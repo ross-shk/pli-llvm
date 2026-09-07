@@ -205,4 +205,4 @@ decisions taken, and maintains a user manual mapping PL/I features to
 | LLVM API churn | maintenance | pin version; isolate behind `IRGen` |
 | Decimal performance | adoption | ADR-006 tiering; benchmark early against packed BCD |
 | Legacy dialect divergence | adoption | compatibility switches, and document every deviation in one place |
-| Spec gaps from OCR damage (rules 65, 112–114, 148) | conformance | resolved against Y33-6003; each divergence recorded in the grammar file's ⚠ notes |
+| Spec gaps from OCR damage (rules 65, 113, 115) | conformance | resolved against Y33-6003/C28-8201-1 where possible — rules (114), (148) and TR §2.3.3 are now recovered; each remaining divergence is recorded in the grammar file's ⚠ notes |
