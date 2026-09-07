@@ -11,7 +11,7 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md`
 
 ```bash
 make                       # build/plic + build/libpli.a
-make test                  # compile, run, diff every tests/*.pli
+make test                  # compile, run, diff every tests/*/*.pli
 ./build/plic f.pli -o f    # compile a program
 ./build/plic f.pli -emit-llvm -o f.ll   # inspect generated IR
 ./build/plic f.pli -fsyntax-only        # front end only
@@ -38,13 +38,13 @@ test. Keep them in one change.
 1. **Pick the rule.** Find the feature in `docs/GRAMMAR-COVERAGE.md` and note
    its rule number, e.g. `(104)-(109)` for stream I/O. If it is not in
    TR 25.084, it is out of scope — say so instead of implementing it.
-2. **Write the test first.** `tests/<feature>.pli`, lowercase PL/I, with a
-   header comment naming the rules exercised. Add a `tests/bad_<feature>.pli`
+2. **Write the test first.** `tests/core/<feature>.pli`, lowercase PL/I, with
+   a header comment naming the rules exercised. Add `tests/core/bad_<feature>.pli`
    if the feature has error cases.
 3. **Implement across the layers** in the table above, smallest change that
    works (KISS). Diagnose what you do not implement — never accept silently.
 4. **Verify**: `make test`. Then record expected output:
-   `./build/plic tests/x.pli -o /tmp/x && /tmp/x > tests/expected/x.out`
+   `./build/plic tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out`
    Read that file before committing it — it is now the specification of
    behaviour, so a wrong line becomes a permanent wrong answer.
 5. **Check the IR** for anything non-trivial: `-emit-llvm` and read it. Cheap,
@@ -62,7 +62,7 @@ Break these and the design breaks:
 
 1. **The lexer never classifies keywords.** PL/I has no reserved words; keyword
    recognition is positional, in `parser.cpp:atStmtKeyword` /
-   `looksLikeAssignment`. `tests/keywords.pli` guards this.
+   `looksLikeAssignment`. `tests/core/keywords.pli` guards this.
 2. **Unimplemented is diagnosed, never accepted.** Every gap produces an error
    citing its rule number: `d_.error(loc, "… is not implemented in this stage", "(91)")`.
    Silent acceptance produces wrong answers; an error is a to-do list entry.
@@ -94,7 +94,7 @@ Diagnosis, in workflow order:
    get static storage (ADR-010), and `irgen.cpp:emitGlobals` always emitted a
    zero initializer while the prologue-store path was reserved for automatic
    variables. The value was dropped between two correct-looking branches.
-2. Test first: `tests/init.pli`, covering `INITIAL` for `FIXED`, `FLOAT`,
+2. Test first: `tests/core/init.pli`, covering `INITIAL` for `FIXED`, `FLOAT`,
    `CHAR`, `CHAR VARYING`, `BIT`, a negative constant, and both storage
    classes.
 3. Fix across layers: sema attaches the folded constant to the symbol
@@ -110,10 +110,15 @@ exists because of this class of bug.
 
 | Convention | Meaning |
 |---|---|
-| `tests/x.pli` + `tests/expected/x.out` | compile, run, diff stdout |
-| `tests/bad_x.pli` | must be rejected; `run_tests.sh` checks exit status |
+| `tests/<group>/x.pli` + `tests/<group>/expected/x.out` | compile, run, diff stdout |
+| `tests/<group>/bad_x.pli` | must be rejected; `run_tests.sh` checks exit status |
+| `tests/<group>/out/` | scratch binaries, logs and diffs; gitignored |
 | Header comment | names the rules exercised, e.g. `rules (74),(75)` |
-| Style | modern lowercase PL/I, one leading space, as in `tests/init.pli` |
+| Style | modern lowercase PL/I, one leading space, as in `tests/core/init.pli` |
+
+`run_tests.sh` auto-discovers every `tests/*/` subfolder: a group is any
+folder with `*.pli` programs and an `expected/` directory — create one and
+it runs.
 
 Existing uppercase tests stay as they are — follow the style of the file you
 are editing.

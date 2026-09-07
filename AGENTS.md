@@ -17,7 +17,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 |---|---|
 | `src/` | `lexer` → `parser` → `sema` → `irgen` (+ `diag`, `types`, `ast`, `main`) |
 | `runtime/` | `libpli`: list-directed I/O, string semantics, conditions (C11) |
-| `tests/` | `*.pli` + `expected/*.out`, `bad_*.pli` must fail, `run_tests.sh` |
+| `tests/` | `run_tests.sh` + groups: `<group>/*.pli` + `<group>/expected/*.out`, `bad_*` must fail |
 | `docs/` | ARCHITECTURE, DESIGN-DECISIONS (ADRs), OPTIMIZATION, IMPLEMENTATION-PLAN, GRAMMAR-COVERAGE |
 | `examples/` | scratch programs, git-ignored |
 | `TR25.084-concrete-syntax.md` | the spec: rules (1)–(151), with ⚠ notes where the scan was damaged |
@@ -31,7 +31,7 @@ make && make test                        # 9 tests, must stay green
 ```
 
 ## Invariants
-1. lexer never classifies keywords — PL/I has no reserved words (`tests/keywords.pli`)
+1. lexer never classifies keywords — PL/I has no reserved words (`tests/core/keywords.pli`)
 2. gaps are diagnosed with a rule number, never silently accepted
 3. `d_.error(loc, msg, "(nn)")` — diagnostics cite TR 25.084
 4. `IRGen` is the only LLVM-aware component (ADR-002)
@@ -39,7 +39,7 @@ make && make test                        # 9 tests, must stay green
 
 ## Feature work
 1. find the rule in `docs/GRAMMAR-COVERAGE.md` — not in TR 25.084 ⇒ out of scope, say so
-2. test first (`tests/x.pli`, lowercase PL/I), then AST kind → parse → sema → irgen → runtime
+2. test first (`tests/core/x.pli`, lowercase PL/I), then AST kind → parse → sema → irgen → runtime
 3. `make test`, record expected output, **read it**
 4. update `GRAMMAR-COVERAGE.md`; add an ADR if a decision was made
 5. stage; report rules moved + test counts

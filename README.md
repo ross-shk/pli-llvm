@@ -11,7 +11,7 @@ the architecture and plan for the full language.
 
 ```
 $ make
-$ ./build/plic tests/hello.pli -o hello && ./hello
+$ ./build/plic tests/core/hello.pli -o hello && ./hello
 Hello, world!
 ```
 
@@ -46,7 +46,7 @@ END HELLO;
   `¬`/`^`/`~`, and the 48-character-set operator words (`AND`, `GT`, `CAT`, …)
 - `CHARACTER(n)`, `CHARACTER(n) VARYING`, concatenation, blank-padded
   comparison; `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
-- **no reserved words** — `tests/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
+- **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
   `END` and `PUT` as ordinary variables
 
 Everything else is reported as unimplemented *with its specification rule
@@ -72,7 +72,7 @@ plic [options] file.pli
 ```
 src/         compiler: diag, lexer, parser, sema, irgen, driver
 runtime/     libpli: list-directed output, string semantics, conditions
-tests/       .pli programs + expected output + run_tests.sh
+tests/       run_tests.sh + test groups: *.pli + expected/*.out + out/ scratch
 docs/        architecture, decisions, optimization, plan, coverage
 ```
 
@@ -92,7 +92,7 @@ Current suite: 9 tests (8 execution + 1 diagnostic), all passing.
 ## Example: generated IR
 
 ```
-$ ./build/plic tests/hello.pli -emit-llvm -o hello.ll && cat hello.ll
+$ ./build/plic tests/core/hello.pli -emit-llvm -o hello.ll && cat hello.ll
 define internal void @PLI_HELLO() {
 entry:
   call void @pli_put_skip(i64 1)
