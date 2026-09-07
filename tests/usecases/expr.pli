@@ -37,6 +37,12 @@
        put skip list('FAIL: negated comparisons true side');
     end;
 
+    /* ASCII spellings of the not sign: ^=, ^>, ^< (rule 118). */
+    if ^(2 ^= 3 & 1 ^> 2 & 2 ^< 1) | (2 ^= 2 | 1 ^= 1) then do;
+       fails = fails + 1;
+       put skip list('FAIL: caret spellings');
+    end;
+
     if ^(2 >= 1 & 1 <= 2) | (1 >= 2 | 2 <= 1) then do;
        fails = fails + 1;
        put skip list('FAIL: ge/le');

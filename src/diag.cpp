@@ -13,17 +13,38 @@ void Diags::emit(const char *level, SourceLoc loc, const std::string &msg,
     fprintf(stderr, "%s: %s: %s%s\n", file_.c_str(), level, msg.c_str(),
             suffix.c_str());
 
-  // Echo the source line plus a caret, clang-style.
+  // Echo the source line plus a caret, clang-style; rendered ASCII-safe so
+  // the UTF-8 not sign reads as '^' on any terminal and the caret aligns.
   if (src_ && loc.line > 0) {
     std::istringstream is(*src_);
     std::string line;
     for (int i = 0; i < loc.line && std::getline(is, line); ++i) {
     }
     if (!line.empty() || loc.line > 0) {
-      fprintf(stderr, "  %s\n", line.c_str());
-      int c = loc.col > 0 ? loc.col - 1 : 0;
-      std::string caret(c, ' ');
+      int target = loc.col > 0 ? loc.col - 1 : 0;
+      int d = 0;
+      for (int j = 0; j < target && j < (int)line.size(); ++j) {
+        unsigned char b = (unsigned char)line[j];
+        if (b == 0xC2 && j + 1 < (int)line.size() &&
+            (unsigned char)line[j + 1] == 0xAC)
+          ++j;  // two bytes, one display column
+        ++d;
+      }
+      std::string show, caret(d, ' ');
       caret += '^';
+      for (size_t j = 0; j < line.size(); ++j) {
+        unsigned char b = (unsigned char)line[j];
+        if (b == 0xC2 && j + 1 < line.size() &&
+            (unsigned char)line[j + 1] == 0xAC) {
+          show += '^';
+          ++j;
+        } else if (b >= 0x80) {
+          show += '?';
+        } else {
+          show += (char)b;
+        }
+      }
+      fprintf(stderr, "  %s\n", show.c_str());
       fprintf(stderr, "  %s\n", caret.c_str());
     }
   }
