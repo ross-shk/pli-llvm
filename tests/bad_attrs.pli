@@ -1,0 +1,11 @@
+/* Diagnostic test: every declaration below is ill-formed, and each must be
+   reported with a reference to the governing TR 25.084 rule. */
+BADATTR: PROCEDURE OPTIONS(MAIN);
+   DECLARE A FIXED FLOAT;                /* conflicting scale attributes  */
+   DECLARE B BINARY DECIMAL;             /* conflicting base attributes   */
+   DECLARE C CHARACTER(4) FIXED;         /* string + arithmetic           */
+   DECLARE D VARYING;                    /* VARYING without CHARACTER/BIT */
+   DECLARE E FIXED DECIMAL(7,2);         /* scaled FIXED: not implemented */
+   DECLARE A FIXED BINARY(31);           /* duplicate declaration         */
+   E = 'text';                           /* unimplemented conversion      */
+END BADATTR;

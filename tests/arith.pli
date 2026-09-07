@@ -1,0 +1,34 @@
+/* Expression evaluation: operator precedence exactly as rules (115)-(122),
+   truncation on assignment to a FIXED target, and the 48-character-set
+   operator words of TR §2.3.3. */
+ARITH: PROCEDURE OPTIONS(MAIN);
+   DECLARE I FIXED BINARY(31);
+   DECLARE X FLOAT DECIMAL(6);
+   DECLARE B BIT(1);
+
+   I = 2 + 3 * 4;              /* * binds tighter than + */
+   PUT SKIP LIST('2+3*4 =', I);
+
+   I = (2 + 3) * 4;
+   PUT SKIP LIST('(2+3)*4 =', I);
+
+   I = 2 ** 10;
+   PUT SKIP LIST('2**10 =', I);
+
+   I = 7 / 2;                  /* assignment to FIXED truncates */
+   PUT SKIP LIST('7/2 into FIXED =', I);
+
+   X = 7 / 2;
+   PUT SKIP LIST('7/2 into FLOAT =', X);
+
+   I = -3 ** 2;                /* rule (122): the prefix applies to the power */
+   PUT SKIP LIST('-3**2 =', I);
+
+   B = I < 0;
+   PUT SKIP LIST('negative =', B);
+
+   /* Operator words: the 48-character set has no ¬ & | > < glyphs. */
+   IF I LT 0 & ^(I = 0) THEN PUT SKIP LIST('LT and ^ agree');
+   IF 1 = 1 AND 2 GT 1 THEN PUT SKIP LIST('AND and GT agree');
+   PUT SKIP LIST('cat:', 'ab' CAT 'cd');
+END ARITH;

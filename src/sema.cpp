@@ -1,0 +1,372 @@
+#include "sema.h"
+#include <algorithm>
+
+// FIXED op FIXED -> FIXED with the wider precision; anything involving FLOAT
+// is FLOAT. (Full precision/scale rules for FIXED are M2, see ADR-006.)
+Type arithResultType(const Type &a, const Type &b) {
+  if (a.k == TK::Float || b.k == TK::Float)
+    return Type::flt(std::max(a.k == TK::Float ? a.prec : 6, b.k == TK::Float ? b.prec : 6));
+  int bits = std::max(a.intBits(), b.intBits());
+  return Type::fixedBin(bits == 64 ? 63 : 31, 0);
+}
+
+Scope *Sema::scopeFor(Proc *p) {
+  auto it = procScopes_.find(p);
+  if (it != procScopes_.end()) return it->second;
+  auto sc = std::make_unique<Scope>();
+  sc->parent = p->parent ? scopeFor(p->parent) : nullptr;
+  Scope *raw = sc.get();
+  scopes_.push_back(std::move(sc));
+  procScopes_[p] = raw;
+  return raw;
+}
+
+Symbol *Sema::lookup(Scope *sc, const std::string &n) {
+  for (Scope *s = sc; s; s = s->parent) {
+    auto it = s->tab.find(n);
+    if (it != s->tab.end()) return it->second;
+  }
+  return nullptr;
+}
+
+Symbol *Sema::declare(Scope *sc, const std::string &n, Type t, SourceLoc l,
+                      Symbol::Kind k, bool isStatic) {
+  auto it = sc->tab.find(n);
+  if (it != sc->tab.end()) {
+    d_.error(l, "'" + n + "' is already declared in this block", "(9)");
+    d_.note(it->second->loc, "previous declaration was here");
+    return it->second;
+  }
+  auto sym = std::make_unique<Symbol>();
+  sym->name = n;
+  sym->ty = t;
+  sym->loc = l;
+  sym->kind = k;
+  sym->isStatic = isStatic;
+  if (k == Symbol::Param) sym->irName = "%" + n + ".ptr";
+  else if (isStatic) sym->irName = "@pli_g_" + n;
+  else sym->irName = "%" + n + ".addr";
+  Symbol *raw = sym.get();
+  owned_.push_back(std::move(sym));
+  sc->tab[n] = raw;
+  sc->order.push_back(raw);
+  if (k != Symbol::ProcName) storage_.push_back(raw);
+  return raw;
+}
+
+// Implicit declaration (Y33-6003: an identifier beginning with I through N is
+// FIXED BINARY REAL with default precision; any other initial letter gives
+// FLOAT DECIMAL REAL). TR 25.084 defines only the syntax, not these defaults.
+Symbol *Sema::implicitDeclare(Scope *sc, const std::string &n, SourceLoc l, bool isStatic) {
+  char c = n.empty() ? 'X' : n[0];
+  Type t = (c >= 'I' && c <= 'N') ? Type::fixedBin(15, 0) : Type::flt(6);
+  Symbol *s = declare(sc, n, t, l, Symbol::Var, isStatic);
+  s->implicit = true;
+  d_.warn(l, "'" + n + "' is not declared; implicitly " + t.desc(), "(130)");
+  return s;
+}
+
+bool Sema::run(Program &prog) {
+  prog_ = &prog;
+
+  // Pass 1: every procedure name is visible in its parent's scope, so that
+  // CALL can be resolved regardless of textual order.
+  for (auto &p : prog.procs) {
+    p->irName = "@PLI_" + p->name;
+    Scope *outer = p->parent ? scopeFor(p->parent) : nullptr;
+    if (outer) {
+      Symbol *s = declare(outer, p->name, Type::voidTy(), p->loc, Symbol::ProcName, false);
+      s->proc = p.get();
+      p->irName = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name;
+    }
+  }
+
+  // Pass 2: declarations, resolution and typing, procedure by procedure.
+  for (auto &p : prog.procs) processProc(p.get());
+
+  if (!prog.mainProc) {
+    if (!prog.procs.empty()) {
+      d_.warn(prog.procs.front()->loc,
+              "no procedure has OPTIONS(MAIN); using '" + prog.procs.front()->name +
+                  "' as the program entry point", "(5)");
+      prog.mainProc = prog.procs.front().get();
+      prog.mainProc->isMain = true;
+    } else {
+      d_.error({}, "translation unit contains no procedure", "(1)");
+    }
+  }
+  return d_.ok();
+}
+
+void Sema::processProc(Proc *p) {
+  Scope *sc = scopeFor(p);
+
+  // STORAGE DECISION (M0): variables of the external procedure get static
+  // storage so that internal procedures can reference them without a static
+  // link/display. Internal procedure variables are AUTOMATIC (stack).
+  // See ADR-010 and the M1 milestone for proper nesting support.
+  bool isStatic = (p->parent == nullptr);
+
+  collectDecls(p->body, sc, isStatic);
+
+  // Parameters: a DECLARE inside the procedure supplies their attributes;
+  // otherwise the implicit rule applies. Parameters are always by reference.
+  for (const std::string &pname : p->params) {
+    Symbol *s = nullptr;
+    auto it = sc->tab.find(pname);
+    if (it != sc->tab.end()) {
+      s = it->second;
+      s->kind = Symbol::Param;
+      s->isStatic = false;
+      s->irName = "%" + pname + ".ptr";
+      storage_.erase(std::remove(storage_.begin(), storage_.end(), s), storage_.end());
+    } else {
+      char c = pname.empty() ? 'X' : pname[0];
+      Type t = (c >= 'I' && c <= 'N') ? Type::fixedBin(15, 0) : Type::flt(6);
+      s = declare(sc, pname, t, p->loc, Symbol::Param, false);
+      storage_.erase(std::remove(storage_.begin(), storage_.end(), s), storage_.end());
+      d_.warn(p->loc, "parameter '" + pname + "' has no DECLARE; implicitly " + t.desc(), "(4)");
+    }
+    p->paramSyms.push_back(s);
+  }
+
+  for (auto &s : p->body) checkStmt(s.get(), sc, p);
+
+  // Classify storage for code generation: AUTOMATIC variables of this
+  // procedure need an alloca; STATIC ones become LLVM globals.
+  for (Symbol *s : sc->order) {
+    if (s->kind != Symbol::Var) continue;
+    if (!s->isStatic) p->localSyms.push_back(s);
+  }
+}
+
+void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
+  for (auto &s : body) {
+    if (!s) continue;
+    if (s->kind == Stmt::Declare) {
+      for (auto &item : s->decls) {
+        item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
+        if (item.init) {
+          // M0 accepts a literal (optionally signed) as INITIAL value.
+          Expr *e = item.init.get();
+          bool neg = false;
+          if (e->kind == Expr::Unary && e->op == Tok::Minus) { neg = true; e = e->a.get(); }
+          if (e->kind == Expr::IntLit || e->kind == Expr::FltLit ||
+              e->kind == Expr::CharLit || e->kind == Expr::BitLit) {
+            if (neg) { e->ival = -e->ival; e->fval = -e->fval; }
+          } else {
+            d_.error(item.loc, "INITIAL requires a constant in this stage", "(26)");
+            item.init.reset();
+          }
+        }
+      }
+      continue;
+    }
+    // Declarations are block scoped; M0 has no BEGIN-block scopes, so nested
+    // DO/IF bodies contribute to the procedure scope.
+    if (!s->body.empty()) collectDecls(s->body, sc, isStatic);
+    if (s->thenS) { std::vector<StmtP> one; /* handled below */ }
+    if (s->thenS && s->thenS->kind == Stmt::Declare)
+      d_.error(s->thenS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
+  }
+}
+
+bool Sema::checkAssignable(const Type &dst, const Type &src, SourceLoc loc, const char *what) {
+  if (dst.isNumeric() && (src.isNumeric() || src.isBit())) return true;
+  if (dst.isBit() && (src.isBit() || src.isNumeric())) return true;
+  if (dst.isChar() && src.isChar()) return true;
+  d_.error(loc, std::string(what) + ": conversion from " + src.desc() + " to " +
+           dst.desc() + " is not implemented in this stage", "(86)");
+  return false;
+}
+
+void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
+  if (!s) return;
+  switch (s->kind) {
+    case Stmt::Null:
+      break;
+    case Stmt::Declare:
+      break;  // handled in collectDecls
+    case Stmt::Assign: {
+      typeExpr(s->target.get(), sc, p);
+      typeExpr(s->value.get(), sc, p);
+      if (s->target->kind != Expr::VarRef) {
+        d_.error(s->target->loc, "assignment target must be a variable reference in this stage", "(86)");
+        break;
+      }
+      if (s->target->sym && s->target->sym->kind == Symbol::ProcName) {
+        d_.error(s->target->loc, "cannot assign to procedure '" + s->target->name + "'", "(86)");
+        break;
+      }
+      if (!s->value->ty.isVoid())
+        checkAssignable(s->target->ty, s->value->ty, s->loc, "assignment");
+      break;
+    }
+    case Stmt::If: {
+      typeExpr(s->cond.get(), sc, p);
+      if (s->cond && !s->cond->ty.isBit() && !s->cond->ty.isNumeric())
+        d_.error(s->cond->loc, "IF condition must yield a bit value", "(75)");
+      checkStmt(s->thenS.get(), sc, p);
+      checkStmt(s->elseS.get(), sc, p);
+      break;
+    }
+    case Stmt::Group:
+      for (auto &b : s->body) checkStmt(b.get(), sc, p);
+      break;
+    case Stmt::DoWhile:
+      typeExpr(s->cond.get(), sc, p);
+      for (auto &b : s->body) checkStmt(b.get(), sc, p);
+      break;
+    case Stmt::DoIter: {
+      Symbol *sym = lookup(sc, s->name);
+      if (!sym) sym = implicitDeclare(sc, s->name, s->loc, p->parent == nullptr);
+      s->sym = sym;
+      if (!sym->ty.isNumeric())
+        d_.error(s->loc, "DO control variable must be arithmetic, found " + sym->ty.desc(), "(72)");
+      typeExpr(s->from.get(), sc, p);
+      typeExpr(s->to.get(), sc, p);
+      typeExpr(s->by.get(), sc, p);
+      typeExpr(s->cond.get(), sc, p);
+      for (auto &b : s->body) checkStmt(b.get(), sc, p);
+      break;
+    }
+    case Stmt::Put: {
+      typeExpr(s->skipCount.get(), sc, p);
+      for (auto &it : s->items) {
+        typeExpr(it.get(), sc, p);
+        if (it->ty.isVoid())
+          d_.error(it->loc, "invalid data list item", "(110)");
+      }
+      break;
+    }
+    case Stmt::CallS: {
+      Symbol *sym = lookup(sc, s->name);
+      if (!sym || sym->kind != Symbol::ProcName) {
+        d_.error(s->loc, "'" + s->name + "' is not a known internal procedure", "(78)");
+        break;
+      }
+      s->sym = sym;
+      Proc *callee = sym->proc;
+      for (auto &a : s->args) typeExpr(a.get(), sc, p);
+      if (callee && s->args.size() != callee->params.size()) {
+        d_.error(s->loc, "'" + s->name + "' expects " + std::to_string(callee->params.size()) +
+                 " argument(s), " + std::to_string(s->args.size()) + " given", "(78)");
+        break;
+      }
+      if (callee)
+        for (size_t i = 0; i < s->args.size(); ++i)
+          if (i < callee->paramSyms.size())
+            checkAssignable(callee->paramSyms[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
+      break;
+    }
+    case Stmt::Return:
+    case Stmt::Stop:
+    case Stmt::Leave:
+      break;
+  }
+}
+
+void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
+  if (!e) return;
+  switch (e->kind) {
+    case Expr::IntLit:
+      e->ty = Type::fixedDec(e->ival > 99999 || e->ival < -99999 ? 15 : 5, 0);
+      if (e->ty.intBits() == 32 && (e->ival > 2147483647LL || e->ival < -2147483648LL))
+        e->ty = Type::fixedBin(63, 0);
+      break;
+    case Expr::FltLit:
+      e->ty = Type::flt(6);
+      break;
+    case Expr::CharLit:
+      e->ty = Type::chr((int)e->sval.size());
+      break;
+    case Expr::BitLit:
+      e->ty = Type::bit((int)std::max<size_t>(1, e->sval.size()));
+      break;
+    case Expr::VarRef: {
+      Symbol *sym = lookup(sc, e->name);
+      if (!sym) sym = implicitDeclare(sc, e->name, e->loc, p->parent == nullptr);
+      e->sym = sym;
+      e->ty = sym->ty;
+      if (sym->kind == Symbol::ProcName) {
+        d_.error(e->loc, "'" + e->name + "' is a procedure and cannot be used as a value", "(123)");
+        e->ty = Type::voidTy();
+      }
+      break;
+    }
+    case Expr::Call:
+      for (auto &a : e->args) typeExpr(a.get(), sc, p);
+      d_.error(e->loc, "subscripted references, built-in functions and function "
+                       "calls are not implemented in this stage", "(126)");
+      e->ty = Type::voidTy();
+      break;
+    case Expr::Unary: {
+      typeExpr(e->a.get(), sc, p);
+      const Type &t = e->a->ty;
+      if (e->op == Tok::Not) {
+        if (!t.isBit() && !t.isNumeric())
+          d_.error(e->loc, "operand of NOT must be a bit or arithmetic value", "(122)");
+        e->ty = Type::bit(1);
+      } else {
+        if (!t.isNumeric()) {
+          d_.error(e->loc, "operand of unary '-' must be arithmetic, found " + t.desc(), "(122)");
+          e->ty = Type::fixedBin(31, 0);
+        } else {
+          e->ty = t;
+        }
+      }
+      break;
+    }
+    case Expr::Binary: {
+      typeExpr(e->a.get(), sc, p);
+      typeExpr(e->b.get(), sc, p);
+      const Type &A = e->a->ty, &B = e->b->ty;
+      switch (e->op) {
+        case Tok::Plus: case Tok::Minus: case Tok::Star:
+          if (!A.isNumeric() || !B.isNumeric()) {
+            d_.error(e->loc, "arithmetic operator requires arithmetic operands (" +
+                     A.desc() + ", " + B.desc() + ")", "(120)");
+            e->ty = Type::fixedBin(31, 0);
+          } else {
+            e->ty = arithResultType(A, B);
+          }
+          break;
+        case Tok::Slash: case Tok::Power:
+          // Division and exponentiation are evaluated in floating point in M0;
+          // PL/I's exact FIXED scale rules are M2 (ADR-006). Truncation on
+          // assignment to a FIXED target preserves the usual observable result.
+          if (!A.isNumeric() || !B.isNumeric()) {
+            d_.error(e->loc, "operator requires arithmetic operands", "(121)");
+            e->ty = Type::flt(6);
+          } else {
+            e->ty = Type::flt(std::max(6, std::max(A.prec, B.prec)));
+          }
+          break;
+        case Tok::Concat:
+          if (!A.isChar() || !B.isChar()) {
+            d_.error(e->loc, "concatenation of non-character data is not implemented "
+                             "in this stage", "(119)");
+            e->ty = Type::chr(1);
+          } else {
+            e->ty = Type::chr(A.len + B.len);
+          }
+          break;
+        case Tok::Amp: case Tok::Bar:
+          if ((!A.isBit() && !A.isNumeric()) || (!B.isBit() && !B.isNumeric()))
+            d_.error(e->loc, "logical operator requires bit operands", "(116)");
+          e->ty = Type::bit(1);
+          break;
+        case Tok::Eq: case Tok::Ne: case Tok::Lt: case Tok::Le:
+        case Tok::Gt: case Tok::Ge: case Tok::Ngt: case Tok::Nlt:
+          if (A.isChar() != B.isChar())
+            d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+          e->ty = Type::bit(1);
+          break;
+        default:
+          e->ty = Type::fixedBin(31, 0);
+          break;
+      }
+      break;
+    }
+  }
+}

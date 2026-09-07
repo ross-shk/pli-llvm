@@ -1,0 +1,25 @@
+/* CHARACTER data: fixed and VARYING, concatenation, blank-padded comparison.
+   TR 25.084 rules (18) string-attribute, (119) concatenation,
+   (117) comparison, (143) character-string constants. */
+STRINGS: PROCEDURE OPTIONS(MAIN);
+   DECLARE FIRST CHARACTER(10) VARYING;
+   DECLARE LAST CHARACTER(10) VARYING;
+   DECLARE FULL CHARACTER(21) VARYING;
+   DECLARE TAG CHARACTER(5);
+
+   FIRST = 'Ada';
+   LAST = 'Lovelace';
+   FULL = FIRST || ' ' || LAST;
+   PUT SKIP LIST(FULL);
+
+   TAG = 'AB';                     /* padded with blanks to CHARACTER(5) */
+   PUT SKIP LIST('[' || TAG || ']');
+
+   IF FIRST < LAST THEN PUT SKIP LIST('Ada sorts before Lovelace');
+
+   /* The shorter operand is extended with blanks for comparison. */
+   IF TAG = 'AB' THEN PUT SKIP LIST('blank padding compares equal');
+
+   /* A quotation mark inside a constant is written twice (rule 143). */
+   PUT SKIP LIST('it''s fine');
+END STRINGS;

@@ -1,0 +1,34 @@
+/* DO groups: iterative with TO/BY, DO WHILE, and multiple closure of nested
+   groups by a single labelled END (TR §2.3.2.2, rules (69)-(73), (7)). */
+LOOPS: PROCEDURE OPTIONS(MAIN);
+   DECLARE I FIXED BINARY(31), J FIXED BINARY(31), TOTAL FIXED BINARY(31);
+
+   TOTAL = 0;
+   DO I = 1 TO 5;
+      TOTAL = TOTAL + I;
+   END;
+   PUT SKIP LIST('sum 1..5 =', TOTAL);
+
+   DO I = 10 TO 1 BY -3;
+      PUT SKIP LIST('countdown', I);
+   END;
+
+   I = 0;
+   DO WHILE (I < 3);
+      I = I + 1;
+      PUT SKIP LIST('while', I);
+   END;
+
+   /* DO with both TO and a WHILE clause (rule 73). */
+   DO I = 1 TO 10 WHILE (I < 4);
+      PUT SKIP LIST('guarded', I);
+   END;
+
+   /* One `END OUTER;` closes the inner group and the labelled outer group. */
+   TOTAL = 0;
+   OUTER: DO I = 1 TO 3;
+      DO J = 1 TO 3;
+         TOTAL = TOTAL + 1;
+   END OUTER;
+   PUT SKIP LIST('pairs =', TOTAL);
+END LOOPS;

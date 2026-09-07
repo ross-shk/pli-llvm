@@ -1,0 +1,98 @@
+// ast.h — abstract syntax tree.
+//
+// WIREFRAME NOTE: M0 uses two "wide" node structs (Expr, Stmt) with a kind tag
+// instead of a class hierarchy. This keeps the bootstrap small; M1 replaces
+// them with a proper node hierarchy + visitor, and inserts the HIR layer
+// described in docs/ARCHITECTURE.md.
+#pragma once
+#include <memory>
+#include <string>
+#include <vector>
+#include "token.h"
+#include "types.h"
+
+struct Symbol;
+struct Proc;
+
+struct Expr;
+using ExprP = std::unique_ptr<Expr>;
+
+struct Expr {
+  enum Kind { IntLit, FltLit, CharLit, BitLit, VarRef, Binary, Unary, Call } kind = IntLit;
+  SourceLoc loc{};
+  Type ty{};  // assigned by sema
+
+  long long ival = 0;
+  double fval = 0;
+  std::string sval;          // CharLit / BitLit payload
+  std::string name;          // VarRef / Call target
+  Symbol *sym = nullptr;     // resolved by sema
+  Tok op = Tok::Eof;         // Binary / Unary operator
+  ExprP a, b;
+  std::vector<ExprP> args;   // Call
+};
+
+struct Stmt;
+using StmtP = std::unique_ptr<Stmt>;
+
+struct DeclItem {
+  std::string name;
+  Type ty{};
+  SourceLoc loc{};
+  ExprP init;      // INITIAL(...) — scalar constant only in M0
+  Symbol *sym = nullptr;
+};
+
+struct Stmt {
+  enum Kind {
+    Null,       // rule (67)
+    Declare,    // rule (9)
+    Assign,     // rule (86)
+    If,         // rule (74)
+    Group,      // rule (70)  DO; ... END;
+    DoWhile,    // rule (71)  DO WHILE(e);
+    DoIter,     // rule (71)+(72)+(73)
+    Put,        // rules (104)-(109)
+    CallS,      // rule (78)
+    Return,     // rule (81)
+    Stop,       // rule (85)
+    Leave,      // (not in TR 25.084; modern LEAVE, rejected in M0)
+  } kind = Null;
+
+  SourceLoc loc{};
+  std::vector<std::string> labels;  // rule (64) label prefixes
+
+  std::vector<DeclItem> decls;
+
+  ExprP target, value, cond, from, to, by;
+  StmtP thenS, elseS;
+  std::vector<StmtP> body;
+
+  std::string name;        // DO control variable, CALL target
+  Symbol *sym = nullptr;   // resolved control variable / callee
+
+  // PUT statement options
+  bool skip = false, page = false;
+  ExprP skipCount;
+  std::vector<ExprP> items;
+
+  std::vector<ExprP> args;  // CALL arguments
+};
+
+struct Proc {
+  std::string name;
+  SourceLoc loc{};
+  bool isMain = false;
+  std::vector<std::string> params;      // rule (4) parameterlist
+  std::vector<StmtP> body;
+  Proc *parent = nullptr;               // lexical nesting (rule (8) sentence)
+  std::vector<Symbol *> paramSyms;
+  std::vector<Symbol *> localSyms;      // AUTOMATIC variables needing an alloca
+  std::string irName;                   // mangled LLVM symbol
+};
+
+struct Program {
+  // All procedures, flattened; `parent` preserves lexical nesting.
+  std::vector<std::unique_ptr<Proc>> procs;
+  Proc *mainProc = nullptr;
+};
