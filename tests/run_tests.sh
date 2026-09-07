@@ -100,7 +100,7 @@ for dir in tests/*/; do
         echo "PASS $name"
         pass=$((pass + 1))
       else
-        echo "FAIL $name (self test did not print PASS)"
+        echo "FAIL $name (self test did not print PASS)"; echo
         sed 's/^/      /' "$out/$name.out"
         fail=$((fail + 1))
       fi
