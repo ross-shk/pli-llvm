@@ -19,6 +19,7 @@ Hello, world!
 
 | Document | Contents |
 |---|---|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | how to add a feature: layer map, workflow, invariants, test conventions |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, IR levels, data representation, ABI, condition model, runtime interface |
 | [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) | 20 ADRs: why no reserved words forces a hand-written parser, why decimal is scaled binary, why four IR levels, … |
 | [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) | HIR/MIR passes, custom LLVM passes, metadata, `-O` levels, what we deliberately do not optimize |
@@ -35,8 +36,8 @@ END HELLO;
 
 - procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
 - parameters **by reference**, with dummy arguments when conversion is needed
-- `DECLARE` with the attribute default rules; implicit declarations (I–N →
-  `FIXED BINARY`) with warnings
+- `DECLARE` with the attribute default rules and `INITIAL` constants; implicit
+  declarations (I–N → `FIXED BINARY`) with warnings
 - `IF`/`THEN`/`ELSE` (nested, `DO`-group branches), `BEGIN` blocks
 - `DO;`, `DO WHILE(e);`, `DO I = a TO b BY c WHILE(d);`
 - **multiple closure**: one `END L;` closes every open block up to `L`
@@ -86,7 +87,7 @@ make test     # compile, run and diff every test program
 make clean
 ```
 
-Current suite: 8 tests (7 execution + 1 diagnostic), all passing.
+Current suite: 9 tests (8 execution + 1 diagnostic), all passing.
 
 ## Example: generated IR
 
