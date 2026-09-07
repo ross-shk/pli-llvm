@@ -44,6 +44,6 @@ test: all
 	@tests/run_tests.sh
 
 clean:
-	rm -rf $(BUILD) tests/out
+	rm -rf $(BUILD) tests/*/out
 
 -include $(DEPS)

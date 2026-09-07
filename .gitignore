@@ -3,8 +3,8 @@
 *.ll
 
 build/
-tests/out/
+tests/*/out/
 examples/
 
 # test baselines are source of truth, not build output
-!tests/expected/*.out
+!tests/*/expected/*.out

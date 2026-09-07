@@ -227,7 +227,7 @@ The ABI is the set of `pli_*` symbols. M0 implements the shaded subset:
 **Parameter passing.** By reference, as PL/I requires: the callee receives
 addresses. When an argument needs conversion, is an expression, or is a
 constant, the caller materialises a **dummy argument** and passes its address
-(M0 already implements this — `tests/procs.pli`). Aggregates with `*` extents
+(M0 already implements this — `tests/core/procs.pli`). Aggregates with `*` extents
 and `CHARACTER(*)` pass a descriptor. Internal procedures additionally receive
 a static link (M1) for access to the enclosing block's automatic storage.
 
@@ -269,7 +269,7 @@ Every diagnostic carries a source location, and — where a syntactic rule is
 implicated — the TR 25.084 production number, e.g.
 
 ```
-tests/bad_attrs.pli:4:12: error: FIXED and FLOAT are conflicting attributes  [TR 25.084 rule (16)]
+tests/core/bad_attrs.pli:4:12: error: FIXED and FLOAT are conflicting attributes  [TR 25.084 rule (16)]
      DECLARE A FIXED FLOAT;
              ^
 ```
@@ -286,7 +286,7 @@ Planned additions: fix-it hints, `-fdiagnostics-format=json`, and a
 | Lexer/parser units | golden token/AST dumps | M1 |
 | IR golden tests | `plic -emit-llvm` + FileCheck-style matching | M1 |
 | Execution tests | compile, run, diff stdout (`tests/run_tests.sh`) | M0 (9 tests) |
-| Diagnostic tests | `tests/bad_*.pli` must be rejected with the right rule | M0 |
+| Diagnostic tests | `tests/*/bad_*.pli` must be rejected with the right rule | M0 |
 | Conformance matrix | every rule (1)–(151) mapped to a test (GRAMMAR-COVERAGE.md) | M0 skeleton |
 | Corpus compilation | compile `references/code/**` (Iron Spring, MULTICS, RosettaCode samples) | M2+ |
 | Differential testing | run corpus outputs against another PL/I implementation | M3+ |

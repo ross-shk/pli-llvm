@@ -74,7 +74,7 @@ words. `DECLARE IF FIXED BINARY(31); IF = 1; IF IF = 1 THEN ...` is legal.
    prefer the interpretation consistent with the symbol table (a declared
    variable named `IF` biases towards assignment).
 
-**Consequences.** `tests/keywords.pli` compiles and runs, using `IF`, `THEN`,
+**Consequences.** `tests/core/keywords.pli` compiles and runs, using `IF`, `THEN`,
 `ELSE`, `DO`, `END`, `PUT` as variables. Keyword-position parsing is a single
 predicate (`atStmtKeyword`), so the rule is stated once.
 **Rejected.** Reserving keywords (rejects valid PL/I, and legacy code does use
@@ -216,7 +216,7 @@ not own the label re-propagates it to its parent. A `pendingEnd_` slot carries
 the information across statement-level returns.
 **Consequences.** ~20 lines, no backtracking, and the error "END label 'X' does
 not match any open block" falls out naturally. Verified by
-`tests/loops.pli`, where one `END OUTER;` closes two nested groups.
+`tests/core/loops.pli`, where one `END OUTER;` closes two nested groups.
 **Rejected.** Post-hoc AST surgery (loses the diagnostic); requiring labels
 (non-conforming).
 
@@ -232,7 +232,7 @@ substitution rules; `--source-encoding=ebcdic` and `--margins=m,n` handle card
 images. Character *data* is bytes; `--data-encoding` selects the collating
 sequence used by comparisons and `PICTURE` validation.
 **Consequences.** The M0 lexer already accepts both not-symbol spellings and
-the operator words in operator position (`tests/arith.pli`).
+the operator words in operator position (`tests/core/arith.pli`).
 **Rejected.** UTF-8-only (cannot read the corpus); making the 48-character
 words unconditionally reserved (would break 60-char programs using `OR` as a
 variable).
@@ -257,7 +257,7 @@ ADR-006, which M0 does not have.
 **Decision.** On a syntax error: report once with the rule number, skip to the
 next `;`, continue. Sema errors do not stop analysis of sibling statements.
 **Consequences.** One bad statement yields one diagnostic, not a cascade —
-visible in `tests/bad_attrs.pli`, which reports five independent declaration
+visible in `tests/core/bad_attrs.pli`, which reports five independent declaration
 errors in one run.
 **Rejected.** Panic-to-`END` (loses too much); error productions in a grammar
 generator (n/a per ADR-003).
