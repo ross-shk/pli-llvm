@@ -1,0 +1,18 @@
+ cube: /* Cube (FIXED attribute) */
+ procedure options (main);
+
+ declare
+    Edge    fixed,
+    Surface fixed,
+    Volume  fixed;
+
+ Edge = 3 /* cm */;
+ Volume = Edge * Edge * Edge;
+ Surface = Edge * Edge * 6;
+ 
+ if Surface ¬= 54 | Volume ¬= 27 then do;
+    put skip list('FAIL: cube surface =', Surface, 'volume =', Volume);
+ end;
+ else put skip list('PASS');
+
+ end cube;
