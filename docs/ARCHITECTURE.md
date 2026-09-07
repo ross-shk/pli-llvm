@@ -285,7 +285,7 @@ Planned additions: fix-it hints, `-fdiagnostics-format=json`, and a
 |---|---|---|
 | Lexer/parser units | golden token/AST dumps | M1 |
 | IR golden tests | `plic -emit-llvm` + FileCheck-style matching | M1 |
-| Execution tests | compile, run; diff (`expected/`) or PASS-grep (`tests/usecases/`) | M0 |
+| Execution tests | compile, run; diff (`expected/`) or PASS-grep (`tests/usecases/`) | M0 (13) |
 | Diagnostic tests | `tests/*/bad_*.pli` must be rejected with the right rule | M0 |
 | Conformance matrix | every rule (1)–(151) mapped to a test (GRAMMAR-COVERAGE.md) | M0 skeleton |
 | Corpus compilation | compile `references/code/**` (Iron Spring, MULTICS, RosettaCode samples) | M2+ |

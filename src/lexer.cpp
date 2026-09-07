@@ -1,5 +1,6 @@
 #include "lexer.h"
 #include <cctype>
+#include <cstdio>
 
 const char *tokName(Tok t) {
   switch (t) {
@@ -302,6 +303,21 @@ std::vector<Token> Lexer::run() {
             t.kind = Tok::Not;
           }
           break;
+        }
+        // Encoding damage, not language: diagnose it readably.
+        if ((unsigned char)cur() == 0xC3 && (unsigned char)peek() == 0x82 &&
+            (unsigned char)peek(2) == 0xC2 && (unsigned char)peek(3) == 0xAC) {
+          d_.error(loc, "not sign is doubly encoded (0xc3 0x82 0xc2 0xac); write it as '^'");
+          bump(); bump(); bump(); bump();
+          continue;
+        }
+        if ((unsigned char)cur() >= 0x80) {
+          char buf[72];
+          std::snprintf(buf, sizeof buf, "invalid character (0x%02x) in source",
+                        (unsigned char)cur());
+          d_.error(loc, buf);
+          bump();
+          continue;
         }
         d_.error(loc, std::string("invalid character '") + c + "' in source");
         bump();
