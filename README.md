@@ -87,6 +87,12 @@ make test     # compile, run and check every test program (diff or PASS-grep)
 make clean
 ```
 
+Run tests in specific groups with:
+
+```
+`./run_tests.sh usecases`
+```
+
 Current suite: 12 tests (8 golden + 3 self-contained + 1 diagnostic), all passing.
 
 ## Example: generated IR
