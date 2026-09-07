@@ -1,6 +1,6 @@
 /* INITIAL attribute (rule 26) on both storage classes.
-   Regression test: init values on external-procedure variables (which get
-   static storage in M0) were silently dropped before. */
+   Regression test: init values on external-procedure variables (which
+   get static storage in M0) were silently dropped before. */
  init_test: procedure options(main);
     declare i fixed bin(31) init(7);
     declare x float dec(6) init(2.5);

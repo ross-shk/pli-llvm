@@ -11,6 +11,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 - unimplemented ≠ accepted: diagnose it with its rule number (see Invariants)
 - follow the indentation and style of the file you are editing
 - one-line comments stating the *intent* of the block that follows
+- PL/I card margins 2–72: `.pli`/`.inc` lines carry one leading space (text begins in column 2) and nothing past column 72
 
 ## Layout
 | Path | Contents |
@@ -24,7 +25,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 
 ## Build
 ```bash
-make && make test                        # 9 tests, must stay green
+make && make test                        # 13 tests, must stay green
 ./build/plic f.pli -o f                  # compile
 ./build/plic f.pli -emit-llvm -o f.ll    # inspect IR (do this for codegen work)
 ./build/plic f.pli -fsyntax-only -v      # front end only / show clang command

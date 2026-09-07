@@ -1,8 +1,9 @@
-/* Internal procedures and CALL. Parameters are passed by reference, which is
-   the PL/I default; an argument that is not a matching variable is passed as a
-   dummy, so the caller cannot see the update.
-   TR 25.084 rules (2) procedure, (4) parameterlist, (78) CALL, (80) arguments. */
-PROCS: PROCEDURE OPTIONS(MAIN);
+/* Internal procedures and CALL. Parameters are passed by reference, 
+   which is the PL/I default; an argument that is not a matching
+   variable is passed as a dummy, so the caller cannot see the update.
+   TR 25.084 rules (2) procedure, (4) parameterlist, (78) CALL, (80) 
+   arguments. */
+ PROCS: PROCEDURE OPTIONS(MAIN);
    DECLARE COUNTER FIXED BINARY(31);
    DECLARE N FIXED BINARY(31);
 
@@ -11,7 +12,8 @@ PROCS: PROCEDURE OPTIONS(MAIN);
    BUMP: PROCEDURE(K);
       DECLARE K FIXED BINARY(31);
       K = K + 1;
-      COUNTER = COUNTER + 1;       /* a variable of the containing procedure */
+      COUNTER = COUNTER + 1;       /* a variable of the containing
+      procedure */
    END BUMP;
 
    N = 40;
@@ -19,7 +21,8 @@ PROCS: PROCEDURE OPTIONS(MAIN);
    CALL BUMP(N);
    PUT SKIP LIST('N =', N, 'calls =', COUNTER);
 
-   /* An expression argument is a dummy: BUMP updates the dummy, not N. */
+   /* An expression argument is a dummy: BUMP updates the dummy, not 
+   N. */
    CALL BUMP(N + 0);
    PUT SKIP LIST('N =', N, 'calls =', COUNTER);
-END PROCS;
+ END PROCS;

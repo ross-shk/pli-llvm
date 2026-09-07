@@ -1,7 +1,9 @@
-/* DO groups: iterative with TO/BY, DO WHILE, and multiple closure of nested
-   groups by a single labelled END (TR §2.3.2.2, rules (69)-(73), (7)). */
-LOOPS: PROCEDURE OPTIONS(MAIN);
-   DECLARE I FIXED BINARY(31), J FIXED BINARY(31), TOTAL FIXED BINARY(31);
+/* DO groups: iterative with TO/BY, DO WHILE, and multiple closure of
+   nested groups by a single labelled END (TR §2.3.2.2, rules (69)-
+   (73), (7)). */
+ LOOPS: PROCEDURE OPTIONS(MAIN);
+   DECLARE I FIXED BINARY(31), J FIXED BINARY(31), 
+     TOTAL FIXED BINARY(31);
 
    TOTAL = 0;
    DO I = 1 TO 5;
@@ -24,11 +26,12 @@ LOOPS: PROCEDURE OPTIONS(MAIN);
       PUT SKIP LIST('guarded', I);
    END;
 
-   /* One `END OUTER;` closes the inner group and the labelled outer group. */
+   /* One `END OUTER;` closes the inner group and the labelled outer 
+   group. */
    TOTAL = 0;
    OUTER: DO I = 1 TO 3;
       DO J = 1 TO 3;
          TOTAL = TOTAL + 1;
    END OUTER;
    PUT SKIP LIST('pairs =', TOTAL);
-END LOOPS;
+ END LOOPS;

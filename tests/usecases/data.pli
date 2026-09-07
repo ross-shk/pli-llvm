@@ -1,15 +1,15 @@
- /* Self-contained, complements tests/core: declaration and procedure ground
-    that init.pli and procs.pli do not pin. Prints FAIL per violated check,
-    PASS only if all hold.
+ /* Self-contained, complements tests/core: declaration and procedure
+    ground that init.pli and procs.pli do not pin. Prints FAIL per
+    violated check, PASS only if all hold.
     TR 25.084 rules (11) declaration items, (2)-(4) nested procedure
-    structure; attribute defaults and string truncation per Y33-6003. */
+    structure; attribute defaults and truncation per Y33-6003. */
  data: procedure options(main);
     declare tag char(3);
     declare mark fixed bin(31) init(0);
     declare fails fixed bin(31);
 
-    /* Two-deep nesting: the innermost procedure reaches a variable of the
-       outermost procedure. */
+    /* Two-deep nesting: the innermost procedure reaches a variable
+       of the outermost procedure. */
     mid: procedure;
        leaf: procedure;
           mark = mark + 1;

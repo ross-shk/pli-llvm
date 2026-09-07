@@ -48,7 +48,7 @@
     mark = 0;
     begin;
        declare fresh fixed bin(31) init(42);
-       mark = fresh - 42;             /* assignment to the outer variable */
+        mark = fresh - 42;             /* assigns the outer variable */
        if fresh ¬= 42 then do;
           fails = fails + 1;
           put skip list('FAIL: begin decl =', fresh);
@@ -59,7 +59,7 @@
        put skip list('FAIL: begin outer access =', mark);
     end;
 
-    /* An iterative DO whose body contains DO WHILE: 1 + 2 + 3 passes. */
+    /* An iterative DO whose body contains DO WHILE: 1+2+3 passes. */
     total = 0;
     do i = 1 to 3;
        j = 0;
