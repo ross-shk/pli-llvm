@@ -119,10 +119,10 @@ exists because of this class of bug.
 | Style | modern lowercase PL/I, one leading space, as in `tests/usecases/expr.pli` |
 
 `run_tests.sh` auto-discovers every `tests/*/` subfolder — create one and it
-runs, and `run_tests.sh [group ...]` runs only the named groups. Golden groups
-diff against `expected/`; self-contained groups (no `expected/`) verify
-themselves: every internal check must hold for the final `PASS` — see
-`tests/usecases/`.
+runs; `run_tests.sh [group ... | <group>/<name>.pli]` runs whole groups or
+single tests. Golden groups diff against `expected/`; self-contained groups (no
+`expected/`) verify themselves: every internal check must hold for the final
+`PASS` — see `tests/usecases/`.
 
 Existing uppercase tests stay as they are — follow the style of the file you
 are editing.

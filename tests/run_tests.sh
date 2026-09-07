@@ -1,8 +1,9 @@
 #!/bin/sh
 # tests/run_tests.sh — compile, run and check every test program.
 #
-# Usage: tests/run_tests.sh [group ...]
-# Without arguments every tests/*/ group runs; otherwise only the named ones.
+# Usage: tests/run_tests.sh [group ... | <group>/<name>.pli ...]
+# Without arguments every tests/*/ group runs; otherwise only the named
+# groups, or the single tests named by path (e.g. usecases/data.pli).
 #
 # Each tests/<group>/ subfolder is a test group containing:
 #   <group>/*.pli           test programs (bad_*.pli must be rejected)
@@ -19,19 +20,48 @@ PLIC=./build/plic
 pass=0
 fail=0
 
-# Named groups must exist; captured before the main loop reuses "$@" for globs.
-groups="$*"
-for group in "$@"; do
-  [ -d "tests/$group" ] || { echo "run_tests.sh: no such test group: tests/$group"; exit 1; }
+# Arguments are group names or single-test paths; both must exist. Captured
+# before the main loop reuses "$@" for glob expansion.
+groups=""
+onetest_dir=""
+onetest_name=""
+for arg in "$@"; do
+  case "$arg" in
+    *.pli)
+      t=${arg#./}
+      case "$t" in
+        tests/*) ;;
+        *) t="tests/$t" ;;
+      esac
+      [ -f "$t" ] || { echo "run_tests.sh: no such test: $arg"; exit 1; }
+      onetest_dir=$(dirname "$t")/
+      onetest_name=$(basename "$t" .pli)
+      ;;
+    *)
+      [ -d "tests/$arg" ] || { echo "run_tests.sh: no such test group: tests/$arg"; exit 1; }
+      groups="$groups $arg"
+      ;;
+  esac
 done
 
 for dir in tests/*/; do
-  if [ -n "$groups" ]; then
-    base=$(basename "$dir")
-    case " $groups " in
-      *" $base "*) ;;
-      *) continue ;;
-    esac
+  # A named group runs whole; with no group arguments, a single-test path
+  # selects only its own group, filtered by name inside the loops.
+  base=$(basename "$dir")
+  named=0
+  case " $groups " in
+    *" $base "*) named=1 ;;
+  esac
+  if [ "$named" -eq 1 ]; then
+    single=0
+  elif [ -n "$onetest_dir" ] && [ "$dir" = "$onetest_dir" ]; then
+    single=1
+  elif [ -n "$groups" ]; then
+    continue
+  elif [ -z "$onetest_dir" ]; then
+    single=0
+  else
+    continue
   fi
   set -- "$dir"*.pli
   [ -f "$1" ] || continue
@@ -41,6 +71,7 @@ for dir in tests/*/; do
   # Execution tests: compile, run, then diff or self-check.
   for src in "$dir"*.pli; do
     name=$(basename "$src" .pli)
+    if [ "$single" -eq 1 ] && [ "$name" != "$onetest_name" ]; then continue; fi
     case "$name" in
       bad_*) continue ;;
     esac
@@ -80,6 +111,7 @@ for dir in tests/*/; do
   for src in "$dir"bad_*.pli; do
     [ -f "$src" ] || continue
     name=$(basename "$src" .pli)
+    if [ "$single" -eq 1 ] && [ "$name" != "$onetest_name" ]; then continue; fi
     if "$PLIC" "$src" -fsyntax-only > "$out/$name.compile" 2>&1; then
       echo "FAIL $name (expected diagnostics, compiled cleanly)"
       fail=$((fail + 1))
