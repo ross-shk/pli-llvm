@@ -1,6 +1,9 @@
 #!/bin/sh
 # tests/run_tests.sh — compile, run and check every test program.
 #
+# Usage: tests/run_tests.sh [group ...]
+# Without arguments every tests/*/ group runs; otherwise only the named ones.
+#
 # Each tests/<group>/ subfolder is a test group containing:
 #   <group>/*.pli           test programs (bad_*.pli must be rejected)
 #   <group>/out/            scratch binaries, logs and diffs (gitignored)
@@ -16,7 +19,20 @@ PLIC=./build/plic
 pass=0
 fail=0
 
+# Named groups must exist; captured before the main loop reuses "$@" for globs.
+groups="$*"
+for group in "$@"; do
+  [ -d "tests/$group" ] || { echo "run_tests.sh: no such test group: tests/$group"; exit 1; }
+done
+
 for dir in tests/*/; do
+  if [ -n "$groups" ]; then
+    base=$(basename "$dir")
+    case " $groups " in
+      *" $base "*) ;;
+      *) continue ;;
+    esac
+  fi
   set -- "$dir"*.pli
   [ -f "$1" ] || continue
   out="$dir/out"
