@@ -1,0 +1,23 @@
+/* PL/I HAS NO RESERVED WORDS (TR 25.084 §2.3, and the keyword recognition
+   discussion in docs/DESIGN-DECISIONS.md ADR-004). Every word below is used
+   both as an ordinary variable and as a statement keyword. */
+KEYWORDS: PROCEDURE OPTIONS(MAIN);
+   DECLARE IF FIXED BINARY(31);
+   DECLARE THEN FIXED BINARY(31);
+   DECLARE ELSE FIXED BINARY(31);
+   DECLARE DO FIXED BINARY(31);
+   DECLARE END FIXED BINARY(31);
+   DECLARE PUT FIXED BINARY(31);
+
+   IF = 1;          /* assignment to a variable named IF   */
+   THEN = 2;
+   ELSE = 3;
+   DO = 4;
+   END = 5;         /* ... even to one named END           */
+   PUT = 6;
+
+   IF IF = 1 THEN PUT SKIP LIST('IF =', IF);
+   IF THEN > IF THEN PUT SKIP LIST('THEN > IF');
+   IF DO + END = 9 THEN PUT SKIP LIST('DO + END =', DO + END);
+   IF PUT ¬= ELSE THEN PUT SKIP LIST('PUT ¬= ELSE');
+END KEYWORDS;

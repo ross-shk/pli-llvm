@@ -1,0 +1,6 @@
+/* Hello world — the canonical PL/I program.
+   TR 25.084 rules exercised: (1) program, (2) procedure, (5) OPTIONS,
+   (7) end-clause, (104)/(105)/(109) PUT LIST with the SKIP option. */
+HELLO: PROCEDURE OPTIONS(MAIN);
+   PUT SKIP LIST('Hello, world!');
+END HELLO;
