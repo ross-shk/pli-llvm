@@ -1,0 +1,69 @@
+ /* Self-contained, complements tests/core: expression ground that arith.pli
+    and strings.pli do not pin. Prints FAIL per violated check, PASS only if
+    all hold.
+    TR 25.084 rules (118) comparisons incl. negated forms, (121)-(122)
+    prefix operators and ** over a prefixed exponent, §2.3.3 NOT/OR words. */
+ expr: procedure options(main);
+    declare x float dec(6);
+    declare b bit(1);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* A prefixed exponent: the ** right operand is expression-one. */
+    x = 2 ** -3;
+    if x ¬= 0.125 then do;
+       fails = fails + 1;
+       put skip list('FAIL: 2**-3 =', x);
+    end;
+
+    /* Mixed FIXED and FLOAT operands compute in FLOAT. */
+    x = 1 + 2.5;
+    if x ¬= 3.5 then do;
+       fails = fails + 1;
+       put skip list('FAIL: 1 + 2.5 =', x);
+    end;
+
+    /* Negated comparisons (rule 118): 2 ¬< 1 and 1 ¬> 2 hold... */
+    if ^(2 ¬< 1 & 1 ¬> 2) then do;
+       fails = fails + 1;
+       put skip list('FAIL: negated comparisons');
+    end;
+
+    /* ...and 1 ¬< 2 / 2 ¬> 1 do not. */
+    if 1 ¬< 2 | 2 ¬> 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL: negated comparisons true side');
+    end;
+
+    if ^(2 >= 1 & 1 <= 2) | (1 >= 2 | 2 <= 1) then do;
+       fails = fails + 1;
+       put skip list('FAIL: ge/le');
+    end;
+
+    /* The word forms NOT and OR behave as ¬ and |. */
+    if ^(not (1 = 2) & (1 = 1 or 2 = 3)) then do;
+       fails = fails + 1;
+       put skip list('FAIL: NOT/OR word forms');
+    end;
+
+    /* A BIT(1) computed from a comparison drives a condition. */
+    b = 3 > 2;
+    if ^b then do;
+       fails = fails + 1;
+       put skip list('FAIL: bit from true comparison');
+    end;
+    b = 2 > 3;
+    if b then do;
+       fails = fails + 1;
+       put skip list('FAIL: bit from false comparison');
+    end;
+
+    /* Character ordering runs the other way than strings.pli checks. */
+    if ^('b' > 'a') then do;
+       fails = fails + 1;
+       put skip list('FAIL: char >');
+    end;
+
+    if fails = 0 then put skip list('PASS');
+ end expr;

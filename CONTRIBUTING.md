@@ -39,14 +39,15 @@ test. Keep them in one change.
    its rule number, e.g. `(104)-(109)` for stream I/O. If it is not in
    TR 25.084, it is out of scope — say so instead of implementing it.
 2. **Write the test first.** `tests/core/<feature>.pli`, lowercase PL/I, with
-   a header comment naming the rules exercised. Add `tests/core/bad_<feature>.pli`
-   if the feature has error cases.
+   a header comment naming the rules exercised. Add
+   `tests/core/bad_<feature>.pli` if the feature has error cases.
 3. **Implement across the layers** in the table above, smallest change that
    works (KISS). Diagnose what you do not implement — never accept silently.
-4. **Verify**: `make test`. Then record expected output:
+4. **Verify**: `make test`. For a golden test, record the baseline:
    `./build/plic tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out`
-   Read that file before committing it — it is now the specification of
-   behaviour, so a wrong line becomes a permanent wrong answer.
+   and read it before committing — it becomes the specification of behaviour,
+   so a wrong line is a permanent wrong answer. A self-contained test needs no
+   baseline: its `PASS` is the verdict.
 5. **Check the IR** for anything non-trivial: `-emit-llvm` and read it. Cheap,
    and catches silently-dropped work (see the worked example below).
 6. **Update docs**: flip the row in `docs/GRAMMAR-COVERAGE.md`; adjust
@@ -110,15 +111,17 @@ exists because of this class of bug.
 
 | Convention | Meaning |
 |---|---|
-| `tests/<group>/x.pli` + `tests/<group>/expected/x.out` | compile, run, diff stdout |
+| `tests/<group>/x.pli` + `tests/<group>/expected/x.out` | golden: compile, run, diff stdout |
+| `tests/<group>/x.pli` without `expected/` | self-contained: passes iff it prints `PASS` and never `FAIL` |
 | `tests/<group>/bad_x.pli` | must be rejected; `run_tests.sh` checks exit status |
 | `tests/<group>/out/` | scratch binaries, logs and diffs; gitignored |
 | Header comment | names the rules exercised, e.g. `rules (74),(75)` |
-| Style | modern lowercase PL/I, one leading space, as in `tests/core/init.pli` |
+| Style | modern lowercase PL/I, one leading space, as in `tests/usecases/expr.pli` |
 
-`run_tests.sh` auto-discovers every `tests/*/` subfolder: a group is any
-folder with `*.pli` programs and an `expected/` directory — create one and
-it runs.
+`run_tests.sh` auto-discovers every `tests/*/` subfolder — create one and it
+runs. Golden groups diff against `expected/`; self-contained groups (no
+`expected/`) verify themselves: every internal check must hold for the final
+`PASS` — see `tests/usecases/`.
 
 Existing uppercase tests stay as they are — follow the style of the file you
 are editing.

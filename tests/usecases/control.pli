@@ -1,0 +1,77 @@
+ /* Self-contained, complements tests/core: control-flow ground that
+    ifelse.pli and loops.pli do not pin. Prints FAIL per violated check,
+    PASS only if all hold.
+    TR 25.084 rules (69)-(73) do-specification BY forms, (74)-(76)
+    if-statement, (8)-(9) BEGIN blocks and declarations. */
+ control: procedure options(main);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare total fixed bin(31);
+    declare mark fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* Positive BY with TO (rule 71): 0 + 2 + 4 + 6. */
+    total = 0;
+    do i = 0 to 7 by 2;
+       total = total + i;
+    end;
+    if total ¬= 12 then do;
+       fails = fails + 1;
+       put skip list('FAIL: to by 2 sum =', total);
+    end;
+
+    /* BY with WHILE and no TO (rule 73): 1 + 3 + 5 + 7. */
+    total = 0;
+    do i = 1 by 2 while (i < 8);
+       total = total + i;
+    end;
+    if total ¬= 16 then do;
+       fails = fails + 1;
+       put skip list('FAIL: by while sum =', total);
+    end;
+
+    /* The ELSE branch as a DO group. */
+    i = 3;
+    if i > 5 then j = 1;
+    else do;
+       j = 30;
+    end;
+    if j ¬= 30 then do;
+       fails = fails + 1;
+       put skip list('FAIL: else do group =', j);
+    end;
+
+    /* A BEGIN block declares names of its own; enclosing names stay
+       visible inside it. */
+    mark = 0;
+    begin;
+       declare fresh fixed bin(31) init(42);
+       mark = fresh - 42;             /* assignment to the outer variable */
+       if fresh ¬= 42 then do;
+          fails = fails + 1;
+          put skip list('FAIL: begin decl =', fresh);
+       end;
+    end;
+    if mark ¬= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL: begin outer access =', mark);
+    end;
+
+    /* An iterative DO whose body contains DO WHILE: 1 + 2 + 3 passes. */
+    total = 0;
+    do i = 1 to 3;
+       j = 0;
+       do while (j < i);
+          j = j + 1;
+          total = total + 1;
+       end;
+    end;
+    if total ¬= 6 then do;
+       fails = fails + 1;
+       put skip list('FAIL: nested while total =', total);
+    end;
+
+    if fails = 0 then put skip list('PASS');
+ end control;

@@ -72,7 +72,7 @@ plic [options] file.pli
 ```
 src/         compiler: diag, lexer, parser, sema, irgen, driver
 runtime/     libpli: list-directed output, string semantics, conditions
-tests/       run_tests.sh + test groups: *.pli + expected/*.out + out/ scratch
+tests/       groups: golden (expected/*.out) or self-checking (prints PASS) + out/
 docs/        architecture, decisions, optimization, plan, coverage
 ```
 
@@ -83,11 +83,11 @@ generated LLVM IR — see ADR-002; the LLVM C++ API arrives in M1).
 
 ```
 make          # build build/plic and build/libpli.a
-make test     # compile, run and diff every test program
+make test     # compile, run and check every test program (diff or PASS-grep)
 make clean
 ```
 
-Current suite: 9 tests (8 execution + 1 diagnostic), all passing.
+Current suite: 12 tests (8 golden + 3 self-contained + 1 diagnostic), all passing.
 
 ## Example: generated IR
 

@@ -1,10 +1,13 @@
 #!/bin/sh
-# tests/run_tests.sh — compile, run and diff every test program.
+# tests/run_tests.sh — compile, run and check every test program.
 #
 # Each tests/<group>/ subfolder is a test group containing:
 #   <group>/*.pli           test programs (bad_*.pli must be rejected)
-#   <group>/expected/*.out  expected stdout, diff-checked
 #   <group>/out/            scratch binaries, logs and diffs (gitignored)
+# A group is one of two classes:
+#   golden — expected/*.out exists: stdout is diff-checked against it
+#   self   — no expected/: the program verifies itself and must print
+#            PASS (case-insensitive); any FAIL in its output fails the test
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -19,7 +22,7 @@ for dir in tests/*/; do
   out="$dir/out"
   mkdir -p "$out"
 
-  # Execution tests: compile, run, diff against expected output.
+  # Execution tests: compile, run, then diff or self-check.
   for src in "$dir"*.pli; do
     name=$(basename "$src" .pli)
     case "$name" in
@@ -34,16 +37,26 @@ for dir in tests/*/; do
     fi
 
     "$out/$name" > "$out/$name.out" 2>&1
-    if [ ! -f "$dir/expected/$name.out" ]; then
-      echo "FAIL $name (no expected output; run: $out/$name > $dir/expected/$name.out)"
-      fail=$((fail + 1))
-    elif diff -u "$dir/expected/$name.out" "$out/$name.out" > "$out/$name.diff" 2>&1; then
-      echo "PASS $name"
-      pass=$((pass + 1))
+    if [ -f "$dir/expected/$name.out" ]; then
+      # Golden test: diff against the recorded baseline.
+      if diff -u "$dir/expected/$name.out" "$out/$name.out" > "$out/$name.diff" 2>&1; then
+        echo "PASS $name"
+        pass=$((pass + 1))
+      else
+        echo "FAIL $name (output differs)"
+        sed 's/^/      /' "$out/$name.diff"
+        fail=$((fail + 1))
+      fi
     else
-      echo "FAIL $name (output differs)"
-      sed 's/^/      /' "$out/$name.diff"
-      fail=$((fail + 1))
+      # Self-contained test: the program verifies itself.
+      if grep -qi 'PASS' "$out/$name.out" && ! grep -qi 'FAIL' "$out/$name.out"; then
+        echo "PASS $name"
+        pass=$((pass + 1))
+      else
+        echo "FAIL $name (self test did not print PASS)"
+        sed 's/^/      /' "$out/$name.out"
+        fail=$((fail + 1))
+      fi
     fi
   done
 

@@ -1,0 +1,55 @@
+ /* Self-contained, complements tests/core: declaration and procedure ground
+    that init.pli and procs.pli do not pin. Prints FAIL per violated check,
+    PASS only if all hold.
+    TR 25.084 rules (11) declaration items, (2)-(4) nested procedure
+    structure; attribute defaults and string truncation per Y33-6003. */
+ data: procedure options(main);
+    declare tag char(3);
+    declare mark fixed bin(31) init(0);
+    declare fails fixed bin(31);
+
+    /* Two-deep nesting: the innermost procedure reaches a variable of the
+       outermost procedure. */
+    mid: procedure;
+       leaf: procedure;
+          mark = mark + 1;
+       end leaf;
+       call leaf;
+       call leaf;
+    end mid;
+
+    fails = 0;
+
+    /* One DECLARE with several items, each with INITIAL (rule 11). */
+    declare n2 fixed bin(31) init(5),
+            k2 fixed bin(31) init(7);
+    if n2 + k2 ¬= 12 then do;
+       fails = fails + 1;
+       put skip list('FAIL: declare list with init =', n2 + k2);
+    end;
+
+    /* Attribute defaults: J (I-N) defaults to FIXED BINARY, COUNT
+       (outside I-N) to FLOAT. */
+    j = 3;
+    count = 2.5;
+    if j ¬= 3 | count ¬= 2.5 then do;
+       fails = fails + 1;
+       put skip list('FAIL: implicit j =', j, 'count =', count);
+    end;
+
+    /* Assignment to CHARACTER(3) truncates. */
+    tag = 'ABCDE';
+    if tag ¬= 'ABC' then do;
+       fails = fails + 1;
+       put skip list('FAIL: char truncation =', tag);
+    end;
+
+    /* The nested procedures update the outermost variable. */
+    call mid;
+    if mark ¬= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL: depth-2 update =', mark);
+    end;
+
+    if fails = 0 then put skip list('PASS');
+ end data;
