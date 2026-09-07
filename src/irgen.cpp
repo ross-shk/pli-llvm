@@ -107,20 +107,45 @@ void IRGen::emitGlobals() {
   for (Symbol *s : sema_.storage()) {
     if (!s->isStatic || s->kind != Symbol::Var) continue;
     const Type &t = s->ty;
+    const Expr *ini = s->initExpr;  // INITIAL constant, rule (26)
     std::string init;
     switch (t.k) {
       case TK::FixedBin:
-      case TK::FixedDec: init = "0"; break;
-      case TK::Float: init = fmtDouble(0.0); break;
-      case TK::Bit: init = "0"; break;
+      case TK::FixedDec: {
+        long long v = 0;
+        if (ini) v = ini->kind == Expr::FltLit ? (long long)ini->fval
+                   : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
+                   : ini->ival;
+        init = std::to_string(v);
+        break;
+      }
+      case TK::Float: {
+        double v = 0;
+        if (ini) v = ini->kind == Expr::FltLit ? ini->fval : (double)ini->ival;
+        init = fmtDouble(v);
+        break;
+      }
+      case TK::Bit: {
+        int v = 0;
+        if (ini) v = ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
+                   : (ini->ival != 0 || ini->fval != 0);
+        init = std::to_string(v);
+        break;
+      }
       case TK::Char: {
         // M0 blank-fills character storage; the spec leaves uninitialised
         // AUTOMATIC storage undefined (see ADR-010).
-        std::string blanks(t.len, ' ');
-        if (t.varying)
-          init = "{ i32 0, [" + std::to_string(t.len) + " x i8] c\"" + irEscape(blanks) + "\" }";
-        else
-          init = "c\"" + irEscape(blanks) + "\"";
+        std::string text(t.len, ' ');
+        if (ini) {
+          for (int i = 0; i < t.len && i < (int)ini->sval.size(); ++i) text[i] = ini->sval[i];
+        }
+        if (t.varying) {
+          size_t cur = ini ? std::min<size_t>(ini->sval.size(), (size_t)t.len) : 0;
+          init = "{ i32 " + std::to_string(cur) + ", [" + std::to_string(t.len) +
+                 " x i8] c\"" + irEscape(text) + "\" }";
+        } else {
+          init = "c\"" + irEscape(text) + "\"";
+        }
         break;
       }
       case TK::Void: continue;

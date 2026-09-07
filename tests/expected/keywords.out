@@ -1,0 +1,4 @@
+IF = 1
+THEN > IF
+DO + END = 9
+PUT ¬= ELSE

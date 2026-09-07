@@ -154,6 +154,12 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
           if (e->kind == Expr::IntLit || e->kind == Expr::FltLit ||
               e->kind == Expr::CharLit || e->kind == Expr::BitLit) {
             if (neg) { e->ival = -e->ival; e->fval = -e->fval; }
+            // INITIAL must be assignable to the declared type.
+            bool strInit = e->kind == Expr::CharLit;
+            if (item.ty.isChar() != strInit)
+              d_.error(item.loc, "INITIAL value is not compatible with " + item.ty.desc(), "(26)");
+            else
+              item.sym->initExpr = e;  // consumed by code generation
           } else {
             d_.error(item.loc, "INITIAL requires a constant in this stage", "(26)");
             item.init.reset();

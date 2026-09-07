@@ -1,0 +1,23 @@
+/* INITIAL attribute (rule 26) on both storage classes.
+   Regression test: init values on external-procedure variables (which get
+   static storage in M0) were silently dropped before. */
+ init_test: procedure options(main);
+    declare i fixed bin(31) init(7);
+    declare x float dec(6) init(2.5);
+    declare s char(6) init('ab');
+    declare v char(10) varying init('hello');
+    declare b bit(1) init('1'b);
+    declare n fixed bin(31) init(-3);
+
+    put skip list('static:', i, x, '[' || s || ']', v, b, n);
+
+    if i = 7 then put skip list('static initial survived');
+
+    inner: procedure;
+       declare j fixed bin(31) init(41);   /* automatic storage */
+       j = j + 1;
+       put skip list('automatic:', j);
+    end inner;
+
+    call inner;
+ end init_test;

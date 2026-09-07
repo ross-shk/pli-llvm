@@ -16,6 +16,7 @@ struct Symbol {
   bool implicit = false;   // created by the implicit-declaration rule
   std::string irName;      // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc *proc = nullptr;    // for ProcName
+  Expr *initExpr = nullptr;  // folded INITIAL constant, rule (26)
 };
 
 struct Scope {
