@@ -1,5 +1,7 @@
 *.o
 *.out
+*.ll
 
 build/
 tests/out/
+examples/
