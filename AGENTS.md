@@ -17,7 +17,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 |---|---|
 | `src/` | `lexer` → `parser` → `sema` → `irgen` (+ `diag`, `types`, `ast`, `main`) |
 | `runtime/` | `libpli`: list-directed I/O, string semantics, conditions (C11) |
-| `tests/` | `run_tests.sh` + groups: `<group>/*.pli` + `<group>/expected/*.out`, `bad_*` must fail |
+| `tests/` | `run_tests.sh` + groups: golden (`expected/*.out` diff) or self-checking (prints PASS), `bad_*` must fail |
 | `docs/` | ARCHITECTURE, DESIGN-DECISIONS (ADRs), OPTIMIZATION, IMPLEMENTATION-PLAN, GRAMMAR-COVERAGE |
 | `examples/` | scratch programs, git-ignored |
 | `TR25.084-concrete-syntax.md` | the spec: rules (1)–(151), with ⚠ notes where the scan was damaged |
@@ -39,8 +39,8 @@ make && make test                        # 9 tests, must stay green
 
 ## Feature work
 1. find the rule in `docs/GRAMMAR-COVERAGE.md` — not in TR 25.084 ⇒ out of scope, say so
-2. test first (`tests/core/x.pli`, lowercase PL/I), then AST kind → parse → sema → irgen → runtime
-3. `make test`, record expected output, **read it**
+2. test first (`tests/core/x.pli` golden or `tests/usecases/` self-checking, lowercase PL/I), then AST kind → parse → sema → irgen → runtime
+3. `make test`; golden: record expected output, **read it**; self: print PASS
 4. update `GRAMMAR-COVERAGE.md`; add an ADR if a decision was made
 5. stage; report rules moved + test counts
 

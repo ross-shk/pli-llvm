@@ -58,7 +58,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (106)–(111) | data specifications, data lists | partial M0 | list-directed output; `DATA`/`EDIT` → M6 |
 | (112),(113) | record I/O | diag → M7 | option set from Y33-6003 (scan incomplete) |
 | (114) | `DISPLAY` | M6 | scan garbled; Y33-6003 form used |
-| (115)–(122) | expression precedence hierarchy | M0 | `arith.pli` |
+| (115)–(122) | expression precedence hierarchy | M0 | `arith.pli` pins `-3**2` = `-(3**2)` = -9 ((128) constants are unsigned); `usecases/expr.pli` pins negated comparisons and a prefixed `**` exponent |
 | (118) | comparison operators | M0 | incl. `¬=`, `¬>`, `¬<` |
 | (123) | primitive expressions | M0 | |
 | (124),(125) | locator qualification, qualified names | diag → M3/M4 | |
