@@ -1,7 +1,7 @@
-/* IF ... THEN ... ELSE, including nested statements and a DO group as the
-   then-branch.  TR 25.084 rules (74) if-statement, (75) if-clause,
+/* IF ... THEN ... ELSE, including nested statements and a DO group as
+   the then-branch.  TR 25.084 rules (74) if-statement, (75) if-clause,
    (76) balanced-statement, (115)-(118) expressions. */
-IFELSE: PROCEDURE OPTIONS(MAIN);
+ IFELSE: PROCEDURE OPTIONS(MAIN);
    DECLARE I FIXED BINARY(31);
    DECLARE GRADE CHARACTER(4);
 
@@ -27,4 +27,4 @@ IFELSE: PROCEDURE OPTIONS(MAIN);
 
    IF ¬(I = 17) THEN PUT SKIP LIST('not 17');
    ELSE PUT SKIP LIST('is 17');
-END IFELSE;
+ END IFELSE;

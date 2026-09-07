@@ -1,8 +1,9 @@
- /* Self-contained, complements tests/core: expression ground that arith.pli
-    and strings.pli do not pin. Prints FAIL per violated check, PASS only if
-    all hold.
+ /* Self-contained, complements tests/core: expression ground that
+    arith.pli and strings.pli do not pin. Prints FAIL per violated
+    check, PASS only if all hold.
     TR 25.084 rules (118) comparisons incl. negated forms, (121)-(122)
-    prefix operators and ** over a prefixed exponent, §2.3.3 NOT/OR words. */
+    prefix operators and ** over a prefixed exponent, §2.3.3 NOT and
+    OR word forms. */
  expr: procedure options(main);
     declare x float dec(6);
     declare b bit(1);

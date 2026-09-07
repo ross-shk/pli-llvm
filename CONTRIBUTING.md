@@ -116,7 +116,7 @@ exists because of this class of bug.
 | `tests/<group>/bad_x.pli` | must be rejected; `run_tests.sh` checks exit status |
 | `tests/<group>/out/` | scratch binaries, logs and diffs; gitignored |
 | Header comment | names the rules exercised, e.g. `rules (74),(75)` |
-| Style | modern lowercase PL/I, one leading space, as in `tests/usecases/expr.pli` |
+| Style | modern lowercase PL/I: one leading space, margins 2–72, as in `tests/usecases/expr.pli` |
 
 `run_tests.sh` auto-discovers every `tests/*/` subfolder — create one and it
 runs; `run_tests.sh [group ... | <group>/<name>.pli]` runs whole groups or

@@ -99,7 +99,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 12 tests (8 golden + 3 self-contained + 1 diagnostic), all passing.
+Current suite: 13 tests (8 golden + 4 self-contained + 1 diagnostic), all passing.
 
 ## Example: generated IR
 

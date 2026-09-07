@@ -1,7 +1,7 @@
-/* Expression evaluation: operator precedence exactly as rules (115)-(122),
-   truncation on assignment to a FIXED target, and the 48-character-set
-   operator words of TR §2.3.3. */
-ARITH: PROCEDURE OPTIONS(MAIN);
+ /* Expression evaluation: operator precedence exactly as rules (115)-(122),
+    truncation on assignment to a FIXED target, and the 48-character-set
+    operator words of TR §2.3.3. */
+ ARITH: PROCEDURE OPTIONS(MAIN);
    DECLARE I FIXED BINARY(31);
    DECLARE X FLOAT DECIMAL(6);
    DECLARE B BIT(1);
@@ -31,4 +31,4 @@ ARITH: PROCEDURE OPTIONS(MAIN);
    IF I LT 0 & ^(I = 0) THEN PUT SKIP LIST('LT and ^ agree');
    IF 1 = 1 AND 2 GT 1 THEN PUT SKIP LIST('AND and GT agree');
    PUT SKIP LIST('cat:', 'ab' CAT 'cd');
-END ARITH;
+ END ARITH;
