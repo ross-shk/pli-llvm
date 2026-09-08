@@ -384,7 +384,10 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
       break;
     case Stmt::DoIter: {
       Symbol *sym = lookup(sc, s->name);
-      if (!sym) sym = implicitDeclare(sc, s->name, s->loc, p->parent == nullptr);
+      if (!sym) {
+        sym = implicitDeclare(sc, s->name, s->loc, false);
+        p->localSyms.push_back(sym);  // implicit vars are AUTOMATIC storage
+      }
       s->sym = sym;
       if (!sym->ty.isNumeric())
         d_.error(s->loc, "DO control variable must be arithmetic, found " + sym->ty.desc(), "(72)");
@@ -478,7 +481,10 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       break;
     case Expr::VarRef: {
       Symbol *sym = lookup(sc, e->name);
-      if (!sym) sym = implicitDeclare(sc, e->name, e->loc, p->parent == nullptr);
+      if (!sym) {
+        sym = implicitDeclare(sc, e->name, e->loc, false);
+        p->localSyms.push_back(sym);  // implicit vars are AUTOMATIC storage
+      }
       if (!sym->owner) sym->owner = p;
       e->sym = sym;
       e->ty = sym->ty;
