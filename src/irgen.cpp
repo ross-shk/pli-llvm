@@ -98,6 +98,32 @@ llvm::Function *IRGen::runtimeFn(const std::string &name, llvm::Type *ret,
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
+// Resolve the LLVM function a call targets. External C entries (rule (38)) have
+// no PL/I body, so no function is pre-declared; declare it on demand. Every
+// PL/I argument is passed by reference, so all parameters are pointers.
+llvm::Function *IRGen::calleeFn(Symbol *sym) {
+  Proc *callee = sym->proc;
+  Stmt *en = sym->entry;
+  std::string name;
+  if (en)
+    name = entryIrName(callee, en).substr(1);
+  else if (callee)
+    name = callee->irName.substr(1);
+  else if (sym->isEntry)
+    name = sym->irName.substr(1);
+  else
+    return nullptr;
+
+  llvm::Function *f = mod_.getFunction(name);
+  if (f) return f;
+  if (!sym->isEntry) return f;  // internal callee missing a declaration is a bug
+
+  std::vector<llvm::Type *> pt;
+  for (size_t i = 0; i < sym->entryParams.size(); ++i) pt.push_back(b_.getPtrTy());
+  llvm::FunctionType *ft = llvm::FunctionType::get(b_.getVoidTy(), pt, false);
+  return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+}
+
 // ---------------------------------------------------------------------------
 // module
 // ---------------------------------------------------------------------------
@@ -767,13 +793,7 @@ void IRGen::emitCall(Stmt *s) {
   Symbol *calleeSym = s->sym;
   Proc *callee = calleeSym->proc;
   Stmt *en = calleeSym->entry;
-  llvm::Function *calleeFn;
-  if (en)
-    calleeFn = mod_.getFunction(entryIrName(callee, en).substr(1));
-  else if (callee)
-    calleeFn = mod_.getFunction(callee->irName.substr(1));
-  else
-    calleeFn = mod_.getFunction(calleeSym->irName.substr(1));
+  llvm::Function *calleeF = calleeFn(calleeSym);
   std::vector<Symbol *> calleeParams =
       en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol *>());
 
@@ -833,7 +853,7 @@ void IRGen::emitCall(Stmt *s) {
       args.push_back(addressOf(v));
     }
   }
-  b_.CreateCall(calleeFn, args);
+  b_.CreateCall(calleeF, args);
 }
 
 // ---------------------------------------------------------------------------

@@ -87,6 +87,9 @@ private:
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
   llvm::Function *runtimeFn(const std::string &name, llvm::Type *ret,
                             std::vector<llvm::Type *> args, bool vararg = false);
+  // Resolve a call target's LLVM function; for an external C entry (rule 38),
+  // get-or-create its external declaration (no PL/I body).
+  llvm::Function *calleeFn(Symbol *sym);
 
   Diags &d_;
   Sema &sema_;
