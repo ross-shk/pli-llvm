@@ -160,6 +160,19 @@ long long pli_verify(const char *s, long long slen, const char *t, long long tle
   return 0;
 }
 
+/* TRANSLATE(s, out, in): copy s, mapping each character that occurs in `in`
+ * to the corresponding character of `out`; unmatched characters pass through. */
+void pli_translate(char *dst, long long dstcap, const char *s, long long slen,
+                   const char *out, long long outlen, const char *in, long long inlen) {
+  for (long long i = 0; i < slen && i < dstcap; ++i) {
+    char c = s[i];
+    long long k = 0;
+    while (k < inlen && c != in[k]) ++k;
+    if (k < inlen && k < outlen) c = out[k];
+    dst[i] = c;
+  }
+}
+
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {

@@ -1,0 +1,7 @@
+ /* Diagnostic test: TRANSLATE with a non-character argument is rejected. */
+ BADTRANSLATE: PROCEDURE OPTIONS(MAIN);
+    DECLARE N FIXED BINARY(31);
+    DECLARE T CHAR(4);
+    N = 5;
+    T = TRANSLATE('ABCD', N, 'AB');
+ END BADTRANSLATE;
