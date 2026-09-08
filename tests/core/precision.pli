@@ -1,0 +1,35 @@
+ /* PRECISION built-in function: precision(x, p) yields x with p digits (or
+    bits) of precision, keeping the base type of x. M2 arithmetic built-in
+    (Y33-6003 PRECISION); exact FIXED precision/scale rules are M2 (ADR-006),
+    so the value itself is preserved and only the declared precision changes. */
+ precision_test: procedure options(main);
+    declare x fixed bin(31);
+    declare y fixed bin(63);
+    declare f float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    x = 12345;
+    y = precision(x, 40);
+    if y ^= 12345 then do;
+       fails = fails + 1;
+       put skip list('FAIL precision(12345,40) =', y);
+    end;
+
+    x = -999;
+    y = precision(x, 63);
+    if y ^= -999 then do;
+       fails = fails + 1;
+       put skip list('FAIL precision(-999,63) =', y);
+    end;
+
+    f = precision(3.5, 6);
+    if f ^= 3.5 then do;
+       fails = fails + 1;
+       put skip list('FAIL precision(3.5,6) =', f);
+    end;
+
+    if fails = 0 then put skip list('PASS precision');
+    else put skip list('FAIL precision: fails =', fails);
+ end precision_test;

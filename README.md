@@ -59,8 +59,9 @@ make install
 - `CHARACTER(n)`, `CHARACTER(n) VARYING`, concatenation, blank-padded
   comparison; replicated string constants `(n)'str'` (rule 129); the `SUBSTR`,
   `INDEX`, `LENGTH`, `REPEAT`, `VERIFY`, `TRANSLATE`, `HIGH`, `LOW`, `DATE`,
-  `TIME`, `ABS`, `TRUNC`, `MIN`, `MAX`, `MOD`, `ROUND`, `MULTIPLY` and `DIVIDE`
-  built-in functions; `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
+  `TIME`, `ABS`, `TRUNC`, `MIN`, `MAX`, `MOD`, `ROUND`, `MULTIPLY`, `DIVIDE`
+  and `PRECISION` built-in functions; `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL`
+  (scale 0)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
   `END` and `PUT` as ordinary variables
 

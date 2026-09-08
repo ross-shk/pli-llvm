@@ -848,6 +848,13 @@ Val IRGen::emitExpr(Expr *e) {
         }
         return v;
       }
+      // PRECISION built-in (M2): keep x's value, widen/narrow to the result
+      // type when the requested precision changes the FIXED storage width.
+      if (e->name == "PRECISION") {
+        Val a = emitExpr(e->args[0].get());
+        v = convert(a, e->ty, e->loc);
+        return v;
+      }
       // MIN built-in (M2): convert both operands to the common type and select
       // the smaller.
       if (e->name == "MIN") {
