@@ -505,6 +505,22 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
         break;
       }
+      // MAX built-in (M2): max(a, b) — the larger of two numerics, in their
+      // common arithmetic type (two-argument form in this stage).
+      if (e->name == "MAX") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "MAX takes 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "MAX arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
