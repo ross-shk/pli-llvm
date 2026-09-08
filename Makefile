@@ -12,9 +12,14 @@ BUILD    := build
 BIN      := $(BUILD)/plic
 RTLIB    := $(BUILD)/libpli.a
 
-SRCS     := src/main.cpp src/diag.cpp src/lexer.cpp src/parser.cpp src/sema.cpp src/irgen.cpp
+SRCS     := src/main.cpp src/diag.cpp src/explain.cpp src/lexer.cpp src/parser.cpp src/sema.cpp src/irgen.cpp
 OBJS     := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRCS))
 DEPS     := $(OBJS:.o=.d)
+
+# --explain data: the TR 25.084 productions, generated from the spec so the
+# table cannot drift from TR25.084-concrete-syntax.md (see scripts/gen_rules.py).
+RULES_CPP := $(BUILD)/rules.cpp
+RULES_OBJ := $(BUILD)/rules.o
 
 RT_SRCS  := runtime/pli_rt.c
 RT_OBJS  := $(patsubst runtime/%.c,$(BUILD)/rt_%.o,$(RT_SRCS))
@@ -31,11 +36,17 @@ $(BUILD):
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' -MMD -MP -c $< -o $@
 
+$(RULES_CPP): TR25.084-concrete-syntax.md scripts/gen_rules.py | $(BUILD)
+	python3 scripts/gen_rules.py $< $@
+
+$(RULES_OBJ): $(RULES_CPP) src/explain.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) -Isrc -c $< -o $@
+
 $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BIN): $(OBJS)
-	$(CXX) $(CXXFLAGS) $(OBJS) -o $@
+$(BIN): $(OBJS) $(RULES_OBJ)
+	$(CXX) $(CXXFLAGS) $(OBJS) $(RULES_OBJ) -o $@
 
 $(RTLIB): $(RT_OBJS)
 	ar rcs $@ $(RT_OBJS)

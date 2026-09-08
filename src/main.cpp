@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "diag.h"
+#include "explain.h"
 #include "irgen.h"
 #include "lexer.h"
 #include "parser.h"
@@ -39,6 +40,7 @@ static void usage() {
       "  --keep-ll        keep the intermediate .ll next to the output\n"
       "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
       "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
+      "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
       "  -v               show the sub-commands being run\n"
       "  -h, --help       this message\n";
 }
@@ -58,6 +60,7 @@ int main(int argc, char **argv) {
   std::string input, output, runtimeLib = PLIC_RUNTIME_LIB, triple;
   std::string optLevel = "-O2";
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
+  int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -73,11 +76,30 @@ int main(int argc, char **argv) {
     else if (a == "--keep-ll") keepLL = true;
     else if (a == "--runtime") runtimeLib = next("--runtime");
     else if (a == "--triple") triple = next("--triple");
+    else if (a == "--explain") {
+      const std::string n = next("--explain");
+      char *end = nullptr;
+      long v = strtol(n.c_str(), &end, 10);
+      if (end == n.c_str() || *end != '\0' || v < 1 || v > 151) {
+        std::cerr << "plic: --explain needs a rule number 1..151\n";
+        return 2;
+      }
+      explain = (int)v;
+    }
     else if (a == "-v") verbose = true;
     else if (a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os") optLevel = a;
     else if (!a.empty() && a[0] == '-') { std::cerr << "plic: unknown option " << a << "\n"; return 2; }
     else if (input.empty()) input = a;
     else { std::cerr << "plic: more than one input file given\n"; return 2; }
+  }
+
+  // `--explain` needs no input file: print the production and exit.
+  if (explain) {
+    if (!explainRule(explain)) {
+      std::cerr << "plic: no TR 25.084 rule (" << explain << ")\n";
+      return 1;
+    }
+    return 0;
   }
 
   if (input.empty()) { usage(); return 2; }
