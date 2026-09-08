@@ -108,6 +108,7 @@ std::string IRGen::run(Program &prog) {
       "declare void @pli_assign_char(ptr, i64, ptr, i64)\n"
       "declare i64 @pli_assign_varying(ptr, i64, ptr, i64)\n"
       "declare void @pli_concat(ptr, ptr, i64, ptr, i64)\n"
+      "declare void @pli_substr(ptr, i64, ptr, i64, i64, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n";
 
@@ -763,6 +764,19 @@ Val IRGen::emitExpr(Expr *e) {
       if (!e->sym) { v.ty = e->ty; v.reg = "0"; return v; }
       return loadSym(e->sym, e->sym->ty);
     case Expr::Call: {
+      // SUBSTR built-in (M2): substr(s, i, n) — copy n chars of s starting at
+      // the 1-based position i into a fresh buffer.
+      if (e->name == "SUBSTR") {
+        Val s = emitExpr(e->args[0].get());
+        Val start = emitExpr(e->args[1].get());
+        Val len = emitExpr(e->args[2].get());
+        Val out = charTemp(e->ty.len);
+        body_ += "  call void @pli_substr(ptr " + out.ptr + ", i64 " + out.len +
+                 ", ptr " + s.ptr + ", i64 " + s.len + ", i64 " + toI64(start) +
+                 ", i64 " + toI64(len) + ")\n";
+        out.len = std::to_string(e->ty.len);
+        return out;
+      }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.
       if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = "0"; return v; }

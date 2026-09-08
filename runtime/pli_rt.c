@@ -104,6 +104,19 @@ void pli_concat(char *dst, const char *a, long long alen, const char *b, long lo
   if (blen > 0) memmove(dst + alen, b, (size_t)blen);
 }
 
+/* SUBSTR(s, i, n): copy up to n characters of s starting at the 1-based
+ * position i, blank-filling the tail. Positions past the end of s clip to
+ * blanks (a real compiler would raise SUBSCRIPTRANGE, M3). */
+void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
+                long long start, long long len) {
+  long long n = len < dstcap ? len : dstcap;
+  long long avail = srclen - (start - 1);
+  if (avail < 0) avail = 0;
+  long long take = avail < n ? avail : n;
+  if (take > 0 && start >= 1) memmove(dst, src + (start - 1), (size_t)take);
+  if (n > take) memset(dst + take, ' ', (size_t)(n - take));
+}
+
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {
