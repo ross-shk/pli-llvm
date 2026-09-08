@@ -109,6 +109,7 @@ std::string IRGen::run(Program &prog) {
       "declare i64 @pli_assign_varying(ptr, i64, ptr, i64)\n"
       "declare void @pli_concat(ptr, ptr, i64, ptr, i64)\n"
       "declare void @pli_substr(ptr, i64, ptr, i64, i64, i64)\n"
+      "declare void @pli_substr_assign(ptr, i64, i64, i64, ptr, i64)\n"
       "declare i64 @pli_index(ptr, i64, ptr, i64)\n"
       "declare i64 @pli_mod_ll(i64, i64)\n"
       "declare double @pli_mod_dd(double, double)\n"
@@ -322,7 +323,22 @@ void IRGen::emitStmt(Stmt *s) {
 }
 
 void IRGen::emitAssign(Stmt *s) {
-  if (!s->target || s->target->kind != Expr::VarRef || !s->target->sym) return;
+  if (!s->target) return;
+  // SUBSTR pseudo-variable (M2): substr(v, i, n) = x overwrites part of the
+  // string variable v in place (rule (86) reference on the left of '=').
+  if (s->target->kind == Expr::Call && s->target->name == "SUBSTR") {
+    Expr *t = s->target.get();
+    Val sv = emitExpr(t->args[0].get());      // the string variable's data ptr
+    Symbol *sym = t->args[0]->sym;
+    Val start = emitExpr(t->args[1].get());
+    Val len = emitExpr(t->args[2].get());
+    Val rhs = emitExpr(s->value.get());
+    body_ += "  call void @pli_substr_assign(ptr " + sv.ptr + ", i64 " +
+             std::to_string(sym->ty.len) + ", i64 " + toI64(start) + ", i64 " + toI64(len) +
+             ", ptr " + rhs.ptr + ", i64 " + rhs.len + ")\n";
+    return;
+  }
+  if (s->target->kind != Expr::VarRef || !s->target->sym) return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
 }

@@ -267,6 +267,19 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
     case Stmt::Assign: {
       typeExpr(s->target.get(), sc, p);
       typeExpr(s->value.get(), sc, p);
+      // SUBSTR pseudo-variable (M2): substr(v, i, n) on the left of '=' — v
+      // must be a modifiable character variable that the assignment overwrites.
+      if (s->target->kind == Expr::Call && s->target->name == "SUBSTR") {
+        Expr *t = s->target.get();
+        if (t->args[0]->kind != Expr::VarRef || !t->args[0]->sym ||
+            t->args[0]->sym->kind == Symbol::ProcName) {
+          d_.error(t->args[0]->loc, "SUBSTR assignment target must be a modifiable character variable", "(86)");
+          break;
+        }
+        if (!s->value->ty.isVoid())
+          checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
+        break;
+      }
       if (s->target->kind != Expr::VarRef) {
         d_.error(s->target->loc, "assignment target must be a variable reference in this stage", "(86)");
         break;

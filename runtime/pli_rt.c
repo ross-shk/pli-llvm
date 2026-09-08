@@ -119,6 +119,22 @@ void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
   if (n > take) memset(dst + take, ' ', (size_t)(n - take));
 }
 
+/* SUBSTR(s, i, n) = v: overwrite n characters of dst starting at the 1-based
+ * position i with the first n characters of src, blank-filling the tail when
+ * src is shorter than n. Positions past the end of dst clip (SUBSCRIPTRANGE
+ * is M3). */
+void pli_substr_assign(char *dst, long long dstcap, long long start, long long len,
+                       const char *src, long long srclen) {
+  if (start < 1) return;
+  long long n = len;
+  long long space = dstcap - (start - 1);
+  if (space <= 0) return;
+  if (n > space) n = space;
+  long long take = srclen < n ? srclen : n;
+  if (take > 0) memmove(dst + (start - 1), src, (size_t)take);
+  if (n > take) memset(dst + (start - 1) + take, ' ', (size_t)(n - take));
+}
+
 long long pli_mod_ll(long long a, long long b) {
   if (b == 0) return 0;
   long long r = a % b;

@@ -50,7 +50,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (81) | `RETURN` | partial M0 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
 | (82),(83) | `WAIT`, `DELAY` | M9 | |
 | (84),(85) | `EXIT`, `STOP` | M0 | |
-| (86) | assignment (incl. `BY NAME`) | partial M0 | scalar single target; multiple/`BY NAME` → M3 |
+| (86) | assignment (incl. `BY NAME`) | partial M0 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); multiple/`BY NAME` → M3 |
 | (87)–(90) | `ALLOCATE`/`FREE` | diag → M4 | |
 | (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M5 | |
 | (100)–(103) | `OPEN`/`CLOSE` | diag → M6 | |
