@@ -111,7 +111,8 @@ std::string IRGen::run(Program &prog) {
       "declare void @pli_substr(ptr, i64, ptr, i64, i64, i64)\n"
       "declare i64 @pli_index(ptr, i64, ptr, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
-      "declare double @llvm.pow.f64(double, double)\n";
+      "declare double @llvm.pow.f64(double, double)\n"
+      "declare double @llvm.fabs.f64(double)\n";
 
   return module_ + decls + "\n" + funcs_;
 }
@@ -789,6 +790,26 @@ Val IRGen::emitExpr(Expr *e) {
         body_ += "  " + t + " = trunc i64 " + r + " to i32\n";
         v.ty = e->ty;
         v.reg = t;
+        return v;
+      }
+      // ABS built-in (M2): absolute value; float via llvm.fabs, fixed via the
+      // select idiom.
+      if (e->name == "ABS") {
+        Val a = emitExpr(e->args[0].get());
+        const Type &at = a.ty;
+        std::string r = fresh("abs");
+        if (at.k == TK::Float) {
+          body_ += "  " + r + " = call double @llvm.fabs.f64(double " + a.reg + ")\n";
+        } else {
+          std::string neg = fresh("absneg");
+          body_ += "  " + neg + " = sub " + at.llvmTy() + " 0, " + a.reg + "\n";
+          std::string cmp = fresh("abscmp");
+          body_ += "  " + cmp + " = icmp slt " + at.llvmTy() + " " + a.reg + ", 0\n";
+          body_ += "  " + r + " = select i1 " + cmp + ", " + at.llvmTy() + " " + neg +
+                   ", " + at.llvmTy() + " " + a.reg + "\n";
+        }
+        v.ty = e->ty;
+        v.reg = r;
         return v;
       }
       // Function reference (rule (123)): call an internal function procedure

@@ -1,0 +1,7 @@
+ /* Diagnostic test: ABS with a non-numeric argument is rejected. */
+ BADABS: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHAR(4);
+    DECLARE X FIXED BINARY(31);
+    S = 'abcd';
+    X = ABS(S);
+ END BADABS;
