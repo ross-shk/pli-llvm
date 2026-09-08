@@ -10,7 +10,7 @@ The ledger that ties the implementation to the specification. Status values:
 |---|---|---|---|
 | (1) | `program ::= procedure•••` | M0 | `parser.cpp:parse` / all tests |
 | (2) | procedure, entry-namelist, options | M0 | `parseExternalProcedure` / `hello.pli` |
-| (3) | entry-namelist (multiple entry names) | M1 | multiple entry points |
+| (3) | entry-namelist (multiple entry names) | M0 | `a, b: PROCEDURE` shares one body; callable by any name (`multientry.pli`); extra names are internal aliases |
 | (4) | parameterlist | M0 | `procs.pli` |
 | (5) | procedure options (`OPTIONS`, `RECURSIVE`, `RETURNS`) | partial M0 | `MAIN` honoured; `RETURNS` → function procedures (`func.pli`); `RECURSIVE` accepted |
 | (6),(7) | sentencelist, end-clause, multiple closure | M0 | `parseBody` / `loops.pli` (`END OUTER;`) |

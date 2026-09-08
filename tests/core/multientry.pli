@@ -1,0 +1,22 @@
+ /* Two entry points to one procedure body, via the entry-namelist
+    `a, b: PROCEDURE` (rule (3), M1 exit criterion). Either name calls the
+    same body; a recursive function is reachable through both. */
+ multientry: procedure options(main);
+    declare n fixed bin(31);
+    declare f fixed bin(31);
+
+    n = 5;
+    f = fact(n);
+    if f = 120 then put skip list('PASS fact(5) = 120');
+    else put skip list('FAIL fact(5) =', f);
+
+    f = factorial(n);
+    if f = 120 then put skip list('PASS factorial(5) = 120');
+    else put skip list('FAIL factorial(5) =', f);
+ end multientry;
+
+ fact, factorial: procedure(n) returns(fixed bin(31));
+    declare n fixed bin(31);
+    if n <= 1 then return(1);
+    return(n * fact(n - 1));
+ end fact;

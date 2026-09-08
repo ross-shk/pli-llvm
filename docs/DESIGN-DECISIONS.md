@@ -446,3 +446,29 @@ right of `=` is unaffected — it is the ordinary built-in.
 pseudo-variables, or targets that are arbitrary expressions) — KISS, one
 pseudo-variable now; the runtime call keeps codegen simple.
 
+## ADR-025 — A program-level scope makes sibling external procedures callable
+
+**Context.** Pass 1 of sema declared a procedure's name only in its *parent's*
+scope (`if (outer)`), so a name at the top level was never registered: external
+procedures could not call each other, only nested ones could. This blocks the
+entry-namelist feature (rule (3)) — a two-entry-point external procedure is
+unusable if the MAIN procedure cannot reach it.
+
+**Decision.** Introduce a single program-level `rootScope_`. Every external
+procedure (no parent) is declared there, and every external procedure's own
+scope takes `rootScope_` as its parent. Nested procedures are unchanged: they
+stay in their parent's scope and can still reach the root through the chain.
+Each entry-namelist name (rule (3)) is declared in the same scope as its
+procedure, resolving to the same `Proc`; codegen emits an internal LLVM alias
+per extra name so the symbol exists.
+
+**Consequences.** Sibling external procedures can call each other — correct
+PL/I behaviour, previously missing. `multientry.pli` pins a two-entry-point
+procedure callable by both names from MAIN. All existing tests still pass;
+lookup order (own scope before parent before root) preserves shadowing.
+
+**Rejected.** Keeping external procedures mutually invisible (blocks the M1
+exit criterion); or emitting one function body per entry name with no shared
+scope (duplicates logic and still cannot be called from a sibling).
+
+

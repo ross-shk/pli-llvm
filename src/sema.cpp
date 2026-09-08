@@ -14,7 +14,7 @@ Scope *Sema::scopeFor(Proc *p) {
   auto it = procScopes_.find(p);
   if (it != procScopes_.end()) return it->second;
   auto sc = std::make_unique<Scope>();
-  sc->parent = p->parent ? scopeFor(p->parent) : nullptr;
+  sc->parent = p->parent ? scopeFor(p->parent) : rootScope_;
   Scope *raw = sc.get();
   scopes_.push_back(std::move(sc));
   procScopes_[p] = raw;
@@ -76,17 +76,24 @@ bool Sema::run(Program &prog, bool compileOnly) {
   prog_ = &prog;
 
   // Pass 1: every procedure name is visible in its parent's scope, so that
-  // CALL can be resolved regardless of textual order.
+  // CALL can be resolved regardless of textual order. External procedures
+  // share a program-level scope, so siblings can call each other.
+  rootScope_ = new Scope();
+  scopes_.push_back(std::unique_ptr<Scope>(rootScope_));
   for (auto &p : prog.procs) {
     p->irName = "@PLI_" + p->name;
-    Scope *outer = p->parent ? scopeFor(p->parent) : nullptr;
-    if (outer) {
-      // A function procedure's symbol carries its result type so that a
-      // function reference (rule (123)) types as the returned value.
-      Type symTy = p->isFunction ? p->retTy : Type::voidTy();
-      Symbol *s = declare(outer, p->name, symTy, p->loc, Symbol::ProcName, false);
-      s->proc = p.get();
-      p->irName = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name;
+    // A function procedure's symbol carries its result type so that a
+    // function reference (rule (123)) types as the returned value.
+    Scope *outer = p->parent ? scopeFor(p->parent) : rootScope_;
+    Type symTy = p->isFunction ? p->retTy : Type::voidTy();
+    Symbol *s = declare(outer, p->name, symTy, p->loc, Symbol::ProcName, false);
+    s->proc = p.get();
+    p->irName = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name;
+    // rule (3) entry-namelist: every extra name is another entry point to
+    // the same procedure body, so each resolves to this Proc.
+    for (const auto &en : p->entryNames) {
+      Symbol *es = declare(outer, en, symTy, p->loc, Symbol::ProcName, false);
+      es->proc = p.get();
     }
   }
 
