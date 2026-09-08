@@ -822,6 +822,22 @@ Val IRGen::emitExpr(Expr *e) {
         v.reg = t;
         return v;
       }
+      // TRUNC built-in (M2): drop the fractional part toward zero. FLOAT goes
+      // through fptosi/sitofp; FIXED is already integral (no-op).
+      if (e->name == "TRUNC") {
+        Val a = emitExpr(e->args[0].get());
+        if (a.ty.k == TK::Float) {
+          std::string i = fresh("trunci");
+          body_ += "  " + i + " = fptosi double " + a.reg + " to i64\n";
+          std::string r = fresh("truncd");
+          body_ += "  " + r + " = sitofp i64 " + i + " to double\n";
+          v.ty = e->ty;
+          v.reg = r;
+        } else {
+          v = a;
+        }
+        return v;
+      }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.
       if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = "0"; return v; }

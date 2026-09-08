@@ -58,7 +58,7 @@ make install
   `¬`/`^`/`~`, and the 48-character-set operator words (`AND`, `GT`, `CAT`, …)
 - `CHARACTER(n)`, `CHARACTER(n) VARYING`, concatenation, blank-padded
   comparison; replicated string constants `(n)'str'` (rule 129); the `SUBSTR`,
-  `INDEX`, `LENGTH` and `ABS` built-in functions; `BIT(1)`; `FLOAT`;
+  `INDEX`, `LENGTH`, `ABS` and `TRUNC` built-in functions; `BIT(1)`; `FLOAT`;
   `FIXED BINARY/DECIMAL` (scale 0)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
   `END` and `PUT` as ordinary variables
@@ -151,7 +151,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 28 tests (9 golden + 13 self-contained + 6 diagnostic), all passing.
+Current suite: 30 tests (9 golden + 14 self-contained + 7 diagnostic), all passing.
 
 ## Example: generated IR
 
