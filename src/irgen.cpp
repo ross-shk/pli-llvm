@@ -110,6 +110,8 @@ std::string IRGen::run(Program &prog) {
       "declare void @pli_concat(ptr, ptr, i64, ptr, i64)\n"
       "declare void @pli_substr(ptr, i64, ptr, i64, i64, i64)\n"
       "declare i64 @pli_index(ptr, i64, ptr, i64)\n"
+      "declare i64 @pli_mod_ll(i64, i64)\n"
+      "declare double @pli_mod_dd(double, double)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n"
       "declare double @llvm.fabs.f64(double)\n";
@@ -876,6 +878,28 @@ Val IRGen::emitExpr(Expr *e) {
                  ", " + common.llvmTy() + " " + av.reg + "\n";
         v.ty = common;
         v.reg = r;
+        return v;
+      }
+      // MOD built-in (M2): remainder with the divisor's sign, via the runtime.
+      if (e->name == "MOD") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        std::string r = fresh("mod");
+        if (common.k == TK::Float)
+          body_ += "  " + r + " = call double @pli_mod_dd(double " + av.reg + ", double " + bv.reg + ")\n";
+        else
+          body_ += "  " + r + " = call i64 @pli_mod_ll(i64 " + toI64(av) + ", i64 " + toI64(bv) + ")\n";
+        v.ty = common;
+        if (common.k == TK::Float) {
+          v.reg = r;
+        } else {
+          std::string t = fresh("mod32");
+          body_ += "  " + t + " = trunc i64 " + r + " to i32\n";
+          v.reg = t;
+        }
         return v;
       }
       // Function reference (rule (123)): call an internal function procedure

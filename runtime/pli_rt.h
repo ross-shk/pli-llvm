@@ -30,6 +30,8 @@ void pli_concat(char *dst, const char *a, long long alen, const char *b, long lo
 void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
                 long long start, long long len); /* SUBSTR built-in */
 long long pli_index(const char *a, long long alen, const char *b, long long blen); /* INDEX */
+long long pli_mod_ll(long long a, long long b);  /* MOD (integer) */
+double pli_mod_dd(double a, double b);           /* MOD (float) */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen);
 
 /* Condition signalling (M5 will expand this into the ON-unit machinery). */

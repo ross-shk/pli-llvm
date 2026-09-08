@@ -1,5 +1,6 @@
 /* pli_rt.c — PL/I runtime library (libpli), M0 subset. */
 #include "pli_rt.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,6 +116,20 @@ void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
   long long take = avail < n ? avail : n;
   if (take > 0 && start >= 1) memmove(dst, src + (start - 1), (size_t)take);
   if (n > take) memset(dst + take, ' ', (size_t)(n - take));
+}
+
+long long pli_mod_ll(long long a, long long b) {
+  if (b == 0) return 0;
+  long long r = a % b;
+  if (r != 0 && ((r < 0) != (b < 0))) r += b;  /* result takes the sign of b */
+  return r;
+}
+
+/* MOD (float): a - b*floor(a/b); the result takes the sign of b. */
+double pli_mod_dd(double a, double b) {
+  double r = fmod(a, b);
+  if (r != 0.0 && ((r < 0.0) != (b < 0.0))) r += b;
+  return r;
 }
 
 /* Comparison of character data: the shorter operand is notionally extended
