@@ -129,6 +129,18 @@ int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {
   return 0;
 }
 
+/* INDEX(s1, s2): 1-based position of the first occurrence of s2 within s1, or
+ * 0 if not present. An empty s2 matches at position 1 (Y33-6003 INDEX). */
+long long pli_index(const char *a, long long alen, const char *b, long long blen) {
+  if (blen <= 0) return 1;
+  if (blen > alen) return 0;
+  for (long long i = 0; i + blen <= alen; ++i) {
+    long long j = 0;
+    while (j < blen && a[i + j] == b[j]) ++j;
+    if (j == blen) return i + 1;
+  }
+  return 0;
+}
 void pli_signal_error(const char *msg) {
   pli_rt_fini();
   fprintf(stderr, "ERROR condition raised: %s\n", msg ? msg : "(unspecified)");

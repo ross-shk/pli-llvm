@@ -429,6 +429,21 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::chr(n);
         break;
       }
+      // INDEX built-in (M2): index(s1, s2) yields a FIXED BINARY position.
+      if (e->name == "INDEX") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "INDEX expects 2 arguments (string, substring)", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
+          d_.error(e->loc, "INDEX arguments must be character strings", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::fixedBin(31, 0);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");

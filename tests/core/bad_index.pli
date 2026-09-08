@@ -1,0 +1,7 @@
+ /* Diagnostic test: INDEX with a non-character argument is rejected. */
+ BADINDEX: PROCEDURE OPTIONS(MAIN);
+    DECLARE N FIXED BINARY(31);
+    DECLARE P FIXED BINARY(31);
+    N = 5;
+    P = INDEX(N, '5');
+ END BADINDEX;

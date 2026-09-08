@@ -109,6 +109,7 @@ std::string IRGen::run(Program &prog) {
       "declare i64 @pli_assign_varying(ptr, i64, ptr, i64)\n"
       "declare void @pli_concat(ptr, ptr, i64, ptr, i64)\n"
       "declare void @pli_substr(ptr, i64, ptr, i64, i64, i64)\n"
+      "declare i64 @pli_index(ptr, i64, ptr, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n";
 
@@ -776,6 +777,19 @@ Val IRGen::emitExpr(Expr *e) {
                  ", i64 " + toI64(len) + ")\n";
         out.len = std::to_string(e->ty.len);
         return out;
+      }
+      // INDEX built-in (M2): index(s1, s2) -> FIXED BINARY position (i32).
+      if (e->name == "INDEX") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        std::string r = fresh("idx");
+        body_ += "  " + r + " = call i64 @pli_index(ptr " + a.ptr + ", i64 " + a.len +
+                 ", ptr " + b.ptr + ", i64 " + b.len + ")\n";
+        std::string t = fresh("idx32");
+        body_ += "  " + t + " = trunc i64 " + r + " to i32\n";
+        v.ty = e->ty;
+        v.reg = t;
+        return v;
       }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.
