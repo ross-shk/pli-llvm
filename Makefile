@@ -43,6 +43,11 @@ RT_OBJS  := $(patsubst runtime/%.c,$(BUILD)/rt_%.o,$(RT_SRCS))
 # Baked-in default path to the runtime archive, so `plic hello.pli` just works.
 RTPATH   := $(abspath $(RTLIB))
 
+# Baked-in default clang used to assemble/optimize/link the emitted IR. plic
+# emits IR in the syntax of the LLVM it links against, so the matching clang
+# from that same LLVM install must be used (see main.cpp PLIC_CLANG).
+CLANGPATH := $(shell $(LLVM_CONFIG) --bindir)/clang
+
 .PHONY: all clean test install
 all: $(BIN) $(RTLIB)
 
@@ -50,7 +55,7 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' -DPLIC_CLANG='"$(CLANGPATH)"' -MMD -MP -c $< -o $@
 
 $(RULES_CPP): TR25.084-concrete-syntax.md scripts/gen_rules.py | $(BUILD)
 	python3 scripts/gen_rules.py $< $@
