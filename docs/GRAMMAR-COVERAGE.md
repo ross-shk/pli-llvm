@@ -30,7 +30,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (25) | `BASED` | M4 | |
 | (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 | scalar constants; full → M3 |
 | (33) | non-data attributes | M2 | |
-| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | M1/M2 | functions |
+| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | M1 (ENTRY→C) | ADR-021: `DECLARE … ENTRY` external C entry + by-ref call (`cinterop`); `RETURNS`/descriptors/`USES`/`SETS` pending |
 | (39),(40) | `FILE` attributes | M6 | |
 | (41) | `GENERIC` | M2 | generic selection |
 | (42) | scope (`INTERNAL`/`EXTERNAL`) | accepted M0 → M1 | linkage in M1 |

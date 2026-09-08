@@ -32,6 +32,7 @@ static void usage() {
       "\n"
       "options:\n"
       "  -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)\n"
+      "  -c               compile to a relocatable object (no linking)\n"
       "  -emit-llvm       write LLVM IR and stop\n"
       "  -fsyntax-only    parse and analyse only\n"
       "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
@@ -56,7 +57,7 @@ static std::string runCapture(const char *cmd) {
 int main(int argc, char **argv) {
   std::string input, output, runtimeLib = PLIC_RUNTIME_LIB, triple;
   std::string optLevel = "-O2";
-  bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false;
+  bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -66,6 +67,7 @@ int main(int argc, char **argv) {
     };
     if (a == "-h" || a == "--help") { usage(); return 0; }
     else if (a == "-o") output = next("-o");
+    else if (a == "-c") compileOnly = true;
     else if (a == "-emit-llvm" || a == "--emit-llvm") emitLLVM = true;
     else if (a == "-fsyntax-only") syntaxOnly = true;
     else if (a == "--keep-ll") keepLL = true;
@@ -99,7 +101,7 @@ int main(int argc, char **argv) {
   if (!diags.ok()) return 1;
 
   Sema sema(diags);
-  sema.run(*prog);
+  sema.run(*prog, compileOnly);
   if (!diags.ok()) return 1;
 
   if (syntaxOnly) return 0;
@@ -121,7 +123,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (output.empty()) output = "a.out";
+  if (output.empty()) output = compileOnly ? base + ".o" : "a.out";
 
   fs::path llPath = keepLL ? fs::path(output).parent_path() / (base + ".ll")
                            : fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) + ".ll");
@@ -133,7 +135,11 @@ int main(int argc, char **argv) {
 
   // --- assemble, optimize, link -----------------------------------------
   std::string cmd = "clang -Wno-override-module " + optLevel + " \"" + llPath.string() + "\"";
-  if (!runtimeLib.empty()) cmd += " \"" + runtimeLib + "\"";
+  if (compileOnly) {
+    cmd += " -c";  // relocatable object: the caller performs the link step
+  } else {
+    if (!runtimeLib.empty()) cmd += " \"" + runtimeLib + "\"";
+  }
   cmd += " -o \"" + output + "\"";
   if (verbose) std::cerr << "+ " << cmd << "\n";
   int rc = system(cmd.c_str());

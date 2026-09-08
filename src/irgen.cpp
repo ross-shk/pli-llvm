@@ -83,7 +83,18 @@ std::string IRGen::run(Program &prog) {
     funcs_ += "  ret i32 0\n}\n\n";
   }
 
-  std::string decls =
+  // Forward declarations for external C entries (DECLARE ... ENTRY, rule
+  // (38)). PL/I passes arguments by reference, so each parameter is a `ptr`.
+  std::string decls;
+  for (Symbol *e : sema_.entries()) {
+    std::string sig;
+    for (size_t i = 0; i < e->entryParams.size(); ++i) {
+      if (i) sig += ", ";
+      sig += "ptr";
+    }
+    decls += "declare void " + e->irName + "(" + sig + ")\n";
+  }
+  decls +=
       "\n; ---- PL/I runtime (libpli) ----\n"
       "declare void @pli_rt_init()\n"
       "declare void @pli_rt_fini()\n"
@@ -430,53 +441,65 @@ void IRGen::emitPut(Stmt *s) {
 }
 
 void IRGen::emitCall(Stmt *s) {
-  if (!s->sym || !s->sym->proc) return;
-  Proc *callee = s->sym->proc;
+  if (!s->sym) return;
+  Symbol *calleeSym = s->sym;
+  Proc *callee = calleeSym->proc;
+  // A defined procedure uses its mangled Proc symbol; an external C entry
+  // uses the ProcName symbol's irName (@NAME).
+  const std::string calleeName = callee ? callee->irName : calleeSym->irName;
   std::string args;
   for (size_t i = 0; i < s->args.size(); ++i) {
     Expr *a = s->args[i].get();
-    Symbol *ps = i < callee->paramSyms.size() ? callee->paramSyms[i] : nullptr;
-    if (!ps) break;
+    // The expected parameter type comes from the procedure's DECLAREd
+    // parameters, or (for an external C entry) its ENTRY descriptor.
+    Type pty;
+    if (callee) {
+      if (i < callee->paramSyms.size()) pty = callee->paramSyms[i]->ty;
+      else break;
+    } else {
+      if (i < calleeSym->entryParams.size()) pty = calleeSym->entryParams[i];
+      else break;
+    }
     std::string addr;
     bool direct = a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
-                  a->sym->ty.k == ps->ty.k && a->sym->ty.len == ps->ty.len &&
-                  a->sym->ty.prec == ps->ty.prec && a->sym->ty.varying == ps->ty.varying;
+                  a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
+                  a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
     if (direct) {
       // True by-reference passing (PL/I default).
       addr = addressOf(a->sym);
     } else {
       // Conversion required: pass a dummy argument (Y33-6003 dummy arguments).
       addr = fresh("dummy");
-      body_ += "  " + addr + " = alloca " + ps->ty.llvmTy() + "\n";
+      body_ += "  " + addr + " = alloca " + pty.llvmTy() + "\n";
       Val v = emitExpr(a);
-      if (ps->ty.isChar()) {
+      if (pty.isChar()) {
         Val cv = v;
-        if (ps->ty.varying) {
+        if (pty.varying) {
           std::string dp = fresh("vdata");
-          body_ += "  " + dp + " = getelementptr inbounds " + ps->ty.llvmTy() + ", ptr " + addr +
+          body_ += "  " + dp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
                    ", i32 0, i32 1\n";
           std::string ln = fresh("vlen");
           body_ += "  " + ln + " = call i64 @pli_assign_varying(ptr " + dp + ", i64 " +
-                   std::to_string(ps->ty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
+                   std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
           std::string lp = fresh("vlenp");
-          body_ += "  " + lp + " = getelementptr inbounds " + ps->ty.llvmTy() + ", ptr " + addr +
+          body_ += "  " + lp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
                    ", i32 0, i32 0\n";
           std::string t32 = fresh("l32");
           body_ += "  " + t32 + " = trunc i64 " + ln + " to i32\n";
           body_ += "  store i32 " + t32 + ", ptr " + lp + "\n";
         } else {
           body_ += "  call void @pli_assign_char(ptr " + addr + ", i64 " +
-                   std::to_string(ps->ty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
+                   std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
         }
       } else {
-        Val cv = convert(v, ps->ty, a->loc);
-        storeScalarTo(addr, ps->ty, cv);
+        Val cv = convert(v, pty, a->loc);
+        storeScalarTo(addr, pty, cv);
       }
     }
     if (!args.empty()) args += ", ";
     args += "ptr " + addr;
   }
-  emit("call void " + callee->irName + "(" + args + ")");
+  emit("call void " + calleeName + "(" + args + ")");
 }
 
 // ---------------------------------------------------------------------------

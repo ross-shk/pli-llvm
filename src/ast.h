@@ -41,6 +41,8 @@ struct DeclItem {
   SourceLoc loc{};
   ExprP init;      // INITIAL(...) — scalar constant only in M0
   Symbol *sym = nullptr;
+  bool isEntry = false;              // DECLARE name ENTRY(...) (rule 38)
+  std::vector<Type> entryParams;     // ENTRY ( ... ) descriptor
 };
 
 struct Stmt {

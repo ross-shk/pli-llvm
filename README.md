@@ -41,6 +41,7 @@ END HELLO;
 ```
 
 - procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
+- calling external C procedures via `DECLARE … ENTRY(...)` (by reference, ADR-021)
 - parameters **by reference**, with dummy arguments when conversion is needed
 - `DECLARE` with the attribute default rules and `INITIAL` constants; implicit
   declarations (I–N → `FIXED BINARY`) with warnings
@@ -58,12 +59,46 @@ END HELLO;
 Everything else is reported as unimplemented *with its specification rule
 number*, which doubles as the to-do list.
 
+## Calling external C procedures
+
+PL/I can call procedures written in C (architecture goal 4; ADR-021). Declare
+an external entry with the `ENTRY` attribute (rule 38) and call it like any
+procedure; the name is upper-cased and resolved at link time against a C
+symbol, and arguments are passed **by reference** — the PL/I default — so the
+C callee receives pointers:
+
+```pli
+ CALLER: PROCEDURE OPTIONS(MAIN);
+    DECLARE X FIXED BINARY(31);
+    DECLARE C_SET ENTRY (FIXED BINARY(31));
+    X = 0;
+    CALL C_SET(X);            /* C function receives &X */
+    IF X = 42 THEN PUT SKIP LIST('PASS');
+ END CALLER;
+```
+
+```c
+void C_SET(int *x) { *x = 42; }
+```
+
+Compile each unit to an object and link them together with the runtime:
+
+```
+./build/plic caller.pli -c -o caller.o
+cc -c c_set.c -o c_set.o
+cc caller.o c_set.o build/libpli.a -o caller
+```
+
+`RETURNS` (function values), full entry descriptors, and `OPTIONS(BYVALUE)`
+value-passing are not yet implemented (M2 / M9).
+
 ## Usage
 
 ```
 plic [options] file.pli
 
   -o <file>        output file (default a.out)
+  -c               compile to a relocatable object (no linking)
   -emit-llvm       write LLVM IR and stop
   -fsyntax-only    parse and analyse only
   -O0 … -O3        optimization level (default -O2)
@@ -105,7 +140,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 14 tests (8 golden + 5 self-contained + 1 diagnostic), all passing.
+Current suite: 15 tests (9 golden + 5 self-contained + 1 diagnostic), all passing.
 
 ## Example: generated IR
 

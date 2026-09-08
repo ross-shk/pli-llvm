@@ -53,6 +53,8 @@ private:
   StmtP parseAssignment();
   void parseProcOptions(Proc *p);
   bool parseDeclItem(DeclItem &item);
+  bool parseDescriptorType(Type &out);  // one ENTRY parameter type (rule 38)
+  bool parseEntryParams(std::vector<Type> &params);  // ENTRY ( ... )
 
   // --- expressions (rules 115-129) ------------------------------------
   ExprP parseExpr(int minPrec = 1);

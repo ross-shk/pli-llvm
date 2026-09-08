@@ -1,0 +1,10 @@
+ /* PL/I calls an external C procedure (rule 38). C_SET is linked in
+    and receives x by reference, setting *x = 42. */
+ cinterop: procedure options(main);
+    declare x fixed binary(31);
+    declare c_set entry (fixed binary(31));
+    x = 0;
+    call c_set(x);
+    if x = 42 then put skip list('PASS cinterop');
+    else put skip list('FAIL cinterop');
+ end cinterop;
