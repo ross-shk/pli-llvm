@@ -1,0 +1,15 @@
+/* Statement keywords are recognised by position, not spelling (TR 25.084
+    §2.3; ADR-004). A leading word followed by '( ... ) =' is ambiguous:
+    `IF (X) = 1 THEN` is an IF statement whose condition is (X) = 1, not an
+    assignment to a subscripted variable named IF. ADR-004 step 3 resolves
+    the ambiguity with a speculative parse. Rules (74) and (86). */
+ AMBIGUITY: PROCEDURE OPTIONS(MAIN);
+    DECLARE X FIXED BINARY(31);
+    DECLARE Y FIXED BINARY(31);
+
+    X = 0;
+    Y = 0;
+    IF (X) = 0 THEN Y = 1;     /* condition (X) = 0       */
+    IF (Y) = 1 THEN PUT SKIP LIST('PASS IF with parenthesized condition');
+    ELSE PUT SKIP LIST('FAIL IF with parenthesized condition');
+ END AMBIGUITY;

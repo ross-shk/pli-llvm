@@ -64,7 +64,10 @@ void Parser::resync() {
 // Bounded lookahead: WORD '='            -> assignment  (e.g. `IF = 5;`)
 //                    WORD '(' ... ')' '=' -> assignment  (e.g. `IF(3) = 5;`)
 //                    otherwise            -> keyword
-// This is the M0 approximation of the speculative-parse rule in ADR-004.
+// Where the two readings are ambiguous — `IF (X) = 1 THEN` is the IF
+// statement of rule (74), whose condition is `(X) = 1` — step 3 of ADR-004
+// speculatively parses the keyword reading and keeps it only if it succeeds
+// (probeKeywordStatement).
 // ---------------------------------------------------------------------------
 bool Parser::looksLikeAssignment() const {
   size_t j = i_ + 1;
@@ -84,6 +87,21 @@ bool Parser::looksLikeAssignment() const {
     }
     return j < t_.size() && t_[j].kind == Tok::Eq;
   }
+  return false;
+}
+
+// The words keywordStatement() dispatches on. Only a word with a keyword
+// spelling can be ambiguous with the keyword reading, so the speculative
+// probe (ADR-004 step 3) is gated on this.
+static bool stmtKeywordSpelling(const std::string &w) {
+  static const char *const kws[] = {
+      "DECLARE", "DCL",  "IF",   "DO",    "BEGIN",    "PUT",     "CALL",
+      "RETURN",  "STOP", "EXIT", "GET",   "GO",       "GOTO",    "ON",
+      "SIGNAL",  "REVERT", "ALLOCATE", "FREE", "OPEN", "CLOSE",
+      "READ",    "WRITE", "REWRITE", "DELETE",
+  };
+  for (const char *k : kws)
+    if (w == k) return true;
   return false;
 }
 
@@ -297,20 +315,77 @@ StmtP Parser::parseStatement(Proc *owner) {
 
   if (eat(Tok::Semi)) { st->kind = Stmt::Null; return st; }  // rule (67)
 
-  if (atStmtKeyword("DECLARE") || atStmtKeyword("DCL")) { advance(); auto d = parseDeclare(); if (d) d->labels = st->labels; return d; }
-  if (atStmtKeyword("IF")) { auto s = parseIf(owner); if (s) s->labels = st->labels; return s; }
-  if (atStmtKeyword("DO")) { auto s = parseDo(owner, st->labels); if (s) s->labels = st->labels; return s; }
-  if (atStmtKeyword("BEGIN")) {
+  // WORD ( ... ) = is ambiguous until parsed (ADR-004 step 3): it may be a
+  // statement whose own grammar contains that shape (IF (X) = 1 THEN ...)
+  // or an assignment to a variable bearing the keyword's spelling. Prefer
+  // the keyword reading when a speculative parse of it succeeds; otherwise
+  // fall through and let the word be an assignment target.
+  if (cur().kind == Tok::Word && looksLikeAssignment() &&
+      stmtKeywordSpelling(cur().text)) {
+    StmtP s = probeKeywordStatement(owner, st->labels);
+    if (s) return s;
+  }
+
+  StmtP k = keywordStatement(owner, st->labels, /*probe=*/false);
+  if (k) { k->labels = st->labels; return k; }
+
+  auto s = parseAssignment();
+  if (s) s->labels = st->labels;
+  return s;
+}
+
+// ADR-004 step 3: try the keyword reading of an ambiguous leading word under
+// muted diagnostics. Keep the resulting statement only when the reading parses
+// cleanly (emitted no errors); otherwise rewind the token stream, any
+// propagated END (multiple closure) and any procedure hoisted into the program
+// during the probe, and report failure so the caller falls back to the
+// assignment reading. A probe is grammar-only — sema has no symbol table to
+// bias it — so when both readings are valid, the keyword reading wins.
+StmtP Parser::probeKeywordStatement(Proc *owner,
+                                    const std::vector<std::string> &labels) {
+  size_t save = i_;
+  EndInfo saveEnd = pendingEnd_;
+  size_t saveProcs = prog_->procs.size();
+  int before = d_.mutedErrors();
+  d_.mute();
+  StmtP s = keywordStatement(owner, labels, /*probe=*/true);
+  bool clean = s && d_.mutedErrors() == before;
+  d_.unmute();
+  if (clean) return s;
+  i_ = save;
+  pendingEnd_ = saveEnd;
+  while (prog_->procs.size() > saveProcs) prog_->procs.pop_back();
+  d_.rewindMutedErrors(before);
+  return nullptr;
+}
+
+// Statement-keyword dispatch (rules (57)-(59) and the keyed statements).
+// With probe=false the keyword spelling is guarded by the bounded-lookahead
+// of ADR-004 step 2 (atStmtKeyword); with probe=true it is taken on spelling
+// alone so a speculative parse can decide whether the keyword reading holds.
+// Returns nullptr when no keyword matched (caller tries rule (86) then).
+StmtP Parser::keywordStatement(Proc *owner, const std::vector<std::string> &labels,
+                               bool probe) {
+  auto kw = [&](const char *w) { return probe ? cur().isWord(w) : atStmtKeyword(w); };
+
+  if (kw("DECLARE") || kw("DCL")) { advance(); return parseDeclare(); }        // rule (9)
+  if (kw("IF")) { return parseIf(owner); }                                     // rules (74),(75)
+  if (kw("DO")) { return parseDo(owner, labels); }                             // rules (69)-(73)
+  if (kw("BEGIN")) {                                                           // rule (68)
+    auto st = std::make_unique<Stmt>();
+    st->loc = cur().loc;
     advance();
     expect(Tok::Semi, "(68)");
     st->kind = Stmt::Begin;  // a block with its own scope (rule (68))
-    EndInfo e = parseBody(owner, st->body, st->labels.empty() ? std::string() : st->labels.front());
+    EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
     if (e.present && !e.label.empty()) pendingEnd_ = e;
     return st;
   }
-  if (atStmtKeyword("PUT")) { auto s = parsePut(); if (s) s->labels = st->labels; return s; }
-  if (atStmtKeyword("CALL")) { auto s = parseCall(); if (s) s->labels = st->labels; return s; }
-  if (atStmtKeyword("RETURN")) {
+  if (kw("PUT")) { return parsePut(); }                                        // rules (104)-(109)
+  if (kw("CALL")) { return parseCall(); }                                      // rules (78)-(80)
+  if (kw("RETURN")) {                                                          // rule (81)
+    auto st = std::make_unique<Stmt>();
+    st->loc = cur().loc;
     advance();
     st->kind = Stmt::Return;
     if (eat(Tok::LParen)) {           // RETURN(value) — function value, rule (81)
@@ -320,19 +395,23 @@ StmtP Parser::parseStatement(Proc *owner) {
     expect(Tok::Semi, "(81)");
     return st;
   }
-  if (atStmtKeyword("STOP") || atStmtKeyword("EXIT")) {
+  if (kw("STOP") || kw("EXIT")) {                                              // rules (84),(85)
+    auto st = std::make_unique<Stmt>();
+    st->loc = cur().loc;
     advance();
     st->kind = Stmt::Stop;
     expect(Tok::Semi, "(85)");
     return st;
   }
-  if (atStmtKeyword("GET")) {
+  if (kw("GET")) {
     d_.error(cur().loc, "GET (stream input) is not implemented in this stage", "(104)");
     resync();
     return nullptr;
   }
-  if (atStmtKeyword("GO") && peek().kind == Tok::Word && peek().isWord("TO")) {
+  if (kw("GO") && peek().kind == Tok::Word && peek().isWord("TO")) {
     // GO TO label ;                                        rule (77)
+    auto st = std::make_unique<Stmt>();
+    st->loc = cur().loc;
     advance();  // GO
     advance();  // TO
     st->kind = Stmt::Goto;
@@ -341,8 +420,10 @@ StmtP Parser::parseStatement(Proc *owner) {
     expect(Tok::Semi, "(77)");
     return st;
   }
-  if (atStmtKeyword("GOTO")) {
+  if (kw("GOTO")) {
     // GOTO label ;   (one-word spelling)                  rule (77)
+    auto st = std::make_unique<Stmt>();
+    st->loc = cur().loc;
     advance();
     st->kind = Stmt::Goto;
     if (at(Tok::Word)) { st->name = cur().text; advance(); }
@@ -350,26 +431,23 @@ StmtP Parser::parseStatement(Proc *owner) {
     expect(Tok::Semi, "(77)");
     return st;
   }
-  if (atStmtKeyword("ON") || atStmtKeyword("SIGNAL") || atStmtKeyword("REVERT")) {
+  if (kw("ON") || kw("SIGNAL") || kw("REVERT")) {
     d_.error(cur().loc, "condition handling (ON/SIGNAL/REVERT) is not implemented in this stage", "(91)");
     resync();
     return nullptr;
   }
-  if (atStmtKeyword("ALLOCATE") || atStmtKeyword("FREE")) {
+  if (kw("ALLOCATE") || kw("FREE")) {
     d_.error(cur().loc, "dynamic storage (ALLOCATE/FREE) is not implemented in this stage", "(87)");
     resync();
     return nullptr;
   }
-  if (atStmtKeyword("OPEN") || atStmtKeyword("CLOSE") || atStmtKeyword("READ") ||
-      atStmtKeyword("WRITE") || atStmtKeyword("REWRITE") || atStmtKeyword("DELETE")) {
+  if (kw("OPEN") || kw("CLOSE") || kw("READ") || kw("WRITE") || kw("REWRITE") ||
+      kw("DELETE")) {
     d_.error(cur().loc, "file input/output is not implemented in this stage", "(100)");
     resync();
     return nullptr;
   }
-
-  auto s = parseAssignment();
-  if (s) s->labels = st->labels;
-  return s;
+  return nullptr;
 }
 
 // declaration-sentence ::= [labellist] DECLARE declarationlist ;   rule (9)
