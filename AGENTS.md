@@ -4,8 +4,9 @@ PL/I → LLVM compiler, built to `TR25.084-concrete-syntax.md` (syntax) and
 Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 
 ## Rules
+- do not duplicate info from the specs into REAMDE and the docs unless actually necessary
 - keep docs clear and concise, avoid lengthy explanations
-- do not commit without my approval, just stage changes
+- do not commit without my approval
 - do not quietly change/revert existing code unless required by the current task
 - KISS: smallest change that works; keep implementations lean
 - `tests/` is the source of truth — fix the compiler, not the test
