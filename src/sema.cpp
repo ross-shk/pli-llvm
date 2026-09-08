@@ -517,8 +517,8 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
           break;
         }
         int p = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
-        if (p < 0) {
-          d_.error(e->args[1]->loc, "PRECISION precision must be a constant in this stage", "(123)");
+        if (p <= 0) {
+          d_.error(e->args[1]->loc, "PRECISION must be a positive integer constant", "(123)");
           e->ty = Type::voidTy();
           break;
         }
