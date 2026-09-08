@@ -41,39 +41,31 @@ llvm::Value *IRGen::flt(double d) {
   return llvm::ConstantFP::get(b_.getDoubleTy(), d);
 }
 
+llvm::AllocaInst *IRGen::entryAlloca(llvm::Type *ty, const llvm::Twine &name) {
+  llvm::IRBuilder<> ab(&curFn_->getEntryBlock(), curFn_->getEntryBlock().begin());
+  return ab.CreateAlloca(ty, nullptr, name);
+}
+
+static bool blockTerminated(llvm::BasicBlock *bb) {
+  return bb && !bb->empty() && bb->back().isTerminator();
+}
+
 void IRGen::startBlock(llvm::BasicBlock *bb) {
-  if (b_.GetInsertBlock() && !terminated_) {
+  if (b_.GetInsertBlock() && !blockTerminated(b_.GetInsertBlock())) {
     // The current block is open (not terminated): fall through into bb.
     b_.CreateBr(bb);
   }
   b_.SetInsertPoint(bb);
-  terminated_ = false;
 }
 
 void IRGen::newBlock() {
   llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, "", curFn_);
   b_.SetInsertPoint(bb);
-  terminated_ = false;
-}
-
-// After a function body is emitted, some pre-created blocks (GO TO / ENTRY
-// segment targets that were never reached) may lack a terminator. Give every
-// such block an `unreachable` terminator so the module verifies.
-void IRGen::closeBlocks() {
-  for (llvm::BasicBlock &bb : *curFn_) {
-    // getTerminator() asserts on a block without one, so test safely first.
-    if (bb.empty() || !bb.back().isTerminator()) {
-      llvm::IRBuilder<>::InsertPointGuard g(b_);
-      b_.SetInsertPoint(&bb);
-      b_.CreateUnreachable();
-    }
-  }
 }
 
 void IRGen::branch(llvm::BasicBlock *target) {
-  if (!terminated_) {
+  if (!blockTerminated(b_.GetInsertBlock())) {
     b_.CreateBr(target);
-    terminated_ = true;
   }
 }
 
@@ -128,6 +120,16 @@ llvm::Function *IRGen::calleeFn(Symbol *sym) {
 // module
 // ---------------------------------------------------------------------------
 std::string IRGen::run(Program &prog) {
+  // Reject unsupported signatures before constructing a partial module.
+  for (auto &p : prog.procs) {
+    if (p->isFunction && p->retTy.isChar())
+      d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
+  }
+  if (prog.mainProc && !prog.mainProc->params.empty())
+    d_.error(prog.mainProc->loc,
+             "parameters on the MAIN procedure are not implemented in this stage", "(2)");
+  if (!d_.ok()) return "";
+
   emitGlobals();
 
   // Pre-declare every procedure's functions/aliases so a call site resolves
@@ -138,9 +140,6 @@ std::string IRGen::run(Program &prog) {
   // C entry point: initialise the runtime, invoke the MAIN procedure,
   // terminate normally (this is where FINISH would be raised, see M5).
   if (prog.mainProc) {
-    if (!prog.mainProc->params.empty())
-      d_.error(prog.mainProc->loc,
-               "parameters on the MAIN procedure are not implemented in this stage", "(2)");
     llvm::Function *main =
         llvm::Function::Create(llvm::FunctionType::get(b_.getInt32Ty(), false),
                                llvm::Function::ExternalLinkage, "main", &mod_);
@@ -242,7 +241,7 @@ llvm::Value *IRGen::addressOf(Symbol *sym) {
 void IRGen::allocaLocals(Proc *p) {
   for (Symbol *s : p->localSyms) {
     if (s->kind != Symbol::Var) continue;
-    llvm::Value *a = b_.CreateAlloca(llvmTy(s->ty), nullptr, s->irName.substr(1));
+    llvm::Value *a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
     symAddr_[s] = a;
     if (s->ty.isChar()) {  // blank fill
       std::string blanks(s->ty.len, ' ');
@@ -317,7 +316,7 @@ void IRGen::emitInitials(Proc *p) {
 // (rule (77)) can branch to it. Multiple labels on one statement alias one block.
 void IRGen::collectGotoBlocks(Stmt *s) {
   if (!s) return;
-  if (!s->labels.empty()) {
+  if (!s->labels.empty() && s->kind != Stmt::Entry) {
     std::string blk = "L" + std::to_string(n_++);
     llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, blk, curFn_);
     for (const std::string &l : s->labels) labelBlocks_[l] = bb;
@@ -360,14 +359,6 @@ void IRGen::declareProc(Proc *p) {
   for (Symbol *s : p->paramSyms) push(s);
   for (Stmt *e : entries)
     for (Symbol *s : e->entryParamSyms) push(s);
-
-  for (Stmt *e : entries) {
-    Type rt = e->entryIsFunction ? e->entryRetTy : Type::voidTy();
-    bool ok = (p->isFunction && e->entryIsFunction && rt.k == p->retTy.k) ||
-              (!p->isFunction && !e->entryIsFunction);
-    if (!ok)
-      d_.error(e->loc, "ENTRY result type differs from the procedure's; a mixed return type is not implemented in this stage", "(56)");
-  }
 
   // Shared implementation (body filled by emitMultiEntryProc).
   std::vector<llvm::Type *> pt;
@@ -423,11 +414,8 @@ void IRGen::emitProc(Proc *p) {
   // Re-seed globals: static storage resolves the same in every procedure.
   for (Symbol *s : sema_.storage())
     if (s->isStatic && s->kind == Symbol::Var)
-      symAddr_[s] = mod_.getGlobalVariable(s->irName.substr(1));
+      symAddr_[s] = mod_.getGlobalVariable(s->irName.substr(1), true);
 
-  if (p->isFunction && p->retTy.isChar()) {
-    d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
-  }
   llvm::Type *retLLVM = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
 
   // rule (56): ENTRY statements declare alternate entry points.
@@ -459,20 +447,18 @@ void IRGen::emitPlainProc(Proc *p, llvm::Type *retLLVM) {
   for (size_t i = 0; i < p->env.size(); ++i) symAddr_[p->env[i]] = fn->getArg(ai++);
 
   b_.SetInsertPoint(entry);
-  terminated_ = false;
 
   allocaLocals(p);
   emitInitials(p);  // INITIAL attribute on AUTOMATIC variables (rule 26)
 
   for (auto &st : p->body) emitStmt(st.get());
 
-  if (!terminated_) {
+  if (!blockTerminated(b_.GetInsertBlock())) {
     if (p->isFunction)
       b_.CreateRet(llvm::Constant::getNullValue(retLLVM));  // fall-off: return a zero value
     else
       b_.CreateRetVoid();
   }
-  closeBlocks();
   curFn_ = nullptr;
 }
 
@@ -501,7 +487,6 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm
   llvm::Value *sel = impl->getArg(ai++);
 
   b_.SetInsertPoint(entry);
-  terminated_ = false;
 
   allocaLocals(p);
   emitInitials(p);
@@ -512,10 +497,12 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm
     llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, "e.seg." + std::to_string(i), impl);
     segs.push_back(bb);
   }
+  for (size_t i = 0; i < entries.size(); ++i)
+    for (const std::string &label : entries[i]->labels)
+      labelBlocks_[label] = segs[i + 1];
   llvm::SwitchInst *sw = b_.CreateSwitch(sel, segs[0], entries.size());
   for (size_t i = 0; i < entries.size(); ++i)
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), i + 1), segs[i + 1]);
-  terminated_ = true;
 
   // Segment 0 is the procedure's own start; each ENTRY begins the next segment.
   size_t seg = 0;
@@ -528,11 +515,10 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm
     }
     emitStmt(st.get());
   }
-  if (!terminated_) {
+  if (!blockTerminated(b_.GetInsertBlock())) {
     if (p->isFunction) b_.CreateRet(llvm::Constant::getNullValue(retLLVM));
     else b_.CreateRetVoid();
   }
-  closeBlocks();
   curFn_ = nullptr;
 }
 
@@ -548,7 +534,7 @@ void IRGen::emitStmt(Stmt *s) {
   if (!s) return;
   if (!s->labels.empty()) {
     startBlock(labelBlocks_[s->labels.front()]);
-  } else if (terminated_) {
+  } else if (blockTerminated(b_.GetInsertBlock())) {
     newBlock();  // unreachable code (e.g. after STOP): start a fresh block
   }
   switch (s->kind) {
@@ -578,19 +564,16 @@ void IRGen::emitStmt(Stmt *s) {
       } else {
         b_.CreateRetVoid();
       }
-      terminated_ = true;
       break;
     }
     case Stmt::Stop:
       b_.CreateCall(runtimeFn("pli_stop", b_.getVoidTy(), {}), {});
       b_.CreateUnreachable();
-      terminated_ = true;
       break;
     case Stmt::Leave:
       break;
     case Stmt::Goto:
       b_.CreateBr(labelBlocks_[s->name]);
-      terminated_ = true;
       break;
   }
 }
@@ -623,7 +606,6 @@ void IRGen::emitIf(Stmt *s) {
   llvm::BasicBlock *endL = llvm::BasicBlock::Create(ctx_, "if.end." + id, curFn_);
   llvm::BasicBlock *elseL = s->elseS ? llvm::BasicBlock::Create(ctx_, "if.else." + id, curFn_) : nullptr;
   b_.CreateCondBr(cond, thenL, s->elseS ? elseL : endL);
-  terminated_ = true;
 
   startBlock(thenL);
   emitStmt(s->thenS.get());
@@ -646,7 +628,6 @@ void IRGen::emitDoWhile(Stmt *s) {
   startBlock(condL);
   Val c = emitExpr(s->cond.get());
   b_.CreateCondBr(toI1(c, s->loc), bodyL, endL);
-  terminated_ = true;
   startBlock(bodyL);
   for (auto &b : s->body) emitStmt(b.get());
   branch(condL);
@@ -666,7 +647,7 @@ void IRGen::emitDoIter(Stmt *s) {
   llvm::Value *toAddr = nullptr, *byAddr = nullptr;
   if (s->to) {
     Val to = convert(emitExpr(s->to.get()), ct, s->loc);
-    toAddr = b_.CreateAlloca(llvmTy(ct), nullptr, "do.to." + id);
+    toAddr = entryAlloca(llvmTy(ct), "do.to." + id);
     storeScalarTo(toAddr, ct, to);
   }
   Val by;
@@ -677,16 +658,19 @@ void IRGen::emitDoIter(Stmt *s) {
     by.reg = ct.k == TK::Float ? flt(1.0)
                                : llvm::ConstantInt::get(llvmTy(ct), 1, true);
   }
-  byAddr = b_.CreateAlloca(llvmTy(ct), nullptr, "do.by." + id);
+  byAddr = entryAlloca(llvmTy(ct), "do.by." + id);
   storeScalarTo(byAddr, ct, by);
 
   llvm::BasicBlock *condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
   llvm::BasicBlock *bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
   llvm::BasicBlock *stepL = llvm::BasicBlock::Create(ctx_, "do.step." + id, curFn_);
   llvm::BasicBlock *endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);
-  llvm::BasicBlock *upL = llvm::BasicBlock::Create(ctx_, "do.up." + id, curFn_);
-  llvm::BasicBlock *downL = llvm::BasicBlock::Create(ctx_, "do.down." + id, curFn_);
-  llvm::BasicBlock *testL = llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_);
+  llvm::BasicBlock *upL = s->to
+      ? llvm::BasicBlock::Create(ctx_, "do.up." + id, curFn_) : nullptr;
+  llvm::BasicBlock *downL = s->to
+      ? llvm::BasicBlock::Create(ctx_, "do.down." + id, curFn_) : nullptr;
+  llvm::BasicBlock *testL = s->to
+      ? llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_) : nullptr;
 
   branch(condL);
   startBlock(condL);
@@ -703,19 +687,16 @@ void IRGen::emitDoIter(Stmt *s) {
     else
       neg = b_.CreateICmpSLT(bv, zero, "negstep");
     b_.CreateCondBr(neg, downL, upL);
-    terminated_ = true;
 
     startBlock(upL);
     llvm::Value *cu = ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv, "cmpup")
                                         : b_.CreateICmpSLE(cv.reg, tv, "cmpup");
     b_.CreateCondBr(cu, testL, endL);
-    terminated_ = true;
 
     startBlock(downL);
     llvm::Value *cd = ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv, "cmpdn")
                                         : b_.CreateICmpSGE(cv.reg, tv, "cmpdn");
     b_.CreateCondBr(cd, testL, endL);
-    terminated_ = true;
 
     startBlock(testL);
   }
@@ -723,7 +704,6 @@ void IRGen::emitDoIter(Stmt *s) {
   if (s->cond) {  // WHILE clause
     Val w = emitExpr(s->cond.get());
     b_.CreateCondBr(toI1(w, s->loc), bodyL, endL);
-    terminated_ = true;
   } else {
     branch(bodyL);
   }
@@ -815,7 +795,7 @@ void IRGen::emitCall(Stmt *s) {
     if (direct) {
       addr = addressOf(a->sym);
     } else {
-      addr = b_.CreateAlloca(llvmTy(pty), nullptr, "dummy");
+      addr = entryAlloca(llvmTy(pty), "dummy");
       Val v = emitExpr(a);
       if (pty.isChar()) {
         Val cv = v;
@@ -996,7 +976,7 @@ llvm::Value *IRGen::toI64(const Val &v) {
 Val IRGen::charTemp(int len) {
   Val v;
   v.ty = Type::chr(len);
-  v.ptr = b_.CreateAlloca(llvm::ArrayType::get(b_.getInt8Ty(), len), nullptr, "cbuf");
+  v.ptr = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), len), "cbuf");
   v.len = i64(len);
   return v;
 }
@@ -1232,7 +1212,7 @@ Val IRGen::emitExpr(Expr *e) {
         if (direct) {
           addr = addressOf(a->sym);
         } else {
-          addr = b_.CreateAlloca(llvmTy(pty), nullptr, "dummy");
+          addr = entryAlloca(llvmTy(pty), "dummy");
           Val av = emitExpr(a);
           if (pty.isChar()) {
             Val cv = av;

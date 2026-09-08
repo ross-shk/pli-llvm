@@ -1,0 +1,11 @@
+ /* rule (56): entries in one implementation need compatible results. */
+ badentrytype: procedure options(main);
+    declare x fixed bin(63);
+    x = wide();
+
+    wide: procedure returns(fixed bin(63));
+       return(1);
+       narrow: entry returns(fixed bin(15));
+       return(2);
+    end wide;
+ end badentrytype;

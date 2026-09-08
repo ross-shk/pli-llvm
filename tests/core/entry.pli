@@ -34,6 +34,15 @@
      a = quad(3);
      if a = 9 then put skip list('PASS quad(3) = 9');
      else put skip list('FAIL quad(3) =', a);
+
+     call jump();
+
+     jump: procedure;
+        go to alternate;
+        put skip list('FAIL GO TO ENTRY');
+        alternate: entry;
+        put skip list('PASS GO TO ENTRY');
+     end jump;
   end entrytest;
 
   calc: procedure(a, m) returns(fixed);
@@ -52,4 +61,3 @@
         return(x + base);
      end helper;
   end calc;
-

@@ -12,15 +12,21 @@ endif
 LLVM_CXXFLAGS := $(shell $(LLVM_CONFIG) --cxxflags 2>/dev/null)
 LLVM_LDFLAGS  := $(shell $(LLVM_CONFIG) --ldflags 2>/dev/null)
 LLVM_LIBS     := $(shell $(LLVM_CONFIG) --libs core irreader support 2>/dev/null)
+LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) --system-libs 2>/dev/null)
 ifeq ($(LLVM_CXXFLAGS),)
   $(error llvm-config not found — install LLVM >= 18 via Homebrew (brew install llvm) or set LLVM_CONFIG=)
 endif
+LLVM_VERSION_OK := $(shell major=`$(LLVM_CONFIG) --version | cut -d. -f1`; \
+                           test "$$major" -ge 18 2>/dev/null && echo yes)
+ifeq ($(LLVM_VERSION_OK),)
+  $(error plic requires LLVM >= 18)
+endif
 
 CXX      ?= c++
-# LLVM's cxxflags carry -std=c++17; we keep -std=c++20 in our own flags and
-# strip the -std= and -stdlib= that llvm-config adds to avoid an override.
-CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wno-unused-parameter \
-            $(filter-out -std=% -stdlib=%,$(LLVM_CXXFLAGS))
+CXXFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter
+# LLVM's flags are required even when callers override CXXFLAGS. Keep its ABI
+# options, but put our language standard last so llvm-config cannot override it.
+PLIC_CXXFLAGS := $(CXXFLAGS) $(filter-out -std=%,$(LLVM_CXXFLAGS)) -std=c++20
 CC       ?= cc
 CFLAGS   ?= -O2 -Wall -Wextra
 
@@ -55,19 +61,21 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' -DPLIC_CLANG='"$(CLANGPATH)"' -MMD -MP -c $< -o $@
+	$(CXX) $(PLIC_CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
+		-DPLIC_INSTALL_RUNTIME_LIB='"$(LIBDIR)/libpli.a"' \
+		-DPLIC_CLANG='"$(CLANGPATH)"' -MMD -MP -c $< -o $@
 
 $(RULES_CPP): TR25.084-concrete-syntax.md scripts/gen_rules.py | $(BUILD)
 	python3 scripts/gen_rules.py $< $@
 
 $(RULES_OBJ): $(RULES_CPP) src/explain.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) -Isrc -c $< -o $@
+	$(CXX) $(PLIC_CXXFLAGS) -Isrc -c $< -o $@
 
 $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) $(RULES_OBJ)
-	$(CXX) $(CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) -o $@
+	$(CXX) $(PLIC_CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) $(LLVM_SYSTEM_LIBS) -o $@
 
 $(RTLIB): $(RT_OBJS)
 	ar rcs $@ $(RT_OBJS)
@@ -78,9 +86,8 @@ test: all
 clean:
 	rm -rf $(BUILD) tests/*/out
 
-# Install plic and the runtime archive. The baked-in RTPATH inside the binary
-# still points at build/libpli.a, so installed plic needs --runtime to find the
-# archive unless PREFIX matches where libpli.a is placed.
+# Install plic and the runtime archive. The driver falls back to the sibling
+# lib directory when its baked-in build-tree runtime is unavailable.
 PREFIX  ?= /usr/local
 BINDIR  := $(PREFIX)/bin
 LIBDIR  := $(PREFIX)/lib

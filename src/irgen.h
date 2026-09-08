@@ -42,6 +42,7 @@ private:
   llvm::Value *i32(int v);
   llvm::Value *i64(long long v);
   llvm::Value *flt(double d);
+  llvm::AllocaInst *entryAlloca(llvm::Type *ty, const llvm::Twine &name);
   void startBlock(llvm::BasicBlock *bb);   // branch into bb unless terminated, then insert there
   void newBlock();                          // a fresh dead block for unreachable code
   void branch(llvm::BasicBlock *target);
@@ -59,7 +60,6 @@ private:
   void emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm::Type *retLLVM);
   void allocaLocals(Proc *p);
   void emitInitials(Proc *p);  // INITIAL stores on AUTOMATIC vars (rule 26)
-  void closeBlocks();          // give any unterminated block an unreachable terminator
   void collectGotoBlocks(Stmt *s);  // assign an LLVM block to each labelled stmt
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
   std::string entryIrName(Proc *p, Stmt *e);
@@ -100,7 +100,6 @@ private:
   llvm::Function *curFn_ = nullptr;  // the function we are currently filling
   std::vector<llvm::GlobalVariable *> strLits_;
   int n_ = 0;
-  bool terminated_ = false;
   Proc *curProc_ = nullptr;
   std::map<std::string, llvm::BasicBlock *> labelBlocks_;  // label -> block (rule 77)
 };
