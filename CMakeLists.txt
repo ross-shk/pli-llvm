@@ -27,6 +27,7 @@ set(PLIC_SOURCES
   src/main.cpp
   src/diag.cpp
   src/explain.cpp
+  src/hir.cpp
   src/lexer.cpp
   src/parser.cpp
   src/sema.cpp

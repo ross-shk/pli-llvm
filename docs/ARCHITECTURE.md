@@ -105,7 +105,8 @@ independent PL/I-free code". MIR keeps us honest about what LLVM cannot know
 | AST | `src/ast.h` | syntax tree |
 | Types | `src/types.h` | attribute → type mapping |
 | Sema | `src/sema.{h,cpp}` | scopes, declarations, defaults, typing, conversions |
-| IR generation | `src/irgen.{h,cpp}` | LLVM IR via `llvm::IRBuilder<>` (ADR-002) |
+| HIR | `src/hir.{h,cpp}` | PL/I-aware IR with explicit conversions (ADR-005, ADR-029); `--print-hir` |
+| IR generation | `src/irgen.{h,cpp}` | LLVM IR via `llvm::IRBuilder<>` (ADR-002); consumes HIR |
 | Runtime | `runtime/pli_rt.{h,c}` | I/O, string semantics, conditions |
 
 ### 3.1 Source manager

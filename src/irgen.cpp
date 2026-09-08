@@ -98,7 +98,7 @@ llvm::Function *IRGen::calleeFn(Symbol *sym) {
   Stmt *en = sym->entry;
   std::string name;
   if (en)
-    name = entryIrName(callee, en).substr(1);
+    name = entryIrName(callee->name, callee->parent ? callee->parent->name : "", en->name).substr(1);
   else if (callee)
     name = callee->irName.substr(1);
   else if (sym->isEntry)
@@ -119,7 +119,7 @@ llvm::Function *IRGen::calleeFn(Symbol *sym) {
 // ---------------------------------------------------------------------------
 // module
 // ---------------------------------------------------------------------------
-std::string IRGen::run(Program &prog) {
+std::string IRGen::run(HProgram &prog) {
   // Reject unsupported signatures before constructing a partial module.
   for (auto &p : prog.procs) {
     if (p->isFunction && p->retTy.isChar())
@@ -238,7 +238,7 @@ llvm::Value *IRGen::addressOf(Symbol *sym) {
   return symAddr_.count(sym) ? symAddr_[sym] : nullptr;
 }
 
-void IRGen::allocaLocals(Proc *p) {
+void IRGen::allocaLocals(HProc *p) {
   for (Symbol *s : p->localSyms) {
     if (s->kind != Symbol::Var) continue;
     llvm::Value *a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
@@ -260,10 +260,10 @@ void IRGen::allocaLocals(Proc *p) {
 
 // INITIAL attribute on AUTOMATIC variables (rule 26): runs on every
 // activation.
-static void collectDeclStmts(Stmt *s, std::vector<Stmt *> &out) {
+static void collectDeclStmts(HStmt *s, std::vector<HStmt *> &out) {
   if (!s) return;
-  if (s->kind == Stmt::Declare) { out.push_back(s); return; }
-  if (s->kind == Stmt::Begin || s->kind == Stmt::Group)
+  if (s->kind == HStmt::Declare) { out.push_back(s); return; }
+  if (s->kind == HStmt::Begin || s->kind == HStmt::Group)
     for (auto &b : s->body) collectDeclStmts(b.get(), out);
   else {
     for (auto &b : s->body) collectDeclStmts(b.get(), out);
@@ -272,10 +272,10 @@ static void collectDeclStmts(Stmt *s, std::vector<Stmt *> &out) {
   }
 }
 
-void IRGen::emitInitials(Proc *p) {
-  std::vector<Stmt *> decls;
+void IRGen::emitInitials(HProc *p) {
+  std::vector<HStmt *> decls;
   for (auto &st : p->body) collectDeclStmts(st.get(), decls);
-  for (Stmt *st : decls) {
+  for (HStmt *st : decls) {
     for (auto &item : st->decls) {
       Expr *e = item.sym ? item.sym->initExpr : nullptr;
       if (!e) continue;
@@ -314,9 +314,9 @@ void IRGen::emitInitials(Proc *p) {
 
 // Assign an LLVM block to every labelled statement (rule (64)) so a GO TO
 // (rule (77)) can branch to it. Multiple labels on one statement alias one block.
-void IRGen::collectGotoBlocks(Stmt *s) {
+void IRGen::collectGotoBlocks(HStmt *s) {
   if (!s) return;
-  if (!s->labels.empty() && s->kind != Stmt::Entry) {
+  if (!s->labels.empty() && s->kind != HStmt::Entry) {
     std::string blk = "L" + std::to_string(n_++);
     llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, blk, curFn_);
     for (const std::string &l : s->labels) labelBlocks_[l] = bb;
@@ -330,11 +330,11 @@ void IRGen::collectGotoBlocks(Stmt *s) {
 // regardless of emission order. Plain procedures get one function (filled by
 // emitPlainProc); multi-entry procedures get the shared impl (filled by
 // emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
-void IRGen::declareProc(Proc *p) {
+void IRGen::declareProc(HProc *p) {
   llvm::Type *ret = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
-  std::vector<Stmt *> entries;
+  std::vector<HStmt *> entries;
   for (auto &st : p->body)
-    if (st && st->kind == Stmt::Entry) entries.push_back(st.get());
+    if (st && st->kind == HStmt::Entry) entries.push_back(st.get());
   auto aliasFor = [&](const std::string &en, llvm::Function *target) {
     std::string alias = "PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + en;
     llvm::GlobalAlias::create(llvm::GlobalValue::InternalLinkage, alias, target);
@@ -357,7 +357,7 @@ void IRGen::declareProc(Proc *p) {
     if (std::find(uni.begin(), uni.end(), s) == uni.end()) uni.push_back(s);
   };
   for (Symbol *s : p->paramSyms) push(s);
-  for (Stmt *e : entries)
+  for (HStmt *e : entries)
     for (Symbol *s : e->entryParamSyms) push(s);
 
   // Shared implementation (body filled by emitMultiEntryProc).
@@ -403,11 +403,11 @@ void IRGen::declareProc(Proc *p) {
   for (const auto &en : p->entryNames) aliasFor(en, t0);
   for (size_t i = 0; i < entries.size(); ++i) {
     llvm::Function *tf = thunk(entries[i]->entryParamSyms, i64(i + 1));
-    tf->setName(entryIrName(p, entries[i]).substr(1));
+    tf->setName(entryIrName(p->name, p->parent ? p->parent->name : "", entries[i]->name).substr(1));
   }
 }
 
-void IRGen::emitProc(Proc *p) {
+void IRGen::emitProc(HProc *p) {
   curProc_ = p;
   labelBlocks_.clear();
   symAddr_.clear();
@@ -419,9 +419,9 @@ void IRGen::emitProc(Proc *p) {
   llvm::Type *retLLVM = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
 
   // rule (56): ENTRY statements declare alternate entry points.
-  std::vector<Stmt *> entries;
+  std::vector<HStmt *> entries;
   for (auto &st : p->body)
-    if (st && st->kind == Stmt::Entry) entries.push_back(st.get());
+    if (st && st->kind == HStmt::Entry) entries.push_back(st.get());
 
   if (entries.empty())
     emitPlainProc(p, retLLVM);
@@ -432,7 +432,7 @@ void IRGen::emitProc(Proc *p) {
 
 // One procedure, one LLVM function: the ordinary path (no ENTRY statements).
 // The function and its entry-namelist aliases were pre-created by declareProc.
-void IRGen::emitPlainProc(Proc *p, llvm::Type *retLLVM) {
+void IRGen::emitPlainProc(HProc *p, llvm::Type *retLLVM) {
   llvm::Function *fn = mod_.getFunction(p->irName.substr(1));
   curFn_ = fn;
   // The entry block must be the function's first block (so it is the real
@@ -465,7 +465,7 @@ void IRGen::emitPlainProc(Proc *p, llvm::Type *retLLVM) {
 // rule (56): a procedure with ENTRY statements. The shared implementation
 // function (pre-created by declareProc) carries the whole body split into
 // segments; each entry point's thunk was built by declareProc.
-void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm::Type *retLLVM) {
+void IRGen::emitMultiEntryProc(HProc *p, const std::vector<HStmt *> &entries, llvm::Type *retLLVM) {
   llvm::Function *impl = mod_.getFunction(p->irName.substr(1) + ".impl");
   curFn_ = impl;
   // The entry block must be the function's first block (so it is the real
@@ -478,7 +478,7 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm
     if (std::find(uni.begin(), uni.end(), s) == uni.end()) uni.push_back(s);
   };
   for (Symbol *s : p->paramSyms) push(s);
-  for (Stmt *e : entries)
+  for (HStmt *e : entries)
     for (Symbol *s : e->entryParamSyms) push(s);
 
   size_t ai = 0;
@@ -508,7 +508,7 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm
   size_t seg = 0;
   startBlock(segs[0]);
   for (auto &st : p->body) {
-    if (st && st->kind == Stmt::Entry) {
+    if (st && st->kind == HStmt::Entry) {
       ++seg;
       startBlock(segs[seg]);  // fall through from the previous segment
       continue;
@@ -522,15 +522,15 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm
   curFn_ = nullptr;
 }
 
-std::string IRGen::entryIrName(Proc *p, Stmt *e) {
-  return "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name +
-         "$entry$" + e->name;
+std::string IRGen::entryIrName(const std::string &proc, const std::string &parent,
+                               const std::string &entry) {
+  return "@PLI_" + (parent.empty() ? std::string() : parent + "$") + proc + "$entry$" + entry;
 }
 
 // ---------------------------------------------------------------------------
 // statements
 // ---------------------------------------------------------------------------
-void IRGen::emitStmt(Stmt *s) {
+void IRGen::emitStmt(HStmt *s) {
   if (!s) return;
   if (!s->labels.empty()) {
     startBlock(labelBlocks_[s->labels.front()]);
@@ -538,21 +538,21 @@ void IRGen::emitStmt(Stmt *s) {
     newBlock();  // unreachable code (e.g. after STOP): start a fresh block
   }
   switch (s->kind) {
-    case Stmt::Null:
-    case Stmt::Declare:
-    case Stmt::Entry:  // segment marker; handled by emitMultiEntryProc
+    case HStmt::Null:
+    case HStmt::Declare:
+    case HStmt::Entry:  // segment marker; handled by emitMultiEntryProc
       break;
-    case Stmt::Assign: emitAssign(s); break;
-    case Stmt::If: emitIf(s); break;
-    case Stmt::Group:
-    case Stmt::Begin:  // a block executes its body as a group (rule (68))
+    case HStmt::Assign: emitAssign(s); break;
+    case HStmt::If: emitIf(s); break;
+    case HStmt::Group:
+    case HStmt::Begin:  // a block executes its body as a group (rule (68))
       for (auto &b : s->body) emitStmt(b.get());
       break;
-    case Stmt::DoWhile: emitDoWhile(s); break;
-    case Stmt::DoIter: emitDoIter(s); break;
-    case Stmt::Put: emitPut(s); break;
-    case Stmt::CallS: emitCall(s); break;
-    case Stmt::Return: {
+    case HStmt::DoWhile: emitDoWhile(s); break;
+    case HStmt::DoIter: emitDoIter(s); break;
+    case HStmt::Put: emitPut(s); break;
+    case HStmt::CallS: emitCall(s); break;
+    case HStmt::Return: {
       if (curProc_->isFunction) {
         Val v = emitExpr(s->value.get());
         Val rv = convert(v, curProc_->retTy, s->loc);
@@ -566,22 +566,22 @@ void IRGen::emitStmt(Stmt *s) {
       }
       break;
     }
-    case Stmt::Stop:
+    case HStmt::Stop:
       b_.CreateCall(runtimeFn("pli_stop", b_.getVoidTy(), {}), {});
       b_.CreateUnreachable();
       break;
-    case Stmt::Leave:
+    case HStmt::Leave:
       break;
-    case Stmt::Goto:
+    case HStmt::Goto:
       b_.CreateBr(labelBlocks_[s->name]);
       break;
   }
 }
 
-void IRGen::emitAssign(Stmt *s) {
+void IRGen::emitAssign(HStmt *s) {
   if (!s->target) return;
-  if (s->target->kind == Expr::Call && s->target->name == "SUBSTR") {
-    Expr *t = s->target.get();
+  if (s->target->kind == HExpr::Call && s->target->name == "SUBSTR") {
+    HExpr *t = s->target.get();
     Val sv = emitExpr(t->args[0].get());
     Symbol *sym = t->args[0]->sym;
     Val start = emitExpr(t->args[1].get());
@@ -593,12 +593,12 @@ void IRGen::emitAssign(Stmt *s) {
                   {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
-  if (s->target->kind != Expr::VarRef || !s->target->sym) return;
+  if (s->target->kind != HExpr::VarRef || !s->target->sym) return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
 }
 
-void IRGen::emitIf(Stmt *s) {
+void IRGen::emitIf(HStmt *s) {
   Val c = emitExpr(s->cond.get());
   llvm::Value *cond = toI1(c, s->loc);
   std::string id = std::to_string(n_++);
@@ -619,7 +619,7 @@ void IRGen::emitIf(Stmt *s) {
   startBlock(endL);
 }
 
-void IRGen::emitDoWhile(Stmt *s) {
+void IRGen::emitDoWhile(HStmt *s) {
   std::string id = std::to_string(n_++);
   llvm::BasicBlock *condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
   llvm::BasicBlock *bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
@@ -635,7 +635,7 @@ void IRGen::emitDoWhile(Stmt *s) {
 }
 
 // DO v = e1 [TO e2] [BY e3] [WHILE(e4)];                    rules (71)-(73)
-void IRGen::emitDoIter(Stmt *s) {
+void IRGen::emitDoIter(HStmt *s) {
   Symbol *ctl = s->sym;
   if (!ctl) return;
   const Type &ct = ctl->ty;
@@ -726,7 +726,7 @@ void IRGen::emitDoIter(Stmt *s) {
   startBlock(endL);
 }
 
-void IRGen::emitPut(Stmt *s) {
+void IRGen::emitPut(HStmt *s) {
   if (s->page)
     b_.CreateCall(runtimeFn("pli_put_page", b_.getVoidTy(), {}), {});
   if (s->skip) {
@@ -768,7 +768,7 @@ void IRGen::emitPut(Stmt *s) {
   }
 }
 
-void IRGen::emitCall(Stmt *s) {
+void IRGen::emitCall(HStmt *s) {
   if (!s->sym) return;
   Symbol *calleeSym = s->sym;
   Proc *callee = calleeSym->proc;
@@ -779,7 +779,7 @@ void IRGen::emitCall(Stmt *s) {
 
   std::vector<llvm::Value *> args;
   for (size_t i = 0; i < s->args.size(); ++i) {
-    Expr *a = s->args[i].get();
+    HExpr *a = s->args[i].get();
     Type pty;
     if (en || callee) {
       if (i < calleeParams.size()) pty = calleeParams[i]->ty;
@@ -789,7 +789,7 @@ void IRGen::emitCall(Stmt *s) {
       else break;
     }
     llvm::Value *addr;
-    bool direct = a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
+    bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
                   a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
                   a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
     if (direct) {
@@ -824,7 +824,7 @@ void IRGen::emitCall(Stmt *s) {
     for (Symbol *v : callee->env) {
       // "cousin" call: resolve via addressOf; for a non-adjacent variable
       // so diagnose it (same rule as before).
-      if (v->owner != curProc_ &&
+      if (v->owner != curProc_->src &&
           std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
         d_.error(callee->loc,
                  "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
@@ -984,32 +984,34 @@ Val IRGen::charTemp(int len) {
 // ---------------------------------------------------------------------------
 // expressions
 // ---------------------------------------------------------------------------
-Val IRGen::emitExpr(Expr *e) {
+Val IRGen::emitExpr(HExpr *e) {
   Val v;
   if (!e) return v;
   switch (e->kind) {
-    case Expr::IntLit:
+    case HExpr::Convert:
+      return convert(emitExpr(e->a.get()), e->convTo, e->loc);
+    case HExpr::IntLit:
       v.ty = e->ty;
       v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
       return v;
-    case Expr::FltLit:
+    case HExpr::FltLit:
       v.ty = e->ty;
       v.reg = flt(e->fval);
       return v;
-    case Expr::CharLit: {
+    case HExpr::CharLit: {
       v.ty = e->ty;
       v.ptr = globalString(e->sval);
       v.len = i64(e->sval.size());
       return v;
     }
-    case Expr::BitLit:
+    case HExpr::BitLit:
       v.ty = Type::bit(1);
       v.reg = b_.getInt1(!e->sval.empty() && e->sval[0] == '1');
       return v;
-    case Expr::VarRef:
+    case HExpr::VarRef:
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
       return loadSym(e->sym, e->sym->ty);
-    case Expr::Call: {
+    case HExpr::Call: {
       if (e->name == "SUBSTR") {
         Val s = emitExpr(e->args[0].get());
         Val start = emitExpr(e->args[1].get());
@@ -1195,18 +1197,18 @@ Val IRGen::emitExpr(Expr *e) {
       Proc *callee = e->sym->proc;
       Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy()) : callee->retTy;
       llvm::Function *calleeFn = en
-          ? mod_.getFunction(entryIrName(callee, en).substr(1))
+          ? mod_.getFunction(entryIrName(callee->name, callee->parent ? callee->parent->name : "", en->name).substr(1))
           : mod_.getFunction(callee->irName.substr(1));
       std::vector<Symbol *> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
       if (rty.isChar()) { v.ty = e->ty; v.reg = i64(0); return v; }  // diagnosed in emitProc
       std::vector<llvm::Value *> args;
       for (size_t i = 0; i < e->args.size(); ++i) {
-        Expr *a = e->args[i].get();
+        HExpr *a = e->args[i].get();
         Type pty;
         if (i < calleeParams.size()) pty = calleeParams[i]->ty;
         else break;
         llvm::Value *addr;
-        bool direct = a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
+        bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
                       a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
                       a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
         if (direct) {
@@ -1238,7 +1240,7 @@ Val IRGen::emitExpr(Expr *e) {
       }
       if (callee) {
         for (Symbol *v : callee->env) {
-          if (v->owner != curProc_ &&
+          if (v->owner != curProc_->src &&
               std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
             d_.error(callee->loc,
                      "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
@@ -1256,7 +1258,7 @@ Val IRGen::emitExpr(Expr *e) {
       }
       return v;
     }
-    case Expr::Unary: {
+    case HExpr::Unary: {
       Val a = emitExpr(e->a.get());
       if (e->op == Tok::Not) {
         llvm::Value *bb = toI1(a, e->loc);
@@ -1271,7 +1273,7 @@ Val IRGen::emitExpr(Expr *e) {
         v.reg = b_.CreateSub(llvm::Constant::getNullValue(llvmTy(a.ty)), a.reg, "neg");
       return v;
     }
-    case Expr::Binary: break;
+    case HExpr::Binary: break;
   }
 
   // ---- binary operators ----

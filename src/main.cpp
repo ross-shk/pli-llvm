@@ -14,6 +14,7 @@
 
 #include "diag.h"
 #include "explain.h"
+#include "hir.h"
 #include "irgen.h"
 #include "lexer.h"
 #include "parser.h"
@@ -47,6 +48,7 @@ static void usage() {
       "  -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)\n"
       "  -c               compile to a relocatable object (no linking)\n"
       "  -emit-llvm       write LLVM IR and stop\n"
+      "  --print-hir      lower to HIR and print it, then stop\n"
       "  -fsyntax-only    parse and analyse only\n"
       "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
       "  --keep-ll        keep the intermediate .ll next to the output\n"
@@ -94,7 +96,7 @@ int main(int argc, char **argv) {
   std::string clangPath = PLIC_CLANG;
   std::string optLevel = "-O2";
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
-  bool runtimeExplicit = false;
+  bool runtimeExplicit = false, print_hir = false;
   int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -107,6 +109,7 @@ int main(int argc, char **argv) {
     else if (a == "-o") output = next("-o");
     else if (a == "-c") compileOnly = true;
     else if (a == "-emit-llvm" || a == "--emit-llvm") emitLLVM = true;
+    else if (a == "--print-hir") print_hir = true;
     else if (a == "-fsyntax-only") syntaxOnly = true;
     else if (a == "--keep-ll") keepLL = true;
     else if (a == "--runtime") { runtimeLib = next("--runtime"); runtimeExplicit = true; }
@@ -171,11 +174,15 @@ int main(int argc, char **argv) {
 
   if (syntaxOnly) return 0;
 
+  // Lower the typed AST to HIR (ADR-005). `--print-hir` shows it and stops.
+  HProgram hir = lower(*prog);
+  if (print_hir) { printHIR(hir, std::cout); return 0; }
+
   // --- code generation ---------------------------------------------------
   if (triple.empty())
     triple = runCapture((shellQuote(clangPath) + " -dumpmachine 2>/dev/null").c_str());
   IRGen irgen(diags, sema, triple);
-  std::string ir = irgen.run(*prog);
+  std::string ir = irgen.run(hir);
   if (!diags.ok()) return 1;
 
   fs::path inPath(input);
