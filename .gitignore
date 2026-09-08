@@ -5,6 +5,7 @@
 build/
 tests/*/out/
 examples/
+.jspace/
 
 # test baselines are source of truth, not build output
 !tests/*/expected/*.out
