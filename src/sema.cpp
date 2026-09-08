@@ -489,6 +489,31 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = e->args[0]->ty;
         break;
       }
+      // PRECISION built-in (M2): precision(x, p) — x with p digits/bits of
+      // precision, keeping x's base type (M0 model; the value is unchanged and
+      // only the declared precision differs, so the storage width may change).
+      if (e->name == "PRECISION") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "PRECISION expects 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isNumeric()) {
+          d_.error(e->args[0]->loc, "PRECISION first argument must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        int p = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
+        if (p < 0) {
+          d_.error(e->args[1]->loc, "PRECISION precision must be a constant in this stage", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        Type t = e->args[0]->ty;
+        t.prec = p;
+        e->ty = t;
+        break;
+      }
       // MIN built-in (M2): min(a, b) — the smaller of two numerics, in their
       // common arithmetic type (two-argument form in this stage).
       if (e->name == "MIN") {

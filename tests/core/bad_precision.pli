@@ -1,0 +1,6 @@
+ /* Diagnostic test: PRECISION with a character argument is rejected. */
+ BADPRECISION: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHARACTER(4);
+    DECLARE X FIXED BINARY(31);
+    X = PRECISION(S, 5);
+ END BADPRECISION;
