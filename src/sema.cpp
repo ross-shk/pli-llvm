@@ -137,6 +137,8 @@ void Sema::processProc(Proc *p) {
     p->paramSyms.push_back(s);
   }
 
+  procLabels_.clear();
+  for (auto &s : p->body) collectLabels(s.get());
   for (auto &s : p->body) checkStmt(s.get(), sc, p);
 
   // Classify storage for code generation: AUTOMATIC variables of this
@@ -195,6 +197,17 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
     if (s->thenS && s->thenS->kind == Stmt::Declare)
       d_.error(s->thenS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
   }
+}
+
+// Gather the labels (rule (64)) defined anywhere in this procedure so that a
+// GO TO target (rule (77)) can be resolved. M1 treats every label of the
+// procedure body as visible; non-local GO TO to an enclosing procedure is M5.
+void Sema::collectLabels(Stmt *s) {
+  if (!s) return;
+  for (const std::string &l : s->labels) procLabels_.insert(l);
+  if (s->thenS) collectLabels(s->thenS.get());
+  if (s->elseS) collectLabels(s->elseS.get());
+  for (auto &b : s->body) collectLabels(b.get());
 }
 
 bool Sema::checkAssignable(const Type &dst, const Type &src, SourceLoc loc, const char *what) {
@@ -305,6 +318,11 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
     }
     case Stmt::Stop:
     case Stmt::Leave:
+      break;
+    case Stmt::Goto:
+      // GO TO target must be a label defined in this procedure (rules (64),(77)).
+      if (procLabels_.find(s->name) == procLabels_.end())
+        d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
       break;
   }
 }

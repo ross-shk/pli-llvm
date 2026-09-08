@@ -291,10 +291,24 @@ StmtP Parser::parseStatement(Proc *owner) {
     resync();
     return nullptr;
   }
-  if (atStmtKeyword("GO") || atStmtKeyword("GOTO")) {
-    d_.error(cur().loc, "GO TO is not implemented in this stage", "(77)");
-    resync();
-    return nullptr;
+  if (atStmtKeyword("GO") && peek().kind == Tok::Word && peek().isWord("TO")) {
+    // GO TO label ;                                        rule (77)
+    advance();  // GO
+    advance();  // TO
+    st->kind = Stmt::Goto;
+    if (at(Tok::Word)) { st->name = cur().text; advance(); }
+    else d_.error(cur().loc, "expected a label after GO TO", "(77)");
+    expect(Tok::Semi, "(77)");
+    return st;
+  }
+  if (atStmtKeyword("GOTO")) {
+    // GOTO label ;   (one-word spelling)                  rule (77)
+    advance();
+    st->kind = Stmt::Goto;
+    if (at(Tok::Word)) { st->name = cur().text; advance(); }
+    else d_.error(cur().loc, "expected a label after GOTO", "(77)");
+    expect(Tok::Semi, "(77)");
+    return st;
   }
   if (atStmtKeyword("ON") || atStmtKeyword("SIGNAL") || atStmtKeyword("REVERT")) {
     d_.error(cur().loc, "condition handling (ON/SIGNAL/REVERT) is not implemented in this stage", "(91)");

@@ -1,0 +1,44 @@
+ /* GO TO within a procedure (rule (77)): forward and backward branches to
+    labelled statements. TR 25.084 rules (64) labels, (77) GO TO. */
+ goto_test: procedure options(main);
+    declare i fixed bin(31);
+    declare sum fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* Forward GO TO skips the intervening statement. */
+    i = 0;
+    go to ahead;
+    i = 100;               /* must be skipped */
+ ahead:
+    if i ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL: forward goto did not skip');
+    end;
+
+    /* Backward GO TO forms a loop back to the top of the block. */
+    i = 0;
+    sum = 0;
+ loop:
+    sum = sum + i;
+    i = i + 1;
+    if i < 5 then go to loop;
+    if sum ^= 10 then do;
+       fails = fails + 1;
+       put skip list('FAIL: backward goto loop sum =', sum);
+    end;
+
+    /* GO TO out of an IF branch (one-word GOTO spelling). */
+    i = 1;
+    if i = 1 then goto done;
+    i = 99;                /* skipped */
+ done:
+    if i ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL: goto out of IF');
+    end;
+
+    if fails = 0 then put skip list('PASS goto');
+    else put skip list('FAIL goto: fails =', fails);
+ end goto_test;
