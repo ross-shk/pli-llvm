@@ -24,11 +24,22 @@
        put skip list('FAIL reentrant f(3) =', r);
     end;
 
+    do i = 1 to 1;
+    end;
+    call readi();
+
     if fails = 0 then put skip list('PASS');
 
     bump: procedure;
        x = x + 3;
     end bump;
+
+    readi: procedure;
+       if i ^= 2 then do;
+          fails = fails + 1;
+          put skip list('FAIL implicit DO static link i =', i);
+       end;
+    end readi;
 
     f: procedure(n) returns(fixed);
        declare n fixed bin(31);

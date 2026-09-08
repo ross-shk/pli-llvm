@@ -22,6 +22,8 @@ struct Type {
   int len = 1;           // CHARACTER/BIT length
   bool varying = false;  // VARYING (rule 15)
 
+  bool operator==(const Type &) const = default;
+
   static Type fixedBin(int p = 15, int q = 0) { Type t; t.k = TK::FixedBin; t.prec = p; t.scale = q; return t; }
   static Type fixedDec(int p = 5, int q = 0) { Type t; t.k = TK::FixedDec; t.prec = p; t.scale = q; return t; }
   static Type flt(int p = 6) { Type t; t.k = TK::Float; t.prec = p; return t; }

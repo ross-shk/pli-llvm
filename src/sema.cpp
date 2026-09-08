@@ -153,8 +153,13 @@ void Sema::processProc(Proc *p) {
   // by reference, in the same scope (so a name shared with the procedure's own
   // parameter list refers to the same variable).
   for (auto &st : p->body) {
-    if (st && st->kind == Stmt::Entry)
+    if (st && st->kind == Stmt::Entry) {
       resolveParams(sc, p, st->params, st->entryParamSyms);
+      Type rt = st->entryIsFunction ? st->entryRetTy : Type::voidTy();
+      Type prt = p->isFunction ? p->retTy : Type::voidTy();
+      if (rt != prt)
+        d_.error(st->loc, "ENTRY result type differs from the procedure's; a mixed return type is not implemented in this stage", "(56)");
+    }
   }
 
   procLabels_.clear();
@@ -184,6 +189,7 @@ void Sema::resolveParams(Scope *sc, Proc *p, const std::vector<std::string> &nam
       storage_.erase(std::remove(storage_.begin(), storage_.end(), s), storage_.end());
       d_.warn(p->loc, "parameter '" + pname + "' has no DECLARE; implicitly " + t.desc(), "(4)");
     }
+    s->owner = p;
     out.push_back(s);
   }
 }
@@ -386,6 +392,7 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
       Symbol *sym = lookup(sc, s->name);
       if (!sym) {
         sym = implicitDeclare(sc, s->name, s->loc, false);
+        sym->owner = p;
         p->localSyms.push_back(sym);  // implicit vars are AUTOMATIC storage
       }
       s->sym = sym;

@@ -16,30 +16,19 @@
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
-PLIC=./build/plic
-RTLIB=./build/libpli.a
+PLIC=${PLIC:-./build/plic}
+RTLIB=${RTLIB:-./build/libpli.a}
+CLANG=${CLANG:-clang}
 
 pass=0
 fail=0
 
-# Run a command with stdout+stderr to `$1`, killing it if it exceeds 10s so a
-# hung program cannot stall the whole suite. Exits 124 on timeout (GNU timeout
-# convention), else the command's exit status. The extra `wait "$killer"`
-# reaps the watchdog subshell so the shell does not print a "Terminated"
-# job-control notice on every run.
+# Run a command with stdout+stderr to `$1`, killing its process group if it
+# exceeds 10s. Exit 124 follows the GNU timeout convention.
 timeout_run() {
   outfile=$1
   shift
-  "$@" > "$outfile" 2>&1 &
-  pid=$!
-  ( sleep 10; kill -9 "$pid" 2>/dev/null ) &
-  killer=$!
-  wait "$pid"
-  rc=$?
-  kill "$killer" 2>/dev/null
-  wait "$killer" 2>/dev/null
-  [ "$rc" -eq 137 ] && return 124
-  return "$rc"
+  python3 scripts/run_with_timeout.py 10 "$outfile" "$@"
 }
 
 # Arguments are group names or single-test paths; both must exist. Captured
@@ -137,9 +126,9 @@ for dir in tests/*/; do
       # Cross-unit test: the .pli calls an external C procedure via ENTRY;
       # a companion .c defines it. Compile each to an object and link with
       # the runtime.
-      if ! clang -c "$dir/$name.c" -o "$out/$name.c.o" > "$out/$name.compile" 2>&1 \
+      if ! "$CLANG" -c "$dir/$name.c" -o "$out/$name.c.o" > "$out/$name.compile" 2>&1 \
          || ! "$PLIC" "$src" -c -o "$out/$name.pli.o" >> "$out/$name.compile" 2>&1 \
-         || ! clang "$out/$name.pli.o" "$out/$name.c.o" "$RTLIB" -o "$out/$name" \
+         || ! "$CLANG" "$out/$name.pli.o" "$out/$name.c.o" "$RTLIB" -o "$out/$name" \
                 >> "$out/$name.compile" 2>&1; then
         echo "FAIL $name (cross-unit build failed)"
         sed 's/^/      /' "$out/$name.compile"

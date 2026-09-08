@@ -23,6 +23,10 @@
 #define PLIC_RUNTIME_LIB ""
 #endif
 
+#ifndef PLIC_INSTALL_RUNTIME_LIB
+#define PLIC_INSTALL_RUNTIME_LIB ""
+#endif
+
 // The clang used to assemble/optimize/link the emitted IR. plic emits IR in the
 // syntax of the LLVM it was built against (e.g. the `memory(none)` attribute),
 // so the matching clang must be used; the build bakes its path in. Overridable
@@ -35,7 +39,7 @@ namespace fs = std::filesystem;
 
 static void usage() {
   std::cout <<
-      "plic — PL/I compiler (LLVM backend), M0 wireframe\n"
+      "plic — PL/I compiler (LLVM backend)\n"
       "\n"
       "usage: plic [options] file.pli\n"
       "\n"
@@ -65,11 +69,32 @@ static std::string runCapture(const char *cmd) {
   return out;
 }
 
+static std::string shellQuote(const std::string &s) {
+  std::string out = "'";
+  for (char c : s) out += c == '\'' ? "'\\''" : std::string(1, c);
+  return out + "'";
+}
+
+static fs::path executablePath(const char *arg0) {
+  fs::path p(arg0);
+  if (p.has_parent_path()) return fs::absolute(p);
+  const char *path = std::getenv("PATH");
+  if (!path) return p;
+  std::stringstream dirs(path);
+  std::string dir;
+  while (std::getline(dirs, dir, ':')) {
+    fs::path candidate = fs::path(dir.empty() ? "." : dir) / p;
+    if (fs::exists(candidate)) return fs::absolute(candidate);
+  }
+  return p;
+}
+
 int main(int argc, char **argv) {
   std::string input, output, runtimeLib = PLIC_RUNTIME_LIB, triple;
   std::string clangPath = PLIC_CLANG;
   std::string optLevel = "-O2";
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
+  bool runtimeExplicit = false;
   int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -84,7 +109,7 @@ int main(int argc, char **argv) {
     else if (a == "-emit-llvm" || a == "--emit-llvm") emitLLVM = true;
     else if (a == "-fsyntax-only") syntaxOnly = true;
     else if (a == "--keep-ll") keepLL = true;
-    else if (a == "--runtime") runtimeLib = next("--runtime");
+    else if (a == "--runtime") { runtimeLib = next("--runtime"); runtimeExplicit = true; }
     else if (a == "--clang") clangPath = next("--clang");
     else if (a == "--triple") triple = next("--triple");
     else if (a == "--explain") {
@@ -115,6 +140,13 @@ int main(int argc, char **argv) {
 
   if (input.empty()) { usage(); return 2; }
 
+  if (!runtimeExplicit && !runtimeLib.empty() && !fs::exists(runtimeLib)) {
+    fs::path installed = PLIC_INSTALL_RUNTIME_LIB;
+    if (installed.empty() || !fs::exists(installed))
+      installed = executablePath(argv[0]).parent_path().parent_path() / "lib/libpli.a";
+    if (fs::exists(installed)) runtimeLib = installed.string();
+  }
+
   std::ifstream in(input, std::ios::binary);
   if (!in) { std::cerr << "plic: cannot open " << input << "\n"; return 1; }
   std::stringstream ss;
@@ -140,7 +172,8 @@ int main(int argc, char **argv) {
   if (syntaxOnly) return 0;
 
   // --- code generation ---------------------------------------------------
-  if (triple.empty()) triple = runCapture((clangPath + " -dumpmachine 2>/dev/null").c_str());
+  if (triple.empty())
+    triple = runCapture((shellQuote(clangPath) + " -dumpmachine 2>/dev/null").c_str());
   IRGen irgen(diags, sema, triple);
   std::string ir = irgen.run(*prog);
   if (!diags.ok()) return 1;
@@ -167,13 +200,14 @@ int main(int argc, char **argv) {
   }
 
   // --- assemble, optimize, link -----------------------------------------
-  std::string cmd = clangPath + " -Wno-override-module " + optLevel + " \"" + llPath.string() + "\"";
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel +
+                    " " + shellQuote(llPath.string());
   if (compileOnly) {
     cmd += " -c";  // relocatable object: the caller performs the link step
   } else {
-    if (!runtimeLib.empty()) cmd += " \"" + runtimeLib + "\"";
+    if (!runtimeLib.empty()) cmd += " " + shellQuote(runtimeLib);
   }
-  cmd += " -o \"" + output + "\"";
+  cmd += " -o " + shellQuote(output);
   if (verbose) std::cerr << "+ " << cmd << "\n";
   int rc = system(cmd.c_str());
   if (!keepLL) {
