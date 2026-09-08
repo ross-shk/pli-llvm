@@ -1,0 +1,7 @@
+ /* Diagnostic test: HIGH/LOW with a non-constant length is rejected. */
+ BADHIGHLOW: PROCEDURE OPTIONS(MAIN);
+    DECLARE N FIXED BINARY(31);
+    DECLARE H CHAR(3);
+    N = 3;
+    H = HIGH(N);
+ END BADHIGHLOW;

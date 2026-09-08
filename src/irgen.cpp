@@ -116,6 +116,8 @@ std::string IRGen::run(Program &prog) {
       "declare void @pli_repeat(ptr, i64, ptr, i64, i64)\n"
       "declare i64 @pli_verify(ptr, i64, ptr, i64)\n"
       "declare void @pli_translate(ptr, i64, ptr, i64, ptr, i64, ptr, i64)\n"
+      "declare void @pli_high(ptr, i64)\n"
+      "declare void @pli_low(ptr, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n"
       "declare double @llvm.fabs.f64(double)\n";
@@ -951,6 +953,15 @@ Val IRGen::emitExpr(Expr *e) {
                  ", ptr " + in.ptr + ", i64 " + in.len + ")\n";
         dst.len = std::to_string(e->ty.len);
         return dst;
+      }
+      // HIGH/LOW built-ins (M2): fill a buffer with the top/bottom character.
+      if (e->name == "HIGH" || e->name == "LOW") {
+        Val n = emitExpr(e->args[0].get());
+        Val out = charTemp(e->ty.len);
+        body_ += "  call void @" + (e->name == "HIGH" ? std::string("pli_high") : std::string("pli_low")) +
+                 "(ptr " + out.ptr + ", i64 " + toI64(n) + ")\n";
+        out.len = std::to_string(e->ty.len);
+        return out;
       }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.

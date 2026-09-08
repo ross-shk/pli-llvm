@@ -38,6 +38,8 @@ void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
 long long pli_verify(const char *s, long long slen, const char *t, long long tlen); /* VERIFY */
 void pli_translate(char *dst, long long dstcap, const char *s, long long slen,
                    const char *out, long long outlen, const char *in, long long inlen); /* TRANSLATE */
+void pli_high(char *dst, long long n);  /* HIGH(n): n copies of the top char */
+void pli_low(char *dst, long long n);   /* LOW(n): n copies of the bottom char */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen);
 
 /* Condition signalling (M5 will expand this into the ON-unit machinery). */
