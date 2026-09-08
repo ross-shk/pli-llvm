@@ -459,6 +459,21 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = e->args[0]->ty;
         break;
       }
+      // LENGTH built-in (M2): length(s) yields a FIXED BINARY length.
+      if (e->name == "LENGTH") {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, "LENGTH expects 1 argument", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isChar()) {
+          d_.error(e->args[0]->loc, "LENGTH argument must be a character string", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::fixedBin(31, 0);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");

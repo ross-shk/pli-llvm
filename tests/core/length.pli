@@ -1,0 +1,41 @@
+ /* LENGTH built-in function: length(s) returns the current length of a string
+    as a FIXED BINARY integer — the declared length for a NONVARYING string,
+    the current length for VARYING. M2 string built-in (Y33-6003 LENGTH). */
+ length_test: procedure options(main);
+    declare s char(8);
+    declare v char(8) varying;
+    declare n fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    s = 'ABCD';
+    n = length(s);
+    if n ^= 8 then do;
+       fails = fails + 1;
+       put skip list('FAIL length fixed =', n);
+    end;
+
+    v = 'ABCD';
+    n = length(v);
+    if n ^= 4 then do;
+       fails = fails + 1;
+       put skip list('FAIL length varying =', n);
+    end;
+
+    n = length('xyz');
+    if n ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL length lit =', n);
+    end;
+
+    /* LENGTH is usable in an expression. */
+    n = length('ab') + length('c');
+    if n ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL length expr =', n);
+    end;
+
+    if fails = 0 then put skip list('PASS length');
+    else put skip list('FAIL length: fails =', fails);
+ end length_test;

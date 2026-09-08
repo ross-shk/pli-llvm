@@ -1,0 +1,7 @@
+ /* Diagnostic test: LENGTH with a non-character argument is rejected. */
+ BADLENGTH: PROCEDURE OPTIONS(MAIN);
+    DECLARE N FIXED BINARY(31);
+    DECLARE X FIXED BINARY(31);
+    N = 5;
+    X = LENGTH(N);
+ END BADLENGTH;
