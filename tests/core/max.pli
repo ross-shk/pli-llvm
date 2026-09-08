@@ -1,0 +1,38 @@
+ /* MAX built-in function: max(a, b) returns the larger of two numeric values,
+    computed in their common arithmetic type. M2 arithmetic built-in
+    (Y33-6003 MAX). */
+ max_test: procedure options(main);
+    declare x fixed bin(31);
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    x = max(3, 7);
+    if x ^= 7 then do;
+       fails = fails + 1;
+       put skip list('FAIL max(3,7) =', x);
+    end;
+
+    x = max(-5, 2);
+    if x ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL max(-5,2) =', x);
+    end;
+
+    y = max(2.5, 1.5);
+    if y ^= 2.5 then do;
+       fails = fails + 1;
+       put skip list('FAIL max(2.5,1.5) =', y);
+    end;
+
+    /* MAX with mixed FIXED/FLOAT computes in FLOAT. */
+    y = max(3, 2.5);
+    if y ^= 3.0 then do;
+       fails = fails + 1;
+       put skip list('FAIL max(3,2.5) =', y);
+    end;
+
+    if fails = 0 then put skip list('PASS max');
+    else put skip list('FAIL max: fails =', fails);
+ end max_test;
