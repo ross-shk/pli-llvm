@@ -7,11 +7,12 @@
 #
 # Each tests/<group>/ subfolder is a test group containing:
 #   <group>/*.pli           test programs (bad_*.pli must be rejected)
+#   <group>/expected/*.out  recorded stdout for golden tests
 #   <group>/out/            scratch binaries, logs and diffs (gitignored)
-# A group is one of two classes:
-#   golden — expected/*.out exists: stdout is diff-checked against it
-#   self   — no expected/: the program verifies itself and must print
-#            PASS (case-insensitive); any FAIL in its output fails the test
+# A group may mix test classes; each test is classified individually:
+#   golden — expected/<name>.out exists: stdout is diff-checked against it
+#   self   — no expected/<name>.out: the program verifies itself and must
+#            print PASS (case-insensitive); any FAIL in its output fails it
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
