@@ -812,6 +812,16 @@ Val IRGen::emitExpr(Expr *e) {
         v.reg = r;
         return v;
       }
+      // LENGTH built-in (M2): the string value already carries its current
+      // length (i64); size it to a FIXED BINARY(31) result.
+      if (e->name == "LENGTH") {
+        Val a = emitExpr(e->args[0].get());
+        std::string t = fresh("len32");
+        body_ += "  " + t + " = trunc i64 " + a.len + " to i32\n";
+        v.ty = e->ty;
+        v.reg = t;
+        return v;
+      }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.
       if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = "0"; return v; }
