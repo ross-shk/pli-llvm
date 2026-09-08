@@ -195,6 +195,11 @@ void IRGen::emitProc(Proc *p) {
   body_.clear();
   terminated_ = false;
 
+  if (p->isFunction && p->retTy.isChar()) {
+    d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
+  }
+  const std::string retLLVM = p->isFunction ? p->retTy.llvmTy() : "void";
+
   std::string params;
   for (size_t i = 0; i < p->paramSyms.size(); ++i) {
     if (i) params += ", ";
@@ -216,9 +221,14 @@ void IRGen::emitProc(Proc *p) {
 
   for (auto &st : p->body) emitStmt(st.get());
 
-  if (!terminated_) body_ += "  ret void\n";
+  if (!terminated_) {
+    if (p->isFunction)
+      body_ += "  ret " + retLLVM + " 0\n";  // fall-off: return a zero value
+    else
+      body_ += "  ret void\n";
+  }
 
-  funcs_ += "define internal void " + p->irName + "(" + params + ") {\n" + body_ + "}\n\n";
+  funcs_ += "define internal " + retLLVM + " " + p->irName + "(" + params + ") {\n" + body_ + "}\n\n";
   curProc_ = nullptr;
 }
 
@@ -247,10 +257,24 @@ void IRGen::emitStmt(Stmt *s) {
     case Stmt::DoIter: emitDoIter(s); break;
     case Stmt::Put: emitPut(s); break;
     case Stmt::CallS: emitCall(s); break;
-    case Stmt::Return:
-      emit("ret void");
+    case Stmt::Return: {
+      if (curProc_->isFunction) {
+        // rule (81): RETURN(value) supplies the function result.
+        Val v = emitExpr(s->value.get());
+        Val rv = convert(v, curProc_->retTy, s->loc);
+        std::string reg = rv.reg;
+        if (curProc_->retTy.isBit()) {  // BIT returns are held in i8
+          std::string z = fresh("retz");
+          body_ += "  " + z + " = zext i1 " + reg + " to i8\n";
+          reg = z;
+        }
+        emit("ret " + curProc_->retTy.llvmTy() + " " + reg);
+      } else {
+        emit("ret void");
+      }
       terminated_ = true;
       break;
+    }
     case Stmt::Stop:
       emit("call void @pli_stop()");
       emit("unreachable");
@@ -715,10 +739,68 @@ Val IRGen::emitExpr(Expr *e) {
     case Expr::VarRef:
       if (!e->sym) { v.ty = e->ty; v.reg = "0"; return v; }
       return loadSym(e->sym, e->sym->ty);
-    case Expr::Call:
-      v.ty = Type::fixedBin(31, 0);
-      v.reg = "0";
+    case Expr::Call: {
+      // Function reference (rule (123)): call an internal function procedure
+      // and take its result as a value.
+      if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = "0"; return v; }
+      Proc *callee = e->sym->proc;
+      const Type &rty = callee->retTy;
+      if (rty.isChar()) { v.ty = e->ty; v.reg = "0"; return v; }  // diagnosed in emitProc
+      std::string args;
+      for (size_t i = 0; i < e->args.size(); ++i) {
+        Expr *a = e->args[i].get();
+        Type pty;
+        if (i < callee->paramSyms.size()) pty = callee->paramSyms[i]->ty;
+        else break;
+        std::string addr;
+        bool direct = a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
+                      a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
+                      a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
+        if (direct) {
+          addr = addressOf(a->sym);
+        } else {
+          addr = fresh("dummy");
+          body_ += "  " + addr + " = alloca " + pty.llvmTy() + "\n";
+          Val av = emitExpr(a);
+          if (pty.isChar()) {
+            Val cv = av;
+            if (pty.varying) {
+              std::string dp = fresh("vdata");
+              body_ += "  " + dp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
+                       ", i32 0, i32 1\n";
+              std::string ln = fresh("vlen");
+              body_ += "  " + ln + " = call i64 @pli_assign_varying(ptr " + dp + ", i64 " +
+                       std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
+              std::string lp = fresh("vlenp");
+              body_ += "  " + lp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
+                       ", i32 0, i32 0\n";
+              std::string t32 = fresh("l32");
+              body_ += "  " + t32 + " = trunc i64 " + ln + " to i32\n";
+              body_ += "  store i32 " + t32 + ", ptr " + lp + "\n";
+            } else {
+              body_ += "  call void @pli_assign_char(ptr " + addr + ", i64 " +
+                       std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
+            }
+          } else {
+            Val cv = convert(av, pty, a->loc);
+            storeScalarTo(addr, pty, cv);
+          }
+        }
+        if (!args.empty()) args += ", ";
+        args += "ptr " + addr;
+      }
+      std::string callReg = fresh("fres");
+      body_ += "  " + callReg + " = call " + rty.llvmTy() + " " + callee->irName + "(" + args + ")\n";
+      v.ty = rty;
+      if (rty.isBit()) {
+        std::string b = fresh("fb");
+        body_ += "  " + b + " = trunc i8 " + callReg + " to i1\n";
+        v.reg = b;
+      } else {
+        v.reg = callReg;
+      }
       return v;
+    }
     case Expr::Unary: {
       Val a = emitExpr(e->a.get());
       if (e->op == Tok::Not) {

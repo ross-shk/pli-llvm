@@ -75,7 +75,10 @@ bool Sema::run(Program &prog, bool compileOnly) {
     p->irName = "@PLI_" + p->name;
     Scope *outer = p->parent ? scopeFor(p->parent) : nullptr;
     if (outer) {
-      Symbol *s = declare(outer, p->name, Type::voidTy(), p->loc, Symbol::ProcName, false);
+      // A function procedure's symbol carries its result type so that a
+      // function reference (rule (123)) types as the returned value.
+      Type symTy = p->isFunction ? p->retTy : Type::voidTy();
+      Symbol *s = declare(outer, p->name, symTy, p->loc, Symbol::ProcName, false);
       s->proc = p.get();
       p->irName = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name;
     }
@@ -284,7 +287,22 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
             checkAssignable(callee->paramSyms[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
       break;
     }
-    case Stmt::Return:
+    case Stmt::Return: {
+      // rule (81): RETURN(value) supplies a function procedure's result;
+      // a plain RETURN ends a procedure.
+      if (s->value) {
+        if (!p->isFunction) {
+          d_.error(s->loc, "RETURN with a value is only valid in a function procedure", "(81)");
+          break;
+        }
+        typeExpr(s->value.get(), sc, p);
+        if (!s->value->ty.isVoid())
+          checkAssignable(p->retTy, s->value->ty, s->loc, "RETURN value");
+      } else if (p->isFunction) {
+        d_.error(s->loc, "a function procedure must RETURN a value", "(81)");
+      }
+      break;
+    }
     case Stmt::Stop:
     case Stmt::Leave:
       break;
@@ -319,12 +337,36 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       }
       break;
     }
-    case Expr::Call:
+    case Expr::Call: {
+      // Function reference (rule (123)): an internal procedure carrying a
+      // RETURNS attribute, called as a value-producing expression.
       for (auto &a : e->args) typeExpr(a.get(), sc, p);
-      d_.error(e->loc, "subscripted references, built-in functions and function "
-                       "calls are not implemented in this stage", "(126)");
-      e->ty = Type::voidTy();
+      Symbol *sym = lookup(sc, e->name);
+      if (!sym || sym->kind != Symbol::ProcName) {
+        d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
+        e->ty = Type::voidTy();
+        break;
+      }
+      if (!sym->proc || !sym->proc->isFunction) {
+        d_.error(e->loc, "'" + e->name + "' is a procedure and returns no value", "(123)");
+        e->ty = Type::voidTy();
+        break;
+      }
+      e->sym = sym;
+      Proc *callee = sym->proc;
+      const size_t expect = callee->params.size();
+      if (e->args.size() != expect) {
+        d_.error(e->loc, "'" + e->name + "' expects " + std::to_string(expect) +
+                 " argument(s), " + std::to_string(e->args.size()) + " given", "(78)");
+        e->ty = Type::voidTy();
+        break;
+      }
+      for (size_t i = 0; i < e->args.size(); ++i)
+        if (i < callee->paramSyms.size())
+          checkAssignable(callee->paramSyms[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
+      e->ty = callee->retTy;
       break;
+    }
     case Expr::Unary: {
       typeExpr(e->a.get(), sc, p);
       const Type &t = e->a->ty;

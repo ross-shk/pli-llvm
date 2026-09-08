@@ -86,6 +86,8 @@ struct Proc {
   std::string name;
   SourceLoc loc{};
   bool isMain = false;
+  bool isFunction = false;              // has a RETURNS attribute (rules (5),(34))
+  Type retTy{};                         // function return type (RETURNS)
   std::vector<std::string> params;      // rule (4) parameterlist
   std::vector<StmtP> body;
   Proc *parent = nullptr;               // lexical nesting (rule (8) sentence)

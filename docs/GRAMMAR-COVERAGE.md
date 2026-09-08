@@ -12,7 +12,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (2) | procedure, entry-namelist, options | M0 | `parseExternalProcedure` / `hello.pli` |
 | (3) | entry-namelist (multiple entry names) | M1 | multiple entry points |
 | (4) | parameterlist | M0 | `procs.pli` |
-| (5) | procedure options (`OPTIONS`, `RECURSIVE`) | partial M0 | `MAIN` honoured; `RECURSIVE` accepted, effective in M1 |
+| (5) | procedure options (`OPTIONS`, `RECURSIVE`, `RETURNS`) | partial M0 | `MAIN` honoured; `RETURNS` → function procedures (`func.pli`); `RECURSIVE` accepted |
 | (6),(7) | sentencelist, end-clause, multiple closure | M0 | `parseBody` / `loops.pli` (`END OUTER;`) |
 | (8) | sentence kinds | M0 | `parseStatement` |
 | (9),(10) | `DECLARE`, declarationlist | M0 | `parseDeclare` / `ifelse.pli` |
@@ -30,7 +30,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (25) | `BASED` | M4 | |
 | (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 | scalar constants; full → M3 |
 | (33) | non-data attributes | M2 | |
-| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | M1 (ENTRY→C) | ADR-021: `DECLARE … ENTRY` external C entry + by-ref call (`cinterop`); `RETURNS`/descriptors/`USES`/`SETS` pending |
+| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | partial M0 | ADR-021: `DECLARE … ENTRY` external C entry + by-ref call (`cinterop`); `RETURNS` function procedures (scalar result, `func.pli`); full descriptors/`USES`/`SETS` pending |
 | (39),(40) | `FILE` attributes | M6 | |
 | (41) | `GENERIC` | M2 | generic selection |
 | (42) | scope (`INTERNAL`/`EXTERNAL`) | accepted M0 → M1 | linkage in M1 |
@@ -47,7 +47,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (74)–(76) | `IF`/`THEN`/`ELSE`, balanced statements | M0 | `ifelse.pli` |
 | (77) | `GO TO` | diag → M1/M5 | local M1, non-local M5 |
 | (78)–(80) | `CALL`, options, argumentlist | M0 (opts M9) | `procs.pli`; `TASK`/`EVENT` → M9 |
-| (81) | `RETURN` | M0 (value M1) | |
+| (81) | `RETURN` | partial M0 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
 | (82),(83) | `WAIT`, `DELAY` | M9 | |
 | (84),(85) | `EXIT`, `STOP` | M0 | |
 | (86) | assignment (incl. `BY NAME`) | partial M0 | scalar single target; multiple/`BY NAME` → M3 |
@@ -60,7 +60,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (114) | `DISPLAY` | M6 | scan garbled; Y33-6003 form used |
 | (115)–(122) | expression precedence hierarchy | M0 | `arith.pli` pins `-3**2` = `-(3**2)` = -9 ((128) constants are unsigned); `usecases/expr.pli` pins negated comparisons and a prefixed `**` exponent |
 | (118) | comparison operators | M0 | incl. `¬=`, `¬>`, `¬<` |
-| (123) | primitive expressions | M0 | |
+| (123) | primitive expressions | partial M0 | constants/vars (M0); function references to function procedures (`func.pli`) |
 | (124),(125) | locator qualification, qualified names | diag → M3/M4 | |
 | (126) | subscripted references | diag → M3 | incl. `*` cross-sections |
 | (127) | unsubscripted reference | M3 | |

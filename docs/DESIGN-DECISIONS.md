@@ -367,3 +367,31 @@ would mask typos and break the "diagnose, never silently accept" invariant;
 keeping the `@PLI_` prefix on entry symbols (breaks the C symbol name match);
 blindly lower-casing every imported symbol (would make an upper-case C
 function unreachable).
+
+## ADR-022 — Function procedures: scalar results by value
+
+**Context.** M1's exit criterion is a recursive `FACTORIAL` function. Rule (34)
+`RETURNS` was "not implemented in this stage". A function procedure needs a
+calling convention for its result and a rule for what `RETURN(value)` means
+(rule (81)).
+
+**Decision.** `PROC [...] RETURNS(t)` marks a function procedure whose result
+type `t` is the scalar computational type carried by its symbol and by
+`Expr::Call`. The result is returned **by value in a register** of LLVM type
+`t.llvmTy()` (`i32`/`i64`/`double`/`i8` for `BIT`); `RETURN(value)` converts the
+expression to `t` and `ret`s it, and a function falling off its end returns a
+zero value. Arguments stay **by reference** like any PL/I procedure, so a
+recursive call passes a fresh dummy alloca for each by-value argument and reads
+its parameter through the per-frame pointer — recursion needs no static link.
+`RETURN(value)` is an error in a non-function procedure, and a function
+procedure must contain a `RETURN(value)` (diagnosed, invariant 2).
+
+**Consequences.** Recursive and mutually-referential scalar functions run
+(`tests/core/func.pli`). Character-valued results are **not** yet supported —
+they are diagnosed in codegen (ADR-021 kept them pending); a later milestone
+will return strings via an sret descriptor or an out-parameter. By-value
+parameters (`OPTIONS(BYVALUE)`) remain M9.
+
+**Rejected.** Returning character values through the same register path (a
+`char[n]` is not a first-class return type and would silently truncate); and
+allowing a function to fall off without a value (would violate invariant 2).
