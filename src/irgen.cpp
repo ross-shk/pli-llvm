@@ -118,6 +118,8 @@ std::string IRGen::run(Program &prog) {
       "declare void @pli_translate(ptr, i64, ptr, i64, ptr, i64, ptr, i64)\n"
       "declare void @pli_high(ptr, i64)\n"
       "declare void @pli_low(ptr, i64)\n"
+      "declare void @pli_date(ptr, i64)\n"
+      "declare void @pli_time(ptr, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n"
       "declare double @llvm.fabs.f64(double)\n";
@@ -960,6 +962,14 @@ Val IRGen::emitExpr(Expr *e) {
         Val out = charTemp(e->ty.len);
         body_ += "  call void @" + (e->name == "HIGH" ? std::string("pli_high") : std::string("pli_low")) +
                  "(ptr " + out.ptr + ", i64 " + toI64(n) + ")\n";
+        out.len = std::to_string(e->ty.len);
+        return out;
+      }
+      // DATE/TIME built-ins (M2): fill a buffer with the current date/time.
+      if (e->name == "DATE" || e->name == "TIME") {
+        Val out = charTemp(e->ty.len);
+        body_ += "  call void @" + (e->name == "DATE" ? std::string("pli_date") : std::string("pli_time")) +
+                 "(ptr " + out.ptr + ", i64 " + out.len + ")\n";
         out.len = std::to_string(e->ty.len);
         return out;
       }

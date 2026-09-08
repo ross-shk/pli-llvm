@@ -1,0 +1,7 @@
+ /* Diagnostic test: DATE with an argument is rejected. */
+ BADDATETIME: PROCEDURE OPTIONS(MAIN);
+    DECLARE N FIXED BINARY(31);
+    DECLARE D CHAR(8);
+    N = 1;
+    D = DATE(N);
+ END BADDATETIME;

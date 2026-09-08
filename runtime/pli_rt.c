@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
@@ -178,6 +179,31 @@ void pli_high(char *dst, long long n) { memset(dst, 0xFF, (size_t)n); }
 
 /* LOW(n): n copies of the lowest collating character (0x00). */
 void pli_low(char *dst, long long n) { memset(dst, 0x00, (size_t)n); }
+
+/* DATE(): write the current local date as 'YYYYMMDD'. */
+void pli_date(char *buf, long long cap) {
+  time_t now = time(NULL);
+  struct tm tmv;
+  localtime_r(&now, &tmv);
+  char tmp[16];
+  int n = snprintf(tmp, sizeof tmp, "%04d%02d%02d",
+                   tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
+  long long i = 0;
+  for (; i < cap && i < n; ++i) buf[i] = tmp[i];
+  for (; i < cap; ++i) buf[i] = ' ';
+}
+
+/* TIME(): write the current local time as 'HHMMSS'. */
+void pli_time(char *buf, long long cap) {
+  time_t now = time(NULL);
+  struct tm tmv;
+  localtime_r(&now, &tmv);
+  char tmp[16];
+  int n = snprintf(tmp, sizeof tmp, "%02d%02d%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+  long long i = 0;
+  for (; i < cap && i < n; ++i) buf[i] = tmp[i];
+  for (; i < cap; ++i) buf[i] = ' ';
+}
 
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
