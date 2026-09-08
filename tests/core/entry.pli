@@ -14,14 +14,42 @@
     return(r);
  end area;
 
- entrytest: procedure options(main);
-    declare a fixed;
+  entrytest: procedure options(main);
+     declare a fixed;
 
-    a = area(3);
-    if a = 9 then put skip list('PASS area(3) = 9');
-    else put skip list('FAIL area(3) =', a);
+     a = area(3);
+     if a = 9 then put skip list('PASS area(3) = 9');
+     else put skip list('FAIL area(3) =', a);
 
-    a = cube(3);
-    if a = 27 then put skip list('PASS cube(3) = 27');
-    else put skip list('FAIL cube(3) =', a);
- end entrytest;
+     a = cube(3);
+     if a = 27 then put skip list('PASS cube(3) = 27');
+     else put skip list('FAIL cube(3) =', a);
+
+     /* an ENTRY with a different parameter count than the procedure, whose
+        body calls an internal procedure through a static link (rule (8)) */
+     a = calc(2, 10);
+     if a = 60 then put skip list('PASS calc(2,10) = 60');
+     else put skip list('FAIL calc(2,10) =', a);
+
+     a = quad(3);
+     if a = 9 then put skip list('PASS quad(3) = 9');
+     else put skip list('FAIL quad(3) =', a);
+  end entrytest;
+
+  calc: procedure(a, m) returns(fixed);
+     declare a fixed;
+     declare m fixed;
+     declare base fixed;
+     base = a * 2;
+     return(helper(a) * m);
+
+     quad: entry(b) returns(fixed);
+     declare b fixed;
+     return(b * b);
+
+     helper: procedure(x) returns(fixed);
+        declare x fixed;
+        return(x + base);
+     end helper;
+  end calc;
+

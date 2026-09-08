@@ -229,7 +229,10 @@ addresses. When an argument needs conversion, is an expression, or is a
 constant, the caller materialises a **dummy argument** and passes its address
 (M0 already implements this — `tests/core/procs.pli`). Aggregates with `*` extents
 and `CHARACTER(*)` pass a descriptor. Internal procedures additionally receive
-a static link (M1) for access to the enclosing block's automatic storage.
+a static link (ADR-027) for access to the enclosing block's automatic storage.
+All procedure variables are `AUTOMATIC` (`alloca`), so each activation owns its
+own copy and external procedures are reentrant; a static link is one `ptr`
+parameter per enclosing variable an internal procedure accesses.
 
 **Name mangling.** `EXTERNAL` procedures and variables keep their upper-cased
 PL/I name so that classic linkage and C interop work. Internal procedures are
@@ -301,7 +304,9 @@ the arithmetic/string attribute defaults, implicit declarations, assignment,
 `WHILE`), `BEGIN` blocks, `CALL`, `RETURN`, `STOP`, `PUT [SKIP] [PAGE] LIST`,
 the full operator set with spec precedence, 48-character-set operator words,
 `CHARACTER` fixed/`VARYING` with concatenation and padded comparison, `BIT(1)`,
-`FLOAT`, `FIXED BINARY/DECIMAL` with scale 0.
+`FLOAT`, `FIXED BINARY/DECIMAL` with scale 0. M1 adds static links so internal
+procedures reach enclosing automatic storage and external procedures are
+reentrant (ADR-027), and `ENTRY` statements (ADR-026).
 
 Everything else is diagnosed as unimplemented with its rule number, which is
 also the project's to-do list: see IMPLEMENTATION-PLAN.md.

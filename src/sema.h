@@ -19,6 +19,7 @@ struct Symbol {
   std::vector<Type> entryParams;  // ENTRY(...) descriptor, for codegen
   std::string irName;      // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc *proc = nullptr;    // for ProcName
+  Proc *owner = nullptr;   // the procedure that declares this variable (static link)
   Stmt *entry = nullptr;   // if this ProcName is an ENTRY statement (rule 56)
   Expr *initExpr = nullptr;  // folded INITIAL constant, rule (26)
 };
@@ -48,6 +49,12 @@ private:
   Symbol *implicitDeclare(Scope *sc, const std::string &n, SourceLoc l, bool isStatic);
 
   void processProc(Proc *p);
+  // Bottom-up: fill each Proc::env with the enclosing variables its subtree
+  // accesses, so codegen can thread a static link (M1, removes ADR-010 dev).
+  void computeEnv(Proc *p);
+  void addEnv(std::vector<Symbol *> &env, Symbol *s);
+  // Is `p` nested (directly or transitively) inside `anc`?
+  bool isDescendantOf(Proc *p, Proc *anc);
   // Turn a parameter name list into by-reference Param symbols in `sc`, so the
   // same storage is shared when a name repeats (proc param vs ENTRY param).
   void resolveParams(Scope *sc, Proc *p, const std::vector<std::string> &names,

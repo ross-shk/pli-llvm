@@ -506,5 +506,42 @@ programmer.
 need promotion to globals or threaded pointers); or one function per entry
 with no shared body (duplicates logic and cannot share storage).
 
+## ADR-027 — Static links make internal procedures reach enclosing automatic storage
+
+**Context.** ADR-010's M0 deviation gave external-procedure variables static
+(global) storage so internal procedures could reach them without a static
+link. That is observationally equivalent only when the external procedure
+never recurses: with shared globals, a recursive external procedure's internal
+procedures read the *deepest* activation's copy of an enclosing variable, not
+their own — reproduced by a recursive function whose internal helper reads an
+enclosing `v` after the recursion, returning 0 instead of the correct sum.
+
+**Decision.** Remove the deviation: every procedure's variables are now
+`AUTOMATIC` (LLVM `alloca`), so each activation owns its own copy and external
+procedures are reentrant. An internal procedure that (directly or through its
+own internal procedures) references a variable of an enclosing procedure is
+given one *static-link* parameter per such variable — a pointer to that
+variable in the enclosing activation. The caller supplies a link as its own
+address when it owns the variable, or re-threads its own link for a variable
+owned higher up. `IRGen::addressOf` routes a reference to an enclosing variable
+through the link. The environment each procedure needs is computed bottom-up
+in sema (`Proc::env`). Links are appended after the ordinary parameters in the
+signature and after the arguments at every call site (CALL, function
+references, and the `ENTRY`-statement impl/thunks).
+
+**Consequences.** Reentrant external procedures with internal helpers behave
+per spec (`tests/core/staticlink.pli`); `INITIAL` on these now-automatic
+variables is a per-activation prologue store, so the STATIC global path's
+type-aware literal handling moved into `IRGen::emitInitials`. A procedure that
+has no enclosing variables gains no link — zero overhead. One case is
+diagnosed unimplemented rather than silently miscompiled: a "cousin" call in
+which a procedure reaches a variable owned by a non-adjacent procedure between
+itself and the callee (rule (8)).
+
+**Rejected.** A display (an array of frame pointers) — more machinery than the
+M1 case needs; promoting enclosing variables to globals again (reintroduces the
+reentrancy bug); heap-allocating automatic storage (needless cost).
+
+
 
 
