@@ -218,7 +218,7 @@ void printType(std::ostream &os, const Type &t) { os << t.desc(); }
 
 void printExpr(std::ostream &os, const HExpr *e, int ind) {
   if (!e) { os << "null"; return; }
-  const std::string pad(ind * 2, ' ');
+  (void)ind;
   switch (e->kind) {
     case HExpr::IntLit: os << "IntLit(" << e->ival << ":"; printType(os, e->ty); os << ")"; break;
     case HExpr::FltLit: os << "FltLit(" << e->fval << ":"; printType(os, e->ty); os << ")"; break;
