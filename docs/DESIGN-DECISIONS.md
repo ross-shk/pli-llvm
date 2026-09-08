@@ -395,3 +395,30 @@ parameters (`OPTIONS(BYVALUE)`) remain M9.
 **Rejected.** Returning character values through the same register path (a
 `char[n]` is not a first-class return type and would silently truncate); and
 allowing a function to fall off without a value (would violate invariant 2).
+
+## ADR-023 — `BEGIN` blocks are lexical scopes over a flat storage model
+
+**Context.** Rule (68) `BEGIN` executed but shared the enclosing procedure's
+scope: a name declared inside a block collided with an outer one ("already
+declared in this block", rule (9)) and never leaked — but also could not
+shadow. The plan assigns `BEGIN` "own scope in M1".
+
+**Decision.** A `BEGIN` block opens a **child scope for name resolution only**:
+names declared inside are visible in the block, shadow outer names of the same
+spelling, and do not leak out. Storage, however, stays **flat** per ADR-010 —
+block variables are still allocated at function entry (AUTOMATIC) or as module
+globals (STATIC), not deallocated at block exit. Shadowed names therefore get
+disambiguated `irName`s (a numeric `$N` suffix) so two same-spelled variables
+map to distinct storage, resolved by lexical lookup.
+
+**Consequences.** `tests/core/begin.pli` pins shadowing and outer-variable
+preservation; an inner declaration no longer errors as a duplicate. There is no
+run-time deallocation at block exit, so a block does not bound an automatic
+variable's lifetime — a known simplification over full PL/I block activation
+(M1's static-link work will revisit it). `INITIAL` on a nested-block variable
+is still served by the existing static/automatic initialisation paths (flat
+storage); block-entry initialisation of AUTOMATIC storage is deferred.
+
+**Rejected.** Allocating (and deallocating) a fresh activation per `BEGIN`
+block — the flat model keeps codegen simple and matches the M0 storage
+simplification of ADR-010.

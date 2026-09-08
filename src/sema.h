@@ -47,7 +47,7 @@ private:
   Symbol *implicitDeclare(Scope *sc, const std::string &n, SourceLoc l, bool isStatic);
 
   void processProc(Proc *p);
-  void collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic);
+  void collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isStatic);
   void collectLabels(Stmt *s);  // gather GO TO targets defined in this proc
   void checkStmt(Stmt *s, Scope *sc, Proc *p);
   void typeExpr(Expr *e, Scope *sc, Proc *p);
@@ -61,6 +61,8 @@ private:
   std::vector<Symbol *> storage_;
   std::vector<Symbol *> entries_;   // external C entries, in declaration order
   std::set<std::string> procLabels_;  // GO TO targets in the current proc (rule 77)
+  std::set<std::string> irNames_;   // irNames in use, to disambiguate shadowing
+  std::unordered_map<Stmt *, Scope *> beginScopes_;  // BEGIN block -> its scope
 };
 
 // Arithmetic result type per the conversion rules (M0 approximation).

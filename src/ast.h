@@ -53,6 +53,7 @@ struct Stmt {
     Assign,     // rule (86)
     If,         // rule (74)
     Group,      // rule (70)  DO; ... END;
+    Begin,      // rule (68)  BEGIN; ... END; — a block with its own scope
     DoWhile,    // rule (71)  DO WHILE(e);
     DoIter,     // rule (71)+(72)+(73)
     Put,        // rules (104)-(109)

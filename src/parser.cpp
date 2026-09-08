@@ -263,7 +263,7 @@ StmtP Parser::parseStatement(Proc *owner) {
   if (atStmtKeyword("BEGIN")) {
     advance();
     expect(Tok::Semi, "(68)");
-    st->kind = Stmt::Group;
+    st->kind = Stmt::Begin;  // a block with its own scope (rule (68))
     EndInfo e = parseBody(owner, st->body, st->labels.empty() ? std::string() : st->labels.front());
     if (e.present && !e.label.empty()) pendingEnd_ = e;
     return st;
