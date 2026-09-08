@@ -4,6 +4,7 @@ PL/I → LLVM compiler, built to `TR25.084-concrete-syntax.md` (syntax) and
 Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 
 ## Rules
+- keep docs clear and concise, avoid lengthy explanations
 - do not commit without my approval, just stage changes
 - do not quietly change/revert existing code unless required by the current task
 - KISS: smallest change that works; keep implementations lean
