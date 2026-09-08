@@ -622,6 +622,17 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::chr(n);
         break;
       }
+      // DATE/TIME built-ins (M2): date() -> CHARACTER(8) 'YYYYMMDD', time()
+      // -> CHARACTER(6) 'HHMMSS'; both take no arguments.
+      if (e->name == "DATE" || e->name == "TIME") {
+        if (!e->args.empty()) {
+          d_.error(e->loc, std::string(e->name == "DATE" ? "DATE" : "TIME") + " takes no arguments", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::chr(e->name == "DATE" ? 8 : 6);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");

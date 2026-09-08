@@ -1,0 +1,37 @@
+ /* DATE and TIME built-in functions: date() returns the current date as a
+    CHARACTER(8) 'YYYYMMDD' string, time() the time as a CHARACTER(6)
+    'HHMMSS' string. M2 built-ins (Y33-6003 DATE, TIME). */
+ datetime_test: procedure options(main);
+    declare d char(8);
+    declare t char(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    d = date();
+    t = time();
+
+    if length(d) ^= 8 then do;
+       fails = fails + 1;
+       put skip list('FAIL date length =', length(d));
+    end;
+
+    if length(t) ^= 6 then do;
+       fails = fails + 1;
+       put skip list('FAIL time length =', length(t));
+    end;
+
+    /* date() and time() differ from an arbitrary fixed string. */
+    if d = 'XXXXXXXX' then do;
+       fails = fails + 1;
+       put skip list('FAIL date constant');
+    end;
+
+    if t = '123456' then do;
+       fails = fails + 1;
+       put skip list('FAIL time constant');
+    end;
+
+    if fails = 0 then put skip list('PASS datetime');
+    else put skip list('FAIL datetime: fails =', fails);
+ end datetime_test;
