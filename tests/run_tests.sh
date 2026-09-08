@@ -22,6 +22,26 @@ RTLIB=./build/libpli.a
 pass=0
 fail=0
 
+# Run a command with stdout+stderr to `$1`, killing it if it exceeds 10s so a
+# hung program cannot stall the whole suite. Exits 124 on timeout (GNU timeout
+# convention), else the command's exit status. The extra `wait "$killer"`
+# reaps the watchdog subshell so the shell does not print a "Terminated"
+# job-control notice on every run.
+timeout_run() {
+  outfile=$1
+  shift
+  "$@" > "$outfile" 2>&1 &
+  pid=$!
+  ( sleep 10; kill -9 "$pid" 2>/dev/null ) &
+  killer=$!
+  wait "$pid"
+  rc=$?
+  kill "$killer" 2>/dev/null
+  wait "$killer" 2>/dev/null
+  [ "$rc" -eq 137 ] && return 124
+  return "$rc"
+}
+
 # Arguments are group names or single-test paths; both must exist. Captured
 # before the main loop reuses "$@" for glob expansion.
 groups=""
@@ -81,7 +101,12 @@ for dir in tests/*/; do
       [ -f "$drv" ] || continue
       name=$(basename "$drv" .sh)
       if [ "$single" -eq 1 ] && [ "$name" != "$onetest_name" ]; then continue; fi
-      sh "$drv" > "$out/$name.out" 2>&1
+      timeout_run "$out/$name.out" sh "$drv"
+      if [ $? -eq 124 ]; then
+        echo "FAIL $name (timed out after 10s)"; echo
+        fail=$((fail + 1))
+        continue
+      fi
       if [ -f "$dir/expected/$name.out" ]; then
         if diff -u "$dir/expected/$name.out" "$out/$name.out" > "$out/$name.diff" 2>&1; then
           echo "PASS $name"; pass=$((pass + 1))
@@ -128,7 +153,12 @@ for dir in tests/*/; do
       continue
     fi
 
-    "$out/$name" > "$out/$name.out" 2>&1
+    timeout_run "$out/$name.out" "$out/$name"
+    if [ $? -eq 124 ]; then
+      echo "FAIL $name (timed out after 10s)"; echo
+      fail=$((fail + 1))
+      continue
+    fi
     if [ -f "$dir/expected/$name.out" ]; then
       # Golden test: diff against the recorded baseline.
       if diff -u "$dir/expected/$name.out" "$out/$name.out" > "$out/$name.diff" 2>&1; then
