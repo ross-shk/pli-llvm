@@ -61,6 +61,7 @@ copy features from it into this compiler
 
 ## Token economy
 
+- think mostly silently, return only short necessary minimal commentary and the final answer
 - `grep` for a symbol first, then `read` with `offset`/`limit`
 - large files: `src/parser.cpp`, `src/irgen.cpp`, `TR25.084-concrete-syntax.md`
 - `edit` over `write`; batch related edits; parallel independent `bash` calls
