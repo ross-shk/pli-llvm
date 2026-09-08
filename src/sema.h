@@ -58,6 +58,7 @@ private:
   std::vector<std::unique_ptr<Symbol>> owned_;
   std::vector<std::unique_ptr<Scope>> scopes_;
   std::unordered_map<Proc *, Scope *> procScopes_;
+  Scope *rootScope_ = nullptr;  // program scope: all external procedure names
   std::vector<Symbol *> storage_;
   std::vector<Symbol *> entries_;   // external C entries, in declaration order
   std::set<std::string> procLabels_;  // GO TO targets in the current proc (rule 77)

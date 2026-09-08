@@ -91,6 +91,7 @@ struct Proc {
   bool isFunction = false;              // has a RETURNS attribute (rules (5),(34))
   Type retTy{};                         // function return type (RETURNS)
   std::vector<std::string> params;      // rule (4) parameterlist
+  std::vector<std::string> entryNames;  // rule (3) entry-namelist extra names
   std::vector<StmtP> body;
   Proc *parent = nullptr;               // lexical nesting (rule (8) sentence)
   std::vector<Symbol *> paramSyms;

@@ -43,6 +43,9 @@ make install
 - procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
 - **function procedures** via `RETURNS(...)` and `RETURN(value)`, used as
   value-producing expressions; recursive functions run (`func.pli`)
+- **multiple entry points** via the entry-namelist `a, b: PROCEDURE` — the body
+  is reachable through any name (`multientry.pli`); sibling external
+  procedures can call each other (program scope)
 - calling external C procedures via `DECLARE … ENTRY(...)` (by reference, ADR-021)
 - parameters **by reference**, with dummy arguments when conversion is needed
 - `DECLARE` with the attribute default rules and `INITIAL` constants; implicit

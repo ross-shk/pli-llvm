@@ -120,6 +120,13 @@ void Parser::parseExternalProcedure() {
   std::string name = cur().text;
   SourceLoc loc = cur().loc;
   advance();
+  // rule (3) entry-namelist: `a, b: PROCEDURE` — the first name is the primary,
+  // the rest are additional entry points to the same procedure body.
+  std::vector<std::string> entryNames;
+  while (eat(Tok::Comma)) {
+    if (at(Tok::Word)) { entryNames.push_back(cur().text); advance(); }
+    else { d_.error(cur().loc, "expected entry name", "(3)"); resync(); return; }
+  }
   if (!expect(Tok::Colon, "(64)")) { resync(); return; }
   if (!(atStmtKeyword("PROCEDURE") || atStmtKeyword("PROC"))) {
     d_.error(cur().loc, "expected PROCEDURE after entry name", "(2)");
@@ -128,6 +135,7 @@ void Parser::parseExternalProcedure() {
   }
   advance();
   Proc *p = startProc(name, loc, nullptr);
+  p->entryNames = std::move(entryNames);
   parseProcOptions(p);
   parseProcBody(p);
 }

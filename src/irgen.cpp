@@ -230,9 +230,11 @@ void IRGen::emitProc(Proc *p) {
   const std::string retLLVM = p->isFunction ? p->retTy.llvmTy() : "void";
 
   std::string params;
+  std::string paramTys;  // the parameter types only, for the entry aliases
   for (size_t i = 0; i < p->paramSyms.size(); ++i) {
-    if (i) params += ", ";
+    if (i) { params += ", "; paramTys += ", "; }
     params += "ptr " + p->paramSyms[i]->irName;
+    paramTys += "ptr";
   }
 
   body_ += "entry:\n";
@@ -258,6 +260,13 @@ void IRGen::emitProc(Proc *p) {
   }
 
   funcs_ += "define internal " + retLLVM + " " + p->irName + "(" + params + ") {\n" + body_ + "}\n\n";
+  // rule (3) entry-namelist: each extra name is an internal alias for the same
+  // body, so the symbol exists and a call through any entry point works.
+  for (const auto &en : p->entryNames) {
+    std::string alias = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + en;
+    funcs_ += alias + " = internal alias " + retLLVM + " (" + paramTys + "), " +
+              retLLVM + " (" + paramTys + ")* " + p->irName + "\n";
+  }
   curProc_ = nullptr;
 }
 
