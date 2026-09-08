@@ -63,22 +63,26 @@ number*, which doubles as the to-do list.
 
 PL/I can call procedures written in C (architecture goal 4; ADR-021). Declare
 an external entry with the `ENTRY` attribute (rule 38) and call it like any
-procedure; the name is upper-cased and resolved at link time against a C
-symbol, and arguments are passed **by reference** — the PL/I default — so the
-C callee receives pointers:
+procedure; arguments are passed **by reference** — the PL/I default — so the
+C callee receives pointers.
+
+`caller.pli`:
 
 ```pli
  CALLER: PROCEDURE OPTIONS(MAIN);
     DECLARE X FIXED BINARY(31);
-    DECLARE C_SET ENTRY (FIXED BINARY(31));
+    DECLARE C_SET ENTRY (FIXED BINARY(31))
+       EXTERNAL('c_set');
     X = 0;
     CALL C_SET(X);            /* C function receives &X */
     IF X = 42 THEN PUT SKIP LIST('PASS');
  END CALLER;
 ```
 
+`c_set.c`:
+
 ```c
-void C_SET(int *x) { *x = 42; }
+void c_set(int *x) { *x = 42; }
 ```
 
 Compile each unit to an object and link them together with the runtime:

@@ -43,6 +43,7 @@ struct DeclItem {
   Symbol *sym = nullptr;
   bool isEntry = false;              // DECLARE name ENTRY(...) (rule 38)
   std::vector<Type> entryParams;     // ENTRY ( ... ) descriptor
+  std::string extName;               // EXTERNAL('name') case-sensitive C symbol
 };
 
 struct Stmt {

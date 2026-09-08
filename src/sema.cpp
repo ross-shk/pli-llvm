@@ -150,13 +150,14 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
     if (s->kind == Stmt::Declare) {
       for (auto &item : s->decls) {
         if (item.isEntry) {
-          // External C entry: a ProcName symbol with no PL/I body. It keeps
-          // its upper-cased PL/I name so the linker resolves it to the C
-          // function (rules (34),(38)). Not storage.
+          // External C entry: a ProcName symbol with no PL/I body. The C
+          // symbol is the EXTERNAL('name') override when given, else the
+          // upper-cased PL/I identifier (rules (34),(38); z/OS ILC naming).
+          // Not storage.
           Symbol *sym = declare(sc, item.name, Type::voidTy(), item.loc, Symbol::ProcName, false);
           sym->isEntry = true;
           sym->entryParams = item.entryParams;
-          sym->irName = "@" + item.name;
+          sym->irName = "@" + (item.extName.empty() ? item.name : item.extName);
           item.sym = sym;
           entries_.push_back(sym);
           continue;
