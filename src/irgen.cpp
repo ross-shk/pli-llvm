@@ -113,6 +113,7 @@ std::string IRGen::run(Program &prog) {
       "declare i64 @pli_mod_ll(i64, i64)\n"
       "declare double @pli_mod_dd(double, double)\n"
       "declare double @pli_round(double, i64)\n"
+      "declare void @pli_repeat(ptr, i64, ptr, i64, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n"
       "declare double @llvm.fabs.f64(double)\n";
@@ -913,6 +914,16 @@ Val IRGen::emitExpr(Expr *e) {
         v.ty = e->ty;
         v.reg = r;
         return v;
+      }
+      // REPEAT built-in (M2): fill a buffer with n copies of s.
+      if (e->name == "REPEAT") {
+        Val s = emitExpr(e->args[0].get());
+        Val n = emitExpr(e->args[1].get());
+        Val out = charTemp(e->ty.len);
+        body_ += "  call void @pli_repeat(ptr " + out.ptr + ", i64 " + out.len +
+                 ", ptr " + s.ptr + ", i64 " + s.len + ", i64 " + toI64(n) + ")\n";
+        out.len = std::to_string(e->ty.len);
+        return out;
       }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.

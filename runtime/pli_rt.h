@@ -33,6 +33,8 @@ long long pli_index(const char *a, long long alen, const char *b, long long blen
 long long pli_mod_ll(long long a, long long b);  /* MOD (integer) */
 double pli_mod_dd(double a, double b);           /* MOD (float) */
 double pli_round(double x, long long n);         /* ROUND */
+void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
+                long long n);                    /* REPEAT */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen);
 
 /* Condition signalling (M5 will expand this into the ON-unit machinery). */

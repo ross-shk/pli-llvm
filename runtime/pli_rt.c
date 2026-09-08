@@ -140,6 +140,15 @@ double pli_round(double x, long long n) {
   return round(x * factor) / factor;
 }
 
+/* REPEAT(s, n): fill dst with n copies of s, blank-padding to dstcap. */
+void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
+                long long n) {
+  long long out = 0;
+  for (long long k = 0; k < n; ++k)
+    for (long long i = 0; i < srclen && out < dstcap; ++i) dst[out++] = src[i];
+  while (out < dstcap) dst[out++] = ' ';
+}
+
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {
