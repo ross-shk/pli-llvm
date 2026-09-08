@@ -208,9 +208,32 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isSta
     }
     // Declarations in DO/IF bodies contribute to the enclosing scope.
     if (!s->body.empty()) collectDecls(s->body, sc, p, isStatic);
-    if (s->thenS) { std::vector<StmtP> one; /* handled below */ }
-    if (s->thenS && s->thenS->kind == Stmt::Declare)
-      d_.error(s->thenS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
+    // THEN/ELSE branches also need BEGIN scope creation (rule (68)) and
+    // the bare-DECLARE diagnostic (rule (74)).
+    if (s->thenS) {
+      if (s->thenS->kind == Stmt::Begin) {
+        auto child = std::make_unique<Scope>();
+        child->parent = sc;
+        Scope *raw = child.get();
+        scopes_.push_back(std::move(child));
+        beginScopes_[s->thenS.get()] = raw;
+        collectDecls(s->thenS->body, raw, p, isStatic);
+      } else if (s->thenS->kind == Stmt::Declare) {
+        d_.error(s->thenS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
+      }
+    }
+    if (s->elseS) {
+      if (s->elseS->kind == Stmt::Begin) {
+        auto child = std::make_unique<Scope>();
+        child->parent = sc;
+        Scope *raw = child.get();
+        scopes_.push_back(std::move(child));
+        beginScopes_[s->elseS.get()] = raw;
+        collectDecls(s->elseS->body, raw, p, isStatic);
+      } else if (s->elseS->kind == Stmt::Declare) {
+        d_.error(s->elseS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
+      }
+    }
   }
 }
 
