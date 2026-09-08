@@ -36,7 +36,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (42) | scope (`INTERNAL`/`EXTERNAL`) | accepted M0 → M1 | linkage in M1 |
 | (43) | `LIKE` | M3 | |
 | (44)–(55) | `FORMAT` statement and all format items | M6 | format engine |
-| (56) | `ENTRY` statement | M1 | |
+| (56) | `ENTRY` statement | M1 | `label: ENTRY(params) [RETURNS(...)]` declares an alternate entry point with its own params/result; body split into segments behind a shared impl, one thunk per entry name (`entry.pli`); mixed return types diagnosed unimplemented (ADR-026) |
 | (57)–(59) | statement, unconditional, simple | M0 | |
 | (60)–(63) | condition prefixes | parsed M0 → M5 | warned as unenforced |
 | (64) | labellist | M0 | label prefixes parsed; used by (7) |

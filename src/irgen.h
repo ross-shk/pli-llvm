@@ -43,8 +43,12 @@ private:
   std::string addressOf(Symbol *sym);
   void emitGlobals();
   void emitProc(Proc *p);
+  void emitPlainProc(Proc *p, const std::string &retLLVM);
+  void emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, const std::string &retLLVM);
   void allocaLocals(Proc *p);
   void collectGotoBlocks(Stmt *s);  // assign an LLVM block to each labelled stmt
+  // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
+  std::string entryIrName(Proc *p, Stmt *e);
 
   // --- statements & expressions --------------------------------------
   void emitStmt(Stmt *s);

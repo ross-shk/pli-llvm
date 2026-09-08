@@ -95,6 +95,15 @@ bool Sema::run(Program &prog, bool compileOnly) {
       Symbol *es = declare(outer, en, symTy, p->loc, Symbol::ProcName, false);
       es->proc = p.get();
     }
+    // rule (56) ENTRY statements: each labelled entry is callable by name.
+    for (auto &st : p->body) {
+      if (st && st->kind == Stmt::Entry) {
+        Type et = st->entryIsFunction ? st->entryRetTy : Type::voidTy();
+        Symbol *es = declare(outer, st->name, et, st->loc, Symbol::ProcName, false);
+        es->proc = p.get();
+        es->entry = st.get();
+      }
+    }
   }
 
   // Pass 2: declarations, resolution and typing, procedure by procedure.
@@ -132,7 +141,28 @@ void Sema::processProc(Proc *p) {
 
   // Parameters: a DECLARE inside the procedure supplies their attributes;
   // otherwise the implicit rule applies. Parameters are always by reference.
-  for (const std::string &pname : p->params) {
+  resolveParams(sc, p, p->params, p->paramSyms);
+
+  // rule (56) ENTRY statements: each entry point declares its own parameters,
+  // by reference, in the same scope (so a name shared with the procedure's own
+  // parameter list refers to the same variable).
+  for (auto &st : p->body) {
+    if (st && st->kind == Stmt::Entry)
+      resolveParams(sc, p, st->params, st->entryParamSyms);
+  }
+
+  procLabels_.clear();
+  for (auto &s : p->body) collectLabels(s.get());
+  for (auto &s : p->body) checkStmt(s.get(), sc, p);
+}
+
+// Parameters are always by reference; a DECLARE supplies their attributes,
+// otherwise the implicit rule applies. A name already resolved as a parameter
+// (e.g. an ENTRY parameter reusing a procedure parameter) is reused, so the
+// two spellings refer to one variable.
+void Sema::resolveParams(Scope *sc, Proc *p, const std::vector<std::string> &names,
+                         std::vector<Symbol *> &out) {
+  for (const std::string &pname : names) {
     Symbol *s = nullptr;
     auto it = sc->tab.find(pname);
     if (it != sc->tab.end()) {
@@ -148,12 +178,8 @@ void Sema::processProc(Proc *p) {
       storage_.erase(std::remove(storage_.begin(), storage_.end(), s), storage_.end());
       d_.warn(p->loc, "parameter '" + pname + "' has no DECLARE; implicitly " + t.desc(), "(4)");
     }
-    p->paramSyms.push_back(s);
+    out.push_back(s);
   }
-
-  procLabels_.clear();
-  for (auto &s : p->body) collectLabels(s.get());
-  for (auto &s : p->body) checkStmt(s.get(), sc, p);
 }
 
 void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isStatic) {
@@ -383,6 +409,7 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
     }
     case Stmt::Stop:
     case Stmt::Leave:
+    case Stmt::Entry:  // declaration-like; params/type resolved in processProc
       break;
     case Stmt::Goto:
       // GO TO target must be a label defined in this procedure (rules (64),(77)).

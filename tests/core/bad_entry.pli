@@ -1,0 +1,7 @@
+ /* rule (56): an ENTRY statement must carry a label (the entry name); a bare
+    ENTRY is rejected, not silently accepted. */
+ badentry: procedure options(main);
+    declare x fixed;
+    entry(x);
+    x = 1;
+ end badentry;

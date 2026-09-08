@@ -471,4 +471,40 @@ lookup order (own scope before parent before root) preserves shadowing.
 exit criterion); or emitting one function body per entry name with no shared
 scope (duplicates logic and still cannot be called from a sibling).
 
+## ADR-026 — `ENTRY` statements: a shared impl split into entry-point segments
+
+**Context.** The `ENTRY` statement (rule (56)) `label: ENTRY (params)
+[RETURNS(type)]` declares an alternate entry point into a procedure, with its
+own parameters and result type; a call through that name starts executing at
+the `ENTRY` and continues to the end of the body. Naive codegen — one LLVM
+function per entry point — cannot share the procedure's locals across entries,
+since LLVM cannot jump between functions.
+
+**Decision.** When a procedure contains any `ENTRY` statement, emit one shared
+implementation function `@PLI_<name>.impl` carrying the whole body, split into
+segments (the procedure's start, then one segment per `ENTRY` in order). The
+impl takes the *union* of every entry point's parameters (by-reference `ptr`,
+deduplicated by symbol) plus an `i64` entry selector; its entry block switches
+on the selector to the matching segment, and segments fall through in body
+order. Each entry name (the procedure's own names and each `ENTRY` label) is a
+small thunk with that entry point's exact signature that tail-calls the impl,
+forwarding its own arguments and `undef` for the other union slots, then
+returns the result. Entry-namelist aliases (rule (3)) point at the procedure's
+segment-0 thunk. A `CALL`/function reference to an `ENTRY` name resolves to
+that name's thunk and its parameters.
+
+**Consequences.** Locals stay as allocas in the impl and are shared across
+segments; each entry point has its own calling convention; every existing test
+still passes. `entry.pli` pins a function with two entry points reachable
+through either name. Two limitations are diagnosed rather than silently
+accepted: the impl returns one type, so a mixed return type across entry
+points is rejected (rule (56)); a segment that reads a parameter not supplied
+on its entry path sees `undef` — the PL/I "unused parameter" case, left to the
+programmer.
+
+**Rejected.** One LLVM function per entry chained by tail calls (locals would
+need promotion to globals or threaded pointers); or one function per entry
+with no shared body (duplicates logic and cannot share storage).
+
+
 

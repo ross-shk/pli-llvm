@@ -19,6 +19,7 @@ struct Symbol {
   std::vector<Type> entryParams;  // ENTRY(...) descriptor, for codegen
   std::string irName;      // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc *proc = nullptr;    // for ProcName
+  Stmt *entry = nullptr;   // if this ProcName is an ENTRY statement (rule 56)
   Expr *initExpr = nullptr;  // folded INITIAL constant, rule (26)
 };
 
@@ -47,6 +48,10 @@ private:
   Symbol *implicitDeclare(Scope *sc, const std::string &n, SourceLoc l, bool isStatic);
 
   void processProc(Proc *p);
+  // Turn a parameter name list into by-reference Param symbols in `sc`, so the
+  // same storage is shared when a name repeats (proc param vs ENTRY param).
+  void resolveParams(Scope *sc, Proc *p, const std::vector<std::string> &names,
+                     std::vector<Symbol *> &out);
   void collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isStatic);
   void collectLabels(Stmt *s);  // gather GO TO targets defined in this proc
   void checkStmt(Stmt *s, Scope *sc, Proc *p);
