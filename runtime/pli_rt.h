@@ -29,6 +29,7 @@ long long pli_assign_varying(char *dstdata, long long cap, const char *src, long
 void pli_concat(char *dst, const char *a, long long alen, const char *b, long long blen);
 void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
                 long long start, long long len); /* SUBSTR built-in */
+long long pli_index(const char *a, long long alen, const char *b, long long blen); /* INDEX */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen);
 
 /* Condition signalling (M5 will expand this into the ON-unit machinery). */
