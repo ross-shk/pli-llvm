@@ -589,6 +589,21 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::fixedBin(31, 0);
         break;
       }
+      // TRANSLATE built-in (M2): translate(s, out, in) — same length as s.
+      if (e->name == "TRANSLATE") {
+        if (e->args.size() != 3) {
+          d_.error(e->loc, "TRANSLATE expects 3 arguments (string, out, in)", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar() || !e->args[2]->ty.isChar()) {
+          d_.error(e->loc, "TRANSLATE arguments must be character strings", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::chr(e->args[0]->ty.len);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");

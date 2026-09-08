@@ -115,6 +115,7 @@ std::string IRGen::run(Program &prog) {
       "declare double @pli_round(double, i64)\n"
       "declare void @pli_repeat(ptr, i64, ptr, i64, i64)\n"
       "declare i64 @pli_verify(ptr, i64, ptr, i64)\n"
+      "declare void @pli_translate(ptr, i64, ptr, i64, ptr, i64, ptr, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n"
       "declare double @llvm.fabs.f64(double)\n";
@@ -938,6 +939,18 @@ Val IRGen::emitExpr(Expr *e) {
         v.ty = e->ty;
         v.reg = x;
         return v;
+      }
+      // TRANSLATE built-in (M2): map characters of s through the in/out table.
+      if (e->name == "TRANSLATE") {
+        Val s = emitExpr(e->args[0].get());
+        Val out = emitExpr(e->args[1].get());
+        Val in = emitExpr(e->args[2].get());
+        Val dst = charTemp(e->ty.len);
+        body_ += "  call void @pli_translate(ptr " + dst.ptr + ", i64 " + dst.len +
+                 ", ptr " + s.ptr + ", i64 " + s.len + ", ptr " + out.ptr + ", i64 " + out.len +
+                 ", ptr " + in.ptr + ", i64 " + in.len + ")\n";
+        dst.len = std::to_string(e->ty.len);
+        return dst;
       }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.
