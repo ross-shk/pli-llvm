@@ -79,6 +79,7 @@ The ledger that ties the implementation to the specification. Status values:
 |---|---|---|
 | §2.1, §2.2 | notation semantics / meta-syntax | reference only |
 | §2.3.1 | generation process, delimiters, 60-char alphabet | M0 (lexer) |
+| §2.3.1 | statement-keyword disambiguation | M1 | ADR-004 step 3: `WORD ( … ) =` resolves by a speculative parse of the keyword reading (`ambiguity.pli`); `WORD =` stays an assignment |
 | §2.3.2.1 | keyword abbreviations (`DCL`, `PROC`, `BIN`, …) | partial M0 (`DCL`, `PROC`, `BIN`, `DEC`, `CHAR`, `VAR`, `INIT`, `PTR`, `CTL`, `DEF`) → M9 completes the table |
 | §2.3.2.2 | multiple closure | M0 |
 | §2.3.3 | 48-character set: operator words, deletions, colon rules | partial M0 (operator words in `arith.pli`) → M9 |

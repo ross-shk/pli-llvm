@@ -38,6 +38,10 @@ private:
   // --- contextual keyword recognition (ADR-004) -----------------------
   bool atStmtKeyword(const char *w) const;
   bool looksLikeAssignment() const;
+  StmtP keywordStatement(Proc *owner, const std::vector<std::string> &labels,
+                         bool probe);
+  StmtP probeKeywordStatement(Proc *owner,
+                              const std::vector<std::string> &labels);
 
   // --- grammar --------------------------------------------------------
   void parseExternalProcedure();

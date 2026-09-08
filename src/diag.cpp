@@ -51,15 +51,18 @@ void Diags::emit(const char *level, SourceLoc loc, const std::string &msg,
 }
 
 void Diags::error(SourceLoc loc, const std::string &msg, const std::string &rule) {
+  if (muted()) { ++mnerr_; return; }
   ++nerr_;
   emit("error", loc, msg, rule);
 }
 
 void Diags::warn(SourceLoc loc, const std::string &msg, const std::string &rule) {
+  if (muted()) return;
   ++nwarn_;
   emit("warning", loc, msg, rule);
 }
 
 void Diags::note(SourceLoc loc, const std::string &msg) {
+  if (muted()) return;
   emit("note", loc, msg, "");
 }
