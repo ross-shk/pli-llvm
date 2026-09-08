@@ -1,0 +1,5 @@
+ /* Diagnostic test: DIVIDE with a non-numeric argument is rejected in M0. */
+ BADDIVIDE: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHARACTER(4);
+    S = DIVIDE(S, 2);
+ END BADDIVIDE;

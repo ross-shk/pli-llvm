@@ -649,6 +649,22 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
         break;
       }
+      // DIVIDE built-in (M2): divide(a, b) — quotient of two numerics, computed
+      // in floating point (M0 model, ADR-014; exact decimal division is M2).
+      if (e->name == "DIVIDE") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "DIVIDE expects 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "DIVIDE arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
