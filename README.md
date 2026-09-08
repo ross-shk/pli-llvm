@@ -15,6 +15,12 @@ $ ./build/plic tests/core/hello.pli -o hello && ./hello
 Hello, world!
 ```
 
+Install with:
+
+```
+make install               
+```
+
 ## Documentation
 
 | Document | Contents |
