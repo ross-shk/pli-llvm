@@ -42,7 +42,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (64) | labellist | M0 | label prefixes parsed; used by (7) |
 | (65) | initial-label (subscripted labels) | M3/M5 | scan damaged; see ⚠ in grammar |
 | (66),(67) | proper-statement, null statement | M0 | |
-| (68) | `BEGIN` block | partial M0 | executes; own scope in M1 |
+| (68) | `BEGIN` block | partial M1 | executes; a block is now a real lexical scope — inner declarations shadow outer ones and do not leak (`begin.pli`); storage stays flat per ADR-010 |
 | (69)–(73) | `DO` groups, specifications, `WHILE` | M0 | `loops.pli` |
 | (74)–(76) | `IF`/`THEN`/`ELSE`, balanced statements | M0 | `ifelse.pli` |
 | (77) | `GO TO` | partial M1 | local `GO TO`/`GOTO` to a label in the same procedure (`goto.pli`, `bad_goto.pli`); non-local to an enclosing procedure → M5 |

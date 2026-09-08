@@ -47,7 +47,8 @@ make install
 - parameters **by reference**, with dummy arguments when conversion is needed
 - `DECLARE` with the attribute default rules and `INITIAL` constants; implicit
   declarations (I–N → `FIXED BINARY`) with warnings
-- `IF`/`THEN`/`ELSE` (nested, `DO`-group branches), `BEGIN` blocks
+- `IF`/`THEN`/`ELSE` (nested, `DO`-group branches); `BEGIN` blocks are real
+  lexical scopes (inner declarations shadow outer ones; ADR-023)
 - `DO;`, `DO WHILE(e);`, `DO I = a TO b BY c WHILE(d);`
 - **local `GO TO`** / `GOTO` to a labelled statement in the same procedure
   (`goto.pli`); non-local `GO TO` is M5
@@ -148,7 +149,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 18 tests (9 golden + 7 self-contained + 2 diagnostic), all passing.
+Current suite: 19 tests (9 golden + 8 self-contained + 2 diagnostic), all passing.
 
 ## Example: generated IR
 

@@ -43,9 +43,15 @@ Symbol *Sema::declare(Scope *sc, const std::string &n, Type t, SourceLoc l,
   sym->loc = l;
   sym->kind = k;
   sym->isStatic = isStatic;
-  if (k == Symbol::Param) sym->irName = "%" + n + ".ptr";
-  else if (isStatic) sym->irName = "@pli_g_" + n;
-  else sym->irName = "%" + n + ".addr";
+  // The irName must be unique module-wide: a name declared in a nested
+  // BEGIN block shadows an outer one of the same spelling (rule (68)), and the
+  // two symbols still need distinct storage. Disambiguate with a numeric suffix.
+  std::string base = (k == Symbol::Param) ? "%" + n + ".ptr"
+                    : isStatic ? "@pli_g_" + n
+                    : "%" + n + ".addr";
+  std::string ir = base;
+  for (int d = 1; !irNames_.insert(ir).second; ++d) ir = base + "$" + std::to_string(d);
+  sym->irName = ir;
   Symbol *raw = sym.get();
   owned_.push_back(std::move(sym));
   sc->tab[n] = raw;
@@ -114,7 +120,8 @@ void Sema::processProc(Proc *p) {
   // See ADR-010 and the M1 milestone for proper nesting support.
   bool isStatic = (p->parent == nullptr);
 
-  collectDecls(p->body, sc, isStatic);
+  beginScopes_.clear();
+  collectDecls(p->body, sc, p, isStatic);
 
   // Parameters: a DECLARE inside the procedure supplies their attributes;
   // otherwise the implicit rule applies. Parameters are always by reference.
@@ -140,16 +147,9 @@ void Sema::processProc(Proc *p) {
   procLabels_.clear();
   for (auto &s : p->body) collectLabels(s.get());
   for (auto &s : p->body) checkStmt(s.get(), sc, p);
-
-  // Classify storage for code generation: AUTOMATIC variables of this
-  // procedure need an alloca; STATIC ones become LLVM globals.
-  for (Symbol *s : sc->order) {
-    if (s->kind != Symbol::Var) continue;
-    if (!s->isStatic) p->localSyms.push_back(s);
-  }
 }
 
-void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
+void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isStatic) {
   for (auto &s : body) {
     if (!s) continue;
     if (s->kind == Stmt::Declare) {
@@ -168,6 +168,11 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
           continue;
         }
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
+        // Record AUTOMATIC variables so codegen allocates them (STATIC ones
+        // become LLVM globals via emitGlobals). This must cover variables of
+        // BEGIN blocks too, hence the Proc* here.
+        if (item.sym->kind == Symbol::Var && !item.sym->isStatic)
+          p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
           Expr *e = item.init.get();
@@ -190,9 +195,19 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
       }
       continue;
     }
-    // Declarations are block scoped; M0 has no BEGIN-block scopes, so nested
-    // DO/IF bodies contribute to the procedure scope.
-    if (!s->body.empty()) collectDecls(s->body, sc, isStatic);
+    if (s->kind == Stmt::Begin) {
+      // A BEGIN block (rule (68)) opens a child scope: names declared inside
+      // shadow outer ones and do not leak out.
+      auto child = std::make_unique<Scope>();
+      child->parent = sc;
+      Scope *raw = child.get();
+      scopes_.push_back(std::move(child));
+      beginScopes_[s.get()] = raw;
+      collectDecls(s->body, raw, p, isStatic);
+      continue;
+    }
+    // Declarations in DO/IF bodies contribute to the enclosing scope.
+    if (!s->body.empty()) collectDecls(s->body, sc, p, isStatic);
     if (s->thenS) { std::vector<StmtP> one; /* handled below */ }
     if (s->thenS && s->thenS->kind == Stmt::Declare)
       d_.error(s->thenS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
@@ -252,6 +267,13 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
     case Stmt::Group:
       for (auto &b : s->body) checkStmt(b.get(), sc, p);
       break;
+    case Stmt::Begin: {
+      // Descend with the block's own scope (rule (68)); see collectDecls.
+      auto it = beginScopes_.find(s);
+      Scope *bsc = it != beginScopes_.end() ? it->second : sc;
+      for (auto &b : s->body) checkStmt(b.get(), bsc, p);
+      break;
+    }
     case Stmt::DoWhile:
       typeExpr(s->cond.get(), sc, p);
       for (auto &b : s->body) checkStmt(b.get(), sc, p);

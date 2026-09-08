@@ -268,6 +268,7 @@ void IRGen::emitStmt(Stmt *s) {
     case Stmt::Assign: emitAssign(s); break;
     case Stmt::If: emitIf(s); break;
     case Stmt::Group:
+    case Stmt::Begin:  // a block executes its body as a group (rule (68))
       for (auto &b : s->body) emitStmt(b.get());
       break;
     case Stmt::DoWhile: emitDoWhile(s); break;
