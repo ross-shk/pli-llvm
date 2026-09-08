@@ -1,0 +1,7 @@
+ /* Diagnostic test: SUBSTR assignment to a non-variable is rejected. */
+ BADSUBSTRASSIGN: PROCEDURE OPTIONS(MAIN);
+    DECLARE STR CHARACTER(6) INIT('abcdef');
+    DECLARE X FIXED BINARY(31);
+    X = 1;
+    SUBSTR('literal', X, 2) = 'AB';
+ END BADSUBSTRASSIGN;

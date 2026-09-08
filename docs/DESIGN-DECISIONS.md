@@ -422,3 +422,27 @@ storage); block-entry initialisation of AUTOMATIC storage is deferred.
 **Rejected.** Allocating (and deallocating) a fresh activation per `BEGIN`
 block — the flat model keeps codegen simple and matches the M0 storage
 simplification of ADR-010.
+
+## ADR-024 — `SUBSTR` as a pseudo-variable is a runtime write into the source string
+
+**Context.** Rule (86) allows a *reference* on the left of `=`. The M2 plan
+lists `SUBSTR` as a pseudo-variable, i.e. `SUBSTR(v, i, n) = x` must overwrite
+part of the character variable `v` in place.
+
+**Decision.** The parser already routes `WORD ( … ) =` to an assignment (its
+`looksLikeAssignment` lookahead), so no parse change is needed. Sema restricts
+the target to a SUBSTR call whose first argument is a modifiable character
+variable. Codegen lowers the pseudo-variable to a runtime call
+`pli_substr_assign(dst, dstcap, start, len, src, srclen)` that writes up to
+`len` characters of the RHS into `dst` at the 1-based position, blank-filling
+the tail when the RHS is shorter.
+
+**Consequences.** Only the fixed-length `CHARACTER` and (via the shared data
+pointer) `VARYING` forms are served; substring bounds past the end of the
+variable clip rather than raise `SUBSCRIPTRANGE` (that is M3). `SUBSTR` on the
+right of `=` is unaffected — it is the ordinary built-in.
+
+**Rejected.** Building a general pseudo-variable infrastructure (other
+pseudo-variables, or targets that are arbitrary expressions) — KISS, one
+pseudo-variable now; the runtime call keeps codegen simple.
+

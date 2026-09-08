@@ -1,0 +1,25 @@
+ /* SUBSTR pseudo-variable: substr(v, i, n) = x overwrites part of a character
+    variable in place. rule (86) allows a reference on the left of '='; M2
+    implements the SUBSTR form. */
+ substr_assign_test: procedure options(main);
+    declare str char(10) init('abcdefghij');
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    substr(str, 1, 3) = 'XYZ';
+    if str ^= 'XYZdefghij' then do;
+       fails = fails + 1;
+       put skip list('FAIL substr(1,3) =', str);
+    end;
+
+    str = 'abcdefghij';
+    substr(str, 5, 2) = '99';
+    if str ^= 'abcd99ghij' then do;
+       fails = fails + 1;
+       put skip list('FAIL substr(5,2) =', str);
+    end;
+
+    if fails = 0 then put skip list('PASS substr-assign');
+    else put skip list('FAIL substr-assign: fails =', fails);
+ end substr_assign_test;
