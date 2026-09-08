@@ -58,3 +58,6 @@ make && make test                        # 14 tests, must stay green
 - large files: `src/parser.cpp`, `src/irgen.cpp`, `TR25.084-concrete-syntax.md`
 - `edit` over `write`; batch related edits; parallel independent `bash` calls
 - reproduce a bug (compile it, read the diagnostic or IR) before editing code
+- silo `tests/`: don't list, glob, or read the tree during source work — open
+  only the specific test you are writing/fixing or running; `tests/*/out/` is
+  gitignored scratch, never worth reading
