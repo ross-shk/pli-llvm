@@ -542,6 +542,25 @@ itself and the callee (rule (8)).
 M1 case needs; promoting enclosing variables to globals again (reintroduces the
 reentrancy bug); heap-allocating automatic storage (needless cost).
 
+## ADR-028 — `--explain`: rule productions generated from the spec
+
+**Context.** Diagnostics cite TR 25.084 rule numbers; a user wants to look up a
+cited rule without opening the spec. The productions live only in
+`TR25.084-concrete-syntax.md`, and AGENTS.md forbids duplicating spec text into
+the codebase by hand.
+**Decision.** `--explain <rule>` prints a production's formal text from a C++
+table that `scripts/gen_rules.py` extracts from the spec at build time
+(`build/rules.cpp`). The spec stays the single source of truth; a regeneration
+cannot drift from it. Only the formal grammar lines inside the code fences are
+extracted; the surrounding prose (including ⚠ OCR-caveat notes) is left in the
+spec, so `--explain` points the user at the rule without re-stating the prose.
+**Consequences.** `make` needs `python3` and the spec present at build time
+(both already true in-repo). Driver tests (`tests/driver/*.sh`) were added to
+`run_tests.sh` to cover a driver-level feature the `.pli` harness cannot.
+**Rejected.** Hand-maintaining a rule table (duplicates the spec, drifts);
+reading the spec file at runtime (requires the spec on the installed system,
+and couples the binary to a repo path).
+
 
 
 

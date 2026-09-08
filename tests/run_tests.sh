@@ -66,12 +66,42 @@ for dir in tests/*/; do
     continue
   fi
   set -- "$dir"*.pli
-  [ -f "$1" ] || continue
+  have_pli=0; [ -f "$1" ] && have_pli=1
+  set -- "$dir"*.sh
+  have_sh=0; [ -f "$1" ] && have_sh=1
+  [ "$have_pli" -eq 1 ] || [ "$have_sh" -eq 1 ] || continue
   out="$dir/out"
   mkdir -p "$out"
 
+  # Driver tests: tests/driver/*.sh run a plic sub-command; a golden
+  # expected/<name>.out (if present) is diff-checked, else the script must
+  # print PASS. Mirrors the execution-test classification below.
+  if [ "$have_sh" -eq 1 ]; then
+    for drv in "$dir"*.sh; do
+      [ -f "$drv" ] || continue
+      name=$(basename "$drv" .sh)
+      if [ "$single" -eq 1 ] && [ "$name" != "$onetest_name" ]; then continue; fi
+      sh "$drv" > "$out/$name.out" 2>&1
+      if [ -f "$dir/expected/$name.out" ]; then
+        if diff -u "$dir/expected/$name.out" "$out/$name.out" > "$out/$name.diff" 2>&1; then
+          echo "PASS $name"; pass=$((pass + 1))
+        else
+          echo "FAIL $name (output differs)"; sed 's/^/      /' "$out/$name.diff"
+          fail=$((fail + 1))
+        fi
+      elif grep -qi 'PASS' "$out/$name.out" && ! grep -qi 'FAIL' "$out/$name.out"; then
+        echo "PASS $name"; pass=$((pass + 1))
+      else
+        echo "FAIL $name (self test did not print PASS)"; echo
+        sed 's/^/      /' "$out/$name.out"
+        fail=$((fail + 1))
+      fi
+    done
+  fi
+
   # Execution tests: compile, run, then diff or self-check.
   for src in "$dir"*.pli; do
+    [ -f "$src" ] || continue
     name=$(basename "$src" .pli)
     if [ "$single" -eq 1 ] && [ "$name" != "$onetest_name" ]; then continue; fi
     case "$name" in

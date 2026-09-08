@@ -279,8 +279,9 @@ tests/core/bad_attrs.pli:4:12: error: FIXED and FLOAT are conflicting attributes
 
 This is deliberate: PL/I's rule set is large and unfamiliar to most working
 programmers, and a citation makes a diagnostic checkable against the spec.
-Planned additions: fix-it hints, `-fdiagnostics-format=json`, and a
-`--explain <rule>` mode that prints the production and its prose.
+`--explain <rule>` prints the TR 25.084 production for a rule number (generated
+from the spec by `scripts/gen_rules.py`, so it cannot drift). Planned
+additions: fix-it hints and `-fdiagnostics-format=json`.
 
 ## 7. Testing architecture
 
