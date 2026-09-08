@@ -924,6 +924,20 @@ Val IRGen::emitExpr(Expr *e) {
         v.reg = r;
         return v;
       }
+      // DIVIDE built-in (M2): quotient of two numerics in floating point
+      // (ADR-014; exact decimal division is M2), like the `/` operator.
+      if (e->name == "DIVIDE") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        std::string r = fresh("div");
+        body_ += "  " + r + " = fdiv double " + av.reg + ", " + bv.reg + "\n";
+        v.ty = common;
+        v.reg = r;
+        return v;
+      }
       // ROUND built-in (M2): round x to n fractional digits, as a FLOAT.
       if (e->name == "ROUND") {
         Val x = emitExpr(e->args[0].get());
