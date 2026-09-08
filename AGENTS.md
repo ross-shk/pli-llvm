@@ -22,7 +22,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `src/`                        | `lexer` → `parser` → `sema` → `irgen` (+ `diag`, `types`, `ast`, `main`)                                  |
 | `runtime/`                    | `libpli`: list-directed I/O, string semantics, conditions (C11)                                           |
-| `tests/`                      | `run_tests.sh` + groups: golden (`expected/*.out` diff) or self-checking (prints PASS), `bad_*` must fail |
+| `tests/`                      | `run_tests.py` + groups: golden (`expected/*.out` diff) or self-checking (prints PASS), `bad_*` must fail |
 | `docs/`                       | ARCHITECTURE, DESIGN-DECISIONS (ADRs), OPTIMIZATION, IMPLEMENTATION-PLAN, GRAMMAR-COVERAGE                |
 | `examples/`                   | scratch programs, git-ignored                                                                             |
 | `TR25.084-concrete-syntax.md` | the spec: rules (1)–(151), with ⚠ notes where the scan was damaged                                        |
@@ -36,7 +36,7 @@ make -j8 && make test                   # parallel build + tests must stay green
 ./build/plic f.pli -fsyntax-only -v      # front end only / show clang command
 ```
 
-`make -j8` parallelises the compile; the test runner (`tests/run_tests.sh`) already
+`make -j8` parallelises the compile; the test runner (`tests/run_tests.py`) already
 runs its compile+run jobs concurrently (`JOBS` overrides the worker count).
 
 ## Invariants

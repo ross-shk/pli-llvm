@@ -154,13 +154,13 @@ make clean
 Run tests in specific groups with:
 
 ```
-`./run_tests.sh usecases`
+`./tests/run_tests.py usecases`
 ```
 
 or a specific test with:
 
 ```
-`./run_tests.sh usecases/control.pli`
+`./tests/run_tests.py usecases/control.pli`
 ```
 
 Current suite: 50 tests (9 golden + 24 self-contained + 17 diagnostic), all passing.
