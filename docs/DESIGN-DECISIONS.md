@@ -561,6 +561,30 @@ spec, so `--explain` points the user at the rule without re-stating the prose.
 reading the spec file at runtime (requires the spec on the installed system,
 and couples the binary to a repo path).
 
+## ADR-029 — HIR as a field-for-field AST mirror plus explicit `Convert` nodes
+
+**Context.** ADR-005 places an HIR between sema and codegen; the M1 plan asks
+for it "initially as a thin mirror of the AST, plus `--print-hir`", and a later
+decision adds explicit conversions. Sema annotates the AST in place (types,
+symbols), so the lowering runs after sema and before IRGen.
+**Decision.** HIR (`src/hir.h`) mirrors the AST node-for-node (same kinds and
+fields), lowering (`src/hir.cpp`) copies the typed AST into it, and IRGen
+consumes HIR. A new `Convert` node marks every implicit scalar conversion that
+IRGen would otherwise apply inline (assignment, return, DO bounds, call args,
+and the MIN/MAX/MOD/MULTIPLY/DIVIDE/PRECISION/ROUND built-in operands); `Convert`
+is emitted by `emitExpr` through the existing conversion helper. Symbols keep
+pointing at the still-alive AST procedures/entries — names mirror exactly, so
+callee resolution is unchanged; each `HProc` carries a `src` back-pointer for
+the rare AST↔HIR owner comparison.
+**Consequences.** `plic --print-hir` shows the lowered, conversion-explicit
+program; runtime behaviour is unchanged (a Convert wraps exactly where IRGen
+already converted). Lowering mutates no AST. Cost: a parallel node set and its
+maintenance.
+**Rejected.** Making HIR a distinct, more abstract IR now (that is the MIR
+milestone, M8); rewriting sema to build HIR directly (far beyond the M1 "thin
+mirror" scope); dropping the mirror and keeping IRGen on the AST (leaves no
+inspectable HIR for later passes to hang off).
+
 
 
 

@@ -16,6 +16,7 @@
 
 #include "ast.h"
 #include "diag.h"
+#include "hir.h"
 #include "sema.h"
 
 // A materialised PL/I value.
@@ -34,7 +35,7 @@ public:
       : d_(d), sema_(s), triple_(std::move(triple)),
         mod_("plic", ctx_), b_(ctx_) {}
 
-  std::string run(Program &prog);
+  std::string run(HProgram &prog);
 
 private:
   // --- emission primitives -------------------------------------------
@@ -54,26 +55,27 @@ private:
   // local alloca, parameter, or a static link) to its address value.
   std::unordered_map<Symbol *, llvm::Value *> symAddr_;
   void emitGlobals();
-  void declareProc(Proc *p);  // pre-create a proc's functions/aliases so calls resolve
-  void emitProc(Proc *p);
-  void emitPlainProc(Proc *p, llvm::Type *retLLVM);
-  void emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm::Type *retLLVM);
-  void allocaLocals(Proc *p);
-  void emitInitials(Proc *p);  // INITIAL stores on AUTOMATIC vars (rule 26)
-  void collectGotoBlocks(Stmt *s);  // assign an LLVM block to each labelled stmt
+  void declareProc(HProc *p);  // pre-create a proc's functions/aliases so calls resolve
+  void emitProc(HProc *p);
+  void emitPlainProc(HProc *p, llvm::Type *retLLVM);
+  void emitMultiEntryProc(HProc *p, const std::vector<HStmt *> &entries, llvm::Type *retLLVM);
+  void allocaLocals(HProc *p);
+  void emitInitials(HProc *p);  // INITIAL stores on AUTOMATIC vars (rule 26)
+  void collectGotoBlocks(HStmt *s);  // assign an LLVM block to each labelled stmt
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
-  std::string entryIrName(Proc *p, Stmt *e);
+  static std::string entryIrName(const std::string &proc, const std::string &parent,
+                                 const std::string &entry);
 
   // --- statements & expressions --------------------------------------
-  void emitStmt(Stmt *s);
-  void emitAssign(Stmt *s);
-  void emitIf(Stmt *s);
-  void emitDoWhile(Stmt *s);
-  void emitDoIter(Stmt *s);
-  void emitPut(Stmt *s);
-  void emitCall(Stmt *s);
+  void emitStmt(HStmt *s);
+  void emitAssign(HStmt *s);
+  void emitIf(HStmt *s);
+  void emitDoWhile(HStmt *s);
+  void emitDoIter(HStmt *s);
+  void emitPut(HStmt *s);
+  void emitCall(HStmt *s);
 
-  Val emitExpr(Expr *e);
+  Val emitExpr(HExpr *e);
   Val loadSym(Symbol *sym, const Type &ty);
   void storeTo(Symbol *sym, const Val &v, SourceLoc loc);
   void storeScalarTo(llvm::Value *addr, const Type &ty, const Val &v);
@@ -82,7 +84,7 @@ private:
   llvm::Value *toI1(const Val &v, SourceLoc loc);
   llvm::Value *toI64(const Val &v);
   Val charTemp(int len);          // alloca [len x i8]
-  Val charOf(Expr *e);            // materialise a character value
+  Val charOf(HExpr *e);           // materialise a character value
 
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
   llvm::Function *runtimeFn(const std::string &name, llvm::Type *ret,
@@ -100,6 +102,6 @@ private:
   llvm::Function *curFn_ = nullptr;  // the function we are currently filling
   std::vector<llvm::GlobalVariable *> strLits_;
   int n_ = 0;
-  Proc *curProc_ = nullptr;
+  HProc *curProc_ = nullptr;
   std::map<std::string, llvm::BasicBlock *> labelBlocks_;  // label -> block (rule 77)
 };
