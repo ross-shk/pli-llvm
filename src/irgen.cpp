@@ -112,6 +112,7 @@ std::string IRGen::run(Program &prog) {
       "declare i64 @pli_index(ptr, i64, ptr, i64)\n"
       "declare i64 @pli_mod_ll(i64, i64)\n"
       "declare double @pli_mod_dd(double, double)\n"
+      "declare double @pli_round(double, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n"
       "declare double @llvm.fabs.f64(double)\n";
@@ -900,6 +901,17 @@ Val IRGen::emitExpr(Expr *e) {
           body_ += "  " + t + " = trunc i64 " + r + " to i32\n";
           v.reg = t;
         }
+        return v;
+      }
+      // ROUND built-in (M2): round x to n fractional digits, as a FLOAT.
+      if (e->name == "ROUND") {
+        Val x = emitExpr(e->args[0].get());
+        Val n = emitExpr(e->args[1].get());
+        Val xd = convert(x, Type::flt(6), e->loc);
+        std::string r = fresh("round");
+        body_ += "  " + r + " = call double @pli_round(double " + xd.reg + ", i64 " + toI64(n) + ")\n";
+        v.ty = e->ty;
+        v.reg = r;
         return v;
       }
       // Function reference (rule (123)): call an internal function procedure
