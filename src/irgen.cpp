@@ -1,74 +1,112 @@
 #include "irgen.h"
 #include <algorithm>
-#include <cstdio>
-#include <cstring>
+
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-static std::string irEscape(const std::string &s) {
-  static const char *hex = "0123456789ABCDEF";
-  std::string out;
-  for (unsigned char c : s) {
-    if (c == '\\' || c == '"' || c < 0x20 || c >= 0x7F) {
-      out += '\\';
-      out += hex[c >> 4];
-      out += hex[c & 0xF];
-    } else {
-      out += (char)c;
+llvm::Type *IRGen::llvmTy(const Type &t) {
+  switch (t.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      return b_.getIntNTy(t.intBits());
+    case TK::Float:
+      return b_.getDoubleTy();
+    case TK::Bit:
+      return b_.getInt8Ty();
+    case TK::Char: {
+      if (t.varying) {
+        llvm::Type *data = llvm::ArrayType::get(b_.getInt8Ty(), t.len);
+        return llvm::StructType::get(b_.getInt32Ty(), data);
+      }
+      return llvm::ArrayType::get(b_.getInt8Ty(), t.len);
     }
+    case TK::Void:
+      return b_.getVoidTy();
   }
-  return out;
+  return b_.getInt32Ty();
 }
 
-static std::string fmtDouble(double d) {
-  // LLVM accepts hexadecimal float literals; use them to avoid any loss.
-  unsigned long long bits;
-  static_assert(sizeof(bits) == sizeof(d), "double must be 64-bit");
-  memcpy(&bits, &d, sizeof(bits));
-  char buf[32];
-  snprintf(buf, sizeof(buf), "0x%016llX", bits);
-  return buf;
+llvm::Value *IRGen::i32(int v) { return b_.getInt32(v); }
+llvm::Value *IRGen::i64(long long v) { return b_.getInt64(v); }
+llvm::Value *IRGen::flt(double d) {
+  return llvm::ConstantFP::get(b_.getDoubleTy(), d);
 }
 
-std::string IRGen::fresh(const char *prefix) {
-  return std::string("%") + prefix + "." + std::to_string(n_++);
-}
-
-void IRGen::emitLabel(const std::string &name) {
-  if (!terminated_) body_ += "  br label %" + name + "\n";
-  body_ += name + ":\n";
+void IRGen::startBlock(llvm::BasicBlock *bb) {
+  if (b_.GetInsertBlock() && !terminated_) {
+    // The current block is open (not terminated): fall through into bb.
+    b_.CreateBr(bb);
+  }
+  b_.SetInsertPoint(bb);
   terminated_ = false;
 }
 
-void IRGen::branch(const std::string &target) {
+void IRGen::newBlock() {
+  llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, "", curFn_);
+  b_.SetInsertPoint(bb);
+  terminated_ = false;
+}
+
+// After a function body is emitted, some pre-created blocks (GO TO / ENTRY
+// segment targets that were never reached) may lack a terminator. Give every
+// such block an `unreachable` terminator so the module verifies.
+void IRGen::closeBlocks() {
+  for (llvm::BasicBlock &bb : *curFn_) {
+    // getTerminator() asserts on a block without one, so test safely first.
+    if (bb.empty() || !bb.back().isTerminator()) {
+      llvm::IRBuilder<>::InsertPointGuard g(b_);
+      b_.SetInsertPoint(&bb);
+      b_.CreateUnreachable();
+    }
+  }
+}
+
+void IRGen::branch(llvm::BasicBlock *target) {
   if (!terminated_) {
-    body_ += "  br label %" + target + "\n";
+    b_.CreateBr(target);
     terminated_ = true;
   }
 }
 
-std::string IRGen::globalString(const std::string &s) {
-  auto it = strLits_.find(s);
-  if (it != strLits_.end()) return it->second;
-  std::string name = "@.str." + std::to_string(strLits_.size());
-  size_t n = s.size() ? s.size() : 1;
-  module_ += name + " = private unnamed_addr constant [" + std::to_string(n) +
-             " x i8] c\"" + irEscape(s.empty() ? std::string(" ") : s) + "\"\n";
-  strLits_[s] = name;
-  return name;
+llvm::GlobalVariable *IRGen::globalString(const std::string &s) {
+  std::string want = s.empty() ? " " : s;
+  auto *init = llvm::ConstantDataArray::getString(ctx_, want, false);
+  for (auto *g : strLits_)
+    if (g->getInitializer() == init) return g;
+  auto *g = new llvm::GlobalVariable(
+      mod_, init->getType(), true, llvm::GlobalValue::PrivateLinkage, init,
+      "str." + std::to_string(strLits_.size()));
+  strLits_.push_back(g);
+  return g;
+}
+
+// Get (or create) a declaration for a runtime `pli_*` function.
+llvm::Function *IRGen::runtimeFn(const std::string &name, llvm::Type *ret,
+                                 std::vector<llvm::Type *> args, bool vararg) {
+  llvm::FunctionType *ft = llvm::FunctionType::get(ret, args, vararg);
+  llvm::Function *f = mod_.getFunction(name);
+  if (f) return f;
+  return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
 // ---------------------------------------------------------------------------
 // module
 // ---------------------------------------------------------------------------
 std::string IRGen::run(Program &prog) {
-  module_ = ";; Generated by plic (PL/I -> LLVM), M0 wireframe\n";
-  if (!triple_.empty()) module_ += "target triple = \"" + triple_ + "\"\n";
-  module_ += "\n";
-
   emitGlobals();
 
+  // Pre-declare every procedure's functions/aliases so a call site resolves
+  // regardless of the order the (flattened) procedures are emitted in.
+  for (auto &p : prog.procs) declareProc(p.get());
   for (auto &p : prog.procs) emitProc(p.get());
 
   // C entry point: initialise the runtime, invoke the MAIN procedure,
@@ -77,56 +115,41 @@ std::string IRGen::run(Program &prog) {
     if (!prog.mainProc->params.empty())
       d_.error(prog.mainProc->loc,
                "parameters on the MAIN procedure are not implemented in this stage", "(2)");
-    funcs_ += "define i32 @main() {\nentry:\n";
-    funcs_ += "  call void @pli_rt_init()\n";
-    funcs_ += "  call void " + prog.mainProc->irName + "()\n";
-    funcs_ += "  call void @pli_rt_fini()\n";
-    funcs_ += "  ret i32 0\n}\n\n";
-  }
-
-  // Forward declarations for external C entries (DECLARE ... ENTRY, rule
-  // (38)). PL/I passes arguments by reference, so each parameter is a `ptr`.
-  std::string decls;
-  for (Symbol *e : sema_.entries()) {
-    std::string sig;
-    for (size_t i = 0; i < e->entryParams.size(); ++i) {
-      if (i) sig += ", ";
-      sig += "ptr";
+    llvm::Function *main =
+        llvm::Function::Create(llvm::FunctionType::get(b_.getInt32Ty(), false),
+                               llvm::Function::ExternalLinkage, "main", &mod_);
+    llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, "entry", main);
+    b_.SetInsertPoint(bb);
+    b_.CreateCall(runtimeFn("pli_rt_init", b_.getVoidTy(), {}), {});
+    llvm::Function *mfn = mod_.getFunction(prog.mainProc->irName.substr(1));
+    if (!mfn) {
+      mfn = llvm::Function::Create(llvm::FunctionType::get(b_.getVoidTy(), false),
+                                   llvm::Function::InternalLinkage,
+                                   prog.mainProc->irName.substr(1), &mod_);
+      llvm::BasicBlock *mb = llvm::BasicBlock::Create(ctx_, "entry", mfn);
+      b_.SetInsertPoint(mb);
+      b_.CreateRetVoid();
     }
-    decls += "declare void " + e->irName + "(" + sig + ")\n";
+    b_.SetInsertPoint(bb);
+    b_.CreateCall(mfn, {});
+    b_.CreateCall(runtimeFn("pli_rt_fini", b_.getVoidTy(), {}), {});
+    b_.CreateRet(i32(0));
   }
-  decls +=
-      "\n; ---- PL/I runtime (libpli) ----\n"
-      "declare void @pli_rt_init()\n"
-      "declare void @pli_rt_fini()\n"
-      "declare void @pli_stop()\n"
-      "declare void @pli_put_skip(i64)\n"
-      "declare void @pli_put_page()\n"
-      "declare void @pli_put_list_char(ptr, i64)\n"
-      "declare void @pli_put_list_fixed(i64)\n"
-      "declare void @pli_put_list_float(double)\n"
-      "declare void @pli_put_list_bit(i8)\n"
-      "declare void @pli_assign_char(ptr, i64, ptr, i64)\n"
-      "declare i64 @pli_assign_varying(ptr, i64, ptr, i64)\n"
-      "declare void @pli_concat(ptr, ptr, i64, ptr, i64)\n"
-      "declare void @pli_substr(ptr, i64, ptr, i64, i64, i64)\n"
-      "declare void @pli_substr_assign(ptr, i64, i64, i64, ptr, i64)\n"
-      "declare i64 @pli_index(ptr, i64, ptr, i64)\n"
-      "declare i64 @pli_mod_ll(i64, i64)\n"
-      "declare double @pli_mod_dd(double, double)\n"
-      "declare double @pli_round(double, i64)\n"
-      "declare void @pli_repeat(ptr, i64, ptr, i64, i64)\n"
-      "declare i64 @pli_verify(ptr, i64, ptr, i64)\n"
-      "declare void @pli_translate(ptr, i64, ptr, i64, ptr, i64, ptr, i64)\n"
-      "declare void @pli_high(ptr, i64)\n"
-      "declare void @pli_low(ptr, i64)\n"
-      "declare void @pli_date(ptr, i64)\n"
-      "declare void @pli_time(ptr, i64)\n"
-      "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
-      "declare double @llvm.pow.f64(double, double)\n"
-      "declare double @llvm.fabs.f64(double)\n";
 
-  return module_ + decls + "\n" + funcs_;
+  // Verify the module before serializing; a malformed IR will trip an
+  // assertion here rather than causing an opaque clang assembler crash.
+  if (llvm::verifyModule(mod_, &llvm::errs())) {
+    d_.error({}, "internal error: LLVM module verification failed", "");
+    return "";
+  }
+
+  // Serialize to a string for the driver / clang pipeline.
+  std::string ir;
+  llvm::raw_string_ostream os(ir);
+  os << "; Generated by plic (PL/I -> LLVM)\n";
+  if (!triple_.empty()) mod_.setTargetTriple(llvm::Triple(triple_));
+  mod_.print(os, nullptr);
+  return ir;
 }
 
 void IRGen::emitGlobals() {
@@ -134,7 +157,7 @@ void IRGen::emitGlobals() {
     if (!s->isStatic || s->kind != Symbol::Var) continue;
     const Type &t = s->ty;
     const Expr *ini = s->initExpr;  // INITIAL constant, rule (26)
-    std::string init;
+    llvm::Constant *init = nullptr;
     switch (t.k) {
       case TK::FixedBin:
       case TK::FixedDec: {
@@ -142,79 +165,76 @@ void IRGen::emitGlobals() {
         if (ini) v = ini->kind == Expr::FltLit ? (long long)ini->fval
                    : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
                    : ini->ival;
-        init = std::to_string(v);
+        init = llvm::ConstantInt::get(llvmTy(t), v, true);
         break;
       }
       case TK::Float: {
         double v = 0;
         if (ini) v = ini->kind == Expr::FltLit ? ini->fval : (double)ini->ival;
-        init = fmtDouble(v);
+        init = llvm::ConstantFP::get(b_.getDoubleTy(), v);
         break;
       }
       case TK::Bit: {
         int v = 0;
         if (ini) v = ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
                    : (ini->ival != 0 || ini->fval != 0);
-        init = std::to_string(v);
+        init = llvm::ConstantInt::get(b_.getInt8Ty(), v);
         break;
       }
       case TK::Char: {
-        // M0 blank-fills character storage; the spec leaves uninitialised
-        // AUTOMATIC storage undefined (see ADR-010).
         std::string text(t.len, ' ');
         if (ini) {
           for (int i = 0; i < t.len && i < (int)ini->sval.size(); ++i) text[i] = ini->sval[i];
         }
+        llvm::Constant *data = llvm::ConstantDataArray::getString(ctx_, text, false);
         if (t.varying) {
           size_t cur = ini ? std::min<size_t>(ini->sval.size(), (size_t)t.len) : 0;
-          init = "{ i32 " + std::to_string(cur) + ", [" + std::to_string(t.len) +
-                 " x i8] c\"" + irEscape(text) + "\" }";
+          init = llvm::ConstantStruct::get(
+              llvm::cast<llvm::StructType>(llvmTy(t)),
+              llvm::ConstantInt::get(b_.getInt32Ty(), cur), data);
         } else {
-          init = "c\"" + irEscape(text) + "\"";
+          init = data;
         }
         break;
       }
       case TK::Void: continue;
     }
-    module_ += s->irName + " = internal global " + t.llvmTy() + " " + init + "\n";
+    auto *g = new llvm::GlobalVariable(mod_, llvmTy(t), false,
+                                       llvm::GlobalValue::InternalLinkage, init,
+                                       s->irName.substr(1));
+    symAddr_[s] = g;
   }
-  module_ += "\n";
 }
 
-std::string IRGen::addressOf(Symbol *sym) {
-  // rule (8): an enclosing variable is reached through this procedure's
-  // static link (if this proc accesses it); otherwise it is this frame's own
-  // storage (globals: @g ; locals: %x.addr ; params: %x.ptr).
-  auto it = linkAddr_.find(sym);
-  if (it != linkAddr_.end()) return it->second;
-  return sym->irName;
+llvm::Value *IRGen::addressOf(Symbol *sym) {
+  // rule (8): an enclosing variable is reached through this frame's static
+  // link; otherwise it is this frame's own storage (globals / allocas /
+  // parameters). Both are recorded in symAddr_.
+  return symAddr_.count(sym) ? symAddr_[sym] : nullptr;
 }
 
 void IRGen::allocaLocals(Proc *p) {
   for (Symbol *s : p->localSyms) {
     if (s->kind != Symbol::Var) continue;
-    body_ += "  " + s->irName + " = alloca " + s->ty.llvmTy() + "\n";
+    llvm::Value *a = b_.CreateAlloca(llvmTy(s->ty), nullptr, s->irName.substr(1));
+    symAddr_[s] = a;
     if (s->ty.isChar()) {  // blank fill
       std::string blanks(s->ty.len, ' ');
-      std::string g = globalString(blanks);
+      llvm::Value *g = globalString(blanks);
       if (s->ty.varying) {
-        std::string lenp = fresh("lenp");
-        body_ += "  " + lenp + " = getelementptr inbounds " + s->ty.llvmTy() + ", ptr " +
-                 s->irName + ", i32 0, i32 0\n";
-        body_ += "  store i32 0, ptr " + lenp + "\n";
+        llvm::Value *lenp = b_.CreateStructGEP(llvmTy(s->ty), a, 0, "lenp");
+        b_.CreateStore(i32(0), lenp);
       } else {
-        body_ += "  call void @pli_assign_char(ptr " + s->irName + ", i64 " +
-                 std::to_string(s->ty.len) + ", ptr " + g + ", i64 0)\n";
+        b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+                      {a, i64(s->ty.len), g, i64(0)});
       }
     }
   }
 }
 
 // INITIAL attribute on AUTOMATIC variables (rule 26): runs on every
-// activation. INITIAL expressions are not passed through typeExpr, so the
-// literal is not typed; build a value of the declared type directly from the
-// folded literal (sema's initExpr), as the STATIC global path does. Declarations
-// may sit inside BEGIN/DO/IF bodies, so walk statements like sema does.
+// activation.
 static void collectDeclStmts(Stmt *s, std::vector<Stmt *> &out) {
   if (!s) return;
   if (s->kind == Stmt::Declare) { out.push_back(s); return; }
@@ -239,26 +259,26 @@ void IRGen::emitInitials(Proc *p) {
       switch (item.sym->ty.k) {
         case TK::Float: {
           double d = e->kind == Expr::FltLit ? e->fval : (double)e->ival;
-          v.reg = fmtDouble(d);
+          v.reg = flt(d);
           break;
         }
         case TK::Bit: {
           bool one = e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
                                              : (e->ival != 0 || e->fval != 0);
-          v.reg = one ? "true" : "false";
+          v.reg = b_.getInt1(one);
           break;
         }
         case TK::Char: {
           Val cv;
           cv.ty = item.sym->ty;
           cv.ptr = globalString(e->sval);
-          cv.len = std::to_string(e->sval.size());
+          cv.len = i64(e->sval.size());
           storeTo(item.sym, cv, item.loc);
           continue;
         }
         default: {  // Fixed
           long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
-          v.reg = std::to_string(val);
+          v.reg = llvm::ConstantInt::get(llvmTy(item.sym->ty), val, true);
           break;
         }
       }
@@ -267,34 +287,124 @@ void IRGen::emitInitials(Proc *p) {
   }
 }
 
-// Assign an LLVM block name to every labelled statement (rule (64)) so a GO TO
+// Assign an LLVM block to every labelled statement (rule (64)) so a GO TO
 // (rule (77)) can branch to it. Multiple labels on one statement alias one block.
 void IRGen::collectGotoBlocks(Stmt *s) {
   if (!s) return;
   if (!s->labels.empty()) {
     std::string blk = "L" + std::to_string(n_++);
-    for (const std::string &l : s->labels) labelBlocks_[l] = blk;
+    llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, blk, curFn_);
+    for (const std::string &l : s->labels) labelBlocks_[l] = bb;
   }
   if (s->thenS) collectGotoBlocks(s->thenS.get());
   if (s->elseS) collectGotoBlocks(s->elseS.get());
   for (auto &b : s->body) collectGotoBlocks(b.get());
 }
 
+// Pre-create a procedure's functions and aliases so a call site resolves
+// regardless of emission order. Plain procedures get one function (filled by
+// emitPlainProc); multi-entry procedures get the shared impl (filled by
+// emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
+void IRGen::declareProc(Proc *p) {
+  llvm::Type *ret = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
+  std::vector<Stmt *> entries;
+  for (auto &st : p->body)
+    if (st && st->kind == Stmt::Entry) entries.push_back(st.get());
+  auto aliasFor = [&](const std::string &en, llvm::Function *target) {
+    std::string alias = "PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + en;
+    llvm::GlobalAlias::create(llvm::GlobalValue::InternalLinkage, alias, target);
+  };
+
+  if (entries.empty()) {
+    std::vector<llvm::Type *> pt;
+    for (size_t i = 0; i < p->paramSyms.size(); ++i) pt.push_back(b_.getPtrTy());
+    for (size_t i = 0; i < p->env.size(); ++i) pt.push_back(b_.getPtrTy());  // links
+    llvm::FunctionType *ft = llvm::FunctionType::get(ret, pt, false);
+    llvm::Function *fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
+                                                p->irName.substr(1), &mod_);
+    for (const auto &en : p->entryNames) aliasFor(en, fn);
+    return;
+  }
+
+  // Multi-entry: the union of every entry point's parameters.
+  std::vector<Symbol *> uni;
+  auto push = [&](Symbol *s) {
+    if (std::find(uni.begin(), uni.end(), s) == uni.end()) uni.push_back(s);
+  };
+  for (Symbol *s : p->paramSyms) push(s);
+  for (Stmt *e : entries)
+    for (Symbol *s : e->entryParamSyms) push(s);
+
+  for (Stmt *e : entries) {
+    Type rt = e->entryIsFunction ? e->entryRetTy : Type::voidTy();
+    bool ok = (p->isFunction && e->entryIsFunction && rt.k == p->retTy.k) ||
+              (!p->isFunction && !e->entryIsFunction);
+    if (!ok)
+      d_.error(e->loc, "ENTRY result type differs from the procedure's; a mixed return type is not implemented in this stage", "(56)");
+  }
+
+  // Shared implementation (body filled by emitMultiEntryProc).
+  std::vector<llvm::Type *> pt;
+  for (size_t i = 0; i < uni.size(); ++i) pt.push_back(b_.getPtrTy());
+  for (size_t i = 0; i < p->env.size(); ++i) pt.push_back(b_.getPtrTy());
+  pt.push_back(b_.getInt64Ty());  // the entry selector
+  llvm::FunctionType *ift = llvm::FunctionType::get(ret, pt, false);
+  llvm::Function *impl = llvm::Function::Create(ift, llvm::Function::InternalLinkage,
+                                                p->irName.substr(1) + ".impl", &mod_);
+
+  // A thunk marshals one entry's arguments and tail-calls the shared impl.
+  int thunkN = 0;
+  auto thunk = [&](const std::vector<Symbol *> &mine, llvm::Value *selv) {
+    std::vector<llvm::Type *> sig;
+    for (size_t i = 0; i < mine.size(); ++i) sig.push_back(b_.getPtrTy());
+    for (size_t i = 0; i < p->env.size(); ++i) sig.push_back(b_.getPtrTy());  // links
+    llvm::FunctionType *tft = llvm::FunctionType::get(ret, sig, false);
+    llvm::Function *tf = llvm::Function::Create(tft, llvm::Function::InternalLinkage,
+                                                "entry.thunk." + std::to_string(thunkN++), &mod_);
+    llvm::BasicBlock *tb = llvm::BasicBlock::Create(ctx_, "entry", tf);
+    b_.SetInsertPoint(tb);
+    std::vector<llvm::Value *> args;
+    size_t targ = 0;
+    std::unordered_map<Symbol *, llvm::Value *> mineAddr;
+    for (Symbol *s : mine) mineAddr[s] = tf->getArg(targ++);
+    std::vector<llvm::Value *> links;
+    for (size_t i = 0; i < p->env.size(); ++i) links.push_back(tf->getArg(targ++));
+    for (Symbol *u : uni)
+      args.push_back(mineAddr.count(u) ? mineAddr[u]
+                                       : llvm::UndefValue::get(b_.getPtrTy()));
+    for (auto *l : links) args.push_back(l);
+    args.push_back(selv);
+    llvm::CallInst *call = b_.CreateCall(ift, impl, args);
+    call->setTailCall(true);
+    if (ret->isVoidTy()) b_.CreateRetVoid();
+    else b_.CreateRet(call);
+    return tf;
+  };
+
+  llvm::Function *t0 = thunk(p->paramSyms, i64(0));
+  t0->setName(p->irName.substr(1));
+  for (const auto &en : p->entryNames) aliasFor(en, t0);
+  for (size_t i = 0; i < entries.size(); ++i) {
+    llvm::Function *tf = thunk(entries[i]->entryParamSyms, i64(i + 1));
+    tf->setName(entryIrName(p, entries[i]).substr(1));
+  }
+}
+
 void IRGen::emitProc(Proc *p) {
   curProc_ = p;
-  body_.clear();
-  terminated_ = false;
   labelBlocks_.clear();
-  for (auto &st : p->body) collectGotoBlocks(st.get());
+  symAddr_.clear();
+  // Re-seed globals: static storage resolves the same in every procedure.
+  for (Symbol *s : sema_.storage())
+    if (s->isStatic && s->kind == Symbol::Var)
+      symAddr_[s] = mod_.getGlobalVariable(s->irName.substr(1));
 
   if (p->isFunction && p->retTy.isChar()) {
     d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
   }
-  const std::string retLLVM = p->isFunction ? p->retTy.llvmTy() : "void";
+  llvm::Type *retLLVM = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
 
-  // rule (56): ENTRY statements declare alternate entry points, each with its
-  // own parameters/result type. When present the body is split into segments
-  // (one per entry point) inside a shared implementation function.
+  // rule (56): ENTRY statements declare alternate entry points.
   std::vector<Stmt *> entries;
   for (auto &st : p->body)
     if (st && st->kind == Stmt::Entry) entries.push_back(st.get());
@@ -307,52 +417,50 @@ void IRGen::emitProc(Proc *p) {
 }
 
 // One procedure, one LLVM function: the ordinary path (no ENTRY statements).
-void IRGen::emitPlainProc(Proc *p, const std::string &retLLVM) {
-  std::string params;
-  std::string paramTys;  // the parameter types only, for the entry aliases
-  for (size_t i = 0; i < p->paramSyms.size(); ++i) {
-    if (i) { params += ", "; paramTys += ", "; }
-    params += "ptr " + p->paramSyms[i]->irName;
-    paramTys += "ptr";
-  }
-  std::string linkTys;
-  setupLinks(p, params, linkTys);   // static links (rule (8)); updates linkAddr_
-  if (!linkTys.empty()) { if (!paramTys.empty()) paramTys += ", "; paramTys += linkTys; }
+// The function and its entry-namelist aliases were pre-created by declareProc.
+void IRGen::emitPlainProc(Proc *p, llvm::Type *retLLVM) {
+  llvm::Function *fn = mod_.getFunction(p->irName.substr(1));
+  curFn_ = fn;
+  // The entry block must be the function's first block (so it is the real
+  // entry, and the allocas it holds dominate every reachable block).
+  llvm::BasicBlock *entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
+  for (auto &st : p->body) collectGotoBlocks(st.get());
 
-  body_ += "entry:\n";
+  // Parameter arguments become their symbols' addresses (PL/I by reference);
+  // the trailing args are the static links (rule (8)).
+  size_t ai = 0;
+  for (Symbol *s : p->paramSyms) symAddr_[s] = fn->getArg(ai++);
+  for (size_t i = 0; i < p->env.size(); ++i) symAddr_[p->env[i]] = fn->getArg(ai++);
+
+  b_.SetInsertPoint(entry);
+  terminated_ = false;
+
   allocaLocals(p);
-
   emitInitials(p);  // INITIAL attribute on AUTOMATIC variables (rule 26)
 
   for (auto &st : p->body) emitStmt(st.get());
 
   if (!terminated_) {
     if (p->isFunction)
-      body_ += "  ret " + retLLVM + " 0\n";  // fall-off: return a zero value
+      b_.CreateRet(llvm::Constant::getNullValue(retLLVM));  // fall-off: return a zero value
     else
-      body_ += "  ret void\n";
+      b_.CreateRetVoid();
   }
-
-  funcs_ += "define internal " + retLLVM + " " + p->irName + "(" + params + ") {\n" + body_ + "}\n\n";
-  // rule (3) entry-namelist: each extra name is an internal alias for the same
-  // body, so the symbol exists and a call through any entry point works.
-  for (const auto &en : p->entryNames) {
-    std::string alias = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + en;
-    funcs_ += alias + " = internal alias " + retLLVM + " (" + paramTys + "), " +
-              retLLVM + " (" + paramTys + ")* " + p->irName + "\n";
-  }
+  closeBlocks();
+  curFn_ = nullptr;
 }
 
-// rule (56): a procedure with ENTRY statements. One shared implementation
-// function carries the whole body split into segments (each entry point starts
-// a segment); a small thunk per entry name marshals that entry's arguments and
-// tail-calls the implementation, so every entry point has its own signature.
-// All parameters (procedure + every entry) live in the shared function, so the
-// body can reference any of them; a thunk passes `undef` for the entries not
-// reached through it (those parameters are unused on that path).
-void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, const std::string &retLLVM) {
-  // The union of every entry point's parameters, deduplicated by symbol, in a
-  // stable order: the procedure's own list first, then each ENTRY's in order.
+// rule (56): a procedure with ENTRY statements. The shared implementation
+// function (pre-created by declareProc) carries the whole body split into
+// segments; each entry point's thunk was built by declareProc.
+void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, llvm::Type *retLLVM) {
+  llvm::Function *impl = mod_.getFunction(p->irName.substr(1) + ".impl");
+  curFn_ = impl;
+  // The entry block must be the function's first block (so it is the real
+  // entry and its allocas dominate every reachable segment block).
+  llvm::BasicBlock *entry = llvm::BasicBlock::Create(ctx_, "entry", impl);
+  for (auto &st : p->body) collectGotoBlocks(st.get());
+
   std::vector<Symbol *> uni;
   auto push = [&](Symbol *s) {
     if (std::find(uni.begin(), uni.end(), s) == uni.end()) uni.push_back(s);
@@ -361,116 +469,45 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, cons
   for (Stmt *e : entries)
     for (Symbol *s : e->entryParamSyms) push(s);
 
-  // Return type must be uniform across all entry points, since one shared body
-  // returns one type. Diagnose an unsupported mix rather than emit bad IR.
-  for (Stmt *e : entries) {
-    Type rt = e->entryIsFunction ? e->entryRetTy : Type::voidTy();
-    bool ok = (p->isFunction && e->entryIsFunction && rt.k == p->retTy.k) ||
-              (!p->isFunction && !e->entryIsFunction);
-    if (!ok)
-      d_.error(e->loc, "ENTRY result type differs from the procedure's; a mixed return type is not implemented in this stage", "(56)");
-  }
+  size_t ai = 0;
+  for (Symbol *s : uni) symAddr_[s] = impl->getArg(ai++);
+  for (size_t i = 0; i < p->env.size(); ++i) symAddr_[p->env[i]] = impl->getArg(ai++);
+  llvm::Value *sel = impl->getArg(ai++);
 
-  const std::string impl = p->irName + ".impl";
-  const std::string sel = "%entrysel";
+  b_.SetInsertPoint(entry);
+  terminated_ = false;
 
-  // ---- shared implementation function ----
-  std::string params;  // union of every entry point's parameters
-  for (size_t i = 0; i < uni.size(); ++i) {
-    if (i) params += ", ";
-    params += "ptr " + uni[i]->irName;
-  }
-  std::string linkTys;
-  setupLinks(p, params, linkTys);  // static links (rule (8)); sets linkAddr_
-  if (!params.empty()) params += ", ";
-  params += "i64 " + sel;
-
-  body_ += "entry:\n";
   allocaLocals(p);
-
-  // INITIAL attribute on AUTOMATIC variables (rule 26): runs on every
-  // activation regardless of which entry point was used.
   emitInitials(p);
 
   // Entry selector: dispatch to the segment each call entered through.
-  body_ += "  switch i64 " + sel + ", label %e.seg.0 [";
-  for (size_t i = 0; i < entries.size(); ++i) {
-    body_ += " i64 " + std::to_string(i + 1) + ", label %e.seg." + std::to_string(i + 1);
+  std::vector<llvm::BasicBlock *> segs;
+  for (size_t i = 0; i <= entries.size(); ++i) {
+    llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, "e.seg." + std::to_string(i), impl);
+    segs.push_back(bb);
   }
-  body_ += " ]\n";
-  terminated_ = false;
+  llvm::SwitchInst *sw = b_.CreateSwitch(sel, segs[0], entries.size());
+  for (size_t i = 0; i < entries.size(); ++i)
+    sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), i + 1), segs[i + 1]);
+  terminated_ = true;
 
   // Segment 0 is the procedure's own start; each ENTRY begins the next segment.
   size_t seg = 0;
-  body_ += "e.seg.0:\n";
-  terminated_ = false;
+  startBlock(segs[0]);
   for (auto &st : p->body) {
     if (st && st->kind == Stmt::Entry) {
       ++seg;
-      body_ += "e.seg." + std::to_string(seg) + ":\n";
-      terminated_ = false;  // fall through from the previous segment
+      startBlock(segs[seg]);  // fall through from the previous segment
       continue;
     }
     emitStmt(st.get());
   }
   if (!terminated_) {
-    if (p->isFunction) body_ += "  ret " + retLLVM + " 0\n";
-    else body_ += "  ret void\n";
+    if (p->isFunction) b_.CreateRet(llvm::Constant::getNullValue(retLLVM));
+    else b_.CreateRetVoid();
   }
-  funcs_ += "define internal " + retLLVM + " " + impl + "(" + params + ") {\n" + body_ + "}\n\n";
-
-  // ---- entry-point thunks ----
-  // A thunk tail-calls the shared body with its own arguments (for its own
-  // parameters), `undef` for the rest, and its static links, then returns.
-  // Link parameters are named %lnk.0..%lnk.(n-1), matching the impl's.
-  std::string linkSig;
-  std::string linkArgs;
-  for (size_t i = 0; i < p->env.size(); ++i) {
-    if (i) { linkSig += ", "; linkArgs += ", "; }
-    linkSig += "ptr %lnk." + std::to_string(i);
-    linkArgs += "%lnk." + std::to_string(i);
-  }
-  auto join = [](const std::vector<std::string> &v) {
-    std::string s;
-    for (size_t i = 0; i < v.size(); ++i) { if (i) s += ", "; s += v[i]; }
-    return s;
-  };
-  auto thunk = [&](const std::vector<Symbol *> &mine, const std::string &selv) {
-    std::vector<std::string> sig;
-    for (Symbol *s : mine) sig.push_back("ptr " + s->irName);
-    if (!linkSig.empty()) sig.push_back(linkSig);
-    std::vector<std::string> args;
-    for (Symbol *u : uni) {
-      bool own = std::find(mine.begin(), mine.end(), u) != mine.end();
-      args.push_back("ptr " + std::string(own ? u->irName : "undef"));
-    }
-    if (!linkArgs.empty()) args.push_back(linkArgs);
-    args.push_back(selv);
-    std::string b;
-    std::string call = "tail call " + retLLVM + " " + impl + "(" + join(args) + ")";
-    if (retLLVM == "void") {
-      b = "entry:\n  " + call + "\n  ret void\n";
-    } else {
-      std::string r = fresh("r");
-      b = "entry:\n  " + r + " = " + call + "\n  ret " + retLLVM + " " + r + "\n";
-    }
-    return std::make_pair(join(sig), b);
-  };
-
-  // Segment 0: the procedure's own name (and its entry-namelist aliases).
-  auto t0 = thunk(p->paramSyms, "i64 0");
-  funcs_ += "define internal " + retLLVM + " " + p->irName + "(" + t0.first + ") {\n" + t0.second + "}\n\n";
-  for (const auto &en : p->entryNames) {
-    std::string alias = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + en;
-    funcs_ += alias + " = internal alias " + retLLVM + " (" + t0.first + "), " +
-              retLLVM + " (" + t0.first + ")* " + p->irName + "\n";
-  }
-  // Each ENTRY statement's name.
-  for (size_t i = 0; i < entries.size(); ++i) {
-    auto t = thunk(entries[i]->entryParamSyms, "i64 " + std::to_string(i + 1));
-    std::string fname = entryIrName(p, entries[i]);
-    funcs_ += "define internal " + retLLVM + " " + fname + "(" + t.first + ") {\n" + t.second + "}\n\n";
-  }
+  closeBlocks();
+  curFn_ = nullptr;
 }
 
 std::string IRGen::entryIrName(Proc *p, Stmt *e) {
@@ -478,55 +515,15 @@ std::string IRGen::entryIrName(Proc *p, Stmt *e) {
          "$entry$" + e->name;
 }
 
-// Declare this procedure's static-link parameters (one per enclosing variable
-// in `env`) and remember their irNames in linkAddr_, so addressOf() routes
-// references to those variables through the link. Returns the parameter list
-// fragment ("ptr %lnk.0, ptr %lnk.1") and its type-only form for aliases.
-void IRGen::setupLinks(Proc *p, std::string &linkParams, std::string &linkTypes) {
-  linkAddr_.clear();
-  for (size_t i = 0; i < p->env.size(); ++i) {
-    std::string nm = "%lnk." + std::to_string(i);
-    if (!linkParams.empty()) { linkParams += ", "; linkTypes += ", "; }
-    linkParams += "ptr " + nm;
-    linkTypes += "ptr";
-    linkAddr_[p->env[i]] = nm;
-  }
-}
-
-// The static-link arguments a call to `callee` needs, evaluated in the current
-// procedure's frame: a variable owned by this proc is its own address, one
-// owned higher up is this proc's already-received link (threaded through).
-std::string IRGen::linkArgsFor(Proc *callee) {
-  std::string args;
-  for (Symbol *v : callee->env) {
-    // Reaching a variable owned by a procedure between this one and the callee
-    // (a "cousin" call) is not implemented here — diagnose it, since addressOf
-    // would otherwise resolve to a frame this procedure does not hold.
-    if (v->owner != curProc_ &&
-        std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
-      d_.error(callee->loc,
-               "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
-      continue;
-    }
-    if (!args.empty()) args += ", ";
-    args += "ptr " + addressOf(v);
-  }
-  return args;
-}
-
 // ---------------------------------------------------------------------------
 // statements
 // ---------------------------------------------------------------------------
 void IRGen::emitStmt(Stmt *s) {
   if (!s) return;
-  // A labelled statement is a GO TO target (rule (77)) and must begin a new
-  // basic block, whether reached by fall-through or by a branch.
   if (!s->labels.empty()) {
-    emitLabel(labelBlocks_[s->labels.front()]);
-    terminated_ = false;
+    startBlock(labelBlocks_[s->labels.front()]);
   } else if (terminated_) {
-    // Unreachable code: PL/I allows it (e.g. after STOP); start a new block.
-    emitLabel(fresh("dead").substr(1));
+    newBlock();  // unreachable code (e.g. after STOP): start a fresh block
   }
   switch (s->kind) {
     case Stmt::Null:
@@ -545,32 +542,28 @@ void IRGen::emitStmt(Stmt *s) {
     case Stmt::CallS: emitCall(s); break;
     case Stmt::Return: {
       if (curProc_->isFunction) {
-        // rule (81): RETURN(value) supplies the function result.
         Val v = emitExpr(s->value.get());
         Val rv = convert(v, curProc_->retTy, s->loc);
-        std::string reg = rv.reg;
+        llvm::Value *reg = rv.reg;
         if (curProc_->retTy.isBit()) {  // BIT returns are held in i8
-          std::string z = fresh("retz");
-          body_ += "  " + z + " = zext i1 " + reg + " to i8\n";
-          reg = z;
+          reg = b_.CreateZExt(reg, b_.getInt8Ty(), "retz");
         }
-        emit("ret " + curProc_->retTy.llvmTy() + " " + reg);
+        b_.CreateRet(reg);
       } else {
-        emit("ret void");
+        b_.CreateRetVoid();
       }
       terminated_ = true;
       break;
     }
     case Stmt::Stop:
-      emit("call void @pli_stop()");
-      emit("unreachable");
+      b_.CreateCall(runtimeFn("pli_stop", b_.getVoidTy(), {}), {});
+      b_.CreateUnreachable();
       terminated_ = true;
       break;
     case Stmt::Leave:
       break;
     case Stmt::Goto:
-      // rule (77): unconditional branch to the labelled statement.
-      emit("br label %" + labelBlocks_[s->name]);
+      b_.CreateBr(labelBlocks_[s->name]);
       terminated_ = true;
       break;
   }
@@ -578,18 +571,17 @@ void IRGen::emitStmt(Stmt *s) {
 
 void IRGen::emitAssign(Stmt *s) {
   if (!s->target) return;
-  // SUBSTR pseudo-variable (M2): substr(v, i, n) = x overwrites part of the
-  // string variable v in place (rule (86) reference on the left of '=').
   if (s->target->kind == Expr::Call && s->target->name == "SUBSTR") {
     Expr *t = s->target.get();
-    Val sv = emitExpr(t->args[0].get());      // the string variable's data ptr
+    Val sv = emitExpr(t->args[0].get());
     Symbol *sym = t->args[0]->sym;
     Val start = emitExpr(t->args[1].get());
     Val len = emitExpr(t->args[2].get());
     Val rhs = emitExpr(s->value.get());
-    body_ += "  call void @pli_substr_assign(ptr " + sv.ptr + ", i64 " +
-             std::to_string(sym->ty.len) + ", i64 " + toI64(start) + ", i64 " + toI64(len) +
-             ", ptr " + rhs.ptr + ", i64 " + rhs.len + ")\n";
+    b_.CreateCall(runtimeFn("pli_substr_assign", b_.getVoidTy(),
+                            {b_.getPtrTy(), b_.getInt64Ty(), b_.getInt64Ty(),
+                             b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+                  {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
   if (s->target->kind != Expr::VarRef || !s->target->sym) return;
@@ -599,40 +591,43 @@ void IRGen::emitAssign(Stmt *s) {
 
 void IRGen::emitIf(Stmt *s) {
   Val c = emitExpr(s->cond.get());
-  std::string cond = toI1(c, s->loc);
+  llvm::Value *cond = toI1(c, s->loc);
   std::string id = std::to_string(n_++);
-  std::string thenL = "if.then." + id, elseL = "if.else." + id, endL = "if.end." + id;
-  emit("br i1 " + cond + ", label %" + thenL + ", label %" + (s->elseS ? elseL : endL));
+  llvm::BasicBlock *thenL = llvm::BasicBlock::Create(ctx_, "if.then." + id, curFn_);
+  llvm::BasicBlock *endL = llvm::BasicBlock::Create(ctx_, "if.end." + id, curFn_);
+  llvm::BasicBlock *elseL = s->elseS ? llvm::BasicBlock::Create(ctx_, "if.else." + id, curFn_) : nullptr;
+  b_.CreateCondBr(cond, thenL, s->elseS ? elseL : endL);
   terminated_ = true;
 
-  emitLabel(thenL);
+  startBlock(thenL);
   emitStmt(s->thenS.get());
   branch(endL);
 
   if (s->elseS) {
-    emitLabel(elseL);
+    startBlock(elseL);
     emitStmt(s->elseS.get());
     branch(endL);
   }
-  emitLabel(endL);
+  startBlock(endL);
 }
 
 void IRGen::emitDoWhile(Stmt *s) {
   std::string id = std::to_string(n_++);
-  std::string condL = "do.cond." + id, bodyL = "do.body." + id, endL = "do.end." + id;
+  llvm::BasicBlock *condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
+  llvm::BasicBlock *bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
+  llvm::BasicBlock *endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);
   branch(condL);
-  emitLabel(condL);
+  startBlock(condL);
   Val c = emitExpr(s->cond.get());
-  emit("br i1 " + toI1(c, s->loc) + ", label %" + bodyL + ", label %" + endL);
+  b_.CreateCondBr(toI1(c, s->loc), bodyL, endL);
   terminated_ = true;
-  emitLabel(bodyL);
+  startBlock(bodyL);
   for (auto &b : s->body) emitStmt(b.get());
   branch(condL);
-  emitLabel(endL);
+  startBlock(endL);
 }
 
 // DO v = e1 [TO e2] [BY e3] [WHILE(e4)];                    rules (71)-(73)
-// e1/e2/e3 are evaluated once, before the first iteration.
 void IRGen::emitDoIter(Stmt *s) {
   Symbol *ctl = s->sym;
   if (!ctl) return;
@@ -642,11 +637,10 @@ void IRGen::emitDoIter(Stmt *s) {
   Val from = emitExpr(s->from.get());
   storeTo(ctl, from, s->loc);
 
-  std::string toAddr, byAddr;
+  llvm::Value *toAddr = nullptr, *byAddr = nullptr;
   if (s->to) {
     Val to = convert(emitExpr(s->to.get()), ct, s->loc);
-    toAddr = "%do.to." + id;
-    body_ += "  " + toAddr + " = alloca " + ct.llvmTy() + "\n";
+    toAddr = b_.CreateAlloca(llvmTy(ct), nullptr, "do.to." + id);
     storeScalarTo(toAddr, ct, to);
   }
   Val by;
@@ -654,115 +648,113 @@ void IRGen::emitDoIter(Stmt *s) {
     by = convert(emitExpr(s->by.get()), ct, s->loc);
   } else {
     by.ty = ct;
-    by.reg = ct.k == TK::Float ? fmtDouble(1.0) : "1";
+    by.reg = ct.k == TK::Float ? flt(1.0)
+                               : llvm::ConstantInt::get(llvmTy(ct), 1, true);
   }
-  byAddr = "%do.by." + id;
-  body_ += "  " + byAddr + " = alloca " + ct.llvmTy() + "\n";
+  byAddr = b_.CreateAlloca(llvmTy(ct), nullptr, "do.by." + id);
   storeScalarTo(byAddr, ct, by);
 
-  std::string condL = "do.cond." + id, bodyL = "do.body." + id,
-              stepL = "do.step." + id, endL = "do.end." + id,
-              upL = "do.up." + id, downL = "do.down." + id, testL = "do.test." + id;
+  llvm::BasicBlock *condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
+  llvm::BasicBlock *bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
+  llvm::BasicBlock *stepL = llvm::BasicBlock::Create(ctx_, "do.step." + id, curFn_);
+  llvm::BasicBlock *endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);
+  llvm::BasicBlock *upL = llvm::BasicBlock::Create(ctx_, "do.up." + id, curFn_);
+  llvm::BasicBlock *downL = llvm::BasicBlock::Create(ctx_, "do.down." + id, curFn_);
+  llvm::BasicBlock *testL = llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_);
 
   branch(condL);
-  emitLabel(condL);
+  startBlock(condL);
 
   if (s->to) {
-    // Direction depends on the sign of BY, which may be dynamic.
     Val cv = loadSym(ctl, ct);
-    std::string tv = fresh("to");
-    body_ += "  " + tv + " = load " + ct.llvmTy() + ", ptr " + toAddr + "\n";
-    std::string bv = fresh("by");
-    body_ += "  " + bv + " = load " + ct.llvmTy() + ", ptr " + byAddr + "\n";
-    std::string zero = ct.k == TK::Float ? fmtDouble(0.0) : "0";
-    std::string neg = fresh("negstep");
+    llvm::Value *tv = b_.CreateLoad(llvmTy(ct), toAddr, "to");
+    llvm::Value *bv = b_.CreateLoad(llvmTy(ct), byAddr, "by");
+    llvm::Value *zero = ct.k == TK::Float ? flt(0.0)
+                                          : llvm::Constant::getNullValue(llvmTy(ct));
+    llvm::Value *neg;
     if (ct.k == TK::Float)
-      body_ += "  " + neg + " = fcmp olt double " + bv + ", " + zero + "\n";
+      neg = b_.CreateFCmpOLT(bv, zero, "negstep");
     else
-      body_ += "  " + neg + " = icmp slt " + ct.llvmTy() + " " + bv + ", " + zero + "\n";
-    emit("br i1 " + neg + ", label %" + downL + ", label %" + upL);
+      neg = b_.CreateICmpSLT(bv, zero, "negstep");
+    b_.CreateCondBr(neg, downL, upL);
     terminated_ = true;
 
-    emitLabel(upL);
-    std::string cu = fresh("cmpup");
-    if (ct.k == TK::Float)
-      body_ += "  " + cu + " = fcmp ole double " + cv.reg + ", " + tv + "\n";
-    else
-      body_ += "  " + cu + " = icmp sle " + ct.llvmTy() + " " + cv.reg + ", " + tv + "\n";
-    emit("br i1 " + cu + ", label %" + testL + ", label %" + endL);
+    startBlock(upL);
+    llvm::Value *cu = ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv, "cmpup")
+                                        : b_.CreateICmpSLE(cv.reg, tv, "cmpup");
+    b_.CreateCondBr(cu, testL, endL);
     terminated_ = true;
 
-    emitLabel(downL);
-    std::string cd = fresh("cmpdn");
-    if (ct.k == TK::Float)
-      body_ += "  " + cd + " = fcmp oge double " + cv.reg + ", " + tv + "\n";
-    else
-      body_ += "  " + cd + " = icmp sge " + ct.llvmTy() + " " + cv.reg + ", " + tv + "\n";
-    emit("br i1 " + cd + ", label %" + testL + ", label %" + endL);
+    startBlock(downL);
+    llvm::Value *cd = ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv, "cmpdn")
+                                        : b_.CreateICmpSGE(cv.reg, tv, "cmpdn");
+    b_.CreateCondBr(cd, testL, endL);
     terminated_ = true;
 
-    emitLabel(testL);
+    startBlock(testL);
   }
 
   if (s->cond) {  // WHILE clause
     Val w = emitExpr(s->cond.get());
-    emit("br i1 " + toI1(w, s->loc) + ", label %" + bodyL + ", label %" + endL);
+    b_.CreateCondBr(toI1(w, s->loc), bodyL, endL);
     terminated_ = true;
   } else {
     branch(bodyL);
   }
 
-  emitLabel(bodyL);
+  startBlock(bodyL);
   for (auto &b : s->body) emitStmt(b.get());
   branch(stepL);
 
-  emitLabel(stepL);
+  startBlock(stepL);
   Val cv = loadSym(ctl, ct);
-  std::string bv = fresh("by");
-  body_ += "  " + bv + " = load " + ct.llvmTy() + ", ptr " + byAddr + "\n";
-  std::string nx = fresh("next");
-  if (ct.k == TK::Float)
-    body_ += "  " + nx + " = fadd double " + cv.reg + ", " + bv + "\n";
-  else
-    body_ += "  " + nx + " = add " + ct.llvmTy() + " " + cv.reg + ", " + bv + "\n";
+  llvm::Value *bv = b_.CreateLoad(llvmTy(ct), byAddr, "by");
+  llvm::Value *nx = ct.k == TK::Float ? b_.CreateFAdd(cv.reg, bv, "next")
+                                      : b_.CreateAdd(cv.reg, bv, "next");
   Val nv;
   nv.ty = ct;
   nv.reg = nx;
   storeTo(ctl, nv, s->loc);
   branch(condL);
 
-  emitLabel(endL);
+  startBlock(endL);
 }
 
 void IRGen::emitPut(Stmt *s) {
-  // Options take effect before data transmission (Y33-6003 PUT, rule 5).
-  if (s->page) emit("call void @pli_put_page()");
+  if (s->page)
+    b_.CreateCall(runtimeFn("pli_put_page", b_.getVoidTy(), {}), {});
   if (s->skip) {
-    std::string n = "1";
+    llvm::Value *n = i64(1);
     if (s->skipCount) {
       Val v = emitExpr(s->skipCount.get());
       n = toI64(v);
     }
-    emit("call void @pli_put_skip(i64 " + n + ")");
+    b_.CreateCall(runtimeFn("pli_put_skip", b_.getVoidTy(), {b_.getInt64Ty()}), {n});
   }
   for (auto &item : s->items) {
     Val v = emitExpr(item.get());
     switch (v.ty.k) {
       case TK::Char:
-        emit("call void @pli_put_list_char(ptr " + v.ptr + ", i64 " + v.len + ")");
+        b_.CreateCall(runtimeFn("pli_put_list_char", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty()}),
+                      {v.ptr, v.len});
         break;
       case TK::Float:
-        emit("call void @pli_put_list_float(double " + v.reg + ")");
+        b_.CreateCall(runtimeFn("pli_put_list_float", b_.getVoidTy(),
+                                {b_.getDoubleTy()}),
+                      {v.reg});
         break;
       case TK::Bit: {
-        std::string b = fresh("bit");
-        body_ += "  " + b + " = zext i1 " + v.reg + " to i8\n";
-        emit("call void @pli_put_list_bit(i8 " + b + ")");
+        llvm::Value *bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+        b_.CreateCall(runtimeFn("pli_put_list_bit", b_.getVoidTy(), {b_.getInt8Ty()}),
+                      {bit});
         break;
       }
       case TK::FixedBin:
       case TK::FixedDec:
-        emit("call void @pli_put_list_fixed(i64 " + toI64(v) + ")");
+        b_.CreateCall(runtimeFn("pli_put_list_fixed", b_.getVoidTy(),
+                                {b_.getInt64Ty()}),
+                      {toI64(v)});
         break;
       case TK::Void:
         break;
@@ -774,19 +766,20 @@ void IRGen::emitCall(Stmt *s) {
   if (!s->sym) return;
   Symbol *calleeSym = s->sym;
   Proc *callee = calleeSym->proc;
-  // rule (56): calling an alternate entry point uses its own thunk and params.
   Stmt *en = calleeSym->entry;
-  // A defined procedure uses its mangled Proc symbol; an external C entry
-  // uses the ProcName symbol's irName (@NAME); an ENTRY uses its own thunk.
-  const std::string calleeName =
-      en ? entryIrName(callee, en) : (callee ? callee->irName : calleeSym->irName);
+  llvm::Function *calleeFn;
+  if (en)
+    calleeFn = mod_.getFunction(entryIrName(callee, en).substr(1));
+  else if (callee)
+    calleeFn = mod_.getFunction(callee->irName.substr(1));
+  else
+    calleeFn = mod_.getFunction(calleeSym->irName.substr(1));
   std::vector<Symbol *> calleeParams =
       en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol *>());
-  std::string args;
+
+  std::vector<llvm::Value *> args;
   for (size_t i = 0; i < s->args.size(); ++i) {
     Expr *a = s->args[i].get();
-    // The expected parameter type comes from the entry point's parameters
-    // (the procedure's, the ENTRY's, or an external C ENTRY descriptor).
     Type pty;
     if (en || callee) {
       if (i < calleeParams.size()) pty = calleeParams[i]->ty;
@@ -795,51 +788,52 @@ void IRGen::emitCall(Stmt *s) {
       if (i < calleeSym->entryParams.size()) pty = calleeSym->entryParams[i];
       else break;
     }
-    std::string addr;
+    llvm::Value *addr;
     bool direct = a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
                   a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
                   a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
     if (direct) {
-      // True by-reference passing (PL/I default).
       addr = addressOf(a->sym);
     } else {
-      // Conversion required: pass a dummy argument (Y33-6003 dummy arguments).
-      addr = fresh("dummy");
-      body_ += "  " + addr + " = alloca " + pty.llvmTy() + "\n";
+      addr = b_.CreateAlloca(llvmTy(pty), nullptr, "dummy");
       Val v = emitExpr(a);
       if (pty.isChar()) {
         Val cv = v;
         if (pty.varying) {
-          std::string dp = fresh("vdata");
-          body_ += "  " + dp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
-                   ", i32 0, i32 1\n";
-          std::string ln = fresh("vlen");
-          body_ += "  " + ln + " = call i64 @pli_assign_varying(ptr " + dp + ", i64 " +
-                   std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
-          std::string lp = fresh("vlenp");
-          body_ += "  " + lp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
-                   ", i32 0, i32 0\n";
-          std::string t32 = fresh("l32");
-          body_ += "  " + t32 + " = trunc i64 " + ln + " to i32\n";
-          body_ += "  store i32 " + t32 + ", ptr " + lp + "\n";
+          llvm::Value *dp = b_.CreateStructGEP(llvmTy(pty), addr, 1, "vdata");
+          llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying", b_.getInt64Ty(),
+                                                    {b_.getPtrTy(), b_.getInt64Ty(),
+                                                     b_.getPtrTy(), b_.getInt64Ty()}),
+                                          {dp, i64(pty.len), cv.ptr, cv.len});
+          llvm::Value *lp = b_.CreateStructGEP(llvmTy(pty), addr, 0, "vlenp");
+          b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
         } else {
-          body_ += "  call void @pli_assign_char(ptr " + addr + ", i64 " +
-                   std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
+          b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
+                                  {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+                        {addr, i64(pty.len), cv.ptr, cv.len});
         }
       } else {
         Val cv = convert(v, pty, a->loc);
         storeScalarTo(addr, pty, cv);
       }
     }
-    if (!args.empty()) args += ", ";
-    args += "ptr " + addr;
+    args.push_back(addr);
   }
   // rule (8): pass the callee's static links (enclosing automatic variables).
   if (callee) {
-    std::string la = linkArgsFor(callee);
-    if (!la.empty()) { if (!args.empty()) args += ", "; args += la; }
+    for (Symbol *v : callee->env) {
+      // "cousin" call: resolve via addressOf; for a non-adjacent variable
+      // so diagnose it (same rule as before).
+      if (v->owner != curProc_ &&
+          std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
+        d_.error(callee->loc,
+                 "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
+        continue;
+      }
+      args.push_back(addressOf(v));
+    }
   }
-  emit("call void " + calleeName + "(" + args + ")");
+  b_.CreateCall(calleeFn, args);
 }
 
 // ---------------------------------------------------------------------------
@@ -848,52 +842,40 @@ void IRGen::emitCall(Stmt *s) {
 Val IRGen::loadSym(Symbol *sym, const Type &ty) {
   Val v;
   v.ty = ty;
-  std::string addr = addressOf(sym);
+  llvm::Value *addr = addressOf(sym);
   if (ty.isChar()) {
     if (ty.varying) {
-      std::string dp = fresh("vdata");
-      body_ += "  " + dp + " = getelementptr inbounds " + ty.llvmTy() + ", ptr " + addr +
-               ", i32 0, i32 1\n";
-      std::string lp = fresh("vlenp");
-      body_ += "  " + lp + " = getelementptr inbounds " + ty.llvmTy() + ", ptr " + addr +
-               ", i32 0, i32 0\n";
-      std::string l32 = fresh("l32");
-      body_ += "  " + l32 + " = load i32, ptr " + lp + "\n";
-      std::string l64 = fresh("l64");
-      body_ += "  " + l64 + " = sext i32 " + l32 + " to i64\n";
+      llvm::Value *dp = b_.CreateStructGEP(llvmTy(ty), addr, 1, "vdata");
+      llvm::Value *lp = b_.CreateStructGEP(llvmTy(ty), addr, 0, "vlenp");
+      llvm::Value *l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "l32");
       v.ptr = dp;
-      v.len = l64;
+      v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "l64");
     } else {
       v.ptr = addr;
-      v.len = std::to_string(ty.len);
+      v.len = i64(ty.len);
     }
     return v;
   }
-  std::string r = fresh("ld");
-  body_ += "  " + r + " = load " + ty.llvmTy() + ", ptr " + addr + "\n";
+  llvm::Value *r = b_.CreateLoad(llvmTy(ty), addr, "ld");
   if (ty.isBit()) {
-    std::string b = fresh("b1");
-    body_ += "  " + b + " = trunc i8 " + r + " to i1\n";
-    v.reg = b;
+    v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
   } else {
     v.reg = r;
   }
   return v;
 }
 
-void IRGen::storeScalarTo(const std::string &addr, const Type &ty, const Val &v) {
-  std::string val = v.reg;
+void IRGen::storeScalarTo(llvm::Value *addr, const Type &ty, const Val &v) {
+  llvm::Value *val = v.reg;
   if (ty.isBit()) {
-    std::string z = fresh("z8");
-    body_ += "  " + z + " = zext i1 " + val + " to i8\n";
-    val = z;
+    val = b_.CreateZExt(val, b_.getInt8Ty(), "z8");
   }
-  body_ += "  store " + ty.llvmTy() + " " + val + ", ptr " + addr + "\n";
+  b_.CreateStore(val, addr);
 }
 
 void IRGen::storeTo(Symbol *sym, const Val &v, SourceLoc loc) {
   const Type &dt = sym->ty;
-  std::string addr = addressOf(sym);
+  llvm::Value *addr = addressOf(sym);
   if (dt.isChar()) {
     if (!v.ty.isChar()) {
       d_.error(loc, "conversion from " + v.ty.desc() + " to " + dt.desc() +
@@ -901,21 +883,17 @@ void IRGen::storeTo(Symbol *sym, const Val &v, SourceLoc loc) {
       return;
     }
     if (dt.varying) {
-      std::string dp = fresh("vdata");
-      body_ += "  " + dp + " = getelementptr inbounds " + dt.llvmTy() + ", ptr " + addr +
-               ", i32 0, i32 1\n";
-      std::string ln = fresh("vlen");
-      body_ += "  " + ln + " = call i64 @pli_assign_varying(ptr " + dp + ", i64 " +
-               std::to_string(dt.len) + ", ptr " + v.ptr + ", i64 " + v.len + ")\n";
-      std::string lp = fresh("vlenp");
-      body_ += "  " + lp + " = getelementptr inbounds " + dt.llvmTy() + ", ptr " + addr +
-               ", i32 0, i32 0\n";
-      std::string t32 = fresh("l32");
-      body_ += "  " + t32 + " = trunc i64 " + ln + " to i32\n";
-      body_ += "  store i32 " + t32 + ", ptr " + lp + "\n";
+      llvm::Value *dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
+      llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying", b_.getInt64Ty(),
+                                                {b_.getPtrTy(), b_.getInt64Ty(),
+                                                 b_.getPtrTy(), b_.getInt64Ty()}),
+                                      {dp, i64(dt.len), v.ptr, v.len});
+      llvm::Value *lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
+      b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
     } else {
-      body_ += "  call void @pli_assign_char(ptr " + addr + ", i64 " + std::to_string(dt.len) +
-               ", ptr " + v.ptr + ", i64 " + v.len + ")\n";
+      b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
+                              {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+                    {addr, i64(dt.len), v.ptr, v.len});
     }
     return;
   }
@@ -933,7 +911,7 @@ Val IRGen::convert(const Val &v, const Type &dst, SourceLoc loc) {
     if (v.ty.isChar() && dst.isChar()) return v;
     d_.error(loc, "conversion between " + v.ty.desc() + " and " + dst.desc() +
              " is not implemented in this stage", "(86)");
-    out.reg = "0";
+    out.reg = i64(0);
     return out;
   }
 
@@ -947,28 +925,21 @@ Val IRGen::convert(const Val &v, const Type &dst, SourceLoc loc) {
     return out;
   }
   if (srcBit) {  // BIT -> arithmetic
-    std::string r = fresh("cvt");
     if (dstFloat) {
-      std::string z = fresh("z");
-      body_ += "  " + z + " = zext i1 " + v.reg + " to i32\n";
-      body_ += "  " + r + " = sitofp i32 " + z + " to double\n";
+      llvm::Value *z = b_.CreateZExt(v.reg, b_.getInt32Ty(), "z");
+      out.reg = b_.CreateSIToFP(z, b_.getDoubleTy(), "cvt");
     } else {
-      body_ += "  " + r + " = zext i1 " + v.reg + " to " + dst.llvmTy() + "\n";
+      out.reg = b_.CreateZExt(v.reg, llvmTy(dst), "cvt");
     }
-    out.reg = r;
     return out;
   }
   if (srcFloat && dstFloat) return v;
   if (srcFloat && !dstFloat) {  // FLOAT -> FIXED truncates toward zero
-    std::string r = fresh("cvt");
-    body_ += "  " + r + " = fptosi double " + v.reg + " to " + dst.llvmTy() + "\n";
-    out.reg = r;
+    out.reg = b_.CreateFPToSI(v.reg, llvmTy(dst), "cvt");
     return out;
   }
   if (!srcFloat && dstFloat) {
-    std::string r = fresh("cvt");
-    body_ += "  " + r + " = sitofp " + v.ty.llvmTy() + " " + v.reg + " to double\n";
-    out.reg = r;
+    out.reg = b_.CreateSIToFP(v.reg, b_.getDoubleTy(), "cvt");
     return out;
   }
   // FIXED -> FIXED: adjust width
@@ -976,54 +947,37 @@ Val IRGen::convert(const Val &v, const Type &dst, SourceLoc loc) {
     out.reg = v.reg;
     return out;
   }
-  std::string r = fresh("cvt");
   if (v.ty.intBits() < dst.intBits())
-    body_ += "  " + r + " = sext " + v.ty.llvmTy() + " " + v.reg + " to " + dst.llvmTy() + "\n";
+    out.reg = b_.CreateSExt(v.reg, llvmTy(dst), "cvt");
   else
-    body_ += "  " + r + " = trunc " + v.ty.llvmTy() + " " + v.reg + " to " + dst.llvmTy() + "\n";
-  out.reg = r;
+    out.reg = b_.CreateTrunc(v.reg, llvmTy(dst), "cvt");
   return out;
 }
 
-std::string IRGen::toI1(const Val &v, SourceLoc loc) {
+llvm::Value *IRGen::toI1(const Val &v, SourceLoc loc) {
   if (v.ty.isBit()) return v.reg;
-  if (v.ty.k == TK::Float) {
-    std::string r = fresh("tst");
-    body_ += "  " + r + " = fcmp une double " + v.reg + ", " + fmtDouble(0.0) + "\n";
-    return r;
-  }
-  if (v.ty.isNumeric()) {
-    std::string r = fresh("tst");
-    body_ += "  " + r + " = icmp ne " + v.ty.llvmTy() + " " + v.reg + ", 0\n";
-    return r;
-  }
+  if (v.ty.k == TK::Float)
+    return b_.CreateFCmpUNE(v.reg, flt(0.0), "tst");
+  if (v.ty.isNumeric())
+    return b_.CreateICmpNE(v.reg, llvm::Constant::getNullValue(llvmTy(v.ty)), "tst");
   d_.error(loc, "value of type " + v.ty.desc() + " cannot be used as a condition", "(75)");
-  return "false";
+  return b_.getInt1(false);
 }
 
-std::string IRGen::toI64(const Val &v) {
-  if (v.ty.k == TK::Float) {
-    std::string r = fresh("i64");
-    body_ += "  " + r + " = fptosi double " + v.reg + " to i64\n";
-    return r;
-  }
-  if (v.ty.isBit()) {
-    std::string r = fresh("i64");
-    body_ += "  " + r + " = zext i1 " + v.reg + " to i64\n";
-    return r;
-  }
+llvm::Value *IRGen::toI64(const Val &v) {
+  if (v.ty.k == TK::Float)
+    return b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "i64");
+  if (v.ty.isBit())
+    return b_.CreateZExt(v.reg, b_.getInt64Ty(), "i64");
   if (v.ty.intBits() == 64) return v.reg;
-  std::string r = fresh("i64");
-  body_ += "  " + r + " = sext " + v.ty.llvmTy() + " " + v.reg + " to i64\n";
-  return r;
+  return b_.CreateSExt(v.reg, b_.getInt64Ty(), "i64");
 }
 
 Val IRGen::charTemp(int len) {
   Val v;
   v.ty = Type::chr(len);
-  v.ptr = fresh("cbuf");
-  body_ += "  " + v.ptr + " = alloca [" + std::to_string(len) + " x i8]\n";
-  v.len = std::to_string(len);
+  v.ptr = b_.CreateAlloca(llvm::ArrayType::get(b_.getInt8Ty(), len), nullptr, "cbuf");
+  v.len = i64(len);
   return v;
 }
 
@@ -1036,345 +990,285 @@ Val IRGen::emitExpr(Expr *e) {
   switch (e->kind) {
     case Expr::IntLit:
       v.ty = e->ty;
-      v.reg = std::to_string(e->ival);
+      v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
       return v;
     case Expr::FltLit:
       v.ty = e->ty;
-      v.reg = fmtDouble(e->fval);
+      v.reg = flt(e->fval);
       return v;
     case Expr::CharLit: {
       v.ty = e->ty;
       v.ptr = globalString(e->sval);
-      v.len = std::to_string(e->sval.size());
+      v.len = i64(e->sval.size());
       return v;
     }
     case Expr::BitLit:
       v.ty = Type::bit(1);
-      v.reg = (!e->sval.empty() && e->sval[0] == '1') ? "true" : "false";
+      v.reg = b_.getInt1(!e->sval.empty() && e->sval[0] == '1');
       return v;
     case Expr::VarRef:
-      if (!e->sym) { v.ty = e->ty; v.reg = "0"; return v; }
+      if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
       return loadSym(e->sym, e->sym->ty);
     case Expr::Call: {
-      // SUBSTR built-in (M2): substr(s, i, n) — copy n chars of s starting at
-      // the 1-based position i into a fresh buffer.
       if (e->name == "SUBSTR") {
         Val s = emitExpr(e->args[0].get());
         Val start = emitExpr(e->args[1].get());
         Val len = emitExpr(e->args[2].get());
         Val out = charTemp(e->ty.len);
-        body_ += "  call void @pli_substr(ptr " + out.ptr + ", i64 " + out.len +
-                 ", ptr " + s.ptr + ", i64 " + s.len + ", i64 " + toI64(start) +
-                 ", i64 " + toI64(len) + ")\n";
-        out.len = std::to_string(e->ty.len);
+        b_.CreateCall(runtimeFn("pli_substr", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
+                                 b_.getInt64Ty(), b_.getInt64Ty(), b_.getInt64Ty()}),
+                      {out.ptr, out.len, s.ptr, s.len, toI64(start), toI64(len)});
+        out.len = i64(e->ty.len);
         return out;
       }
-      // INDEX built-in (M2): index(s1, s2) -> FIXED BINARY position (i32).
       if (e->name == "INDEX") {
         Val a = emitExpr(e->args[0].get());
         Val b = emitExpr(e->args[1].get());
-        std::string r = fresh("idx");
-        body_ += "  " + r + " = call i64 @pli_index(ptr " + a.ptr + ", i64 " + a.len +
-                 ", ptr " + b.ptr + ", i64 " + b.len + ")\n";
-        std::string t = fresh("idx32");
-        body_ += "  " + t + " = trunc i64 " + r + " to i32\n";
+        llvm::Value *r = b_.CreateCall(runtimeFn("pli_index", b_.getInt64Ty(),
+                                                 {b_.getPtrTy(), b_.getInt64Ty(),
+                                                  b_.getPtrTy(), b_.getInt64Ty()}),
+                                       {a.ptr, a.len, b.ptr, b.len});
         v.ty = e->ty;
-        v.reg = t;
+        v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "idx32");
         return v;
       }
-      // ABS built-in (M2): absolute value; float via llvm.fabs, fixed via the
-      // select idiom.
       if (e->name == "ABS") {
         Val a = emitExpr(e->args[0].get());
         const Type &at = a.ty;
-        std::string r = fresh("abs");
+        llvm::Value *r;
         if (at.k == TK::Float) {
-          body_ += "  " + r + " = call double @llvm.fabs.f64(double " + a.reg + ")\n";
+          r = b_.CreateCall(runtimeFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}),
+                            {a.reg}, "abs");
         } else {
-          std::string neg = fresh("absneg");
-          body_ += "  " + neg + " = sub " + at.llvmTy() + " 0, " + a.reg + "\n";
-          std::string cmp = fresh("abscmp");
-          body_ += "  " + cmp + " = icmp slt " + at.llvmTy() + " " + a.reg + ", 0\n";
-          body_ += "  " + r + " = select i1 " + cmp + ", " + at.llvmTy() + " " + neg +
-                   ", " + at.llvmTy() + " " + a.reg + "\n";
+          llvm::Value *neg = b_.CreateSub(llvm::Constant::getNullValue(llvmTy(at)), a.reg, "absneg");
+          llvm::Value *cmp = b_.CreateICmpSLT(a.reg, llvm::Constant::getNullValue(llvmTy(at)), "abscmp");
+          r = b_.CreateSelect(cmp, neg, a.reg, "abs");
         }
         v.ty = e->ty;
         v.reg = r;
         return v;
       }
-      // LENGTH built-in (M2): the string value already carries its current
-      // length (i64); size it to a FIXED BINARY(31) result.
       if (e->name == "LENGTH") {
         Val a = emitExpr(e->args[0].get());
-        std::string t = fresh("len32");
-        body_ += "  " + t + " = trunc i64 " + a.len + " to i32\n";
         v.ty = e->ty;
-        v.reg = t;
+        v.reg = b_.CreateTrunc(a.len, b_.getInt32Ty(), "len32");
         return v;
       }
-      // TRUNC built-in (M2): drop the fractional part toward zero. FLOAT goes
-      // through fptosi/sitofp; FIXED is already integral (no-op).
       if (e->name == "TRUNC") {
         Val a = emitExpr(e->args[0].get());
         if (a.ty.k == TK::Float) {
-          std::string i = fresh("trunci");
-          body_ += "  " + i + " = fptosi double " + a.reg + " to i64\n";
-          std::string r = fresh("truncd");
-          body_ += "  " + r + " = sitofp i64 " + i + " to double\n";
+          llvm::Value *i = b_.CreateFPToSI(a.reg, b_.getInt64Ty(), "trunci");
           v.ty = e->ty;
-          v.reg = r;
+          v.reg = b_.CreateSIToFP(i, b_.getDoubleTy(), "truncd");
         } else {
           v = a;
         }
         return v;
       }
-      // PRECISION built-in (M2): keep x's value, widen/narrow to the result
-      // type when the requested precision changes the FIXED storage width.
       if (e->name == "PRECISION") {
         Val a = emitExpr(e->args[0].get());
         v = convert(a, e->ty, e->loc);
         return v;
       }
-      // MIN built-in (M2): convert both operands to the common type and select
-      // the smaller.
-      if (e->name == "MIN") {
+      if (e->name == "MIN" || e->name == "MAX") {
         Val a = emitExpr(e->args[0].get());
         Val b = emitExpr(e->args[1].get());
         const Type &common = e->ty;
         Val av = convert(a, common, e->loc);
         Val bv = convert(b, common, e->loc);
-        std::string cmp = fresh("mincmp");
-        if (common.k == TK::Float)
-          body_ += "  " + cmp + " = fcmp olt double " + av.reg + ", " + bv.reg + "\n";
-        else
-          body_ += "  " + cmp + " = icmp slt " + common.llvmTy() + " " + av.reg + ", " + bv.reg + "\n";
-        std::string r = fresh("min");
-        body_ += "  " + r + " = select i1 " + cmp + ", " + common.llvmTy() + " " + av.reg +
-                 ", " + common.llvmTy() + " " + bv.reg + "\n";
+        llvm::Value *cmp = common.k == TK::Float
+            ? b_.CreateFCmpOLT(av.reg, bv.reg, "mincmp")
+            : b_.CreateICmpSLT(av.reg, bv.reg, "mincmp");
+        llvm::Value *r = e->name == "MIN"
+            ? b_.CreateSelect(cmp, av.reg, bv.reg, "min")
+            : b_.CreateSelect(cmp, bv.reg, av.reg, "max");
         v.ty = common;
         v.reg = r;
         return v;
       }
-      // MAX built-in (M2): convert both operands to the common type and select
-      // the larger.
-      if (e->name == "MAX") {
-        Val a = emitExpr(e->args[0].get());
-        Val b = emitExpr(e->args[1].get());
-        const Type &common = e->ty;
-        Val av = convert(a, common, e->loc);
-        Val bv = convert(b, common, e->loc);
-        std::string cmp = fresh("maxcmp");
-        if (common.k == TK::Float)
-          body_ += "  " + cmp + " = fcmp olt double " + av.reg + ", " + bv.reg + "\n";
-        else
-          body_ += "  " + cmp + " = icmp slt " + common.llvmTy() + " " + av.reg + ", " + bv.reg + "\n";
-        std::string r = fresh("max");
-        body_ += "  " + r + " = select i1 " + cmp + ", " + common.llvmTy() + " " + bv.reg +
-                 ", " + common.llvmTy() + " " + av.reg + "\n";
-        v.ty = common;
-        v.reg = r;
-        return v;
-      }
-      // MOD built-in (M2): remainder with the divisor's sign, via the runtime.
       if (e->name == "MOD") {
         Val a = emitExpr(e->args[0].get());
         Val b = emitExpr(e->args[1].get());
         const Type &common = e->ty;
         Val av = convert(a, common, e->loc);
         Val bv = convert(b, common, e->loc);
-        std::string r = fresh("mod");
-        if (common.k == TK::Float)
-          body_ += "  " + r + " = call double @pli_mod_dd(double " + av.reg + ", double " + bv.reg + ")\n";
-        else
-          body_ += "  " + r + " = call i64 @pli_mod_ll(i64 " + toI64(av) + ", i64 " + toI64(bv) + ")\n";
         v.ty = common;
         if (common.k == TK::Float) {
-          v.reg = r;
+          v.reg = b_.CreateCall(runtimeFn("pli_mod_dd", b_.getDoubleTy(),
+                                          {b_.getDoubleTy(), b_.getDoubleTy()}),
+                                {av.reg, bv.reg}, "mod");
         } else {
-          std::string t = fresh("mod32");
-          body_ += "  " + t + " = trunc i64 " + r + " to i32\n";
-          v.reg = t;
+          llvm::Value *r = b_.CreateCall(runtimeFn("pli_mod_ll", b_.getInt64Ty(),
+                                                   {b_.getInt64Ty(), b_.getInt64Ty()}),
+                                         {toI64(av), toI64(bv)});
+          v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "mod32");
         }
         return v;
       }
-      // MULTIPLY built-in (M2): product of two numerics (like *).
       if (e->name == "MULTIPLY") {
         Val a = emitExpr(e->args[0].get());
         Val b = emitExpr(e->args[1].get());
         const Type &common = e->ty;
         Val av = convert(a, common, e->loc);
         Val bv = convert(b, common, e->loc);
-        std::string r = fresh("mul");
-        body_ += "  " + r + " = " + (common.k == TK::Float ? "fmul" : "mul") + " " + common.llvmTy() +
-                 " " + av.reg + ", " + bv.reg + "\n";
+        llvm::Value *r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
+                                               : b_.CreateMul(av.reg, bv.reg, "mul");
         v.ty = common;
         v.reg = r;
         return v;
       }
-      // DIVIDE built-in (M2): quotient of two numerics in floating point
-      // (ADR-014; exact decimal division is M2), like the `/` operator.
       if (e->name == "DIVIDE") {
         Val a = emitExpr(e->args[0].get());
         Val b = emitExpr(e->args[1].get());
         const Type &common = e->ty;
         Val av = convert(a, common, e->loc);
         Val bv = convert(b, common, e->loc);
-        std::string r = fresh("div");
-        body_ += "  " + r + " = fdiv double " + av.reg + ", " + bv.reg + "\n";
         v.ty = common;
-        v.reg = r;
+        v.reg = b_.CreateFDiv(av.reg, bv.reg, "div");
         return v;
       }
-      // ROUND built-in (M2): round x to n fractional digits, as a FLOAT.
       if (e->name == "ROUND") {
         Val x = emitExpr(e->args[0].get());
         Val n = emitExpr(e->args[1].get());
         Val xd = convert(x, Type::flt(6), e->loc);
-        std::string r = fresh("round");
-        body_ += "  " + r + " = call double @pli_round(double " + xd.reg + ", i64 " + toI64(n) + ")\n";
         v.ty = e->ty;
-        v.reg = r;
+        v.reg = b_.CreateCall(runtimeFn("pli_round", b_.getDoubleTy(),
+                                        {b_.getDoubleTy(), b_.getInt64Ty()}),
+                              {xd.reg, toI64(n)}, "round");
         return v;
       }
-      // REPEAT built-in (M2): fill a buffer with n copies of s.
       if (e->name == "REPEAT") {
         Val s = emitExpr(e->args[0].get());
         Val n = emitExpr(e->args[1].get());
         Val out = charTemp(e->ty.len);
-        body_ += "  call void @pli_repeat(ptr " + out.ptr + ", i64 " + out.len +
-                 ", ptr " + s.ptr + ", i64 " + s.len + ", i64 " + toI64(n) + ")\n";
-        out.len = std::to_string(e->ty.len);
+        b_.CreateCall(runtimeFn("pli_repeat", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
+                                 b_.getInt64Ty(), b_.getInt64Ty()}),
+                      {out.ptr, out.len, s.ptr, s.len, toI64(n)});
+        out.len = i64(e->ty.len);
         return out;
       }
-      // VERIFY built-in (M2): position of the first char of s not in t.
       if (e->name == "VERIFY") {
         Val s = emitExpr(e->args[0].get());
         Val t = emitExpr(e->args[1].get());
-        std::string r = fresh("ver");
-        body_ += "  " + r + " = call i64 @pli_verify(ptr " + s.ptr + ", i64 " + s.len +
-                 ", ptr " + t.ptr + ", i64 " + t.len + ")\n";
-        std::string x = fresh("ver32");
-        body_ += "  " + x + " = trunc i64 " + r + " to i32\n";
+        llvm::Value *r = b_.CreateCall(runtimeFn("pli_verify", b_.getInt64Ty(),
+                                                 {b_.getPtrTy(), b_.getInt64Ty(),
+                                                  b_.getPtrTy(), b_.getInt64Ty()}),
+                                       {s.ptr, s.len, t.ptr, t.len});
         v.ty = e->ty;
-        v.reg = x;
+        v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
         return v;
       }
-      // TRANSLATE built-in (M2): map characters of s through the in/out table.
       if (e->name == "TRANSLATE") {
         Val s = emitExpr(e->args[0].get());
         Val out = emitExpr(e->args[1].get());
         Val in = emitExpr(e->args[2].get());
         Val dst = charTemp(e->ty.len);
-        body_ += "  call void @pli_translate(ptr " + dst.ptr + ", i64 " + dst.len +
-                 ", ptr " + s.ptr + ", i64 " + s.len + ", ptr " + out.ptr + ", i64 " + out.len +
-                 ", ptr " + in.ptr + ", i64 " + in.len + ")\n";
-        dst.len = std::to_string(e->ty.len);
+        b_.CreateCall(runtimeFn("pli_translate", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
+                                 b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty(),
+                                 b_.getPtrTy(), b_.getInt64Ty()}),
+                      {dst.ptr, dst.len, s.ptr, s.len, out.ptr, out.len, in.ptr, in.len});
+        dst.len = i64(e->ty.len);
         return dst;
       }
-      // HIGH/LOW built-ins (M2): fill a buffer with the top/bottom character.
       if (e->name == "HIGH" || e->name == "LOW") {
         Val n = emitExpr(e->args[0].get());
         Val out = charTemp(e->ty.len);
-        body_ += "  call void @" + (e->name == "HIGH" ? std::string("pli_high") : std::string("pli_low")) +
-                 "(ptr " + out.ptr + ", i64 " + toI64(n) + ")\n";
-        out.len = std::to_string(e->ty.len);
+        std::string fn = e->name == "HIGH" ? "pli_high" : "pli_low";
+        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
+                      {out.ptr, toI64(n)});
+        out.len = i64(e->ty.len);
         return out;
       }
-      // DATE/TIME built-ins (M2): fill a buffer with the current date/time.
       if (e->name == "DATE" || e->name == "TIME") {
         Val out = charTemp(e->ty.len);
-        body_ += "  call void @" + (e->name == "DATE" ? std::string("pli_date") : std::string("pli_time")) +
-                 "(ptr " + out.ptr + ", i64 " + out.len + ")\n";
-        out.len = std::to_string(e->ty.len);
+        std::string fn = e->name == "DATE" ? "pli_date" : "pli_time";
+        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
+                      {out.ptr, out.len});
+        out.len = i64(e->ty.len);
         return out;
       }
-      // Function reference (rule (123)): call an internal function procedure
-      // (or an ENTRY statement, rule (56)) and take its result as a value.
-      if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = "0"; return v; }
+      if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = i64(0); return v; }
       Stmt *en = e->sym->entry;
       Proc *callee = e->sym->proc;
       Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy()) : callee->retTy;
-      const std::string calleeName = en ? entryIrName(callee, en) : callee->irName;
+      llvm::Function *calleeFn = en
+          ? mod_.getFunction(entryIrName(callee, en).substr(1))
+          : mod_.getFunction(callee->irName.substr(1));
       std::vector<Symbol *> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
-      if (rty.isChar()) { v.ty = e->ty; v.reg = "0"; return v; }  // diagnosed in emitProc
-      std::string args;
+      if (rty.isChar()) { v.ty = e->ty; v.reg = i64(0); return v; }  // diagnosed in emitProc
+      std::vector<llvm::Value *> args;
       for (size_t i = 0; i < e->args.size(); ++i) {
         Expr *a = e->args[i].get();
         Type pty;
         if (i < calleeParams.size()) pty = calleeParams[i]->ty;
         else break;
-        std::string addr;
+        llvm::Value *addr;
         bool direct = a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
                       a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
                       a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
         if (direct) {
           addr = addressOf(a->sym);
         } else {
-          addr = fresh("dummy");
-          body_ += "  " + addr + " = alloca " + pty.llvmTy() + "\n";
+          addr = b_.CreateAlloca(llvmTy(pty), nullptr, "dummy");
           Val av = emitExpr(a);
           if (pty.isChar()) {
             Val cv = av;
             if (pty.varying) {
-              std::string dp = fresh("vdata");
-              body_ += "  " + dp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
-                       ", i32 0, i32 1\n";
-              std::string ln = fresh("vlen");
-              body_ += "  " + ln + " = call i64 @pli_assign_varying(ptr " + dp + ", i64 " +
-                       std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
-              std::string lp = fresh("vlenp");
-              body_ += "  " + lp + " = getelementptr inbounds " + pty.llvmTy() + ", ptr " + addr +
-                       ", i32 0, i32 0\n";
-              std::string t32 = fresh("l32");
-              body_ += "  " + t32 + " = trunc i64 " + ln + " to i32\n";
-              body_ += "  store i32 " + t32 + ", ptr " + lp + "\n";
+              llvm::Value *dp = b_.CreateStructGEP(llvmTy(pty), addr, 1, "vdata");
+              llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying", b_.getInt64Ty(),
+                                                        {b_.getPtrTy(), b_.getInt64Ty(),
+                                                         b_.getPtrTy(), b_.getInt64Ty()}),
+                                              {dp, i64(pty.len), cv.ptr, cv.len});
+              llvm::Value *lp = b_.CreateStructGEP(llvmTy(pty), addr, 0, "vlenp");
+              b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
             } else {
-              body_ += "  call void @pli_assign_char(ptr " + addr + ", i64 " +
-                       std::to_string(pty.len) + ", ptr " + cv.ptr + ", i64 " + cv.len + ")\n";
+              b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
+                                      {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+                            {addr, i64(pty.len), cv.ptr, cv.len});
             }
           } else {
             Val cv = convert(av, pty, a->loc);
             storeScalarTo(addr, pty, cv);
           }
         }
-        if (!args.empty()) args += ", ";
-        args += "ptr " + addr;
+        args.push_back(addr);
       }
-      // rule (8): pass the callee's static links (enclosing automatic vars).
       if (callee) {
-        std::string la = linkArgsFor(callee);
-        if (!la.empty()) { if (!args.empty()) args += ", "; args += la; }
+        for (Symbol *v : callee->env) {
+          if (v->owner != curProc_ &&
+              std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
+            d_.error(callee->loc,
+                     "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
+            continue;
+          }
+          args.push_back(addressOf(v));
+        }
       }
-      std::string callReg = fresh("fres");
-      body_ += "  " + callReg + " = call " + rty.llvmTy() + " " + calleeName + "(" + args + ")\n";
+      llvm::CallInst *call = b_.CreateCall(calleeFn, args, "fres");
       v.ty = rty;
       if (rty.isBit()) {
-        std::string b = fresh("fb");
-        body_ += "  " + b + " = trunc i8 " + callReg + " to i1\n";
-        v.reg = b;
+        v.reg = b_.CreateTrunc(call, b_.getInt1Ty(), "fb");
       } else {
-        v.reg = callReg;
+        v.reg = call;
       }
       return v;
     }
     case Expr::Unary: {
       Val a = emitExpr(e->a.get());
       if (e->op == Tok::Not) {
-        std::string b = toI1(a, e->loc);
-        std::string r = fresh("not");
-        body_ += "  " + r + " = xor i1 " + b + ", true\n";
+        llvm::Value *bb = toI1(a, e->loc);
         v.ty = Type::bit(1);
-        v.reg = r;
+        v.reg = b_.CreateXor(bb, b_.getInt1(true), "not");
         return v;
       }
-      // unary minus
       v.ty = a.ty;
-      std::string r = fresh("neg");
       if (a.ty.k == TK::Float)
-        body_ += "  " + r + " = fneg double " + a.reg + "\n";
+        v.reg = b_.CreateFNeg(a.reg, "neg");
       else
-        body_ += "  " + r + " = sub " + a.ty.llvmTy() + " 0, " + a.reg + "\n";
-      v.reg = r;
+        v.reg = b_.CreateSub(llvm::Constant::getNullValue(llvmTy(a.ty)), a.reg, "neg");
       return v;
     }
     case Expr::Binary: break;
@@ -1386,25 +1280,23 @@ Val IRGen::emitExpr(Expr *e) {
   if (op == Tok::Concat) {                                     // rule (119)
     Val a = emitExpr(e->a.get());
     Val b = emitExpr(e->b.get());
-    if (!a.ty.isChar() || !b.ty.isChar()) { v.ty = e->ty; v.reg = "0"; return v; }
-    Val out = charTemp(e->ty.len);  // capacity = sum of the maximum lengths
-    body_ += "  call void @pli_concat(ptr " + out.ptr + ", ptr " + a.ptr + ", i64 " + a.len +
-             ", ptr " + b.ptr + ", i64 " + b.len + ")\n";
-    // The current length is the sum of the operands' current lengths, which is
-    // dynamic when an operand is VARYING.
-    std::string sum = fresh("clen");
-    body_ += "  " + sum + " = add i64 " + a.len + ", " + b.len + "\n";
-    out.len = sum;
+    if (!a.ty.isChar() || !b.ty.isChar()) { v.ty = e->ty; v.reg = i64(0); return v; }
+    Val out = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_concat", b_.getVoidTy(),
+                            {b_.getPtrTy(), b_.getPtrTy(), b_.getInt64Ty(),
+                             b_.getPtrTy(), b_.getInt64Ty()}),
+                  {out.ptr, a.ptr, a.len, b.ptr, b.len});
+    out.len = b_.CreateAdd(a.len, b.len, "clen");
     return out;
   }
 
   if (op == Tok::Amp || op == Tok::Bar) {                       // rules (116),(115)
     Val a = emitExpr(e->a.get());
-    std::string ab = toI1(a, e->loc);
+    llvm::Value *ab = toI1(a, e->loc);
     Val b = emitExpr(e->b.get());
-    std::string bb = toI1(b, e->loc);
-    std::string r = fresh(op == Tok::Amp ? "and" : "or");
-    body_ += "  " + r + " = " + (op == Tok::Amp ? "and" : "or") + " i1 " + ab + ", " + bb + "\n";
+    llvm::Value *bb = toI1(b, e->loc);
+    llvm::Value *r = op == Tok::Amp ? b_.CreateAnd(ab, bb, "and")
+                                    : b_.CreateOr(ab, bb, "or");
     v.ty = Type::bit(1);
     v.reg = r;
     return v;
@@ -1417,30 +1309,27 @@ Val IRGen::emitExpr(Expr *e) {
   Val b = emitExpr(e->b.get());
 
   if (isCmp && a.ty.isChar() && b.ty.isChar()) {                // rule (117)
-    std::string c = fresh("scmp");
-    body_ += "  " + c + " = call i32 @pli_cmp_char(ptr " + a.ptr + ", i64 " + a.len +
-             ", ptr " + b.ptr + ", i64 " + b.len + ")\n";
-    const char *pred = "eq";
+    llvm::Value *c = b_.CreateCall(runtimeFn("pli_cmp_char", b_.getInt32Ty(),
+                                             {b_.getPtrTy(), b_.getInt64Ty(),
+                                              b_.getPtrTy(), b_.getInt64Ty()}),
+                                   {a.ptr, a.len, b.ptr, b.len}, "scmp");
+    llvm::CmpInst::Predicate pred = llvm::CmpInst::ICMP_EQ;
     switch (op) {
-      case Tok::Eq: pred = "eq"; break;
-      case Tok::Ne: pred = "ne"; break;
-      case Tok::Lt: pred = "slt"; break;
-      case Tok::Le: pred = "sle"; break;
-      case Tok::Gt: pred = "sgt"; break;
-      case Tok::Ge: pred = "sge"; break;
-      case Tok::Ngt: pred = "sle"; break;
-      case Tok::Nlt: pred = "sge"; break;
+      case Tok::Eq: pred = llvm::CmpInst::ICMP_EQ; break;
+      case Tok::Ne: pred = llvm::CmpInst::ICMP_NE; break;
+      case Tok::Lt: pred = llvm::CmpInst::ICMP_SLT; break;
+      case Tok::Le: pred = llvm::CmpInst::ICMP_SLE; break;
+      case Tok::Gt: pred = llvm::CmpInst::ICMP_SGT; break;
+      case Tok::Ge: pred = llvm::CmpInst::ICMP_SGE; break;
+      case Tok::Ngt: pred = llvm::CmpInst::ICMP_SLE; break;
+      case Tok::Nlt: pred = llvm::CmpInst::ICMP_SGE; break;
       default: break;
     }
-    std::string r = fresh("cmp");
-    body_ += "  " + r + " = icmp " + pred + " i32 " + c + ", 0\n";
     v.ty = Type::bit(1);
-    v.reg = r;
+    v.reg = b_.CreateICmp(pred, c, i32(0), "cmp");
     return v;
   }
 
-  // Arithmetic and arithmetic comparison: convert both operands to a common
-  // type first (the "target type" of the conversion rules).
   Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
                                         b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
                       : e->ty;
@@ -1448,63 +1337,53 @@ Val IRGen::emitExpr(Expr *e) {
   Val av = convert(a, common, e->loc);
   Val bv = convert(b, common, e->loc);
   const bool flt = common.k == TK::Float;
-  const std::string ty = common.llvmTy();
 
   if (isCmp) {
-    const char *pred = "eq";
+    llvm::Value *r;
     if (flt) {
+      llvm::FCmpInst::Predicate pred = llvm::CmpInst::FCMP_OEQ;
       switch (op) {
-        case Tok::Eq: pred = "oeq"; break;
-        case Tok::Ne: pred = "une"; break;
-        case Tok::Lt: pred = "olt"; break;
-        case Tok::Le: pred = "ole"; break;
-        case Tok::Gt: pred = "ogt"; break;
-        case Tok::Ge: pred = "oge"; break;
-        case Tok::Ngt: pred = "ole"; break;
-        case Tok::Nlt: pred = "oge"; break;
+        case Tok::Eq: pred = llvm::CmpInst::FCMP_OEQ; break;
+        case Tok::Ne: pred = llvm::CmpInst::FCMP_UNE; break;
+        case Tok::Lt: pred = llvm::CmpInst::FCMP_OLT; break;
+        case Tok::Le: pred = llvm::CmpInst::FCMP_OLE; break;
+        case Tok::Gt: pred = llvm::CmpInst::FCMP_OGT; break;
+        case Tok::Ge: pred = llvm::CmpInst::FCMP_OGE; break;
+        case Tok::Ngt: pred = llvm::CmpInst::FCMP_OLE; break;
+        case Tok::Nlt: pred = llvm::CmpInst::FCMP_OGE; break;
         default: break;
       }
+      r = b_.CreateFCmp(pred, av.reg, bv.reg, "cmp");
     } else {
+      llvm::CmpInst::Predicate pred = llvm::CmpInst::ICMP_EQ;
       switch (op) {
-        case Tok::Eq: pred = "eq"; break;
-        case Tok::Ne: pred = "ne"; break;
-        case Tok::Lt: pred = "slt"; break;
-        case Tok::Le: pred = "sle"; break;
-        case Tok::Gt: pred = "sgt"; break;
-        case Tok::Ge: pred = "sge"; break;
-        case Tok::Ngt: pred = "sle"; break;
-        case Tok::Nlt: pred = "sge"; break;
+        case Tok::Eq: pred = llvm::CmpInst::ICMP_EQ; break;
+        case Tok::Ne: pred = llvm::CmpInst::ICMP_NE; break;
+        case Tok::Lt: pred = llvm::CmpInst::ICMP_SLT; break;
+        case Tok::Le: pred = llvm::CmpInst::ICMP_SLE; break;
+        case Tok::Gt: pred = llvm::CmpInst::ICMP_SGT; break;
+        case Tok::Ge: pred = llvm::CmpInst::ICMP_SGE; break;
+        case Tok::Ngt: pred = llvm::CmpInst::ICMP_SLE; break;
+        case Tok::Nlt: pred = llvm::CmpInst::ICMP_SGE; break;
         default: break;
       }
+      r = b_.CreateICmp(pred, av.reg, bv.reg, "cmp");
     }
-    std::string r = fresh("cmp");
-    body_ += "  " + r + " = " + (flt ? "fcmp " : "icmp ") + pred + " " + ty + " " + av.reg +
-             ", " + bv.reg + "\n";
     v.ty = Type::bit(1);
     v.reg = r;
     return v;
   }
 
-  std::string r = fresh("bin");
+  llvm::Value *r;
   switch (op) {
-    case Tok::Plus:
-      body_ += "  " + r + " = " + (flt ? "fadd" : "add") + " " + ty + " " + av.reg + ", " + bv.reg + "\n";
-      break;
-    case Tok::Minus:
-      body_ += "  " + r + " = " + (flt ? "fsub" : "sub") + " " + ty + " " + av.reg + ", " + bv.reg + "\n";
-      break;
-    case Tok::Star:
-      body_ += "  " + r + " = " + (flt ? "fmul" : "mul") + " " + ty + " " + av.reg + ", " + bv.reg + "\n";
-      break;
-    case Tok::Slash:
-      body_ += "  " + r + " = fdiv double " + av.reg + ", " + bv.reg + "\n";
-      break;
-    case Tok::Power:
-      body_ += "  " + r + " = call double @llvm.pow.f64(double " + av.reg + ", double " + bv.reg + ")\n";
-      break;
-    default:
-      body_ += "  " + r + " = add " + ty + " 0, 0\n";
-      break;
+    case Tok::Plus:  r = flt ? b_.CreateFAdd(av.reg, bv.reg, "bin") : b_.CreateAdd(av.reg, bv.reg, "bin"); break;
+    case Tok::Minus: r = flt ? b_.CreateFSub(av.reg, bv.reg, "bin") : b_.CreateSub(av.reg, bv.reg, "bin"); break;
+    case Tok::Star:  r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin"); break;
+    case Tok::Slash: r = b_.CreateFDiv(av.reg, bv.reg, "bin"); break;
+    case Tok::Power: r = b_.CreateCall(runtimeFn("llvm.pow.f64", b_.getDoubleTy(),
+                                                 {b_.getDoubleTy(), b_.getDoubleTy()}),
+                                       {av.reg, bv.reg}, "bin"); break;
+    default: r = b_.CreateAdd(i64(0), i64(0)); break;
   }
   v.ty = common;
   v.reg = r;
