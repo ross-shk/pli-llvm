@@ -49,6 +49,8 @@ make install
   declarations (I–N → `FIXED BINARY`) with warnings
 - `IF`/`THEN`/`ELSE` (nested, `DO`-group branches), `BEGIN` blocks
 - `DO;`, `DO WHILE(e);`, `DO I = a TO b BY c WHILE(d);`
+- **local `GO TO`** / `GOTO` to a labelled statement in the same procedure
+  (`goto.pli`); non-local `GO TO` is M5
 - **multiple closure**: one `END L;` closes every open block up to `L`
 - `PUT [PAGE] [SKIP(n)] LIST(...)` to SYSPRINT
 - full operator set at spec precedence, including `**` right-associativity,
@@ -146,7 +148,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 16 tests (9 golden + 6 self-contained + 1 diagnostic), all passing.
+Current suite: 18 tests (9 golden + 7 self-contained + 2 diagnostic), all passing.
 
 ## Example: generated IR
 

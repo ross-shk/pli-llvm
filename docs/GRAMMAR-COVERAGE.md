@@ -45,7 +45,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (68) | `BEGIN` block | partial M0 | executes; own scope in M1 |
 | (69)–(73) | `DO` groups, specifications, `WHILE` | M0 | `loops.pli` |
 | (74)–(76) | `IF`/`THEN`/`ELSE`, balanced statements | M0 | `ifelse.pli` |
-| (77) | `GO TO` | diag → M1/M5 | local M1, non-local M5 |
+| (77) | `GO TO` | partial M1 | local `GO TO`/`GOTO` to a label in the same procedure (`goto.pli`, `bad_goto.pli`); non-local to an enclosing procedure → M5 |
 | (78)–(80) | `CALL`, options, argumentlist | M0 (opts M9) | `procs.pli`; `TASK`/`EVENT` → M9 |
 | (81) | `RETURN` | partial M0 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
 | (82),(83) | `WAIT`, `DELAY` | M9 | |

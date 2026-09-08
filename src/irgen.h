@@ -44,6 +44,7 @@ private:
   void emitGlobals();
   void emitProc(Proc *p);
   void allocaLocals(Proc *p);
+  void collectGotoBlocks(Stmt *s);  // assign an LLVM block to each labelled stmt
 
   // --- statements & expressions --------------------------------------
   void emitStmt(Stmt *s);
@@ -75,5 +76,6 @@ private:
   bool terminated_ = false;
   Proc *curProc_ = nullptr;
   std::map<std::string, std::string> strLits_;
+  std::map<std::string, std::string> labelBlocks_;  // label -> block name (rule 77)
   std::vector<std::string> allocas_;
 };

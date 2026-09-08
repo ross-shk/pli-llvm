@@ -190,10 +190,25 @@ void IRGen::allocaLocals(Proc *p) {
   }
 }
 
+// Assign an LLVM block name to every labelled statement (rule (64)) so a GO TO
+// (rule (77)) can branch to it. Multiple labels on one statement alias one block.
+void IRGen::collectGotoBlocks(Stmt *s) {
+  if (!s) return;
+  if (!s->labels.empty()) {
+    std::string blk = "L" + std::to_string(n_++);
+    for (const std::string &l : s->labels) labelBlocks_[l] = blk;
+  }
+  if (s->thenS) collectGotoBlocks(s->thenS.get());
+  if (s->elseS) collectGotoBlocks(s->elseS.get());
+  for (auto &b : s->body) collectGotoBlocks(b.get());
+}
+
 void IRGen::emitProc(Proc *p) {
   curProc_ = p;
   body_.clear();
   terminated_ = false;
+  labelBlocks_.clear();
+  for (auto &st : p->body) collectGotoBlocks(st.get());
 
   if (p->isFunction && p->retTy.isChar()) {
     d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
@@ -236,13 +251,15 @@ void IRGen::emitProc(Proc *p) {
 // statements
 // ---------------------------------------------------------------------------
 void IRGen::emitStmt(Stmt *s) {
-  if (!s || terminated_) {
-    if (s && terminated_) {
-      // Unreachable code: PL/I allows it (e.g. after STOP); start a new block.
-      emitLabel(fresh("dead").substr(1));
-    } else {
-      return;
-    }
+  if (!s) return;
+  // A labelled statement is a GO TO target (rule (77)) and must begin a new
+  // basic block, whether reached by fall-through or by a branch.
+  if (!s->labels.empty()) {
+    emitLabel(labelBlocks_[s->labels.front()]);
+    terminated_ = false;
+  } else if (terminated_) {
+    // Unreachable code: PL/I allows it (e.g. after STOP); start a new block.
+    emitLabel(fresh("dead").substr(1));
   }
   switch (s->kind) {
     case Stmt::Null:
@@ -281,6 +298,11 @@ void IRGen::emitStmt(Stmt *s) {
       terminated_ = true;
       break;
     case Stmt::Leave:
+      break;
+    case Stmt::Goto:
+      // rule (77): unconditional branch to the labelled statement.
+      emit("br label %" + labelBlocks_[s->name]);
+      terminated_ = true;
       break;
   }
 }

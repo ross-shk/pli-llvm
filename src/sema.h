@@ -1,6 +1,7 @@
 // sema.h — declaration processing, name resolution and expression typing.
 #pragma once
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -47,6 +48,7 @@ private:
 
   void processProc(Proc *p);
   void collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic);
+  void collectLabels(Stmt *s);  // gather GO TO targets defined in this proc
   void checkStmt(Stmt *s, Scope *sc, Proc *p);
   void typeExpr(Expr *e, Scope *sc, Proc *p);
   bool checkAssignable(const Type &dst, const Type &src, SourceLoc loc, const char *what);
@@ -58,6 +60,7 @@ private:
   std::unordered_map<Proc *, Scope *> procScopes_;
   std::vector<Symbol *> storage_;
   std::vector<Symbol *> entries_;   // external C entries, in declaration order
+  std::set<std::string> procLabels_;  // GO TO targets in the current proc (rule 77)
 };
 
 // Arithmetic result type per the conversion rules (M0 approximation).

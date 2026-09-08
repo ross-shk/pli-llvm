@@ -1,0 +1,5 @@
+ /* Diagnostic test: GO TO to a label that is not defined in this procedure
+    must be rejected with a citation of rule (77). */
+ BADGOTO: PROCEDURE OPTIONS(MAIN);
+    GO TO NOSUCH;
+ END BADGOTO;

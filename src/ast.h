@@ -59,6 +59,7 @@ struct Stmt {
     CallS,      // rule (78)
     Return,     // rule (81)
     Stop,       // rule (85)
+    Goto,       // rule (77)  GO TO label — local, within a procedure (M1)
     Leave,      // (not in TR 25.084; modern LEAVE, rejected in M0)
   } kind = Null;
 
