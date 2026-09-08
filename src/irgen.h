@@ -9,6 +9,7 @@
 #pragma once
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "ast.h"
 #include "diag.h"
@@ -41,14 +42,22 @@ private:
 
   // --- lvalues / storage ---------------------------------------------
   std::string addressOf(Symbol *sym);
+  // For the current procedure, maps each enclosing variable it accesses to the
+  // irName of that variable's static-link pointer in this frame (rule (8)).
+  std::unordered_map<Symbol *, std::string> linkAddr_;
   void emitGlobals();
   void emitProc(Proc *p);
   void emitPlainProc(Proc *p, const std::string &retLLVM);
   void emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, const std::string &retLLVM);
   void allocaLocals(Proc *p);
+  void emitInitials(Proc *p);  // INITIAL stores on AUTOMATIC vars (rule 26)
   void collectGotoBlocks(Stmt *s);  // assign an LLVM block to each labelled stmt
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
   std::string entryIrName(Proc *p, Stmt *e);
+  // Static links (rule (8)): declare p's link params, record linkAddr_, and
+  // append the link args a caller must pass to callee from the current proc.
+  void setupLinks(Proc *p, std::string &linkParams, std::string &linkTypes);
+  std::string linkArgsFor(Proc *callee);
 
   // --- statements & expressions --------------------------------------
   void emitStmt(Stmt *s);

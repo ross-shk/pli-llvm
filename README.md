@@ -43,6 +43,9 @@ make install
 - procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
 - **function procedures** via `RETURNS(...)` and `RETURN(value)`, used as
   value-producing expressions; recursive functions run (`func.pli`)
+- internal procedures reach a variable of an enclosing procedure through a
+  **static link** (ADR-027); variables are `AUTOMATIC`, so external procedures
+  are **reentrant** (`staticlink.pli`, rule (8))
 - **multiple entry points** via the entry-namelist `a, b: PROCEDURE` — the body
   is reachable through any name (`multientry.pli`); sibling external
   procedures can call each other (program scope)

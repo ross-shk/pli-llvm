@@ -1,0 +1,43 @@
+ /* rule (8): an internal procedure reaches a variable of an enclosing
+    procedure through a static link (ADR-027). Each activation of the enclosing
+    procedure owns its own copy of the variable, so an internal procedure sees
+    the correct one — which also makes external procedures reentrant. */
+ outer: procedure options(main);
+    declare x fixed bin(31);
+    declare r fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    /* internal proc reads and writes the enclosing automatic variable */
+    x = 5;
+    call bump();
+    if x ^= 8 then do;
+       fails = fails + 1;
+       put skip list('FAIL bump x =', x);
+    end;
+
+    /* reentrancy: the recursive function's internal proc sees each
+       activation's own v (3 + 2 + 1 + 0 = 6) */
+    r = f(3);
+    if r ^= 6 then do;
+       fails = fails + 1;
+       put skip list('FAIL reentrant f(3) =', r);
+    end;
+
+    if fails = 0 then put skip list('PASS');
+
+    bump: procedure;
+       x = x + 3;
+    end bump;
+
+    f: procedure(n) returns(fixed);
+       declare n fixed bin(31);
+       declare v fixed bin(31);
+       v = n;
+       if n <= 0 then return(0);
+       return(inner() + f(n - 1));
+       inner: procedure returns(fixed);
+          return(v);
+       end inner;
+    end f;
+ end outer;

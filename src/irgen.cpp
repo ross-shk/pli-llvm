@@ -182,7 +182,12 @@ void IRGen::emitGlobals() {
 }
 
 std::string IRGen::addressOf(Symbol *sym) {
-  return sym->irName;  // globals: @g ; locals: %x.addr ; params: %x.ptr
+  // rule (8): an enclosing variable is reached through this procedure's
+  // static link (if this proc accesses it); otherwise it is this frame's own
+  // storage (globals: @g ; locals: %x.addr ; params: %x.ptr).
+  auto it = linkAddr_.find(sym);
+  if (it != linkAddr_.end()) return it->second;
+  return sym->irName;
 }
 
 void IRGen::allocaLocals(Proc *p) {
@@ -201,6 +206,63 @@ void IRGen::allocaLocals(Proc *p) {
         body_ += "  call void @pli_assign_char(ptr " + s->irName + ", i64 " +
                  std::to_string(s->ty.len) + ", ptr " + g + ", i64 0)\n";
       }
+    }
+  }
+}
+
+// INITIAL attribute on AUTOMATIC variables (rule 26): runs on every
+// activation. INITIAL expressions are not passed through typeExpr, so the
+// literal is not typed; build a value of the declared type directly from the
+// folded literal (sema's initExpr), as the STATIC global path does. Declarations
+// may sit inside BEGIN/DO/IF bodies, so walk statements like sema does.
+static void collectDeclStmts(Stmt *s, std::vector<Stmt *> &out) {
+  if (!s) return;
+  if (s->kind == Stmt::Declare) { out.push_back(s); return; }
+  if (s->kind == Stmt::Begin || s->kind == Stmt::Group)
+    for (auto &b : s->body) collectDeclStmts(b.get(), out);
+  else {
+    for (auto &b : s->body) collectDeclStmts(b.get(), out);
+    collectDeclStmts(s->thenS.get(), out);
+    collectDeclStmts(s->elseS.get(), out);
+  }
+}
+
+void IRGen::emitInitials(Proc *p) {
+  std::vector<Stmt *> decls;
+  for (auto &st : p->body) collectDeclStmts(st.get(), decls);
+  for (Stmt *st : decls) {
+    for (auto &item : st->decls) {
+      Expr *e = item.sym ? item.sym->initExpr : nullptr;
+      if (!e) continue;
+      Val v;
+      v.ty = item.sym->ty;
+      switch (item.sym->ty.k) {
+        case TK::Float: {
+          double d = e->kind == Expr::FltLit ? e->fval : (double)e->ival;
+          v.reg = fmtDouble(d);
+          break;
+        }
+        case TK::Bit: {
+          bool one = e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
+                                             : (e->ival != 0 || e->fval != 0);
+          v.reg = one ? "true" : "false";
+          break;
+        }
+        case TK::Char: {
+          Val cv;
+          cv.ty = item.sym->ty;
+          cv.ptr = globalString(e->sval);
+          cv.len = std::to_string(e->sval.size());
+          storeTo(item.sym, cv, item.loc);
+          continue;
+        }
+        default: {  // Fixed
+          long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
+          v.reg = std::to_string(val);
+          break;
+        }
+      }
+      storeTo(item.sym, v, item.loc);
     }
   }
 }
@@ -253,19 +315,14 @@ void IRGen::emitPlainProc(Proc *p, const std::string &retLLVM) {
     params += "ptr " + p->paramSyms[i]->irName;
     paramTys += "ptr";
   }
+  std::string linkTys;
+  setupLinks(p, params, linkTys);   // static links (rule (8)); updates linkAddr_
+  if (!linkTys.empty()) { if (!paramTys.empty()) paramTys += ", "; paramTys += linkTys; }
 
   body_ += "entry:\n";
   allocaLocals(p);
 
-  // INITIAL attribute on AUTOMATIC variables (rule 26).
-  for (auto &st : p->body) {
-    if (st && st->kind == Stmt::Declare)
-      for (auto &item : st->decls)
-        if (item.init && item.sym && !item.sym->isStatic) {
-          Val v = emitExpr(item.init.get());
-          storeTo(item.sym, v, item.loc);
-        }
-  }
+  emitInitials(p);  // INITIAL attribute on AUTOMATIC variables (rule 26)
 
   for (auto &st : p->body) emitStmt(st.get());
 
@@ -318,11 +375,13 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, cons
   const std::string sel = "%entrysel";
 
   // ---- shared implementation function ----
-  std::string params;
+  std::string params;  // union of every entry point's parameters
   for (size_t i = 0; i < uni.size(); ++i) {
     if (i) params += ", ";
     params += "ptr " + uni[i]->irName;
   }
+  std::string linkTys;
+  setupLinks(p, params, linkTys);  // static links (rule (8)); sets linkAddr_
   if (!params.empty()) params += ", ";
   params += "i64 " + sel;
 
@@ -331,14 +390,7 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, cons
 
   // INITIAL attribute on AUTOMATIC variables (rule 26): runs on every
   // activation regardless of which entry point was used.
-  for (auto &st : p->body) {
-    if (st && st->kind == Stmt::Declare)
-      for (auto &item : st->decls)
-        if (item.init && item.sym && !item.sym->isStatic) {
-          Val v = emitExpr(item.init.get());
-          storeTo(item.sym, v, item.loc);
-        }
-  }
+  emitInitials(p);
 
   // Entry selector: dispatch to the segment each call entered through.
   body_ += "  switch i64 " + sel + ", label %e.seg.0 [";
@@ -369,29 +421,40 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, cons
 
   // ---- entry-point thunks ----
   // A thunk tail-calls the shared body with its own arguments (for its own
-  // parameters) and `undef` for the rest, then returns the result.
+  // parameters), `undef` for the rest, and its static links, then returns.
+  // Link parameters are named %lnk.0..%lnk.(n-1), matching the impl's.
+  std::string linkSig;
+  std::string linkArgs;
+  for (size_t i = 0; i < p->env.size(); ++i) {
+    if (i) { linkSig += ", "; linkArgs += ", "; }
+    linkSig += "ptr %lnk." + std::to_string(i);
+    linkArgs += "%lnk." + std::to_string(i);
+  }
+  auto join = [](const std::vector<std::string> &v) {
+    std::string s;
+    for (size_t i = 0; i < v.size(); ++i) { if (i) s += ", "; s += v[i]; }
+    return s;
+  };
   auto thunk = [&](const std::vector<Symbol *> &mine, const std::string &selv) {
-    std::string sig;
-    for (size_t i = 0; i < mine.size(); ++i) {
-      if (i) sig += ", ";
-      sig += "ptr " + mine[i]->irName;
+    std::vector<std::string> sig;
+    for (Symbol *s : mine) sig.push_back("ptr " + s->irName);
+    if (!linkSig.empty()) sig.push_back(linkSig);
+    std::vector<std::string> args;
+    for (Symbol *u : uni) {
+      bool own = std::find(mine.begin(), mine.end(), u) != mine.end();
+      args.push_back("ptr " + std::string(own ? u->irName : "undef"));
     }
-    std::string args;
-    for (size_t j = 0; j < uni.size(); ++j) {
-      if (j) args += ", ";
-      bool own = std::find(mine.begin(), mine.end(), uni[j]) != mine.end();
-      args += "ptr " + std::string(own ? uni[j]->irName : "undef");
-    }
-    if (!args.empty()) args += ", ";
+    if (!linkArgs.empty()) args.push_back(linkArgs);
+    args.push_back(selv);
     std::string b;
+    std::string call = "tail call " + retLLVM + " " + impl + "(" + join(args) + ")";
     if (retLLVM == "void") {
-      b = "entry:\n  tail call void " + impl + "(" + args + selv + ")\n  ret void\n";
+      b = "entry:\n  " + call + "\n  ret void\n";
     } else {
       std::string r = fresh("r");
-      b = "entry:\n  " + r + " = tail call " + retLLVM + " " + impl + "(" + args + selv +
-          ")\n  ret " + retLLVM + " " + r + "\n";
+      b = "entry:\n  " + r + " = " + call + "\n  ret " + retLLVM + " " + r + "\n";
     }
-    return std::make_pair(sig, b);
+    return std::make_pair(join(sig), b);
   };
 
   // Segment 0: the procedure's own name (and its entry-namelist aliases).
@@ -413,6 +476,42 @@ void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, cons
 std::string IRGen::entryIrName(Proc *p, Stmt *e) {
   return "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name +
          "$entry$" + e->name;
+}
+
+// Declare this procedure's static-link parameters (one per enclosing variable
+// in `env`) and remember their irNames in linkAddr_, so addressOf() routes
+// references to those variables through the link. Returns the parameter list
+// fragment ("ptr %lnk.0, ptr %lnk.1") and its type-only form for aliases.
+void IRGen::setupLinks(Proc *p, std::string &linkParams, std::string &linkTypes) {
+  linkAddr_.clear();
+  for (size_t i = 0; i < p->env.size(); ++i) {
+    std::string nm = "%lnk." + std::to_string(i);
+    if (!linkParams.empty()) { linkParams += ", "; linkTypes += ", "; }
+    linkParams += "ptr " + nm;
+    linkTypes += "ptr";
+    linkAddr_[p->env[i]] = nm;
+  }
+}
+
+// The static-link arguments a call to `callee` needs, evaluated in the current
+// procedure's frame: a variable owned by this proc is its own address, one
+// owned higher up is this proc's already-received link (threaded through).
+std::string IRGen::linkArgsFor(Proc *callee) {
+  std::string args;
+  for (Symbol *v : callee->env) {
+    // Reaching a variable owned by a procedure between this one and the callee
+    // (a "cousin" call) is not implemented here — diagnose it, since addressOf
+    // would otherwise resolve to a frame this procedure does not hold.
+    if (v->owner != curProc_ &&
+        std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
+      d_.error(callee->loc,
+               "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
+      continue;
+    }
+    if (!args.empty()) args += ", ";
+    args += "ptr " + addressOf(v);
+  }
+  return args;
 }
 
 // ---------------------------------------------------------------------------
@@ -734,6 +833,11 @@ void IRGen::emitCall(Stmt *s) {
     }
     if (!args.empty()) args += ", ";
     args += "ptr " + addr;
+  }
+  // rule (8): pass the callee's static links (enclosing automatic variables).
+  if (callee) {
+    std::string la = linkArgsFor(callee);
+    if (!la.empty()) { if (!args.empty()) args += ", "; args += la; }
   }
   emit("call void " + calleeName + "(" + args + ")");
 }
@@ -1235,6 +1339,11 @@ Val IRGen::emitExpr(Expr *e) {
         }
         if (!args.empty()) args += ", ";
         args += "ptr " + addr;
+      }
+      // rule (8): pass the callee's static links (enclosing automatic vars).
+      if (callee) {
+        std::string la = linkArgsFor(callee);
+        if (!la.empty()) { if (!args.empty()) args += ", "; args += la; }
       }
       std::string callReg = fresh("fres");
       body_ += "  " + callReg + " = call " + rty.llvmTy() + " " + calleeName + "(" + args + ")\n";

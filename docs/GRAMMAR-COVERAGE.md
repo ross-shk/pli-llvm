@@ -14,7 +14,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (4) | parameterlist | M0 | `procs.pli` |
 | (5) | procedure options (`OPTIONS`, `RECURSIVE`, `RETURNS`) | partial M0 | `MAIN` honoured; `RETURNS` → function procedures (`func.pli`); `RECURSIVE` accepted |
 | (6),(7) | sentencelist, end-clause, multiple closure | M0 | `parseBody` / `loops.pli` (`END OUTER;`) |
-| (8) | sentence kinds | M0 | `parseStatement` |
+| (8) | sentence kinds | M0 | `parseStatement`; internal procedures reach enclosing automatic storage via a static link (ADR-027, `staticlink.pli`) |
 | (9),(10) | `DECLARE`, declarationlist | M0 | `parseDeclare` / `ifelse.pli` |
 | (11) | declaration, level numbers, factoring | partial M0 | scalars; factoring and levels → M3 |
 | (12),(13) | dimension attribute, bound pairs | M3 | arrays |
@@ -36,13 +36,13 @@ The ledger that ties the implementation to the specification. Status values:
 | (42) | scope (`INTERNAL`/`EXTERNAL`) | accepted M0 → M1 | linkage in M1 |
 | (43) | `LIKE` | M3 | |
 | (44)–(55) | `FORMAT` statement and all format items | M6 | format engine |
-| (56) | `ENTRY` statement | M1 | `label: ENTRY(params) [RETURNS(...)]` declares an alternate entry point with its own params/result; body split into segments behind a shared impl, one thunk per entry name (`entry.pli`); mixed return types diagnosed unimplemented (ADR-026) |
+| (56) | `ENTRY` statement | M1 | `label: ENTRY(params) [RETURNS(...)]` declares an alternate entry point with its own params (any count) and result type; body split into segments behind a shared impl, one thunk per entry name (`entry.pli`); mixed return types diagnosed unimplemented (ADR-026) |
 | (57)–(59) | statement, unconditional, simple | M0 | |
 | (60)–(63) | condition prefixes | parsed M0 → M5 | warned as unenforced |
 | (64) | labellist | M0 | label prefixes parsed; used by (7) |
 | (65) | initial-label (subscripted labels) | M3/M5 | scan damaged; see ⚠ in grammar |
 | (66),(67) | proper-statement, null statement | M0 | |
-| (68) | `BEGIN` block | partial M1 | executes; a block is now a real lexical scope — inner declarations shadow outer ones and do not leak (`begin.pli`); storage stays flat per ADR-010 |
+| (68) | `BEGIN` block | partial M1 | executes; a block is now a real lexical scope — inner declarations shadow outer ones and do not leak (`begin.pli`); block variables are AUTOMATIC in the enclosing procedure's frame (ADR-010, ADR-027) |
 | (69)–(73) | `DO` groups, specifications, `WHILE` | M0 | `loops.pli` |
 | (74)–(76) | `IF`/`THEN`/`ELSE`, balanced statements | M0 | `ifelse.pli` |
 | (77) | `GO TO` | partial M1 | local `GO TO`/`GOTO` to a label in the same procedure (`goto.pli`, `bad_goto.pli`); non-local to an enclosing procedure → M5 |

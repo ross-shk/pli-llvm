@@ -105,6 +105,8 @@ struct Proc {
   Proc *parent = nullptr;               // lexical nesting (rule (8) sentence)
   std::vector<Symbol *> paramSyms;
   std::vector<Symbol *> localSyms;      // AUTOMATIC variables needing an alloca
+  std::vector<Symbol *> directUses;     // enclosing vars referenced by this body
+  std::vector<Symbol *> env;            // static-link targets for this procedure
   std::string irName;                   // mangled LLVM symbol
 };
 

@@ -109,6 +109,11 @@ bool Sema::run(Program &prog, bool compileOnly) {
   // Pass 2: declarations, resolution and typing, procedure by procedure.
   for (auto &p : prog.procs) processProc(p.get());
 
+  // Pass 3: bottom-up static-link environments (rule (8)); a proc's env is the
+  // set of enclosing variables its whole subtree accesses.
+  for (auto &p : prog.procs)
+    if (!p->parent) computeEnv(p.get());
+
   if (!prog.mainProc) {
     if (!prog.procs.empty()) {
       // A relocatable object (`-c`) may be a library with no entry point; the
@@ -130,11 +135,12 @@ bool Sema::run(Program &prog, bool compileOnly) {
 void Sema::processProc(Proc *p) {
   Scope *sc = scopeFor(p);
 
-  // STORAGE DECISION (M0): variables of the external procedure get static
-  // storage so that internal procedures can reference them without a static
-  // link/display. Internal procedure variables are AUTOMATIC (stack).
-  // See ADR-010 and the M1 milestone for proper nesting support.
-  bool isStatic = (p->parent == nullptr);
+  // STORAGE (M1): every procedure's variables are AUTOMATIC (stack), so each
+  // activation gets its own copy — this makes external procedures reentrant.
+  // Internal procedures reach enclosing automatic storage through a static
+  // link (ADR-027); the M0 ADR-010 deviation (external vars as globals) is
+  // removed. Explicit STATIC is accepted and treated as AUTOMATIC for now.
+  bool isStatic = false;
 
   beginScopes_.clear();
   collectDecls(p->body, sc, p, isStatic);
@@ -182,6 +188,34 @@ void Sema::resolveParams(Scope *sc, Proc *p, const std::vector<std::string> &nam
   }
 }
 
+bool Sema::isDescendantOf(Proc *p, Proc *anc) {
+  for (Proc *c = p; c; c = c->parent)
+    if (c == anc) return true;
+  return false;
+}
+
+void Sema::addEnv(std::vector<Symbol *> &env, Symbol *s) {
+  if (std::find(env.begin(), env.end(), s) == env.end()) env.push_back(s);
+}
+
+// Bottom-up over the procedure tree. `p->env` is the ordered list of variables
+// owned by a strict ancestor of `p` that `p` or any of its internal procedures
+// accesses; codegen makes each a static-link parameter. A variable owned by
+// `p` itself is not in the list — the caller passes its address directly.
+void Sema::computeEnv(Proc *p) {
+  for (auto &q : prog_->procs)
+    if (q->parent == p) computeEnv(q.get());
+
+  std::vector<Symbol *> env;
+  for (Symbol *s : p->directUses) addEnv(env, s);
+  for (auto &q : prog_->procs) {
+    if (q->parent != p) continue;
+    for (Symbol *s : q->env)
+      if (s->owner != p) addEnv(env, s);  // owned higher up: thread it through
+  }
+  p->env = env;
+}
+
 void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isStatic) {
   for (auto &s : body) {
     if (!s) continue;
@@ -201,6 +235,7 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isSta
           continue;
         }
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
+        item.sym->owner = p;  // which procedure's frame holds this variable
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
         // BEGIN blocks too, hence the Proc* here.
@@ -377,9 +412,14 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
       }
       s->sym = sym;
       Proc *callee = sym->proc;
+      Stmt *en = sym->entry;  // rule (56): an ENTRY name uses the entry's params
+      std::vector<Symbol *> calleeParams =
+          en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol *>());
       for (auto &a : s->args) typeExpr(a.get(), sc, p);
       // External entries carry their descriptor in entryParams (rule (38)).
-      const size_t expect = callee ? callee->params.size() : sym->entryParams.size();
+      const size_t expect = en ? en->params.size()
+                          : callee ? callee->params.size()
+                          : sym->entryParams.size();
       if (s->args.size() != expect) {
         d_.error(s->loc, "'" + s->name + "' expects " + std::to_string(expect) +
                  " argument(s), " + std::to_string(s->args.size()) + " given", "(78)");
@@ -387,8 +427,8 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
       }
       if (callee)
         for (size_t i = 0; i < s->args.size(); ++i)
-          if (i < callee->paramSyms.size())
-            checkAssignable(callee->paramSyms[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
+          if (i < calleeParams.size())
+            checkAssignable(calleeParams[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
       break;
     }
     case Stmt::Return: {
@@ -439,12 +479,18 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
     case Expr::VarRef: {
       Symbol *sym = lookup(sc, e->name);
       if (!sym) sym = implicitDeclare(sc, e->name, e->loc, p->parent == nullptr);
+      if (!sym->owner) sym->owner = p;
       e->sym = sym;
       e->ty = sym->ty;
       if (sym->kind == Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is a procedure and cannot be used as a value", "(123)");
         e->ty = Type::voidTy();
       }
+      // rule (8)/(42) static link: a reference to a variable of an enclosing
+      // procedure is served through this procedure's static link.
+      if (sym->kind == Symbol::Var && sym->owner && sym->owner != p &&
+          isDescendantOf(p, sym->owner))
+        addEnv(p->directUses, sym);
       break;
     }
     case Expr::Call: {
@@ -743,14 +789,17 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::voidTy();
         break;
       }
-      if (!sym->proc || !sym->proc->isFunction) {
+      if (!sym->proc || !(sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))) {
         d_.error(e->loc, "'" + e->name + "' is a procedure and returns no value", "(123)");
         e->ty = Type::voidTy();
         break;
       }
       e->sym = sym;
       Proc *callee = sym->proc;
-      const size_t expect = callee->params.size();
+      Stmt *en = sym->entry;  // rule (56): an ENTRY name uses the entry's params
+      std::vector<Symbol *> calleeParams =
+          en ? en->entryParamSyms : callee->paramSyms;
+      const size_t expect = en ? en->params.size() : callee->params.size();
       if (e->args.size() != expect) {
         d_.error(e->loc, "'" + e->name + "' expects " + std::to_string(expect) +
                  " argument(s), " + std::to_string(e->args.size()) + " given", "(78)");
@@ -758,9 +807,9 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         break;
       }
       for (size_t i = 0; i < e->args.size(); ++i)
-        if (i < callee->paramSyms.size())
-          checkAssignable(callee->paramSyms[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
-      e->ty = callee->retTy;
+        if (i < calleeParams.size())
+          checkAssignable(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
+      e->ty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy()) : callee->retTy;
       break;
     }
     case Expr::Unary: {
