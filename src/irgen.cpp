@@ -1,4 +1,5 @@
 #include "irgen.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -229,6 +230,22 @@ void IRGen::emitProc(Proc *p) {
   }
   const std::string retLLVM = p->isFunction ? p->retTy.llvmTy() : "void";
 
+  // rule (56): ENTRY statements declare alternate entry points, each with its
+  // own parameters/result type. When present the body is split into segments
+  // (one per entry point) inside a shared implementation function.
+  std::vector<Stmt *> entries;
+  for (auto &st : p->body)
+    if (st && st->kind == Stmt::Entry) entries.push_back(st.get());
+
+  if (entries.empty())
+    emitPlainProc(p, retLLVM);
+  else
+    emitMultiEntryProc(p, entries, retLLVM);
+  curProc_ = nullptr;
+}
+
+// One procedure, one LLVM function: the ordinary path (no ENTRY statements).
+void IRGen::emitPlainProc(Proc *p, const std::string &retLLVM) {
   std::string params;
   std::string paramTys;  // the parameter types only, for the entry aliases
   for (size_t i = 0; i < p->paramSyms.size(); ++i) {
@@ -267,7 +284,135 @@ void IRGen::emitProc(Proc *p) {
     funcs_ += alias + " = internal alias " + retLLVM + " (" + paramTys + "), " +
               retLLVM + " (" + paramTys + ")* " + p->irName + "\n";
   }
-  curProc_ = nullptr;
+}
+
+// rule (56): a procedure with ENTRY statements. One shared implementation
+// function carries the whole body split into segments (each entry point starts
+// a segment); a small thunk per entry name marshals that entry's arguments and
+// tail-calls the implementation, so every entry point has its own signature.
+// All parameters (procedure + every entry) live in the shared function, so the
+// body can reference any of them; a thunk passes `undef` for the entries not
+// reached through it (those parameters are unused on that path).
+void IRGen::emitMultiEntryProc(Proc *p, const std::vector<Stmt *> &entries, const std::string &retLLVM) {
+  // The union of every entry point's parameters, deduplicated by symbol, in a
+  // stable order: the procedure's own list first, then each ENTRY's in order.
+  std::vector<Symbol *> uni;
+  auto push = [&](Symbol *s) {
+    if (std::find(uni.begin(), uni.end(), s) == uni.end()) uni.push_back(s);
+  };
+  for (Symbol *s : p->paramSyms) push(s);
+  for (Stmt *e : entries)
+    for (Symbol *s : e->entryParamSyms) push(s);
+
+  // Return type must be uniform across all entry points, since one shared body
+  // returns one type. Diagnose an unsupported mix rather than emit bad IR.
+  for (Stmt *e : entries) {
+    Type rt = e->entryIsFunction ? e->entryRetTy : Type::voidTy();
+    bool ok = (p->isFunction && e->entryIsFunction && rt.k == p->retTy.k) ||
+              (!p->isFunction && !e->entryIsFunction);
+    if (!ok)
+      d_.error(e->loc, "ENTRY result type differs from the procedure's; a mixed return type is not implemented in this stage", "(56)");
+  }
+
+  const std::string impl = p->irName + ".impl";
+  const std::string sel = "%entrysel";
+
+  // ---- shared implementation function ----
+  std::string params;
+  for (size_t i = 0; i < uni.size(); ++i) {
+    if (i) params += ", ";
+    params += "ptr " + uni[i]->irName;
+  }
+  if (!params.empty()) params += ", ";
+  params += "i64 " + sel;
+
+  body_ += "entry:\n";
+  allocaLocals(p);
+
+  // INITIAL attribute on AUTOMATIC variables (rule 26): runs on every
+  // activation regardless of which entry point was used.
+  for (auto &st : p->body) {
+    if (st && st->kind == Stmt::Declare)
+      for (auto &item : st->decls)
+        if (item.init && item.sym && !item.sym->isStatic) {
+          Val v = emitExpr(item.init.get());
+          storeTo(item.sym, v, item.loc);
+        }
+  }
+
+  // Entry selector: dispatch to the segment each call entered through.
+  body_ += "  switch i64 " + sel + ", label %e.seg.0 [";
+  for (size_t i = 0; i < entries.size(); ++i) {
+    body_ += " i64 " + std::to_string(i + 1) + ", label %e.seg." + std::to_string(i + 1);
+  }
+  body_ += " ]\n";
+  terminated_ = false;
+
+  // Segment 0 is the procedure's own start; each ENTRY begins the next segment.
+  size_t seg = 0;
+  body_ += "e.seg.0:\n";
+  terminated_ = false;
+  for (auto &st : p->body) {
+    if (st && st->kind == Stmt::Entry) {
+      ++seg;
+      body_ += "e.seg." + std::to_string(seg) + ":\n";
+      terminated_ = false;  // fall through from the previous segment
+      continue;
+    }
+    emitStmt(st.get());
+  }
+  if (!terminated_) {
+    if (p->isFunction) body_ += "  ret " + retLLVM + " 0\n";
+    else body_ += "  ret void\n";
+  }
+  funcs_ += "define internal " + retLLVM + " " + impl + "(" + params + ") {\n" + body_ + "}\n\n";
+
+  // ---- entry-point thunks ----
+  // A thunk tail-calls the shared body with its own arguments (for its own
+  // parameters) and `undef` for the rest, then returns the result.
+  auto thunk = [&](const std::vector<Symbol *> &mine, const std::string &selv) {
+    std::string sig;
+    for (size_t i = 0; i < mine.size(); ++i) {
+      if (i) sig += ", ";
+      sig += "ptr " + mine[i]->irName;
+    }
+    std::string args;
+    for (size_t j = 0; j < uni.size(); ++j) {
+      if (j) args += ", ";
+      bool own = std::find(mine.begin(), mine.end(), uni[j]) != mine.end();
+      args += "ptr " + std::string(own ? uni[j]->irName : "undef");
+    }
+    if (!args.empty()) args += ", ";
+    std::string b;
+    if (retLLVM == "void") {
+      b = "entry:\n  tail call void " + impl + "(" + args + selv + ")\n  ret void\n";
+    } else {
+      std::string r = fresh("r");
+      b = "entry:\n  " + r + " = tail call " + retLLVM + " " + impl + "(" + args + selv +
+          ")\n  ret " + retLLVM + " " + r + "\n";
+    }
+    return std::make_pair(sig, b);
+  };
+
+  // Segment 0: the procedure's own name (and its entry-namelist aliases).
+  auto t0 = thunk(p->paramSyms, "i64 0");
+  funcs_ += "define internal " + retLLVM + " " + p->irName + "(" + t0.first + ") {\n" + t0.second + "}\n\n";
+  for (const auto &en : p->entryNames) {
+    std::string alias = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + en;
+    funcs_ += alias + " = internal alias " + retLLVM + " (" + t0.first + "), " +
+              retLLVM + " (" + t0.first + ")* " + p->irName + "\n";
+  }
+  // Each ENTRY statement's name.
+  for (size_t i = 0; i < entries.size(); ++i) {
+    auto t = thunk(entries[i]->entryParamSyms, "i64 " + std::to_string(i + 1));
+    std::string fname = entryIrName(p, entries[i]);
+    funcs_ += "define internal " + retLLVM + " " + fname + "(" + t.first + ") {\n" + t.second + "}\n\n";
+  }
+}
+
+std::string IRGen::entryIrName(Proc *p, Stmt *e) {
+  return "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name +
+         "$entry$" + e->name;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +432,7 @@ void IRGen::emitStmt(Stmt *s) {
   switch (s->kind) {
     case Stmt::Null:
     case Stmt::Declare:
+    case Stmt::Entry:  // segment marker; handled by emitMultiEntryProc
       break;
     case Stmt::Assign: emitAssign(s); break;
     case Stmt::If: emitIf(s); break;
@@ -529,17 +675,22 @@ void IRGen::emitCall(Stmt *s) {
   if (!s->sym) return;
   Symbol *calleeSym = s->sym;
   Proc *callee = calleeSym->proc;
+  // rule (56): calling an alternate entry point uses its own thunk and params.
+  Stmt *en = calleeSym->entry;
   // A defined procedure uses its mangled Proc symbol; an external C entry
-  // uses the ProcName symbol's irName (@NAME).
-  const std::string calleeName = callee ? callee->irName : calleeSym->irName;
+  // uses the ProcName symbol's irName (@NAME); an ENTRY uses its own thunk.
+  const std::string calleeName =
+      en ? entryIrName(callee, en) : (callee ? callee->irName : calleeSym->irName);
+  std::vector<Symbol *> calleeParams =
+      en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol *>());
   std::string args;
   for (size_t i = 0; i < s->args.size(); ++i) {
     Expr *a = s->args[i].get();
-    // The expected parameter type comes from the procedure's DECLAREd
-    // parameters, or (for an external C entry) its ENTRY descriptor.
+    // The expected parameter type comes from the entry point's parameters
+    // (the procedure's, the ENTRY's, or an external C ENTRY descriptor).
     Type pty;
-    if (callee) {
-      if (i < callee->paramSyms.size()) pty = callee->paramSyms[i]->ty;
+    if (en || callee) {
+      if (i < calleeParams.size()) pty = calleeParams[i]->ty;
       else break;
     } else {
       if (i < calleeSym->entryParams.size()) pty = calleeSym->entryParams[i];
@@ -1034,16 +1185,19 @@ Val IRGen::emitExpr(Expr *e) {
         return out;
       }
       // Function reference (rule (123)): call an internal function procedure
-      // and take its result as a value.
+      // (or an ENTRY statement, rule (56)) and take its result as a value.
       if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = "0"; return v; }
+      Stmt *en = e->sym->entry;
       Proc *callee = e->sym->proc;
-      const Type &rty = callee->retTy;
+      Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy()) : callee->retTy;
+      const std::string calleeName = en ? entryIrName(callee, en) : callee->irName;
+      std::vector<Symbol *> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
       if (rty.isChar()) { v.ty = e->ty; v.reg = "0"; return v; }  // diagnosed in emitProc
       std::string args;
       for (size_t i = 0; i < e->args.size(); ++i) {
         Expr *a = e->args[i].get();
         Type pty;
-        if (i < callee->paramSyms.size()) pty = callee->paramSyms[i]->ty;
+        if (i < calleeParams.size()) pty = calleeParams[i]->ty;
         else break;
         std::string addr;
         bool direct = a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
@@ -1083,7 +1237,7 @@ Val IRGen::emitExpr(Expr *e) {
         args += "ptr " + addr;
       }
       std::string callReg = fresh("fres");
-      body_ += "  " + callReg + " = call " + rty.llvmTy() + " " + callee->irName + "(" + args + ")\n";
+      body_ += "  " + callReg + " = call " + rty.llvmTy() + " " + calleeName + "(" + args + ")\n";
       v.ty = rty;
       if (rty.isBit()) {
         std::string b = fresh("fb");

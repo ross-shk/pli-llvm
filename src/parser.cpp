@@ -263,6 +263,38 @@ StmtP Parser::parseStatement(Proc *owner) {
     return nullptr;  // procedures are hoisted into Program::procs
   }
 
+  // ENTRY statement                                     rule (56)
+  if (atStmtKeyword("ENTRY")) {
+    if (st->labels.empty()) {
+      d_.error(cur().loc, "ENTRY statement requires a label (the entry name)", "(56)");
+      resync();
+      return nullptr;
+    }
+    advance();  // ENTRY
+    st->kind = Stmt::Entry;
+    st->name = st->labels.front();
+    // [ ( parameterlist ) ]
+    if (eat(Tok::LParen)) {
+      while (!at(Tok::RParen) && !at(Tok::Eof)) {
+        if (at(Tok::Word)) { st->params.push_back(cur().text); advance(); }
+        else { d_.error(cur().loc, "expected parameter name", "(56)"); advance(); }
+        if (!eat(Tok::Comma)) break;
+      }
+      expect(Tok::RParen, "(56)");
+    }
+    // [ RETURNS ( data-attributes ) ]
+    if (atWord("RETURNS")) {
+      advance();
+      if (expect(Tok::LParen, "(56)")) {
+        st->entryIsFunction = true;
+        parseDescriptorType(st->entryRetTy);
+        expect(Tok::RParen, "(56)");
+      }
+    }
+    expect(Tok::Semi, "(56)");
+    return st;
+  }
+
   if (eat(Tok::Semi)) { st->kind = Stmt::Null; return st; }  // rule (67)
 
   if (atStmtKeyword("DECLARE") || atStmtKeyword("DCL")) { advance(); auto d = parseDeclare(); if (d) d->labels = st->labels; return d; }

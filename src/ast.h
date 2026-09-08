@@ -61,6 +61,8 @@ struct Stmt {
     Return,     // rule (81)
     Stop,       // rule (85)
     Goto,       // rule (77)  GO TO label — local, within a procedure (M1)
+    Entry,      // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
+                //            an alternate entry point into this procedure
     Leave,      // (not in TR 25.084; modern LEAVE, rejected in M0)
   } kind = Null;
 
@@ -73,8 +75,15 @@ struct Stmt {
   StmtP thenS, elseS;
   std::vector<StmtP> body;
 
-  std::string name;        // DO control variable, CALL target
+  std::string name;        // DO control variable, CALL target, ENTRY name
   Symbol *sym = nullptr;   // resolved control variable / callee
+
+  // ENTRY statement (rule 56): an alternate entry point, with its own params
+  // and optional RETURNS type.
+  std::vector<std::string> params;   // ENTRY parameter names
+  bool entryIsFunction = false;
+  Type entryRetTy{};
+  std::vector<Symbol *> entryParamSyms;  // resolved by sema
 
   // PUT statement options
   bool skip = false, page = false;

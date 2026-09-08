@@ -1,0 +1,27 @@
+ /* rule (56): the ENTRY statement declares an alternate entry point into a
+    procedure, with its own parameters and result type. Calling the procedure
+    by its own name runs the body from the top; calling it by an entry name
+    starts at that ENTRY statement. Each segment here terminates on its own. */
+ area: procedure(d) returns(fixed);
+    declare d fixed;
+    declare r fixed;
+
+    r = d * d;
+    return(r);
+
+    cube: entry(d) returns(fixed);
+    r = d * d * d;
+    return(r);
+ end area;
+
+ entrytest: procedure options(main);
+    declare a fixed;
+
+    a = area(3);
+    if a = 9 then put skip list('PASS area(3) = 9');
+    else put skip list('FAIL area(3) =', a);
+
+    a = cube(3);
+    if a = 27 then put skip list('PASS cube(3) = 27');
+    else put skip list('FAIL cube(3) =', a);
+ end entrytest;
