@@ -1,0 +1,31 @@
+ /* TRUNC built-in function: trunc(x) removes the fractional part of a numeric
+    value toward zero, preserving its type (FLOAT stays FLOAT, FIXED is already
+    integral). M2 arithmetic built-in (Y33-6003 TRUNC). */
+ trunc_test: procedure options(main);
+    declare x fixed bin(31);
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    y = trunc(2.7);
+    if y ^= 2.0 then do;
+       fails = fails + 1;
+       put skip list('FAIL trunc(2.7) =', y);
+    end;
+
+    y = trunc(-2.7);
+    if y ^= -2.0 then do;
+       fails = fails + 1;
+       put skip list('FAIL trunc(-2.7) =', y);
+    end;
+
+    x = trunc(5);
+    if x ^= 5 then do;
+       fails = fails + 1;
+       put skip list('FAIL trunc(5) =', x);
+    end;
+
+    if fails = 0 then put skip list('PASS trunc');
+    else put skip list('FAIL trunc: fails =', fails);
+ end trunc_test;

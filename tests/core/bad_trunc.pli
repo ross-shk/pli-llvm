@@ -1,0 +1,7 @@
+ /* Diagnostic test: TRUNC with a non-numeric argument is rejected. */
+ BADTRUNC: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHAR(4);
+    DECLARE Y FLOAT DECIMAL(6);
+    S = 'abcd';
+    Y = TRUNC(S);
+ END BADTRUNC;
