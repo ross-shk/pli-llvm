@@ -22,7 +22,7 @@ RT_OBJS  := $(patsubst runtime/%.c,$(BUILD)/rt_%.o,$(RT_SRCS))
 # Baked-in default path to the runtime archive, so `plic hello.pli` just works.
 RTPATH   := $(abspath $(RTLIB))
 
-.PHONY: all clean test
+.PHONY: all clean test install
 all: $(BIN) $(RTLIB)
 
 $(BUILD):
@@ -45,5 +45,17 @@ test: all
 
 clean:
 	rm -rf $(BUILD) tests/*/out
+
+# Install plic and the runtime archive. The baked-in RTPATH inside the binary
+# still points at build/libpli.a, so installed plic needs --runtime to find the
+# archive unless PREFIX matches where libpli.a is placed.
+PREFIX  ?= /usr/local
+BINDIR  := $(PREFIX)/bin
+LIBDIR  := $(PREFIX)/lib
+
+install: all
+	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(LIBDIR)
+	install -m 755 $(BIN) $(DESTDIR)$(BINDIR)/plic
+	install -m 644 $(RTLIB) $(DESTDIR)$(LIBDIR)/libpli.a
 
 -include $(DEPS)
