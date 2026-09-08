@@ -10,8 +10,8 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md`
 ## Build and test
 
 ```bash
-make                       # build/plic + build/libpli.a
-make test                  # compile, run, diff every tests/*/*.pli
+make -j8                    # build/plic + build/libpli.a (parallel)
+make test                   # compile, run, diff every tests/*/*.pli (parallel)
 ./build/plic f.pli -o f    # compile a program
 ./build/plic f.pli -emit-llvm -o f.ll   # inspect generated IR
 ./build/plic f.pli -fsyntax-only        # front end only
