@@ -380,10 +380,18 @@ bool Parser::parseDeclItem(DeclItem &item) {
         advance();
         continue;
       }
+      if (w == "ENTRY") {
+        // Declares an external entry (a C procedure, resolved at link time).
+        // rule (38). The optional ( ... ) is the parameter descriptor list.
+        item.isEntry = true;
+        advance();
+        if (at(Tok::LParen)) parseEntryParams(item.entryParams);
+        continue;
+      }
       if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" ||
           w == "POINTER" || w == "PTR" || w == "AREA" || w == "OFFSET" ||
           w == "BASED" || w == "CONTROLLED" || w == "CTL" || w == "DEFINED" ||
-          w == "DEF" || w == "LABEL" || w == "ENTRY" || w == "FILE" || w == "TASK" ||
+          w == "DEF" || w == "LABEL" || w == "FILE" || w == "TASK" ||
           w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN" || w == "LIKE") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
@@ -433,6 +441,54 @@ bool Parser::parseDeclItem(DeclItem &item) {
     }
   }
   item.init = std::move(init);
+  return true;
+}
+
+// descriptor-param ::= attribute•••                                rule (38)
+// Parse a single ENTRY parameter type, mirroring the attribute bag of
+// parseDeclItem for the scalar computational types M0 supports.
+bool Parser::parseDescriptorType(Type &out) {
+  bool sawFloat = false, sawBin = false;
+  bool sawChar = false, sawBit = false, sawVarying = false;
+  int prec = -1, scale = 0, slen = -1;
+  auto parenNums = [&](int &n1, int &n2) {
+    if (!eat(Tok::LParen)) return false;
+    if (at(Tok::Number)) { n1 = atoi(cur().text.c_str()); advance(); }
+    if (eat(Tok::Comma) && at(Tok::Number)) { n2 = atoi(cur().text.c_str()); advance(); }
+    expect(Tok::RParen, "(38)");
+    return true;
+  };
+  for (;;) {
+    if (!at(Tok::Word)) break;
+    const std::string &w = cur().text;
+    if (w == "FIXED") { advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
+    if (w == "FLOAT") { sawFloat = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) prec = a; } continue; }
+    if (w == "BINARY" || w == "BIN") { sawBin = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
+    if (w == "DECIMAL" || w == "DEC") { advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
+    if (w == "CHARACTER" || w == "CHAR") { sawChar = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) slen = a; } continue; }
+    if (w == "BIT") { sawBit = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) slen = a; } continue; }
+    if (w == "VARYING" || w == "VAR") { sawVarying = true; advance(); continue; }
+    if (w == "REAL") { advance(); continue; }
+    break;
+  }
+  if (sawChar) out = Type::chr(slen > 0 ? slen : 1, sawVarying);
+  else if (sawBit) out = Type::bit(slen > 0 ? slen : 1);
+  else if (sawFloat) out = Type::flt(prec > 0 ? prec : (sawBin ? 21 : 6));
+  else if (sawBin) out = Type::fixedBin(prec > 0 ? prec : 15, scale);
+  else out = Type::fixedDec(prec > 0 ? prec : 5, scale);
+  return true;
+}
+
+// entry-parameterlist ::= ( descriptor-param [ , descriptor-param ]••• )
+bool Parser::parseEntryParams(std::vector<Type> &params) {
+  if (!expect(Tok::LParen, "(38)")) return false;
+  while (!at(Tok::RParen) && !at(Tok::Eof)) {
+    Type t;
+    parseDescriptorType(t);
+    params.push_back(t);
+    if (!eat(Tok::Comma)) break;
+  }
+  expect(Tok::RParen, "(38)");
   return true;
 }
 

@@ -16,6 +16,7 @@ set -u
 
 cd "$(dirname "$0")/.." || exit 1
 PLIC=./build/plic
+RTLIB=./build/libpli.a
 
 pass=0
 fail=0
@@ -76,7 +77,20 @@ for dir in tests/*/; do
       bad_*) continue ;;
     esac
 
-    if ! "$PLIC" "$src" -o "$out/$name" > "$out/$name.compile" 2>&1; then
+    if [ -f "$dir/$name.c" ]; then
+      # Cross-unit test: the .pli calls an external C procedure via ENTRY;
+      # a companion .c defines it. Compile each to an object and link with
+      # the runtime.
+      if ! clang -c "$dir/$name.c" -o "$out/$name.c.o" > "$out/$name.compile" 2>&1 \
+         || ! "$PLIC" "$src" -c -o "$out/$name.pli.o" >> "$out/$name.compile" 2>&1 \
+         || ! clang "$out/$name.pli.o" "$out/$name.c.o" "$RTLIB" -o "$out/$name" \
+                >> "$out/$name.compile" 2>&1; then
+        echo "FAIL $name (cross-unit build failed)"
+        sed 's/^/      /' "$out/$name.compile"
+        fail=$((fail + 1))
+        continue
+      fi
+    elif ! "$PLIC" "$src" -o "$out/$name" > "$out/$name.compile" 2>&1; then
       echo "FAIL $name (compilation failed)"
       sed 's/^/      /' "$out/$name.compile"
       fail=$((fail + 1))

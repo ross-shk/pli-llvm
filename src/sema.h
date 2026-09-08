@@ -14,6 +14,8 @@ struct Symbol {
   enum Kind { Var, Param, ProcName } kind = Var;
   bool isStatic = false;   // STATIC storage: an LLVM global
   bool implicit = false;   // created by the implicit-declaration rule
+  bool isEntry = false;    // external C entry (DECLARE ... ENTRY): no body
+  std::vector<Type> entryParams;  // ENTRY(...) descriptor, for codegen
   std::string irName;      // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc *proc = nullptr;    // for ProcName
   Expr *initExpr = nullptr;  // folded INITIAL constant, rule (26)
@@ -28,10 +30,13 @@ struct Scope {
 class Sema {
 public:
   explicit Sema(Diags &d) : d_(d) {}
-  bool run(Program &prog);
+  bool run(Program &prog, bool compileOnly = false);
 
   // Symbols that require storage, in declaration order.
   const std::vector<Symbol *> &storage() const { return storage_; }
+
+  // External entries (DECLARE ... ENTRY) to forward-declare, in decl order.
+  const std::vector<Symbol *> &entries() const { return entries_; }
 
 private:
   Scope *scopeFor(Proc *p);
@@ -52,6 +57,7 @@ private:
   std::vector<std::unique_ptr<Scope>> scopes_;
   std::unordered_map<Proc *, Scope *> procScopes_;
   std::vector<Symbol *> storage_;
+  std::vector<Symbol *> entries_;   // external C entries, in declaration order
 };
 
 // Arithmetic result type per the conversion rules (M0 approximation).

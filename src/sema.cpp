@@ -66,7 +66,7 @@ Symbol *Sema::implicitDeclare(Scope *sc, const std::string &n, SourceLoc l, bool
   return s;
 }
 
-bool Sema::run(Program &prog) {
+bool Sema::run(Program &prog, bool compileOnly) {
   prog_ = &prog;
 
   // Pass 1: every procedure name is visible in its parent's scope, so that
@@ -86,11 +86,15 @@ bool Sema::run(Program &prog) {
 
   if (!prog.mainProc) {
     if (!prog.procs.empty()) {
-      d_.warn(prog.procs.front()->loc,
-              "no procedure has OPTIONS(MAIN); using '" + prog.procs.front()->name +
-                  "' as the program entry point", "(5)");
-      prog.mainProc = prog.procs.front().get();
-      prog.mainProc->isMain = true;
+      // A relocatable object (`-c`) may be a library with no entry point; the
+      // caller links it against its own `main` (e.g. a C driver).
+      if (!compileOnly) {
+        d_.warn(prog.procs.front()->loc,
+                "no procedure has OPTIONS(MAIN); using '" + prog.procs.front()->name +
+                    "' as the program entry point", "(5)");
+        prog.mainProc = prog.procs.front().get();
+        prog.mainProc->isMain = true;
+      }
     } else {
       d_.error({}, "translation unit contains no procedure", "(1)");
     }
@@ -145,6 +149,18 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, bool isStatic) {
     if (!s) continue;
     if (s->kind == Stmt::Declare) {
       for (auto &item : s->decls) {
+        if (item.isEntry) {
+          // External C entry: a ProcName symbol with no PL/I body. It keeps
+          // its upper-cased PL/I name so the linker resolves it to the C
+          // function (rules (34),(38)). Not storage.
+          Symbol *sym = declare(sc, item.name, Type::voidTy(), item.loc, Symbol::ProcName, false);
+          sym->isEntry = true;
+          sym->entryParams = item.entryParams;
+          sym->irName = "@" + item.name;
+          item.sym = sym;
+          entries_.push_back(sym);
+          continue;
+        }
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
@@ -254,8 +270,10 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
       s->sym = sym;
       Proc *callee = sym->proc;
       for (auto &a : s->args) typeExpr(a.get(), sc, p);
-      if (callee && s->args.size() != callee->params.size()) {
-        d_.error(s->loc, "'" + s->name + "' expects " + std::to_string(callee->params.size()) +
+      // External entries carry their descriptor in entryParams (rule (38)).
+      const size_t expect = callee ? callee->params.size() : sym->entryParams.size();
+      if (s->args.size() != expect) {
+        d_.error(s->loc, "'" + s->name + "' expects " + std::to_string(expect) +
                  " argument(s), " + std::to_string(s->args.size()) + " given", "(78)");
         break;
       }

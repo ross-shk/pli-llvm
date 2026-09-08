@@ -335,3 +335,29 @@ our own code.
 **Rejected.** Unit tests alone (they would not catch semantic drift in
 codegen); relying on the corpus alone (it does not exercise dark corners like
 `iSUB` defining or multiple closure).
+
+---
+
+## ADR-021 — External C entries: `DECLARE … ENTRY` and by-reference calls
+
+**Context.** PL/I must be able to call procedures written in C (architecture
+goal 4: "interoperate with C ABIs"; `OPTIONS(BYVALUE)` / C-interop attributes
+are M9). Rule (38) `ENTRY` was "not implemented in this stage".
+
+**Decision.** `DECLARE name ENTRY ( t1, … tn )` declares an external entry: a
+`ProcName` symbol with no PL/I body whose upper-cased name (the lexer already
+uppercases) is the C symbol, resolved at link time. Codegen emits a forward
+`declare` (one `ptr` per parameter) and a `CALL` passes each argument **by
+reference** (the PL/I default), so the C callee receives pointers — matching
+how an `ENTRY` descriptor parameter is passed. A `-c` flag compiles a unit to
+a relocatable object so a PL/I program can be linked against C objects (and a
+PL/I library unit against a foreign `main`).
+
+**Consequences.** PL/I can call C functions in a separate compilation unit,
+linked together with `libpli` (test `tests/core/cinterop.{pli,c}`). `ENTRY`
+parameters may also be passed as expressions via a dummy argument, like any
+PL/I by-reference call. `RETURNS` (function values), full descriptors, and
+`USES`/`SETS` remain M2; `OPTIONS(BYVALUE)` for value-passing is M9.
+**Rejected.** Implicit external entries (any undeclared `CALL` target) — this
+would mask typos and break the "diagnose, never silently accept" invariant;
+keeping the `@PLI_` prefix on entry symbols (breaks the C symbol name match).
