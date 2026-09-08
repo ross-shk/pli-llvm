@@ -552,6 +552,28 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::flt(6);
         break;
       }
+      // REPEAT built-in (M2): repeat(s, n) — s repeated n times; the length
+      // must be a constant so the result type is sized.
+      if (e->name == "REPEAT") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "REPEAT expects 2 arguments (string, count)", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isChar()) {
+          d_.error(e->args[0]->loc, "REPEAT first argument must be a character string", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        int n = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
+        if (n < 0) {
+          d_.error(e->args[1]->loc, "REPEAT count must be a constant in this stage", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::chr(e->args[0]->ty.len * n);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");

@@ -1,0 +1,7 @@
+ /* Diagnostic test: REPEAT with a non-constant count is rejected. */
+ BADREPEAT: PROCEDURE OPTIONS(MAIN);
+    DECLARE N FIXED BINARY(31);
+    DECLARE T CHAR(6);
+    N = 3;
+    T = REPEAT('AB', N);
+ END BADREPEAT;
