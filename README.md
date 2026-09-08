@@ -41,6 +41,8 @@ make install
 ```
 
 - procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
+- **function procedures** via `RETURNS(...)` and `RETURN(value)`, used as
+  value-producing expressions; recursive functions run (`func.pli`)
 - calling external C procedures via `DECLARE … ENTRY(...)` (by reference, ADR-021)
 - parameters **by reference**, with dummy arguments when conversion is needed
 - `DECLARE` with the attribute default rules and `INITIAL` constants; implicit
@@ -93,8 +95,8 @@ cc -c c_set.c -o c_set.o
 cc caller.o c_set.o build/libpli.a -o caller
 ```
 
-`RETURNS` (function values), full entry descriptors, and `OPTIONS(BYVALUE)`
-value-passing are not yet implemented (M2 / M9).
+Full entry descriptors, `USES`/`SETS`, character-valued results, and
+`OPTIONS(BYVALUE)` value-passing are not yet implemented (M2 / M9).
 
 ## Usage
 
@@ -144,7 +146,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 15 tests (9 golden + 5 self-contained + 1 diagnostic), all passing.
+Current suite: 16 tests (9 golden + 6 self-contained + 1 diagnostic), all passing.
 
 ## Example: generated IR
 
@@ -175,3 +177,5 @@ Documented in full in the ADRs; the load-bearing ones:
    procedures can see them without a static link (ADR-010); M1 fixes this.
 3. `PUT SKIP` on a fresh line does not emit a blank line, unlike a real
    SYSPRINT whose page/line position is tracked (M6).
+4. Function procedures return scalar (numeric/`BIT`) results by value
+   (ADR-022); character-valued results are diagnosed as unimplemented (M2).

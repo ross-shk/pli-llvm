@@ -159,9 +159,14 @@ void Parser::parseProcOptions(Proc *p) {
     }
     if (eatWord("RECURSIVE")) continue;
     if (atWord("RETURNS")) {
-      d_.error(cur().loc, "function procedures (RETURNS) are not implemented in this stage", "(34)");
+      // RETURNS(data-attributes) ::= the result type of a function
+      // procedure (rules (5),(34)). Parse the type from the attribute words.
       advance();
-      if (eat(Tok::LParen)) { int d = 1; while (d && !at(Tok::Eof)) { if (at(Tok::LParen)) ++d; else if (at(Tok::RParen)) --d; advance(); } }
+      if (expect(Tok::LParen, "(34)")) {
+        p->isFunction = true;
+        parseDescriptorType(p->retTy);   // result type from the attribute words
+        expect(Tok::RParen, "(34)");
+      }
       continue;
     }
     d_.warn(cur().loc, "ignoring unsupported procedure option '" +
@@ -268,10 +273,9 @@ StmtP Parser::parseStatement(Proc *owner) {
   if (atStmtKeyword("RETURN")) {
     advance();
     st->kind = Stmt::Return;
-    if (eat(Tok::LParen)) {
-      d_.error(st->loc, "RETURN with a value requires a function procedure (not implemented)", "(81)");
-      int depth = 1;
-      while (depth && !at(Tok::Eof)) { if (at(Tok::LParen)) ++depth; else if (at(Tok::RParen)) --depth; advance(); }
+    if (eat(Tok::LParen)) {           // RETURN(value) — function value, rule (81)
+      st->value = parseExpr();
+      expect(Tok::RParen, "(81)");
     }
     expect(Tok::Semi, "(81)");
     return st;
