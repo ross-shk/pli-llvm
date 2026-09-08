@@ -574,6 +574,21 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::chr(e->args[0]->ty.len * n);
         break;
       }
+      // VERIFY built-in (M2): verify(s, t) yields a FIXED BINARY position.
+      if (e->name == "VERIFY") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "VERIFY expects 2 arguments (string, set)", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
+          d_.error(e->loc, "VERIFY arguments must be character strings", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::fixedBin(31, 0);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");

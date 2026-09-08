@@ -149,6 +149,17 @@ void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
   while (out < dstcap) dst[out++] = ' ';
 }
 
+/* VERIFY(s, t): 1-based position of the first character of s not in t, or 0
+ * if every character of s appears in t (Y33-6003 VERIFY). */
+long long pli_verify(const char *s, long long slen, const char *t, long long tlen) {
+  for (long long i = 0; i < slen; ++i) {
+    long long j = 0;
+    while (j < tlen && s[i] != t[j]) ++j;
+    if (j == tlen) return i + 1;
+  }
+  return 0;
+}
+
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {
