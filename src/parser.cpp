@@ -770,6 +770,24 @@ ExprP Parser::parsePrimary() {
   auto e = std::make_unique<Expr>();
   e->loc = cur().loc;
 
+  // replicated-string-constant ::= ( integer ) simple-string-constant (129)
+  // Expand `(3)'AB'` into `'ABABAB'` at parse time; also covers bit strings.
+  if (at(Tok::LParen) && peek().kind == Tok::Number && !peek().isFloat &&
+      peek(2).kind == Tok::RParen &&
+      (peek(3).kind == Tok::CharLit || peek(3).kind == Tok::BitLit)) {
+    advance();                                    // (
+    long long count = strtoll(cur().text.c_str(), nullptr, 10);
+    advance();                                    // integer
+    advance();                                    // )
+    const Token &lit = cur();
+    advance();                                    // simple-string-constant
+    std::string out;
+    for (long long i = 0; i < count; ++i) out += lit.sval;
+    e->kind = lit.kind == Tok::CharLit ? Expr::CharLit : Expr::BitLit;
+    e->sval = out;
+    return e;
+  }
+
   if (at(Tok::LParen)) {
     advance();
     ExprP inner = parseExpr();

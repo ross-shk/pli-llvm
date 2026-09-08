@@ -64,7 +64,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (124),(125) | locator qualification, qualified names | diag → M3/M4 | |
 | (126) | subscripted references | diag → M3 | incl. `*` cross-sections |
 | (127) | unsubscripted reference | M3 | |
-| (128),(129) | constants, replicated string constants | partial M0 | `(3)'AB'` → M2 |
+| (128),(129) | constants, replicated string constants | partial M0 | replicated string constants `(n)'str'` expanded at parse time (rule (129), `repl.pli`); imaginary/sterling → M2 |
 | (130)–(133) | identifier, letter, alphameric, digit | M0 | incl. `$ # @` and break character |
 | (134) | `isub` (`integer SUB`) | M3 | ADR-018 |
 | (135)–(139) | integer, fixed/float/imaginary constants | partial M0 | `B` radix parsed; `COMPLEX` → M2 |

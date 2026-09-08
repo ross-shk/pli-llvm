@@ -57,7 +57,8 @@ make install
 - full operator set at spec precedence, including `**` right-associativity,
   `¬`/`^`/`~`, and the 48-character-set operator words (`AND`, `GT`, `CAT`, …)
 - `CHARACTER(n)`, `CHARACTER(n) VARYING`, concatenation, blank-padded
-  comparison; `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
+  comparison; replicated string constants `(n)'str'` (rule 129); `BIT(1)`;
+  `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
   `END` and `PUT` as ordinary variables
 
@@ -149,7 +150,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 19 tests (9 golden + 8 self-contained + 2 diagnostic), all passing.
+Current suite: 20 tests (9 golden + 9 self-contained + 2 diagnostic), all passing.
 
 ## Example: generated IR
 
