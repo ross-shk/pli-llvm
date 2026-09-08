@@ -173,6 +173,12 @@ void pli_translate(char *dst, long long dstcap, const char *s, long long slen,
   }
 }
 
+/* HIGH(n): n copies of the highest collating character (0xFF). */
+void pli_high(char *dst, long long n) { memset(dst, 0xFF, (size_t)n); }
+
+/* LOW(n): n copies of the lowest collating character (0x00). */
+void pli_low(char *dst, long long n) { memset(dst, 0x00, (size_t)n); }
+
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {

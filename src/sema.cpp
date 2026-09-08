@@ -604,6 +604,24 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::chr(e->args[0]->ty.len);
         break;
       }
+      // HIGH/LOW built-ins (M2): high(n)/low(n) — n copies of the top/bottom
+      // collating character; n must be constant to size the result.
+      if (e->name == "HIGH" || e->name == "LOW") {
+        const char *nm = e->name == "HIGH" ? "HIGH" : "LOW";
+        if (e->args.size() != 1) {
+          d_.error(e->loc, std::string(nm) + " expects 1 argument", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        int n = e->args[0]->kind == Expr::IntLit ? (int)e->args[0]->ival : -1;
+        if (n < 0) {
+          d_.error(e->args[0]->loc, std::string(nm) + " length must be a constant in this stage", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::chr(n);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
