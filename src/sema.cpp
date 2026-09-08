@@ -444,6 +444,21 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::fixedBin(31, 0);
         break;
       }
+      // ABS built-in (M2): abs(x) preserves the numeric type of its argument.
+      if (e->name == "ABS") {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, "ABS expects 1 argument", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isNumeric()) {
+          d_.error(e->args[0]->loc, "ABS argument must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = e->args[0]->ty;
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
