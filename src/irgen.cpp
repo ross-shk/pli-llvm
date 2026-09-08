@@ -838,6 +838,26 @@ Val IRGen::emitExpr(Expr *e) {
         }
         return v;
       }
+      // MIN built-in (M2): convert both operands to the common type and select
+      // the smaller.
+      if (e->name == "MIN") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        std::string cmp = fresh("mincmp");
+        if (common.k == TK::Float)
+          body_ += "  " + cmp + " = fcmp olt double " + av.reg + ", " + bv.reg + "\n";
+        else
+          body_ += "  " + cmp + " = icmp slt " + common.llvmTy() + " " + av.reg + ", " + bv.reg + "\n";
+        std::string r = fresh("min");
+        body_ += "  " + r + " = select i1 " + cmp + ", " + common.llvmTy() + " " + av.reg +
+                 ", " + common.llvmTy() + " " + bv.reg + "\n";
+        v.ty = common;
+        v.reg = r;
+        return v;
+      }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.
       if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = "0"; return v; }

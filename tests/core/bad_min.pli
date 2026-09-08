@@ -1,0 +1,7 @@
+ /* Diagnostic test: MIN with a non-numeric argument is rejected. */
+ BADMIN: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHAR(4);
+    DECLARE X FIXED BINARY(31);
+    S = 'abcd';
+    X = MIN(S, 3);
+ END BADMIN;
