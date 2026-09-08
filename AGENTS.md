@@ -69,3 +69,4 @@ copy features from it into this compiler
 only the specific test you are writing/fixing or running; `tests/*/out/` is  
 gitignored scratch, never worth reading
 - silo `runtime/`: don't list, glob, or read unless extending or changing the runtime
+- `docs/DESIGN-DECISIONS.md` contains the historical track of design decisions, don't read unless you need to check or modify already implemented features
