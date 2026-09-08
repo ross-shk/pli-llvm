@@ -84,8 +84,11 @@ $(BIN): $(OBJS) $(RULES_OBJ)
 $(RTLIB): $(RT_OBJS)
 	ar rcs $@ $(RT_OBJS)
 
+# The object rules above are independent, so `make -j` parallelises the build;
+# the test runner (tests/run_tests.py) parallelises its compile+run jobs
+# (override with JOBS).
 test: all
-	@tests/run_tests.sh
+	@python3 tests/run_tests.py
 
 clean:
 	rm -rf $(BUILD) tests/*/out
