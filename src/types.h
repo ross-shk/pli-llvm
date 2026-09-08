@@ -42,21 +42,6 @@ struct Type {
     return 32;
   }
 
-  // LLVM first-class type used to hold a value of this PL/I type in memory.
-  std::string llvmTy() const {
-    switch (k) {
-      case TK::FixedBin:
-      case TK::FixedDec: return intBits() == 32 ? "i32" : "i64";
-      case TK::Float: return "double";
-      case TK::Bit: return "i8";
-      case TK::Char:
-        if (varying) return "{ i32, [" + std::to_string(len) + " x i8] }";
-        return "[" + std::to_string(len) + " x i8]";
-      case TK::Void: return "void";
-    }
-    return "i32";
-  }
-
   // Human readable attribute list, used in diagnostics.
   std::string desc() const {
     switch (k) {

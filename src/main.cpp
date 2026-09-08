@@ -23,6 +23,14 @@
 #define PLIC_RUNTIME_LIB ""
 #endif
 
+// The clang used to assemble/optimize/link the emitted IR. plic emits IR in the
+// syntax of the LLVM it was built against (e.g. the `memory(none)` attribute),
+// so the matching clang must be used; the build bakes its path in. Overridable
+// with --clang. Falls back to `clang` on PATH.
+#ifndef PLIC_CLANG
+#define PLIC_CLANG "clang"
+#endif
+
 namespace fs = std::filesystem;
 
 static void usage() {
@@ -39,6 +47,7 @@ static void usage() {
       "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
       "  --keep-ll        keep the intermediate .ll next to the output\n"
       "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
+      "  --clang <path>    clang to assemble/link the IR (default: LLVM's clang)\n"
       "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
       "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
       "  -v               show the sub-commands being run\n"
@@ -58,6 +67,7 @@ static std::string runCapture(const char *cmd) {
 
 int main(int argc, char **argv) {
   std::string input, output, runtimeLib = PLIC_RUNTIME_LIB, triple;
+  std::string clangPath = PLIC_CLANG;
   std::string optLevel = "-O2";
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   int explain = 0;
@@ -75,6 +85,7 @@ int main(int argc, char **argv) {
     else if (a == "-fsyntax-only") syntaxOnly = true;
     else if (a == "--keep-ll") keepLL = true;
     else if (a == "--runtime") runtimeLib = next("--runtime");
+    else if (a == "--clang") clangPath = next("--clang");
     else if (a == "--triple") triple = next("--triple");
     else if (a == "--explain") {
       const std::string n = next("--explain");
@@ -129,7 +140,7 @@ int main(int argc, char **argv) {
   if (syntaxOnly) return 0;
 
   // --- code generation ---------------------------------------------------
-  if (triple.empty()) triple = runCapture("clang -dumpmachine 2>/dev/null");
+  if (triple.empty()) triple = runCapture((clangPath + " -dumpmachine 2>/dev/null").c_str());
   IRGen irgen(diags, sema, triple);
   std::string ir = irgen.run(*prog);
   if (!diags.ok()) return 1;
@@ -156,7 +167,7 @@ int main(int argc, char **argv) {
   }
 
   // --- assemble, optimize, link -----------------------------------------
-  std::string cmd = "clang -Wno-override-module " + optLevel + " \"" + llPath.string() + "\"";
+  std::string cmd = clangPath + " -Wno-override-module " + optLevel + " \"" + llPath.string() + "\"";
   if (compileOnly) {
     cmd += " -c";  // relocatable object: the caller performs the link step
   } else {

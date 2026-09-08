@@ -1,10 +1,26 @@
-# plic — PL/I -> LLVM compiler (M0 wireframe)
+# plic — PL/I -> LLVM compiler
 #
-# CMake + the LLVM C++ API arrive in M1 (see docs/IMPLEMENTATION-PLAN.md);
-# M0 deliberately depends on nothing but a C++20 compiler and `clang`.
+# M1 generates IR with the LLVM C++ API (ADR-002); the Makefile uses
+# llvm-config to locate the LLVM installation.
+#
+# The only hard external dependencies are a C++20 compiler and LLVM >= 18.
+
+LLVM_CONFIG ?= $(shell PATH="/opt/homebrew/opt/llvm/bin:$$PATH" which llvm-config 2>/dev/null)
+ifeq ($(LLVM_CONFIG),)
+  LLVM_CONFIG := $(shell which llvm-config 2>/dev/null)
+endif
+LLVM_CXXFLAGS := $(shell $(LLVM_CONFIG) --cxxflags 2>/dev/null)
+LLVM_LDFLAGS  := $(shell $(LLVM_CONFIG) --ldflags 2>/dev/null)
+LLVM_LIBS     := $(shell $(LLVM_CONFIG) --libs core irreader support 2>/dev/null)
+ifeq ($(LLVM_CXXFLAGS),)
+  $(error llvm-config not found — install LLVM >= 18 via Homebrew (brew install llvm) or set LLVM_CONFIG=)
+endif
 
 CXX      ?= c++
-CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wno-unused-parameter
+# LLVM's cxxflags carry -std=c++17; we keep -std=c++20 in our own flags and
+# strip the -std= and -stdlib= that llvm-config adds to avoid an override.
+CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wno-unused-parameter \
+            $(filter-out -std=% -stdlib=%,$(LLVM_CXXFLAGS))
 CC       ?= cc
 CFLAGS   ?= -O2 -Wall -Wextra
 
@@ -46,7 +62,7 @@ $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BIN): $(OBJS) $(RULES_OBJ)
-	$(CXX) $(CXXFLAGS) $(OBJS) $(RULES_OBJ) -o $@
+	$(CXX) $(CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) -o $@
 
 $(RTLIB): $(RT_OBJS)
 	ar rcs $@ $(RT_OBJS)
