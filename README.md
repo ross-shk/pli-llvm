@@ -35,9 +35,9 @@ make install
 ## What the wireframe compiles today
 
 ```pli
-HELLO: PROCEDURE OPTIONS(MAIN);
-   PUT SKIP LIST('Hello, world!');
-END HELLO;
+ hello: procedure options(main);
+    put skip list('Hello, world!');
+ end hello;
 ```
 
 - procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
@@ -69,14 +69,14 @@ C callee receives pointers.
 `caller.pli`:
 
 ```pli
- CALLER: PROCEDURE OPTIONS(MAIN);
-    DECLARE X FIXED BINARY(31);
-    DECLARE C_SET ENTRY (FIXED BINARY(31))
-       EXTERNAL('c_set');
-    X = 0;
-    CALL C_SET(X);            /* C function receives &X */
-    IF X = 42 THEN PUT SKIP LIST('PASS');
- END CALLER;
+ caller: procedure options(main);
+    declare x fixed bin(31);
+    declare c_set entry (fixed bin(31))
+       external('c_set');
+    x = 0;
+    call c_set(x);            /* C function receives &x */
+    if x = 42 then put skip list('PASS');
+ end caller;
 ```
 
 `c_set.c`:
