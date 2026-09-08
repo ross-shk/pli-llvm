@@ -1,6 +1,7 @@
 *.o
 *.out
 *.ll
+*.a
 
 build/
 tests/*/out/
