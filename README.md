@@ -59,8 +59,8 @@ make install
 - `CHARACTER(n)`, `CHARACTER(n) VARYING`, concatenation, blank-padded
   comparison; replicated string constants `(n)'str'` (rule 129); the `SUBSTR`,
   `INDEX`, `LENGTH`, `REPEAT`, `VERIFY`, `TRANSLATE`, `HIGH`, `LOW`, `DATE`,
-  `TIME`, `ABS`, `TRUNC`, `MIN`, `MAX`, `MOD` and `ROUND` built-in functions;
-  `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
+  `TIME`, `ABS`, `TRUNC`, `MIN`, `MAX`, `MOD`, `ROUND` and `MULTIPLY` built-in
+  functions; `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
   `END` and `PUT` as ordinary variables
 
@@ -152,7 +152,7 @@ or a specific test with:
 `./run_tests.sh usecases/control.pli`
 ```
 
-Current suite: 48 tests (9 golden + 23 self-contained + 16 diagnostic), all passing.
+Current suite: 50 tests (9 golden + 24 self-contained + 17 diagnostic), all passing.
 
 ## Example: generated IR
 

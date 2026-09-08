@@ -1,0 +1,5 @@
+ /* Diagnostic test: MULTIPLY with a precision argument is rejected in M0. */
+ BADMULTIPLY: PROCEDURE OPTIONS(MAIN);
+    DECLARE X FIXED BINARY(31);
+    X = MULTIPLY(6, 7, 10);
+ END BADMULTIPLY;

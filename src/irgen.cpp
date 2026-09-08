@@ -910,6 +910,20 @@ Val IRGen::emitExpr(Expr *e) {
         }
         return v;
       }
+      // MULTIPLY built-in (M2): product of two numerics (like *).
+      if (e->name == "MULTIPLY") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        std::string r = fresh("mul");
+        body_ += "  " + r + " = " + (common.k == TK::Float ? "fmul" : "mul") + " " + common.llvmTy() +
+                 " " + av.reg + ", " + bv.reg + "\n";
+        v.ty = common;
+        v.reg = r;
+        return v;
+      }
       // ROUND built-in (M2): round x to n fractional digits, as a FLOAT.
       if (e->name == "ROUND") {
         Val x = emitExpr(e->args[0].get());
