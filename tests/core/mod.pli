@@ -1,0 +1,36 @@
+ /* MOD built-in function: mod(a, b) = a - b * floor(a/b); the result takes the
+    sign of the divisor b. M2 arithmetic built-in (Y33-6003 MOD). */
+ mod_test: procedure options(main);
+    declare x fixed bin(31);
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    x = mod(7, 3);
+    if x ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL mod(7,3) =', x);
+    end;
+
+    x = mod(-7, 3);   /* sign of the divisor b */
+    if x ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL mod(-7,3) =', x);
+    end;
+
+    x = mod(10, 4);
+    if x ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL mod(10,4) =', x);
+    end;
+
+    y = mod(7.5, 2.0);
+    if y ^= 1.5 then do;
+       fails = fails + 1;
+       put skip list('FAIL mod(7.5,2.0) =', y);
+    end;
+
+    if fails = 0 then put skip list('PASS mod');
+    else put skip list('FAIL mod: fails =', fails);
+ end mod_test;

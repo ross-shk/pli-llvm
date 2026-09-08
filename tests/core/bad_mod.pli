@@ -1,0 +1,7 @@
+ /* Diagnostic test: MOD with a non-numeric argument is rejected. */
+ BADMOD: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHAR(4);
+    DECLARE X FIXED BINARY(31);
+    S = 'abcd';
+    X = MOD(S, 3);
+ END BADMOD;
