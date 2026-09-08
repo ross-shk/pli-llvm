@@ -1,0 +1,30 @@
+ /* VERIFY built-in function: verify(s, t) returns the 1-based position of the
+    first character of s that does not appear in t, or 0 if every character of
+    s appears in t. M2 string built-in (Y33-6003 VERIFY). */
+ verify_test: procedure options(main);
+    declare p fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    p = verify('ABCD', 'BCD');   /* 'A' is not in 'BCD', at position 1 */
+    if p ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify ABCD/BCD =', p);
+    end;
+
+    p = verify('ABCD', 'ABCD');  /* every character is in t -> 0 */
+    if p ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify all-in =', p);
+    end;
+
+    p = verify('A1B2', 'ABCD');  /* '1' is not in t, at position 2 */
+    if p ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify A1B2/ABCD =', p);
+    end;
+
+    if fails = 0 then put skip list('PASS verify');
+    else put skip list('FAIL verify: fails =', fails);
+ end verify_test;

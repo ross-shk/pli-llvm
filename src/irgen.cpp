@@ -114,6 +114,7 @@ std::string IRGen::run(Program &prog) {
       "declare double @pli_mod_dd(double, double)\n"
       "declare double @pli_round(double, i64)\n"
       "declare void @pli_repeat(ptr, i64, ptr, i64, i64)\n"
+      "declare i64 @pli_verify(ptr, i64, ptr, i64)\n"
       "declare i32 @pli_cmp_char(ptr, i64, ptr, i64)\n"
       "declare double @llvm.pow.f64(double, double)\n"
       "declare double @llvm.fabs.f64(double)\n";
@@ -924,6 +925,19 @@ Val IRGen::emitExpr(Expr *e) {
                  ", ptr " + s.ptr + ", i64 " + s.len + ", i64 " + toI64(n) + ")\n";
         out.len = std::to_string(e->ty.len);
         return out;
+      }
+      // VERIFY built-in (M2): position of the first char of s not in t.
+      if (e->name == "VERIFY") {
+        Val s = emitExpr(e->args[0].get());
+        Val t = emitExpr(e->args[1].get());
+        std::string r = fresh("ver");
+        body_ += "  " + r + " = call i64 @pli_verify(ptr " + s.ptr + ", i64 " + s.len +
+                 ", ptr " + t.ptr + ", i64 " + t.len + ")\n";
+        std::string x = fresh("ver32");
+        body_ += "  " + x + " = trunc i64 " + r + " to i32\n";
+        v.ty = e->ty;
+        v.reg = x;
+        return v;
       }
       // Function reference (rule (123)): call an internal function procedure
       // and take its result as a value.

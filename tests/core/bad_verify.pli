@@ -1,0 +1,7 @@
+ /* Diagnostic test: VERIFY with a non-character argument is rejected. */
+ BADVERIFY: PROCEDURE OPTIONS(MAIN);
+    DECLARE N FIXED BINARY(31);
+    DECLARE P FIXED BINARY(31);
+    N = 5;
+    P = VERIFY(N, '5');
+ END BADVERIFY;
