@@ -401,9 +401,34 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       break;
     }
     case Expr::Call: {
-      // Function reference (rule (123)): an internal procedure carrying a
-      // RETURNS attribute, called as a value-producing expression.
       for (auto &a : e->args) typeExpr(a.get(), sc, p);
+      // SUBSTR built-in (M2): substr(s, i, n) yields a character string of
+      // length n; the length must be a constant so the result type is sized.
+      if (e->name == "SUBSTR") {
+        if (e->args.size() != 3) {
+          d_.error(e->loc, "SUBSTR expects 3 arguments (string, start, length)", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isChar()) {
+          d_.error(e->args[0]->loc, "SUBSTR first argument must be a character string", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[1]->ty.isNumeric() || !e->args[2]->ty.isNumeric()) {
+          d_.error(e->loc, "SUBSTR start and length must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        int n = e->args[2]->kind == Expr::IntLit ? (int)e->args[2]->ival : -1;
+        if (n < 0) {
+          d_.error(e->args[2]->loc, "SUBSTR length must be a constant in this stage", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::chr(n);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
