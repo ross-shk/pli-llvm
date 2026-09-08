@@ -1,8 +1,9 @@
- /* PL/I calls an external C procedure (rule 38). C_SET is linked in
-    and receives x by reference, setting *x = 42. */
+ /* PL/I calls an external C procedure (rule 38). The C symbol is
+    spelled exactly via EXTERNAL('c_set'); x is by reference. */
  cinterop: procedure options(main);
     declare x fixed binary(31);
-    declare c_set entry (fixed binary(31));
+    declare c_set entry (fixed binary(31))
+       external('c_set');
     x = 0;
     call c_set(x);
     if x = 42 then put skip list('PASS cinterop');

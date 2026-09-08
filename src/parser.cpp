@@ -375,9 +375,21 @@ bool Parser::parseDeclItem(DeclItem &item) {
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
-          w == "UNALIGNED" || w == "INTERNAL" || w == "EXTERNAL") {
+          w == "UNALIGNED" || w == "INTERNAL") {
         d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage", "(15)");
         advance();
+        continue;
+      }
+      if (w == "EXTERNAL" || w == "EXT") {
+        // Extended external-name form: EXTERNAL('symbol') gives the exact,
+        // case-sensitive C symbol for interlanguage calls (see z/OS ILC).
+        advance();
+        if (at(Tok::LParen) && peek().kind == Tok::CharLit) {
+          advance();            // (
+          item.extName = cur().sval;
+          advance();            // the quoted symbol
+          if (at(Tok::RParen)) advance();
+        }
         continue;
       }
       if (w == "ENTRY") {
