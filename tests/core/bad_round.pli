@@ -1,0 +1,7 @@
+ /* Diagnostic test: ROUND with a non-numeric argument is rejected. */
+ BADROUND: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHAR(4);
+    DECLARE Y FLOAT DECIMAL(6);
+    S = 'abcd';
+    Y = ROUND(S, 2);
+ END BADROUND;

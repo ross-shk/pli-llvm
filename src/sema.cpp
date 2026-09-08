@@ -537,6 +537,21 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
         break;
       }
+      // ROUND built-in (M2): round(x, n) — the result is a FLOAT value.
+      if (e->name == "ROUND") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "ROUND expects 2 arguments", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "ROUND arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = Type::flt(6);
+        break;
+      }
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");

@@ -132,6 +132,14 @@ double pli_mod_dd(double a, double b) {
   return r;
 }
 
+/* ROUND(x, n): round x to n fractional decimal digits (n may be negative). */
+double pli_round(double x, long long n) {
+  double factor = 1.0;
+  for (long long i = 0; i < n; ++i) factor *= 10.0;
+  for (long long i = 0; i > n; --i) factor /= 10.0;
+  return round(x * factor) / factor;
+}
+
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {

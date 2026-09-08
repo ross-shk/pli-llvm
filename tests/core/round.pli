@@ -1,0 +1,29 @@
+ /* ROUND built-in function: round(x, n) rounds the numeric value x to n
+    fractional decimal digits. M2 arithmetic built-in (Y33-6003 ROUND). */
+ round_test: procedure options(main);
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    y = round(2.345, 2);
+    if y ^= 2.35 then do;
+       fails = fails + 1;
+       put skip list('FAIL round(2.345,2) =', y);
+    end;
+
+    y = round(2.344, 2);
+    if y ^= 2.34 then do;
+       fails = fails + 1;
+       put skip list('FAIL round(2.344,2) =', y);
+    end;
+
+    y = round(7.5, 0);
+    if y ^= 8.0 then do;
+       fails = fails + 1;
+       put skip list('FAIL round(7.5,0) =', y);
+    end;
+
+    if fails = 0 then put skip list('PASS round');
+    else put skip list('FAIL round: fails =', fails);
+ end round_test;
