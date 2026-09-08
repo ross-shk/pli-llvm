@@ -23,12 +23,16 @@ ifeq ($(LLVM_VERSION_OK),)
 endif
 
 CXX      ?= c++
-CXXFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter
+# Maximum optimization (-O3). Deliberately no -flto and no -march=native: LTO
+# records host CPU features that leak into the emitted IR, and a compiler must
+# not bake the build machine's features into its output (the assembler would
+# reject them). Both would also slow every incremental rebuild.
+CXXFLAGS ?= -O3 -Wall -Wextra -Wno-unused-parameter
 # LLVM's flags are required even when callers override CXXFLAGS. Keep its ABI
 # options, but put our language standard last so llvm-config cannot override it.
 PLIC_CXXFLAGS := $(CXXFLAGS) $(filter-out -std=%,$(LLVM_CXXFLAGS)) -std=c++20
 CC       ?= cc
-CFLAGS   ?= -O2 -Wall -Wextra
+CFLAGS   ?= -O3 -Wall -Wextra
 
 BUILD    := build
 BIN      := $(BUILD)/plic
