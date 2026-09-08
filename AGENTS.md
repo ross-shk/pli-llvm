@@ -30,11 +30,14 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 ## Build
 
 ```bash
-make && make test                        # all tests must stay green
+make -j8 && make test                   # parallel build + tests must stay green
 ./build/plic f.pli -o f                  # compile
 ./build/plic f.pli -emit-llvm -o f.ll    # inspect IR (do this for codegen work)
 ./build/plic f.pli -fsyntax-only -v      # front end only / show clang command
 ```
+
+`make -j8` parallelises the compile; the test runner (`tests/run_tests.sh`) already
+runs its compile+run jobs concurrently (`JOBS` overrides the worker count).
 
 ## Invariants
 

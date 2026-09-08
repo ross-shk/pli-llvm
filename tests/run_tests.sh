@@ -1,5 +1,5 @@
 #!/bin/sh
-# tests/run_tests.sh — compile, run and check every test program.
+# tests/run_tests.sh — compile, run and check every test program, in parallel.
 #
 # Usage: tests/run_tests.sh [group ... | <group>/<name>.pli ...]
 # Without arguments every tests/*/ group runs; otherwise only the named
@@ -13,23 +13,28 @@
 #   golden — expected/<name>.out exists: stdout is diff-checked against it
 #   self   — no expected/<name>.out: the program verifies itself and must
 #            print PASS (case-insensitive); any FAIL in its output fails it
+#
+# Tests are dispatched to tests/run_one.sh through `xargs -P`, so independent
+# tests compile and run concurrently. `JOBS` overrides the default worker count
+# (the number of CPUs). Results are collected and printed in group order.
+# `make -j` parallelises the compile step separately (see Makefile).
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
 PLIC=${PLIC:-./build/plic}
 RTLIB=${RTLIB:-./build/libpli.a}
 CLANG=${CLANG:-clang}
+export PLIC RTLIB CLANG
 
-pass=0
-fail=0
+# Parallelism: JOBS or the number of CPUs (fall back to 4 if unknown).
+if [ -z "${JOBS:-}" ]; then
+  JOBS=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+fi
 
-# Run a command with stdout+stderr to `$1`, killing its process group if it
-# exceeds 10s. Exit 124 follows the GNU timeout convention.
-timeout_run() {
-  outfile=$1
-  shift
-  python3 scripts/run_with_timeout.py 10 "$outfile" "$@"
-}
+# The job list: one line per test, `dir name type`, in deterministic order.
+jobs=""
+append_job() { jobs="$jobs$1 $2 $3
+"; }
 
 # Arguments are group names or single-test paths; both must exist. Captured
 # before the main loop reuses "$@" for glob expansion.
@@ -79,37 +84,14 @@ for dir in tests/*/; do
   set -- "$dir"*.sh
   have_sh=0; [ -f "$1" ] && have_sh=1
   [ "$have_pli" -eq 1 ] || [ "$have_sh" -eq 1 ] || continue
-  out="$dir/out"
-  mkdir -p "$out"
 
-  # Driver tests: tests/driver/*.sh run a plic sub-command; a golden
-  # expected/<name>.out (if present) is diff-checked, else the script must
-  # print PASS. Mirrors the execution-test classification below.
+  # Driver tests: tests/driver/*.sh run a plic sub-command.
   if [ "$have_sh" -eq 1 ]; then
     for drv in "$dir"*.sh; do
       [ -f "$drv" ] || continue
       name=$(basename "$drv" .sh)
       if [ "$single" -eq 1 ] && [ "$name" != "$onetest_name" ]; then continue; fi
-      timeout_run "$out/$name.out" sh "$drv"
-      if [ $? -eq 124 ]; then
-        echo "FAIL $name (timed out after 10s)"; echo
-        fail=$((fail + 1))
-        continue
-      fi
-      if [ -f "$dir/expected/$name.out" ]; then
-        if diff -u "$dir/expected/$name.out" "$out/$name.out" > "$out/$name.diff" 2>&1; then
-          echo "PASS $name"; pass=$((pass + 1))
-        else
-          echo "FAIL $name (output differs)"; sed 's/^/      /' "$out/$name.diff"
-          fail=$((fail + 1))
-        fi
-      elif grep -qi 'PASS' "$out/$name.out" && ! grep -qi 'FAIL' "$out/$name.out"; then
-        echo "PASS $name"; pass=$((pass + 1))
-      else
-        echo "FAIL $name (self test did not print PASS)"; echo
-        sed 's/^/      /' "$out/$name.out"
-        fail=$((fail + 1))
-      fi
+      append_job "$dir" "$name" driver
     done
   fi
 
@@ -121,54 +103,7 @@ for dir in tests/*/; do
     case "$name" in
       bad_*) continue ;;
     esac
-
-    if [ -f "$dir/$name.c" ]; then
-      # Cross-unit test: the .pli calls an external C procedure via ENTRY;
-      # a companion .c defines it. Compile each to an object and link with
-      # the runtime.
-      if ! "$CLANG" -c "$dir/$name.c" -o "$out/$name.c.o" > "$out/$name.compile" 2>&1 \
-         || ! "$PLIC" "$src" -c -o "$out/$name.pli.o" >> "$out/$name.compile" 2>&1 \
-         || ! "$CLANG" "$out/$name.pli.o" "$out/$name.c.o" "$RTLIB" -o "$out/$name" \
-                >> "$out/$name.compile" 2>&1; then
-        echo "FAIL $name (cross-unit build failed)"
-        sed 's/^/      /' "$out/$name.compile"
-        fail=$((fail + 1))
-        continue
-      fi
-    elif ! "$PLIC" "$src" -o "$out/$name" > "$out/$name.compile" 2>&1; then
-      echo "FAIL $name (compilation failed)"
-      sed 's/^/      /' "$out/$name.compile"
-      fail=$((fail + 1))
-      continue
-    fi
-
-    timeout_run "$out/$name.out" "$out/$name"
-    if [ $? -eq 124 ]; then
-      echo "FAIL $name (timed out after 10s)"; echo
-      fail=$((fail + 1))
-      continue
-    fi
-    if [ -f "$dir/expected/$name.out" ]; then
-      # Golden test: diff against the recorded baseline.
-      if diff -u "$dir/expected/$name.out" "$out/$name.out" > "$out/$name.diff" 2>&1; then
-        echo "PASS $name"
-        pass=$((pass + 1))
-      else
-        echo "FAIL $name (output differs)"
-        sed 's/^/      /' "$out/$name.diff"
-        fail=$((fail + 1))
-      fi
-    else
-      # Self-contained test: the program verifies itself.
-      if grep -qi 'PASS' "$out/$name.out" && ! grep -qi 'FAIL' "$out/$name.out"; then
-        echo "PASS $name"
-        pass=$((pass + 1))
-      else
-        echo "FAIL $name (self test did not print PASS)"; echo
-        sed 's/^/      /' "$out/$name.out"
-        fail=$((fail + 1))
-      fi
-    fi
+    append_job "$dir" "$name" exec
   done
 
   # Diagnostic tests: these must be rejected.
@@ -176,15 +111,31 @@ for dir in tests/*/; do
     [ -f "$src" ] || continue
     name=$(basename "$src" .pli)
     if [ "$single" -eq 1 ] && [ "$name" != "$onetest_name" ]; then continue; fi
-    if "$PLIC" "$src" -fsyntax-only > "$out/$name.compile" 2>&1; then
-      echo "FAIL $name (expected diagnostics, compiled cleanly)"
-      fail=$((fail + 1))
-    else
-      echo "PASS $name (rejected as expected)"
-      pass=$((pass + 1))
-    fi
+    append_job "$dir" "$name" diag
   done
 done
+
+# Run all jobs concurrently (bounded by JOBS), then print results in order.
+jobsfile=$(mktemp "${TMPDIR:-/tmp}/plic-jobs.XXXXXX")
+printf '%s' "$jobs" > "$jobsfile"
+cat "$jobsfile" | xargs -P "$JOBS" -n 3 tests/run_one.sh
+
+pass=0
+fail=0
+while read -r dir name type; do
+  result="$dir/out/$name.result"
+  if [ -f "$result" ]; then
+    cat "$result"
+    case "$(sed -n '1s/^PASS.*/PASS/p' "$result")" in
+      PASS) pass=$((pass + 1)) ;;
+      *) fail=$((fail + 1)) ;;
+    esac
+  else
+    echo "FAIL $name (no result)"
+    fail=$((fail + 1))
+  fi
+done < "$jobsfile"
+rm -f "$jobsfile"
 
 echo
 echo "$pass passed, $fail failed"
