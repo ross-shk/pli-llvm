@@ -17,7 +17,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (6),(7) | sentencelist, end-clause, multiple closure | M0 | `parseBody` / `loops.pli` (`END OUTER;`) |
 | (8) | sentence kinds | M0 | `parseStatement`; internal procedures reach enclosing automatic storage via a static link (ADR-027, `staticlink.pli`) |
 | (9),(10) | `DECLARE`, declarationlist | M0 | `parseDeclare` / `ifelse.pli` |
-| (11) | declaration, level numbers, factoring | partial M2 | scalars + level-numbered structures (nested via `1 S, 2 A ..., 2 X, 3 Y ...`) in read/write positions, including array members `2 A(10) ...` (`struct.pli`, `struct_array.pli`); factoring → M2; `INITIAL`/whole-structure → diag |
+| (11) | declaration, level numbers, factoring | M2 | scalars + level-numbered structures (nested via `1 S, 2 A ..., 2 X, 3 Y ...`) in read/write positions, including array members `2 A(10) ...` (`struct.pli`, `struct_array.pli`); factored lists `DECLARE (A, B) FIXED BIN(31)` with a factored dimension `(X, Y) (5) ...` (`factor.pli`); `INITIAL` in factored form → diag |
 | (12),(13) | dimension attribute, bound pairs | partial M2 | fixed-size constant-bounds arrays, single- and multi-axis, row-major layout (`A(m,n)`/`A(lb:ub,...)`), scalar elements (`array.pli`, `array2d.pli`); dynamic bounds, `*` extents, cross-sections → M2 |
 | (14),(15) | attribute, data-attribute set | partial M0 | arithmetic/string/`ALIGNED` subset |
 | (16),(17) | arithmetic attributes, precision, signed integer | partial M0 | practical binary forms first; full decimal/precision conformance → D1 |

@@ -57,6 +57,9 @@ private:
   StmtP parseAssignment();
   void parseProcOptions(Proc *p);
   bool parseDeclItem(DeclItem &item);
+  // Parse the dimension + attribute tail shared by a declaration item and by a
+  // factored declaration list (rule 11); builds item.ty / item.dims / item.init.
+  bool parseDeclTail(DeclItem &item);
   // Try to parse a constant-bounds dimension (rules (12),(13)) at the current
   // LParen. Consumes tokens only when it is genuinely a dimension; returns
   // false (with the token stream restored) so the caller can treat the group

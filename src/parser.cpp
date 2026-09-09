@@ -457,9 +457,40 @@ StmtP Parser::parseDeclare() {
   st->kind = Stmt::Declare;
   st->loc = cur().loc;
   for (;;) {
-    DeclItem item;
-    if (!parseDeclItem(item)) { resync(); return st; }
-    st->decls.push_back(std::move(item));
+    if (at(Tok::LParen)) {
+      // Factored declaration (rule 11): DECLARE (A, B, C) [dim] attrs... — every
+      // name in the parenthesised list shares the dimension + attribute tail.
+      // Parse the name list, parse the tail once, then clone it per name.
+      SourceLoc floc = cur().loc;
+      advance();  // (
+      std::vector<std::pair<std::string, SourceLoc>> names;
+      for (;;) {
+        if (at(Tok::Word)) { names.push_back({cur().text, cur().loc}); advance(); }
+        else { d_.error(cur().loc, "expected a name in factored declaration", "(11)"); break; }
+        if (!eat(Tok::Comma)) break;
+      }
+      expect(Tok::RParen, "(11)");
+      if (names.empty()) d_.error(floc, "factored declaration has no names", "(11)");
+      DeclItem base;
+      if (!parseDeclTail(base)) { resync(); return st; }
+      if (base.init)
+        d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage", "(26)");
+      for (auto &[n, nl] : names) {
+        DeclItem item;
+        item.name = n;
+        item.loc = nl;
+        item.level = base.level;
+        item.ty = base.ty;
+        item.isEntry = base.isEntry;
+        item.extName = base.extName;
+        item.entryParams = base.entryParams;
+        st->decls.push_back(std::move(item));
+      }
+    } else {
+      DeclItem item;
+      if (!parseDeclItem(item)) { resync(); return st; }
+      st->decls.push_back(std::move(item));
+    }
     if (!eat(Tok::Comma)) break;
   }
   expect(Tok::Semi, "(9)");
@@ -494,15 +525,17 @@ bool Parser::parseScalarAttr(AttrBag &bag, const char *rule) {
 // declaration ::= [integer] identifier [dimension] [attribute•••]  rule (11)
 bool Parser::parseDeclItem(DeclItem &item) {
   if (at(Tok::Number) && !cur().isFloat) { item.level = atoi(cur().text.c_str()); advance(); }
-  if (at(Tok::LParen)) {
-    d_.error(cur().loc, "factored declarations are not implemented in this stage", "(11)");
-    return false;
-  }
   if (!at(Tok::Word)) { d_.error(cur().loc, "expected a name in DECLARE", "(11)"); return false; }
   item.name = cur().text;
   item.loc = cur().loc;
   advance();
+  return parseDeclTail(item);
+}
 
+// Dimension + attribute tail of a declaration (rule 11), shared verbatim by a
+// factored declaration list (DECLARE (A, B) FIXED): the dimension attribute
+// first, then the attribute bag, ending by building item.ty / dims / init.
+bool Parser::parseDeclTail(DeclItem &item) {
   // Dimension attribute (rules (12),(13)): a leading parenthesised group after
   // the name is a dimension when a bound-pair ':' is present or an attribute
   // keyword follows; otherwise it is a precision/length (M0 scalar behaviour).
