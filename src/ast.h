@@ -48,12 +48,24 @@ struct Expr {
 struct Stmt;
 using StmtP = std::unique_ptr<Stmt>;
 
+// One INITIAL item (rules (26)-(31)): a constant value, an iteration factor
+// (n) that repeats its sublist n times, a bare '*' that repeats the last value,
+// or a Group — a parenthesised sublist. Sema expands a list of these into a flat
+// sequence of element values.
+struct InitItem {
+  enum Kind { Value, Iter, Repeat, Group } kind = Value;
+  ExprP value;                 // Value: the constant; Iter: the factor count
+  long long factor = 0;        // Iter: iteration count
+  std::vector<InitItem> items; // Iter/Group: the repeated sublist
+};
+
 struct DeclItem {
   std::string name;
   Type ty{};
   SourceLoc loc{};
   int level = 0; // rule (11) level number; 0 when absent (no structure)
-  ExprP init;    // INITIAL(...) — scalar constant only in M0
+  ExprP init;    // INITIAL(...) — a single simple scalar constant (M0 scalar path)
+  std::vector<InitItem> initItems; // INITIAL(...) itemlist (arrays, rule 26-31)
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor

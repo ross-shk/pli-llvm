@@ -1,0 +1,5 @@
+  /* INITIAL on an array (rule 26) must supply exactly one value per element;
+     a list whose expanded length does not match the extent is rejected. */
+  bad_init_array: procedure options(main);
+     declare a(3) fixed bin(31) init((1,2,3,4));
+  end bad_init_array;

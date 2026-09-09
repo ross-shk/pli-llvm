@@ -1,0 +1,29 @@
+  /* INITIAL iteration factors on arrays (rules (26)-(31)): an itemlist of
+     constants, with iteration factors (n), '*' repeat-last, and flat lists,
+     fills a fixed-size array element by element on both STATIC and AUTOMATIC
+     storage. */
+  init_array_test: procedure options(main);
+     declare a(6) fixed bin(31) init((1,2,3,4,5,6));
+     declare b(6) fixed bin(31) init((3) (1,2));
+     declare c(6) fixed bin(31) init((1,2,*,*,(2)9));
+     declare fails fixed bin(31);
+
+     fails = 0;
+     /* flat itemlist */
+     if a(1) ^= 1 or a(3) ^= 3 or a(6) ^= 6 then fails = fails + 1;
+     /* iteration factor over a sublist: (1,2) repeated 3 times */
+     if b(1) ^= 1 or b(2) ^= 2 or b(5) ^= 1 or b(6) ^= 2 then fails = fails + 1;
+     /* '*' repeat-last and an iteration factor over a single value */
+     if c(1) ^= 1 or c(2) ^= 2 or c(3) ^= 2 or c(4) ^= 2 then fails = fails + 1;
+     if c(5) ^= 9 or c(6) ^= 9 then fails = fails + 1;
+
+     /* automatic storage (emitInitials): per-element stores */
+     auto_test: procedure;
+        declare d(4) fixed bin(31) init((2) (7,8));
+        if d(1) ^= 7 or d(2) ^= 8 or d(3) ^= 7 or d(4) ^= 8 then fails = fails + 1;
+     end auto_test;
+     call auto_test;
+
+     if fails = 0 then put skip list('PASS init_array');
+     else put skip list('FAIL init_array: fails =', fails);
+  end init_array_test;

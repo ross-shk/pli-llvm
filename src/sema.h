@@ -22,6 +22,7 @@ struct Symbol {
   Proc* owner = nullptr;         // the procedure that declares this variable (static link)
   Stmt* entry = nullptr;         // if this ProcName is an ENTRY statement (rule 56)
   Expr* initExpr = nullptr;      // folded INITIAL constant, rule (26)
+  std::vector<Expr*> initElems;  // folded INITIAL element list for arrays, rule (26)
 };
 
 struct Scope {
@@ -85,6 +86,16 @@ private:
   // same-named, assignable member in `src` (recursively); names absent from
   // either side are skipped, so the layouts need not match.
   void checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc);
+  // Fold an INITIAL constant expression (rule 26) to a literal, negating a
+  // leading unary minus; returns the folded literal, or nullptr after a
+  // diagnostic when it is not a literal or not assignable to `ty`.
+  Expr* foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc);
+  // Expand an INITIAL itemlist (rules (28)-(31)) into a flat sequence of folded
+  // element values, expanding iteration factors and resolving '*'.
+  void expandInitItems(const std::vector<InitItem>& items, const Type& elemTy, SourceLoc loc,
+                       std::vector<Expr*>& out);
+  // Total element count of an array type: the product of (ub - lb + 1) (rule 12).
+  long long elementCount(const Type& ty);
 
   Diags& d_;
   Program* prog_ = nullptr;

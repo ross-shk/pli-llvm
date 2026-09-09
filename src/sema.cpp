@@ -314,14 +314,25 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         item.sym->owner = p; // which procedure's frame holds this variable
         // Only scalar (numeric/BIT) element arrays are served in this stage;
         // character element arrays are diagnosed, never silently miscompiled
-        // (invariant 2). INITIAL on arrays (iteration factors) is M2 later.
+        // (invariant 2). INITIAL on an array (rule 26) expands its itemlist
+        // (with iteration factors and '*') into one value per element.
         if (item.ty.isArray()) {
           if (item.ty.elementType().isChar())
             d_.error(item.loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
-          if (item.init)
-            d_.error(item.loc, "INITIAL on an array is not implemented in this stage", "(26)");
+          if (!item.initItems.empty()) {
+            std::vector<Expr*> elems;
+            expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
+            long long n = elementCount(item.ty);
+            if ((long long)elems.size() != n)
+              d_.error(item.loc,
+                       "INITIAL supplies " + std::to_string(elems.size()) +
+                           " value(s) for an array of " + std::to_string(n) + " element(s)",
+                       "(26)");
+            else
+              item.sym->initElems = std::move(elems);
+          }
         }
-        if (item.ty.isStruct() && item.init)
+        if (item.ty.isStruct() && !item.initItems.empty())
           d_.error(item.loc, "INITIAL on a structure is not implemented in this stage", "(26)");
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
@@ -330,28 +341,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
-          Expr* e = item.init.get();
-          bool neg = false;
-          if (e->kind == Expr::Unary && e->op == Tok::Minus) {
-            neg = true;
-            e = e->a.get();
-          }
-          if (e->kind == Expr::IntLit || e->kind == Expr::FltLit || e->kind == Expr::CharLit ||
-              e->kind == Expr::BitLit) {
-            if (neg) {
-              e->ival = -e->ival;
-              e->fval = -e->fval;
-            }
-            // INITIAL must be assignable to the declared type.
-            bool strInit = e->kind == Expr::CharLit;
-            if (item.ty.isChar() != strInit)
-              d_.error(item.loc, "INITIAL value is not compatible with " + item.ty.desc(), "(26)");
-            else
-              item.sym->initExpr = e; // consumed by code generation
-          } else {
-            d_.error(item.loc, "INITIAL requires a constant in this stage", "(26)");
-            item.init.reset();
-          }
+          if (Expr* folded = foldInitialConstant(item.init.get(), item.ty, item.loc))
+            item.sym->initExpr = folded; // consumed by code generation
         }
       }
       continue;
@@ -486,6 +477,63 @@ void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
       checkAssignable(dm->ty, sm->ty, loc, "BY NAME assignment");
     }
   }
+}
+
+Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
+  Expr* lit = e;
+  if (lit->kind == Expr::Unary && lit->op == Tok::Minus)
+    lit = lit->a.get();
+  if (lit->kind != Expr::IntLit && lit->kind != Expr::FltLit && lit->kind != Expr::CharLit &&
+      lit->kind != Expr::BitLit) {
+    d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
+    return nullptr;
+  }
+  if (lit != e) { // apply the leading unary minus once
+    lit->ival = -lit->ival;
+    lit->fval = -lit->fval;
+  }
+  bool strInit = lit->kind == Expr::CharLit;
+  if (ty.isChar() != strInit) {
+    d_.error(loc, "INITIAL value is not compatible with " + ty.desc(), "(26)");
+    return nullptr;
+  }
+  return lit;
+}
+
+void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemTy, SourceLoc loc,
+                           std::vector<Expr*>& out) {
+  for (const InitItem& it : items) {
+    switch (it.kind) {
+    case InitItem::Value:
+      if (Expr* f = foldInitialConstant(it.value.get(), elemTy, loc))
+        out.push_back(f);
+      break;
+    case InitItem::Repeat:
+      if (out.empty())
+        d_.error(loc, "'*' in INITIAL has no preceding value to repeat", "(29)");
+      else
+        out.push_back(out.back()); // repeat the last folded value
+      break;
+    case InitItem::Group:
+      expandInitItems(it.items, elemTy, loc, out);
+      break;
+    case InitItem::Iter: {
+      std::vector<Expr*> sub;
+      expandInitItems(it.items, elemTy, loc, sub);
+      for (long long k = 0; k < it.factor; ++k)
+        for (Expr* s : sub)
+          out.push_back(s);
+      break;
+    }
+    }
+  }
+}
+
+long long Sema::elementCount(const Type& ty) {
+  long long n = 1;
+  for (const auto& d : ty.dims)
+    n *= (long long)(d.second - d.first + 1);
+  return n;
 }
 
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {

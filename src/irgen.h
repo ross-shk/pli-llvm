@@ -111,6 +111,12 @@ private:
   Val loadSym(Symbol* sym, const Type& ty);
   void storeTo(Symbol* sym, const Val& v, SourceLoc loc);
   void storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v);
+  // An LLVM scalar constant for an INITIAL element value (rule 26), or null for
+  // types without a constant form (e.g. STRUCT).
+  llvm::Constant* scalarInitConstant(const Type& ty, const Expr* ini);
+  // A materialised scalar value for an INITIAL element (rule 26), for storing
+  // into an AUTOMATIC array element.
+  Val initValue(const Type& ty, const Expr* e);
   // Load / store one array element (rule 126), with the SUBSCRIPTRANGE check.
   Val loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
   void storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, const Val& src,

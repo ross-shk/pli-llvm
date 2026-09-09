@@ -102,6 +102,14 @@ private:
   ExprP parsePower();
   ExprP parsePrimary();
 
+  // --- INITIAL itemlist (rules 26-31) ---------------------------------
+  // Parse a comma-separated list of INITIAL items, stopping at the enclosing
+  // ')'. Returns the item tree for sema to expand.
+  std::vector<InitItem> parseInitialList();
+  // Parse one INITIAL item: a constant, an iteration factor (n) value/sublist,
+  // a '*' repeat-last, or a parenthesised group.
+  InitItem parseInitialItem();
+
   std::vector<Token> t_;
   Diags& d_;
   size_t i_ = 0;
