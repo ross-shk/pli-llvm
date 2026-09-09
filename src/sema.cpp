@@ -378,7 +378,14 @@ void Sema::collectLabels(Stmt *s) {
 
 bool Sema::checkAssignable(const Type &dst, const Type &src, SourceLoc loc, const char *what) {
   if (dst.isStruct() || src.isStruct()) {
-    d_.error(loc, std::string(what) + ": whole-structure assignment is not implemented in this stage", "(127)");
+    // Whole-structure assignment (rule 127): a copy between two structures of
+    // identical shape (same members, recursively). Anything else — a shape
+    // mismatch, or mixing a structure with a non-structure — is diagnosed.
+    if (dst.isStruct() && src.isStruct() && dst == src) return true;
+    if (dst.isStruct() && src.isStruct())
+      d_.error(loc, std::string(what) + ": whole-structure assignment requires identical structure shapes", "(127)");
+    else
+      d_.error(loc, std::string(what) + ": a whole structure cannot be mixed with a non-structure in this position", "(127)");
     return false;
   }
   if (dst.isNumeric() && (src.isNumeric() || src.isBit())) return true;

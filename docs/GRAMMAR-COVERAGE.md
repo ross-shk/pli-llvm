@@ -51,7 +51,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (81) | `RETURN` | M0/M1 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
 | (82),(83) | `WAIT`, `DELAY` | M9 | |
 | (84),(85) | `EXIT`, `STOP` | M0 | |
-| (86) | assignment (incl. `BY NAME`) | partial M0 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); multiple/`BY NAME` → M2 |
+| (86) | assignment (incl. `BY NAME`) | partial M2 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); whole-structure assignment between identical-shape structures (`struct_assign.pli`, rule (127)); multiple/`BY NAME` → M2 |
 | (87)–(90) | `ALLOCATE`/`FREE` | diag → M3 | |
 | (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M4 | |
 | (100)–(103) | `OPEN`/`CLOSE` | diag → M5 | |
@@ -64,7 +64,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (123) | primitive expressions | partial M2 | constants/vars (M0); function references to function procedures (`func.pli`); array attribute built-ins `LBOUND`/`HBOUND`/`DIM` on fixed-size single-axis arrays (`array_bounds.pli`, `bad_array_builtin.pli`); `DIM` of a multi-axis array = total element count; array reduction built-ins `SUM`/`PROD`/`ANY`/`ALL` over the full extent (`array_reduce.pli`, `bad_array_reduce.pli`); attribute/reduction built-ins also apply to parameter arrays inside a callee (`array_param.pli`); cross-sections/multi-axis → M2 |
 | (124),(125) | locator qualification, qualified names | partial M2 | aggregate (structure) member qualification `S.A.B` in read/write positions and expressions (`struct.pli`); whole-structure value/assignment and `INITIAL` diagnosed (`bad_struct_*.pli`, rule (127)); locators → M3 |
 | (126) | subscripted references | partial M2 | fixed-size constant-bounds scalar arrays in read/write positions, single- and multi-axis, compile-time + runtime SUBSCRIPTRANGE on every axis (`array.pli`, `array2d.pli`, `bad_array_oob.pli`, `bad_array2d_oob.pli`, `bad_array2d_arity.pli`); subscripted structure array members `S.A(i)` incl. nested/multi-axis (`struct_array.pli`, `bad_struct_array_*.pli`); parameter arrays passed by reference, subscriptable on both sides of an assignment inside a callee (`array_param.pli`); `*` cross-sections → M2 |
-| (127) | unsubscripted reference | partial M2 | whole-structure value/assignment diagnosed (`bad_struct_assign.pli`, `bad_struct_value.pli`); full aggregate references → M2 |
+| (127) | unsubscripted reference | partial M2 | whole-structure assignment served as a storage copy between structures of identical shape, incl. array members and nested members (`struct_assign.pli`); shape mismatch or mixing a structure with a non-structure diagnosed (`bad_struct_assign.pli`, `bad_struct_value.pli`, rule (127)); a whole structure as an expression value, and full aggregate references → M2 |
 | (128),(129) | constants, replicated string constants | partial M0 | replicated strings served; imaginary/sterling → D1 |
 | (130)–(133) | identifier, letter, alphameric, digit | M0 | incl. `$ # @` and break character |
 | (134) | `isub` (`integer SUB`) | M2 | ADR-018; after ordinary aggregates |

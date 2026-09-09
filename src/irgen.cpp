@@ -207,6 +207,17 @@ std::string IRGen::run(HProgram &prog) {
              "parameters on the MAIN procedure are not implemented in this stage", "(2)");
   if (!d_.ok()) return "";
 
+  // The module needs a data layout so aggregate store sizes (used by
+  // whole-structure assignment's memcpy, rule 127) match the target. Pick by
+  // pointer/aggregate width from the target triple; the OS mangling does not
+  // affect type sizes.
+  if (!triple_.empty()) {
+    if (llvm::Triple(triple_).isArch64Bit())
+      mod_.setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128");
+    else
+      mod_.setDataLayout("e-m:o-p:32:32-i64:64-i128:128-n32:64-S128");
+  }
+
   emitGlobals();
 
   // Pre-declare every procedure's functions/aliases so a call site resolves
@@ -705,6 +716,25 @@ void IRGen::emitAssign(HStmt *s) {
       return;
     }
     storeArrayElement(t->sym, t->args, v, s->loc);
+    return;
+  }
+  // Whole-structure assignment S = T (rule 127): copy the source structure's
+  // storage into the target. Both sides are whole-structure references (a
+  // top-level variable or a qualified member); sema checked identical shape.
+  if (s->target->kind == HExpr::VarRef && s->target->sym && s->target->ty.isStruct()) {
+    HExpr *t = s->target.get();
+    HExpr *v = s->value.get();
+    if (v->kind != HExpr::VarRef || !v->sym || !v->ty.isStruct()) {
+      d_.error(s->loc, "right-hand side of a whole-structure assignment must be a structure reference", "(127)");
+      return;
+    }
+    llvm::Value *dst = t->memberPath.empty() ? addressOf(t->sym)
+                                             : memberAddr(t->sym, t->memberPath, s->loc);
+    llvm::Value *src = v->memberPath.empty() ? addressOf(v->sym)
+                                             : memberAddr(v->sym, v->memberPath, s->loc);
+    llvm::Type *sty = llvmTy(t->ty);
+    llvm::Value *sz = i64(mod_.getDataLayout().getTypeStoreSize(sty));
+    b_.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), sz);
     return;
   }
   // Qualified member assignment: S.A = e (rule 124).
