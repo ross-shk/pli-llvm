@@ -1,0 +1,73 @@
+ /* Array procedure parameters (rules (126),(123)): a fixed-size array passed to
+    a procedure is reached by reference, so a parameter array is subscriptable
+    on both sides of an assignment, and the array built-ins (DIM/LBOUND/HBOUND/
+    SUM/PROD) work on it inside the callee. */
+ array_param_test: procedure options(main);
+    declare a(5) fixed bin(31);
+    declare m(3,3) fixed bin(31);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    do i = 1 to 5;
+       a(i) = i;
+    end;
+    do i = 1 to 3;
+       do j = 1 to 3;
+          m(i,j) = i + j;
+       end;
+    end;
+
+    /* reads of a passed array inside the callee */
+    call check(a);
+    /* by-reference writes inside the callee reflect outside */
+    call double(a);
+    if a(1) ^= 2 or a(5) ^= 10 then fails = fails + 1;
+    /* a multi-axis array param, read and summed */
+    call trace(m);
+    /* a function procedure with an array param, returning a value */
+    if trace2(m) ^= 12 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS array_param');
+    else put skip list('FAIL array_param: fails =', fails);
+
+ check: procedure(x);
+    declare x(5) fixed bin(31);
+    declare i fixed bin(31);
+    if x(1) ^= 1 or x(5) ^= 5 then fails = fails + 1;
+    if dim(x) ^= 5 then fails = fails + 1;
+    if lbound(x) ^= 1 or hbound(x) ^= 5 then fails = fails + 1;
+    if sum(x) ^= 15 then fails = fails + 1;
+ end check;
+
+ double: procedure(x);
+    declare x(5) fixed bin(31);
+    declare i fixed bin(31);
+    do i = 1 to 5;
+       x(i) = x(i) * 2;
+    end;
+ end double;
+
+ trace: procedure(x);
+    declare x(3,3) fixed bin(31);
+    declare t fixed bin(31);
+    declare i fixed bin(31);
+    t = 0;
+    do i = 1 to 3;
+       t = t + x(i,i);
+    end;
+    if t ^= 12 then fails = fails + 1;
+ end trace;
+
+ trace2: procedure(x) returns(fixed bin(31));
+    declare x(3,3) fixed bin(31);
+    declare t fixed bin(31);
+    declare i fixed bin(31);
+    t = 0;
+    do i = 1 to 3;
+       t = t + x(i,i);
+    end;
+    return(t);
+ end trace2;
+ end array_param_test;
