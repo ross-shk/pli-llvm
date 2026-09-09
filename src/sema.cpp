@@ -989,5 +989,25 @@ bool Sema::typeBuiltin(Expr *e) {
         e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
         return true;
       }
+      // Array attribute built-ins (M2, rules (12),(13),(123)): LBOUND/HBOUND/
+      // DIM of a fixed-size single-axis array. With constant bounds these fold
+      // to compile-time values; the argument must be an unsubscripted array.
+      if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, e->name + " takes one array argument in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        Expr *a = e->args[0].get();
+        bool isArr = (a->kind == Expr::VarRef && a->sym &&
+                      a->sym->kind == Symbol::Var && a->sym->ty.isArray());
+        if (!isArr) {
+          d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::fixedBin(31, 0);
+        return true;
+      }
   return false;
 }

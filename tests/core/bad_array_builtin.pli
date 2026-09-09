@@ -1,0 +1,15 @@
+ /* Array attribute built-ins (rule (123)) are misused: a scalar argument, a
+    wrong argument count, and an out-of-range axis must each be diagnosed. */
+ bad_array_builtin: procedure options(main);
+    declare a(5) fixed bin(31);
+    declare x fixed bin(31);
+
+    /* not an array */
+    if dim(x) ^= 1 then put skip list('nope');
+
+    /* array attribute built-ins take one array argument in this stage */
+    if lbound(a, 1, 2) ^= 1 then put skip list('nope');
+
+    /* only a single axis is served in this stage */
+    if hbound(a, 2) ^= 1 then put skip list('nope');
+ end bad_array_builtin;
