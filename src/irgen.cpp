@@ -481,6 +481,13 @@ void IRGen::emitInitials(HProc* p) {
         }
         continue;
       }
+      // INITIAL(CALL f(...)) (rule 27): evaluate the call at block entry and
+      // store its return value into the variable. Runs on every entry (AUTOMATIC).
+      if (sym && sym->initCallH) {
+        Val v = emitExpr(sym->initCallH);
+        storeTo(sym, v, item.loc);
+        continue;
+      }
       Expr* e = item.sym ? item.sym->initExpr : nullptr;
       if (!e)
         continue;

@@ -1,0 +1,9 @@
+ /* INITIAL CALL (rule (27)) error: the called identifier must be a function
+    procedure (one that returns a value); calling a plain procedure that does
+    not RETURNS a value as the initializer is rejected. */
+ bad_init_call: procedure options(main);
+    declare a fixed bin(31) initial(call no_value());
+
+    no_value: procedure;
+    end no_value;
+ end bad_init_call;

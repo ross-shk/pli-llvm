@@ -622,6 +622,9 @@ StmtP Parser::parseDeclare() {
       if (base.init)
         d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage",
                  "(26)");
+      if (base.initCall)
+        d_.error(floc, "INITIAL CALL in a factored declaration is not implemented in this stage",
+                 "(27)");
       if (!base.dynBounds.empty())
         d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
                  "(13)");
@@ -792,7 +795,32 @@ bool Parser::parseDeclTail(DeclItem& item) {
         advance();
         if (expect(Tok::LParen, "(26)")) {
           if (atWord("CALL")) {
-            d_.error(cur().loc, "INITIAL CALL is not implemented in this stage", "(27)");
+            // initial-call ::= CALL identifier ( argumentlist )  rule (27)
+            advance(); // CALL
+            auto call = std::make_unique<Expr>();
+            if (at(Tok::Word)) {
+              call->kind = Expr::Call;
+              call->name = cur().text;
+              call->loc = cur().loc;
+              advance();
+              if (at(Tok::LParen)) {
+                advance();
+                if (!at(Tok::RParen)) {
+                  for (;;) {
+                    call->args.push_back(parseExpr());
+                    if (!eat(Tok::Comma))
+                      break;
+                  }
+                }
+                expect(Tok::RParen, "(27)");
+              } else {
+                d_.error(call->loc, "expected '(' after the INITIAL CALL function name", "(27)");
+              }
+            } else {
+              d_.error(cur().loc, "expected a function name after INITIAL CALL", "(27)");
+            }
+            item.initCall = std::move(call);
+            expect(Tok::RParen, "(26)"); // close INITIAL( ... )
           } else {
             item.initItems = parseInitialList();
             // Back-compat: a single plain value is also the M0 scalar item.init.
