@@ -12,6 +12,7 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md`
 ```bash
 make -j8                    # build/plic + build/libpli.a (parallel)
 make test                   # compile, run, diff every tests/*/*.pli (parallel)
+make check                  # analysis gate: -Werror + fmt-check + clang-tidy + scan-build
 ./build/plic f.pli -o f    # compile a program
 ./build/plic f.pli -emit-llvm -o f.ll   # inspect generated IR
 ./build/plic f.pli -fsyntax-only        # front end only
@@ -47,7 +48,9 @@ test. Keep them in one change.
    `./build/plic tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out`
    and read it before committing — it becomes the specification of behaviour,
    so a wrong line is a permanent wrong answer. A self-contained test needs no
-   baseline: its `PASS` is the verdict.
+   baseline: its `PASS` is the verdict. For a major edit run `make check` — the
+   analysis gate (`-Werror` build + clang-format drift + clang-tidy + the clang
+   static analyzer) must stay green; `make fmt` normalizes formatting first.
 5. **Check the IR** for anything non-trivial: `-emit-llvm` and read it. Cheap,
    and catches silently-dropped work (see the worked example below).
 6. **Update docs**: flip the row in `docs/GRAMMAR-COVERAGE.md`; adjust
