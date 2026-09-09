@@ -1227,3 +1227,45 @@ heap allocation for dynamic arrays (the runtime-sized `alloca` is valid for the
 block-scoped AUTOMATIC lifetime and needs no deallocator); evaluating the bound
 lazily at each subscript instead of once at entry (would allow the extent to
 change mid-block, which AUTOMATIC semantics forbid).
+
+---
+
+## ADR-051 — Arrays of structures: a dimensioned level item reached by subscript-then-qualify
+
+**Context.** M2 names nested arrays of structures. A structure whose level item
+carries a dimension, `1 arr(3), 2 x, 2 y`, is an array whose elements are
+structures; a member of one element is `arr(i).x` — subscript the array to a
+structure element, then qualify into a member. The existing access forms were
+qualify-then-subscript (`S.A(i)`, a structure with an array *member*, ADR-037) and
+plain array subscript (`A(i)`); `arr(i).x` (subscript *then* qualify) was
+unparseable, and `buildType` dropped a level item's dimension when it had members,
+so `arr` was typed as a plain structure rather than an array of structures.
+
+**Decision.** An array of structures is represented as a structure `Type` that
+keeps its `dims` (`buildType` copies `it.ty.dims` onto the built struct type), so
+`isArray()` and `elementType().isStruct()` are both true and `llvmTy` lays it out
+as `[N x structTy]`. The parser collects member qualifiers after the subscript
+group (`parsePrimary`), so `arr(i).x` is a `VarRef` with `args=[i]`, `path=[x]`;
+sema's `Call` case recognizes a base that is an array of structures, checks the
+subscript count against the array dims, reclassifies as `Subscript`, and resolves
+the path against the element structure type. Codegen addresses a member of one
+element as `arrayElementAddr` to the element struct, then `elementMemberAddr` — a
+GEP through the recorded field indices from the caller-supplied element address,
+mirroring `memberAddr` which starts from the symbol's own base. The parse-time
+dimension heuristic is extended: a bare extent `(n)` directly after a name is a
+dimension when an attribute keyword *or a comma* follows it, because a scalar
+precision can never follow a name bare, and the comma is the structure-array form
+`1 arr(3), 2 x`.
+
+**Consequences.** `tests/core/struct_array_of.pli` writes and reads `arr(i).x`/
+`arr(i).y` with runtime subscripts and in expressions; `bad_struct_array_of.pli`
+rejects a wrong subscript count and a missing member. A member array of an element
+(`arr(i).x(j)`) is diagnosed unimplemented. GRAMMAR-COVERAGE rules (11),(124),(126)
+and the implementation table list the served form.
+
+**Rejected.** A member array of an element (`arr(i).x(j)`) — two-level subscripting
+in one reference, deferred until the array-of-structures access is well covered; a
+whole element as a value (`arr(i)`) — already diagnosed as a whole-structure value
+(rule 127); a distinct AST/HIR node for subscript-then-qualify — the existing
+`VarRef` with `args`+`path` and the `Subscript` reclassification carry it without
+new nodes.

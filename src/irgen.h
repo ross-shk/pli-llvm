@@ -100,6 +100,11 @@ private:
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.
   llvm::Value* memberAddr(Symbol* base, const std::vector<unsigned>& path, SourceLoc loc);
+  // Address of a member of one structure element of an array of structures
+  // (rule 124): like memberAddr, but GEPs from a caller-supplied element address
+  // through the recorded field indices against the element structure type.
+  llvm::Value* elementMemberAddr(Symbol* base, const std::vector<unsigned>& path,
+                                 llvm::Value* elemAddr);
   // The resolved type of a qualified member S.A.B (rule 124): walk the recorded
   // field indices to recover the leaf member's type (an array member's array
   // type), mirroring memberAddr without emitting GEPs.

@@ -1,0 +1,32 @@
+ /* Array of structures (rules (11),(124),(126)): a level-1 dimensioned
+    structure `1 arr(3), 2 x, 2 y` is an array whose elements are structures.
+    A member of one element is reached by subscript-then-qualify `arr(i).x`,
+    usable on both sides of an assignment and in expressions. */
+ struct_array_of_test: procedure options(main);
+    declare 1 arr(3),
+           2 x fixed bin(31),
+           2 y fixed bin(31);
+    declare i fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* write members of each element with a runtime subscript */
+    do i = 1 to 3;
+       arr(i).x = i * 10;
+       arr(i).y = i * 100;
+    end;
+
+    /* read members back */
+    if arr(1).x ^= 10 then fails = fails + 1;
+    if arr(1).y ^= 100 then fails = fails + 1;
+    if arr(2).x ^= 20 then fails = fails + 1;
+    if arr(3).y ^= 300 then fails = fails + 1;
+
+    /* a member in an expression, and cross-element use */
+    arr(2).x = arr(1).x + arr(3).x;
+    if arr(2).x ^= 40 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS struct_array_of');
+    else put skip list('FAIL struct_array_of: fails =', fails);
+ end struct_array_of_test;

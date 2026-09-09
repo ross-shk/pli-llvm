@@ -349,7 +349,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(13)");
           ms.push_back({items[c]->name, ct});
         }
-        return Type::structTy(std::move(ms));
+        Type st = Type::structTy(std::move(ms));
+        st.dims = it.ty.dims; // an array of structures: keep the level item's dimension
+        return st;
       };
       // Declare each top-level item (no parent) as a variable; members are
       // reached by qualification and get no standalone symbol or storage.
@@ -1052,6 +1054,38 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // base structure symbol and the resolved field path.
     if (!e->path.empty()) {
       Symbol* bs = lookup(sc, e->name);
+      // An array of structures arr(i).x (rules 124,126): the subscripts index
+      // the array to select one structure element, then the path resolves a
+      // member of that element. Served for a scalar (or nested minor-structure)
+      // member; a member array of an element is diagnosed unimplemented.
+      if (bs && bs->kind == Symbol::Var && bs->ty.isArray() && bs->ty.elementType().isStruct()) {
+        if (e->args.size() != bs->ty.dims.size()) {
+          d_.error(e->loc,
+                   "array of structures '" + e->name + "' has " +
+                       std::to_string(bs->ty.dims.size()) + " dimension(s) and takes " +
+                       std::to_string(bs->ty.dims.size()) + " subscript(s), " +
+                       std::to_string(e->args.size()) + " given",
+                   "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->kind = Expr::Subscript;
+        e->sym = bs;
+        const Type* leaf = resolveMemberPath(e, bs->ty.elementType());
+        if (!leaf) {
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (leaf->isArray())
+          d_.error(e->loc,
+                   "a member array of an array-of-structures element is not implemented in this "
+                   "stage",
+                   "(124)");
+        e->ty = *leaf;
+        if (bs->owner && bs->owner != p && isDescendantOf(p, bs->owner))
+          addEnv(p->directUses, bs);
+        break;
+      }
       if (!bs || bs->kind != Symbol::Var || !bs->ty.isStruct()) {
         d_.error(e->loc,
                  "'" + e->name + "' is not a structure, so it cannot be subscripted by member",
