@@ -16,6 +16,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 - one-line comments stating the *intent* of the block that follows
 - if the same fix fails twice, stop, state what was tried, and ask the user
 - PL/I card margins 2–72: nonblank `.pli`/`.inc` lines carry one leading space (text begins in column 2) and nothing past column 72
+- don't fix all regressions at once, make sure the current feature works and plan regression fixes for later
 
 ## Layout
 
@@ -37,7 +38,7 @@ make -j8 && make test                   # parallel build + tests must stay green
 ./build/plic f.pli -fsyntax-only -v      # front end only / show clang command
 ```
 
-`make -j8` parallelises the compile; the test runner (`tests/run_tests.py`) already
+`make -j8` parallelises the compile; the test runner (`tests/run_tests.py`) already  
 runs its compile+run jobs concurrently (`JOBS` overrides the worker count).
 
 ## Invariants
