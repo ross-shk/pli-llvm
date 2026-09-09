@@ -440,6 +440,16 @@ void IRGen::allocaLocals(HProc* p) {
   }
 }
 
+// A dynamic (runtime-extent) array parameter is a by-reference pointer to the
+// caller's data with no own storage, so its extent must be read once from the
+// bound argument (itself by-ref) at entry. Record it so subscripting and the
+// array built-ins bounds-check against the live extent (rules (12),(13),(34)).
+void IRGen::recordDynParamUbs(const std::vector<Symbol*>& params) {
+  for (Symbol* s : params)
+    if (s->ty.isDynamic() && s->dynUb && !dynUb_.count(s))
+      dynUb_[s] = toI64(emitExpr(s->dynUb));
+}
+
 // INITIAL attribute on AUTOMATIC variables (rule 26): runs on every
 // activation.
 static void collectDeclStmts(HStmt* s, std::vector<HStmt*>& out) {
@@ -687,6 +697,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 
   allocaLocals(p);
   emitInitials(p); // INITIAL attribute on AUTOMATIC variables (rule 26)
+  recordDynParamUbs(p->paramSyms);
 
   for (auto& st : p->body)
     emitStmt(st.get());
@@ -734,6 +745,7 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
 
   allocaLocals(p);
   emitInitials(p);
+  recordDynParamUbs(uni);
 
   // Entry selector: dispatch to the segment each call entered through.
   std::vector<llvm::BasicBlock*> segs;
@@ -1647,8 +1659,8 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
   const int ilb = dd.lb, iub = dd.ub;
   // Affine iSUB base index m*1SUB + c (rule 134 index arithmetic): Y(i) overlays
   // X(m*i + c), so the base index is m*yidx + c and is bounds-checked against X.
-  llvm::Value* bidx = b_.CreateAdd(b_.CreateMul(yidx, i64(y->definedIsubMult), "m"),
-                                   i64(y->definedIsubAdd), "c");
+  llvm::Value* bidx =
+      b_.CreateAdd(b_.CreateMul(yidx, i64(y->definedIsubMult), "m"), i64(y->definedIsubAdd), "c");
   llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(bidx, i64(ilb), "lo"),
                                  b_.CreateICmpSGT(bidx, i64(iub), "hi"), "oob");
   std::string id = std::to_string(n_++);
@@ -2349,11 +2361,22 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     }
     const Type& arr = a->sym->ty;
     const Type& el = arr.elementType();
-    const long long n = arrayExtent(arr);
     const bool isBit = e->name == "ANY" || e->name == "ALL";
     const bool isFloat = !isBit && el.k == TK::Float;
     llvm::Value* base = addressOf(a->sym);
-    llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)n);
+    // A dynamic (runtime-extent) array is a bare element buffer sized by the
+    // live bound; a fixed array is [N x elem]. Drive the loop by the element
+    // count and address elements accordingly (rules (12),(13),(123)).
+    const bool dyn = arr.isArray() && arr.isDynamic();
+    llvm::Value* n;
+    llvm::Type* arrTy = nullptr;
+    if (dyn) {
+      llvm::Value* ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(arr.dims[0].ub);
+      n = b_.CreateAdd(b_.CreateSub(ub, i64(arr.dims[0].lb), "e1"), i64(1), "rdn");
+    } else {
+      n = i64(arrayExtent(arr));
+      arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));
+    }
 
     std::string id = std::to_string(n_++);
     // Accumulator identity: 0 for SUM, 1 for PROD, false for ANY, true for ALL.
@@ -2378,9 +2401,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     branch(condL);
     startBlock(condL);
     llvm::Value* c = b_.CreateLoad(b_.getInt64Ty(), ctr, "rdc");
-    b_.CreateCondBr(b_.CreateICmpSLT(c, i64(n), "rdcmp"), bodyL, endL);
+    b_.CreateCondBr(b_.CreateICmpSLT(c, n, "rdcmp"), bodyL, endL);
     startBlock(bodyL);
-    llvm::Value* ep = b_.CreateInBoundsGEP(arrTy, base, {i64(0), c}, "rdp");
+    llvm::Value* ep = dyn ? b_.CreateInBoundsGEP(llvmTy(el), base, {c}, "rdp")
+                          : b_.CreateInBoundsGEP(arrTy, base, {i64(0), c}, "rdp");
     Val ev;
     ev.ty = el;
     if (isBit)
