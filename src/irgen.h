@@ -75,6 +75,15 @@ private:
   void emitPut(HStmt *s);
   void emitCall(HStmt *s);
 
+  // Address of one call argument for a by-reference parameter (rule 4): a
+  // direct variable of the same type passes its own address; anything else is
+  // copied into a fresh dummy argument. Shared by emitCall and emitExpr so the
+  // marshalling logic has a single home.
+  llvm::Value *argAddr(HExpr *a, const Type &pty);
+  // Append the callee's static-link arguments (its enclosing automatic
+  // variables, rule 8). Shared by emitCall and emitExpr.
+  void appendStaticLinks(Proc *callee, std::vector<llvm::Value *> &args);
+
   Val emitExpr(HExpr *e);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
@@ -91,8 +100,13 @@ private:
   Val charOf(HExpr *e);           // materialise a character value
 
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
-  llvm::Function *runtimeFn(const std::string &name, llvm::Type *ret,
-                            std::vector<llvm::Type *> args, bool vararg = false);
+  // The signature is taken from runtime/pli_rt_abi.def (the single source of
+  // truth for the runtime ABI), not re-specified by the caller.
+  llvm::Function *runtimeFn(const std::string &name);
+  // Get-or-create an LLVM intrinsic with an explicit signature (used only for
+  // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
+  llvm::Function *intrinsicFn(const std::string &name, llvm::Type *ret,
+                              std::vector<llvm::Type *> args);
   // Resolve a call target's LLVM function; for an external C entry (rule 38),
   // get-or-create its external declaration (no PL/I body).
   llvm::Function *calleeFn(Symbol *sym);

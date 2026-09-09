@@ -1,0 +1,43 @@
+/* pli_rt_abi.def — the single source of truth for the pli_* runtime ABI.
+ *
+ * Each PLI_FN line names one runtime entry point and its signature as type
+ * tokens. Two consumers expand it differently:
+ *   - runtime/pli_rt.h expands the tokens to C prototypes (for pli_rt.c).
+ *   - src/irgen.cpp expands them to LLVM type tokens (for codegen).
+ * Changing a signature here updates both sides at once, so the C ABI and the
+ * emitted IR cannot drift (cf. docs/ARCHITECTURE.md "Runtime interface").
+ *
+ * Tokens: VOID I64 I32 I8 DOUBLE PTR (char*) CPTR (const char*).
+ * A function with no parameters is written with a single VOID argument.
+ */
+PLI_FN(pli_rt_init, VOID, (VOID))                     /* program prologue */
+PLI_FN(pli_rt_fini, VOID, (VOID))                     /* program epilogue */
+PLI_FN(pli_stop, VOID, (VOID))                        /* STOP, rule (85) */
+
+PLI_FN(pli_put_skip, VOID, (I64))                     /* list-directed (104-109) */
+PLI_FN(pli_put_page, VOID, (VOID))
+PLI_FN(pli_put_list_char, VOID, (CPTR, I64))
+PLI_FN(pli_put_list_fixed, VOID, (I64))
+PLI_FN(pli_put_list_fixed_scaled, VOID, (I64, I64))   /* scaled FIXED (ADR-006) */
+PLI_FN(pli_put_list_float, VOID, (DOUBLE))
+PLI_FN(pli_put_list_bit, VOID, (I8))
+
+PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
+PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))
+PLI_FN(pli_concat, VOID, (PTR, CPTR, I64, CPTR, I64))
+PLI_FN(pli_substr, VOID, (PTR, I64, CPTR, I64, I64, I64))    /* SUBSTR */
+PLI_FN(pli_substr_assign, VOID, (PTR, I64, I64, I64, CPTR, I64)) /* SUBSTR pseudo-var */
+PLI_FN(pli_index, I64, (CPTR, I64, CPTR, I64))        /* INDEX */
+PLI_FN(pli_mod_ll, I64, (I64, I64))                   /* MOD */
+PLI_FN(pli_mod_dd, DOUBLE, (DOUBLE, DOUBLE))
+PLI_FN(pli_round, DOUBLE, (DOUBLE, I64))              /* ROUND */
+PLI_FN(pli_repeat, VOID, (PTR, I64, CPTR, I64, I64))  /* REPEAT */
+PLI_FN(pli_verify, I64, (CPTR, I64, CPTR, I64))       /* VERIFY */
+PLI_FN(pli_translate, VOID, (PTR, I64, CPTR, I64, CPTR, I64, CPTR, I64)) /* TRANSLATE */
+PLI_FN(pli_high, VOID, (PTR, I64))                    /* HIGH(n) */
+PLI_FN(pli_low, VOID, (PTR, I64))                     /* LOW(n) */
+PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */
+PLI_FN(pli_time, VOID, (PTR, I64))                    /* TIME() */
+PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
+
+PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */

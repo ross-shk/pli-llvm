@@ -76,7 +76,7 @@ $(RULES_OBJ): $(RULES_CPP) src/explain.h | $(BUILD)
 	$(CXX) $(PLIC_CXXFLAGS) -Isrc -c $< -o $@
 
 $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BIN): $(OBJS) $(RULES_OBJ)
 	$(CXX) $(PLIC_CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) $(LLVM_SYSTEM_LIBS) -o $@

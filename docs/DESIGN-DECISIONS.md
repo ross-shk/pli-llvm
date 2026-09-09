@@ -642,3 +642,35 @@ expected IR shape. M1's exit criterion is now met.
 **Rejected.** Whole-file IR diffs against `expected/*.ll` (brittle across LLVM
 versions); invoking the `FileCheck` binary (an extra, version-pinned dependency
 for what a few dozen lines of Python do).
+
+---
+
+## ADR-032 — Single source of truth for the pli_* runtime ABI
+
+**Context.** Every runtime entry point's signature was hand-written twice: as a
+C prototype in `runtime/pli_rt.h` and as an LLVM function type at each
+`runtimeFn(...)` call site in `src/irgen.cpp`. A change to one side (a new
+parameter, a different return type) could silently drift from the other,
+producing IR that mismatches the C ABI at link time.
+
+**Decision.** One table, `runtime/pli_rt_abi.def`, is the sole home of each
+`pli_*` signature, written as type tokens (`VOID I64 I32 I8 DOUBLE PTR CPTR`).
+Two consumers expand it by `#include` with redefined macros:
+`runtime/pli_rt.h` maps the tokens to C types and emits prototypes;
+`src/irgen.cpp` maps them to LLVM types and builds declarations. A function
+with no parameters is written with a single `VOID` argument, which each
+consumer drops. `irgen.cpp`'s `runtimeFn(name)` now looks up the signature
+from the table instead of taking it from the caller, and `intrinsicFn(name,
+ret, args)` is the narrow escape hatch for non-ABI LLVM builtins
+(`llvm.pow.f64`, `llvm.fabs.f64`). The Makefile's `-MMD -MP` on the runtime
+objects records the `.def` as a header dependency, so a signature change there
+rebuilds both the C runtime and the code generator.
+
+**Consequences.** The C ABI and the emitted IR cannot drift: one edit in the
+`.def` propagates to both. `runtimeFn` call sites lose the error-prone explicit
+signature. `pli_*` symbols not yet emitted (e.g. `pli_signal_error` for M5) live
+in the table ahead of use, keeping it the complete ABI contract.
+**Rejected.** Keeping two hand-written lists (drift, the original problem);
+deriving one side from the other in a build script (a third source of truth for
+the same information); having irgen read the `.def` at runtime (overkill — the
+macro-expansion gives compile-time checking with zero cost).
