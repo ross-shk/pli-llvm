@@ -671,9 +671,10 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       }
       // A subscripted reference (rule (126)): the callee name resolves to a
       // declared array. Reclassify as a Subscript of the element type; the
-      // index (single axis in this stage) is checked against the bounds.
+      // index (single axis in this stage) is checked against the bounds. A
+      // procedure parameter array (rule (126)) is subscriptable the same way.
       if (Symbol *arr = lookup(sc, e->name);
-          arr && arr->kind == Symbol::Var && arr->ty.isArray()) {
+          arr && (arr->kind == Symbol::Var || arr->kind == Symbol::Param) && arr->ty.isArray()) {
         if (e->args.size() != arr->ty.dims.size()) {
           d_.error(e->loc, "array '" + e->name + "' has " +
                    std::to_string(arr->ty.dims.size()) + " dimension(s) and takes " +
@@ -1115,7 +1116,8 @@ bool Sema::typeBuiltin(Expr *e) {
         }
         Expr *a = e->args[0].get();
         bool isArr = (a->kind == Expr::VarRef && a->sym &&
-                      a->sym->kind == Symbol::Var && a->sym->ty.isArray());
+                      (a->sym->kind == Symbol::Var || a->sym->kind == Symbol::Param) &&
+                      a->sym->ty.isArray());
         if (!isArr) {
           d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
           e->ty = Type::voidTy();
@@ -1135,7 +1137,8 @@ bool Sema::typeBuiltin(Expr *e) {
         }
         Expr *a = e->args[0].get();
         bool isArr = (a->kind == Expr::VarRef && a->sym &&
-                      a->sym->kind == Symbol::Var && a->sym->ty.isArray());
+                      (a->sym->kind == Symbol::Var || a->sym->kind == Symbol::Param) &&
+                      a->sym->ty.isArray());
         if (!isArr) {
           d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
           e->ty = Type::voidTy();

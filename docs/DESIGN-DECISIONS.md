@@ -862,4 +862,34 @@ member semantics); a dope vector for constant-bounds member arrays (unneeded —
 ADR-008); re-deriving the member type by walking in IRGen instead of the single
 `memberType` helper (duplication). `CHARACTER` array members remain diagnosed.
 
+## ADR-039 — Array procedure parameters: by-reference addressing, widened sema checks
+
+**Context.** The M2 exit criterion needs record/matrix programs to "pass arrays
+and structures between procedures." Structures already pass by reference (a
+parameter symbol's address is the passed pointer, ADR-037). Arrays did not: a
+parameter array `X(I)` inside a callee errored because sema's Call→Subscript
+reclassification only accepted `Symbol::Var`, and the array attribute/reduction
+built-ins (`DIM`/`LBOUND`/`HBOUND`/`SUM`/`PROD`/`ANY`/`ALL`) did likewise.
+
+**Decision.** Parameter arrays reuse the existing by-reference parameter
+addressing: a callee's `addressOf(paramArray)` is the caller's array base
+pointer, so subscripting and the array built-ins work unchanged once sema accepts
+`Symbol::Param` wherever it accepted `Symbol::Var` for an array. No descriptor is
+introduced for fixed, constant-bounds arrays; the callee checks bounds against
+its own declared extents (ADR-036's flat `[N x elemTy]` layout and per-axis
+`SUBSCRIPTRANGE` apply unchanged). Sema now accepts `Var` or `Param` in the
+Call→Subscript reclassification and in the array attribute/reduction built-ins.
+The parameter's static-link handling is unchanged: `resolveParams` sets a param's
+owner to the current procedure, so a param is never treated as an enclosing
+variable.
+
+**Consequences.** Fixed-size arrays pass by reference into procedures and are
+subscriptable on both sides of an assignment, multi-axis, and through the array
+built-ins — with the same bounds checking as standalone arrays, satisfying the
+M2 "pass arrays between procedures" criterion for constant bounds. **Rejected.**
+A dope-vector descriptor for constant-bounds parameter arrays (unneeded — ADR-008
+reserves descriptors for dynamic extents/`*`); copying array arguments by value
+(PL/I is by reference); adding extent/shape checking between caller and callee
+declarations in this stage (a later hardening step).
+
 

@@ -31,7 +31,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (25) | `BASED` | M3 | |
 | (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 | scalar constants; full → M2 |
 | (33) | non-data attributes | M8 | prioritize by corpus impact |
-| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | partial M0 → M2 | ADR-021: scalar C entry/calls served; aggregate descriptors completed with arrays/structures |
+| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | partial M0 → M2 | ADR-021: scalar C entry/calls served; fixed-size arrays and structures passed by reference to PL/I procedures (`array_param.pli`, `struct.pli`); dope-vector descriptors for dynamic extents/`*` → M2 |
 | (39),(40) | `FILE` attributes | M5 | |
 | (41) | `GENERIC` | M8 | generic selection; prioritize by corpus impact |
 | (42) | scope (`INTERNAL`/`EXTERNAL`) | M1 | linkage implemented |
@@ -61,9 +61,9 @@ The ledger that ties the implementation to the specification. Status values:
 | (114) | `DISPLAY` | M5 | scan garbled; Y33-6003 form used |
 | (115)–(122) | expression precedence hierarchy | M0 | `arith.pli` pins `-3**2` = `-(3**2)` = -9 ((128) constants are unsigned); `usecases/expr.pli` pins negated comparisons and a prefixed `**` exponent |
 | (118) | comparison operators | M0 | incl. `¬=`, `¬>`, `¬<` |
-| (123) | primitive expressions | partial M2 | constants/vars (M0); function references to function procedures (`func.pli`); array attribute built-ins `LBOUND`/`HBOUND`/`DIM` on fixed-size single-axis arrays (`array_bounds.pli`, `bad_array_builtin.pli`); `DIM` of a multi-axis array = total element count; array reduction built-ins `SUM`/`PROD`/`ANY`/`ALL` over the full extent (`array_reduce.pli`, `bad_array_reduce.pli`); cross-sections/multi-axis → M2 |
+| (123) | primitive expressions | partial M2 | constants/vars (M0); function references to function procedures (`func.pli`); array attribute built-ins `LBOUND`/`HBOUND`/`DIM` on fixed-size single-axis arrays (`array_bounds.pli`, `bad_array_builtin.pli`); `DIM` of a multi-axis array = total element count; array reduction built-ins `SUM`/`PROD`/`ANY`/`ALL` over the full extent (`array_reduce.pli`, `bad_array_reduce.pli`); attribute/reduction built-ins also apply to parameter arrays inside a callee (`array_param.pli`); cross-sections/multi-axis → M2 |
 | (124),(125) | locator qualification, qualified names | partial M2 | aggregate (structure) member qualification `S.A.B` in read/write positions and expressions (`struct.pli`); whole-structure value/assignment and `INITIAL` diagnosed (`bad_struct_*.pli`, rule (127)); locators → M3 |
-| (126) | subscripted references | partial M2 | fixed-size constant-bounds scalar arrays in read/write positions, single- and multi-axis, compile-time + runtime SUBSCRIPTRANGE on every axis (`array.pli`, `array2d.pli`, `bad_array_oob.pli`, `bad_array2d_oob.pli`, `bad_array2d_arity.pli`); subscripted structure array members `S.A(i)` incl. nested/multi-axis (`struct_array.pli`, `bad_struct_array_*.pli`); `*` cross-sections → M2 |
+| (126) | subscripted references | partial M2 | fixed-size constant-bounds scalar arrays in read/write positions, single- and multi-axis, compile-time + runtime SUBSCRIPTRANGE on every axis (`array.pli`, `array2d.pli`, `bad_array_oob.pli`, `bad_array2d_oob.pli`, `bad_array2d_arity.pli`); subscripted structure array members `S.A(i)` incl. nested/multi-axis (`struct_array.pli`, `bad_struct_array_*.pli`); parameter arrays passed by reference, subscriptable on both sides of an assignment inside a callee (`array_param.pli`); `*` cross-sections → M2 |
 | (127) | unsubscripted reference | partial M2 | whole-structure value/assignment diagnosed (`bad_struct_assign.pli`, `bad_struct_value.pli`); full aggregate references → M2 |
 | (128),(129) | constants, replicated string constants | partial M0 | replicated strings served; imaginary/sterling → D1 |
 | (130)–(133) | identifier, letter, alphameric, digit | M0 | incl. `$ # @` and break character |
