@@ -1,0 +1,76 @@
+ /* '*' adjustable-extent array parameters (rules (12),(13),(34)): a procedure
+    parameter declared `x(*)` takes its extent from the caller's actual array at
+    call time, so the callee bounds-checks and reduces against the live extent.
+    A fixed-size, a dynamic-bound, and a multi-axis array can all be passed; a
+    by-reference write through the parameter is visible in the caller. */
+ star_param_test: procedure options(main);
+    declare a(6) fixed bin(31);
+    declare d(4) fixed bin(31);
+    declare m(3,3) fixed bin(31);
+    declare i fixed bin(31);
+    declare n fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    do i = 1 to 6;
+       a(i) = i * 2;
+    end;
+    /* by-reference write through a '*' param reflects in the caller */
+    call bump(a);
+    if a(1) ^= 3 or a(6) ^= 13 then fails = fails + 1;
+
+    /* a dynamic-bound array passed to a '*' param */
+    do i = 1 to 4;
+       d(i) = i;
+    end;
+    call check(d, 4);
+    if total(d) ^= 10 then fails = fails + 1;
+
+    /* a multi-axis array: the '*' extent is the first axis */
+    do i = 1 to 3;
+       m(i,1) = i;
+    end;
+    call first(m);
+
+    if fails = 0 then put skip list('PASS star_param');
+    else put skip list('FAIL star_param: fails =', fails);
+
+ bump: procedure(x);
+    declare x(*) fixed bin(31);
+    declare i fixed bin(31);
+    do i = 1 to hbound(x);
+       x(i) = x(i) + 1;
+    end;
+ end bump;
+
+ check: procedure(x, k);
+    declare k fixed bin(31);
+    declare x(*) fixed bin(31);
+    declare t fixed bin(31);
+    declare i fixed bin(31);
+    t = 0;
+    do i = 1 to k;
+       t = t + x(i);
+    end;
+    if lbound(x) ^= 1 then fails = fails + 1;
+    if hbound(x) ^= k then fails = fails + 1;
+    if dim(x) ^= k then fails = fails + 1;
+    if sum(x) ^= t then fails = fails + 1;
+ end check;
+
+ total: procedure(x) returns(fixed bin(31));
+    declare x(*) fixed bin(31);
+    declare t fixed bin(31);
+    declare i fixed bin(31);
+    t = 0;
+    do i = 1 to hbound(x);
+       t = t + x(i);
+    end;
+    return(t);
+ end total;
+
+ first: procedure(x);
+    declare x(*) fixed bin(31);
+    if hbound(x) ^= 3 then fails = fails + 1;
+ end first;
+ end star_param_test;

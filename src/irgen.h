@@ -90,6 +90,23 @@ private:
   // Append the callee's static-link arguments (its enclosing automatic
   // variables, rule 8). Shared by emitCall and emitExpr.
   void appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args);
+  // True when a parameter is a `*`-adjustable-extent array (rule (13)); such a
+  // parameter carries a hidden i64 extent argument from the caller.
+  bool isAdjustable(Symbol* s) {
+    return s->ty.isArray() && !s->ty.dims.empty() && s->ty.dims[0].adj;
+  }
+  // Number of `*`-adjustable-extent parameters in `params` (each contributes a
+  // hidden i64 extent argument after the by-reference pointers).
+  size_t nAdjustable(const std::vector<Symbol*>& params) {
+    size_t n = 0;
+    for (Symbol* s : params)
+      if (isAdjustable(s))
+        ++n;
+    return n;
+  }
+  // Element count of a call argument passed to a `*`-extent parameter: constant
+  // for a fixed array, the recorded live bound for a dynamic-bound array.
+  llvm::Value* argExtent(HExpr* a);
 
   Val emitExpr(HExpr* e);
   // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).

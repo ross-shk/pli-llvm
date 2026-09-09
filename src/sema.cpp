@@ -489,12 +489,25 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (item.ty.isDynamic()) {
             // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
             // serves only a single-axis AUTOMATIC array with a constant lower
-            // bound. Resolve the runtime upper-bound expression's symbol so
-            // codegen can evaluate it at entry to size the buffer.
+            // bound. A `*` adjustable extent is a parameter-only form whose
+            // bound is supplied by the caller at call time. Resolve the runtime
+            // upper-bound expression's symbol so codegen can evaluate it at
+            // entry to size the buffer.
+            bool hasStar = false;
+            for (const auto& d : item.ty.dims)
+              if (d.adj)
+                hasStar = true;
+            bool isParam =
+                std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+            if (hasStar && !isParam)
+              d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
+            if (hasStar && isParam && item.ty.dims.size() != 1)
+              d_.error(item.loc, "a '*' extent parameter must be single-axis in this stage",
+                       "(13)");
             for (auto& b : item.dynBounds)
               if (b)
                 typeExpr(b.get(), sc, p);
-            if (item.ty.dims.size() != 1)
+            if (!hasStar && item.ty.dims.size() != 1)
               d_.error(item.loc, "a dynamic array must be single-axis in this stage", "(13)");
             if (item.sym->isStatic)
               d_.error(item.loc, "a dynamic array must be AUTOMATIC in this stage", "(13)");
