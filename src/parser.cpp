@@ -786,8 +786,14 @@ bool Parser::parseDeclTail(DeclItem& item) {
       if (w == "INITIAL" || w == "INIT") {
         advance();
         if (expect(Tok::LParen, "(26)")) {
-          init = parseExpr();
-          expect(Tok::RParen, "(26)");
+          if (atWord("CALL")) {
+            d_.error(cur().loc, "INITIAL CALL is not implemented in this stage", "(27)");
+          } else {
+            item.initItems = parseInitialList();
+            // Back-compat: a single plain value is also the M0 scalar item.init.
+            if (item.initItems.size() == 1 && item.initItems[0].kind == InitItem::Value)
+              init = std::move(item.initItems[0].value);
+          }
         }
         continue;
       }
@@ -1402,4 +1408,82 @@ ExprP Parser::parsePrimary() {
 
   d_.error(cur().loc, std::string("expected an expression, found ") + tokName(cur().kind), "(123)");
   return nullptr;
+}
+
+// INITIAL itemlist (rules (28)-(31)): a comma-separated list of INITIAL items
+// terminated by the enclosing ')'. Called with the opening '(' already consumed;
+// consumes the closing ')'.
+std::vector<InitItem> Parser::parseInitialList() {
+  std::vector<InitItem> out;
+  for (;;) {
+    if (at(Tok::RParen)) {
+      advance();
+      break;
+    }
+    out.push_back(parseInitialItem());
+    if (at(Tok::Comma)) {
+      advance();
+      continue;
+    }
+    expect(Tok::RParen, "(28)");
+    break;
+  }
+  return out;
+}
+
+// One INITIAL item (rules (29)-(31)): a constant value, an iteration factor
+// '( n )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
+InitItem Parser::parseInitialItem() {
+  auto valueStart = [](Tok k) {
+    return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::Word ||
+           k == Tok::Minus || k == Tok::Plus || k == Tok::Star || k == Tok::LParen;
+  };
+  if (at(Tok::Star)) {
+    advance();
+    return InitItem{InitItem::Repeat, nullptr, 0, {}};
+  }
+  if (at(Tok::LParen)) {
+    // A leading '(' is an iteration factor '( n )' when a value or sublist
+    // follows it; a parenthesised constant '( n )' when ',' or ')' follows;
+    // otherwise it is a group '( item, ... )'. Decide without consuming.
+    bool iter = peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+                (peek(3).kind == Tok::LParen || valueStart(peek(3).kind));
+    bool parenConst = peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+                      (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);
+    advance(); // (
+    if (iter) {
+      long long n = strtoll(cur().text.c_str(), nullptr, 10);
+      advance(); // n
+      advance(); // )
+      InitItem it;
+      it.kind = InitItem::Iter;
+      it.factor = n;
+      if (at(Tok::LParen)) {
+        advance(); // (
+        it.items = parseInitialList();
+      } else {
+        it.items.push_back(parseInitialItem());
+      }
+      return it;
+    }
+    if (parenConst) {
+      InitItem v;
+      v.kind = InitItem::Value;
+      v.value = std::make_unique<Expr>();
+      v.value->loc = cur().loc;
+      v.value->kind = Expr::IntLit;
+      v.value->ival = strtoll(cur().text.c_str(), nullptr, 10);
+      advance(); // n
+      advance(); // )
+      return v;
+    }
+    InitItem g;
+    g.kind = InitItem::Group;
+    g.items = parseInitialList(); // consumes the group's ')'
+    return g;
+  }
+  InitItem v;
+  v.kind = InitItem::Value;
+  v.value = parseExpr();
+  return v;
 }

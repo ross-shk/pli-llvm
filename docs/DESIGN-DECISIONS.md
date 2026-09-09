@@ -999,3 +999,30 @@ point of `BY NAME`); serving CHAR members (not yet supported anywhere, so it wou
 introduce a half-working case); storing a materialised member-pair plan from sema
 to IRGen (the two structure types let codegen re-derive the same name walk cheaply,
 keeping the change KISS).
+
+## ADR-044 — `INITIAL` iteration factors on arrays: parse-time item tree, sema expansion
+
+**Context.** Rule (26) is `initial-attribute ::= INITIAL ( { initial-call |
+initial-itemlist } )`; the itemlist (rules (28)-(31)) holds constants, iteration
+factors `(n)`, `*` repeat-last, and nested groups. M0 served only a single scalar
+constant. M2 names "`INITIAL` iteration factors" for populating arrays.
+
+**Decision.** The parser builds an `InitItem` tree (Value/Iter/Repeat/Group) from
+the itemlist. Sema (`expandInitItems`) expands it into a flat sequence of folded
+element values (`Symbol::initElems`), resolving iteration factors and `*` at
+semantic time, and requires the expanded count to equal the array extent (a
+mismatch is diagnosed, rule (26)). IRGen stores one constant per element: the
+`emitInitials` AUTOMATIC path emits per-element stores; `emitGlobals` builds a
+constant-array initializer for STATIC. `INITIAL CALL` (rule 27) and `INITIAL` on a
+structure remain diagnosed. Character-element arrays stay diagnosed (rule 12).
+
+**Consequences.** `DECLARE A(6) INIT((3) (1,2))`, `INIT((1,2,*,*))`, and nested
+factors fill arrays element-by-element. The existing single-value scalar path is
+unchanged (a one-item plain list still sets `item.init`). `*` repeats the already-
+folded last value, so a repeated negative constant is not double-negated.
+
+**Rejected.** Carrying the `InitItem` tree through HIR (sema already flattens to
+`sym->initElems`, which codegen reads via the symbol); folding element values in
+place twice (breaks `*` over a negative constant); padding a short list to the
+extent (PL/I requires a full list; a mismatch is an error); implementing
+`INITIAL CALL` now (independent, deferred).

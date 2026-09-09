@@ -281,69 +281,99 @@ std::string IRGen::run(HProgram& prog) {
   return ir;
 }
 
+// An LLVM scalar constant for an INITIAL element value (rule 26). Null is
+// returned only for types without a constant form (e.g. STRUCT), which callers
+// fall back to zero-initialising.
+llvm::Constant* IRGen::scalarInitConstant(const Type& t, const Expr* ini) {
+  switch (t.k) {
+  case TK::FixedBin:
+  case TK::FixedDec: {
+    long long v = 0;
+    if (ini)
+      v = ini->kind == Expr::FltLit   ? (long long)ini->fval
+          : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
+                                      : ini->ival;
+    return llvm::ConstantInt::get(llvmTy(t), v, true);
+  }
+  case TK::Float: {
+    double v = 0;
+    if (ini)
+      v = ini->kind == Expr::FltLit ? ini->fval : (double)ini->ival;
+    return llvm::ConstantFP::get(b_.getDoubleTy(), v);
+  }
+  case TK::Bit: {
+    int v = 0;
+    if (ini)
+      v = ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
+                                    : (ini->ival != 0 || ini->fval != 0);
+    return llvm::ConstantInt::get(b_.getInt8Ty(), v);
+  }
+  case TK::Char: {
+    std::string text(t.len, ' ');
+    if (ini) {
+      for (int i = 0; i < t.len && i < (int)ini->sval.size(); ++i)
+        text[i] = ini->sval[i];
+    }
+    llvm::Constant* data = llvm::ConstantDataArray::getString(ctx_, text, false);
+    if (t.varying) {
+      size_t cur = ini ? std::min<size_t>(ini->sval.size(), (size_t)t.len) : 0;
+      return llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(llvmTy(t)),
+                                       llvm::ConstantInt::get(b_.getInt32Ty(), cur), data);
+    }
+    return data;
+  }
+  default:
+    return nullptr; // no scalar constant form (e.g. STRUCT)
+  }
+}
+
+// A materialised scalar value for an INITIAL element (rule 26), for storing
+// into an AUTOMATIC array element.
+Val IRGen::initValue(const Type& t, const Expr* e) {
+  Val v;
+  v.ty = t;
+  switch (t.k) {
+  case TK::Float:
+    v.reg = flt(e->kind == Expr::FltLit ? e->fval : (double)e->ival);
+    break;
+  case TK::Bit:
+    v.reg = b_.getInt1(e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
+                                               : (e->ival != 0 || e->fval != 0));
+    break;
+  default: { // Fixed
+    v.reg = llvm::ConstantInt::get(llvmTy(t),
+                                   e->kind == Expr::FltLit ? (long long)e->fval : e->ival, true);
+    break;
+  }
+  }
+  return v;
+}
+
 void IRGen::emitGlobals() {
   for (Symbol* s : sema_.storage()) {
     if (!s->isStatic || s->kind != Symbol::Var)
       continue;
     const Type& t = s->ty;
-    const Expr* ini = s->initExpr; // INITIAL constant, rule (26)
-    llvm::Constant* init = nullptr;
-    switch (t.k) {
-    case TK::FixedBin:
-    case TK::FixedDec: {
-      long long v = 0;
-      if (ini)
-        v = ini->kind == Expr::FltLit   ? (long long)ini->fval
-            : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
-                                        : ini->ival;
-      init = llvm::ConstantInt::get(llvmTy(t), v, true);
-      break;
-    }
-    case TK::Float: {
-      double v = 0;
-      if (ini)
-        v = ini->kind == Expr::FltLit ? ini->fval : (double)ini->ival;
-      init = llvm::ConstantFP::get(b_.getDoubleTy(), v);
-      break;
-    }
-    case TK::Bit: {
-      int v = 0;
-      if (ini)
-        v = ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
-                                      : (ini->ival != 0 || ini->fval != 0);
-      init = llvm::ConstantInt::get(b_.getInt8Ty(), v);
-      break;
-    }
-    case TK::Char: {
-      std::string text(t.len, ' ');
-      if (ini) {
-        for (int i = 0; i < t.len && i < (int)ini->sval.size(); ++i)
-          text[i] = ini->sval[i];
-      }
-      llvm::Constant* data = llvm::ConstantDataArray::getString(ctx_, text, false);
-      if (t.varying) {
-        size_t cur = ini ? std::min<size_t>(ini->sval.size(), (size_t)t.len) : 0;
-        init = llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(llvmTy(t)),
-                                         llvm::ConstantInt::get(b_.getInt32Ty(), cur), data);
-      } else {
-        init = data;
-      }
-      break;
-    }
-    case TK::Void:
+    if (t.k == TK::Void)
       continue;
-    case TK::Struct:
-      // STATIC structure: a zero-initialised aggregate (rule 11). INITIAL
-      // on a structure is diagnosed in sema.
-      init = llvm::ConstantAggregateZero::get(llvmTy(t));
-      break;
-    }
     llvm::Type* gt = llvmTy(t);
-    llvm::Constant* ginit = init;
+    llvm::Constant* ginit = nullptr;
     if (t.isArray()) {
-      // STATIC array: a [N x elemTy] global, zero-initialised (rules (12),(13)).
+      // STATIC array: a [N x elemTy] global (rules (12),(13)), zero-initialised
+      // unless an INITIAL element list (rule 26) supplies a constant per element.
       gt = llvm::ArrayType::get(llvmTy(t.elementType()), (unsigned)arrayExtent(t));
-      ginit = llvm::ConstantAggregateZero::get(gt);
+      if (!s->initElems.empty()) {
+        std::vector<llvm::Constant*> els;
+        for (Expr* e : s->initElems)
+          els.push_back(scalarInitConstant(t.elementType(), e));
+        ginit = llvm::ConstantArray::get(llvm::cast<llvm::ArrayType>(gt), els);
+      } else {
+        ginit = llvm::ConstantAggregateZero::get(gt);
+      }
+    } else {
+      ginit = scalarInitConstant(t, s->initExpr);
+      if (!ginit)
+        ginit = llvm::ConstantAggregateZero::get(gt); // STRUCT (rule 11)
     }
     auto* g = new llvm::GlobalVariable(mod_, gt, false, llvm::GlobalValue::InternalLinkage, ginit,
                                        s->irName.substr(1));
@@ -411,6 +441,21 @@ void IRGen::emitInitials(HProc* p) {
     collectDeclStmts(st.get(), decls);
   for (HStmt* st : decls) {
     for (auto& item : st->decls) {
+      Symbol* sym = item.sym;
+      // INITIAL on an AUTOMATIC array (rule 26): store each element constant
+      // into its slot; the array is a [N x elemTy] alloca.
+      if (sym && sym->ty.isArray() && !sym->initElems.empty()) {
+        const Type& et = sym->ty.elementType();
+        llvm::Type* aty = llvm::ArrayType::get(llvmTy(et), (unsigned)arrayExtent(sym->ty));
+        llvm::Value* base = addressOf(sym);
+        int i = 0;
+        for (Expr* e : sym->initElems) {
+          llvm::Value* idx = i32(i++);
+          llvm::Value* p = b_.CreateGEP(aty, base, {i32(0), idx}, "init.el");
+          storeScalarTo(p, et, initValue(et, e));
+        }
+        continue;
+      }
       Expr* e = item.sym ? item.sym->initExpr : nullptr;
       if (!e)
         continue;
