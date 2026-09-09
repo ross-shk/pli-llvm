@@ -1026,3 +1026,31 @@ folded last value, so a repeated negative constant is not double-negated.
 place twice (breaks `*` over a negative constant); padding a short list to the
 extent (PL/I requires a full list; a mismatch is an error); implementing
 `INITIAL CALL` now (independent, deferred).
+
+## ADR-045 — `LIKE` template: the item deep-copies the referenced structure's type
+
+**Context.** Rule (43) is `like-attribute ::= LIKE unsubscripted-reference`. The
+declared item takes the structure shape of an already-declared structure
+variable, so its members are qualified like the template's. M2 names "`LIKE`".
+A template is only a shape; the copy and the template are distinct storage.
+
+**Decision.** The parser records the template reference in `DeclItem::like`
+(qualified `S.A.B` templates are diagnosed, rule (43)). Sema, when building an
+item's type in `collectDecls`, deep-copies the template symbol's `Type` (the
+same struct `Type` used by ordinary level-numbered structures) onto the item.
+Because the copy is a fresh struct type, top-level `1 T LIKE S;` and nested
+`2 M LIKE S;` (a member of S's shape) both work, and whole-structure assignment
+`T = S;` works when the shapes match. A non-structure or undeclared template is
+diagnosed; LIKE combined with a dimension (an array of the template) or with its
+own member list (the extend form) is diagnosed, never silently dropped.
+
+**Consequences.** `LIKE` needs no IRGen or HIR changes: the copied struct type is
+handled by the existing structure code paths. `tests/core/like.pli` covers a
+top-level copy, a nested member copy, and whole-structure assignment between
+template and copy.
+
+**Rejected.** Sharing the template's `Type` (member paths and layouts would alias
+the template); emitting a member-tree copy into `children` (the struct `Type`
+already carries the full shape); allowing a dimension after `LIKE` (an array of a
+template needs the whole-template dimension machinery, independent); allowing the
+extend form (members after `LIKE`); resolving qualified `S.A.B` templates now.

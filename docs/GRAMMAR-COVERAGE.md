@@ -35,7 +35,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (39),(40) | `FILE` attributes | M5 | |
 | (41) | `GENERIC` | M8 | generic selection; prioritize by corpus impact |
 | (42) | scope (`INTERNAL`/`EXTERNAL`) | M1 | linkage implemented |
-| (43) | `LIKE` | M2 | |
+| (43) | `LIKE` | M2 | `LIKE <structure-variable>` copies the template's structure shape onto the declared item — top-level `1 T LIKE S;` (T is a copy of S) and nested `2 M LIKE S;` (M is a member of S's shape) both work (`like.pli`, ADR-045); a non-structure or undeclared template is diagnosed, and LIKE combined with a dimension or with members is diagnosed (`bad_like.pli`); qualified LIKE templates `LIKE S.A.B` diagnosed |
 | (44)–(55) | `FORMAT` statement and format items | M5 (picture items D1) | common format engine first |
 | (56) | `ENTRY` statement | M1 | `label: ENTRY(params) [RETURNS(...)]` declares an alternate entry point with its own params (any count) and result type; body split into segments behind a shared impl, one thunk per entry name (`entry.pli`); mixed return types diagnosed unimplemented (ADR-026) |
 | (57)–(59) | statement, unconditional, simple | M0 | |

@@ -1,0 +1,7 @@
+  /* LIKE (rule 43) requires an already-declared structure variable as its
+     template; a scalar or an undeclared reference is rejected. */
+  bad_like: procedure options(main);
+     declare x fixed bin(31);
+     declare 1 t like x;
+     declare 1 u like nope;
+  end bad_like;

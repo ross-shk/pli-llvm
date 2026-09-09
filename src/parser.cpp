@@ -631,6 +631,7 @@ StmtP Parser::parseDeclare() {
         item.isEntry = base.isEntry;
         item.extName = base.extName;
         item.entryParams = base.entryParams;
+        item.like = base.like;
         st->decls.push_back(std::move(item));
       }
     } else {
@@ -826,11 +827,25 @@ bool Parser::parseDeclTail(DeclItem& item) {
           parseEntryParams(item.entryParams);
         continue;
       }
+      if (w == "LIKE") {
+        // like-attribute ::= LIKE unsubscripted-reference (rule 43): the
+        // declared item takes the structure shape of the referenced structure.
+        advance();
+        if (at(Tok::Word)) {
+          item.like = cur().text;
+          advance();
+          if (at(Tok::Dot)) // LIKE S.A.B: qualified template, diagnosed in sema
+            d_.error(cur().loc, "LIKE with a qualified reference is not implemented in this stage",
+                     "(43)");
+        } else {
+          d_.error(cur().loc, "expected a reference after LIKE", "(43)");
+        }
+        continue;
+      }
       if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "POINTER" ||
           w == "PTR" || w == "AREA" || w == "OFFSET" || w == "BASED" || w == "CONTROLLED" ||
           w == "CTL" || w == "DEFINED" || w == "DEF" || w == "LABEL" || w == "FILE" ||
-          w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN" ||
-          w == "LIKE") {
+          w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
