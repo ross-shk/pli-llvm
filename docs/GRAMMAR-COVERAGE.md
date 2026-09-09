@@ -84,6 +84,36 @@ The ledger that ties the implementation to the specification. Status values:
 | §2.3.2.2 | multiple closure | M0 |
 | §2.3.3 | 48-character set: operator words, deletions, colon rules | partial M0 (operator words in `arith.pli`) → M9 |
 
+## IRGen touch-points
+
+Where each implemented feature lands in codegen (`src/irgen.cpp`). The rule →
+emit mapping is the same "one feature = N edits" chain as CONTRIBUTING.md; the
+entry points below are where that chain terminates.
+
+| Rule(s) | IRGen entry point | Notes |
+|---|---|---|
+| (1),(2),(3) | `declareProc`, `emitPlainProc`, `emitMultiEntryProc` | procedure shapes and entry aliases |
+| (4) | `emitCall` | dummy-argument materialisation for by-ref params |
+| (5) | `declareProc` | `MAIN` shim + `RETURNS` function procs |
+| (6),(7),(8) | `emitStmt` → `emitAssign`/`emitIf`/… | statement dispatch |
+| (9),(10) | `emitGlobals` | `DECLARE` storage |
+| (16) | `emitExpr` (`Call`) | `TRUNC` scaled-FIXED guard diagnosed in sema |
+| (18) | `loadSym`/`storeTo` | `BIT(1)` held as `i8` in registers (`toI1`) |
+| (26) | `emitInitials` | `INITIAL` stores on AUTOMATIC vars |
+| (34) | `calleeFn` | external C `ENTRY` decl (rule 38 interop) |
+| (56) | `emitMultiEntryProc`, `entryIrName` | alternate entry thunks |
+| (68) | `emitStmt` (`Begin`) | block body executed as a group |
+| (69)–(73) | `emitDoWhile`, `emitDoIter` | `DO WHILE` / iterative |
+| (74)–(76) | `emitIf` | |
+| (77) | `collectGotoBlocks`, `emitStmt` (`Goto`) | local `GO TO` |
+| (78),(79) | `emitCall` | `CALL` statement |
+| (81) | `emitStmt` (`Return`) | value / plain `RETURN` |
+| (84),(85) | `emitStmt` (`Stop`) | `pli_stop` + `Unreachable` |
+| (86) | `emitAssign`, `storeTo` | incl. `SUBSTR` pseudo-variable (`pli_substr_assign`) |
+| (104),(105) | `emitPut` | list-directed output |
+| (115)–(122) | `emitExpr` (binary/`Unary`) | arithmetic, bit, comparison, concat |
+| (123) | `emitExpr` (`Call`) | per-builtin handlers: SUBSTR, INDEX, ABS, LENGTH, TRUNC, PRECISION, MIN, MAX, MOD, MULTIPLY, DIVIDE, ROUND, REPEAT, VERIFY, TRANSLATE, HIGH, LOW, DATE, TIME |
+
 ## Headline numbers (M0)
 
 - Rules fully implemented and tested: **40**
