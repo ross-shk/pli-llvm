@@ -20,6 +20,7 @@ void pli_put_skip(long long n);
 void pli_put_page(void);
 void pli_put_list_char(const char *p, long long len);
 void pli_put_list_fixed(long long v);
+void pli_put_list_fixed_scaled(long long v, long long scale); /* scaled FIXED (ADR-006) */
 void pli_put_list_float(double v);
 void pli_put_list_bit(unsigned char b);
 

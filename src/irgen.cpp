@@ -1012,186 +1012,9 @@ Val IRGen::emitExpr(HExpr *e) {
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
       return loadSym(e->sym, e->sym->ty);
     case HExpr::Call: {
-      if (e->name == "SUBSTR") {
-        Val s = emitExpr(e->args[0].get());
-        Val start = emitExpr(e->args[1].get());
-        Val len = emitExpr(e->args[2].get());
-        Val out = charTemp(e->ty.len);
-        b_.CreateCall(runtimeFn("pli_substr", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
-                                 b_.getInt64Ty(), b_.getInt64Ty(), b_.getInt64Ty()}),
-                      {out.ptr, out.len, s.ptr, s.len, toI64(start), toI64(len)});
-        out.len = i64(e->ty.len);
-        return out;
-      }
-      if (e->name == "INDEX") {
-        Val a = emitExpr(e->args[0].get());
-        Val b = emitExpr(e->args[1].get());
-        llvm::Value *r = b_.CreateCall(runtimeFn("pli_index", b_.getInt64Ty(),
-                                                 {b_.getPtrTy(), b_.getInt64Ty(),
-                                                  b_.getPtrTy(), b_.getInt64Ty()}),
-                                       {a.ptr, a.len, b.ptr, b.len});
-        v.ty = e->ty;
-        v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "idx32");
-        return v;
-      }
-      if (e->name == "ABS") {
-        Val a = emitExpr(e->args[0].get());
-        const Type &at = a.ty;
-        llvm::Value *r;
-        if (at.k == TK::Float) {
-          r = b_.CreateCall(runtimeFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}),
-                            {a.reg}, "abs");
-        } else {
-          llvm::Value *neg = b_.CreateSub(llvm::Constant::getNullValue(llvmTy(at)), a.reg, "absneg");
-          llvm::Value *cmp = b_.CreateICmpSLT(a.reg, llvm::Constant::getNullValue(llvmTy(at)), "abscmp");
-          r = b_.CreateSelect(cmp, neg, a.reg, "abs");
-        }
-        v.ty = e->ty;
-        v.reg = r;
-        return v;
-      }
-      if (e->name == "LENGTH") {
-        Val a = emitExpr(e->args[0].get());
-        v.ty = e->ty;
-        v.reg = b_.CreateTrunc(a.len, b_.getInt32Ty(), "len32");
-        return v;
-      }
-      if (e->name == "TRUNC") {
-        Val a = emitExpr(e->args[0].get());
-        if (a.ty.k == TK::Float) {
-          llvm::Value *i = b_.CreateFPToSI(a.reg, b_.getInt64Ty(), "trunci");
-          v.ty = e->ty;
-          v.reg = b_.CreateSIToFP(i, b_.getDoubleTy(), "truncd");
-        } else {
-          v = a;
-        }
-        return v;
-      }
-      if (e->name == "PRECISION") {
-        Val a = emitExpr(e->args[0].get());
-        v = convert(a, e->ty, e->loc);
-        return v;
-      }
-      if (e->name == "MIN" || e->name == "MAX") {
-        Val a = emitExpr(e->args[0].get());
-        Val b = emitExpr(e->args[1].get());
-        const Type &common = e->ty;
-        Val av = convert(a, common, e->loc);
-        Val bv = convert(b, common, e->loc);
-        llvm::Value *cmp = common.k == TK::Float
-            ? b_.CreateFCmpOLT(av.reg, bv.reg, "mincmp")
-            : b_.CreateICmpSLT(av.reg, bv.reg, "mincmp");
-        llvm::Value *r = e->name == "MIN"
-            ? b_.CreateSelect(cmp, av.reg, bv.reg, "min")
-            : b_.CreateSelect(cmp, bv.reg, av.reg, "max");
-        v.ty = common;
-        v.reg = r;
-        return v;
-      }
-      if (e->name == "MOD") {
-        Val a = emitExpr(e->args[0].get());
-        Val b = emitExpr(e->args[1].get());
-        const Type &common = e->ty;
-        Val av = convert(a, common, e->loc);
-        Val bv = convert(b, common, e->loc);
-        v.ty = common;
-        if (common.k == TK::Float) {
-          v.reg = b_.CreateCall(runtimeFn("pli_mod_dd", b_.getDoubleTy(),
-                                          {b_.getDoubleTy(), b_.getDoubleTy()}),
-                                {av.reg, bv.reg}, "mod");
-        } else {
-          llvm::Value *r = b_.CreateCall(runtimeFn("pli_mod_ll", b_.getInt64Ty(),
-                                                   {b_.getInt64Ty(), b_.getInt64Ty()}),
-                                         {toI64(av), toI64(bv)});
-          v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "mod32");
-        }
-        return v;
-      }
-      if (e->name == "MULTIPLY") {
-        Val a = emitExpr(e->args[0].get());
-        Val b = emitExpr(e->args[1].get());
-        const Type &common = e->ty;
-        Val av = convert(a, common, e->loc);
-        Val bv = convert(b, common, e->loc);
-        llvm::Value *r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
-                                               : b_.CreateMul(av.reg, bv.reg, "mul");
-        v.ty = common;
-        v.reg = r;
-        return v;
-      }
-      if (e->name == "DIVIDE") {
-        Val a = emitExpr(e->args[0].get());
-        Val b = emitExpr(e->args[1].get());
-        const Type &common = e->ty;
-        Val av = convert(a, common, e->loc);
-        Val bv = convert(b, common, e->loc);
-        v.ty = common;
-        v.reg = b_.CreateFDiv(av.reg, bv.reg, "div");
-        return v;
-      }
-      if (e->name == "ROUND") {
-        Val x = emitExpr(e->args[0].get());
-        Val n = emitExpr(e->args[1].get());
-        Val xd = convert(x, Type::flt(6), e->loc);
-        v.ty = e->ty;
-        v.reg = b_.CreateCall(runtimeFn("pli_round", b_.getDoubleTy(),
-                                        {b_.getDoubleTy(), b_.getInt64Ty()}),
-                              {xd.reg, toI64(n)}, "round");
-        return v;
-      }
-      if (e->name == "REPEAT") {
-        Val s = emitExpr(e->args[0].get());
-        Val n = emitExpr(e->args[1].get());
-        Val out = charTemp(e->ty.len);
-        b_.CreateCall(runtimeFn("pli_repeat", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
-                                 b_.getInt64Ty(), b_.getInt64Ty()}),
-                      {out.ptr, out.len, s.ptr, s.len, toI64(n)});
-        out.len = i64(e->ty.len);
-        return out;
-      }
-      if (e->name == "VERIFY") {
-        Val s = emitExpr(e->args[0].get());
-        Val t = emitExpr(e->args[1].get());
-        llvm::Value *r = b_.CreateCall(runtimeFn("pli_verify", b_.getInt64Ty(),
-                                                 {b_.getPtrTy(), b_.getInt64Ty(),
-                                                  b_.getPtrTy(), b_.getInt64Ty()}),
-                                       {s.ptr, s.len, t.ptr, t.len});
-        v.ty = e->ty;
-        v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
-        return v;
-      }
-      if (e->name == "TRANSLATE") {
-        Val s = emitExpr(e->args[0].get());
-        Val out = emitExpr(e->args[1].get());
-        Val in = emitExpr(e->args[2].get());
-        Val dst = charTemp(e->ty.len);
-        b_.CreateCall(runtimeFn("pli_translate", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
-                                 b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty(),
-                                 b_.getPtrTy(), b_.getInt64Ty()}),
-                      {dst.ptr, dst.len, s.ptr, s.len, out.ptr, out.len, in.ptr, in.len});
-        dst.len = i64(e->ty.len);
-        return dst;
-      }
-      if (e->name == "HIGH" || e->name == "LOW") {
-        Val n = emitExpr(e->args[0].get());
-        Val out = charTemp(e->ty.len);
-        std::string fn = e->name == "HIGH" ? "pli_high" : "pli_low";
-        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
-                      {out.ptr, toI64(n)});
-        out.len = i64(e->ty.len);
-        return out;
-      }
-      if (e->name == "DATE" || e->name == "TIME") {
-        Val out = charTemp(e->ty.len);
-        std::string fn = e->name == "DATE" ? "pli_date" : "pli_time";
-        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
-                      {out.ptr, out.len});
-        out.len = i64(e->ty.len);
-        return out;
-      }
+      // Built-ins are emitted in emitBuiltin; a non-builtin call (a user
+      // function procedure) falls through to the general path below.
+      if (emitBuiltin(e, v)) return v;
       if (!e->sym || !e->sym->proc) { v.ty = e->ty; v.reg = i64(0); return v; }
       Stmt *en = e->sym->entry;
       Proc *callee = e->sym->proc;
@@ -1390,4 +1213,210 @@ Val IRGen::emitExpr(HExpr *e) {
   v.ty = common;
   v.reg = r;
   return v;
+}
+// Emit a built-in function call (SUBSTR, INDEX, ABS, ...). Returns true
+// if `e` is one of the recognised built-ins, filling `result`; false if
+// it is a user function procedure (handled in emitExpr's general path).
+// Extracted from the emitExpr Call case so each built-in is a
+// self-contained block.
+bool IRGen::emitBuiltin(HExpr *e, Val &result) {
+  // Names matching none of these are user function procedures.
+  Val v;
+      if (e->name == "SUBSTR") {
+        Val s = emitExpr(e->args[0].get());
+        Val start = emitExpr(e->args[1].get());
+        Val len = emitExpr(e->args[2].get());
+        Val out = charTemp(e->ty.len);
+        b_.CreateCall(runtimeFn("pli_substr", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
+                                 b_.getInt64Ty(), b_.getInt64Ty(), b_.getInt64Ty()}),
+                      {out.ptr, out.len, s.ptr, s.len, toI64(start), toI64(len)});
+        out.len = i64(e->ty.len);
+        result = out;
+        return true;
+      }
+      if (e->name == "INDEX") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        llvm::Value *r = b_.CreateCall(runtimeFn("pli_index", b_.getInt64Ty(),
+                                                 {b_.getPtrTy(), b_.getInt64Ty(),
+                                                  b_.getPtrTy(), b_.getInt64Ty()}),
+                                       {a.ptr, a.len, b.ptr, b.len});
+        v.ty = e->ty;
+        v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "idx32");
+        result = v;
+        return true;
+      }
+      if (e->name == "ABS") {
+        Val a = emitExpr(e->args[0].get());
+        const Type &at = a.ty;
+        llvm::Value *r;
+        if (at.k == TK::Float) {
+          r = b_.CreateCall(runtimeFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}),
+                            {a.reg}, "abs");
+        } else {
+          llvm::Value *neg = b_.CreateSub(llvm::Constant::getNullValue(llvmTy(at)), a.reg, "absneg");
+          llvm::Value *cmp = b_.CreateICmpSLT(a.reg, llvm::Constant::getNullValue(llvmTy(at)), "abscmp");
+          r = b_.CreateSelect(cmp, neg, a.reg, "abs");
+        }
+        v.ty = e->ty;
+        v.reg = r;
+        result = v;
+        return true;
+      }
+      if (e->name == "LENGTH") {
+        Val a = emitExpr(e->args[0].get());
+        v.ty = e->ty;
+        v.reg = b_.CreateTrunc(a.len, b_.getInt32Ty(), "len32");
+        result = v;
+        return true;
+      }
+      if (e->name == "TRUNC") {
+        Val a = emitExpr(e->args[0].get());
+        if (a.ty.k == TK::Float) {
+          llvm::Value *i = b_.CreateFPToSI(a.reg, b_.getInt64Ty(), "trunci");
+          v.ty = e->ty;
+          v.reg = b_.CreateSIToFP(i, b_.getDoubleTy(), "truncd");
+        } else {
+          v = a;
+        }
+        result = v;
+        return true;
+      }
+      if (e->name == "PRECISION") {
+        Val a = emitExpr(e->args[0].get());
+        v = convert(a, e->ty, e->loc);
+        result = v;
+        return true;
+      }
+      if (e->name == "MIN" || e->name == "MAX") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        llvm::Value *cmp = common.k == TK::Float
+            ? b_.CreateFCmpOLT(av.reg, bv.reg, "mincmp")
+            : b_.CreateICmpSLT(av.reg, bv.reg, "mincmp");
+        llvm::Value *r = e->name == "MIN"
+            ? b_.CreateSelect(cmp, av.reg, bv.reg, "min")
+            : b_.CreateSelect(cmp, bv.reg, av.reg, "max");
+        v.ty = common;
+        v.reg = r;
+        result = v;
+        return true;
+      }
+      if (e->name == "MOD") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        v.ty = common;
+        if (common.k == TK::Float) {
+          v.reg = b_.CreateCall(runtimeFn("pli_mod_dd", b_.getDoubleTy(),
+                                          {b_.getDoubleTy(), b_.getDoubleTy()}),
+                                {av.reg, bv.reg}, "mod");
+        } else {
+          llvm::Value *r = b_.CreateCall(runtimeFn("pli_mod_ll", b_.getInt64Ty(),
+                                                   {b_.getInt64Ty(), b_.getInt64Ty()}),
+                                         {toI64(av), toI64(bv)});
+          v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "mod32");
+        }
+        result = v;
+        return true;
+      }
+      if (e->name == "MULTIPLY") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        llvm::Value *r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
+                                               : b_.CreateMul(av.reg, bv.reg, "mul");
+        v.ty = common;
+        v.reg = r;
+        result = v;
+        return true;
+      }
+      if (e->name == "DIVIDE") {
+        Val a = emitExpr(e->args[0].get());
+        Val b = emitExpr(e->args[1].get());
+        const Type &common = e->ty;
+        Val av = convert(a, common, e->loc);
+        Val bv = convert(b, common, e->loc);
+        v.ty = common;
+        v.reg = b_.CreateFDiv(av.reg, bv.reg, "div");
+        result = v;
+        return true;
+      }
+      if (e->name == "ROUND") {
+        Val x = emitExpr(e->args[0].get());
+        Val n = emitExpr(e->args[1].get());
+        Val xd = convert(x, Type::flt(6), e->loc);
+        v.ty = e->ty;
+        v.reg = b_.CreateCall(runtimeFn("pli_round", b_.getDoubleTy(),
+                                        {b_.getDoubleTy(), b_.getInt64Ty()}),
+                              {xd.reg, toI64(n)}, "round");
+        result = v;
+        return true;
+      }
+      if (e->name == "REPEAT") {
+        Val s = emitExpr(e->args[0].get());
+        Val n = emitExpr(e->args[1].get());
+        Val out = charTemp(e->ty.len);
+        b_.CreateCall(runtimeFn("pli_repeat", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
+                                 b_.getInt64Ty(), b_.getInt64Ty()}),
+                      {out.ptr, out.len, s.ptr, s.len, toI64(n)});
+        out.len = i64(e->ty.len);
+        result = out;
+        return true;
+      }
+      if (e->name == "VERIFY") {
+        Val s = emitExpr(e->args[0].get());
+        Val t = emitExpr(e->args[1].get());
+        llvm::Value *r = b_.CreateCall(runtimeFn("pli_verify", b_.getInt64Ty(),
+                                                 {b_.getPtrTy(), b_.getInt64Ty(),
+                                                  b_.getPtrTy(), b_.getInt64Ty()}),
+                                       {s.ptr, s.len, t.ptr, t.len});
+        v.ty = e->ty;
+        v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
+        result = v;
+        return true;
+      }
+      if (e->name == "TRANSLATE") {
+        Val s = emitExpr(e->args[0].get());
+        Val out = emitExpr(e->args[1].get());
+        Val in = emitExpr(e->args[2].get());
+        Val dst = charTemp(e->ty.len);
+        b_.CreateCall(runtimeFn("pli_translate", b_.getVoidTy(),
+                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
+                                 b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty(),
+                                 b_.getPtrTy(), b_.getInt64Ty()}),
+                      {dst.ptr, dst.len, s.ptr, s.len, out.ptr, out.len, in.ptr, in.len});
+        dst.len = i64(e->ty.len);
+        result = dst;
+        return true;
+      }
+      if (e->name == "HIGH" || e->name == "LOW") {
+        Val n = emitExpr(e->args[0].get());
+        Val out = charTemp(e->ty.len);
+        std::string fn = e->name == "HIGH" ? "pli_high" : "pli_low";
+        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
+                      {out.ptr, toI64(n)});
+        out.len = i64(e->ty.len);
+        result = out;
+        return true;
+      }
+      if (e->name == "DATE" || e->name == "TIME") {
+        Val out = charTemp(e->ty.len);
+        std::string fn = e->name == "DATE" ? "pli_date" : "pli_time";
+        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
+                      {out.ptr, out.len});
+        out.len = i64(e->ty.len);
+        result = out;
+        return true;
+      }
+  return false;
 }
