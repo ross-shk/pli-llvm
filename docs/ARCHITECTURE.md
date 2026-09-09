@@ -7,6 +7,14 @@ semantics from the **Y33-6003** language specifications. Both are in
 
 ## 1. Goals and non-goals
 
+**Overarching design goal: emitted code is as fast and efficient as
+possible.** This is the objective that governs the whole backend — the front end
+must never foreclose a downstream optimization, and codegen is judged on the
+speed of what actually runs. It is realised by the pipeline in §2 and the pass
+sets in OPTIMIZATION.md: PL/I-specific optimizations run in HIR/MIR (where the
+language rules are known), classical ones are LLVM's job, and HIR/MIR are shaped
+so LLVM can do them. §7 documents what we deliberately refuse to optimize.
+
 **Goals**
 
 1. Accept the language defined by TR 25.084 rules (1)–(151), i.e. full
