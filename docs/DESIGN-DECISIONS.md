@@ -708,3 +708,36 @@ dynamic bounds and `*` extents. **Rejected.** Dope vectors for this slice
 (unneeded for constant bounds); servicing character element arrays before the
 string-addressing machinery is wired (incomplete and unsafe); silently skipping
 bounds checks to gain speed before condition handling exists (invariant 2).
+
+---
+
+## ADR-034 — Array attribute built-ins `LBOUND`/`HBOUND`/`DIM`: compile-time constants
+
+**Context.** ADR-033 serves fixed-size single-axis scalar arrays (rules
+(12),(13),(126)). The next M2 increment (IMPLEMENTATION-PLAN) is the common array
+built-ins `SUM`, `PROD`, `ANY`, `ALL`, `DIM`, `LBOUND`, `HBOUND`. The cheapest,
+most broadly useful of these are the three attribute built-ins, because with
+constant bounds they are pure compile-time values and they make bounds-driven
+loops (`DO i = LBOUND(a) TO HBOUND(a)`) the idiomatic way to walk an array — the
+pattern matrix/table programs depend on.
+
+**Decision.** `LBOUND(a)` yields the declared lower bound (1 by default),
+`HBOUND(a)` the upper bound, and `DIM(a)` the extent `ub - lb + 1`. Each takes a
+single unsubscripted array argument (rule (127)) and, because bounds are
+constants in this stage, folds in IRGen to an integer constant of the result
+type's width (`FIXED BIN(31)`, an `i32`). A non-array argument, an extra argument
+(incl. an axis number — only axis 1 exists), or a multi-axis array is diagnosed
+as rule (123). The reduction built-ins (`SUM`/`PROD`/`ANY`/`ALL`) need a runtime
+loop over the elements and are deferred to a later M2 slice.
+
+**Consequences.** Bounds-driven loops compile to constant comparisons and work
+with the existing `SUBSCRIPTRANGE` checks. The result constant must use the
+result type's LLVM width — returning a 64-bit register for a 32-bit `FIXED
+BIN(31)` result broke DO-loop bound storage (the TO bound was stored as `i64`
+into an `i32` slot), so the value is built with `ConstantInt::get(llvmTy(e->ty))`
+matching ADR-033's `[N x elemTy]` element width. **Rejected.** Returning the
+bounds as 64-bit registers (width mismatch against `FIXED BIN(31)` storage);
+implementing the reduction built-ins before the array-iteration machinery they
+need; diagnosing the attribute built-ins as unimplemented when they are trivial
+constants that directly enable the M2 exit criterion.
+

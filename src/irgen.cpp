@@ -1523,7 +1523,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
                        : e->name == "HBOUND" ? ub
                        : (ub - lb + 1);
         v.ty = e->ty;
-        v.reg = i64(val);
+        v.reg = llvm::ConstantInt::get(llvmTy(e->ty), val, true);
         result = v;
         return true;
       }
