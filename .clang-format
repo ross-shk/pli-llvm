@@ -1,0 +1,11 @@
+# plic clang-format config. Matches the repo style: 2-space indent, C++20,
+# LLVM-compatible brace style. `make fmt` rewrites sources; `make fmt-check`
+# only reports drift (see Makefile).
+BasedOnStyle: LLVM
+IndentWidth: 2
+ColumnLimit: 100
+PointerAlignment: Left
+DerivePointerAlignment: false
+Standard: c++20
+SortIncludes: true
+IndentCaseLabels: false

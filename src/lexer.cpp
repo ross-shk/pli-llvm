@@ -2,49 +2,75 @@
 #include <cctype>
 #include <cstdio>
 
-const char *tokName(Tok t) {
+const char* tokName(Tok t) {
   switch (t) {
-    case Tok::Eof: return "end of file";
-    case Tok::Word: return "identifier";
-    case Tok::Number: return "numeric constant";
-    case Tok::CharLit: return "character constant";
-    case Tok::BitLit: return "bit constant";
-    case Tok::Semi: return "';'";
-    case Tok::Colon: return "':'";
-    case Tok::Comma: return "','";
-    case Tok::LParen: return "'('";
-    case Tok::RParen: return "')'";
-    case Tok::Dot: return "'.'";
-    case Tok::Eq: return "'='";
-    case Tok::Plus: return "'+'";
-    case Tok::Minus: return "'-'";
-    case Tok::Star: return "'*'";
-    case Tok::Slash: return "'/'";
-    case Tok::Power: return "'**'";
-    case Tok::Concat: return "'||'";
-    case Tok::Amp: return "'&'";
-    case Tok::Bar: return "'|'";
-    case Tok::Not: return "'not'";
-    case Tok::Lt: return "'<'";
-    case Tok::Le: return "'<='";
-    case Tok::Gt: return "'>'";
-    case Tok::Ge: return "'>='";
-    case Tok::Ne: return "'not='";
-    case Tok::Ngt: return "'not>'";
-    case Tok::Nlt: return "'not<'";
-    case Tok::Arrow: return "'->'";
+  case Tok::Eof:
+    return "end of file";
+  case Tok::Word:
+    return "identifier";
+  case Tok::Number:
+    return "numeric constant";
+  case Tok::CharLit:
+    return "character constant";
+  case Tok::BitLit:
+    return "bit constant";
+  case Tok::Semi:
+    return "';'";
+  case Tok::Colon:
+    return "':'";
+  case Tok::Comma:
+    return "','";
+  case Tok::LParen:
+    return "'('";
+  case Tok::RParen:
+    return "')'";
+  case Tok::Dot:
+    return "'.'";
+  case Tok::Eq:
+    return "'='";
+  case Tok::Plus:
+    return "'+'";
+  case Tok::Minus:
+    return "'-'";
+  case Tok::Star:
+    return "'*'";
+  case Tok::Slash:
+    return "'/'";
+  case Tok::Power:
+    return "'**'";
+  case Tok::Concat:
+    return "'||'";
+  case Tok::Amp:
+    return "'&'";
+  case Tok::Bar:
+    return "'|'";
+  case Tok::Not:
+    return "'not'";
+  case Tok::Lt:
+    return "'<'";
+  case Tok::Le:
+    return "'<='";
+  case Tok::Gt:
+    return "'>'";
+  case Tok::Ge:
+    return "'>='";
+  case Tok::Ne:
+    return "'not='";
+  case Tok::Ngt:
+    return "'not>'";
+  case Tok::Nlt:
+    return "'not<'";
+  case Tok::Arrow:
+    return "'->'";
   }
   return "token";
 }
 
 bool pliIsLetter(char c) {
-  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '$' ||
-         c == '#' || c == '@';
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '$' || c == '#' || c == '@';
 }
 
-bool pliIsAlphameric(char c) {
-  return pliIsLetter(c) || (c >= '0' && c <= '9') || c == '_';
-}
+bool pliIsAlphameric(char c) { return pliIsLetter(c) || (c >= '0' && c <= '9') || c == '_'; }
 
 void Lexer::bump() {
   if (p_ < s_.size()) {
@@ -75,8 +101,9 @@ bool Lexer::eatNot() {
 
 void Lexer::skipSpaceAndComments() {
   for (;;) {
-    while (cur() && (unsigned char)cur() <= ' ') bump();
-    if (cur() == '/' && peek() == '*') {  // rule 150
+    while (cur() && (unsigned char)cur() <= ' ')
+      bump();
+    if (cur() == '/' && peek() == '*') { // rule 150
       SourceLoc start = here();
       bump();
       bump();
@@ -151,13 +178,12 @@ Token Lexer::lexNumber() {
       col_ = sc;
     }
   }
-  if (cur() == 'B' || cur() == 'b') {  // binary radix (rule 136)
+  if (cur() == 'B' || cur() == 'b') { // binary radix (rule 136)
     t.binaryRadix = true;
     bump();
-  } else if (cur() == 'I' || cur() == 'i') {  // imaginary (rule 139)
+  } else if (cur() == 'I' || cur() == 'i') { // imaginary (rule 139)
     bump();
-    d_.error(t.loc, "complex constants are not supported by this compiler stage",
-             "(139)");
+    d_.error(t.loc, "complex constants are not supported by this compiler stage", "(139)");
   }
   return t;
 }
@@ -167,7 +193,7 @@ Token Lexer::lexNumber() {
 Token Lexer::lexString() {
   Token t;
   t.loc = here();
-  bump();  // opening quote
+  bump(); // opening quote
   std::string v;
   for (;;) {
     if (!cur() || cur() == '\n') {
@@ -216,8 +242,7 @@ std::vector<Token> Lexer::run() {
       out.push_back(lexWord());
       continue;
     }
-    if (isdigit((unsigned char)c) ||
-        (c == '.' && isdigit((unsigned char)peek()))) {
+    if (isdigit((unsigned char)c) || (c == '.' && isdigit((unsigned char)peek()))) {
       out.push_back(lexNumber());
       continue;
     }
@@ -233,95 +258,118 @@ std::vector<Token> Lexer::run() {
       bump();
     };
     switch (c) {
-      case ';': one(Tok::Semi); break;
-      case ':': one(Tok::Colon); break;
-      case ',': one(Tok::Comma); break;
-      case '(': one(Tok::LParen); break;
-      case ')': one(Tok::RParen); break;
-      case '.': one(Tok::Dot); break;
-      case '+': one(Tok::Plus); break;
-      case '&': one(Tok::Amp); break;
-      case '=': one(Tok::Eq); break;
-      case '*':
+    case ';':
+      one(Tok::Semi);
+      break;
+    case ':':
+      one(Tok::Colon);
+      break;
+    case ',':
+      one(Tok::Comma);
+      break;
+    case '(':
+      one(Tok::LParen);
+      break;
+    case ')':
+      one(Tok::RParen);
+      break;
+    case '.':
+      one(Tok::Dot);
+      break;
+    case '+':
+      one(Tok::Plus);
+      break;
+    case '&':
+      one(Tok::Amp);
+      break;
+    case '=':
+      one(Tok::Eq);
+      break;
+    case '*':
+      bump();
+      if (cur() == '*') {
         bump();
-        if (cur() == '*') {
-          bump();
-          t.kind = Tok::Power;
-        } else {
-          t.kind = Tok::Star;
-        }
-        break;
-      case '/': one(Tok::Slash); break;
-      case '|':
+        t.kind = Tok::Power;
+      } else {
+        t.kind = Tok::Star;
+      }
+      break;
+    case '/':
+      one(Tok::Slash);
+      break;
+    case '|':
+      bump();
+      if (cur() == '|') {
         bump();
-        if (cur() == '|') {
-          bump();
-          t.kind = Tok::Concat;
-        } else {
-          t.kind = Tok::Bar;
-        }
-        break;
-      case '-':
+        t.kind = Tok::Concat;
+      } else {
+        t.kind = Tok::Bar;
+      }
+      break;
+    case '-':
+      bump();
+      if (cur() == '>') {
         bump();
-        if (cur() == '>') {
-          bump();
-          t.kind = Tok::Arrow;
-        } else {
-          t.kind = Tok::Minus;
-        }
-        break;
-      case '<':
+        t.kind = Tok::Arrow;
+      } else {
+        t.kind = Tok::Minus;
+      }
+      break;
+    case '<':
+      bump();
+      if (cur() == '=') {
         bump();
+        t.kind = Tok::Le;
+      } else {
+        t.kind = Tok::Lt;
+      }
+      break;
+    case '>':
+      bump();
+      if (cur() == '=') {
+        bump();
+        t.kind = Tok::Ge;
+      } else {
+        t.kind = Tok::Gt;
+      }
+      break;
+    default:
+      if (eatNot()) { // ¬ ¬= ¬> ¬<
         if (cur() == '=') {
           bump();
-          t.kind = Tok::Le;
+          t.kind = Tok::Ne;
+        } else if (cur() == '>') {
+          bump();
+          t.kind = Tok::Ngt;
+        } else if (cur() == '<') {
+          bump();
+          t.kind = Tok::Nlt;
         } else {
-          t.kind = Tok::Lt;
+          t.kind = Tok::Not;
         }
         break;
-      case '>':
+      }
+      // Encoding damage, not language: diagnose it readably.
+      if ((unsigned char)cur() == 0xC3 && (unsigned char)peek() == 0x82 &&
+          (unsigned char)peek(2) == 0xC2 && (unsigned char)peek(3) == 0xAC) {
+        d_.error(loc, "not sign is doubly encoded (0xc3 0x82 0xc2 0xac); write it as '^'");
         bump();
-        if (cur() == '=') {
-          bump();
-          t.kind = Tok::Ge;
-        } else {
-          t.kind = Tok::Gt;
-        }
-        break;
-      default:
-        if (eatNot()) {  // ¬ ¬= ¬> ¬<
-          if (cur() == '=') {
-            bump();
-            t.kind = Tok::Ne;
-          } else if (cur() == '>') {
-            bump();
-            t.kind = Tok::Ngt;
-          } else if (cur() == '<') {
-            bump();
-            t.kind = Tok::Nlt;
-          } else {
-            t.kind = Tok::Not;
-          }
-          break;
-        }
-        // Encoding damage, not language: diagnose it readably.
-        if ((unsigned char)cur() == 0xC3 && (unsigned char)peek() == 0x82 &&
-            (unsigned char)peek(2) == 0xC2 && (unsigned char)peek(3) == 0xAC) {
-          d_.error(loc, "not sign is doubly encoded (0xc3 0x82 0xc2 0xac); write it as '^'");
-          bump(); bump(); bump(); bump();
-          continue;
-        }
-        if ((unsigned char)cur() >= 0x80) {
-          char buf[72];
-          std::snprintf(buf, sizeof buf, "invalid character (0x%02x) in source",
-                        (unsigned char)cur());
-          d_.error(loc, buf);
-          bump();
-          continue;
-        }
-        d_.error(loc, std::string("invalid character '") + c + "' in source");
+        bump();
+        bump();
         bump();
         continue;
+      }
+      if ((unsigned char)cur() >= 0x80) {
+        char buf[72];
+        std::snprintf(buf, sizeof buf, "invalid character (0x%02x) in source",
+                      (unsigned char)cur());
+        d_.error(loc, buf);
+        bump();
+        continue;
+      }
+      d_.error(loc, std::string("invalid character '") + c + "' in source");
+      bump();
+      continue;
     }
     out.push_back(t);
   }

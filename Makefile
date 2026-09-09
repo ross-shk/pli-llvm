@@ -58,7 +58,17 @@ RTPATH   := $(abspath $(RTLIB))
 # from that same LLVM install must be used (see main.cpp PLIC_CLANG).
 CLANGPATH := $(shell $(LLVM_CONFIG) --bindir)/clang
 
-.PHONY: all clean test install
+# Static-analysis tooling from the same LLVM install (no system copies are
+# assumed on PATH). Used by `make check` / its individual targets.
+LLVM_BINDIR := $(shell $(LLVM_CONFIG) --bindir)
+CLANG_TIDY := $(shell command -v $(LLVM_BINDIR)/clang-tidy 2>/dev/null || command -v clang-tidy 2>/dev/null)
+CLANG_FORMAT := $(shell command -v $(LLVM_BINDIR)/clang-format 2>/dev/null || command -v clang-format 2>/dev/null)
+SCAN_BUILD := $(shell command -v $(LLVM_BINDIR)/scan-build 2>/dev/null || command -v scan-build 2>/dev/null)
+
+# Sources clang-format / clang-tidy operate on (C++ only; the runtime is C).
+SRCS_TXT := $(SRCS) src/*.h
+
+.PHONY: all clean test install check tidy fmt fmt-check scan werror
 all: $(BIN) $(RTLIB)
 
 $(BUILD):
@@ -89,6 +99,50 @@ $(RTLIB): $(RT_OBJS)
 # (override with JOBS).
 test: all
 	@python3 tests/run_tests.py
+
+# --- static analysis / lint gate -------------------------------------------
+# `make check` is the single gate for major edits: a -Werror build, a
+# clang-format drift check, clang-tidy, and the clang static analyzer, in that
+# order, stopping on the first failure. Each analyzer also has its own target.
+check: werror fmt-check tidy scan
+
+# Rebuild the C++ objects with -Werror so warnings fail the build. The objects
+# are dropped first so the new flag actually reaches the compiler.
+werror:
+	@rm -f $(OBJS) $(RULES_OBJ)
+	@$(MAKE) CXXFLAGS="$(CXXFLAGS) -Werror" $(OBJS) $(RULES_OBJ)
+
+# Rewrite sources in place to the repo format.
+fmt:
+	@test -n "$(CLANG_FORMAT)" || { echo "clang-format not found"; exit 1; }
+	@$(CLANG_FORMAT) -i $(SRCS_TXT)
+
+# Report (without fixing) whether sources drift from the repo format.
+fmt-check:
+	@test -n "$(CLANG_FORMAT)" || { echo "clang-format not found"; exit 1; }
+	@if $(CLANG_FORMAT) --dry-run --Werror $(SRCS_TXT) >/dev/null 2>&1; then \
+	  echo "fmt: clean"; \
+	else \
+	  echo "fmt: sources drift from .clang-format (run make fmt)"; \
+	  $(CLANG_FORMAT) --dry-run $(SRCS_TXT) 2>&1 | sed -n '1,20p'; \
+	  exit 1; \
+	fi
+
+# clang-tidy over the C++ sources (config in .clang-tidy). No compile database
+# exists for the Makefile, so the compile flags are passed after `--`.
+tidy:
+	@test -n "$(CLANG_TIDY)" || { echo "clang-tidy not found"; exit 1; }
+	@$(CLANG_TIDY) $(SRCS) --quiet -- \
+		$(PLIC_CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
+		-DPLIC_INSTALL_RUNTIME_LIB='"$(LIBDIR)/libpli.a"' \
+		-DPLIC_CLANG='"$(CLANGPATH)"'
+
+# The clang static analyzer; report only real bugs (--status-bugs). Drop the
+# objects first so every source is re-analyzed.
+scan:
+	@test -n "$(SCAN_BUILD)" || { echo "scan-build not found"; exit 1; }
+	@rm -f $(OBJS) $(RULES_OBJ)
+	@$(SCAN_BUILD) --status-bugs $(MAKE) $(OBJS) $(RULES_OBJ)
 
 clean:
 	rm -rf $(BUILD) tests/*/out

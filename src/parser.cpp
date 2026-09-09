@@ -5,54 +5,97 @@
 // Operator mapping. Symbols, plus the 48-character-set operator words of
 // TR 25.084 §2.3.3 (NOT AND OR GT LT GE LE NG NL NE CAT).
 // ---------------------------------------------------------------------------
-static Tok infixOp(const Token &t) {
+static Tok infixOp(const Token& t) {
   switch (t.kind) {
-    case Tok::Bar: case Tok::Amp: case Tok::Concat:
-    case Tok::Eq: case Tok::Ne: case Tok::Lt: case Tok::Le:
-    case Tok::Gt: case Tok::Ge: case Tok::Ngt: case Tok::Nlt:
-    case Tok::Plus: case Tok::Minus: case Tok::Star: case Tok::Slash:
-    case Tok::Power:
-      return t.kind;
-    case Tok::Word: break;
-    default: return Tok::Eof;
+  case Tok::Bar:
+  case Tok::Amp:
+  case Tok::Concat:
+  case Tok::Eq:
+  case Tok::Ne:
+  case Tok::Lt:
+  case Tok::Le:
+  case Tok::Gt:
+  case Tok::Ge:
+  case Tok::Ngt:
+  case Tok::Nlt:
+  case Tok::Plus:
+  case Tok::Minus:
+  case Tok::Star:
+  case Tok::Slash:
+  case Tok::Power:
+    return t.kind;
+  case Tok::Word:
+    break;
+  default:
+    return Tok::Eof;
   }
-  if (t.text == "AND") return Tok::Amp;
-  if (t.text == "OR") return Tok::Bar;
-  if (t.text == "CAT") return Tok::Concat;
-  if (t.text == "GT") return Tok::Gt;
-  if (t.text == "LT") return Tok::Lt;
-  if (t.text == "GE") return Tok::Ge;
-  if (t.text == "LE") return Tok::Le;
-  if (t.text == "NE") return Tok::Ne;
-  if (t.text == "NG") return Tok::Ngt;
-  if (t.text == "NL") return Tok::Nlt;
+  if (t.text == "AND")
+    return Tok::Amp;
+  if (t.text == "OR")
+    return Tok::Bar;
+  if (t.text == "CAT")
+    return Tok::Concat;
+  if (t.text == "GT")
+    return Tok::Gt;
+  if (t.text == "LT")
+    return Tok::Lt;
+  if (t.text == "GE")
+    return Tok::Ge;
+  if (t.text == "LE")
+    return Tok::Le;
+  if (t.text == "NE")
+    return Tok::Ne;
+  if (t.text == "NG")
+    return Tok::Ngt;
+  if (t.text == "NL")
+    return Tok::Nlt;
   return Tok::Eof;
 }
 
 // Precedence per rules (115)-(122): | < & < comparison < || < +- < */ < **
 static int precOf(Tok op) {
   switch (op) {
-    case Tok::Bar: return 1;
-    case Tok::Amp: return 2;
-    case Tok::Eq: case Tok::Ne: case Tok::Lt: case Tok::Le:
-    case Tok::Gt: case Tok::Ge: case Tok::Ngt: case Tok::Nlt: return 3;
-    case Tok::Concat: return 4;
-    case Tok::Plus: case Tok::Minus: return 5;
-    case Tok::Star: case Tok::Slash: return 6;
-    default: return 0;  // ** handled in parsePower (right associative)
+  case Tok::Bar:
+    return 1;
+  case Tok::Amp:
+    return 2;
+  case Tok::Eq:
+  case Tok::Ne:
+  case Tok::Lt:
+  case Tok::Le:
+  case Tok::Gt:
+  case Tok::Ge:
+  case Tok::Ngt:
+  case Tok::Nlt:
+    return 3;
+  case Tok::Concat:
+    return 4;
+  case Tok::Plus:
+  case Tok::Minus:
+    return 5;
+  case Tok::Star:
+  case Tok::Slash:
+    return 6;
+  default:
+    return 0; // ** handled in parsePower (right associative)
   }
 }
 
-bool Parser::expect(Tok k, const char *rule) {
-  if (at(k)) { advance(); return true; }
-  d_.error(cur().loc, std::string("expected ") + tokName(k) + ", found " +
-           (cur().kind == Tok::Word ? "'" + cur().text + "'" : tokName(cur().kind)),
+bool Parser::expect(Tok k, const char* rule) {
+  if (at(k)) {
+    advance();
+    return true;
+  }
+  d_.error(cur().loc,
+           std::string("expected ") + tokName(k) + ", found " +
+               (cur().kind == Tok::Word ? "'" + cur().text + "'" : tokName(cur().kind)),
            rule);
   return false;
 }
 
 void Parser::resync() {
-  while (!at(Tok::Eof) && !at(Tok::Semi)) advance();
+  while (!at(Tok::Eof) && !at(Tok::Semi))
+    advance();
   eat(Tok::Semi);
 }
 
@@ -71,28 +114,34 @@ void Parser::resync() {
 // ---------------------------------------------------------------------------
 bool Parser::looksLikeAssignment() const {
   size_t j = i_ + 1;
-  if (j >= t_.size()) return false;
+  if (j >= t_.size())
+    return false;
   // Qualified / locator-qualified targets: A.B = , P->A =
-  while (j + 1 < t_.size() &&
-         (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
+  while (j + 1 < t_.size() && (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
          t_[j + 1].kind == Tok::Word)
     j += 2;
   // Multiple assignment targets: A, B, C = (rule 86) — skip further
   // references separated by commas (each possibly qualified).
   while (j + 1 < t_.size() && t_[j].kind == Tok::Comma && t_[j + 1].kind == Tok::Word) {
     j += 2;
-    while (j + 1 < t_.size() &&
-           (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
+    while (j + 1 < t_.size() && (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
            t_[j + 1].kind == Tok::Word)
       j += 2;
   }
-  if (t_[j].kind == Tok::Eq) return true;
+  if (t_[j].kind == Tok::Eq)
+    return true;
   if (t_[j].kind == Tok::LParen) {
     int depth = 0;
     for (; j < t_.size(); ++j) {
-      if (t_[j].kind == Tok::LParen) ++depth;
-      else if (t_[j].kind == Tok::RParen) { if (--depth == 0) { ++j; break; } }
-      else if (t_[j].kind == Tok::Semi || t_[j].kind == Tok::Eof) return false;
+      if (t_[j].kind == Tok::LParen)
+        ++depth;
+      else if (t_[j].kind == Tok::RParen) {
+        if (--depth == 0) {
+          ++j;
+          break;
+        }
+      } else if (t_[j].kind == Tok::Semi || t_[j].kind == Tok::Eof)
+        return false;
     }
     return j < t_.size() && t_[j].kind == Tok::Eq;
   }
@@ -102,19 +151,19 @@ bool Parser::looksLikeAssignment() const {
 // The words keywordStatement() dispatches on. Only a word with a keyword
 // spelling can be ambiguous with the keyword reading, so the speculative
 // probe (ADR-004 step 3) is gated on this.
-static bool stmtKeywordSpelling(const std::string &w) {
-  static const char *const kws[] = {
-      "DECLARE", "DCL",  "IF",   "DO",    "BEGIN",    "PUT",     "CALL",
-      "RETURN",  "STOP", "EXIT", "GET",   "GO",       "GOTO",    "ON",
-      "SIGNAL",  "REVERT", "ALLOCATE", "FREE", "OPEN", "CLOSE",
-      "READ",    "WRITE", "REWRITE", "DELETE",
+static bool stmtKeywordSpelling(const std::string& w) {
+  static const char* const kws[] = {
+      "DECLARE",  "DCL",  "IF",   "DO",    "BEGIN", "PUT",   "CALL",    "RETURN",
+      "STOP",     "EXIT", "GET",  "GO",    "GOTO",  "ON",    "SIGNAL",  "REVERT",
+      "ALLOCATE", "FREE", "OPEN", "CLOSE", "READ",  "WRITE", "REWRITE", "DELETE",
   };
-  for (const char *k : kws)
-    if (w == k) return true;
+  for (const char* k : kws)
+    if (w == k)
+      return true;
   return false;
 }
 
-bool Parser::atStmtKeyword(const char *w) const {
+bool Parser::atStmtKeyword(const char* w) const {
   return cur().isWord(w) && !looksLikeAssignment();
 }
 
@@ -125,17 +174,20 @@ std::unique_ptr<Program> Parser::parse() {
   while (!at(Tok::Eof)) {
     size_t before = i_;
     parseExternalProcedure();
-    if (i_ == before) { d_.error(cur().loc, "expected an external procedure", "(1)"); break; }
+    if (i_ == before) {
+      d_.error(cur().loc, "expected an external procedure", "(1)");
+      break;
+    }
   }
   return std::move(prog_);
 }
 
-Proc *Parser::startProc(const std::string &name, SourceLoc loc, Proc *parent) {
+Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
   auto p = std::make_unique<Proc>();
   p->name = name;
   p->loc = loc;
   p->parent = parent;
-  Proc *raw = p.get();
+  Proc* raw = p.get();
   prog_->procs.push_back(std::move(p));
   return raw;
 }
@@ -143,7 +195,11 @@ Proc *Parser::startProc(const std::string &name, SourceLoc loc, Proc *parent) {
 // procedure ::= [prefixlist] entry-namelist PROCEDURE [(parameterlist)]
 //               [procedure-optionslist] sentencelist                rule (2)
 void Parser::parseExternalProcedure() {
-  if (!at(Tok::Word)) { d_.error(cur().loc, "expected procedure name", "(2)"); resync(); return; }
+  if (!at(Tok::Word)) {
+    d_.error(cur().loc, "expected procedure name", "(2)");
+    resync();
+    return;
+  }
   std::string name = cur().text;
   SourceLoc loc = cur().loc;
   advance();
@@ -151,29 +207,44 @@ void Parser::parseExternalProcedure() {
   // the rest are additional entry points to the same procedure body.
   std::vector<std::string> entryNames;
   while (eat(Tok::Comma)) {
-    if (at(Tok::Word)) { entryNames.push_back(cur().text); advance(); }
-    else { d_.error(cur().loc, "expected entry name", "(3)"); resync(); return; }
+    if (at(Tok::Word)) {
+      entryNames.push_back(cur().text);
+      advance();
+    } else {
+      d_.error(cur().loc, "expected entry name", "(3)");
+      resync();
+      return;
+    }
   }
-  if (!expect(Tok::Colon, "(64)")) { resync(); return; }
+  if (!expect(Tok::Colon, "(64)")) {
+    resync();
+    return;
+  }
   if (!(atStmtKeyword("PROCEDURE") || atStmtKeyword("PROC"))) {
     d_.error(cur().loc, "expected PROCEDURE after entry name", "(2)", "PROCEDURE ");
     resync();
     return;
   }
   advance();
-  Proc *p = startProc(name, loc, nullptr);
+  Proc* p = startProc(name, loc, nullptr);
   p->entryNames = std::move(entryNames);
   parseProcOptions(p);
   parseProcBody(p);
 }
 
-void Parser::parseProcOptions(Proc *p) {
+void Parser::parseProcOptions(Proc* p) {
   // [ ( parameterlist ) ]                                            rule (4)
   if (eat(Tok::LParen)) {
     while (!at(Tok::RParen) && !at(Tok::Eof)) {
-      if (at(Tok::Word)) { p->params.push_back(cur().text); advance(); }
-      else { d_.error(cur().loc, "expected parameter name", "(4)"); advance(); }
-      if (!eat(Tok::Comma)) break;
+      if (at(Tok::Word)) {
+        p->params.push_back(cur().text);
+        advance();
+      } else {
+        d_.error(cur().loc, "expected parameter name", "(4)");
+        advance();
+      }
+      if (!eat(Tok::Comma))
+        break;
     }
     expect(Tok::RParen, "(4)");
   }
@@ -184,35 +255,42 @@ void Parser::parseProcOptions(Proc *p) {
       if (expect(Tok::LParen, "(5)")) {
         int depth = 1;
         while (depth > 0 && !at(Tok::Eof)) {
-          if (at(Tok::LParen)) ++depth;
-          else if (at(Tok::RParen)) --depth;
-          else if (atWord("MAIN")) p->isMain = true;
+          if (at(Tok::LParen))
+            ++depth;
+          else if (at(Tok::RParen))
+            --depth;
+          else if (atWord("MAIN"))
+            p->isMain = true;
           advance();
         }
       }
       continue;
     }
-    if (eatWord("RECURSIVE")) continue;
+    if (eatWord("RECURSIVE"))
+      continue;
     if (atWord("RETURNS")) {
       // RETURNS(data-attributes) ::= the result type of a function
       // procedure (rules (5),(34)). Parse the type from the attribute words.
       advance();
       if (expect(Tok::LParen, "(34)")) {
         p->isFunction = true;
-        parseDescriptorType(p->retTy);   // result type from the attribute words
+        parseDescriptorType(p->retTy); // result type from the attribute words
         expect(Tok::RParen, "(34)");
       }
       continue;
     }
-    d_.warn(cur().loc, "ignoring unsupported procedure option '" +
-            (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) + "'", "(5)");
+    d_.warn(cur().loc,
+            "ignoring unsupported procedure option '" +
+                (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) + "'",
+            "(5)");
     advance();
   }
   expect(Tok::Semi, "(2)");
-  if (p->isMain && !prog_->mainProc) prog_->mainProc = p;
+  if (p->isMain && !prog_->mainProc)
+    prog_->mainProc = p;
 }
 
-EndInfo Parser::parseProcBody(Proc *p) {
+EndInfo Parser::parseProcBody(Proc* p) {
   EndInfo e = parseBody(p, p->body, p->name);
   if (e.present && !e.label.empty()) {
     // END names something that is not this procedure and not any enclosing
@@ -226,12 +304,11 @@ EndInfo Parser::parseProcBody(Proc *p) {
 //
 // Implements multiple closure (TR §2.3.2.2): an END bearing a label that names
 // an enclosing block closes every block in between.
-EndInfo Parser::parseBody(Proc *owner, std::vector<StmtP> &body,
-                          const std::string &ownName) {
+EndInfo Parser::parseBody(Proc* owner, std::vector<StmtP>& body, const std::string& ownName) {
   for (;;) {
     if (at(Tok::Eof)) {
-      d_.error(cur().loc, "unexpected end of file: missing END for '" + ownName + "'",
-               "(7)", "END " + ownName + ";");
+      d_.error(cur().loc, "unexpected end of file: missing END for '" + ownName + "'", "(7)",
+               "END " + ownName + ";");
       return {};
     }
     if (atStmtKeyword("END")) {
@@ -239,23 +316,33 @@ EndInfo Parser::parseBody(Proc *owner, std::vector<StmtP> &body,
       e.present = true;
       e.loc = cur().loc;
       advance();
-      if (at(Tok::Word)) { e.label = cur().text; advance(); }
+      if (at(Tok::Word)) {
+        e.label = cur().text;
+        advance();
+      }
       expect(Tok::Semi, "(7)");
-      if (e.label.empty() || e.label == ownName) { e.label.clear(); return e; }
-      return e;  // closes an outer block -> propagate
+      if (e.label.empty() || e.label == ownName) {
+        e.label.clear();
+        return e;
+      }
+      return e; // closes an outer block -> propagate
     }
     StmtP s = parseStatement(owner);
-    if (s) body.push_back(std::move(s));
+    if (s)
+      body.push_back(std::move(s));
     if (pendingEnd_.present) {
       EndInfo e = pendingEnd_;
       pendingEnd_ = {};
-      if (e.label == ownName) { e.label.clear(); return e; }
+      if (e.label == ownName) {
+        e.label.clear();
+        return e;
+      }
       return e;
     }
   }
 }
 
-StmtP Parser::parseStatement(Proc *owner) {
+StmtP Parser::parseStatement(Proc* owner) {
   auto st = std::make_unique<Stmt>();
   st->loc = cur().loc;
 
@@ -265,14 +352,23 @@ StmtP Parser::parseStatement(Proc *owner) {
     int depth = 0;
     size_t save = i_;
     while (!at(Tok::Eof)) {
-      if (at(Tok::LParen)) ++depth;
-      else if (at(Tok::RParen)) { if (--depth == 0) { advance(); break; } }
+      if (at(Tok::LParen))
+        ++depth;
+      else if (at(Tok::RParen)) {
+        if (--depth == 0) {
+          advance();
+          break;
+        }
+      }
       advance();
     }
     if (at(Tok::Colon)) {
       advance();
       d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
-    } else { i_ = save; break; }
+    } else {
+      i_ = save;
+      break;
+    }
   }
 
   // label prefixes                                                 rule (64)
@@ -285,10 +381,10 @@ StmtP Parser::parseStatement(Proc *owner) {
   // nested procedure                                          rules (2),(8)
   if ((atStmtKeyword("PROCEDURE") || atStmtKeyword("PROC")) && !st->labels.empty()) {
     advance();
-    Proc *p = startProc(st->labels.front(), st->loc, owner);
+    Proc* p = startProc(st->labels.front(), st->loc, owner);
     parseProcOptions(p);
     parseProcBody(p);
-    return nullptr;  // procedures are hoisted into Program::procs
+    return nullptr; // procedures are hoisted into Program::procs
   }
 
   // ENTRY statement                                     rule (56)
@@ -298,15 +394,21 @@ StmtP Parser::parseStatement(Proc *owner) {
       resync();
       return nullptr;
     }
-    advance();  // ENTRY
+    advance(); // ENTRY
     st->kind = Stmt::Entry;
     st->name = st->labels.front();
     // [ ( parameterlist ) ]
     if (eat(Tok::LParen)) {
       while (!at(Tok::RParen) && !at(Tok::Eof)) {
-        if (at(Tok::Word)) { st->params.push_back(cur().text); advance(); }
-        else { d_.error(cur().loc, "expected parameter name", "(56)"); advance(); }
-        if (!eat(Tok::Comma)) break;
+        if (at(Tok::Word)) {
+          st->params.push_back(cur().text);
+          advance();
+        } else {
+          d_.error(cur().loc, "expected parameter name", "(56)");
+          advance();
+        }
+        if (!eat(Tok::Comma))
+          break;
       }
       expect(Tok::RParen, "(56)");
     }
@@ -323,24 +425,31 @@ StmtP Parser::parseStatement(Proc *owner) {
     return st;
   }
 
-  if (eat(Tok::Semi)) { st->kind = Stmt::Null; return st; }  // rule (67)
+  if (eat(Tok::Semi)) {
+    st->kind = Stmt::Null;
+    return st;
+  } // rule (67)
 
   // WORD ( ... ) = is ambiguous until parsed (ADR-004 step 3): it may be a
   // statement whose own grammar contains that shape (IF (X) = 1 THEN ...)
   // or an assignment to a variable bearing the keyword's spelling. Prefer
   // the keyword reading when a speculative parse of it succeeds; otherwise
   // fall through and let the word be an assignment target.
-  if (cur().kind == Tok::Word && looksLikeAssignment() &&
-      stmtKeywordSpelling(cur().text)) {
+  if (cur().kind == Tok::Word && looksLikeAssignment() && stmtKeywordSpelling(cur().text)) {
     StmtP s = probeKeywordStatement(owner, st->labels);
-    if (s) return s;
+    if (s)
+      return s;
   }
 
   StmtP k = keywordStatement(owner, st->labels, /*probe=*/false);
-  if (k) { k->labels = st->labels; return k; }
+  if (k) {
+    k->labels = st->labels;
+    return k;
+  }
 
   auto s = parseAssignment();
-  if (s) s->labels = st->labels;
+  if (s)
+    s->labels = st->labels;
   return s;
 }
 
@@ -351,8 +460,7 @@ StmtP Parser::parseStatement(Proc *owner) {
 // during the probe, and report failure so the caller falls back to the
 // assignment reading. A probe is grammar-only — sema has no symbol table to
 // bias it — so when both readings are valid, the keyword reading wins.
-StmtP Parser::probeKeywordStatement(Proc *owner,
-                                    const std::vector<std::string> &labels) {
+StmtP Parser::probeKeywordStatement(Proc* owner, const std::vector<std::string>& labels) {
   size_t save = i_;
   EndInfo saveEnd = pendingEnd_;
   size_t saveProcs = prog_->procs.size();
@@ -361,10 +469,12 @@ StmtP Parser::probeKeywordStatement(Proc *owner,
   StmtP s = keywordStatement(owner, labels, /*probe=*/true);
   bool clean = s && d_.mutedErrors() == before;
   d_.unmute();
-  if (clean) return s;
+  if (clean)
+    return s;
   i_ = save;
   pendingEnd_ = saveEnd;
-  while (prog_->procs.size() > saveProcs) prog_->procs.pop_back();
+  while (prog_->procs.size() > saveProcs)
+    prog_->procs.pop_back();
   d_.rewindMutedErrors(before);
   return nullptr;
 }
@@ -374,38 +484,49 @@ StmtP Parser::probeKeywordStatement(Proc *owner,
 // of ADR-004 step 2 (atStmtKeyword); with probe=true it is taken on spelling
 // alone so a speculative parse can decide whether the keyword reading holds.
 // Returns nullptr when no keyword matched (caller tries rule (86) then).
-StmtP Parser::keywordStatement(Proc *owner, const std::vector<std::string> &labels,
-                               bool probe) {
-  auto kw = [&](const char *w) { return probe ? cur().isWord(w) : atStmtKeyword(w); };
+StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labels, bool probe) {
+  auto kw = [&](const char* w) { return probe ? cur().isWord(w) : atStmtKeyword(w); };
 
-  if (kw("DECLARE") || kw("DCL")) { advance(); return parseDeclare(); }        // rule (9)
-  if (kw("IF")) { return parseIf(owner); }                                     // rules (74),(75)
-  if (kw("DO")) { return parseDo(owner, labels); }                             // rules (69)-(73)
-  if (kw("BEGIN")) {                                                           // rule (68)
+  if (kw("DECLARE") || kw("DCL")) {
+    advance();
+    return parseDeclare();
+  } // rule (9)
+  if (kw("IF")) {
+    return parseIf(owner);
+  } // rules (74),(75)
+  if (kw("DO")) {
+    return parseDo(owner, labels);
+  } // rules (69)-(73)
+  if (kw("BEGIN")) { // rule (68)
     auto st = std::make_unique<Stmt>();
     st->loc = cur().loc;
     advance();
     expect(Tok::Semi, "(68)");
-    st->kind = Stmt::Begin;  // a block with its own scope (rule (68))
+    st->kind = Stmt::Begin; // a block with its own scope (rule (68))
     EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
-    if (e.present && !e.label.empty()) pendingEnd_ = e;
+    if (e.present && !e.label.empty())
+      pendingEnd_ = e;
     return st;
   }
-  if (kw("PUT")) { return parsePut(); }                                        // rules (104)-(109)
-  if (kw("CALL")) { return parseCall(); }                                      // rules (78)-(80)
-  if (kw("RETURN")) {                                                          // rule (81)
+  if (kw("PUT")) {
+    return parsePut();
+  } // rules (104)-(109)
+  if (kw("CALL")) {
+    return parseCall();
+  } // rules (78)-(80)
+  if (kw("RETURN")) { // rule (81)
     auto st = std::make_unique<Stmt>();
     st->loc = cur().loc;
     advance();
     st->kind = Stmt::Return;
-    if (eat(Tok::LParen)) {           // RETURN(value) — function value, rule (81)
+    if (eat(Tok::LParen)) { // RETURN(value) — function value, rule (81)
       st->value = parseExpr();
       expect(Tok::RParen, "(81)");
     }
     expect(Tok::Semi, "(81)");
     return st;
   }
-  if (kw("STOP") || kw("EXIT")) {                                              // rules (84),(85)
+  if (kw("STOP") || kw("EXIT")) { // rules (84),(85)
     auto st = std::make_unique<Stmt>();
     st->loc = cur().loc;
     advance();
@@ -422,11 +543,14 @@ StmtP Parser::keywordStatement(Proc *owner, const std::vector<std::string> &labe
     // GO TO label ;                                        rule (77)
     auto st = std::make_unique<Stmt>();
     st->loc = cur().loc;
-    advance();  // GO
-    advance();  // TO
+    advance(); // GO
+    advance(); // TO
     st->kind = Stmt::Goto;
-    if (at(Tok::Word)) { st->name = cur().text; advance(); }
-    else d_.error(cur().loc, "expected a label after GO TO", "(77)");
+    if (at(Tok::Word)) {
+      st->name = cur().text;
+      advance();
+    } else
+      d_.error(cur().loc, "expected a label after GO TO", "(77)");
     expect(Tok::Semi, "(77)");
     return st;
   }
@@ -436,13 +560,17 @@ StmtP Parser::keywordStatement(Proc *owner, const std::vector<std::string> &labe
     st->loc = cur().loc;
     advance();
     st->kind = Stmt::Goto;
-    if (at(Tok::Word)) { st->name = cur().text; advance(); }
-    else d_.error(cur().loc, "expected a label after GOTO", "(77)");
+    if (at(Tok::Word)) {
+      st->name = cur().text;
+      advance();
+    } else
+      d_.error(cur().loc, "expected a label after GOTO", "(77)");
     expect(Tok::Semi, "(77)");
     return st;
   }
   if (kw("ON") || kw("SIGNAL") || kw("REVERT")) {
-    d_.error(cur().loc, "condition handling (ON/SIGNAL/REVERT) is not implemented in this stage", "(91)");
+    d_.error(cur().loc, "condition handling (ON/SIGNAL/REVERT) is not implemented in this stage",
+             "(91)");
     resync();
     return nullptr;
   }
@@ -451,8 +579,7 @@ StmtP Parser::keywordStatement(Proc *owner, const std::vector<std::string> &labe
     resync();
     return nullptr;
   }
-  if (kw("OPEN") || kw("CLOSE") || kw("READ") || kw("WRITE") || kw("REWRITE") ||
-      kw("DELETE")) {
+  if (kw("OPEN") || kw("CLOSE") || kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE")) {
     d_.error(cur().loc, "file input/output is not implemented in this stage", "(100)");
     resync();
     return nullptr;
@@ -471,20 +598,31 @@ StmtP Parser::parseDeclare() {
       // name in the parenthesised list shares the dimension + attribute tail.
       // Parse the name list, parse the tail once, then clone it per name.
       SourceLoc floc = cur().loc;
-      advance();  // (
+      advance(); // (
       std::vector<std::pair<std::string, SourceLoc>> names;
       for (;;) {
-        if (at(Tok::Word)) { names.push_back({cur().text, cur().loc}); advance(); }
-        else { d_.error(cur().loc, "expected a name in factored declaration", "(11)"); break; }
-        if (!eat(Tok::Comma)) break;
+        if (at(Tok::Word)) {
+          names.push_back({cur().text, cur().loc});
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a name in factored declaration", "(11)");
+          break;
+        }
+        if (!eat(Tok::Comma))
+          break;
       }
       expect(Tok::RParen, "(11)");
-      if (names.empty()) d_.error(floc, "factored declaration has no names", "(11)");
+      if (names.empty())
+        d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
-      if (!parseDeclTail(base)) { resync(); return st; }
+      if (!parseDeclTail(base)) {
+        resync();
+        return st;
+      }
       if (base.init)
-        d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage", "(26)");
-      for (auto &[n, nl] : names) {
+        d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage",
+                 "(26)");
+      for (auto& [n, nl] : names) {
         DeclItem item;
         item.name = n;
         item.loc = nl;
@@ -497,10 +635,14 @@ StmtP Parser::parseDeclare() {
       }
     } else {
       DeclItem item;
-      if (!parseDeclItem(item)) { resync(); return st; }
+      if (!parseDeclItem(item)) {
+        resync();
+        return st;
+      }
       st->decls.push_back(std::move(item));
     }
-    if (!eat(Tok::Comma)) break;
+    if (!eat(Tok::Comma))
+      break;
   }
   expect(Tok::Semi, "(9)");
   return st;
@@ -509,32 +651,113 @@ StmtP Parser::parseDeclare() {
 // Consume one scalar computational attribute word into `bag`. Shared by
 // parseDeclItem (rule 11) and parseDescriptorType (rule 38); `rule` cites the
 // TR production for the parenthesised precision group.
-bool Parser::parseScalarAttr(AttrBag &bag, const char *rule) {
-  if (!at(Tok::Word)) return false;
-  const std::string &w = cur().text;
-  auto parenNums = [&](int &n1, int &n2) {
-    if (!eat(Tok::LParen)) return false;
-    if (at(Tok::Number)) { n1 = atoi(cur().text.c_str()); advance(); }
-    if (eat(Tok::Comma) && at(Tok::Number)) { n2 = atoi(cur().text.c_str()); advance(); }
+bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
+  if (!at(Tok::Word))
+    return false;
+  const std::string& w = cur().text;
+  auto parenNums = [&](int& n1, int& n2) {
+    if (!eat(Tok::LParen))
+      return false;
+    if (at(Tok::Number)) {
+      n1 = atoi(cur().text.c_str());
+      advance();
+    }
+    if (eat(Tok::Comma) && at(Tok::Number)) {
+      n2 = atoi(cur().text.c_str());
+      advance();
+    }
     expect(Tok::RParen, rule);
     return true;
   };
   int a = -1, b = 0;
-  if (w == "FIXED") { bag.fixed = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { bag.prec = a; bag.scale = b; } } return true; }
-  if (w == "FLOAT") { bag.floating = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) bag.prec = a; } return true; }
-  if (w == "BINARY" || w == "BIN") { bag.binary = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { bag.prec = a; bag.scale = b; } } return true; }
-  if (w == "DECIMAL" || w == "DEC") { bag.decimal = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { bag.prec = a; bag.scale = b; } } return true; }
-  if (w == "CHARACTER" || w == "CHAR") { bag.character = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) bag.slen = a; } return true; }
-  if (w == "BIT") { bag.bit = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) bag.slen = a; } return true; }
-  if (w == "VARYING" || w == "VAR") { bag.varying = true; advance(); return true; }
-  if (w == "REAL") { advance(); return true; }
+  if (w == "FIXED") {
+    bag.fixed = true;
+    advance();
+    if (at(Tok::LParen)) {
+      parenNums(a, b);
+      if (a > 0) {
+        bag.prec = a;
+        bag.scale = b;
+      }
+    }
+    return true;
+  }
+  if (w == "FLOAT") {
+    bag.floating = true;
+    advance();
+    if (at(Tok::LParen)) {
+      parenNums(a, b);
+      if (a > 0)
+        bag.prec = a;
+    }
+    return true;
+  }
+  if (w == "BINARY" || w == "BIN") {
+    bag.binary = true;
+    advance();
+    if (at(Tok::LParen)) {
+      parenNums(a, b);
+      if (a > 0) {
+        bag.prec = a;
+        bag.scale = b;
+      }
+    }
+    return true;
+  }
+  if (w == "DECIMAL" || w == "DEC") {
+    bag.decimal = true;
+    advance();
+    if (at(Tok::LParen)) {
+      parenNums(a, b);
+      if (a > 0) {
+        bag.prec = a;
+        bag.scale = b;
+      }
+    }
+    return true;
+  }
+  if (w == "CHARACTER" || w == "CHAR") {
+    bag.character = true;
+    advance();
+    if (at(Tok::LParen)) {
+      parenNums(a, b);
+      if (a > 0)
+        bag.slen = a;
+    }
+    return true;
+  }
+  if (w == "BIT") {
+    bag.bit = true;
+    advance();
+    if (at(Tok::LParen)) {
+      parenNums(a, b);
+      if (a > 0)
+        bag.slen = a;
+    }
+    return true;
+  }
+  if (w == "VARYING" || w == "VAR") {
+    bag.varying = true;
+    advance();
+    return true;
+  }
+  if (w == "REAL") {
+    advance();
+    return true;
+  }
   return false;
 }
 
 // declaration ::= [integer] identifier [dimension] [attribute•••]  rule (11)
-bool Parser::parseDeclItem(DeclItem &item) {
-  if (at(Tok::Number) && !cur().isFloat) { item.level = atoi(cur().text.c_str()); advance(); }
-  if (!at(Tok::Word)) { d_.error(cur().loc, "expected a name in DECLARE", "(11)"); return false; }
+bool Parser::parseDeclItem(DeclItem& item) {
+  if (at(Tok::Number) && !cur().isFloat) {
+    item.level = atoi(cur().text.c_str());
+    advance();
+  }
+  if (!at(Tok::Word)) {
+    d_.error(cur().loc, "expected a name in DECLARE", "(11)");
+    return false;
+  }
   item.name = cur().text;
   item.loc = cur().loc;
   advance();
@@ -544,7 +767,7 @@ bool Parser::parseDeclItem(DeclItem &item) {
 // Dimension + attribute tail of a declaration (rule 11), shared verbatim by a
 // factored declaration list (DECLARE (A, B) FIXED): the dimension attribute
 // first, then the attribute bag, ending by building item.ty / dims / init.
-bool Parser::parseDeclTail(DeclItem &item) {
+bool Parser::parseDeclTail(DeclItem& item) {
   // Dimension attribute (rules (12),(13)): a leading parenthesised group after
   // the name is a dimension when a bound-pair ':' is present or an attribute
   // keyword follows; otherwise it is a precision/length (M0 scalar behaviour).
@@ -556,9 +779,10 @@ bool Parser::parseDeclTail(DeclItem &item) {
   ExprP init;
 
   for (;;) {
-    if (parseScalarAttr(bag, "(16)")) continue;
+    if (parseScalarAttr(bag, "(16)"))
+      continue;
     if (at(Tok::Word)) {
-      const std::string &w = cur().text;
+      const std::string& w = cur().text;
       if (w == "INITIAL" || w == "INIT") {
         advance();
         if (expect(Tok::LParen, "(26)")) {
@@ -567,9 +791,10 @@ bool Parser::parseDeclTail(DeclItem &item) {
         }
         continue;
       }
-      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
-          w == "UNALIGNED" || w == "INTERNAL") {
-        d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage", "(15)");
+      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" ||
+          w == "INTERNAL") {
+        d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
+                "(15)");
         advance();
         continue;
       }
@@ -578,10 +803,11 @@ bool Parser::parseDeclTail(DeclItem &item) {
         // case-sensitive C symbol for interlanguage calls (see z/OS ILC).
         advance();
         if (at(Tok::LParen) && peek().kind == Tok::CharLit) {
-          advance();            // (
+          advance(); // (
           item.extName = cur().sval;
-          advance();            // the quoted symbol
-          if (at(Tok::RParen)) advance();
+          advance(); // the quoted symbol
+          if (at(Tok::RParen))
+            advance();
         }
         continue;
       }
@@ -590,31 +816,52 @@ bool Parser::parseDeclTail(DeclItem &item) {
         // rule (38). The optional ( ... ) is the parameter descriptor list.
         item.isEntry = true;
         advance();
-        if (at(Tok::LParen)) parseEntryParams(item.entryParams);
+        if (at(Tok::LParen))
+          parseEntryParams(item.entryParams);
         continue;
       }
-      if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" ||
-          w == "POINTER" || w == "PTR" || w == "AREA" || w == "OFFSET" ||
-          w == "BASED" || w == "CONTROLLED" || w == "CTL" || w == "DEFINED" ||
-          w == "DEF" || w == "LABEL" || w == "FILE" || w == "TASK" ||
-          w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN" || w == "LIKE") {
+      if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "POINTER" ||
+          w == "PTR" || w == "AREA" || w == "OFFSET" || w == "BASED" || w == "CONTROLLED" ||
+          w == "CTL" || w == "DEFINED" || w == "DEF" || w == "LABEL" || w == "FILE" ||
+          w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN" ||
+          w == "LIKE") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
-        if (at(Tok::LParen)) { int d = 0; do { if (at(Tok::LParen)) ++d; else if (at(Tok::RParen)) --d; advance(); } while (d && !at(Tok::Eof)); }
+        if (at(Tok::LParen)) {
+          int d = 0;
+          do {
+            if (at(Tok::LParen))
+              ++d;
+            else if (at(Tok::RParen))
+              --d;
+            advance();
+          } while (d && !at(Tok::Eof));
+        }
         continue;
       }
-      break;  // not an attribute: next declaration item or end
+      break; // not an attribute: next declaration item or end
     }
-    if (at(Tok::LParen)) {  // bare precision or dimension
+    if (at(Tok::LParen)) { // bare precision or dimension
       int a = -1, b = 0;
       SourceLoc l = cur().loc;
       eat(Tok::LParen);
-      if (at(Tok::Number)) { a = atoi(cur().text.c_str()); advance(); }
-      if (eat(Tok::Comma) && at(Tok::Number)) { b = atoi(cur().text.c_str()); advance(); }
+      if (at(Tok::Number)) {
+        a = atoi(cur().text.c_str());
+        advance();
+      }
+      if (eat(Tok::Comma) && at(Tok::Number)) {
+        b = atoi(cur().text.c_str());
+        advance();
+      }
       expect(Tok::RParen, "(16)");
-      if (bag.character || bag.bit) { if (a > 0) bag.slen = a; }
-      else if (a > 0) { bag.prec = a; bag.scale = b; }
-      else d_.error(l, "arrays are not implemented in this stage", "(12)");
+      if (bag.character || bag.bit) {
+        if (a > 0)
+          bag.slen = a;
+      } else if (a > 0) {
+        bag.prec = a;
+        bag.scale = b;
+      } else
+        d_.error(l, "arrays are not implemented in this stage", "(12)");
       continue;
     }
     break;
@@ -641,7 +888,8 @@ bool Parser::parseDeclTail(DeclItem &item) {
     if (n != 1) {
       // Only BIT(1) is served; arbitrary-length bit strings are M2. Never
       // silently miscompile a wider bit value as a single bit (invariant 2).
-      d_.error(item.loc, "BIT(" + std::to_string(n) + ") is not implemented in this stage; only BIT(1)",
+      d_.error(item.loc,
+               "BIT(" + std::to_string(n) + ") is not implemented in this stage; only BIT(1)",
                "(18)");
       item.ty = Type::bit(1);
     }
@@ -650,8 +898,10 @@ bool Parser::parseDeclTail(DeclItem &item) {
   } else {
     // FIXED is the default scale attribute; DECIMAL the default base. The
     // scale factor q is kept as a static property (ADR-006, rule (16)).
-    if (bag.binary && !bag.decimal) item.ty = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
-    else item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
+    if (bag.binary && !bag.decimal)
+      item.ty = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
+    else
+      item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   }
   item.ty.dims = arrDims;
   item.init = std::move(init);
@@ -662,8 +912,9 @@ bool Parser::parseDeclTail(DeclItem &item) {
 // bound-pair (lb:ub) is always a dimension; a bare (n) is a dimension only when
 // followed by an attribute keyword (e.g. `DECLARE A(5) FIXED BINARY;`), else it
 // stays a precision/length for M0 scalar declarations.
-bool Parser::tryParseDimension(std::vector<std::pair<int, int>> &out) {
-  if (!at(Tok::LParen)) return false;
+bool Parser::tryParseDimension(std::vector<std::pair<int, int>>& out) {
+  if (!at(Tok::LParen))
+    return false;
   size_t save = i_;
   eat(Tok::LParen);
 
@@ -675,11 +926,20 @@ bool Parser::tryParseDimension(std::vector<std::pair<int, int>> &out) {
   for (;;) {
     int lb = 1, ub = 0;
     bool colon = false;
-    if (at(Tok::Number)) { lb = atoi(cur().text.c_str()); advance(); }
-    if (eat(Tok::Colon) && at(Tok::Number)) { ub = atoi(cur().text.c_str()); advance(); colon = true; }
+    if (at(Tok::Number)) {
+      lb = atoi(cur().text.c_str());
+      advance();
+    }
+    if (eat(Tok::Colon) && at(Tok::Number)) {
+      ub = atoi(cur().text.c_str());
+      advance();
+      colon = true;
+    }
     axes.push_back(colon ? std::pair<int, int>{lb, ub} : std::pair<int, int>{1, lb});
-    if (colon) anyColon = true;
-    if (!eat(Tok::Comma)) break;
+    if (colon)
+      anyColon = true;
+    if (!eat(Tok::Comma))
+      break;
   }
 
   expect(Tok::RParen, "(12)");
@@ -689,13 +949,12 @@ bool Parser::tryParseDimension(std::vector<std::pair<int, int>> &out) {
     return true;
   }
   // All bare (n): a dimension only when an attribute keyword follows the group.
-  auto isAttrWord = [&](const std::string &w) {
-    return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" ||
-           w == "DECIMAL" || w == "DEC" || w == "CHARACTER" || w == "CHAR" ||
-           w == "BIT" || w == "VARYING" || w == "VAR" || w == "STATIC" ||
-           w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
-           w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" ||
-           w == "INIT" || w == "EXTERNAL" || w == "EXT";
+  auto isAttrWord = [&](const std::string& w) {
+    return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
+           w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
+           w == "VAR" || w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
+           w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" || w == "INIT" ||
+           w == "EXTERNAL" || w == "EXT";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -708,25 +967,33 @@ bool Parser::tryParseDimension(std::vector<std::pair<int, int>> &out) {
 // descriptor-param ::= attribute•••                                rule (38)
 // Parse a single ENTRY parameter type, using the same scalar-attribute
 // accumulator as parseDeclItem, restricted to the scalar computational types.
-bool Parser::parseDescriptorType(Type &out) {
+bool Parser::parseDescriptorType(Type& out) {
   AttrBag bag;
-  while (parseScalarAttr(bag, "(38)")) {}
-  if (bag.character) out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
-  else if (bag.bit) out = Type::bit(bag.slen > 0 ? bag.slen : 1);
-  else if (bag.floating) out = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
-  else if (bag.binary) out = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
-  else out = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
+  while (parseScalarAttr(bag, "(38)")) {
+  }
+  if (bag.character)
+    out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+  else if (bag.bit)
+    out = Type::bit(bag.slen > 0 ? bag.slen : 1);
+  else if (bag.floating)
+    out = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
+  else if (bag.binary)
+    out = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
+  else
+    out = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   return true;
 }
 
 // entry-parameterlist ::= ( descriptor-param [ , descriptor-param ]••• )
-bool Parser::parseEntryParams(std::vector<Type> &params) {
-  if (!expect(Tok::LParen, "(38)")) return false;
+bool Parser::parseEntryParams(std::vector<Type>& params) {
+  if (!expect(Tok::LParen, "(38)"))
+    return false;
   while (!at(Tok::RParen) && !at(Tok::Eof)) {
     Type t;
     parseDescriptorType(t);
     params.push_back(t);
-    if (!eat(Tok::Comma)) break;
+    if (!eat(Tok::Comma))
+      break;
   }
   expect(Tok::RParen, "(38)");
   return true;
@@ -734,11 +1001,11 @@ bool Parser::parseEntryParams(std::vector<Type> &params) {
 
 // if-statement ::= if-clause statement | if-clause balanced-statement
 //                  ELSE statement                              rules (74),(75)
-StmtP Parser::parseIf(Proc *owner) {
+StmtP Parser::parseIf(Proc* owner) {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::If;
   st->loc = cur().loc;
-  advance();  // IF
+  advance(); // IF
   st->cond = parseExpr();
   if (!atWord("THEN")) {
     d_.error(cur().loc, "expected THEN", "(75)", "THEN ");
@@ -747,7 +1014,8 @@ StmtP Parser::parseIf(Proc *owner) {
   }
   advance();
   st->thenS = parseStatement(owner);
-  if (pendingEnd_.present) return st;
+  if (pendingEnd_.present)
+    return st;
   if (atWord("ELSE")) {
     advance();
     st->elseS = parseStatement(owner);
@@ -759,10 +1027,10 @@ StmtP Parser::parseIf(Proc *owner) {
 //
 // `labels` are the label prefixes of this DO statement; a labelled group can
 // be closed by `END <label>;` from any depth (multiple closure).
-StmtP Parser::parseDo(Proc *owner, const std::vector<std::string> &labels) {
+StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
   auto st = std::make_unique<Stmt>();
   st->loc = cur().loc;
-  advance();  // DO
+  advance(); // DO
 
   if (eat(Tok::Semi)) {
     st->kind = Stmt::Group;
@@ -778,14 +1046,28 @@ StmtP Parser::parseDo(Proc *owner, const std::vector<std::string> &labels) {
     st->kind = Stmt::DoIter;
     st->name = cur().text;
     advance();
-    if (!expect(Tok::Eq, "(72)")) { resync(); return nullptr; }
-    st->from = parseExpr();                                  // rule (73)
+    if (!expect(Tok::Eq, "(72)")) {
+      resync();
+      return nullptr;
+    }
+    st->from = parseExpr(); // rule (73)
     for (;;) {
-      if (atWord("TO")) { advance(); st->to = parseExpr(); continue; }
-      if (atWord("BY")) { advance(); st->by = parseExpr(); continue; }
+      if (atWord("TO")) {
+        advance();
+        st->to = parseExpr();
+        continue;
+      }
+      if (atWord("BY")) {
+        advance();
+        st->by = parseExpr();
+        continue;
+      }
       if (atWord("WHILE")) {
         advance();
-        if (expect(Tok::LParen, "(73)")) { st->cond = parseExpr(); expect(Tok::RParen, "(73)"); }
+        if (expect(Tok::LParen, "(73)")) {
+          st->cond = parseExpr();
+          expect(Tok::RParen, "(73)");
+        }
         continue;
       }
       break;
@@ -803,7 +1085,8 @@ StmtP Parser::parseDo(Proc *owner, const std::vector<std::string> &labels) {
   }
 
   EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
-  if (e.present && !e.label.empty()) pendingEnd_ = e;  // multiple closure
+  if (e.present && !e.label.empty())
+    pendingEnd_ = e; // multiple closure
   return st;
 }
 
@@ -812,16 +1095,23 @@ StmtP Parser::parsePut() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Put;
   st->loc = cur().loc;
-  advance();  // PUT
+  advance(); // PUT
   bool sawData = false;
   while (!at(Tok::Semi) && !at(Tok::Eof)) {
     if (atWord("SKIP")) {
       advance();
       st->skip = true;
-      if (eat(Tok::LParen)) { st->skipCount = parseExpr(); expect(Tok::RParen, "(105)"); }
+      if (eat(Tok::LParen)) {
+        st->skipCount = parseExpr();
+        expect(Tok::RParen, "(105)");
+      }
       continue;
     }
-    if (atWord("PAGE")) { advance(); st->page = true; continue; }
+    if (atWord("PAGE")) {
+      advance();
+      st->page = true;
+      continue;
+    }
     if (atWord("LIST")) {
       advance();
       sawData = true;
@@ -829,7 +1119,8 @@ StmtP Parser::parsePut() {
         if (!at(Tok::RParen)) {
           for (;;) {
             st->items.push_back(parseExpr());
-            if (!eat(Tok::Comma)) break;
+            if (!eat(Tok::Comma))
+              break;
           }
         }
         expect(Tok::RParen, "(109)");
@@ -839,7 +1130,11 @@ StmtP Parser::parsePut() {
     if (atWord("FILE")) {
       advance();
       SourceLoc l = cur().loc;
-      if (eat(Tok::LParen)) { if (at(Tok::Word)) advance(); expect(Tok::RParen, "(105)"); }
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word))
+          advance();
+        expect(Tok::RParen, "(105)");
+      }
       d_.warn(l, "FILE option ignored: this stage writes to SYSPRINT only", "(105)");
       continue;
     }
@@ -849,7 +1144,8 @@ StmtP Parser::parsePut() {
       return nullptr;
     }
     if (atWord("LINE") || atWord("STRING") || atWord("COPY")) {
-      d_.error(cur().loc, "PUT option " + cur().text + " is not implemented in this stage", "(105)");
+      d_.error(cur().loc, "PUT option " + cur().text + " is not implemented in this stage",
+               "(105)");
       resync();
       return nullptr;
     }
@@ -867,15 +1163,20 @@ StmtP Parser::parseCall() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::CallS;
   st->loc = cur().loc;
-  advance();  // CALL
-  if (!at(Tok::Word)) { d_.error(cur().loc, "expected entry name after CALL", "(78)"); resync(); return nullptr; }
+  advance(); // CALL
+  if (!at(Tok::Word)) {
+    d_.error(cur().loc, "expected entry name after CALL", "(78)");
+    resync();
+    return nullptr;
+  }
   st->name = cur().text;
   advance();
-  if (eat(Tok::LParen)) {                                        // rule (80)
+  if (eat(Tok::LParen)) { // rule (80)
     if (!at(Tok::RParen)) {
       for (;;) {
         st->args.push_back(parseExpr());
-        if (!eat(Tok::Comma)) break;
+        if (!eat(Tok::Comma))
+          break;
       }
     }
     expect(Tok::RParen, "(80)");
@@ -895,11 +1196,17 @@ StmtP Parser::parseAssignment() {
   st->kind = Stmt::Assign;
   st->loc = cur().loc;
   st->target = parsePrimary();
-  if (!st->target) { resync(); return nullptr; }
+  if (!st->target) {
+    resync();
+    return nullptr;
+  }
   while (at(Tok::Comma)) {
     advance();
     ExprP more = parsePrimary();
-    if (!more) { resync(); return nullptr; }
+    if (!more) {
+      resync();
+      return nullptr;
+    }
     st->extraTargets.push_back(std::move(more));
   }
   if (!at(Tok::Eq)) {
@@ -916,7 +1223,8 @@ StmtP Parser::parseAssignment() {
       advance();
       advance();
     } else {
-      d_.error(cur().loc, "malformed assignment: unexpected item after the right-hand side", "(86)");
+      d_.error(cur().loc, "malformed assignment: unexpected item after the right-hand side",
+               "(86)");
     }
   }
   expect(Tok::Semi, "(86)");
@@ -928,15 +1236,18 @@ StmtP Parser::parseAssignment() {
 // ---------------------------------------------------------------------------
 ExprP Parser::parseExpr(int minPrec) {
   ExprP lhs = parseUnary();
-  if (!lhs) return nullptr;
+  if (!lhs)
+    return nullptr;
   for (;;) {
     Tok op = infixOp(cur());
     int p = precOf(op);
-    if (op == Tok::Eof || p == 0 || p < minPrec) break;
+    if (op == Tok::Eof || p == 0 || p < minPrec)
+      break;
     SourceLoc loc = cur().loc;
     advance();
-    ExprP rhs = parseExpr(p + 1);  // all binary operators are left associative
-    if (!rhs) return nullptr;
+    ExprP rhs = parseExpr(p + 1); // all binary operators are left associative
+    if (!rhs)
+      return nullptr;
     auto e = std::make_unique<Expr>();
     e->kind = Expr::Binary;
     e->op = op;
@@ -953,15 +1264,16 @@ ExprP Parser::parseExpr(int minPrec) {
 ExprP Parser::parseUnary() {
   if (at(Tok::Plus) || at(Tok::Minus) || at(Tok::Not) ||
       (at(Tok::Word) && cur().text == "NOT" &&
-       (peek().kind == Tok::Word || peek().kind == Tok::Number ||
-        peek().kind == Tok::LParen || peek().kind == Tok::CharLit ||
-        peek().kind == Tok::BitLit))) {
+       (peek().kind == Tok::Word || peek().kind == Tok::Number || peek().kind == Tok::LParen ||
+        peek().kind == Tok::CharLit || peek().kind == Tok::BitLit))) {
     Tok op = at(Tok::Word) ? Tok::Not : cur().kind;
     SourceLoc loc = cur().loc;
     advance();
     ExprP operand = parseUnary();
-    if (!operand) return nullptr;
-    if (op == Tok::Plus) return operand;  // unary plus is the identity
+    if (!operand)
+      return nullptr;
+    if (op == Tok::Plus)
+      return operand; // unary plus is the identity
     auto e = std::make_unique<Expr>();
     e->kind = Expr::Unary;
     e->op = op;
@@ -974,12 +1286,14 @@ ExprP Parser::parseUnary() {
 
 ExprP Parser::parsePower() {
   ExprP base = parsePrimary();
-  if (!base) return nullptr;
+  if (!base)
+    return nullptr;
   if (at(Tok::Power)) {
     SourceLoc loc = cur().loc;
     advance();
-    ExprP exp = parseUnary();  // right associative, permits 2**-3
-    if (!exp) return nullptr;
+    ExprP exp = parseUnary(); // right associative, permits 2**-3
+    if (!exp)
+      return nullptr;
     auto e = std::make_unique<Expr>();
     e->kind = Expr::Binary;
     e->op = Tok::Power;
@@ -1001,14 +1315,15 @@ ExprP Parser::parsePrimary() {
   if (at(Tok::LParen) && peek().kind == Tok::Number && !peek().isFloat &&
       peek(2).kind == Tok::RParen &&
       (peek(3).kind == Tok::CharLit || peek(3).kind == Tok::BitLit)) {
-    advance();                                    // (
+    advance(); // (
     long long count = strtoll(cur().text.c_str(), nullptr, 10);
-    advance();                                    // integer
-    advance();                                    // )
-    const Token &lit = cur();
-    advance();                                    // simple-string-constant
+    advance(); // integer
+    advance(); // )
+    const Token& lit = cur();
+    advance(); // simple-string-constant
     std::string out;
-    for (long long i = 0; i < count; ++i) out += lit.sval;
+    for (long long i = 0; i < count; ++i)
+      out += lit.sval;
     e->kind = lit.kind == Tok::CharLit ? Expr::CharLit : Expr::BitLit;
     e->sval = out;
     return e;
@@ -1021,7 +1336,7 @@ ExprP Parser::parsePrimary() {
     return inner;
   }
   if (at(Tok::Number)) {
-    const Token &t = cur();
+    const Token& t = cur();
     if (t.isFloat) {
       e->kind = Expr::FltLit;
       e->fval = strtod(t.text.c_str(), nullptr);
@@ -1052,24 +1367,32 @@ ExprP Parser::parsePrimary() {
     e->name = cur().text;
     advance();
     if (at(Tok::Arrow)) {
-      d_.error(cur().loc, "locator-qualified references are not implemented in this stage", "(124)");
+      d_.error(cur().loc, "locator-qualified references are not implemented in this stage",
+               "(124)");
       advance();
-      if (at(Tok::Word)) advance();
+      if (at(Tok::Word))
+        advance();
       return e;
     }
     // A qualified name S.A.B (rule 124): collect the member qualifiers after
     // the base name; sema resolves them against the structure type.
     while (eat(Tok::Dot)) {
-      if (at(Tok::Word)) { e->path.push_back(cur().text); advance(); }
-      else { d_.error(cur().loc, "expected a member name after '.'", "(124)"); break; }
+      if (at(Tok::Word)) {
+        e->path.push_back(cur().text);
+        advance();
+      } else {
+        d_.error(cur().loc, "expected a member name after '.'", "(124)");
+        break;
+      }
     }
-    if (at(Tok::LParen)) {  // subscripts or function reference
+    if (at(Tok::LParen)) { // subscripts or function reference
       e->kind = Expr::Call;
       advance();
       if (!at(Tok::RParen)) {
         for (;;) {
           e->args.push_back(parseExpr());
-          if (!eat(Tok::Comma)) break;
+          if (!eat(Tok::Comma))
+            break;
         }
       }
       expect(Tok::RParen, "(126)");

@@ -16,17 +16,20 @@ namespace {
 // True when IRGen's `convert` would emit a real instruction: a bit <-> scalar
 // change, float <-> fixed, or a FIXED width or scale change. Character and
 // void values are handled elsewhere, so they never need a Convert node.
-bool convRequired(const Type &src, const Type &dst) {
-  if (src.isBit() != dst.isBit()) return true;
-  if ((src.k == TK::Float) != (dst.k == TK::Float)) return true;
+bool convRequired(const Type& src, const Type& dst) {
+  if (src.isBit() != dst.isBit())
+    return true;
+  if ((src.k == TK::Float) != (dst.k == TK::Float))
+    return true;
   if (src.isNumeric() && dst.isNumeric() && src.k != TK::Float && dst.k != TK::Float)
     return src.intBits() != dst.intBits() || src.scale != dst.scale;
   return false;
 }
 
 // Wrap `e` in an explicit Convert to `dst` when a scalar conversion is needed.
-HExprP convIf(HExprP e, const Type &dst) {
-  if (!e || !convRequired(e->ty, dst)) return e;
+HExprP convIf(HExprP e, const Type& dst) {
+  if (!e || !convRequired(e->ty, dst))
+    return e;
   auto c = std::make_unique<HExpr>();
   c->kind = HExpr::Convert;
   c->loc = e->loc;
@@ -36,14 +39,15 @@ HExprP convIf(HExprP e, const Type &dst) {
   return c;
 }
 
-HExprP lowerCallExpr(const Expr *e);
-HExprP lowerSubscriptExpr(const Expr *e);
-HExprP lowerExpr(const Expr *e);
+HExprP lowerCallExpr(const Expr* e);
+HExprP lowerSubscriptExpr(const Expr* e);
+HExprP lowerExpr(const Expr* e);
 
 // Mirror an expression node without re-dispatching the Call case (Call is
 // handled by lowerCallExpr, which builds on this).
-HExprP lowerExprBase(const Expr *e) {
-  if (!e) return nullptr;
+HExprP lowerExprBase(const Expr* e) {
+  if (!e)
+    return nullptr;
   auto h = std::make_unique<HExpr>();
   h->kind = static_cast<HExpr::Kind>(e->kind);
   h->loc = e->loc;
@@ -58,20 +62,24 @@ HExprP lowerExprBase(const Expr *e) {
   h->op = e->op;
   h->a = lowerExpr(e->a.get());
   h->b = lowerExpr(e->b.get());
-  for (const auto &a : e->args) h->args.push_back(lowerExpr(a.get()));
+  for (const auto& a : e->args)
+    h->args.push_back(lowerExpr(a.get()));
   return h;
 }
 
-HExprP lowerExpr(const Expr *e) {
-  if (!e) return nullptr;
-  if (e->kind == Expr::Call) return lowerCallExpr(e);
-  if (e->kind == Expr::Subscript) return lowerSubscriptExpr(e);
+HExprP lowerExpr(const Expr* e) {
+  if (!e)
+    return nullptr;
+  if (e->kind == Expr::Call)
+    return lowerCallExpr(e);
+  if (e->kind == Expr::Subscript)
+    return lowerSubscriptExpr(e);
   return lowerExprBase(e);
 }
 
 // Mirror a subscripted array reference A(i) (rule 126). The base symbol and
 // element type come from sema; lowerExprBase already lowers the index args.
-HExprP lowerSubscriptExpr(const Expr *e) {
+HExprP lowerSubscriptExpr(const Expr* e) {
   auto h = lowerExprBase(e);
   h->kind = HExpr::Subscript;
   return h;
@@ -80,21 +88,23 @@ HExprP lowerSubscriptExpr(const Expr *e) {
 // Lower a function-call expression, wrapping each argument that needs an
 // implicit conversion to its parameter type. Built-ins get their operand
 // conversions to the result/common type, mirroring IRGen's `convert` calls.
-HExprP lowerCallExpr(const Expr *e) {
+HExprP lowerCallExpr(const Expr* e) {
   auto h = lowerExprBase(e);
-  HExpr *he = h.get();
-  const std::string &n = e->name;
+  HExpr* he = h.get();
+  const std::string& n = e->name;
 
   if (n == "MIN" || n == "MAX" || n == "MOD" || n == "MULTIPLY" || n == "DIVIDE") {
     if (he->args.size() >= 2) {
-      const Type &common = e->ty;
+      const Type& common = e->ty;
       he->args[0] = convIf(std::move(he->args[0]), common);
       he->args[1] = convIf(std::move(he->args[1]), common);
     }
   } else if (n == "PRECISION") {
-    if (!he->args.empty()) he->args[0] = convIf(std::move(he->args[0]), e->ty);
+    if (!he->args.empty())
+      he->args[0] = convIf(std::move(he->args[0]), e->ty);
   } else if (n == "ROUND") {
-    if (!he->args.empty()) he->args[0] = convIf(std::move(he->args[0]), Type::flt(6));
+    if (!he->args.empty())
+      he->args[0] = convIf(std::move(he->args[0]), Type::flt(6));
   } else if (e->sym && e->sym->proc) {
     // A user-defined function call: coerce each argument to its parameter type.
     for (size_t i = 0; i < he->args.size() && i < e->sym->proc->paramSyms.size(); ++i)
@@ -103,8 +113,9 @@ HExprP lowerCallExpr(const Expr *e) {
   return h;
 }
 
-HStmtP lowerStmt(const Stmt *s, const Proc *owner) {
-  if (!s) return nullptr;
+HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
+  if (!s)
+    return nullptr;
   auto h = std::make_unique<HStmt>();
   h->kind = static_cast<HStmt::Kind>(s->kind);
   h->loc = s->loc;
@@ -118,7 +129,7 @@ HStmtP lowerStmt(const Stmt *s, const Proc *owner) {
   h->skip = s->skip;
   h->page = s->page;
 
-  for (const auto &d : s->decls) {
+  for (const auto& d : s->decls) {
     HDeclItem hd;
     hd.name = d.name;
     hd.ty = d.ty;
@@ -133,27 +144,30 @@ HStmtP lowerStmt(const Stmt *s, const Proc *owner) {
   }
 
   h->target = lowerExpr(s->target.get());
-  for (const auto &t : s->extraTargets) h->extraTargets.push_back(lowerExpr(t.get()));
+  for (const auto& t : s->extraTargets)
+    h->extraTargets.push_back(lowerExpr(t.get()));
   h->cond = lowerExpr(s->cond.get());
   h->from = lowerExpr(s->from.get());
   h->to = lowerExpr(s->to.get());
   h->by = lowerExpr(s->by.get());
   h->thenS = lowerStmt(s->thenS.get(), owner);
   h->elseS = lowerStmt(s->elseS.get(), owner);
-  for (const auto &b : s->body) h->body.push_back(lowerStmt(b.get(), owner));
+  for (const auto& b : s->body)
+    h->body.push_back(lowerStmt(b.get(), owner));
 
   h->skipCount = lowerExpr(s->skipCount.get());
-  for (const auto &it : s->items) h->items.push_back(lowerExpr(it.get()));
+  for (const auto& it : s->items)
+    h->items.push_back(lowerExpr(it.get()));
 
   // CALL statement arguments: coerce to the callee's parameter types.
-  for (const auto &a : s->args) {
+  for (const auto& a : s->args) {
     HExprP ha = lowerExpr(a.get());
     // Callee parameter list: via the symbol's proc/entry, mirroring emitCall.
     if (s->sym) {
-      if (Stmt *en = s->sym->entry) {
+      if (Stmt* en = s->sym->entry) {
         if (h->args.size() < en->entryParamSyms.size())
           ha = convIf(std::move(ha), en->entryParamSyms[h->args.size()]->ty);
-      } else if (Proc *callee = s->sym->proc) {
+      } else if (Proc* callee = s->sym->proc) {
         if (h->args.size() < callee->paramSyms.size())
           ha = convIf(std::move(ha), callee->paramSyms[h->args.size()]->ty);
       }
@@ -163,42 +177,43 @@ HStmtP lowerStmt(const Stmt *s, const Proc *owner) {
 
   // Statement-level conversions that IRGen applies inline, made explicit.
   switch (h->kind) {
-    case HStmt::Assign:
-      if (s->target && s->target->kind == Expr::VarRef && s->target->sym)
-        h->value = convIf(lowerExpr(s->value.get()), s->target->sym->ty);
-      else if (s->target && s->target->kind == Expr::Subscript && s->target->sym)
-        // Array element target: convert to the element type (rule 126).
-        h->value = convIf(lowerExpr(s->value.get()), s->target->ty);
-      else
-        h->value = lowerExpr(s->value.get());
-      break;
-    case HStmt::Return:
-      if (owner && owner->isFunction)
-        h->value = convIf(lowerExpr(s->value.get()), owner->retTy);
-      else
-        h->value = lowerExpr(s->value.get());
-      break;
-    case HStmt::DoIter:
-      if (s->sym) {
-        const Type &ct = s->sym->ty;
-        h->from = convIf(std::move(h->from), ct);
-        h->to = convIf(std::move(h->to), ct);
-        h->by = convIf(std::move(h->by), ct);
-      }
-      break;
-    default:
-      if (!h->value) h->value = lowerExpr(s->value.get());
-      break;
+  case HStmt::Assign:
+    if (s->target && s->target->kind == Expr::VarRef && s->target->sym)
+      h->value = convIf(lowerExpr(s->value.get()), s->target->sym->ty);
+    else if (s->target && s->target->kind == Expr::Subscript && s->target->sym)
+      // Array element target: convert to the element type (rule 126).
+      h->value = convIf(lowerExpr(s->value.get()), s->target->ty);
+    else
+      h->value = lowerExpr(s->value.get());
+    break;
+  case HStmt::Return:
+    if (owner && owner->isFunction)
+      h->value = convIf(lowerExpr(s->value.get()), owner->retTy);
+    else
+      h->value = lowerExpr(s->value.get());
+    break;
+  case HStmt::DoIter:
+    if (s->sym) {
+      const Type& ct = s->sym->ty;
+      h->from = convIf(std::move(h->from), ct);
+      h->to = convIf(std::move(h->to), ct);
+      h->by = convIf(std::move(h->by), ct);
+    }
+    break;
+  default:
+    if (!h->value)
+      h->value = lowerExpr(s->value.get());
+    break;
   }
   return h;
 }
 
-}  // namespace
+} // namespace
 
-HProgram lower(const Program &prog) {
+HProgram lower(const Program& prog) {
   HProgram out;
   // First pass: create every HProc and set parents, so parent pointers are valid.
-  std::vector<HProc *> nodes(prog.procs.size(), nullptr);
+  std::vector<HProc*> nodes(prog.procs.size(), nullptr);
   for (size_t i = 0; i < prog.procs.size(); ++i) {
     auto hp = std::make_unique<HProc>();
     hp->name = prog.procs[i]->name;
@@ -220,157 +235,281 @@ HProgram lower(const Program &prog) {
   for (size_t i = 0; i < prog.procs.size(); ++i)
     if (prog.procs[i]->parent)
       for (size_t j = 0; j < prog.procs.size(); ++j)
-        if (prog.procs[j].get() == prog.procs[i]->parent) { nodes[i]->parent = nodes[j]; break; }
+        if (prog.procs[j].get() == prog.procs[i]->parent) {
+          nodes[i]->parent = nodes[j];
+          break;
+        }
   for (size_t i = 0; i < prog.procs.size(); ++i)
-    for (auto &b : prog.procs[i]->body)
+    for (auto& b : prog.procs[i]->body)
       nodes[i]->body.push_back(lowerStmt(b.get(), prog.procs[i].get()));
   for (size_t i = 0; i < prog.procs.size(); ++i)
-    if (prog.mainProc && prog.procs[i].get() == prog.mainProc) { out.mainProc = nodes[i]; break; }
+    if (prog.mainProc && prog.procs[i].get() == prog.mainProc) {
+      out.mainProc = nodes[i];
+      break;
+    }
   return out;
 }
 
 namespace {
 
-void printType(std::ostream &os, const Type &t) { os << t.desc(); }
+void printType(std::ostream& os, const Type& t) { os << t.desc(); }
 
-void printExpr(std::ostream &os, const HExpr *e, int ind) {
-  if (!e) { os << "null"; return; }
+void printExpr(std::ostream& os, const HExpr* e, int ind) {
+  if (!e) {
+    os << "null";
+    return;
+  }
   (void)ind;
   switch (e->kind) {
-    case HExpr::IntLit: os << "IntLit(" << e->ival << ":"; printType(os, e->ty); os << ")"; break;
-    case HExpr::FltLit: os << "FltLit(" << e->fval << ":"; printType(os, e->ty); os << ")"; break;
-    case HExpr::CharLit: os << "CharLit(\"" << e->sval << "\":"; printType(os, e->ty); os << ")"; break;
-    case HExpr::BitLit: os << "BitLit(\"" << e->sval << "\":"; printType(os, e->ty); os << ")"; break;
-    case HExpr::VarRef: os << "VarRef(" << e->name << ":"; printType(os, e->ty); os << ")"; break;
-    case HExpr::Convert:
-      os << "Convert(";
-      printExpr(os, e->a.get(), ind);
-      os << " -> "; printType(os, e->convTo); os << ")";
+  case HExpr::IntLit:
+    os << "IntLit(" << e->ival << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::FltLit:
+    os << "FltLit(" << e->fval << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::CharLit:
+    os << "CharLit(\"" << e->sval << "\":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::BitLit:
+    os << "BitLit(\"" << e->sval << "\":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::VarRef:
+    os << "VarRef(" << e->name << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::Convert:
+    os << "Convert(";
+    printExpr(os, e->a.get(), ind);
+    os << " -> ";
+    printType(os, e->convTo);
+    os << ")";
+    break;
+  case HExpr::Unary: {
+    const char* op = e->op == Tok::Not ? "not" : "neg";
+    os << "Unary(" << op << " ";
+    printExpr(os, e->a.get(), ind);
+    os << ")";
+    break;
+  }
+  case HExpr::Binary:
+    os << "Binary(";
+    printExpr(os, e->a.get(), ind);
+    os << " ";
+    switch (e->op) {
+    case Tok::Plus:
+      os << "+";
       break;
-    case HExpr::Unary: {
-      const char *op = e->op == Tok::Not ? "not" : "neg";
-      os << "Unary(" << op << " ";
-      printExpr(os, e->a.get(), ind); os << ")";
+    case Tok::Minus:
+      os << "-";
       break;
+    case Tok::Star:
+      os << "*";
+      break;
+    case Tok::Slash:
+      os << "/";
+      break;
+    case Tok::Power:
+      os << "**";
+      break;
+    case Tok::Concat:
+      os << "||";
+      break;
+    case Tok::Amp:
+      os << "&";
+      break;
+    case Tok::Bar:
+      os << "|";
+      break;
+    case Tok::Eq:
+      os << "=";
+      break;
+    case Tok::Ne:
+      os << "¬=";
+      break;
+    case Tok::Lt:
+      os << "<";
+      break;
+    case Tok::Le:
+      os << "<=";
+      break;
+    case Tok::Gt:
+      os << ">";
+      break;
+    case Tok::Ge:
+      os << ">=";
+      break;
+    default:
+      os << "?";
     }
-    case HExpr::Binary:
-      os << "Binary(";
-      printExpr(os, e->a.get(), ind); os << " ";
-      switch (e->op) {
-        case Tok::Plus: os << "+"; break; case Tok::Minus: os << "-"; break;
-        case Tok::Star: os << "*"; break; case Tok::Slash: os << "/"; break;
-        case Tok::Power: os << "**"; break; case Tok::Concat: os << "||"; break;
-        case Tok::Amp: os << "&"; break; case Tok::Bar: os << "|"; break;
-        case Tok::Eq: os << "="; break; case Tok::Ne: os << "¬="; break;
-        case Tok::Lt: os << "<"; break; case Tok::Le: os << "<="; break;
-        case Tok::Gt: os << ">"; break; case Tok::Ge: os << ">="; break;
-        default: os << "?";
-      }
+    os << " ";
+    printExpr(os, e->b.get(), ind);
+    os << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::Subscript: {
+    os << "Subscript(" << e->name;
+    for (const auto& a : e->args) {
       os << " ";
-      printExpr(os, e->b.get(), ind); os << ":"; printType(os, e->ty); os << ")";
-      break;
-    case HExpr::Subscript: {
-      os << "Subscript(" << e->name;
-      for (const auto &a : e->args) { os << " "; printExpr(os, a.get(), ind); }
-      os << ":"; printType(os, e->ty); os << ")";
-      break;
+      printExpr(os, a.get(), ind);
     }
-    case HExpr::Call: {
-      os << "Call(" << e->name;
-      if (e->sym && e->sym->proc) os << "->" << e->sym->proc->name;
-      for (const auto &a : e->args) { os << " "; printExpr(os, a.get(), ind); }
-      os << ")";
-      break;
+    os << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  }
+  case HExpr::Call: {
+    os << "Call(" << e->name;
+    if (e->sym && e->sym->proc)
+      os << "->" << e->sym->proc->name;
+    for (const auto& a : e->args) {
+      os << " ";
+      printExpr(os, a.get(), ind);
     }
+    os << ")";
+    break;
+  }
   }
 }
 
-const char *stmtKind(HStmt::Kind k) {
+const char* stmtKind(HStmt::Kind k) {
   switch (k) {
-    case HStmt::Null: return "Null";
-    case HStmt::Declare: return "Declare";
-    case HStmt::Assign: return "Assign";
-    case HStmt::If: return "If";
-    case HStmt::Group: return "Group";
-    case HStmt::Begin: return "Begin";
-    case HStmt::DoWhile: return "DoWhile";
-    case HStmt::DoIter: return "DoIter";
-    case HStmt::Put: return "Put";
-    case HStmt::CallS: return "Call";
-    case HStmt::Return: return "Return";
-    case HStmt::Stop: return "Stop";
-    case HStmt::Goto: return "Goto";
-    case HStmt::Entry: return "Entry";
-    case HStmt::Leave: return "Leave";
+  case HStmt::Null:
+    return "Null";
+  case HStmt::Declare:
+    return "Declare";
+  case HStmt::Assign:
+    return "Assign";
+  case HStmt::If:
+    return "If";
+  case HStmt::Group:
+    return "Group";
+  case HStmt::Begin:
+    return "Begin";
+  case HStmt::DoWhile:
+    return "DoWhile";
+  case HStmt::DoIter:
+    return "DoIter";
+  case HStmt::Put:
+    return "Put";
+  case HStmt::CallS:
+    return "Call";
+  case HStmt::Return:
+    return "Return";
+  case HStmt::Stop:
+    return "Stop";
+  case HStmt::Goto:
+    return "Goto";
+  case HStmt::Entry:
+    return "Entry";
+  case HStmt::Leave:
+    return "Leave";
   }
   return "?";
 }
 
-void printStmt(std::ostream &os, const HStmt *s, int ind) {
-  if (!s) return;
+void printStmt(std::ostream& os, const HStmt* s, int ind) {
+  if (!s)
+    return;
   const std::string pad(ind * 2, ' ');
   os << pad << stmtKind(s->kind);
-  if (!s->labels.empty()) os << " @" << s->labels.front();
+  if (!s->labels.empty())
+    os << " @" << s->labels.front();
   switch (s->kind) {
-    case HStmt::Declare:
-      for (const auto &d : s->decls)
-        os << " " << d.name << ":" << d.ty.desc();
-      break;
-    case HStmt::Assign:
-      os << " "; printExpr(os, s->target.get(), ind);
-      for (const auto &t : s->extraTargets) { os << ","; printExpr(os, t.get(), ind); }
-      os << " = "; printExpr(os, s->value.get(), ind);
-      break;
-    case HStmt::If:
-      os << " cond="; printExpr(os, s->cond.get(), ind);
-      break;
-    case HStmt::DoWhile:
-      os << " cond="; printExpr(os, s->cond.get(), ind);
-      break;
-    case HStmt::DoIter:
-      os << " v=" << (s->sym ? s->sym->name : s->name)
-         << " from="; printExpr(os, s->from.get(), ind);
-      if (s->to) { os << " to="; printExpr(os, s->to.get(), ind); }
-      if (s->by) { os << " by="; printExpr(os, s->by.get(), ind); }
-      break;
-    case HStmt::CallS:
-      os << " " << (s->sym ? s->sym->name : s->name);
-      for (const auto &a : s->args) { os << " "; printExpr(os, a.get(), ind); }
-      break;
-    case HStmt::Return:
-      os << " "; printExpr(os, s->value.get(), ind);
-      break;
-    case HStmt::Goto:
-      os << " " << s->name;
-      break;
-    case HStmt::Put: {
-      os << " [";
-      for (size_t i = 0; i < s->items.size(); ++i) {
-        if (i) os << ", ";
-        printExpr(os, s->items[i].get(), ind);
-      }
-      os << "]";
-      break;
+  case HStmt::Declare:
+    for (const auto& d : s->decls)
+      os << " " << d.name << ":" << d.ty.desc();
+    break;
+  case HStmt::Assign:
+    os << " ";
+    printExpr(os, s->target.get(), ind);
+    for (const auto& t : s->extraTargets) {
+      os << ",";
+      printExpr(os, t.get(), ind);
     }
-    case HStmt::Entry:
-      os << " " << s->name;
-      break;
-    default: break;
+    os << " = ";
+    printExpr(os, s->value.get(), ind);
+    break;
+  case HStmt::If:
+    os << " cond=";
+    printExpr(os, s->cond.get(), ind);
+    break;
+  case HStmt::DoWhile:
+    os << " cond=";
+    printExpr(os, s->cond.get(), ind);
+    break;
+  case HStmt::DoIter:
+    os << " v=" << (s->sym ? s->sym->name : s->name) << " from=";
+    printExpr(os, s->from.get(), ind);
+    if (s->to) {
+      os << " to=";
+      printExpr(os, s->to.get(), ind);
+    }
+    if (s->by) {
+      os << " by=";
+      printExpr(os, s->by.get(), ind);
+    }
+    break;
+  case HStmt::CallS:
+    os << " " << (s->sym ? s->sym->name : s->name);
+    for (const auto& a : s->args) {
+      os << " ";
+      printExpr(os, a.get(), ind);
+    }
+    break;
+  case HStmt::Return:
+    os << " ";
+    printExpr(os, s->value.get(), ind);
+    break;
+  case HStmt::Goto:
+    os << " " << s->name;
+    break;
+  case HStmt::Put: {
+    os << " [";
+    for (size_t i = 0; i < s->items.size(); ++i) {
+      if (i)
+        os << ", ";
+      printExpr(os, s->items[i].get(), ind);
+    }
+    os << "]";
+    break;
+  }
+  case HStmt::Entry:
+    os << " " << s->name;
+    break;
+  default:
+    break;
   }
   os << "\n";
-  if (s->thenS) printStmt(os, s->thenS.get(), ind + 1);
-  if (s->elseS) { os << pad << "else\n"; printStmt(os, s->elseS.get(), ind + 1); }
-  for (const auto &b : s->body) printStmt(os, b.get(), ind + 1);
+  if (s->thenS)
+    printStmt(os, s->thenS.get(), ind + 1);
+  if (s->elseS) {
+    os << pad << "else\n";
+    printStmt(os, s->elseS.get(), ind + 1);
+  }
+  for (const auto& b : s->body)
+    printStmt(os, b.get(), ind + 1);
 }
 
-}  // namespace
+} // namespace
 
-void printHIR(const HProgram &p, std::ostream &os) {
-  for (const auto &proc : p.procs) {
+void printHIR(const HProgram& p, std::ostream& os) {
+  for (const auto& proc : p.procs) {
     os << (proc->isMain ? "main " : "") << "proc " << proc->name;
-    if (proc->isFunction) os << " returns " << proc->retTy.desc();
+    if (proc->isFunction)
+      os << " returns " << proc->retTy.desc();
     os << "\n";
-    for (const auto &b : proc->body) printStmt(os, b.get(), 1);
+    for (const auto& b : proc->body)
+      printStmt(os, b.get(), 1);
     os << "end " << proc->name << "\n";
   }
 }
