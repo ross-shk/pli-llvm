@@ -146,6 +146,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->target = lowerExpr(s->target.get());
   for (const auto& t : s->extraTargets)
     h->extraTargets.push_back(lowerExpr(t.get()));
+  h->byName = s->byName;
   h->cond = lowerExpr(s->cond.get());
   h->from = lowerExpr(s->from.get());
   h->to = lowerExpr(s->to.get());
@@ -438,6 +439,8 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     }
     os << " = ";
     printExpr(os, s->value.get(), ind);
+    if (s->byName)
+      os << " BY NAME";
     break;
   case HStmt::If:
     os << " cond=";

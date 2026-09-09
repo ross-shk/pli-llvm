@@ -78,6 +78,13 @@ private:
   // typeExpr can fall through to the general function-call path.
   bool typeBuiltin(Expr* e);
   bool checkAssignable(const Type& dst, const Type& src, SourceLoc loc, const char* what);
+  // Struct leaf type of a whole-structure reference (VarRef, top-level or
+  // qualified path to a minor structure), or nullptr if it is not a structure.
+  const Type* structLeafType(Expr* e);
+  // BY NAME assignment (rule 86): validate that each member of `dst` has a
+  // same-named, assignable member in `src` (recursively); names absent from
+  // either side are skipped, so the layouts need not match.
+  void checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc);
 
   Diags& d_;
   Program* prog_ = nullptr;

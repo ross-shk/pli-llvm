@@ -51,7 +51,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (81) | `RETURN` | M0/M1 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
 | (82),(83) | `WAIT`, `DELAY` | M9 | |
 | (84),(85) | `EXIT`, `STOP` | M0 | |
-| (86) | assignment (incl. `BY NAME`) | partial M2 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); whole-structure assignment between identical-shape structures (`struct_assign.pli`, rule (127)); multiple assignment `a, b, c = e` with one shared RHS and same-type scalar/array-element targets (`multiassign.pli`, `bad_multiassign.pli`, `bad_multiassign_type.pli`); `BY NAME` → M2 |
+| (86) | assignment (incl. `BY NAME`) | partial M2 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); whole-structure assignment between identical-shape structures (`struct_assign.pli`, rule (127)); multiple assignment `a, b, c = e` with one shared RHS and same-type scalar/array-element targets (`multiassign.pli`, `bad_multiassign.pli`, `bad_multiassign_type.pli`); `BY NAME` assignment `S = T, BY NAME` copies same-named members regardless of layout, recursing into minor structures and arrays, skipping names absent from either side (`struct_by_name.pli`, ADR-043); non-structure or multi-target `BY NAME` diagnosed (`bad_struct_byname.pli`) |
 | (87)–(90) | `ALLOCATE`/`FREE` | diag → M3 | |
 | (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M4 | |
 | (100)–(103) | `OPEN`/`CLOSE` | diag → M5 | |
@@ -110,7 +110,7 @@ entry points below are where that chain terminates.
 | (78),(79) | `emitCall` | `CALL` statement |
 | (81) | `emitStmt` (`Return`) | value / plain `RETURN` |
 | (84),(85) | `emitStmt` (`Stop`) | `pli_stop` + `Unreachable` |
-| (86) | `emitAssign`, `storeTo` | incl. `SUBSTR` pseudo-variable (`pli_substr_assign`); multiple assignment evaluates the RHS once and stores to each target (`emitAssign` multi-target path) |
+| (86) | `emitAssign`, `storeTo` | incl. `SUBSTR` pseudo-variable (`pli_substr_assign`); multiple assignment evaluates the RHS once and stores to each target (`emitAssign` multi-target path); `BY NAME` emits member-by-name copies through `emitByNameCopy` (scalar load/convert/store, memcpy for arrays, recursion into minor structures) |
 | (104),(105) | `emitPut` | list-directed output |
 | (115)–(122) | `emitExpr` (binary/`Unary`) | arithmetic, bit, comparison, concat |
 | (123) | `emitExpr` (`Call`) | per-builtin handlers: SUBSTR, INDEX, ABS, LENGTH, TRUNC, PRECISION, MIN, MAX, MOD, MULTIPLY, DIVIDE, ROUND, REPEAT, VERIFY, TRANSLATE, HIGH, LOW, DATE, TIME, LBOUND, HBOUND, DIM, SUM, PROD, ANY, ALL |

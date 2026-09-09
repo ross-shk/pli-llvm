@@ -95,6 +95,7 @@ struct HStmt {
 
   HExprP target, value, cond, from, to, by;
   std::vector<HExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
+  bool byName = false;              // rule (86) trailing ", BY NAME" on assignment
   HStmtP thenS, elseS;
   std::vector<HStmtP> body;
 

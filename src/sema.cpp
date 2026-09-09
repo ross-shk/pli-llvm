@@ -447,6 +447,47 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
   return false;
 }
 
+const Type* Sema::structLeafType(Expr* e) {
+  if (e->kind != Expr::VarRef || !e->sym || e->sym->kind == Symbol::ProcName)
+    return nullptr;
+  if (!e->ty.isStruct())
+    return nullptr;
+  return &e->ty;
+}
+
+void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
+  // BY NAME (rule 86): walk the target structure's members; a member is copied
+  // from the same-named member of the source when both are present. Nested
+  // structures recurse by name, so the two layouts need not match.
+  for (const auto& dm : dst.members) {
+    const Member* sm = nullptr;
+    for (const auto& m : src.members)
+      if (m->name == dm->name) {
+        sm = m.get();
+        break;
+      }
+    if (!sm)
+      continue; // name absent from the source: skipped, not an error
+    if (dm->ty.isStruct() && sm->ty.isStruct()) {
+      checkByNameMatch(dm->ty, sm->ty, loc);
+    } else if (dm->ty.isStruct() || sm->ty.isStruct()) {
+      d_.error(loc,
+               "BY NAME assignment mixes a structure with a non-structure member '" + dm->name +
+                   "'",
+               "(86)");
+    } else if (dm->ty.isArray() || sm->ty.isArray()) {
+      if (!(dm->ty == sm->ty))
+        d_.error(loc,
+                 "BY NAME array member '" + dm->name + "' must have the same type on both sides",
+                 "(86)");
+    } else if (dm->ty.isChar() || sm->ty.isChar()) {
+      d_.error(loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+    } else {
+      checkAssignable(dm->ty, sm->ty, loc, "BY NAME assignment");
+    }
+  }
+}
+
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   if (!s)
     return;
@@ -457,6 +498,29 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break; // handled in collectDecls
   case Stmt::Assign: {
     typeExpr(s->value.get(), sc, p);
+    typeExpr(s->target.get(), sc, p);
+    // BY NAME assignment (rule 86): S = T BY NAME copies members of S from
+    // the same-named members of T. Both sides must be whole structures; members
+    // present in only one side are skipped, so the layouts need not match.
+    if (s->byName) {
+      if (!s->extraTargets.empty()) {
+        d_.error(s->loc, "assignment BY NAME requires a single structure target", "(86)");
+        break;
+      }
+      const Type* dst = structLeafType(s->target.get());
+      const Type* src = structLeafType(s->value.get());
+      if (!dst || !src) {
+        if (!dst)
+          d_.error(s->target->loc, "assignment BY NAME target must be a structure reference",
+                   "(86)");
+        if (!src)
+          d_.error(s->value->loc,
+                   "assignment BY NAME right-hand side must be a structure reference", "(86)");
+        break;
+      }
+      checkByNameMatch(*dst, *src, s->loc);
+      break;
+    }
     // Multiple assignment (rule 86): a, b, c = e — the shared value is
     // converted once (to the first target's type) and stored to every target,
     // so all targets must be of that same type. SUBSTR and whole-structure
@@ -489,7 +553,6 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       break;
     }
-    typeExpr(s->target.get(), sc, p);
     // SUBSTR pseudo-variable (M2): substr(v, i, n) on the left of '=' — v
     // must be a modifiable character variable that the assignment overwrites.
     if (s->target->kind == Expr::Call && s->target->name == "SUBSTR") {

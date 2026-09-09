@@ -969,3 +969,33 @@ reformat of `src/` is mechanical and covered by the full test suite.
 macOS, and no bare `lld` installed); making `fmt-check` a soft, non-failing check
 (the user chose enforcement); wiring CI now (deferred); putting the full `check`
 gate in CMake while the Makefile is the documented bootstrap build.
+
+## ADR-043 — `BY NAME` assignment: layout-independent member matching
+
+**Context.** Rule (86) is `assignment-statement ::= {,• reference•••} = expression
+[ , BY NAME ] ;`. Unlike whole-structure assignment (ADR-040), which copies only
+between structures of *identical shape*, `BY NAME` assigns a structure from the
+members of another structure that *share the same name*, regardless of layout.
+The M2 scope names it as a distinct item.
+
+**Decision.** `S = T, BY NAME` requires a **single** whole-structure target and a
+whole-structure value (sema `structLeafType`); with multiple targets or a
+non-structure operand it is diagnosed. Sema (`checkByNameMatch`) walks the target
+structure's members, finds the same-named member of the source when present, and
+checks the pair is assignable — recursing into minor structures, requiring
+identical array types, and rejecting CHAR members (rule 11, consistent with the
+rest of the compiler). Members absent from either side are skipped, not errors.
+IRGen (`emitByNameCopy`) emits a per-member copy by name: a scalar leaf is loaded,
+converted and stored; an array member is memcpy'd whole; a minor structure recurses.
+
+**Consequences.** Two differently-declared structures sharing member names can be
+copied field-wise, enabling record-style programmes without identical layouts. The
+parse of `, BY NAME` sets `Stmt::byName` (and its HIR mirror); sema runs before the
+multiple-assignment path so a multi-target `BY NAME` is caught early. `BY NAME` in
+a multiple-assignment list stays rejected.
+
+**Rejected.** Requiring identical shapes (that is already ADR-040 and defeats the
+point of `BY NAME`); serving CHAR members (not yet supported anywhere, so it would
+introduce a half-working case); storing a materialised member-pair plan from sema
+to IRGen (the two structure types let codegen re-derive the same name walk cheaply,
+keeping the change KISS).

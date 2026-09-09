@@ -87,6 +87,7 @@ struct Stmt {
 
   ExprP target, value, cond, from, to, by;
   std::vector<ExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
+  bool byName = false;             // rule (86) trailing ", BY NAME" on assignment
   StmtP thenS, elseS;
   std::vector<StmtP> body;
 

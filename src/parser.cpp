@@ -1189,8 +1189,8 @@ StmtP Parser::parseCall() {
 // assignment-statement ::= {,• reference•••} = expression [ , BY NAME ]
 //                                                          rule (86)
 // The comma-separated target list precedes '='; every target receives the value
-// of the single RHS expression. A trailing ", BY NAME" is diagnosed (M2 plan
-// lists BY NAME separately, still unimplemented).
+// of the single RHS expression. The trailing ", BY NAME" is parsed into
+// st->byName; sema restricts it to a single whole-structure target.
 StmtP Parser::parseAssignment() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Assign;
@@ -1219,7 +1219,7 @@ StmtP Parser::parseAssignment() {
   if (at(Tok::Comma)) {
     advance();
     if (atWord("BY") && peek().isWord("NAME")) {
-      d_.error(cur().loc, "assignment BY NAME is not implemented in this stage", "(86)");
+      st->byName = true;
       advance();
       advance();
     } else {
