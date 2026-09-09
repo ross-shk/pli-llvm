@@ -2,9 +2,10 @@
 
 The ledger that ties the implementation to the specification. Status values:
 
-- **M0** — implemented in the wireframe and covered by a test
+- **M0**, **M1** — implemented in the completed milestones and covered by tests
 - **diag** — recognised and rejected with a citation of its rule number
-- **Mn** — planned for that milestone (IMPLEMENTATION-PLAN.md)
+- **M2**-**M9** — planned for that milestone (IMPLEMENTATION-PLAN.md)
+- **D1** — explicitly deferred specialized scalar conformance; diagnosed until implemented
 
 | Rules | Feature | Status | Component / test |
 |---|---|---|---|
@@ -12,65 +13,65 @@ The ledger that ties the implementation to the specification. Status values:
 | (2) | procedure, entry-namelist, options | M0 | `parseExternalProcedure` / `hello.pli` |
 | (3) | entry-namelist (multiple entry names) | M0 | `a, b: PROCEDURE` shares one body; callable by any name (`multientry.pli`); extra names are internal aliases |
 | (4) | parameterlist | M0 | `procs.pli` |
-| (5) | procedure options (`OPTIONS`, `RECURSIVE`, `RETURNS`) | partial M0 | `MAIN` honoured; `RETURNS` → function procedures (`func.pli`); `RECURSIVE` accepted |
+| (5) | procedure options (`OPTIONS`, `RECURSIVE`, `RETURNS`) | M0/M1 | `MAIN` honoured; `RETURNS` → function procedures (`func.pli`); `RECURSIVE` accepted |
 | (6),(7) | sentencelist, end-clause, multiple closure | M0 | `parseBody` / `loops.pli` (`END OUTER;`) |
 | (8) | sentence kinds | M0 | `parseStatement`; internal procedures reach enclosing automatic storage via a static link (ADR-027, `staticlink.pli`) |
 | (9),(10) | `DECLARE`, declarationlist | M0 | `parseDeclare` / `ifelse.pli` |
-| (11) | declaration, level numbers, factoring | partial M0 | scalars; factoring and levels → M3 |
-| (12),(13) | dimension attribute, bound pairs | M3 | arrays |
+| (11) | declaration, level numbers, factoring | partial M0 | scalars; factoring and levels → M2 |
+| (12),(13) | dimension attribute, bound pairs | M2 | arrays |
 | (14),(15) | attribute, data-attribute set | partial M0 | arithmetic/string/`ALIGNED` subset |
-| (16),(17) | arithmetic attributes, precision, signed integer | partial M0 | scale 0 only; full → M2 |
-| (18) | string attributes (`BIT`/`CHARACTER`/`VARYING`) | partial M0 | `BIT(1)` and char/varying served (`strings.pli`); `BIT(n>1)` diagnosed as unimplemented → M2 (`bad_bitlen.pli`, rule (18)) |
-| (19) | `PICTURE` attribute | M2 | ADR-017 |
-| (20) | `AREA` attribute | M4 | |
-| (21) | `LABEL` attribute | M5 | label variables |
-| (22) | `OFFSET` attribute | M4 | |
-| (23) | storage classes | diag → M4 | `AUTOMATIC`/`STATIC` accepted, `CONTROLLED` M4 |
-| (24) | `DEFINED`/`POSITION` | M3 | ADR-018 |
-| (25) | `BASED` | M4 | |
-| (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 | scalar constants; full → M3 |
-| (33) | non-data attributes | M2 | |
-| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | partial M0 | ADR-021: `DECLARE … ENTRY` external C entry + by-ref call (`cinterop`); `RETURNS` function procedures (scalar result, `func.pli`); full descriptors/`USES`/`SETS` pending |
-| (39),(40) | `FILE` attributes | M6 | |
-| (41) | `GENERIC` | M2 | generic selection |
-| (42) | scope (`INTERNAL`/`EXTERNAL`) | accepted M0 → M1 | linkage in M1 |
-| (43) | `LIKE` | M3 | |
-| (44)–(55) | `FORMAT` statement and all format items | M6 | format engine |
+| (16),(17) | arithmetic attributes, precision, signed integer | partial M0 | practical binary forms first; full decimal/precision conformance → D1 |
+| (18) | string attributes (`BIT`/`CHARACTER`/`VARYING`) | partial M0 | `BIT(1)` and char/varying served (`strings.pli`); `BIT(n>1)` diagnosed as unimplemented (`bad_bitlen.pli`, rule (18)); schedule by corpus impact |
+| (19) | `PICTURE` attribute | D1 | ADR-017 |
+| (20) | `AREA` attribute | M3 | |
+| (21) | `LABEL` attribute | M4 | label variables |
+| (22) | `OFFSET` attribute | M3 | |
+| (23) | storage classes | diag → M3 | `AUTOMATIC`/`STATIC` accepted, `CONTROLLED` M3 |
+| (24) | `DEFINED`/`POSITION` | M2 | ADR-018; after ordinary aggregates |
+| (25) | `BASED` | M3 | |
+| (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 | scalar constants; full → M2 |
+| (33) | non-data attributes | M8 | prioritize by corpus impact |
+| (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | partial M0 → M2 | ADR-021: scalar C entry/calls served; aggregate descriptors completed with arrays/structures |
+| (39),(40) | `FILE` attributes | M5 | |
+| (41) | `GENERIC` | M8 | generic selection; prioritize by corpus impact |
+| (42) | scope (`INTERNAL`/`EXTERNAL`) | M1 | linkage implemented |
+| (43) | `LIKE` | M2 | |
+| (44)–(55) | `FORMAT` statement and format items | M5 (picture items D1) | common format engine first |
 | (56) | `ENTRY` statement | M1 | `label: ENTRY(params) [RETURNS(...)]` declares an alternate entry point with its own params (any count) and result type; body split into segments behind a shared impl, one thunk per entry name (`entry.pli`); mixed return types diagnosed unimplemented (ADR-026) |
 | (57)–(59) | statement, unconditional, simple | M0 | |
-| (60)–(63) | condition prefixes | parsed M0 → M5 | warned as unenforced |
+| (60)–(63) | condition prefixes | parsed M0 → M4 | warned as unenforced |
 | (64) | labellist | M0 | label prefixes parsed; used by (7) |
-| (65) | initial-label (subscripted labels) | M3/M5 | scan damaged; see ⚠ in grammar |
+| (65) | initial-label (subscripted labels) | M2/M4 | scan damaged; see ⚠ in grammar |
 | (66),(67) | proper-statement, null statement | M0 | |
-| (68) | `BEGIN` block | partial M1 | executes; a block is now a real lexical scope — inner declarations shadow outer ones and do not leak (`begin.pli`); block variables are AUTOMATIC in the enclosing procedure's frame (ADR-010, ADR-027) |
+| (68) | `BEGIN` block | M1 | executes as a real lexical scope; inner declarations shadow outer ones and do not leak (`begin.pli`); block variables are AUTOMATIC in the enclosing procedure's frame (ADR-010, ADR-027) |
 | (69)–(73) | `DO` groups, specifications, `WHILE` | M0 | `loops.pli` |
 | (74)–(76) | `IF`/`THEN`/`ELSE`, balanced statements | M0 | `ifelse.pli` |
-| (77) | `GO TO` | partial M1 | local `GO TO`/`GOTO` to a label in the same procedure (`goto.pli`, `bad_goto.pli`); non-local to an enclosing procedure → M5 |
+| (77) | `GO TO` | M1/M4 | local `GO TO`/`GOTO` implemented (`goto.pli`, `bad_goto.pli`); non-local to an enclosing procedure → M4 |
 | (78)–(80) | `CALL`, options, argumentlist | M0 (opts M9) | `procs.pli`; `TASK`/`EVENT` → M9 |
-| (81) | `RETURN` | partial M0 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
+| (81) | `RETURN` | M0/M1 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
 | (82),(83) | `WAIT`, `DELAY` | M9 | |
 | (84),(85) | `EXIT`, `STOP` | M0 | |
-| (86) | assignment (incl. `BY NAME`) | partial M0 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); multiple/`BY NAME` → M3 |
-| (87)–(90) | `ALLOCATE`/`FREE` | diag → M4 | |
-| (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M5 | |
-| (100)–(103) | `OPEN`/`CLOSE` | diag → M6 | |
-| (104),(105) | `GET`/`PUT` and options | partial M0 | `PUT [SKIP] [PAGE] LIST`; rest → M6 |
-| (106)–(111) | data specifications, data lists | partial M0 | list-directed output; `DATA`/`EDIT` → M6 |
-| (112),(113) | record I/O | diag → M7 | option set from Y33-6003 (scan incomplete) |
-| (114) | `DISPLAY` | M6 | scan garbled; Y33-6003 form used |
+| (86) | assignment (incl. `BY NAME`) | partial M0 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); multiple/`BY NAME` → M2 |
+| (87)–(90) | `ALLOCATE`/`FREE` | diag → M3 | |
+| (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M4 | |
+| (100)–(103) | `OPEN`/`CLOSE` | diag → M5 | |
+| (104),(105) | `GET`/`PUT` and options | partial M0 | `PUT [SKIP] [PAGE] LIST`; rest → M5 |
+| (106)–(111) | data specifications, data lists | partial M0 | list-directed output; common `DATA`/`EDIT` → M5, picture-directed forms → D1 |
+| (112),(113) | record I/O | diag → M6 | option set from Y33-6003 (scan incomplete) |
+| (114) | `DISPLAY` | M5 | scan garbled; Y33-6003 form used |
 | (115)–(122) | expression precedence hierarchy | M0 | `arith.pli` pins `-3**2` = `-(3**2)` = -9 ((128) constants are unsigned); `usecases/expr.pli` pins negated comparisons and a prefixed `**` exponent |
 | (118) | comparison operators | M0 | incl. `¬=`, `¬>`, `¬<` |
 | (123) | primitive expressions | partial M0 | constants/vars (M0); function references to function procedures (`func.pli`) |
-| (124),(125) | locator qualification, qualified names | diag → M3/M4 | |
-| (126) | subscripted references | diag → M3 | incl. `*` cross-sections |
-| (127) | unsubscripted reference | M3 | |
-| (128),(129) | constants, replicated string constants | partial M0 | replicated string constants `(n)'str'` expanded at parse time (rule (129), `repl.pli`); imaginary/sterling → M2 |
+| (124),(125) | locator qualification, qualified names | diag → M2/M3 | aggregate qualification M2; locators M3 |
+| (126) | subscripted references | diag → M2 | incl. `*` cross-sections |
+| (127) | unsubscripted reference | M2 | |
+| (128),(129) | constants, replicated string constants | partial M0 | replicated strings served; imaginary/sterling → D1 |
 | (130)–(133) | identifier, letter, alphameric, digit | M0 | incl. `$ # @` and break character |
-| (134) | `isub` (`integer SUB`) | M3 | ADR-018 |
-| (135)–(139) | integer, fixed/float/imaginary constants | partial M0 | `B` radix parsed; `COMPLEX` → M2 |
+| (134) | `isub` (`integer SUB`) | M2 | ADR-018; after ordinary aggregates |
+| (135)–(139) | integer, fixed/float/imaginary constants | partial M0 | practical binary constants served; decimal/complex/imaginary completeness → D1 |
 | (140)–(144) | string constants, bit strings, characters | M0 | `strings.pli` (incl. `''` escape) |
-| (145) | sterling constants | M2 | with sterling pictures |
-| (146)–(148) | picture specification/string/characters | M2 | ADR-017 |
+| (145) | sterling constants | D1 | with sterling pictures |
+| (146)–(148) | picture specification/string/characters | D1 | ADR-017 |
 | (149)–(151) | space, comment, comment symbols | M0 | `/* … */` |
 
 ## Auxiliary sections
@@ -80,9 +81,9 @@ The ledger that ties the implementation to the specification. Status values:
 | §2.1, §2.2 | notation semantics / meta-syntax | reference only |
 | §2.3.1 | generation process, delimiters, 60-char alphabet | M0 (lexer) |
 | §2.3.1 | statement-keyword disambiguation | M1 | ADR-004 step 3: `WORD ( … ) =` resolves by a speculative parse of the keyword reading (`ambiguity.pli`); `WORD =` stays an assignment |
-| §2.3.2.1 | keyword abbreviations (`DCL`, `PROC`, `BIN`, …) | partial M0 (`DCL`, `PROC`, `BIN`, `DEC`, `CHAR`, `VAR`, `INIT`, `PTR`, `CTL`, `DEF`) → M9 completes the table |
+| §2.3.2.1 | keyword abbreviations (`DCL`, `PROC`, `BIN`, …) | partial M0 (`DCL`, `PROC`, `BIN`, `DEC`, `CHAR`, `VAR`, `INIT`, `PTR`, `CTL`, `DEF`) → M8 completes the table |
 | §2.3.2.2 | multiple closure | M0 |
-| §2.3.3 | 48-character set: operator words, deletions, colon rules | partial M0 (operator words in `arith.pli`) → M9 |
+| §2.3.3 | 48-character set: operator words, deletions, colon rules | partial M0 (operator words in `arith.pli`) → M8 |
 
 ## IRGen touch-points
 
