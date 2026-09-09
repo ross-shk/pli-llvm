@@ -72,7 +72,11 @@ struct DeclItem {
   Type ty{};
   SourceLoc loc{};
   int level = 0; // rule (11) level number; 0 when absent (no structure)
-  ExprP init;    // INITIAL(...) — a single simple scalar constant (M0 scalar path)
+  // Runtime upper-bound expressions for dynamic array axes (rule (13)); empty
+  // for a fully constant array. Parallel to ty.dims: an entry is non-null when
+  // the corresponding axis's upper bound is a runtime value.
+  std::vector<ExprP> dynBounds;
+  ExprP init; // INITIAL(...) — a single simple scalar constant (M0 scalar path)
   std::vector<InitItem> initItems;     // INITIAL(...) itemlist (arrays, rule 26-31)
   std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none

@@ -25,15 +25,26 @@ enum class TK {
 // constructor (see the out-of-line definitions below Member).
 struct Member;
 
+// One array axis (rules (12),(13)): a lower and upper bound. A dynamic (runtime)
+// upper bound — a general expression, or a `*` adjustable extent — is marked by
+// `dyn`; `ub` is then unused and the extent is only known at run time. The lower
+// bound stays constant in this stage.
+struct Dim {
+  int lb = 1;
+  int ub = 1;
+  bool dyn = false; // the upper bound is a runtime value (rule (13))
+  bool operator==(const Dim& o) const { return lb == o.lb && ub == o.ub && dyn == o.dyn; }
+};
+
 struct Type {
   TK k = TK::FixedBin;
   int prec = 15;        // precision: digits (DECIMAL) or bits (BINARY)
   int scale = 0;        // FIXED scale factor q
   int len = 1;          // CHARACTER/BIT length
   bool varying = false; // VARYING (rule 15)
-  // Array dimension bounds (lb,ub) per axis — rules (12),(13). Empty for a
-  // scalar. `len`/`prec`/... describe the element type.
-  std::vector<std::pair<int, int>> dims;
+  // Array dimension bounds per axis — rules (12),(13). Empty for a scalar.
+  // `len`/`prec`/... describe the element type.
+  std::vector<Dim> dims;
   // Structure members (rule 11), in declaration order. Only meaningful when
   // k == TK::Struct.
   std::vector<std::unique_ptr<Member>> members;
@@ -50,6 +61,13 @@ struct Type {
 
   bool isArray() const { return !dims.empty(); }
   bool isStruct() const { return k == TK::Struct; }
+  // True when any axis has a runtime (dynamic) extent (rule (13)).
+  bool isDynamic() const {
+    for (const auto& d : dims)
+      if (d.dyn)
+        return true;
+    return false;
+  }
   // The scalar type of one element (dims cleared).
   Type elementType() const {
     Type t = *this;

@@ -1186,3 +1186,44 @@ shape). GRAMMAR-COVERAGE rule (126) now lists multi-`*` copies as served.
 dynamic extents generally); nesting the gather as one loop per `*` axis rather
 than a single linear decomposition (more basic blocks for no benefit at this
 stage).
+
+---
+
+## ADR-050 — Dynamic array extents: a single-axis `AUTOMATIC` array with a runtime upper bound
+
+**Context.** M2 names dynamic bounds (rule (13)) for matrix and table programs.
+The constant-bounds path (`ADR`-adjacent to (12)) lays out `[N x elemTy]` arrays
+in the frame, so an extent must be a compile-time constant. A runtime extent
+`DECLARE A(n) ...` cannot be an LLVM aggregate field; it needs a buffer sized at
+block entry from the live value of `n`, plus a way to bounds-check subscripts
+against that runtime bound.
+
+**Decision.** This stage serves exactly one dynamic form: a single-axis
+`AUTOMATIC` array with a constant lower bound (default 1) and a runtime upper
+bound, e.g. `A(n)` or `A(lb:n)`. The upper-bound expression is kept on the
+`DeclItem` (`dynBounds`), lowered to HIR and stashed on `Symbol::dynUb`, and run
+through sema's `typeExpr` so its symbol resolves. `allocaLocals` evaluates it in
+a second pass (after fixed-size locals, so referenced variables are addressable),
+allocates `alloca i32, i64 extent` where `extent = ub - lb + 1`, records the
+buffer in `symAddr_` and the live bound in a `dynUb_` dope slot. `arrayElementAddr`
+takes the dynamic 1-D path: one runtime SUBSCRIPTRANGE against the recorded bound,
+then `GEP i - lb` on the bare element pointer. `LBOUND` reports the constant lower
+bound; `HBOUND`/`DIM` read the recorded runtime bound. Because AUTOMATIC storage
+is sized at entry, the bound is evaluated at block entry and fixed for the block's
+lifetime.
+
+**Consequences.** `tests/core/dynamic_array.pli` drives the bound via a procedure
+parameter and checks runtime read/write and `LBOUND`/`HBOUND`; `bad_dynamic_array.pli`
+and `bad_dynamic_array_ext.pli` reject the unsupported forms. Dynamic arrays cannot
+be structure members, multi-axis, or carry `INITIAL` in this stage (diagnosed, rule
+(13)/(26)); `*` adjustable extents and dynamic lower bounds are rejected at parse
+time. GRAMMAR-COVERAGE rules (12),(13) and the implementation table list the served
+form.
+
+**Rejected.** Dynamic structure members and multi-axis dynamic arrays (need dope
+vectors; ADR-008 defers them); `*` adjustable extents (a descriptor with
+re-allocation on entry); a dynamic lower bound (bounds stay constant here); a
+heap allocation for dynamic arrays (the runtime-sized `alloca` is valid for the
+block-scoped AUTOMATIC lifetime and needs no deallocator); evaluating the bound
+lazily at each subscript instead of once at entry (would allow the extent to
+change mid-block, which AUTOMATIC semantics forbid).

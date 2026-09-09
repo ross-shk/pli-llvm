@@ -342,8 +342,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (children[idx].empty())
           return it.ty;
         std::vector<Member> ms;
-        for (int c : children[idx])
-          ms.push_back({items[c]->name, buildType(c)});
+        for (int c : children[idx]) {
+          Type ct = buildType(c);
+          if (ct.isArray() && ct.isDynamic())
+            d_.error(items[c]->loc, "a dynamic array cannot be a structure member in this stage",
+                     "(13)");
+          ms.push_back({items[c]->name, ct});
+        }
         return Type::structTy(std::move(ms));
       };
       // Declare each top-level item (no parent) as a variable; members are
@@ -414,12 +419,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   }
                 } else if (ds.expr && ds.expr->kind == Expr::IntLit) {
                   cst[k] = ds.expr->ival;
-                  const auto& [lb, ub] = base->ty.dims[k];
-                  if (cst[k] < lb || cst[k] > ub)
+                  const Dim& d = base->ty.dims[k];
+                  if (cst[k] < d.lb || cst[k] > d.ub)
                     d_.error(ds.expr->loc,
                              "DEFINED base subscript " + std::to_string(cst[k]) +
-                                 " is out of bounds " + std::to_string(lb) + ":" +
-                                 std::to_string(ub),
+                                 " is out of bounds " + std::to_string(d.lb) + ":" +
+                                 std::to_string(d.ub),
                              "(126)");
                 } else {
                   d_.error(item.loc, "DEFINED base subscripts must be constant integers", "(24)");
@@ -467,7 +472,22 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (item.ty.isArray() && !isDefined) {
           if (item.ty.elementType().isChar())
             d_.error(item.loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
-          if (!item.initItems.empty()) {
+          if (item.ty.isDynamic()) {
+            // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
+            // serves only a single-axis AUTOMATIC array with a constant lower
+            // bound. Resolve the runtime upper-bound expression's symbol so
+            // codegen can evaluate it at entry to size the buffer.
+            for (auto& b : item.dynBounds)
+              if (b)
+                typeExpr(b.get(), sc, p);
+            if (item.ty.dims.size() != 1)
+              d_.error(item.loc, "a dynamic array must be single-axis in this stage", "(13)");
+            if (item.sym->isStatic)
+              d_.error(item.loc, "a dynamic array must be AUTOMATIC in this stage", "(13)");
+            if (!item.initItems.empty())
+              d_.error(item.loc, "INITIAL on a dynamic array is not implemented in this stage",
+                       "(26)");
+          } else if (!item.initItems.empty()) {
             std::vector<Expr*> elems;
             expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
             long long n = elementCount(item.ty);
@@ -680,7 +700,7 @@ void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemT
 long long Sema::elementCount(const Type& ty) {
   long long n = 1;
   for (const auto& d : ty.dims)
-    n *= (long long)(d.second - d.first + 1);
+    n *= (long long)(d.ub - d.lb + 1);
   return n;
 }
 
@@ -924,19 +944,21 @@ void Sema::checkSubscriptBounds(Expr* e, Symbol* arr) {
   checkSubscriptBoundsDims(e, arr->ty.dims, arr->name);
 }
 
-void Sema::checkSubscriptBoundsDims(Expr* e, const std::vector<std::pair<int, int>>& dims,
+void Sema::checkSubscriptBoundsDims(Expr* e, const std::vector<Dim>& dims,
                                     const std::string& name) {
   const size_t n = std::min(e->args.size(), dims.size());
   for (size_t k = 0; k < n; ++k) {
     Expr* idx = e->args[k].get();
     if (idx->kind != Expr::IntLit)
       continue;
+    const Dim& d = dims[k];
+    if (d.dyn) // a dynamic axis has no compile-time upper bound to check
+      continue;
     long long v = idx->ival;
-    const auto& [lb, ub] = dims[k];
-    if (v < lb || v > ub)
+    if (v < d.lb || v > d.ub)
       d_.error(idx->loc,
-               "subscript " + std::to_string(v) + " is out of bounds " + std::to_string(lb) + ":" +
-                   std::to_string(ub) + " for array '" + name + "'",
+               "subscript " + std::to_string(v) + " is out of bounds " + std::to_string(d.lb) +
+                   ":" + std::to_string(d.ub) + " for array '" + name + "'",
                "(126)");
   }
 }

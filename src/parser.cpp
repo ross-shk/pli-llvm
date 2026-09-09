@@ -622,6 +622,9 @@ StmtP Parser::parseDeclare() {
       if (base.init)
         d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage",
                  "(26)");
+      if (!base.dynBounds.empty())
+        d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
+                 "(13)");
       for (auto& [n, nl] : names) {
         DeclItem item;
         item.name = n;
@@ -772,8 +775,9 @@ bool Parser::parseDeclTail(DeclItem& item) {
   // Dimension attribute (rules (12),(13)): a leading parenthesised group after
   // the name is a dimension when a bound-pair ':' is present or an attribute
   // keyword follows; otherwise it is a precision/length (M0 scalar behaviour).
-  std::vector<std::pair<int, int>> arrDims;
-  tryParseDimension(arrDims);
+  std::vector<Dim> arrDims;
+  std::vector<ExprP> arrDyn;
+  tryParseDimension(arrDims, arrDyn);
 
   // Attribute bag (rules 14-32).
   AttrBag bag;
@@ -983,6 +987,7 @@ bool Parser::parseDeclTail(DeclItem& item) {
       item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   }
   item.ty.dims = arrDims;
+  item.dynBounds = std::move(arrDyn);
   item.init = std::move(init);
   return true;
 }
@@ -991,32 +996,78 @@ bool Parser::parseDeclTail(DeclItem& item) {
 // bound-pair (lb:ub) is always a dimension; a bare (n) is a dimension only when
 // followed by an attribute keyword (e.g. `DECLARE A(5) FIXED BINARY;`), else it
 // stays a precision/length for M0 scalar declarations.
-bool Parser::tryParseDimension(std::vector<std::pair<int, int>>& out) {
+bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds) {
   if (!at(Tok::LParen))
     return false;
   size_t save = i_;
   eat(Tok::LParen);
 
-  // One or more comma-separated bound-pairs (lb:ub) or bare extents (n), one
-  // per axis (rules (12),(13)). A bound-pair makes the whole group a dimension;
-  // all-bare extents are a dimension only when an attribute keyword follows.
-  std::vector<std::pair<int, int>> axes;
+  // Fold a bound expression to a compile-time constant when it is a (possibly
+  // negated) integer literal; false means it is a runtime expression (rule (13)).
+  auto foldBound = [&](const ExprP& e, long long& v) -> bool {
+    if (e->kind == Expr::IntLit) {
+      v = e->ival;
+      return true;
+    }
+    if (e->kind == Expr::Unary && e->op == Tok::Minus && e->a && e->a->kind == Expr::IntLit) {
+      v = -e->a->ival;
+      return true;
+    }
+    return false;
+  };
+
+  // One or more comma-separated bound-pairs (lb:ub) or bare extents (n|expr),
+  // one per axis (rules (12),(13)); '*' is an adjustable extent. A colon group
+  // or a dynamic bound makes the whole group a dimension; all-bare constant
+  // extents are a dimension only when an attribute keyword follows.
+  std::vector<Dim> axes;
+  std::vector<ExprP> db; // parallel to axes: upper-bound expr (nullptr = constant)
   bool anyColon = false;
   for (;;) {
-    int lb = 1, ub = 0;
-    bool colon = false;
-    if (at(Tok::Number)) {
-      lb = atoi(cur().text.c_str());
+    Dim d;
+    if (at(Tok::Star)) { // rule (13) '*': adjustable extent — deferred
+      d_.error(cur().loc, "a '*' array extent is not implemented in this stage", "(13)");
       advance();
+      d.dyn = true;
+    } else {
+      ExprP first = parseExpr();
+      if (!first) {
+        i_ = save;
+        return false;
+      }
+      long long fv;
+      bool firstConst = foldBound(first, fv);
+      if (eat(Tok::Colon)) {
+        anyColon = true;
+        if (firstConst) {
+          d.lb = (int)fv;
+        } else {
+          d_.error(first->loc, "a dynamic array lower bound is not implemented in this stage",
+                   "(13)");
+          d.lb = 1;
+        }
+        ExprP ubE = parseExpr();
+        long long uv;
+        if (!ubE) {
+          i_ = save;
+          return false;
+        }
+        if (foldBound(ubE, uv)) {
+          d.ub = (int)uv;
+        } else {
+          d.dyn = true;
+          db.push_back(std::move(ubE));
+        }
+      } else { // bare extent (ub): lower bound defaults to 1
+        if (firstConst) {
+          d.ub = (int)fv;
+        } else {
+          d.dyn = true;
+          db.push_back(std::move(first));
+        }
+      }
     }
-    if (eat(Tok::Colon) && at(Tok::Number)) {
-      ub = atoi(cur().text.c_str());
-      advance();
-      colon = true;
-    }
-    axes.push_back(colon ? std::pair<int, int>{lb, ub} : std::pair<int, int>{1, lb});
-    if (colon)
-      anyColon = true;
+    axes.push_back(d);
     if (!eat(Tok::Comma))
       break;
   }
@@ -1025,9 +1076,10 @@ bool Parser::tryParseDimension(std::vector<std::pair<int, int>>& out) {
 
   if (anyColon) {
     out = std::move(axes);
+    dynBounds = std::move(db);
     return true;
   }
-  // All bare (n): a dimension only when an attribute keyword follows the group.
+  // All bare constants (n): a dimension only when an attribute keyword follows.
   auto isAttrWord = [&](const std::string& w) {
     return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
@@ -1037,6 +1089,7 @@ bool Parser::tryParseDimension(std::vector<std::pair<int, int>>& out) {
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
+    dynBounds = std::move(db);
     return true;
   }
   i_ = save;

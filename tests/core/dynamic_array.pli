@@ -1,0 +1,39 @@
+ /* Dynamic (runtime-extent) 1-D arrays (rules (12),(13),(126)): an AUTOMATIC
+    array whose upper bound is a runtime expression — here the parameter n —
+    is sized when the procedure is entered, so the bound is fixed at entry.
+    Subscripting a dynamic array is bounds-checked against the runtime extent,
+    and LBOUND/HBOUND/DIM report the live bound values. */
+ dynamic_array_test: procedure options(main);
+    declare fails fixed bin(31);
+    fails = 0;
+    call check(5);
+    call check(1);
+    call check(0);
+    if fails = 0 then put skip list('PASS dynamic_array');
+    else put skip list('FAIL dynamic_array: fails =', fails);
+
+    check: procedure(n);
+       declare n fixed bin(31);
+       declare a(n) fixed bin(31);
+       declare i fixed bin(31);
+       /* LBOUND is the constant lower bound; HBOUND/DIM are runtime values */
+       if lbound(a) ^= 1 then do;
+          fails = fails + 1;
+          put skip list('FAIL lbound', lbound(a));
+       end;
+       if hbound(a) ^= n then do;
+          fails = fails + 1;
+          put skip list('FAIL hbound', hbound(a));
+       end;
+       /* fill and read back with runtime-variable subscripts */
+       do i = 1 to n;
+          a(i) = i * 7;
+       end;
+       do i = 1 to n;
+          if a(i) ^= i * 7 then do;
+             fails = fails + 1;
+             put skip list('FAIL a(i) at i =', i);
+          end;
+       end;
+    end check;
+ end dynamic_array_test;

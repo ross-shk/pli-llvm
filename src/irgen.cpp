@@ -397,8 +397,11 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
 }
 
 void IRGen::allocaLocals(HProc* p) {
+  // Pass 1: fixed-size storage (scalars and constant-bounds arrays). Dynamic
+  // arrays are deferred so that any variables their bounds reference are
+  // already addressable.
   for (Symbol* s : p->localSyms) {
-    if (s->kind != Symbol::Var)
+    if (s->kind != Symbol::Var || s->ty.isDynamic())
       continue;
     llvm::Value* a;
     if (s->ty.isArray()) {
@@ -420,6 +423,20 @@ void IRGen::allocaLocals(HProc* p) {
         b_.CreateCall(runtimeFn("pli_assign_char"), {a, i64(s->ty.len), g, i64(0)});
       }
     }
+  }
+  // Pass 2: dynamic (runtime-extent) arrays (rules (12),(13)). Evaluate the
+  // upper bound at entry, allocate a runtime-sized element buffer, and record
+  // the buffer pointer and the bound value for subscript addressing.
+  for (Symbol* s : p->localSyms) {
+    if (s->kind != Symbol::Var || !s->ty.isDynamic())
+      continue;
+    const Type& el = s->ty.elementType();
+    const Dim& d = s->ty.dims[0];
+    llvm::Value* ub = toI64(emitExpr(s->dynUb));
+    llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, i64(d.lb), "e1"), i64(1), "ext");
+    llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".dyn");
+    symAddr_[s] = buf;
+    dynUb_[s] = ub;
   }
 }
 
@@ -1236,8 +1253,8 @@ void IRGen::emitCall(HStmt* s) {
 // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).
 long long IRGen::arrayExtent(const Type& arr) {
   long long n = 1;
-  for (const auto& [lb, ub] : arr.dims)
-    n *= (ub - lb + 1);
+  for (const auto& d : arr.dims)
+    n *= (d.ub - d.lb + 1);
   return n;
 }
 
@@ -1246,9 +1263,31 @@ long long IRGen::arrayExtent(const Type& arr) {
 // Each index is 1-based (or lb-based); the generated flat offset is
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
 llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
-                                     const std::vector<HExprP>& idxs, SourceLoc loc) {
+                                     const std::vector<HExprP>& idxs, SourceLoc loc,
+                                     llvm::Value* dynUb) {
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
+
+  // Dynamic 1-D array (rule (13)): a runtime upper bound and a bare element
+  // buffer, so the flat offset is just (i - lb) and the GEP is on the element
+  // pointer. Only single-axis dynamic arrays are served in this stage.
+  if (arr.isDynamic()) {
+    const Dim& d = arr.dims[0];
+    llvm::Value* i = toI64(emitExpr(idxs[0].get()));
+    llvm::Value* ub = d.dyn ? dynUb : i64(d.ub);
+    llvm::Value* oob =
+        b_.CreateOr(b_.CreateICmpSLT(i, i64(d.lb), "lo"), b_.CreateICmpSGT(i, ub, "hi"), "oob");
+    std::string id = std::to_string(n_++);
+    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
+    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
+    b_.CreateCondBr(oob, failL, okL);
+    startBlock(failL);
+    b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+    b_.CreateUnreachable();
+    startBlock(okL);
+    llvm::Value* off = b_.CreateSub(i, i64(d.lb), "off");
+    return b_.CreateInBoundsGEP(llvmTy(el), base, {off}, "aelem");
+  }
 
   // Emit every index and OR the per-axis out-of-bounds flags into one check,
   // accumulating the row-major flat offset (last axis is contiguous).
@@ -1256,7 +1295,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
   llvm::Value* oob = b_.getInt1(false);
   long long stride = 1;
   for (size_t k = nAxes; k-- > 0;) {
-    const long long lb = arr.dims[k].first, ub = arr.dims[k].second;
+    const long long lb = arr.dims[k].lb, ub = arr.dims[k].ub;
     llvm::Value* i = toI64(emitExpr(idxs[k].get()));
     oob = b_.CreateOr(
         oob, b_.CreateOr(b_.CreateICmpSLT(i, i64(lb), "lo"), b_.CreateICmpSGT(i, i64(ub), "hi")),
@@ -1411,7 +1450,8 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
     v.reg = i64(0);
     return v;
   }
-  llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc);
+  llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
+                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr);
   llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
   if (el.isBit())
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
@@ -1429,7 +1469,8 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
     d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
     return;
   }
-  llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc);
+  llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
+                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr);
   Val cv = convert(src, el, loc);
   storeScalarTo(addr, el, cv);
 }
@@ -1463,7 +1504,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   std::vector<long long> stride(n);
   for (long long s = 1, k = (long long)n; k-- > 0;) {
     stride[k] = s;
-    s *= (srcArr.dims[k].second - srcArr.dims[k].first + 1);
+    s *= (srcArr.dims[k].ub - srcArr.dims[k].lb + 1);
   }
 
   // Evaluate and bounds-check each fixed-axis index once; accumulate its
@@ -1473,8 +1514,8 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
     if (x->args[k]->kind == HExpr::Star)
       continue;
     llvm::Value* iv = toI64(emitExpr(x->args[k].get()));
-    llvm::Value* lb = i64(srcArr.dims[k].first);
-    llvm::Value* ub = i64(srcArr.dims[k].second);
+    llvm::Value* lb = i64(srcArr.dims[k].lb);
+    llvm::Value* ub = i64(srcArr.dims[k].ub);
     llvm::Value* oob =
         b_.CreateOr(b_.CreateICmpSLT(iv, lb, "lo"), b_.CreateICmpSGT(iv, ub, "hi"), "oob");
     std::string fid = std::to_string(n_++);
@@ -1495,7 +1536,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   std::vector<long long> tstride(m);
   for (long long s = 1, j = (long long)m; j-- > 0;) {
     tstride[j] = s;
-    s *= (srcArr.dims[stars[j]].second - srcArr.dims[stars[j]].first + 1);
+    s *= (srcArr.dims[stars[j]].ub - srcArr.dims[stars[j]].lb + 1);
   }
   const long long total = arrayExtent(tgtArr);
   llvm::Type* srcArrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(srcArr));
@@ -1549,8 +1590,8 @@ llvm::Value* IRGen::definedConstAddr(Symbol* sym) {
   long long flat = 0, stride = 1;
   const size_t n = bty.dims.size();
   for (size_t k = n; k-- > 0;) {
-    flat += (sym->definedConst[k] - bty.dims[k].first) * stride;
-    stride *= (bty.dims[k].second - bty.dims[k].first + 1);
+    flat += (sym->definedConst[k] - bty.dims[k].lb) * stride;
+    stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);
   }
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
   return b_.CreateInBoundsGEP(arrTy, baseAddr, {i64(0), i64(flat)}, "defined");
@@ -1566,7 +1607,8 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
   const Type& bty = base->ty;
   const size_t n = bty.dims.size();
   llvm::Value* yidx = toI64(emitExpr(idxs[0].get()));
-  const auto& [ilb, iub] = bty.dims[y->definedIsubAxis];
+  const Dim& dd = bty.dims[y->definedIsubAxis];
+  const int ilb = dd.lb, iub = dd.ub;
   llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(yidx, i64(ilb), "lo"),
                                  b_.CreateICmpSGT(yidx, i64(iub), "hi"), "oob");
   std::string id = std::to_string(n_++);
@@ -1583,8 +1625,8 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
   for (size_t k = n; k-- > 0;) {
     llvm::Value* iv = (int)k == y->definedIsubAxis ? yidx : i64(y->definedConst[k]);
     flat = b_.CreateAdd(
-        flat, b_.CreateMul(b_.CreateSub(iv, i64(bty.dims[k].first), "o"), i64(stride), "s"), "f");
-    stride *= (bty.dims[k].second - bty.dims[k].first + 1);
+        flat, b_.CreateMul(b_.CreateSub(iv, i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
+    stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);
   }
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
   return b_.CreateInBoundsGEP(arrTy, addressOf(base), {i64(0), flat}, "delem");
@@ -2216,12 +2258,28 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
     HExpr* a = e->args[0].get();
     const Type& arr = a->sym ? a->sym->ty : Type::fixedBin(31, 0);
-    long long lb = arr.isArray() ? arr.dims[0].first : 1;
-    long long ub = arr.isArray() ? arr.dims[0].second : 1;
+    v.ty = e->ty;
+    // A dynamic (runtime-extent) array reports the constant lower bound but a
+    // runtime upper bound / element count, read from the recorded dope slot.
+    if (arr.isArray() && arr.isDynamic()) {
+      llvm::Value* lb = i64(arr.dims[0].lb);
+      llvm::Value* ub = dynUb_[a->sym];
+      llvm::Value* raw = e->name == "LBOUND" ? lb
+                         : e->name == "HBOUND"
+                             ? ub
+                             : b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+      Val src;
+      src.ty = Type::fixedBin(63, 0);
+      src.reg = raw;
+      v.reg = convert(src, e->ty, e->loc).reg;
+      result = v;
+      return true;
+    }
+    long long lb = arr.isArray() ? arr.dims[0].lb : 1;
+    long long ub = arr.isArray() ? arr.dims[0].ub : 1;
     long long val = e->name == "LBOUND"   ? lb
                     : e->name == "HBOUND" ? ub
                                           : (arr.isArray() ? arrayExtent(arr) : 1);
-    v.ty = e->ty;
     v.reg = llvm::ConstantInt::get(llvmTy(e->ty), val, true);
     result = v;
     return true;

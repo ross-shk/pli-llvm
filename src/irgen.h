@@ -53,6 +53,9 @@ private:
   // Every storage-owning symbol this frame can address directly (global,
   // local alloca, parameter, or a static link) to its address value.
   std::unordered_map<Symbol*, llvm::Value*> symAddr_;
+  // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
+  // bound value of its dynamic axis, loaded once at block entry.
+  std::unordered_map<Symbol*, llvm::Value*> dynUb_;
   void emitGlobals();
   void declareProc(HProc* p); // pre-create a proc's functions/aliases so calls resolve
   void emitProc(HProc* p);
@@ -88,9 +91,11 @@ private:
   long long arrayExtent(const Type& arr);
   // Address of one array element A(i,j,...) (rule 126), after a runtime bounds
   // check on each axis. `arr` is the array type (bounds + element), `base` the
-  // address of the array storage; `idxs` holds one index per axis.
+  // address of the array storage; `idxs` holds one index per axis. For a
+  // dynamic (runtime-extent) array, `dynUb` supplies the runtime upper bound of
+  // the (single, 1-D) dynamic axis and `base` is a bare element pointer.
   llvm::Value* arrayElementAddr(const Type& arr, llvm::Value* base, const std::vector<HExprP>& idxs,
-                                SourceLoc loc);
+                                SourceLoc loc, llvm::Value* dynUb = nullptr);
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.

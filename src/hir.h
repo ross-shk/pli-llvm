@@ -63,7 +63,10 @@ struct HDeclItem {
   Type ty{};
   SourceLoc loc{};
   int level = 0; // rule (11) level number; 0 when absent (no structure)
-  HExprP init;   // INITIAL(...) — scalar constant only in M0
+  // Runtime upper-bound expressions for dynamic array axes (rule (13)); empty
+  // for a fully constant array. Parallel to ty.dims.
+  std::vector<HExprP> dynBounds;
+  HExprP init; // INITIAL(...) — scalar constant only in M0
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor

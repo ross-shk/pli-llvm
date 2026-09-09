@@ -1,0 +1,9 @@
+ /* Dynamic (runtime-extent) array bound restrictions (rule (13)): a dynamic
+    lower bound (n:5) and a '*' adjustable extent are not implemented in this
+    stage and are rejected at parse time. */
+ bad_dynamic_array_ext: procedure options(main);
+    declare n fixed bin(31);
+
+    declare lo(n:5) fixed bin(31);         /* dynamic lower bound not implemented */
+    declare star(*) fixed bin(31);         /* '*' adjustable extent not implemented */
+ end bad_dynamic_array_ext;
