@@ -14,6 +14,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 - unimplemented ≠ accepted: diagnose it with its rule number (see Invariants)
 - follow the indentation and style of the file you are editing
 - one-line comments stating the *intent* of the block that follows
+- if the same fix fails twice, stop, state what was tried, and ask the user
 - PL/I card margins 2–72: nonblank `.pli`/`.inc` lines carry one leading space (text begins in column 2) and nothing past column 72
 
 ## Layout
