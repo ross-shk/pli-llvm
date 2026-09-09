@@ -7,7 +7,7 @@
 
 struct RuleDef {
   int num;
-  const char *text;
+  const char* text;
 };
 
 // Generated in src/rules.cpp (build output); sorted by rule number.

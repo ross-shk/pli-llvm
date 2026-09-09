@@ -6,36 +6,53 @@
 // parser performs keyword recognition positionally, with bounded lookahead.
 // See docs/DESIGN-DECISIONS.md ADR-004.
 #pragma once
+#include "diag.h"
 #include <string>
 #include <string_view>
-#include "diag.h"
 
 enum class Tok {
   Eof,
-  Word,      // identifier or contextual keyword
-  Number,    // arithmetic constant
-  CharLit,   // '...'   (character-string constant)
-  BitLit,    // '...'B  (bit-string constant)
+  Word,    // identifier or contextual keyword
+  Number,  // arithmetic constant
+  CharLit, // '...'   (character-string constant)
+  BitLit,  // '...'B  (bit-string constant)
   // Punctuation
-  Semi, Colon, Comma, LParen, RParen, Dot,
+  Semi,
+  Colon,
+  Comma,
+  LParen,
+  RParen,
+  Dot,
   // Operators
-  Eq,        // =  (assignment symbol and equality comparison; context decides)
-  Plus, Minus, Star, Slash, Power,   // + - * / **
-  Concat,                            // ||
-  Amp, Bar, Not,                     // & | ¬  (also ^ ~ for ¬ on ASCII keyboards)
-  Lt, Le, Gt, Ge, Ne, Ngt, Nlt,      // < <= > >= ¬= ¬> ¬<
-  Arrow,                             // ->  locator qualification
+  Eq, // =  (assignment symbol and equality comparison; context decides)
+  Plus,
+  Minus,
+  Star,
+  Slash,
+  Power,  // + - * / **
+  Concat, // ||
+  Amp,
+  Bar,
+  Not, // & | ¬  (also ^ ~ for ¬ on ASCII keyboards)
+  Lt,
+  Le,
+  Gt,
+  Ge,
+  Ne,
+  Ngt,
+  Nlt,   // < <= > >= ¬= ¬> ¬<
+  Arrow, // ->  locator qualification
 };
 
 struct Token {
   Tok kind = Tok::Eof;
-  std::string text;   // upper-cased spelling for Word; digits for Number
-  std::string sval;   // decoded value for CharLit/BitLit
+  std::string text; // upper-cased spelling for Word; digits for Number
+  std::string sval; // decoded value for CharLit/BitLit
   SourceLoc loc{};
-  bool binaryRadix = false;  // Number had the B suffix (rule 136)
+  bool binaryRadix = false; // Number had the B suffix (rule 136)
   bool isFloat = false;
 
   bool isWord(std::string_view w) const { return kind == Tok::Word && text == w; }
 };
 
-const char *tokName(Tok t);
+const char* tokName(Tok t);

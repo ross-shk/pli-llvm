@@ -1,0 +1,28 @@
+# plic clang-tidy config. Wired into `make tidy` / `make check` (see Makefile).
+# Scoped to bug-catching checks: the clang static analyzer plus bugprone and
+# performance, with the pure optimization-advisory checks and intentional
+# patterns disabled so the gate stays green on the repo's hand-written style.
+# plic has no exceptions/RTTI and uses the LLVM API.
+---
+Checks: 'clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  -performance-no-int-to-ptr,
+  -bugprone-narrowing-conversions,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-branch-clone,
+  -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-deadcode.DeadStores,
+  -performance-use-std-move,
+  -performance-inefficient-vector-operation,
+  -performance-enum-size,
+  -performance-unnecessary-value-param,
+  -performance-move-const-arg,
+  -performance-for-range-copy,
+  -bugprone-command-processor,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-unchecked-string-to-number-conversion'
+HeaderFilterRegex: 'src/'
+WarningsAsErrors: ''
+CheckOptions: []
+...
