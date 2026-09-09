@@ -1118,3 +1118,35 @@ visible-alias bug at -O0, and both names already share one alloca, so LLVM sees
 the aliasing structurally); a different-type overlay (needs an address bitcast and
 a size check, an independent slice); `POSITION`, subscripted bases, and `iSUB`
 (rule 134) now.
+
+## ADR-048 — iSUB and subscripted `DEFINED`: an element-address redirect to the base
+
+**Context.** Rule (24) `defined-attribute ::= DEFINED basic-reference
+[POSITION(integer)]` and rule (134) `isub ::= integer SUB`. A `DEFINED` base may
+be subscripted; an `iSUB` dummy variable (`1SUB`, `2SUB`) in that subscript
+stands for the DEFINED array's own index, transforming it into a subscript of
+the base (`DECLARE Y(5) DEFINED X(2*1SUB)`). ADR-018 framed these as address
+computations over the base.
+
+**Decision.** `integer SUB` is lexed as a distinct `Isub` token (no blanks, rule
+134). A `DEFINED` base subscript list holds either a constant integer or a single
+`iSUB` dummy. In sema a base with only constant subscripts makes the item a
+scalar overlay of one element (stable GEP, `definedConstAddr`); a base with one
+`iSUB` makes the item a 1-D array overlaying that axis of X. IRGen redirects an
+iSUB-defined `Y(k)` (in both the load and store subscript paths) to the base
+element `X(fixed..., k, fixed...)` via `definedSubElementAddr`, bounds-checking
+the `k` slot; the fixed subscripts were compile-time checked. Writes through the
+overlay are visible in the base and vice versa, because both name the same bytes.
+
+**Consequences.** A row view `DECLARE R(4) DEFINED A(2, 1SUB)` is a live overlay
+(unlike the copy produced by the `A(2, *)` cross-section, ADR-046). No copying
+and no alias metadata needed: `Y(k)` and `X(2, k)` both resolve to the same GEP.
+`tests/core/isub_defined.pli` covers a row overlay, a whole-array iSUB, and an
+element overlay; `bad_isub_defined.pli` covers two iSUBs, a scalar item on an
+iSUB base, a non-constant subscript, and an out-of-bounds constant.
+
+**Rejected.** General iSUB index arithmetic (`X(2*1SUB)`, a transformed offset)
+now (needs evaluating an index expression against the iSUB variable, an
+independent slice); multi-axis iSUB (a sub-block overlay, broader address logic);
+non-constant fixed subscripts (would need the address recomputed per reference
+rather than at a stable point).

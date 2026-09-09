@@ -124,6 +124,12 @@ private:
   // Copy a single-'*' cross-section A(i, *) (rule 126) into a whole array
   // target: iterate the '*' axis, gathering the source elements into the target.
   void emitCrossSectionAssign(HExpr* target, HExpr* cross, SourceLoc loc);
+  // Address of a DEFINED scalar element overlay (rule 24): the base element at
+  // the constant subscripts, computed once (sema bounds-checked them).
+  llvm::Value* definedConstAddr(Symbol* sym);
+  // Address of a subscripted iSUB-DEFINED array element Y(k) (rules 134,126):
+  // the base X element at the fixed subscripts with the iSUB slot set to k.
+  llvm::Value* definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs, SourceLoc loc);
 
   Val convert(const Val& v, const Type& dst, SourceLoc loc);
   llvm::Value* toI1(const Val& v, SourceLoc loc);
