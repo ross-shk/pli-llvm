@@ -1,0 +1,11 @@
+ /* Dynamic (runtime-extent) array restrictions (rule (13)): this stage serves
+    only a single-axis AUTOMATIC array with a constant lower bound and no
+    INITIAL. A multi-axis dynamic array and a dynamic array with INITIAL are
+    both rejected. */
+ bad_dynamic_array: procedure options(main);
+    declare n fixed bin(31);
+    declare m fixed bin(31);
+
+    declare d(n, m) fixed bin(31);         /* dynamic arrays must be single-axis */
+    declare ini(n) fixed bin(31) initial(0); /* INITIAL on a dynamic array */
+ end bad_dynamic_array;

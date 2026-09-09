@@ -73,11 +73,13 @@ private:
   // Parse the dimension + attribute tail shared by a declaration item and by a
   // factored declaration list (rule 11); builds item.ty / item.dims / item.init.
   bool parseDeclTail(DeclItem& item);
-  // Try to parse a constant-bounds dimension (rules (12),(13)) at the current
-  // LParen. Consumes tokens only when it is genuinely a dimension; returns
-  // false (with the token stream restored) so the caller can treat the group
-  // as a precision/length instead. Supports a single axis: (ub) or (lb:ub).
-  bool tryParseDimension(std::vector<std::pair<int, int>>& out);
+  // Try to parse a dimension (rules (12),(13)) at the current LParen. Consumes
+  // tokens only when it is genuinely a dimension; returns false (with the token
+  // stream restored) so the caller can treat the group as a precision/length.
+  // Fills `out` with the per-axis Dim (a dynamic axis is marked `dyn`) and
+  // `dynBounds` with the runtime upper-bound expression of each dynamic axis
+  // (null entries for constant axes). Supports (ub), (lb:ub), and (expr)/(lb:expr).
+  bool tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds);
   bool parseDescriptorType(Type& out);              // one ENTRY parameter type (rule 38)
   bool parseEntryParams(std::vector<Type>& params); // ENTRY ( ... )
 

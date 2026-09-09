@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct HExpr; // forward decl; dynamic array bounds are lowered to HIR in hir.cpp
+
 struct Symbol {
   std::string name;
   Type ty{};
@@ -30,6 +32,10 @@ struct Symbol {
   // definedConst holds one fixed constant per X axis (0 at the iSUB axis).
   int definedIsubAxis = -1;
   std::vector<long long> definedConst;
+  // Runtime upper-bound expression of a dynamic array's first axis (rule (13)),
+  // lowered to HIR during AST->HIR lowering; null for a constant array. Used by
+  // irgen to size and bounds-check the dynamic array.
+  HExpr* dynUb = nullptr;
 };
 
 struct Scope {
@@ -75,8 +81,7 @@ private:
   void checkSubscriptBounds(Expr* e, Symbol* arr);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript against an
   // explicit bound list (rule 126); `name` is the array's diagnostic name.
-  void checkSubscriptBoundsDims(Expr* e, const std::vector<std::pair<int, int>>& dims,
-                                const std::string& name);
+  void checkSubscriptBoundsDims(Expr* e, const std::vector<Dim>& dims, const std::string& name);
   // Resolve a qualified reference S.A.B (rule 124) against a structure type,
   // recording the LLVM field index of each step in e->memberPath. Returns the
   // leaf member's type, or nullptr after reporting a diagnostic.
