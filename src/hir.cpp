@@ -147,6 +147,13 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     // the HExpr is owned by this HProgram, which outlives IRGen.
     if (hd.sym && !hd.dynBounds.empty())
       hd.sym->dynUb = hd.dynBounds[0].get();
+    // The lowered INITIAL(CALL f(...)) expression (rule 27) rides on the symbol
+    // so irgen's emitInitials can evaluate it at block entry; hd.initCall owns
+    // the HExpr (freed with the HStmt), which outlives IRGen.
+    if (hd.sym && d.initCall) {
+      hd.initCall = lowerExpr(d.initCall.get());
+      hd.sym->initCallH = hd.initCall.get();
+    }
     h->decls.push_back(std::move(hd));
   }
 

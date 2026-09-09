@@ -1,0 +1,18 @@
+ /* INITIAL CALL (rule (27)): `INITIAL (CALL identifier ( argumentlist ))`
+    initializes a variable by calling a function procedure, whose return value
+    is stored into the variable at block entry. Each procedure entry re-runs
+    the call (AUTOMATIC semantics). */
+ init_call_test: procedure options(main);
+    declare a fixed bin(31) initial(call make(5));
+    declare b fixed bin(31) initial(call make(7));
+
+    make: procedure(n) returns(fixed bin(31));
+       declare n fixed bin(31);
+       return(n * 2);
+    end make;
+
+    if a ^= 10 then put skip list('FAIL init_call a =', a);
+    if b ^= 14 then put skip list('FAIL init_call b =', b);
+    if a = 10 & b = 14 then put skip list('PASS init_call');
+    else put skip list('FAIL init_call: a =', a, 'b =', b);
+ end init_call_test;

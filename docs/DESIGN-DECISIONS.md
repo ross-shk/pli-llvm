@@ -1269,3 +1269,37 @@ whole element as a value (`arr(i)`) — already diagnosed as a whole-structure v
 (rule 127); a distinct AST/HIR node for subscript-then-qualify — the existing
 `VarRef` with `args`+`path` and the `Subscript` reclassification carry it without
 new nodes.
+
+---
+
+## ADR-052 — INITIAL CALL: a function-call initializer evaluated at block entry
+
+**Context.** M2 names `INITIAL CALL` (rule 27). The existing `INITIAL` machinery
+folds the value to a compile-time constant (`foldInitialConstant` → `initExpr`,
+or an array element list `initElems`), which cannot represent a runtime call.
+`INITIAL(CALL f(args))` was diagnosed at parse time.
+
+**Decision.** `INITIAL(CALL identifier ( argumentlist ))` (rule 27) is parsed as a
+function-call expression and carried on the `DeclItem` (`initCall`), distinct from
+the scalar-constant `init`. Sema type-checks it with `typeExpr`, which resolves the
+function, its arguments, and its return type, and rejects a non-value-returning
+(plain) procedure; the call is stashed on the symbol. HIR lowering owns the lowered
+call on `HDeclItem.initCall` and rides a raw `HExpr*` (`sym->initCallH`) on the
+symbol (mirroring the `dynUb` pattern, ADR-050). `emitInitials` evaluates the call
+via `emitExpr` at block entry and stores the return value through `storeTo`, which
+converts it to the variable's type. Because STATIC storage is not implemented
+(storage classes are accepted-but-inert), the call runs on every procedure entry,
+matching AUTOMATIC semantics.
+
+**Consequences.** `tests/core/init_call.pli` initializes two variables from a
+value-returning function with different arguments; `bad_init_call.pli` rejects
+calling a procedure that does not return a value. `INITIAL CALL` in a factored
+declaration is diagnosed. GRAMMAR-COVERAGE rules (26)-(32) and the implementation
+table list the served form.
+
+**Rejected.** `INITIAL CALL` with no argument list (`CALL f` without parens) — rule
+(27) requires `( argumentlist )`; a call initializer for an array or structure
+initializer list — served only for a scalar variable here, arrays/structures
+continue to use the constant itemlist; a one-time (STATIC) evaluation — STATIC is
+not yet implemented, so the call runs each entry, and a genuine STATIC `INITIAL CALL`
+is deferred with STATIC storage.

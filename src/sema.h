@@ -25,6 +25,8 @@ struct Symbol {
   Stmt* entry = nullptr;         // if this ProcName is an ENTRY statement (rule 56)
   Expr* initExpr = nullptr;      // folded INITIAL constant, rule (26)
   std::vector<Expr*> initElems;  // folded INITIAL element list for arrays, rule (26)
+  Expr* initCall = nullptr;      // INITIAL(CALL f(...)) call expr (rule 27), lowered to HIR
+  HExpr* initCallH = nullptr;    // the lowered INITIAL CALL expression, for codegen
   Symbol* definedBase = nullptr; // DEFINED on this variable's storage (rule 24); null = none
   // For a DEFINED base that is a subscripted reference (rule 126):
   //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)

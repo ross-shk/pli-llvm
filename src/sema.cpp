@@ -514,6 +514,15 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (Expr* folded = foldInitialConstant(item.init.get(), item.ty, item.loc))
             item.sym->initExpr = folded; // consumed by code generation
         }
+        if (item.initCall) {
+          // INITIAL(CALL f(...)) (rule 27): type-check the call — this resolves
+          // the function, its arguments, and its return type. Store the call on
+          // the symbol only when it returns a value; a non-function (void) call
+          // was already diagnosed in typeExpr.
+          typeExpr(item.initCall.get(), sc, p);
+          if (!item.initCall->ty.isVoid())
+            item.sym->initCall = item.initCall.get(); // consumed by codegen
+        }
       }
       continue;
     }

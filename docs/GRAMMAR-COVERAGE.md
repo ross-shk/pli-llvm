@@ -29,7 +29,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (23) | storage classes | diag → M3 | `AUTOMATIC`/`STATIC` accepted, `CONTROLLED` M3 |
 | (24) | `DEFINED`/`POSITION` | partial M2 | `Y ... DEFINED X` overlays the storage of an already-declared same-type variable — Y needs no own storage and reads/writes resolve to X's address (`defined.pli`, ADR-047); an undeclared base, a different-type base, a structure, or a base in an enclosing procedure is diagnosed (`bad_defined.pli`); `POSITION` is diagnosed (rule 24); different-type (memory-view) overlays and `DEFINED X(i)` subscripted bases → M2 |
 | (25) | `BASED` | M3 | |
-| (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 | scalar constants (M0); arrays: an `INITIAL` itemlist with iteration factors `(n)`, `*` repeat-last, and nested groups fills a fixed-size numeric/BIT array element-by-element on AUTOMATIC storage (`init_array.pli`, `bad_init_array.pli`, ADR-044); a count that does not match the extent is diagnosed; `INITIAL CALL` diagnosed (rule (27)); `INITIAL` on a structure diagnosed |
+| (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 → M2 | scalar constants (M0); arrays: an `INITIAL` itemlist with iteration factors `(n)`, `*` repeat-last, and nested groups fills a fixed-size numeric/BIT array element-by-element on AUTOMATIC storage (`init_array.pli`, `bad_init_array.pli`, ADR-044); a count that does not match the extent is diagnosed; `INITIAL CALL` `INITIAL(CALL f(args))` calls a value-returning function at block entry and stores the result (rule (27), `init_call.pli`, `bad_init_call.pli`, ADR-052), diagnosed in a factored declaration; `INITIAL` on a structure diagnosed |
 | (33) | non-data attributes | M8 | prioritize by corpus impact |
 | (34)–(38) | `ENTRY`, `RETURNS`, descriptors, `USES`/`SETS` | partial M0 → M2 | ADR-021: scalar C entry/calls served; fixed-size arrays and structures passed by reference to PL/I procedures (`array_param.pli`, `struct.pli`); dope-vector descriptors for dynamic extents/`*` → M2 |
 | (39),(40) | `FILE` attributes | M5 | |
@@ -100,7 +100,7 @@ entry points below are where that chain terminates.
 | (9),(10) | `emitGlobals` | `DECLARE` storage |
 | (16) | `emitExpr` (`Call`) | `TRUNC` scaled-FIXED guard diagnosed in sema |
 | (18) | `loadSym`/`storeTo` | `BIT(1)` held as `i8` in registers (`toI1`) |
-| (26) | `emitInitials` | `INITIAL` stores on AUTOMATIC vars; an array itemlist expands via `sym->initElems` to per-element stores (`initValue`), and `emitGlobals` builds a constant-array initializer (`scalarInitConstant`) for STATIC |
+| (26) | `emitInitials` | `INITIAL` stores on AUTOMATIC vars; an array itemlist expands via `sym->initElems` to per-element stores (`initValue`), and `emitGlobals` builds a constant-array initializer (`scalarInitConstant`) for STATIC; `INITIAL CALL` (rule 27) evaluates the lowered call (`sym->initCallH`) via `emitExpr` at block entry and stores the return value |
 | (34) | `calleeFn` | external C `ENTRY` decl (rule 38 interop) |
 | (56) | `emitMultiEntryProc`, `entryIrName` | alternate entry thunks |
 | (68) | `emitStmt` (`Begin`) | block body executed as a group |
