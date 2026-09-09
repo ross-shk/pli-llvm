@@ -1645,8 +1645,12 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
   llvm::Value* yidx = toI64(emitExpr(idxs[0].get()));
   const Dim& dd = bty.dims[y->definedIsubAxis];
   const int ilb = dd.lb, iub = dd.ub;
-  llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(yidx, i64(ilb), "lo"),
-                                 b_.CreateICmpSGT(yidx, i64(iub), "hi"), "oob");
+  // Affine iSUB base index m*1SUB + c (rule 134 index arithmetic): Y(i) overlays
+  // X(m*i + c), so the base index is m*yidx + c and is bounds-checked against X.
+  llvm::Value* bidx = b_.CreateAdd(b_.CreateMul(yidx, i64(y->definedIsubMult), "m"),
+                                   i64(y->definedIsubAdd), "c");
+  llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(bidx, i64(ilb), "lo"),
+                                 b_.CreateICmpSGT(bidx, i64(iub), "hi"), "oob");
   std::string id = std::to_string(n_++);
   llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
   llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
@@ -1659,7 +1663,7 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
   llvm::Value* flat = i64(0);
   long long stride = 1;
   for (size_t k = n; k-- > 0;) {
-    llvm::Value* iv = (int)k == y->definedIsubAxis ? yidx : i64(y->definedConst[k]);
+    llvm::Value* iv = (int)k == y->definedIsubAxis ? bidx : i64(y->definedConst[k]);
     flat = b_.CreateAdd(
         flat, b_.CreateMul(b_.CreateSub(iv, i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
     stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);

@@ -34,6 +34,11 @@ struct Symbol {
   // definedConst holds one fixed constant per X axis (0 at the iSUB axis).
   int definedIsubAxis = -1;
   std::vector<long long> definedConst;
+  // Affine iSUB base index (rule 134 index arithmetic): the iSUB axis base
+  // subscript is `definedIsubMult * overlay_index + definedIsubAdd`. Bare iSUB
+  // is mult=1, add=0.
+  long long definedIsubMult = 1;
+  long long definedIsubAdd = 0;
   // Runtime upper-bound expression of a dynamic array's first axis (rule (13)),
   // lowered to HIR during AST->HIR lowering; null for a constant array. Used by
   // irgen to size and bounds-check the dynamic array.

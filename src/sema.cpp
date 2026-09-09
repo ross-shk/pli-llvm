@@ -409,6 +409,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             } else {
               int isubAxis = -1;
               std::vector<long long> cst(base->ty.dims.size(), 0);
+              long long iSubMult = 1, iSubAdd = 0;
               bool ok = true;
               for (size_t k = 0; k < item.definedSubs.size(); ++k) {
                 const DefinedSub& ds = item.definedSubs[k];
@@ -418,6 +419,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                     ok = false;
                   } else {
                     isubAxis = (int)k;
+                    iSubMult = ds.mult;
+                    iSubAdd = ds.add;
                   }
                 } else if (ds.expr && ds.expr->kind == Expr::IntLit) {
                   cst[k] = ds.expr->ival;
@@ -434,19 +437,28 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 }
               }
               if (ok && isubAxis >= 0) {
-                // iSUB overlay: Y is a 1-D array over X's iSUB axis.
+                // iSUB overlay: Y is a 1-D array over X's iSUB axis. With
+                // index arithmetic Y(i) -> X(m*i + c), the affine image of the
+                // overlay's index range must stay within the base axis bounds.
+                const Dim& dd = base->ty.dims[isubAxis];
+                long long lo = iSubMult * item.ty.dims[0].lb + iSubAdd;
+                long long hi = iSubMult * item.ty.dims[0].ub + iSubAdd;
+                if (iSubMult < 0)
+                  std::swap(lo, hi);
                 bool match = item.ty.isArray() && item.ty.dims.size() == 1 &&
-                             item.ty.dims[0] == base->ty.dims[isubAxis] &&
-                             item.ty.elementType() == base->ty.elementType();
+                             item.ty.elementType() == base->ty.elementType() && lo >= dd.lb &&
+                             hi <= dd.ub;
                 if (match) {
                   item.sym->definedBase = base;
                   item.sym->definedIsubAxis = isubAxis;
                   item.sym->definedConst = cst;
+                  item.sym->definedIsubMult = iSubMult;
+                  item.sym->definedIsubAdd = iSubAdd;
                   isDefined = true;
                 } else {
                   d_.error(item.loc,
                            "DEFINED iSUB base requires the item to be a 1-D array of the iSUB "
-                           "axis's element type and extent",
+                           "axis's element type whose affine image fits the base axis",
                            "(134)");
                 }
               } else if (ok) {
