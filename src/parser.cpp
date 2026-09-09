@@ -589,13 +589,10 @@ bool Parser::parseDeclItem(DeclItem &item) {
   } else if (sawFloat) {
     item.ty = Type::flt(prec > 0 ? prec : (sawBin ? 21 : 6));
   } else {
-    // FIXED is the default scale attribute; DECIMAL the default base.
+    // FIXED is the default scale attribute; DECIMAL the default base. The
+    // scale factor q is kept as a static property (ADR-006, rule (16)).
     if (sawBin && !sawDec) item.ty = Type::fixedBin(prec > 0 ? prec : 15, scale);
     else item.ty = Type::fixedDec(prec > 0 ? prec : 5, scale);
-    if (scale != 0) {
-      d_.error(item.loc, "scaled FIXED data (nonzero scale factor) is not implemented in this stage", "(16)");
-      item.ty.scale = 0;
-    }
   }
   item.init = std::move(init);
   return true;

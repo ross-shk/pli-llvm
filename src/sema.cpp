@@ -1,13 +1,25 @@
 #include "sema.h"
 #include <algorithm>
 
-// FIXED op FIXED -> FIXED with the wider precision; anything involving FLOAT
-// is FLOAT. (Full precision/scale rules for FIXED are M2, see ADR-006.)
+// FIXED op FIXED -> FIXED with the wider precision and the larger scale;
+// anything involving FLOAT is FLOAT. This is the *common* result type for
+// +,-,comparison (and MIN/MAX/MOD), where a mixed-scale operand is rescaled
+// up to the common scale (ADR-006). The product (`*`, MULTIPLY) uses
+// mulResultType instead, whose scale is the sum of the operand scales.
 Type arithResultType(const Type &a, const Type &b) {
   if (a.k == TK::Float || b.k == TK::Float)
     return Type::flt(std::max(a.k == TK::Float ? a.prec : 6, b.k == TK::Float ? b.prec : 6));
   int bits = std::max(a.intBits(), b.intBits());
-  return Type::fixedBin(bits == 64 ? 63 : 31, 0);
+  return Type::fixedBin(bits == 64 ? 63 : 31, std::max(a.scale, b.scale));
+}
+
+// Product of two FIXED operands: the scale of the result is the sum of the
+// operand scales, since the stored integers multiply directly (ADR-006).
+Type mulResultType(const Type &a, const Type &b) {
+  if (a.k == TK::Float || b.k == TK::Float) return arithResultType(a, b);
+  Type t = arithResultType(a, b);
+  t.scale = a.scale + b.scale;
+  return t;
 }
 
 Scope *Sema::scopeFor(Proc *p) {
@@ -398,6 +410,10 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
       s->sym = sym;
       if (!sym->ty.isNumeric())
         d_.error(s->loc, "DO control variable must be arithmetic, found " + sym->ty.desc(), "(72)");
+      // A scaled FIXED control variable would miscompile the loop step and
+      // comparison at the scaled representation (invariant 2).
+      if (sym->ty.isFixed() && sym->ty.scale != 0)
+        d_.error(s->loc, "a scaled FIXED DO control variable is not implemented in this stage", "(16)");
       typeExpr(s->from.get(), sc, p);
       typeExpr(s->to.get(), sc, p);
       typeExpr(s->by.get(), sc, p);
@@ -592,6 +608,13 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
           e->ty = Type::voidTy();
           break;
         }
+        // TRUNC of a scaled FIXED value must remove its fractional digits,
+        // which the scaled representation does not yet do (invariant 2).
+        if (e->args[0]->ty.isFixed() && e->args[0]->ty.scale != 0) {
+          d_.error(e->args[0]->loc, "TRUNC of a scaled FIXED value is not implemented in this stage", "(16)");
+          e->ty = Type::voidTy();
+          break;
+        }
         e->ty = e->args[0]->ty;
         break;
       }
@@ -764,8 +787,8 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         e->ty = Type::chr(e->name == "DATE" ? 8 : 6);
         break;
       }
-      // MULTIPLY built-in (M2): multiply(a, b) — product of two numerics, in
-      // their common arithmetic type (M0 model; exact decimal precision is M2).
+      // MULTIPLY built-in (M2): multiply(a, b) — product of two numerics; for
+      // FIXED operands the result scale is the sum of the operand scales.
       if (e->name == "MULTIPLY") {
         if (e->args.size() != 2) {
           d_.error(e->loc, "MULTIPLY expects 2 arguments in this stage", "(123)");
@@ -777,7 +800,7 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
           e->ty = Type::voidTy();
           break;
         }
-        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+        e->ty = mulResultType(e->args[0]->ty, e->args[1]->ty);
         break;
       }
       // DIVIDE built-in (M2): divide(a, b) — quotient of two numerics, computed
@@ -847,13 +870,23 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       typeExpr(e->b.get(), sc, p);
       const Type &A = e->a->ty, &B = e->b->ty;
       switch (e->op) {
-        case Tok::Plus: case Tok::Minus: case Tok::Star:
+        case Tok::Plus: case Tok::Minus:
           if (!A.isNumeric() || !B.isNumeric()) {
             d_.error(e->loc, "arithmetic operator requires arithmetic operands (" +
                      A.desc() + ", " + B.desc() + ")", "(120)");
             e->ty = Type::fixedBin(31, 0);
           } else {
             e->ty = arithResultType(A, B);
+          }
+          break;
+        case Tok::Star:
+          // The product's scale is the sum of the operand scales (ADR-006).
+          if (!A.isNumeric() || !B.isNumeric()) {
+            d_.error(e->loc, "arithmetic operator requires arithmetic operands (" +
+                     A.desc() + ", " + B.desc() + ")", "(120)");
+            e->ty = Type::fixedBin(31, 0);
+          } else {
+            e->ty = mulResultType(A, B);
           }
           break;
         case Tok::Slash: case Tok::Power:
