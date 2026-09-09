@@ -933,6 +933,19 @@ void IRGen::emitAssign(HStmt* s) {
     HExpr* t = s->target.get();
     Val v = emitExpr(s->value.get());
     if (!t->memberPath.empty()) {
+      // An array of structures target arr(i).x = e (rules 124,126): subscript
+      // to the element structure, then store through the member path.
+      if (t->sym->ty.isArray()) {
+        llvm::Value* elem = arrayElementAddr(t->sym->ty, addressOf(t->sym), t->args, s->loc);
+        llvm::Value* addr = elementMemberAddr(t->sym, t->memberPath, elem);
+        const Type& el = t->ty;
+        if (el.isChar()) {
+          d_.error(s->loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+          return;
+        }
+        storeScalarTo(addr, el, convert(v, el, s->loc));
+        return;
+      }
       // A subscripted member array S.A(i) = e (rules 124,126): store through
       // the member array field, bounds-checked like any array element.
       const Type& arr = memberType(t->sym, t->memberPath);
@@ -1326,6 +1339,22 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
 llvm::Value* IRGen::memberAddr(Symbol* base, const std::vector<unsigned>& path, SourceLoc) {
   llvm::Value* addr = addressOf(base);
   const Type* cur = &base->ty;
+  for (unsigned f : path) {
+    addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "mem");
+    cur = &cur->members[f]->ty;
+  }
+  return addr;
+}
+
+// Address of a member of one element of an array of structures arr(i).x
+// (rule 124): GEP through the recorded field indices from a caller-supplied
+// element-struct address, against the element structure type (mirrors
+// memberAddr, which starts from the symbol's own base instead).
+llvm::Value* IRGen::elementMemberAddr(Symbol* base, const std::vector<unsigned>& path,
+                                      llvm::Value* elemAddr) {
+  llvm::Value* addr = elemAddr;
+  Type elem = base->ty.elementType(); // stable copy of the element structure type
+  const Type* cur = &elem;
   for (unsigned f : path) {
     addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "mem");
     cur = &cur->members[f]->ty;
@@ -1772,6 +1801,17 @@ Val IRGen::emitExpr(HExpr* e) {
         return v;
       }
     if (!e->memberPath.empty()) {
+      // An array of structures arr(i).x (rules 124,126): the subscripts index
+      // the array to one structure element, then the member path GEPs into it.
+      if (e->sym->ty.isArray()) {
+        llvm::Value* elem = arrayElementAddr(e->sym->ty, addressOf(e->sym), e->args, e->loc);
+        llvm::Value* addr = elementMemberAddr(e->sym, e->memberPath, elem);
+        const Type& el = e->ty;
+        llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "aosld");
+        v.ty = el;
+        v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+        return v;
+      }
       // A subscripted member array S.A(i) (rules 124,126): the member array
       // lives at memberAddr(...) (a [N x elemTy] field), so GEP into it as a
       // normal array and load the leaf element.

@@ -1092,6 +1092,15 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
     dynBounds = std::move(db);
     return true;
   }
+  // A bare extent (n) directly after a name is unambiguously a dimension when
+  // more items follow in the same DECLARE — a comma — because a scalar precision
+  // can never follow a name bare. This is the structure-array form `1 arr(3),
+  // 2 x` (rule 11), where no attribute keyword follows the bound.
+  if (at(Tok::Comma)) {
+    out = std::move(axes);
+    dynBounds = std::move(db);
+    return true;
+  }
   i_ = save;
   return false;
 }
@@ -1539,6 +1548,18 @@ ExprP Parser::parsePrimary() {
         }
       }
       expect(Tok::RParen, "(126)");
+    }
+    // A qualified member after a subscript/call group: `arr(i).x` (rule 124) —
+    // the base is an array of structures, so the member qualifiers follow the
+    // subscript. Sema resolves the path against the element structure type.
+    while (eat(Tok::Dot)) {
+      if (at(Tok::Word)) {
+        e->path.push_back(cur().text);
+        advance();
+      } else {
+        d_.error(cur().loc, "expected a member name after '.'", "(124)");
+        break;
+      }
     }
     return e;
   }

@@ -1,0 +1,11 @@
+ /* Array of structures (rules (124),(126)) errors: a subscript on an array of
+    structures must take as many indices as the array has dimensions, and the
+    qualified member must exist in the element structure. */
+ bad_struct_array_of: procedure options(main);
+    declare 1 arr(3),
+           2 x fixed bin(31);
+    declare i fixed bin(31);
+
+    arr(i, i).x = 5;   /* two subscripts on a 1-D array of structures */
+    arr(1).q = 5;      /* no member q in the element structure */
+ end bad_struct_array_of;
