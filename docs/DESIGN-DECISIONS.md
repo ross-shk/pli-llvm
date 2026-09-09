@@ -921,4 +921,26 @@ scope — rule (127) keeps those diagnosed); computing the byte size by walking
 members (wrong once a nested struct's padding is accounted for — the data layout
 gives the true store size).
 
+## ADR-041 — Multiple assignment: one shared RHS, same-type targets
 
+**Context.** Rule (86) is `assignment-statement ::= {,• reference•••} = expression
+[ , BY NAME ] ;` — a comma-separated list of targets all receive the value of the
+single RHS. The M2 scope names "multiple assignment." The open questions are how
+the shared RHS is evaluated and how per-target type conversion behaves.
+
+**Decision.** `a, b, c = e` evaluates the RHS **once** and stores the resulting
+value to every target through the existing scalar store paths (`storeTo`,
+`storeArrayElement`, member stores), which each convert as needed. Because the HIR
+lowers the value to the first target's type, sema requires every target to share
+the **first target's type** and rejects SUBSTR and whole-structure targets inside a
+multiple list (rule (86)); single-target assignment keeps its full behaviour
+unchanged. The trailing `, BY NAME` suffix is diagnosed as unimplemented (BY NAME
+is a separate M2 item).
+
+**Consequences.** Scalar variables, array elements, and scalar structure members in
+any mix store the same value, so `X(1), X(2), X(3) = 4` and `a, X(1), b = 9` work.
+**Rejected.** Re-evaluating the RHS per target (wrong for a side-effecting
+function-call RHS); per-target independent HIR value conversion (would re-derive
+conversion once per target and require the RHS to be evaluated N times, and would
+change the HIR/IR shape of the existing single-target case); serving mixed-type or
+`BY NAME` multiple assignment in this stage.

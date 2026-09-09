@@ -1,0 +1,9 @@
+  /* Multiple assignment (rule 86): every target must share the first target's
+     type, because the RHS is converted once and stored to each. */
+  bad_multiassign_type: procedure options(main);
+     declare a fixed bin(31);
+     declare b fixed bin(31);
+     declare d float bin(53);
+
+     a, b, d = 1;
+  end bad_multiassign_type;

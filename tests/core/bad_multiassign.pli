@@ -1,0 +1,9 @@
+  /* Multiple assignment (rule 86): the trailing ", BY NAME" suffix is not
+     implemented in this stage. */
+  bad_multiassign: procedure options(main);
+     declare a fixed bin(31);
+     declare b fixed bin(31);
+     declare c fixed bin(31);
+
+     a, b = c, BY NAME;
+  end bad_multiassign;

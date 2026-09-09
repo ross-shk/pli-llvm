@@ -686,6 +686,47 @@ void IRGen::emitStmt(HStmt *s) {
 
 void IRGen::emitAssign(HStmt *s) {
   if (!s->target) return;
+  // Multiple assignment (rule 86): a, b, c = e — evaluate the RHS once and
+  // store it to every target. Sema restricted targets to scalar variables and
+  // array elements of one shared type, so each store reuses the scalar paths.
+  if (!s->extraTargets.empty()) {
+    Val v = emitExpr(s->value.get());
+    auto storeOne = [&](HExpr *t) {
+      if (t->kind == HExpr::Subscript && t->sym) {
+        if (!t->memberPath.empty()) {
+          const Type &arr = memberType(t->sym, t->memberPath);
+          const Type &el = t->ty;
+          if (el.isChar()) {
+            d_.error(s->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
+            return;
+          }
+          llvm::Value *addr = arrayElementAddr(arr, memberAddr(t->sym, t->memberPath, s->loc),
+                                               t->args, s->loc);
+          storeScalarTo(addr, el, convert(v, el, s->loc));
+          return;
+        }
+        storeArrayElement(t->sym, t->args, v, s->loc);
+        return;
+      }
+      if (t->kind == HExpr::VarRef && t->sym) {
+        if (!t->memberPath.empty()) {
+          const Type &leaf = t->ty;
+          if (leaf.isChar()) {
+            d_.error(s->loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+            return;
+          }
+          llvm::Value *addr = memberAddr(t->sym, t->memberPath, s->loc);
+          storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
+          return;
+        }
+        storeTo(t->sym, v, s->loc);
+        return;
+      }
+    };
+    storeOne(s->target.get());
+    for (auto &t : s->extraTargets) storeOne(t.get());
+    return;
+  }
   if (s->target->kind == HExpr::Call && s->target->name == "SUBSTR") {
     HExpr *t = s->target.get();
     Val sv = emitExpr(t->args[0].get());
