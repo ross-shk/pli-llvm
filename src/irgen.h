@@ -85,6 +85,9 @@ private:
   void appendStaticLinks(Proc *callee, std::vector<llvm::Value *> &args);
 
   Val emitExpr(HExpr *e);
+  // Address of one array element A(i) (rule 126), after a runtime bounds check.
+  // The element type and bounds come from the array symbol; `idx` is the index.
+  llvm::Value *arrayElementAddr(Symbol *sym, HExpr *idx, SourceLoc loc);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.
@@ -92,6 +95,9 @@ private:
   Val loadSym(Symbol *sym, const Type &ty);
   void storeTo(Symbol *sym, const Val &v, SourceLoc loc);
   void storeScalarTo(llvm::Value *addr, const Type &ty, const Val &v);
+  // Load / store one array element (rule 126), with the SUBSCRIPTRANGE check.
+  Val loadArrayElement(Symbol *sym, HExpr *idx, SourceLoc loc);
+  void storeArrayElement(Symbol *sym, HExpr *idx, const Val &src, SourceLoc loc);
 
   Val convert(const Val &v, const Type &dst, SourceLoc loc);
   llvm::Value *toI1(const Val &v, SourceLoc loc);

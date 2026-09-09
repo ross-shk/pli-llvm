@@ -18,7 +18,8 @@ struct Expr;
 using ExprP = std::unique_ptr<Expr>;
 
 struct Expr {
-  enum Kind { IntLit, FltLit, CharLit, BitLit, VarRef, Binary, Unary, Call } kind = IntLit;
+  enum Kind { IntLit, FltLit, CharLit, BitLit, VarRef, Binary, Unary, Call,
+              Subscript } kind = IntLit;
   SourceLoc loc{};
   Type ty{};  // assigned by sema
 

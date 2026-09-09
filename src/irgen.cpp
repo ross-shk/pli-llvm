@@ -290,8 +290,15 @@ void IRGen::emitGlobals() {
       }
       case TK::Void: continue;
     }
-    auto *g = new llvm::GlobalVariable(mod_, llvmTy(t), false,
-                                       llvm::GlobalValue::InternalLinkage, init,
+    llvm::Type *gt = llvmTy(t);
+    llvm::Constant *ginit = init;
+    if (t.isArray()) {
+      // STATIC array: a [N x elemTy] global, zero-initialised (rules (12),(13)).
+      gt = llvm::ArrayType::get(llvmTy(t.elementType()), t.dims[0].second);
+      ginit = llvm::ConstantAggregateZero::get(gt);
+    }
+    auto *g = new llvm::GlobalVariable(mod_, gt, false,
+                                       llvm::GlobalValue::InternalLinkage, ginit,
                                        s->irName.substr(1));
     symAddr_[s] = g;
   }
@@ -307,9 +314,16 @@ llvm::Value *IRGen::addressOf(Symbol *sym) {
 void IRGen::allocaLocals(HProc *p) {
   for (Symbol *s : p->localSyms) {
     if (s->kind != Symbol::Var) continue;
-    llvm::Value *a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
+    llvm::Value *a;
+    if (s->ty.isArray()) {
+      // A fixed-size array is a [N x elemTy] alloca (rules (12),(13)).
+      const Type &el = s->ty.elementType();
+      a = entryAlloca(llvm::ArrayType::get(llvmTy(el), s->ty.dims[0].second), s->irName.substr(1));
+    } else {
+      a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
+    }
     symAddr_[s] = a;
-    if (s->ty.isChar()) {  // blank fill
+    if (s->ty.isChar() && !s->ty.isArray()) {  // blank fill (scalar char only)
       std::string blanks(s->ty.len, ' ');
       llvm::Value *g = globalString(blanks);
       if (s->ty.varying) {
@@ -656,6 +670,13 @@ void IRGen::emitAssign(HStmt *s) {
                   {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
+  // Array element assignment: A(i) = e (rule 126).
+  if (s->target->kind == HExpr::Subscript && s->target->sym) {
+    HExpr *t = s->target.get();
+    Val v = emitExpr(s->value.get());
+    storeArrayElement(t->sym, t->args[0].get(), v, s->loc);
+    return;
+  }
   if (s->target->kind != HExpr::VarRef || !s->target->sym) return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
@@ -901,6 +922,34 @@ void IRGen::emitCall(HStmt *s) {
 // ---------------------------------------------------------------------------
 // loads / stores
 // ---------------------------------------------------------------------------
+// Address of array element A(i) (rule 126): a runtime SUBSCRIPTRANGE check,
+// then a GEP into the [N x elemTy] storage. i is a 1-based (or lb-based)
+// subscript; the generated index is i - lb.
+llvm::Value *IRGen::arrayElementAddr(Symbol *sym, HExpr *idx, SourceLoc loc) {
+  const Type &arr = sym->ty;
+  const Type &el = arr.elementType();
+  const long long lb = arr.dims[0].first, ub = arr.dims[0].second;
+  llvm::Value *base = addressOf(sym);
+  Val iv = emitExpr(idx);
+  llvm::Value *i = toI64(iv);
+
+  std::string id = std::to_string(n_++);
+  llvm::BasicBlock *failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
+  llvm::BasicBlock *okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
+  llvm::Value *oob = b_.CreateOr(b_.CreateICmpSLT(i, i64(lb), "lo"),
+                                 b_.CreateICmpSGT(i, i64(ub), "hi"), "oob");
+  b_.CreateCondBr(oob, failL, okL);
+
+  startBlock(failL);
+  b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+  b_.CreateUnreachable();
+
+  startBlock(okL);
+  llvm::Value *off = b_.CreateSub(i, i64(lb), "off");
+  llvm::Type *arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arr.dims[0].second);
+  return b_.CreateInBoundsGEP(arrTy, base, {i64(0), off}, "aelem");
+}
+
 Val IRGen::loadSym(Symbol *sym, const Type &ty) {
   Val v;
   v.ty = ty;
@@ -958,6 +1007,40 @@ void IRGen::storeTo(Symbol *sym, const Val &v, SourceLoc loc) {
   }
   Val cv = convert(v, dt, loc);
   storeScalarTo(addr, dt, cv);
+}
+
+// Load one array element (rule 126): a bounds-checked address, then a load of
+// the element's scalar value. Character element arrays are diagnosed, not
+// silently miscompiled (invariant 2).
+Val IRGen::loadArrayElement(Symbol *sym, HExpr *idx, SourceLoc loc) {
+  Val v;
+  const Type &el = sym->ty.elementType();
+  v.ty = el;
+  if (el.isChar()) {
+    d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
+    v.reg = i64(0);
+    return v;
+  }
+  llvm::Value *addr = arrayElementAddr(sym, idx, loc);
+  llvm::Value *r = b_.CreateLoad(llvmTy(el), addr, "ald");
+  if (el.isBit())
+    v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
+  else
+    v.reg = r;
+  return v;
+}
+
+// Store one array element (rule 126): convert to the element type, then store
+// through the bounds-checked element address.
+void IRGen::storeArrayElement(Symbol *sym, HExpr *idx, const Val &src, SourceLoc loc) {
+  const Type &el = sym->ty.elementType();
+  if (el.isChar()) {
+    d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
+    return;
+  }
+  llvm::Value *addr = arrayElementAddr(sym, idx, loc);
+  Val cv = convert(src, el, loc);
+  storeScalarTo(addr, el, cv);
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,6 +1150,9 @@ Val IRGen::emitExpr(HExpr *e) {
       v.ty = Type::bit(1);
       v.reg = b_.getInt1(!e->sval.empty() && e->sval[0] == '1');
       return v;
+    case HExpr::Subscript:
+      if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
+      return loadArrayElement(e->sym, e->args[0].get(), e->loc);
     case HExpr::VarRef:
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
       return loadSym(e->sym, e->sym->ty);

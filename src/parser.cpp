@@ -503,6 +503,12 @@ bool Parser::parseDeclItem(DeclItem &item) {
   item.loc = cur().loc;
   advance();
 
+  // Dimension attribute (rules (12),(13)): a leading parenthesised group after
+  // the name is a dimension when a bound-pair ':' is present or an attribute
+  // keyword follows; otherwise it is a precision/length (M0 scalar behaviour).
+  std::vector<std::pair<int, int>> arrDims;
+  tryParseDimension(arrDims);
+
   // Attribute bag (rules 14-32).
   AttrBag bag;
   ExprP init;
@@ -605,8 +611,55 @@ bool Parser::parseDeclItem(DeclItem &item) {
     if (bag.binary && !bag.decimal) item.ty = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
     else item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   }
+  item.ty.dims = arrDims;
   item.init = std::move(init);
   return true;
+}
+
+// See parser.h. Disambiguates a leading (n) after a name from a precision: a
+// bound-pair (lb:ub) is always a dimension; a bare (n) is a dimension only when
+// followed by an attribute keyword (e.g. `DECLARE A(5) FIXED BINARY;`), else it
+// stays a precision/length for M0 scalar declarations.
+bool Parser::tryParseDimension(std::vector<std::pair<int, int>> &out) {
+  if (!at(Tok::LParen)) return false;
+  size_t save = i_;
+  eat(Tok::LParen);
+
+  int lb = 1, ub = 0;
+  bool colon = false;
+  if (at(Tok::Number)) { lb = atoi(cur().text.c_str()); advance(); }
+  if (eat(Tok::Colon) && at(Tok::Number)) { ub = atoi(cur().text.c_str()); advance(); colon = true; }
+
+  if (eat(Tok::Comma)) {
+    // A second axis: multi-dimensional arrays are not implemented yet.
+    d_.error(cur().loc, "multi-dimensional arrays are not implemented in this stage", "(13)");
+    int d = 0;
+    do { if (at(Tok::LParen)) ++d; else if (at(Tok::RParen)) --d; advance(); }
+    while (d && !at(Tok::Eof));
+    return true;
+  }
+
+  expect(Tok::RParen, "(12)");
+
+  if (colon) {
+    out.push_back({lb, ub});
+    return true;
+  }
+  // Bare (n): a dimension only when an attribute keyword follows the group.
+  auto isAttrWord = [&](const std::string &w) {
+    return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" ||
+           w == "DECIMAL" || w == "DEC" || w == "CHARACTER" || w == "CHAR" ||
+           w == "BIT" || w == "VARYING" || w == "VAR" || w == "STATIC" ||
+           w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
+           w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" ||
+           w == "INIT" || w == "EXTERNAL" || w == "EXT";
+  };
+  if (at(Tok::Word) && isAttrWord(cur().text)) {
+    out.push_back({1, lb});
+    return true;
+  }
+  i_ = save;
+  return false;
 }
 
 // descriptor-param ::= attribute•••                                rule (38)

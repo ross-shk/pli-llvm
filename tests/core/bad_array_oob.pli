@@ -1,0 +1,7 @@
+ /* A constant subscript out of the declared bounds is a compile-time
+    SUBSCRIPTRANGE error (rule (126)); runtime indices are range-checked by
+    the generated bounds check instead. */
+ bad_array_oob: procedure options(main);
+    declare a(5) fixed bin(31);
+    a(9) = 1;
+ end bad_array_oob;

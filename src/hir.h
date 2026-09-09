@@ -28,6 +28,7 @@ struct HExpr {
   enum Kind {
     IntLit, FltLit, CharLit, BitLit,   // literals
     VarRef, Binary, Unary, Call,        // compound
+    Subscript,                          // array element A(i) — rules (126)
     Convert,                            // explicit conversion (HIR only)
   } kind = IntLit;
   SourceLoc loc{};

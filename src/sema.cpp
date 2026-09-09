@@ -254,6 +254,15 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isSta
         }
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p;  // which procedure's frame holds this variable
+        // Only scalar (numeric/BIT) element arrays are served in this stage;
+        // character element arrays are diagnosed, never silently miscompiled
+        // (invariant 2). INITIAL on arrays (iteration factors) is M2 later.
+        if (item.ty.isArray()) {
+          if (item.ty.elementType().isChar())
+            d_.error(item.loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
+          if (item.init)
+            d_.error(item.loc, "INITIAL on an array is not implemented in this stage", "(26)");
+        }
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
         // BEGIN blocks too, hence the Proc* here.
@@ -364,6 +373,12 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
         }
         if (!s->value->ty.isVoid())
           checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
+        break;
+      }
+      // Array element assignment: A(i) = e — a modifiable subscripted target.
+      if (s->target->kind == Expr::Subscript) {
+        if (!s->value->ty.isVoid())
+          checkAssignable(s->target->ty, s->value->ty, s->loc, "assignment");
         break;
       }
       if (s->target->kind != Expr::VarRef) {
@@ -485,6 +500,20 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
   }
 }
 
+// A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
+// (126)); a runtime index is left to the generated bounds check in IRGen.
+void Sema::checkSubscriptBounds(Expr *e, Symbol *arr) {
+  if (e->args.size() != 1) return;
+  Expr *idx = e->args[0].get();
+  if (idx->kind != Expr::IntLit) return;
+  long long v = idx->ival;
+  const auto &[lb, ub] = arr->ty.dims[0];
+  if (v < lb || v > ub)
+    d_.error(idx->loc, "subscript " + std::to_string(v) +
+             " is out of bounds " + std::to_string(lb) + ":" +
+             std::to_string(ub) + " for array '" + arr->name + "'", "(126)");
+}
+
 void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
   if (!e) return;
   switch (e->kind) {
@@ -522,8 +551,31 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
         addEnv(p->directUses, sym);
       break;
     }
+    case Expr::Subscript:
+      // Reclassified in the Call case; never re-dispatched here.
+      break;
     case Expr::Call: {
       for (auto &a : e->args) typeExpr(a.get(), sc, p);
+      // A subscripted reference (rule (126)): the callee name resolves to a
+      // declared array. Reclassify as a Subscript of the element type; the
+      // index (single axis in this stage) is checked against the bounds.
+      if (Symbol *arr = lookup(sc, e->name);
+          arr && arr->kind == Symbol::Var && arr->ty.isArray()) {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, "array '" + e->name + "' is 1-dimensional and takes one subscript", "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->kind = Expr::Subscript;
+        e->sym = arr;
+        e->ty = arr->ty.elementType();
+        // rule (8)/(42): an array of an enclosing procedure is reached through
+        // this procedure's static link.
+        if (arr->owner && arr->owner != p && isDescendantOf(p, arr->owner))
+          addEnv(p->directUses, arr);
+        checkSubscriptBounds(e, arr);
+        break;
+      }
       // Built-ins are typed in typeBuiltin; a non-builtin call (a user
       // function procedure) falls through to the general path below.
       if (typeBuiltin(e)) break;
