@@ -91,6 +91,10 @@ private:
   // check on each axis. The element type and bounds come from the array symbol;
   // `idxs` holds one index per axis.
   llvm::Value *arrayElementAddr(Symbol *sym, const std::vector<HExprP> &idxs, SourceLoc loc);
+  // Address of a qualified member S.A.B (rule 124): a GEP off the structure
+  // base through the recorded LLVM field indices (relative to each nested
+  // struct), loading the leaf member's scalar value.
+  llvm::Value *memberAddr(Symbol *base, const std::vector<unsigned> &path, SourceLoc loc);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.

@@ -1,0 +1,9 @@
+ /* Whole-structure assignment is not served in this stage (rule (127)); only
+    qualified member assignment is. */
+ bad_struct_assign: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31);
+    declare 1 t,
+           2 b fixed bin(31);
+    s = t;
+ end bad_struct_assign;

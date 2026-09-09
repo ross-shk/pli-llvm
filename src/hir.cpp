@@ -52,6 +52,8 @@ HExprP lowerExprBase(const Expr *e) {
   h->fval = e->fval;
   h->sval = e->sval;
   h->name = e->name;
+  h->path = e->path;
+  h->memberPath = e->memberPath;
   h->sym = e->sym;
   h->op = e->op;
   h->a = lowerExpr(e->a.get());
@@ -121,6 +123,7 @@ HStmtP lowerStmt(const Stmt *s, const Proc *owner) {
     hd.name = d.name;
     hd.ty = d.ty;
     hd.loc = d.loc;
+    hd.level = d.level;
     hd.init = lowerExpr(d.init.get());
     hd.sym = d.sym;
     hd.isEntry = d.isEntry;

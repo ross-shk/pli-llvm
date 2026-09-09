@@ -1,0 +1,37 @@
+ /* Level-numbered structures (rules (11),(124),(125)): DECLARE 1 S, 2 A ..., 2 B ...
+    declares a structure; S.A / S.B are qualified references to its scalar
+    members, usable on both sides of an assignment. Minor (nested) structures
+    like S.X.Y are served too. */
+ struct_test: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31),
+           2 b fixed bin(31),
+           2 x,
+             3 y fixed bin(31),
+             3 z fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* write via qualified references */
+    s.a = 11;
+    s.b = 22;
+    s.x.y = 33;
+    s.x.z = 44;
+
+    /* read back */
+    if s.a ^= 11 then fails = fails + 1;
+    if s.b ^= 22 then fails = fails + 1;
+    if s.x.y ^= 33 then fails = fails + 1;
+    if s.x.z ^= 44 then fails = fails + 1;
+
+    /* members in an arithmetic expression */
+    s.b = s.a + s.x.y + 1;
+    if s.b ^= 45 then do;
+       fails = fails + 1;
+       put skip list('FAIL s.b =', s.b);
+    end;
+
+    if fails = 0 then put skip list('PASS struct');
+    else put skip list('FAIL struct: fails =', fails);
+ end struct_test;

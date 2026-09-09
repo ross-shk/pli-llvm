@@ -29,6 +29,13 @@ llvm::Type *IRGen::llvmTy(const Type &t) {
       }
       return llvm::ArrayType::get(b_.getInt8Ty(), t.len);
     }
+    case TK::Struct: {
+      // A level-numbered structure (rule 11): an LLVM literal struct of its
+      // members, recursively laid out in declaration order.
+      std::vector<llvm::Type *> mts;
+      for (const auto &m : t.members) mts.push_back(llvmTy(m->ty));
+      return llvm::StructType::get(ctx_, mts);
+    }
     case TK::Void:
       return b_.getVoidTy();
   }
@@ -289,6 +296,11 @@ void IRGen::emitGlobals() {
         break;
       }
       case TK::Void: continue;
+      case TK::Struct:
+        // STATIC structure: a zero-initialised aggregate (rule 11). INITIAL
+        // on a structure is diagnosed in sema.
+        init = llvm::ConstantAggregateZero::get(llvmTy(t));
+        break;
     }
     llvm::Type *gt = llvmTy(t);
     llvm::Constant *ginit = init;
@@ -677,6 +689,24 @@ void IRGen::emitAssign(HStmt *s) {
     storeArrayElement(t->sym, t->args, v, s->loc);
     return;
   }
+  // Qualified member assignment: S.A = e (rule 124).
+  if (s->target->kind == HExpr::VarRef && s->target->sym && !s->target->memberPath.empty()) {
+    HExpr *t = s->target.get();
+    const Type &leaf = t->ty;
+    if (leaf.isChar()) {
+      d_.error(s->loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+      return;
+    }
+    Val v = emitExpr(s->value.get());
+    llvm::Value *addr = memberAddr(t->sym, t->memberPath, s->loc);
+    storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
+    return;
+  }
+  // Whole-structure assignment (rule 127) is not served in this stage.
+  if (s->target->kind == HExpr::VarRef && s->target->sym && s->target->ty.isStruct()) {
+    d_.error(s->loc, "whole-structure assignment is not implemented in this stage", "(127)");
+    return;
+  }
   if (s->target->kind != HExpr::VarRef || !s->target->sym) return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
@@ -845,6 +875,10 @@ void IRGen::emitPut(HStmt *s) {
         break;
       case TK::Void:
         break;
+      case TK::Struct:
+        // Whole-structure values are diagnosed in emitExpr (rule 127); a
+        // structure never reaches list-directed output as a value.
+        break;
     }
   }
 }
@@ -966,6 +1000,20 @@ llvm::Value *IRGen::arrayElementAddr(Symbol *sym, const std::vector<HExprP> &idx
   startBlock(okL);
   llvm::Type *arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));
   return b_.CreateInBoundsGEP(arrTy, base, {i64(0), flat}, "aelem");
+}
+
+// Address of a qualified member S.A.B (rule 124): descend the recorded field
+// indices one struct at a time with CreateStructGEP (the same API the
+// varying-string addressing uses), so each GEP selects one field of the
+// current struct type.
+llvm::Value *IRGen::memberAddr(Symbol *base, const std::vector<unsigned> &path, SourceLoc) {
+  llvm::Value *addr = addressOf(base);
+  const Type *cur = &base->ty;
+  for (unsigned f : path) {
+    addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "mem");
+    cur = &cur->members[f]->ty;
+  }
+  return addr;
 }
 
 Val IRGen::loadSym(Symbol *sym, const Type &ty) {
@@ -1173,6 +1221,24 @@ Val IRGen::emitExpr(HExpr *e) {
       return loadArrayElement(e->sym, e->args, e->loc);
     case HExpr::VarRef:
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
+      if (!e->memberPath.empty()) {
+        // Qualified member S.A.B (rule 124): load the leaf member.
+        const Type &leaf = e->ty;
+        if (leaf.isChar()) {
+          d_.error(e->loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+          v.ty = leaf; v.reg = i64(0); return v;
+        }
+        llvm::Value *addr = memberAddr(e->sym, e->memberPath, e->loc);
+        v.ty = leaf;
+        llvm::Value *r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
+        v.reg = leaf.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+        return v;
+      }
+      if (e->ty.isStruct()) {
+        // A whole structure as a value (rule 127) is not served in this stage.
+        d_.error(e->loc, "a whole structure cannot be used as a value in this stage", "(127)");
+        v.ty = e->ty; v.reg = i64(0); return v;
+      }
       return loadSym(e->sym, e->sym->ty);
     case HExpr::Call: {
       // Built-ins are emitted in emitBuiltin; a non-builtin call (a user

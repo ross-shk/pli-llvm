@@ -1,0 +1,7 @@
+ /* A qualified reference to a member that does not exist in the structure is
+    a compile-time error (rules (124)). */
+ bad_struct_member: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31);
+    s.q = 1;
+ end bad_struct_member;

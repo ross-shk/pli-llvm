@@ -27,6 +27,8 @@ struct Expr {
   double fval = 0;
   std::string sval;          // CharLit / BitLit payload
   std::string name;          // VarRef / Call target
+  std::vector<std::string> path;   // VarRef: member qualifiers after the base name (S.A.B -> {"A","B"})
+  std::vector<unsigned> memberPath;  // VarRef: resolved LLVM struct field indices (set by sema)
   Symbol *sym = nullptr;     // resolved by sema
   Tok op = Tok::Eof;         // Binary / Unary operator
   ExprP a, b;
@@ -40,6 +42,7 @@ struct DeclItem {
   std::string name;
   Type ty{};
   SourceLoc loc{};
+  int level = 0;          // rule (11) level number; 0 when absent (no structure)
   ExprP init;      // INITIAL(...) — scalar constant only in M0
   Symbol *sym = nullptr;
   bool isEntry = false;              // DECLARE name ENTRY(...) (rule 38)
