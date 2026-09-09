@@ -502,16 +502,19 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
 
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
 // (126)); a runtime index is left to the generated bounds check in IRGen.
+// Each constant subscript is checked against its own axis (rules (12),(13)).
 void Sema::checkSubscriptBounds(Expr *e, Symbol *arr) {
-  if (e->args.size() != 1) return;
-  Expr *idx = e->args[0].get();
-  if (idx->kind != Expr::IntLit) return;
-  long long v = idx->ival;
-  const auto &[lb, ub] = arr->ty.dims[0];
-  if (v < lb || v > ub)
-    d_.error(idx->loc, "subscript " + std::to_string(v) +
-             " is out of bounds " + std::to_string(lb) + ":" +
-             std::to_string(ub) + " for array '" + arr->name + "'", "(126)");
+  const size_t n = std::min(e->args.size(), arr->ty.dims.size());
+  for (size_t k = 0; k < n; ++k) {
+    Expr *idx = e->args[k].get();
+    if (idx->kind != Expr::IntLit) continue;
+    long long v = idx->ival;
+    const auto &[lb, ub] = arr->ty.dims[k];
+    if (v < lb || v > ub)
+      d_.error(idx->loc, "subscript " + std::to_string(v) +
+               " is out of bounds " + std::to_string(lb) + ":" +
+               std::to_string(ub) + " for array '" + arr->name + "'", "(126)");
+  }
 }
 
 void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
@@ -561,8 +564,10 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       // index (single axis in this stage) is checked against the bounds.
       if (Symbol *arr = lookup(sc, e->name);
           arr && arr->kind == Symbol::Var && arr->ty.isArray()) {
-        if (e->args.size() != 1) {
-          d_.error(e->loc, "array '" + e->name + "' is 1-dimensional and takes one subscript", "(126)");
+        if (e->args.size() != arr->ty.dims.size()) {
+          d_.error(e->loc, "array '" + e->name + "' has " +
+                   std::to_string(arr->ty.dims.size()) + " dimension(s) and takes " +
+                   std::to_string(arr->ty.dims.size()) + " subscript(s)", "(126)");
           e->ty = Type::voidTy();
           break;
         }

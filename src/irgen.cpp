@@ -670,11 +670,11 @@ void IRGen::emitAssign(HStmt *s) {
                   {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
-  // Array element assignment: A(i) = e (rule 126).
+  // Array element assignment: A(i,j,...) = e (rule 126).
   if (s->target->kind == HExpr::Subscript && s->target->sym) {
     HExpr *t = s->target.get();
     Val v = emitExpr(s->value.get());
-    storeArrayElement(t->sym, t->args[0].get(), v, s->loc);
+    storeArrayElement(t->sym, t->args, v, s->loc);
     return;
   }
   if (s->target->kind != HExpr::VarRef || !s->target->sym) return;
@@ -922,27 +922,41 @@ void IRGen::emitCall(HStmt *s) {
 // ---------------------------------------------------------------------------
 // loads / stores
 // ---------------------------------------------------------------------------
-// Number of elements on the single served axis: ub - lb + 1 (rule (12)).
+// Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).
 long long IRGen::arrayExtent(const Type &arr) {
-  return arr.dims[0].second - arr.dims[0].first + 1;
+  long long n = 1;
+  for (const auto &[lb, ub] : arr.dims) n *= (ub - lb + 1);
+  return n;
 }
 
-// Address of array element A(i) (rule 126): a runtime SUBSCRIPTRANGE check,
-// then a GEP into the [N x elemTy] storage. i is a 1-based (or lb-based)
-// subscript; the generated index is i - lb.
-llvm::Value *IRGen::arrayElementAddr(Symbol *sym, HExpr *idx, SourceLoc loc) {
+// Address of array element A(i,j,...) (rule 126): a runtime SUBSCRIPTRANGE
+// check on each axis, then a GEP into the flat row-major [N x elemTy] storage.
+// Each index is 1-based (or lb-based); the generated flat offset is
+//   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
+llvm::Value *IRGen::arrayElementAddr(Symbol *sym, const std::vector<HExprP> &idxs, SourceLoc loc) {
   const Type &arr = sym->ty;
   const Type &el = arr.elementType();
-  const long long lb = arr.dims[0].first, ub = arr.dims[0].second;
+  const size_t nAxes = arr.dims.size();
   llvm::Value *base = addressOf(sym);
-  Val iv = emitExpr(idx);
-  llvm::Value *i = toI64(iv);
+
+  // Emit every index and OR the per-axis out-of-bounds flags into one check,
+  // accumulating the row-major flat offset (last axis is contiguous).
+  llvm::Value *flat = i64(0);
+  llvm::Value *oob = b_.getInt1(false);
+  long long stride = 1;
+  for (size_t k = nAxes; k-- > 0;) {
+    const long long lb = arr.dims[k].first, ub = arr.dims[k].second;
+    llvm::Value *i = toI64(emitExpr(idxs[k].get()));
+    oob = b_.CreateOr(oob, b_.CreateOr(b_.CreateICmpSLT(i, i64(lb), "lo"),
+                                       b_.CreateICmpSGT(i, i64(ub), "hi")), "oob");
+    llvm::Value *off = b_.CreateSub(i, i64(lb), "off");
+    flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
+    stride *= (ub - lb + 1);
+  }
 
   std::string id = std::to_string(n_++);
   llvm::BasicBlock *failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
   llvm::BasicBlock *okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
-  llvm::Value *oob = b_.CreateOr(b_.CreateICmpSLT(i, i64(lb), "lo"),
-                                 b_.CreateICmpSGT(i, i64(ub), "hi"), "oob");
   b_.CreateCondBr(oob, failL, okL);
 
   startBlock(failL);
@@ -950,9 +964,8 @@ llvm::Value *IRGen::arrayElementAddr(Symbol *sym, HExpr *idx, SourceLoc loc) {
   b_.CreateUnreachable();
 
   startBlock(okL);
-  llvm::Value *off = b_.CreateSub(i, i64(lb), "off");
   llvm::Type *arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));
-  return b_.CreateInBoundsGEP(arrTy, base, {i64(0), off}, "aelem");
+  return b_.CreateInBoundsGEP(arrTy, base, {i64(0), flat}, "aelem");
 }
 
 Val IRGen::loadSym(Symbol *sym, const Type &ty) {
@@ -1017,7 +1030,7 @@ void IRGen::storeTo(Symbol *sym, const Val &v, SourceLoc loc) {
 // Load one array element (rule 126): a bounds-checked address, then a load of
 // the element's scalar value. Character element arrays are diagnosed, not
 // silently miscompiled (invariant 2).
-Val IRGen::loadArrayElement(Symbol *sym, HExpr *idx, SourceLoc loc) {
+Val IRGen::loadArrayElement(Symbol *sym, const std::vector<HExprP> &idxs, SourceLoc loc) {
   Val v;
   const Type &el = sym->ty.elementType();
   v.ty = el;
@@ -1026,7 +1039,7 @@ Val IRGen::loadArrayElement(Symbol *sym, HExpr *idx, SourceLoc loc) {
     v.reg = i64(0);
     return v;
   }
-  llvm::Value *addr = arrayElementAddr(sym, idx, loc);
+  llvm::Value *addr = arrayElementAddr(sym, idxs, loc);
   llvm::Value *r = b_.CreateLoad(llvmTy(el), addr, "ald");
   if (el.isBit())
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
@@ -1037,13 +1050,13 @@ Val IRGen::loadArrayElement(Symbol *sym, HExpr *idx, SourceLoc loc) {
 
 // Store one array element (rule 126): convert to the element type, then store
 // through the bounds-checked element address.
-void IRGen::storeArrayElement(Symbol *sym, HExpr *idx, const Val &src, SourceLoc loc) {
+void IRGen::storeArrayElement(Symbol *sym, const std::vector<HExprP> &idxs, const Val &src, SourceLoc loc) {
   const Type &el = sym->ty.elementType();
   if (el.isChar()) {
     d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
     return;
   }
-  llvm::Value *addr = arrayElementAddr(sym, idx, loc);
+  llvm::Value *addr = arrayElementAddr(sym, idxs, loc);
   Val cv = convert(src, el, loc);
   storeScalarTo(addr, el, cv);
 }
@@ -1157,7 +1170,7 @@ Val IRGen::emitExpr(HExpr *e) {
       return v;
     case HExpr::Subscript:
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
-      return loadArrayElement(e->sym, e->args[0].get(), e->loc);
+      return loadArrayElement(e->sym, e->args, e->loc);
     case HExpr::VarRef:
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
       return loadSym(e->sym, e->sym->ty);
@@ -1514,6 +1527,8 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
       // Array attribute built-ins (M2, rule (123)): constant bounds fold to a
       // compile-time value. The argument is the unsubscripted array reference;
       // read its bounds from the symbol rather than emitting the array value.
+      // LBOUND/HBOUND report the first dimension; DIM reports the total element
+      // count (the product over all axes).
       if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
         HExpr *a = e->args[0].get();
         const Type &arr = a->sym ? a->sym->ty : Type::fixedBin(31, 0);
@@ -1521,7 +1536,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         long long ub = arr.isArray() ? arr.dims[0].second : 1;
         long long val = e->name == "LBOUND" ? lb
                        : e->name == "HBOUND" ? ub
-                       : (ub - lb + 1);
+                       : (arr.isArray() ? arrayExtent(arr) : 1);
         v.ty = e->ty;
         v.reg = llvm::ConstantInt::get(llvmTy(e->ty), val, true);
         result = v;

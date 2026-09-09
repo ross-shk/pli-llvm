@@ -1,0 +1,6 @@
+ /* A subscripted reference must supply one subscript per declared axis
+    (rules (12),(126)); a 2-D array takes two subscripts. */
+ bad_array2d_arity: procedure options(main);
+    declare a(2,3) fixed bin(31);
+    a(1) = 1;
+ end bad_array2d_arity;

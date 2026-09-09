@@ -85,11 +85,12 @@ private:
   void appendStaticLinks(Proc *callee, std::vector<llvm::Value *> &args);
 
   Val emitExpr(HExpr *e);
-  // Number of elements on the single served axis: ub - lb + 1 (rule (12)).
+  // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).
   long long arrayExtent(const Type &arr);
-  // Address of one array element A(i) (rule 126), after a runtime bounds check.
-  // The element type and bounds come from the array symbol; `idx` is the index.
-  llvm::Value *arrayElementAddr(Symbol *sym, HExpr *idx, SourceLoc loc);
+  // Address of one array element A(i,j,...) (rule 126), after a runtime bounds
+  // check on each axis. The element type and bounds come from the array symbol;
+  // `idxs` holds one index per axis.
+  llvm::Value *arrayElementAddr(Symbol *sym, const std::vector<HExprP> &idxs, SourceLoc loc);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.
@@ -98,8 +99,8 @@ private:
   void storeTo(Symbol *sym, const Val &v, SourceLoc loc);
   void storeScalarTo(llvm::Value *addr, const Type &ty, const Val &v);
   // Load / store one array element (rule 126), with the SUBSCRIPTRANGE check.
-  Val loadArrayElement(Symbol *sym, HExpr *idx, SourceLoc loc);
-  void storeArrayElement(Symbol *sym, HExpr *idx, const Val &src, SourceLoc loc);
+  Val loadArrayElement(Symbol *sym, const std::vector<HExprP> &idxs, SourceLoc loc);
+  void storeArrayElement(Symbol *sym, const std::vector<HExprP> &idxs, const Val &src, SourceLoc loc);
 
   Val convert(const Val &v, const Type &dst, SourceLoc loc);
   llvm::Value *toI1(const Val &v, SourceLoc loc);

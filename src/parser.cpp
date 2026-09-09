@@ -625,27 +625,28 @@ bool Parser::tryParseDimension(std::vector<std::pair<int, int>> &out) {
   size_t save = i_;
   eat(Tok::LParen);
 
-  int lb = 1, ub = 0;
-  bool colon = false;
-  if (at(Tok::Number)) { lb = atoi(cur().text.c_str()); advance(); }
-  if (eat(Tok::Colon) && at(Tok::Number)) { ub = atoi(cur().text.c_str()); advance(); colon = true; }
-
-  if (eat(Tok::Comma)) {
-    // A second axis: multi-dimensional arrays are not implemented yet.
-    d_.error(cur().loc, "multi-dimensional arrays are not implemented in this stage", "(13)");
-    int d = 0;
-    do { if (at(Tok::LParen)) ++d; else if (at(Tok::RParen)) --d; advance(); }
-    while (d && !at(Tok::Eof));
-    return true;
+  // One or more comma-separated bound-pairs (lb:ub) or bare extents (n), one
+  // per axis (rules (12),(13)). A bound-pair makes the whole group a dimension;
+  // all-bare extents are a dimension only when an attribute keyword follows.
+  std::vector<std::pair<int, int>> axes;
+  bool anyColon = false;
+  for (;;) {
+    int lb = 1, ub = 0;
+    bool colon = false;
+    if (at(Tok::Number)) { lb = atoi(cur().text.c_str()); advance(); }
+    if (eat(Tok::Colon) && at(Tok::Number)) { ub = atoi(cur().text.c_str()); advance(); colon = true; }
+    axes.push_back(colon ? std::pair<int, int>{lb, ub} : std::pair<int, int>{1, lb});
+    if (colon) anyColon = true;
+    if (!eat(Tok::Comma)) break;
   }
 
   expect(Tok::RParen, "(12)");
 
-  if (colon) {
-    out.push_back({lb, ub});
+  if (anyColon) {
+    out = std::move(axes);
     return true;
   }
-  // Bare (n): a dimension only when an attribute keyword follows the group.
+  // All bare (n): a dimension only when an attribute keyword follows the group.
   auto isAttrWord = [&](const std::string &w) {
     return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" ||
            w == "DECIMAL" || w == "DEC" || w == "CHARACTER" || w == "CHAR" ||
@@ -655,7 +656,7 @@ bool Parser::tryParseDimension(std::vector<std::pair<int, int>> &out) {
            w == "INIT" || w == "EXTERNAL" || w == "EXT";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
-    out.push_back({1, lb});
+    out = std::move(axes);
     return true;
   }
   i_ = save;
