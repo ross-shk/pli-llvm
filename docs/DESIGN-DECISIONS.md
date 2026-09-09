@@ -944,3 +944,28 @@ function-call RHS); per-target independent HIR value conversion (would re-derive
 conversion once per target and require the RHS to be evaluated N times, and would
 change the HIR/IR shape of the existing single-target case); serving mixed-type or
 `BY NAME` multiple assignment in this stage.
+
+## ADR-042 — Build tooling: clang stays the link driver; `make check` is the analysis gate
+
+**Context.** The driver shells out to clang to assemble/optimize/link the emitted
+IR (ADR-002); there is no other linker in the picture, and the repo wants a single
+gate the agents run for major edits so static analysis is actually exercised.
+
+**Decision.** `plic` keeps clang as its link driver and gains explicit link
+controls (`-L`, `-l`, `-Wl`, `--linker`, `-shared`, `-static`, `--extra`) passed
+through to that driver — no direct lld invocation. On the build side, `make check`
+rolls the analyzers into one gate: a `-Werror` rebuild (`make werror`), a
+clang-format drift check (`make fmt-check`, with `make fmt` to normalize),
+clang-tidy over the C++ sources (`make tidy`, scoped to bug-catching checks), and
+the clang static analyzer (`make scan`). `src/` is clang-format-normalized so the
+gate is green from the start.
+
+**Consequences.** The Makefile is the canonical home for build tooling; CMake stays
+secondary and its `ctest` now drives `tests/run_tests.py` (fixing a dangling
+`run_tests.sh` reference). New edits should pass `make check`. The one-time
+reformat of `src/` is mechanical and covered by the full test suite.
+
+**Rejected.** Driving lld directly (platform-specific sysroot/library matching on
+macOS, and no bare `lld` installed); making `fmt-check` a soft, non-failing check
+(the user chose enforcement); wiring CI now (deferred); putting the full `check`
+gate in CMake while the Makefile is the documented bootstrap build.

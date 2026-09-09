@@ -127,6 +127,12 @@ plic [options] file.pli
   --keep-ll        keep the intermediate .ll
   --runtime <lib>  path to libpli.a
   --triple <t>     target triple
+  -L <dir>         add a library search path to the link step
+  -l<lib>          link a library on the link step
+  -Wl,<flag>       pass a raw flag to the linker
+  --linker <ld>    select the linker via -fuse-ld=<ld>
+  -shared -static  produce a shared / static binary
+  --extra <a,b,c>  comma-separated extra backend args
   --explain <n>    print TR 25.084 rule (n)'s production and exit
   -v               show sub-commands
 ```
@@ -148,6 +154,7 @@ generated LLVM IR — see ADR-002; the LLVM C++ API arrives in M1).
 ```
 make          # build build/plic and build/libpli.a
 make test     # compile, run and check every test program (diff or PASS-grep)
+make check    # analysis gate: -Werror build + fmt-check + clang-tidy + scan-build
 make clean
 ```
 

@@ -64,7 +64,8 @@ add_custom_command(
 )
 
 enable_testing()
-add_test(NAME plic-tests COMMAND ${CMAKE_SOURCE_DIR}/tests/run_tests.sh)
+add_test(NAME plic-tests COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tests/run_tests.py)
 set_tests_properties(plic-tests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   ENVIRONMENT "PLIC=$<TARGET_FILE:plic>;RTLIB=$<TARGET_FILE:libpli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
