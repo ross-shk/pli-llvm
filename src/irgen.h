@@ -99,6 +99,11 @@ private:
   // field indices to recover the leaf member's type (an array member's array
   // type), mirroring memberAddr without emitting GEPs.
   const Type& memberType(Symbol* base, const std::vector<unsigned>& path);
+  // BY NAME assignment (rule 86): copy each same-named member of `dst` from
+  // `src` at their struct bases, recursing into minor structures; names absent
+  // from either side are skipped.
+  void emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Type& dst, const Type& src,
+                      SourceLoc loc);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.

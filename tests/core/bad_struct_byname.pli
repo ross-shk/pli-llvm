@@ -1,0 +1,11 @@
+  /* BY NAME assignment (rule 86) requires a single structure target and a
+     structure value; it is rejected otherwise. */
+  bad_struct_byname: procedure options(main);
+     declare a fixed bin(31);
+     declare 1 s,
+            2 m fixed bin(31);
+     declare 1 t,
+            2 m fixed bin(31);
+     a = s, by name;
+     s = a, by name;
+  end bad_struct_byname;

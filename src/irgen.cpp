@@ -808,6 +808,23 @@ void IRGen::emitAssign(HStmt* s) {
       storeOne(t.get());
     return;
   }
+  // BY NAME assignment (rule 86): S = T BY NAME copies each same-named member
+  // of the target structure from the source structure, regardless of layout.
+  if (s->byName) {
+    HExpr* t = s->target.get();
+    HExpr* v = s->value.get();
+    if (t->kind != HExpr::VarRef || !t->sym || !t->ty.isStruct() || v->kind != HExpr::VarRef ||
+        !v->sym || !v->ty.isStruct()) {
+      d_.error(s->loc, "BY NAME assignment requires two structure references", "(86)");
+      return;
+    }
+    llvm::Value* dst =
+        t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
+    llvm::Value* src =
+        v->memberPath.empty() ? addressOf(v->sym) : memberAddr(v->sym, v->memberPath, s->loc);
+    emitByNameCopy(dst, src, t->ty, v->ty, s->loc);
+    return;
+  }
   if (s->target->kind == HExpr::Call && s->target->name == "SUBSTR") {
     HExpr* t = s->target.get();
     Val sv = emitExpr(t->args[0].get());
@@ -1203,6 +1220,41 @@ const Type& IRGen::memberType(Symbol* base, const std::vector<unsigned>& path) {
   for (unsigned f : path)
     cur = &cur->members[f]->ty;
   return *cur;
+}
+
+// BY NAME assignment (rule 86): copy each member of `dst` (at dstBase) from the
+// same-named member of `src` (at srcBase). Minor structures recurse by name; an
+// array member is copied whole (sema required identical array types); a scalar
+// member is loaded, converted to the target type and stored.
+void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Type& dst,
+                           const Type& src, SourceLoc loc) {
+  for (size_t i = 0; i < dst.members.size(); ++i) {
+    const Member& dm = *dst.members[i];
+    size_t j = (size_t)-1;
+    for (size_t k = 0; k < src.members.size(); ++k)
+      if (src.members[k]->name == dm.name) {
+        j = k;
+        break;
+      }
+    if (j == (size_t)-1)
+      continue; // name absent from the source: skipped
+    const Member& sm = *src.members[j];
+    llvm::Value* d = b_.CreateStructGEP(llvmTy(dst), dstBase, (unsigned)i, "bnm.d");
+    llvm::Value* s = b_.CreateStructGEP(llvmTy(src), srcBase, (unsigned)j, "bnm.s");
+    if (dm.ty.isStruct() && sm.ty.isStruct()) {
+      emitByNameCopy(d, s, dm.ty, sm.ty, loc);
+    } else if (dm.ty.isArray()) {
+      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(dm.ty)));
+      b_.CreateMemCpy(d, llvm::MaybeAlign(), s, llvm::MaybeAlign(), sz);
+    } else {
+      Val sv;
+      sv.ty = sm.ty;
+      sv.reg = b_.CreateLoad(llvmTy(sm.ty), s, "bnm.ld");
+      if (sm.ty.isBit())
+        sv.reg = b_.CreateTrunc(sv.reg, b_.getInt1Ty(), "bnm.b1");
+      storeScalarTo(d, dm.ty, convert(sv, dm.ty, loc));
+    }
+  }
 }
 
 Val IRGen::loadSym(Symbol* sym, const Type& ty) {
