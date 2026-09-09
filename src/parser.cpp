@@ -466,6 +466,31 @@ StmtP Parser::parseDeclare() {
   return st;
 }
 
+// Consume one scalar computational attribute word into `bag`. Shared by
+// parseDeclItem (rule 11) and parseDescriptorType (rule 38); `rule` cites the
+// TR production for the parenthesised precision group.
+bool Parser::parseScalarAttr(AttrBag &bag, const char *rule) {
+  if (!at(Tok::Word)) return false;
+  const std::string &w = cur().text;
+  auto parenNums = [&](int &n1, int &n2) {
+    if (!eat(Tok::LParen)) return false;
+    if (at(Tok::Number)) { n1 = atoi(cur().text.c_str()); advance(); }
+    if (eat(Tok::Comma) && at(Tok::Number)) { n2 = atoi(cur().text.c_str()); advance(); }
+    expect(Tok::RParen, rule);
+    return true;
+  };
+  int a = -1, b = 0;
+  if (w == "FIXED") { bag.fixed = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { bag.prec = a; bag.scale = b; } } return true; }
+  if (w == "FLOAT") { bag.floating = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) bag.prec = a; } return true; }
+  if (w == "BINARY" || w == "BIN") { bag.binary = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { bag.prec = a; bag.scale = b; } } return true; }
+  if (w == "DECIMAL" || w == "DEC") { bag.decimal = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { bag.prec = a; bag.scale = b; } } return true; }
+  if (w == "CHARACTER" || w == "CHAR") { bag.character = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) bag.slen = a; } return true; }
+  if (w == "BIT") { bag.bit = true; advance(); if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) bag.slen = a; } return true; }
+  if (w == "VARYING" || w == "VAR") { bag.varying = true; advance(); return true; }
+  if (w == "REAL") { advance(); return true; }
+  return false;
+}
+
 // declaration ::= [integer] identifier [dimension] [attribute•••]  rule (11)
 bool Parser::parseDeclItem(DeclItem &item) {
   if (at(Tok::Number) && !cur().isFloat) advance();  // level number, ignored in M0
@@ -479,30 +504,13 @@ bool Parser::parseDeclItem(DeclItem &item) {
   advance();
 
   // Attribute bag (rules 14-32).
-  bool sawFixed = false, sawFloat = false, sawBin = false, sawDec = false;
-  bool sawChar = false, sawBit = false, sawVarying = false;
-  int prec = -1, scale = 0, slen = -1;
+  AttrBag bag;
   ExprP init;
 
-  auto parenNums = [&](int &n1, int &n2) {
-    if (!eat(Tok::LParen)) return false;
-    if (at(Tok::Number)) { n1 = atoi(cur().text.c_str()); advance(); }
-    if (eat(Tok::Comma) && at(Tok::Number)) { n2 = atoi(cur().text.c_str()); advance(); }
-    expect(Tok::RParen, "(16)");
-    return true;
-  };
-
   for (;;) {
+    if (parseScalarAttr(bag, "(16)")) continue;
     if (at(Tok::Word)) {
       const std::string &w = cur().text;
-      if (w == "FIXED") { sawFixed = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
-      if (w == "FLOAT") { sawFloat = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) prec = a; } continue; }
-      if (w == "BINARY" || w == "BIN") { sawBin = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
-      if (w == "DECIMAL" || w == "DEC") { sawDec = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
-      if (w == "CHARACTER" || w == "CHAR") { sawChar = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) slen = a; } continue; }
-      if (w == "BIT") { sawBit = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) slen = a; } continue; }
-      if (w == "VARYING" || w == "VAR") { sawVarying = true; advance(); continue; }
-      if (w == "REAL") { advance(); continue; }
       if (w == "INITIAL" || w == "INIT") {
         advance();
         if (expect(Tok::LParen, "(26)")) {
@@ -552,9 +560,12 @@ bool Parser::parseDeclItem(DeclItem &item) {
     if (at(Tok::LParen)) {  // bare precision or dimension
       int a = -1, b = 0;
       SourceLoc l = cur().loc;
-      parenNums(a, b);
-      if (sawChar || sawBit) { if (a > 0) slen = a; }
-      else if (a > 0) { prec = a; scale = b; }
+      eat(Tok::LParen);
+      if (at(Tok::Number)) { a = atoi(cur().text.c_str()); advance(); }
+      if (eat(Tok::Comma) && at(Tok::Number)) { b = atoi(cur().text.c_str()); advance(); }
+      expect(Tok::RParen, "(16)");
+      if (bag.character || bag.bit) { if (a > 0) bag.slen = a; }
+      else if (a > 0) { bag.prec = a; bag.scale = b; }
       else d_.error(l, "arrays are not implemented in this stage", "(12)");
       continue;
     }
@@ -563,21 +574,21 @@ bool Parser::parseDeclItem(DeclItem &item) {
 
   // Attribute -> type, applying the default rules of TR 25.084 rules (15)-(18).
   // Conflicting attributes are diagnosed first.
-  if (sawFixed && sawFloat)
+  if (bag.fixed && bag.floating)
     d_.error(item.loc, "FIXED and FLOAT are conflicting attributes", "(16)");
-  if (sawBin && sawDec)
+  if (bag.binary && bag.decimal)
     d_.error(item.loc, "BINARY and DECIMAL are conflicting attributes", "(16)");
-  if (sawChar && sawBit)
+  if (bag.character && bag.bit)
     d_.error(item.loc, "CHARACTER and BIT are conflicting attributes", "(18)");
-  if ((sawChar || sawBit) && (sawFixed || sawFloat || sawBin || sawDec))
+  if ((bag.character || bag.bit) && (bag.fixed || bag.floating || bag.binary || bag.decimal))
     d_.error(item.loc, "string and arithmetic attributes cannot be combined", "(15)");
-  if (sawVarying && !sawChar && !sawBit)
+  if (bag.varying && !bag.character && !bag.bit)
     d_.error(item.loc, "VARYING requires CHARACTER or BIT", "(15)");
 
-  if (sawChar) {
-    item.ty = Type::chr(slen > 0 ? slen : 1, sawVarying);
-  } else if (sawBit) {
-    int n = slen > 0 ? slen : 1;
+  if (bag.character) {
+    item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+  } else if (bag.bit) {
+    int n = bag.slen > 0 ? bag.slen : 1;
     item.ty = Type::bit(n);
     if (n != 1) {
       // Only BIT(1) is served; arbitrary-length bit strings are M2. Never
@@ -586,50 +597,29 @@ bool Parser::parseDeclItem(DeclItem &item) {
                "(18)");
       item.ty = Type::bit(1);
     }
-  } else if (sawFloat) {
-    item.ty = Type::flt(prec > 0 ? prec : (sawBin ? 21 : 6));
+  } else if (bag.floating) {
+    item.ty = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
   } else {
     // FIXED is the default scale attribute; DECIMAL the default base. The
     // scale factor q is kept as a static property (ADR-006, rule (16)).
-    if (sawBin && !sawDec) item.ty = Type::fixedBin(prec > 0 ? prec : 15, scale);
-    else item.ty = Type::fixedDec(prec > 0 ? prec : 5, scale);
+    if (bag.binary && !bag.decimal) item.ty = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
+    else item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   }
   item.init = std::move(init);
   return true;
 }
 
 // descriptor-param ::= attribute•••                                rule (38)
-// Parse a single ENTRY parameter type, mirroring the attribute bag of
-// parseDeclItem for the scalar computational types M0 supports.
+// Parse a single ENTRY parameter type, using the same scalar-attribute
+// accumulator as parseDeclItem, restricted to the scalar computational types.
 bool Parser::parseDescriptorType(Type &out) {
-  bool sawFloat = false, sawBin = false;
-  bool sawChar = false, sawBit = false, sawVarying = false;
-  int prec = -1, scale = 0, slen = -1;
-  auto parenNums = [&](int &n1, int &n2) {
-    if (!eat(Tok::LParen)) return false;
-    if (at(Tok::Number)) { n1 = atoi(cur().text.c_str()); advance(); }
-    if (eat(Tok::Comma) && at(Tok::Number)) { n2 = atoi(cur().text.c_str()); advance(); }
-    expect(Tok::RParen, "(38)");
-    return true;
-  };
-  for (;;) {
-    if (!at(Tok::Word)) break;
-    const std::string &w = cur().text;
-    if (w == "FIXED") { advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
-    if (w == "FLOAT") { sawFloat = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) prec = a; } continue; }
-    if (w == "BINARY" || w == "BIN") { sawBin = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
-    if (w == "DECIMAL" || w == "DEC") { advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) { prec = a; scale = b; } } continue; }
-    if (w == "CHARACTER" || w == "CHAR") { sawChar = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) slen = a; } continue; }
-    if (w == "BIT") { sawBit = true; advance(); int a = -1, b = 0; if (at(Tok::LParen)) { parenNums(a, b); if (a > 0) slen = a; } continue; }
-    if (w == "VARYING" || w == "VAR") { sawVarying = true; advance(); continue; }
-    if (w == "REAL") { advance(); continue; }
-    break;
-  }
-  if (sawChar) out = Type::chr(slen > 0 ? slen : 1, sawVarying);
-  else if (sawBit) out = Type::bit(slen > 0 ? slen : 1);
-  else if (sawFloat) out = Type::flt(prec > 0 ? prec : (sawBin ? 21 : 6));
-  else if (sawBin) out = Type::fixedBin(prec > 0 ? prec : 15, scale);
-  else out = Type::fixedDec(prec > 0 ? prec : 5, scale);
+  AttrBag bag;
+  while (parseScalarAttr(bag, "(38)")) {}
+  if (bag.character) out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+  else if (bag.bit) out = Type::bit(bag.slen > 0 ? bag.slen : 1);
+  else if (bag.floating) out = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
+  else if (bag.binary) out = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
+  else out = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   return true;
 }
 

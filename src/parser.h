@@ -60,6 +60,21 @@ private:
   bool parseDescriptorType(Type &out);  // one ENTRY parameter type (rule 38)
   bool parseEntryParams(std::vector<Type> &params);  // ENTRY ( ... )
 
+  // Shared scalar-computational attribute accumulator (rules 15-18). Both
+  // parseDeclItem (rule 11) and parseDescriptorType (rule 38) consume the same
+  // attribute words; only their conflict checking and type selection differ.
+  struct AttrBag {
+    bool fixed = false, floating = false, binary = false, decimal = false;
+    bool character = false, bit = false, varying = false;
+    int prec = -1, scale = 0, slen = -1;
+  };
+  // Consume one attribute word (FIXED, FLOAT, BINARY, DECIMAL, CHARACTER,
+  // BIT, VARYING, REAL) with its optional precision into `bag`. Returns true
+  // if the current token was such an attribute. `rule` cites the TR production
+  // for the precision parenthesised group (16 for a declaration, 38 for a
+  // descriptor parameter).
+  bool parseScalarAttr(AttrBag &bag, const char *rule);
+
   // --- expressions (rules 115-129) ------------------------------------
   ExprP parseExpr(int minPrec = 1);
   ExprP parseUnary();
