@@ -889,9 +889,9 @@ void IRGen::emitAssign(HStmt* s) {
                   {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
-  // Cross-section assignment (rule 126): B = A(i, *) — the right-hand side is a
-  // reduced-dim array value produced by a '*' subscript. Copy it into the whole
-  // array target; anywhere else a cross-section is rejected in emitExpr.
+  // Cross-section assignment (rule 126): B = A(i, *, ...) — the right-hand side
+  // is a reduced-dim array value produced by '*' subscripts. Copy it into the
+  // whole array target; anywhere else a cross-section is rejected in emitExpr.
   {
     HExpr* x = s->value.get();
     if (x->kind == HExpr::Subscript && x->sym && x->ty.isArray()) {
@@ -1434,11 +1434,13 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
   storeScalarTo(addr, el, cv);
 }
 
-// Copy a single-'*' cross-section (rule 126) into a whole array target:
-// `t` is the target array (plain variable or member), `x` is the source
-// cross-section A(<fixed>, *, <fixed>) of matching reduced (1-D) shape. The
-// fixed axes' indices are evaluated and bounds-checked once; the '*' axis is
-// iterated, gathering each source element into the corresponding target slot.
+// Copy an N-star cross-section (rule 126) into a whole array target: `t` is
+// the target array (plain variable or member), `x` is the source cross-section
+// A(<fixed|*>, ...) of matching reduced shape (rank = number of '*' axes). The
+// fixed axes' indices are evaluated and bounds-checked once; the '*' axes are
+// gathered into the target by iterating its linear row-major index, decomposing
+// each position into star-axis coordinates and mapping them to the source flat
+// offset. A single '*' is the row/column case of this same affine gather.
 void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   const Type& srcArr = x->memberPath.empty() ? x->sym->ty : memberType(x->sym, x->memberPath);
   llvm::Value* srcBase =
@@ -1449,14 +1451,15 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
       t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, loc);
 
   const size_t n = srcArr.dims.size();
-  size_t star = n;
+  // Positions of the '*' axes in source axis order; the target is rank m with
+  // the same extents as these axes in that order.
+  std::vector<size_t> stars;
   for (size_t k = 0; k < n; ++k)
-    if (x->args[k]->kind == HExpr::Star) {
-      star = k;
-      break;
-    }
+    if (x->args[k]->kind == HExpr::Star)
+      stars.push_back(k);
+  const size_t m = stars.size();
 
-  // Row-major stride of each axis: the product of the later-axis extents.
+  // Row-major stride of each source axis: the product of the later-axis extents.
   std::vector<long long> stride(n);
   for (long long s = 1, k = (long long)n; k-- > 0;) {
     stride[k] = s;
@@ -1467,7 +1470,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   // contribution to the source flat offset.
   llvm::Value* fixedFlat = i64(0);
   for (size_t k = 0; k < n; ++k) {
-    if (k == star)
+    if (x->args[k]->kind == HExpr::Star)
       continue;
     llvm::Value* iv = toI64(emitExpr(x->args[k].get()));
     llvm::Value* lb = i64(srcArr.dims[k].first);
@@ -1486,13 +1489,19 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
         fixedFlat, b_.CreateMul(b_.CreateSub(iv, lb, "off"), i64(stride[k]), "scaled"), "ff");
   }
 
-  // Iterate the '*' axis from its lower bound to its upper bound (the target
-  // is 1-D with the same bounds), gathering source elements into the target.
-  const long long slb = srcArr.dims[star].first, sub = srcArr.dims[star].second;
+  // Target is rank m. Its row-major strides and total extent let a single linear
+  // index be decomposed into star-axis coordinates; coordinate j is the index
+  // along source axis stars[j], so its source offset is coord * stride[stars[j]].
+  std::vector<long long> tstride(m);
+  for (long long s = 1, j = (long long)m; j-- > 0;) {
+    tstride[j] = s;
+    s *= (srcArr.dims[stars[j]].second - srcArr.dims[stars[j]].first + 1);
+  }
+  const long long total = arrayExtent(tgtArr);
   llvm::Type* srcArrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(srcArr));
   llvm::Type* tgtArrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(tgtArr));
   llvm::AllocaInst* ctr = entryAlloca(b_.getInt64Ty(), "cs.i." + std::to_string(n_++));
-  b_.CreateStore(i64(slb), ctr);
+  b_.CreateStore(i64(0), ctr);
   std::string id = std::to_string(n_++);
   llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "cs.cond." + id, curFn_);
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "cs.body." + id, curFn_);
@@ -1500,23 +1509,32 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "cs.end." + id, curFn_);
   branch(condL);
   startBlock(condL);
-  llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), ctr, "csi");
-  b_.CreateCondBr(b_.CreateICmpSLE(i, i64(sub), "cscmp"), bodyL, endL);
+  llvm::Value* ti = b_.CreateLoad(b_.getInt64Ty(), ctr, "cst");
+  b_.CreateCondBr(b_.CreateICmpSLT(ti, i64(total), "cscmp"), bodyL, endL);
   startBlock(bodyL);
-  llvm::Value* srcFlat = b_.CreateAdd(
-      fixedFlat, b_.CreateMul(b_.CreateSub(i, i64(slb), "soff"), i64(stride[star]), "sscaled"),
-      "sflat");
+
+  // Decompose the linear target index into star-axis coordinates and map each to
+  // its source flat-offset contribution. All offsets are non-negative (fixed
+  // axes are bounds-checked, coordinates run 0..extent-1), so the arithmetic is
+  // unsigned.
+  llvm::Value* srcFlat = fixedFlat;
+  llvm::Value* rem = ti;
+  for (size_t j = 0; j < m; ++j) {
+    llvm::Value* coord = b_.CreateUDiv(rem, i64(tstride[j]), "csc");
+    rem = b_.CreateURem(rem, i64(tstride[j]), "csr");
+    srcFlat = b_.CreateAdd(srcFlat, b_.CreateMul(coord, i64(stride[stars[j]]), "csm"), "css");
+  }
+
   llvm::Value* saddr = b_.CreateInBoundsGEP(srcArrTy, srcBase, {i64(0), srcFlat}, "csrc");
   Val sv;
   sv.ty = el;
   llvm::Value* lr = b_.CreateLoad(llvmTy(el), saddr, "csl");
   sv.reg = el.isBit() ? b_.CreateTrunc(lr, b_.getInt1Ty(), "csb") : lr;
-  llvm::Value* taddr =
-      b_.CreateInBoundsGEP(tgtArrTy, tgtBase, {i64(0), b_.CreateSub(i, i64(slb), "tflat")}, "cdst");
+  llvm::Value* taddr = b_.CreateInBoundsGEP(tgtArrTy, tgtBase, {i64(0), ti}, "cdst");
   storeScalarTo(taddr, el, convert(sv, el, loc));
   branch(stepL);
   startBlock(stepL);
-  b_.CreateStore(b_.CreateAdd(i, i64(1), "csinc"), ctr);
+  b_.CreateStore(b_.CreateAdd(ti, i64(1), "csinc"), ctr);
   branch(condL);
   startBlock(endL);
 }

@@ -1,0 +1,74 @@
+   /* Cross-section (rule 126) with more than one '*': a sub-block copy. The
+      '*' axes, in axis order, select a lower-rank sub-block of the source and
+      assign it to a whole array of matching shape. Covers a full 2-D block,
+      a 3-D block with two '*' axes, and a two-star cross-section of an array
+      member. */
+   cross_section2_test: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare full(3, 4) fixed bin(31);
+      declare d(2, 3, 4) fixed bin(31);
+      declare block(3, 4) fixed bin(31); /* d(2, *, *) */
+      declare block2(2, 4) fixed bin(31); /* d(*, 3, *) */
+      declare i fixed bin(31), j fixed bin(31), k fixed bin(31), fails fixed bin(31);
+
+      /* fill a in row-major order: a(i, j) = 10*i + j */
+      do i = 1 to 3;
+         do j = 1 to 4;
+            a(i, j) = 10 * i + j;
+         end;
+      end;
+
+      fails = 0;
+
+      /* full 2-D sub-block: a(*, *) is the whole array */
+      full = a(*, *);
+      do i = 1 to 3;
+         do j = 1 to 4;
+            if full(i, j) ^= 10 * i + j then fails = fails + 1;
+         end;
+      end;
+
+      /* fill d in row-major order: d(i, j, k) = 100*i + 10*j + k */
+      do i = 1 to 2;
+         do j = 1 to 3;
+            do k = 1 to 4;
+               d(i, j, k) = 100 * i + 10 * j + k;
+            end;
+         end;
+      end;
+
+      /* two-star cross-section with one fixed axis: d(2, *, *) -> (3,4) */
+      block = d(2, *, *);
+      do j = 1 to 3;
+         do k = 1 to 4;
+            if block(j, k) ^= 200 + 10 * j + k then fails = fails + 1;
+         end;
+      end;
+
+      /* two-star cross-section with a middle fixed axis: d(*, 3, *) -> (2,4) */
+      block2 = d(*, 3, *);
+      do i = 1 to 2;
+         do k = 1 to 4;
+            if block2(i, k) ^= 100 * i + 30 + k then fails = fails + 1;
+         end;
+      end;
+
+      /* two-star cross-section of an array member: s.m(2, *, *) -> (2,3) */
+      declare 1 s,
+             2 m(2, 3, 4) fixed bin(31);
+      declare mblock(3, 4) fixed bin(31);
+      do j = 1 to 3;
+         do k = 1 to 4;
+            s.m(2, j, k) = 1000 + 10 * j + k;
+         end;
+      end;
+      mblock = s.m(2, *, *);
+      do j = 1 to 3;
+         do k = 1 to 4;
+            if mblock(j, k) ^= 1000 + 10 * j + k then fails = fails + 1;
+         end;
+      end;
+
+      if fails = 0 then put skip list('PASS cross_section2');
+      else put skip list('FAIL cross_section2: fails =', fails);
+   end cross_section2_test;
