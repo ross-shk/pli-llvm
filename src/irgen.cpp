@@ -81,10 +81,76 @@ llvm::GlobalVariable *IRGen::globalString(const std::string &s) {
   return g;
 }
 
-// Get (or create) a declaration for a runtime `pli_*` function.
-llvm::Function *IRGen::runtimeFn(const std::string &name, llvm::Type *ret,
-                                 std::vector<llvm::Type *> args, bool vararg) {
-  llvm::FunctionType *ft = llvm::FunctionType::get(ret, args, vararg);
+// ABI type tokens, used to expand runtime/pli_rt_abi.def into LLVM
+// signatures. RtVoid is also the "no arguments" marker (a function with no
+// parameters is written with a single VOID in the .def).
+enum RtTok { RtVoid, RtI64, RtI32, RtI8, RtDouble, RtPtr };
+struct RtSig {
+  RtTok ret;
+  std::vector<RtTok> args;
+};
+
+// The pli_* ABI table, expanded from the single source of truth
+// runtime/pli_rt_abi.def. Tokens resolve to LLVM types inside runtimeFn,
+// where the builder's context is available.
+static const std::map<std::string, RtSig> &kRuntimeSigs() {
+  static const std::map<std::string, RtSig> table = {
+#define VOID RtVoid
+#define I64 RtI64
+#define I32 RtI32
+#define I8 RtI8
+#define DOUBLE RtDouble
+#define PTR RtPtr
+#define CPTR RtPtr
+#define PLI_STRIP(...) __VA_ARGS__  // turn the .def's (a, b, c) into a braced list
+#define PLI_FN(name, ret, args) {#name, {ret, {PLI_STRIP args}}},
+#include "../runtime/pli_rt_abi.def"
+#undef PLI_FN
+#undef PLI_STRIP
+#undef CPTR
+#undef PTR
+#undef DOUBLE
+#undef I8
+#undef I32
+#undef I64
+#undef VOID
+  };
+  return table;
+}
+
+// Get (or create) a declaration for a runtime `pli_*` function. The signature
+// comes from runtime/pli_rt_abi.def, not from the caller, so the emitted IR
+// cannot drift from the C ABI.
+llvm::Function *IRGen::runtimeFn(const std::string &name) {
+  auto &sigs = kRuntimeSigs();
+  auto it = sigs.find(name);
+  if (it == sigs.end()) return nullptr;  // not a pli_* ABI function
+  auto tokTy = [this](RtTok k) -> llvm::Type * {
+    switch (k) {
+      case RtVoid: return b_.getVoidTy();
+      case RtI64: return b_.getInt64Ty();
+      case RtI32: return b_.getInt32Ty();
+      case RtI8: return b_.getInt8Ty();
+      case RtDouble: return b_.getDoubleTy();
+      case RtPtr: return b_.getPtrTy();
+    }
+    return b_.getVoidTy();
+  };
+  const RtSig &s = it->second;
+  std::vector<llvm::Type *> args;
+  for (RtTok a : s.args)
+    if (a != RtVoid) args.push_back(tokTy(a));  // RtVoid here means "no args"
+  llvm::FunctionType *ft = llvm::FunctionType::get(tokTy(s.ret), args, false);
+  llvm::Function *f = mod_.getFunction(name);
+  if (f) return f;
+  return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+}
+
+// Get (or create) an LLVM intrinsic with an explicit signature. Only used for
+// non-ABI LLVM builtins (llvm.pow.f64, llvm.fabs.f64).
+llvm::Function *IRGen::intrinsicFn(const std::string &name, llvm::Type *ret,
+                                   std::vector<llvm::Type *> args) {
+  llvm::FunctionType *ft = llvm::FunctionType::get(ret, args, false);
   llvm::Function *f = mod_.getFunction(name);
   if (f) return f;
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
@@ -145,7 +211,7 @@ std::string IRGen::run(HProgram &prog) {
                                llvm::Function::ExternalLinkage, "main", &mod_);
     llvm::BasicBlock *bb = llvm::BasicBlock::Create(ctx_, "entry", main);
     b_.SetInsertPoint(bb);
-    b_.CreateCall(runtimeFn("pli_rt_init", b_.getVoidTy(), {}), {});
+    b_.CreateCall(runtimeFn("pli_rt_init"), {});
     llvm::Function *mfn = mod_.getFunction(prog.mainProc->irName.substr(1));
     if (!mfn) {
       mfn = llvm::Function::Create(llvm::FunctionType::get(b_.getVoidTy(), false),
@@ -157,7 +223,7 @@ std::string IRGen::run(HProgram &prog) {
     }
     b_.SetInsertPoint(bb);
     b_.CreateCall(mfn, {});
-    b_.CreateCall(runtimeFn("pli_rt_fini", b_.getVoidTy(), {}), {});
+    b_.CreateCall(runtimeFn("pli_rt_fini"), {});
     b_.CreateRet(i32(0));
   }
 
@@ -250,8 +316,7 @@ void IRGen::allocaLocals(HProc *p) {
         llvm::Value *lenp = b_.CreateStructGEP(llvmTy(s->ty), a, 0, "lenp");
         b_.CreateStore(i32(0), lenp);
       } else {
-        b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn("pli_assign_char"),
                       {a, i64(s->ty.len), g, i64(0)});
       }
     }
@@ -567,7 +632,7 @@ void IRGen::emitStmt(HStmt *s) {
       break;
     }
     case HStmt::Stop:
-      b_.CreateCall(runtimeFn("pli_stop", b_.getVoidTy(), {}), {});
+      b_.CreateCall(runtimeFn("pli_stop"), {});
       b_.CreateUnreachable();
       break;
     case HStmt::Leave:
@@ -587,9 +652,7 @@ void IRGen::emitAssign(HStmt *s) {
     Val start = emitExpr(t->args[1].get());
     Val len = emitExpr(t->args[2].get());
     Val rhs = emitExpr(s->value.get());
-    b_.CreateCall(runtimeFn("pli_substr_assign", b_.getVoidTy(),
-                            {b_.getPtrTy(), b_.getInt64Ty(), b_.getInt64Ty(),
-                             b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+    b_.CreateCall(runtimeFn("pli_substr_assign"),
                   {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
@@ -728,43 +791,84 @@ void IRGen::emitDoIter(HStmt *s) {
 
 void IRGen::emitPut(HStmt *s) {
   if (s->page)
-    b_.CreateCall(runtimeFn("pli_put_page", b_.getVoidTy(), {}), {});
+    b_.CreateCall(runtimeFn("pli_put_page"), {});
   if (s->skip) {
     llvm::Value *n = i64(1);
     if (s->skipCount) {
       Val v = emitExpr(s->skipCount.get());
       n = toI64(v);
     }
-    b_.CreateCall(runtimeFn("pli_put_skip", b_.getVoidTy(), {b_.getInt64Ty()}), {n});
+    b_.CreateCall(runtimeFn("pli_put_skip"), {n});
   }
   for (auto &item : s->items) {
     Val v = emitExpr(item.get());
     switch (v.ty.k) {
       case TK::Char:
-        b_.CreateCall(runtimeFn("pli_put_list_char", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn("pli_put_list_char"),
                       {v.ptr, v.len});
         break;
       case TK::Float:
-        b_.CreateCall(runtimeFn("pli_put_list_float", b_.getVoidTy(),
-                                {b_.getDoubleTy()}),
+        b_.CreateCall(runtimeFn("pli_put_list_float"),
                       {v.reg});
         break;
       case TK::Bit: {
         llvm::Value *bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-        b_.CreateCall(runtimeFn("pli_put_list_bit", b_.getVoidTy(), {b_.getInt8Ty()}),
+        b_.CreateCall(runtimeFn("pli_put_list_bit"),
                       {bit});
         break;
       }
       case TK::FixedBin:
       case TK::FixedDec:
-        b_.CreateCall(runtimeFn("pli_put_list_fixed", b_.getVoidTy(),
-                                {b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn("pli_put_list_fixed"),
                       {toI64(v)});
         break;
       case TK::Void:
         break;
     }
+  }
+}
+
+// Address of one call argument for a by-reference parameter (rule 4).
+llvm::Value *IRGen::argAddr(HExpr *a, const Type &pty) {
+  bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
+                a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
+                a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
+  if (direct) return addressOf(a->sym);
+  llvm::Value *addr = entryAlloca(llvmTy(pty), "dummy");
+  Val av = emitExpr(a);
+  if (pty.isChar()) {
+    Val cv = av;
+    if (pty.varying) {
+      llvm::Value *dp = b_.CreateStructGEP(llvmTy(pty), addr, 1, "vdata");
+      llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying"),
+                                      {dp, i64(pty.len), cv.ptr, cv.len});
+      llvm::Value *lp = b_.CreateStructGEP(llvmTy(pty), addr, 0, "vlenp");
+      b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
+    } else {
+      b_.CreateCall(runtimeFn("pli_assign_char"),
+                    {addr, i64(pty.len), cv.ptr, cv.len});
+    }
+  } else {
+    Val cv = convert(av, pty, a->loc);
+    storeScalarTo(addr, pty, cv);
+  }
+  return addr;
+}
+
+// Append the callee's static-link arguments (its enclosing automatic
+// variables, rule 8). Shared by emitCall and emitExpr.
+void IRGen::appendStaticLinks(Proc *callee, std::vector<llvm::Value *> &args) {
+  if (!callee) return;
+  for (Symbol *v : callee->env) {
+    // "cousin" call: a sibling internal procedure reaching a non-adjacent
+    // enclosing variable is not yet supported.
+    if (v->owner != curProc_->src &&
+        std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
+      d_.error(callee->loc,
+               "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
+      continue;
+    }
+    args.push_back(addressOf(v));
   }
 }
 
@@ -788,51 +892,9 @@ void IRGen::emitCall(HStmt *s) {
       if (i < calleeSym->entryParams.size()) pty = calleeSym->entryParams[i];
       else break;
     }
-    llvm::Value *addr;
-    bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
-                  a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
-                  a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
-    if (direct) {
-      addr = addressOf(a->sym);
-    } else {
-      addr = entryAlloca(llvmTy(pty), "dummy");
-      Val v = emitExpr(a);
-      if (pty.isChar()) {
-        Val cv = v;
-        if (pty.varying) {
-          llvm::Value *dp = b_.CreateStructGEP(llvmTy(pty), addr, 1, "vdata");
-          llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying", b_.getInt64Ty(),
-                                                    {b_.getPtrTy(), b_.getInt64Ty(),
-                                                     b_.getPtrTy(), b_.getInt64Ty()}),
-                                          {dp, i64(pty.len), cv.ptr, cv.len});
-          llvm::Value *lp = b_.CreateStructGEP(llvmTy(pty), addr, 0, "vlenp");
-          b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
-        } else {
-          b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
-                                  {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
-                        {addr, i64(pty.len), cv.ptr, cv.len});
-        }
-      } else {
-        Val cv = convert(v, pty, a->loc);
-        storeScalarTo(addr, pty, cv);
-      }
-    }
-    args.push_back(addr);
+    args.push_back(argAddr(a, pty));
   }
-  // rule (8): pass the callee's static links (enclosing automatic variables).
-  if (callee) {
-    for (Symbol *v : callee->env) {
-      // "cousin" call: resolve via addressOf; for a non-adjacent variable
-      // so diagnose it (same rule as before).
-      if (v->owner != curProc_->src &&
-          std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
-        d_.error(callee->loc,
-                 "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
-        continue;
-      }
-      args.push_back(addressOf(v));
-    }
-  }
+  appendStaticLinks(callee, args);
   b_.CreateCall(calleeF, args);
 }
 
@@ -884,15 +946,12 @@ void IRGen::storeTo(Symbol *sym, const Val &v, SourceLoc loc) {
     }
     if (dt.varying) {
       llvm::Value *dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
-      llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying", b_.getInt64Ty(),
-                                                {b_.getPtrTy(), b_.getInt64Ty(),
-                                                 b_.getPtrTy(), b_.getInt64Ty()}),
+      llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying"),
                                       {dp, i64(dt.len), v.ptr, v.len});
       llvm::Value *lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
     } else {
-      b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
-                              {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
+      b_.CreateCall(runtimeFn("pli_assign_char"),
                     {addr, i64(dt.len), v.ptr, v.len});
     }
     return;
@@ -1030,48 +1089,9 @@ Val IRGen::emitExpr(HExpr *e) {
         Type pty;
         if (i < calleeParams.size()) pty = calleeParams[i]->ty;
         else break;
-        llvm::Value *addr;
-        bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
-                      a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
-                      a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
-        if (direct) {
-          addr = addressOf(a->sym);
-        } else {
-          addr = entryAlloca(llvmTy(pty), "dummy");
-          Val av = emitExpr(a);
-          if (pty.isChar()) {
-            Val cv = av;
-            if (pty.varying) {
-              llvm::Value *dp = b_.CreateStructGEP(llvmTy(pty), addr, 1, "vdata");
-              llvm::Value *ln = b_.CreateCall(runtimeFn("pli_assign_varying", b_.getInt64Ty(),
-                                                        {b_.getPtrTy(), b_.getInt64Ty(),
-                                                         b_.getPtrTy(), b_.getInt64Ty()}),
-                                              {dp, i64(pty.len), cv.ptr, cv.len});
-              llvm::Value *lp = b_.CreateStructGEP(llvmTy(pty), addr, 0, "vlenp");
-              b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
-            } else {
-              b_.CreateCall(runtimeFn("pli_assign_char", b_.getVoidTy(),
-                                      {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty()}),
-                            {addr, i64(pty.len), cv.ptr, cv.len});
-            }
-          } else {
-            Val cv = convert(av, pty, a->loc);
-            storeScalarTo(addr, pty, cv);
-          }
-        }
-        args.push_back(addr);
+        args.push_back(argAddr(a, pty));
       }
-      if (callee) {
-        for (Symbol *v : callee->env) {
-          if (v->owner != curProc_->src &&
-              std::find(curProc_->env.begin(), curProc_->env.end(), v) == curProc_->env.end()) {
-            d_.error(callee->loc,
-                     "a sibling internal procedure reaching a non-adjacent enclosing variable is not implemented in this stage", "(8)");
-            continue;
-          }
-          args.push_back(addressOf(v));
-        }
-      }
+      appendStaticLinks(callee, args);
       llvm::CallInst *call = b_.CreateCall(calleeFn, args, "fres");
       v.ty = rty;
       if (rty.isBit()) {
@@ -1107,9 +1127,7 @@ Val IRGen::emitExpr(HExpr *e) {
     Val b = emitExpr(e->b.get());
     if (!a.ty.isChar() || !b.ty.isChar()) { v.ty = e->ty; v.reg = i64(0); return v; }
     Val out = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_concat", b_.getVoidTy(),
-                            {b_.getPtrTy(), b_.getPtrTy(), b_.getInt64Ty(),
-                             b_.getPtrTy(), b_.getInt64Ty()}),
+    b_.CreateCall(runtimeFn("pli_concat"),
                   {out.ptr, a.ptr, a.len, b.ptr, b.len});
     out.len = b_.CreateAdd(a.len, b.len, "clen");
     return out;
@@ -1134,9 +1152,7 @@ Val IRGen::emitExpr(HExpr *e) {
   Val b = emitExpr(e->b.get());
 
   if (isCmp && a.ty.isChar() && b.ty.isChar()) {                // rule (117)
-    llvm::Value *c = b_.CreateCall(runtimeFn("pli_cmp_char", b_.getInt32Ty(),
-                                             {b_.getPtrTy(), b_.getInt64Ty(),
-                                              b_.getPtrTy(), b_.getInt64Ty()}),
+    llvm::Value *c = b_.CreateCall(runtimeFn("pli_cmp_char"),
                                    {a.ptr, a.len, b.ptr, b.len}, "scmp");
     llvm::CmpInst::Predicate pred = llvm::CmpInst::ICMP_EQ;
     switch (op) {
@@ -1205,8 +1221,8 @@ Val IRGen::emitExpr(HExpr *e) {
     case Tok::Minus: r = flt ? b_.CreateFSub(av.reg, bv.reg, "bin") : b_.CreateSub(av.reg, bv.reg, "bin"); break;
     case Tok::Star:  r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin"); break;
     case Tok::Slash: r = b_.CreateFDiv(av.reg, bv.reg, "bin"); break;
-    case Tok::Power: r = b_.CreateCall(runtimeFn("llvm.pow.f64", b_.getDoubleTy(),
-                                                 {b_.getDoubleTy(), b_.getDoubleTy()}),
+    case Tok::Power: r = b_.CreateCall(intrinsicFn("llvm.pow.f64", b_.getDoubleTy(),
+                                                  {b_.getDoubleTy(), b_.getDoubleTy()}),
                                        {av.reg, bv.reg}, "bin"); break;
     default: r = b_.CreateAdd(i64(0), i64(0)); break;
   }
@@ -1227,9 +1243,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         Val start = emitExpr(e->args[1].get());
         Val len = emitExpr(e->args[2].get());
         Val out = charTemp(e->ty.len);
-        b_.CreateCall(runtimeFn("pli_substr", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
-                                 b_.getInt64Ty(), b_.getInt64Ty(), b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn("pli_substr"),
                       {out.ptr, out.len, s.ptr, s.len, toI64(start), toI64(len)});
         out.len = i64(e->ty.len);
         result = out;
@@ -1238,9 +1252,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
       if (e->name == "INDEX") {
         Val a = emitExpr(e->args[0].get());
         Val b = emitExpr(e->args[1].get());
-        llvm::Value *r = b_.CreateCall(runtimeFn("pli_index", b_.getInt64Ty(),
-                                                 {b_.getPtrTy(), b_.getInt64Ty(),
-                                                  b_.getPtrTy(), b_.getInt64Ty()}),
+        llvm::Value *r = b_.CreateCall(runtimeFn("pli_index"),
                                        {a.ptr, a.len, b.ptr, b.len});
         v.ty = e->ty;
         v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "idx32");
@@ -1252,7 +1264,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         const Type &at = a.ty;
         llvm::Value *r;
         if (at.k == TK::Float) {
-          r = b_.CreateCall(runtimeFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}),
+          r = b_.CreateCall(intrinsicFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}),
                             {a.reg}, "abs");
         } else {
           llvm::Value *neg = b_.CreateSub(llvm::Constant::getNullValue(llvmTy(at)), a.reg, "absneg");
@@ -1314,12 +1326,10 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         Val bv = convert(b, common, e->loc);
         v.ty = common;
         if (common.k == TK::Float) {
-          v.reg = b_.CreateCall(runtimeFn("pli_mod_dd", b_.getDoubleTy(),
-                                          {b_.getDoubleTy(), b_.getDoubleTy()}),
+          v.reg = b_.CreateCall(runtimeFn("pli_mod_dd"),
                                 {av.reg, bv.reg}, "mod");
         } else {
-          llvm::Value *r = b_.CreateCall(runtimeFn("pli_mod_ll", b_.getInt64Ty(),
-                                                   {b_.getInt64Ty(), b_.getInt64Ty()}),
+          llvm::Value *r = b_.CreateCall(runtimeFn("pli_mod_ll"),
                                          {toI64(av), toI64(bv)});
           v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "mod32");
         }
@@ -1355,8 +1365,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         Val n = emitExpr(e->args[1].get());
         Val xd = convert(x, Type::flt(6), e->loc);
         v.ty = e->ty;
-        v.reg = b_.CreateCall(runtimeFn("pli_round", b_.getDoubleTy(),
-                                        {b_.getDoubleTy(), b_.getInt64Ty()}),
+        v.reg = b_.CreateCall(runtimeFn("pli_round"),
                               {xd.reg, toI64(n)}, "round");
         result = v;
         return true;
@@ -1365,9 +1374,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         Val s = emitExpr(e->args[0].get());
         Val n = emitExpr(e->args[1].get());
         Val out = charTemp(e->ty.len);
-        b_.CreateCall(runtimeFn("pli_repeat", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
-                                 b_.getInt64Ty(), b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn("pli_repeat"),
                       {out.ptr, out.len, s.ptr, s.len, toI64(n)});
         out.len = i64(e->ty.len);
         result = out;
@@ -1376,9 +1383,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
       if (e->name == "VERIFY") {
         Val s = emitExpr(e->args[0].get());
         Val t = emitExpr(e->args[1].get());
-        llvm::Value *r = b_.CreateCall(runtimeFn("pli_verify", b_.getInt64Ty(),
-                                                 {b_.getPtrTy(), b_.getInt64Ty(),
-                                                  b_.getPtrTy(), b_.getInt64Ty()}),
+        llvm::Value *r = b_.CreateCall(runtimeFn("pli_verify"),
                                        {s.ptr, s.len, t.ptr, t.len});
         v.ty = e->ty;
         v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
@@ -1390,10 +1395,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         Val out = emitExpr(e->args[1].get());
         Val in = emitExpr(e->args[2].get());
         Val dst = charTemp(e->ty.len);
-        b_.CreateCall(runtimeFn("pli_translate", b_.getVoidTy(),
-                                {b_.getPtrTy(), b_.getInt64Ty(), b_.getPtrTy(),
-                                 b_.getInt64Ty(), b_.getPtrTy(), b_.getInt64Ty(),
-                                 b_.getPtrTy(), b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn("pli_translate"),
                       {dst.ptr, dst.len, s.ptr, s.len, out.ptr, out.len, in.ptr, in.len});
         dst.len = i64(e->ty.len);
         result = dst;
@@ -1403,7 +1405,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         Val n = emitExpr(e->args[0].get());
         Val out = charTemp(e->ty.len);
         std::string fn = e->name == "HIGH" ? "pli_high" : "pli_low";
-        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn(fn),
                       {out.ptr, toI64(n)});
         out.len = i64(e->ty.len);
         result = out;
@@ -1412,7 +1414,7 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
       if (e->name == "DATE" || e->name == "TIME") {
         Val out = charTemp(e->ty.len);
         std::string fn = e->name == "DATE" ? "pli_date" : "pli_time";
-        b_.CreateCall(runtimeFn(fn, b_.getVoidTy(), {b_.getPtrTy(), b_.getInt64Ty()}),
+        b_.CreateCall(runtimeFn(fn),
                       {out.ptr, out.len});
         out.len = i64(e->ty.len);
         result = out;
