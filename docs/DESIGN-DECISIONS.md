@@ -1088,3 +1088,33 @@ first-class expression value / function argument (array-value semantics,
 independent); reusing `arrayElementAddr` per gather step by wrapping the
 induction variable in an `IntLit` (fixed indices may be runtime values, so the
 source flat offset is computed incrementally instead).
+
+## ADR-047 — `DEFINED` overlays: no storage, an address alias to the base
+
+**Context.** Rule (24) is `defined-attribute ::= DEFINED basic-reference
+[ POSITION ( integer ) ]`. A `DEFINED` declaration overlays the storage of
+another variable, so the two names touch the same bytes. ADR-018 framed this as
+an address computation over the base, with alias metadata for the optimizer.
+
+**Decision.** `DECLARE Y ty DEFINED X;` where `X` is an already-declared variable
+of the same type in the same procedure makes `Y` an alias for `X`'s storage: sema
+records `Y.sym->definedBase = X` and omits `Y` from the procedure's allocation
+list; `IRGen::addressOf(Y)` returns `addressOf(X)`. Because `Y` and `X` share a
+type, loads and stores through either name use the same LLVM pointer type, so the
+overlay is a pure address alias with no copying and no reinterpretation. The base
+is required to be same-type, in-scope, and not a structure; `POSITION`, a
+subscripted base, a different-type (memory-view) overlay, and an `iSUB` subscript
+(rule 134) are diagnosed rather than partially accepted.
+
+**Consequences.** Writing through `Y` is immediately visible through `X` and vice
+versa for both scalars and arrays. No new HIR node is needed — the alias lives on
+the `Symbol`, so every existing load/store/address path works unchanged.
+`tests/core/defined.pli` covers a scalar and an array overlay; `bad_defined.pli`
+covers an undeclared base and a type mismatch.
+
+**Rejected.** Copy-in/copy-out (wrong semantics — the whole point is shared
+storage); emitting alias.scope/noalias metadata now (the optimizer has no
+visible-alias bug at -O0, and both names already share one alloca, so LLVM sees
+the aliasing structurally); a different-type overlay (needs an address bitcast and
+a size check, an independent slice); `POSITION`, subscripted bases, and `iSUB`
+(rule 134) now.

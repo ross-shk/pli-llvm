@@ -23,6 +23,7 @@ struct Symbol {
   Stmt* entry = nullptr;         // if this ProcName is an ENTRY statement (rule 56)
   Expr* initExpr = nullptr;      // folded INITIAL constant, rule (26)
   std::vector<Expr*> initElems;  // folded INITIAL element list for arrays, rule (26)
+  Symbol* definedBase = nullptr; // DEFINED on this variable's storage (rule 24); null = none
 };
 
 struct Scope {

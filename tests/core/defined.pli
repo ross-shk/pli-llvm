@@ -1,0 +1,29 @@
+   /* DEFINED (rule 24): a declaration overlays the storage of an already-
+      declared same-type variable, so the two names share the same memory.
+      Covers a scalar overlay and an array overlay (ADR-018 address rule). */
+   defined_test: procedure options(main);
+      declare x fixed bin(31);
+      declare y fixed bin(31) defined x;
+      declare a(3) fixed bin(31);
+      declare b(3) fixed bin(31) defined a;
+      declare i fixed bin(31), fails fixed bin(31);
+
+      fails = 0;
+
+      /* scalar overlay: x and y are the same storage */
+      x = 7;
+      if y ^= 7 then fails = fails + 1;
+      y = 99;
+      if x ^= 99 then fails = fails + 1;
+
+      /* array overlay: writing through b is visible via a, and vice versa */
+      a(1) = 10;
+      a(2) = 20;
+      a(3) = 30;
+      if b(1) ^= 10 or b(2) ^= 20 or b(3) ^= 30 then fails = fails + 1;
+      b(2) = 22;
+      if a(2) ^= 22 then fails = fails + 1;
+
+      if fails = 0 then put skip list('PASS defined');
+      else put skip list('FAIL defined: fails =', fails);
+   end defined_test;

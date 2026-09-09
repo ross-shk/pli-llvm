@@ -355,11 +355,38 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         item.ty = buildType(idx);
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p; // which procedure's frame holds this variable
+        // DEFINED (rule 24): the item overlays the storage of an already-
+        // declared variable of identical type in this scope, so it needs no
+        // storage of its own — references resolve to the base's address
+        // (ADR-018). Unsupported forms are diagnosed, never silently dropped.
+        bool isDefined = false;
+        if (!item.definedBase.empty()) {
+          Symbol* base = lookup(sc, item.definedBase);
+          if (!base || base->kind != Symbol::Var) {
+            d_.error(item.loc,
+                     "DEFINED base '" + item.definedBase + "' is not a variable in this scope",
+                     "(24)");
+          } else if (base->owner != p) {
+            d_.error(item.loc,
+                     "DEFINED across an enclosing procedure is not implemented in this stage",
+                     "(24)");
+          } else if (item.ty.isStruct() || base->ty.isStruct()) {
+            d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
+          } else if (!(item.ty == base->ty)) {
+            d_.error(item.loc,
+                     "DEFINED requires the item and base to have the same type (" + item.ty.desc() +
+                         " vs " + base->ty.desc() + ")",
+                     "(24)");
+          } else {
+            item.sym->definedBase = base;
+            isDefined = true;
+          }
+        }
         // Only scalar (numeric/BIT) element arrays are served in this stage;
         // character element arrays are diagnosed, never silently miscompiled
         // (invariant 2). INITIAL on an array (rule 26) expands its itemlist
         // (with iteration factors and '*') into one value per element.
-        if (item.ty.isArray()) {
+        if (item.ty.isArray() && !isDefined) {
           if (item.ty.elementType().isChar())
             d_.error(item.loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
           if (!item.initItems.empty()) {
@@ -380,7 +407,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
         // BEGIN blocks too, hence the Proc* here.
-        if (item.sym->kind == Symbol::Var && !item.sym->isStatic)
+        if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase)
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.

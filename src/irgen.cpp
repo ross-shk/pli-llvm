@@ -382,6 +382,10 @@ void IRGen::emitGlobals() {
 }
 
 llvm::Value* IRGen::addressOf(Symbol* sym) {
+  // A DEFINED variable (rule 24) has no storage of its own: it overlays the
+  // base variable's storage, so its address is the base's address (ADR-018).
+  if (sym->definedBase)
+    return addressOf(sym->definedBase);
   // rule (8): an enclosing variable is reached through this frame's static
   // link; otherwise it is this frame's own storage (globals / allocas /
   // parameters). Both are recorded in symAddr_.
