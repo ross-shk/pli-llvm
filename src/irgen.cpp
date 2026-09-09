@@ -1511,5 +1511,21 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         result = out;
         return true;
       }
+      // Array attribute built-ins (M2, rule (123)): constant bounds fold to a
+      // compile-time value. The argument is the unsubscripted array reference;
+      // read its bounds from the symbol rather than emitting the array value.
+      if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
+        HExpr *a = e->args[0].get();
+        const Type &arr = a->sym ? a->sym->ty : Type::fixedBin(31, 0);
+        long long lb = arr.isArray() ? arr.dims[0].first : 1;
+        long long ub = arr.isArray() ? arr.dims[0].second : 1;
+        long long val = e->name == "LBOUND" ? lb
+                       : e->name == "HBOUND" ? ub
+                       : (ub - lb + 1);
+        v.ty = e->ty;
+        v.reg = i64(val);
+        result = v;
+        return true;
+      }
   return false;
 }
