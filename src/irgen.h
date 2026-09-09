@@ -85,6 +85,8 @@ private:
   void appendStaticLinks(Proc *callee, std::vector<llvm::Value *> &args);
 
   Val emitExpr(HExpr *e);
+  // Number of elements on the single served axis: ub - lb + 1 (rule (12)).
+  long long arrayExtent(const Type &arr);
   // Address of one array element A(i) (rule 126), after a runtime bounds check.
   // The element type and bounds come from the array symbol; `idx` is the index.
   llvm::Value *arrayElementAddr(Symbol *sym, HExpr *idx, SourceLoc loc);

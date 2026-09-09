@@ -294,7 +294,7 @@ void IRGen::emitGlobals() {
     llvm::Constant *ginit = init;
     if (t.isArray()) {
       // STATIC array: a [N x elemTy] global, zero-initialised (rules (12),(13)).
-      gt = llvm::ArrayType::get(llvmTy(t.elementType()), t.dims[0].second);
+      gt = llvm::ArrayType::get(llvmTy(t.elementType()), (unsigned)arrayExtent(t));
       ginit = llvm::ConstantAggregateZero::get(gt);
     }
     auto *g = new llvm::GlobalVariable(mod_, gt, false,
@@ -318,7 +318,7 @@ void IRGen::allocaLocals(HProc *p) {
     if (s->ty.isArray()) {
       // A fixed-size array is a [N x elemTy] alloca (rules (12),(13)).
       const Type &el = s->ty.elementType();
-      a = entryAlloca(llvm::ArrayType::get(llvmTy(el), s->ty.dims[0].second), s->irName.substr(1));
+      a = entryAlloca(llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(s->ty)), s->irName.substr(1));
     } else {
       a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
     }
@@ -922,6 +922,11 @@ void IRGen::emitCall(HStmt *s) {
 // ---------------------------------------------------------------------------
 // loads / stores
 // ---------------------------------------------------------------------------
+// Number of elements on the single served axis: ub - lb + 1 (rule (12)).
+long long IRGen::arrayExtent(const Type &arr) {
+  return arr.dims[0].second - arr.dims[0].first + 1;
+}
+
 // Address of array element A(i) (rule 126): a runtime SUBSCRIPTRANGE check,
 // then a GEP into the [N x elemTy] storage. i is a 1-based (or lb-based)
 // subscript; the generated index is i - lb.
@@ -946,7 +951,7 @@ llvm::Value *IRGen::arrayElementAddr(Symbol *sym, HExpr *idx, SourceLoc loc) {
 
   startBlock(okL);
   llvm::Value *off = b_.CreateSub(i, i64(lb), "off");
-  llvm::Type *arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arr.dims[0].second);
+  llvm::Type *arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));
   return b_.CreateInBoundsGEP(arrTy, base, {i64(0), off}, "aelem");
 }
 
