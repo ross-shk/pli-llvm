@@ -585,6 +585,34 @@ milestone, M8); rewriting sema to build HIR directly (far beyond the M1 "thin
 mirror" scope); dropping the mirror and keeping IRGen on the AST (leaves no
 inspectable HIR for later passes to hang off).
 
+## ADR-030 — Fix-its: insertions threaded through `Diags`, rendered at the caret
+
+**Context.** The M1 diagnostics scope is "fix-its, `--explain <rule>`".
+`--explain` is ADR-028. A fix-it should tell the reader what to type to repair
+the error. Most syntax-recovery cases in this parser are *insertions* of a
+missing token at the current token's position — `expected THEN`, `expected '='
+in assignment statement`, `expected PROCEDURE after entry name`, and the EOF
+case `missing END for '<name>'`.
+
+**Decision.** `Diags::error`/`warn` gain one optional `replace` argument: the
+text to insert at the diagnostic's location. `Diags::emit` renders it on a line
+below the caret, padded to the same column, so the suggested text sits exactly
+where it goes (clang-style "insert here"). Only unambiguous single-token
+insertions carry a fix-it; a fix-it is only rendered where a real source line
+exists (the EOF `missing END` case is guarded the same way the caret is).
+Muted speculative-parse probes (ADR-004 step 3) never render fix-its because
+they return before `emit`.
+
+**Consequences.** `tests/driver/fixit.sh` checks that the four recovery cases
+render their suggested token. Fix-its stay one-argument-simple; there is no
+general replacement-span or multi-edit machinery yet. `-fdiagnostics-format=json`
+(ARCHITECTURE §6) remains planned.
+**Rejected.** A structured fix-it object with spans and kinds (a replacement of
+an existing range, or a note attached to a *different* location) — more
+machinery than the current recovery cases need; building it now would be
+speculative (KISS).
+
+
 
 
 

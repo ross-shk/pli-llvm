@@ -147,7 +147,7 @@ void Parser::parseExternalProcedure() {
   }
   if (!expect(Tok::Colon, "(64)")) { resync(); return; }
   if (!(atStmtKeyword("PROCEDURE") || atStmtKeyword("PROC"))) {
-    d_.error(cur().loc, "expected PROCEDURE after entry name", "(2)");
+    d_.error(cur().loc, "expected PROCEDURE after entry name", "(2)", "PROCEDURE ");
     resync();
     return;
   }
@@ -221,7 +221,8 @@ EndInfo Parser::parseBody(Proc *owner, std::vector<StmtP> &body,
                           const std::string &ownName) {
   for (;;) {
     if (at(Tok::Eof)) {
-      d_.error(cur().loc, "unexpected end of file: missing END for '" + ownName + "'", "(7)");
+      d_.error(cur().loc, "unexpected end of file: missing END for '" + ownName + "'",
+               "(7)", "END " + ownName + ";");
       return {};
     }
     if (atStmtKeyword("END")) {
@@ -649,7 +650,7 @@ StmtP Parser::parseIf(Proc *owner) {
   advance();  // IF
   st->cond = parseExpr();
   if (!atWord("THEN")) {
-    d_.error(cur().loc, "expected THEN", "(75)");
+    d_.error(cur().loc, "expected THEN", "(75)", "THEN ");
     resync();
     return nullptr;
   }
@@ -800,7 +801,7 @@ StmtP Parser::parseAssignment() {
   st->target = parsePrimary();
   if (!st->target) { resync(); return nullptr; }
   if (!at(Tok::Eq)) {
-    d_.error(cur().loc, "expected '=' in assignment statement", "(86)");
+    d_.error(cur().loc, "expected '=' in assignment statement", "(86)", "= ");
     resync();
     return nullptr;
   }

@@ -16,8 +16,10 @@ class Diags {
 public:
   explicit Diags(std::string filename) : file_(std::move(filename)) {}
 
-  void error(SourceLoc loc, const std::string &msg, const std::string &rule = "");
-  void warn(SourceLoc loc, const std::string &msg, const std::string &rule = "");
+  void error(SourceLoc loc, const std::string &msg, const std::string &rule = "",
+             const std::string &replace = "");
+  void warn(SourceLoc loc, const std::string &msg, const std::string &rule = "",
+            const std::string &replace = "");
   void note(SourceLoc loc, const std::string &msg);
 
   int errorCount() const { return nerr_; }
@@ -39,7 +41,7 @@ public:
 
 private:
   void emit(const char *level, SourceLoc loc, const std::string &msg,
-            const std::string &rule);
+            const std::string &rule, const std::string &replace);
   std::string file_;
   const std::string *src_ = nullptr;
   int nerr_ = 0;

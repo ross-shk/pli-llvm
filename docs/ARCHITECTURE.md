@@ -289,8 +289,10 @@ tests/core/bad_attrs.pli:4:12: error: FIXED and FLOAT are conflicting attributes
 This is deliberate: PL/I's rule set is large and unfamiliar to most working
 programmers, and a citation makes a diagnostic checkable against the spec.
 `--explain <rule>` prints the TR 25.084 production for a rule number (generated
-from the spec by `scripts/gen_rules.py`, so it cannot drift). Planned
-additions: fix-it hints and `-fdiagnostics-format=json`.
+from the spec by `scripts/gen_rules.py`, so it cannot drift). A fix-it is an
+insertion suggested at the caret column — e.g. `expected THEN` renders the
+missing `THEN` under the offending token — for the unambiguous recovery cases
+(missing `THEN`, `=`, `PROCEDURE`, or `END`). Planned: `-fdiagnostics-format=json`.
 
 ## 7. Testing architecture
 
@@ -316,7 +318,8 @@ the full operator set with spec precedence, 48-character-set operator words,
 `CHARACTER` fixed/`VARYING` with concatenation and padded comparison, `BIT(1)`,
 `FLOAT`, `FIXED BINARY/DECIMAL` with scale 0. M1 adds static links so internal
 procedures reach enclosing automatic storage and external procedures are
-reentrant (ADR-027), and `ENTRY` statements (ADR-026).
+reentrant (ADR-027), `ENTRY` statements (ADR-026), and diagnostic fix-its
+(ADR-030) suggesting the missing token for the unambiguous recovery cases.
 
 Everything else is diagnosed as unimplemented with its rule number, which is
 also the project's to-do list: see IMPLEMENTATION-PLAN.md.

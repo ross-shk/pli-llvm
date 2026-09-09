@@ -3,7 +3,7 @@
 #include <sstream>
 
 void Diags::emit(const char *level, SourceLoc loc, const std::string &msg,
-                 const std::string &rule) {
+                 const std::string &rule, const std::string &replace) {
   std::string suffix;
   if (!rule.empty()) suffix = "  [TR 25.084 rule " + rule + "]";
   if (loc.line > 0)
@@ -46,23 +46,32 @@ void Diags::emit(const char *level, SourceLoc loc, const std::string &msg,
       }
       fprintf(stderr, "  %s\n", show.c_str());
       fprintf(stderr, "  %s\n", caret.c_str());
+
+      // A fix-it is an insertion of `replace` at this location; render the
+      // suggested text at the caret column so it is visible where it goes.
+      if (!replace.empty()) {
+        std::string pad(d, ' ');
+        fprintf(stderr, "  %s%s\n", pad.c_str(), replace.c_str());
+      }
     }
   }
 }
 
-void Diags::error(SourceLoc loc, const std::string &msg, const std::string &rule) {
+void Diags::error(SourceLoc loc, const std::string &msg, const std::string &rule,
+                  const std::string &replace) {
   if (muted()) { ++mnerr_; return; }
   ++nerr_;
-  emit("error", loc, msg, rule);
+  emit("error", loc, msg, rule, replace);
 }
 
-void Diags::warn(SourceLoc loc, const std::string &msg, const std::string &rule) {
+void Diags::warn(SourceLoc loc, const std::string &msg, const std::string &rule,
+                 const std::string &replace) {
   if (muted()) return;
   ++nwarn_;
-  emit("warning", loc, msg, rule);
+  emit("warning", loc, msg, rule, replace);
 }
 
 void Diags::note(SourceLoc loc, const std::string &msg) {
   if (muted()) return;
-  emit("note", loc, msg, "");
+  emit("note", loc, msg, "", "");
 }
