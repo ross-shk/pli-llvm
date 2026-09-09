@@ -833,4 +833,33 @@ semantics and complicates qualification); a per-member dope vector or descriptor
 (unneeded for constant layout); serving whole-structure values in this stage
 (diagnosed per unimplemented ≠ accepted).
 
+## ADR-038 — Structure array members: `llvmTy` handles arrays, subscripted via memberPath
+
+**Context.** Record-processing programs (the M2 exit criterion) declare array
+fields inside structures, `2 A(10) FIXED BIN(31)`, referenced as `S.A(i)` (rules
+(11),(124),(126)). A member is a `Type` with `dims`; the question is how to lay
+it out and address a subscripted member array, and how a member array interacts
+with the existing flat `[N x elemTy]` array codegen.
+
+**Decision.** `llvmTy` now handles `isArray()` and emits `[N x elemTy]` (before,
+only top-level arrays got their aggregate type via `addressOf`/`emitGlobals`
+special-casing, so a member array collapsed to its scalar — a latent layout bug
+that LLVM `-O2`/SROA miscompiled into `poison` for nested member arrays). A
+member array therefore lays out as an `[N x elemTy]` field of the struct. In
+sema, `S.A(i)` — which the parser sees as a Call with `path` — is reclassified
+as a `Subscript` carrying the base structure symbol and the resolved
+`memberPath`; arity and constant bounds are checked against the member's `dims`.
+IRGen composes the two existing addressing schemes: `memberAddr` descends the
+field indices to the member array's address, then `arrayElementAddr(arr, base,
+…)` does the flat row-major GEP with the per-axis `SUBSCRIPTRANGE` check.
+`memberType` mirrors `memberAddr` (no GEPs) to recover the leaf array type.
+
+**Consequences.** Structure array members — nested (minor-struct) and multi-axis
+— work in read/write/expression positions with the same bounds checking as
+standalone arrays, reusing the existing aggregate layout (ADR-036/037).
+**Rejected.** Giving array members their own symbol/allocation (breaks PL/I
+member semantics); a dope vector for constant-bounds member arrays (unneeded —
+ADR-008); re-deriving the member type by walking in IRGen instead of the single
+`memberType` helper (duplication). `CHARACTER` array members remain diagnosed.
+
 

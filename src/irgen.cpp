@@ -14,6 +14,10 @@
 // helpers
 // ---------------------------------------------------------------------------
 llvm::Type *IRGen::llvmTy(const Type &t) {
+  // An array is a [N x elemTy] aggregate (rules (12),(13)); handled here so a
+  // struct member that is itself an array (2 A(10) ...) lays out correctly.
+  if (t.isArray())
+    return llvm::ArrayType::get(llvmTy(t.elementType()), (unsigned)arrayExtent(t));
   switch (t.k) {
     case TK::FixedBin:
     case TK::FixedDec:
@@ -686,6 +690,20 @@ void IRGen::emitAssign(HStmt *s) {
   if (s->target->kind == HExpr::Subscript && s->target->sym) {
     HExpr *t = s->target.get();
     Val v = emitExpr(s->value.get());
+    if (!t->memberPath.empty()) {
+      // A subscripted member array S.A(i) = e (rules 124,126): store through
+      // the member array field, bounds-checked like any array element.
+      const Type &arr = memberType(t->sym, t->memberPath);
+      const Type &el = t->ty;
+      if (el.isChar()) {
+        d_.error(s->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
+        return;
+      }
+      llvm::Value *addr = arrayElementAddr(arr, memberAddr(t->sym, t->memberPath, s->loc),
+                                           t->args, s->loc);
+      storeScalarTo(addr, el, convert(v, el, s->loc));
+      return;
+    }
     storeArrayElement(t->sym, t->args, v, s->loc);
     return;
   }
@@ -967,11 +985,10 @@ long long IRGen::arrayExtent(const Type &arr) {
 // check on each axis, then a GEP into the flat row-major [N x elemTy] storage.
 // Each index is 1-based (or lb-based); the generated flat offset is
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
-llvm::Value *IRGen::arrayElementAddr(Symbol *sym, const std::vector<HExprP> &idxs, SourceLoc loc) {
-  const Type &arr = sym->ty;
+llvm::Value *IRGen::arrayElementAddr(const Type &arr, llvm::Value *base,
+                                     const std::vector<HExprP> &idxs, SourceLoc loc) {
   const Type &el = arr.elementType();
   const size_t nAxes = arr.dims.size();
-  llvm::Value *base = addressOf(sym);
 
   // Emit every index and OR the per-axis out-of-bounds flags into one check,
   // accumulating the row-major flat offset (last axis is contiguous).
@@ -1014,6 +1031,15 @@ llvm::Value *IRGen::memberAddr(Symbol *base, const std::vector<unsigned> &path, 
     cur = &cur->members[f]->ty;
   }
   return addr;
+}
+
+// The resolved type of a qualified member S.A.B (rule 124): walk the recorded
+// field indices (as memberAddr does, without emitting GEPs) to recover the leaf
+// member's type — for a subscripted member array S.A(i), this is the array type.
+const Type &IRGen::memberType(Symbol *base, const std::vector<unsigned> &path) {
+  const Type *cur = &base->ty;
+  for (unsigned f : path) cur = &cur->members[f]->ty;
+  return *cur;
 }
 
 Val IRGen::loadSym(Symbol *sym, const Type &ty) {
@@ -1087,7 +1113,7 @@ Val IRGen::loadArrayElement(Symbol *sym, const std::vector<HExprP> &idxs, Source
     v.reg = i64(0);
     return v;
   }
-  llvm::Value *addr = arrayElementAddr(sym, idxs, loc);
+  llvm::Value *addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc);
   llvm::Value *r = b_.CreateLoad(llvmTy(el), addr, "ald");
   if (el.isBit())
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
@@ -1104,7 +1130,7 @@ void IRGen::storeArrayElement(Symbol *sym, const std::vector<HExprP> &idxs, cons
     d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
     return;
   }
-  llvm::Value *addr = arrayElementAddr(sym, idxs, loc);
+  llvm::Value *addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc);
   Val cv = convert(src, el, loc);
   storeScalarTo(addr, el, cv);
 }
@@ -1218,6 +1244,23 @@ Val IRGen::emitExpr(HExpr *e) {
       return v;
     case HExpr::Subscript:
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }
+      if (!e->memberPath.empty()) {
+        // A subscripted member array S.A(i) (rules 124,126): the member array
+        // lives at memberAddr(...) (a [N x elemTy] field), so GEP into it as a
+        // normal array and load the leaf element.
+        const Type &arr = memberType(e->sym, e->memberPath);
+        const Type &el = e->ty;
+        if (el.isChar()) {
+          d_.error(e->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
+          v.ty = el; v.reg = i64(0); return v;
+        }
+        llvm::Value *addr = arrayElementAddr(arr, memberAddr(e->sym, e->memberPath, e->loc),
+                                             e->args, e->loc);
+        llvm::Value *r = b_.CreateLoad(llvmTy(el), addr, "mald");
+        v.ty = el;
+        v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+        return v;
+      }
       return loadArrayElement(e->sym, e->args, e->loc);
     case HExpr::VarRef:
       if (!e->sym) { v.ty = e->ty; v.reg = i64(0); return v; }

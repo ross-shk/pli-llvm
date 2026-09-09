@@ -88,13 +88,18 @@ private:
   // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).
   long long arrayExtent(const Type &arr);
   // Address of one array element A(i,j,...) (rule 126), after a runtime bounds
-  // check on each axis. The element type and bounds come from the array symbol;
-  // `idxs` holds one index per axis.
-  llvm::Value *arrayElementAddr(Symbol *sym, const std::vector<HExprP> &idxs, SourceLoc loc);
+  // check on each axis. `arr` is the array type (bounds + element), `base` the
+  // address of the array storage; `idxs` holds one index per axis.
+  llvm::Value *arrayElementAddr(const Type &arr, llvm::Value *base,
+                                const std::vector<HExprP> &idxs, SourceLoc loc);
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.
   llvm::Value *memberAddr(Symbol *base, const std::vector<unsigned> &path, SourceLoc loc);
+  // The resolved type of a qualified member S.A.B (rule 124): walk the recorded
+  // field indices to recover the leaf member's type (an array member's array
+  // type), mirroring memberAddr without emitting GEPs.
+  const Type &memberType(Symbol *base, const std::vector<unsigned> &path);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.

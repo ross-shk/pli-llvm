@@ -1,0 +1,7 @@
+ /* A subscript on a structure member that is not an array is an error
+    (rule (126)): only array members may be subscripted. */
+ bad_struct_array_scalar: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31);
+    s.a(1) = 5;
+ end bad_struct_array_scalar;

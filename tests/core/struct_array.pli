@@ -1,0 +1,41 @@
+ /* Structure members that are arrays (rules (11),(124),(126)): 2 A(10) declares
+    an array member of a structure, referenced as S.A(i). Array members may be
+    nested inside minor structures (S.X.Y(i,j)) and used on both sides of an
+    assignment and in expressions. */
+ struct_array_test: procedure options(main);
+    declare 1 s,
+           2 a(10) fixed bin(31),
+           2 b fixed bin(31),
+           2 x,
+             3 y(5,5) fixed bin(31),
+             3 z fixed bin(31);
+    declare i fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* write via a runtime-indexed member array */
+    do i = 1 to 10;
+       s.a(i) = i * 2;
+    end;
+
+    /* a nested (minor) structure member array, single and multi-axis */
+    s.x.y(2,3) = 99;
+    s.x.z = s.a(5) + s.x.y(2,3);
+
+    /* read back */
+    if s.a(1) ^= 2 then fails = fails + 1;
+    if s.a(5) ^= 10 then fails = fails + 1;
+    if s.a(10) ^= 20 then fails = fails + 1;
+    if s.x.y(2,3) ^= 99 then fails = fails + 1;
+    if s.x.z ^= 109 then fails = fails + 1;
+
+    /* a second member-array axis, with a different upper bound */
+    do i = 1 to 5;
+       s.x.y(i,1) = i;
+    end;
+    if s.x.y(4,1) ^= 4 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS struct_array');
+    else put skip list('FAIL struct_array: fails =', fails);
+ end struct_array_test;

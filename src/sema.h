@@ -65,6 +65,14 @@ private:
   void typeExpr(Expr *e, Scope *sc, Proc *p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr *e, Symbol *arr);
+  // Compile-time SUBSCRIPTRANGE check for a constant subscript against an
+  // explicit bound list (rule 126); `name` is the array's diagnostic name.
+  void checkSubscriptBoundsDims(Expr *e, const std::vector<std::pair<int, int>> &dims,
+                                const std::string &name);
+  // Resolve a qualified reference S.A.B (rule 124) against a structure type,
+  // recording the LLVM field index of each step in e->memberPath. Returns the
+  // leaf member's type, or nullptr after reporting a diagnostic.
+  const Type *resolveMemberPath(Expr *e, const Type &base);
   // Type a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` is a known built-in (result typed or diagnosed); false otherwise, so
   // typeExpr can fall through to the general function-call path.
