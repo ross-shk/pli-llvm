@@ -77,6 +77,15 @@ bool Parser::looksLikeAssignment() const {
          (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
          t_[j + 1].kind == Tok::Word)
     j += 2;
+  // Multiple assignment targets: A, B, C = (rule 86) — skip further
+  // references separated by commas (each possibly qualified).
+  while (j + 1 < t_.size() && t_[j].kind == Tok::Comma && t_[j + 1].kind == Tok::Word) {
+    j += 2;
+    while (j + 1 < t_.size() &&
+           (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
+           t_[j + 1].kind == Tok::Word)
+      j += 2;
+  }
   if (t_[j].kind == Tok::Eq) return true;
   if (t_[j].kind == Tok::LParen) {
     int depth = 0;
@@ -876,12 +885,23 @@ StmtP Parser::parseCall() {
 }
 
 // assignment-statement ::= reference = expression ;                rule (86)
+// assignment-statement ::= {,• reference•••} = expression [ , BY NAME ]
+//                                                          rule (86)
+// The comma-separated target list precedes '='; every target receives the value
+// of the single RHS expression. A trailing ", BY NAME" is diagnosed (M2 plan
+// lists BY NAME separately, still unimplemented).
 StmtP Parser::parseAssignment() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Assign;
   st->loc = cur().loc;
   st->target = parsePrimary();
   if (!st->target) { resync(); return nullptr; }
+  while (at(Tok::Comma)) {
+    advance();
+    ExprP more = parsePrimary();
+    if (!more) { resync(); return nullptr; }
+    st->extraTargets.push_back(std::move(more));
+  }
   if (!at(Tok::Eq)) {
     d_.error(cur().loc, "expected '=' in assignment statement", "(86)", "= ");
     resync();
@@ -890,9 +910,14 @@ StmtP Parser::parseAssignment() {
   advance();
   st->value = parseExpr();
   if (at(Tok::Comma)) {
-    d_.error(cur().loc, "multiple assignment targets are not implemented in this stage", "(86)");
-    resync();
-    return st;
+    advance();
+    if (atWord("BY") && peek().isWord("NAME")) {
+      d_.error(cur().loc, "assignment BY NAME is not implemented in this stage", "(86)");
+      advance();
+      advance();
+    } else {
+      d_.error(cur().loc, "malformed assignment: unexpected item after the right-hand side", "(86)");
+    }
   }
   expect(Tok::Semi, "(86)");
   return st;

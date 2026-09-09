@@ -76,6 +76,7 @@ struct HStmt {
   std::vector<HDeclItem> decls;
 
   HExprP target, value, cond, from, to, by;
+  std::vector<HExprP> extraTargets;  // rule (86) multiple assignment a, b, c = e
   HStmtP thenS, elseS;
   std::vector<HStmtP> body;
 

@@ -404,8 +404,37 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
     case Stmt::Declare:
       break;  // handled in collectDecls
     case Stmt::Assign: {
-      typeExpr(s->target.get(), sc, p);
       typeExpr(s->value.get(), sc, p);
+      // Multiple assignment (rule 86): a, b, c = e — the shared value is
+      // converted once (to the first target's type) and stored to every target,
+      // so all targets must be of that same type. SUBSTR and whole-structure
+      // targets are not served in a multiple-assignment list.
+      if (!s->extraTargets.empty()) {
+        auto checkOne = [&](Expr *t) {
+          typeExpr(t, sc, p);
+          if (t->kind != Expr::VarRef && t->kind != Expr::Subscript) {
+            d_.error(t->loc, "multiple-assignment target must be a scalar variable or array element in this stage", "(86)");
+            return false;
+          }
+          if (t->kind == Expr::VarRef && t->sym &&
+              t->sym->kind == Symbol::ProcName) {
+            d_.error(t->loc, "cannot assign to procedure '" + t->name + "'", "(86)");
+            return false;
+          }
+          if (!s->value->ty.isVoid() && !t->ty.isVoid())
+            checkAssignable(t->ty, s->value->ty, t->loc, "assignment");
+          return true;
+        };
+        bool ok = checkOne(s->target.get());
+        for (auto &t : s->extraTargets) ok = checkOne(t.get()) && ok;
+        if (ok && !s->target->ty.isVoid()) {
+          for (auto &t : s->extraTargets)
+            if (!(t->ty == s->target->ty))
+              d_.error(t->loc, "multiple-assignment targets must all have the same type", "(86)");
+        }
+        break;
+      }
+      typeExpr(s->target.get(), sc, p);
       // SUBSTR pseudo-variable (M2): substr(v, i, n) on the left of '=' — v
       // must be a modifiable character variable that the assignment overwrites.
       if (s->target->kind == Expr::Call && s->target->name == "SUBSTR") {

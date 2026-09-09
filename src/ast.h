@@ -76,6 +76,7 @@ struct Stmt {
   std::vector<DeclItem> decls;
 
   ExprP target, value, cond, from, to, by;
+  std::vector<ExprP> extraTargets;   // rule (86) multiple assignment a, b, c = e
   StmtP thenS, elseS;
   std::vector<StmtP> body;
 

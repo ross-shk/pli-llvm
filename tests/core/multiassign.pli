@@ -1,0 +1,37 @@
+  /* Multiple assignment (rule 86): a, b, c = expr; evaluates the RHS once and
+     stores it to every target in the comma-separated list. Scalar variables
+     and array elements share the value; the RHS is computed a single time. */
+  multiassign_test: procedure options(main);
+     declare (a, b, c) fixed bin(31);
+     declare x(3) fixed bin(31);
+     declare i fixed bin(31);
+     declare fails fixed bin(31);
+
+     fails = 0;
+
+     /* scalar targets: a, b, c all get the same value */
+     a, b, c = 7;
+     if a ^= 7 or b ^= 7 or c ^= 7 then fails = fails + 1;
+
+     /* RHS may be an expression; it is evaluated once */
+     a, b = 2 * 3 + 1;
+     if a ^= 7 or b ^= 7 then fails = fails + 1;
+
+     /* RHS may read one of the targets, then store to all */
+     a = 5;
+     a, b, c = a + 2;
+     if a ^= 7 or b ^= 7 or c ^= 7 then fails = fails + 1;
+
+     /* array elements as targets */
+     x(1), x(2), x(3) = 4;
+     do i = 1 to 3;
+        if x(i) ^= 4 then fails = fails + 1;
+     end;
+
+     /* mix scalar and array targets sharing one RHS */
+     a, x(1), b = 9;
+     if a ^= 9 or b ^= 9 or x(1) ^= 9 then fails = fails + 1;
+
+     if fails = 0 then put skip list('PASS multiassign');
+     else put skip list('FAIL multiassign: fails =', fails);
+  end multiassign_test;
