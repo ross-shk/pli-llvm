@@ -414,7 +414,7 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
       }
       // Array element assignment: A(i) = e — a modifiable subscripted target.
       if (s->target->kind == Expr::Subscript) {
-        if (!s->value->ty.isVoid())
+        if (!s->value->ty.isVoid() && !s->target->ty.isVoid())
           checkAssignable(s->target->ty, s->value->ty, s->loc, "assignment");
         break;
       }
@@ -541,17 +541,44 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
 // (126)); a runtime index is left to the generated bounds check in IRGen.
 // Each constant subscript is checked against its own axis (rules (12),(13)).
 void Sema::checkSubscriptBounds(Expr *e, Symbol *arr) {
-  const size_t n = std::min(e->args.size(), arr->ty.dims.size());
+  checkSubscriptBoundsDims(e, arr->ty.dims, arr->name);
+}
+
+void Sema::checkSubscriptBoundsDims(Expr *e, const std::vector<std::pair<int, int>> &dims,
+                                    const std::string &name) {
+  const size_t n = std::min(e->args.size(), dims.size());
   for (size_t k = 0; k < n; ++k) {
     Expr *idx = e->args[k].get();
     if (idx->kind != Expr::IntLit) continue;
     long long v = idx->ival;
-    const auto &[lb, ub] = arr->ty.dims[k];
+    const auto &[lb, ub] = dims[k];
     if (v < lb || v > ub)
       d_.error(idx->loc, "subscript " + std::to_string(v) +
                " is out of bounds " + std::to_string(lb) + ":" +
-               std::to_string(ub) + " for array '" + arr->name + "'", "(126)");
+               std::to_string(ub) + " for array '" + name + "'", "(126)");
   }
+}
+
+const Type *Sema::resolveMemberPath(Expr *e, const Type &base) {
+  const Type *cur = &base;
+  e->memberPath.clear();
+  for (const std::string &mname : e->path) {
+    if (!cur->isStruct()) {
+      d_.error(e->loc, "'" + e->name + "' is not a structure, so it cannot be qualified by '" +
+               mname + "'", "(124)");
+      return nullptr;
+    }
+    int m = -1;
+    for (size_t k = 0; k < cur->members.size(); ++k)
+      if (cur->members[k]->name == mname) { m = (int)k; break; }
+    if (m < 0) {
+      d_.error(e->loc, "structure '" + e->name + "' has no member '" + mname + "'", "(124)");
+      return nullptr;
+    }
+    e->memberPath.push_back((unsigned)m);
+    cur = &cur->members[m]->ty;
+  }
+  return cur;
 }
 
 void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
@@ -583,27 +610,8 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       // A qualified reference S.A.B (rule 124): resolve each member against
       // the structure type, recording the LLVM field index along the path.
       if (!e->path.empty()) {
-        const Type *cur = &sym->ty;
-        e->memberPath.clear();
-        for (const std::string &mname : e->path) {
-          if (!cur->isStruct()) {
-            d_.error(e->loc, "'" + e->name + "' is not a structure, so it cannot be qualified by '" +
-                     mname + "'", "(124)");
-            e->ty = Type::voidTy();
-            break;
-          }
-          int m = -1;
-          for (size_t k = 0; k < cur->members.size(); ++k)
-            if (cur->members[k]->name == mname) { m = (int)k; break; }
-          if (m < 0) {
-            d_.error(e->loc, "structure '" + e->name + "' has no member '" + mname + "'", "(124)");
-            e->ty = Type::voidTy();
-            break;
-          }
-          e->memberPath.push_back((unsigned)m);
-          cur = &cur->members[m]->ty;
-        }
-        if (!e->ty.isVoid()) e->ty = *cur;
+        if (const Type *leaf = resolveMemberPath(e, sym->ty); leaf) e->ty = *leaf;
+        else e->ty = Type::voidTy();
       }
       if (sym->kind == Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is a procedure and cannot be used as a value", "(123)");
@@ -621,6 +629,46 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       break;
     case Expr::Call: {
       for (auto &a : e->args) typeExpr(a.get(), sc, p);
+      // A qualified reference being subscripted, S.A(i) (rules 124,126): the
+      // callee name is a structure and the path resolves to an array member.
+      // Reclassify as a Subscript of the member's element type, carrying the
+      // base structure symbol and the resolved field path.
+      if (!e->path.empty()) {
+        Symbol *bs = lookup(sc, e->name);
+        if (!bs || bs->kind != Symbol::Var || !bs->ty.isStruct()) {
+          d_.error(e->loc, "'" + e->name + "' is not a structure, so it cannot be subscripted by member",
+                   "(124)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        // Reclassify as a Subscript up front so an assignment target that fails
+        // to resolve is still recognised as a (void) subscript, not a call.
+        e->kind = Expr::Subscript;
+        e->sym = bs;
+        const Type *leaf = resolveMemberPath(e, bs->ty);
+        if (!leaf || !leaf->isArray()) {
+          if (leaf)
+            d_.error(e->loc, "structure member is not an array and cannot be subscripted", "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (e->args.size() != leaf->dims.size()) {
+          d_.error(e->loc, "member array has " + std::to_string(leaf->dims.size()) +
+                   " dimension(s) and takes " + std::to_string(leaf->dims.size()) +
+                   " subscript(s), " + std::to_string(e->args.size()) + " given", "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = leaf->elementType();
+        std::string mname = e->name;
+        for (const std::string &q : e->path) mname += "." + q;
+        checkSubscriptBoundsDims(e, leaf->dims, mname);
+        // rule (8)/(42): a structure of an enclosing procedure is reached
+        // through this procedure's static link.
+        if (bs->owner && bs->owner != p && isDescendantOf(p, bs->owner))
+          addEnv(p->directUses, bs);
+        break;
+      }
       // A subscripted reference (rule (126)): the callee name resolves to a
       // declared array. Reclassify as a Subscript of the element type; the
       // index (single axis in this stage) is checked against the bounds.

@@ -1,0 +1,7 @@
+ /* The number of subscripts on a member array must match its dimensionality
+    (rule (126)). */
+ bad_struct_array_arity: procedure options(main);
+    declare 1 s,
+           2 a(3) fixed bin(31);
+    s.a(1,2) = 5;
+ end bad_struct_array_arity;

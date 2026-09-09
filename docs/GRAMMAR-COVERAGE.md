@@ -17,7 +17,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (6),(7) | sentencelist, end-clause, multiple closure | M0 | `parseBody` / `loops.pli` (`END OUTER;`) |
 | (8) | sentence kinds | M0 | `parseStatement`; internal procedures reach enclosing automatic storage via a static link (ADR-027, `staticlink.pli`) |
 | (9),(10) | `DECLARE`, declarationlist | M0 | `parseDeclare` / `ifelse.pli` |
-| (11) | declaration, level numbers, factoring | partial M2 | scalars + level-numbered structures (nested via `1 S, 2 A ..., 2 X, 3 Y ...`) in read/write positions (`struct.pli`); factoring → M2; `INITIAL`/whole-structure → diag |
+| (11) | declaration, level numbers, factoring | partial M2 | scalars + level-numbered structures (nested via `1 S, 2 A ..., 2 X, 3 Y ...`) in read/write positions, including array members `2 A(10) ...` (`struct.pli`, `struct_array.pli`); factoring → M2; `INITIAL`/whole-structure → diag |
 | (12),(13) | dimension attribute, bound pairs | partial M2 | fixed-size constant-bounds arrays, single- and multi-axis, row-major layout (`A(m,n)`/`A(lb:ub,...)`), scalar elements (`array.pli`, `array2d.pli`); dynamic bounds, `*` extents, cross-sections → M2 |
 | (14),(15) | attribute, data-attribute set | partial M0 | arithmetic/string/`ALIGNED` subset |
 | (16),(17) | arithmetic attributes, precision, signed integer | partial M0 | practical binary forms first; full decimal/precision conformance → D1 |
@@ -63,7 +63,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (118) | comparison operators | M0 | incl. `¬=`, `¬>`, `¬<` |
 | (123) | primitive expressions | partial M2 | constants/vars (M0); function references to function procedures (`func.pli`); array attribute built-ins `LBOUND`/`HBOUND`/`DIM` on fixed-size single-axis arrays (`array_bounds.pli`, `bad_array_builtin.pli`); `DIM` of a multi-axis array = total element count; array reduction built-ins `SUM`/`PROD`/`ANY`/`ALL` over the full extent (`array_reduce.pli`, `bad_array_reduce.pli`); cross-sections/multi-axis → M2 |
 | (124),(125) | locator qualification, qualified names | partial M2 | aggregate (structure) member qualification `S.A.B` in read/write positions and expressions (`struct.pli`); whole-structure value/assignment and `INITIAL` diagnosed (`bad_struct_*.pli`, rule (127)); locators → M3 |
-| (126) | subscripted references | partial M2 | fixed-size constant-bounds scalar arrays in read/write positions, single- and multi-axis, compile-time + runtime SUBSCRIPTRANGE on every axis (`array.pli`, `array2d.pli`, `bad_array_oob.pli`, `bad_array2d_oob.pli`, `bad_array2d_arity.pli`); `*` cross-sections → M2 |
+| (126) | subscripted references | partial M2 | fixed-size constant-bounds scalar arrays in read/write positions, single- and multi-axis, compile-time + runtime SUBSCRIPTRANGE on every axis (`array.pli`, `array2d.pli`, `bad_array_oob.pli`, `bad_array2d_oob.pli`, `bad_array2d_arity.pli`); subscripted structure array members `S.A(i)` incl. nested/multi-axis (`struct_array.pli`, `bad_struct_array_*.pli`); `*` cross-sections → M2 |
 | (127) | unsubscripted reference | partial M2 | whole-structure value/assignment diagnosed (`bad_struct_assign.pli`, `bad_struct_value.pli`); full aggregate references → M2 |
 | (128),(129) | constants, replicated string constants | partial M0 | replicated strings served; imaginary/sterling → D1 |
 | (130)–(133) | identifier, letter, alphameric, digit | M0 | incl. `$ # @` and break character |
@@ -114,7 +114,7 @@ entry points below are where that chain terminates.
 | (104),(105) | `emitPut` | list-directed output |
 | (115)–(122) | `emitExpr` (binary/`Unary`) | arithmetic, bit, comparison, concat |
 | (123) | `emitExpr` (`Call`) | per-builtin handlers: SUBSTR, INDEX, ABS, LENGTH, TRUNC, PRECISION, MIN, MAX, MOD, MULTIPLY, DIVIDE, ROUND, REPEAT, VERIFY, TRANSLATE, HIGH, LOW, DATE, TIME, LBOUND, HBOUND, DIM, SUM, PROD, ANY, ALL |
-| (12),(13),(126) | `arrayExtent`, `arrayElementAddr`, `loadArrayElement`, `storeArrayElement` | `[N x elemTy]` flat row-major layout; multi-axis GEP offset = Σ (i_k − lb_k)·stride_k; per-axis SUBSCRIPTRANGE; `DIM` = product of extents |
+| (12),(13),(126) | `arrayExtent`, `arrayElementAddr`, `loadArrayElement`, `storeArrayElement` | `[N x elemTy]` flat row-major layout; multi-axis GEP offset = Σ (i_k − lb_k)·stride_k; per-axis SUBSCRIPTRANGE; `DIM` = product of extents; a structure array member lays out as `[N x elemTy]` inside the struct (`llvmTy` handles `isArray`) and is subscripted via `memberAddr` + `arrayElementAddr` |
 
 ## Headline numbers (M0)
 
