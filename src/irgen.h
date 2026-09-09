@@ -121,8 +121,9 @@ private:
   Val loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
   void storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, const Val& src,
                          SourceLoc loc);
-  // Copy a single-'*' cross-section A(i, *) (rule 126) into a whole array
-  // target: iterate the '*' axis, gathering the source elements into the target.
+  // Copy an N-star cross-section A(i, *, ...) (rule 126) into a whole array
+  // target: iterate the target's linear index, mapping each star-axis
+  // coordinate back to a source element and gathering it into the target.
   void emitCrossSectionAssign(HExpr* target, HExpr* cross, SourceLoc loc);
   // Address of a DEFINED scalar element overlay (rule 24): the base element at
   // the constant subscripts, computed once (sema bounds-checked them).

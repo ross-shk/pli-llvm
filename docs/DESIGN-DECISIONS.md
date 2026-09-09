@@ -1150,3 +1150,39 @@ now (needs evaluating an index expression against the iSUB variable, an
 independent slice); multi-axis iSUB (a sub-block overlay, broader address logic);
 non-constant fixed subscripts (would need the address recomputed per reference
 rather than at a stable point).
+
+## ADR-049 — Multi-`*` cross-sections: a general affine gather over the star axes
+
+**Context.** ADR-046 served exactly one `*` axis (`A(i, *)`, `A(*, j)`), a 1-D
+row or column copy, and diagnosed more than one `*` as unimplemented. M2 names
+cross-sections for matrix and table programs; copying a sub-block (`A(*, *)`,
+`D(2, *, *)`, `D(*, 3, *)`) out of an N-D array is the same gather with several
+star axes. Sema already reduced the type of any cross-section to the rank of its
+`*` axes in order (`crossSectionType`), so only the one-star guard and the 1-D
+gather loop were the limiting pieces.
+
+**Decision.** The `nStar > 1` diagnostics are removed: sema types any
+cross-section to the array of its `*`-axis dims in order, and the existing
+whole-array-target shape check validates it. `emitCrossSectionAssign` becomes a
+general affine gather. The fixed axes' indices are evaluated and
+SUBSCRIPTRANGE-checked once and folded into a fixed source flat offset; then the
+target's linear row-major index is iterated, decomposed into star-axis
+coordinates against the target strides, and each coordinate maps back to a
+source flat offset through the corresponding star axis's stride. A single `*` is
+the rank-1 case of the same loop. Bounds are identical on both sides (the target
+is the reduced array), so coordinates run `0..extent-1` and all offset
+arithmetic is unsigned.
+
+**Consequences.** Sub-block copies need no new AST/HIR node beyond the existing
+`Star` marker. `tests/core/cross_section2.pli` covers `A(*, *)`, `D(2, *, *)`,
+`D(*, 3, *)`, and a two-star array-member cross-section `S.M(2, *, *)`;
+`bad_cross_section.pli` still rejects a cross-section to a scalar or a
+shape-mismatched target (including a multi-`*` cross-section of the wrong
+shape). GRAMMAR-COVERAGE rule (126) now lists multi-`*` copies as served.
+
+**Rejected.** A cross-section as a general expression value or function argument
+(still an array-value-semantics concern, independent of the gather); dynamic
+(non-constant) cross-section bounds via a runtime dope vector (deferred with
+dynamic extents generally); nesting the gather as one loop per `*` axis rather
+than a single linear decomposition (more basic blocks for no benefit at this
+stage).

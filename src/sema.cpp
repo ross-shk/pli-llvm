@@ -1060,15 +1060,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       int nStar = 0;
       Type reduced;
       if (crossSectionType(e, *leaf, reduced, nStar)) {
-        // A member-array cross-section S.A(i, *) (rules 124,126): reduced-dim
-        // array value.
-        if (nStar > 1) {
-          d_.error(e->loc,
-                   "a cross-section with more than one '*' is not implemented in this stage",
-                   "(126)");
-          e->ty = Type::voidTy();
-          break;
-        }
+        // A member-array cross-section S.A(i, *) (rules 124,126): a reduced-dim
+        // array value whose rank is the number of '*' axes (rule 126).
         e->ty = reduced;
       } else {
         e->ty = leaf->elementType();
@@ -1103,14 +1096,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       int nStar = 0;
       Type reduced;
       if (crossSectionType(e, arr->ty, reduced, nStar)) {
-        // A cross-section A(*, ...) (rule 126): a reduced-dim array value.
-        if (nStar > 1) {
-          d_.error(e->loc,
-                   "a cross-section with more than one '*' is not implemented in this stage",
-                   "(126)");
-          e->ty = Type::voidTy();
-          break;
-        }
+        // A cross-section A(*, ...) (rule 126): a reduced-dim array value whose
+        // rank is the number of '*' axes.
         e->ty = reduced;
       } else {
         e->ty = arr->ty.elementType();
