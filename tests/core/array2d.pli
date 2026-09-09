@@ -1,0 +1,65 @@
+ /* Fixed-size 2-D arrays (rules (12),(13),(126)): DECLARE A(m,n) declares an
+    m x n array in row-major order; A(i,j) is a subscripted reference usable
+    on both sides of an assignment with constant or runtime subscripts. */
+ array2d_test: procedure options(main);
+    declare a(2,3) fixed bin(31);
+    declare b(0:1, 1:2) fixed bin(31);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* write via constant subscripts */
+    a(1,1) = 11;
+    a(1,2) = 12;
+    a(1,3) = 13;
+    a(2,1) = 21;
+    a(2,2) = 22;
+    a(2,3) = 23;
+
+    /* read back via constant subscripts */
+    if a(1,1) ^= 11 then fails = fails + 1;
+    if a(1,3) ^= 13 then fails = fails + 1;
+    if a(2,1) ^= 21 then fails = fails + 1;
+    if a(2,3) ^= 23 then fails = fails + 1;
+
+    /* fill and read back with runtime subscripts (row-major) */
+    do i = 1 to 2;
+       do j = 1 to 3;
+          a(i,j) = i * 10 + j;
+       end;
+    end;
+    do i = 1 to 2;
+       do j = 1 to 3;
+          if a(i,j) ^= i * 10 + j then do;
+             fails = fails + 1;
+             put skip list('FAIL a(i,j) at', i, j, a(i,j));
+          end;
+       end;
+    end;
+
+    /* element in an arithmetic expression */
+    a(2,2) = a(1,3) + a(2,1) + 1;
+    if a(2,2) ^= 35 then do;
+       fails = fails + 1;
+       put skip list('FAIL a(2,2) =', a(2,2));
+    end;
+
+    /* explicit lower bounds on each axis */
+    b(0,1) = 7;
+    b(1,2) = 9;
+    if b(0,1) ^= 7 then fails = fails + 1;
+    if b(1,2) ^= 9 then fails = fails + 1;
+
+    /* DIM of a 2-D array is the total element count */
+    if dim(a) ^= 6 then do;
+       fails = fails + 1;
+       put skip list('FAIL dim(a) =', dim(a));
+    end;
+    if lbound(a) ^= 1 then fails = fails + 1;
+    if hbound(a) ^= 2 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS array2d');
+    else put skip list('FAIL array2d: fails =', fails);
+ end array2d_test;

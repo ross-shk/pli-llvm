@@ -772,3 +772,37 @@ one entry per element type/operation; a `SUBSCRIPTRANGE` check on every iteratio
 (always in-bounds — pure overhead); and walking the array through the public
 `A(i)` load (which would re-run bounds checks and be needlessly indirect).
 
+## ADR-036 — Multi-axis fixed-size arrays: flat row-major layout
+
+**Context.** ADR-033 served fixed-size **single-axis** scalar arrays and diagnosed
+a multi-axis declaration as rule (13); ADR-034/035 read only `dims[0]` for the
+bounds/reduction built-ins. The M2 plan (IMPLEMENTATION-PLAN, rules (12),(13),(126))
+next needs matrix/table programs, which are 2-D and up. The open questions are how
+to lay out a multi-axis array in the already-fixed `[N x elemTy]` aggregate and how
+the bounds and reduction built-ins report a multi-axis array.
+
+**Decision.** A multi-axis fixed-size array is stored in the same flat `[N x
+elemTy]` aggregate with `N` the product of all axis extents, in **row-major**
+order: the last axis is contiguous, and each earlier axis strides by the product
+of the extents of the axes after it. A subscripted reference `A(i,j,...)` (rule
+(126)) emits a per-axis `SUBSCRIPTRANGE` check (all flags OR-ed into one branch,
+one `pli_subscript_oob` call) and computes the flat offset
+`Σ_k (i_k − lb_k) · stride_k`, a single `GEP [0, offset]` into the aggregate. The
+arity check in sema now requires one subscript per axis (rule (126)). The attribute
+built-ins (ADR-034) keep their no-axis-argument form: `LBOUND`/`HBOUND` report the
+**first** dimension (PL/I semantics for the single-argument form), while `DIM(a)`
+now reports the total element count (the product of extents) — which is also what
+the reduction built-ins (ADR-035) walk, so `SUM`/`PROD`/`ANY`/`ALL` and `DIM`
+automatically span the whole array.
+
+**Consequences.** Matrix and table programs compile and run with per-axis bounds
+checking on (the M2 exit criterion), reusing the existing aggregate layout and the
+`[N x elemTy]` element addressing. `DIM(a)` and the reductions are correct over
+every axis with no change to their emitted loop. **Rejected.** A nested/GEP-per-axis
+layout or a separate dope vector (neither needed for constant bounds — ADR-008
+reserves dope vectors for dynamic extents and `*`); returning per-axis arrays for
+the built-ins (out of scope until the axis-argument form `LBOUND(a,d)` is added);
+and column-major order (PL/I is row-major). Dynamic bounds, `*` extents, and
+cross-sections remain diagnosed.
+
+

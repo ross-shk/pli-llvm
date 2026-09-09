@@ -1,0 +1,7 @@
+ /* A constant subscript out of the declared bounds on any axis is a
+    compile-time SUBSCRIPTRANGE error (rule (126)); here the second subscript
+    exceeds the second axis extent. */
+ bad_array2d_oob: procedure options(main);
+    declare a(2,3) fixed bin(31);
+    a(1,4) = 1;
+ end bad_array2d_oob;
