@@ -853,6 +853,37 @@ bool Parser::parseDeclTail(DeclItem& item) {
         } else {
           d_.error(cur().loc, "expected a reference after DEFINED", "(24)");
         }
+        // An optional subscripted base DEFINED X(...) (rules 126,134): each
+        // subscript is a constant integer or an iSUB dummy (nSUB). Non-constant
+        // index expressions are diagnosed; sema resolves the base.
+        if (at(Tok::LParen)) {
+          advance();
+          if (!at(Tok::RParen)) {
+            for (;;) {
+              DefinedSub ds;
+              if (at(Tok::Isub)) {
+                ds.isub = true;
+                advance();
+              } else if (at(Tok::Number)) {
+                ds.expr = std::make_unique<Expr>();
+                ds.expr->kind = Expr::IntLit;
+                ds.expr->loc = cur().loc;
+                ds.expr->ival = strtoll(cur().text.c_str(), nullptr, 10);
+                advance();
+              } else {
+                d_.error(cur().loc,
+                         "DEFINED base subscripts must be constant integers or an iSUB dummy",
+                         "(24)");
+                // skip the offending expression token to keep parsing the list
+                advance();
+              }
+              item.definedSubs.push_back(std::move(ds));
+              if (!eat(Tok::Comma))
+                break;
+            }
+          }
+          expect(Tok::RParen, "(126)");
+        }
         while (at(Tok::Word) && (cur().text == "POSITION" || cur().text == "POS")) {
           d_.error(cur().loc, "POSITION on DEFINED is not implemented in this stage", "(24)");
           advance();

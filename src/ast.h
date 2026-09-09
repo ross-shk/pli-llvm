@@ -60,15 +60,23 @@ struct InitItem {
   std::vector<InitItem> items; // Iter/Group: the repeated sublist
 };
 
+// One DEFINED base subscript (rules 24,126): either an iSUB dummy variable
+// (rule 134, uses the DEFINED array's own index) or a fixed index expression.
+struct DefinedSub {
+  bool isub = false; // true: an iSUB dummy; expr is null
+  ExprP expr;        // fixed index expression (constant in this stage)
+};
+
 struct DeclItem {
   std::string name;
   Type ty{};
   SourceLoc loc{};
   int level = 0; // rule (11) level number; 0 when absent (no structure)
   ExprP init;    // INITIAL(...) — a single simple scalar constant (M0 scalar path)
-  std::vector<InitItem> initItems; // INITIAL(...) itemlist (arrays, rule 26-31)
-  std::string like;                // LIKE <unsubscripted-reference> template (rule 43)
-  std::string definedBase;         // DEFINED <reference> base (rule 24); empty = none
+  std::vector<InitItem> initItems;     // INITIAL(...) itemlist (arrays, rule 26-31)
+  std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)
+  std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
+  std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor

@@ -382,10 +382,14 @@ void IRGen::emitGlobals() {
 }
 
 llvm::Value* IRGen::addressOf(Symbol* sym) {
-  // A DEFINED variable (rule 24) has no storage of its own: it overlays the
-  // base variable's storage, so its address is the base's address (ADR-018).
-  if (sym->definedBase)
+  // A DEFINED variable (rule 24) has no storage of its own. A whole-base or
+  // iSUB overlay resolves to the base's address; a scalar element overlay
+  // (all-constant subscripts, no iSUB) is a stable GEP into the base.
+  if (sym->definedBase) {
+    if (!sym->definedConst.empty() && sym->definedIsubAxis < 0)
+      return definedConstAddr(sym);
     return addressOf(sym->definedBase);
+  }
   // rule (8): an enclosing variable is reached through this frame's static
   // link; otherwise it is this frame's own storage (globals / allocas /
   // parameters). Both are recorded in symAddr_.
@@ -923,6 +927,13 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* addr =
           arrayElementAddr(arr, memberAddr(t->sym, t->memberPath, s->loc), t->args, s->loc);
       storeScalarTo(addr, el, convert(v, el, s->loc));
+      return;
+    }
+    // An iSUB-DEFINED array target Y(k) (rule 134) has no storage of its own:
+    // store into the live base element X(...k...).
+    if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
+      llvm::Value* addr = definedSubElementAddr(t->sym, t->args, s->loc);
+      storeScalarTo(addr, t->ty, convert(v, t->ty, s->loc));
       return;
     }
     storeArrayElement(t->sym, t->args, v, s->loc);
@@ -1510,6 +1521,57 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   startBlock(endL);
 }
 
+// Address of a DEFINED scalar element overlay (rule 24): Y overlays the base
+// array element at the (compile-time checked) constant subscripts, so its
+// address is a stable GEP into the base. Y has no storage of its own.
+llvm::Value* IRGen::definedConstAddr(Symbol* sym) {
+  Symbol* base = sym->definedBase;
+  const Type& bty = base->ty;
+  llvm::Value* baseAddr = addressOf(base);
+  long long flat = 0, stride = 1;
+  const size_t n = bty.dims.size();
+  for (size_t k = n; k-- > 0;) {
+    flat += (sym->definedConst[k] - bty.dims[k].first) * stride;
+    stride *= (bty.dims[k].second - bty.dims[k].first + 1);
+  }
+  llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
+  return b_.CreateInBoundsGEP(arrTy, baseAddr, {i64(0), i64(flat)}, "defined");
+}
+
+// Address of a subscripted iSUB-DEFINED array element Y(k) (rules 134,126): Y
+// is a 1-D live overlay of one axis of the base array X, so Y(k) is the base
+// element X(fixed..., k, fixed...). The iSUB slot index is bounds-checked; the
+// fixed subscripts were compile-time checked.
+llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs,
+                                          SourceLoc loc) {
+  Symbol* base = y->definedBase;
+  const Type& bty = base->ty;
+  const size_t n = bty.dims.size();
+  llvm::Value* yidx = toI64(emitExpr(idxs[0].get()));
+  const auto& [ilb, iub] = bty.dims[y->definedIsubAxis];
+  llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(yidx, i64(ilb), "lo"),
+                                 b_.CreateICmpSGT(yidx, i64(iub), "hi"), "oob");
+  std::string id = std::to_string(n_++);
+  llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
+  llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
+  b_.CreateCondBr(oob, failL, okL);
+  startBlock(failL);
+  b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+  b_.CreateUnreachable();
+  startBlock(okL);
+
+  llvm::Value* flat = i64(0);
+  long long stride = 1;
+  for (size_t k = n; k-- > 0;) {
+    llvm::Value* iv = (int)k == y->definedIsubAxis ? yidx : i64(y->definedConst[k]);
+    flat = b_.CreateAdd(
+        flat, b_.CreateMul(b_.CreateSub(iv, i64(bty.dims[k].first), "o"), i64(stride), "s"), "f");
+    stride *= (bty.dims[k].second - bty.dims[k].first + 1);
+  }
+  llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
+  return b_.CreateInBoundsGEP(arrTy, addressOf(base), {i64(0), flat}, "delem");
+}
+
 // ---------------------------------------------------------------------------
 // conversions (the M0 subset of the PL/I conversion rules)
 // ---------------------------------------------------------------------------
@@ -1664,6 +1726,16 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::Value* addr =
           arrayElementAddr(arr, memberAddr(e->sym, e->memberPath, e->loc), e->args, e->loc);
       llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
+      v.ty = el;
+      v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+      return v;
+    }
+    // An iSUB-DEFINED array Y (rule 134) has no storage of its own: Y(k) is a
+    // live overlay of a base element, so route the address to the base X.
+    if (e->sym->definedBase && e->sym->definedIsubAxis >= 0) {
+      llvm::Value* addr = definedSubElementAddr(e->sym, e->args, e->loc);
+      const Type& el = e->ty;
+      llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "defl");
       v.ty = el;
       v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;

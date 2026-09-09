@@ -24,6 +24,12 @@ struct Symbol {
   Expr* initExpr = nullptr;      // folded INITIAL constant, rule (26)
   std::vector<Expr*> initElems;  // folded INITIAL element list for arrays, rule (26)
   Symbol* definedBase = nullptr; // DEFINED on this variable's storage (rule 24); null = none
+  // For a DEFINED base that is a subscripted reference (rule 126):
+  //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)
+  //   definedIsubAxis >= 0  -> this X axis holds the iSUB dummy (rule 134)
+  // definedConst holds one fixed constant per X axis (0 at the iSUB axis).
+  int definedIsubAxis = -1;
+  std::vector<long long> definedConst;
 };
 
 struct Scope {

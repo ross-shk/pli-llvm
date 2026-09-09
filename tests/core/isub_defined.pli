@@ -1,0 +1,45 @@
+   /* iSUB (rule 134) and subscripted DEFINED base (rule 24): DECLARE Y DEFINED
+      X(1SUB) overlays one axis of X as a live 1-D view; DECLARE Z DEFINED X(c, c)
+      overlays a single element. Reads/writes through the overlay are visible in
+      the base and vice versa. */
+   isub_defined_test: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare r(4) fixed bin(31) defined a(2, 1SUB);
+      declare x(3) fixed bin(31);
+      declare y(3) fixed bin(31) defined x(1SUB);
+      declare z fixed bin(31) defined a(2, 3);
+      declare i fixed bin(31), j fixed bin(31), fails fixed bin(31);
+
+      do i = 1 to 3;
+         do j = 1 to 4;
+            a(i, j) = 10 * i + j;
+         end;
+      end;
+
+      fails = 0;
+
+      /* r(i) is a live view of a(2, i) */
+      do j = 1 to 4;
+         if r(j) ^= 20 + j then fails = fails + 1;
+      end;
+      r(1) = 100;
+      if a(2, 1) ^= 100 then fails = fails + 1;
+
+      /* whole-array iSUB: y(i) aliases x(i) */
+      do i = 1 to 3;
+         x(i) = i * 7;
+      end;
+      do i = 1 to 3;
+         if y(i) ^= i * 7 then fails = fails + 1;
+      end;
+      y(2) = 99;
+      if x(2) ^= 99 then fails = fails + 1;
+
+      /* element overlay: z aliases a(2, 3) */
+      if z ^= 23 then fails = fails + 1;
+      z = 44;
+      if a(2, 3) ^= 44 then fails = fails + 1;
+
+      if fails = 0 then put skip list('PASS isub_defined');
+      else put skip list('FAIL isub_defined: fails =', fails);
+   end isub_defined_test;

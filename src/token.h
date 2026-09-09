@@ -14,6 +14,7 @@ enum class Tok {
   Eof,
   Word,    // identifier or contextual keyword
   Number,  // arithmetic constant
+  Isub,    // iSUB dummy variable, 'integer SUB' with no blanks (rule 134)
   CharLit, // '...'   (character-string constant)
   BitLit,  // '...'B  (bit-string constant)
   // Punctuation

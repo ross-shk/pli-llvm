@@ -370,16 +370,94 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc,
                      "DEFINED across an enclosing procedure is not implemented in this stage",
                      "(24)");
-          } else if (item.ty.isStruct() || base->ty.isStruct()) {
-            d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
-          } else if (!(item.ty == base->ty)) {
-            d_.error(item.loc,
-                     "DEFINED requires the item and base to have the same type (" + item.ty.desc() +
-                         " vs " + base->ty.desc() + ")",
-                     "(24)");
+          } else if (item.definedSubs.empty()) {
+            // Whole-base overlay (rule 24): the item shares the base's storage.
+            if (item.ty.isStruct() || base->ty.isStruct()) {
+              d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
+            } else if (!(item.ty == base->ty)) {
+              d_.error(item.loc,
+                       "DEFINED requires the item and base to have the same type (" +
+                           item.ty.desc() + " vs " + base->ty.desc() + ")",
+                       "(24)");
+            } else {
+              item.sym->definedBase = base;
+              isDefined = true;
+            }
           } else {
-            item.sym->definedBase = base;
-            isDefined = true;
+            // Subscripted base DEFINED X(...) (rules 126,134): each base
+            // subscript is a constant index or a single iSUB dummy. With an
+            // iSUB, the item is a 1-D array overlaying that axis of X; with
+            // only constants, it is a scalar overlay of one element.
+            if (!base->ty.isArray()) {
+              d_.error(item.loc,
+                       "DEFINED base '" + item.definedBase +
+                           "' is not an array and cannot be subscripted",
+                       "(126)");
+            } else if (item.definedSubs.size() != base->ty.dims.size()) {
+              d_.error(item.loc,
+                       "DEFINED base '" + item.definedBase + "' has " +
+                           std::to_string(base->ty.dims.size()) + " dimension(s) but takes " +
+                           std::to_string(item.definedSubs.size()) + " subscript(s)",
+                       "(126)");
+            } else {
+              int isubAxis = -1;
+              std::vector<long long> cst(base->ty.dims.size(), 0);
+              bool ok = true;
+              for (size_t k = 0; k < item.definedSubs.size(); ++k) {
+                const DefinedSub& ds = item.definedSubs[k];
+                if (ds.isub) {
+                  if (isubAxis >= 0) {
+                    d_.error(item.loc, "a DEFINED base may have only one iSUB", "(134)");
+                    ok = false;
+                  } else {
+                    isubAxis = (int)k;
+                  }
+                } else if (ds.expr && ds.expr->kind == Expr::IntLit) {
+                  cst[k] = ds.expr->ival;
+                  const auto& [lb, ub] = base->ty.dims[k];
+                  if (cst[k] < lb || cst[k] > ub)
+                    d_.error(ds.expr->loc,
+                             "DEFINED base subscript " + std::to_string(cst[k]) +
+                                 " is out of bounds " + std::to_string(lb) + ":" +
+                                 std::to_string(ub),
+                             "(126)");
+                } else {
+                  d_.error(item.loc, "DEFINED base subscripts must be constant integers", "(24)");
+                  ok = false;
+                }
+              }
+              if (ok && isubAxis >= 0) {
+                // iSUB overlay: Y is a 1-D array over X's iSUB axis.
+                bool match = item.ty.isArray() && item.ty.dims.size() == 1 &&
+                             item.ty.dims[0] == base->ty.dims[isubAxis] &&
+                             item.ty.elementType() == base->ty.elementType();
+                if (match) {
+                  item.sym->definedBase = base;
+                  item.sym->definedIsubAxis = isubAxis;
+                  item.sym->definedConst = cst;
+                  isDefined = true;
+                } else {
+                  d_.error(item.loc,
+                           "DEFINED iSUB base requires the item to be a 1-D array of the iSUB "
+                           "axis's element type and extent",
+                           "(134)");
+                }
+              } else if (ok) {
+                // All-constant element overlay: Y is a scalar of X's element type.
+                if (item.ty == base->ty.elementType()) {
+                  item.sym->definedBase = base;
+                  item.sym->definedIsubAxis = -1;
+                  item.sym->definedConst = cst;
+                  isDefined = true;
+                } else {
+                  d_.error(item.loc,
+                           "DEFINED element base requires the item to match the base's element "
+                           "type (" +
+                               item.ty.desc() + " vs " + base->ty.elementType().desc() + ")",
+                           "(24)");
+                }
+              }
+            }
           }
         }
         // Only scalar (numeric/BIT) element arrays are served in this stage;

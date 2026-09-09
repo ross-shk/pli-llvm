@@ -10,6 +10,8 @@ const char* tokName(Tok t) {
     return "identifier";
   case Tok::Number:
     return "numeric constant";
+  case Tok::Isub:
+    return "iSUB";
   case Tok::CharLit:
     return "character constant";
   case Tok::BitLit:
@@ -144,6 +146,16 @@ Token Lexer::lexNumber() {
   while (isdigit((unsigned char)cur())) {
     t.text.push_back(cur());
     bump();
+  }
+  // rule (134): iSUB dummy variable — a pure integer immediately followed by
+  // SUB with no intervening blank (1SUB, 2SUB, ...), not a real constant.
+  if ((cur() == 'S' || cur() == 's') && (peek() == 'U' || peek() == 'u') &&
+      (peek(2) == 'B' || peek(2) == 'b')) {
+    t.kind = Tok::Isub;
+    bump();
+    bump();
+    bump();
+    return t;
   }
   if (cur() == '.' && isdigit((unsigned char)peek())) {
     t.isFloat = true;
