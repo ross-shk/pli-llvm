@@ -1,0 +1,40 @@
+ /* Whole-structure assignment (rule 127): S = T copies one structure's storage
+    into another of identical shape, including array members; S.X = T.X copies a
+    nested (minor) structure member. */
+ struct_assign_test: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31),
+           2 v(3) fixed bin(31),
+           2 x,
+             3 y fixed bin(31);
+    declare 1 t,
+           2 a fixed bin(31),
+           2 v(3) fixed bin(31),
+           2 x,
+             3 y fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    t.a = 11;
+    t.v(1) = 1;
+    t.v(2) = 2;
+    t.v(3) = 3;
+    t.x.y = 33;
+
+    /* whole-structure copy, including an array member */
+    s = t;
+    if s.a ^= 11 then fails = fails + 1;
+    if s.v(2) ^= 2 or s.v(3) ^= 3 then fails = fails + 1;
+    if s.x.y ^= 33 then fails = fails + 1;
+
+    /* member-to-member whole-structure copy */
+    s.x = t.x;
+    if s.x.y ^= 33 then fails = fails + 1;
+
+    /* self-assignment is a no-op */
+    s = s;
+    if s.a ^= 11 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS struct_assign');
+    else put skip list('FAIL struct_assign: fails =', fails);
+ end struct_assign_test;

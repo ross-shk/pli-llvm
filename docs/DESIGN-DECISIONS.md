@@ -892,4 +892,33 @@ reserves descriptors for dynamic extents/`*`); copying array arguments by value
 (PL/I is by reference); adding extent/shape checking between caller and callee
 declarations in this stage (a later hardening step).
 
+## ADR-040 — Whole-structure assignment: a storage copy between identical shapes
+
+**Context.** The M2 scope ("aggregate ... assignment", rule (127)) and the
+record-processing exit criterion need `S = T` — copying one structure's value
+into another. Structures are literal LLVM structs with constant layout (ADR-037),
+and only scalar/member-array assignment was served; a whole-structure assignment
+was diagnosed. The open questions are what shapes are accepted and how to emit
+the copy.
+
+**Decision.** `S = T` is a whole-storage `memcpy` from the source structure's
+address to the target's, of the target's LLVM struct store size. Sema accepts
+only structures of **identical** `Type` (same member names and types, recursively
+— a conservative by-position approximation), and diagnoses a shape mismatch or
+mixing a structure with a non-structure (rule (127)). Either side may be a
+top-level variable or a qualified member (`S.X = T.X`), resolved via `addressOf`
+or `memberAddr`. To compute the copy size correctly the module is given a data
+layout string derived from the target triple's pointer width (the OS mangling
+does not affect type sizes).
+
+**Consequences.** Record copying — including array members and nested minor
+structures — works for identical shapes, reusing the existing literal-struct
+layout and member addressing (ADR-037/038). Self-assignment is a harmless
+no-op copy. **Rejected.** A by-position shape check that ignores member names
+(real PL/I unqualified-assignment semantics; deferred until a mismatch-reporting
+stage); whole-structure values in expressions and as return values (out of
+scope — rule (127) keeps those diagnosed); computing the byte size by walking
+members (wrong once a nested struct's padding is accounted for — the data layout
+gives the true store size).
+
 
