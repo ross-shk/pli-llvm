@@ -1336,3 +1336,38 @@ and vice versa.
 axis — the affine image is computed per axis, but the address logic for a
 multi-axis sub-block remains broader); a non-affine iSUB (e.g. `1SUB*1SUB`); a
 non-constant coefficient or offset (constant-folded only in this stage).
+
+## ADR-054 — Dynamic array parameters: a by-reference bound argument sized at callee entry
+
+**Context.** ADR-050 served single-axis dynamic (`AUTOMATIC`) arrays **locally**:
+`allocaLocals` evaluated the runtime upper bound at entry and recorded it in a
+`dynUb_` dope slot, so subscripting and the array built-ins bounds-check against
+the live extent. But a dynamic array passed to a procedure (`DECLARE X(K) ...` as a
+parameter, rule (34)) has no local alloca and no entry in `dynUb_` — every
+parameter is a by-reference pointer to the caller's data. Subscripting such a
+parameter crashed irgen because `arrayElementAddr` received a null dynamic bound,
+and the SUM/PROD/ANY/ALL reduce loop assumed a fixed `[N x elem]` layout.
+
+**Decision.** Record a dynamic array **parameter's** runtime upper bound at entry,
+mirroring ADR-050's locals. A new `recordDynParamUbs` runs after `allocaLocals`
+(in both the plain and multi-entry procedure paths) and, for each dynamic-array
+parameter, evaluates `Symbol::dynUb` (the bound argument, itself a by-reference
+parameter, e.g. `k` in `x(k)`) and records it in the same `dynUb_` dope slot. The
+parameter keeps `symAddr_` as the caller's data pointer, so `arrayElementAddr`'s
+dynamic 1-D path then bounds-checks and GEPs the bare element pointer against the
+live bound exactly as for a local. The SUM/PROD/ANY/ALL reduce loop is generalized
+to the dynamic case: it drives the element count from the recorded bound (a runtime
+value) and addresses a bare element pointer instead of the fixed `[N x elem]` GEP.
+
+**Consequences.** `tests/core/dyn_param.pli` passes a fixed array to a procedure
+whose parameter is dynamic, verifying by-reference writes (visible in the caller),
+`LBOUND`/`HBOUND`/`DIM`/`SUM` against the live extent, and a value-returning
+function with a dynamic array parameter; `bad_dyn_param.pli` rejects a multi-axis
+dynamic parameter and a dynamic lower bound (rule (13)). The bound is read once at
+entry, so it cannot change mid-block (matching AUTOMATIC semantics, ADR-050).
+GRAMMAR-COVERAGE rules (12),(13) and (34)-(38) list the served form.
+
+**Rejected.** Multi-axis dynamic parameters and a dynamic lower bound on a
+parameter (need dope-vector descriptors, ADR-008); `*` adjustable-extent
+parameters (a descriptor with re-allocation on entry); passing a dynamic array
+that is a structure member (dynamic structure members remain diagnosed).

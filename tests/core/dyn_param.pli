@@ -1,0 +1,71 @@
+ /* Dynamic (runtime-extent) array procedure parameters (rules (12),(13),(126),
+    (34)-(38)): a fixed-size array passed to a procedure whose parameter is a
+    dynamic array `x(k)` is reached by reference, so the callee sizes the view
+    from the bound argument k at entry. Subscripting is bounds-checked against
+    the live extent, and the array built-ins (DIM/LBOUND/HBOUND/SUM) report the
+    actual values. Writes through the parameter are visible in the caller. */
+ dyn_param_test: procedure options(main);
+    declare a(10) fixed bin(31);
+    declare m(4) fixed bin(31);
+    declare i fixed bin(31);
+    declare n fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    do i = 1 to 10;
+       a(i) = i * 2;
+    end;
+    /* pass a fixed array, sizing the parameter's dynamic extent from n */
+    n = 10;
+    call check(a, n);
+    /* writes through the dynamic parameter reflect outside */
+    call bump(a, n);
+    if a(1) ^= 3 or a(10) ^= 21 then fails = fails + 1;
+    /* pass a smaller fixed array with a matching extent */
+    do i = 1 to 4;
+       m(i) = i;
+    end;
+    call check(m, 4);
+    /* a function procedure with a dynamic array param returning a value */
+    n = 4;
+    if total(m, n) ^= 10 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS dyn_param');
+    else put skip list('FAIL dyn_param: fails =', fails);
+
+ check: procedure(x, k);
+    declare k fixed bin(31);
+    declare x(k) fixed bin(31);
+    declare t fixed bin(31);
+    declare i fixed bin(31);
+    t = 0;
+    do i = 1 to k;
+       t = t + x(i);
+    end;
+    if lbound(x) ^= 1 then fails = fails + 1;
+    if hbound(x) ^= k then fails = fails + 1;
+    if dim(x) ^= k then fails = fails + 1;
+    if sum(x) ^= t then fails = fails + 1;
+ end check;
+
+ bump: procedure(x, k);
+    declare k fixed bin(31);
+    declare x(k) fixed bin(31);
+    declare i fixed bin(31);
+    do i = 1 to k;
+       x(i) = x(i) + 1;
+    end;
+ end bump;
+
+ total: procedure(x, k) returns(fixed bin(31));
+    declare k fixed bin(31);
+    declare x(k) fixed bin(31);
+    declare t fixed bin(31);
+    declare i fixed bin(31);
+    t = 0;
+    do i = 1 to k;
+       t = t + x(i);
+    end;
+    return(t);
+ end total;
+ end dyn_param_test;

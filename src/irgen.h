@@ -62,7 +62,12 @@ private:
   void emitPlainProc(HProc* p, llvm::Type* retLLVM);
   void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM);
   void allocaLocals(HProc* p);
-  void emitInitials(HProc* p);      // INITIAL stores on AUTOMATIC vars (rule 26)
+  void emitInitials(HProc* p); // INITIAL stores on AUTOMATIC vars (rule 26)
+  // Record the runtime upper bound of each dynamic (runtime-extent) array
+  // parameter at entry (rules (12),(13),(34)-(38)): a parameter like `x(k)` is
+  // a by-reference pointer with no own storage, so its extent must be read from
+  // the bound argument (itself by-ref) once, mirroring allocaLocals' locals.
+  void recordDynParamUbs(const std::vector<Symbol*>& params);
   void collectGotoBlocks(HStmt* s); // assign an LLVM block to each labelled stmt
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
   static std::string entryIrName(const std::string& proc, const std::string& parent,
