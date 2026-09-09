@@ -493,7 +493,7 @@ bool Parser::parseScalarAttr(AttrBag &bag, const char *rule) {
 
 // declaration ::= [integer] identifier [dimension] [attribute•••]  rule (11)
 bool Parser::parseDeclItem(DeclItem &item) {
-  if (at(Tok::Number) && !cur().isFloat) advance();  // level number, ignored in M0
+  if (at(Tok::Number) && !cur().isFloat) { item.level = atoi(cur().text.c_str()); advance(); }
   if (at(Tok::LParen)) {
     d_.error(cur().loc, "factored declarations are not implemented in this stage", "(11)");
     return false;
@@ -993,11 +993,17 @@ ExprP Parser::parsePrimary() {
     e->kind = Expr::VarRef;
     e->name = cur().text;
     advance();
-    if (at(Tok::Dot) || at(Tok::Arrow)) {
-      d_.error(cur().loc, "qualified and locator-qualified references are not implemented in this stage", "(124)");
+    if (at(Tok::Arrow)) {
+      d_.error(cur().loc, "locator-qualified references are not implemented in this stage", "(124)");
       advance();
       if (at(Tok::Word)) advance();
       return e;
+    }
+    // A qualified name S.A.B (rule 124): collect the member qualifiers after
+    // the base name; sema resolves them against the structure type.
+    while (eat(Tok::Dot)) {
+      if (at(Tok::Word)) { e->path.push_back(cur().text); advance(); }
+      else { d_.error(cur().loc, "expected a member name after '.'", "(124)"); break; }
     }
     if (at(Tok::LParen)) {  // subscripts or function reference
       e->kind = Expr::Call;

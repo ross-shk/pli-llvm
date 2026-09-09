@@ -1,5 +1,6 @@
 #include "sema.h"
 #include <algorithm>
+#include <functional>
 
 // FIXED op FIXED -> FIXED with the wider precision and the larger scale;
 // anything involving FLOAT is FLOAT. This is the *common* result type for
@@ -238,6 +239,11 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isSta
   for (auto &s : body) {
     if (!s) continue;
     if (s->kind == Stmt::Declare) {
+      // Build the level-numbered structure hierarchy (rule 11): a member item
+      // belongs to the nearest preceding item with a strictly smaller level.
+      std::vector<DeclItem *> items;
+      std::vector<int> parentOf;
+      std::vector<std::vector<int>> children;
       for (auto &item : s->decls) {
         if (item.isEntry) {
           // External C entry: a ProcName symbol with no PL/I body. The C
@@ -252,6 +258,31 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isSta
           entries_.push_back(sym);
           continue;
         }
+        // Group the remaining (storage) items into a tree by level.
+        int idx = (int)items.size();
+        int parent = -1;
+        for (int k = (int)items.size(); k-- > 0;)
+          if (items[k]->level > 0 && items[k]->level < item.level) { parent = k; break; }
+        items.push_back(&item);
+        parentOf.push_back(parent);
+        children.push_back({});
+        if (parent >= 0) children[parent].push_back(idx);
+      }
+      // Construct the struct Type for an item from its (recursively built)
+      // children; a leaf keeps its parsed scalar/array type.
+      std::function<Type(int)> buildType = [&](int idx) -> Type {
+        const DeclItem &it = *items[idx];
+        if (children[idx].empty()) return it.ty;
+        std::vector<Member> ms;
+        for (int c : children[idx]) ms.push_back({items[c]->name, buildType(c)});
+        return Type::structTy(std::move(ms));
+      };
+      // Declare each top-level item (no parent) as a variable; members are
+      // reached by qualification and get no standalone symbol or storage.
+      for (int idx = 0; idx < (int)items.size(); ++idx) {
+        if (parentOf[idx] != -1) continue;
+        DeclItem &item = *items[idx];
+        item.ty = buildType(idx);
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p;  // which procedure's frame holds this variable
         // Only scalar (numeric/BIT) element arrays are served in this stage;
@@ -263,6 +294,8 @@ void Sema::collectDecls(std::vector<StmtP> &body, Scope *sc, Proc *p, bool isSta
           if (item.init)
             d_.error(item.loc, "INITIAL on an array is not implemented in this stage", "(26)");
         }
+        if (item.ty.isStruct() && item.init)
+          d_.error(item.loc, "INITIAL on a structure is not implemented in this stage", "(26)");
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
         // BEGIN blocks too, hence the Proc* here.
@@ -344,6 +377,10 @@ void Sema::collectLabels(Stmt *s) {
 }
 
 bool Sema::checkAssignable(const Type &dst, const Type &src, SourceLoc loc, const char *what) {
+  if (dst.isStruct() || src.isStruct()) {
+    d_.error(loc, std::string(what) + ": whole-structure assignment is not implemented in this stage", "(127)");
+    return false;
+  }
   if (dst.isNumeric() && (src.isNumeric() || src.isBit())) return true;
   if (dst.isBit() && (src.isBit() || src.isNumeric())) return true;
   if (dst.isChar() && src.isChar()) return true;
@@ -389,7 +426,7 @@ void Sema::checkStmt(Stmt *s, Scope *sc, Proc *p) {
         d_.error(s->target->loc, "cannot assign to procedure '" + s->target->name + "'", "(86)");
         break;
       }
-      if (!s->value->ty.isVoid())
+      if (!s->value->ty.isVoid() && !s->target->ty.isVoid())
         checkAssignable(s->target->ty, s->value->ty, s->loc, "assignment");
       break;
     }
@@ -543,6 +580,31 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       if (!sym->owner) sym->owner = p;
       e->sym = sym;
       e->ty = sym->ty;
+      // A qualified reference S.A.B (rule 124): resolve each member against
+      // the structure type, recording the LLVM field index along the path.
+      if (!e->path.empty()) {
+        const Type *cur = &sym->ty;
+        e->memberPath.clear();
+        for (const std::string &mname : e->path) {
+          if (!cur->isStruct()) {
+            d_.error(e->loc, "'" + e->name + "' is not a structure, so it cannot be qualified by '" +
+                     mname + "'", "(124)");
+            e->ty = Type::voidTy();
+            break;
+          }
+          int m = -1;
+          for (size_t k = 0; k < cur->members.size(); ++k)
+            if (cur->members[k]->name == mname) { m = (int)k; break; }
+          if (m < 0) {
+            d_.error(e->loc, "structure '" + e->name + "' has no member '" + mname + "'", "(124)");
+            e->ty = Type::voidTy();
+            break;
+          }
+          e->memberPath.push_back((unsigned)m);
+          cur = &cur->members[m]->ty;
+        }
+        if (!e->ty.isVoid()) e->ty = *cur;
+      }
       if (sym->kind == Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is a procedure and cannot be used as a value", "(123)");
         e->ty = Type::voidTy();

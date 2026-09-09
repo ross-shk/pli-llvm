@@ -38,6 +38,8 @@ struct HExpr {
   double fval = 0;
   std::string sval;          // CharLit / BitLit payload
   std::string name;          // VarRef / Call target
+  std::vector<std::string> path;   // VarRef: member qualifiers (S.A.B -> {"A","B"})
+  std::vector<unsigned> memberPath;  // VarRef: resolved LLVM struct field indices (sema)
   Symbol *sym = nullptr;     // resolved by sema
   Tok op = Tok::Eof;         // Binary / Unary operator
   HExprP a, b;
@@ -53,6 +55,7 @@ struct HDeclItem {
   std::string name;
   Type ty{};
   SourceLoc loc{};
+  int level = 0;          // rule (11) level number; 0 when absent (no structure)
   HExprP init;   // INITIAL(...) — scalar constant only in M0
   Symbol *sym = nullptr;
   bool isEntry = false;               // DECLARE name ENTRY(...) (rule 38)

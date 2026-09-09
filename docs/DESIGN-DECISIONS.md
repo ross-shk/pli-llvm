@@ -805,4 +805,32 @@ the built-ins (out of scope until the axis-argument form `LBOUND(a,d)` is added)
 and column-major order (PL/I is row-major). Dynamic bounds, `*` extents, and
 cross-sections remain diagnosed.
 
+## ADR-037 — Level-numbered structures: literal LLVM structs, members without symbols
+
+**Context.** The M2 plan (rules (11),(124),(125)) needs `DECLARE 1 S, 2 A ..., 2 B ...`
+— a level-numbered structure whose members are reached by qualified names like
+`S.A`. A member has no storage of its own; the structure owns the aggregate, and
+a qualified reference is a projection of it. Open questions are how to represent
+the aggregate type and how sema/IRGen should resolve a qualification chain.
+
+**Decision.** A structure compiles to an LLVM **literal struct** type laid out in
+declaration order, recursing for nested (minor) structures. In sema,
+`collectDecls` builds the level-numbered hierarchy (an item belongs to the nearest
+preceding item with a strictly smaller level) into a `Type` of kind `Struct`; only
+top-level items become symbols, and members get **no** standalone symbol. A
+qualified reference `S.A.B` is resolved at sema time against the structure type,
+recording the LLVM field index of each step in `memberPath`. IRGen descends with
+one `CreateStructGEP` per field index, then loads/stores the leaf scalar. Whole
+structures are **not** served this stage: using one as a value or as an
+assignment target, or writing `INITIAL` on a structure, is diagnosed (rules
+(26),(127)).
+
+**Consequences.** Member qualification is a compile-time constant field index —
+no descriptors, no runtime name lookup — and the layout is visible to LLVM's
+analyses (per ADR-008). `CHARACTER` members are diagnosed pending varying-string
+addressing. **Rejected.** Giving every member its own symbol/storage (breaks PL/I
+semantics and complicates qualification); a per-member dope vector or descriptor
+(unneeded for constant layout); serving whole-structure values in this stage
+(diagnosed per unimplemented ≠ accepted).
+
 

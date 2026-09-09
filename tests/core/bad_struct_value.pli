@@ -1,0 +1,8 @@
+ /* A whole structure cannot be used as a scalar value (rule (127)); it must
+    be qualified by a member. */
+ bad_struct_value: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31);
+    declare x fixed bin(31);
+    x = s;
+ end bad_struct_value;
