@@ -1371,3 +1371,39 @@ GRAMMAR-COVERAGE rules (12),(13) and (34)-(38) list the served form.
 parameter (need dope-vector descriptors, ADR-008); `*` adjustable-extent
 parameters (a descriptor with re-allocation on entry); passing a dynamic array
 that is a structure member (dynamic structure members remain diagnosed).
+
+## ADR-055 — `*` adjustable-extent array parameters: a hidden extent argument
+
+**Context.** ADR-054 served dynamic array parameters whose extent comes from an
+explicit bound argument (`x(k)` bound by `k`). PL/I table programs also use the
+`*` adjustable extent: `DECLARE X(*)` as a parameter takes its extent from the
+caller's actual array, with no named bound argument. Rule (13) marks the axis
+`dyn`; previously the parser diagnosed `*` outright.
+
+**Decision.** `*` is accepted in a declaration dimension and recorded as a
+distinct `Dim::adj` (adjustable) flag alongside `dyn`, so it is told apart from a
+dynamic-bound axis (which has a bound expression). Sema gates it: a `*` axis is
+valid only on a parameter, and only single-axis in this stage; a block-scope `*`
+is diagnosed (rule 13). The extent flows caller-to-callee as a hidden i64
+argument per `*` parameter, placed after the by-reference pointers and before the
+static links. `declareProc` (plain impl, multi-entry impl, and each entry thunk)
+and `calleeFn` add the i64 extent to the signature; `emitCall` and the
+expression-call path compute the caller's actual element count (`argExtent`: a
+constant for a fixed array, the live bound for a dynamic-bound array) and pass
+it; the callee entry reads it into the same `dynUb_` dope slot as ADR-050/054, so
+subscripting bounds-checks and the LBOUND/HBOUND/DIM/SUM/PROD built-ins report
+against the live extent.
+
+**Consequences.** `tests/core/star_param.pli` passes a fixed, a dynamic-bound, and
+a multi-axis (first-axis extent) array to `*` parameters, verifies by-reference
+writes are visible in the caller, and checks LBOUND/HBOUND/DIM/SUM in the callee;
+`bad_star_param.pli` rejects a block-scope `*` and a multi-axis `*` parameter.
+`bad_dynamic_array_ext.pli` still rejects a block-scope `*`. The hidden extent
+argument is consistent across plain and multi-entry procedures and their thunks.
+GRAMMAR-COVERAGE rules (12),(13) and (34)-(38) list the served form.
+
+**Rejected.** Multi-axis `*` parameters (need dope-vector descriptors, ADR-008);
+forwarding one `*` array to another `*` parameter (a second hidden extent whose
+value is not a constant or a recorded dynamic bound); a dynamic lower bound on a
+`*` parameter; `*` on a non-parameter declaration (a `*` local has no caller to
+supply its extent).

@@ -1,0 +1,16 @@
+ /* '*' adjustable-extent array errors (rule (13)): a '*' extent is only valid
+    on a parameter (a block-scope '*' is rejected), and a '*' extent parameter
+    must be single-axis in this stage. */
+ bad_star_param: procedure options(main);
+    declare a(10) fixed bin(31);
+    declare n fixed bin(31);
+    n = 10;
+
+    declare local(*) fixed bin(31);        /* '*' only valid on a parameter */
+    call multi(a, n);
+
+ multi: procedure(x, k);
+    declare k fixed bin(31);
+    declare x(*,*) fixed bin(31);          /* '*' parameter must be single-axis */
+ end multi;
+ end bad_star_param;

@@ -1090,10 +1090,10 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   bool anyColon = false;
   for (;;) {
     Dim d;
-    if (at(Tok::Star)) { // rule (13) '*': adjustable extent — deferred
-      d_.error(cur().loc, "a '*' array extent is not implemented in this stage", "(13)");
+    if (at(Tok::Star)) { // rule (13) '*': adjustable extent (parameter only)
       advance();
       d.dyn = true;
+      d.adj = true; // the bound is supplied by the caller, not an expression
     } else {
       ExprP first = parseExpr();
       if (!first) {

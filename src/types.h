@@ -33,7 +33,10 @@ struct Dim {
   int lb = 1;
   int ub = 1;
   bool dyn = false; // the upper bound is a runtime value (rule (13))
-  bool operator==(const Dim& o) const { return lb == o.lb && ub == o.ub && dyn == o.dyn; }
+  bool adj = false; // '*' adjustable extent: the bound comes from the caller (rule (13))
+  bool operator==(const Dim& o) const {
+    return lb == o.lb && ub == o.ub && dyn == o.dyn && adj == o.adj;
+  }
 };
 
 struct Type {

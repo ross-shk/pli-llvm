@@ -202,6 +202,9 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
   std::vector<llvm::Type*> pt;
   for (size_t i = 0; i < sym->entryParams.size(); ++i)
     pt.push_back(b_.getPtrTy());
+  for (const Type& t : sym->entryParams)
+    if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+      pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
   llvm::FunctionType* ft = llvm::FunctionType::get(b_.getVoidTy(), pt, false);
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
@@ -572,6 +575,9 @@ void IRGen::declareProc(HProc* p) {
     std::vector<llvm::Type*> pt;
     for (size_t i = 0; i < p->paramSyms.size(); ++i)
       pt.push_back(b_.getPtrTy());
+    for (Symbol* s : p->paramSyms)
+      if (isAdjustable(s))
+        pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
     for (size_t i = 0; i < p->env.size(); ++i)
       pt.push_back(b_.getPtrTy()); // links
     llvm::FunctionType* ft = llvm::FunctionType::get(ret, pt, false);
@@ -598,6 +604,9 @@ void IRGen::declareProc(HProc* p) {
   std::vector<llvm::Type*> pt;
   for (size_t i = 0; i < uni.size(); ++i)
     pt.push_back(b_.getPtrTy());
+  for (Symbol* s : uni)
+    if (isAdjustable(s))
+      pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
   for (size_t i = 0; i < p->env.size(); ++i)
     pt.push_back(b_.getPtrTy());
   pt.push_back(b_.getInt64Ty()); // the entry selector
@@ -611,6 +620,9 @@ void IRGen::declareProc(HProc* p) {
     std::vector<llvm::Type*> sig;
     for (size_t i = 0; i < mine.size(); ++i)
       sig.push_back(b_.getPtrTy());
+    for (Symbol* s : mine)
+      if (isAdjustable(s))
+        sig.push_back(b_.getInt64Ty()); // hidden `*` extent args
     for (size_t i = 0; i < p->env.size(); ++i)
       sig.push_back(b_.getPtrTy()); // links
     llvm::FunctionType* tft = llvm::FunctionType::get(ret, sig, false);
@@ -623,11 +635,18 @@ void IRGen::declareProc(HProc* p) {
     std::unordered_map<Symbol*, llvm::Value*> mineAddr;
     for (Symbol* s : mine)
       mineAddr[s] = tf->getArg(targ++);
+    std::unordered_map<Symbol*, llvm::Value*> mineExt;
+    for (Symbol* s : mine)
+      if (isAdjustable(s))
+        mineExt[s] = tf->getArg(targ++);
     std::vector<llvm::Value*> links;
     for (size_t i = 0; i < p->env.size(); ++i)
       links.push_back(tf->getArg(targ++));
     for (Symbol* u : uni)
       args.push_back(mineAddr.count(u) ? mineAddr[u] : llvm::UndefValue::get(b_.getPtrTy()));
+    for (Symbol* u : uni)
+      if (isAdjustable(u))
+        args.push_back(mineExt.count(u) ? mineExt[u] : llvm::UndefValue::get(b_.getInt64Ty()));
     for (auto* l : links)
       args.push_back(l);
     args.push_back(selv);
@@ -686,10 +705,14 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     collectGotoBlocks(st.get());
 
   // Parameter arguments become their symbols' addresses (PL/I by reference);
-  // the trailing args are the static links (rule (8)).
+  // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
+  // dope slot; the trailing args are the static links (rule (8)).
   size_t ai = 0;
   for (Symbol* s : p->paramSyms)
     symAddr_[s] = fn->getArg(ai++);
+  for (Symbol* s : p->paramSyms)
+    if (isAdjustable(s))
+      dynUb_[s] = fn->getArg(ai++);
   for (size_t i = 0; i < p->env.size(); ++i)
     symAddr_[p->env[i]] = fn->getArg(ai++);
 
@@ -737,6 +760,9 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   size_t ai = 0;
   for (Symbol* s : uni)
     symAddr_[s] = impl->getArg(ai++);
+  for (Symbol* s : uni)
+    if (isAdjustable(s))
+      dynUb_[s] = impl->getArg(ai++);
   for (size_t i = 0; i < p->env.size(); ++i)
     symAddr_[p->env[i]] = impl->getArg(ai++);
   llvm::Value* sel = impl->getArg(ai++);
@@ -1228,6 +1254,27 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   return addr;
 }
 
+// Element count of a call argument passed to a `*`-extent parameter (rule 13):
+// a fixed array contributes its constant extent, a dynamic-bound array its live
+// recorded bound. Returns null for an unsupported argument form (the caller
+// diagnoses it), so a `*` array cannot be forwarded to another `*` parameter in
+// this stage.
+llvm::Value* IRGen::argExtent(HExpr* a) {
+  if (a->kind != HExpr::VarRef || !a->sym || !a->sym->ty.isArray())
+    return nullptr;
+  const Type& arr = a->sym->ty;
+  const Dim& d = arr.dims[0];
+  if (d.adj)
+    return nullptr; // forwarding a `*` array: not served here
+  if (d.dyn) {
+    llvm::Value* ub = dynUb_.count(a->sym)
+                          ? dynUb_[a->sym]
+                          : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub));
+    return b_.CreateAdd(b_.CreateSub(ub, i64(d.lb), "e1"), i64(1), "ext");
+  }
+  return i64(d.ub - d.lb + 1);
+}
+
 // Append the callee's static-link arguments (its enclosing automatic
 // variables, rule 8). Shared by emitCall and emitExpr.
 void IRGen::appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args) {
@@ -1274,6 +1321,20 @@ void IRGen::emitCall(HStmt* s) {
         break;
     }
     args.push_back(argAddr(a, pty));
+  }
+  // Hidden extent args for `*`-extent parameters (rule 13): the caller passes
+  // the actual element count of each matching array argument.
+  for (size_t i = 0; i < calleeParams.size() && i < s->args.size(); ++i) {
+    if (isAdjustable(calleeParams[i])) {
+      llvm::Value* ext = argExtent(s->args[i].get());
+      if (!ext) {
+        d_.error(s->args[i]->loc,
+                 "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                 "(13)");
+        ext = i64(0);
+      }
+      args.push_back(ext);
+    }
   }
   appendStaticLinks(callee, args);
   b_.CreateCall(calleeF, args);
@@ -1927,6 +1988,17 @@ Val IRGen::emitExpr(HExpr* e) {
         break;
       args.push_back(argAddr(a, pty));
     }
+    for (size_t i = 0; i < calleeParams.size() && i < e->args.size(); ++i)
+      if (isAdjustable(calleeParams[i])) {
+        llvm::Value* ext = argExtent(e->args[i].get());
+        if (!ext) {
+          d_.error(e->args[i]->loc,
+                   "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                   "(13)");
+          ext = i64(0);
+        }
+        args.push_back(ext);
+      }
     appendStaticLinks(callee, args);
     llvm::CallInst* call = b_.CreateCall(calleeFn, args, "fres");
     v.ty = rty;
