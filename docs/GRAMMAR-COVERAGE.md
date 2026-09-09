@@ -61,7 +61,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (114) | `DISPLAY` | M5 | scan garbled; Y33-6003 form used |
 | (115)–(122) | expression precedence hierarchy | M0 | `arith.pli` pins `-3**2` = `-(3**2)` = -9 ((128) constants are unsigned); `usecases/expr.pli` pins negated comparisons and a prefixed `**` exponent |
 | (118) | comparison operators | M0 | incl. `¬=`, `¬>`, `¬<` |
-| (123) | primitive expressions | partial M2 | constants/vars (M0); function references to function procedures (`func.pli`); array attribute built-ins `LBOUND`/`HBOUND`/`DIM` on fixed-size single-axis arrays (`array_bounds.pli`, `bad_array_builtin.pli`); `SUM`/`PROD`/`ANY`/`ALL` → M2 |
+| (123) | primitive expressions | partial M2 | constants/vars (M0); function references to function procedures (`func.pli`); array attribute built-ins `LBOUND`/`HBOUND`/`DIM` on fixed-size single-axis arrays (`array_bounds.pli`, `bad_array_builtin.pli`); array reduction built-ins `SUM`/`PROD`/`ANY`/`ALL` over the full extent (`array_reduce.pli`, `bad_array_reduce.pli`); cross-sections/multi-axis → M2 |
 | (124),(125) | locator qualification, qualified names | diag → M2/M3 | aggregate qualification M2; locators M3 |
 | (126) | subscripted references | partial M2 | single-axis constant-bounds scalar arrays in read/write positions, compile-time + runtime SUBSCRIPTRANGE (`array.pli`, `bad_array_oob.pli`); `*` cross-sections and multi-axis → M2 |
 | (127) | unsubscripted reference | M2 | |
@@ -113,7 +113,7 @@ entry points below are where that chain terminates.
 | (86) | `emitAssign`, `storeTo` | incl. `SUBSTR` pseudo-variable (`pli_substr_assign`) |
 | (104),(105) | `emitPut` | list-directed output |
 | (115)–(122) | `emitExpr` (binary/`Unary`) | arithmetic, bit, comparison, concat |
-| (123) | `emitExpr` (`Call`) | per-builtin handlers: SUBSTR, INDEX, ABS, LENGTH, TRUNC, PRECISION, MIN, MAX, MOD, MULTIPLY, DIVIDE, ROUND, REPEAT, VERIFY, TRANSLATE, HIGH, LOW, DATE, TIME, LBOUND, HBOUND, DIM |
+| (123) | `emitExpr` (`Call`) | per-builtin handlers: SUBSTR, INDEX, ABS, LENGTH, TRUNC, PRECISION, MIN, MAX, MOD, MULTIPLY, DIVIDE, ROUND, REPEAT, VERIFY, TRANSLATE, HIGH, LOW, DATE, TIME, LBOUND, HBOUND, DIM, SUM, PROD, ANY, ALL |
 
 ## Headline numbers (M0)
 
