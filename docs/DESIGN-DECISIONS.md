@@ -616,3 +616,29 @@ speculative (KISS).
 
 
 
+## ADR-031 — IR golden tests: a dependency-free FileCheck-style matcher
+
+**Context.** M1's exit criterion is "IR golden tests in place", and ARCHITECTURE
+§7 lists them at M1, but no harness existed. A golden *diff* of emitted IR is
+brittle — LLVM IR changes with version and optimization level. The plan names
+"FileCheck-style matching" (ordered pattern checks, not whole-file diffs). The
+LLVM install ships a `FileCheck` binary, but relying on it adds a test-time
+dependency whose exact path is LLVM-version-specific (like `clang`).
+
+**Decision.** A new `tests/ir/` group: each `<name>.pli` is compiled with
+`plic -emit-llvm -o <out>/<name>.ll`, and a companion `<name>.check` holds
+`CHECK: <regex>` directives matched **in order** against the IR by a minimal
+matcher (`ir_match` in `tests/run_tests.py`). The matcher is dependency-free
+(Python `re`); a FileCheck regex block `{{...}}` becomes a Python group
+`(?:...)`, and the rest of the line is a Python regex. A new `ir` test kind in
+the runner emits IR and applies the checks. `tests/ir/init.pli`, `arith.pli`,
+`func.pli` (the recursive-factorial exit criterion) and `ifelse.pli` pin the
+initial-value store, integer add/sub, signed compare + branch, and recursion.
+
+**Consequences.** Codegen that silently drops work (e.g. an INITIAL never
+reaching a store — the CONTRIBUTING worked example) fails the suite. No new
+build or test dependency; the `.check` files double as documentation of the
+expected IR shape. M1's exit criterion is now met.
+**Rejected.** Whole-file IR diffs against `expected/*.ll` (brittle across LLVM
+versions); invoking the `FileCheck` binary (an extra, version-pinned dependency
+for what a few dozen lines of Python do).
