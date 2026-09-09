@@ -18,7 +18,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (8) | sentence kinds | M0 | `parseStatement`; internal procedures reach enclosing automatic storage via a static link (ADR-027, `staticlink.pli`) |
 | (9),(10) | `DECLARE`, declarationlist | M0 | `parseDeclare` / `ifelse.pli` |
 | (11) | declaration, level numbers, factoring | partial M0 | scalars; factoring and levels → M2 |
-| (12),(13) | dimension attribute, bound pairs | M2 | arrays |
+| (12),(13) | dimension attribute, bound pairs | partial M2 | single-axis constant-bounds arrays (`A(n)`/`A(lb:ub)`), scalar elements (`array.pli`); multi-axis (13), dynamic bounds, `*` extents, cross-sections → M2 |
 | (14),(15) | attribute, data-attribute set | partial M0 | arithmetic/string/`ALIGNED` subset |
 | (16),(17) | arithmetic attributes, precision, signed integer | partial M0 | practical binary forms first; full decimal/precision conformance → D1 |
 | (18) | string attributes (`BIT`/`CHARACTER`/`VARYING`) | partial M0 | `BIT(1)` and char/varying served (`strings.pli`); `BIT(n>1)` diagnosed as unimplemented (`bad_bitlen.pli`, rule (18)); schedule by corpus impact |
@@ -63,7 +63,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (118) | comparison operators | M0 | incl. `¬=`, `¬>`, `¬<` |
 | (123) | primitive expressions | partial M0 | constants/vars (M0); function references to function procedures (`func.pli`) |
 | (124),(125) | locator qualification, qualified names | diag → M2/M3 | aggregate qualification M2; locators M3 |
-| (126) | subscripted references | diag → M2 | incl. `*` cross-sections |
+| (126) | subscripted references | partial M2 | single-axis constant-bounds scalar arrays in read/write positions, compile-time + runtime SUBSCRIPTRANGE (`array.pli`, `bad_array_oob.pli`); `*` cross-sections and multi-axis → M2 |
 | (127) | unsubscripted reference | M2 | |
 | (128),(129) | constants, replicated string constants | partial M0 | replicated strings served; imaginary/sterling → D1 |
 | (130)–(133) | identifier, letter, alphameric, digit | M0 | incl. `$ # @` and break character |

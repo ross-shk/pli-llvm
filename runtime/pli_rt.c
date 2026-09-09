@@ -280,3 +280,11 @@ void pli_signal_error(const char *msg) {
   fprintf(stderr, "ERROR condition raised: %s\n", msg ? msg : "(unspecified)");
   exit(8);
 }
+
+/* SUBSCRIPTRANGE interim (M2): a runtime subscript is out of bounds. Raised as
+ * a hard error until condition handling (M4) provides ON SUBSCRIPTRANGE. */
+void pli_subscript_oob(void) {
+  pli_rt_fini();
+  fprintf(stderr, "SUBSCRIPTRANGE: array subscript out of bounds\n");
+  exit(8);
+}

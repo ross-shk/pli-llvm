@@ -5,6 +5,8 @@
 // AREA/OFFSET, ENTRY/FILE/LABEL variables are M2-M4 (see IMPLEMENTATION-PLAN).
 #pragma once
 #include <string>
+#include <utility>
+#include <vector>
 
 enum class TK {
   FixedBin,  // FIXED BINARY(p,q)
@@ -21,8 +23,15 @@ struct Type {
   int scale = 0;         // FIXED scale factor q
   int len = 1;           // CHARACTER/BIT length
   bool varying = false;  // VARYING (rule 15)
+  // Array dimension bounds (lb,ub) per axis — rules (12),(13). Empty for a
+  // scalar. `len`/`prec`/... describe the element type.
+  std::vector<std::pair<int, int>> dims;
 
   bool operator==(const Type &) const = default;
+
+  bool isArray() const { return !dims.empty(); }
+  // The scalar type of one element (dims cleared).
+  Type elementType() const { Type t = *this; t.dims.clear(); return t; }
 
   static Type fixedBin(int p = 15, int q = 0) { Type t; t.k = TK::FixedBin; t.prec = p; t.scale = q; return t; }
   static Type fixedDec(int p = 5, int q = 0) { Type t; t.k = TK::FixedDec; t.prec = p; t.scale = q; return t; }

@@ -41,3 +41,4 @@ PLI_FN(pli_time, VOID, (PTR, I64))                    /* TIME() */
 PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
 PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */
+PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE interim (M2) */

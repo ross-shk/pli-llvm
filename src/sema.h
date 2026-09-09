@@ -63,6 +63,8 @@ private:
   void collectLabels(Stmt *s);  // gather GO TO targets defined in this proc
   void checkStmt(Stmt *s, Scope *sc, Proc *p);
   void typeExpr(Expr *e, Scope *sc, Proc *p);
+  // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
+  void checkSubscriptBounds(Expr *e, Symbol *arr);
   // Type a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` is a known built-in (result typed or diagnosed); false otherwise, so
   // typeExpr can fall through to the general function-call path.

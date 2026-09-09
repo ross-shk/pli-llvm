@@ -57,6 +57,11 @@ private:
   StmtP parseAssignment();
   void parseProcOptions(Proc *p);
   bool parseDeclItem(DeclItem &item);
+  // Try to parse a constant-bounds dimension (rules (12),(13)) at the current
+  // LParen. Consumes tokens only when it is genuinely a dimension; returns
+  // false (with the token stream restored) so the caller can treat the group
+  // as a precision/length instead. Supports a single axis: (ub) or (lb:ub).
+  bool tryParseDimension(std::vector<std::pair<int, int>> &out);
   bool parseDescriptorType(Type &out);  // one ENTRY parameter type (rule 38)
   bool parseEntryParams(std::vector<Type> &params);  // ENTRY ( ... )
 

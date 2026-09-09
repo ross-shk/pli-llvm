@@ -37,6 +37,7 @@ HExprP convIf(HExprP e, const Type &dst) {
 }
 
 HExprP lowerCallExpr(const Expr *e);
+HExprP lowerSubscriptExpr(const Expr *e);
 HExprP lowerExpr(const Expr *e);
 
 // Mirror an expression node without re-dispatching the Call case (Call is
@@ -62,7 +63,16 @@ HExprP lowerExprBase(const Expr *e) {
 HExprP lowerExpr(const Expr *e) {
   if (!e) return nullptr;
   if (e->kind == Expr::Call) return lowerCallExpr(e);
+  if (e->kind == Expr::Subscript) return lowerSubscriptExpr(e);
   return lowerExprBase(e);
+}
+
+// Mirror a subscripted array reference A(i) (rule 126). The base symbol and
+// element type come from sema; lowerExprBase already lowers the index args.
+HExprP lowerSubscriptExpr(const Expr *e) {
+  auto h = lowerExprBase(e);
+  h->kind = HExpr::Subscript;
+  return h;
 }
 
 // Lower a function-call expression, wrapping each argument that needs an
@@ -152,6 +162,9 @@ HStmtP lowerStmt(const Stmt *s, const Proc *owner) {
     case HStmt::Assign:
       if (s->target && s->target->kind == Expr::VarRef && s->target->sym)
         h->value = convIf(lowerExpr(s->value.get()), s->target->sym->ty);
+      else if (s->target && s->target->kind == Expr::Subscript && s->target->sym)
+        // Array element target: convert to the element type (rule 126).
+        h->value = convIf(lowerExpr(s->value.get()), s->target->ty);
       else
         h->value = lowerExpr(s->value.get());
       break;
@@ -252,6 +265,12 @@ void printExpr(std::ostream &os, const HExpr *e, int ind) {
       os << " ";
       printExpr(os, e->b.get(), ind); os << ":"; printType(os, e->ty); os << ")";
       break;
+    case HExpr::Subscript: {
+      os << "Subscript(" << e->name;
+      for (const auto &a : e->args) { os << " "; printExpr(os, a.get(), ind); }
+      os << ":"; printType(os, e->ty); os << ")";
+      break;
+    }
     case HExpr::Call: {
       os << "Call(" << e->name;
       if (e->sym && e->sym->proc) os << "->" << e->sym->proc->name;

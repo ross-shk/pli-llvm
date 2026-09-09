@@ -674,3 +674,37 @@ in the table ahead of use, keeping it the complete ABI contract.
 deriving one side from the other in a build script (a third source of truth for
 the same information); having irgen read the `.def` at runtime (overkill — the
 macro-expansion gives compile-time checking with zero cost).
+
+---
+
+## ADR-033 — Fixed-size arrays: static layout, scalar elements, SUBSCRIPTRANGE interim
+
+**Context.** M2 begins with arrays (rules (12),(13),(126)). ADR-008 already
+fixes the representation: constant bounds become an LLVM aggregate
+(`DECLARE A(100) FIXED BIN(31);` → `[100 x i32]`), with dope vectors only when
+bounds are dynamic. The first slice must decide how to lay out that aggregate,
+which element types it serves, and how out-of-range subscripts are handled
+before condition handling (M4) provides `ON SUBSCRIPTRANGE`.
+
+**Decision.** A fixed-size array is stored as `[N x elemTy]` where `N` is the
+upper bound and `elemTy` the element's scalar LLVM type (per ADR-008); the lower
+bound defaults to 1 (a `(lb:ub)` bound pair is honoured). One dimension per axis
+is served in this slice — a multi-axis declaration is diagnosed as rule (13).
+Only scalar (numeric and `BIT(1)`) element types are served; a character-element
+array is diagnosed as rule (12), never silently miscompiled (invariant 2).
+`INITIAL` on an array (iteration factors) is diagnosed as rule (26). A
+subscripted reference `A(i)` (rule (126)) lowers to a GEP with index `i - lb`;
+a constant subscript is range-checked at compile time, and a runtime index is
+guarded by an emitted check that calls a new `pli_subscript_oob` runtime helper,
+which prints a `SUBSCRIPTRANGE` message and exits. The interim is a hard abort
+because conditions are M4; ADR-009's handler mechanism replaces it when `ON
+SUBSCRIPTRANGE` is implemented.
+
+**Consequences.** Common vector/table programs compile and run with bounds
+checking on (the M2 exit criterion). Out-of-range constant subscripts are caught
+at compile time; out-of-range runtime subscripts stop the program deterministically
+instead of corrupting memory. The dope-vector path (ADR-008) is deferred to
+dynamic bounds and `*` extents. **Rejected.** Dope vectors for this slice
+(unneeded for constant bounds); servicing character element arrays before the
+string-addressing machinery is wired (incomplete and unsafe); silently skipping
+bounds checks to gain speed before condition handling exists (invariant 2).
