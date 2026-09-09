@@ -1009,5 +1009,40 @@ bool Sema::typeBuiltin(Expr *e) {
         e->ty = Type::fixedBin(31, 0);
         return true;
       }
+      // Array reduction built-ins (M2, rule (123)): SUM/PROD reduce a numeric
+      // array to its element type; ANY/ALL reduce a BIT array to BIT(1). Each
+      // takes a single unsubscripted array argument in this stage.
+      if (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL") {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, e->name + " takes one array argument in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        Expr *a = e->args[0].get();
+        bool isArr = (a->kind == Expr::VarRef && a->sym &&
+                      a->sym->kind == Symbol::Var && a->sym->ty.isArray());
+        if (!isArr) {
+          d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        const Type &el = a->sym->ty.elementType();
+        if (e->name == "ANY" || e->name == "ALL") {
+          if (!el.isBit()) {
+            d_.error(a->loc, e->name + " requires a BIT array in this stage", "(123)");
+            e->ty = Type::voidTy();
+            return true;
+          }
+          e->ty = Type::bit(1);
+        } else {
+          if (el.isChar() || !el.isNumeric()) {
+            d_.error(a->loc, e->name + " requires a numeric array in this stage", "(123)");
+            e->ty = Type::voidTy();
+            return true;
+          }
+          e->ty = el;
+        }
+        return true;
+      }
   return false;
 }

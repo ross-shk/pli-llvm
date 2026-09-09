@@ -1,0 +1,16 @@
+ /* Array reduction built-ins (rule (123)) are misused: a non-array argument,
+    an unsupported element type, and a wrong argument count must be diagnosed. */
+ bad_array_reduce: procedure options(main);
+    declare a(5) fixed bin(31);
+    declare b(3) char(4);
+    declare x fixed bin(31);
+
+    /* not an array */
+    if sum(x) ^= 0 then put skip list('nope');
+
+    /* character elements are not served in this stage */
+    if sum(b) ^= 0 then put skip list('nope');
+
+    /* reduction built-ins take one array argument in this stage */
+    if sum(a, 1) ^= 0 then put skip list('nope');
+ end bad_array_reduce;

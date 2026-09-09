@@ -1527,5 +1527,70 @@ bool IRGen::emitBuiltin(HExpr *e, Val &result) {
         result = v;
         return true;
       }
+      // Array reduction built-ins (M2, rule (123)): walk the whole single-axis
+      // extent and reduce — SUM/PROD over numeric elements, ANY/ALL over BIT
+      // elements. The accumulator and counter live in entry allocas so they
+      // survive the emitted loop's basic blocks.
+      if (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL") {
+        HExpr *a = e->args[0].get();
+        if (!a->sym) { v.ty = e->ty; v.reg = llvm::Constant::getNullValue(llvmTy(e->ty)); result = v; return true; }
+        const Type &arr = a->sym->ty;
+        const Type &el = arr.elementType();
+        const long long n = arrayExtent(arr);
+        const bool isBit = e->name == "ANY" || e->name == "ALL";
+        const bool isFloat = !isBit && el.k == TK::Float;
+        llvm::Value *base = addressOf(a->sym);
+        llvm::Type *arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)n);
+
+        std::string id = std::to_string(n_++);
+        // Accumulator identity: 0 for SUM, 1 for PROD, false for ANY, true for ALL.
+        llvm::Value *accInit;
+        if (e->name == "SUM") accInit = llvm::Constant::getNullValue(llvmTy(e->ty));
+        else if (e->name == "PROD") accInit = isFloat ? flt(1.0)
+            : llvm::ConstantInt::get(llvmTy(e->ty), 1, true);
+        else if (e->name == "ANY") accInit = b_.getInt1(false);
+        else accInit = b_.getInt1(true);  // ALL
+        llvm::AllocaInst *acc = entryAlloca(isBit ? b_.getInt1Ty() : llvmTy(e->ty), "rd.acc." + id);
+        b_.CreateStore(accInit, acc);
+        llvm::AllocaInst *ctr = entryAlloca(b_.getInt64Ty(), "rd.i." + id);
+        b_.CreateStore(i64(0), ctr);
+
+        llvm::BasicBlock *condL = llvm::BasicBlock::Create(ctx_, "rd.cond." + id, curFn_);
+        llvm::BasicBlock *bodyL = llvm::BasicBlock::Create(ctx_, "rd.body." + id, curFn_);
+        llvm::BasicBlock *stepL = llvm::BasicBlock::Create(ctx_, "rd.step." + id, curFn_);
+        llvm::BasicBlock *endL = llvm::BasicBlock::Create(ctx_, "rd.end." + id, curFn_);
+        branch(condL);
+        startBlock(condL);
+        llvm::Value *c = b_.CreateLoad(b_.getInt64Ty(), ctr, "rdc");
+        b_.CreateCondBr(b_.CreateICmpSLT(c, i64(n), "rdcmp"), bodyL, endL);
+        startBlock(bodyL);
+        llvm::Value *ep = b_.CreateInBoundsGEP(arrTy, base, {i64(0), c}, "rdp");
+        Val ev;
+        ev.ty = el;
+        if (isBit)
+          ev.reg = b_.CreateTrunc(b_.CreateLoad(llvmTy(el), ep, "rdb"), b_.getInt1Ty(), "rdb1");
+        else
+          ev.reg = b_.CreateLoad(llvmTy(el), ep, "rdl");
+        llvm::Value *av = b_.CreateLoad(isBit ? b_.getInt1Ty() : llvmTy(e->ty), acc, "rdacc");
+        llvm::Value *nv;
+        if (e->name == "SUM")
+          nv = isFloat ? b_.CreateFAdd(av, ev.reg, "rds") : b_.CreateAdd(av, ev.reg, "rds");
+        else if (e->name == "PROD")
+          nv = isFloat ? b_.CreateFMul(av, ev.reg, "rds") : b_.CreateMul(av, ev.reg, "rds");
+        else if (e->name == "ANY")
+          nv = b_.CreateOr(av, ev.reg, "rdo");
+        else
+          nv = b_.CreateAnd(av, ev.reg, "rda");
+        b_.CreateStore(nv, acc);
+        branch(stepL);
+        startBlock(stepL);
+        b_.CreateStore(b_.CreateAdd(c, i64(1), "rdinc"), ctr);
+        branch(condL);
+        startBlock(endL);
+        v.ty = e->ty;
+        v.reg = b_.CreateLoad(isBit ? b_.getInt1Ty() : llvmTy(e->ty), acc, "rdres");
+        result = v;
+        return true;
+      }
   return false;
 }

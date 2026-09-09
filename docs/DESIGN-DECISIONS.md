@@ -741,3 +741,34 @@ implementing the reduction built-ins before the array-iteration machinery they
 need; diagnosing the attribute built-ins as unimplemented when they are trivial
 constants that directly enable the M2 exit criterion.
 
+---
+
+## ADR-035 — Array reduction built-ins `SUM`/`PROD`/`ANY`/`ALL`: an emitted loop
+
+**Context.** ADR-034 deferred the reduction built-ins pending the array-iteration
+machinery they need. ADR-033 lays arrays out as `[N x elemTy]`; this slice adds
+`SUM`/`PROD` over numeric arrays and `ANY`/`ALL` over `BIT` arrays, walking the
+whole single-axis extent (rule (123)). The open design question is how a reduction
+gets the array elements: emit a loop in IRGen, or call a runtime helper.
+
+**Decision.** Each reduction is lowered in IRGen to an LLVM loop over the extent
+`0..N-1`: an entry alloca holds the accumulator (identity 0 for `SUM`, 1 for
+`PROD`, `false` for `ANY`, `true` for `ALL`) and an i64 counter; each iteration
+GEPs `base[0, i]`, loads the element, and combines it (`add`/`mul` for numeric —
+float or integer per element type — `or`/`and` for bits). The result type is the
+element type for `SUM`/`PROD` and `BIT(1)` for `ANY`/`ALL`. A non-array argument,
+an unsupported element type (a `CHAR` or non-numeric array for `SUM`/`PROD`, a
+non-`BIT` array for `ANY`/`ALL`), or an extra argument is diagnosed as rule (123).
+The loop needs no `SUBSCRIPTRANGE` check because the walk stays within the extent.
+
+**Consequences.** Common aggregate queries (`SUM`, `PROD`, `ANY`, `ALL` over a
+vector or table) compile and run; the emitted loop reuses the existing
+`addressOf` path, so arrays in an enclosing procedure's frame (static link) and
+non-1 lower bounds are handled. The bit accumulator is held as an `i1` (matching
+how `Val` represents `BIT` values) rather than the `i8` storage type. **Rejected.**
+A per-element-type runtime helper (e.g. `pli_sum_i32`), because the arithmetic is
+trivial in LLVM and a helper would fragment the ABI surface (ADR-032) and need
+one entry per element type/operation; a `SUBSCRIPTRANGE` check on every iteration
+(always in-bounds — pure overhead); and walking the array through the public
+`A(i)` load (which would re-run bounds checks and be needlessly indirect).
+
