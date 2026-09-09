@@ -1,0 +1,47 @@
+   /* Cross-section (rule 126): A(i, *) / A(*, j) selects every index along the
+      '*' axis, producing a 1-D array value assigned to a same-shape array.
+      Covers a row, a column, and a cross-section of an array member. */
+   cross_section_test: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare r(4) fixed bin(31); /* a row: a(i, *) */
+      declare c(3) fixed bin(31); /* a column: a(*, j) */
+      declare i fixed bin(31), j fixed bin(31), fails fixed bin(31);
+
+      /* fill a in row-major order: a(i, j) = 10*i + j */
+      do i = 1 to 3;
+         do j = 1 to 4;
+            a(i, j) = 10 * i + j;
+         end;
+      end;
+
+      fails = 0;
+
+      /* row 2: a(2, *) = {21, 22, 23, 24} */
+      r = a(2, *);
+      do j = 1 to 4;
+         if r(j) ^= 20 + j then fails = fails + 1;
+      end;
+
+      /* column 3: a(*, 3) = {13, 23, 33} */
+      c = a(*, 3);
+      do i = 1 to 3;
+         if c(i) ^= 10 * i + 3 then fails = fails + 1;
+      end;
+
+      /* cross-section of an array member: s.m(2, *) = {109, 110, 111} */
+      declare 1 s,
+             2 m(2, 3) fixed bin(31);
+      declare mr(3) fixed bin(31);
+      do i = 1 to 2;
+         do j = 1 to 3;
+            s.m(i, j) = 100 + 3 * i + j;
+         end;
+      end;
+      mr = s.m(2, *);
+      do j = 1 to 3;
+         if mr(j) ^= 100 + 6 + j then fails = fails + 1;
+      end;
+
+      if fails = 0 then put skip list('PASS cross_section');
+      else put skip list('FAIL cross_section: fails =', fails);
+   end cross_section_test;

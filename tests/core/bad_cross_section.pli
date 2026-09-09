@@ -1,0 +1,10 @@
+   /* Cross-section (rule 126) restrictions: a cross-section assigned to a
+      scalar target, and a cross-section with more than one '*', are rejected. */
+   bad_cross_section: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare x fixed bin(31);
+      declare b(4) fixed bin(31);
+
+      x = a(*, 2);  /* scalar target, array cross-section */
+      b = a(*, *);  /* more than one '*' */
+   end bad_cross_section;

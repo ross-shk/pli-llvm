@@ -881,6 +881,28 @@ void IRGen::emitAssign(HStmt* s) {
                   {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
+  // Cross-section assignment (rule 126): B = A(i, *) — the right-hand side is a
+  // reduced-dim array value produced by a '*' subscript. Copy it into the whole
+  // array target; anywhere else a cross-section is rejected in emitExpr.
+  {
+    HExpr* x = s->value.get();
+    if (x->kind == HExpr::Subscript && x->sym && x->ty.isArray()) {
+      bool isCross = false;
+      for (auto& a : x->args)
+        if (a->kind == HExpr::Star) {
+          isCross = true;
+          break;
+        }
+      if (isCross) {
+        if (s->target->kind == HExpr::VarRef && s->target->sym && s->target->ty.isArray()) {
+          emitCrossSectionAssign(s->target.get(), x, s->loc);
+          return;
+        }
+        d_.error(s->loc, "cross-section assignment requires a whole-array target", "(126)");
+        return;
+      }
+    }
+  }
   // Array element assignment: A(i,j,...) = e (rule 126).
   if (s->target->kind == HExpr::Subscript && s->target->sym) {
     HExpr* t = s->target.get();
@@ -1397,6 +1419,93 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
   storeScalarTo(addr, el, cv);
 }
 
+// Copy a single-'*' cross-section (rule 126) into a whole array target:
+// `t` is the target array (plain variable or member), `x` is the source
+// cross-section A(<fixed>, *, <fixed>) of matching reduced (1-D) shape. The
+// fixed axes' indices are evaluated and bounds-checked once; the '*' axis is
+// iterated, gathering each source element into the corresponding target slot.
+void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
+  const Type& srcArr = x->memberPath.empty() ? x->sym->ty : memberType(x->sym, x->memberPath);
+  llvm::Value* srcBase =
+      x->memberPath.empty() ? addressOf(x->sym) : memberAddr(x->sym, x->memberPath, loc);
+  const Type& el = srcArr.elementType();
+  const Type& tgtArr = t->memberPath.empty() ? t->sym->ty : memberType(t->sym, t->memberPath);
+  llvm::Value* tgtBase =
+      t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, loc);
+
+  const size_t n = srcArr.dims.size();
+  size_t star = n;
+  for (size_t k = 0; k < n; ++k)
+    if (x->args[k]->kind == HExpr::Star) {
+      star = k;
+      break;
+    }
+
+  // Row-major stride of each axis: the product of the later-axis extents.
+  std::vector<long long> stride(n);
+  for (long long s = 1, k = (long long)n; k-- > 0;) {
+    stride[k] = s;
+    s *= (srcArr.dims[k].second - srcArr.dims[k].first + 1);
+  }
+
+  // Evaluate and bounds-check each fixed-axis index once; accumulate its
+  // contribution to the source flat offset.
+  llvm::Value* fixedFlat = i64(0);
+  for (size_t k = 0; k < n; ++k) {
+    if (k == star)
+      continue;
+    llvm::Value* iv = toI64(emitExpr(x->args[k].get()));
+    llvm::Value* lb = i64(srcArr.dims[k].first);
+    llvm::Value* ub = i64(srcArr.dims[k].second);
+    llvm::Value* oob =
+        b_.CreateOr(b_.CreateICmpSLT(iv, lb, "lo"), b_.CreateICmpSGT(iv, ub, "hi"), "oob");
+    std::string fid = std::to_string(n_++);
+    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "cs.fail." + fid, curFn_);
+    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "cs.ok." + fid, curFn_);
+    b_.CreateCondBr(oob, failL, okL);
+    startBlock(failL);
+    b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+    b_.CreateUnreachable();
+    startBlock(okL);
+    fixedFlat = b_.CreateAdd(
+        fixedFlat, b_.CreateMul(b_.CreateSub(iv, lb, "off"), i64(stride[k]), "scaled"), "ff");
+  }
+
+  // Iterate the '*' axis from its lower bound to its upper bound (the target
+  // is 1-D with the same bounds), gathering source elements into the target.
+  const long long slb = srcArr.dims[star].first, sub = srcArr.dims[star].second;
+  llvm::Type* srcArrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(srcArr));
+  llvm::Type* tgtArrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(tgtArr));
+  llvm::AllocaInst* ctr = entryAlloca(b_.getInt64Ty(), "cs.i." + std::to_string(n_++));
+  b_.CreateStore(i64(slb), ctr);
+  std::string id = std::to_string(n_++);
+  llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "cs.cond." + id, curFn_);
+  llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "cs.body." + id, curFn_);
+  llvm::BasicBlock* stepL = llvm::BasicBlock::Create(ctx_, "cs.step." + id, curFn_);
+  llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "cs.end." + id, curFn_);
+  branch(condL);
+  startBlock(condL);
+  llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), ctr, "csi");
+  b_.CreateCondBr(b_.CreateICmpSLE(i, i64(sub), "cscmp"), bodyL, endL);
+  startBlock(bodyL);
+  llvm::Value* srcFlat = b_.CreateAdd(
+      fixedFlat, b_.CreateMul(b_.CreateSub(i, i64(slb), "soff"), i64(stride[star]), "sscaled"),
+      "sflat");
+  llvm::Value* saddr = b_.CreateInBoundsGEP(srcArrTy, srcBase, {i64(0), srcFlat}, "csrc");
+  Val sv;
+  sv.ty = el;
+  llvm::Value* lr = b_.CreateLoad(llvmTy(el), saddr, "csl");
+  sv.reg = el.isBit() ? b_.CreateTrunc(lr, b_.getInt1Ty(), "csb") : lr;
+  llvm::Value* taddr =
+      b_.CreateInBoundsGEP(tgtArrTy, tgtBase, {i64(0), b_.CreateSub(i, i64(slb), "tflat")}, "cdst");
+  storeScalarTo(taddr, el, convert(sv, el, loc));
+  branch(stepL);
+  startBlock(stepL);
+  b_.CreateStore(b_.CreateAdd(i, i64(1), "csinc"), ctr);
+  branch(condL);
+  startBlock(endL);
+}
+
 // ---------------------------------------------------------------------------
 // conversions (the M0 subset of the PL/I conversion rules)
 // ---------------------------------------------------------------------------
@@ -1511,12 +1620,31 @@ Val IRGen::emitExpr(HExpr* e) {
     v.ty = Type::bit(1);
     v.reg = b_.getInt1(!e->sval.empty() && e->sval[0] == '1');
     return v;
+  case HExpr::Star:
+    // A '*' is a cross-section axis marker (rule 126); outside a subscript it
+    // is not a value. Sema only reaches here through a misused cross-section.
+    d_.error(e->loc, "a cross-section '*' is only valid within a subscript", "(126)");
+    v.ty = Type::voidTy();
+    v.reg = i64(0);
+    return v;
   case HExpr::Subscript:
     if (!e->sym) {
       v.ty = e->ty;
       v.reg = i64(0);
       return v;
     }
+    // A cross-section A(*, ...) is a reduced-dim array value (rule 126), served
+    // only as an assignment RHS (see emitAssign); anywhere else it is rejected.
+    for (const auto& a : e->args)
+      if (a->kind == HExpr::Star) {
+        d_.error(
+            e->loc,
+            "a cross-section is only valid as the right-hand side of an assignment in this stage",
+            "(126)");
+        v.ty = e->ty;
+        v.reg = i64(0);
+        return v;
+      }
     if (!e->memberPath.empty()) {
       // A subscripted member array S.A(i) (rules 124,126): the member array
       // lives at memberAddr(...) (a [N x elemTy] field), so GEP into it as a

@@ -24,6 +24,29 @@ Type mulResultType(const Type& a, const Type& b) {
   return t;
 }
 
+// Cross-section (rule 126): a subscript list containing at least one '*'. The
+// result is an array whose rank and bounds are those of the '*' axes, in axis
+// order; each non-'*' axis is collapsed by its fixed index. Returns true and
+// fills `reduced` (the reduced-dim array type) and `nStar` when `e` is a
+// cross-section, else returns false.
+bool crossSectionType(const Expr* e, const Type& full, Type& reduced, int& nStar) {
+  bool isCross = false;
+  nStar = 0;
+  Type r = full.elementType();
+  r.dims.clear();
+  for (size_t k = 0; k < e->args.size() && k < full.dims.size(); ++k) {
+    if (e->args[k]->kind == Expr::Star) {
+      isCross = true;
+      ++nStar;
+      r.dims.push_back(full.dims[k]);
+    }
+  }
+  if (!isCross)
+    return false;
+  reduced = r;
+  return true;
+}
+
 Scope* Sema::scopeFor(Proc* p) {
   auto it = procScopes_.find(p);
   if (it != procScopes_.end())
@@ -650,6 +673,26 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->target->loc, "cannot assign to procedure '" + s->target->name + "'", "(86)");
       break;
     }
+    // Cross-section assignment (rule 126): B = A(i, *) — the right-hand side is
+    // a reduced-dim array value produced by a '*' subscript. The target must be
+    // a whole array of exactly that reduced shape.
+    {
+      bool isCross = false;
+      for (auto& a : s->value->args)
+        if (a->kind == Expr::Star) {
+          isCross = true;
+          break;
+        }
+      if (isCross) {
+        if (s->target->ty.isArray() && s->target->ty == s->value->ty)
+          break;
+        d_.error(s->loc,
+                 "cross-section assignment requires the target to be an array of the "
+                 "cross-section's shape",
+                 "(126)");
+        break;
+      }
+    }
     if (!s->value->ty.isVoid() && !s->target->ty.isVoid())
       checkAssignable(s->target->ty, s->value->ty, s->loc, "assignment");
     break;
@@ -837,6 +880,11 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
   case Expr::BitLit:
     e->ty = Type::bit((int)std::max<size_t>(1, e->sval.size()));
     break;
+  case Expr::Star:
+    // A '*' subscript is a cross-section axis marker (rule 126), not a value;
+    // its meaning is assigned by the enclosing subscript, so it stays void.
+    e->ty = Type::voidTy();
+    break;
   case Expr::VarRef: {
     Symbol* sym = lookup(sc, e->name);
     if (!sym) {
@@ -904,7 +952,22 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         e->ty = Type::voidTy();
         break;
       }
-      e->ty = leaf->elementType();
+      int nStar = 0;
+      Type reduced;
+      if (crossSectionType(e, *leaf, reduced, nStar)) {
+        // A member-array cross-section S.A(i, *) (rules 124,126): reduced-dim
+        // array value.
+        if (nStar > 1) {
+          d_.error(e->loc,
+                   "a cross-section with more than one '*' is not implemented in this stage",
+                   "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = reduced;
+      } else {
+        e->ty = leaf->elementType();
+      }
       std::string mname = e->name;
       for (const std::string& q : e->path)
         mname += "." + q;
@@ -932,7 +995,21 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       e->kind = Expr::Subscript;
       e->sym = arr;
-      e->ty = arr->ty.elementType();
+      int nStar = 0;
+      Type reduced;
+      if (crossSectionType(e, arr->ty, reduced, nStar)) {
+        // A cross-section A(*, ...) (rule 126): a reduced-dim array value.
+        if (nStar > 1) {
+          d_.error(e->loc,
+                   "a cross-section with more than one '*' is not implemented in this stage",
+                   "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = reduced;
+      } else {
+        e->ty = arr->ty.elementType();
+      }
       // rule (8)/(42): an array of an enclosing procedure is reached through
       // this procedure's static link.
       if (arr->owner && arr->owner != p && isDescendantOf(p, arr->owner))
