@@ -1,0 +1,48 @@
+ /* General iSUB index arithmetic (rule 134): the iSUB dummy may appear in an
+    affine base subscript `m * 1SUB + c`. Y(i) is then a live overlay of
+    X(m*i + c) — a strided or offset 1-D view of one axis of X. Writes through
+    the overlay are visible in the base and vice versa. */
+ isub_arith_test: procedure options(main);
+    declare a(10) fixed bin(31);
+    declare r(5) fixed bin(31) defined a(2*1SUB);      /* r(i) -> a(2*i) */
+    declare b(10) fixed bin(31);
+    declare s(8) fixed bin(31) defined b(1SUB+2);      /* s(i) -> b(i+2) */
+    declare c(10) fixed bin(31);
+    declare t(4) fixed bin(31) defined c(2*1SUB-1);    /* t(i) -> c(2*i-1) */
+    declare i fixed bin(31), fails fixed bin(31);
+
+    fails = 0;
+
+    /* base -> strided overlay */
+    do i = 1 to 10;
+       a(i) = i * 10;
+    end;
+    do i = 1 to 5;
+       if r(i) ^= i * 20 then fails = fails + 1;
+    end;
+    r(3) = 999;                       /* write through the strided overlay */
+    if a(6) ^= 999 then fails = fails + 1;
+
+    /* offset overlay */
+    do i = 1 to 10;
+       b(i) = i;
+    end;
+    do i = 1 to 8;
+       if s(i) ^= i + 2 then fails = fails + 1;
+    end;
+    s(1) = 100;
+    if b(3) ^= 100 then fails = fails + 1;
+
+    /* combined multiplier + offset */
+    do i = 1 to 10;
+       c(i) = i;
+    end;
+    do i = 1 to 4;
+       if t(i) ^= 2 * i - 1 then fails = fails + 1;
+    end;
+    t(2) = 77;
+    if c(3) ^= 77 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS isub_arith');
+    else put skip list('FAIL isub_arith: fails =', fails);
+ end isub_arith_test;

@@ -892,22 +892,59 @@ bool Parser::parseDeclTail(DeclItem& item) {
           advance();
           if (!at(Tok::RParen)) {
             for (;;) {
+              // One base subscript (rules 126,134): a constant integer, a bare
+              // iSUB dummy, or an affine iSUB form `[m] [*] 1SUB [+/- c]`. A
+              // non-affine base subscript is diagnosed.
               DefinedSub ds;
-              if (at(Tok::Isub)) {
-                ds.isub = true;
+              auto parseInt = [&](bool neg) -> long long {
+                long long v = 0;
+                if (at(Tok::Number)) {
+                  v = strtoll(cur().text.c_str(), nullptr, 10);
+                  advance();
+                } else {
+                  d_.error(cur().loc,
+                           "DEFINED base subscripts must be constant integers or an affine iSUB "
+                           "expression",
+                           "(24)");
+                }
+                return neg ? -v : v;
+              };
+              if (at(Tok::Number)) {
+                long long c = strtoll(cur().text.c_str(), nullptr, 10);
                 advance();
-              } else if (at(Tok::Number)) {
-                ds.expr = std::make_unique<Expr>();
-                ds.expr->kind = Expr::IntLit;
-                ds.expr->loc = cur().loc;
-                ds.expr->ival = strtoll(cur().text.c_str(), nullptr, 10);
+                if (eat(Tok::Star)) {
+                  // m * 1SUB
+                  if (at(Tok::Isub)) {
+                    ds.isub = true;
+                    ds.mult = c;
+                    advance();
+                  } else {
+                    d_.error(cur().loc, "expected an iSUB dummy after '*'", "(134)");
+                  }
+                } else {
+                  // a plain constant index (no iSUB)
+                  ds.expr = std::make_unique<Expr>();
+                  ds.expr->kind = Expr::IntLit;
+                  ds.expr->loc = cur().loc;
+                  ds.expr->ival = c;
+                }
+              } else if (at(Tok::Isub)) {
+                // 1SUB (or 1SUB +/- c)
+                ds.isub = true;
+                ds.mult = 1;
                 advance();
               } else {
                 d_.error(cur().loc,
-                         "DEFINED base subscripts must be constant integers or an iSUB dummy",
+                         "DEFINED base subscripts must be constant integers or an affine iSUB "
+                         "expression",
                          "(24)");
-                // skip the offending expression token to keep parsing the list
+                advance(); // skip the offending token to keep parsing the list
+              }
+              // optional affine offset (only meaningful after an iSUB)
+              if (ds.isub && (at(Tok::Plus) || at(Tok::Minus))) {
+                bool neg = cur().kind == Tok::Minus;
                 advance();
+                ds.add = parseInt(neg);
               }
               item.definedSubs.push_back(std::move(ds));
               if (!eat(Tok::Comma))

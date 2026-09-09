@@ -1,0 +1,9 @@
+ /* General iSUB index arithmetic (rule 134) errors: the affine image of the
+    overlay's index range must stay within the base axis bounds, and the iSUB
+    base subscript must be affine (m * 1SUB + c) — a single linear occurrence. */
+ bad_isub_arith: procedure options(main);
+    declare a(10) fixed bin(31);
+
+    declare o1(6) fixed bin(31) defined a(2*1SUB);    /* r(6) -> a(12), out of range */
+    declare o2(5) fixed bin(31) defined a(1SUB*1SUB); /* non-linear iSUB */
+ end bad_isub_arith;

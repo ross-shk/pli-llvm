@@ -1303,3 +1303,36 @@ initializer list — served only for a scalar variable here, arrays/structures
 continue to use the constant itemlist; a one-time (STATIC) evaluation — STATIC is
 not yet implemented, so the call runs each entry, and a genuine STATIC `INITIAL CALL`
 is deferred with STATIC storage.
+
+## ADR-053 — iSUB index arithmetic: an affine 1-D overlay of one base axis
+
+**Context.** ADR-048 served a bare `iSUB` dummy (`X(1SUB)`) making `Y(n)` a 1-D
+overlay of one axis of `X`, and explicitly rejected the general form `X(2*1SUB)`
+(a transformed offset). Rule (134) `isub ::= integer SUB` permits the iSUB dummy
+to appear within the arithmetic of a base subscript. This ADR covers the affine
+form.
+
+**Decision.** A `DEFINED` base subscript that is an iSUB dummy may carry an
+affine coefficient and offset, giving the base index `m*1SUB + c` for the axis
+(`X(2*1SUB)`, `X(1SUB+2)`, `X(2*1SUB-1)`). In the AST each `DefinedSub` carries
+`mult` (m, default 1) and `add` (c, default 0); a bare `1SUB` is `m=1, c=0` and a
+constant base subscript stays a fixed `expr`. Parser accepts `[m] [*] 1SUB [+/- c]`
+and rejects a non-affine iSUB (a second linear occurrence such as `1SUB*1SUB` is
+rejected at parse, per rule (126)). Sema checks the overlay's affine image: with
+`Y` ranging `[lb,ub]`, the image `m*[lb,ub]+c` must stay within the base axis
+bounds `[lo,hi]`, swapping the endpoints when `m<0`, and records `definedIsubMult`
+and `definedIsubAdd` on the symbol. IRGen computes the base index `m*yidx+c` for
+both the bounds check and the flat element address.
+
+**Consequences.** `tests/core/isub_arith.pli` covers a strided (`2*1SUB`), an
+offset (`1SUB+2`), and a combined (`2*1SUB-1`) overlay, each checked both by
+reading through the overlay and by writing through it and reading the base;
+`bad_isub_arith.pli` rejects an out-of-range image (`2*1SUB` on a 6-element
+overlay of a 10-element base) and a non-linear iSUB. As in ADR-048, the overlay
+is a live alias to the base bytes, so writes through it are visible in the base
+and vice versa.
+
+**Rejected.** Multi-axis iSUB (a sub-block overlay with an iSUB on more than one
+axis — the affine image is computed per axis, but the address logic for a
+multi-axis sub-block remains broader); a non-affine iSUB (e.g. `1SUB*1SUB`); a
+non-constant coefficient or offset (constant-folded only in this stage).
