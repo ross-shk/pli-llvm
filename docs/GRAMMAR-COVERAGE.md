@@ -27,7 +27,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (21) | `LABEL` attribute | M4 | label variables |
 | (22) | `OFFSET` attribute | M3 | |
 | (23) | storage classes | diag → M3 | `AUTOMATIC`/`STATIC` accepted, `CONTROLLED` M3 |
-| (24) | `DEFINED`/`POSITION` | M2 | ADR-018; after ordinary aggregates |
+| (24) | `DEFINED`/`POSITION` | partial M2 | `Y ... DEFINED X` overlays the storage of an already-declared same-type variable — Y needs no own storage and reads/writes resolve to X's address (`defined.pli`, ADR-047); an undeclared base, a different-type base, a structure, or a base in an enclosing procedure is diagnosed (`bad_defined.pli`); `POSITION` is diagnosed (rule 24); different-type (memory-view) overlays and `DEFINED X(i)` subscripted bases → M2 |
 | (25) | `BASED` | M3 | |
 | (26)–(32) | `INITIAL` (incl. `CALL`, iteration, `*`) | partial M0 | scalar constants (M0); arrays: an `INITIAL` itemlist with iteration factors `(n)`, `*` repeat-last, and nested groups fills a fixed-size numeric/BIT array element-by-element on AUTOMATIC storage (`init_array.pli`, `bad_init_array.pli`, ADR-044); a count that does not match the extent is diagnosed; `INITIAL CALL` diagnosed (rule (27)); `INITIAL` on a structure diagnosed |
 | (33) | non-data attributes | M8 | prioritize by corpus impact |
@@ -67,7 +67,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (127) | unsubscripted reference | partial M2 | whole-structure assignment served as a storage copy between structures of identical shape, incl. array members and nested members (`struct_assign.pli`); shape mismatch or mixing a structure with a non-structure diagnosed (`bad_struct_assign.pli`, `bad_struct_value.pli`, rule (127)); a whole structure as an expression value, and full aggregate references → M2 |
 | (128),(129) | constants, replicated string constants | partial M0 | replicated strings served; imaginary/sterling → D1 |
 | (130)–(133) | identifier, letter, alphameric, digit | M0 | incl. `$ # @` and break character |
-| (134) | `isub` (`integer SUB`) | M2 | ADR-018; after ordinary aggregates |
+| (134) | `isub` (`integer SUB`) | M2 | iSUB dummy variable in `DEFINED` subscript bases (`DEFINED X(2*1SUB)`) — diagnosed; ADR-018; after plain `DEFINED` overlays |
 | (135)–(139) | integer, fixed/float/imaginary constants | partial M0 | practical binary constants served; decimal/complex/imaginary completeness → D1 |
 | (140)–(144) | string constants, bit strings, characters | M0 | `strings.pli` (incl. `''` escape) |
 | (145) | sterling constants | D1 | with sterling pictures |

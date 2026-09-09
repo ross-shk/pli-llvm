@@ -1,0 +1,8 @@
+   /* DEFINED (rule 24) restrictions: the base must be an in-scope variable of
+      the same type; different-type overlays are rejected. */
+   bad_defined: procedure options(main);
+      declare x fixed bin(31);
+      declare c fixed bin(63);
+      declare z fixed bin(31) defined nope;   /* undeclared base */
+      declare w fixed bin(31) defined c;      /* different type */
+   end bad_defined;

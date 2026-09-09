@@ -842,10 +842,37 @@ bool Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
+      if (w == "DEFINED" || w == "DEF") {
+        // defined-attribute ::= DEFINED basic-reference [ POSITION(integer) ]
+        // (rule 24): the declared item overlays the storage of the base
+        // reference. The base is resolved in sema; POSITION is diagnosed.
+        advance();
+        if (at(Tok::Word)) {
+          item.definedBase = cur().text;
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a reference after DEFINED", "(24)");
+        }
+        while (at(Tok::Word) && (cur().text == "POSITION" || cur().text == "POS")) {
+          d_.error(cur().loc, "POSITION on DEFINED is not implemented in this stage", "(24)");
+          advance();
+          if (at(Tok::LParen)) {
+            int dd = 0;
+            do {
+              if (at(Tok::LParen))
+                ++dd;
+              else if (at(Tok::RParen))
+                --dd;
+              advance();
+            } while (dd && !at(Tok::Eof));
+          }
+        }
+        continue;
+      }
       if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "POINTER" ||
           w == "PTR" || w == "AREA" || w == "OFFSET" || w == "BASED" || w == "CONTROLLED" ||
-          w == "CTL" || w == "DEFINED" || w == "DEF" || w == "LABEL" || w == "FILE" ||
-          w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
+          w == "CTL" || w == "LABEL" || w == "FILE" || w == "TASK" || w == "EVENT" || w == "CELL" ||
+          w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
