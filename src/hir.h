@@ -35,6 +35,7 @@ struct HExpr {
     Unary,
     Call,      // compound
     Subscript, // array element A(i) — rules (126)
+    Star,      // '*' in a subscript list — a cross-section axis (rule 126)
     Convert,   // explicit conversion (HIR only)
   } kind = IntLit;
   SourceLoc loc{};

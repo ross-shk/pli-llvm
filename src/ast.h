@@ -27,7 +27,8 @@ struct Expr {
     Binary,
     Unary,
     Call,
-    Subscript
+    Subscript,
+    Star // '*' in a subscript list — a cross-section axis (rule 126); not a value
   } kind = IntLit;
   SourceLoc loc{};
   Type ty{}; // assigned by sema

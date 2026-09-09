@@ -368,6 +368,9 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
     os << ")";
     break;
   }
+  case HExpr::Star:
+    os << "*";
+    break;
   case HExpr::Call: {
     os << "Call(" << e->name;
     if (e->sym && e->sym->proc)

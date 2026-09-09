@@ -121,6 +121,9 @@ private:
   Val loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
   void storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, const Val& src,
                          SourceLoc loc);
+  // Copy a single-'*' cross-section A(i, *) (rule 126) into a whole array
+  // target: iterate the '*' axis, gathering the source elements into the target.
+  void emitCrossSectionAssign(HExpr* target, HExpr* cross, SourceLoc loc);
 
   Val convert(const Val& v, const Type& dst, SourceLoc loc);
   llvm::Value* toI1(const Val& v, SourceLoc loc);

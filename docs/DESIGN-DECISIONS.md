@@ -1054,3 +1054,37 @@ the template); emitting a member-tree copy into `children` (the struct `Type`
 already carries the full shape); allowing a dimension after `LIKE` (an array of a
 template needs the whole-template dimension machinery, independent); allowing the
 extend form (members after `LIKE`); resolving qualified `S.A.B` templates now.
+
+## ADR-046 — Cross-sections: a `*` axis marker and a gather loop on assignment
+
+**Context.** Rule (126) is `unqualified-reference ::= identifier [ ( {,• {
+expression | * }•••} ) ]`; a `*` subscript selects every index along that axis,
+yielding a cross-section — a reduced-rank array value (`A(3,*)`, `X(1,*,3)`).
+M2 names cross-sections for matrix programs; the core use is copying a row or
+column out of a 2-D array into a 1-D array.
+
+**Decision.** A `*` is parsed as a distinct `Star` expression node held in the
+subscript argument list (an axis marker, not a value). Sema types a subscript
+with at least one `*` as an array whose rank and bounds are those of the `*`
+axes in order; the fixed axes are collapsed by their indices. Exactly one `*` is
+served in this stage; more than one is diagnosed (rule (126)). The only use is
+`B = A(i, *)` with `B` a whole array of the reduced shape (validated in sema).
+IRGen emits a gather loop (`emitCrossSectionAssign`): the fixed-axis indices are
+evaluated and SUBSCRIPTRANGE-checked once, then the `*` axis is iterated,
+reading each source element by row-major flat offset and storing it into the
+target's corresponding slot. A cross-section used anywhere else (as a general
+expression value) is diagnosed.
+
+**Consequences.** The row/column copy needs no new AST kind beyond the `Star`
+marker and no HIR change beyond mirroring it; the existing `arrayElementAddr`
+strides and `memberAddr` addressing are reused for the source and target bases.
+`tests/core/cross_section.pli` covers a row, a column, and an array-member
+cross-section; `bad_cross_section.pli` covers a scalar target, more than one
+`*`, and a shape mismatch.
+
+**Rejected.** Multi-`*` cross-sections now (a reduced-rank sub-block needs a
+general nested-loop gather and broader value semantics); a cross-section as a
+first-class expression value / function argument (array-value semantics,
+independent); reusing `arrayElementAddr` per gather step by wrapping the
+induction variable in an `IntLit` (fixed indices may be runtime values, so the
+source flat offset is computed incrementally instead).

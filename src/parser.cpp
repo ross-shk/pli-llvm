@@ -1411,7 +1411,18 @@ ExprP Parser::parsePrimary() {
       advance();
       if (!at(Tok::RParen)) {
         for (;;) {
-          e->args.push_back(parseExpr());
+          // A '*' subscript is a cross-section axis marker (rule 126) — the
+          // reference selects every index along that axis. It is not an
+          // expression; it is recorded as a Star node in the argument list.
+          if (at(Tok::Star)) {
+            auto star = std::make_unique<Expr>();
+            star->kind = Expr::Star;
+            star->loc = cur().loc;
+            e->args.push_back(std::move(star));
+            advance();
+          } else {
+            e->args.push_back(parseExpr());
+          }
           if (!eat(Tok::Comma))
             break;
         }
