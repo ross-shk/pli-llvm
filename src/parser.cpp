@@ -577,7 +577,15 @@ bool Parser::parseDeclItem(DeclItem &item) {
   if (sawChar) {
     item.ty = Type::chr(slen > 0 ? slen : 1, sawVarying);
   } else if (sawBit) {
-    item.ty = Type::bit(slen > 0 ? slen : 1);
+    int n = slen > 0 ? slen : 1;
+    item.ty = Type::bit(n);
+    if (n != 1) {
+      // Only BIT(1) is served; arbitrary-length bit strings are M2. Never
+      // silently miscompile a wider bit value as a single bit (invariant 2).
+      d_.error(item.loc, "BIT(" + std::to_string(n) + ") is not implemented in this stage; only BIT(1)",
+               "(18)");
+      item.ty = Type::bit(1);
+    }
   } else if (sawFloat) {
     item.ty = Type::flt(prec > 0 ? prec : (sawBin ? 21 : 6));
   } else {
