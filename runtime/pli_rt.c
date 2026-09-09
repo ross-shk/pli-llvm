@@ -73,6 +73,36 @@ void pli_put_list_fixed(long long v) {
   put_raw(buf, (size_t)n);
 }
 
+/* List-directed output of a scaled FIXED value (ADR-006): the stored integer v
+ * holds the value * 2^scale, so print v / 2^scale exactly as a decimal. The
+ * fractional part of a dyadic rational terminates, so the digit loop is exact. */
+void pli_put_list_fixed_scaled(long long v, long long scale) {
+  char buf[96];
+  char *p = buf;
+  if (scale <= 0) {  /* fall back to the plain formatter */
+    pli_put_list_fixed(v);
+    return;
+  }
+  if (v < 0) { *p++ = '-'; v = -v; }
+  long long factor = 1LL << scale;  /* 2^scale */
+  int n = snprintf(p, sizeof buf - (size_t)(p - buf), "%lld", v / factor);
+  p += n;
+  long long rem = v % factor;
+  if (rem != 0) {
+    *p++ = '.';
+    char digit[64];
+    int cnt = 0;
+    while (rem != 0 && cnt < 60) {
+      rem *= 10;
+      digit[cnt++] = (char)(rem >> scale);
+      rem &= (factor - 1);
+    }
+    for (int i = 0; i < cnt; ++i) *p++ = '0' + digit[i];
+  }
+  separate();
+  put_raw(buf, (size_t)(p - buf));
+}
+
 void pli_put_list_float(double v) {
   char buf[64];
   /* PL/I would use E-format for FLOAT; %.6g keeps the wireframe readable. */

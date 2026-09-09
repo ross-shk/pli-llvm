@@ -14,13 +14,13 @@
 namespace {
 
 // True when IRGen's `convert` would emit a real instruction: a bit <-> scalar
-// change, float <-> fixed, or a FIXED width change. Character and void values
-// are handled elsewhere, so they never need a Convert node.
+// change, float <-> fixed, or a FIXED width or scale change. Character and
+// void values are handled elsewhere, so they never need a Convert node.
 bool convRequired(const Type &src, const Type &dst) {
   if (src.isBit() != dst.isBit()) return true;
   if ((src.k == TK::Float) != (dst.k == TK::Float)) return true;
   if (src.isNumeric() && dst.isNumeric() && src.k != TK::Float && dst.k != TK::Float)
-    return src.intBits() != dst.intBits();
+    return src.intBits() != dst.intBits() || src.scale != dst.scale;
   return false;
 }
 
