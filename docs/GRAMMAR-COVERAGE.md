@@ -20,7 +20,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (12),(13) | dimension attribute, bound pairs | M3 | arrays |
 | (14),(15) | attribute, data-attribute set | partial M0 | arithmetic/string/`ALIGNED` subset |
 | (16),(17) | arithmetic attributes, precision, signed integer | partial M0 | scale 0 only; full → M2 |
-| (18) | string attributes (`BIT`/`CHARACTER`/`VARYING`) | M0 | `strings.pli` |
+| (18) | string attributes (`BIT`/`CHARACTER`/`VARYING`) | partial M0 | `BIT(1)` and char/varying served (`strings.pli`); `BIT(n>1)` diagnosed as unimplemented → M2 (`bad_bitlen.pli`, rule (18)) |
 | (19) | `PICTURE` attribute | M2 | ADR-017 |
 | (20) | `AREA` attribute | M4 | |
 | (21) | `LABEL` attribute | M5 | label variables |
@@ -86,7 +86,7 @@ The ledger that ties the implementation to the specification. Status values:
 
 ## Headline numbers (M0)
 
-- Rules fully implemented and tested: **41**
-- Rules partially implemented: **17**
+- Rules fully implemented and tested: **40**
+- Rules partially implemented: **18**
 - Rules recognised and diagnosed with their number: **21**
 - Rules not yet reached: **72**
