@@ -524,301 +524,9 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
     }
     case Expr::Call: {
       for (auto &a : e->args) typeExpr(a.get(), sc, p);
-      // SUBSTR built-in (M2): substr(s, i, n) yields a character string of
-      // length n; the length must be a constant so the result type is sized.
-      if (e->name == "SUBSTR") {
-        if (e->args.size() != 3) {
-          d_.error(e->loc, "SUBSTR expects 3 arguments (string, start, length)", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isChar()) {
-          d_.error(e->args[0]->loc, "SUBSTR first argument must be a character string", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[1]->ty.isNumeric() || !e->args[2]->ty.isNumeric()) {
-          d_.error(e->loc, "SUBSTR start and length must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        int n = e->args[2]->kind == Expr::IntLit ? (int)e->args[2]->ival : -1;
-        if (n < 0) {
-          d_.error(e->args[2]->loc, "SUBSTR length must be a constant in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::chr(n);
-        break;
-      }
-      // INDEX built-in (M2): index(s1, s2) yields a FIXED BINARY position.
-      if (e->name == "INDEX") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "INDEX expects 2 arguments (string, substring)", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
-          d_.error(e->loc, "INDEX arguments must be character strings", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::fixedBin(31, 0);
-        break;
-      }
-      // ABS built-in (M2): abs(x) preserves the numeric type of its argument.
-      if (e->name == "ABS") {
-        if (e->args.size() != 1) {
-          d_.error(e->loc, "ABS expects 1 argument", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric()) {
-          d_.error(e->args[0]->loc, "ABS argument must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = e->args[0]->ty;
-        break;
-      }
-      // LENGTH built-in (M2): length(s) yields a FIXED BINARY length.
-      if (e->name == "LENGTH") {
-        if (e->args.size() != 1) {
-          d_.error(e->loc, "LENGTH expects 1 argument", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isChar()) {
-          d_.error(e->args[0]->loc, "LENGTH argument must be a character string", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::fixedBin(31, 0);
-        break;
-      }
-      // TRUNC built-in (M2): trunc(x) preserves the numeric type of its arg.
-      if (e->name == "TRUNC") {
-        if (e->args.size() != 1) {
-          d_.error(e->loc, "TRUNC expects 1 argument", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric()) {
-          d_.error(e->args[0]->loc, "TRUNC argument must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        // TRUNC of a scaled FIXED value must remove its fractional digits,
-        // which the scaled representation does not yet do (invariant 2).
-        if (e->args[0]->ty.isFixed() && e->args[0]->ty.scale != 0) {
-          d_.error(e->args[0]->loc, "TRUNC of a scaled FIXED value is not implemented in this stage", "(16)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = e->args[0]->ty;
-        break;
-      }
-      // PRECISION built-in (M2): precision(x, p) — x with p digits/bits of
-      // precision, keeping x's base type (M0 model; the value is unchanged and
-      // only the declared precision differs, so the storage width may change).
-      if (e->name == "PRECISION") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "PRECISION expects 2 arguments in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric()) {
-          d_.error(e->args[0]->loc, "PRECISION first argument must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        int p = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
-        if (p <= 0) {
-          d_.error(e->args[1]->loc, "PRECISION must be a positive integer constant", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        Type t = e->args[0]->ty;
-        t.prec = p;
-        e->ty = t;
-        break;
-      }
-      // MIN built-in (M2): min(a, b) — the smaller of two numerics, in their
-      // common arithmetic type (two-argument form in this stage).
-      if (e->name == "MIN") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "MIN takes 2 arguments in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-          d_.error(e->loc, "MIN arguments must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
-        break;
-      }
-      // MAX built-in (M2): max(a, b) — the larger of two numerics, in their
-      // common arithmetic type (two-argument form in this stage).
-      if (e->name == "MAX") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "MAX takes 2 arguments in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-          d_.error(e->loc, "MAX arguments must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
-        break;
-      }
-      // MOD built-in (M2): mod(a, b) — remainder with the divisor's sign, in
-      // the common arithmetic type.
-      if (e->name == "MOD") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "MOD expects 2 arguments", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-          d_.error(e->loc, "MOD arguments must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
-        break;
-      }
-      // ROUND built-in (M2): round(x, n) — the result is a FLOAT value.
-      if (e->name == "ROUND") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "ROUND expects 2 arguments", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-          d_.error(e->loc, "ROUND arguments must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::flt(6);
-        break;
-      }
-      // REPEAT built-in (M2): repeat(s, n) — s repeated n times; the length
-      // must be a constant so the result type is sized.
-      if (e->name == "REPEAT") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "REPEAT expects 2 arguments (string, count)", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isChar()) {
-          d_.error(e->args[0]->loc, "REPEAT first argument must be a character string", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        int n = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
-        if (n < 0) {
-          d_.error(e->args[1]->loc, "REPEAT count must be a constant in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::chr(e->args[0]->ty.len * n);
-        break;
-      }
-      // VERIFY built-in (M2): verify(s, t) yields a FIXED BINARY position.
-      if (e->name == "VERIFY") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "VERIFY expects 2 arguments (string, set)", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
-          d_.error(e->loc, "VERIFY arguments must be character strings", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::fixedBin(31, 0);
-        break;
-      }
-      // TRANSLATE built-in (M2): translate(s, out, in) — same length as s.
-      if (e->name == "TRANSLATE") {
-        if (e->args.size() != 3) {
-          d_.error(e->loc, "TRANSLATE expects 3 arguments (string, out, in)", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar() || !e->args[2]->ty.isChar()) {
-          d_.error(e->loc, "TRANSLATE arguments must be character strings", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::chr(e->args[0]->ty.len);
-        break;
-      }
-      // HIGH/LOW built-ins (M2): high(n)/low(n) — n copies of the top/bottom
-      // collating character; n must be constant to size the result.
-      if (e->name == "HIGH" || e->name == "LOW") {
-        const char *nm = e->name == "HIGH" ? "HIGH" : "LOW";
-        if (e->args.size() != 1) {
-          d_.error(e->loc, std::string(nm) + " expects 1 argument", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        int n = e->args[0]->kind == Expr::IntLit ? (int)e->args[0]->ival : -1;
-        if (n < 0) {
-          d_.error(e->args[0]->loc, std::string(nm) + " length must be a constant in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::chr(n);
-        break;
-      }
-      // DATE/TIME built-ins (M2): date() -> CHARACTER(8) 'YYYYMMDD', time()
-      // -> CHARACTER(6) 'HHMMSS'; both take no arguments.
-      if (e->name == "DATE" || e->name == "TIME") {
-        if (!e->args.empty()) {
-          d_.error(e->loc, std::string(e->name == "DATE" ? "DATE" : "TIME") + " takes no arguments", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::chr(e->name == "DATE" ? 8 : 6);
-        break;
-      }
-      // MULTIPLY built-in (M2): multiply(a, b) — product of two numerics; for
-      // FIXED operands the result scale is the sum of the operand scales.
-      if (e->name == "MULTIPLY") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "MULTIPLY expects 2 arguments in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-          d_.error(e->loc, "MULTIPLY arguments must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = mulResultType(e->args[0]->ty, e->args[1]->ty);
-        break;
-      }
-      // DIVIDE built-in (M2): divide(a, b) — quotient of two numerics, computed
-      // in floating point (M0 model, ADR-014; exact decimal division is M2).
-      if (e->name == "DIVIDE") {
-        if (e->args.size() != 2) {
-          d_.error(e->loc, "DIVIDE expects 2 arguments in this stage", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-          d_.error(e->loc, "DIVIDE arguments must be numeric", "(123)");
-          e->ty = Type::voidTy();
-          break;
-        }
-        e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
-        break;
-      }
+      // Built-ins are typed in typeBuiltin; a non-builtin call (a user
+      // function procedure) falls through to the general path below.
+      if (typeBuiltin(e)) break;
       Symbol *sym = lookup(sc, e->name);
       if (!sym || sym->kind != Symbol::ProcName) {
         d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
@@ -927,4 +635,307 @@ void Sema::typeExpr(Expr *e, Scope *sc, Proc *p) {
       break;
     }
   }
+}
+// Type a built-in function call; return true if `e` is one of the
+// recognised built-ins (typed or diagnosed here). Extracted from the
+// typeExpr Call case so each built-in is a self-contained block.
+bool Sema::typeBuiltin(Expr *e) {
+  // Names matching none of these are user function procedures and are
+  // handled in typeExpr's general function-call path.
+      // SUBSTR built-in (M2): substr(s, i, n) yields a character string of
+      // length n; the length must be a constant so the result type is sized.
+      if (e->name == "SUBSTR") {
+        if (e->args.size() != 3) {
+          d_.error(e->loc, "SUBSTR expects 3 arguments (string, start, length)", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isChar()) {
+          d_.error(e->args[0]->loc, "SUBSTR first argument must be a character string", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[1]->ty.isNumeric() || !e->args[2]->ty.isNumeric()) {
+          d_.error(e->loc, "SUBSTR start and length must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        int n = e->args[2]->kind == Expr::IntLit ? (int)e->args[2]->ival : -1;
+        if (n < 0) {
+          d_.error(e->args[2]->loc, "SUBSTR length must be a constant in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::chr(n);
+        return true;
+      }
+      // INDEX built-in (M2): index(s1, s2) yields a FIXED BINARY position.
+      if (e->name == "INDEX") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "INDEX expects 2 arguments (string, substring)", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
+          d_.error(e->loc, "INDEX arguments must be character strings", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::fixedBin(31, 0);
+        return true;
+      }
+      // ABS built-in (M2): abs(x) preserves the numeric type of its argument.
+      if (e->name == "ABS") {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, "ABS expects 1 argument", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric()) {
+          d_.error(e->args[0]->loc, "ABS argument must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = e->args[0]->ty;
+        return true;
+      }
+      // LENGTH built-in (M2): length(s) yields a FIXED BINARY length.
+      if (e->name == "LENGTH") {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, "LENGTH expects 1 argument", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isChar()) {
+          d_.error(e->args[0]->loc, "LENGTH argument must be a character string", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::fixedBin(31, 0);
+        return true;
+      }
+      // TRUNC built-in (M2): trunc(x) preserves the numeric type of its arg.
+      if (e->name == "TRUNC") {
+        if (e->args.size() != 1) {
+          d_.error(e->loc, "TRUNC expects 1 argument", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric()) {
+          d_.error(e->args[0]->loc, "TRUNC argument must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        // TRUNC of a scaled FIXED value must remove its fractional digits,
+        // which the scaled representation does not yet do (invariant 2).
+        if (e->args[0]->ty.isFixed() && e->args[0]->ty.scale != 0) {
+          d_.error(e->args[0]->loc, "TRUNC of a scaled FIXED value is not implemented in this stage", "(16)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = e->args[0]->ty;
+        return true;
+      }
+      // PRECISION built-in (M2): precision(x, p) — x with p digits/bits of
+      // precision, keeping x's base type (M0 model; the value is unchanged and
+      // only the declared precision differs, so the storage width may change).
+      if (e->name == "PRECISION") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "PRECISION expects 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric()) {
+          d_.error(e->args[0]->loc, "PRECISION first argument must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        int p = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
+        if (p <= 0) {
+          d_.error(e->args[1]->loc, "PRECISION must be a positive integer constant", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        Type t = e->args[0]->ty;
+        t.prec = p;
+        e->ty = t;
+        return true;
+      }
+      // MIN built-in (M2): min(a, b) — the smaller of two numerics, in their
+      // common arithmetic type (two-argument form in this stage).
+      if (e->name == "MIN") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "MIN takes 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "MIN arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+        return true;
+      }
+      // MAX built-in (M2): max(a, b) — the larger of two numerics, in their
+      // common arithmetic type (two-argument form in this stage).
+      if (e->name == "MAX") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "MAX takes 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "MAX arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+        return true;
+      }
+      // MOD built-in (M2): mod(a, b) — remainder with the divisor's sign, in
+      // the common arithmetic type.
+      if (e->name == "MOD") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "MOD expects 2 arguments", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "MOD arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+        return true;
+      }
+      // ROUND built-in (M2): round(x, n) — the result is a FLOAT value.
+      if (e->name == "ROUND") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "ROUND expects 2 arguments", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "ROUND arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::flt(6);
+        return true;
+      }
+      // REPEAT built-in (M2): repeat(s, n) — s repeated n times; the length
+      // must be a constant so the result type is sized.
+      if (e->name == "REPEAT") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "REPEAT expects 2 arguments (string, count)", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isChar()) {
+          d_.error(e->args[0]->loc, "REPEAT first argument must be a character string", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        int n = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
+        if (n < 0) {
+          d_.error(e->args[1]->loc, "REPEAT count must be a constant in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::chr(e->args[0]->ty.len * n);
+        return true;
+      }
+      // VERIFY built-in (M2): verify(s, t) yields a FIXED BINARY position.
+      if (e->name == "VERIFY") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "VERIFY expects 2 arguments (string, set)", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
+          d_.error(e->loc, "VERIFY arguments must be character strings", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::fixedBin(31, 0);
+        return true;
+      }
+      // TRANSLATE built-in (M2): translate(s, out, in) — same length as s.
+      if (e->name == "TRANSLATE") {
+        if (e->args.size() != 3) {
+          d_.error(e->loc, "TRANSLATE expects 3 arguments (string, out, in)", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar() || !e->args[2]->ty.isChar()) {
+          d_.error(e->loc, "TRANSLATE arguments must be character strings", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::chr(e->args[0]->ty.len);
+        return true;
+      }
+      // HIGH/LOW built-ins (M2): high(n)/low(n) — n copies of the top/bottom
+      // collating character; n must be constant to size the result.
+      if (e->name == "HIGH" || e->name == "LOW") {
+        const char *nm = e->name == "HIGH" ? "HIGH" : "LOW";
+        if (e->args.size() != 1) {
+          d_.error(e->loc, std::string(nm) + " expects 1 argument", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        int n = e->args[0]->kind == Expr::IntLit ? (int)e->args[0]->ival : -1;
+        if (n < 0) {
+          d_.error(e->args[0]->loc, std::string(nm) + " length must be a constant in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::chr(n);
+        return true;
+      }
+      // DATE/TIME built-ins (M2): date() -> CHARACTER(8) 'YYYYMMDD', time()
+      // -> CHARACTER(6) 'HHMMSS'; both take no arguments.
+      if (e->name == "DATE" || e->name == "TIME") {
+        if (!e->args.empty()) {
+          d_.error(e->loc, std::string(e->name == "DATE" ? "DATE" : "TIME") + " takes no arguments", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::chr(e->name == "DATE" ? 8 : 6);
+        return true;
+      }
+      // MULTIPLY built-in (M2): multiply(a, b) — product of two numerics; for
+      // FIXED operands the result scale is the sum of the operand scales.
+      if (e->name == "MULTIPLY") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "MULTIPLY expects 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "MULTIPLY arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = mulResultType(e->args[0]->ty, e->args[1]->ty);
+        return true;
+      }
+      // DIVIDE built-in (M2): divide(a, b) — quotient of two numerics, computed
+      // in floating point (M0 model, ADR-014; exact decimal division is M2).
+      if (e->name == "DIVIDE") {
+        if (e->args.size() != 2) {
+          d_.error(e->loc, "DIVIDE expects 2 arguments in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+          d_.error(e->loc, "DIVIDE arguments must be numeric", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
+        return true;
+      }
+  return false;
 }

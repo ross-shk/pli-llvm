@@ -76,6 +76,10 @@ private:
   void emitCall(HStmt *s);
 
   Val emitExpr(HExpr *e);
+  // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
+  // `e` was a recognised built-in; false otherwise, so emitExpr can fall
+  // through to the general function-call path.
+  bool emitBuiltin(HExpr *e, Val &out);
   Val loadSym(Symbol *sym, const Type &ty);
   void storeTo(Symbol *sym, const Val &v, SourceLoc loc);
   void storeScalarTo(llvm::Value *addr, const Type &ty, const Val &v);
