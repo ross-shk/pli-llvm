@@ -1,0 +1,12 @@
+/* Scalar arithmetic lowers to LLVM integer ops (ADR-006 tiering). Rules
+   (115)-(117), (16). */
+ main: procedure options(main);
+   declare a fixed bin(31);
+   declare b fixed bin(31);
+   declare c fixed bin(31);
+   a = 7;
+   b = 2;
+   c = a + b;
+   c = c - a;
+   put skip list(c);
+ end main;

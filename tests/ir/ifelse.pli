@@ -1,0 +1,8 @@
+/* IF/THEN/ELSE lowers to a signed compare and a conditional branch (rules
+   (74),(75),(115)-(118)). */
+ main: procedure options(main);
+   declare x fixed bin(31);
+   x = 3;
+   if x > 1 then put skip list('big');
+   else put skip list('small');
+ end main;

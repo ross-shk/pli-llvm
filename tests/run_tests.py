@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PLIC = os.environ.get("PLIC", str(ROOT / "build" / "plic"))
 RTLIB = os.environ.get("RTLIB", str(ROOT / "build" / "libpli.a"))
 CLANG = os.environ.get("CLANG", "clang")
-TYPES = ("driver", "exec", "diag")
+TYPES = ("driver", "exec", "diag", "ir")
 
 
 def run_cmd(cmd, outfile):
@@ -50,6 +50,34 @@ def run_cmd(cmd, outfile):
 
 def indented(text):
     return "\n".join("      " + line for line in text.rstrip("\n").splitlines())
+
+
+def ir_match(ir, checkfile):
+    """FileCheck-style ordered match. Each `CHECK: <regex>` line in `checkfile`
+    must match, in order, somewhere after the previous match in `ir`. A
+    FileCheck regex block `{{...}}` becomes a Python group `(?:...)`; the rest
+    of the line is a Python regex (so a literal parenthesis is backslash
+    escaped in the check file). Returns (ok, reason). Minimal and
+    dependency-free (no FileCheck binary)."""
+    import re
+    pos = 0
+    for lineno, line in enumerate(checkfile.splitlines(), 1):
+        if not line.strip():
+            continue
+        if not line.startswith("CHECK:"):
+            return False, f".check line {lineno}: expected 'CHECK:' directive"
+        pat = line[len("CHECK:"):].strip()
+        if not pat:
+            return False, f".check line {lineno}: empty CHECK pattern"
+        pat = re.sub(r"\{\{(.*?)\}\}", r"(?:\1)", pat)
+        try:
+            m = re.search(pat, ir[pos:], re.MULTILINE)
+        except re.error as e:
+            return False, f".check line {lineno}: bad pattern '{pat}': {e}"
+        if not m:
+            return False, f".check line {lineno}: pattern not found: {pat}"
+        pos += m.end()
+    return True, ""
 
 
 class Runner:
@@ -123,9 +151,28 @@ class Runner:
             return f"FAIL {self.name} (expected diagnostics, compiled cleanly)", 1
         return f"PASS {self.name} (rejected as expected)", 0
 
+    def ir_test(self):
+        # Emit LLVM IR for the program and FileCheck it against <name>.check.
+        checkfile = self.dir / f"{self.name}.check"
+        if not checkfile.exists():
+            return f"FAIL {self.name} (missing {self.name}.check)", 1
+        llfile = self.out / f"{self.name}.ll"
+        compilefile = self.out / f"{self.name}.compile"
+        with open(compilefile, "w") as cfh:
+            rc = subprocess.run(
+                [PLIC, str(self.dir / f"{self.name}.pli"), "-emit-llvm", "-o", str(llfile)],
+                stdout=cfh, stderr=subprocess.STDOUT).returncode
+        if rc != 0:
+            return f"FAIL {self.name} (compilation failed)\n{indented(compilefile.read_text(errors='replace'))}", 1
+        ir = llfile.read_text(errors="replace")
+        ok, reason = ir_match(ir, checkfile.read_text(errors="replace"))
+        if not ok:
+            return f"FAIL {self.name} (IR check: {reason})\n\n{indented(ir)}", 1
+        return f"PASS {self.name}", 0
+
     def run(self):
         fn = {"driver": self.driver, "exec": self.exec_test,
-              "diag": self.diag}.get(self.kind)
+              "diag": self.diag, "ir": self.ir_test}.get(self.kind)
         return fn()
 
 
@@ -174,7 +221,9 @@ def enumerate_jobs(args):
             add(f.stem, "driver")
         for f in sorted(dir_path.glob("*.pli")):
             if not f.name.startswith("bad_"):
-                add(f.stem, "exec")
+                # tests/ir/*.pli are IR golden tests (FileCheck against .check).
+                kind = "ir" if dir_path.name == "ir" else "exec"
+                add(f.stem, kind)
         for f in sorted(dir_path.glob("bad_*.pli")):
             add(f.stem, "diag")
     return jobs

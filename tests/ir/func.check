@@ -1,0 +1,6 @@
+CHECK: define {{.*}}@PLI_FACT\(ptr
+CHECK: icmp sle i32
+CHECK: br i1
+CHECK: ret i32 1
+CHECK: call {{.*}}@PLI_FACT\(ptr
+CHECK: mul i32

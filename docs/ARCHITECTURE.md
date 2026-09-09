@@ -299,7 +299,7 @@ missing `THEN` under the offending token — for the unambiguous recovery cases
 | Layer | Mechanism | Status |
 |---|---|---|
 | Lexer/parser units | golden token/AST dumps | M1 |
-| IR golden tests | `plic -emit-llvm` + FileCheck-style matching | M1 |
+| IR golden tests | `tests/ir/*.pli` + FileCheck-style `*.check`, `plic -emit-llvm` matched in order (ADR-031) | M1 |
 | Execution tests | compile, run; diff (`expected/`) or PASS-grep (`tests/usecases/`) | M0 (13) |
 | Diagnostic tests | `tests/*/bad_*.pli` must be rejected with the right rule | M0 |
 | Conformance matrix | every rule (1)–(151) mapped to a test (GRAMMAR-COVERAGE.md) | M0 skeleton |
@@ -320,6 +320,8 @@ the full operator set with spec precedence, 48-character-set operator words,
 procedures reach enclosing automatic storage and external procedures are
 reentrant (ADR-027), `ENTRY` statements (ADR-026), and diagnostic fix-its
 (ADR-030) suggesting the missing token for the unambiguous recovery cases.
+The M1 exit criterion is met: a recursive function and a two-entry-point
+procedure run, and IR golden tests (`tests/ir/`, ADR-031) pin the emitted IR.
 
 Everything else is diagnosed as unimplemented with its rule number, which is
 also the project's to-do list: see IMPLEMENTATION-PLAN.md.
