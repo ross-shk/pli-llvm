@@ -296,6 +296,26 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       // children; a leaf keeps its parsed scalar/array type.
       std::function<Type(int)> buildType = [&](int idx) -> Type {
         const DeclItem& it = *items[idx];
+        // LIKE template (rule 43): the item takes the structure shape of an
+        // already-declared structure variable (a deep copy of its type). A LIKE
+        // item combined with its own members (the extend form) or a dimension
+        // (an array of the template) is diagnosed, never silently dropped.
+        if (!it.like.empty()) {
+          if (!it.ty.dims.empty())
+            d_.error(it.loc, "LIKE with a dimension is not implemented in this stage", "(43)");
+          if (!children[idx].empty())
+            d_.error(
+                it.loc,
+                "LIKE combined with members is not implemented in this stage; use a plain LIKE",
+                "(43)");
+          Symbol* tpl = lookup(sc, it.like);
+          if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
+            d_.error(it.loc, "LIKE reference '" + it.like + "' is not a structure in this scope",
+                     "(43)");
+            return Type::voidTy();
+          }
+          return tpl->ty; // deep copy via Type's copy constructor
+        }
         if (children[idx].empty())
           return it.ty;
         std::vector<Member> ms;

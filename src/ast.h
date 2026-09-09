@@ -66,6 +66,7 @@ struct DeclItem {
   int level = 0; // rule (11) level number; 0 when absent (no structure)
   ExprP init;    // INITIAL(...) — a single simple scalar constant (M0 scalar path)
   std::vector<InitItem> initItems; // INITIAL(...) itemlist (arrays, rule 26-31)
+  std::string like;                // LIKE <unsubscripted-reference> template (rule 43)
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
