@@ -282,6 +282,18 @@ void Sema::computeEnv(Proc* p) {
   p->env = env;
 }
 
+// True when a structure type contains a dynamic (runtime-extent) array member,
+// at any nesting depth (rule (13)).
+static bool hasDynamicMember(const Type& ty) {
+  for (const auto& m : ty.members) {
+    if (m->ty.isArray() && m->ty.isDynamic())
+      return true;
+    if (m->ty.isStruct() && hasDynamicMember(m->ty))
+      return true;
+  }
+  return false;
+}
+
 void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isStatic) {
   for (auto& s : body) {
     if (!s)
@@ -321,8 +333,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           children[parent].push_back(idx);
       }
       // Construct the struct Type for an item from its (recursively built)
-      // children; a leaf keeps its parsed scalar/array type.
-      std::function<Type(int)> buildType = [&](int idx) -> Type {
+      // children; a leaf keeps its parsed scalar/array type. A dynamic array
+      // member (rule 13) has its runtime bound exprs type-checked and captured
+      // (with its field path) so codegen can size and address it.
+      std::function<Type(int, std::vector<unsigned>, std::vector<DeclItem::DynMemberInfo>&)>
+          buildType = [&](int idx, std::vector<unsigned> path,
+                          std::vector<DeclItem::DynMemberInfo>& dynMs) -> Type {
         const DeclItem& it = *items[idx];
         // LIKE template (rule 43): the item takes the structure shape of an
         // already-declared structure variable (a deep copy of its type). A LIKE
@@ -342,17 +358,36 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(43)");
             return Type::voidTy();
           }
+          if (hasDynamicMember(tpl->ty))
+            d_.error(it.loc, "LIKE of a structure with a dynamic member is not implemented",
+                     "(13)");
           return tpl->ty; // deep copy via Type's copy constructor
         }
         if (children[idx].empty())
           return it.ty;
         std::vector<Member> ms;
+        unsigned fi = 0;
         for (int c : children[idx]) {
-          Type ct = buildType(c);
-          if (ct.isArray() && ct.isDynamic())
-            d_.error(items[c]->loc, "a dynamic array cannot be a structure member in this stage",
-                     "(13)");
+          std::vector<unsigned> cp = path;
+          cp.push_back(fi);
+          Type ct = buildType(c, cp, dynMs);
+          if (ct.isArray() && ct.isDynamic()) {
+            // A dynamic array member (rule 13): resolve its bound expressions so
+            // codegen can evaluate them at entry to size the member buffer.
+            for (auto& b : items[c]->dynBounds)
+              if (b)
+                typeExpr(b.get(), sc, p);
+            for (auto& b : items[c]->dynLbBounds)
+              if (b)
+                typeExpr(b.get(), sc, p);
+            DeclItem::DynMemberInfo dm;
+            dm.path = cp;
+            dm.ub = items[c]->dynBounds.empty() ? nullptr : items[c]->dynBounds[0].get();
+            dm.lb = items[c]->dynLbBounds.empty() ? nullptr : items[c]->dynLbBounds[0].get();
+            dynMs.push_back(std::move(dm));
+          }
           ms.push_back({items[c]->name, ct});
+          ++fi;
         }
         Type st = Type::structTy(std::move(ms));
         st.dims = it.ty.dims; // an array of structures: keep the level item's dimension
@@ -364,7 +399,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (parentOf[idx] != -1)
           continue;
         DeclItem& item = *items[idx];
-        item.ty = buildType(idx);
+        std::vector<DeclItem::DynMemberInfo> dynMs;
+        item.ty = buildType(idx, {}, dynMs);
+        item.dynMembers = std::move(dynMs);
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p; // which procedure's frame holds this variable
         // DEFINED (rule 24): the item overlays the storage of an already-
@@ -656,8 +693,17 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     // Whole-structure assignment (rule 127): a copy between two structures of
     // identical shape (same members, recursively). Anything else — a shape
     // mismatch, or mixing a structure with a non-structure — is diagnosed.
-    if (dst.isStruct() && src.isStruct() && dst == src)
+    if (dst.isStruct() && src.isStruct() && dst == src) {
+      // A struct with a dynamic-array member holds a pointer to a runtime
+      // buffer, so a storage copy would copy the pointer, not the data (rule
+      // 13): diagnose rather than miscompile.
+      if (hasDynamicMember(dst))
+        d_.error(loc,
+                 std::string(what) +
+                     ": a whole-structure assignment with a dynamic member is not implemented",
+                 "(13)");
       return true;
+    }
     if (dst.isStruct() && src.isStruct())
       d_.error(loc,
                std::string(what) +

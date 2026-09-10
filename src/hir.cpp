@@ -165,6 +165,23 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
       hd.sym->dynUb = hd.dynBounds[0].get();
     if (hd.sym && !hd.dynLbBounds.empty())
       hd.sym->dynLb = hd.dynLbBounds[0].get();
+    // Dynamic array members (rule 13): lower each member's bound exprs onto the
+    // symbol so irgen can size and address the member buffer at entry. The raw
+    // ub/lb pointers reference hd.dynMemberBounds, which owns the exprs.
+    if (hd.sym)
+      for (const auto& dm : d.dynMembers) {
+        Symbol::DynMemberH mh;
+        mh.path = dm.path;
+        if (dm.ub) {
+          hd.dynMemberBounds.push_back(lowerExpr(dm.ub));
+          mh.ub = hd.dynMemberBounds.back().get();
+        }
+        if (dm.lb) {
+          hd.dynMemberBounds.push_back(lowerExpr(dm.lb));
+          mh.lb = hd.dynMemberBounds.back().get();
+        }
+        hd.sym->dynMembers.push_back(std::move(mh));
+      }
     // The lowered INITIAL(CALL f(...)) expression (rule 27) rides on the symbol
     // so irgen's emitInitials can evaluate it at block entry; hd.initCall owns
     // the HExpr (freed with the HStmt), which outlives IRGen.

@@ -1523,3 +1523,38 @@ rejects `A(3,n)`; a constant-upper dynamic array `A(lb:5,3)` runs (the
 runtime strides for each such axis, deferred); a dynamic multi-axis array passed
 to a `*` parameter beyond the total-extent case; a dynamic structure member
 (still gated).
+
+## ADR-060 — Dynamic array structure members: a bare buffer-pointer field
+
+**Context.** ADR-050/058/059 serve standalone AUTOMATIC arrays with a runtime
+extent, allocated as a bare element buffer whose bounds are recorded at entry.
+A dynamic array that is a structure member was gated ("cannot be a structure
+member in this stage"); `struct_dyn.pli` needs `1 s, 2 v(n) fixed bin(31)`,
+reached by qualification `s.v(i)` on both sides of an assignment.
+
+**Decision.** A dynamic-array member lays out in the LLVM struct as a **bare
+buffer pointer** field (`ptr`), not an inline `[N x elemTy]` — the extent is
+runtime, so the struct size cannot be compile-time. `llvmTy` emits `ptr` for a
+member whose type `isArray && isDynamic`. At block entry, `allocaLocals` pass 3
+allocates each member's runtime-sized element buffer (bounds evaluated from its
+bound exprs, scaled by any fixed later axes), stores the pointer into the struct
+field, and records the live bounds in `memberDyn_` keyed by (symbol, field path).
+Subscript addressing loads the buffer pointer (`dynamicMemberBase`) before the
+`arrayElementAddr` dynamic path, bounds-checking against the recorded bounds.
+The dynamic member bound exprs are lowered in `hir.cpp` and owned by
+`HDeclItem::dynMemberBounds`, referenced (non-owning) by
+`Symbol::DynMemberH.ub/lb`.
+
+**Consequences.** `tests/core/struct_dyn.pli` covers a fixed scalar member beside
+a dynamic member, element write/readback via `s.v(i)` in loops, and scalar-member
+integrity across the dynamic buffer; `make test` stays green. Because a struct
+field is now a pointer to separately-allocated data, a whole-structure storage
+copy would copy the pointer, not the pointed-to data — `Sema::checkAssignable`
+rejects a whole-structure assignment with a dynamic member (rule 13),
+`bad_struct_dyn.pli`.
+
+**Rejected.** An inline `[N x elemTy]` member for a dynamic array (struct size is
+not compile-time); supporting whole-structure copy of a struct with a dynamic
+member (needs deep copy of each buffer, deferred); a dynamic member of an array
+of structures `arr(i).v(n)` (member buffer per element not yet served); `LIKE`
+of a struct with a dynamic member is diagnosed, not deep-copied.

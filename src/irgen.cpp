@@ -64,10 +64,15 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   }
   case TK::Struct: {
     // A level-numbered structure (rule 11): an LLVM literal struct of its
-    // members, recursively laid out in declaration order.
+    // members, recursively laid out in declaration order. A dynamic (runtime
+    // extent, rule 13) array member is a bare runtime-sized buffer, so its
+    // field is a pointer to the element type (allocated and stored at entry).
     std::vector<llvm::Type*> mts;
     for (const auto& m : t.members)
-      mts.push_back(llvmTy(m->ty));
+      if (m->ty.isArray() && m->ty.isDynamic())
+        mts.push_back(llvm::PointerType::get(ctx_, 0));
+      else
+        mts.push_back(llvmTy(m->ty));
     return llvm::StructType::get(ctx_, mts);
   }
   case TK::Void:
@@ -490,6 +495,30 @@ void IRGen::allocaLocals(HProc* p) {
       dynUb_[s] = ub;
     if (s->dynLb)
       dynLb_[s] = lb;
+  }
+  // Pass 3: dynamic array structure members (rule 13). Each member is a bare
+  // runtime-sized element buffer; evaluate its bounds at entry, allocate it, and
+  // store the buffer pointer into the struct field (the struct itself was
+  // allocated in pass 1). Record the bounds for subscript addressing.
+  for (Symbol* s : p->localSyms) {
+    if (s->kind != Symbol::Var || s->dynMembers.empty())
+      continue;
+    for (const auto& mh : s->dynMembers) {
+      const Type& arr = memberType(s, mh.path);
+      const Type& el = arr.elementType();
+      const Dim& d = arr.dims[0];
+      llvm::Value* ub = mh.ub ? toI64(emitExpr(mh.ub)) : i64(d.ub);
+      llvm::Value* lb = mh.lb ? toI64(emitExpr(mh.lb)) : i64(d.lb);
+      llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "me1"), i64(1), "mext");
+      long long rest = 1;
+      for (size_t k = 1; k < arr.dims.size(); ++k)
+        rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+      if (rest != 1)
+        extent = b_.CreateMul(extent, i64(rest), "mextall");
+      llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".mdyn");
+      b_.CreateStore(buf, memberAddr(s, mh.path, s->loc));
+      memberDyn_[MemberDyn{s, mh.path}] = MemberBounds{ub, lb};
+    }
   }
 }
 
@@ -955,8 +984,11 @@ void IRGen::emitAssign(HStmt* s) {
                      "(12)");
             return;
           }
-          llvm::Value* addr =
-              arrayElementAddr(arr, memberAddr(t->sym, t->memberPath, s->loc), t->args, s->loc);
+          llvm::Value* ub = nullptr, *lb = nullptr;
+          llvm::Value* base = arr.isDynamic()
+                                  ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                                  : memberAddr(t->sym, t->memberPath, s->loc);
+          llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
           storeScalarTo(addr, el, convert(v, el, s->loc));
           return;
         }
@@ -1060,8 +1092,11 @@ void IRGen::emitAssign(HStmt* s) {
         d_.error(s->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
         return;
       }
-      llvm::Value* addr =
-          arrayElementAddr(arr, memberAddr(t->sym, t->memberPath, s->loc), t->args, s->loc);
+      llvm::Value* ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic()
+                              ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                              : memberAddr(t->sym, t->memberPath, s->loc);
+      llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
       storeScalarTo(addr, el, convert(v, el, s->loc));
       return;
     }
@@ -1528,6 +1563,19 @@ const Type& IRGen::memberType(Symbol* base, const std::vector<unsigned>& path) {
   for (unsigned f : path)
     cur = &cur->members[f]->ty;
   return *cur;
+}
+
+// Buffer pointer and live bounds of a dynamic-array structure member (rule 13):
+// the struct field holds a pointer to a bare runtime-sized element buffer
+// (allocated at entry), so load it; the bounds were recorded in memberDyn_ at
+// entry too. Returns the element-buffer pointer and sets ub/lb for
+// arrayElementAddr's runtime bounds check.
+llvm::Value* IRGen::dynamicMemberBase(Symbol* base, const std::vector<unsigned>& path,
+                                      SourceLoc loc, llvm::Value*& ub, llvm::Value*& lb) {
+  auto it = memberDyn_.find(MemberDyn{base, path});
+  ub = it != memberDyn_.end() ? it->second.ub : nullptr;
+  lb = it != memberDyn_.end() ? it->second.lb : nullptr;
+  return b_.CreateLoad(b_.getPtrTy(), memberAddr(base, path, loc), "mdynp");
 }
 
 // BY NAME assignment (rule 86): copy each member of `dst` (at dstBase) from the
@@ -2047,8 +2095,8 @@ Val IRGen::emitExpr(HExpr* e) {
         return v;
       }
       // A subscripted member array S.A(i) (rules 124,126): the member array
-      // lives at memberAddr(...) (a [N x elemTy] field), so GEP into it as a
-      // normal array and load the leaf element.
+      // lives at memberAddr(...) (a [N x elemTy] field, or a buffer pointer for
+      // a dynamic member), so GEP into it as a normal array and load the leaf.
       const Type& arr = memberType(e->sym, e->memberPath);
       const Type& el = e->ty;
       if (el.isChar()) {
@@ -2057,8 +2105,11 @@ Val IRGen::emitExpr(HExpr* e) {
         v.reg = i64(0);
         return v;
       }
-      llvm::Value* addr =
-          arrayElementAddr(arr, memberAddr(e->sym, e->memberPath, e->loc), e->args, e->loc);
+      llvm::Value* ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic()
+                              ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
+                              : memberAddr(e->sym, e->memberPath, e->loc);
+      llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc, ub, lb);
       llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
       v.ty = el;
       v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
