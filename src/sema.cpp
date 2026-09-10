@@ -532,8 +532,30 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               item.sym->initElems = std::move(elems);
           }
         }
-        if (item.ty.isStruct() && !item.initItems.empty())
-          d_.error(item.loc, "INITIAL on a structure is not implemented in this stage", "(26)");
+        if (item.ty.isStruct() && !item.initItems.empty()) {
+          // INITIAL on a structure (rule (26)): flatten the itemlist (iteration
+          // factors, '*' and groups) and fold each value against its member's
+          // type in declaration order. The count must match the scalar leaves.
+          if (item.sym->isStatic) {
+            d_.error(item.loc, "INITIAL on a static structure is not implemented in this stage",
+                     "(26)");
+          } else {
+            std::vector<Expr*> raw;
+            flattenInitItems(item.initItems, item.loc, raw);
+            long long leaves = structureLeafCount(item.ty);
+            if ((long long)raw.size() != leaves)
+              d_.error(item.loc,
+                       "INITIAL supplies " + std::to_string(raw.size()) +
+                           " value(s) for a structure of " + std::to_string(leaves) + " member(s)",
+                       "(26)");
+            else {
+              std::vector<Expr*> folded;
+              size_t idx = 0;
+              foldStructInit(item.ty, raw, idx, item.loc, folded);
+              item.sym->initElems = std::move(folded);
+            }
+          }
+        }
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
         // BEGIN blocks too, hence the Proc* here.
@@ -743,6 +765,74 @@ long long Sema::elementCount(const Type& ty) {
   for (const auto& d : ty.dims)
     n *= (long long)(d.ub - d.lb + 1);
   return n;
+}
+
+long long Sema::structureLeafCount(const Type& ty) {
+  long long n = 0;
+  for (const auto& m : ty.members) {
+    if (m->ty.isStruct()) {
+      n += structureLeafCount(m->ty);
+    } else if (m->ty.isArray()) {
+      long long cnt = elementCount(m->ty);
+      if (m->ty.elementType().isStruct())
+        n += cnt * structureLeafCount(m->ty.elementType());
+      else
+        n += cnt;
+    } else {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+void Sema::flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc,
+                            std::vector<Expr*>& out) {
+  for (const InitItem& it : items) {
+    switch (it.kind) {
+    case InitItem::Value:
+      out.push_back(it.value.get());
+      break;
+    case InitItem::Repeat:
+      if (out.empty())
+        d_.error(loc, "'*' in INITIAL has no preceding value to repeat", "(29)");
+      else
+        out.push_back(out.back()); // repeat the last raw value
+      break;
+    case InitItem::Group:
+      flattenInitItems(it.items, loc, out);
+      break;
+    case InitItem::Iter: {
+      std::vector<Expr*> sub;
+      flattenInitItems(it.items, loc, sub);
+      for (long long k = 0; k < it.factor; ++k)
+        for (Expr* s : sub)
+          out.push_back(s);
+      break;
+    }
+    }
+  }
+}
+
+void Sema::foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t& idx,
+                          SourceLoc loc, std::vector<Expr*>& out) {
+  for (const auto& m : ty.members) {
+    if (m->ty.isStruct()) {
+      foldStructInit(m->ty, vals, idx, loc, out);
+    } else if (m->ty.isArray()) {
+      long long cnt = elementCount(m->ty);
+      const Type& el = m->ty.elementType();
+      for (long long k = 0; k < cnt; ++k) {
+        if (el.isStruct())
+          foldStructInit(el, vals, idx, loc, out);
+        else if (idx < vals.size())
+          if (Expr* f = foldInitialConstant(vals[idx++], el, loc))
+            out.push_back(f);
+      }
+    } else if (idx < vals.size()) {
+      if (Expr* f = foldInitialConstant(vals[idx++], m->ty, loc))
+        out.push_back(f);
+    }
+  }
 }
 
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {

@@ -531,6 +531,14 @@ void IRGen::emitInitials(HProc* p) {
         }
         continue;
       }
+      // INITIAL on an AUTOMATIC structure (rule (26)): store each leaf value
+      // into its member slot, recursing through nested structures and array
+      // members (emitStructInitValues).
+      if (sym && sym->ty.isStruct() && !sym->initElems.empty()) {
+        size_t idx = 0;
+        emitStructInitValues(addressOf(sym), sym->ty, sym->initElems, idx, item.loc);
+        continue;
+      }
       // INITIAL(CALL f(...)) (rule 27): evaluate the call at block entry and
       // store its return value into the variable. Runs on every entry (AUTOMATIC).
       if (sym && sym->initCallH) {
@@ -1523,6 +1531,36 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
       if (sm.ty.isBit())
         sv.reg = b_.CreateTrunc(sv.reg, b_.getInt1Ty(), "bnm.b1");
       storeScalarTo(d, dm.ty, convert(sv, dm.ty, loc));
+    }
+  }
+}
+
+// Store a structure's INITIAL element list (rule (26)) into its storage, walking
+// members in declaration order. A nested structure recurses; an array member is
+// filled element by element (an array of structures recurses per element); a
+// scalar leaf stores the next value, converted to its type.
+void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::vector<Expr*>& vals,
+                                 size_t& idx, SourceLoc loc) {
+  for (size_t i = 0; i < ty.members.size(); ++i) {
+    const Member& m = *ty.members[i];
+    llvm::Value* mem = b_.CreateStructGEP(llvmTy(ty), base, (unsigned)i, "init.mem");
+    if (m.ty.isStruct()) {
+      emitStructInitValues(mem, m.ty, vals, idx, loc);
+    } else if (m.ty.isArray()) {
+      const Type& el = m.ty.elementType();
+      llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(m.ty));
+      for (long long k = 0; k < arrayExtent(m.ty); ++k) {
+        llvm::Value* ep = b_.CreateInBoundsGEP(arrTy, mem, {i64(0), i64(k)}, "init.el");
+        if (el.isStruct())
+          emitStructInitValues(ep, el, vals, idx, loc);
+        else
+          storeScalarTo(ep, el, initValue(el, vals[idx++]));
+      }
+    } else {
+      if (m.ty.isChar())
+        d_.error(loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+      else
+        storeScalarTo(mem, m.ty, initValue(m.ty, vals[idx++]));
     }
   }
 }

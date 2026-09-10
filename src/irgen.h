@@ -136,6 +136,12 @@ private:
   // from either side are skipped.
   void emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Type& dst, const Type& src,
                       SourceLoc loc);
+  // Store a structure's INITIAL element list (rule (26)) into its storage,
+  // walking members in declaration order and storing each value to the matching
+  // scalar leaf (recursing into nested structures and array members). `idx` is
+  // the position in `vals` and advances as leaves are consumed.
+  void emitStructInitValues(llvm::Value* base, const Type& ty, const std::vector<Expr*>& vals,
+                            size_t& idx, SourceLoc loc);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.

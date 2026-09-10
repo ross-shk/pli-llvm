@@ -1,0 +1,10 @@
+  /* INITIAL on a structure (rule (26)) must supply exactly one value per scalar
+     leaf; a list whose expanded length does not match the leaf count (recursing
+     nested structures and array members) is rejected. */
+  bad_struct_init: procedure options(main);
+     declare 1 s init(1, 2, 3, 4),
+            2 a fixed bin(31),
+            2 x,
+              3 y fixed bin(31),
+              3 z fixed bin(31);
+  end bad_struct_init;

@@ -115,6 +115,19 @@ private:
                        std::vector<Expr*>& out);
   // Total element count of an array type: the product of (ub - lb + 1) (rule 12).
   long long elementCount(const Type& ty);
+  // Number of scalar leaf values a structure's INITIAL list must supply (rule
+  // (26)): sum over members — a scalar counts 1, a nested structure recurses,
+  // an array member counts its element count (an array of structures counts the
+  // leaves of each element).
+  long long structureLeafCount(const Type& ty);
+  // Flatten an INITIAL itemlist into raw (unfolded) values, expanding iteration
+  // factors and '*' but not folding, so a heterogeneous structure can fold each
+  // value against its own member type later.
+  void flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc, std::vector<Expr*>& out);
+  // Fold raw INITIAL values against a structure's scalar leaves in order into
+  // `out` (an index into `vals` advanced as leaves are consumed).
+  void foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t& idx, SourceLoc loc,
+                      std::vector<Expr*>& out);
 
   Diags& d_;
   Program* prog_ = nullptr;
