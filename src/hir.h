@@ -85,6 +85,14 @@ struct HDeclItem {
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
 };
 
+// One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
+// FormatItem with lowered width/decimals expressions.
+struct HFormatItem {
+  enum Kind { A, F, X, Skip, Page, Line } kind = A;
+  HExprP w; // field width
+  HExprP d; // F: fractional digits
+};
+
 struct HStmt {
   enum Kind {
     Null,
@@ -134,6 +142,10 @@ struct HStmt {
   bool skip = false, page = false;
   HExprP skipCount;
   std::vector<HExprP> items;
+  // Edit-directed transmission (rule (108)); mirrors the AST flag and format
+  // list, with lowered width/decimals expressions.
+  bool edit = false;
+  std::vector<HFormatItem> formats;
   // STRING ( reference ) option (rule 105): the character variable the list-
   // directed output is written into (PUT) or input read from (GET); null =
   // SYSIN/SYSPRINT.

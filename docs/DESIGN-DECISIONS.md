@@ -1816,3 +1816,41 @@ the values; `tests/core/bad_file.pli` rejects a numeric variable as a FILE targe
 compiler-resolved name of a slot here); a new `TK::File` (would force a case in
 every type switch for a value that never reaches arithmetic); `FILE` with `PAGE`/
 `SKIP` (not part of this stage's stream surface).
+
+## ADR-069 — edit-directed `PUT/GET EDIT` with common format items
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs edit-directed transmission
+(rule 108) — the `printf`/`scanf` analogue. `PUT [SKIP] [PAGE] LIST` existed, but
+`EDIT`/`DATA` were diagnosed unimplemented; the format items (rules 44-55) had no
+engine.
+
+**Decision.** `PUT/GET EDIT ( datalist ) ( formatlist )` (the real-PL/I spelling;
+the TR grammar's outer-parenthesis reading is OCR-ambiguous) is served for the
+common items: the numeric `F(w,d)`, the character `A(w)`, and the control
+`X(w)`, `SKIP(n)`, `PAGE`, and `LINE(n)`. The AST statement carries a flat
+`formats` list (`FormatItem`/`HFormatItem`) alongside the existing `items`; each
+data item is paired in order with the next `A`/`F` format while the control items
+act between them without consuming data. `A`/`F` require a CHARACTER/numeric item
+(respectively); for GET every item must be an assignable reference. IRGen walks
+the format list with a data index, emitting `pli_put_edit_char`/`_fixed`/`_float`/
+`_x`/`_skip`/`_page`/`_line` for output and `pli_get_edit_num`/`_char`/`_x`/
+`_skip` for input; output routes through `put_raw` and input through `next_char`
+so the STRING (ADR-067) and FILE (ADR-068) sources/sinks are honoured. A FIXED
+value is rescaled from its stored `10^scale` representation to `d` fractional
+digits (rounding half away from zero) before right-justification in width `w`;
+GET `F(w,d)` parses the field to a double and the target conversion applies the
+scaling.
+
+**Consequences.** `tests/core/edit.pli` round-trips `F(w)`, `A(w)`, `X(w)`, and
+`F(w,d)` through a STRING buffer and verifies the spacing content; `bad_edit.pli`
+diagnoses the unimplemented `E` format and a GET data item that is not a
+reference. `make test` and `make check` stay green; emitted IR shows the paired
+`pli_put_edit_*`/`pli_get_edit_*` calls. `DATA`, `COPY`, `LINE` options,
+format iteration `(n) (item)`, `E`/`B`/`C`/`P`/`COLUMN`/`R` items, a standalone
+`FORMAT` statement, and a third `F` scale operand stay diagnosed (M5/D1).
+
+**Rejected.** Reusing the list-directed `pli_put_list_*`/`pli_get_list_*`
+functions (they separate and tokenize, not position in fixed-width fields); an
+`E` scientific item in this slice (FLOAT uses `F`); an implicit-decimal-point
+`F(w,d)` read (a field with an explicit `'.'` is parsed; the implied-decimal form
+is not).

@@ -1097,6 +1097,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     typeExpr(s->skipCount.get(), sc, p);
     checkStringTarget(s, sc, p);
     checkFileTarget(s, sc);
+    if (s->edit) {
+      checkEditFormats(s, sc, p, false);
+      break;
+    }
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       if (it->ty.isVoid())
@@ -1111,6 +1115,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     typeExpr(s->skipCount.get(), sc, p);
     checkStringTarget(s, sc, p);
     checkFileTarget(s, sc);
+    if (s->edit) {
+      checkEditFormats(s, sc, p, true);
+      break;
+    }
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
@@ -1272,6 +1280,52 @@ void Sema::checkFileTarget(Stmt* s, Scope* sc) {
   s->fileSym = sym;
   if (s->stringTarget)
     d_.error(s->loc, "the FILE and STRING options cannot be combined", "(105)");
+}
+
+// Edit-directed transmission (rule (108)): type the format widths/decimals and
+// the data items, then pair each data item with its data (A/F) format, skipping
+// the control formats (X/SKIP/PAGE/LINE) that act without consuming data. For
+// GET the paired item must be an assignable reference of a format-compatible
+// type.
+void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
+  for (auto& it : s->items)
+    typeExpr(it.get(), sc, p);
+  for (auto& f : s->formats) {
+    typeExpr(f.w.get(), sc, p);
+    typeExpr(f.d.get(), sc, p);
+  }
+  size_t dataIdx = 0;
+  for (auto& f : s->formats) {
+    if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
+        f.kind == FormatItem::Line)
+      continue; // a control format consumes no data item
+    if (dataIdx >= s->items.size()) {
+      d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
+      break;
+    }
+    Expr* it = s->items[dataIdx].get();
+    if (f.kind == FormatItem::A && !it->ty.isChar())
+      d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
+    else if (f.kind == FormatItem::F && !it->ty.isNumeric())
+      d_.error(it->loc, "an F format requires a numeric item", "(50)");
+    if (isGet) {
+      bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                 it->kind == Expr::Subscript;
+      if (!ref)
+        d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
+      else if (it->ty.isStruct())
+        d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
+    } else if (it->ty.isVoid()) {
+      d_.error(it->loc, "invalid data list item", "(110)");
+    }
+    ++dataIdx;
+  }
+  size_t dataFormats = 0;
+  for (auto& f : s->formats)
+    if (f.kind == FormatItem::A || f.kind == FormatItem::F)
+      ++dataFormats;
+  if (dataFormats < s->items.size())
+    d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
 }
 
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule

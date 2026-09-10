@@ -104,6 +104,11 @@ private:
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
   void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
+  // Edit-directed transmission (rule (108)): walk the format list, pairing each
+  // data item with its A/F format and emitting the control (X/SKIP/PAGE/LINE)
+  // items in order.
+  void emitPutEditItems(HStmt* s);
+  void emitGetEditItems(HStmt* s);
   // Store a list-directed input value into a data-list reference (the same
   // target-addressing as an assignment's left-hand side).
   void storeGetTarget(HExpr* t, const Val& v, SourceLoc loc);

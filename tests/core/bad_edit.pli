@@ -1,0 +1,10 @@
+   /* Edit-directed I/O diagnostics (rules (48)-(54),(108),(110)): an
+      unimplemented format item (E scientific), and a GET EDIT data item that
+      is not a variable reference, must each be diagnosed. */
+   bad_edit_test: procedure options(main);
+      declare a fixed bin(31);
+      declare b fixed bin(31);
+      a = 1;
+      put edit(a) (e(12,2));        /* E format is unimplemented */
+      get edit(42) (f(5));          /* constant is not a variable */
+   end bad_edit_test;

@@ -1,0 +1,65 @@
+   /* Edit-directed I/O (rules (108),(44)-(54)): PUT EDIT writes data items
+      through the paired format list and GET EDIT reads them back, so a STRING
+      round-trip recovers the original values. Covers the common numeric (F),
+      character (A), and control (X, SKIP) format items. */
+   edit_test: procedure options(main);
+      declare fails fixed bin(31);
+      declare buf char(40);
+      declare a fixed bin(31);
+      declare b fixed bin(31);
+      declare c fixed bin(31);
+      declare d fixed bin(31);
+      declare x char(4);
+      declare y char(4);
+      declare z char(4);
+      declare w char(4);
+      declare p fixed dec(5,2);
+      declare q fixed dec(5,2);
+      declare chunk char(7);
+      fails = 0;
+
+      /* F(w): right-justified integer in a width-w field. */
+      a = 123;
+      b = -45;
+      put string(buf) edit(a, b) (f(6), f(6));
+      get string(buf) edit(c, d) (f(6), f(6));
+      if c ^= 123 then do;
+         fails = fails + 1;
+         put skip list('FAIL F int c', c);
+      end;
+      if d ^= -45 then do;
+         fails = fails + 1;
+         put skip list('FAIL F int d', d);
+      end;
+
+      /* A(w): an exact-width character field round-trips cleanly. */
+      x = 'abcd';
+      put string(buf) edit(x) (a(4));
+      get string(buf) edit(y) (a(4));
+      if y ^= 'abcd' then do;
+         fails = fails + 1;
+         put skip list('FAIL A roundtrip', y);
+      end;
+
+      /* X(w): spacing between A fields, visible in the buffer. */
+      z = 'ab';
+      w = 'cd';
+      put string(buf) edit(z, w) (a(2), x(3), a(2));
+      chunk = substr(buf, 1, 7);
+      if chunk ^= 'ab   cd' then do;
+         fails = fails + 1;
+         put skip list('FAIL X spacing', chunk);
+      end;
+
+      /* F(w,d): scaled fixed decimal with d fractional digits round-trips. */
+      p = 123.45;
+      put string(buf) edit(p) (f(8,2));
+      get string(buf) edit(q) (f(8,2));
+      if q ^= 123.45 then do;
+         fails = fails + 1;
+         put skip list('FAIL F dec roundtrip', q);
+      end;
+
+      if fails = 0 then put skip list('PASS edit');
+      else put skip list('FAIL edit: fails =', fails);
+   end edit_test;

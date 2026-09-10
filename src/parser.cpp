@@ -1413,8 +1413,16 @@ StmtP Parser::parsePut() {
       }
       continue;
     }
-    if (atWord("EDIT") || atWord("DATA")) {
-      d_.error(cur().loc, "only list-directed output is implemented in this stage", "(106)");
+    if (atWord("EDIT")) {
+      // Edit-directed transmission (rule (108)): `EDIT ( (datalist) formatlist )`.
+      if (!parseEditClause(st.get())) {
+        resync();
+        return nullptr;
+      }
+      continue;
+    }
+    if (atWord("DATA")) {
+      d_.error(cur().loc, "DATA-directed output is not implemented in this stage", "(106)");
       resync();
       return nullptr;
     }
@@ -1502,7 +1510,15 @@ StmtP Parser::parseGet() {
       }
       continue;
     }
-    if (atWord("EDIT") || atWord("DATA") || atWord("COPY") || atWord("LINE") || atWord("PAGE")) {
+    if (atWord("EDIT")) {
+      // Edit-directed transmission (rule (108)): `EDIT ( (datalist) formatlist )`.
+      if (!parseEditClause(st.get())) {
+        resync();
+        return nullptr;
+      }
+      continue;
+    }
+    if (atWord("DATA") || atWord("COPY") || atWord("LINE") || atWord("PAGE")) {
       d_.error(cur().loc, "GET option " + cur().text + " is not implemented in this stage",
                "(105)");
       resync();
@@ -1514,6 +1530,92 @@ StmtP Parser::parseGet() {
   }
   expect(Tok::Semi, "(104)");
   return st;
+}
+
+// EDIT ( { ( datalist ) formatlist }••• )          rules (108),(45)
+// Parses the edit-directed data specification into the statement's data items
+// and its paired format list. A bare word inside the datalist is a data item
+// (an expression); inside the formatlist it is a format descriptor (A/F/X/...).
+bool Parser::parseEditClause(Stmt* st) {
+  advance(); // EDIT
+  for (;;) {
+    // ( datalist )   rules (110),(111)
+    if (!expect(Tok::LParen, "(110)"))
+      return false;
+    if (!at(Tok::RParen)) {
+      for (;;) {
+        st->items.push_back(parseExpr());
+        if (!eat(Tok::Comma))
+          break;
+      }
+    }
+    expect(Tok::RParen, "(110)");
+    // formatlist  ( {,• format•••} )   rules (45)-(54)
+    if (!expect(Tok::LParen, "(45)"))
+      return false;
+    if (!at(Tok::RParen)) {
+      for (;;) {
+        if (!parseFormatItem(st))
+          return false;
+        if (!eat(Tok::Comma))
+          break;
+      }
+    }
+    expect(Tok::RParen, "(45)");
+    // A further ( datalist ) formatlist group, comma-separated.
+    if (!eat(Tok::Comma))
+      break;
+  }
+  st->edit = true;
+  return true;
+}
+
+// One format item (rules (46)-(54)): a data format (A character, F fixed) or a
+// control format (X spacing, SKIP/LINE/PAGE line control), each with an optional
+// parenthesised width and, for F, a fractional-digit count.
+bool Parser::parseFormatItem(Stmt* st) {
+  FormatItem fi;
+  if (cur().kind != Tok::Word) {
+    d_.error(cur().loc, "expected a format item", "(48)");
+    return false;
+  }
+  const std::string& w = cur().text;
+  // Format families recognised but not served by this slice (CM3).
+  if (w == "E" || w == "B" || w == "C" || w == "P" || w == "COLUMN" || w == "R") {
+    d_.error(cur().loc, "format item '" + w + "' is not implemented in this stage", "(48)");
+    return false;
+  }
+  if (w == "A") {
+    fi.kind = FormatItem::A;
+  } else if (w == "F") {
+    fi.kind = FormatItem::F;
+  } else if (w == "X") {
+    fi.kind = FormatItem::X;
+  } else if (w == "SKIP") {
+    fi.kind = FormatItem::Skip;
+  } else if (w == "PAGE") {
+    fi.kind = FormatItem::Page;
+  } else if (w == "LINE") {
+    fi.kind = FormatItem::Line;
+  } else {
+    d_.error(cur().loc, "'" + w + "' is not a format item", "(48)");
+    return false;
+  }
+  advance();              // the format descriptor word
+  if (eat(Tok::LParen)) { // optional ( width [, decimals ] )
+    fi.w = parseExpr();
+    if (fi.kind == FormatItem::F && eat(Tok::Comma)) {
+      fi.d = parseExpr();
+      if (eat(Tok::Comma)) { // the third F operand is a scale factor
+        d_.error(cur().loc, "a scale factor on an F format item is not implemented in this stage",
+                 "(50)");
+        return false;
+      }
+    }
+    expect(Tok::RParen, "(48)");
+  }
+  st->formats.push_back(std::move(fi));
+  return true;
 }
 
 // call-statement ::= CALL identifier [argumentlist] ... ;          rule (78)

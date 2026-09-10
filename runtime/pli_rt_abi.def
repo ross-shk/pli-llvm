@@ -22,6 +22,17 @@ PLI_FN(pli_put_list_fixed_scaled, VOID, (I64, I64))   /* scaled FIXED (ADR-006) 
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
 
+/* Edit-directed output (rules (108),(44)-(54)): F(w,d), A(w), and the control
+ * X/SKIP/PAGE/LINE items. The fixed form takes the stored value, its decimal
+ * scale (value*10^scale), the field width, and the fractional-digit count. */
+PLI_FN(pli_put_edit_char, VOID, (CPTR, I64, I64))
+PLI_FN(pli_put_edit_fixed, VOID, (I64, I64, I64, I64))
+PLI_FN(pli_put_edit_float, VOID, (DOUBLE, I64, I64))
+PLI_FN(pli_put_edit_x, VOID, (I64))
+PLI_FN(pli_put_edit_skip, VOID, (I64))
+PLI_FN(pli_put_edit_page, VOID, (VOID))
+PLI_FN(pli_put_edit_line, VOID, (I64))
+
 PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
 PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))
 PLI_FN(pli_concat, VOID, (PTR, CPTR, I64, CPTR, I64))
@@ -50,6 +61,14 @@ PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (10
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))
 PLI_FN(pli_get_list_char, VOID, (PTR, I64))
 PLI_FN(pli_get_list_bit, I8, (VOID))
+
+/* Edit-directed input (rules (108),(44)-(54)): F(w,d) is parsed to a double
+ * (the caller converts to the target's type), A(w) reads a character field,
+ * and X/SKIP advance the input position. */
+PLI_FN(pli_get_edit_num, DOUBLE, (I64))
+PLI_FN(pli_get_edit_char, VOID, (PTR, I64, I64))
+PLI_FN(pli_get_edit_x, VOID, (I64))
+PLI_FN(pli_get_edit_skip, VOID, (I64))
 
 PLI_FN(pli_string_put_open, VOID, (PTR, I64))         /* STRING output (105) */
 PLI_FN(pli_string_put_close, VOID, (PTR, I64))
