@@ -75,6 +75,8 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
         mts.push_back(llvmTy(m->ty));
     return llvm::StructType::get(ctx_, mts);
   }
+  case TK::Pointer:
+    return b_.getPtrTy();
   case TK::Void:
     return b_.getVoidTy();
   }
@@ -1337,6 +1339,9 @@ void IRGen::emitPut(HStmt* s) {
       // Whole-structure values are diagnosed in emitExpr (rule 127); a
       // structure never reaches list-directed output as a value.
       break;
+    case TK::Pointer:
+      d_.error(s->loc, "a POINTER value cannot be written with PUT LIST in this stage", "(110)");
+      break;
     }
   }
 }
@@ -1938,6 +1943,11 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     return out;
   }
 
+  // A pointer value is passed through unchanged between POINTER targets
+  // (rule 15): pointer assignment copies the address, no numeric conversion.
+  if (v.ty.isPointer() && dst.isPointer())
+    return v;
+
   const bool srcFloat = v.ty.k == TK::Float;
   const bool dstFloat = dst.k == TK::Float;
   const bool srcBit = v.ty.isBit();
@@ -2316,6 +2326,15 @@ Val IRGen::emitExpr(HExpr* e) {
     return v;
   }
 
+  if (isCmp && a.ty.isPointer() && b.ty.isPointer()) {
+    // POINTER equality/inequality (rule (117)): compare the two addresses
+    // directly; ordered comparisons were rejected in sema.
+    llvm::CmpInst::Predicate pred = op == Tok::Eq ? llvm::CmpInst::ICMP_EQ : llvm::CmpInst::ICMP_NE;
+    v.ty = Type::bit(1);
+    v.reg = b_.CreateICmp(pred, a.reg, b.reg, "pcmp");
+    return v;
+  }
+
   Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
                                         b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
                       : e->ty;
@@ -2442,6 +2461,28 @@ Val IRGen::emitExpr(HExpr* e) {
 bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // Names matching none of these are user function procedures.
   Val v;
+  if (e->name == "NULL") {
+    // NULL (rule 123, Appendix 1): the null POINTER value.
+    v.ty = e->ty;
+    v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+    result = v;
+    return true;
+  }
+  if (e->name == "ADDR") {
+    // ADDR (rule 123, Appendix 1): the address of a variable as a POINTER.
+    HExpr* a = e->args[0].get();
+    if (a->kind != HExpr::VarRef || !a->sym) {
+      d_.error(a->loc, "ADDR requires an unsubscripted variable in this stage", "(123)");
+      v.ty = e->ty;
+      v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+      result = v;
+      return true;
+    }
+    v.ty = e->ty;
+    v.reg = addressOf(a->sym);
+    result = v;
+    return true;
+  }
   if (e->name == "SUBSTR") {
     Val s = emitExpr(e->args[0].get());
     Val start = emitExpr(e->args[1].get());

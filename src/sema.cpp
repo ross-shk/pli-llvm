@@ -723,6 +723,10 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
   }
   if (dst.isNumeric() && (src.isNumeric() || src.isBit()))
     return true;
+  // POINTER assignment (rule 15): copy the address; a pointer target takes a
+  // pointer source (NULL, ADDR, or another pointer) unchanged.
+  if (dst.isPointer() && src.isPointer())
+    return true;
   if (dst.isBit() && (src.isBit() || src.isNumeric()))
     return true;
   if (dst.isChar() && src.isChar())
@@ -1473,13 +1477,25 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       break;
     case Tok::Eq:
     case Tok::Ne:
+      // Equality/inequality of a POINTER is allowed only against another
+      // POINTER (rules (15),(117)); mixed pointer/arithmetic comparison is
+      // diagnosed rather than silently comparing an address as a number.
+      if ((A.isPointer() || B.isPointer()) && !(A.isPointer() && B.isPointer()))
+        d_.error(e->loc, "a POINTER can only be compared with a POINTER", "(117)");
+      else if (A.isChar() != B.isChar())
+        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+      e->ty = Type::bit(1);
+      break;
     case Tok::Lt:
     case Tok::Le:
     case Tok::Gt:
     case Tok::Ge:
     case Tok::Ngt:
     case Tok::Nlt:
-      if (A.isChar() != B.isChar())
+      // Ordered comparisons are not meaningful on addresses (rule (117)).
+      if (A.isPointer() || B.isPointer())
+        d_.error(e->loc, "ordered comparison of a POINTER is not allowed", "(117)");
+      else if (A.isChar() != B.isChar())
         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
       e->ty = Type::bit(1);
       break;
@@ -1497,6 +1513,24 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
 bool Sema::typeBuiltin(Expr* e) {
   // Names matching none of these are user function procedures and are
   // handled in typeExpr's general function-call path.
+  // NULL built-in (rule 123, Appendix 1): yields the null POINTER value.
+  if (e->name == "NULL") {
+    if (!e->args.empty())
+      d_.error(e->loc, "NULL takes no arguments", "(123)");
+    e->ty = Type::ptr();
+    return true;
+  }
+  // ADDR built-in (rule 123, Appendix 1): yields the address of a variable as
+  // a POINTER value.
+  if (e->name == "ADDR") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "ADDR takes one argument (a variable)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::ptr();
+    return true;
+  }
   // SUBSTR built-in (M2): substr(s, i, n) yields a character string of
   // length n; the length must be a constant so the result type is sized.
   if (e->name == "SUBSTR") {

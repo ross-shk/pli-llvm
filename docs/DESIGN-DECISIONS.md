@@ -1626,3 +1626,37 @@ array built-in argument (rule 123); `make test` stays green. A subscripted membe
 **Rejected.** Adding member knowledge to the symbol table (member bounds already
 live in `memberDyn_`); requiring the whole structure as the built-in argument
 (the built-ins reduce a single array, not a whole structure).
+
+## ADR-063 — POINTER as a first-class address type
+
+**Context.** QR1.3 (CM2 of the C-mirror sub-plan) needs `POINTER`, based data,
+`->`, `ADDR`, `NULL`, and `ALLOCATE`/`FREE` for linked records. Before based
+addressing and allocation can be built, POINTER must exist as a real value type:
+declared `DECLARE P POINTER;`, holding the null pointer, the address of a
+variable, or another pointer, assignable between pointer variables and compared
+for equality/inequality.
+
+**Decision.** Add a `TK::Pointer` scalar type (`Type::ptr()`, `isPointer()`). A
+pointer variable is declared with the `POINTER`/`PTR` attribute (parsed into the
+attribute bag and rejected if combined with a numeric/string attribute, rule 15)
+and lays out in IR as an LLVM `ptr`. Pointer assignment copies the address
+(`Sema::checkAssignable` allows pointer→pointer; `IRGen::convert` passes a
+pointer through unchanged). `NULL` and `ADDR(x)` are built-ins typed in
+`Sema::typeBuiltin` and emitted in `IRGen::emitBuiltin`: `NULL` yields a null
+pointer constant, `ADDR(x)` the `addressOf` a variable. Pointer equality and
+inequality are emitted as an integer `icmp eq/ne` on the two addresses; ordered
+comparisons and mixing a pointer with an arithmetic value are diagnosed (rules
+(15),(117)). Following the codebase's no-arg-builtin convention (DATE/TIME),
+`NULL` is written `null()` with parentheses, not bare.
+
+**Consequences.** `tests/core/pointer.pli` covers `p = null()`, `p = addr(x)`,
+`q = p` pointer assignment, and `=`/`^=` comparisons against the null pointer and
+other pointers; `tests/core/bad_pointer.pli` rejects assigning a pointer to a
+numeric target; `make test` stays green. A pointer value cannot be written with
+`PUT LIST` in this stage (diagnosed, rule 110); pointer parameters, based data,
+`->`, and `ALLOCATE`/`FREE` remain for later CM2 slices.
+
+**Rejected.** An integer-typed pointer (LLVM `ptr` keeps the address opaque and
+avoids accidental arithmetic); allowing bare `NULL` without parentheses (kept
+consistent with DATE/TIME and other no-arg built-ins in this compiler); pointer
+arithmetic or ordering.

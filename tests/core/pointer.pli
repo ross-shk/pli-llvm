@@ -1,0 +1,48 @@
+  /* POINTER foundation (rules (15),(123)): a POINTER variable holds an
+     address. null() yields the null pointer, addr(x) the address of a variable,
+     pointers assign between each other, and pointer equality/inequality is
+     compared against the null pointer and against other pointers. */
+  pointer_test: procedure options(main);
+     declare fails fixed bin(31);
+     declare p pointer;
+     declare q pointer;
+     declare x fixed bin(31);
+     fails = 0;
+     /* the null pointer compares equal to itself, unequal to an address */
+     p = null();
+     if p ^= null() then do;
+        fails = fails + 1;
+        put skip list('FAIL p not null after null()');
+     end;
+     x = 42;
+     p = addr(x);
+     if p = null() then do;
+        fails = fails + 1;
+        put skip list('FAIL addr() null');
+     end;
+     if p ^= addr(x) then do;
+        fails = fails + 1;
+        put skip list('FAIL addr() not eq');
+     end;
+     /* pointer assignment copies the address */
+     q = p;
+     if q ^= p then do;
+        fails = fails + 1;
+        put skip list('FAIL q not eq p');
+     end;
+     if q = null() then do;
+        fails = fails + 1;
+        put skip list('FAIL q eq null()');
+     end;
+     q = null();
+     if q ^= null() then do;
+        fails = fails + 1;
+        put skip list('FAIL q not null after null()');
+     end;
+     if q = p then do;
+        fails = fails + 1;
+        put skip list('FAIL q eq p after null()');
+     end;
+     if fails = 0 then put skip list('PASS pointer');
+     else put skip list('FAIL pointer: fails =', fails);
+  end pointer_test;
