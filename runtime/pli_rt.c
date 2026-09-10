@@ -11,9 +11,31 @@
 static int col = 0;
 static int items_on_line = 0;
 
+/* STRING (rule 105) sink/source: when out_buf is non-null, list-directed output
+ * is written into it instead of stdout; when in_buf is non-null, list-directed
+ * input is read from it instead of stdin. */
+static char *out_buf = NULL;
+static size_t out_cap = 0, out_len = 0;
+static const char *in_buf = NULL;
+static size_t in_len = 0, in_pos = 0;
+
 static void put_raw(const char *p, size_t n) {
+  if (out_buf) {
+    size_t take = n < (out_cap - out_len) ? n : (out_cap - out_len);
+    if (take > 0)
+      memmove(out_buf + out_len, p, take);
+    out_len += take;
+    return;
+  }
   fwrite(p, 1, n, stdout);
   col += (int)n;
+}
+
+/* Read one input character from the active STRING source, or from stdin. */
+static int next_char(void) {
+  if (in_buf)
+    return in_pos < in_len ? (unsigned char)in_buf[in_pos++] : EOF;
+  return getchar();
 }
 
 void pli_rt_init(void) {
@@ -311,7 +333,7 @@ void pli_free(char *p) { free(p); }
 static int get_token(char *buf, size_t cap) {
   int c;
   do {
-    c = getchar();
+    c = next_char();
   } while (c != EOF && (c == ' ' || c == '\t' || c == '\n' || c == '\r'));
   if (c == EOF)
     return 0;
@@ -319,7 +341,7 @@ static int get_token(char *buf, size_t cap) {
   while (c != EOF && c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != ',') {
     if (n + 1 < cap)
       buf[n++] = (char)c;
-    c = getchar();
+    c = next_char();
   }
   buf[n] = '\0';
   return 1;
@@ -354,4 +376,34 @@ unsigned char pli_get_list_bit(void) {
   if (!get_token(tok, sizeof tok))
     return 0;
   return tok[0] == '1' ? 1 : 0;
+}
+
+/* STRING (rule 105) PUT: route list-directed output into buf (cap bytes). */
+void pli_string_put_open(char *buf, long long cap) {
+  out_buf = buf;
+  out_cap = (size_t)cap;
+  out_len = 0;
+  items_on_line = 0;
+}
+
+/* End a STRING PUT: blank-pad the unused tail, then return to SYSPRINT. */
+void pli_string_put_close(char *buf, long long cap) {
+  (void)buf;
+  if (out_buf && out_len < (size_t)cap)
+    memset(out_buf + out_len, ' ', (size_t)cap - out_len);
+  out_buf = NULL;
+  out_cap = out_len = 0;
+}
+
+/* STRING (rule 105) GET: read list-directed input from buf (len bytes). */
+void pli_string_get_open(char *buf, long long len) {
+  in_buf = buf;
+  in_len = (size_t)len;
+  in_pos = 0;
+}
+
+/* End a STRING GET: return to SYSIN. */
+void pli_string_get_close(void) {
+  in_buf = NULL;
+  in_len = in_pos = 0;
 }

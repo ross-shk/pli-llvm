@@ -128,10 +128,14 @@ struct HStmt {
   Type entryRetTy{};
   std::vector<Symbol*> entryParamSyms; // resolved by sema
 
-  // PUT statement options
+  // GET/PUT stream statement options (rules (104),(105))
   bool skip = false, page = false;
   HExprP skipCount;
   std::vector<HExprP> items;
+  // STRING ( reference ) option (rule 105): the character variable the list-
+  // directed output is written into (PUT) or input read from (GET); null =
+  // SYSIN/SYSPRINT.
+  HExprP stringTarget;
 
   std::vector<HExprP> args; // CALL arguments
 
