@@ -121,6 +121,7 @@ struct Stmt {
     DoWhile,  // rule (71)  DO WHILE(e);
     DoIter,   // rule (71)+(72)+(73)
     Put,      // rules (104)-(109)
+    Get,      // rules (104)-(109)
     CallS,    // rule (78)
     Return,   // rule (81)
     Stop,     // rule (85)

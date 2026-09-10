@@ -1,0 +1,6 @@
+ /* GET LIST items must be assignable scalar references (rules (109),(110)):
+    reading into a constant is diagnosed rather than miscompiled. */
+ bad_get: procedure options(main);
+    declare a fixed bin(31);
+    get list (5);
+ end bad_get;

@@ -66,6 +66,7 @@ private:
   StmtP parseIf(Proc* owner);
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
   StmtP parsePut();
+  StmtP parseGet();
   StmtP parseCall();
   StmtP parseAssignment();
   StmtP parseAllocate(); // ALLOCATE (rule 87)

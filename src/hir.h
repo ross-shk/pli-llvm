@@ -96,6 +96,7 @@ struct HStmt {
     DoWhile,
     DoIter,
     Put,
+    Get,
     CallS,
     Return,
     Stop,

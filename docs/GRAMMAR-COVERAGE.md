@@ -55,8 +55,8 @@ The ledger that ties the implementation to the specification. Status values:
 | (87)–(90) | `ALLOCATE`/`FREE` | partial M2 | heap-allocate a based structure and store its address in a POINTER with the `SET(reference)` option, then release the block with `FREE`, addressed either by an explicit locator `P -> X` or by the based variable's own `BASED` pointer — two allocations of the same based variable yield independent blocks (`alloc.pli`, `bad_alloc.pli`, `bad_alloc_set.pli`, ADR-065); the `IN (AREA)` option and dynamic-extent based arrays → QR2.3 |
 | (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M4 | |
 | (100)–(103) | `OPEN`/`CLOSE` | diag → M5 | |
-| (104),(105) | `GET`/`PUT` and options | partial M0 | `PUT [SKIP] [PAGE] LIST`; rest → M5 |
-| (106)–(111) | data specifications, data lists | partial M0 | list-directed output; common `DATA`/`EDIT` → M5, picture-directed forms → D1 |
+| (104),(105) | `GET`/`PUT` and options | partial M2 | `PUT [SKIP] [PAGE] LIST`; `GET [SKIP] LIST` list-directed input reading scalar values from SYSIN (`get.pli`, `bad_get.pli`, ADR-066); `FILE`/`STRING`/`EDIT`/`DATA`/`COPY`/`LINE` → M5 |
+| (106)–(111) | data specifications, data lists | partial M2 | list-directed output (`PUT LIST`) and input (`GET LIST`); common `DATA`/`EDIT` → M5, picture-directed forms → D1 |
 | (112),(113) | record I/O | diag → M6 | option set from Y33-6003 (scan incomplete) |
 | (114) | `DISPLAY` | M5 | scan garbled; Y33-6003 form used |
 | (115)–(122) | expression precedence hierarchy | M0 | `arith.pli` pins `-3**2` = `-(3**2)` = -9 ((128) constants are unsigned); `usecases/expr.pli` pins negated comparisons and a prefixed `**` exponent |

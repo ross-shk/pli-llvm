@@ -962,6 +962,9 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Put:
     emitPut(s);
     break;
+  case HStmt::Get:
+    emitGet(s);
+    break;
   case HStmt::CallS:
     emitCall(s);
     break;
@@ -1380,6 +1383,82 @@ void IRGen::emitPut(HStmt* s) {
       break;
     }
   }
+}
+
+// GET (rules 104-109): list-directed input reads each data-list reference from
+// SYSIN and stores the value, like an assignment target.
+void IRGen::emitGet(HStmt* s) {
+  for (auto& item : s->items) {
+    HExpr* t = item.get();
+    const Type& ty = t->ty;
+    Val v;
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
+      v.ty = Type::fixedBin(63, 0);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_get_list_float"), {});
+      v.ty = Type::flt(6);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_get_list_bit"), {});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "gbit");
+      v.ty = Type::bit();
+      break;
+    }
+    case TK::Char: {
+      // Read into a reusable entry buffer, then assign into the target.
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
+      b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      break;
+    }
+    default:
+      d_.error(item->loc, "GET LIST of this type is not implemented in this stage", "(110)");
+      continue;
+    }
+    storeGetTarget(t, v, s->loc);
+  }
+}
+
+// Store an input value into a data-list reference (rules (109),(110)): the same
+// target-addressing as an assignment's left-hand side.
+void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
+  const Type& ty = t->ty;
+  if (t->kind == HExpr::Subscript && t->sym) {
+    if (!t->memberPath.empty()) {
+      const Type& arr = memberType(t->sym, t->memberPath);
+      llvm::Value *ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
+                                          : memberAddr(t->sym, t->memberPath, loc);
+      llvm::Value* addr = arrayElementAddr(arr, base, t->args, loc, ub, lb);
+      storeScalarTo(addr, ty, convert(v, ty, loc));
+      return;
+    }
+    if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
+      llvm::Value* addr = definedSubElementAddr(t->sym, t->args, loc);
+      storeScalarTo(addr, ty, convert(v, ty, loc));
+      return;
+    }
+    storeArrayElement(t->sym, t->args, v, loc);
+    return;
+  }
+  if (t->kind == HExpr::VarRef && t->sym) {
+    if (!t->memberPath.empty()) {
+      llvm::Value* addr =
+          t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                    : memberAddr(t->sym, t->memberPath, loc);
+      storeScalarTo(addr, ty, convert(v, ty, loc));
+      return;
+    }
+    storeTo(t->sym, v, loc);
+    return;
+  }
+  d_.error(loc, "GET LIST target is not assignable in this stage", "(110)");
 }
 
 // Address of one call argument for a by-reference parameter (rule 4).

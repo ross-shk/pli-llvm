@@ -1095,6 +1095,40 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     break;
   }
+  case Stmt::Get: {
+    // List-directed input writes a value into each data-list item, so every
+    // item must be an assignable scalar reference, not a constant or procedure
+    // (rules (109),(110)).
+    typeExpr(s->skipCount.get(), sc, p);
+    for (auto& it : s->items) {
+      typeExpr(it.get(), sc, p);
+      bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                 it->kind == Expr::Subscript;
+      if (!ref) {
+        d_.error(it->loc, "GET LIST item must be a variable to receive the value", "(110)");
+        continue;
+      }
+      if (it->ty.isVoid()) {
+        d_.error(it->loc, "invalid data list item", "(110)");
+        continue;
+      }
+      if (it->ty.isStruct()) {
+        d_.error(it->loc, "a whole structure cannot be read with GET LIST in this stage", "(110)");
+        continue;
+      }
+      // A CHARACTER member or array element is read through storeArrayElement
+      // /member paths, which are not served (mirrors assignment, rule (11)/(12)).
+      if (it->ty.isChar() &&
+          ((it->kind == Expr::VarRef && !it->memberPath.empty()) || it->kind == Expr::Subscript)) {
+        d_.error(it->loc,
+                 "GET LIST of a CHARACTER member or array element is not implemented in this "
+                 "stage",
+                 "(110)");
+        continue;
+      }
+    }
+    break;
+  }
   case Stmt::CallS: {
     Symbol* sym = lookup(sc, s->name);
     if (!sym || sym->kind != Symbol::ProcName) {

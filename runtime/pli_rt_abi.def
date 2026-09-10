@@ -45,3 +45,8 @@ PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE interim 
 
 PLI_FN(pli_alloc, PTR, (I64))                         /* ALLOCATE (87) */
 PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */
+
+PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
+PLI_FN(pli_get_list_float, DOUBLE, (VOID))
+PLI_FN(pli_get_list_char, VOID, (PTR, I64))
+PLI_FN(pli_get_list_bit, I8, (VOID))
