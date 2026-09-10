@@ -1784,3 +1784,35 @@ rejects a non-character STRING target; `make test` and `make check` stay green.
 set (duplicated the whole list-directed surface); routing through the FILE
 option (needs file-handle state, QR2.5); supporting `STRING` with `PAGE`/`SKIP`
 or a VARYING target (not meaningful for a fixed in-memory sink/source).
+
+## ADR-068 — OPEN/CLOSE and the FILE ( f ) stream option
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs file sources and sinks —
+the `fopen`/`fclose` analogue. `OPEN`/`CLOSE` (rules 100-103) and the `FILE ( f )`
+stream option (rule 105) were diagnosed unimplemented; the `FILE` attribute
+(rules 39,40) was not declared.
+
+**Decision.** A `FILE`-declared variable (`DECLARE f FILE;`) carries no runtime
+storage: its identity is a compile-time slot (0–15) assigned by sema. The runtime
+keeps a fixed `FILE*` table (`pli_files[16]`) plus two current-stream globals
+(`out_f`/`in_f`). `OPEN FILE(f) TITLE('name') [INPUT|OUTPUT|STREAM|PRINT]` calls
+`pli_file_open(slot, name, len, mode)` (`fopen` with "r"/"w"); `CLOSE FILE(f)`
+calls `pli_file_close(slot)`. `PUT FILE(f) LIST(...)`/`GET FILE(f) LIST(...)`
+call `pli_put_select`/`pli_get_select` before the item loop and the matching
+unselect after, so `put_raw`/`next_char` route through the file before
+falling back to SYSPRINT/SYSIN — reusing the same per-type `pli_put_list_*`/
+`pli_get_list_*` functions as the STRING sink/source (ADR-067). sema's
+`checkFileTarget` resolves `FILE ( f )` to the symbol and requires it to be a
+FILE variable; FILE and STRING are mutually exclusive per statement. OPEN without
+a `FILE ( f )` option is diagnosed (this stage names one file).
+
+**Consequences.** `tests/driver/file.sh` does a `PUT FILE` → `GET FILE` round-trip
+against a relative filename in the gitignored test output directory and verifies
+the values; `tests/core/bad_file.pli` rejects a numeric variable as a FILE target;
+`make test` and `make check` stay green. `IDENT`/`LINESIZE`/`PAGESIZE`,
+`RECORD`/`UPDATE`/`KEYED`/`ENVIRONMENT`, and record I/O stay M6.
+
+**Rejected.** Giving each FILE variable real runtime storage (it is only ever the
+compiler-resolved name of a slot here); a new `TK::File` (would force a case in
+every type switch for a value that never reaches arithmetic); `FILE` with `PAGE`/
+`SKIP` (not part of this stage's stream surface).

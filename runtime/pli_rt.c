@@ -19,7 +19,19 @@ static size_t out_cap = 0, out_len = 0;
 static const char *in_buf = NULL;
 static size_t in_len = 0, in_pos = 0;
 
+/* Named files (rules 100-103, 105): a fixed table indexed by the compile-time
+ * slot assigned to each FILE variable. out_f/in_f are the streams selected by
+ * the FILE ( f ) option of a PUT/GET; when set they override stdout/stdin. */
+#define PLI_MAX_FILES 16
+static FILE *pli_files[PLI_MAX_FILES] = {0};
+static FILE *out_f = NULL;
+static FILE *in_f = NULL;
+
 static void put_raw(const char *p, size_t n) {
+  if (out_f) {
+    fwrite(p, 1, n, out_f);
+    return;
+  }
   if (out_buf) {
     size_t take = n < (out_cap - out_len) ? n : (out_cap - out_len);
     if (take > 0)
@@ -31,8 +43,11 @@ static void put_raw(const char *p, size_t n) {
   col += (int)n;
 }
 
-/* Read one input character from the active STRING source, or from stdin. */
+/* Read one input character from the active FILE stream, STRING source, or
+ * stdin. */
 static int next_char(void) {
+  if (in_f)
+    return getc(in_f);
   if (in_buf)
     return in_pos < in_len ? (unsigned char)in_buf[in_pos++] : EOF;
   return getchar();
@@ -406,4 +421,51 @@ void pli_string_get_open(char *buf, long long len) {
 void pli_string_get_close(void) {
   in_buf = NULL;
   in_len = in_pos = 0;
+}
+
+/* OPEN (rules 100-103): open the file in `slot` with the given name (namelen
+ * bytes, not nul-terminated). mode 0 = INPUT, 1 = OUTPUT. The FILE variable's
+ * slot is a compile-time constant, so pli_files[slot] is stable across the
+ * OPEN/GET/PUT/CLOSE statements that name it. */
+void pli_file_open(long long slot, const char *name, long long namelen, long long mode) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  char buf[256];
+  size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
+  memcpy(buf, name, n);
+  buf[n] = '\0';
+  if (pli_files[slot])
+    fclose(pli_files[slot]);
+  pli_files[slot] = fopen(buf, mode ? "w" : "r");
+}
+
+/* CLOSE (rule 102): close the file in `slot` and release the slot. */
+void pli_file_close(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  if (pli_files[slot]) {
+    fclose(pli_files[slot]);
+    pli_files[slot] = NULL;
+  }
+}
+
+/* FILE ( f ) output routing (rule 105): put_raw writes to the named file until
+ * the matching unselect returns to SYSPRINT. */
+void pli_put_select(long long slot) {
+  out_f = (slot >= 0 && slot < PLI_MAX_FILES) ? pli_files[slot] : NULL;
+  col = 0;
+  items_on_line = 0;
+}
+
+void pli_put_unselect(void) {
+  out_f = NULL;
+}
+
+/* FILE ( f ) input routing (rule 105): next_char reads from the named file. */
+void pli_get_select(long long slot) {
+  in_f = (slot >= 0 && slot < PLI_MAX_FILES) ? pli_files[slot] : NULL;
+}
+
+void pli_get_unselect(void) {
+  in_f = NULL;
 }

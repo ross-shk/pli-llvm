@@ -110,6 +110,8 @@ private:
   void emitCall(HStmt* s);
   void emitAllocate(HStmt* s); // ALLOCATE (rule 87)
   void emitFree(HStmt* s);     // FREE (rule 90)
+  void emitOpen(HStmt* s);     // OPEN (rules 100,101)
+  void emitClose(HStmt* s);    // CLOSE (rules 102,103)
 
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is

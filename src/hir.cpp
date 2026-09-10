@@ -211,6 +211,12 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   for (const auto& it : s->items)
     h->items.push_back(lowerExpr(it.get()));
 
+  // OPEN/CLOSE and the FILE ( f ) stream option (rules 100-103,105): carry the
+  // resolved FILE symbol and the OPEN options across the lowering.
+  h->fileSym = s->fileSym;
+  h->openTitle = s->openTitle;
+  h->openInput = s->openInput;
+
   // CALL statement arguments: coerce to the callee's parameter types.
   for (const auto& a : s->args) {
     HExprP ha = lowerExpr(a.get());
@@ -486,6 +492,10 @@ const char* stmtKind(HStmt::Kind k) {
     return "Allocate";
   case HStmt::Free:
     return "Free";
+  case HStmt::Open:
+    return "Open";
+  case HStmt::Close:
+    return "Close";
   case HStmt::Leave:
     return "Leave";
   }
@@ -586,6 +596,14 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
       os << (i ? "," : " ");
       printExpr(os, s->freeBase[i].get(), ind);
     }
+    break;
+  case HStmt::Open:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name) << (s->openInput ? " input" : " output");
+    if (!s->openTitle.empty())
+      os << " title(" << s->openTitle << ")";
+    break;
+  case HStmt::Close:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name);
     break;
   default:
     break;

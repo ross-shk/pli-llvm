@@ -592,7 +592,11 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     return parseAllocate();
   if (kw("FREE"))
     return parseFree();
-  if (kw("OPEN") || kw("CLOSE") || kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE")) {
+  if (kw("OPEN"))
+    return parseOpen();
+  if (kw("CLOSE"))
+    return parseClose();
+  if (kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE")) {
     d_.error(cur().loc, "file input/output is not implemented in this stage", "(100)");
     resync();
     return nullptr;
@@ -988,6 +992,13 @@ bool Parser::parseDeclTail(DeclItem& item) {
         bag.pointer = true;
         continue;
       }
+      if (w == "FILE") {
+        // file-name-attribute ::= FILE (rules 39,40): a named file variable,
+        // addressed by OPEN/CLOSE and the FILE ( f ) stream option.
+        advance();
+        bag.file = true;
+        continue;
+      }
       if (w == "BASED") {
         // based-attribute ::= BASED [ ( reference ) ]  rule (25): the declared
         // item overlays the storage addressed by a POINTER variable, so it has
@@ -1009,8 +1020,8 @@ bool Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "AREA" ||
-          w == "OFFSET" || w == "CONTROLLED" || w == "CTL" || w == "LABEL" || w == "FILE" ||
-          w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
+          w == "OFFSET" || w == "CONTROLLED" || w == "CTL" || w == "LABEL" || w == "TASK" ||
+          w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -1068,8 +1079,16 @@ bool Parser::parseDeclTail(DeclItem& item) {
   if (bag.pointer &&
       (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal))
     d_.error(item.loc, "POINTER cannot be combined with a data attribute", "(15)");
+  if (bag.file && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
+                   bag.decimal || bag.pointer))
+    d_.error(item.loc, "FILE cannot be combined with a data attribute", "(15)");
 
-  if (bag.pointer) {
+  if (bag.file) {
+    // A FILE variable carries no computational value (rules 39,40); the parser
+    // records the flag and sema assigns it a runtime slot at OPEN/CLOSE.
+    item.fileAttr = true;
+    item.ty = Type::voidTy();
+  } else if (bag.pointer) {
     item.ty = Type::ptr();
   } else if (bag.character) {
     item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
@@ -1383,13 +1402,15 @@ StmtP Parser::parsePut() {
     }
     if (atWord("FILE")) {
       advance();
-      SourceLoc l = cur().loc;
       if (eat(Tok::LParen)) {
-        if (at(Tok::Word))
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
           advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(105)");
+        }
         expect(Tok::RParen, "(105)");
       }
-      d_.warn(l, "FILE option ignored: this stage writes to SYSPRINT only", "(105)");
       continue;
     }
     if (atWord("EDIT") || atWord("DATA")) {
@@ -1458,13 +1479,15 @@ StmtP Parser::parseGet() {
     }
     if (atWord("FILE")) {
       advance();
-      SourceLoc l = cur().loc;
       if (eat(Tok::LParen)) {
-        if (at(Tok::Word))
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
           advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(105)");
+        }
         expect(Tok::RParen, "(105)");
       }
-      d_.warn(l, "FILE option ignored: this stage reads from SYSIN only", "(105)");
       continue;
     }
     if (atWord("STRING")) {
@@ -1664,6 +1687,109 @@ StmtP Parser::parseFree() {
       break;
   }
   expect(Tok::Semi, "(90)");
+  return st;
+}
+
+// open-statement ::= OPEN {, open-optionslist};    rules (100),(101)
+// This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the
+// INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40). RECORD/KEYED/UPDATE and
+// the IDENT/LINESIZE/PAGESIZE/ENVIRONMENT options stay unimplemented.
+StmtP Parser::parseOpen() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Open;
+  st->loc = cur().loc;
+  advance(); // OPEN
+  bool sawFile = false;
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("FILE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(101)");
+        }
+        expect(Tok::RParen, "(101)");
+      } else {
+        d_.error(cur().loc, "expected '(' after FILE", "(101)");
+      }
+      sawFile = true;
+      continue;
+    }
+    if (atWord("TITLE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::CharLit)) {
+          st->openTitle = cur().sval;
+          advance();
+        } else {
+          d_.error(cur().loc, "TITLE requires a character-string constant", "(101)");
+        }
+        expect(Tok::RParen, "(101)");
+      }
+      continue;
+    }
+    if (atWord("INPUT")) {
+      st->openInput = true;
+      advance();
+      continue;
+    }
+    if (atWord("OUTPUT") || atWord("STREAM") || atWord("PRINT")) {
+      advance();
+      continue;
+    }
+    if (atWord("RECORD") || atWord("KEYED") || atWord("UPDATE") || atWord("ENVIRONMENT") ||
+        atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE")) {
+      d_.error(cur().loc, "OPEN option " + cur().text + " is not implemented in this stage",
+               "(101)");
+      resync();
+      return nullptr;
+    }
+    d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");
+    resync();
+    return nullptr;
+  }
+  if (!sawFile)
+    d_.error(st->loc, "OPEN requires a FILE ( f ) option in this stage", "(101)");
+  expect(Tok::Semi, "(100)");
+  return st;
+}
+
+// close-statement ::= CLOSE {, close-optionslist};   rules (102),(103)
+StmtP Parser::parseClose() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Close;
+  st->loc = cur().loc;
+  advance(); // CLOSE
+  bool sawFile = false;
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("FILE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(103)");
+        }
+        expect(Tok::RParen, "(103)");
+      }
+      sawFile = true;
+      continue;
+    }
+    if (atWord("IDENT")) {
+      d_.error(cur().loc, "CLOSE option IDENT is not implemented in this stage", "(103)");
+      resync();
+      return nullptr;
+    }
+    d_.error(cur().loc, "unexpected token in CLOSE statement", "(103)");
+    resync();
+    return nullptr;
+  }
+  if (!sawFile)
+    d_.error(st->loc, "CLOSE requires a FILE ( f ) option in this stage", "(103)");
+  expect(Tok::Semi, "(102)");
   return st;
 }
 

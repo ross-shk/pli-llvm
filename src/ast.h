@@ -106,6 +106,7 @@ struct DeclItem {
   std::vector<DynMemberInfo> dynMembers;
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
+  bool fileAttr = false;         // DECLARE name FILE (rules 39,40): a named file
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
 };
@@ -130,6 +131,8 @@ struct Stmt {
               //            an alternate entry point into this procedure
     Allocate, // rule (87)  ALLOCATE based-allocate-item{,...}
     Free,     // rule (90)  FREE ( [reference ->] identifier ){,...}
+    Open,     // rule (100) OPEN open-optionslist{,...};
+    Close,    // rule (102) CLOSE close-optionslist{,...};
     Leave,    // (not in TR 25.084; modern LEAVE, rejected in M0)
   } kind = Null;
 
@@ -162,6 +165,13 @@ struct Stmt {
   // list-directed output is written into (PUT) or input is read from (GET);
   // null when the stream is SYSIN/SYSPRINT.
   ExprP stringTarget;
+  // FILE ( f ) option (rule 105) and OPEN/CLOSE FILE ( f ): the name of the
+  // FILE variable being named; resolved to `fileSym` by sema. For OPEN, the
+  // TITLE ('name') string and the INPUT/OUTPUT mode are also carried.
+  std::string fileIdent;
+  Symbol* fileSym = nullptr;
+  std::string openTitle;
+  bool openInput = false;
 
   std::vector<ExprP> args; // CALL arguments
 

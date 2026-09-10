@@ -71,6 +71,8 @@ private:
   StmtP parseAssignment();
   StmtP parseAllocate(); // ALLOCATE (rule 87)
   StmtP parseFree();     // FREE (rule 90)
+  StmtP parseOpen();     // OPEN (rules 100,101)
+  StmtP parseClose();    // CLOSE (rules 102,103)
   void parseProcOptions(Proc* p);
   bool parseDeclItem(DeclItem& item);
   // Parse the dimension + attribute tail shared by a declaration item and by a
@@ -96,6 +98,7 @@ private:
     bool fixed = false, floating = false, binary = false, decimal = false;
     bool character = false, bit = false, varying = false;
     bool pointer = false;
+    bool file = false; // FILE (rules 39,40): a named file variable
     int prec = -1, scale = 0, slen = -1;
   };
   // Consume one attribute word (FIXED, FLOAT, BINARY, DECIMAL, CHARACTER,

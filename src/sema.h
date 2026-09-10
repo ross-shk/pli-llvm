@@ -18,6 +18,8 @@ struct Symbol {
   bool isStatic = false;         // STATIC storage: an LLVM global
   bool implicit = false;         // created by the implicit-declaration rule
   bool isEntry = false;          // external C entry (DECLARE ... ENTRY): no body
+  bool fileAttr = false;         // FILE variable (rules 39,40): a named file
+  int fileSlot = -1;             // runtime slot index for a FILE variable (100-103)
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   std::string irName;            // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc* proc = nullptr;          // for ProcName
@@ -101,6 +103,10 @@ private:
   // Validate the STRING ( reference ) stream option (rule 105): the target must
   // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only.
   void checkStringTarget(Stmt* s, Scope* sc, Proc* p);
+  // Resolve and validate the FILE ( f ) stream option (rule 105) and the
+  // OPEN/CLOSE FILE ( f ): `f` must be a declared FILE variable. Resolves
+  // s->fileIdent to s->fileSym.
+  void checkFileTarget(Stmt* s, Scope* sc);
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);
@@ -155,6 +161,7 @@ private:
   Scope* rootScope_ = nullptr; // program scope: all external procedure names
   std::vector<Symbol*> storage_;
   std::vector<Symbol*> entries_;                  // external C entries, in declaration order
+  int nextFileSlot_ = 0;                          // next FILE variable slot index (100-103)
   std::set<std::string> procLabels_;              // GO TO targets in the current proc (rule 77)
   std::set<std::string> irNames_;                 // irNames in use, to disambiguate shadowing
   std::unordered_map<Stmt*, Scope*> beginScopes_; // BEGIN block -> its scope
