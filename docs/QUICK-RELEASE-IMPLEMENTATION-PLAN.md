@@ -32,7 +32,10 @@ receives no effort here and must not be reimplemented. Before starting a slice,
 remove any gaps that have since moved to implemented-and-tested in
 `GRAMMAR-COVERAGE.md` and reduce the estimate accordingly.
 
-## Phase 1 - Pareto release (18 engineer-weeks)
+`C-MIRROR-QUICK-RELEASE-SUBPLAN.md` provides a smaller optional path through
+the remaining features that have close standard C analogues.
+
+## Phase 1 - Pareto release (17 engineer-weeks)
 
 Implement these slices in dependency order. Work on decimal arithmetic and the
 stream runtime may proceed in parallel after aggregate descriptors stabilize.
@@ -40,7 +43,7 @@ stream runtime may proceed in parallel after aggregate descriptors stabilize.
 | Order | Slice | Effort | Deliverable |
 |---|---|---:|---|
 | QR1.1 | Remaining practical aggregate gaps | 3w | dynamic lower and multi-axis bounds, dynamic structure members and lengths, general dope-vector descriptors beyond current extent passing, whole aggregate expression values, and `INITIAL` for dynamic arrays and structures |
-| QR1.2 | Commercial fixed decimal | 4w | `FIXED DECIMAL(p,q)` storage, constants, arithmetic, comparison, assignment conversion, rounding, and decimal `GET`/`PUT`; overflow and conversion checks included |
+| QR1.2 | Remaining commercial fixed-decimal gaps | 3w | full precision conformance, overflow checks, remaining conversion boundaries, and decimal `GET`/`PUT`; existing fixed-decimal storage, constants, scaled arithmetic, comparison, assignment conversion, and rounding are excluded |
 | QR1.3 | Practical dynamic records | 2w | `POINTER`, based structures, `->`, `ADDR`, `NULL`, and common `ALLOCATE`/`FREE` forms for linked records |
 | QR1.4 | Recoverable conditions | 3w | enforce already-parsed condition prefixes and add `ON`, `REVERT`, and `SIGNAL` for `ERROR`, arithmetic, conversion, subscript, allocation, and common I/O conditions |
 | QR1.5 | Remaining practical stream and file I/O | 4w | `OPEN`/`CLOSE`; input; `FILE`, `STRING`, `LINE`, and `COPY` options; data-directed transmission; and common edit-directed numeric, character, spacing, line, and page items beyond existing `PUT SKIP/PAGE LIST` |
