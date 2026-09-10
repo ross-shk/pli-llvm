@@ -67,6 +67,13 @@ private:
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
   StmtP parsePut();
   StmtP parseGet();
+  // Edit-directed transmission (rule (108)): parse `EDIT ( { ( datalist )
+  // formatlist }••• )` into st->items/st->formats with st->edit set. Returns
+  // true on success; on error emits a diagnostic, resyncs, and returns false.
+  bool parseEditClause(Stmt* st);
+  // Parse one format item (rules (46)-(54)) into st->formats; returns false
+  // (after a diagnostic) on an unimplemented or malformed item.
+  bool parseFormatItem(Stmt* st);
   StmtP parseCall();
   StmtP parseAssignment();
   StmtP parseAllocate(); // ALLOCATE (rule 87)

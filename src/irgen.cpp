@@ -1389,33 +1389,37 @@ void IRGen::emitPut(HStmt* s) {
   // file's stream instead of SYSPRINT.
   if (s->fileSym)
     b_.CreateCall(runtimeFn("pli_put_select"), {i64(s->fileSym->fileSlot)});
-  for (auto& item : s->items) {
-    Val v = emitExpr(item.get());
-    switch (v.ty.k) {
-    case TK::Char:
-      b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
-      break;
-    case TK::Float:
-      b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
-      break;
-    case TK::Bit: {
-      llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-      b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
-      break;
-    }
-    case TK::FixedBin:
-    case TK::FixedDec:
-      b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
-      break;
-    case TK::Void:
-      break;
-    case TK::Struct:
-      // Whole-structure values are diagnosed in emitExpr (rule 127); a
-      // structure never reaches list-directed output as a value.
-      break;
-    case TK::Pointer:
-      d_.error(s->loc, "a POINTER value cannot be written with PUT LIST in this stage", "(110)");
-      break;
+  if (s->edit) {
+    emitPutEditItems(s);
+  } else {
+    for (auto& item : s->items) {
+      Val v = emitExpr(item.get());
+      switch (v.ty.k) {
+      case TK::Char:
+        b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
+        break;
+      case TK::Float:
+        b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
+        break;
+      case TK::Bit: {
+        llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+        b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
+        break;
+      }
+      case TK::FixedBin:
+      case TK::FixedDec:
+        b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+        break;
+      case TK::Void:
+        break;
+      case TK::Struct:
+        // Whole-structure values are diagnosed in emitExpr (rule 127); a
+        // structure never reaches list-directed output as a value.
+        break;
+      case TK::Pointer:
+        d_.error(s->loc, "a POINTER value cannot be written with PUT LIST in this stage", "(110)");
+        break;
+      }
     }
   }
   if (s->stringTarget)
@@ -1441,40 +1445,44 @@ void IRGen::emitGet(HStmt* s) {
   // file's stream instead of SYSIN.
   if (s->fileSym)
     b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
-  for (auto& item : s->items) {
-    HExpr* t = item.get();
-    const Type& ty = t->ty;
-    Val v;
-    switch (ty.k) {
-    case TK::FixedBin:
-    case TK::FixedDec:
-      v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
-      v.ty = Type::fixedBin(63, 0);
-      break;
-    case TK::Float:
-      v.reg = b_.CreateCall(runtimeFn("pli_get_list_float"), {});
-      v.ty = Type::flt(6);
-      break;
-    case TK::Bit: {
-      llvm::Value* b = b_.CreateCall(runtimeFn("pli_get_list_bit"), {});
-      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "gbit");
-      v.ty = Type::bit();
-      break;
+  if (s->edit) {
+    emitGetEditItems(s);
+  } else {
+    for (auto& item : s->items) {
+      HExpr* t = item.get();
+      const Type& ty = t->ty;
+      Val v;
+      switch (ty.k) {
+      case TK::FixedBin:
+      case TK::FixedDec:
+        v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
+        v.ty = Type::fixedBin(63, 0);
+        break;
+      case TK::Float:
+        v.reg = b_.CreateCall(runtimeFn("pli_get_list_float"), {});
+        v.ty = Type::flt(6);
+        break;
+      case TK::Bit: {
+        llvm::Value* b = b_.CreateCall(runtimeFn("pli_get_list_bit"), {});
+        v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "gbit");
+        v.ty = Type::bit();
+        break;
+      }
+      case TK::Char: {
+        // Read into a reusable entry buffer, then assign into the target.
+        llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
+        b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
+        v.ptr = buf;
+        v.len = i64(ty.len);
+        v.ty = ty;
+        break;
+      }
+      default:
+        d_.error(item->loc, "GET LIST of this type is not implemented in this stage", "(110)");
+        continue;
+      }
+      storeGetTarget(t, v, s->loc);
     }
-    case TK::Char: {
-      // Read into a reusable entry buffer, then assign into the target.
-      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
-      b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
-      v.ptr = buf;
-      v.len = i64(ty.len);
-      v.ty = ty;
-      break;
-    }
-    default:
-      d_.error(item->loc, "GET LIST of this type is not implemented in this stage", "(110)");
-      continue;
-    }
-    storeGetTarget(t, v, s->loc);
   }
   if (s->stringTarget)
     b_.CreateCall(runtimeFn("pli_string_get_close"), {});
@@ -1516,6 +1524,112 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
     return;
   }
   d_.error(loc, "GET LIST target is not assignable in this stage", "(110)");
+}
+
+// Edit-directed output (rule (108)): walk the format list, pairing each A/F
+// data format with the next data item and emitting the control (X/SKIP/PAGE/
+// LINE) items in order.
+void IRGen::emitPutEditItems(HStmt* s) {
+  llvm::Value* defW = i64(0);
+  llvm::Value* defD = i64(0);
+  size_t di = 0;
+  for (auto& f : s->formats) {
+    switch (f.kind) {
+    case HFormatItem::X: {
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      b_.CreateCall(runtimeFn("pli_put_edit_x"), {w});
+      break;
+    }
+    case HFormatItem::Skip: {
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_put_edit_skip"), {n});
+      break;
+    }
+    case HFormatItem::Page:
+      b_.CreateCall(runtimeFn("pli_put_edit_page"), {});
+      break;
+    case HFormatItem::Line: {
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_put_edit_line"), {n});
+      break;
+    }
+    case HFormatItem::A: {
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = emitExpr(item);
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      b_.CreateCall(runtimeFn("pli_put_edit_char"), {v.ptr, v.len, w});
+      break;
+    }
+    case HFormatItem::F: {
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = emitExpr(item);
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+      if (v.ty.k == TK::Float) {
+        b_.CreateCall(runtimeFn("pli_put_edit_float"), {v.reg, w, d});
+      } else {
+        llvm::Value* scale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
+        b_.CreateCall(runtimeFn("pli_put_edit_fixed"), {toI64(v), scale, w, d});
+      }
+      break;
+    }
+    }
+  }
+}
+
+// Edit-directed input (rule (108)): pair each A/F data format with the next
+// data item and emit the control (X/SKIP) items in order.
+void IRGen::emitGetEditItems(HStmt* s) {
+  llvm::Value* defW = i64(0);
+  size_t di = 0;
+  for (auto& f : s->formats) {
+    switch (f.kind) {
+    case HFormatItem::X: {
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      b_.CreateCall(runtimeFn("pli_get_edit_x"), {w});
+      break;
+    }
+    case HFormatItem::Skip: {
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_get_edit_skip"), {n});
+      break;
+    }
+    case HFormatItem::Page:
+    case HFormatItem::Line:
+      // Line control is not meaningful on input in this stage; ignored.
+      break;
+    case HFormatItem::A: {
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      const Type& ty = t->ty;
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gech");
+      b_.CreateCall(runtimeFn("pli_get_edit_char"), {buf, i64(ty.len), w});
+      Val v;
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeGetTarget(t, v, s->loc);
+      break;
+    }
+    case HFormatItem::F: {
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      Val v;
+      v.reg = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w});
+      v.ty = Type::flt(6);
+      storeGetTarget(t, v, s->loc);
+      break;
+    }
+    }
+  }
 }
 
 // Address of one call argument for a by-reference parameter (rule 4).

@@ -107,6 +107,10 @@ private:
   // OPEN/CLOSE FILE ( f ): `f` must be a declared FILE variable. Resolves
   // s->fileIdent to s->fileSym.
   void checkFileTarget(Stmt* s, Scope* sc);
+  // Validate edit-directed transmission (rule (108)): type the format widths,
+  // and check that the data items pair one-to-one with the data (A/F) formats,
+  // and for GET that each item is an assignable reference of a matching type.
+  void checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet);
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);

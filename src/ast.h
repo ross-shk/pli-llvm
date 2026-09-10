@@ -76,6 +76,16 @@ struct DefinedSub {
   long long add = 0;  // affine iSUB offset (c)
 };
 
+// One FORMAT item for edit-directed I/O (rules (48)-(54)): a data format
+// (A character, F fixed) that transmits the next data item, or a control format
+// (X spacing, SKIP/PAGE/LINE line control) that acts without consuming data.
+// F(w,d): w = field width, d = fractional digits; A(w)/X(w): w = field width.
+struct FormatItem {
+  enum Kind { A, F, X, Skip, Page, Line } kind = A;
+  ExprP w; // field width
+  ExprP d; // F: fractional digits
+};
+
 struct DeclItem {
   std::string name;
   Type ty{};
@@ -161,6 +171,10 @@ struct Stmt {
   bool skip = false, page = false;
   ExprP skipCount;
   std::vector<ExprP> items;
+  // Edit-directed transmission (rule (108)): when true, the data items are
+  // written/read through the paired format list instead of list-directed.
+  bool edit = false;
+  std::vector<FormatItem> formats; // one per data item or control action
   // STRING ( reference ) option (rule 105): the character variable that the
   // list-directed output is written into (PUT) or input is read from (GET);
   // null when the stream is SYSIN/SYSPRINT.

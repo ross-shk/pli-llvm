@@ -210,6 +210,15 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->stringTarget = lowerExpr(s->stringTarget.get());
   for (const auto& it : s->items)
     h->items.push_back(lowerExpr(it.get()));
+  // Edit-directed format list (rule (108)): lower each item's width/decimals.
+  h->edit = s->edit;
+  for (const auto& f : s->formats) {
+    HFormatItem hf;
+    hf.kind = static_cast<HFormatItem::Kind>(f.kind);
+    hf.w = lowerExpr(f.w.get());
+    hf.d = lowerExpr(f.d.get());
+    h->formats.push_back(std::move(hf));
+  }
 
   // OPEN/CLOSE and the FILE ( f ) stream option (rules 100-103,105): carry the
   // resolved FILE symbol and the OPEN options across the lowering.
