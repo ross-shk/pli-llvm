@@ -567,9 +567,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                        "(13)");
             if (item.sym->isStatic)
               d_.error(item.loc, "a dynamic array must be AUTOMATIC in this stage", "(13)");
-            if (!item.initItems.empty())
-              d_.error(item.loc, "INITIAL on a dynamic array is not implemented in this stage",
-                       "(26)");
+            if (!item.initItems.empty()) {
+              // INITIAL on a dynamic array (rule (26)): the extent is runtime, so
+              // the itemlist cannot be count-checked here; expand it into the flat
+              // element list and store it into the runtime buffer at block entry.
+              std::vector<Expr*> elems;
+              expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
+              item.sym->initElems = std::move(elems);
+            }
           } else if (!item.initItems.empty()) {
             std::vector<Expr*> elems;
             expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);

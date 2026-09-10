@@ -1,0 +1,56 @@
+ /* INITIAL on a dynamic (runtime-extent) array (rules (13),(26)): an itemlist
+    of constants fills the runtime-sized element buffer at block entry. The
+    itemlist is not compile-time count-checked (the extent is runtime); only the
+    supplied elements are set — a list shorter than the extent leaves the rest
+    uninitialized (AUTOMATIC semantics), and a longer list cannot overflow the
+    buffer (it is pre-sized to hold the whole itemlist). Iteration factors, a
+    dynamic multi-axis array (flat row-major), and re-run on every activation
+    are served. Bounds are passed as parameters (the entry-time value the
+    dynamic extent reads). */
+ dyn_init_test: procedure options(main);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    check: procedure(n); /* a full matching itemlist with an iteration factor */
+       declare n fixed bin(31);
+       declare a(n) fixed bin(31) init((2)(7, 8));
+       if a(1) ^= 7 then fails = fails + 1;
+       if a(2) ^= 8 then fails = fails + 1;
+       if a(3) ^= 7 then fails = fails + 1;
+       if a(4) ^= 8 then fails = fails + 1;
+    end check;
+    call check(4);
+
+    short: procedure(n); /* a list shorter than the extent: the supplied set only */
+       declare n fixed bin(31);
+       declare b(n) fixed bin(31) init(1, 2);
+       if b(1) ^= 1 then fails = fails + 1;
+       if b(2) ^= 2 then fails = fails + 1;
+    end short;
+    call short(3);
+
+    multi: procedure(n); /* dynamic multi-axis fills flat row-major */
+       declare n fixed bin(31);
+       declare c(n, 3) fixed bin(31) init(10, 20, 30, 40, 50, 60);
+       if c(1,1) ^= 10 then fails = fails + 1;
+       if c(1,2) ^= 20 then fails = fails + 1;
+       if c(1,3) ^= 30 then fails = fails + 1;
+       if c(2,1) ^= 40 then fails = fails + 1;
+       if c(2,2) ^= 50 then fails = fails + 1;
+       if c(2,3) ^= 60 then fails = fails + 1;
+    end multi;
+    call multi(2);
+
+    rerun: procedure(n); /* INITIAL runs on every activation (AUTOMATIC) */
+       declare n fixed bin(31);
+       declare d(n) fixed bin(31) init(4, 5);
+       if d(1) ^= 4 then fails = fails + 1;
+       if d(2) ^= 5 then fails = fails + 1;
+       d(1) = 0;
+    end rerun;
+    call rerun(2);
+    call rerun(2);
+
+    if fails = 0 then put skip list('PASS dyn_init');
+    else put skip list('FAIL dyn_init: fails =', fails);
+ end dyn_init_test;

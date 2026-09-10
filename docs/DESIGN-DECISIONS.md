@@ -1558,3 +1558,36 @@ not compile-time); supporting whole-structure copy of a struct with a dynamic
 member (needs deep copy of each buffer, deferred); a dynamic member of an array
 of structures `arr(i).v(n)` (member buffer per element not yet served); `LIKE`
 of a struct with a dynamic member is diagnosed, not deep-copied.
+
+## ADR-061 — `INITIAL` on a dynamic array: fill the runtime buffer at entry
+
+**Context.** ADR-044 serves an `INITIAL` itemlist on a **fixed-size** array by
+expanding it (sema) into `sym->initElems` and storing one constant per element;
+a count that does not match the extent is diagnosed at compile time. ADR-050+
+serve dynamic (runtime-extent) AUTOMATIC arrays as a bare runtime-sized alloca,
+but `INITIAL` on a dynamic array was still gated as rule (26) — the itemlist
+cannot be count-checked because the extent is runtime.
+
+**Decision.** `INITIAL` on a dynamic AUTOMATIC array is served by expanding the
+itemlist into `sym->initElems` exactly as for a fixed array, but with **no
+compile-time count check** (the extent is runtime). At block entry, `emitInitials`
+GEPs each constant into its slot of the runtime-sized element buffer, straight
+line — no loop — so it re-runs on every activation (AUTOMATIC semantics). To keep
+a longer-than-extent itemlist from overflowing the buffer, `allocaLocals` pass 2
+pre-sizes the alloca to the larger of the runtime extent and the itemlist length;
+the logical extent used for bounds checks (`dynUb_` / `SUBSCRIPTRANGE` / `DIM`)
+is unchanged. A dynamic lower bound and a dynamic first axis stay served by the
+existing paths (ADR-058/059); multi-axis and structure-member dynamic arrays fill
+the same flat row-major buffer.
+
+**Consequences.** `tests/core/dyn_init.pli` covers a full matching itemlist with
+an iteration factor, a list shorter than the extent (only the supplied elements
+set; the rest stay uninitialized per AUTOMATIC semantics), a dynamic multi-axis
+array filling flat row-major, and re-run on every activation; `make test` stays
+green. `bad_dynamic_array.pli` no longer rejects `INITIAL` on a dynamic array and
+now rejects only the multi-axis form.
+
+**Rejected.** Compile-time count-checking of a dynamic itemlist (the extent is
+runtime); zero-filling the rest of a short itemlist (AUTOMATIC leaves it
+uninitialized, matching scalar/array semantics); a loop for the store (the
+itemlist is a fixed constant sequence, straight-line GEPs are leaner).
