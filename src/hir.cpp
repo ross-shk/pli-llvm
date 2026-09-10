@@ -469,6 +469,8 @@ const char* stmtKind(HStmt::Kind k) {
     return "DoIter";
   case HStmt::Put:
     return "Put";
+  case HStmt::Get:
+    return "Get";
   case HStmt::CallS:
     return "Call";
   case HStmt::Return:
@@ -548,6 +550,16 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     os << " " << s->name;
     break;
   case HStmt::Put: {
+    os << " [";
+    for (size_t i = 0; i < s->items.size(); ++i) {
+      if (i)
+        os << ", ";
+      printExpr(os, s->items[i].get(), ind);
+    }
+    os << "]";
+    break;
+  }
+  case HStmt::Get: {
     os << " [";
     for (size_t i = 0; i < s->items.size(); ++i) {
       if (i)

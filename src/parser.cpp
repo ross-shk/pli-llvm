@@ -551,11 +551,8 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     expect(Tok::Semi, "(85)");
     return st;
   }
-  if (kw("GET")) {
-    d_.error(cur().loc, "GET (stream input) is not implemented in this stage", "(104)");
-    resync();
-    return nullptr;
-  }
+  if (kw("GET"))
+    return parseGet();
   if (kw("GO") && peek().kind == Tok::Word && peek().isWord("TO")) {
     // GO TO label ;                                        rule (77)
     auto st = std::make_unique<Stmt>();
@@ -1412,6 +1409,64 @@ StmtP Parser::parsePut() {
   }
   expect(Tok::Semi, "(104)");
   (void)sawData;
+  return st;
+}
+
+// stream-io-statement ::= GET stream-optionslist ;    rules (104)-(109)
+// CM3 serves the list-directed form: GET [SKIP] LIST (datalist); reading scalar
+// values from SYSIN. FILE/STRING/EDIT/DATA/COPY/LINE/PAGE stay QR2.5.
+StmtP Parser::parseGet() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Get;
+  st->loc = cur().loc;
+  advance(); // GET
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("SKIP")) {
+      advance();
+      st->skip = true;
+      if (eat(Tok::LParen)) {
+        st->skipCount = parseExpr();
+        expect(Tok::RParen, "(105)");
+      }
+      continue;
+    }
+    if (atWord("LIST")) {
+      advance();
+      if (expect(Tok::LParen, "(109)")) {
+        if (!at(Tok::RParen)) {
+          for (;;) {
+            st->items.push_back(parseExpr());
+            if (!eat(Tok::Comma))
+              break;
+          }
+        }
+        expect(Tok::RParen, "(109)");
+      }
+      continue;
+    }
+    if (atWord("FILE")) {
+      advance();
+      SourceLoc l = cur().loc;
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word))
+          advance();
+        expect(Tok::RParen, "(105)");
+      }
+      d_.warn(l, "FILE option ignored: this stage reads from SYSIN only", "(105)");
+      continue;
+    }
+    if (atWord("EDIT") || atWord("DATA") || atWord("STRING") || atWord("COPY") || atWord("LINE") ||
+        atWord("PAGE")) {
+      d_.error(cur().loc, "GET option " + cur().text + " is not implemented in this stage",
+               "(105)");
+      resync();
+      return nullptr;
+    }
+    d_.error(cur().loc, "unexpected token in GET statement", "(105)");
+    resync();
+    return nullptr;
+  }
+  expect(Tok::Semi, "(104)");
   return st;
 }
 

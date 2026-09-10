@@ -304,3 +304,54 @@ char *pli_alloc(long long n) {
 
 /* FREE (rule 90): release the heap block addressed by a based pointer. */
 void pli_free(char *p) { free(p); }
+
+/* List-directed input (rule 109): read the next whitespace/comma-delimited
+ * token from SYSIN (stdin) into buf (nul-terminated). Returns 0 at end of
+ * input. */
+static int get_token(char *buf, size_t cap) {
+  int c;
+  do {
+    c = getchar();
+  } while (c != EOF && (c == ' ' || c == '\t' || c == '\n' || c == '\r'));
+  if (c == EOF)
+    return 0;
+  size_t n = 0;
+  while (c != EOF && c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != ',') {
+    if (n + 1 < cap)
+      buf[n++] = (char)c;
+    c = getchar();
+  }
+  buf[n] = '\0';
+  return 1;
+}
+
+long long pli_get_list_fixed(void) {
+  char tok[64];
+  if (!get_token(tok, sizeof tok))
+    return 0;
+  return strtoll(tok, NULL, 10);
+}
+
+double pli_get_list_float(void) {
+  char tok[64];
+  if (!get_token(tok, sizeof tok))
+    return 0.0;
+  return strtod(tok, NULL);
+}
+
+void pli_get_list_char(char *dst, long long cap) {
+  char tok[256];
+  get_token(tok, sizeof tok);
+  long long i = 0;
+  for (; i < cap && tok[i]; ++i)
+    dst[i] = tok[i];
+  for (; i < cap; ++i)
+    dst[i] = ' ';
+}
+
+unsigned char pli_get_list_bit(void) {
+  char tok[16];
+  if (!get_token(tok, sizeof tok))
+    return 0;
+  return tok[0] == '1' ? 1 : 0;
+}

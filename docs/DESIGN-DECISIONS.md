@@ -1726,3 +1726,32 @@ the `pli_rt_abi.def` ABI so the C and IR signatures cannot drift, cf. ADR-002);
 reusing the based structure's own `BASED` pointer for `ALLOCATE SET` (SET may
 name any pointer); serving the `IN (AREA)` option, which needs a runtime
 sub-allocator.
+
+## ADR-066 — GET LIST list-directed input from SYSIN
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs list-directed input, the
+input counterpart to the existing `PUT LIST`. The `GET` statement (rules
+104-109) was diagnosed unimplemented citing rule (104).
+
+**Decision.** `GET [SKIP] LIST (datalist);` reads list-directed values from SYSIN
+(stdin) into the data-list references, which sema requires to be assignable
+scalar variables (an array element, a structure member, or a plain variable),
+not constants or procedures (rule 110). `GET` mirrors `PUT`: it is a
+`Stmt::Get`/`HStmt::Get` statement reusing the `items` data list. Four new
+runtime entries (`pli_get_list_fixed/float/char/bit` in `pli_rt_abi.def`) read a
+whitespace/comma-delimited token from stdin and parse it as i64, double, a
+blank-padded character field, or a bit. `emitGet` produces a value of the item's
+type and stores it with the same target-addressing as an assignment
+(`storeGetTarget`); scaled FIXED DECIMAL input is read as a plain integer and
+converted, and `GET` of a CHARACTER member or array element is diagnosed (the
+member/array-element character store paths are not served, matching assignment).
+
+**Consequences.** `tests/driver/get.sh` compiles a program that `GET LIST`s a
+pair of FIXED, a FLOAT, and a CHARACTER value, verifies each, and prints PASS;
+`tests/core/bad_get.pli` rejects reading into a constant; `make test` and
+`make check` stay green.
+
+**Rejected.** Using C `scanf` directly in emitted IR (kept behind the
+`pli_*` ABI so signatures cannot drift, cf. ADR-002); supporting `FILE`/`STRING`
+sources, `EDIT`/`DATA` specifications, `COPY`, `LINE`, or `PAGE` in this stage
+(QR2.5); list-directed `DO`-repetition data-list elements (rule 111).

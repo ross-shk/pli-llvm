@@ -103,6 +103,10 @@ private:
   void emitDoWhile(HStmt* s);
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
+  void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
+  // Store a list-directed input value into a data-list reference (the same
+  // target-addressing as an assignment's left-hand side).
+  void storeGetTarget(HExpr* t, const Val& v, SourceLoc loc);
   void emitCall(HStmt* s);
   void emitAllocate(HStmt* s); // ALLOCATE (rule 87)
   void emitFree(HStmt* s);     // FREE (rule 90)
