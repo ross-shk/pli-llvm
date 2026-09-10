@@ -489,6 +489,13 @@ void IRGen::allocaLocals(HProc* p) {
       rest *= (s->ty.dims[k].ub - s->ty.dims[k].lb + 1);
     if (rest != 1)
       extent = b_.CreateMul(extent, i64(rest), "extall");
+    // An INITIAL itemlist (rule 26) is stored at block entry; a list longer than
+    // the runtime extent cannot be diagnosed at compile time, so size the buffer
+    // to hold it too (the logical extent used for bounds checks is unchanged).
+    long long ninit = (long long)s->initElems.size();
+    if (ninit > 0)
+      extent =
+          b_.CreateSelect(b_.CreateICmpUGT(extent, i64(ninit), "maxc"), extent, i64(ninit), "max");
     llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".dyn");
     symAddr_[s] = buf;
     if (s->dynUb)
@@ -559,6 +566,18 @@ void IRGen::emitInitials(HProc* p) {
   for (HStmt* st : decls) {
     for (auto& item : st->decls) {
       Symbol* sym = item.sym;
+      // INITIAL on a dynamic array (rule 26): the element buffer is a bare
+      // runtime-sized alloca (allocaLocals pass 2), pre-sized to hold the whole
+      // itemlist, so store each value into its slot straight-line.
+      if (sym && sym->ty.isArray() && !sym->initElems.empty() && sym->ty.isDynamic()) {
+        const Type& et = sym->ty.elementType();
+        int i = 0;
+        for (Expr* e : sym->initElems) {
+          llvm::Value* p = b_.CreateGEP(llvmTy(et), symAddr_[sym], {i64(i++)}, "init.el");
+          storeScalarTo(p, et, initValue(et, e));
+        }
+        continue;
+      }
       // INITIAL on an AUTOMATIC array (rule 26): store each element constant
       // into its slot; the array is a [N x elemTy] alloca.
       if (sym && sym->ty.isArray() && !sym->initElems.empty()) {

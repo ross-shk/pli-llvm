@@ -68,7 +68,8 @@ private:
     struct Hash {
       size_t operator()(const MemberDyn& k) const {
         size_t h = std::hash<Symbol*>{}(k.sym);
-        for (unsigned u : k.path) h = h * 31 + u;
+        for (unsigned u : k.path)
+          h = h * 31 + u;
         return h;
       }
     };
