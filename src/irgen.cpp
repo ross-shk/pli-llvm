@@ -13,6 +13,35 @@
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+// 10^k as a compile-time integer (k >= 0); used to rescale FIXED DECIMAL
+// values whose stored integer is scaled by 10^q (ADR-006).
+static long long pliPow10(int k) {
+  long long p = 1;
+  for (int i = 0; i < k; ++i)
+    p *= 10;
+  return p;
+}
+
+// Compile-time scale reduction of a FIXED DECIMAL stored integer v by 10^k,
+// rounding half away from zero (matches the runtime rescale in convert).
+static long long pliRescaleDown(long long v, int k) {
+  long long p = pliPow10(k);
+  long long sign = v < 0 ? -1 : 1;
+  return (v + pliPow10(k - 1) * 5 * sign) / p;
+}
+
+// Numeric value of a constant INITIAL expression (rule 26). A DECIMAL literal
+// holds its value scaled by 10^q, so divide back to the true value.
+static double iniNumeric(const Expr* e) {
+  if (!e)
+    return 0;
+  if (e->kind == Expr::FltLit)
+    return e->fval;
+  if (e->kind == Expr::DecLit)
+    return (double)e->ival / (double)pliPow10(e->decScale);
+  return (double)e->ival;
+}
+
 llvm::Type* IRGen::llvmTy(const Type& t) {
   // An array is a [N x elemTy] aggregate (rules (12),(13)); handled here so a
   // struct member that is itself an array (2 A(10) ...) lays out correctly.
@@ -292,17 +321,21 @@ llvm::Constant* IRGen::scalarInitConstant(const Type& t, const Expr* ini) {
   case TK::FixedBin:
   case TK::FixedDec: {
     long long v = 0;
-    if (ini)
-      v = ini->kind == Expr::FltLit   ? (long long)ini->fval
-          : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
-                                      : ini->ival;
+    if (ini) {
+      if (ini->kind == Expr::DecLit) {
+        v = ini->ival;
+        int dq = t.scale - ini->decScale; // rescale to the target type's scale
+        v = dq > 0 ? v * pliPow10(dq) : dq < 0 ? pliRescaleDown(v, -dq) : v;
+      } else {
+        v = ini->kind == Expr::FltLit   ? (long long)ini->fval
+            : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
+                                        : ini->ival;
+      }
+    }
     return llvm::ConstantInt::get(llvmTy(t), v, true);
   }
   case TK::Float: {
-    double v = 0;
-    if (ini)
-      v = ini->kind == Expr::FltLit ? ini->fval : (double)ini->ival;
-    return llvm::ConstantFP::get(b_.getDoubleTy(), v);
+    return llvm::ConstantFP::get(b_.getDoubleTy(), iniNumeric(ini));
   }
   case TK::Bit: {
     int v = 0;
@@ -337,15 +370,19 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
   v.ty = t;
   switch (t.k) {
   case TK::Float:
-    v.reg = flt(e->kind == Expr::FltLit ? e->fval : (double)e->ival);
+    v.reg = flt(iniNumeric(e));
     break;
   case TK::Bit:
     v.reg = b_.getInt1(e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
                                                : (e->ival != 0 || e->fval != 0));
     break;
   default: { // Fixed
-    v.reg = llvm::ConstantInt::get(llvmTy(t),
-                                   e->kind == Expr::FltLit ? (long long)e->fval : e->ival, true);
+    long long iv = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
+    if (e->kind == Expr::DecLit) {
+      int dq = t.scale - e->decScale; // rescale to the target type's scale
+      iv = dq > 0 ? iv * pliPow10(dq) : dq < 0 ? pliRescaleDown(iv, -dq) : iv;
+    }
+    v.reg = llvm::ConstantInt::get(llvmTy(t), iv, true);
     break;
   }
   }
@@ -508,8 +545,7 @@ void IRGen::emitInitials(HProc* p) {
       v.ty = item.sym->ty;
       switch (item.sym->ty.k) {
       case TK::Float: {
-        double d = e->kind == Expr::FltLit ? e->fval : (double)e->ival;
-        v.reg = flt(d);
+        v.reg = flt(iniNumeric(e));
         break;
       }
       case TK::Bit: {
@@ -528,6 +564,10 @@ void IRGen::emitInitials(HProc* p) {
       }
       default: { // Fixed
         long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
+        if (e->kind == Expr::DecLit) {
+          int dq = item.sym->ty.scale - e->decScale; // rescale to the target scale
+          val = dq > 0 ? val * pliPow10(dq) : dq < 0 ? pliRescaleDown(val, -dq) : val;
+        }
         v.reg = llvm::ConstantInt::get(llvmTy(item.sym->ty), val, true);
         break;
       }
@@ -1783,22 +1823,58 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (srcFloat && dstFloat)
     return v;
   if (srcFloat && !dstFloat) { // FLOAT -> FIXED truncates toward zero
-    out.reg = b_.CreateFPToSI(v.reg, llvmTy(dst), "cvt");
+    // A FIXED DECIMAL target holds the value scaled by 10^q (ADR-006), so
+    // scale the float up first.
+    llvm::Value* f = v.reg;
+    if (dst.k == TK::FixedDec && dst.scale > 0)
+      f = b_.CreateFMul(f, flt((double)pliPow10(dst.scale)), "fsc");
+    out.reg = b_.CreateFPToSI(f, llvmTy(dst), "cvt");
     return out;
   }
   if (!srcFloat && dstFloat) {
-    out.reg = b_.CreateSIToFP(v.reg, b_.getDoubleTy(), "cvt");
+    // A FIXED DECIMAL source holds the value scaled by 10^q; divide back to
+    // the true value before converting to float.
+    llvm::Value* f = b_.CreateSIToFP(v.reg, b_.getDoubleTy(), "cvt");
+    if (v.ty.k == TK::FixedDec && v.ty.scale > 0)
+      f = b_.CreateFDiv(f, flt((double)pliPow10(v.ty.scale)), "fds");
+    out.reg = f;
     return out;
   }
-  // FIXED -> FIXED: adjust width
-  if (v.ty.intBits() == dst.intBits()) {
-    out.reg = v.reg;
+  // FIXED -> FIXED. A 10^q rescale applies only when a FIXED DECIMAL value
+  // (whose stored integer is scaled by 10^q) is involved (ADR-006); FIXED
+  // BINARY scale is 2-based and stays untouched by this feature. Rescale to
+  // a DECIMAL target by 10^(dst.scale - src.scale); a scaled DECIMAL source
+  // converting to a BINARY target reduces to its integer part.
+  if (v.ty.isFixed() && dst.isFixed()) {
+    bool rescale = dst.k == TK::FixedDec && v.ty.scale != dst.scale;
+    if (!rescale && (v.ty.k == TK::FixedDec && v.ty.scale > 0 && dst.k != TK::FixedDec))
+      rescale = true; // DECIMAL source -> BINARY target: drop the fraction
+    if (!rescale) {
+      if (v.ty.intBits() == dst.intBits()) {
+        out.reg = v.reg;
+        return out;
+      }
+      if (v.ty.intBits() < dst.intBits())
+        out.reg = b_.CreateSExt(v.reg, llvmTy(dst), "cvt");
+      else
+        out.reg = b_.CreateTrunc(v.reg, llvmTy(dst), "cvt");
+      return out;
+    }
+    llvm::Value* r = b_.CreateSExt(v.reg, b_.getInt64Ty(), "res");
+    int dq = dst.k == TK::FixedDec ? dst.scale - v.ty.scale : -v.ty.scale;
+    if (dq > 0) {
+      r = b_.CreateMul(r, i64(pliPow10(dq)), "res");
+    } else {
+      int k = -dq;
+      llvm::Value* div = i64(pliPow10(k));
+      // round half away from zero: r + 5*10^(k-1)*sign
+      llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i64(0), "sgn"), i64(-1), i64(1));
+      llvm::Value* adj = b_.CreateMul(i64(pliPow10(k - 1) * 5), sign, "adj");
+      r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+    }
+    out.reg = (unsigned)dst.intBits() == 64 ? r : b_.CreateTrunc(r, llvmTy(dst), "cvt");
     return out;
   }
-  if (v.ty.intBits() < dst.intBits())
-    out.reg = b_.CreateSExt(v.reg, llvmTy(dst), "cvt");
-  else
-    out.reg = b_.CreateTrunc(v.reg, llvmTy(dst), "cvt");
   return out;
 }
 
@@ -1842,6 +1918,10 @@ Val IRGen::emitExpr(HExpr* e) {
   case HExpr::Convert:
     return convert(emitExpr(e->a.get()), e->convTo, e->loc);
   case HExpr::IntLit:
+    v.ty = e->ty;
+    v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
+    return v;
+  case HExpr::DecLit:
     v.ty = e->ty;
     v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
     return v;
@@ -2103,8 +2183,20 @@ Val IRGen::emitExpr(HExpr* e) {
                       : e->ty;
   if (!isCmp && (op == Tok::Slash || op == Tok::Power))
     common = Type::flt(e->ty.prec);
-  Val av = convert(a, common, e->loc);
-  Val bv = convert(b, common, e->loc);
+  Val av, bv;
+  if (op == Tok::Star && common.isFixed()) {
+    // A product's scale is the sum of the operand scales (ADR-006); multiply
+    // the raw scaled integers without first rescaling either operand.
+    Type wa = common;
+    wa.scale = a.ty.isFixed() ? a.ty.scale : 0;
+    Type wb = common;
+    wb.scale = b.ty.isFixed() ? b.ty.scale : 0;
+    av = convert(a, wa, e->loc);
+    bv = convert(b, wb, e->loc);
+  } else {
+    av = convert(a, common, e->loc);
+    bv = convert(b, common, e->loc);
+  }
   const bool flt = common.k == TK::Float;
 
   if (isCmp) {
@@ -2263,6 +2355,13 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* i = b_.CreateFPToSI(a.reg, b_.getInt64Ty(), "trunci");
       v.ty = e->ty;
       v.reg = b_.CreateSIToFP(i, b_.getDoubleTy(), "truncd");
+    } else if (a.ty.k == TK::FixedDec && a.ty.scale > 0) {
+      // Drop fractional digits toward zero: r = (r / 10^q) * 10^q (rule 135).
+      llvm::Value* i = toI64(a);
+      llvm::Value* p = i64(pliPow10(a.ty.scale));
+      llvm::Value* t = b_.CreateSDiv(i, p, "trunci");
+      v.ty = a.ty;
+      v.reg = b_.CreateTrunc(b_.CreateMul(t, p, "truncd"), llvmTy(a.ty), "trunc");
     } else {
       v = a;
     }
@@ -2310,8 +2409,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val a = emitExpr(e->args[0].get());
     Val b = emitExpr(e->args[1].get());
     const Type& common = e->ty;
-    Val av = convert(a, common, e->loc);
-    Val bv = convert(b, common, e->loc);
+    Val av, bv;
+    if (common.isFixed()) {
+      // Product scale is the sum of the operand scales (ADR-006): multiply
+      // the raw scaled integers without rescaling either operand first.
+      Type wa = common;
+      wa.scale = a.ty.isFixed() ? a.ty.scale : 0;
+      Type wb = common;
+      wb.scale = b.ty.isFixed() ? b.ty.scale : 0;
+      av = convert(a, wa, e->loc);
+      bv = convert(b, wb, e->loc);
+    } else {
+      av = convert(a, common, e->loc);
+      bv = convert(b, common, e->loc);
+    }
     llvm::Value* r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
                                            : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;

@@ -184,6 +184,7 @@ Token Lexer::lexNumber() {
       }
       t.text += exp;
       t.isFloat = true;
+      t.hasExp = true;
     } else {
       p_ = save;
       line_ = sl;

@@ -52,6 +52,7 @@ struct Token {
   SourceLoc loc{};
   bool binaryRadix = false; // Number had the B suffix (rule 136)
   bool isFloat = false;
+  bool hasExp = false; // Number had an E exponent (a FLOAT constant, rule 135)
 
   bool isWord(std::string_view w) const { return kind == Tok::Word && text == w; }
 };

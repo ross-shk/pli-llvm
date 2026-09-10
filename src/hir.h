@@ -28,6 +28,7 @@ struct HExpr {
   enum Kind {
     IntLit,
     FltLit,
+    DecLit, // FIXED DECIMAL constant (rule 135), exact
     CharLit,
     BitLit, // literals
     VarRef,
@@ -43,6 +44,8 @@ struct HExpr {
 
   long long ival = 0;
   double fval = 0;
+  int decScale = 0;                 // DecLit: fraction digits q (the 10^q scaling of ival)
+  int decPrec = 0;                  // DecLit: total significant digits p
   std::string sval;                 // CharLit / BitLit payload
   std::string name;                 // VarRef / Call target
   std::vector<std::string> path;    // VarRef: member qualifiers (S.A.B -> {"A","B"})

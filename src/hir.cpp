@@ -54,6 +54,8 @@ HExprP lowerExprBase(const Expr* e) {
   h->ty = e->ty;
   h->ival = e->ival;
   h->fval = e->fval;
+  h->decScale = e->decScale;
+  h->decPrec = e->decPrec;
   h->sval = e->sval;
   h->name = e->name;
   h->path = e->path;
@@ -93,11 +95,23 @@ HExprP lowerCallExpr(const Expr* e) {
   HExpr* he = h.get();
   const std::string& n = e->name;
 
-  if (n == "MIN" || n == "MAX" || n == "MOD" || n == "MULTIPLY" || n == "DIVIDE") {
+  if (n == "MIN" || n == "MAX" || n == "MOD" || n == "DIVIDE") {
     if (he->args.size() >= 2) {
       const Type& common = e->ty;
       he->args[0] = convIf(std::move(he->args[0]), common);
       he->args[1] = convIf(std::move(he->args[1]), common);
+    }
+  } else if (n == "MULTIPLY") {
+    // A product's scale is the sum of the operand scales (ADR-006); match each
+    // operand's width without rescaling it to the product scale first.
+    if (he->args.size() >= 2) {
+      const Type& common = e->ty;
+      Type a0 = common;
+      a0.scale = he->args[0]->ty.isFixed() ? he->args[0]->ty.scale : 0;
+      Type a1 = common;
+      a1.scale = he->args[1]->ty.isFixed() ? he->args[1]->ty.scale : 0;
+      he->args[0] = convIf(std::move(he->args[0]), a0);
+      he->args[1] = convIf(std::move(he->args[1]), a1);
     }
   } else if (n == "PRECISION") {
     if (!he->args.empty())
@@ -278,6 +292,11 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
   switch (e->kind) {
   case HExpr::IntLit:
     os << "IntLit(" << e->ival << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::DecLit:
+    os << "DecLit(" << e->ival << ",q" << e->decScale << ":";
     printType(os, e->ty);
     os << ")";
     break;
