@@ -44,7 +44,8 @@ struct Expr {
       path; // VarRef: member qualifiers after the base name (S.A.B -> {"A","B"})
   std::vector<unsigned> memberPath; // VarRef: resolved LLVM struct field indices (set by sema)
   Symbol* sym = nullptr;            // resolved by sema
-  Tok op = Tok::Eof;                // Binary / Unary operator
+  ExprP locPtr;      // VarRef: the locator pointer of a P->X reference (rule 124); null = none
+  Tok op = Tok::Eof; // Binary / Unary operator
   ExprP a, b;
   std::vector<ExprP> args; // Call
 };
@@ -93,6 +94,7 @@ struct DeclItem {
   std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
+  std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
   // A dynamic (runtime-extent) array that is a structure member (rule 13): its
   // field path (the indices memberAddr walks) and its bound expressions. The
   // member's DeclItem still owns dynBounds/dynLbBounds; these reference them.

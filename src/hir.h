@@ -51,7 +51,8 @@ struct HExpr {
   std::vector<std::string> path;    // VarRef: member qualifiers (S.A.B -> {"A","B"})
   std::vector<unsigned> memberPath; // VarRef: resolved LLVM struct field indices (sema)
   Symbol* sym = nullptr;            // resolved by sema
-  Tok op = Tok::Eof;                // Binary / Unary operator
+  HExprP locPtr;     // VarRef: the locator pointer of a P->X reference (rule 124); null = none
+  Tok op = Tok::Eof; // Binary / Unary operator
   HExprP a, b;
   std::vector<HExprP> args; // Call
 

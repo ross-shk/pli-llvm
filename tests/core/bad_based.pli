@@ -1,0 +1,9 @@
+ /* The right side of '->' must be a BASED variable (rule 124); qualifying a
+    non-based structure through a locator is diagnosed, never silently treated
+    as based storage. */
+ bad_based: procedure options(main);
+    declare p pointer;
+    declare 1 y,
+           2 a fixed bin(31);
+    p -> y.a = 5;
+ end bad_based;

@@ -521,6 +521,20 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             }
           }
         }
+        // BASED (rule 25): the declared item overlays the storage addressed by
+        // a POINTER variable, so it has no storage of its own. The base must be
+        // a POINTER variable/parameter in scope; a based structure member is
+        // addressed through the pointer value at every reference.
+        if (!item.basedBase.empty()) {
+          Symbol* base = lookup(sc, item.basedBase);
+          if (!base || (base->kind != Symbol::Var && base->kind != Symbol::Param) ||
+              !base->ty.isPointer())
+            d_.error(item.loc,
+                     "BASED base '" + item.basedBase + "' is not a POINTER variable in this scope",
+                     "(25)");
+          else
+            item.sym->basedBase = base;
+        }
         // Only scalar (numeric/BIT) element arrays are served in this stage;
         // character element arrays are diagnosed, never silently miscompiled
         // (invariant 2). INITIAL on an array (rule 26) expands its itemlist
@@ -614,8 +628,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         }
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
-        // BEGIN blocks too, hence the Proc* here.
-        if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase)
+        // BEGIN blocks too, hence the Proc* here. A DEFINED or BASED variable
+        // has no storage of its own, so it is never allocated.
+        if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase &&
+            !item.sym->basedBase)
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
@@ -1225,6 +1241,18 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       sym->owner = p;
     e->sym = sym;
     e->ty = sym->ty;
+    // A locator-qualified reference P -> X (rule 124): P is a POINTER, X a
+    // based variable whose storage is addressed through P. The member path
+    // below then resolves X.A against the based structure type.
+    if (e->locPtr) {
+      typeExpr(e->locPtr.get(), sc, p);
+      if (!e->locPtr->ty.isPointer())
+        d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+      if (!sym->basedBase)
+        d_.error(e->loc,
+                 "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
+                 "(124)");
+    }
     // A qualified reference S.A.B (rule 124): resolve each member against
     // the structure type, recording the LLVM field index along the path.
     if (!e->path.empty()) {

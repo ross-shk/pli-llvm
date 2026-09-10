@@ -1660,3 +1660,37 @@ numeric target; `make test` stays green. A pointer value cannot be written with
 avoids accidental arithmetic); allowing bare `NULL` without parentheses (kept
 consistent with DATE/TIME and other no-arg built-ins in this compiler); pointer
 arithmetic or ordering.
+
+## ADR-064 — BASED data and `->` locator qualification
+
+**Context.** ADR-063 added POINTER as a first-class address type. QR1.3 (CM2)
+needs based data for linked records: `DECLARE 1 X BASED(P);` where X has no
+storage of its own and its members are addressed through the POINTER P, plus the
+explicit locator-qualified form `P -> X.FIELD` (rule 124). Both were diagnosed as
+unimplemented.
+
+**Decision.** A based structure is a Symbol with a `basedBase` POINTER reference
+(resolved in sema from the `BASED(P)` attribute; `BASED` without an explicit
+pointer is diagnosed in this stage). It is excluded from `localSyms` (like
+`DEFINED`), so it gets no own storage. `IRGen::addressOf(basedSym)` loads the
+pointer value (`load(addressOf(basedBase))`), so an unqualified based reference
+`X.FIELD` naturally GEPs off the pointer. A locator-qualified reference is a
+`VarRef` carrying the left-hand pointer in a new `locPtr` field (mirrored through
+HIR lowering); sema types it (locator must be a POINTER, right side a based
+variable) and resolves the member path against the based structure type, and irgen
+GEPs off the loaded pointer value (`locatorMemberAddr`) in both value emission and
+assignment targets.
+
+**Consequences.** `tests/core/based.pli` covers pointing P at an existing
+structure via `addr(y)`, writing/reading `rec.a` through P, and the locator form
+`P -> rec.a` on both sides of an assignment, observing the writes in `y`'s
+storage; `tests/core/bad_based.pli` rejects a locator whose right side is not a
+based variable; `make test` stays green. A whole based structure as a value, based
+array subscripts (`P -> X.arr(i)`), and `ALLOCATE`/`FREE` remain for later CM2
+slices.
+
+**Rejected.** Giving a based structure its own storage (it overlays the pointer's
+target); requiring the locator pointer to equal the based structure's own
+`BASED(P)` pointer (the locator may name any pointer); supporting bare `BASED`
+without a pointer (needs an unqualified-locator rule deferred with
+`ALLOCATE`/`FREE`).

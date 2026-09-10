@@ -61,6 +61,7 @@ HExprP lowerExprBase(const Expr* e) {
   h->path = e->path;
   h->memberPath = e->memberPath;
   h->sym = e->sym;
+  h->locPtr = lowerExpr(e->locPtr.get());
   h->op = e->op;
   h->a = lowerExpr(e->a.get());
   h->b = lowerExpr(e->b.get());
