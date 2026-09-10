@@ -429,6 +429,10 @@ void IRGen::emitGlobals() {
 }
 
 llvm::Value* IRGen::addressOf(Symbol* sym) {
+  // A BASED variable (rule 25) has no storage of its own: its address is the
+  // value held in the based POINTER variable, loaded at each reference.
+  if (sym->basedBase)
+    return b_.CreateLoad(b_.getPtrTy(), addressOf(sym->basedBase), "basep");
   // A DEFINED variable (rule 24) has no storage of its own. A whole-base or
   // iSUB overlay resolves to the base's address; a scalar element overlay
   // (all-constant subscripts, no iSUB) is a stable GEP into the base.
@@ -1024,7 +1028,10 @@ void IRGen::emitAssign(HStmt* s) {
                      "(11)");
             return;
           }
-          llvm::Value* addr = memberAddr(t->sym, t->memberPath, s->loc);
+          // A locator-qualified target P->X.FIELD stores off the loaded pointer.
+          llvm::Value* addr =
+              t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                        : memberAddr(t->sym, t->memberPath, s->loc);
           storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
           return;
         }
@@ -1573,6 +1580,21 @@ llvm::Value* IRGen::elementMemberAddr(Symbol* base, const std::vector<unsigned>&
   const Type* cur = &elem;
   for (unsigned f : path) {
     addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "mem");
+    cur = &cur->members[f]->ty;
+  }
+  return addr;
+}
+
+// Address of a member of a locator-qualified reference P->X.FIELD (rule 124):
+// GEP through the recorded field indices from a caller-supplied base address
+// (the loaded pointer value), against the based structure type (mirrors
+// memberAddr, which starts from the symbol's own base instead).
+llvm::Value* IRGen::locatorMemberAddr(Symbol* base, const std::vector<unsigned>& path,
+                                      llvm::Value* baseAddr) {
+  llvm::Value* addr = baseAddr;
+  const Type* cur = &base->ty;
+  for (unsigned f : path) {
+    addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "lmem");
     cur = &cur->members[f]->ty;
   }
   return addr;
@@ -2168,7 +2190,11 @@ Val IRGen::emitExpr(HExpr* e) {
         v.reg = i64(0);
         return v;
       }
-      llvm::Value* addr = memberAddr(e->sym, e->memberPath, e->loc);
+      // A locator-qualified member P->X.FIELD (rule 124) GEPs off the loaded
+      // pointer value; otherwise off the based/symbol member address.
+      llvm::Value* addr =
+          e->locPtr ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
+                    : memberAddr(e->sym, e->memberPath, e->loc);
       v.ty = leaf;
       llvm::Value* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
       v.reg = leaf.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;

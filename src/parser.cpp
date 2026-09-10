@@ -992,10 +992,29 @@ bool Parser::parseDeclTail(DeclItem& item) {
         bag.pointer = true;
         continue;
       }
+      if (w == "BASED") {
+        // based-attribute ::= BASED [ ( reference ) ]  rule (25): the declared
+        // item overlays the storage addressed by a POINTER variable, so it has
+        // no storage of its own. This stage requires the explicit BASED(P).
+        advance();
+        if (at(Tok::LParen)) {
+          advance();
+          if (at(Tok::Word)) {
+            item.basedBase = cur().text;
+            advance();
+          } else {
+            d_.error(cur().loc, "expected a POINTER reference after BASED(", "(25)");
+          }
+          expect(Tok::RParen, "(25)");
+        } else {
+          d_.error(cur().loc, "BASED without an explicit POINTER is not implemented in this stage",
+                   "(25)");
+        }
+        continue;
+      }
       if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "AREA" ||
-          w == "OFFSET" || w == "BASED" || w == "CONTROLLED" || w == "CTL" || w == "LABEL" ||
-          w == "FILE" || w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" ||
-          w == "BUILTIN") {
+          w == "OFFSET" || w == "CONTROLLED" || w == "CTL" || w == "LABEL" || w == "FILE" ||
+          w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -1611,12 +1630,23 @@ ExprP Parser::parsePrimary() {
     e->name = cur().text;
     advance();
     if (at(Tok::Arrow)) {
-      d_.error(cur().loc, "locator-qualified references are not implemented in this stage",
-               "(124)");
-      advance();
-      if (at(Tok::Word))
+      // Locator-qualified reference P -> X (rule 124): the left reference is a
+      // POINTER, the right a based variable X (or X.FIELD). e currently holds
+      // the left P — move it into the locator, then parse the right-hand name.
+      auto ptr = std::make_unique<Expr>();
+      ptr->kind = Expr::VarRef;
+      ptr->name = e->name;
+      ptr->loc = e->loc;
+      advance(); // ->
+      if (at(Tok::Word)) {
+        e->name = cur().text;
+        e->loc = cur().loc;
+        e->locPtr = std::move(ptr);
         advance();
-      return e;
+      } else {
+        d_.error(cur().loc, "expected a based variable after '->'", "(124)");
+      }
+      // fall through: the X.FIELD member path is collected below
     }
     // A qualified name S.A.B (rule 124): collect the member qualifiers after
     // the base name; sema resolves them against the structure type.

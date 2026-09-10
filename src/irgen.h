@@ -152,6 +152,11 @@ private:
   // through the recorded field indices against the element structure type.
   llvm::Value* elementMemberAddr(Symbol* base, const std::vector<unsigned>& path,
                                  llvm::Value* elemAddr);
+  // Address of a member of a locator-qualified reference P->X.FIELD (rule 124):
+  // like memberAddr, but GEPs from a caller-supplied base address (the loaded
+  // pointer value) through the field indices against the based structure type.
+  llvm::Value* locatorMemberAddr(Symbol* base, const std::vector<unsigned>& path,
+                                 llvm::Value* baseAddr);
   // The resolved type of a qualified member S.A.B (rule 124): walk the recorded
   // field indices to recover the leaf member's type (an array member's array
   // type), mirroring memberAddr without emitting GEPs.

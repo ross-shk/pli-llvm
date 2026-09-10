@@ -28,6 +28,9 @@ struct Symbol {
   Expr* initCall = nullptr;      // INITIAL(CALL f(...)) call expr (rule 27), lowered to HIR
   HExpr* initCallH = nullptr;    // the lowered INITIAL CALL expression, for codegen
   Symbol* definedBase = nullptr; // DEFINED on this variable's storage (rule 24); null = none
+  // BASED (rule 25): the POINTER variable that addresses this based structure's
+  // storage; a based symbol has no own storage, its address is the pointer value.
+  Symbol* basedBase = nullptr;
   // For a DEFINED base that is a subscripted reference (rule 126):
   //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)
   //   definedIsubAxis >= 0  -> this X axis holds the iSUB dummy (rule 134)
