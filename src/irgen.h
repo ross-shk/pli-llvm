@@ -56,6 +56,9 @@ private:
   // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
   // bound value of its dynamic axis, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynUb_;
+  // The runtime lower bound value of a dynamic lower bound (rule (13)), the
+  // mirror of `dynUb_`, loaded once at block entry.
+  std::unordered_map<Symbol*, llvm::Value*> dynLb_;
   void emitGlobals();
   void declareProc(HProc* p); // pre-create a proc's functions/aliases so calls resolve
   void emitProc(HProc* p);
@@ -115,9 +118,11 @@ private:
   // check on each axis. `arr` is the array type (bounds + element), `base` the
   // address of the array storage; `idxs` holds one index per axis. For a
   // dynamic (runtime-extent) array, `dynUb` supplies the runtime upper bound of
-  // the (single, 1-D) dynamic axis and `base` is a bare element pointer.
+  // the (single, 1-D) dynamic axis, `dynLb` the runtime lower bound, and `base`
+  // is a bare element pointer.
   llvm::Value* arrayElementAddr(const Type& arr, llvm::Value* base, const std::vector<HExprP>& idxs,
-                                SourceLoc loc, llvm::Value* dynUb = nullptr);
+                                SourceLoc loc, llvm::Value* dynUb = nullptr,
+                                llvm::Value* dynLb = nullptr);
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.

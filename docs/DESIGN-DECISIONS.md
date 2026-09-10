@@ -1469,3 +1469,28 @@ check` stay green.
 a value must be folded against its own member type, not a single element type);
 STATIC constant structure initializers and CHARACTER members in this slice
 (deferred).
+
+## ADR-058 — Dynamic lower bound: a runtime lower bound on a 1-D AUTOMATIC array
+
+**Context.** ADR-050 serves a single-axis AUTOMATIC array with a runtime *upper*
+bound (`dyn`/`dynUb`), a constant lower bound. A non-constant lower bound was
+diagnosed at parse time. CM1 needs `A(lb:ub)` with both bounds runtime.
+
+**Decision.** `Dim` gains `lbDyn` (marking a runtime lower bound; `isDynamic()`
+includes it); the parser captures the lower-bound expression into a parallel
+`dynLbBounds` (mirroring `dynBounds`), lowered to `Symbol::dynLb`, evaluated at
+block entry into a `dynLb_` dope slot in `allocaLocals`. `arrayElementAddr` (and
+its callers) bounds-check `i < lb` and offset `i - lb` against the live value;
+`LBOUND`/`DIM`/reduction extents and `argExtent` use it. Scope stays single-axis
+AUTOMATIC: a dynamic lower bound on a *parameter* is diagnosed (the dyn-param /
+`*` calling conventions convey only the upper bound/extent, so a lower-bound
+parameter would be sized from the wrong origin).
+
+**Consequences.** `tests/core/dyn_lower.pli` covers runtime `LBOUND`/`HBOUND`/
+`DIM`, fill/readback, and a `SUM` reduction over `A(lb:ub)` for several bound
+pairs; `bad_dyn_lower.pli` keeps the multi-axis gate. `make test` (125) and
+`make check` stay green.
+
+**Rejected.** Threading a lower-bound argument through the dyn-param / `*`
+calling conventions (extend the ABI in a later slice); multi-axis dynamic
+arrays; a dynamic lower bound on a parameter in this slice.

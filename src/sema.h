@@ -43,6 +43,9 @@ struct Symbol {
   // lowered to HIR during AST->HIR lowering; null for a constant array. Used by
   // irgen to size and bounds-check the dynamic array.
   HExpr* dynUb = nullptr;
+  // The lowered runtime lower-bound expression of a dynamic array (rule (13)),
+  // the mirror of `dynUb`; null when the lower bound is constant.
+  HExpr* dynLb = nullptr;
 };
 
 struct Scope {

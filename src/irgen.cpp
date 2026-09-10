@@ -473,10 +473,14 @@ void IRGen::allocaLocals(HProc* p) {
     const Type& el = s->ty.elementType();
     const Dim& d = s->ty.dims[0];
     llvm::Value* ub = toI64(emitExpr(s->dynUb));
-    llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, i64(d.lb), "e1"), i64(1), "ext");
+    // A dynamic lower bound is evaluated at entry too; otherwise it is constant.
+    llvm::Value* lb = s->dynLb ? toI64(emitExpr(s->dynLb)) : i64(d.lb);
+    llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
     llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".dyn");
     symAddr_[s] = buf;
     dynUb_[s] = ub;
+    if (s->dynLb)
+      dynLb_[s] = lb;
   }
 }
 
@@ -1314,11 +1318,13 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
   const Dim& d = arr.dims[0];
   if (d.adj)
     return nullptr; // forwarding a `*` array: not served here
-  if (d.dyn) {
-    llvm::Value* ub = dynUb_.count(a->sym)
-                          ? dynUb_[a->sym]
-                          : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub));
-    return b_.CreateAdd(b_.CreateSub(ub, i64(d.lb), "e1"), i64(1), "ext");
+  if (d.dyn || d.lbDyn) {
+    llvm::Value* ub = d.dyn ? (dynUb_.count(a->sym)
+                                   ? dynUb_[a->sym]
+                                   : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub)))
+                            : i64(d.ub);
+    llvm::Value* lb = d.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d.lb)) : i64(d.lb);
+    return b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
   }
   return i64(d.ub - d.lb + 1);
 }
@@ -1405,19 +1411,20 @@ long long IRGen::arrayExtent(const Type& arr) {
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
 llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
                                      const std::vector<HExprP>& idxs, SourceLoc loc,
-                                     llvm::Value* dynUb) {
+                                     llvm::Value* dynUb, llvm::Value* dynLb) {
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
 
-  // Dynamic 1-D array (rule (13)): a runtime upper bound and a bare element
-  // buffer, so the flat offset is just (i - lb) and the GEP is on the element
-  // pointer. Only single-axis dynamic arrays are served in this stage.
+  // Dynamic 1-D array (rule (13)): a runtime upper and/or lower bound and a bare
+  // element buffer, so the flat offset is just (i - lb) and the GEP is on the
+  // element pointer. Only single-axis dynamic arrays are served in this stage.
   if (arr.isDynamic()) {
     const Dim& d = arr.dims[0];
     llvm::Value* i = toI64(emitExpr(idxs[0].get()));
     llvm::Value* ub = d.dyn ? dynUb : i64(d.ub);
+    llvm::Value* lb = d.lbDyn ? dynLb : i64(d.lb);
     llvm::Value* oob =
-        b_.CreateOr(b_.CreateICmpSLT(i, i64(d.lb), "lo"), b_.CreateICmpSGT(i, ub, "hi"), "oob");
+        b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi"), "oob");
     std::string id = std::to_string(n_++);
     llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
@@ -1426,7 +1433,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
     b_.CreateUnreachable();
     startBlock(okL);
-    llvm::Value* off = b_.CreateSub(i, i64(d.lb), "off");
+    llvm::Value* off = b_.CreateSub(i, lb, "off");
     return b_.CreateInBoundsGEP(llvmTy(el), base, {off}, "aelem");
   }
 
@@ -1638,7 +1645,8 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
     return v;
   }
   llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
-                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr);
+                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
   if (el.isBit())
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
@@ -1657,7 +1665,8 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
     return;
   }
   llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
-                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr);
+                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   Val cv = convert(src, el, loc);
   storeScalarTo(addr, el, cv);
 }
@@ -2543,10 +2552,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     HExpr* a = e->args[0].get();
     const Type& arr = a->sym ? a->sym->ty : Type::fixedBin(31, 0);
     v.ty = e->ty;
-    // A dynamic (runtime-extent) array reports the constant lower bound but a
-    // runtime upper bound / element count, read from the recorded dope slot.
+    // A dynamic (runtime-extent) array reports the live lower/upper bounds (a
+    // constant lower bound stays constant), read from the recorded dope slot.
     if (arr.isArray() && arr.isDynamic()) {
-      llvm::Value* lb = i64(arr.dims[0].lb);
+      const Dim& d0 = arr.dims[0];
+      llvm::Value* lb =
+          d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
       llvm::Value* ub = dynUb_[a->sym];
       llvm::Value* raw = e->name == "LBOUND" ? lb
                          : e->name == "HBOUND"
@@ -2592,8 +2603,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* n;
     llvm::Type* arrTy = nullptr;
     if (dyn) {
-      llvm::Value* ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(arr.dims[0].ub);
-      n = b_.CreateAdd(b_.CreateSub(ub, i64(arr.dims[0].lb), "e1"), i64(1), "rdn");
+      const Dim& d0 = arr.dims[0];
+      llvm::Value* ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(d0.ub);
+      llvm::Value* lb =
+          d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
+      n = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "rdn");
     } else {
       n = i64(arrayExtent(arr));
       arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));

@@ -76,10 +76,13 @@ private:
   // Try to parse a dimension (rules (12),(13)) at the current LParen. Consumes
   // tokens only when it is genuinely a dimension; returns false (with the token
   // stream restored) so the caller can treat the group as a precision/length.
-  // Fills `out` with the per-axis Dim (a dynamic axis is marked `dyn`) and
-  // `dynBounds` with the runtime upper-bound expression of each dynamic axis
-  // (null entries for constant axes). Supports (ub), (lb:ub), and (expr)/(lb:expr).
-  bool tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds);
+  // Fills `out` with the per-axis Dim (a dynamic axis is marked `dyn`/`lbDyn`)
+  // and `dynBounds` with the runtime upper-bound expression of each dynamic
+  // upper bound, `dynLbBounds` with the runtime lower-bound expression of each
+  // dynamic lower bound (null entries for constant axes). Supports (ub),
+  // (lb:ub), and (expr)/(lb:expr).
+  bool tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds,
+                         std::vector<ExprP>& dynLbBounds);
   bool parseDescriptorType(Type& out);              // one ENTRY parameter type (rule 38)
   bool parseEntryParams(std::vector<Type>& params); // ENTRY ( ... )
 
