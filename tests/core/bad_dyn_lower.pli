@@ -1,6 +1,10 @@
-  /* A dynamic (runtime) lower bound on a multi-axis array stays rejected: this
-     stage serves only a single-axis dynamic array (rules (12),(13)). */
+  /* A dynamic (runtime) lower bound on a parameter array stays rejected: the
+     dyn-param / '*' calling conventions convey only the upper bound (or extent),
+     so a lower-bound parameter would be sized from the wrong origin (rule (13)). */
   bad_dyn_lower: procedure options(main);
-     declare lb fixed bin(31);
-     declare a(lb:5, 3) fixed bin(31);
+     p: procedure(x, lb, ub);
+        declare lb fixed bin(31);
+        declare ub fixed bin(31);
+        declare x(lb:ub) fixed bin(31);
+     end p;
   end bad_dyn_lower;

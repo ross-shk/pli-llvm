@@ -515,8 +515,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             for (auto& b : item.dynLbBounds)
               if (b)
                 typeExpr(b.get(), sc, p);
-            if (!hasStar && item.ty.dims.size() != 1)
-              d_.error(item.loc, "a dynamic array must be single-axis in this stage", "(13)");
+            // A dynamic array may be multi-axis, but only the first axis may
+            // have a runtime extent; later axes must be constant in this stage.
+            for (size_t k = 1; k < item.ty.dims.size(); ++k)
+              if (item.ty.dims[k].dyn || item.ty.dims[k].lbDyn)
+                d_.error(item.loc,
+                         "a dynamic array may only have a dynamic first axis in this stage",
+                         "(13)");
             // A dynamic lower bound on a parameter is not served: the dyn-param /
             // `*` calling conventions convey only the upper bound (or extent), so
             // a lower-bound parameter would be sized from the wrong origin.
