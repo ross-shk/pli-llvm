@@ -156,11 +156,15 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     hd.extName = d.extName;
     for (const auto& b : d.dynBounds)
       hd.dynBounds.push_back(b ? lowerExpr(b.get()) : nullptr);
+    for (const auto& b : d.dynLbBounds)
+      hd.dynLbBounds.push_back(b ? lowerExpr(b.get()) : nullptr);
     // The lowered dynamic upper bound rides on the symbol so irgen's allocaLocals
     // can size the runtime buffer (rules (12),(13)). Safe to keep a raw pointer:
     // the HExpr is owned by this HProgram, which outlives IRGen.
     if (hd.sym && !hd.dynBounds.empty())
       hd.sym->dynUb = hd.dynBounds[0].get();
+    if (hd.sym && !hd.dynLbBounds.empty())
+      hd.sym->dynLb = hd.dynLbBounds[0].get();
     // The lowered INITIAL(CALL f(...)) expression (rule 27) rides on the symbol
     // so irgen's emitInitials can evaluate it at block entry; hd.initCall owns
     // the HExpr (freed with the HStmt), which outlives IRGen.

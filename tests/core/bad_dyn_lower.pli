@@ -1,0 +1,6 @@
+  /* A dynamic (runtime) lower bound on a multi-axis array stays rejected: this
+     stage serves only a single-axis dynamic array (rules (12),(13)). */
+  bad_dyn_lower: procedure options(main);
+     declare lb fixed bin(31);
+     declare a(lb:5, 3) fixed bin(31);
+  end bad_dyn_lower;

@@ -797,7 +797,8 @@ bool Parser::parseDeclTail(DeclItem& item) {
   // keyword follows; otherwise it is a precision/length (M0 scalar behaviour).
   std::vector<Dim> arrDims;
   std::vector<ExprP> arrDyn;
-  tryParseDimension(arrDims, arrDyn);
+  std::vector<ExprP> arrDynLb;
+  tryParseDimension(arrDims, arrDyn, arrDynLb);
 
   // Attribute bag (rules 14-32).
   AttrBag bag;
@@ -1070,6 +1071,7 @@ bool Parser::parseDeclTail(DeclItem& item) {
   }
   item.ty.dims = arrDims;
   item.dynBounds = std::move(arrDyn);
+  item.dynLbBounds = std::move(arrDynLb);
   item.init = std::move(init);
   return true;
 }
@@ -1078,7 +1080,8 @@ bool Parser::parseDeclTail(DeclItem& item) {
 // bound-pair (lb:ub) is always a dimension; a bare (n) is a dimension only when
 // followed by an attribute keyword (e.g. `DECLARE A(5) FIXED BINARY;`), else it
 // stays a precision/length for M0 scalar declarations.
-bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds) {
+bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds,
+                               std::vector<ExprP>& dynLbBounds) {
   if (!at(Tok::LParen))
     return false;
   size_t save = i_;
@@ -1103,7 +1106,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   // or a dynamic bound makes the whole group a dimension; all-bare constant
   // extents are a dimension only when an attribute keyword follows.
   std::vector<Dim> axes;
-  std::vector<ExprP> db; // parallel to axes: upper-bound expr (nullptr = constant)
+  std::vector<ExprP> db;  // upper-bound expr of each dynamic upper bound
+  std::vector<ExprP> dlb; // lower-bound expr of each dynamic lower bound
   bool anyColon = false;
   for (;;) {
     Dim d;
@@ -1124,9 +1128,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
         if (firstConst) {
           d.lb = (int)fv;
         } else {
-          d_.error(first->loc, "a dynamic array lower bound is not implemented in this stage",
-                   "(13)");
-          d.lb = 1;
+          d.lbDyn = true; // runtime lower bound (rule (13)); lb is a placeholder
+          dlb.push_back(std::move(first));
         }
         ExprP ubE = parseExpr();
         long long uv;
@@ -1159,6 +1162,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   if (anyColon) {
     out = std::move(axes);
     dynBounds = std::move(db);
+    dynLbBounds = std::move(dlb);
     return true;
   }
   // All bare constants (n): a dimension only when an attribute keyword follows.
@@ -1172,6 +1176,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
     dynBounds = std::move(db);
+    dynLbBounds = std::move(dlb);
     return true;
   }
   // A bare extent (n) directly after a name is unambiguously a dimension when
@@ -1181,6 +1186,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   if (at(Tok::Comma)) {
     out = std::move(axes);
     dynBounds = std::move(db);
+    dynLbBounds = std::move(dlb);
     return true;
   }
   i_ = save;

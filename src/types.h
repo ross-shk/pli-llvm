@@ -27,15 +27,18 @@ struct Member;
 
 // One array axis (rules (12),(13)): a lower and upper bound. A dynamic (runtime)
 // upper bound — a general expression, or a `*` adjustable extent — is marked by
-// `dyn`; `ub` is then unused and the extent is only known at run time. The lower
-// bound stays constant in this stage.
+// `dyn`; `ub` is then unused and the extent is only known at run time. A dynamic
+// (runtime) lower bound is marked by `lbDyn`; `lb` is then a placeholder and the
+// live lower bound is evaluated at entry from the symbol's lower-bound
+// expression (`dynLb`, the mirror of `dynUb`).
 struct Dim {
   int lb = 1;
   int ub = 1;
-  bool dyn = false; // the upper bound is a runtime value (rule (13))
-  bool adj = false; // '*' adjustable extent: the bound comes from the caller (rule (13))
+  bool dyn = false;   // the upper bound is a runtime value (rule (13))
+  bool lbDyn = false; // the lower bound is a runtime value (rule (13))
+  bool adj = false;   // '*' adjustable extent: the bound comes from the caller (rule (13))
   bool operator==(const Dim& o) const {
-    return lb == o.lb && ub == o.ub && dyn == o.dyn && adj == o.adj;
+    return lb == o.lb && ub == o.ub && dyn == o.dyn && lbDyn == o.lbDyn && adj == o.adj;
   }
 };
 
@@ -67,7 +70,7 @@ struct Type {
   // True when any axis has a runtime (dynamic) extent (rule (13)).
   bool isDynamic() const {
     for (const auto& d : dims)
-      if (d.dyn)
+      if (d.dyn || d.lbDyn)
         return true;
     return false;
   }

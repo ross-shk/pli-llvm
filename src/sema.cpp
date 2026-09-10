@@ -493,11 +493,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
           if (item.ty.isDynamic()) {
             // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
-            // serves only a single-axis AUTOMATIC array with a constant lower
-            // bound. A `*` adjustable extent is a parameter-only form whose
-            // bound is supplied by the caller at call time. Resolve the runtime
-            // upper-bound expression's symbol so codegen can evaluate it at
-            // entry to size the buffer.
+            // serves only a single-axis AUTOMATIC array whose lower and upper
+            // bounds may be runtime expressions. A `*` adjustable extent is a
+            // parameter-only form whose bound is supplied by the caller at call
+            // time. Resolve the runtime bound expressions' symbols so codegen
+            // can evaluate them at entry to size the buffer.
             bool hasStar = false;
             for (const auto& d : item.ty.dims)
               if (d.adj)
@@ -512,8 +512,17 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             for (auto& b : item.dynBounds)
               if (b)
                 typeExpr(b.get(), sc, p);
+            for (auto& b : item.dynLbBounds)
+              if (b)
+                typeExpr(b.get(), sc, p);
             if (!hasStar && item.ty.dims.size() != 1)
               d_.error(item.loc, "a dynamic array must be single-axis in this stage", "(13)");
+            // A dynamic lower bound on a parameter is not served: the dyn-param /
+            // `*` calling conventions convey only the upper bound (or extent), so
+            // a lower-bound parameter would be sized from the wrong origin.
+            if (isParam && !item.ty.dims.empty() && item.ty.dims[0].lbDyn)
+              d_.error(item.loc, "a dynamic lower bound on a parameter is not served in this stage",
+                       "(13)");
             if (item.sym->isStatic)
               d_.error(item.loc, "a dynamic array must be AUTOMATIC in this stage", "(13)");
             if (!item.initItems.empty())

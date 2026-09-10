@@ -84,6 +84,9 @@ struct DeclItem {
   // for a fully constant array. Parallel to ty.dims: an entry is non-null when
   // the corresponding axis's upper bound is a runtime value.
   std::vector<ExprP> dynBounds;
+  // Runtime lower-bound expressions for dynamic array axes (rule (13)); empty
+  // when every lower bound is constant. Mirrors `dynBounds` for the lower bound.
+  std::vector<ExprP> dynLbBounds;
   ExprP init;     // INITIAL(...) — a single simple scalar constant (M0 scalar path)
   ExprP initCall; // INITIAL(CALL f(...)) — a function call initializer (rule 27)
   std::vector<InitItem> initItems;     // INITIAL(...) itemlist (arrays, rule 26-31)

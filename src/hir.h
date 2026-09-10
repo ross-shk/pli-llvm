@@ -69,6 +69,9 @@ struct HDeclItem {
   // Runtime upper-bound expressions for dynamic array axes (rule (13)); empty
   // for a fully constant array. Parallel to ty.dims.
   std::vector<HExprP> dynBounds;
+  // Runtime lower-bound expressions for dynamic array axes (rule (13)); empty
+  // when every lower bound is constant. Mirrors `dynBounds`.
+  std::vector<HExprP> dynLbBounds;
   HExprP init;     // INITIAL(...) — scalar constant only in M0
   HExprP initCall; // INITIAL(CALL f(...)) — a function-call initializer (rule 27)
   Symbol* sym = nullptr;
