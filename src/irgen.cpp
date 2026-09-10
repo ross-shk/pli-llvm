@@ -1003,7 +1003,7 @@ void IRGen::emitAssign(HStmt* s) {
                      "(12)");
             return;
           }
-          llvm::Value* ub = nullptr, *lb = nullptr;
+          llvm::Value *ub = nullptr, *lb = nullptr;
           llvm::Value* base = arr.isDynamic()
                                   ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
                                   : memberAddr(t->sym, t->memberPath, s->loc);
@@ -1111,10 +1111,9 @@ void IRGen::emitAssign(HStmt* s) {
         d_.error(s->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
         return;
       }
-      llvm::Value* ub = nullptr, *lb = nullptr;
-      llvm::Value* base = arr.isDynamic()
-                              ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
-                              : memberAddr(t->sym, t->memberPath, s->loc);
+      llvm::Value *ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                                          : memberAddr(t->sym, t->memberPath, s->loc);
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
       storeScalarTo(addr, el, convert(v, el, s->loc));
       return;
@@ -2124,10 +2123,9 @@ Val IRGen::emitExpr(HExpr* e) {
         v.reg = i64(0);
         return v;
       }
-      llvm::Value* ub = nullptr, *lb = nullptr;
-      llvm::Value* base = arr.isDynamic()
-                              ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
-                              : memberAddr(e->sym, e->memberPath, e->loc);
+      llvm::Value *ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
+                                          : memberAddr(e->sym, e->memberPath, e->loc);
       llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc, ub, lb);
       llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
       v.ty = el;
@@ -2643,15 +2641,29 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // count (the product over all axes).
   if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
     HExpr* a = e->args[0].get();
-    const Type& arr = a->sym ? a->sym->ty : Type::fixedBin(31, 0);
+    // The argument is an unsubscripted array reference, either a plain array
+    // (a->sym) or a qualified structure member array S.V (a->sym + memberPath).
+    const Type& arr = (a->sym && !a->memberPath.empty())
+                          ? memberType(a->sym, a->memberPath)
+                          : (a->sym ? a->sym->ty : Type::fixedBin(31, 0));
     v.ty = e->ty;
     // A dynamic (runtime-extent) array reports the live lower/upper bounds (a
-    // constant lower bound stays constant), read from the recorded dope slot.
+    // constant lower bound stays constant), read from the recorded dope slot
+    // (the member slot for a dynamic member, the symbol slot for a plain array).
     if (arr.isArray() && arr.isDynamic()) {
       const Dim& d0 = arr.dims[0];
-      llvm::Value* lb =
-          d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
-      llvm::Value* ub = d0.dyn ? dynUb_[a->sym] : i64(d0.ub);
+      llvm::Value* lb = nullptr;
+      llvm::Value* ub = nullptr;
+      if (!a->memberPath.empty()) {
+        auto it = memberDyn_.find(MemberDyn{a->sym, a->memberPath});
+        llvm::Value* mulb = it != memberDyn_.end() ? it->second.lb : nullptr;
+        llvm::Value* muub = it != memberDyn_.end() ? it->second.ub : nullptr;
+        lb = d0.lbDyn ? (mulb ? mulb : i64(d0.lb)) : i64(d0.lb);
+        ub = muub ? muub : i64(d0.ub);
+      } else {
+        lb = d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
+        ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(d0.ub);
+      }
       // DIM of a dynamic multi-axis array is the first-axis runtime extent times
       // the (fixed) product of the later axes' extents.
       long long rest = 1;
@@ -2695,11 +2707,18 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       result = v;
       return true;
     }
-    const Type& arr = a->sym->ty;
+    // The argument is an unsubscripted array reference: a plain array (a->sym)
+    // or a qualified structure member array S.V (a->sym + memberPath).
+    const bool isMember = !a->memberPath.empty();
+    const Type& arr = isMember ? memberType(a->sym, a->memberPath) : a->sym->ty;
     const Type& el = arr.elementType();
     const bool isBit = e->name == "ANY" || e->name == "ALL";
     const bool isFloat = !isBit && el.k == TK::Float;
-    llvm::Value* base = addressOf(a->sym);
+    llvm::Value *ub = nullptr, *lb = nullptr;
+    llvm::Value* base =
+        isMember ? (arr.isDynamic() ? dynamicMemberBase(a->sym, a->memberPath, e->loc, ub, lb)
+                                    : memberAddr(a->sym, a->memberPath, e->loc))
+                 : addressOf(a->sym);
     // A dynamic (runtime-extent) array is a bare element buffer sized by the
     // live bound; a fixed array is [N x elem]. Drive the loop by the element
     // count and address elements accordingly (rules (12),(13),(123)).
@@ -2708,10 +2727,19 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Type* arrTy = nullptr;
     if (dyn) {
       const Dim& d0 = arr.dims[0];
-      llvm::Value* ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(d0.ub);
-      llvm::Value* lb =
-          d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
-      n = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "rdn");
+      llvm::Value *mub = nullptr, *mlb = nullptr;
+      if (isMember) {
+        auto it = memberDyn_.find(MemberDyn{a->sym, a->memberPath});
+        mub = it != memberDyn_.end() ? it->second.ub : nullptr;
+        mlb = it != memberDyn_.end() ? it->second.lb : nullptr;
+      }
+      llvm::Value* rlb = d0.lbDyn
+                             ? (isMember ? (mlb ? mlb : i64(d0.lb))
+                                         : (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)))
+                             : i64(d0.lb);
+      llvm::Value* rub = isMember ? (mub ? mub : i64(d0.ub))
+                                  : (dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(d0.ub));
+      n = b_.CreateAdd(b_.CreateSub(rub, rlb, "e1"), i64(1), "rdn");
       long long rest = 1;
       for (size_t k = 1; k < arr.dims.size(); ++k)
         rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);

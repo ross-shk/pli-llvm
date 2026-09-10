@@ -1797,9 +1797,10 @@ bool Sema::typeBuiltin(Expr* e) {
       return true;
     }
     Expr* a = e->args[0].get();
-    bool isArr =
-        (a->kind == Expr::VarRef && a->sym &&
-         (a->sym->kind == Symbol::Var || a->sym->kind == Symbol::Param) && a->sym->ty.isArray());
+    // An unsubscripted array reference: a plain array variable/parameter
+    // (A or x(k)) or a qualified structure member array (S.V). a->ty is the
+    // resolved reference type, which is the array for an unsubscripted VarRef.
+    bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
     if (!isArr) {
       d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
       e->ty = Type::voidTy();
@@ -1818,15 +1819,15 @@ bool Sema::typeBuiltin(Expr* e) {
       return true;
     }
     Expr* a = e->args[0].get();
-    bool isArr =
-        (a->kind == Expr::VarRef && a->sym &&
-         (a->sym->kind == Symbol::Var || a->sym->kind == Symbol::Param) && a->sym->ty.isArray());
+    // An unsubscripted array reference, including a qualified structure member
+    // array (S.V); a->ty is the resolved array reference type.
+    bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
     if (!isArr) {
       d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
-    const Type& el = a->sym->ty.elementType();
+    const Type& el = a->ty.elementType();
     if (e->name == "ANY" || e->name == "ALL") {
       if (!el.isBit()) {
         d_.error(a->loc, e->name + " requires a BIT array in this stage", "(123)");
