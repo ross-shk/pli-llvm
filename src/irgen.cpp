@@ -472,13 +472,22 @@ void IRGen::allocaLocals(HProc* p) {
       continue;
     const Type& el = s->ty.elementType();
     const Dim& d = s->ty.dims[0];
-    llvm::Value* ub = toI64(emitExpr(s->dynUb));
-    // A dynamic lower bound is evaluated at entry too; otherwise it is constant.
+    // The upper bound is a runtime expression, or a constant when only the lower
+    // bound is dynamic; a dynamic lower bound is evaluated at entry too.
+    llvm::Value* ub = s->dynUb ? toI64(emitExpr(s->dynUb)) : i64(d.ub);
     llvm::Value* lb = s->dynLb ? toI64(emitExpr(s->dynLb)) : i64(d.lb);
     llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+    // A dynamic array may have fixed later axes (only the first axis is dynamic):
+    // the buffer holds every element of every axis, so scale by their product.
+    long long rest = 1;
+    for (size_t k = 1; k < s->ty.dims.size(); ++k)
+      rest *= (s->ty.dims[k].ub - s->ty.dims[k].lb + 1);
+    if (rest != 1)
+      extent = b_.CreateMul(extent, i64(rest), "extall");
     llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".dyn");
     symAddr_[s] = buf;
-    dynUb_[s] = ub;
+    if (s->dynUb)
+      dynUb_[s] = ub;
     if (s->dynLb)
       dynLb_[s] = lb;
   }
@@ -1324,7 +1333,13 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
                                    : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub)))
                             : i64(d.ub);
     llvm::Value* lb = d.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d.lb)) : i64(d.lb);
-    return b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+    llvm::Value* ext = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+    long long rest = 1;
+    for (size_t k = 1; k < arr.dims.size(); ++k)
+      rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+    if (rest != 1)
+      ext = b_.CreateMul(ext, i64(rest), "extall");
+    return ext;
   }
   return i64(d.ub - d.lb + 1);
 }
@@ -1415,16 +1430,25 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
 
-  // Dynamic 1-D array (rule (13)): a runtime upper and/or lower bound and a bare
-  // element buffer, so the flat offset is just (i - lb) and the GEP is on the
-  // element pointer. Only single-axis dynamic arrays are served in this stage.
+  // Dynamic array (rule (13)): the first axis has a runtime upper and/or lower
+  // bound (later axes are fixed in this stage) and the storage is a bare element
+  // buffer, so the flat offset is row-major over the runtime first-axis stride
+  // and the GEP is on the element pointer.
   if (arr.isDynamic()) {
-    const Dim& d = arr.dims[0];
-    llvm::Value* i = toI64(emitExpr(idxs[0].get()));
-    llvm::Value* ub = d.dyn ? dynUb : i64(d.ub);
-    llvm::Value* lb = d.lbDyn ? dynLb : i64(d.lb);
-    llvm::Value* oob =
-        b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi"), "oob");
+    llvm::Value* flat = i64(0);
+    llvm::Value* oob = b_.getInt1(false);
+    long long stride = 1;
+    for (size_t k = nAxes; k-- > 0;) {
+      const Dim& dk = arr.dims[k];
+      llvm::Value* i = toI64(emitExpr(idxs[k].get()));
+      llvm::Value* lb = k == 0 && dk.lbDyn ? dynLb : i64(dk.lb);
+      llvm::Value* ub = k == 0 && dk.dyn ? dynUb : i64(dk.ub);
+      oob = b_.CreateOr(
+          oob, b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi")), "oob");
+      llvm::Value* off = b_.CreateSub(i, lb, "off");
+      flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
+      stride *= (dk.ub - dk.lb + 1); // later axes are fixed; only axis 0 is runtime
+    }
     std::string id = std::to_string(n_++);
     llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
@@ -1433,8 +1457,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
     b_.CreateUnreachable();
     startBlock(okL);
-    llvm::Value* off = b_.CreateSub(i, lb, "off");
-    return b_.CreateInBoundsGEP(llvmTy(el), base, {off}, "aelem");
+    return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "aelem");
   }
 
   // Emit every index and OR the per-axis out-of-bounds flags into one check,
@@ -2558,11 +2581,22 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       const Dim& d0 = arr.dims[0];
       llvm::Value* lb =
           d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
-      llvm::Value* ub = dynUb_[a->sym];
+      llvm::Value* ub = d0.dyn ? dynUb_[a->sym] : i64(d0.ub);
+      // DIM of a dynamic multi-axis array is the first-axis runtime extent times
+      // the (fixed) product of the later axes' extents.
+      long long rest = 1;
+      for (size_t k = 1; k < arr.dims.size(); ++k)
+        rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
       llvm::Value* raw = e->name == "LBOUND" ? lb
                          : e->name == "HBOUND"
                              ? ub
-                             : b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+                             : [&] {
+                                 llvm::Value* dim =
+                                     b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+                                 if (rest != 1)
+                                   dim = b_.CreateMul(dim, i64(rest), "extall");
+                                 return dim;
+                               }();
       Val src;
       src.ty = Type::fixedBin(63, 0);
       src.reg = raw;
@@ -2608,6 +2642,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* lb =
           d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
       n = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "rdn");
+      long long rest = 1;
+      for (size_t k = 1; k < arr.dims.size(); ++k)
+        rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+      if (rest != 1)
+        n = b_.CreateMul(n, i64(rest), "rdnall");
     } else {
       n = i64(arrayExtent(arr));
       arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));

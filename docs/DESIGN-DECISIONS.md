@@ -1494,3 +1494,32 @@ pairs; `bad_dyn_lower.pli` keeps the multi-axis gate. `make test` (125) and
 **Rejected.** Threading a lower-bound argument through the dyn-param / `*`
 calling conventions (extend the ABI in a later slice); multi-axis dynamic
 arrays; a dynamic lower bound on a parameter in this slice.
+
+## ADR-059 — Dynamic multi-axis arrays: a runtime first axis with fixed later axes
+
+**Context.** ADR-050/058 serve a single-axis AUTOMATIC array with a runtime upper
+and/or lower bound, allocated as a bare element buffer (offset `i - lb`). A
+multi-axis array with any dynamic axis was gated ("must be single-axis"). CM1
+needs `A(n,4)` — a 2-D VLA (C analogue `int a[n][4]`) whose first axis is runtime
+and later axes are fixed.
+
+**Decision.** Only the **first** axis may be dynamic; later axes stay constant.
+The storage is a bare element buffer of `axis0_extent × ∏(later extents)`.
+`arrayElementAddr`'s dynamic path accumulates a row-major flat offset with a
+compile-time first-axis stride (the product of the fixed later extents) and
+per-axis bounds checks (axis 0 against the runtime bounds, later axes against
+their constants). `allocaLocals`, `DIM`, reduction counts, and `argExtent`
+scale by the fixed later extents; LBOUND/HBOUND report the (runtime) first axis.
+Sema rejects a dynamic axis beyond the first and a dynamic lower bound on a
+parameter (the calling conventions convey only the upper bound/extent).
+
+**Consequences.** `tests/core/dyn_multi.pli` covers `A(n,4)` for several `n`
+(runtime LBOUND/HBOUND/DIM, row-major fill/readback); `bad_dyn_multi.pli`
+rejects `A(3,n)`; a constant-upper dynamic array `A(lb:5,3)` runs (the 
+`allocaLocals`/LBOUND paths no longer assume a runtime upper bound). `make test`
+(127) and `make check` stay green.
+
+**Rejected.** A dynamic extent on any axis beyond the first in this slice (needs
+runtime strides for each such axis, deferred); a dynamic multi-axis array passed
+to a `*` parameter beyond the total-extent case; a dynamic structure member
+(still gated).
