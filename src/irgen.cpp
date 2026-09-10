@@ -965,6 +965,12 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::CallS:
     emitCall(s);
     break;
+  case HStmt::Allocate:
+    emitAllocate(s);
+    break;
+  case HStmt::Free:
+    emitFree(s);
+    break;
   case HStmt::Return: {
     if (curProc_->isFunction) {
       Val v = emitExpr(s->value.get());
@@ -1180,6 +1186,29 @@ void IRGen::emitAssign(HStmt* s) {
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
+}
+
+// ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
+// store its address in the pointer target.
+void IRGen::emitAllocate(HStmt* s) {
+  for (size_t i = 0; i < s->allocBase.size(); ++i) {
+    Symbol* bsym = s->allocBase[i]->sym;
+    // The LLVM alloc size of the based structure (bytes) sizes the heap block.
+    llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
+    llvm::Value* p = b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
+    HExpr* set = s->allocSet[i].get();
+    storeTo(set->sym, Val{set->ty, p}, set->loc);
+  }
+}
+
+// FREE (rule 90): release the heap storage addressed by a based pointer — the
+// explicit locator when given, else the based variable's own BASED pointer.
+void IRGen::emitFree(HStmt* s) {
+  for (auto& f : s->freeBase) {
+    Symbol* bsym = f->sym;
+    llvm::Value* addr = f->locPtr ? emitExpr(f->locPtr.get()).reg : addressOf(bsym);
+    b_.CreateCall(runtimeFn("pli_free"), {addr});
+  }
 }
 
 void IRGen::emitIf(HStmt* s) {

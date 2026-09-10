@@ -226,6 +226,15 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     h->args.push_back(std::move(ha));
   }
 
+  // ALLOCATE (rule 87) / FREE (rule 90): mirror the based variable references
+  // and their SET pointer targets / locators.
+  for (const auto& b : s->allocBase)
+    h->allocBase.push_back(lowerExpr(b.get()));
+  for (const auto& t : s->allocSet)
+    h->allocSet.push_back(lowerExpr(t.get()));
+  for (const auto& b : s->freeBase)
+    h->freeBase.push_back(lowerExpr(b.get()));
+
   // Statement-level conversions that IRGen applies inline, made explicit.
   switch (h->kind) {
   case HStmt::Assign:
@@ -470,6 +479,10 @@ const char* stmtKind(HStmt::Kind k) {
     return "Goto";
   case HStmt::Entry:
     return "Entry";
+  case HStmt::Allocate:
+    return "Allocate";
+  case HStmt::Free:
+    return "Free";
   case HStmt::Leave:
     return "Leave";
   }
@@ -546,6 +559,20 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   }
   case HStmt::Entry:
     os << " " << s->name;
+    break;
+  case HStmt::Allocate:
+    for (size_t i = 0; i < s->allocBase.size(); ++i) {
+      os << (i ? "," : " ");
+      printExpr(os, s->allocBase[i].get(), ind);
+      os << " set=";
+      printExpr(os, s->allocSet[i].get(), ind);
+    }
+    break;
+  case HStmt::Free:
+    for (size_t i = 0; i < s->freeBase.size(); ++i) {
+      os << (i ? "," : " ");
+      printExpr(os, s->freeBase[i].get(), ind);
+    }
     break;
   default:
     break;

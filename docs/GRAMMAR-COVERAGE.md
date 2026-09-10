@@ -52,7 +52,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (82),(83) | `WAIT`, `DELAY` | M9 | |
 | (84),(85) | `EXIT`, `STOP` | M0 | |
 | (86) | assignment (incl. `BY NAME`) | partial M2 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); whole-structure assignment between identical-shape structures (`struct_assign.pli`, rule (127)); multiple assignment `a, b, c = e` with one shared RHS and same-type scalar/array-element targets (`multiassign.pli`, `bad_multiassign.pli`, `bad_multiassign_type.pli`); `BY NAME` assignment `S = T, BY NAME` copies same-named members regardless of layout, recursing into minor structures and arrays, skipping names absent from either side (`struct_by_name.pli`, ADR-043); non-structure or multi-target `BY NAME` diagnosed (`bad_struct_byname.pli`) |
-| (87)–(90) | `ALLOCATE`/`FREE` | diag → M3 | |
+| (87)–(90) | `ALLOCATE`/`FREE` | partial M2 | heap-allocate a based structure and store its address in a POINTER with the `SET(reference)` option, then release the block with `FREE`, addressed either by an explicit locator `P -> X` or by the based variable's own `BASED` pointer — two allocations of the same based variable yield independent blocks (`alloc.pli`, `bad_alloc.pli`, `bad_alloc_set.pli`, ADR-065); the `IN (AREA)` option and dynamic-extent based arrays → QR2.3 |
 | (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M4 | |
 | (100)–(103) | `OPEN`/`CLOSE` | diag → M5 | |
 | (104),(105) | `GET`/`PUT` and options | partial M0 | `PUT [SKIP] [PAGE] LIST`; rest → M5 |

@@ -1,0 +1,12 @@
+ /* ALLOCATE/FREE require based storage and a POINTER (rules (87)-(90)):
+    allocating a non-based variable, a non-pointer SET target, or freeing a
+    non-based variable is diagnosed rather than miscompiled. */
+ bad_alloc: procedure options(main);
+    declare p pointer;
+    declare n fixed bin(31);
+    declare 1 rec based(p),
+           2 a fixed bin(31);
+    declare 1 x,
+           2 b fixed bin(31);
+    allocate x set (p);
+ end bad_alloc;

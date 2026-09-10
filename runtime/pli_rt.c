@@ -288,3 +288,19 @@ void pli_subscript_oob(void) {
   fprintf(stderr, "SUBSCRIPTRANGE: array subscript out of bounds\n");
   exit(8);
 }
+
+/* ALLOCATE (rule 87): heap-allocate n bytes for a based structure. A null
+ * return would be an ALLOCATION condition (M4); the interim raises a hard
+ * error. */
+char *pli_alloc(long long n) {
+  char *p = (char *)malloc((size_t)(n < 0 ? 0 : n));
+  if (!p) {
+    pli_rt_fini();
+    fprintf(stderr, "ALLOCATION: out of memory\n");
+    exit(8);
+  }
+  return p;
+}
+
+/* FREE (rule 90): release the heap block addressed by a based pointer. */
+void pli_free(char *p) { free(p); }

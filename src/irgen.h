@@ -104,6 +104,8 @@ private:
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
   void emitCall(HStmt* s);
+  void emitAllocate(HStmt* s); // ALLOCATE (rule 87)
+  void emitFree(HStmt* s);     // FREE (rule 90)
 
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is

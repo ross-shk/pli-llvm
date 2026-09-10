@@ -112,22 +112,24 @@ struct DeclItem {
 
 struct Stmt {
   enum Kind {
-    Null,    // rule (67)
-    Declare, // rule (9)
-    Assign,  // rule (86)
-    If,      // rule (74)
-    Group,   // rule (70)  DO; ... END;
-    Begin,   // rule (68)  BEGIN; ... END; — a block with its own scope
-    DoWhile, // rule (71)  DO WHILE(e);
-    DoIter,  // rule (71)+(72)+(73)
-    Put,     // rules (104)-(109)
-    CallS,   // rule (78)
-    Return,  // rule (81)
-    Stop,    // rule (85)
-    Goto,    // rule (77)  GO TO label — local, within a procedure (M1)
-    Entry,   // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
-             //            an alternate entry point into this procedure
-    Leave,   // (not in TR 25.084; modern LEAVE, rejected in M0)
+    Null,     // rule (67)
+    Declare,  // rule (9)
+    Assign,   // rule (86)
+    If,       // rule (74)
+    Group,    // rule (70)  DO; ... END;
+    Begin,    // rule (68)  BEGIN; ... END; — a block with its own scope
+    DoWhile,  // rule (71)  DO WHILE(e);
+    DoIter,   // rule (71)+(72)+(73)
+    Put,      // rules (104)-(109)
+    CallS,    // rule (78)
+    Return,   // rule (81)
+    Stop,     // rule (85)
+    Goto,     // rule (77)  GO TO label — local, within a procedure (M1)
+    Entry,    // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
+              //            an alternate entry point into this procedure
+    Allocate, // rule (87)  ALLOCATE based-allocate-item{,...}
+    Free,     // rule (90)  FREE ( [reference ->] identifier ){,...}
+    Leave,    // (not in TR 25.084; modern LEAVE, rejected in M0)
   } kind = Null;
 
   SourceLoc loc{};
@@ -157,6 +159,15 @@ struct Stmt {
   std::vector<ExprP> items;
 
   std::vector<ExprP> args; // CALL arguments
+
+  // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
+  // (a VarRef to a based structure) and its SET(...) pointer target (rule 88;
+  // allocSet[i] is a VarRef to a POINTER).
+  std::vector<ExprP> allocBase;
+  std::vector<ExprP> allocSet;
+  // FREE (rule 90): per item, the based variable reference. An explicit locator
+  // is carried on freeBase[i]->locPtr; null means the BASED base pointer.
+  std::vector<ExprP> freeBase;
 };
 
 struct Proc {

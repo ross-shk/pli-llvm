@@ -42,3 +42,6 @@ PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
 PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */
 PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE interim (M2) */
+
+PLI_FN(pli_alloc, PTR, (I64))                         /* ALLOCATE (87) */
+PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */

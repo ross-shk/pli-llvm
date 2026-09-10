@@ -1694,3 +1694,35 @@ target); requiring the locator pointer to equal the based structure's own
 `BASED(P)` pointer (the locator may name any pointer); supporting bare `BASED`
 without a pointer (needs an unqualified-locator rule deferred with
 `ALLOCATE`/`FREE`).
+
+## ADR-065 — ALLOCATE/FREE for based records via heap malloc/free
+
+**Context.** ADR-063/064 added POINTER and based data with `->`. QR1.3 (CM2)
+needs the last piece of linked records: `ALLOCATE` (rules 87-88) to create the
+heap storage a based structure overlays and `FREE` (rule 90) to release it. Both
+were diagnosed unimplemented, citing rule (87).
+
+**Decision.** `ALLOCATE id SET(ref);` heap-allocates the based structure `id`
+and stores the address in the POINTER `ref`; `FREE P -> id;` releases the block
+addressed by the locator P, and `FREE id;` releases the block addressed by the
+based variable's own `BASED` base. Both map to C `malloc`/`free` via two new
+runtime entries `pli_alloc`/`pli_free` in `pli_rt_abi.def`. `emitAllocate` sizes
+the block from the based structure's LLVM alloc size
+(`getTypeAllocSize(llvmTy(sym->ty))`) and stores the returned pointer into the
+SET target (a normal pointer `storeTo`); `emitFree` calls `pli_free` on the
+loaded locator value or on `addressOf(basedSym)`. Sema requires a based variable
+(a `basedBase` symbol) and a POINTER SET target/locator (rule 88/90), and defers
+dynamic-extent based arrays and the `IN (AREA)` option to QR2.3.
+
+**Consequences.** `tests/core/alloc.pli` covers two allocations of one based
+variable producing independent blocks, locator read/write, and both FREE forms;
+`tests/core/bad_alloc.pli` rejects allocating a non-based variable and
+`tests/core/bad_alloc_set.pli` a non-pointer SET target; `make test` and
+`make check` stay green. `pli_alloc` raises a hard ALLOCATION error on OOM until
+condition handling (M4).
+
+**Rejected.** Calling libc `malloc`/`free` directly in emitted IR (kept behind
+the `pli_rt_abi.def` ABI so the C and IR signatures cannot drift, cf. ADR-002);
+reusing the based structure's own `BASED` pointer for `ALLOCATE SET` (SET may
+name any pointer); serving the `IN (AREA)` option, which needs a runtime
+sub-allocator.

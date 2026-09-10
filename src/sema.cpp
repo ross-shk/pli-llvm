@@ -1145,6 +1145,45 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Leave:
   case Stmt::Entry: // declaration-like; params/type resolved in processProc
     break;
+  case Stmt::Allocate:
+    // ALLOCATE (rules 87,88): heap-allocate each based structure and store its
+    // address in the SET pointer target. The based variable must be fixed-size
+    // (a runtime-extent based array is QR2.3), and the SET target a POINTER.
+    for (size_t i = 0; i < s->allocBase.size(); ++i) {
+      typeExpr(s->allocBase[i].get(), sc, p);
+      Symbol* bsym = s->allocBase[i]->sym;
+      if (!bsym || !bsym->basedBase) {
+        d_.error(s->allocBase[i]->loc,
+                 "'" + s->allocBase[i]->name +
+                     "' is not a BASED variable; ALLOCATE requires based storage",
+                 "(88)");
+        continue;
+      }
+      if (bsym->ty.isArray() && bsym->ty.isDynamic())
+        d_.error(s->allocBase[i]->loc,
+                 "ALLOCATE of a dynamic-extent based array is not implemented in this stage",
+                 "(89)");
+      if (i < s->allocSet.size()) {
+        typeExpr(s->allocSet[i].get(), sc, p);
+        if (s->allocSet[i]->kind != Expr::VarRef || !s->allocSet[i]->ty.isPointer())
+          d_.error(s->allocSet[i]->loc, "the SET target of ALLOCATE must be a POINTER variable",
+                   "(88)");
+      }
+    }
+    break;
+  case Stmt::Free:
+    // FREE (rule 90): free the storage of each based variable, addressed either
+    // by an explicit locator pointer or by the variable's own BASED pointer.
+    for (auto& f : s->freeBase) {
+      typeExpr(f.get(), sc, p);
+      Symbol* bsym = f->sym;
+      if (!bsym || !bsym->basedBase)
+        d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
+                 "(90)");
+      if (f->locPtr && !f->locPtr->ty.isPointer())
+        d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER", "(90)");
+    }
+    break;
   case Stmt::Goto:
     // GO TO target must be a label defined in this procedure (rules (64),(77)).
     if (procLabels_.find(s->name) == procLabels_.end())
