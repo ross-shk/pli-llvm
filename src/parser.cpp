@@ -591,11 +591,10 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     resync();
     return nullptr;
   }
-  if (kw("ALLOCATE") || kw("FREE")) {
-    d_.error(cur().loc, "dynamic storage (ALLOCATE/FREE) is not implemented in this stage", "(87)");
-    resync();
-    return nullptr;
-  }
+  if (kw("ALLOCATE"))
+    return parseAllocate();
+  if (kw("FREE"))
+    return parseFree();
   if (kw("OPEN") || kw("CLOSE") || kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE")) {
     d_.error(cur().loc, "file input/output is not implemented in this stage", "(100)");
     resync();
@@ -1486,6 +1485,107 @@ StmtP Parser::parseAssignment() {
     }
   }
   expect(Tok::Semi, "(86)");
+  return st;
+}
+
+// ALLOCATE based-allocate-item{,...};  rule (87)
+// based-allocate-item ::= identifier ( SET ( reference ) [ IN ( reference ) ]
+//                                     | IN ( reference ) [ SET ( reference ) ] )  rule (88)
+// CM2 serves the SET option: heap-allocate the based structure's storage and
+// store the address in the pointer reference. The IN (AREA) option stays QR2.3.
+StmtP Parser::parseAllocate() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Allocate;
+  st->loc = cur().loc;
+  advance(); // ALLOCATE
+  for (;;) {
+    if (at(Tok::Word)) {
+      auto base = std::make_unique<Expr>();
+      base->kind = Expr::VarRef;
+      base->name = cur().text;
+      base->loc = cur().loc;
+      advance();
+      bool paren = eat(Tok::LParen); // optional: identifier ( SET ( ref ) )
+      if (atWord("SET")) {
+        advance();
+        expect(Tok::LParen, "(88)");
+        ExprP set = parsePrimary();
+        if (!set) {
+          resync();
+          return nullptr;
+        }
+        expect(Tok::RParen, "(88)");
+        if (paren)
+          expect(Tok::RParen, "(88)");
+        st->allocBase.push_back(std::move(base));
+        st->allocSet.push_back(std::move(set));
+      } else {
+        d_.error(cur().loc, "ALLOCATE requires the SET ( reference ) option in this stage", "(88)");
+        resync();
+        return nullptr;
+      }
+    } else {
+      d_.error(cur().loc, "expected an identifier after ALLOCATE", "(87)");
+      resync();
+      return nullptr;
+    }
+    if (!eat(Tok::Comma))
+      break;
+  }
+  expect(Tok::Semi, "(87)");
+  return st;
+}
+
+// FREE ( [reference ->] identifier [ IN ( reference ) ] ){,...};  rule (90)
+// CM2 serves the plain based-variable form and the locator-qualified form. The
+// IN (AREA) option stays QR2.3.
+StmtP Parser::parseFree() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Free;
+  st->loc = cur().loc;
+  advance(); // FREE
+  for (;;) {
+    bool paren = eat(Tok::LParen);
+    if (at(Tok::Word)) {
+      auto base = std::make_unique<Expr>();
+      base->kind = Expr::VarRef;
+      base->name = cur().text;
+      base->loc = cur().loc;
+      advance();
+      if (at(Tok::Arrow)) {
+        // [reference ->] identifier: the left word is the locator pointer, the
+        // right is the based variable.
+        auto loc = std::make_unique<Expr>();
+        loc->kind = Expr::VarRef;
+        loc->name = base->name;
+        loc->loc = base->loc;
+        advance(); // ->
+        if (at(Tok::Word)) {
+          base->name = cur().text;
+          base->loc = cur().loc;
+          base->locPtr = std::move(loc);
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a based variable after '->'", "(90)");
+        }
+      }
+      st->freeBase.push_back(std::move(base));
+    } else {
+      d_.error(cur().loc, "expected an identifier after FREE", "(90)");
+      resync();
+      return nullptr;
+    }
+    if (atWord("IN")) {
+      d_.error(cur().loc, "FREE ... IN ( AREA ) is not implemented in this stage", "(90)");
+      resync();
+      return nullptr;
+    }
+    if (paren)
+      expect(Tok::RParen, "(90)");
+    if (!eat(Tok::Comma))
+      break;
+  }
+  expect(Tok::Semi, "(90)");
   return st;
 }
 

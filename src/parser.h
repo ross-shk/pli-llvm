@@ -68,6 +68,8 @@ private:
   StmtP parsePut();
   StmtP parseCall();
   StmtP parseAssignment();
+  StmtP parseAllocate(); // ALLOCATE (rule 87)
+  StmtP parseFree();     // FREE (rule 90)
   void parseProcOptions(Proc* p);
   bool parseDeclItem(DeclItem& item);
   // Parse the dimension + attribute tail shared by a declaration item and by a

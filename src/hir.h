@@ -101,6 +101,8 @@ struct HStmt {
     Stop,
     Goto,
     Entry,
+    Allocate,
+    Free,
     Leave,
   } kind = Null;
 
@@ -131,6 +133,14 @@ struct HStmt {
   std::vector<HExprP> items;
 
   std::vector<HExprP> args; // CALL arguments
+
+  // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
+  // and its SET(...) pointer target (rule 88).
+  std::vector<HExprP> allocBase;
+  std::vector<HExprP> allocSet;
+  // FREE (rule 90): per item, the based variable reference (locPtr carries an
+  // explicit locator, null = the BASED base).
+  std::vector<HExprP> freeBase;
 };
 
 struct HProc {
