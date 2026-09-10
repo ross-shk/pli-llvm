@@ -1397,7 +1397,19 @@ StmtP Parser::parsePut() {
       resync();
       return nullptr;
     }
-    if (atWord("LINE") || atWord("STRING") || atWord("COPY")) {
+    if (atWord("STRING")) {
+      // STRING ( reference ) option (rule 105): write list-directed output into
+      // the character variable instead of SYSPRINT.
+      advance();
+      if (eat(Tok::LParen)) {
+        st->stringTarget = parsePrimary();
+        expect(Tok::RParen, "(105)");
+      } else {
+        d_.error(cur().loc, "expected '(' after STRING", "(105)");
+      }
+      continue;
+    }
+    if (atWord("LINE") || atWord("COPY")) {
       d_.error(cur().loc, "PUT option " + cur().text + " is not implemented in this stage",
                "(105)");
       resync();
@@ -1455,8 +1467,19 @@ StmtP Parser::parseGet() {
       d_.warn(l, "FILE option ignored: this stage reads from SYSIN only", "(105)");
       continue;
     }
-    if (atWord("EDIT") || atWord("DATA") || atWord("STRING") || atWord("COPY") || atWord("LINE") ||
-        atWord("PAGE")) {
+    if (atWord("STRING")) {
+      // STRING ( reference ) option (rule 105): read list-directed input from
+      // the character variable instead of SYSIN.
+      advance();
+      if (eat(Tok::LParen)) {
+        st->stringTarget = parsePrimary();
+        expect(Tok::RParen, "(105)");
+      } else {
+        d_.error(cur().loc, "expected '(' after STRING", "(105)");
+      }
+      continue;
+    }
+    if (atWord("EDIT") || atWord("DATA") || atWord("COPY") || atWord("LINE") || atWord("PAGE")) {
       d_.error(cur().loc, "GET option " + cur().text + " is not implemented in this stage",
                "(105)");
       resync();

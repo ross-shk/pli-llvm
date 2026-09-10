@@ -1354,6 +1354,16 @@ void IRGen::emitPut(HStmt* s) {
     }
     b_.CreateCall(runtimeFn("pli_put_skip"), {n});
   }
+  // STRING (rule 105) sink: route the list-directed output into the character
+  // variable instead of SYSPRINT.
+  llvm::Value *sdata = nullptr, *slen = nullptr;
+  if (s->stringTarget) {
+    HExpr* st = s->stringTarget.get();
+    sdata =
+        st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+    slen = i64(st->ty.len);
+    b_.CreateCall(runtimeFn("pli_string_put_open"), {sdata, slen});
+  }
   for (auto& item : s->items) {
     Val v = emitExpr(item.get());
     switch (v.ty.k) {
@@ -1383,11 +1393,23 @@ void IRGen::emitPut(HStmt* s) {
       break;
     }
   }
+  if (s->stringTarget)
+    b_.CreateCall(runtimeFn("pli_string_put_close"), {sdata, slen});
 }
 
 // GET (rules 104-109): list-directed input reads each data-list reference from
 // SYSIN and stores the value, like an assignment target.
 void IRGen::emitGet(HStmt* s) {
+  // STRING (rule 105) source: route the list-directed input from the character
+  // variable instead of SYSIN.
+  llvm::Value *sdata = nullptr, *slen = nullptr;
+  if (s->stringTarget) {
+    HExpr* st = s->stringTarget.get();
+    sdata =
+        st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+    slen = i64(st->ty.len);
+    b_.CreateCall(runtimeFn("pli_string_get_open"), {sdata, slen});
+  }
   for (auto& item : s->items) {
     HExpr* t = item.get();
     const Type& ty = t->ty;
@@ -1423,6 +1445,8 @@ void IRGen::emitGet(HStmt* s) {
     }
     storeGetTarget(t, v, s->loc);
   }
+  if (s->stringTarget)
+    b_.CreateCall(runtimeFn("pli_string_get_close"), {});
 }
 
 // Store an input value into a data-list reference (rules (109),(110)): the same

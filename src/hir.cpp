@@ -207,6 +207,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     h->body.push_back(lowerStmt(b.get(), owner));
 
   h->skipCount = lowerExpr(s->skipCount.get());
+  h->stringTarget = lowerExpr(s->stringTarget.get());
   for (const auto& it : s->items)
     h->items.push_back(lowerExpr(it.get()));
 

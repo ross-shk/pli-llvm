@@ -50,3 +50,8 @@ PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (10
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))
 PLI_FN(pli_get_list_char, VOID, (PTR, I64))
 PLI_FN(pli_get_list_bit, I8, (VOID))
+
+PLI_FN(pli_string_put_open, VOID, (PTR, I64))         /* STRING output (105) */
+PLI_FN(pli_string_put_close, VOID, (PTR, I64))
+PLI_FN(pli_string_get_open, VOID, (PTR, I64))         /* STRING input (105) */
+PLI_FN(pli_string_get_close, VOID, (VOID))

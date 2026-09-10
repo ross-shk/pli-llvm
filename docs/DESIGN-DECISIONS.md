@@ -1755,3 +1755,32 @@ pair of FIXED, a FLOAT, and a CHARACTER value, verifies each, and prints PASS;
 `pli_*` ABI so signatures cannot drift, cf. ADR-002); supporting `FILE`/`STRING`
 sources, `EDIT`/`DATA` specifications, `COPY`, `LINE`, or `PAGE` in this stage
 (QR2.5); list-directed `DO`-repetition data-list elements (rule 111).
+
+## ADR-067 — STRING ( reference ) list-directed sinks and sources
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs file/string sources and
+sinks. The `STRING ( reference )` stream option (rule 105) routes list-directed
+I/O to/from an in-memory character variable instead of SYSPRINT/SYSIN — the
+`sprintf`/`sscanf` analogue — and was diagnosed unimplemented citing rule (105).
+
+**Decision.** `PUT STRING(s) LIST(...)` writes the list-directed output into the
+NONVARYING character variable `s`; `GET STRING(s) LIST(...)` reads it back. The
+target must be a NONVARYING character variable (sema `checkStringTarget`;
+VARYING, arrays, and PAGE/SKIP-with-STRING are diagnosed). Rather than a second
+set of per-type output/input functions, the runtime keeps a selectable sink
+(`out_buf`/`out_cap`/`out_len`) and source (`in_buf`/`in_len`/`in_pos`): `put_raw`
+writes into `out_buf` when active and `next_char`/`get_token` read from `in_buf`
+when active, so the existing `pli_put_list_*`/`pli_get_list_*` functions work
+unchanged. Four new entries (`pli_string_put_open/close`, `pli_string_get_open/
+close` in `pli_rt_abi.def`) switch the mode; `put_close` blank-pads the unused
+tail of the target. `emitPut`/`emitGet` open the STRING before the item loop and
+close it after (target addressed like an assignment left-hand side).
+
+**Consequences.** `tests/core/string.pli` does a `PUT STRING` → `GET STRING`
+round-trip and verifies the values are recovered; `tests/core/bad_string.pli`
+rejects a non-character STRING target; `make test` and `make check` stay green.
+
+**Rejected.** Adding a parallel `pli_put_str_*`/`pli_get_str_*` per-type function
+set (duplicated the whole list-directed surface); routing through the FILE
+option (needs file-handle state, QR2.5); supporting `STRING` with `PAGE`/`SKIP`
+or a VARYING target (not meaningful for a fixed in-memory sink/source).

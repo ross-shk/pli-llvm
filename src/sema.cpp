@@ -1088,6 +1088,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   }
   case Stmt::Put: {
     typeExpr(s->skipCount.get(), sc, p);
+    checkStringTarget(s, sc, p);
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       if (it->ty.isVoid())
@@ -1100,6 +1101,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // item must be an assignable scalar reference, not a constant or procedure
     // (rules (109),(110)).
     typeExpr(s->skipCount.get(), sc, p);
+    checkStringTarget(s, sc, p);
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
@@ -1224,6 +1226,22 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
     break;
   }
+}
+
+// The STRING ( reference ) stream option (rule 105): the target must be a
+// NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only, meaningless
+// against a string sink/source.
+void Sema::checkStringTarget(Stmt* s, Scope* sc, Proc* p) {
+  if (!s->stringTarget)
+    return;
+  typeExpr(s->stringTarget.get(), sc, p);
+  Expr* t = s->stringTarget.get();
+  if (t->kind != Expr::VarRef || !t->sym || t->sym->kind == Symbol::ProcName)
+    d_.error(t->loc, "the STRING option requires a character variable", "(105)");
+  else if (!t->ty.isChar() || t->ty.varying)
+    d_.error(t->loc, "the STRING option requires a NONVARYING CHARACTER variable", "(105)");
+  if (s->page || s->skip)
+    d_.error(s->loc, "PAGE/SKIP cannot be combined with the STRING option", "(105)");
 }
 
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule

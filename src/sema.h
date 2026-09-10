@@ -98,6 +98,9 @@ private:
   void collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isStatic);
   void collectLabels(Stmt* s); // gather GO TO targets defined in this proc
   void checkStmt(Stmt* s, Scope* sc, Proc* p);
+  // Validate the STRING ( reference ) stream option (rule 105): the target must
+  // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only.
+  void checkStringTarget(Stmt* s, Scope* sc, Proc* p);
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);

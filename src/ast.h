@@ -154,10 +154,14 @@ struct Stmt {
   Type entryRetTy{};
   std::vector<Symbol*> entryParamSyms; // resolved by sema
 
-  // PUT statement options
+  // PUT/GET stream statement options (rules (104),(105))
   bool skip = false, page = false;
   ExprP skipCount;
   std::vector<ExprP> items;
+  // STRING ( reference ) option (rule 105): the character variable that the
+  // list-directed output is written into (PUT) or input is read from (GET);
+  // null when the stream is SYSIN/SYSPRINT.
+  ExprP stringTarget;
 
   std::vector<ExprP> args; // CALL arguments
 
