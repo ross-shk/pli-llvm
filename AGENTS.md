@@ -66,7 +66,7 @@ copy features from it into this compiler
 
 ## Token economy
 
-- think silently, return only the concise final answer
+- reason silently, return only one-line comments at crucial reasoning steps and the concise final answer
 - `grep` for a symbol first, then `read` with `offset`/`limit`
 - large files: `src/parser.cpp`, `src/irgen.cpp`, `TR25.084-concrete-syntax.md`
 - `edit` over `write`; batch related edits; parallel independent `bash` calls
