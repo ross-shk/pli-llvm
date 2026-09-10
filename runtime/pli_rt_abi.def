@@ -55,3 +55,10 @@ PLI_FN(pli_string_put_open, VOID, (PTR, I64))         /* STRING output (105) */
 PLI_FN(pli_string_put_close, VOID, (PTR, I64))
 PLI_FN(pli_string_get_open, VOID, (PTR, I64))         /* STRING input (105) */
 PLI_FN(pli_string_get_close, VOID, (VOID))
+
+PLI_FN(pli_file_open, VOID, (I64, CPTR, I64, I64))    /* OPEN (100-103): slot, name, mode */
+PLI_FN(pli_file_close, VOID, (I64))
+PLI_FN(pli_put_select, VOID, (I64))                   /* FILE output routing (105) */
+PLI_FN(pli_put_unselect, VOID, (VOID))
+PLI_FN(pli_get_select, VOID, (I64))                   /* FILE input routing (105) */
+PLI_FN(pli_get_unselect, VOID, (VOID))

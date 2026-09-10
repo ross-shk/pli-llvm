@@ -104,6 +104,8 @@ struct HStmt {
     Entry,
     Allocate,
     Free,
+    Open,
+    Close,
     Leave,
   } kind = Null;
 
@@ -136,6 +138,12 @@ struct HStmt {
   // directed output is written into (PUT) or input read from (GET); null =
   // SYSIN/SYSPRINT.
   HExprP stringTarget;
+
+  // FILE ( f ) option (rule 105) and OPEN/CLOSE FILE ( f ): the resolved FILE
+  // variable and its runtime slot; OPEN carries the TITLE string and mode.
+  Symbol* fileSym = nullptr;
+  std::string openTitle;
+  bool openInput = false;
 
   std::vector<HExprP> args; // CALL arguments
 

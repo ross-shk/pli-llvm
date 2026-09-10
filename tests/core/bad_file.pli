@@ -1,0 +1,8 @@
+ /* The FILE ( f ) stream option (rule (105)) and OPEN/CLOSE FILE ( f ) (rules
+    (100)-(103)) need a declared FILE variable; a numeric variable is diagnosed
+    rather than misused. */
+ bad_file: procedure options(main);
+    declare n fixed bin(31);
+    open file(n) title('x') output;
+    put file(n) list(1);
+ end bad_file;

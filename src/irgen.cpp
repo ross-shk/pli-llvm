@@ -974,6 +974,12 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Free:
     emitFree(s);
     break;
+  case HStmt::Open:
+    emitOpen(s);
+    break;
+  case HStmt::Close:
+    emitClose(s);
+    break;
   case HStmt::Return: {
     if (curProc_->isFunction) {
       Val v = emitExpr(s->value.get());
@@ -1214,6 +1220,21 @@ void IRGen::emitFree(HStmt* s) {
   }
 }
 
+// OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
+// The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 = OUTPUT.
+void IRGen::emitOpen(HStmt* s) {
+  Symbol* f = s->fileSym;
+  llvm::Value* name = globalString(s->openTitle);
+  b_.CreateCall(
+      runtimeFn("pli_file_open"),
+      {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(s->openInput ? 0 : 1)});
+}
+
+// CLOSE (rules 102,103): close the FILE variable's slot.
+void IRGen::emitClose(HStmt* s) {
+  b_.CreateCall(runtimeFn("pli_file_close"), {i64(s->fileSym->fileSlot)});
+}
+
 void IRGen::emitIf(HStmt* s) {
   Val c = emitExpr(s->cond.get());
   llvm::Value* cond = toI1(c, s->loc);
@@ -1364,6 +1385,10 @@ void IRGen::emitPut(HStmt* s) {
     slen = i64(st->ty.len);
     b_.CreateCall(runtimeFn("pli_string_put_open"), {sdata, slen});
   }
+  // FILE ( f ) (rule 105): route the list-directed output through the named
+  // file's stream instead of SYSPRINT.
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_put_select"), {i64(s->fileSym->fileSlot)});
   for (auto& item : s->items) {
     Val v = emitExpr(item.get());
     switch (v.ty.k) {
@@ -1395,6 +1420,8 @@ void IRGen::emitPut(HStmt* s) {
   }
   if (s->stringTarget)
     b_.CreateCall(runtimeFn("pli_string_put_close"), {sdata, slen});
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_put_unselect"), {});
 }
 
 // GET (rules 104-109): list-directed input reads each data-list reference from
@@ -1410,6 +1437,10 @@ void IRGen::emitGet(HStmt* s) {
     slen = i64(st->ty.len);
     b_.CreateCall(runtimeFn("pli_string_get_open"), {sdata, slen});
   }
+  // FILE ( f ) (rule 105): route the list-directed input through the named
+  // file's stream instead of SYSIN.
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
   for (auto& item : s->items) {
     HExpr* t = item.get();
     const Type& ty = t->ty;
@@ -1447,6 +1478,8 @@ void IRGen::emitGet(HStmt* s) {
   }
   if (s->stringTarget)
     b_.CreateCall(runtimeFn("pli_string_get_close"), {});
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_get_unselect"), {});
 }
 
 // Store an input value into a data-list reference (rules (109),(110)): the same

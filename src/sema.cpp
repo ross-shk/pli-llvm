@@ -404,6 +404,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         item.dynMembers = std::move(dynMs);
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p; // which procedure's frame holds this variable
+        if (item.fileAttr) {
+          // A FILE variable carries no runtime storage of its own: its identity
+          // is the compile-time slot that OPEN/CLOSE/FILE( f ) pass to libpli.
+          item.sym->fileAttr = true;
+          item.sym->fileSlot = nextFileSlot_++;
+          storage_.pop_back();
+        }
         // DEFINED (rule 24): the item overlays the storage of an already-
         // declared variable of identical type in this scope, so it needs no
         // storage of its own — references resolve to the base's address
@@ -631,7 +638,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // BEGIN blocks too, hence the Proc* here. A DEFINED or BASED variable
         // has no storage of its own, so it is never allocated.
         if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase &&
-            !item.sym->basedBase)
+            !item.sym->basedBase && !item.sym->fileAttr)
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
@@ -1089,6 +1096,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Put: {
     typeExpr(s->skipCount.get(), sc, p);
     checkStringTarget(s, sc, p);
+    checkFileTarget(s, sc);
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       if (it->ty.isVoid())
@@ -1102,6 +1110,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // (rules (109),(110)).
     typeExpr(s->skipCount.get(), sc, p);
     checkStringTarget(s, sc, p);
+    checkFileTarget(s, sc);
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
@@ -1220,6 +1229,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER", "(90)");
     }
     break;
+  case Stmt::Open:
+  case Stmt::Close:
+    // OPEN/CLOSE FILE ( f ) (rules 100-103): f must be a declared FILE variable.
+    checkFileTarget(s, sc);
+    break;
   case Stmt::Goto:
     // GO TO target must be a label defined in this procedure (rules (64),(77)).
     if (procLabels_.find(s->name) == procLabels_.end())
@@ -1242,6 +1256,22 @@ void Sema::checkStringTarget(Stmt* s, Scope* sc, Proc* p) {
     d_.error(t->loc, "the STRING option requires a NONVARYING CHARACTER variable", "(105)");
   if (s->page || s->skip)
     d_.error(s->loc, "PAGE/SKIP cannot be combined with the STRING option", "(105)");
+}
+
+// The FILE ( f ) stream option (rule 105) and OPEN/CLOSE FILE ( f ) (rules
+// 100-103): f must be a declared FILE variable. FILE and STRING are mutually
+// exclusive stream targets. Resolves s->fileIdent to s->fileSym.
+void Sema::checkFileTarget(Stmt* s, Scope* sc) {
+  if (s->fileIdent.empty())
+    return;
+  Symbol* sym = lookup(sc, s->fileIdent);
+  if (!sym || sym->kind == Symbol::ProcName || !sym->fileAttr) {
+    d_.error(s->loc, "'" + s->fileIdent + "' is not a FILE variable", "(105)");
+    return;
+  }
+  s->fileSym = sym;
+  if (s->stringTarget)
+    d_.error(s->loc, "the FILE and STRING options cannot be combined", "(105)");
 }
 
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
