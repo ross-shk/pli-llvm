@@ -1407,3 +1407,36 @@ forwarding one `*` array to another `*` parameter (a second hidden extent whose
 value is not a constant or a recorded dynamic bound); a dynamic lower bound on a
 `*` parameter; `*` on a non-parameter declaration (a `*` local has no caller to
 supply its extent).
+
+---
+
+## ADR-056 — Exact FIXED DECIMAL constants and scale-aware conversion
+
+**Context.** ADR-006 represents `FIXED DECIMAL(p,q)` as an integer scaled by
+10^q but left `scale` unused in codegen (M0 deviation: scale 0 only). QR1.2
+needs exact decimal: a bare fractional literal (`2.5`) is a FIXED DECIMAL
+constant (rule 135), and arithmetic, comparison, and assignment must honour
+the scale.
+
+**Decision.** A numeric literal with a fraction point and no exponent becomes an
+exact `FIXED DECIMAL(p,q)` constant (`p` = digits, `q` = fraction digits, stored
+integer = value·10^q); an exponent form stays FLOAT. `IRGen::convert` rescales a
+FIXED DECIMAL value by powers of ten: to a DECIMAL target by 10^(dst−src), and a
+scaled DECIMAL source to a BINARY target drops the fraction; scale reduction
+rounds half away from zero. `FLOAT ↔ FIXED DECIMAL` scales by 10^q. `+ -` and
+comparison rescale operands to the common (max) scale; `*` (and `MULTIPLY`)
+multiply the raw scaled integers (product scale = sum) without pre-rescaling.
+`arithResultType` yields a DECIMAL common type only when both operands are
+DECIMAL, so FIXED BINARY scale (2^q) is never rescaled by ten.
+
+**Consequences.** `tests/core/decimal.pli` covers entry from a FLOAT literal,
+`FIXED DECIMAL ↔ FLOAT`, scale-aware `+ - *`, mixed-scale addition, product-scale
+widening, round-half-away scale reduction, and scaled comparison. The existing
+`scaled.pli` (FIXED BINARY, 2-based) and the float-literal builtin tests
+(TRUNC/ROUND/MAX/MOD/PRECISION/MULTIPLY/ABS) stay green. `TRUNC` of a scaled
+DECIMAL now drops the fractional digits. FIXED division still evaluates in FLOAT
+(ADR-006 deviation, QR2).
+
+**Rejected.** Binary floating point for decimal (0.10 not representable);
+changing `scaled.pli`'s 2-based FIXED BINARY behavior; adding decimal overflow
+(`SIZE`/`FIXEDOVERFLOW`) checks in this slice (deferred to QR2).

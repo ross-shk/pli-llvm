@@ -11,7 +11,12 @@ Type arithResultType(const Type& a, const Type& b) {
   if (a.k == TK::Float || b.k == TK::Float)
     return Type::flt(std::max(a.k == TK::Float ? a.prec : 6, b.k == TK::Float ? b.prec : 6));
   int bits = std::max(a.intBits(), b.intBits());
-  return Type::fixedBin(bits == 64 ? 63 : 31, std::max(a.scale, b.scale));
+  int p = bits == 64 ? 63 : 31;
+  // A common DECIMAL type only when both operands are DECIMAL: FIXED BINARY
+  // scale is 2-based (2^q) and must not be rescaled by powers of ten.
+  bool dec = a.k == TK::FixedDec && b.k == TK::FixedDec;
+  return dec ? Type::fixedDec(p, std::max(a.scale, b.scale))
+             : Type::fixedBin(p, std::max(a.scale, b.scale));
 }
 
 // Product of two FIXED operands: the scale of the result is the sum of the
@@ -687,8 +692,8 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
   Expr* lit = e;
   if (lit->kind == Expr::Unary && lit->op == Tok::Minus)
     lit = lit->a.get();
-  if (lit->kind != Expr::IntLit && lit->kind != Expr::FltLit && lit->kind != Expr::CharLit &&
-      lit->kind != Expr::BitLit) {
+  if (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
+      lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
     d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
     return nullptr;
   }
@@ -1033,6 +1038,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     e->ty = Type::fixedDec(e->ival > 99999 || e->ival < -99999 ? 15 : 5, 0);
     if (e->ty.intBits() == 32 && (e->ival > 2147483647LL || e->ival < -2147483648LL))
       e->ty = Type::fixedBin(63, 0);
+    break;
+  case Expr::DecLit:
+    e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
     break;
   case Expr::FltLit:
     e->ty = Type::flt(6);
@@ -1415,14 +1423,6 @@ bool Sema::typeBuiltin(Expr* e) {
     }
     if (!e->args[0]->ty.isNumeric()) {
       d_.error(e->args[0]->loc, "TRUNC argument must be numeric", "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
-    // TRUNC of a scaled FIXED value must remove its fractional digits,
-    // which the scaled representation does not yet do (invariant 2).
-    if (e->args[0]->ty.isFixed() && e->args[0]->ty.scale != 0) {
-      d_.error(e->args[0]->loc, "TRUNC of a scaled FIXED value is not implemented in this stage",
-               "(16)");
       e->ty = Type::voidTy();
       return true;
     }

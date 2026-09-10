@@ -1,6 +1,23 @@
 #include "parser.h"
 #include <cstdlib>
 
+// Parse an exact FIXED DECIMAL constant (rule 135): digits with a fraction
+// point and no exponent, e.g. "3.14". Sets ival to the value scaled by 10^q,
+// decScale to the fraction digit count q, and decPrec to the digit count p.
+static void parseDecConstant(const std::string& text, Expr& e) {
+  size_t dot = text.find('.');
+  std::string intPart = dot == std::string::npos ? text : text.substr(0, dot);
+  std::string fracPart = dot == std::string::npos ? "" : text.substr(dot + 1);
+  long long scaled = 0;
+  for (char c : intPart)
+    scaled = scaled * 10 + (c - '0');
+  for (char c : fracPart)
+    scaled = scaled * 10 + (c - '0');
+  e.ival = scaled;
+  e.decScale = (int)fracPart.size();
+  e.decPrec = (int)(intPart.size() + fracPart.size());
+}
+
 // ---------------------------------------------------------------------------
 // Operator mapping. Symbols, plus the 48-character-set operator words of
 // TR 25.084 §2.3.3 (NOT AND OR GT LT GE LE NG NL NE CAT).
@@ -1544,8 +1561,13 @@ ExprP Parser::parsePrimary() {
   if (at(Tok::Number)) {
     const Token& t = cur();
     if (t.isFloat) {
-      e->kind = Expr::FltLit;
-      e->fval = strtod(t.text.c_str(), nullptr);
+      if (t.hasExp) { // exponent form is a FLOAT constant (rule 135)
+        e->kind = Expr::FltLit;
+        e->fval = strtod(t.text.c_str(), nullptr);
+      } else { // a bare fractional literal is an exact FIXED DECIMAL constant
+        e->kind = Expr::DecLit;
+        parseDecConstant(t.text, *e);
+      }
     } else if (t.binaryRadix) {
       e->kind = Expr::IntLit;
       e->ival = strtoll(t.text.c_str(), nullptr, 2);
