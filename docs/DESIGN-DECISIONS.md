@@ -1591,3 +1591,38 @@ now rejects only the multi-axis form.
 runtime); zero-filling the rest of a short itemlist (AUTOMATIC leaves it
 uninitialized, matching scalar/array semantics); a loop for the store (the
 itemlist is a fixed constant sequence, straight-line GEPs are leaner).
+
+## ADR-062 — Runtime aggregate lengths on a dynamic structure member
+
+**Context.** ADR-060 lays out a dynamic-array structure member `1 s, 2 v(n) fixed
+bin(31)` as a bare buffer-pointer field, with the live bounds recorded in
+`memberDyn_` at entry. ADR-050/058/059 serve `LBOUND`/`HBOUND`/`DIM` and the array
+reductions `SUM`/`PROD`/`ANY`/`ALL` for **standalone** dynamic arrays, reading the
+bounds from `dynUb_`/`dynLb_` keyed by the array symbol. The same built-ins on a
+**qualified** member array `S.V` were gated (rule 123): sema only recognized a
+plain array `VarRef` (`a->sym->ty.isArray()`), and irgen read `a->sym->ty` and
+`dynUb_[a->sym]`, which for `S.V` is the struct symbol, not the member.
+
+**Decision.** The array-attribute and array-reduction built-ins accept an
+unsubscripted **member array** reference `S.V` as their argument. Sema
+(`Sema::typeBuiltin`) recognizes an unsubscripted array by the resolved reference
+type `a->ty.isArray()` (a qualified `VarRef` resolves `a->ty` to the member array
+type), instead of `a->sym->ty.isArray()`, and derives the reduction element type
+from `a->ty.elementType()`. IRGen distinguishes a member array by
+`a->memberPath` non-empty: the array type comes from `memberType(a->sym, path)`,
+the live lower/upper bounds (incl. a dynamic lower bound) from the `memberDyn_`
+slot, and the reduction base from `dynamicMemberBase(...)` (a dynamic member) or
+`memberAddr(...)` (a fixed member) instead of `addressOf(a->sym)`. The reduction
+loop then walks the member buffer pointer the same way as a standalone dynamic
+array.
+
+**Consequences.** `tests/core/struct_dyn_len.pli` covers `LBOUND`/`HBOUND`/`DIM`
+and `SUM` on `s.v(n)` for several extents (including 0), a dynamic lower bound
+member `s.v(2:n+1)`, and fills then reduces the member buffer;
+`tests/core/bad_struct_dyn_len.pli` keeps a scalar member `s.a` rejected as an
+array built-in argument (rule 123); `make test` stays green. A subscripted member
+`S.V(i)` remains rejected (it is a `Subscript`, not an unsubscripted `VarRef`).
+
+**Rejected.** Adding member knowledge to the symbol table (member bounds already
+live in `memberDyn_`); requiring the whole structure as the built-in argument
+(the built-ins reduce a single array, not a whole structure).
