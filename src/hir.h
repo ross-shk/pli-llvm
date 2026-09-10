@@ -72,6 +72,10 @@ struct HDeclItem {
   // Runtime lower-bound expressions for dynamic array axes (rule (13)); empty
   // when every lower bound is constant. Mirrors `dynBounds`.
   std::vector<HExprP> dynLbBounds;
+  // Owns the lowered bound exprs of dynamic-array structure members (rule 13),
+  // which Symbol::DynMemberH.ub/lb point into; kept in HIR so IRGen can size the
+  // member buffers at entry. Mirrors dynBounds ownership.
+  std::vector<HExprP> dynMemberBounds;
   HExprP init;     // INITIAL(...) — scalar constant only in M0
   HExprP initCall; // INITIAL(CALL f(...)) — a function-call initializer (rule 27)
   Symbol* sym = nullptr;

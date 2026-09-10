@@ -59,6 +59,25 @@ private:
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynLb_;
+  // Dynamic array member (rule 13) runtime bound values, keyed by (structure
+  // symbol, member field path), recorded once at block entry.
+  struct MemberDyn {
+    Symbol* sym;
+    std::vector<unsigned> path;
+    bool operator==(const MemberDyn& o) const { return sym == o.sym && path == o.path; }
+    struct Hash {
+      size_t operator()(const MemberDyn& k) const {
+        size_t h = std::hash<Symbol*>{}(k.sym);
+        for (unsigned u : k.path) h = h * 31 + u;
+        return h;
+      }
+    };
+  };
+  struct MemberBounds {
+    llvm::Value* ub = nullptr;
+    llvm::Value* lb = nullptr;
+  };
+  std::unordered_map<MemberDyn, MemberBounds, MemberDyn::Hash> memberDyn_;
   void emitGlobals();
   void declareProc(HProc* p); // pre-create a proc's functions/aliases so calls resolve
   void emitProc(HProc* p);
@@ -136,6 +155,12 @@ private:
   // field indices to recover the leaf member's type (an array member's array
   // type), mirroring memberAddr without emitting GEPs.
   const Type& memberType(Symbol* base, const std::vector<unsigned>& path);
+  // Buffer pointer and live bounds of a dynamic-array structure member (rule
+  // 13): load the runtime-sized buffer pointer held in the struct field, and
+  // return the bounds recorded at entry. Caller passes a dynamic-array member
+  // path; the returned base is a bare element pointer.
+  llvm::Value* dynamicMemberBase(Symbol* base, const std::vector<unsigned>& path, SourceLoc loc,
+                                 llvm::Value*& ub, llvm::Value*& lb);
   // BY NAME assignment (rule 86): copy each same-named member of `dst` from
   // `src` at their struct bases, recursing into minor structures; names absent
   // from either side are skipped.

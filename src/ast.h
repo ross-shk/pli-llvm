@@ -93,6 +93,15 @@ struct DeclItem {
   std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
+  // A dynamic (runtime-extent) array that is a structure member (rule 13): its
+  // field path (the indices memberAddr walks) and its bound expressions. The
+  // member's DeclItem still owns dynBounds/dynLbBounds; these reference them.
+  struct DynMemberInfo {
+    std::vector<unsigned> path;
+    Expr* ub; // runtime upper bound expr (null = constant); non-owning
+    Expr* lb; // runtime lower bound expr (null = constant); non-owning
+  };
+  std::vector<DynMemberInfo> dynMembers;
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor

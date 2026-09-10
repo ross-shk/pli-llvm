@@ -46,6 +46,15 @@ struct Symbol {
   // The lowered runtime lower-bound expression of a dynamic array (rule (13)),
   // the mirror of `dynUb`; null when the lower bound is constant.
   HExpr* dynLb = nullptr;
+  // A dynamic (runtime-extent) array that is a structure member (rule 13), with
+  // its field path (the indices memberAddr walks) and its lowered bound exprs.
+  // Lowered from DeclItem::dynMembers during AST->HIR lowering.
+  struct DynMemberH {
+    std::vector<unsigned> path;
+    HExpr* ub = nullptr;
+    HExpr* lb = nullptr;
+  };
+  std::vector<DynMemberH> dynMembers;
 };
 
 struct Scope {
