@@ -92,6 +92,7 @@ private:
   struct AttrBag {
     bool fixed = false, floating = false, binary = false, decimal = false;
     bool character = false, bit = false, varying = false;
+    bool pointer = false;
     int prec = -1, scale = 0, slen = -1;
   };
   // Consume one attribute word (FIXED, FLOAT, BINARY, DECIMAL, CHARACTER,

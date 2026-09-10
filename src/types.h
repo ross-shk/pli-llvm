@@ -16,6 +16,7 @@ enum class TK {
   Char,     // CHARACTER(n) [VARYING]
   Bit,      // BIT(n)
   Struct,   // structure with level-numbered members (rule 11)
+  Pointer,  // POINTER: an address value (rules (15),(25))
   Void,
 };
 
@@ -119,6 +120,11 @@ struct Type {
     t.k = TK::Void;
     return t;
   }
+  static Type ptr() {
+    Type t;
+    t.k = TK::Pointer;
+    return t;
+  }
   // Build a structure type from its level-numbered members (rule 11).
   static Type structTy(std::vector<Member> m);
 
@@ -126,6 +132,7 @@ struct Type {
   bool isNumeric() const { return isFixed() || k == TK::Float; }
   bool isChar() const { return k == TK::Char; }
   bool isBit() const { return k == TK::Bit; }
+  bool isPointer() const { return k == TK::Pointer; }
   bool isVoid() const { return k == TK::Void; }
 
   // Integer width chosen for FIXED values (M0 keeps FIXED scale 0 only).
@@ -152,6 +159,8 @@ struct Type {
       return "BIT(" + std::to_string(len) + ")";
     case TK::Struct:
       return "STRUCT";
+    case TK::Pointer:
+      return "POINTER";
     case TK::Void:
       return "VOID";
     }

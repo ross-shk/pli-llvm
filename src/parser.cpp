@@ -987,10 +987,15 @@ bool Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "POINTER" ||
-          w == "PTR" || w == "AREA" || w == "OFFSET" || w == "BASED" || w == "CONTROLLED" ||
-          w == "CTL" || w == "LABEL" || w == "FILE" || w == "TASK" || w == "EVENT" || w == "CELL" ||
-          w == "GENERIC" || w == "BUILTIN") {
+      if (w == "POINTER" || w == "PTR") {
+        advance();
+        bag.pointer = true;
+        continue;
+      }
+      if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "AREA" ||
+          w == "OFFSET" || w == "BASED" || w == "CONTROLLED" || w == "CTL" || w == "LABEL" ||
+          w == "FILE" || w == "TASK" || w == "EVENT" || w == "CELL" || w == "GENERIC" ||
+          w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -1045,8 +1050,13 @@ bool Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "string and arithmetic attributes cannot be combined", "(15)");
   if (bag.varying && !bag.character && !bag.bit)
     d_.error(item.loc, "VARYING requires CHARACTER or BIT", "(15)");
+  if (bag.pointer &&
+      (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal))
+    d_.error(item.loc, "POINTER cannot be combined with a data attribute", "(15)");
 
-  if (bag.character) {
+  if (bag.pointer) {
+    item.ty = Type::ptr();
+  } else if (bag.character) {
     item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
   } else if (bag.bit) {
     int n = bag.slen > 0 ? bag.slen : 1;
