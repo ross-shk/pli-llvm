@@ -1440,3 +1440,32 @@ DECIMAL now drops the fractional digits. FIXED division still evaluates in FLOAT
 **Rejected.** Binary floating point for decimal (0.10 not representable);
 changing `scaled.pli`'s 2-based FIXED BINARY behavior; adding decimal overflow
 (`SIZE`/`FIXEDOVERFLOW`) checks in this slice (deferred to QR2).
+
+## ADR-057 — `INITIAL` on a structure: a per-leaf store walk
+
+**Context.** ADR-044 expands an `INITIAL` itemlist for a fixed-size array into a
+flat list of folded element values stored element-by-element (AUTOMATIC) or as a
+constant array initializer (STATIC). A structure (rule 11) `INITIAL` was
+diagnosed. CM1 needs structure initialization: a flat itemlist must fill the
+structure's scalar leaves in declaration order.
+
+**Decision.** The itemlist (with iteration factors, `*`, and groups) is first
+flattened into raw values, then folded against each leaf's own type in
+declaration order (`structureLeafCount` checks the count; `foldStructInit` walks
+members — a nested structure recurses, an array member consumes its element
+count, an array-of-structures recurses per element). The folded list reuses
+`sym->initElems`. `emitInitials` stores it with a recursive member walk
+(`emitStructInitValues`) mirroring `emitByNameCopy`'s GEP pattern, so it runs on
+every activation for AUTOMATIC storage. STATIC structure `INITIAL` stays
+diagnosed; CHARACTER leaves stay diagnosed (matching the existing "CHARACTER
+structure members are not implemented" limitation).
+
+**Consequences.** `tests/core/struct_init.pli` covers scalar, nested, and array
+members, iteration factors, `*`, and re-initialization on each activation;
+`bad_struct_init.pli` diagnoses a count mismatch. `make test` (123) and `make
+check` stay green.
+
+**Rejected.** Folding during itemlist expansion (the leaves are heterogeneous, so
+a value must be folded against its own member type, not a single element type);
+STATIC constant structure initializers and CHARACTER members in this slice
+(deferred).
