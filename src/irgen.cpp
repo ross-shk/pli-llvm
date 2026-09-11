@@ -2892,6 +2892,25 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
+  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN. The argument is converted to FLOAT
+  // and the matching pli_* runtime wrapper is called.
+  if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
+      e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN") {
+    Val x = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
+    static const char* const kMathFn[] = {"pli_floor", "pli_ceil", "pli_sqrt", "pli_exp",
+                                          "pli_log",   "pli_sin",  "pli_cos",  "pli_tan"};
+    static const char* const kMathName[] = {"FLOOR", "CEIL", "SQRT", "EXP",
+                                            "LOG",   "SIN",  "COS",  "TAN"};
+    int ix = 0;
+    for (int i = 0; i < 8; ++i)
+      if (e->name == kMathName[i])
+        ix = i;
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
+    result = v;
+    return true;
+  }
   if (e->name == "LENGTH") {
     Val a = emitExpr(e->args[0].get());
     v.ty = e->ty;

@@ -1930,3 +1930,28 @@ must be expanded first); silently passing unsupported directives through;
 implementing Chapter 9 replacement or control flow in this slice; include
 search-path flags and the implementation-defined multi-identifier data-set form
 before a concrete use case requires them.
+
+## ADR-072 — Scalar math built-ins lowered through pli_* runtime wrappers
+
+**Context.** The C-mirror sub-plan (CM5) maps the remaining QR2.7 Appendix 1
+functions to C `<math.h>`. `FLOOR`, `CEIL`, `SQRT`, `EXP`, `LOG`, `SIN`, `COS`,
+and `TAN` each take one numeric argument and yield a FLOAT value. The runtime
+already links `<math.h>` (used by `pli_round`, `pli_mod_dd`).
+
+**Decision.** Each built-in is typed in `Sema::typeBuiltin` (one numeric
+argument, `FLOAT(6)` result, non-numeric argument diagnosed with rule (123))
+and lowered in `IRGen::emitBuiltin` to a call of a thin `pli_*` wrapper in
+`runtime/pli_rt.c`, registered in `pli_rt_abi.def` so the emitted IR ABI cannot
+drift from the C ABI. `LOG` is the natural logarithm. The argument is converted
+to FLOAT before the call.
+
+**Consequences.** `tests/core/math.pli` checks each built-in against an expected
+value within a small tolerance (`ABS` delta) and prints `PASS math`;
+`bad_math.pli` proves a non-numeric argument is diagnosed with its rule number.
+Inspection of `-emit-llvm` shows `double @pli_*(double)` calls and declarations.
+
+**Rejected.** Emitting `llvm.*` math intrinsics directly or calling `math.h`
+symbols from IRGen: both would bypass the ABI-def single source of truth and
+add the only non-`pli_*` external surface. Complex component/conjugate and the
+remaining Appendix 1 families stay for later CM5 slices.
+

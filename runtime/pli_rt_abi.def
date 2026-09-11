@@ -43,6 +43,14 @@ PLI_FN(pli_index, I64, (CPTR, I64, CPTR, I64))        /* INDEX */
 PLI_FN(pli_mod_ll, I64, (I64, I64))                   /* MOD */
 PLI_FN(pli_mod_dd, DOUBLE, (DOUBLE, DOUBLE))
 PLI_FN(pli_round, DOUBLE, (DOUBLE, I64))              /* ROUND */
+PLI_FN(pli_floor, DOUBLE, (DOUBLE))                   /* scalar math (QR2.7) */
+PLI_FN(pli_ceil, DOUBLE, (DOUBLE))
+PLI_FN(pli_sqrt, DOUBLE, (DOUBLE))
+PLI_FN(pli_exp, DOUBLE, (DOUBLE))
+PLI_FN(pli_log, DOUBLE, (DOUBLE))
+PLI_FN(pli_sin, DOUBLE, (DOUBLE))
+PLI_FN(pli_cos, DOUBLE, (DOUBLE))
+PLI_FN(pli_tan, DOUBLE, (DOUBLE))
 PLI_FN(pli_repeat, VOID, (PTR, I64, CPTR, I64, I64))  /* REPEAT */
 PLI_FN(pli_verify, I64, (CPTR, I64, CPTR, I64))       /* VERIFY */
 PLI_FN(pli_translate, VOID, (PTR, I64, CPTR, I64, CPTR, I64, CPTR, I64)) /* TRANSLATE */
