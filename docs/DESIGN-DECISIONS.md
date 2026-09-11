@@ -1986,3 +1986,33 @@ slice (too large, and not the sub-plan's "start with" item); reusing `TK::Struct
 to fake a complex (semantically wrong and would invite struct-path confusion);
 adding `TK::Complex` to `isNumeric` (complex is not a real arithmetic type for
 the existing `+ - * /` operators).
+
+## ADR-074 — COMPLEX as a storable data type with real↔complex conversion
+
+**Context.** The C-mirror sub-plan (CM5) completes the complex type begun in
+ADR-073: `COMPLEX` should be usable as a declared variable, not just a transient
+expression value. TR 25.084 rules (14),(15) list `COMPLEX` among the data
+attributes, and the pair must be assignable and read back.
+
+**Decision.** `COMPLEX` is a data attribute accepted by the declaration parser
+(`AttrBag.complex`, conflicting with any other data attribute under rule (15))
+that yields `Type::complexTy()`. IRGen wires the `{double,double}` pair through
+storage and assignment: `loadSym` loads it into `Val::cpx`, `storeScalarTo`/
+`storeTo` store it, and `convert` implements the real↔complex rules (complex→
+complex passes through, complex→real takes the real part, real→complex sets a
+zero imaginary part). `Sema::checkAssignable` allows these same conversion pairs
+so assignment type-checks match the codegen.
+
+**Consequences.** `tests/core/complex_var.pli` declares complex variables,
+assigns a `COMPLEX(a,b)` value, assigns a real (imag part 0), assigns complex to
+a real variable (real part), and reads back with `REAL`/`IMAG`/`CONJG`;
+`bad_complex_var.pli` proves COMPLEX combined with another data attribute is
+rejected under rule (15). `-emit-llvm` shows `store { double, double }`/
+`load { double, double }` and `insertvalue`/`extractvalue` sequences. Complex
+arithmetic (`+ - * /`), imaginary constants, and complex list-directed I/O stay
+unimplemented (PUT of a COMPLEX value is diagnosed).
+
+**Rejected.** Adding `TK::Complex` to `isNumeric()` (would make the existing
+arithmetic operators treat a complex pair as a single real scalar and
+miscompile); implementing complex arithmetic in this slice (a separate, larger
+effort, out of the "declare, assign, convert" scope).

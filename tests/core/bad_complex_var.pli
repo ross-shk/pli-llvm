@@ -1,0 +1,4 @@
+ /* Diagnostic test: COMPLEX combined with another data attribute is rejected. */
+ BADCOMPLEXVAR: PROCEDURE OPTIONS(MAIN);
+    DECLARE Z COMPLEX FLOAT;
+ END BADCOMPLEXVAR;

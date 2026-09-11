@@ -2043,7 +2043,10 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     return v;
   }
   llvm::Value* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
-  if (ty.isBit()) {
+  if (ty.isComplex()) {
+    // A complex value (QR2.2/CM5) is the {double,double} struct itself.
+    v.cpx = r;
+  } else if (ty.isBit()) {
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
   } else {
     v.reg = r;
@@ -2052,6 +2055,11 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
 }
 
 void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v) {
+  if (ty.isComplex()) {
+    // A complex value (QR2.2/CM5) is stored as the {double,double} struct.
+    b_.CreateStore(v.cpx, addr);
+    return;
+  }
   llvm::Value* val = v.reg;
   if (ty.isBit()) {
     val = b_.CreateZExt(val, b_.getInt8Ty(), "z8");
@@ -2306,6 +2314,28 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   // (rule 15): pointer assignment copies the address, no numeric conversion.
   if (v.ty.isPointer() && dst.isPointer())
     return v;
+
+  // Complex conversions (QR2.2/CM5): a complex value is an {double,double}
+  // pair. complex -> complex passes through; complex -> real takes the real
+  // part and converts it as a real; real -> complex uses the value as the real
+  // part with a zero imaginary part.
+  if (v.ty.isComplex() && dst.isComplex())
+    return v;
+  if (v.ty.isComplex() && !dst.isComplex()) {
+    Val re;
+    re.ty = Type::flt(6);
+    re.reg = b_.CreateExtractValue(v.cpx, 0, "cpx.re");
+    return convert(re, dst, loc);
+  }
+  if (!v.ty.isComplex() && dst.isComplex()) {
+    Val re = convert(v, Type::flt(6), loc);
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, re.reg, 0, "cpx.re");
+    s = b_.CreateInsertValue(s, flt(0.0), 1, "cpx.im");
+    out.cpx = s;
+    return out;
+  }
 
   const bool srcFloat = v.ty.k == TK::Float;
   const bool dstFloat = dst.k == TK::Float;

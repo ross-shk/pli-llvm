@@ -105,7 +105,8 @@ private:
     bool fixed = false, floating = false, binary = false, decimal = false;
     bool character = false, bit = false, varying = false;
     bool pointer = false;
-    bool file = false; // FILE (rules 39,40): a named file variable
+    bool complex = false; // COMPLEX (QR2.2/CM5): a real+imaginary pair
+    bool file = false;    // FILE (rules 39,40): a named file variable
     int prec = -1, scale = 0, slen = -1;
   };
   // Consume one attribute word (FIXED, FLOAT, BINARY, DECIMAL, CHARACTER,

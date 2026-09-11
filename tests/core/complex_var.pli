@@ -1,0 +1,61 @@
+ /* COMPLEX variable type (QR2.2/CM5 slice 5): DECLARE a complex variable,
+    assign a complex value (COMPLEX(a,b)) or a real value (imag part 0),
+    read it back with REAL/IMAG, and assign complex to a real variable (real
+    part). Results checked within a small tolerance. */
+ complex_var_test: procedure options(main);
+    declare z complex;
+    declare w complex;
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    z = complex(1.5, 2.5);
+    y = real(z);
+    if abs(y - 1.5) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL real(z) =', y);
+    end;
+    y = imag(z);
+    if abs(y - 2.5) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL imag(z) =', y);
+    end;
+
+    /* assigning a real value to a complex sets the imaginary part to 0 */
+    z = 3.0;
+    y = real(z);
+    if abs(y - 3.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL real(z=3) =', y);
+    end;
+    y = imag(z);
+    if abs(y - 0.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL imag(z=3) =', y);
+    end;
+
+    /* assigning complex to a real variable takes the real part */
+    w = complex(7.0, 8.0);
+    y = w;
+    if abs(y - 7.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL y=w =', y);
+    end;
+
+    /* conjugate stored in a variable */
+    z = conjg(w);
+    y = real(z);
+    if abs(y - 7.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL real(conjg) =', y);
+    end;
+    y = imag(z);
+    if abs(y - (-8.0)) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL imag(conjg) =', y);
+    end;
+
+    if fails = 0 then put skip list('PASS complex_var');
+    else put skip list('FAIL complex_var: fails =', fails);
+ end complex_var_test;

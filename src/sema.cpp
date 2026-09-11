@@ -796,6 +796,15 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     return true;
   if (dst.isChar() && src.isChar())
     return true;
+  // Complex conversions (QR2.2/CM5): complex <-> complex passes through; a real
+  // (numeric) value converts to complex with a zero imaginary part, and a
+  // complex value converts to a real by taking the real part.
+  if (dst.isComplex() || src.isComplex()) {
+    if (dst.isComplex() && (src.isComplex() || src.isNumeric()))
+      return true;
+    if (dst.isNumeric() && src.isComplex())
+      return true;
+  }
   d_.error(loc,
            std::string(what) + ": conversion from " + src.desc() + " to " + dst.desc() +
                " is not implemented in this stage",
