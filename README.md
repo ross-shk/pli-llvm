@@ -74,7 +74,9 @@ make install
   degree trig `SIND`, `COSD`, `TAND`, `ATAND`, and the complex component/
   conjugate `COMPLEX`, `REAL`, `IMAG`, `CONJG` built-in functions;
   `SUBSTR(v, i, n) = x` pseudo-variable
-  (ADR-024); `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
+  (ADR-024); `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0);
+  `COMPLEX` variables (`DECLARE z COMPLEX;`) holding a real+imaginary pair
+  (ADR-074)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
   `END` and `PUT` as ordinary variables
 

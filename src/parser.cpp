@@ -1038,9 +1038,16 @@ bool Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "AREA" ||
-          w == "OFFSET" || w == "CONTROLLED" || w == "CTL" || w == "LABEL" || w == "TASK" ||
-          w == "EVENT" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
+      if (w == "COMPLEX" || w == "CPLX") {
+        // complex-attribute (QR2.2/CM5, rules (14),(15)): a value with real and
+        // imaginary parts. Consumed like the other scalar data attributes.
+        advance();
+        bag.complex = true;
+        continue;
+      }
+      if (w == "PICTURE" || w == "PIC" || w == "AREA" || w == "OFFSET" || w == "CONTROLLED" ||
+          w == "CTL" || w == "LABEL" || w == "TASK" || w == "EVENT" || w == "CELL" ||
+          w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -1101,6 +1108,9 @@ bool Parser::parseDeclTail(DeclItem& item) {
   if (bag.file && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
                    bag.decimal || bag.pointer))
     d_.error(item.loc, "FILE cannot be combined with a data attribute", "(15)");
+  if (bag.complex && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
+                      bag.decimal || bag.pointer || bag.file))
+    d_.error(item.loc, "COMPLEX cannot be combined with another data attribute", "(15)");
 
   if (bag.file) {
     // A FILE variable carries no computational value (rules 39,40); the parser
@@ -1109,6 +1119,8 @@ bool Parser::parseDeclTail(DeclItem& item) {
     item.ty = Type::voidTy();
   } else if (bag.pointer) {
     item.ty = Type::ptr();
+  } else if (bag.complex) {
+    item.ty = Type::complexTy();
   } else if (bag.character) {
     item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
   } else if (bag.bit) {
