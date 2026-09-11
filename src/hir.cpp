@@ -139,6 +139,8 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     hd.sym = d.sym;
     hd.isEntry = d.isEntry;
     hd.entryParams = d.entryParams;
+    hd.entryIsFunction = d.entryIsFunction;
+    hd.entryRetTy = d.entryRetTy;
     hd.extName = d.extName;
     for (const auto& b : d.dynBounds)
       hd.dynBounds.push_back(b ? lowerExpr(b.get()) : nullptr);
@@ -236,6 +238,7 @@ HProgram lower(const Program& prog) {
     hp->isMain = prog.procs[i]->isMain;
     hp->isFunction = prog.procs[i]->isFunction;
     hp->retTy = prog.procs[i]->retTy;
+    hp->commonRetTy = prog.procs[i]->commonRetTy;
     hp->params = prog.procs[i]->params;
     hp->entryNames = prog.procs[i]->entryNames;
     hp->paramSyms = prog.procs[i]->paramSyms;

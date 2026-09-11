@@ -1,0 +1,13 @@
+  /* rule (56): a plain RETURN is not valid in
+     a procedure whose ENTRYs return a value;
+     the segments share one valued impl. */
+  badentryret: procedure options(main);
+     call once();
+  end badentryret;
+
+  once: procedure;
+     put skip list('body');
+     return;
+     twice: entry returns(fixed bin(31));
+     return(2);
+  end once;

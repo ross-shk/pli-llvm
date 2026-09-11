@@ -859,6 +859,17 @@ bool Parser::parseDeclTail(DeclItem& item) {
           parseEntryParams(item.entryParams);
         continue;
       }
+      if (w == "RETURNS") {
+        // entry-name-attribute RETURNS ( function-attribute ) (rule (34)): the
+        // result type of an ENTRY-declared function. Valid only on an entry.
+        advance();
+        if (expect(Tok::LParen, "(34)")) {
+          item.entryIsFunction = true;
+          parseDescriptorType(item.entryRetTy);
+          expect(Tok::RParen, "(34)");
+        }
+        continue;
+      }
       if (w == "LIKE") {
         // like-attribute ::= LIKE unsubscripted-reference (rule 43): the
         // declared item takes the structure shape of the referenced structure.

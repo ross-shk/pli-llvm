@@ -1,0 +1,40 @@
+  /* rule (56): a void primary may coexist with
+     function ENTRYs sharing one result type.
+     Rule (34): an external ENTRY RETURNS is
+     callable as a function. */
+  entry_mixed: procedure options(main);
+     declare r fixed bin(31);
+     declare em_add entry(fixed bin(31),
+        fixed bin(31)) returns(fixed bin(31))
+        external('em_add');
+
+     r = twice(4);
+     if r = 8
+        then put skip list('PASS twice(4)=8');
+        else put skip list('FAIL twice(4)=', r);
+
+     r = thrice(3);
+     if r = 9
+        then put skip list('PASS thrice(3)=9');
+        else put skip list('FAIL thrice(3)=', r);
+
+     r = em_add(10, 5);
+     if r = 15
+        then put skip list('PASS em_add(10,5)=15');
+        else put skip list('FAIL em_add(10,5)=', r);
+
+     call once();
+     put skip list('PASS once()');
+  end entry_mixed;
+
+   once: procedure;
+      declare n fixed bin(31);
+      put skip list('PASS once body');
+
+     twice: entry(n) returns(fixed bin(31));
+     return(n * 2);
+
+     thrice: entry(m) returns(fixed bin(31));
+     declare m fixed bin(31);
+     return(m * 3);
+  end once;

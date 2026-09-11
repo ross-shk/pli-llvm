@@ -19,6 +19,8 @@ struct Symbol {
   bool implicit = false;         // created by the implicit-declaration rule
   bool isEntry = false;          // external C entry (DECLARE ... ENTRY): no body
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
+  bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
+  Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
   std::string irName;            // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc* proc = nullptr;          // for ProcName
   Proc* owner = nullptr;         // the procedure that declares this variable (static link)
@@ -125,6 +127,8 @@ private:
   std::vector<Symbol*> storage_;
   std::vector<Symbol*> entries_;                  // external C entries, in declaration order
   std::set<std::string> procLabels_;              // GO TO targets in the current proc (rule 77)
+  Stmt* curEntry_ = nullptr;                      // the ENTRY segment currently being checked
+                                                  // (rule 56): enables RETURN(value) in its body
   std::set<std::string> irNames_;                 // irNames in use, to disambiguate shadowing
   std::unordered_map<Stmt*, Scope*> beginScopes_; // BEGIN block -> its scope
 };

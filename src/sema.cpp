@@ -196,24 +196,37 @@ void Sema::processProc(Proc* p) {
   // rule (56) ENTRY statements: each entry point declares its own parameters,
   // by reference, in the same scope (so a name shared with the procedure's own
   // parameter list refers to the same variable).
-  for (auto& st : p->body) {
-    if (st && st->kind == Stmt::Entry) {
+  for (auto& st : p->body)
+    if (st && st->kind == Stmt::Entry)
       resolveParams(sc, p, st->params, st->entryParamSyms);
-      Type rt = st->entryIsFunction ? st->entryRetTy : Type::voidTy();
-      Type prt = p->isFunction ? p->retTy : Type::voidTy();
-      if (rt != prt)
+
+  // Every function-valued entry point (the procedure's own RETURNS and each
+  // ENTRY's RETURNS, rule (34)) must share one result type, which the shared
+  // implementation returns. A non-function primary entry may coexist with
+  // function ENTRYs (their segments carry a RETURN(value)).
+  Type common = p->isFunction ? p->retTy : Type::voidTy();
+  for (auto& st : p->body)
+    if (st && st->kind == Stmt::Entry && st->entryIsFunction) {
+      if (common.isVoid())
+        common = st->entryRetTy;
+      else if (st->entryRetTy != common)
         d_.error(st->loc,
-                 "ENTRY result type differs from the procedure's; a mixed return type is not "
-                 "implemented in this stage",
+                 "entries in one implementation must all return the same type; a mixed "
+                 "return type is not implemented in this stage",
                  "(56)");
     }
-  }
+  p->commonRetTy = common;
 
   procLabels_.clear();
+  curEntry_ = nullptr;
   for (auto& s : p->body)
     collectLabels(s.get());
-  for (auto& s : p->body)
+  for (auto& s : p->body) {
+    if (s && s->kind == Stmt::Entry)
+      curEntry_ = s.get(); // later statements belong to this segment
     checkStmt(s.get(), sc, p);
+  }
+  curEntry_ = nullptr;
 }
 
 // Parameters are always by reference; a DECLARE supplies their attributes,
@@ -288,14 +301,24 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       std::vector<int> parentOf;
       std::vector<std::vector<int>> children;
       for (auto& item : s->decls) {
+        if (item.entryIsFunction && !item.isEntry) {
+          // RETURNS is an entry-name-attribute (rule (34)): it types an ENTRY
+          // declaration, never a storage item. Never silently accepted.
+          d_.error(item.loc, "RETURNS is only valid on an ENTRY declaration", "(34)");
+          item.entryIsFunction = false;
+        }
         if (item.isEntry) {
           // External C entry: a ProcName symbol with no PL/I body. The C
           // symbol is the EXTERNAL('name') override when given, else the
           // upper-cased PL/I identifier (rules (34),(38); z/OS ILC naming).
-          // Not storage.
-          Symbol* sym = declare(sc, item.name, Type::voidTy(), item.loc, Symbol::ProcName, false);
+          // Not storage. A RETURNS(...) entry-name-attribute (rule (34))
+          // makes it a function entry whose result type types a call.
+          Type symTy = item.entryIsFunction ? item.entryRetTy : Type::voidTy();
+          Symbol* sym = declare(sc, item.name, symTy, item.loc, Symbol::ProcName, false);
           sym->isEntry = true;
           sym->entryParams = item.entryParams;
+          sym->entryIsFunction = item.entryIsFunction;
+          sym->entryRetTy = item.entryRetTy;
           sym->irName = "@" + (item.extName.empty() ? item.name : item.extName);
           item.sym = sym;
           entries_.push_back(sym);
@@ -866,23 +889,41 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     checkStmt(s->elseS.get(), sc, p);
     break;
   }
-  case Stmt::Group:
-    for (auto& b : s->body)
+  case Stmt::Group: {
+    // A segment boundary (rule (56)) may sit inside a group body.
+    Stmt* save = curEntry_;
+    for (auto& b : s->body) {
+      if (b && b->kind == Stmt::Entry)
+        curEntry_ = b.get();
       checkStmt(b.get(), sc, p);
+    }
+    curEntry_ = save;
     break;
+  }
   case Stmt::Begin: {
     // Descend with the block's own scope (rule (68)); see collectDecls.
     auto it = beginScopes_.find(s);
     Scope* bsc = it != beginScopes_.end() ? it->second : sc;
-    for (auto& b : s->body)
+    Stmt* save = curEntry_;
+    for (auto& b : s->body) {
+      if (b && b->kind == Stmt::Entry)
+        curEntry_ = b.get();
       checkStmt(b.get(), bsc, p);
+    }
+    curEntry_ = save;
     break;
   }
-  case Stmt::DoWhile:
+  case Stmt::DoWhile: {
     typeExpr(s->cond.get(), sc, p);
-    for (auto& b : s->body)
+    Stmt* save = curEntry_;
+    for (auto& b : s->body) {
+      if (b && b->kind == Stmt::Entry)
+        curEntry_ = b.get();
       checkStmt(b.get(), sc, p);
+    }
+    curEntry_ = save;
     break;
+  }
   case Stmt::DoIter: {
     Symbol* sym = lookup(sc, s->name);
     if (!sym) {
@@ -902,8 +943,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     typeExpr(s->to.get(), sc, p);
     typeExpr(s->by.get(), sc, p);
     typeExpr(s->cond.get(), sc, p);
-    for (auto& b : s->body)
+    Stmt* save = curEntry_;
+    for (auto& b : s->body) {
+      if (b && b->kind == Stmt::Entry)
+        curEntry_ = b.get();
       checkStmt(b.get(), sc, p);
+    }
+    curEntry_ = save;
     break;
   }
   case Stmt::Put: {
@@ -946,18 +992,38 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   }
   case Stmt::Return: {
-    // rule (81): RETURN(value) supplies a function procedure's result;
-    // a plain RETURN ends a procedure.
+    // rule (81): RETURN(value) supplies a function procedure's result; a plain
+    // RETURN ends a procedure. In a multi-entry procedure a segment belonging to
+    // a function ENTRY (rule 56) may also RETURN(value), even if the primary
+    // entry itself returns nothing. Every RETURN must also agree with the
+    // shared implementation's single result type: a plain RETURN is only valid
+    // when that type is void, and RETURN(value) only when it is not (rule 56).
+    const bool inFuncEntry = curEntry_ && curEntry_->entryIsFunction;
+    const bool isFunc = p->isFunction || inFuncEntry;
+    const Type& rty = inFuncEntry ? curEntry_->entryRetTy : p->retTy;
     if (s->value) {
-      if (!p->isFunction) {
+      if (!isFunc) {
+        d_.error(s->loc, "RETURN with a value is only valid in a function procedure", "(81)");
+        break;
+      }
+      if (p->commonRetTy.isVoid()) {
         d_.error(s->loc, "RETURN with a value is only valid in a function procedure", "(81)");
         break;
       }
       typeExpr(s->value.get(), sc, p);
       if (!s->value->ty.isVoid())
-        checkAssignable(p->retTy, s->value->ty, s->loc, "RETURN value");
-    } else if (p->isFunction) {
-      d_.error(s->loc, "a function procedure must RETURN a value", "(81)");
+        checkAssignable(rty, s->value->ty, s->loc, "RETURN value");
+    } else {
+      if (isFunc) {
+        d_.error(s->loc, "a function procedure must RETURN a value", "(81)");
+        break;
+      }
+      if (!p->commonRetTy.isVoid()) {
+        d_.error(s->loc,
+                 "a plain RETURN is not valid in a procedure whose ENTRYs return a value; "
+                 "RETURN a value of the common result type",
+                 "(56)");
+      }
     }
     break;
   }
@@ -1209,7 +1275,10 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       e->ty = Type::voidTy();
       break;
     }
-    if (!sym->proc || !(sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))) {
+    const bool isFunc = sym->proc
+                            ? (sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))
+                            : (sym->isEntry && sym->entryIsFunction); // rule (34) external entry
+    if (!isFunc) {
       d_.error(e->loc, "'" + e->name + "' is a procedure and returns no value", "(123)");
       e->ty = Type::voidTy();
       break;
@@ -1217,8 +1286,12 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     e->sym = sym;
     Proc* callee = sym->proc;
     Stmt* en = sym->entry; // rule (56): an ENTRY name uses the entry's params
-    std::vector<Symbol*> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
-    const size_t expect = en ? en->params.size() : callee->params.size();
+    // External entries (rule (34)) carry Type descriptors, not Symbol params, so
+    // there is no per-argument type check against callee symbols.
+    std::vector<Symbol*> calleeParams =
+        en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
+    const size_t expect = en ? en->params.size() : (callee ? callee->params.size()
+                                                          : sym->entryParams.size());
     if (e->args.size() != expect) {
       d_.error(e->loc,
                "'" + e->name + "' expects " + std::to_string(expect) + " argument(s), " +
@@ -1230,7 +1303,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     for (size_t i = 0; i < e->args.size(); ++i)
       if (i < calleeParams.size())
         checkAssignable(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
-    e->ty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy()) : callee->retTy;
+    e->ty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
+               : (callee ? callee->retTy
+                         : (sym->entryIsFunction ? sym->entryRetTy : Type::voidTy()));
     break;
   }
   case Expr::Unary: {

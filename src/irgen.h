@@ -192,5 +192,7 @@ private:
   std::vector<llvm::GlobalVariable*> strLits_;
   int n_ = 0;
   HProc* curProc_ = nullptr;
+  Type curRetTy_; // result type of the function currently being emitted (the impl's
+                  // common entry type for a multi-entry procedure, rule (56))
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
 };

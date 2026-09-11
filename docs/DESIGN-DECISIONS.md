@@ -1407,3 +1407,30 @@ forwarding one `*` array to another `*` parameter (a second hidden extent whose
 value is not a constant or a recorded dynamic bound); a dynamic lower bound on a
 `*` parameter; `*` on a non-parameter declaration (a `*` local has no caller to
 supply its extent).
+
+## ADR-056 — Mixed void/function ENTRYs: one common impl type, no fall-through
+
+Context. ADR-026 shares one implementation function across a procedure's
+primary entry and its ENTRY statements, returning one type: every
+function-valued entry point (the procedure's own RETURNS and each ENTRY's
+RETURNS, rule (34)) must agree on it, and a truly mixed return type is
+diagnosed. Two gaps remained: a void (non-function) primary coexisting with
+function ENTRYs had no specified shape, and the impl's segments fell through
+into each other in body order, so a void primary segment could execute a
+function segment's code (or emit a `ret void` inside a valued function).
+
+Decision. The shared impl returns the single result type shared by every
+function-valued entry point (void when none); a void primary may coexist with
+function ENTRYs (`entry_mixed.pli`). The type agreement is enforced at both
+ends: sema rejects a plain RETURN when the impl's common type is non-void and
+a RETURN(value) when it is void (rules (56),(81); `bad_entry_ret.pli`), and it
+tracks the current ENTRY segment through nested Group/Begin/DO bodies. Codegen
+never falls through: each segment closes with a branch to its own return pad,
+and each pad returns the impl's type. A RETURNS attribute on a non-ENTRY
+DECLARE item is diagnosed (rule (34); `bad_returns_attr.pli`).
+
+Consequences. `entry_mixed.pli` covers a void primary beside two function
+ENTRYs plus an external ENTRY...RETURNS function call; the linkage (`.c`
+helper, cross-unit link) reuses the existing `cinterop` pattern. Truly mixed
+valued types stay diagnosed; USES/SETS/REDUCIBLE entry attributes stay
+out of scope.

@@ -1,0 +1,7 @@
+  /* rule (34): RETURNS is an entry-name
+     attribute; on a storage item it is
+     rejected, never silently accepted. */
+  badreturns: procedure options(main);
+     declare x fixed returns(fixed bin(31));
+     x = 1;
+  end badreturns;
