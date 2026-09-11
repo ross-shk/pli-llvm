@@ -1898,3 +1898,35 @@ stay diagnosed (M5/D1).
 changing the caller/callee return convention for one type); struct-returning
 functions with `ENTRY` statements in this slice; inline structure definitions in
 `RETURNS` (a declared template name is the supported form).
+
+## ADR-071 — Recursive `%INCLUDE` before lexical analysis
+
+**Context.** QR1.6 and CM4 require the safe subset of the C28-6571-3 Chapter 9
+processor before replacement and conditional directives. A raw `%` previously
+reached the language lexer and failed as an invalid character. Included text
+must itself be scanned for includes, while apparent directives in PL/I comments
+and character strings must remain source text.
+
+**Decision.** A preprocessor stage runs before `Lexer`. It recognizes directives
+only outside comments and character strings and implements `%INCLUDE` with one
+member or path. Resolution starts in the containing file's directory, with a
+`.inc` fallback for extensionless member names; quoted paths are accepted for
+filesystem-oriented sources. Included text is recursively processed in place.
+An active canonical-path stack rejects include cycles. Missing members,
+malformed includes, and every other directive are diagnosed with a
+C28-6571-3 Chapter 9 citation. Separate handler stubs provide the dispatch points
+for declarations and replacement, activation, conditionals, loops, transfers,
+and compile-time procedures.
+
+**Consequences.** `tests/core/include.pli` exercises nested relative includes,
+quoted and unquoted members, and ignored directives inside a comment and string.
+`bad_include.pli` rejects a missing member, `bad_include_cycle.pli` rejects a
+cycle, and `bad_preprocessor.pli` proves that an unimplemented `%IF` is
+diagnosed by its stub rather than leaking into the lexer. The driver now feeds
+the expanded source to diagnostics and the lexer.
+
+**Rejected.** Treating include text as a lexer token stream (nested includes
+must be expanded first); silently passing unsupported directives through;
+implementing Chapter 9 replacement or control flow in this slice; include
+search-path flags and the implementation-defined multi-identifier data-set form
+before a concrete use case requires them.
