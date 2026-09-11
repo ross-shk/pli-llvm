@@ -77,6 +77,11 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   }
   case TK::Pointer:
     return b_.getPtrTy();
+  case TK::Complex: {
+    // A complex value (QR2.2/CM5): a pair of FLOAT real/imaginary parts.
+    llvm::Type* d = b_.getDoubleTy();
+    return llvm::StructType::get(ctx_, {d, d});
+  }
   case TK::Void:
     return b_.getVoidTy();
   }
@@ -1441,6 +1446,9 @@ void IRGen::emitPut(HStmt* s) {
         break;
       case TK::Pointer:
         d_.error(s->loc, "a POINTER value cannot be written with PUT LIST in this stage", "(110)");
+        break;
+      case TK::Complex:
+        d_.error(s->loc, "a COMPLEX value cannot be written with PUT LIST in this stage", "(110)");
         break;
       }
     }
@@ -2917,6 +2925,43 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         ix = i;
     v.ty = e->ty;
     v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
+    result = v;
+    return true;
+  }
+  // Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1). A complex
+  // value is an {double,double} struct held in Val::cpx. COMPLEX builds one
+  // from two FLOAT parts; REAL/IMAG extract a part as a FLOAT; CONJG negates
+  // the imaginary part.
+  if (e->name == "COMPLEX") {
+    Val re = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
+    Val im = convert(emitExpr(e->args[1].get()), Type::flt(6), e->loc);
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, re.reg, 0, "cpx.re");
+    s = b_.CreateInsertValue(s, im.reg, 1, "cpx.im");
+    v.ty = e->ty;
+    v.cpx = s;
+    result = v;
+    return true;
+  }
+  if (e->name == "REAL" || e->name == "IMAG") {
+    Val z = emitExpr(e->args[0].get());
+    v.ty = e->ty;
+    v.reg = b_.CreateExtractValue(z.cpx, e->name == "REAL" ? 0 : 1, "part");
+    result = v;
+    return true;
+  }
+  if (e->name == "CONJG") {
+    Val z = emitExpr(e->args[0].get());
+    llvm::Value* re = b_.CreateExtractValue(z.cpx, 0, "cgr");
+    llvm::Value* im = b_.CreateExtractValue(z.cpx, 1, "cgi");
+    llvm::Value* nim = b_.CreateFNeg(im, "cgn");
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, re, 0, "cg.re");
+    s = b_.CreateInsertValue(s, nim, 1, "cg.im");
+    v.ty = e->ty;
+    v.cpx = s;
     result = v;
     return true;
   }

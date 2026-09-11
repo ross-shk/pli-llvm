@@ -17,6 +17,7 @@ enum class TK {
   Bit,      // BIT(n)
   Struct,   // structure with level-numbered members (rule 11)
   Pointer,  // POINTER: an address value (rules (15),(25))
+  Complex,  // COMPLEX: a pair of FLOAT real/imaginary parts (QR2.2/CM5)
   Void,
 };
 
@@ -125,6 +126,13 @@ struct Type {
     t.k = TK::Pointer;
     return t;
   }
+  // A complex value (QR2.2/CM5): a pair of FLOAT real/imaginary parts.
+  static Type complexTy() {
+    Type t;
+    t.k = TK::Complex;
+    t.prec = 6;
+    return t;
+  }
   // Build a structure type from its level-numbered members (rule 11).
   static Type structTy(std::vector<Member> m);
 
@@ -134,6 +142,7 @@ struct Type {
   bool isBit() const { return k == TK::Bit; }
   bool isPointer() const { return k == TK::Pointer; }
   bool isVoid() const { return k == TK::Void; }
+  bool isComplex() const { return k == TK::Complex; }
 
   // Integer width chosen for FIXED values (M0 keeps FIXED scale 0 only).
   int intBits() const {
@@ -161,6 +170,8 @@ struct Type {
       return "STRUCT";
     case TK::Pointer:
       return "POINTER";
+    case TK::Complex:
+      return "COMPLEX";
     case TK::Void:
       return "VOID";
     }

@@ -22,11 +22,13 @@
 // A materialised PL/I value.
 //   scalars : `reg` holds the LLVM value (i32/i64/double, or i1 for BIT)
 //   strings : `ptr` holds a pointer to the first character and `len` an i64
+//   complex : `cpx` holds an {double,double} struct of the real/imaginary parts
 struct Val {
   Type ty{};
   llvm::Value* reg = nullptr;
   llvm::Value* ptr = nullptr;
   llvm::Value* len = nullptr;
+  llvm::Value* cpx = nullptr;
 };
 
 class IRGen {

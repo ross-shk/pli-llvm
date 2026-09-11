@@ -1874,6 +1874,51 @@ bool Sema::typeBuiltin(Expr* e) {
     e->ty = Type::flt(6);
     return true;
   }
+  // Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1): COMPLEX(a,b)
+  // forms a complex value from a real and an imaginary part; REAL(z) and IMAG(z)
+  // extract the real/imaginary part as a FLOAT; CONJG(z) returns the conjugate.
+  if (e->name == "COMPLEX") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "COMPLEX expects 2 arguments (real, imaginary)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+      d_.error(e->loc, "COMPLEX arguments must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::complexTy();
+    return true;
+  }
+  if (e->name == "REAL" || e->name == "IMAG") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, e->name + " expects 1 argument (a complex value)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isComplex()) {
+      d_.error(e->args[0]->loc, e->name + " argument must be a complex value", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::flt(6);
+    return true;
+  }
+  if (e->name == "CONJG") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "CONJG expects 1 argument (a complex value)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isComplex()) {
+      d_.error(e->args[0]->loc, "CONJG argument must be a complex value", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::complexTy();
+    return true;
+  }
   // TRUNC built-in (M2): trunc(x) preserves the numeric type of its arg.
   if (e->name == "TRUNC") {
     if (e->args.size() != 1) {
