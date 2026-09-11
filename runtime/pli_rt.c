@@ -531,6 +531,34 @@ void pli_put_edit_float(double v, long long w, long long d) {
   put_field(buf, (size_t)n, w);
 }
 
+/* E(w,d) on a FLOAT value: scientific notation with one leading digit, d
+ * fractional digits, and a two-digit signed exponent (e.g. 1.25E+04), right-
+ * justified in width w. `%.*e` yields `d.dddde±e`; the exponent is normalised
+ * to at least two digits (0-padded) per the E-format convention. */
+void pli_put_edit_float_e(double v, long long w, long long d) {
+  if (d < 0) d = 0;
+  if (d > 60) d = 60;
+  char tmp[128];
+  snprintf(tmp, sizeof tmp, "%.*e", (int)d, v);
+  char buf[128];
+  char *p = buf;
+  const char *q = tmp;
+  if (*q == '-') { *p++ = *q++; }        /* sign */
+  const char *dot = strchr(q, 'e');
+  size_t mant = (size_t)(dot ? dot - q : strlen(q));
+  memcpy(p, q, mant); p += mant;          /* d.dddd mantissa */
+  if (!dot) { *p = '\0'; put_field(buf, (size_t)(p - buf), w); return; }
+  const char *e = dot + 1;                /* e.g. "+04" or "-12" */
+  int ex = atoi(e);
+  int neg = ex < 0;
+  if (neg) ex = -ex;
+  *p++ = 'E';
+  *p++ = neg ? '-' : '+';
+  if (ex < 10) *p++ = '0';
+  p += snprintf(p, (size_t)(buf + sizeof buf - p), "%d", ex);
+  put_field(buf, (size_t)(p - buf), w);
+}
+
 /* A(w): a character value right-justified in width w, truncated on the right
  * when longer than the field. */
 void pli_put_edit_char(const char *p, long long len, long long w) {

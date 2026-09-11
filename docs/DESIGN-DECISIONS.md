@@ -1854,3 +1854,47 @@ functions (they separate and tokenize, not position in fixed-width fields); an
 `E` scientific item in this slice (FLOAT uses `F`); an implicit-decimal-point
 `F(w,d)` read (a field with an explicit `'.'` is parsed; the implied-decimal form
 is not).
+
+## ADR-070 — `E(w,d)` scientific format and structures by value
+
+**Context.** Two CM tails of the C-mirror sub-plan. CM3 left `E` (and `B`/`C`/
+`P`/`COLUMN`/`R`) diagnosed unimplemented by ADR-069; CM1 needed a whole
+structure usable as an expression value — a structure-valued function
+(`RETURNS` a structure), a structure argument passed by value, and a
+structure-returning call assigned to a same-shape structure (rule 127).
+
+**Decision (E-format).** `E(w,d)` is served for both output and input alongside
+the ADR-069 items. Output converts the item to FLOAT and emits
+`pli_put_edit_float_e`, which formats scientific notation with one leading digit,
+`d` fractional digits, and a signed two-digit exponent (e.g. `1.25E+01`),
+right-justified in width `w`. Input reuses `pli_get_edit_num` (its `strtod`
+already parses the exponent form) and converts to the target. `E` requires a
+numeric item (rule 53).
+
+**Decision (structures by value).** A structure is a first-class value carried by
+its address (`Val.ptr`). A structure-valued function is declared `RETURNS(NAME)`
+where `NAME` is an enclosing structure variable whose shape the function takes
+(a deep copy of its type, like a LIKE template); sema resolves it into `retTy`.
+Its ABI is a hidden result pointer: the function returns `void` and the caller
+allocates the result buffer, passes its address as the first argument, and a
+`RETURN(struct)` copies the value into it — avoiding a by-value struct return in
+the ABI. A whole-structure argument is passed BY VALUE: `argAddr` copies the
+source storage into a fresh buffer, so the callee's writes never reach the
+caller's structure (scalars and arrays stay by reference). Whole-structure
+assignment accepts any structure-valued RHS (variable, minor-structure member,
+or a structure-returning call).
+
+**Consequences.** `tests/core/e_format.pli` round-trips `E(w,d)` through a STRING
+buffer and checks the rendered content; `tests/core/struct_return.pli` exercises
+a structure-returning function, a structure-valued assignment, and a by-value
+argument. `make test` (149/149) and `make check` stay green; emitted IR shows the
+hidden result buffer and the by-value `memcpy`. `RETURNS` of a non-structure name,
+a dynamic-member structure, or a structure-returning function with `ENTRY`
+statements are diagnosed. `DATA`, `COPY`, `LINE` options, format iteration,
+`B`/`C`/`P`/`COLUMN`/`R`, a standalone `FORMAT`, and a third `F` scale operand
+stay diagnosed (M5/D1).
+
+**Rejected.** A true by-value struct return in the LLVM ABI (sret requires
+changing the caller/callee return convention for one type); struct-returning
+functions with `ENTRY` statements in this slice; inline structure definitions in
+`RETURNS` (a declared template name is the supported form).

@@ -2,6 +2,11 @@
 #include <algorithm>
 #include <functional>
 
+// True when a structure type contains a dynamic (runtime-extent) array member
+// (rule 13); forward-declared here because resolveStructReturn (rule 127) and
+// LIKE/assignment (rules 43,127) both use it.
+static bool hasDynamicMember(const Type& ty);
+
 // FIXED op FIXED -> FIXED with the wider precision and the larger scale;
 // anything involving FLOAT is FLOAT. This is the *common* result type for
 // +,-,comparison (and MIN/MAX/MOD), where a mixed-scale operand is rescaled
@@ -126,6 +131,7 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // share a program-level scope, so siblings can call each other.
   rootScope_ = new Scope();
   scopes_.push_back(std::unique_ptr<Scope>(rootScope_));
+
   for (auto& p : prog.procs) {
     p->irName = "@PLI_" + p->name;
     // A function procedure's symbol carries its result type so that a
@@ -151,6 +157,19 @@ bool Sema::run(Program& prog, bool compileOnly) {
       }
     }
   }
+
+  // Pass 1b: collect every procedure's declarations into its own scope before
+  // typing any body, so that a structure-valued function's RETURNS name (rule
+  // 127) resolves against an already-declared enclosing template. Runs after
+  // pass 1 (procedure names are declared), so INITIAL CALL (rule 27) can resolve
+  // its function. processProc (pass 2) skips re-collecting (declsCollected_).
+  for (auto& p : prog.procs) {
+    beginScopes_.clear();
+    collectDecls(p->body, scopeFor(p.get()), p.get(), false);
+  }
+  declsCollected_ = true;
+  for (auto& p : prog.procs)
+    resolveStructReturn(p.get());
 
   // Pass 2: declarations, resolution and typing, procedure by procedure.
   for (auto& p : prog.procs)
@@ -191,8 +210,10 @@ void Sema::processProc(Proc* p) {
   // removed. Explicit STATIC is accepted and treated as AUTOMATIC for now.
   bool isStatic = false;
 
-  beginScopes_.clear();
-  collectDecls(p->body, sc, p, isStatic);
+  if (!declsCollected_) {
+    beginScopes_.clear();
+    collectDecls(p->body, sc, p, isStatic);
+  }
 
   // Parameters: a DECLARE inside the procedure supplies their attributes;
   // otherwise the implicit rule applies. Parameters are always by reference.
@@ -219,6 +240,27 @@ void Sema::processProc(Proc* p) {
     collectLabels(s.get());
   for (auto& s : p->body)
     checkStmt(s.get(), sc, p);
+}
+
+// Resolve a structure-valued function's RETURNS name (rule 127). The parser
+// recorded the bare name of an enclosing structure variable; resolve it to a
+// deep copy of that structure's type (mirroring a LIKE template, rule 43). A
+// missing or non-structure reference, or a structure with a dynamic member, is
+// diagnosed.
+void Sema::resolveStructReturn(Proc* p) {
+  if (p->returnsStructName.empty())
+    return;
+  Symbol* tpl = lookup(scopeFor(p), p->returnsStructName);
+  if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
+    d_.error(p->loc,
+             "RETURNS reference '" + p->returnsStructName + "' is not a structure in this scope",
+             "(127)");
+    p->retTy = Type::voidTy();
+    return;
+  }
+  if (hasDynamicMember(tpl->ty))
+    d_.error(p->loc, "RETURNS of a structure with a dynamic member is not implemented", "(13)");
+  p->retTy = tpl->ty; // deep copy via Type's copy constructor
 }
 
 // Parameters are always by reference; a DECLARE supplies their attributes,
@@ -1306,8 +1348,11 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     Expr* it = s->items[dataIdx].get();
     if (f.kind == FormatItem::A && !it->ty.isChar())
       d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
-    else if (f.kind == FormatItem::F && !it->ty.isNumeric())
-      d_.error(it->loc, "an F format requires a numeric item", "(50)");
+    else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
+      const char* letter = f.kind == FormatItem::F ? "F" : "E";
+      const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
+      d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
+    }
     if (isGet) {
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
                  it->kind == Expr::Subscript;
@@ -1322,7 +1367,7 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
   }
   size_t dataFormats = 0;
   for (auto& f : s->formats)
-    if (f.kind == FormatItem::A || f.kind == FormatItem::F)
+    if (f.kind == FormatItem::A || f.kind == FormatItem::F || f.kind == FormatItem::E)
       ++dataFormats;
   if (dataFormats < s->items.size())
     d_.error(s->loc, "more data items than data formats in EDIT", "(108)");

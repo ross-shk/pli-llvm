@@ -81,9 +81,9 @@ struct DefinedSub {
 // (X spacing, SKIP/PAGE/LINE line control) that acts without consuming data.
 // F(w,d): w = field width, d = fractional digits; A(w)/X(w): w = field width.
 struct FormatItem {
-  enum Kind { A, F, X, Skip, Page, Line } kind = A;
+  enum Kind { A, F, E, X, Skip, Page, Line } kind = A;
   ExprP w; // field width
-  ExprP d; // F: fractional digits
+  ExprP d; // F/E: fractional digits
 };
 
 struct DeclItem {
@@ -203,8 +203,12 @@ struct Proc {
   std::string name;
   SourceLoc loc{};
   bool isMain = false;
-  bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
-  Type retTy{};                        // function return type (RETURNS)
+  bool isFunction = false; // has a RETURNS attribute (rules (5),(34))
+  Type retTy{};            // function return type (RETURNS)
+  // A structure-valued function's result type (rule 127): the name of an
+  // enclosing structure variable whose shape the function returns. The parser
+  // records the name; sema resolves it to a deep copy of that type into retTy.
+  std::string returnsStructName;
   std::vector<std::string> params;     // rule (4) parameterlist
   std::vector<std::string> entryNames; // rule (3) entry-namelist extra names
   std::vector<StmtP> body;

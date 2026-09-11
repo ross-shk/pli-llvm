@@ -253,6 +253,14 @@ std::string IRGen::run(HProgram& prog) {
   for (auto& p : prog.procs) {
     if (p->isFunction && p->retTy.isChar())
       d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
+    if (p->isFunction && p->retTy.isStruct()) {
+      for (auto& st : p->body)
+        if (st && st->kind == HStmt::Entry)
+          d_.error(st->loc,
+                   "a structure-returning procedure with ENTRY statements is not implemented in "
+                   "this stage",
+                   "(56)");
+    }
   }
   if (prog.mainProc && !prog.mainProc->params.empty())
     d_.error(prog.mainProc->loc,
@@ -676,7 +684,11 @@ void IRGen::collectGotoBlocks(HStmt* s) {
 // emitPlainProc); multi-entry procedures get the shared impl (filled by
 // emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
 void IRGen::declareProc(HProc* p) {
-  llvm::Type* ret = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
+  bool sret = p->isFunction && p->retTy.isStruct();
+  // A structure-valued function (rule 127) returns through a hidden result
+  // pointer and returns void: the caller allocates the storage and passes its
+  // address as the first argument.
+  llvm::Type* ret = sret ? b_.getVoidTy() : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
   std::vector<HStmt*> entries;
   for (auto& st : p->body)
     if (st && st->kind == HStmt::Entry)
@@ -688,6 +700,8 @@ void IRGen::declareProc(HProc* p) {
 
   if (entries.empty()) {
     std::vector<llvm::Type*> pt;
+    if (sret)
+      pt.push_back(b_.getPtrTy()); // hidden result pointer (rule 127)
     for (size_t i = 0; i < p->paramSyms.size(); ++i)
       pt.push_back(b_.getPtrTy());
     for (Symbol* s : p->paramSyms)
@@ -788,12 +802,15 @@ void IRGen::emitProc(HProc* p) {
   curProc_ = p;
   labelBlocks_.clear();
   symAddr_.clear();
+  structRetPtr_ = nullptr;
   // Re-seed globals: static storage resolves the same in every procedure.
   for (Symbol* s : sema_.storage())
     if (s->isStatic && s->kind == Symbol::Var)
       symAddr_[s] = mod_.getGlobalVariable(s->irName.substr(1), true);
 
-  llvm::Type* retLLVM = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
+  llvm::Type* retLLVM = (p->isFunction && p->retTy.isStruct())
+                            ? b_.getVoidTy()
+                            : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
 
   // rule (56): ENTRY statements declare alternate entry points.
   std::vector<HStmt*> entries;
@@ -823,6 +840,8 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
   // dope slot; the trailing args are the static links (rule (8)).
   size_t ai = 0;
+  if (p->isFunction && p->retTy.isStruct())
+    structRetPtr_ = fn->getArg(ai++); // hidden result pointer (rule 127)
   for (Symbol* s : p->paramSyms)
     symAddr_[s] = fn->getArg(ai++);
   for (Symbol* s : p->paramSyms)
@@ -841,7 +860,9 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     emitStmt(st.get());
 
   if (!blockTerminated(b_.GetInsertBlock())) {
-    if (p->isFunction)
+    if (p->isFunction && p->retTy.isStruct())
+      b_.CreateRetVoid(); // structure-valued: result written to the hidden pointer
+    else if (p->isFunction)
       b_.CreateRet(llvm::Constant::getNullValue(retLLVM)); // fall-off: return a zero value
     else
       b_.CreateRetVoid();
@@ -981,7 +1002,14 @@ void IRGen::emitStmt(HStmt* s) {
     emitClose(s);
     break;
   case HStmt::Return: {
-    if (curProc_->isFunction) {
+    if (curProc_->isFunction && curProc_->retTy.isStruct()) {
+      // Structure-valued function (rule 127): copy the returned structure's
+      // storage into the caller's result buffer, then return void.
+      Val v = emitExpr(s->value.get());
+      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curProc_->retTy)));
+      b_.CreateMemCpy(structRetPtr_, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+      b_.CreateRetVoid();
+    } else if (curProc_->isFunction) {
       Val v = emitExpr(s->value.get());
       Val rv = convert(v, curProc_->retTy, s->loc);
       llvm::Value* reg = rv.reg;
@@ -1156,21 +1184,21 @@ void IRGen::emitAssign(HStmt* s) {
   // storage into the target. Both sides are whole-structure references (a
   // top-level variable or a qualified member); sema checked identical shape.
   if (s->target->kind == HExpr::VarRef && s->target->sym && s->target->ty.isStruct()) {
+    // Whole-structure assignment (rule 127): copy the source structure's storage
+    // into the target. The RHS may be any structure-valued expression (a whole
+    // variable, a minor-structure member, or a structure-returning call).
     HExpr* t = s->target.get();
-    HExpr* v = s->value.get();
-    if (v->kind != HExpr::VarRef || !v->sym || !v->ty.isStruct()) {
-      d_.error(s->loc,
-               "right-hand side of a whole-structure assignment must be a structure reference",
+    Val v = emitExpr(s->value.get());
+    if (!v.ty.isStruct() || !v.ptr) {
+      d_.error(s->loc, "right-hand side of a whole-structure assignment must be a structure value",
                "(127)");
       return;
     }
     llvm::Value* dst =
         t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
-    llvm::Value* src =
-        v->memberPath.empty() ? addressOf(v->sym) : memberAddr(v->sym, v->memberPath, s->loc);
     llvm::Type* sty = llvmTy(t->ty);
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(sty));
-    b_.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), sz);
+    b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
     return;
   }
   // Qualified member assignment: S.A = e (rule 124).
@@ -1184,11 +1212,6 @@ void IRGen::emitAssign(HStmt* s) {
     Val v = emitExpr(s->value.get());
     llvm::Value* addr = memberAddr(t->sym, t->memberPath, s->loc);
     storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
-    return;
-  }
-  // Whole-structure assignment (rule 127) is not served in this stage.
-  if (s->target->kind == HExpr::VarRef && s->target->sym && s->target->ty.isStruct()) {
-    d_.error(s->loc, "whole-structure assignment is not implemented in this stage", "(127)");
     return;
   }
   if (s->target->kind != HExpr::VarRef || !s->target->sym)
@@ -1577,6 +1600,16 @@ void IRGen::emitPutEditItems(HStmt* s) {
       }
       break;
     }
+    case HFormatItem::E: {
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = convert(emitExpr(item), Type::flt(6), item->loc);
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+      b_.CreateCall(runtimeFn("pli_put_edit_float_e"), {v.reg, w, d});
+      break;
+    }
     }
   }
 }
@@ -1617,7 +1650,8 @@ void IRGen::emitGetEditItems(HStmt* s) {
       storeGetTarget(t, v, s->loc);
       break;
     }
-    case HFormatItem::F: {
+    case HFormatItem::F:
+    case HFormatItem::E: {
       if (di >= s->items.size())
         break;
       HExpr* t = s->items[di++].get();
@@ -1634,6 +1668,16 @@ void IRGen::emitGetEditItems(HStmt* s) {
 
 // Address of one call argument for a by-reference parameter (rule 4).
 llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
+  // A whole-structure argument is passed BY VALUE (rule 127): the source's
+  // storage is copied into a fresh buffer, so the callee's writes do not reach
+  // the caller's structure. Scalars and arrays remain by reference.
+  if (pty.isStruct()) {
+    llvm::Value* dst = entryAlloca(llvmTy(pty), "sv");
+    Val av = emitExpr(a);
+    llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(pty)));
+    b_.CreateMemCpy(dst, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), sz);
+    return dst;
+  }
   bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
                 a->sym->ty.k == pty.k && a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
                 a->sym->ty.varying == pty.varying;
@@ -1719,6 +1763,12 @@ void IRGen::emitCall(HStmt* s) {
       en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
 
   std::vector<llvm::Value*> args;
+  // A structure-returning callee (rule 127) takes a hidden result buffer as its
+  // first argument; the CALL statement discards the returned value.
+  Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
+                : (callee ? callee->retTy : Type::voidTy());
+  if (rty.isStruct())
+    args.push_back(entryAlloca(llvmTy(rty), "sret"));
   for (size_t i = 0; i < s->args.size(); ++i) {
     HExpr* a = s->args[i].get();
     Type pty;
@@ -2475,15 +2525,19 @@ Val IRGen::emitExpr(HExpr* e) {
           e->locPtr ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
                     : memberAddr(e->sym, e->memberPath, e->loc);
       v.ty = leaf;
+      if (leaf.isStruct()) {
+        // A whole minor structure member (rule 127): its value is its address.
+        v.ptr = addr;
+        return v;
+      }
       llvm::Value* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
       v.reg = leaf.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
     if (e->ty.isStruct()) {
-      // A whole structure as a value (rule 127) is not served in this stage.
-      d_.error(e->loc, "a whole structure cannot be used as a value in this stage", "(127)");
+      // A whole structure as a value (rule 127): carry its address.
       v.ty = e->ty;
-      v.reg = i64(0);
+      v.ptr = e->locPtr ? emitExpr(e->locPtr.get()).reg : addressOf(e->sym);
       return v;
     }
     return loadSym(e->sym, e->sym->ty);
@@ -2512,6 +2566,13 @@ Val IRGen::emitExpr(HExpr* e) {
       return v;
     } // diagnosed in emitProc
     std::vector<llvm::Value*> args;
+    llvm::Value* sretPtr = nullptr;
+    if (rty.isStruct()) {
+      // Structure-valued function (rule 127): the caller allocates the result
+      // buffer and passes its address as the hidden first argument.
+      sretPtr = entryAlloca(llvmTy(rty), "sret");
+      args.push_back(sretPtr);
+    }
     for (size_t i = 0; i < e->args.size(); ++i) {
       HExpr* a = e->args[i].get();
       Type pty;
@@ -2533,9 +2594,14 @@ Val IRGen::emitExpr(HExpr* e) {
         args.push_back(ext);
       }
     appendStaticLinks(callee, args);
-    llvm::CallInst* call = b_.CreateCall(calleeFn, args, "fres");
+    // A structure-returning callee returns void (the result is written to the
+    // hidden buffer), so the call cannot carry a value name.
+    llvm::CallInst* call =
+        rty.isStruct() ? b_.CreateCall(calleeFn, args) : b_.CreateCall(calleeFn, args, "fres");
     v.ty = rty;
-    if (rty.isBit()) {
+    if (rty.isStruct()) {
+      v.ptr = sretPtr; // the result lives in the caller's buffer
+    } else if (rty.isBit()) {
       v.reg = b_.CreateTrunc(call, b_.getInt1Ty(), "fb");
     } else {
       v.reg = call;
