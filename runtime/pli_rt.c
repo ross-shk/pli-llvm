@@ -234,6 +234,15 @@ double pli_log(double x) { return log(x); }
 double pli_sin(double x) { return sin(x); }
 double pli_cos(double x) { return cos(x); }
 double pli_tan(double x) { return tan(x); }
+double pli_log2(double x) { return log2(x); }
+double pli_log10(double x) { return log10(x); }
+double pli_atan(double x) { return atan(x); }
+double pli_sinh(double x) { return sinh(x); }
+double pli_cosh(double x) { return cosh(x); }
+double pli_tanh(double x) { return tanh(x); }
+double pli_atanh(double x) { return atanh(x); }
+double pli_erf(double x) { return erf(x); }
+double pli_erfc(double x) { return erfc(x); }
 
 /* REPEAT(s, n): fill dst with n copies of s, blank-padding to dstcap. */
 void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,

@@ -2893,17 +2893,24 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
-  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN. The argument is converted to FLOAT
-  // and the matching pli_* runtime wrapper is called.
+  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
+  // ATANH, ERF, ERFC. The argument is converted to FLOAT and the matching pli_*
+  // runtime wrapper is called.
   if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
-      e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN") {
+      e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
+      e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
+      e->name == "COSH" || e->name == "TANH" || e->name == "ATANH" || e->name == "ERF" ||
+      e->name == "ERFC") {
     Val x = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
-    static const char* const kMathFn[] = {"pli_floor", "pli_ceil", "pli_sqrt", "pli_exp",
-                                          "pli_log",   "pli_sin",  "pli_cos",  "pli_tan"};
-    static const char* const kMathName[] = {"FLOOR", "CEIL", "SQRT", "EXP",
-                                            "LOG",   "SIN",  "COS",  "TAN"};
+    static const char* const kMathFn[] = {
+        "pli_floor", "pli_ceil", "pli_sqrt",  "pli_exp",   "pli_log",  "pli_sin",
+        "pli_cos",   "pli_tan",  "pli_log2",  "pli_log10", "pli_atan", "pli_sinh",
+        "pli_cosh",  "pli_tanh", "pli_atanh", "pli_erf",   "pli_erfc"};
+    static const char* const kMathName[] = {"FLOOR", "CEIL", "SQRT",  "EXP",   "LOG",  "SIN",
+                                            "COS",   "TAN",  "LOG2",  "LOG10", "ATAN", "SINH",
+                                            "COSH",  "TANH", "ATANH", "ERF",   "ERFC"};
     int ix = 0;
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 17; ++i)
       if (e->name == kMathName[i])
         ix = i;
     v.ty = e->ty;
