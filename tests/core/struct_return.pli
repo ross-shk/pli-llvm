@@ -1,0 +1,48 @@
+   /* Structures by value (CM1, rule 127): a whole structure is a value that
+      can be returned by a function (RETURNS names an enclosing structure whose
+      shape the function takes) and passed to a procedure BY VALUE (the callee
+      works on a copy, so its writes do not reach the caller). */
+   struct_return_test: procedure options(main);
+      declare 1 s,
+             2 a fixed bin(31),
+             2 b fixed bin(31);
+      declare 1 t,
+             2 a fixed bin(31),
+             2 b fixed bin(31);
+      declare fails fixed bin(31);
+      fails = 0;
+
+      /* A structure-valued function: RETURNS(s) gives it the shape of s. */
+      make_pair: procedure(x, y) returns(s);
+         declare x fixed bin(31);
+         declare y fixed bin(31);
+         declare 1 r,
+                2 a fixed bin(31),
+                2 b fixed bin(31);
+         r.a = x;
+         r.b = y;
+         return(r);
+      end make_pair;
+      /* A by-value structure argument: the callee's writes are local. */
+      bump: procedure(p);
+         declare 1 p,
+                2 a fixed bin(31),
+                2 b fixed bin(31);
+         p.a = p.a + 100;
+         p.b = p.b + 100;
+      end bump;
+
+      s.a = 3;
+      s.b = 5;
+
+      /* structure-valued expression: the call result is assigned to t */
+      t = make_pair(s.a, s.b);
+      if t.a ^= 3 or t.b ^= 5 then fails = fails + 1;
+
+      /* structure argument passed by value: s is unchanged after bump */
+      call bump(s);
+      if s.a ^= 3 or s.b ^= 5 then fails = fails + 1;
+
+      if fails = 0 then put skip list('PASS struct_return');
+      else put skip list('FAIL struct_return: fails =', fails);
+   end struct_return_test;

@@ -18,6 +18,15 @@ static void parseDecConstant(const std::string& text, Expr& e) {
   e.decPrec = (int)(intPart.size() + fracPart.size());
 }
 
+// True when a bare word is a scalar type/attribute keyword (rules (16)-(19)),
+// so `RETURNS(fixed)`/`RETURNS(float)` mean a scalar descriptor rather than a
+// structure template reference (rule 127).
+static bool isScalarTypeWord(const std::string& w) {
+  return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
+         w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
+         w == "VAR" || w == "ALIGNED" || w == "UNALIGNED" || w == "POINTER";
+}
+
 // ---------------------------------------------------------------------------
 // Operator mapping. Symbols, plus the 48-character-set operator words of
 // TR 25.084 §2.3.3 (NOT AND OR GT LT GE LE NG NL NE CAT).
@@ -287,11 +296,21 @@ void Parser::parseProcOptions(Proc* p) {
       continue;
     if (atWord("RETURNS")) {
       // RETURNS(data-attributes) ::= the result type of a function
-      // procedure (rules (5),(34)). Parse the type from the attribute words.
+      // procedure (rules (5),(34)). Parse the type from the attribute words, or
+      // — when the operand is a single name — treat it as a structure variable
+      // whose shape the function returns (rule (127), resolved in sema).
       advance();
       if (expect(Tok::LParen, "(34)")) {
         p->isFunction = true;
-        parseDescriptorType(p->retTy); // result type from the attribute words
+        // A lone identifier that is not a scalar type keyword names a structure
+        // template whose shape the function returns (rule 127).
+        if (cur().kind == Tok::Word && peek().kind == Tok::RParen &&
+            !isScalarTypeWord(cur().text)) {
+          p->returnsStructName = cur().text;
+          advance();
+        } else {
+          parseDescriptorType(p->retTy); // result type from the attribute words
+        }
         expect(Tok::RParen, "(34)");
       }
       continue;
@@ -1581,7 +1600,7 @@ bool Parser::parseFormatItem(Stmt* st) {
   }
   const std::string& w = cur().text;
   // Format families recognised but not served by this slice (CM3).
-  if (w == "E" || w == "B" || w == "C" || w == "P" || w == "COLUMN" || w == "R") {
+  if (w == "B" || w == "C" || w == "P" || w == "COLUMN" || w == "R") {
     d_.error(cur().loc, "format item '" + w + "' is not implemented in this stage", "(48)");
     return false;
   }
@@ -1589,6 +1608,8 @@ bool Parser::parseFormatItem(Stmt* st) {
     fi.kind = FormatItem::A;
   } else if (w == "F") {
     fi.kind = FormatItem::F;
+  } else if (w == "E") {
+    fi.kind = FormatItem::E;
   } else if (w == "X") {
     fi.kind = FormatItem::X;
   } else if (w == "SKIP") {
@@ -1604,7 +1625,7 @@ bool Parser::parseFormatItem(Stmt* st) {
   advance();              // the format descriptor word
   if (eat(Tok::LParen)) { // optional ( width [, decimals ] )
     fi.w = parseExpr();
-    if (fi.kind == FormatItem::F && eat(Tok::Comma)) {
+    if ((fi.kind == FormatItem::F || fi.kind == FormatItem::E) && eat(Tok::Comma)) {
       fi.d = parseExpr();
       if (eat(Tok::Comma)) { // the third F operand is a scale factor
         d_.error(cur().loc, "a scale factor on an F format item is not implemented in this stage",

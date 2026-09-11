@@ -87,6 +87,10 @@ private:
   Symbol* implicitDeclare(Scope* sc, const std::string& n, SourceLoc l, bool isStatic);
 
   void processProc(Proc* p);
+  // Resolve a structure-valued function's RETURNS name (rule 127): deep-copy the
+  // referenced structure variable's type into p->retTy. Runs after all
+  // declarations are collected, so the template is visible in the proc's scope.
+  void resolveStructReturn(Proc* p);
   // Bottom-up: fill each Proc::env with the enclosing variables its subtree
   // accesses, so codegen can thread a static link (M1, removes ADR-010 dev).
   void computeEnv(Proc* p);
@@ -169,6 +173,7 @@ private:
   std::set<std::string> procLabels_;              // GO TO targets in the current proc (rule 77)
   std::set<std::string> irNames_;                 // irNames in use, to disambiguate shadowing
   std::unordered_map<Stmt*, Scope*> beginScopes_; // BEGIN block -> its scope
+  bool declsCollected_ = false;                   // true once the pass-0 collectDecls pre-pass ran
 };
 
 // Arithmetic result type per the conversion rules (M0 approximation).

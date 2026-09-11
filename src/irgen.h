@@ -247,5 +247,8 @@ private:
   std::vector<llvm::GlobalVariable*> strLits_;
   int n_ = 0;
   HProc* curProc_ = nullptr;
+  // The hidden result pointer of a structure-valued function (rule 127): the
+  // caller-supplied buffer that a RETURN(struct) copies into before returning.
+  llvm::Value* structRetPtr_ = nullptr;
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
 };
