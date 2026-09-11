@@ -70,8 +70,9 @@ make install
   `INDEX`, `LENGTH`, `REPEAT`, `VERIFY`, `TRANSLATE`, `HIGH`, `LOW`, `DATE`,
   `TIME`, `ABS`, `TRUNC`, `MIN`, `MAX`, `MOD`, `ROUND`, `MULTIPLY`, `DIVIDE`,
   `PRECISION`, `FLOOR`, `CEIL`, `SQRT`, `EXP`, `LOG`, `LOG2`, `LOG10`, `ATAN`,
-  `SINH`, `COSH`, `TANH`, `ATANH`, `ERF`, `ERFC`, `SIN`, `COS` and `TAN`
-  built-in functions; `SUBSTR(v, i, n) = x` pseudo-variable
+  `SINH`, `COSH`, `TANH`, `ATANH`, `ERF`, `ERFC`, `SIN`, `COS`, `TAN`, and the
+  degree trig `SIND`, `COSD`, `TAND`, `ATAND` built-in functions;
+  `SUBSTR(v, i, n) = x` pseudo-variable
   (ADR-024); `BIT(1)`; `FLOAT`; `FIXED BINARY/DECIMAL` (scale 0)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,
   `END` and `PUT` as ordinary variables
