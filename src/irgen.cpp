@@ -205,7 +205,9 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
   for (const Type& t : sym->entryParams)
     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
       pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
-  llvm::FunctionType* ft = llvm::FunctionType::get(b_.getVoidTy(), pt, false);
+  llvm::Type* rty =
+      sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34) RETURNS
+  llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
@@ -561,7 +563,11 @@ void IRGen::collectGotoBlocks(HStmt* s) {
 // emitPlainProc); multi-entry procedures get the shared impl (filled by
 // emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
 void IRGen::declareProc(HProc* p) {
-  llvm::Type* ret = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
+  // The shared implementation returns the single result type shared by every
+  // function-valued entry point (rule 56): the procedure's own RETURNS type
+  // when it is a function, else the common RETURNS type of its function ENTRYs
+  // (a non-function primary entry may coexist with function segments).
+  llvm::Type* implRet = p->commonRetTy.isVoid() ? b_.getVoidTy() : llvmTy(p->commonRetTy);
   std::vector<HStmt*> entries;
   for (auto& st : p->body)
     if (st && st->kind == HStmt::Entry)
@@ -580,7 +586,7 @@ void IRGen::declareProc(HProc* p) {
         pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
     for (size_t i = 0; i < p->env.size(); ++i)
       pt.push_back(b_.getPtrTy()); // links
-    llvm::FunctionType* ft = llvm::FunctionType::get(ret, pt, false);
+    llvm::FunctionType* ft = llvm::FunctionType::get(implRet, pt, false);
     llvm::Function* fn =
         llvm::Function::Create(ft, llvm::Function::InternalLinkage, p->irName.substr(1), &mod_);
     for (const auto& en : p->entryNames)
@@ -610,13 +616,20 @@ void IRGen::declareProc(HProc* p) {
   for (size_t i = 0; i < p->env.size(); ++i)
     pt.push_back(b_.getPtrTy());
   pt.push_back(b_.getInt64Ty()); // the entry selector
-  llvm::FunctionType* ift = llvm::FunctionType::get(ret, pt, false);
+  llvm::FunctionType* ift = llvm::FunctionType::get(implRet, pt, false);
   llvm::Function* impl = llvm::Function::Create(ift, llvm::Function::InternalLinkage,
                                                 p->irName.substr(1) + ".impl", &mod_);
 
   // A thunk marshals one entry's arguments and tail-calls the shared impl.
+  // The impl carries one segment per entry point in body order; control must
+  // never fall from one segment into the next, so each segment ends with an
+  // explicit terminator when its source statements do not supply one: a
+  // function-valued segment returns the common result type (reached only by
+  // falling off its RETURNs), and a void segment returns void. The thunk
+  // returns its own entry point's result type (void for a non-function entry;
+  // a value produced by the impl is then discarded).
   int thunkN = 0;
-  auto thunk = [&](const std::vector<Symbol*>& mine, llvm::Value* selv) {
+  auto thunk = [&](const std::vector<Symbol*>& mine, llvm::Value* selv, llvm::Type* trty) {
     std::vector<llvm::Type*> sig;
     for (size_t i = 0; i < mine.size(); ++i)
       sig.push_back(b_.getPtrTy());
@@ -625,7 +638,7 @@ void IRGen::declareProc(HProc* p) {
         sig.push_back(b_.getInt64Ty()); // hidden `*` extent args
     for (size_t i = 0; i < p->env.size(); ++i)
       sig.push_back(b_.getPtrTy()); // links
-    llvm::FunctionType* tft = llvm::FunctionType::get(ret, sig, false);
+    llvm::FunctionType* tft = llvm::FunctionType::get(trty, sig, false);
     llvm::Function* tf = llvm::Function::Create(tft, llvm::Function::InternalLinkage,
                                                 "entry.thunk." + std::to_string(thunkN++), &mod_);
     llvm::BasicBlock* tb = llvm::BasicBlock::Create(ctx_, "entry", tf);
@@ -652,19 +665,21 @@ void IRGen::declareProc(HProc* p) {
     args.push_back(selv);
     llvm::CallInst* call = b_.CreateCall(ift, impl, args);
     call->setTailCall(true);
-    if (ret->isVoidTy())
+    if (trty->isVoidTy())
       b_.CreateRetVoid();
     else
       b_.CreateRet(call);
     return tf;
   };
 
-  llvm::Function* t0 = thunk(p->paramSyms, i64(0));
+  llvm::Function* t0 = thunk(p->paramSyms, i64(0), p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
   t0->setName(p->irName.substr(1));
   for (const auto& en : p->entryNames)
     aliasFor(en, t0);
   for (size_t i = 0; i < entries.size(); ++i) {
-    llvm::Function* tf = thunk(entries[i]->entryParamSyms, i64(i + 1));
+    llvm::Function* tf = thunk(entries[i]->entryParamSyms, i64(i + 1),
+                               entries[i]->entryIsFunction ? llvmTy(entries[i]->entryRetTy)
+                                                           : b_.getVoidTy());
     tf->setName(entryIrName(p->name, p->parent ? p->parent->name : "", entries[i]->name).substr(1));
   }
 }
@@ -689,7 +704,8 @@ void IRGen::emitProc(HProc* p) {
   if (entries.empty())
     emitPlainProc(p, retLLVM);
   else
-    emitMultiEntryProc(p, entries, retLLVM);
+    emitMultiEntryProc(p, entries,
+                       p->commonRetTy.isVoid() ? b_.getVoidTy() : llvmTy(p->commonRetTy));
   curProc_ = nullptr;
 }
 
@@ -698,6 +714,7 @@ void IRGen::emitProc(HProc* p) {
 void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   llvm::Function* fn = mod_.getFunction(p->irName.substr(1));
   curFn_ = fn;
+  curRetTy_ = p->isFunction ? p->retTy : Type::voidTy();
   // The entry block must be the function's first block (so it is the real
   // entry, and the allocas it holds dominate every reachable block).
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
@@ -740,6 +757,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM) {
   llvm::Function* impl = mod_.getFunction(p->irName.substr(1) + ".impl");
   curFn_ = impl;
+  curRetTy_ = p->commonRetTy;
   // The entry block must be the function's first block (so it is the real
   // entry and its allocas dominate every reachable segment block).
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", impl);
@@ -787,21 +805,35 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), i + 1), segs[i + 1]);
 
   // Segment 0 is the procedure's own start; each ENTRY begins the next segment.
+  // Segments never fall through: close each one by branching to a per-segment
+  // return pad that returns the impl's single result type (void segments return
+  // void). Sema already rejected a RETURN whose shape disagrees with its own
+  // segment, so every explicit RETURN in a segment matches the pad it reaches.
+  llvm::Type* implRet = retLLVM;
+  std::vector<llvm::BasicBlock*> retPads;
+  for (size_t i = 0; i <= entries.size(); ++i) {
+    retPads.push_back(llvm::BasicBlock::Create(ctx_, "e.ret." + std::to_string(i), impl));
+  }
   size_t seg = 0;
   startBlock(segs[0]);
   for (auto& st : p->body) {
     if (st && st->kind == HStmt::Entry) {
+      if (!blockTerminated(b_.GetInsertBlock()))
+        b_.CreateBr(retPads[seg]);
       ++seg;
-      startBlock(segs[seg]); // fall through from the previous segment
+      startBlock(segs[seg]);
       continue;
     }
     emitStmt(st.get());
   }
-  if (!blockTerminated(b_.GetInsertBlock())) {
-    if (p->isFunction)
-      b_.CreateRet(llvm::Constant::getNullValue(retLLVM));
-    else
+  if (!blockTerminated(b_.GetInsertBlock()))
+    b_.CreateBr(retPads[seg]);
+  for (size_t i = 0; i < retPads.size(); ++i) {
+    b_.SetInsertPoint(retPads[i]);
+    if (implRet->isVoidTy())
       b_.CreateRetVoid();
+    else
+      b_.CreateRet(llvm::Constant::getNullValue(implRet));
   }
   curFn_ = nullptr;
 }
@@ -851,11 +883,11 @@ void IRGen::emitStmt(HStmt* s) {
     emitCall(s);
     break;
   case HStmt::Return: {
-    if (curProc_->isFunction) {
+    if (!curRetTy_.isVoid()) {
       Val v = emitExpr(s->value.get());
-      Val rv = convert(v, curProc_->retTy, s->loc);
+      Val rv = convert(v, curRetTy_, s->loc);
       llvm::Value* reg = rv.reg;
-      if (curProc_->retTy.isBit()) { // BIT returns are held in i8
+      if (curRetTy_.isBit()) { // BIT returns are held in i8
         reg = b_.CreateZExt(reg, b_.getInt8Ty(), "retz");
       }
       b_.CreateRet(reg);
@@ -1959,9 +1991,41 @@ Val IRGen::emitExpr(HExpr* e) {
     // function procedure) falls through to the general path below.
     if (emitBuiltin(e, v))
       return v;
-    if (!e->sym || !e->sym->proc) {
+    if (!e->sym) {
       v.ty = e->ty;
       v.reg = i64(0);
+      return v;
+    }
+    if (!e->sym->proc) {
+      // rule (34): an external ENTRY(...) RETURNS(...) function, declared with
+      // no PL/I body; call the C symbol directly. Args are passed by reference
+      // (the descriptor carries each parameter's type).
+      if (!e->sym->isEntry) {
+        v.ty = e->ty;
+        v.reg = i64(0);
+        return v;
+      }
+      Type rty = e->sym->entryIsFunction ? e->sym->entryRetTy : Type::voidTy();
+      llvm::Function* extFn = calleeFn(e->sym);
+      std::vector<llvm::Value*> args;
+      for (size_t i = 0; i < e->args.size() && i < e->sym->entryParams.size(); ++i) {
+        HExpr* a = e->args[i].get();
+        Type pty = e->sym->entryParams[i];
+        args.push_back(argAddr(a, pty));
+        if (pty.isArray() && !pty.dims.empty() && pty.dims[0].adj) {
+          llvm::Value* ext = argExtent(a);
+          args.push_back(ext ? ext : i64(0)); // hidden `*` extent arg (rule (13))
+        }
+      }
+      if (!e->sym->entryIsFunction) {
+        b_.CreateCall(extFn, args);
+        v.ty = e->ty;
+        v.reg = i64(0);
+        return v;
+      }
+      llvm::CallInst* call = b_.CreateCall(extFn, args, "fres");
+      v.ty = rty;
+      v.reg = rty.isBit() ? b_.CreateTrunc(call, b_.getInt1Ty(), "fb") : call;
       return v;
     }
     Stmt* en = e->sym->entry;

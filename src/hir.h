@@ -71,6 +71,8 @@ struct HDeclItem {
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
+  bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
+  Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
 };
 
@@ -128,6 +130,8 @@ struct HProc {
   bool isMain = false;
   bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
   Type retTy{};                        // function return type (RETURNS)
+  Type commonRetTy{};                  // rule (56): the single result type shared by all
+                                       // function-valued entry points (void if none)
   std::vector<std::string> params;     // rule (4) parameterlist
   std::vector<std::string> entryNames; // rule (3) entry-namelist extra names
   std::vector<HStmtP> body;
