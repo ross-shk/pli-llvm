@@ -1,0 +1,79 @@
+ /* Scalar math built-ins (QR2.7, C <math.h> analogues): FLOOR, CEIL, SQRT,
+    EXP, LOG, SIN, COS, TAN. Each takes one numeric argument and yields a
+    FLOAT value. Results are compared against expected values within a small
+    tolerance. */
+ math_test: procedure options(main);
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    y = floor(2.7);
+    if abs(y - 2.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL floor(2.7) =', y);
+    end;
+
+    y = floor(-2.3);
+    if abs(y - (-3.0)) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL floor(-2.3) =', y);
+    end;
+
+    y = ceil(2.3);
+    if abs(y - 3.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL ceil(2.3) =', y);
+    end;
+
+    y = ceil(-2.7);
+    if abs(y - (-2.0)) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL ceil(-2.7) =', y);
+    end;
+
+    y = sqrt(9.0);
+    if abs(y - 3.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL sqrt(9) =', y);
+    end;
+
+    y = exp(1.0);
+    if abs(y - 2.718282) > 1e-5 then do;
+       fails = fails + 1;
+       put skip list('FAIL exp(1) =', y);
+    end;
+
+    y = log(1.0);
+    if abs(y - 0.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL log(1) =', y);
+    end;
+
+    y = log(exp(1.0));
+    if abs(y - 1.0) > 1e-5 then do;
+       fails = fails + 1;
+       put skip list('FAIL log(exp(1)) =', y);
+    end;
+
+    y = sin(0.0);
+    if abs(y - 0.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL sin(0) =', y);
+    end;
+
+    y = cos(0.0);
+    if abs(y - 1.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL cos(0) =', y);
+    end;
+
+    y = tan(0.0);
+    if abs(y - 0.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL tan(0) =', y);
+    end;
+
+    if fails = 0 then put skip list('PASS math');
+    else put skip list('FAIL math: fails =', fails);
+ end math_test;

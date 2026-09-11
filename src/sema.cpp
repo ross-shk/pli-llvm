@@ -1851,6 +1851,23 @@ bool Sema::typeBuiltin(Expr* e) {
     e->ty = Type::fixedBin(31, 0);
     return true;
   }
+  // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
+  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN — one numeric argument, FLOAT result.
+  if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
+      e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, e->name + " expects 1 argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric()) {
+      d_.error(e->args[0]->loc, e->name + " argument must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::flt(6);
+    return true;
+  }
   // TRUNC built-in (M2): trunc(x) preserves the numeric type of its arg.
   if (e->name == "TRUNC") {
     if (e->args.size() != 1) {

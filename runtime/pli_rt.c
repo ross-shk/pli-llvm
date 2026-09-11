@@ -224,6 +224,17 @@ double pli_round(double x, long long n) {
   return round(x * factor) / factor;
 }
 
+/* Scalar math built-ins (QR2.7, <math.h> analogues): thin wrappers so the
+ * emitted IR ABI is the pli_* one. LOG is the natural logarithm. */
+double pli_floor(double x) { return floor(x); }
+double pli_ceil(double x) { return ceil(x); }
+double pli_sqrt(double x) { return sqrt(x); }
+double pli_exp(double x) { return exp(x); }
+double pli_log(double x) { return log(x); }
+double pli_sin(double x) { return sin(x); }
+double pli_cos(double x) { return cos(x); }
+double pli_tan(double x) { return tan(x); }
+
 /* REPEAT(s, n): fill dst with n copies of s, blank-padding to dstcap. */
 void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
                 long long n) {
