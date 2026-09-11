@@ -60,6 +60,10 @@ PLI_FN(pli_tanh, DOUBLE, (DOUBLE))
 PLI_FN(pli_atanh, DOUBLE, (DOUBLE))
 PLI_FN(pli_erf, DOUBLE, (DOUBLE))
 PLI_FN(pli_erfc, DOUBLE, (DOUBLE))
+PLI_FN(pli_sind, DOUBLE, (DOUBLE))
+PLI_FN(pli_cosd, DOUBLE, (DOUBLE))
+PLI_FN(pli_tand, DOUBLE, (DOUBLE))
+PLI_FN(pli_atand, DOUBLE, (DOUBLE))
 PLI_FN(pli_repeat, VOID, (PTR, I64, CPTR, I64, I64))  /* REPEAT */
 PLI_FN(pli_verify, I64, (CPTR, I64, CPTR, I64))       /* VERIFY */
 PLI_FN(pli_translate, VOID, (PTR, I64, CPTR, I64, CPTR, I64, CPTR, I64)) /* TRANSLATE */

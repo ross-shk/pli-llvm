@@ -244,6 +244,14 @@ double pli_atanh(double x) { return atanh(x); }
 double pli_erf(double x) { return erf(x); }
 double pli_erfc(double x) { return erfc(x); }
 
+/* Degree trig variants (QR2.7, Appendix 1): argument/result in degrees. */
+#define PLI_DEG_TO_RAD (3.14159265358979323846 / 180.0)
+#define PLI_RAD_TO_DEG (180.0 / 3.14159265358979323846)
+double pli_sind(double x) { return sin(x * PLI_DEG_TO_RAD); }
+double pli_cosd(double x) { return cos(x * PLI_DEG_TO_RAD); }
+double pli_tand(double x) { return tan(x * PLI_DEG_TO_RAD); }
+double pli_atand(double x) { return atan(x) * PLI_RAD_TO_DEG; }
+
 /* REPEAT(s, n): fill dst with n copies of s, blank-padding to dstcap. */
 void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
                 long long n) {

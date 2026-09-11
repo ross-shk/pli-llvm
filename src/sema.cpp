@@ -1853,12 +1853,14 @@ bool Sema::typeBuiltin(Expr* e) {
   }
   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
   // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
-  // ATANH, ERF, ERFC — one numeric argument, FLOAT result.
+  // ATANH, ERF, ERFC, and the degree trig variants SIND, COSD, TAND, ATAND —
+  // one numeric argument, FLOAT result.
   if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
       e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
       e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
       e->name == "COSH" || e->name == "TANH" || e->name == "ATANH" || e->name == "ERF" ||
-      e->name == "ERFC") {
+      e->name == "ERFC" || e->name == "SIND" || e->name == "COSD" || e->name == "TAND" ||
+      e->name == "ATAND") {
     if (e->args.size() != 1) {
       d_.error(e->loc, e->name + " expects 1 argument", "(123)");
       e->ty = Type::voidTy();
