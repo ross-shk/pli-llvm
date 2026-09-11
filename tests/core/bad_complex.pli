@@ -1,0 +1,7 @@
+ /* Diagnostic tests: complex built-ins with bad arguments are rejected. */
+ BADCOMPLEX: PROCEDURE OPTIONS(MAIN);
+    DECLARE Y FLOAT DECIMAL(6);
+    DECLARE Z FLOAT DECIMAL(6);
+    Z = 3.0;
+    Y = REAL(Z);       /* REAL requires a complex argument */
+ END BADCOMPLEX;

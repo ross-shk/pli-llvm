@@ -1955,3 +1955,34 @@ symbols from IRGen: both would bypass the ABI-def single source of truth and
 add the only non-`pli_*` external surface. Complex component/conjugate and the
 remaining Appendix 1 families stay for later CM5 slices.
 
+
+## ADR-073 — Complex values as an `{double,double}` pair, expression-only
+
+**Context.** The C-mirror sub-plan (CM5) starts QR2.2 complex work with the
+component/conjugate operations `COMPLEX`, `REAL`, `IMAG`, and `CONJG`
+(Appendix 1). These need a complex value to flow through expressions, but full
+complex declarations, arithmetic, conversions, and I/O are out of this slice's
+scope.
+
+**Decision.** A new `TK::Complex` type kind represents a complex value as an
+LLVM `{double,double}` struct (real, imaginary), mapped by `llvmTy`. A
+materialised complex value is carried in a new `Val::cpx` field rather than the
+scalar `reg`. `COMPLEX(a,b)` builds the pair with `insertvalue`; `REAL(z)` and
+`IMAG(z)` extract a part with `extractvalue` as a FLOAT; `CONJG(z)` negates the
+imaginary part (`fneg`) and rebuilds the pair. Constant operands fold away
+through LLVM's optimizer. `TK::Complex` is not added to `isNumeric` and is not
+wired into storage, conversion, assignment, arithmetic, or list-directed I/O
+(PUT of a COMPLEX value is diagnosed, mirroring POINTER).
+
+**Consequences.** `tests/core/complex.pli` checks each built-in within a small
+tolerance and prints `PASS complex`; `bad_complex.pli` proves a non-complex
+argument to `REAL` is diagnosed with rule (123). `-emit-llvm` on a runtime
+(variable) operand shows the `insertvalue`/`extractvalue`/`fneg` sequence; the
+constant case folds to a single `double`. A COMPLEX value cannot yet be stored
+in a variable or written out, which stays for the QR2.2 complex type work.
+
+**Rejected.** A full `COMPLEX` data attribute with storage/assignment this
+slice (too large, and not the sub-plan's "start with" item); reusing `TK::Struct`
+to fake a complex (semantically wrong and would invite struct-path confusion);
+adding `TK::Complex` to `isNumeric` (complex is not a real arithmetic type for
+the existing `+ - * /` operators).
