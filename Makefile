@@ -38,7 +38,7 @@ BUILD    := build
 BIN      := $(BUILD)/plic
 RTLIB    := $(BUILD)/libpli.a
 
-SRCS     := src/main.cpp src/diag.cpp src/explain.cpp src/hir.cpp src/lexer.cpp src/parser.cpp src/sema.cpp src/irgen.cpp
+SRCS     := src/main.cpp src/diag.cpp src/explain.cpp src/hir.cpp src/lexer.cpp src/parser.cpp src/preprocessor.cpp src/sema.cpp src/irgen.cpp
 OBJS     := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRCS))
 DEPS     := $(OBJS:.o=.d)
 

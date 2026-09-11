@@ -45,12 +45,12 @@ so LLVM can do them. §7 documents what we deliberately refuse to optimize.
    file.pli
       │
       ▼
-┌──────────────┐   %INCLUDE, margins, 48/60-char set, EBCDIC→UTF-8
+┌──────────────┐   margins, 48/60-char set, EBCDIC→UTF-8
 │ SourceMgr    │   line map for diagnostics
 └──────┬───────┘
        ▼
-┌──────────────┐   optional; PL/I % preprocessor statements
-│ Preprocessor │   (own lexer/parser reusing the same infrastructure)
+┌──────────────┐   recursive %INCLUDE; other directives diagnosed
+│ Preprocessor │   comment/string-aware source scan
 └──────┬───────┘
        ▼
 ┌──────────────┐   words are never classified as keywords here (ADR-004)
@@ -108,6 +108,7 @@ independent PL/I-free code". MIR keeps us honest about what LLVM cannot know
 |---|---|---|
 | Driver | `src/main.cpp` | option parsing, phase sequencing, sub-process invocation |
 | Diagnostics | `src/diag.{h,cpp}` | locations, severity, rule citations, caret output |
+| Preprocessor | `src/preprocessor.{h,cpp}` | recursive `%INCLUDE`; directive dispatch and stubs |
 | Lexer | `src/lexer.{h,cpp}`, `src/token.h` | rules (130)–(151); comments; composite operators; not-symbol spellings |
 | Parser | `src/parser.{h,cpp}` | rules (1)–(129); keyword recognition; multiple closure; recovery |
 | AST | `src/ast.h` | syntax tree |
@@ -129,10 +130,15 @@ Handles what PL/I inherited from punched cards and what modern users expect:
   (`--charset=48`), which enables the operator words `NOT AND OR GT LT GE LE
   NG NL NE CAT PT` as *reserved* words and the `..`/`:` substitutions of
   TR §2.3.3.
-- `%INCLUDE` expansion with an include stack, so diagnostics report the
-  inclusion chain.
+### 3.2 Preprocessor
 
-### 3.2 Lexer
+Expands `%INCLUDE member;` recursively before lexing. Members resolve relative
+to the containing source file; a name without an extension falls back to
+`.inc`. Quoted paths are also accepted. Directives inside comments and strings
+are ignored, include cycles and missing members are diagnosed, and handler
+stubs diagnose every other Chapter 9 directive until implemented.
+
+### 3.3 Lexer
 
 Produces `Word`, `Number`, `CharLit`, `BitLit`, punctuation and operators.
 Two PL/I-specific obligations:
@@ -144,7 +150,7 @@ Two PL/I-specific obligations:
   `¬>`, `¬<`, `->`), because TR §2.3.1 step 1 treats them as indivisible
   notation constants; the not-symbol is accepted as `¬`, `^` or `~`.
 
-### 3.3 Parser
+### 3.4 Parser
 
 Recursive descent, one function per production group, plus precedence climbing
 for expressions with the exact precedence of rules (115)–(122):
@@ -165,7 +171,7 @@ Error recovery is statement-granular: a malformed statement is reported once
 and the parser resynchronises on the next `;`, which suits a language whose
 statements are unambiguously `;`-terminated.
 
-### 3.4 Semantic analysis
+### 3.5 Semantic analysis
 
 Ordered sub-phases, because PL/I declarations are order-independent within a
 block but attribute defaults depend on the complete attribute set:
@@ -190,7 +196,7 @@ block but attribute defaults depend on the complete attribute set:
 9. **PICTURE compilation**: parse the picture string (rules 146–148) into a
    field program used by both edit-directed I/O and conversions.
 
-### 3.5 Runtime interface (libpli)
+### 3.6 Runtime interface (libpli)
 
 The ABI is the set of `pli_*` symbols. M0 implements the shaded subset:
 

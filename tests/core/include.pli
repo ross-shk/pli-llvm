@@ -1,0 +1,6 @@
+ /* C28-6571-3 Chapter 9, The INCLUDE Statement */
+ main: procedure options(main);
+ /* %include missing_in_comment.inc; */
+ put skip list('%include missing_in_string.inc;');
+ %include include_outer.inc;
+ end main;

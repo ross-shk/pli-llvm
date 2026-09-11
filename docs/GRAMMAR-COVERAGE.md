@@ -85,6 +85,13 @@ The ledger that ties the implementation to the specification. Status values:
 | §2.3.2.2 | multiple closure | M0 |
 | §2.3.3 | 48-character set: operator words, deletions, colon rules | partial M0 (operator words in `arith.pli`) → M8 |
 
+## C28-6571-3 supplemental coverage
+
+| Section | Feature | Status | Component / test |
+|---|---|---|---|
+| Chapter 9, The INCLUDE Statement | `%INCLUDE` | QR1 | recursive relative member/path expansion, `.inc` fallback, comments/strings ignored, cycle and missing-member diagnostics (`preprocessor.cpp`, `include.pli`, `bad_include.pli`, `bad_include_cycle.pli`, ADR-071) |
+| Chapter 9, remaining processor statements | declarations, replacement, activation, conditionals, loops, transfers, procedures | diag → QR2 | directive handler stubs reject with a Chapter 9 citation (`bad_preprocessor.pli`, ADR-071) |
+
 ## IRGen touch-points
 
 Where each implemented feature lands in codegen (`src/irgen.cpp`). The rule →

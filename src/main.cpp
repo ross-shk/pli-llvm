@@ -1,7 +1,7 @@
 // main.cpp — plic driver.
 //
-// Pipeline: source -> lexer -> parser -> sema -> LLVM IR -> clang (assemble,
-// optimize, link with libpli). See docs/ARCHITECTURE.md.
+// Pipeline: source -> preprocessor -> lexer -> parser -> sema -> LLVM IR ->
+// clang (assemble, optimize, link with libpli). See docs/ARCHITECTURE.md.
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -18,6 +18,7 @@
 #include "irgen.h"
 #include "lexer.h"
 #include "parser.h"
+#include "preprocessor.h"
 #include "sema.h"
 
 #ifndef PLIC_RUNTIME_LIB
@@ -206,14 +207,10 @@ int main(int argc, char** argv) {
       runtimeLib = installed.string();
   }
 
-  std::ifstream in(input, std::ios::binary);
-  if (!in) {
-    std::cerr << "plic: cannot open " << input << "\n";
+  std::string src;
+  Preprocessor preprocessor;
+  if (!preprocessor.run(input, src))
     return 1;
-  }
-  std::stringstream ss;
-  ss << in.rdbuf();
-  std::string src = ss.str();
 
   Diags diags(input);
   diags.setSource(&src);

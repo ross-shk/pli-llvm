@@ -35,7 +35,7 @@ remove any gaps that have since moved to implemented-and-tested in
 `C-MIRROR-QUICK-RELEASE-SUBPLAN.md` provides a smaller optional path through
 the remaining features that have close standard C analogues.
 
-## Phase 1 - Pareto release (17 engineer-weeks)
+## Phase 1 - Pareto release (16 engineer-weeks)
 
 Implement these slices in dependency order. Work on decimal arithmetic and the
 stream runtime may proceed in parallel after aggregate descriptors stabilize.
@@ -47,7 +47,7 @@ stream runtime may proceed in parallel after aggregate descriptors stabilize.
 | QR1.3 | Practical dynamic records | 2w | `POINTER`, based structures, `->`, `ADDR`, `NULL`, and common `ALLOCATE`/`FREE` forms for linked records |
 | QR1.4 | Recoverable conditions | 3w | enforce already-parsed condition prefixes and add `ON`, `REVERT`, and `SIGNAL` for `ERROR`, arithmetic, conversion, subscript, allocation, and common I/O conditions |
 | QR1.5 | Remaining practical stream and file I/O | 4w | `OPEN`/`CLOSE`; input; `FILE`, `STRING`, `LINE`, and `COPY` options; data-directed transmission; and common edit-directed numeric, character, spacing, line, and page items beyond existing `PUT SKIP/PAGE LIST` |
-| QR1.6 | Remaining high-impact source compatibility | 2w | 1966 keyword abbreviations and 48-character forms not already accepted, plus safe `%INCLUDE` without the remaining compile-time processor |
+| QR1.6 | Remaining high-impact source compatibility | 1w | 1966 keyword abbreviations and 48-character forms not already accepted; safe recursive `%INCLUDE` is implemented |
 
 **Phase 1 boundaries.** Decimal floating point, `COMPLEX`, `PICTURE`, record
 I/O, keyed files, tasking, areas, controlled-generation stacks, full compile-time
