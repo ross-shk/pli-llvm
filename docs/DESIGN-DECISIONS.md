@@ -2114,3 +2114,19 @@ for snippet libraries.
 
 Consequences. `driver/include_dirs` covers -I discovery, first-wins order,
 env discovery, missing-file rejection, and the -v default listing.
+
+## ADR-079 — Small binaries: sectioned runtime archive + link-time strip
+
+Context. `libpli.a` is a single object, and static archives link at object
+granularity, so any runtime reference pulled all of `pli_rt.c` into every
+binary: a hello-world carried 85 runtime functions. Splitting the source
+per area was rejected as churn against active feature work.
+
+Decision. Compile the runtime with `-ffunction-sections -fdata-sections`
+and always pass the platform strip flag on the link step (`-dead_strip` on
+macOS, `--gc-sections` elsewhere; `--release` already stripped). Hello now
+keeps exactly its reachable set (`pli_rt_init/fini`, `put_skip`,
+`put_list_char`).
+
+Consequences. `driver/link` asserts an unused probe (`pli_sin`) is absent
+and a used one present. A future source split composes with this unchanged.

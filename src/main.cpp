@@ -332,6 +332,12 @@ int main(int argc, char** argv) {
   if (compileOnly) {
     cmd += " -c"; // relocatable object: the caller performs the link step
   } else {
+    // Drop unreferenced runtime sections (the archive is sectioned, ADR-079).
+#ifdef __APPLE__
+    cmd += " -Wl,-dead_strip";
+#else
+    cmd += " -Wl,--gc-sections";
+#endif
     if (!runtimeLib.empty())
       cmd += " " + shellQuote(runtimeLib);
     for (const std::string& la : linkArgs)
