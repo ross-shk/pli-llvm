@@ -43,6 +43,7 @@ enum class Tok {
   Ngt,
   Nlt,   // < <= > >= ¬= ¬> ¬<
   Arrow, // ->  locator qualification
+  Percent, // %  (extension: preprocessor directives, ADR-058)
 };
 
 struct Token {

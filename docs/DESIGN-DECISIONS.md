@@ -1462,3 +1462,28 @@ Consequences. `on_error.pli` (golden) covers establish/raise/resume, ONCODE
 inside and out, re-establishment after REVERT, and the SYSTEM/REVERT no-op
 path. Frame-carrying units, computational and I/O conditions, FINISH, and
 non-local GO TO unwinding stay diagnosed for later slices.
+
+## ADR-058 — %REPLACE: token-level substitution as a marked extension
+
+Context. TR 25.084 defines no preprocessor: the only comment form is
+`/* ... */` (rules (149)-(151)), and `%` is not a source character.
+`%REPLACE` is requested anyway as an important directive, so it is served
+as a documented dialect extension, not as spec conformance (it also lifts
+the ARCHITECTURE non-goal #2 bar for this one directive only).
+
+Decision. `%REPLACE name BY <tokens> ;` is expanded in the lexer after the
+full token stream is built and before parsing: every later `Word` matching
+the name is replaced by copies of the collected tokens, stamped with the
+use-site location. One left-to-right pass: a use sees only earlier
+directives, and spliced tokens are not re-expanded, so self-reference
+terminates. Strings and comments never surface as words, so their contents
+are unaffected. Only `%REPLACE` is served; any other `%` directive and any
+malformed directive (missing name, missing BY, empty replacement) is
+diagnosed, citing ADR-058 instead of a TR rule number. The directive's own
+`;` terminates the directive and is not part of the replacement text.
+
+Consequences. `replace.pli` covers single-token (array bound, value) and
+multi-token (whole statement) substitution plus string immunity;
+`bad_replace.pli` covers non-REPLACE directives. Redefinition takes the
+last definition. `%INCLUDE`, `%IF`, `%DECLARE`, and recursive expansion
+stay out of scope.

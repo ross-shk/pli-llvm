@@ -1,6 +1,7 @@
 #include "lexer.h"
 #include <cctype>
 #include <cstdio>
+#include <map>
 
 const char* tokName(Tok t) {
   switch (t) {
@@ -64,6 +65,8 @@ const char* tokName(Tok t) {
     return "'not<'";
   case Tok::Arrow:
     return "'->'";
+  case Tok::Percent:
+    return "'%'";
   }
   return "token";
 }
@@ -244,7 +247,11 @@ std::vector<Token> Lexer::run() {
       t.kind = Tok::Eof;
       t.loc = here();
       out.push_back(t);
-      return out;
+      // Extension (ADR-058): expand %REPLACE before parsing. Skipped when
+      // lexing already failed, so one fault never cascades into another.
+      if (!d_.ok())
+        return out;
+      return applyReplace(std::move(out));
     }
 
     SourceLoc loc = here();
@@ -308,6 +315,9 @@ std::vector<Token> Lexer::run() {
       break;
     case '/':
       one(Tok::Slash);
+      break;
+    case '%':
+      one(Tok::Percent);
       break;
     case '|':
       bump();
@@ -385,4 +395,77 @@ std::vector<Token> Lexer::run() {
     }
     out.push_back(t);
   }
+}
+
+// Extension (ADR-058): %REPLACE name BY <tokens> ; substitutes an identifier
+// with source text before parsing. One left-to-right pass: a use sees only
+// earlier directives, and spliced tokens are not re-expanded (so
+// %REPLACE A BY A; terminates). Strings and comments never reach this pass
+// as words, so their contents are unaffected.
+std::vector<Token> Lexer::applyReplace(std::vector<Token> in) {
+  std::map<std::string, std::vector<Token>> reps;
+  std::vector<Token> out;
+  size_t i = 0;
+  // Skip a malformed directive through its terminator.
+  auto resync = [&](size_t& j) {
+    while (j < in.size() && in[j].kind != Tok::Semi && in[j].kind != Tok::Eof)
+      ++j;
+    if (j < in.size() && in[j].kind == Tok::Semi)
+      ++j;
+  };
+  while (i < in.size()) {
+    const Token& t = in[i];
+    if (t.kind == Tok::Percent) {
+      if (i + 1 < in.size() && in[i + 1].isWord("REPLACE")) {
+        size_t j = i + 2;
+        if (j >= in.size() || in[j].kind != Tok::Word) {
+          d_.error(t.loc, "expected an identifier after %REPLACE (ADR-058)", "");
+          resync(j);
+          i = j;
+          continue;
+        }
+        std::string name = in[j].text;
+        SourceLoc nl = in[j].loc;
+        if (++j >= in.size() || !in[j].isWord("BY")) {
+          d_.error(nl, "expected BY after the %REPLACE identifier (ADR-058)", "");
+          resync(j);
+          i = j;
+          continue;
+        }
+        size_t start = ++j;
+        resync(j);
+        size_t end = j;
+        // resync stops past ';' (or at EOF): the replacement is [start, end).
+        if (end > start && in[end - 1].kind == Tok::Semi)
+          --end;
+        if (end == start) {
+          d_.error(nl, "empty replacement text in %REPLACE (ADR-058)", "");
+          i = j;
+          continue;
+        }
+        reps[name] = std::vector<Token>(in.begin() + (ptrdiff_t)start, in.begin() + (ptrdiff_t)end);
+        i = j;
+        continue;
+      }
+      d_.error(t.loc, "only %REPLACE directives are implemented in this stage (ADR-058)", "");
+      ++i;
+      continue;
+    }
+    if (t.kind == Tok::Word) {
+      auto f = reps.find(t.text);
+      if (f != reps.end()) {
+        // Splice copies stamped with the use site for readable diagnostics.
+        for (const Token& r : f->second) {
+          Token c = r;
+          c.loc = t.loc;
+          out.push_back(c);
+        }
+        ++i;
+        continue;
+      }
+    }
+    out.push_back(t);
+    ++i;
+  }
+  return out;
 }
