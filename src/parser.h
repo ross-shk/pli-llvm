@@ -66,6 +66,14 @@ private:
   StmtP parseIf(Proc* owner);
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
   StmtP parsePut();
+  StmtP parseGet();
+  // Edit-directed transmission (rule (108)): parse `EDIT ( { ( datalist )
+  // formatlist }••• )` into st->items/st->formats with st->edit set. Returns
+  // true on success; on error emits a diagnostic, resyncs, and returns false.
+  bool parseEditClause(Stmt* st);
+  // Parse one format item (rules (46)-(54)) into st->formats; returns false
+  // (after a diagnostic) on an unimplemented or malformed item.
+  bool parseFormatItem(Stmt* st);
   StmtP parseCall();
   StmtP parseAssignment();
   StmtP parseOn(Proc* owner); // rule (91)
@@ -76,6 +84,10 @@ private:
   std::string parseCondition();
   // Consume a balanced (...) group (e.g. an unimplemented CHECK list).
   void skipParen(const char* rule);
+  StmtP parseAllocate(); // ALLOCATE (rule 87)
+  StmtP parseFree();     // FREE (rule 90)
+  StmtP parseOpen();     // OPEN (rules 100,101)
+  StmtP parseClose();    // CLOSE (rules 102,103)
   void parseProcOptions(Proc* p);
   bool parseDeclItem(DeclItem& item);
   // Parse the dimension + attribute tail shared by a declaration item and by a
@@ -84,10 +96,13 @@ private:
   // Try to parse a dimension (rules (12),(13)) at the current LParen. Consumes
   // tokens only when it is genuinely a dimension; returns false (with the token
   // stream restored) so the caller can treat the group as a precision/length.
-  // Fills `out` with the per-axis Dim (a dynamic axis is marked `dyn`) and
-  // `dynBounds` with the runtime upper-bound expression of each dynamic axis
-  // (null entries for constant axes). Supports (ub), (lb:ub), and (expr)/(lb:expr).
-  bool tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds);
+  // Fills `out` with the per-axis Dim (a dynamic axis is marked `dyn`/`lbDyn`)
+  // and `dynBounds` with the runtime upper-bound expression of each dynamic
+  // upper bound, `dynLbBounds` with the runtime lower-bound expression of each
+  // dynamic lower bound (null entries for constant axes). Supports (ub),
+  // (lb:ub), and (expr)/(lb:expr).
+  bool tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds,
+                         std::vector<ExprP>& dynLbBounds);
   bool parseDescriptorType(Type& out);              // one ENTRY parameter type (rule 38)
   bool parseEntryParams(std::vector<Type>& params); // ENTRY ( ... )
 
@@ -97,6 +112,9 @@ private:
   struct AttrBag {
     bool fixed = false, floating = false, binary = false, decimal = false;
     bool character = false, bit = false, varying = false;
+    bool pointer = false;
+    bool complex = false; // COMPLEX (QR2.2/CM5): a real+imaginary pair
+    bool file = false;    // FILE (rules 39,40): a named file variable
     int prec = -1, scale = 0, slen = -1;
   };
   // Consume one attribute word (FIXED, FLOAT, BINARY, DECIMAL, CHARACTER,

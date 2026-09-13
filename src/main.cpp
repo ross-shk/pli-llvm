@@ -1,7 +1,7 @@
 // main.cpp — plic driver.
 //
-// Pipeline: source -> lexer -> parser -> sema -> LLVM IR -> clang (assemble,
-// optimize, link with libpli). See docs/ARCHITECTURE.md.
+// Pipeline: source -> preprocessor -> lexer -> parser -> sema -> LLVM IR ->
+// clang (assemble, optimize, link with libpli). See docs/ARCHITECTURE.md.
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -18,6 +18,7 @@
 #include "irgen.h"
 #include "lexer.h"
 #include "parser.h"
+#include "preprocessor.h"
 #include "sema.h"
 
 #ifndef PLIC_RUNTIME_LIB
@@ -50,6 +51,8 @@ static void usage() {
                "  --print-hir      lower to HIR and print it, then stop\n"
                "  -fsyntax-only    parse and analyse only\n"
                "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
+               "  --release        maximum optimization + stripped binary (minimal size)\n"
+               "  --debug          no optimization + debug info (-O0 -g)\n"
                "  --keep-ll        keep the intermediate .ll next to the output\n"
                "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
                "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
@@ -109,7 +112,7 @@ int main(int argc, char** argv) {
   std::string optLevel = "-O2";
   std::vector<std::string> linkArgs; // extra args appended to the link step
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
-  bool runtimeExplicit = false, print_hir = false;
+  bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
   int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -173,6 +176,10 @@ int main(int argc, char** argv) {
       verbose = true;
     else if (a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os")
       optLevel = a;
+    else if (a == "--release")
+      release = true;
+    else if (a == "--debug")
+      debug = true;
     else if (!a.empty() && a[0] == '-') {
       std::cerr << "plic: unknown option " << a << "\n";
       return 2;
@@ -206,14 +213,10 @@ int main(int argc, char** argv) {
       runtimeLib = installed.string();
   }
 
-  std::ifstream in(input, std::ios::binary);
-  if (!in) {
-    std::cerr << "plic: cannot open " << input << "\n";
+  std::string src;
+  Preprocessor preprocessor;
+  if (!preprocessor.run(input, src))
     return 1;
-  }
-  std::stringstream ss;
-  ss << in.rdbuf();
-  std::string src = ss.str();
 
   Diags diags(input);
   diags.setSource(&src);
@@ -282,8 +285,19 @@ int main(int argc, char** argv) {
   }
 
   // --- assemble, optimize, link -----------------------------------------
-  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + " " +
-                    shellQuote(llPath.string());
+  // --release / --debug are overarching presets that select the underlying
+  // optimization and debug-info knobs: release = -O3 + minimal size
+  // (dead-strip + strip symbol table); debug = -O0 + DWARF debug info.
+  std::string backendFlags;
+  if (release) {
+    optLevel = "-O3";
+    backendFlags = " -Wl,-dead_strip -Wl,-S";
+  } else if (debug) {
+    optLevel = "-O0";
+    backendFlags = " -g";
+  }
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags +
+                    " " + shellQuote(llPath.string());
   if (compileOnly) {
     cmd += " -c"; // relocatable object: the caller performs the link step
   } else {

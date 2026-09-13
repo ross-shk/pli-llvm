@@ -1,0 +1,4 @@
+ /* C28-6571-3 Chapter 9: include cycles are diagnosed. */
+ %include include_cycle.inc;
+ main: procedure options(main);
+ end main;

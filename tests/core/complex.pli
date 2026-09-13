@@ -1,0 +1,50 @@
+ /* Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1): COMPLEX(a,b)
+    builds a complex value from a real and imaginary part; REAL(z) and IMAG(z)
+    extract the real and imaginary parts; CONJG(z) returns the conjugate.
+    REAL/IMAG yield a FLOAT value. Results are checked within a small tolerance.
+    */
+ complex_test: procedure options(main);
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    y = real(complex(1.5, 2.5));
+    if abs(y - 1.5) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL real(complex(1.5,2.5)) =', y);
+    end;
+
+    y = imag(complex(1.5, 2.5));
+    if abs(y - 2.5) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL imag(complex(1.5,2.5)) =', y);
+    end;
+
+    y = real(conjg(complex(1.5, 2.5)));
+    if abs(y - 1.5) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL real(conjg(...)) =', y);
+    end;
+
+    y = imag(conjg(complex(1.5, 2.5)));
+    if abs(y - (-2.5)) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL imag(conjg(...)) =', y);
+    end;
+
+    y = real(complex(3, 4));
+    if abs(y - 3.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL real(complex(3,4)) =', y);
+    end;
+
+    y = imag(complex(3, 4));
+    if abs(y - 4.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL imag(complex(3,4)) =', y);
+    end;
+
+    if fails = 0 then put skip list('PASS complex');
+    else put skip list('FAIL complex: fails =', fails);
+ end complex_test;

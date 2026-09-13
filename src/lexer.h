@@ -12,7 +12,7 @@ public:
   std::vector<Token> run();
 
 private:
-  // Extension (ADR-058): serve %REPLACE directives found in the token stream.
+  // Extension (ADR-077): serve %REPLACE directives found in the token stream.
   std::vector<Token> applyReplace(std::vector<Token> in);
   char cur() const { return p_ < s_.size() ? s_[p_] : '\0'; }
   char peek(size_t n = 1) const { return p_ + n < s_.size() ? s_[p_ + n] : '\0'; }

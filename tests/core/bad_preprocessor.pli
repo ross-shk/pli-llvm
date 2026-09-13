@@ -1,0 +1,4 @@
+ /* C28-6571-3 Chapter 9: unsupported directive diagnostic. */
+ %if 1 %then;
+ main: procedure options(main);
+ end main;

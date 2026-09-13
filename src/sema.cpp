@@ -2,6 +2,11 @@
 #include <algorithm>
 #include <functional>
 
+// True when a structure type contains a dynamic (runtime-extent) array member
+// (rule 13); forward-declared here because resolveStructReturn (rule 127) and
+// LIKE/assignment (rules 43,127) both use it.
+static bool hasDynamicMember(const Type& ty);
+
 // FIXED op FIXED -> FIXED with the wider precision and the larger scale;
 // anything involving FLOAT is FLOAT. This is the *common* result type for
 // +,-,comparison (and MIN/MAX/MOD), where a mixed-scale operand is rescaled
@@ -11,7 +16,12 @@ Type arithResultType(const Type& a, const Type& b) {
   if (a.k == TK::Float || b.k == TK::Float)
     return Type::flt(std::max(a.k == TK::Float ? a.prec : 6, b.k == TK::Float ? b.prec : 6));
   int bits = std::max(a.intBits(), b.intBits());
-  return Type::fixedBin(bits == 64 ? 63 : 31, std::max(a.scale, b.scale));
+  int p = bits == 64 ? 63 : 31;
+  // A common DECIMAL type only when both operands are DECIMAL: FIXED BINARY
+  // scale is 2-based (2^q) and must not be rescaled by powers of ten.
+  bool dec = a.k == TK::FixedDec && b.k == TK::FixedDec;
+  return dec ? Type::fixedDec(p, std::max(a.scale, b.scale))
+             : Type::fixedBin(p, std::max(a.scale, b.scale));
 }
 
 // Product of two FIXED operands: the scale of the result is the sum of the
@@ -121,6 +131,7 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // share a program-level scope, so siblings can call each other.
   rootScope_ = new Scope();
   scopes_.push_back(std::unique_ptr<Scope>(rootScope_));
+
   for (auto& p : prog.procs) {
     p->irName = "@PLI_" + p->name;
     // A function procedure's symbol carries its result type so that a
@@ -146,6 +157,19 @@ bool Sema::run(Program& prog, bool compileOnly) {
       }
     }
   }
+
+  // Pass 1b: collect every procedure's declarations into its own scope before
+  // typing any body, so that a structure-valued function's RETURNS name (rule
+  // 127) resolves against an already-declared enclosing template. Runs after
+  // pass 1 (procedure names are declared), so INITIAL CALL (rule 27) can resolve
+  // its function. processProc (pass 2) skips re-collecting (declsCollected_).
+  for (auto& p : prog.procs) {
+    beginScopes_.clear();
+    collectDecls(p->body, scopeFor(p.get()), p.get(), false);
+  }
+  declsCollected_ = true;
+  for (auto& p : prog.procs)
+    resolveStructReturn(p.get());
 
   // Pass 2: declarations, resolution and typing, procedure by procedure.
   for (auto& p : prog.procs)
@@ -189,8 +213,10 @@ void Sema::processProc(Proc* p) {
   // removed. Explicit STATIC is accepted and treated as AUTOMATIC for now.
   bool isStatic = false;
 
-  beginScopes_.clear();
-  collectDecls(p->body, sc, p, isStatic);
+  if (!declsCollected_) {
+    beginScopes_.clear();
+    collectDecls(p->body, sc, p, isStatic);
+  }
 
   // Parameters: a DECLARE inside the procedure supplies their attributes;
   // otherwise the implicit rule applies. Parameters are always by reference.
@@ -236,6 +262,27 @@ void Sema::processProc(Proc* p) {
     d_.error(p->loc,
              "GO TO in a procedure that establishes ON is not implemented in this stage",
              "(91)");
+}
+
+// Resolve a structure-valued function's RETURNS name (rule 127). The parser
+// recorded the bare name of an enclosing structure variable; resolve it to a
+// deep copy of that structure's type (mirroring a LIKE template, rule 43). A
+// missing or non-structure reference, or a structure with a dynamic member, is
+// diagnosed.
+void Sema::resolveStructReturn(Proc* p) {
+  if (p->returnsStructName.empty())
+    return;
+  Symbol* tpl = lookup(scopeFor(p), p->returnsStructName);
+  if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
+    d_.error(p->loc,
+             "RETURNS reference '" + p->returnsStructName + "' is not a structure in this scope",
+             "(127)");
+    p->retTy = Type::voidTy();
+    return;
+  }
+  if (hasDynamicMember(tpl->ty))
+    d_.error(p->loc, "RETURNS of a structure with a dynamic member is not implemented", "(13)");
+  p->retTy = tpl->ty; // deep copy via Type's copy constructor
 }
 
 // Parameters are always by reference; a DECLARE supplies their attributes,
@@ -299,6 +346,18 @@ void Sema::computeEnv(Proc* p) {
   p->env = env;
 }
 
+// True when a structure type contains a dynamic (runtime-extent) array member,
+// at any nesting depth (rule (13)).
+static bool hasDynamicMember(const Type& ty) {
+  for (const auto& m : ty.members) {
+    if (m->ty.isArray() && m->ty.isDynamic())
+      return true;
+    if (m->ty.isStruct() && hasDynamicMember(m->ty))
+      return true;
+  }
+  return false;
+}
+
 void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isStatic) {
   for (auto& s : body) {
     if (!s)
@@ -348,8 +407,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           children[parent].push_back(idx);
       }
       // Construct the struct Type for an item from its (recursively built)
-      // children; a leaf keeps its parsed scalar/array type.
-      std::function<Type(int)> buildType = [&](int idx) -> Type {
+      // children; a leaf keeps its parsed scalar/array type. A dynamic array
+      // member (rule 13) has its runtime bound exprs type-checked and captured
+      // (with its field path) so codegen can size and address it.
+      std::function<Type(int, std::vector<unsigned>, std::vector<DeclItem::DynMemberInfo>&)>
+          buildType = [&](int idx, std::vector<unsigned> path,
+                          std::vector<DeclItem::DynMemberInfo>& dynMs) -> Type {
         const DeclItem& it = *items[idx];
         // LIKE template (rule 43): the item takes the structure shape of an
         // already-declared structure variable (a deep copy of its type). A LIKE
@@ -369,17 +432,36 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(43)");
             return Type::voidTy();
           }
+          if (hasDynamicMember(tpl->ty))
+            d_.error(it.loc, "LIKE of a structure with a dynamic member is not implemented",
+                     "(13)");
           return tpl->ty; // deep copy via Type's copy constructor
         }
         if (children[idx].empty())
           return it.ty;
         std::vector<Member> ms;
+        unsigned fi = 0;
         for (int c : children[idx]) {
-          Type ct = buildType(c);
-          if (ct.isArray() && ct.isDynamic())
-            d_.error(items[c]->loc, "a dynamic array cannot be a structure member in this stage",
-                     "(13)");
+          std::vector<unsigned> cp = path;
+          cp.push_back(fi);
+          Type ct = buildType(c, cp, dynMs);
+          if (ct.isArray() && ct.isDynamic()) {
+            // A dynamic array member (rule 13): resolve its bound expressions so
+            // codegen can evaluate them at entry to size the member buffer.
+            for (auto& b : items[c]->dynBounds)
+              if (b)
+                typeExpr(b.get(), sc, p);
+            for (auto& b : items[c]->dynLbBounds)
+              if (b)
+                typeExpr(b.get(), sc, p);
+            DeclItem::DynMemberInfo dm;
+            dm.path = cp;
+            dm.ub = items[c]->dynBounds.empty() ? nullptr : items[c]->dynBounds[0].get();
+            dm.lb = items[c]->dynLbBounds.empty() ? nullptr : items[c]->dynLbBounds[0].get();
+            dynMs.push_back(std::move(dm));
+          }
           ms.push_back({items[c]->name, ct});
+          ++fi;
         }
         Type st = Type::structTy(std::move(ms));
         st.dims = it.ty.dims; // an array of structures: keep the level item's dimension
@@ -391,9 +473,18 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (parentOf[idx] != -1)
           continue;
         DeclItem& item = *items[idx];
-        item.ty = buildType(idx);
+        std::vector<DeclItem::DynMemberInfo> dynMs;
+        item.ty = buildType(idx, {}, dynMs);
+        item.dynMembers = std::move(dynMs);
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p; // which procedure's frame holds this variable
+        if (item.fileAttr) {
+          // A FILE variable carries no runtime storage of its own: its identity
+          // is the compile-time slot that OPEN/CLOSE/FILE( f ) pass to libpli.
+          item.sym->fileAttr = true;
+          item.sym->fileSlot = nextFileSlot_++;
+          storage_.pop_back();
+        }
         // DEFINED (rule 24): the item overlays the storage of an already-
         // declared variable of identical type in this scope, so it needs no
         // storage of its own — references resolve to the base's address
@@ -511,6 +602,20 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             }
           }
         }
+        // BASED (rule 25): the declared item overlays the storage addressed by
+        // a POINTER variable, so it has no storage of its own. The base must be
+        // a POINTER variable/parameter in scope; a based structure member is
+        // addressed through the pointer value at every reference.
+        if (!item.basedBase.empty()) {
+          Symbol* base = lookup(sc, item.basedBase);
+          if (!base || (base->kind != Symbol::Var && base->kind != Symbol::Param) ||
+              !base->ty.isPointer())
+            d_.error(item.loc,
+                     "BASED base '" + item.basedBase + "' is not a POINTER variable in this scope",
+                     "(25)");
+          else
+            item.sym->basedBase = base;
+        }
         // Only scalar (numeric/BIT) element arrays are served in this stage;
         // character element arrays are diagnosed, never silently miscompiled
         // (invariant 2). INITIAL on an array (rule 26) expands its itemlist
@@ -520,11 +625,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
           if (item.ty.isDynamic()) {
             // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
-            // serves only a single-axis AUTOMATIC array with a constant lower
-            // bound. A `*` adjustable extent is a parameter-only form whose
-            // bound is supplied by the caller at call time. Resolve the runtime
-            // upper-bound expression's symbol so codegen can evaluate it at
-            // entry to size the buffer.
+            // serves only a single-axis AUTOMATIC array whose lower and upper
+            // bounds may be runtime expressions. A `*` adjustable extent is a
+            // parameter-only form whose bound is supplied by the caller at call
+            // time. Resolve the runtime bound expressions' symbols so codegen
+            // can evaluate them at entry to size the buffer.
             bool hasStar = false;
             for (const auto& d : item.ty.dims)
               if (d.adj)
@@ -539,13 +644,32 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             for (auto& b : item.dynBounds)
               if (b)
                 typeExpr(b.get(), sc, p);
-            if (!hasStar && item.ty.dims.size() != 1)
-              d_.error(item.loc, "a dynamic array must be single-axis in this stage", "(13)");
+            for (auto& b : item.dynLbBounds)
+              if (b)
+                typeExpr(b.get(), sc, p);
+            // A dynamic array may be multi-axis, but only the first axis may
+            // have a runtime extent; later axes must be constant in this stage.
+            for (size_t k = 1; k < item.ty.dims.size(); ++k)
+              if (item.ty.dims[k].dyn || item.ty.dims[k].lbDyn)
+                d_.error(item.loc,
+                         "a dynamic array may only have a dynamic first axis in this stage",
+                         "(13)");
+            // A dynamic lower bound on a parameter is not served: the dyn-param /
+            // `*` calling conventions convey only the upper bound (or extent), so
+            // a lower-bound parameter would be sized from the wrong origin.
+            if (isParam && !item.ty.dims.empty() && item.ty.dims[0].lbDyn)
+              d_.error(item.loc, "a dynamic lower bound on a parameter is not served in this stage",
+                       "(13)");
             if (item.sym->isStatic)
               d_.error(item.loc, "a dynamic array must be AUTOMATIC in this stage", "(13)");
-            if (!item.initItems.empty())
-              d_.error(item.loc, "INITIAL on a dynamic array is not implemented in this stage",
-                       "(26)");
+            if (!item.initItems.empty()) {
+              // INITIAL on a dynamic array (rule (26)): the extent is runtime, so
+              // the itemlist cannot be count-checked here; expand it into the flat
+              // element list and store it into the runtime buffer at block entry.
+              std::vector<Expr*> elems;
+              expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
+              item.sym->initElems = std::move(elems);
+            }
           } else if (!item.initItems.empty()) {
             std::vector<Expr*> elems;
             expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
@@ -559,12 +683,36 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               item.sym->initElems = std::move(elems);
           }
         }
-        if (item.ty.isStruct() && !item.initItems.empty())
-          d_.error(item.loc, "INITIAL on a structure is not implemented in this stage", "(26)");
+        if (item.ty.isStruct() && !item.initItems.empty()) {
+          // INITIAL on a structure (rule (26)): flatten the itemlist (iteration
+          // factors, '*' and groups) and fold each value against its member's
+          // type in declaration order. The count must match the scalar leaves.
+          if (item.sym->isStatic) {
+            d_.error(item.loc, "INITIAL on a static structure is not implemented in this stage",
+                     "(26)");
+          } else {
+            std::vector<Expr*> raw;
+            flattenInitItems(item.initItems, item.loc, raw);
+            long long leaves = structureLeafCount(item.ty);
+            if ((long long)raw.size() != leaves)
+              d_.error(item.loc,
+                       "INITIAL supplies " + std::to_string(raw.size()) +
+                           " value(s) for a structure of " + std::to_string(leaves) + " member(s)",
+                       "(26)");
+            else {
+              std::vector<Expr*> folded;
+              size_t idx = 0;
+              foldStructInit(item.ty, raw, idx, item.loc, folded);
+              item.sym->initElems = std::move(folded);
+            }
+          }
+        }
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
-        // BEGIN blocks too, hence the Proc* here.
-        if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase)
+        // BEGIN blocks too, hence the Proc* here. A DEFINED or BASED variable
+        // has no storage of its own, so it is never allocated.
+        if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase &&
+            !item.sym->basedBase && !item.sym->fileAttr)
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
@@ -671,8 +819,17 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     // Whole-structure assignment (rule 127): a copy between two structures of
     // identical shape (same members, recursively). Anything else — a shape
     // mismatch, or mixing a structure with a non-structure — is diagnosed.
-    if (dst.isStruct() && src.isStruct() && dst == src)
+    if (dst.isStruct() && src.isStruct() && dst == src) {
+      // A struct with a dynamic-array member holds a pointer to a runtime
+      // buffer, so a storage copy would copy the pointer, not the data (rule
+      // 13): diagnose rather than miscompile.
+      if (hasDynamicMember(dst))
+        d_.error(loc,
+                 std::string(what) +
+                     ": a whole-structure assignment with a dynamic member is not implemented",
+                 "(13)");
       return true;
+    }
     if (dst.isStruct() && src.isStruct())
       d_.error(loc,
                std::string(what) +
@@ -687,10 +844,23 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
   }
   if (dst.isNumeric() && (src.isNumeric() || src.isBit()))
     return true;
+  // POINTER assignment (rule 15): copy the address; a pointer target takes a
+  // pointer source (NULL, ADDR, or another pointer) unchanged.
+  if (dst.isPointer() && src.isPointer())
+    return true;
   if (dst.isBit() && (src.isBit() || src.isNumeric()))
     return true;
   if (dst.isChar() && src.isChar())
     return true;
+  // Complex conversions (QR2.2/CM5): complex <-> complex passes through; a real
+  // (numeric) value converts to complex with a zero imaginary part, and a
+  // complex value converts to a real by taking the real part.
+  if (dst.isComplex() || src.isComplex()) {
+    if (dst.isComplex() && (src.isComplex() || src.isNumeric()))
+      return true;
+    if (dst.isNumeric() && src.isComplex())
+      return true;
+  }
   d_.error(loc,
            std::string(what) + ": conversion from " + src.desc() + " to " + dst.desc() +
                " is not implemented in this stage",
@@ -743,8 +913,8 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
   Expr* lit = e;
   if (lit->kind == Expr::Unary && lit->op == Tok::Minus)
     lit = lit->a.get();
-  if (lit->kind != Expr::IntLit && lit->kind != Expr::FltLit && lit->kind != Expr::CharLit &&
-      lit->kind != Expr::BitLit) {
+  if (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
+      lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
     d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
     return nullptr;
   }
@@ -867,6 +1037,74 @@ void Sema::checkOnUnit(Stmt* u, Proc* p) {
       check(b.get());
   };
   check(u);
+}
+
+long long Sema::structureLeafCount(const Type& ty) {
+  long long n = 0;
+  for (const auto& m : ty.members) {
+    if (m->ty.isStruct()) {
+      n += structureLeafCount(m->ty);
+    } else if (m->ty.isArray()) {
+      long long cnt = elementCount(m->ty);
+      if (m->ty.elementType().isStruct())
+        n += cnt * structureLeafCount(m->ty.elementType());
+      else
+        n += cnt;
+    } else {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+void Sema::flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc,
+                            std::vector<Expr*>& out) {
+  for (const InitItem& it : items) {
+    switch (it.kind) {
+    case InitItem::Value:
+      out.push_back(it.value.get());
+      break;
+    case InitItem::Repeat:
+      if (out.empty())
+        d_.error(loc, "'*' in INITIAL has no preceding value to repeat", "(29)");
+      else
+        out.push_back(out.back()); // repeat the last raw value
+      break;
+    case InitItem::Group:
+      flattenInitItems(it.items, loc, out);
+      break;
+    case InitItem::Iter: {
+      std::vector<Expr*> sub;
+      flattenInitItems(it.items, loc, sub);
+      for (long long k = 0; k < it.factor; ++k)
+        for (Expr* s : sub)
+          out.push_back(s);
+      break;
+    }
+    }
+  }
+}
+
+void Sema::foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t& idx,
+                          SourceLoc loc, std::vector<Expr*>& out) {
+  for (const auto& m : ty.members) {
+    if (m->ty.isStruct()) {
+      foldStructInit(m->ty, vals, idx, loc, out);
+    } else if (m->ty.isArray()) {
+      long long cnt = elementCount(m->ty);
+      const Type& el = m->ty.elementType();
+      for (long long k = 0; k < cnt; ++k) {
+        if (el.isStruct())
+          foldStructInit(el, vals, idx, loc, out);
+        else if (idx < vals.size())
+          if (Expr* f = foldInitialConstant(vals[idx++], el, loc))
+            out.push_back(f);
+      }
+    } else if (idx < vals.size()) {
+      if (Expr* f = foldInitialConstant(vals[idx++], m->ty, loc))
+        out.push_back(f);
+    }
+  }
 }
 
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
@@ -1060,10 +1298,56 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   }
   case Stmt::Put: {
     typeExpr(s->skipCount.get(), sc, p);
+    checkStringTarget(s, sc, p);
+    checkFileTarget(s, sc);
+    if (s->edit) {
+      checkEditFormats(s, sc, p, false);
+      break;
+    }
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       if (it->ty.isVoid())
         d_.error(it->loc, "invalid data list item", "(110)");
+    }
+    break;
+  }
+  case Stmt::Get: {
+    // List-directed input writes a value into each data-list item, so every
+    // item must be an assignable scalar reference, not a constant or procedure
+    // (rules (109),(110)).
+    typeExpr(s->skipCount.get(), sc, p);
+    checkStringTarget(s, sc, p);
+    checkFileTarget(s, sc);
+    if (s->edit) {
+      checkEditFormats(s, sc, p, true);
+      break;
+    }
+    for (auto& it : s->items) {
+      typeExpr(it.get(), sc, p);
+      bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                 it->kind == Expr::Subscript;
+      if (!ref) {
+        d_.error(it->loc, "GET LIST item must be a variable to receive the value", "(110)");
+        continue;
+      }
+      if (it->ty.isVoid()) {
+        d_.error(it->loc, "invalid data list item", "(110)");
+        continue;
+      }
+      if (it->ty.isStruct()) {
+        d_.error(it->loc, "a whole structure cannot be read with GET LIST in this stage", "(110)");
+        continue;
+      }
+      // A CHARACTER member or array element is read through storeArrayElement
+      // /member paths, which are not served (mirrors assignment, rule (11)/(12)).
+      if (it->ty.isChar() &&
+          ((it->kind == Expr::VarRef && !it->memberPath.empty()) || it->kind == Expr::Subscript)) {
+        d_.error(it->loc,
+                 "GET LIST of a CHARACTER member or array element is not implemented in this "
+                 "stage",
+                 "(110)");
+        continue;
+      }
     }
     break;
   }
@@ -1137,6 +1421,50 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Leave:
   case Stmt::Entry: // declaration-like; params/type resolved in processProc
     break;
+  case Stmt::Allocate:
+    // ALLOCATE (rules 87,88): heap-allocate each based structure and store its
+    // address in the SET pointer target. The based variable must be fixed-size
+    // (a runtime-extent based array is QR2.3), and the SET target a POINTER.
+    for (size_t i = 0; i < s->allocBase.size(); ++i) {
+      typeExpr(s->allocBase[i].get(), sc, p);
+      Symbol* bsym = s->allocBase[i]->sym;
+      if (!bsym || !bsym->basedBase) {
+        d_.error(s->allocBase[i]->loc,
+                 "'" + s->allocBase[i]->name +
+                     "' is not a BASED variable; ALLOCATE requires based storage",
+                 "(88)");
+        continue;
+      }
+      if (bsym->ty.isArray() && bsym->ty.isDynamic())
+        d_.error(s->allocBase[i]->loc,
+                 "ALLOCATE of a dynamic-extent based array is not implemented in this stage",
+                 "(89)");
+      if (i < s->allocSet.size()) {
+        typeExpr(s->allocSet[i].get(), sc, p);
+        if (s->allocSet[i]->kind != Expr::VarRef || !s->allocSet[i]->ty.isPointer())
+          d_.error(s->allocSet[i]->loc, "the SET target of ALLOCATE must be a POINTER variable",
+                   "(88)");
+      }
+    }
+    break;
+  case Stmt::Free:
+    // FREE (rule 90): free the storage of each based variable, addressed either
+    // by an explicit locator pointer or by the variable's own BASED pointer.
+    for (auto& f : s->freeBase) {
+      typeExpr(f.get(), sc, p);
+      Symbol* bsym = f->sym;
+      if (!bsym || !bsym->basedBase)
+        d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
+                 "(90)");
+      if (f->locPtr && !f->locPtr->ty.isPointer())
+        d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER", "(90)");
+    }
+    break;
+  case Stmt::Open:
+  case Stmt::Close:
+    // OPEN/CLOSE FILE ( f ) (rules 100-103): f must be a declared FILE variable.
+    checkFileTarget(s, sc);
+    break;
   case Stmt::Goto:
     // GO TO target must be a label defined in this procedure (rules (64),(77)).
     if (procLabels_.find(s->name) == procLabels_.end())
@@ -1156,6 +1484,87 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // REVERT with no established handler is a no-op reverting to SYSTEM.
     break;
   }
+}
+
+// The STRING ( reference ) stream option (rule 105): the target must be a
+// NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only, meaningless
+// against a string sink/source.
+void Sema::checkStringTarget(Stmt* s, Scope* sc, Proc* p) {
+  if (!s->stringTarget)
+    return;
+  typeExpr(s->stringTarget.get(), sc, p);
+  Expr* t = s->stringTarget.get();
+  if (t->kind != Expr::VarRef || !t->sym || t->sym->kind == Symbol::ProcName)
+    d_.error(t->loc, "the STRING option requires a character variable", "(105)");
+  else if (!t->ty.isChar() || t->ty.varying)
+    d_.error(t->loc, "the STRING option requires a NONVARYING CHARACTER variable", "(105)");
+  if (s->page || s->skip)
+    d_.error(s->loc, "PAGE/SKIP cannot be combined with the STRING option", "(105)");
+}
+
+// The FILE ( f ) stream option (rule 105) and OPEN/CLOSE FILE ( f ) (rules
+// 100-103): f must be a declared FILE variable. FILE and STRING are mutually
+// exclusive stream targets. Resolves s->fileIdent to s->fileSym.
+void Sema::checkFileTarget(Stmt* s, Scope* sc) {
+  if (s->fileIdent.empty())
+    return;
+  Symbol* sym = lookup(sc, s->fileIdent);
+  if (!sym || sym->kind == Symbol::ProcName || !sym->fileAttr) {
+    d_.error(s->loc, "'" + s->fileIdent + "' is not a FILE variable", "(105)");
+    return;
+  }
+  s->fileSym = sym;
+  if (s->stringTarget)
+    d_.error(s->loc, "the FILE and STRING options cannot be combined", "(105)");
+}
+
+// Edit-directed transmission (rule (108)): type the format widths/decimals and
+// the data items, then pair each data item with its data (A/F) format, skipping
+// the control formats (X/SKIP/PAGE/LINE) that act without consuming data. For
+// GET the paired item must be an assignable reference of a format-compatible
+// type.
+void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
+  for (auto& it : s->items)
+    typeExpr(it.get(), sc, p);
+  for (auto& f : s->formats) {
+    typeExpr(f.w.get(), sc, p);
+    typeExpr(f.d.get(), sc, p);
+  }
+  size_t dataIdx = 0;
+  for (auto& f : s->formats) {
+    if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
+        f.kind == FormatItem::Line)
+      continue; // a control format consumes no data item
+    if (dataIdx >= s->items.size()) {
+      d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
+      break;
+    }
+    Expr* it = s->items[dataIdx].get();
+    if (f.kind == FormatItem::A && !it->ty.isChar())
+      d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
+    else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
+      const char* letter = f.kind == FormatItem::F ? "F" : "E";
+      const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
+      d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
+    }
+    if (isGet) {
+      bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                 it->kind == Expr::Subscript;
+      if (!ref)
+        d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
+      else if (it->ty.isStruct())
+        d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
+    } else if (it->ty.isVoid()) {
+      d_.error(it->loc, "invalid data list item", "(110)");
+    }
+    ++dataIdx;
+  }
+  size_t dataFormats = 0;
+  for (auto& f : s->formats)
+    if (f.kind == FormatItem::A || f.kind == FormatItem::F || f.kind == FormatItem::E)
+      ++dataFormats;
+  if (dataFormats < s->items.size())
+    d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
 }
 
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
@@ -1219,6 +1628,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     if (e->ty.intBits() == 32 && (e->ival > 2147483647LL || e->ival < -2147483648LL))
       e->ty = Type::fixedBin(63, 0);
     break;
+  case Expr::DecLit:
+    e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
+    break;
   case Expr::FltLit:
     e->ty = Type::flt(6);
     break;
@@ -1243,6 +1655,18 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       sym->owner = p;
     e->sym = sym;
     e->ty = sym->ty;
+    // A locator-qualified reference P -> X (rule 124): P is a POINTER, X a
+    // based variable whose storage is addressed through P. The member path
+    // below then resolves X.A against the based structure type.
+    if (e->locPtr) {
+      typeExpr(e->locPtr.get(), sc, p);
+      if (!e->locPtr->ty.isPointer())
+        d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+      if (!sym->basedBase)
+        d_.error(e->loc,
+                 "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
+                 "(124)");
+    }
     // A qualified reference S.A.B (rule 124): resolve each member against
     // the structure type, recording the LLVM field index along the path.
     if (!e->path.empty()) {
@@ -1504,13 +1928,25 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       break;
     case Tok::Eq:
     case Tok::Ne:
+      // Equality/inequality of a POINTER is allowed only against another
+      // POINTER (rules (15),(117)); mixed pointer/arithmetic comparison is
+      // diagnosed rather than silently comparing an address as a number.
+      if ((A.isPointer() || B.isPointer()) && !(A.isPointer() && B.isPointer()))
+        d_.error(e->loc, "a POINTER can only be compared with a POINTER", "(117)");
+      else if (A.isChar() != B.isChar())
+        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+      e->ty = Type::bit(1);
+      break;
     case Tok::Lt:
     case Tok::Le:
     case Tok::Gt:
     case Tok::Ge:
     case Tok::Ngt:
     case Tok::Nlt:
-      if (A.isChar() != B.isChar())
+      // Ordered comparisons are not meaningful on addresses (rule (117)).
+      if (A.isPointer() || B.isPointer())
+        d_.error(e->loc, "ordered comparison of a POINTER is not allowed", "(117)");
+      else if (A.isChar() != B.isChar())
         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
       e->ty = Type::bit(1);
       break;
@@ -1528,6 +1964,24 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
 bool Sema::typeBuiltin(Expr* e) {
   // Names matching none of these are user function procedures and are
   // handled in typeExpr's general function-call path.
+  // NULL built-in (rule 123, Appendix 1): yields the null POINTER value.
+  if (e->name == "NULL") {
+    if (!e->args.empty())
+      d_.error(e->loc, "NULL takes no arguments", "(123)");
+    e->ty = Type::ptr();
+    return true;
+  }
+  // ADDR built-in (rule 123, Appendix 1): yields the address of a variable as
+  // a POINTER value.
+  if (e->name == "ADDR") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "ADDR takes one argument (a variable)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::ptr();
+    return true;
+  }
   // SUBSTR built-in (M2): substr(s, i, n) yields a character string of
   // length n; the length must be a constant so the result type is sized.
   if (e->name == "SUBSTR") {
@@ -1600,6 +2054,74 @@ bool Sema::typeBuiltin(Expr* e) {
     e->ty = Type::fixedBin(31, 0);
     return true;
   }
+  // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
+  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
+  // ATANH, ERF, ERFC, and the degree trig variants SIND, COSD, TAND, ATAND —
+  // one numeric argument, FLOAT result.
+  if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
+      e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
+      e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
+      e->name == "COSH" || e->name == "TANH" || e->name == "ATANH" || e->name == "ERF" ||
+      e->name == "ERFC" || e->name == "SIND" || e->name == "COSD" || e->name == "TAND" ||
+      e->name == "ATAND") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, e->name + " expects 1 argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric()) {
+      d_.error(e->args[0]->loc, e->name + " argument must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::flt(6);
+    return true;
+  }
+  // Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1): COMPLEX(a,b)
+  // forms a complex value from a real and an imaginary part; REAL(z) and IMAG(z)
+  // extract the real/imaginary part as a FLOAT; CONJG(z) returns the conjugate.
+  if (e->name == "COMPLEX") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "COMPLEX expects 2 arguments (real, imaginary)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+      d_.error(e->loc, "COMPLEX arguments must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::complexTy();
+    return true;
+  }
+  if (e->name == "REAL" || e->name == "IMAG") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, e->name + " expects 1 argument (a complex value)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isComplex()) {
+      d_.error(e->args[0]->loc, e->name + " argument must be a complex value", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::flt(6);
+    return true;
+  }
+  if (e->name == "CONJG") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "CONJG expects 1 argument (a complex value)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isComplex()) {
+      d_.error(e->args[0]->loc, "CONJG argument must be a complex value", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::complexTy();
+    return true;
+  }
   // TRUNC built-in (M2): trunc(x) preserves the numeric type of its arg.
   if (e->name == "TRUNC") {
     if (e->args.size() != 1) {
@@ -1609,14 +2131,6 @@ bool Sema::typeBuiltin(Expr* e) {
     }
     if (!e->args[0]->ty.isNumeric()) {
       d_.error(e->args[0]->loc, "TRUNC argument must be numeric", "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
-    // TRUNC of a scaled FIXED value must remove its fractional digits,
-    // which the scaled representation does not yet do (invariant 2).
-    if (e->args[0]->ty.isFixed() && e->args[0]->ty.scale != 0) {
-      d_.error(e->args[0]->loc, "TRUNC of a scaled FIXED value is not implemented in this stage",
-               "(16)");
       e->ty = Type::voidTy();
       return true;
     }
@@ -1848,9 +2362,10 @@ bool Sema::typeBuiltin(Expr* e) {
       return true;
     }
     Expr* a = e->args[0].get();
-    bool isArr =
-        (a->kind == Expr::VarRef && a->sym &&
-         (a->sym->kind == Symbol::Var || a->sym->kind == Symbol::Param) && a->sym->ty.isArray());
+    // An unsubscripted array reference: a plain array variable/parameter
+    // (A or x(k)) or a qualified structure member array (S.V). a->ty is the
+    // resolved reference type, which is the array for an unsubscripted VarRef.
+    bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
     if (!isArr) {
       d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
       e->ty = Type::voidTy();
@@ -1869,15 +2384,15 @@ bool Sema::typeBuiltin(Expr* e) {
       return true;
     }
     Expr* a = e->args[0].get();
-    bool isArr =
-        (a->kind == Expr::VarRef && a->sym &&
-         (a->sym->kind == Symbol::Var || a->sym->kind == Symbol::Param) && a->sym->ty.isArray());
+    // An unsubscripted array reference, including a qualified structure member
+    // array (S.V); a->ty is the resolved array reference type.
+    bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
     if (!isArr) {
       d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
-    const Type& el = a->sym->ty.elementType();
+    const Type& el = a->ty.elementType();
     if (e->name == "ANY" || e->name == "ALL") {
       if (!el.isBit()) {
         d_.error(a->loc, e->name + " requires a BIT array in this stage", "(123)");

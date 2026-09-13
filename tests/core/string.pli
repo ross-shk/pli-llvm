@@ -1,0 +1,33 @@
+  /* STRING (rule (105)) sources and sinks: PUT STRING(s) writes list-directed
+     output into a character variable and GET STRING(s) reads it back, so the
+     round-trip recovers the original values. */
+  string_test: procedure options(main);
+     declare fails fixed bin(31);
+     declare a fixed bin(31);
+     declare b fixed bin(31);
+     declare x float;
+     declare c fixed bin(31);
+     declare d fixed bin(31);
+     declare y float;
+     declare s char(40);
+     fails = 0;
+     a = 10;
+     b = 20;
+     x = 3.5;
+     put string(s) list(a, b, x);
+     get string(s) list(c, d, y);
+     if c ^= 10 then do;
+        fails = fails + 1;
+        put skip list('FAIL c');
+     end;
+     if d ^= 20 then do;
+        fails = fails + 1;
+        put skip list('FAIL d');
+     end;
+     if y ^= 3.5 then do;
+        fails = fails + 1;
+        put skip list('FAIL y');
+     end;
+     if fails = 0 then put skip list('PASS string');
+     else put skip list('FAIL string: fails =', fails);
+  end string_test;

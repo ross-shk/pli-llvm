@@ -1408,7 +1408,616 @@ value is not a constant or a recorded dynamic bound); a dynamic lower bound on a
 `*` parameter; `*` on a non-parameter declaration (a `*` local has no caller to
 supply its extent).
 
-## ADR-056 — Mixed void/function ENTRYs: one common impl type, no fall-through
+---
+
+## ADR-056 — Exact FIXED DECIMAL constants and scale-aware conversion
+
+**Context.** ADR-006 represents `FIXED DECIMAL(p,q)` as an integer scaled by
+10^q but left `scale` unused in codegen (M0 deviation: scale 0 only). QR1.2
+needs exact decimal: a bare fractional literal (`2.5`) is a FIXED DECIMAL
+constant (rule 135), and arithmetic, comparison, and assignment must honour
+the scale.
+
+**Decision.** A numeric literal with a fraction point and no exponent becomes an
+exact `FIXED DECIMAL(p,q)` constant (`p` = digits, `q` = fraction digits, stored
+integer = value·10^q); an exponent form stays FLOAT. `IRGen::convert` rescales a
+FIXED DECIMAL value by powers of ten: to a DECIMAL target by 10^(dst−src), and a
+scaled DECIMAL source to a BINARY target drops the fraction; scale reduction
+rounds half away from zero. `FLOAT ↔ FIXED DECIMAL` scales by 10^q. `+ -` and
+comparison rescale operands to the common (max) scale; `*` (and `MULTIPLY`)
+multiply the raw scaled integers (product scale = sum) without pre-rescaling.
+`arithResultType` yields a DECIMAL common type only when both operands are
+DECIMAL, so FIXED BINARY scale (2^q) is never rescaled by ten.
+
+**Consequences.** `tests/core/decimal.pli` covers entry from a FLOAT literal,
+`FIXED DECIMAL ↔ FLOAT`, scale-aware `+ - *`, mixed-scale addition, product-scale
+widening, round-half-away scale reduction, and scaled comparison. The existing
+`scaled.pli` (FIXED BINARY, 2-based) and the float-literal builtin tests
+(TRUNC/ROUND/MAX/MOD/PRECISION/MULTIPLY/ABS) stay green. `TRUNC` of a scaled
+DECIMAL now drops the fractional digits. FIXED division still evaluates in FLOAT
+(ADR-006 deviation, QR2).
+
+**Rejected.** Binary floating point for decimal (0.10 not representable);
+changing `scaled.pli`'s 2-based FIXED BINARY behavior; adding decimal overflow
+(`SIZE`/`FIXEDOVERFLOW`) checks in this slice (deferred to QR2).
+
+## ADR-057 — `INITIAL` on a structure: a per-leaf store walk
+
+**Context.** ADR-044 expands an `INITIAL` itemlist for a fixed-size array into a
+flat list of folded element values stored element-by-element (AUTOMATIC) or as a
+constant array initializer (STATIC). A structure (rule 11) `INITIAL` was
+diagnosed. CM1 needs structure initialization: a flat itemlist must fill the
+structure's scalar leaves in declaration order.
+
+**Decision.** The itemlist (with iteration factors, `*`, and groups) is first
+flattened into raw values, then folded against each leaf's own type in
+declaration order (`structureLeafCount` checks the count; `foldStructInit` walks
+members — a nested structure recurses, an array member consumes its element
+count, an array-of-structures recurses per element). The folded list reuses
+`sym->initElems`. `emitInitials` stores it with a recursive member walk
+(`emitStructInitValues`) mirroring `emitByNameCopy`'s GEP pattern, so it runs on
+every activation for AUTOMATIC storage. STATIC structure `INITIAL` stays
+diagnosed; CHARACTER leaves stay diagnosed (matching the existing "CHARACTER
+structure members are not implemented" limitation).
+
+**Consequences.** `tests/core/struct_init.pli` covers scalar, nested, and array
+members, iteration factors, `*`, and re-initialization on each activation;
+`bad_struct_init.pli` diagnoses a count mismatch. `make test` (123) and `make
+check` stay green.
+
+**Rejected.** Folding during itemlist expansion (the leaves are heterogeneous, so
+a value must be folded against its own member type, not a single element type);
+STATIC constant structure initializers and CHARACTER members in this slice
+(deferred).
+
+## ADR-058 — Dynamic lower bound: a runtime lower bound on a 1-D AUTOMATIC array
+
+**Context.** ADR-050 serves a single-axis AUTOMATIC array with a runtime *upper*
+bound (`dyn`/`dynUb`), a constant lower bound. A non-constant lower bound was
+diagnosed at parse time. CM1 needs `A(lb:ub)` with both bounds runtime.
+
+**Decision.** `Dim` gains `lbDyn` (marking a runtime lower bound; `isDynamic()`
+includes it); the parser captures the lower-bound expression into a parallel
+`dynLbBounds` (mirroring `dynBounds`), lowered to `Symbol::dynLb`, evaluated at
+block entry into a `dynLb_` dope slot in `allocaLocals`. `arrayElementAddr` (and
+its callers) bounds-check `i < lb` and offset `i - lb` against the live value;
+`LBOUND`/`DIM`/reduction extents and `argExtent` use it. Scope stays single-axis
+AUTOMATIC: a dynamic lower bound on a *parameter* is diagnosed (the dyn-param /
+`*` calling conventions convey only the upper bound/extent, so a lower-bound
+parameter would be sized from the wrong origin).
+
+**Consequences.** `tests/core/dyn_lower.pli` covers runtime `LBOUND`/`HBOUND`/
+`DIM`, fill/readback, and a `SUM` reduction over `A(lb:ub)` for several bound
+pairs; `bad_dyn_lower.pli` keeps the multi-axis gate. `make test` (125) and
+`make check` stay green.
+
+**Rejected.** Threading a lower-bound argument through the dyn-param / `*`
+calling conventions (extend the ABI in a later slice); multi-axis dynamic
+arrays; a dynamic lower bound on a parameter in this slice.
+
+## ADR-059 — Dynamic multi-axis arrays: a runtime first axis with fixed later axes
+
+**Context.** ADR-050/058 serve a single-axis AUTOMATIC array with a runtime upper
+and/or lower bound, allocated as a bare element buffer (offset `i - lb`). A
+multi-axis array with any dynamic axis was gated ("must be single-axis"). CM1
+needs `A(n,4)` — a 2-D VLA (C analogue `int a[n][4]`) whose first axis is runtime
+and later axes are fixed.
+
+**Decision.** Only the **first** axis may be dynamic; later axes stay constant.
+The storage is a bare element buffer of `axis0_extent × ∏(later extents)`.
+`arrayElementAddr`'s dynamic path accumulates a row-major flat offset with a
+compile-time first-axis stride (the product of the fixed later extents) and
+per-axis bounds checks (axis 0 against the runtime bounds, later axes against
+their constants). `allocaLocals`, `DIM`, reduction counts, and `argExtent`
+scale by the fixed later extents; LBOUND/HBOUND report the (runtime) first axis.
+Sema rejects a dynamic axis beyond the first and a dynamic lower bound on a
+parameter (the calling conventions convey only the upper bound/extent).
+
+**Consequences.** `tests/core/dyn_multi.pli` covers `A(n,4)` for several `n`
+(runtime LBOUND/HBOUND/DIM, row-major fill/readback); `bad_dyn_multi.pli`
+rejects `A(3,n)`; a constant-upper dynamic array `A(lb:5,3)` runs (the 
+`allocaLocals`/LBOUND paths no longer assume a runtime upper bound). `make test`
+(127) and `make check` stay green.
+
+**Rejected.** A dynamic extent on any axis beyond the first in this slice (needs
+runtime strides for each such axis, deferred); a dynamic multi-axis array passed
+to a `*` parameter beyond the total-extent case; a dynamic structure member
+(still gated).
+
+## ADR-060 — Dynamic array structure members: a bare buffer-pointer field
+
+**Context.** ADR-050/058/059 serve standalone AUTOMATIC arrays with a runtime
+extent, allocated as a bare element buffer whose bounds are recorded at entry.
+A dynamic array that is a structure member was gated ("cannot be a structure
+member in this stage"); `struct_dyn.pli` needs `1 s, 2 v(n) fixed bin(31)`,
+reached by qualification `s.v(i)` on both sides of an assignment.
+
+**Decision.** A dynamic-array member lays out in the LLVM struct as a **bare
+buffer pointer** field (`ptr`), not an inline `[N x elemTy]` — the extent is
+runtime, so the struct size cannot be compile-time. `llvmTy` emits `ptr` for a
+member whose type `isArray && isDynamic`. At block entry, `allocaLocals` pass 3
+allocates each member's runtime-sized element buffer (bounds evaluated from its
+bound exprs, scaled by any fixed later axes), stores the pointer into the struct
+field, and records the live bounds in `memberDyn_` keyed by (symbol, field path).
+Subscript addressing loads the buffer pointer (`dynamicMemberBase`) before the
+`arrayElementAddr` dynamic path, bounds-checking against the recorded bounds.
+The dynamic member bound exprs are lowered in `hir.cpp` and owned by
+`HDeclItem::dynMemberBounds`, referenced (non-owning) by
+`Symbol::DynMemberH.ub/lb`.
+
+**Consequences.** `tests/core/struct_dyn.pli` covers a fixed scalar member beside
+a dynamic member, element write/readback via `s.v(i)` in loops, and scalar-member
+integrity across the dynamic buffer; `make test` stays green. Because a struct
+field is now a pointer to separately-allocated data, a whole-structure storage
+copy would copy the pointer, not the pointed-to data — `Sema::checkAssignable`
+rejects a whole-structure assignment with a dynamic member (rule 13),
+`bad_struct_dyn.pli`.
+
+**Rejected.** An inline `[N x elemTy]` member for a dynamic array (struct size is
+not compile-time); supporting whole-structure copy of a struct with a dynamic
+member (needs deep copy of each buffer, deferred); a dynamic member of an array
+of structures `arr(i).v(n)` (member buffer per element not yet served); `LIKE`
+of a struct with a dynamic member is diagnosed, not deep-copied.
+
+## ADR-061 — `INITIAL` on a dynamic array: fill the runtime buffer at entry
+
+**Context.** ADR-044 serves an `INITIAL` itemlist on a **fixed-size** array by
+expanding it (sema) into `sym->initElems` and storing one constant per element;
+a count that does not match the extent is diagnosed at compile time. ADR-050+
+serve dynamic (runtime-extent) AUTOMATIC arrays as a bare runtime-sized alloca,
+but `INITIAL` on a dynamic array was still gated as rule (26) — the itemlist
+cannot be count-checked because the extent is runtime.
+
+**Decision.** `INITIAL` on a dynamic AUTOMATIC array is served by expanding the
+itemlist into `sym->initElems` exactly as for a fixed array, but with **no
+compile-time count check** (the extent is runtime). At block entry, `emitInitials`
+GEPs each constant into its slot of the runtime-sized element buffer, straight
+line — no loop — so it re-runs on every activation (AUTOMATIC semantics). To keep
+a longer-than-extent itemlist from overflowing the buffer, `allocaLocals` pass 2
+pre-sizes the alloca to the larger of the runtime extent and the itemlist length;
+the logical extent used for bounds checks (`dynUb_` / `SUBSCRIPTRANGE` / `DIM`)
+is unchanged. A dynamic lower bound and a dynamic first axis stay served by the
+existing paths (ADR-058/059); multi-axis and structure-member dynamic arrays fill
+the same flat row-major buffer.
+
+**Consequences.** `tests/core/dyn_init.pli` covers a full matching itemlist with
+an iteration factor, a list shorter than the extent (only the supplied elements
+set; the rest stay uninitialized per AUTOMATIC semantics), a dynamic multi-axis
+array filling flat row-major, and re-run on every activation; `make test` stays
+green. `bad_dynamic_array.pli` no longer rejects `INITIAL` on a dynamic array and
+now rejects only the multi-axis form.
+
+**Rejected.** Compile-time count-checking of a dynamic itemlist (the extent is
+runtime); zero-filling the rest of a short itemlist (AUTOMATIC leaves it
+uninitialized, matching scalar/array semantics); a loop for the store (the
+itemlist is a fixed constant sequence, straight-line GEPs are leaner).
+
+## ADR-062 — Runtime aggregate lengths on a dynamic structure member
+
+**Context.** ADR-060 lays out a dynamic-array structure member `1 s, 2 v(n) fixed
+bin(31)` as a bare buffer-pointer field, with the live bounds recorded in
+`memberDyn_` at entry. ADR-050/058/059 serve `LBOUND`/`HBOUND`/`DIM` and the array
+reductions `SUM`/`PROD`/`ANY`/`ALL` for **standalone** dynamic arrays, reading the
+bounds from `dynUb_`/`dynLb_` keyed by the array symbol. The same built-ins on a
+**qualified** member array `S.V` were gated (rule 123): sema only recognized a
+plain array `VarRef` (`a->sym->ty.isArray()`), and irgen read `a->sym->ty` and
+`dynUb_[a->sym]`, which for `S.V` is the struct symbol, not the member.
+
+**Decision.** The array-attribute and array-reduction built-ins accept an
+unsubscripted **member array** reference `S.V` as their argument. Sema
+(`Sema::typeBuiltin`) recognizes an unsubscripted array by the resolved reference
+type `a->ty.isArray()` (a qualified `VarRef` resolves `a->ty` to the member array
+type), instead of `a->sym->ty.isArray()`, and derives the reduction element type
+from `a->ty.elementType()`. IRGen distinguishes a member array by
+`a->memberPath` non-empty: the array type comes from `memberType(a->sym, path)`,
+the live lower/upper bounds (incl. a dynamic lower bound) from the `memberDyn_`
+slot, and the reduction base from `dynamicMemberBase(...)` (a dynamic member) or
+`memberAddr(...)` (a fixed member) instead of `addressOf(a->sym)`. The reduction
+loop then walks the member buffer pointer the same way as a standalone dynamic
+array.
+
+**Consequences.** `tests/core/struct_dyn_len.pli` covers `LBOUND`/`HBOUND`/`DIM`
+and `SUM` on `s.v(n)` for several extents (including 0), a dynamic lower bound
+member `s.v(2:n+1)`, and fills then reduces the member buffer;
+`tests/core/bad_struct_dyn_len.pli` keeps a scalar member `s.a` rejected as an
+array built-in argument (rule 123); `make test` stays green. A subscripted member
+`S.V(i)` remains rejected (it is a `Subscript`, not an unsubscripted `VarRef`).
+
+**Rejected.** Adding member knowledge to the symbol table (member bounds already
+live in `memberDyn_`); requiring the whole structure as the built-in argument
+(the built-ins reduce a single array, not a whole structure).
+
+## ADR-063 — POINTER as a first-class address type
+
+**Context.** QR1.3 (CM2 of the C-mirror sub-plan) needs `POINTER`, based data,
+`->`, `ADDR`, `NULL`, and `ALLOCATE`/`FREE` for linked records. Before based
+addressing and allocation can be built, POINTER must exist as a real value type:
+declared `DECLARE P POINTER;`, holding the null pointer, the address of a
+variable, or another pointer, assignable between pointer variables and compared
+for equality/inequality.
+
+**Decision.** Add a `TK::Pointer` scalar type (`Type::ptr()`, `isPointer()`). A
+pointer variable is declared with the `POINTER`/`PTR` attribute (parsed into the
+attribute bag and rejected if combined with a numeric/string attribute, rule 15)
+and lays out in IR as an LLVM `ptr`. Pointer assignment copies the address
+(`Sema::checkAssignable` allows pointer→pointer; `IRGen::convert` passes a
+pointer through unchanged). `NULL` and `ADDR(x)` are built-ins typed in
+`Sema::typeBuiltin` and emitted in `IRGen::emitBuiltin`: `NULL` yields a null
+pointer constant, `ADDR(x)` the `addressOf` a variable. Pointer equality and
+inequality are emitted as an integer `icmp eq/ne` on the two addresses; ordered
+comparisons and mixing a pointer with an arithmetic value are diagnosed (rules
+(15),(117)). Following the codebase's no-arg-builtin convention (DATE/TIME),
+`NULL` is written `null()` with parentheses, not bare.
+
+**Consequences.** `tests/core/pointer.pli` covers `p = null()`, `p = addr(x)`,
+`q = p` pointer assignment, and `=`/`^=` comparisons against the null pointer and
+other pointers; `tests/core/bad_pointer.pli` rejects assigning a pointer to a
+numeric target; `make test` stays green. A pointer value cannot be written with
+`PUT LIST` in this stage (diagnosed, rule 110); pointer parameters, based data,
+`->`, and `ALLOCATE`/`FREE` remain for later CM2 slices.
+
+**Rejected.** An integer-typed pointer (LLVM `ptr` keeps the address opaque and
+avoids accidental arithmetic); allowing bare `NULL` without parentheses (kept
+consistent with DATE/TIME and other no-arg built-ins in this compiler); pointer
+arithmetic or ordering.
+
+## ADR-064 — BASED data and `->` locator qualification
+
+**Context.** ADR-063 added POINTER as a first-class address type. QR1.3 (CM2)
+needs based data for linked records: `DECLARE 1 X BASED(P);` where X has no
+storage of its own and its members are addressed through the POINTER P, plus the
+explicit locator-qualified form `P -> X.FIELD` (rule 124). Both were diagnosed as
+unimplemented.
+
+**Decision.** A based structure is a Symbol with a `basedBase` POINTER reference
+(resolved in sema from the `BASED(P)` attribute; `BASED` without an explicit
+pointer is diagnosed in this stage). It is excluded from `localSyms` (like
+`DEFINED`), so it gets no own storage. `IRGen::addressOf(basedSym)` loads the
+pointer value (`load(addressOf(basedBase))`), so an unqualified based reference
+`X.FIELD` naturally GEPs off the pointer. A locator-qualified reference is a
+`VarRef` carrying the left-hand pointer in a new `locPtr` field (mirrored through
+HIR lowering); sema types it (locator must be a POINTER, right side a based
+variable) and resolves the member path against the based structure type, and irgen
+GEPs off the loaded pointer value (`locatorMemberAddr`) in both value emission and
+assignment targets.
+
+**Consequences.** `tests/core/based.pli` covers pointing P at an existing
+structure via `addr(y)`, writing/reading `rec.a` through P, and the locator form
+`P -> rec.a` on both sides of an assignment, observing the writes in `y`'s
+storage; `tests/core/bad_based.pli` rejects a locator whose right side is not a
+based variable; `make test` stays green. A whole based structure as a value, based
+array subscripts (`P -> X.arr(i)`), and `ALLOCATE`/`FREE` remain for later CM2
+slices.
+
+**Rejected.** Giving a based structure its own storage (it overlays the pointer's
+target); requiring the locator pointer to equal the based structure's own
+`BASED(P)` pointer (the locator may name any pointer); supporting bare `BASED`
+without a pointer (needs an unqualified-locator rule deferred with
+`ALLOCATE`/`FREE`).
+
+## ADR-065 — ALLOCATE/FREE for based records via heap malloc/free
+
+**Context.** ADR-063/064 added POINTER and based data with `->`. QR1.3 (CM2)
+needs the last piece of linked records: `ALLOCATE` (rules 87-88) to create the
+heap storage a based structure overlays and `FREE` (rule 90) to release it. Both
+were diagnosed unimplemented, citing rule (87).
+
+**Decision.** `ALLOCATE id SET(ref);` heap-allocates the based structure `id`
+and stores the address in the POINTER `ref`; `FREE P -> id;` releases the block
+addressed by the locator P, and `FREE id;` releases the block addressed by the
+based variable's own `BASED` base. Both map to C `malloc`/`free` via two new
+runtime entries `pli_alloc`/`pli_free` in `pli_rt_abi.def`. `emitAllocate` sizes
+the block from the based structure's LLVM alloc size
+(`getTypeAllocSize(llvmTy(sym->ty))`) and stores the returned pointer into the
+SET target (a normal pointer `storeTo`); `emitFree` calls `pli_free` on the
+loaded locator value or on `addressOf(basedSym)`. Sema requires a based variable
+(a `basedBase` symbol) and a POINTER SET target/locator (rule 88/90), and defers
+dynamic-extent based arrays and the `IN (AREA)` option to QR2.3.
+
+**Consequences.** `tests/core/alloc.pli` covers two allocations of one based
+variable producing independent blocks, locator read/write, and both FREE forms;
+`tests/core/bad_alloc.pli` rejects allocating a non-based variable and
+`tests/core/bad_alloc_set.pli` a non-pointer SET target; `make test` and
+`make check` stay green. `pli_alloc` raises a hard ALLOCATION error on OOM until
+condition handling (M4).
+
+**Rejected.** Calling libc `malloc`/`free` directly in emitted IR (kept behind
+the `pli_rt_abi.def` ABI so the C and IR signatures cannot drift, cf. ADR-002);
+reusing the based structure's own `BASED` pointer for `ALLOCATE SET` (SET may
+name any pointer); serving the `IN (AREA)` option, which needs a runtime
+sub-allocator.
+
+## ADR-066 — GET LIST list-directed input from SYSIN
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs list-directed input, the
+input counterpart to the existing `PUT LIST`. The `GET` statement (rules
+104-109) was diagnosed unimplemented citing rule (104).
+
+**Decision.** `GET [SKIP] LIST (datalist);` reads list-directed values from SYSIN
+(stdin) into the data-list references, which sema requires to be assignable
+scalar variables (an array element, a structure member, or a plain variable),
+not constants or procedures (rule 110). `GET` mirrors `PUT`: it is a
+`Stmt::Get`/`HStmt::Get` statement reusing the `items` data list. Four new
+runtime entries (`pli_get_list_fixed/float/char/bit` in `pli_rt_abi.def`) read a
+whitespace/comma-delimited token from stdin and parse it as i64, double, a
+blank-padded character field, or a bit. `emitGet` produces a value of the item's
+type and stores it with the same target-addressing as an assignment
+(`storeGetTarget`); scaled FIXED DECIMAL input is read as a plain integer and
+converted, and `GET` of a CHARACTER member or array element is diagnosed (the
+member/array-element character store paths are not served, matching assignment).
+
+**Consequences.** `tests/driver/get.sh` compiles a program that `GET LIST`s a
+pair of FIXED, a FLOAT, and a CHARACTER value, verifies each, and prints PASS;
+`tests/core/bad_get.pli` rejects reading into a constant; `make test` and
+`make check` stay green.
+
+**Rejected.** Using C `scanf` directly in emitted IR (kept behind the
+`pli_*` ABI so signatures cannot drift, cf. ADR-002); supporting `FILE`/`STRING`
+sources, `EDIT`/`DATA` specifications, `COPY`, `LINE`, or `PAGE` in this stage
+(QR2.5); list-directed `DO`-repetition data-list elements (rule 111).
+
+## ADR-067 — STRING ( reference ) list-directed sinks and sources
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs file/string sources and
+sinks. The `STRING ( reference )` stream option (rule 105) routes list-directed
+I/O to/from an in-memory character variable instead of SYSPRINT/SYSIN — the
+`sprintf`/`sscanf` analogue — and was diagnosed unimplemented citing rule (105).
+
+**Decision.** `PUT STRING(s) LIST(...)` writes the list-directed output into the
+NONVARYING character variable `s`; `GET STRING(s) LIST(...)` reads it back. The
+target must be a NONVARYING character variable (sema `checkStringTarget`;
+VARYING, arrays, and PAGE/SKIP-with-STRING are diagnosed). Rather than a second
+set of per-type output/input functions, the runtime keeps a selectable sink
+(`out_buf`/`out_cap`/`out_len`) and source (`in_buf`/`in_len`/`in_pos`): `put_raw`
+writes into `out_buf` when active and `next_char`/`get_token` read from `in_buf`
+when active, so the existing `pli_put_list_*`/`pli_get_list_*` functions work
+unchanged. Four new entries (`pli_string_put_open/close`, `pli_string_get_open/
+close` in `pli_rt_abi.def`) switch the mode; `put_close` blank-pads the unused
+tail of the target. `emitPut`/`emitGet` open the STRING before the item loop and
+close it after (target addressed like an assignment left-hand side).
+
+**Consequences.** `tests/core/string.pli` does a `PUT STRING` → `GET STRING`
+round-trip and verifies the values are recovered; `tests/core/bad_string.pli`
+rejects a non-character STRING target; `make test` and `make check` stay green.
+
+**Rejected.** Adding a parallel `pli_put_str_*`/`pli_get_str_*` per-type function
+set (duplicated the whole list-directed surface); routing through the FILE
+option (needs file-handle state, QR2.5); supporting `STRING` with `PAGE`/`SKIP`
+or a VARYING target (not meaningful for a fixed in-memory sink/source).
+
+## ADR-068 — OPEN/CLOSE and the FILE ( f ) stream option
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs file sources and sinks —
+the `fopen`/`fclose` analogue. `OPEN`/`CLOSE` (rules 100-103) and the `FILE ( f )`
+stream option (rule 105) were diagnosed unimplemented; the `FILE` attribute
+(rules 39,40) was not declared.
+
+**Decision.** A `FILE`-declared variable (`DECLARE f FILE;`) carries no runtime
+storage: its identity is a compile-time slot (0–15) assigned by sema. The runtime
+keeps a fixed `FILE*` table (`pli_files[16]`) plus two current-stream globals
+(`out_f`/`in_f`). `OPEN FILE(f) TITLE('name') [INPUT|OUTPUT|STREAM|PRINT]` calls
+`pli_file_open(slot, name, len, mode)` (`fopen` with "r"/"w"); `CLOSE FILE(f)`
+calls `pli_file_close(slot)`. `PUT FILE(f) LIST(...)`/`GET FILE(f) LIST(...)`
+call `pli_put_select`/`pli_get_select` before the item loop and the matching
+unselect after, so `put_raw`/`next_char` route through the file before
+falling back to SYSPRINT/SYSIN — reusing the same per-type `pli_put_list_*`/
+`pli_get_list_*` functions as the STRING sink/source (ADR-067). sema's
+`checkFileTarget` resolves `FILE ( f )` to the symbol and requires it to be a
+FILE variable; FILE and STRING are mutually exclusive per statement. OPEN without
+a `FILE ( f )` option is diagnosed (this stage names one file).
+
+**Consequences.** `tests/driver/file.sh` does a `PUT FILE` → `GET FILE` round-trip
+against a relative filename in the gitignored test output directory and verifies
+the values; `tests/core/bad_file.pli` rejects a numeric variable as a FILE target;
+`make test` and `make check` stay green. `IDENT`/`LINESIZE`/`PAGESIZE`,
+`RECORD`/`UPDATE`/`KEYED`/`ENVIRONMENT`, and record I/O stay M6.
+
+**Rejected.** Giving each FILE variable real runtime storage (it is only ever the
+compiler-resolved name of a slot here); a new `TK::File` (would force a case in
+every type switch for a value that never reaches arithmetic); `FILE` with `PAGE`/
+`SKIP` (not part of this stage's stream surface).
+
+## ADR-069 — edit-directed `PUT/GET EDIT` with common format items
+
+**Context.** CM3 (QR1.5) of the C-mirror sub-plan needs edit-directed transmission
+(rule 108) — the `printf`/`scanf` analogue. `PUT [SKIP] [PAGE] LIST` existed, but
+`EDIT`/`DATA` were diagnosed unimplemented; the format items (rules 44-55) had no
+engine.
+
+**Decision.** `PUT/GET EDIT ( datalist ) ( formatlist )` (the real-PL/I spelling;
+the TR grammar's outer-parenthesis reading is OCR-ambiguous) is served for the
+common items: the numeric `F(w,d)`, the character `A(w)`, and the control
+`X(w)`, `SKIP(n)`, `PAGE`, and `LINE(n)`. The AST statement carries a flat
+`formats` list (`FormatItem`/`HFormatItem`) alongside the existing `items`; each
+data item is paired in order with the next `A`/`F` format while the control items
+act between them without consuming data. `A`/`F` require a CHARACTER/numeric item
+(respectively); for GET every item must be an assignable reference. IRGen walks
+the format list with a data index, emitting `pli_put_edit_char`/`_fixed`/`_float`/
+`_x`/`_skip`/`_page`/`_line` for output and `pli_get_edit_num`/`_char`/`_x`/
+`_skip` for input; output routes through `put_raw` and input through `next_char`
+so the STRING (ADR-067) and FILE (ADR-068) sources/sinks are honoured. A FIXED
+value is rescaled from its stored `10^scale` representation to `d` fractional
+digits (rounding half away from zero) before right-justification in width `w`;
+GET `F(w,d)` parses the field to a double and the target conversion applies the
+scaling.
+
+**Consequences.** `tests/core/edit.pli` round-trips `F(w)`, `A(w)`, `X(w)`, and
+`F(w,d)` through a STRING buffer and verifies the spacing content; `bad_edit.pli`
+diagnoses the unimplemented `E` format and a GET data item that is not a
+reference. `make test` and `make check` stay green; emitted IR shows the paired
+`pli_put_edit_*`/`pli_get_edit_*` calls. `DATA`, `COPY`, `LINE` options,
+format iteration `(n) (item)`, `E`/`B`/`C`/`P`/`COLUMN`/`R` items, a standalone
+`FORMAT` statement, and a third `F` scale operand stay diagnosed (M5/D1).
+
+**Rejected.** Reusing the list-directed `pli_put_list_*`/`pli_get_list_*`
+functions (they separate and tokenize, not position in fixed-width fields); an
+`E` scientific item in this slice (FLOAT uses `F`); an implicit-decimal-point
+`F(w,d)` read (a field with an explicit `'.'` is parsed; the implied-decimal form
+is not).
+
+## ADR-070 — `E(w,d)` scientific format and structures by value
+
+**Context.** Two CM tails of the C-mirror sub-plan. CM3 left `E` (and `B`/`C`/
+`P`/`COLUMN`/`R`) diagnosed unimplemented by ADR-069; CM1 needed a whole
+structure usable as an expression value — a structure-valued function
+(`RETURNS` a structure), a structure argument passed by value, and a
+structure-returning call assigned to a same-shape structure (rule 127).
+
+**Decision (E-format).** `E(w,d)` is served for both output and input alongside
+the ADR-069 items. Output converts the item to FLOAT and emits
+`pli_put_edit_float_e`, which formats scientific notation with one leading digit,
+`d` fractional digits, and a signed two-digit exponent (e.g. `1.25E+01`),
+right-justified in width `w`. Input reuses `pli_get_edit_num` (its `strtod`
+already parses the exponent form) and converts to the target. `E` requires a
+numeric item (rule 53).
+
+**Decision (structures by value).** A structure is a first-class value carried by
+its address (`Val.ptr`). A structure-valued function is declared `RETURNS(NAME)`
+where `NAME` is an enclosing structure variable whose shape the function takes
+(a deep copy of its type, like a LIKE template); sema resolves it into `retTy`.
+Its ABI is a hidden result pointer: the function returns `void` and the caller
+allocates the result buffer, passes its address as the first argument, and a
+`RETURN(struct)` copies the value into it — avoiding a by-value struct return in
+the ABI. A whole-structure argument is passed BY VALUE: `argAddr` copies the
+source storage into a fresh buffer, so the callee's writes never reach the
+caller's structure (scalars and arrays stay by reference). Whole-structure
+assignment accepts any structure-valued RHS (variable, minor-structure member,
+or a structure-returning call).
+
+**Consequences.** `tests/core/e_format.pli` round-trips `E(w,d)` through a STRING
+buffer and checks the rendered content; `tests/core/struct_return.pli` exercises
+a structure-returning function, a structure-valued assignment, and a by-value
+argument. `make test` (149/149) and `make check` stay green; emitted IR shows the
+hidden result buffer and the by-value `memcpy`. `RETURNS` of a non-structure name,
+a dynamic-member structure, or a structure-returning function with `ENTRY`
+statements are diagnosed. `DATA`, `COPY`, `LINE` options, format iteration,
+`B`/`C`/`P`/`COLUMN`/`R`, a standalone `FORMAT`, and a third `F` scale operand
+stay diagnosed (M5/D1).
+
+**Rejected.** A true by-value struct return in the LLVM ABI (sret requires
+changing the caller/callee return convention for one type); struct-returning
+functions with `ENTRY` statements in this slice; inline structure definitions in
+`RETURNS` (a declared template name is the supported form).
+
+## ADR-071 — Recursive `%INCLUDE` before lexical analysis
+
+**Context.** QR1.6 and CM4 require the safe subset of the C28-6571-3 Chapter 9
+processor before replacement and conditional directives. A raw `%` previously
+reached the language lexer and failed as an invalid character. Included text
+must itself be scanned for includes, while apparent directives in PL/I comments
+and character strings must remain source text.
+
+**Decision.** A preprocessor stage runs before `Lexer`. It recognizes directives
+only outside comments and character strings and implements `%INCLUDE` with one
+member or path. Resolution starts in the containing file's directory, with a
+`.inc` fallback for extensionless member names; quoted paths are accepted for
+filesystem-oriented sources. Included text is recursively processed in place.
+An active canonical-path stack rejects include cycles. Missing members,
+malformed includes, and every other directive are diagnosed with a
+C28-6571-3 Chapter 9 citation. Separate handler stubs provide the dispatch points
+for declarations and replacement, activation, conditionals, loops, transfers,
+and compile-time procedures.
+
+**Consequences.** `tests/core/include.pli` exercises nested relative includes,
+quoted and unquoted members, and ignored directives inside a comment and string.
+`bad_include.pli` rejects a missing member, `bad_include_cycle.pli` rejects a
+cycle, and `bad_preprocessor.pli` proves that an unimplemented `%IF` is
+diagnosed by its stub rather than leaking into the lexer. The driver now feeds
+the expanded source to diagnostics and the lexer.
+
+**Rejected.** Treating include text as a lexer token stream (nested includes
+must be expanded first); silently passing unsupported directives through;
+implementing Chapter 9 replacement or control flow in this slice; include
+search-path flags and the implementation-defined multi-identifier data-set form
+before a concrete use case requires them.
+
+## ADR-072 — Scalar math built-ins lowered through pli_* runtime wrappers
+
+**Context.** The C-mirror sub-plan (CM5) maps the remaining QR2.7 Appendix 1
+functions to C `<math.h>`. `FLOOR`, `CEIL`, `SQRT`, `EXP`, `LOG`, `SIN`, `COS`,
+and `TAN` each take one numeric argument and yield a FLOAT value. The runtime
+already links `<math.h>` (used by `pli_round`, `pli_mod_dd`).
+
+**Decision.** Each built-in is typed in `Sema::typeBuiltin` (one numeric
+argument, `FLOAT(6)` result, non-numeric argument diagnosed with rule (123))
+and lowered in `IRGen::emitBuiltin` to a call of a thin `pli_*` wrapper in
+`runtime/pli_rt.c`, registered in `pli_rt_abi.def` so the emitted IR ABI cannot
+drift from the C ABI. `LOG` is the natural logarithm. The argument is converted
+to FLOAT before the call.
+
+**Consequences.** `tests/core/math.pli` checks each built-in against an expected
+value within a small tolerance (`ABS` delta) and prints `PASS math`;
+`bad_math.pli` proves a non-numeric argument is diagnosed with its rule number.
+Inspection of `-emit-llvm` shows `double @pli_*(double)` calls and declarations.
+
+**Rejected.** Emitting `llvm.*` math intrinsics directly or calling `math.h`
+symbols from IRGen: both would bypass the ABI-def single source of truth and
+add the only non-`pli_*` external surface. Complex component/conjugate and the
+remaining Appendix 1 families stay for later CM5 slices.
+
+
+## ADR-073 — Complex values as an `{double,double}` pair, expression-only
+
+**Context.** The C-mirror sub-plan (CM5) starts QR2.2 complex work with the
+component/conjugate operations `COMPLEX`, `REAL`, `IMAG`, and `CONJG`
+(Appendix 1). These need a complex value to flow through expressions, but full
+complex declarations, arithmetic, conversions, and I/O are out of this slice's
+scope.
+
+**Decision.** A new `TK::Complex` type kind represents a complex value as an
+LLVM `{double,double}` struct (real, imaginary), mapped by `llvmTy`. A
+materialised complex value is carried in a new `Val::cpx` field rather than the
+scalar `reg`. `COMPLEX(a,b)` builds the pair with `insertvalue`; `REAL(z)` and
+`IMAG(z)` extract a part with `extractvalue` as a FLOAT; `CONJG(z)` negates the
+imaginary part (`fneg`) and rebuilds the pair. Constant operands fold away
+through LLVM's optimizer. `TK::Complex` is not added to `isNumeric` and is not
+wired into storage, conversion, assignment, arithmetic, or list-directed I/O
+(PUT of a COMPLEX value is diagnosed, mirroring POINTER).
+
+**Consequences.** `tests/core/complex.pli` checks each built-in within a small
+tolerance and prints `PASS complex`; `bad_complex.pli` proves a non-complex
+argument to `REAL` is diagnosed with rule (123). `-emit-llvm` on a runtime
+(variable) operand shows the `insertvalue`/`extractvalue`/`fneg` sequence; the
+constant case folds to a single `double`. A COMPLEX value cannot yet be stored
+in a variable or written out, which stays for the QR2.2 complex type work.
+
+**Rejected.** A full `COMPLEX` data attribute with storage/assignment this
+slice (too large, and not the sub-plan's "start with" item); reusing `TK::Struct`
+to fake a complex (semantically wrong and would invite struct-path confusion);
+adding `TK::Complex` to `isNumeric` (complex is not a real arithmetic type for
+the existing `+ - * /` operators).
+
+## ADR-074 — COMPLEX as a storable data type with real↔complex conversion
+
+**Context.** The C-mirror sub-plan (CM5) completes the complex type begun in
+ADR-073: `COMPLEX` should be usable as a declared variable, not just a transient
+expression value. TR 25.084 rules (14),(15) list `COMPLEX` among the data
+attributes, and the pair must be assignable and read back.
+
+**Decision.** `COMPLEX` is a data attribute accepted by the declaration parser
+(`AttrBag.complex`, conflicting with any other data attribute under rule (15))
+that yields `Type::complexTy()`. IRGen wires the `{double,double}` pair through
+storage and assignment: `loadSym` loads it into `Val::cpx`, `storeScalarTo`/
+`storeTo` store it, and `convert` implements the real↔complex rules (complex→
+complex passes through, complex→real takes the real part, real→complex sets a
+zero imaginary part). `Sema::checkAssignable` allows these same conversion pairs
+so assignment type-checks match the codegen.
+
+**Consequences.** `tests/core/complex_var.pli` declares complex variables,
+assigns a `COMPLEX(a,b)` value, assigns a real (imag part 0), assigns complex to
+a real variable (real part), and reads back with `REAL`/`IMAG`/`CONJG`;
+`bad_complex_var.pli` proves COMPLEX combined with another data attribute is
+rejected under rule (15). `-emit-llvm` shows `store { double, double }`/
+`load { double, double }` and `insertvalue`/`extractvalue` sequences. Complex
+arithmetic (`+ - * /`), imaginary constants, and complex list-directed I/O stay
+unimplemented (PUT of a COMPLEX value is diagnosed).
+
+**Rejected.** Adding `TK::Complex` to `isNumeric()` (would make the existing
+arithmetic operators treat a complex pair as a single real scalar and
+miscompile); implementing complex arithmetic in this slice (a separate, larger
+effort, out of the "declare, assign, convert" scope).
+
+## ADR-075 — Mixed void/function ENTRYs: one common impl type, no fall-through
 
 Context. ADR-026 shares one implementation function across a procedure's
 primary entry and its ENTRY statements, returning one type: every
@@ -1435,7 +2044,7 @@ helper, cross-unit link) reuses the existing `cinterop` pattern. Truly mixed
 valued types stay diagnosed; USES/SETS/REDUCIBLE entry attributes stay
 out of scope.
 
-## ADR-057 — ON ERROR: handler-id stack, frameless units, ONCODE 1/0
+## ADR-076 — ON ERROR: handler-id stack, frameless units, ONCODE 1/0
 
 Context. ADR-009 specifies the M4 condition mechanism (runtime handler stack,
 units compiled to functions taking the establishing frame, compile-time
@@ -1463,7 +2072,7 @@ inside and out, re-establishment after REVERT, and the SYSTEM/REVERT no-op
 path. Frame-carrying units, computational and I/O conditions, FINISH, and
 non-local GO TO unwinding stay diagnosed for later slices.
 
-## ADR-058 — %REPLACE: token-level substitution as a marked extension
+## ADR-077 — %REPLACE: token-level substitution as a marked extension
 
 Context. TR 25.084 defines no preprocessor: the only comment form is
 `/* ... */` (rules (149)-(151)), and `%` is not a source character.
@@ -1479,7 +2088,7 @@ directives, and spliced tokens are not re-expanded, so self-reference
 terminates. Strings and comments never surface as words, so their contents
 are unaffected. Only `%REPLACE` is served; any other `%` directive and any
 malformed directive (missing name, missing BY, empty replacement) is
-diagnosed, citing ADR-058 instead of a TR rule number. The directive's own
+diagnosed, citing ADR-077 instead of a TR rule number. The directive's own
 `;` terminates the directive and is not part of the replacement text.
 
 Consequences. `replace.pli` covers single-token (array bound, value) and

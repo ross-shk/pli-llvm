@@ -1,0 +1,10 @@
+ /* A structure member used as an array built-in argument must itself be an
+    array (rule (123)); a scalar member (s.a) or a subscripted member is
+    diagnosed. */
+ bad_struct_dyn_len: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31),
+           2 v(3) fixed bin(31);
+    declare x fixed bin(31);
+    x = lbound(s.a);
+ end bad_struct_dyn_len;

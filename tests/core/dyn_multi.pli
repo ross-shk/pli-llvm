@@ -1,0 +1,48 @@
+  /* Multi-axis dynamic array (rules (12),(13),(126)): the first axis has a
+     runtime extent (the parameter n) while later axes stay fixed, so the array
+     is a flat row-major buffer of n * (later extents) elements. Subscripting is
+     bounds-checked on every axis and offset by the runtime first-axis extent;
+     LBOUND/HBOUND report the first axis, DIM the total element count. */
+  dyn_multi_test: procedure options(main);
+     declare fails fixed bin(31);
+     fails = 0;
+     call check(3);
+     call check(1);
+     call check(0);
+     if fails = 0 then put skip list('PASS dyn_multi');
+     else put skip list('FAIL dyn_multi: fails =', fails);
+
+     check: procedure(n);
+        declare n fixed bin(31);
+        declare a(n,4) fixed bin(31);
+        declare i fixed bin(31);
+        declare j fixed bin(31);
+        /* first-axis bounds are runtime; DIM is the total element count */
+        if lbound(a) ^= 1 then do;
+           fails = fails + 1;
+           put skip list('FAIL lbound', lbound(a));
+        end;
+        if hbound(a) ^= n then do;
+           fails = fails + 1;
+           put skip list('FAIL hbound', hbound(a));
+        end;
+        if dim(a) ^= n * 4 then do;
+           fails = fails + 1;
+           put skip list('FAIL dim', dim(a));
+        end;
+        /* fill and read back in row-major order */
+        do i = 1 to n;
+           do j = 1 to 4;
+              a(i,j) = i * 100 + j;
+           end;
+        end;
+        do i = 1 to n;
+           do j = 1 to 4;
+              if a(i,j) ^= i * 100 + j then do;
+                 fails = fails + 1;
+                 put skip list('FAIL a(i,j) at', i, j);
+              end;
+           end;
+        end;
+     end check;
+  end dyn_multi_test;

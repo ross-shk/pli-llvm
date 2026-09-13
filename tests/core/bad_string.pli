@@ -1,0 +1,6 @@
+ /* The STRING stream option (rule (105)) needs a NONVARYING CHARACTER variable
+    as its source/sink; a numeric variable is diagnosed rather than misused. */
+ bad_string: procedure options(main);
+    declare n fixed bin(31);
+    put string(n) list(1);
+ end bad_string;

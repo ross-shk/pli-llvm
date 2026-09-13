@@ -18,6 +18,8 @@ struct Symbol {
   bool isStatic = false;         // STATIC storage: an LLVM global
   bool implicit = false;         // created by the implicit-declaration rule
   bool isEntry = false;          // external C entry (DECLARE ... ENTRY): no body
+  bool fileAttr = false;         // FILE variable (rules 39,40): a named file
+  int fileSlot = -1;             // runtime slot index for a FILE variable (100-103)
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
@@ -30,6 +32,9 @@ struct Symbol {
   Expr* initCall = nullptr;      // INITIAL(CALL f(...)) call expr (rule 27), lowered to HIR
   HExpr* initCallH = nullptr;    // the lowered INITIAL CALL expression, for codegen
   Symbol* definedBase = nullptr; // DEFINED on this variable's storage (rule 24); null = none
+  // BASED (rule 25): the POINTER variable that addresses this based structure's
+  // storage; a based symbol has no own storage, its address is the pointer value.
+  Symbol* basedBase = nullptr;
   // For a DEFINED base that is a subscripted reference (rule 126):
   //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)
   //   definedIsubAxis >= 0  -> this X axis holds the iSUB dummy (rule 134)
@@ -45,6 +50,18 @@ struct Symbol {
   // lowered to HIR during AST->HIR lowering; null for a constant array. Used by
   // irgen to size and bounds-check the dynamic array.
   HExpr* dynUb = nullptr;
+  // The lowered runtime lower-bound expression of a dynamic array (rule (13)),
+  // the mirror of `dynUb`; null when the lower bound is constant.
+  HExpr* dynLb = nullptr;
+  // A dynamic (runtime-extent) array that is a structure member (rule 13), with
+  // its field path (the indices memberAddr walks) and its lowered bound exprs.
+  // Lowered from DeclItem::dynMembers during AST->HIR lowering.
+  struct DynMemberH {
+    std::vector<unsigned> path;
+    HExpr* ub = nullptr;
+    HExpr* lb = nullptr;
+  };
+  std::vector<DynMemberH> dynMembers;
 };
 
 struct Scope {
@@ -72,6 +89,10 @@ private:
   Symbol* implicitDeclare(Scope* sc, const std::string& n, SourceLoc l, bool isStatic);
 
   void processProc(Proc* p);
+  // Resolve a structure-valued function's RETURNS name (rule 127): deep-copy the
+  // referenced structure variable's type into p->retTy. Runs after all
+  // declarations are collected, so the template is visible in the proc's scope.
+  void resolveStructReturn(Proc* p);
   // Bottom-up: fill each Proc::env with the enclosing variables its subtree
   // accesses, so codegen can thread a static link (M1, removes ADR-010 dev).
   void computeEnv(Proc* p);
@@ -89,6 +110,17 @@ private:
   // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
   // was already type-checked by checkStmt, so symbol references are resolved.
   void checkOnUnit(Stmt* u, Proc* p);
+  // Validate the STRING ( reference ) stream option (rule 105): the target must
+  // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only.
+  void checkStringTarget(Stmt* s, Scope* sc, Proc* p);
+  // Resolve and validate the FILE ( f ) stream option (rule 105) and the
+  // OPEN/CLOSE FILE ( f ): `f` must be a declared FILE variable. Resolves
+  // s->fileIdent to s->fileSym.
+  void checkFileTarget(Stmt* s, Scope* sc);
+  // Validate edit-directed transmission (rule (108)): type the format widths,
+  // and check that the data items pair one-to-one with the data (A/F) formats,
+  // and for GET that each item is an assignable reference of a matching type.
+  void checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet);
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);
@@ -121,6 +153,19 @@ private:
                        std::vector<Expr*>& out);
   // Total element count of an array type: the product of (ub - lb + 1) (rule 12).
   long long elementCount(const Type& ty);
+  // Number of scalar leaf values a structure's INITIAL list must supply (rule
+  // (26)): sum over members — a scalar counts 1, a nested structure recurses,
+  // an array member counts its element count (an array of structures counts the
+  // leaves of each element).
+  long long structureLeafCount(const Type& ty);
+  // Flatten an INITIAL itemlist into raw (unfolded) values, expanding iteration
+  // factors and '*' but not folding, so a heterogeneous structure can fold each
+  // value against its own member type later.
+  void flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc, std::vector<Expr*>& out);
+  // Fold raw INITIAL values against a structure's scalar leaves in order into
+  // `out` (an index into `vals` advanced as leaves are consumed).
+  void foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t& idx, SourceLoc loc,
+                      std::vector<Expr*>& out);
 
   Diags& d_;
   Program* prog_ = nullptr;
@@ -130,11 +175,13 @@ private:
   Scope* rootScope_ = nullptr; // program scope: all external procedure names
   std::vector<Symbol*> storage_;
   std::vector<Symbol*> entries_;                  // external C entries, in declaration order
+  int nextFileSlot_ = 0;                          // next FILE variable slot index (100-103)
   std::set<std::string> procLabels_;              // GO TO targets in the current proc (rule 77)
   Stmt* curEntry_ = nullptr;                      // the ENTRY segment currently being checked
                                                   // (rule 56): enables RETURN(value) in its body
   std::set<std::string> irNames_;                 // irNames in use, to disambiguate shadowing
   std::unordered_map<Stmt*, Scope*> beginScopes_; // BEGIN block -> its scope
+  bool declsCollected_ = false;                   // true once the pass-0 collectDecls pre-pass ran
 };
 
 // Arithmetic result type per the conversion rules (M0 approximation).

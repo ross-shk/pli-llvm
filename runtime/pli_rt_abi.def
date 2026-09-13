@@ -22,6 +22,18 @@ PLI_FN(pli_put_list_fixed_scaled, VOID, (I64, I64))   /* scaled FIXED (ADR-006) 
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
 
+/* Edit-directed output (rules (108),(44)-(54)): F(w,d), A(w), and the control
+ * X/SKIP/PAGE/LINE items. The fixed form takes the stored value, its decimal
+ * scale (value*10^scale), the field width, and the fractional-digit count. */
+PLI_FN(pli_put_edit_char, VOID, (CPTR, I64, I64))
+PLI_FN(pli_put_edit_fixed, VOID, (I64, I64, I64, I64))
+PLI_FN(pli_put_edit_float, VOID, (DOUBLE, I64, I64))
+PLI_FN(pli_put_edit_float_e, VOID, (DOUBLE, I64, I64))
+PLI_FN(pli_put_edit_x, VOID, (I64))
+PLI_FN(pli_put_edit_skip, VOID, (I64))
+PLI_FN(pli_put_edit_page, VOID, (VOID))
+PLI_FN(pli_put_edit_line, VOID, (I64))
+
 PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
 PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))
 PLI_FN(pli_concat, VOID, (PTR, CPTR, I64, CPTR, I64))
@@ -31,6 +43,27 @@ PLI_FN(pli_index, I64, (CPTR, I64, CPTR, I64))        /* INDEX */
 PLI_FN(pli_mod_ll, I64, (I64, I64))                   /* MOD */
 PLI_FN(pli_mod_dd, DOUBLE, (DOUBLE, DOUBLE))
 PLI_FN(pli_round, DOUBLE, (DOUBLE, I64))              /* ROUND */
+PLI_FN(pli_floor, DOUBLE, (DOUBLE))                   /* scalar math (QR2.7) */
+PLI_FN(pli_ceil, DOUBLE, (DOUBLE))
+PLI_FN(pli_sqrt, DOUBLE, (DOUBLE))
+PLI_FN(pli_exp, DOUBLE, (DOUBLE))
+PLI_FN(pli_log, DOUBLE, (DOUBLE))
+PLI_FN(pli_sin, DOUBLE, (DOUBLE))
+PLI_FN(pli_cos, DOUBLE, (DOUBLE))
+PLI_FN(pli_tan, DOUBLE, (DOUBLE))
+PLI_FN(pli_log2, DOUBLE, (DOUBLE))
+PLI_FN(pli_log10, DOUBLE, (DOUBLE))
+PLI_FN(pli_atan, DOUBLE, (DOUBLE))
+PLI_FN(pli_sinh, DOUBLE, (DOUBLE))
+PLI_FN(pli_cosh, DOUBLE, (DOUBLE))
+PLI_FN(pli_tanh, DOUBLE, (DOUBLE))
+PLI_FN(pli_atanh, DOUBLE, (DOUBLE))
+PLI_FN(pli_erf, DOUBLE, (DOUBLE))
+PLI_FN(pli_erfc, DOUBLE, (DOUBLE))
+PLI_FN(pli_sind, DOUBLE, (DOUBLE))
+PLI_FN(pli_cosd, DOUBLE, (DOUBLE))
+PLI_FN(pli_tand, DOUBLE, (DOUBLE))
+PLI_FN(pli_atand, DOUBLE, (DOUBLE))
 PLI_FN(pli_repeat, VOID, (PTR, I64, CPTR, I64, I64))  /* REPEAT */
 PLI_FN(pli_verify, I64, (CPTR, I64, CPTR, I64))       /* VERIFY */
 PLI_FN(pli_translate, VOID, (PTR, I64, CPTR, I64, CPTR, I64, CPTR, I64)) /* TRANSLATE */
@@ -50,3 +83,31 @@ PLI_FN(pli_on_depth_error, I64, (VOID)) /* block-entry save */
 PLI_FN(pli_on_reset_error, VOID, (I64)) /* block/procedure-exit restore */
 PLI_FN(pli_oncode, I32, (VOID))         /* ONCODE() */
 PLI_FN(pli_set_oncode, VOID, (I32))
+
+PLI_FN(pli_alloc, PTR, (I64))                         /* ALLOCATE (87) */
+PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */
+
+PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
+PLI_FN(pli_get_list_float, DOUBLE, (VOID))
+PLI_FN(pli_get_list_char, VOID, (PTR, I64))
+PLI_FN(pli_get_list_bit, I8, (VOID))
+
+/* Edit-directed input (rules (108),(44)-(54)): F(w,d) is parsed to a double
+ * (the caller converts to the target's type), A(w) reads a character field,
+ * and X/SKIP advance the input position. */
+PLI_FN(pli_get_edit_num, DOUBLE, (I64))
+PLI_FN(pli_get_edit_char, VOID, (PTR, I64, I64))
+PLI_FN(pli_get_edit_x, VOID, (I64))
+PLI_FN(pli_get_edit_skip, VOID, (I64))
+
+PLI_FN(pli_string_put_open, VOID, (PTR, I64))         /* STRING output (105) */
+PLI_FN(pli_string_put_close, VOID, (PTR, I64))
+PLI_FN(pli_string_get_open, VOID, (PTR, I64))         /* STRING input (105) */
+PLI_FN(pli_string_get_close, VOID, (VOID))
+
+PLI_FN(pli_file_open, VOID, (I64, CPTR, I64, I64))    /* OPEN (100-103): slot, name, mode */
+PLI_FN(pli_file_close, VOID, (I64))
+PLI_FN(pli_put_select, VOID, (I64))                   /* FILE output routing (105) */
+PLI_FN(pli_put_unselect, VOID, (VOID))
+PLI_FN(pli_get_select, VOID, (I64))                   /* FILE input routing (105) */
+PLI_FN(pli_get_unselect, VOID, (VOID))

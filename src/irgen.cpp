@@ -13,6 +13,35 @@
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+// 10^k as a compile-time integer (k >= 0); used to rescale FIXED DECIMAL
+// values whose stored integer is scaled by 10^q (ADR-006).
+static long long pliPow10(int k) {
+  long long p = 1;
+  for (int i = 0; i < k; ++i)
+    p *= 10;
+  return p;
+}
+
+// Compile-time scale reduction of a FIXED DECIMAL stored integer v by 10^k,
+// rounding half away from zero (matches the runtime rescale in convert).
+static long long pliRescaleDown(long long v, int k) {
+  long long p = pliPow10(k);
+  long long sign = v < 0 ? -1 : 1;
+  return (v + pliPow10(k - 1) * 5 * sign) / p;
+}
+
+// Numeric value of a constant INITIAL expression (rule 26). A DECIMAL literal
+// holds its value scaled by 10^q, so divide back to the true value.
+static double iniNumeric(const Expr* e) {
+  if (!e)
+    return 0;
+  if (e->kind == Expr::FltLit)
+    return e->fval;
+  if (e->kind == Expr::DecLit)
+    return (double)e->ival / (double)pliPow10(e->decScale);
+  return (double)e->ival;
+}
+
 llvm::Type* IRGen::llvmTy(const Type& t) {
   // An array is a [N x elemTy] aggregate (rules (12),(13)); handled here so a
   // struct member that is itself an array (2 A(10) ...) lays out correctly.
@@ -35,11 +64,23 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   }
   case TK::Struct: {
     // A level-numbered structure (rule 11): an LLVM literal struct of its
-    // members, recursively laid out in declaration order.
+    // members, recursively laid out in declaration order. A dynamic (runtime
+    // extent, rule 13) array member is a bare runtime-sized buffer, so its
+    // field is a pointer to the element type (allocated and stored at entry).
     std::vector<llvm::Type*> mts;
     for (const auto& m : t.members)
-      mts.push_back(llvmTy(m->ty));
+      if (m->ty.isArray() && m->ty.isDynamic())
+        mts.push_back(llvm::PointerType::get(ctx_, 0));
+      else
+        mts.push_back(llvmTy(m->ty));
     return llvm::StructType::get(ctx_, mts);
+  }
+  case TK::Pointer:
+    return b_.getPtrTy();
+  case TK::Complex: {
+    // A complex value (QR2.2/CM5): a pair of FLOAT real/imaginary parts.
+    llvm::Type* d = b_.getDoubleTy();
+    return llvm::StructType::get(ctx_, {d, d});
   }
   case TK::Void:
     return b_.getVoidTy();
@@ -219,6 +260,14 @@ std::string IRGen::run(HProgram& prog) {
   for (auto& p : prog.procs) {
     if (p->isFunction && p->retTy.isChar())
       d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
+    if (p->isFunction && p->retTy.isStruct()) {
+      for (auto& st : p->body)
+        if (st && st->kind == HStmt::Entry)
+          d_.error(st->loc,
+                   "a structure-returning procedure with ENTRY statements is not implemented in "
+                   "this stage",
+                   "(56)");
+    }
   }
   if (prog.mainProc && !prog.mainProc->params.empty())
     d_.error(prog.mainProc->loc,
@@ -301,17 +350,21 @@ llvm::Constant* IRGen::scalarInitConstant(const Type& t, const Expr* ini) {
   case TK::FixedBin:
   case TK::FixedDec: {
     long long v = 0;
-    if (ini)
-      v = ini->kind == Expr::FltLit   ? (long long)ini->fval
-          : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
-                                      : ini->ival;
+    if (ini) {
+      if (ini->kind == Expr::DecLit) {
+        v = ini->ival;
+        int dq = t.scale - ini->decScale; // rescale to the target type's scale
+        v = dq > 0 ? v * pliPow10(dq) : dq < 0 ? pliRescaleDown(v, -dq) : v;
+      } else {
+        v = ini->kind == Expr::FltLit   ? (long long)ini->fval
+            : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
+                                        : ini->ival;
+      }
+    }
     return llvm::ConstantInt::get(llvmTy(t), v, true);
   }
   case TK::Float: {
-    double v = 0;
-    if (ini)
-      v = ini->kind == Expr::FltLit ? ini->fval : (double)ini->ival;
-    return llvm::ConstantFP::get(b_.getDoubleTy(), v);
+    return llvm::ConstantFP::get(b_.getDoubleTy(), iniNumeric(ini));
   }
   case TK::Bit: {
     int v = 0;
@@ -346,15 +399,19 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
   v.ty = t;
   switch (t.k) {
   case TK::Float:
-    v.reg = flt(e->kind == Expr::FltLit ? e->fval : (double)e->ival);
+    v.reg = flt(iniNumeric(e));
     break;
   case TK::Bit:
     v.reg = b_.getInt1(e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
                                                : (e->ival != 0 || e->fval != 0));
     break;
   default: { // Fixed
-    v.reg = llvm::ConstantInt::get(llvmTy(t),
-                                   e->kind == Expr::FltLit ? (long long)e->fval : e->ival, true);
+    long long iv = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
+    if (e->kind == Expr::DecLit) {
+      int dq = t.scale - e->decScale; // rescale to the target type's scale
+      iv = dq > 0 ? iv * pliPow10(dq) : dq < 0 ? pliRescaleDown(iv, -dq) : iv;
+    }
+    v.reg = llvm::ConstantInt::get(llvmTy(t), iv, true);
     break;
   }
   }
@@ -394,6 +451,10 @@ void IRGen::emitGlobals() {
 }
 
 llvm::Value* IRGen::addressOf(Symbol* sym) {
+  // A BASED variable (rule 25) has no storage of its own: its address is the
+  // value held in the based POINTER variable, loaded at each reference.
+  if (sym->basedBase)
+    return b_.CreateLoad(b_.getPtrTy(), addressOf(sym->basedBase), "basep");
   // A DEFINED variable (rule 24) has no storage of its own. A whole-base or
   // iSUB overlay resolves to the base's address; a scalar element overlay
   // (all-constant subscripts, no iSUB) is a stable GEP into the base.
@@ -444,11 +505,55 @@ void IRGen::allocaLocals(HProc* p) {
       continue;
     const Type& el = s->ty.elementType();
     const Dim& d = s->ty.dims[0];
-    llvm::Value* ub = toI64(emitExpr(s->dynUb));
-    llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, i64(d.lb), "e1"), i64(1), "ext");
+    // The upper bound is a runtime expression, or a constant when only the lower
+    // bound is dynamic; a dynamic lower bound is evaluated at entry too.
+    llvm::Value* ub = s->dynUb ? toI64(emitExpr(s->dynUb)) : i64(d.ub);
+    llvm::Value* lb = s->dynLb ? toI64(emitExpr(s->dynLb)) : i64(d.lb);
+    llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+    // A dynamic array may have fixed later axes (only the first axis is dynamic):
+    // the buffer holds every element of every axis, so scale by their product.
+    long long rest = 1;
+    for (size_t k = 1; k < s->ty.dims.size(); ++k)
+      rest *= (s->ty.dims[k].ub - s->ty.dims[k].lb + 1);
+    if (rest != 1)
+      extent = b_.CreateMul(extent, i64(rest), "extall");
+    // An INITIAL itemlist (rule 26) is stored at block entry; a list longer than
+    // the runtime extent cannot be diagnosed at compile time, so size the buffer
+    // to hold it too (the logical extent used for bounds checks is unchanged).
+    long long ninit = (long long)s->initElems.size();
+    if (ninit > 0)
+      extent =
+          b_.CreateSelect(b_.CreateICmpUGT(extent, i64(ninit), "maxc"), extent, i64(ninit), "max");
     llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".dyn");
     symAddr_[s] = buf;
-    dynUb_[s] = ub;
+    if (s->dynUb)
+      dynUb_[s] = ub;
+    if (s->dynLb)
+      dynLb_[s] = lb;
+  }
+  // Pass 3: dynamic array structure members (rule 13). Each member is a bare
+  // runtime-sized element buffer; evaluate its bounds at entry, allocate it, and
+  // store the buffer pointer into the struct field (the struct itself was
+  // allocated in pass 1). Record the bounds for subscript addressing.
+  for (Symbol* s : p->localSyms) {
+    if (s->kind != Symbol::Var || s->dynMembers.empty())
+      continue;
+    for (const auto& mh : s->dynMembers) {
+      const Type& arr = memberType(s, mh.path);
+      const Type& el = arr.elementType();
+      const Dim& d = arr.dims[0];
+      llvm::Value* ub = mh.ub ? toI64(emitExpr(mh.ub)) : i64(d.ub);
+      llvm::Value* lb = mh.lb ? toI64(emitExpr(mh.lb)) : i64(d.lb);
+      llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "me1"), i64(1), "mext");
+      long long rest = 1;
+      for (size_t k = 1; k < arr.dims.size(); ++k)
+        rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+      if (rest != 1)
+        extent = b_.CreateMul(extent, i64(rest), "mextall");
+      llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".mdyn");
+      b_.CreateStore(buf, memberAddr(s, mh.path, s->loc));
+      memberDyn_[MemberDyn{s, mh.path}] = MemberBounds{ub, lb};
+    }
   }
 }
 
@@ -489,6 +594,18 @@ void IRGen::emitInitials(HProc* p) {
   for (HStmt* st : decls) {
     for (auto& item : st->decls) {
       Symbol* sym = item.sym;
+      // INITIAL on a dynamic array (rule 26): the element buffer is a bare
+      // runtime-sized alloca (allocaLocals pass 2), pre-sized to hold the whole
+      // itemlist, so store each value into its slot straight-line.
+      if (sym && sym->ty.isArray() && !sym->initElems.empty() && sym->ty.isDynamic()) {
+        const Type& et = sym->ty.elementType();
+        int i = 0;
+        for (Expr* e : sym->initElems) {
+          llvm::Value* p = b_.CreateGEP(llvmTy(et), symAddr_[sym], {i64(i++)}, "init.el");
+          storeScalarTo(p, et, initValue(et, e));
+        }
+        continue;
+      }
       // INITIAL on an AUTOMATIC array (rule 26): store each element constant
       // into its slot; the array is a [N x elemTy] alloca.
       if (sym && sym->ty.isArray() && !sym->initElems.empty()) {
@@ -501,6 +618,14 @@ void IRGen::emitInitials(HProc* p) {
           llvm::Value* p = b_.CreateGEP(aty, base, {i32(0), idx}, "init.el");
           storeScalarTo(p, et, initValue(et, e));
         }
+        continue;
+      }
+      // INITIAL on an AUTOMATIC structure (rule (26)): store each leaf value
+      // into its member slot, recursing through nested structures and array
+      // members (emitStructInitValues).
+      if (sym && sym->ty.isStruct() && !sym->initElems.empty()) {
+        size_t idx = 0;
+        emitStructInitValues(addressOf(sym), sym->ty, sym->initElems, idx, item.loc);
         continue;
       }
       // INITIAL(CALL f(...)) (rule 27): evaluate the call at block entry and
@@ -517,8 +642,7 @@ void IRGen::emitInitials(HProc* p) {
       v.ty = item.sym->ty;
       switch (item.sym->ty.k) {
       case TK::Float: {
-        double d = e->kind == Expr::FltLit ? e->fval : (double)e->ival;
-        v.reg = flt(d);
+        v.reg = flt(iniNumeric(e));
         break;
       }
       case TK::Bit: {
@@ -537,6 +661,10 @@ void IRGen::emitInitials(HProc* p) {
       }
       default: { // Fixed
         long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
+        if (e->kind == Expr::DecLit) {
+          int dq = item.sym->ty.scale - e->decScale; // rescale to the target scale
+          val = dq > 0 ? val * pliPow10(dq) : dq < 0 ? pliRescaleDown(val, -dq) : val;
+        }
         v.reg = llvm::ConstantInt::get(llvmTy(item.sym->ty), val, true);
         break;
       }
@@ -570,11 +698,16 @@ void IRGen::collectGotoBlocks(HStmt* s) {
 // emitPlainProc); multi-entry procedures get the shared impl (filled by
 // emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
 void IRGen::declareProc(HProc* p) {
+  bool sret = p->isFunction && p->retTy.isStruct();
+  // A structure-valued function (rule 127) returns through a hidden result
+  // pointer and returns void: the caller allocates the storage and passes its
+  // address as the first argument.
   // The shared implementation returns the single result type shared by every
   // function-valued entry point (rule 56): the procedure's own RETURNS type
   // when it is a function, else the common RETURNS type of its function ENTRYs
   // (a non-function primary entry may coexist with function segments).
-  llvm::Type* implRet = p->commonRetTy.isVoid() ? b_.getVoidTy() : llvmTy(p->commonRetTy);
+  llvm::Type* implRet =
+      (sret || p->commonRetTy.isVoid()) ? b_.getVoidTy() : llvmTy(p->commonRetTy);
   std::vector<HStmt*> entries;
   for (auto& st : p->body)
     if (st && st->kind == HStmt::Entry)
@@ -586,6 +719,8 @@ void IRGen::declareProc(HProc* p) {
 
   if (entries.empty()) {
     std::vector<llvm::Type*> pt;
+    if (sret)
+      pt.push_back(b_.getPtrTy()); // hidden result pointer (rule 127)
     for (size_t i = 0; i < p->paramSyms.size(); ++i)
       pt.push_back(b_.getPtrTy());
     for (Symbol* s : p->paramSyms)
@@ -695,12 +830,15 @@ void IRGen::emitProc(HProc* p) {
   curProc_ = p;
   labelBlocks_.clear();
   symAddr_.clear();
+  structRetPtr_ = nullptr;
   // Re-seed globals: static storage resolves the same in every procedure.
   for (Symbol* s : sema_.storage())
     if (s->isStatic && s->kind == Symbol::Var)
       symAddr_[s] = mod_.getGlobalVariable(s->irName.substr(1), true);
 
-  llvm::Type* retLLVM = p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy();
+  llvm::Type* retLLVM = (p->isFunction && p->retTy.isStruct())
+                            ? b_.getVoidTy()
+                            : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
 
   // rule (56): ENTRY statements declare alternate entry points.
   std::vector<HStmt*> entries;
@@ -732,6 +870,8 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
   // dope slot; the trailing args are the static links (rule (8)).
   size_t ai = 0;
+  if (p->isFunction && p->retTy.isStruct())
+    structRetPtr_ = fn->getArg(ai++); // hidden result pointer (rule 127)
   for (Symbol* s : p->paramSyms)
     symAddr_[s] = fn->getArg(ai++);
   for (Symbol* s : p->paramSyms)
@@ -761,7 +901,9 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
-    if (p->isFunction)
+    if (p->isFunction && p->retTy.isStruct())
+      b_.CreateRetVoid(); // structure-valued: result written to the hidden pointer
+    else if (p->isFunction)
       b_.CreateRet(llvm::Constant::getNullValue(retLLVM)); // fall-off: return a zero value
     else
       b_.CreateRetVoid();
@@ -1041,8 +1183,23 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Put:
     emitPut(s);
     break;
+  case HStmt::Get:
+    emitGet(s);
+    break;
   case HStmt::CallS:
     emitCall(s);
+    break;
+  case HStmt::Allocate:
+    emitAllocate(s);
+    break;
+  case HStmt::Free:
+    emitFree(s);
+    break;
+  case HStmt::Open:
+    emitOpen(s);
+    break;
+  case HStmt::Close:
+    emitClose(s);
     break;
   case HStmt::Return: {
     // Rule (91): procedure exit restores the entry ERROR depth, popping any
@@ -1050,7 +1207,16 @@ void IRGen::emitStmt(HStmt* s) {
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
-    if (!curRetTy_.isVoid()) {
+    if (curProc_->isFunction && curProc_->retTy.isStruct()) {
+      // Structure-valued function (rule 127): copy the returned structure's
+      // storage into the caller's result buffer, then return void.
+      Val v = emitExpr(s->value.get());
+      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curProc_->retTy)));
+      b_.CreateMemCpy(structRetPtr_, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+      b_.CreateRetVoid();
+    } else if (!curRetTy_.isVoid()) {
+      // Valued return: the impl's common entry type (rule (56)) may be valued
+      // even when the primary entry is not a function.
       Val v = emitExpr(s->value.get());
       Val rv = convert(v, curRetTy_, s->loc);
       llvm::Value* reg = rv.reg;
@@ -1102,8 +1268,11 @@ void IRGen::emitAssign(HStmt* s) {
                      "(12)");
             return;
           }
-          llvm::Value* addr =
-              arrayElementAddr(arr, memberAddr(t->sym, t->memberPath, s->loc), t->args, s->loc);
+          llvm::Value *ub = nullptr, *lb = nullptr;
+          llvm::Value* base = arr.isDynamic()
+                                  ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                                  : memberAddr(t->sym, t->memberPath, s->loc);
+          llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
           storeScalarTo(addr, el, convert(v, el, s->loc));
           return;
         }
@@ -1118,7 +1287,10 @@ void IRGen::emitAssign(HStmt* s) {
                      "(11)");
             return;
           }
-          llvm::Value* addr = memberAddr(t->sym, t->memberPath, s->loc);
+          // A locator-qualified target P->X.FIELD stores off the loaded pointer.
+          llvm::Value* addr =
+              t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                        : memberAddr(t->sym, t->memberPath, s->loc);
           storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
           return;
         }
@@ -1207,8 +1379,10 @@ void IRGen::emitAssign(HStmt* s) {
         d_.error(s->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
         return;
       }
-      llvm::Value* addr =
-          arrayElementAddr(arr, memberAddr(t->sym, t->memberPath, s->loc), t->args, s->loc);
+      llvm::Value *ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                                          : memberAddr(t->sym, t->memberPath, s->loc);
+      llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
       storeScalarTo(addr, el, convert(v, el, s->loc));
       return;
     }
@@ -1226,21 +1400,21 @@ void IRGen::emitAssign(HStmt* s) {
   // storage into the target. Both sides are whole-structure references (a
   // top-level variable or a qualified member); sema checked identical shape.
   if (s->target->kind == HExpr::VarRef && s->target->sym && s->target->ty.isStruct()) {
+    // Whole-structure assignment (rule 127): copy the source structure's storage
+    // into the target. The RHS may be any structure-valued expression (a whole
+    // variable, a minor-structure member, or a structure-returning call).
     HExpr* t = s->target.get();
-    HExpr* v = s->value.get();
-    if (v->kind != HExpr::VarRef || !v->sym || !v->ty.isStruct()) {
-      d_.error(s->loc,
-               "right-hand side of a whole-structure assignment must be a structure reference",
+    Val v = emitExpr(s->value.get());
+    if (!v.ty.isStruct() || !v.ptr) {
+      d_.error(s->loc, "right-hand side of a whole-structure assignment must be a structure value",
                "(127)");
       return;
     }
     llvm::Value* dst =
         t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
-    llvm::Value* src =
-        v->memberPath.empty() ? addressOf(v->sym) : memberAddr(v->sym, v->memberPath, s->loc);
     llvm::Type* sty = llvmTy(t->ty);
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(sty));
-    b_.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), sz);
+    b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
     return;
   }
   // Qualified member assignment: S.A = e (rule 124).
@@ -1256,15 +1430,48 @@ void IRGen::emitAssign(HStmt* s) {
     storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
     return;
   }
-  // Whole-structure assignment (rule 127) is not served in this stage.
-  if (s->target->kind == HExpr::VarRef && s->target->sym && s->target->ty.isStruct()) {
-    d_.error(s->loc, "whole-structure assignment is not implemented in this stage", "(127)");
-    return;
-  }
   if (s->target->kind != HExpr::VarRef || !s->target->sym)
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
+}
+
+// ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
+// store its address in the pointer target.
+void IRGen::emitAllocate(HStmt* s) {
+  for (size_t i = 0; i < s->allocBase.size(); ++i) {
+    Symbol* bsym = s->allocBase[i]->sym;
+    // The LLVM alloc size of the based structure (bytes) sizes the heap block.
+    llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
+    llvm::Value* p = b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
+    HExpr* set = s->allocSet[i].get();
+    storeTo(set->sym, Val{set->ty, p}, set->loc);
+  }
+}
+
+// FREE (rule 90): release the heap storage addressed by a based pointer — the
+// explicit locator when given, else the based variable's own BASED pointer.
+void IRGen::emitFree(HStmt* s) {
+  for (auto& f : s->freeBase) {
+    Symbol* bsym = f->sym;
+    llvm::Value* addr = f->locPtr ? emitExpr(f->locPtr.get()).reg : addressOf(bsym);
+    b_.CreateCall(runtimeFn("pli_free"), {addr});
+  }
+}
+
+// OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
+// The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 = OUTPUT.
+void IRGen::emitOpen(HStmt* s) {
+  Symbol* f = s->fileSym;
+  llvm::Value* name = globalString(s->openTitle);
+  b_.CreateCall(
+      runtimeFn("pli_file_open"),
+      {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(s->openInput ? 0 : 1)});
+}
+
+// CLOSE (rules 102,103): close the FILE variable's slot.
+void IRGen::emitClose(HStmt* s) {
+  b_.CreateCall(runtimeFn("pli_file_close"), {i64(s->fileSym->fileSlot)});
 }
 
 void IRGen::emitIf(HStmt* s) {
@@ -1407,36 +1614,289 @@ void IRGen::emitPut(HStmt* s) {
     }
     b_.CreateCall(runtimeFn("pli_put_skip"), {n});
   }
-  for (auto& item : s->items) {
-    Val v = emitExpr(item.get());
-    switch (v.ty.k) {
-    case TK::Char:
-      b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
-      break;
-    case TK::Float:
-      b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
-      break;
-    case TK::Bit: {
-      llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-      b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
+  // STRING (rule 105) sink: route the list-directed output into the character
+  // variable instead of SYSPRINT.
+  llvm::Value *sdata = nullptr, *slen = nullptr;
+  if (s->stringTarget) {
+    HExpr* st = s->stringTarget.get();
+    sdata =
+        st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+    slen = i64(st->ty.len);
+    b_.CreateCall(runtimeFn("pli_string_put_open"), {sdata, slen});
+  }
+  // FILE ( f ) (rule 105): route the list-directed output through the named
+  // file's stream instead of SYSPRINT.
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_put_select"), {i64(s->fileSym->fileSlot)});
+  if (s->edit) {
+    emitPutEditItems(s);
+  } else {
+    for (auto& item : s->items) {
+      Val v = emitExpr(item.get());
+      switch (v.ty.k) {
+      case TK::Char:
+        b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
+        break;
+      case TK::Float:
+        b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
+        break;
+      case TK::Bit: {
+        llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+        b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
+        break;
+      }
+      case TK::FixedBin:
+      case TK::FixedDec:
+        b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+        break;
+      case TK::Void:
+        break;
+      case TK::Struct:
+        // Whole-structure values are diagnosed in emitExpr (rule 127); a
+        // structure never reaches list-directed output as a value.
+        break;
+      case TK::Pointer:
+        d_.error(s->loc, "a POINTER value cannot be written with PUT LIST in this stage", "(110)");
+        break;
+      case TK::Complex:
+        d_.error(s->loc, "a COMPLEX value cannot be written with PUT LIST in this stage", "(110)");
+        break;
+      }
+    }
+  }
+  if (s->stringTarget)
+    b_.CreateCall(runtimeFn("pli_string_put_close"), {sdata, slen});
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_put_unselect"), {});
+}
+
+// GET (rules 104-109): list-directed input reads each data-list reference from
+// SYSIN and stores the value, like an assignment target.
+void IRGen::emitGet(HStmt* s) {
+  // STRING (rule 105) source: route the list-directed input from the character
+  // variable instead of SYSIN.
+  llvm::Value *sdata = nullptr, *slen = nullptr;
+  if (s->stringTarget) {
+    HExpr* st = s->stringTarget.get();
+    sdata =
+        st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+    slen = i64(st->ty.len);
+    b_.CreateCall(runtimeFn("pli_string_get_open"), {sdata, slen});
+  }
+  // FILE ( f ) (rule 105): route the list-directed input through the named
+  // file's stream instead of SYSIN.
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
+  if (s->edit) {
+    emitGetEditItems(s);
+  } else {
+    for (auto& item : s->items) {
+      HExpr* t = item.get();
+      const Type& ty = t->ty;
+      Val v;
+      switch (ty.k) {
+      case TK::FixedBin:
+      case TK::FixedDec:
+        v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
+        v.ty = Type::fixedBin(63, 0);
+        break;
+      case TK::Float:
+        v.reg = b_.CreateCall(runtimeFn("pli_get_list_float"), {});
+        v.ty = Type::flt(6);
+        break;
+      case TK::Bit: {
+        llvm::Value* b = b_.CreateCall(runtimeFn("pli_get_list_bit"), {});
+        v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "gbit");
+        v.ty = Type::bit();
+        break;
+      }
+      case TK::Char: {
+        // Read into a reusable entry buffer, then assign into the target.
+        llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
+        b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
+        v.ptr = buf;
+        v.len = i64(ty.len);
+        v.ty = ty;
+        break;
+      }
+      default:
+        d_.error(item->loc, "GET LIST of this type is not implemented in this stage", "(110)");
+        continue;
+      }
+      storeGetTarget(t, v, s->loc);
+    }
+  }
+  if (s->stringTarget)
+    b_.CreateCall(runtimeFn("pli_string_get_close"), {});
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_get_unselect"), {});
+}
+
+// Store an input value into a data-list reference (rules (109),(110)): the same
+// target-addressing as an assignment's left-hand side.
+void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
+  const Type& ty = t->ty;
+  if (t->kind == HExpr::Subscript && t->sym) {
+    if (!t->memberPath.empty()) {
+      const Type& arr = memberType(t->sym, t->memberPath);
+      llvm::Value *ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
+                                          : memberAddr(t->sym, t->memberPath, loc);
+      llvm::Value* addr = arrayElementAddr(arr, base, t->args, loc, ub, lb);
+      storeScalarTo(addr, ty, convert(v, ty, loc));
+      return;
+    }
+    if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
+      llvm::Value* addr = definedSubElementAddr(t->sym, t->args, loc);
+      storeScalarTo(addr, ty, convert(v, ty, loc));
+      return;
+    }
+    storeArrayElement(t->sym, t->args, v, loc);
+    return;
+  }
+  if (t->kind == HExpr::VarRef && t->sym) {
+    if (!t->memberPath.empty()) {
+      llvm::Value* addr =
+          t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                    : memberAddr(t->sym, t->memberPath, loc);
+      storeScalarTo(addr, ty, convert(v, ty, loc));
+      return;
+    }
+    storeTo(t->sym, v, loc);
+    return;
+  }
+  d_.error(loc, "GET LIST target is not assignable in this stage", "(110)");
+}
+
+// Edit-directed output (rule (108)): walk the format list, pairing each A/F
+// data format with the next data item and emitting the control (X/SKIP/PAGE/
+// LINE) items in order.
+void IRGen::emitPutEditItems(HStmt* s) {
+  llvm::Value* defW = i64(0);
+  llvm::Value* defD = i64(0);
+  size_t di = 0;
+  for (auto& f : s->formats) {
+    switch (f.kind) {
+    case HFormatItem::X: {
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      b_.CreateCall(runtimeFn("pli_put_edit_x"), {w});
       break;
     }
-    case TK::FixedBin:
-    case TK::FixedDec:
-      b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+    case HFormatItem::Skip: {
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_put_edit_skip"), {n});
       break;
-    case TK::Void:
+    }
+    case HFormatItem::Page:
+      b_.CreateCall(runtimeFn("pli_put_edit_page"), {});
       break;
-    case TK::Struct:
-      // Whole-structure values are diagnosed in emitExpr (rule 127); a
-      // structure never reaches list-directed output as a value.
+    case HFormatItem::Line: {
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_put_edit_line"), {n});
       break;
+    }
+    case HFormatItem::A: {
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = emitExpr(item);
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      b_.CreateCall(runtimeFn("pli_put_edit_char"), {v.ptr, v.len, w});
+      break;
+    }
+    case HFormatItem::F: {
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = emitExpr(item);
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+      if (v.ty.k == TK::Float) {
+        b_.CreateCall(runtimeFn("pli_put_edit_float"), {v.reg, w, d});
+      } else {
+        llvm::Value* scale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
+        b_.CreateCall(runtimeFn("pli_put_edit_fixed"), {toI64(v), scale, w, d});
+      }
+      break;
+    }
+    case HFormatItem::E: {
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = convert(emitExpr(item), Type::flt(6), item->loc);
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+      b_.CreateCall(runtimeFn("pli_put_edit_float_e"), {v.reg, w, d});
+      break;
+    }
+    }
+  }
+}
+
+// Edit-directed input (rule (108)): pair each A/F data format with the next
+// data item and emit the control (X/SKIP) items in order.
+void IRGen::emitGetEditItems(HStmt* s) {
+  llvm::Value* defW = i64(0);
+  size_t di = 0;
+  for (auto& f : s->formats) {
+    switch (f.kind) {
+    case HFormatItem::X: {
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      b_.CreateCall(runtimeFn("pli_get_edit_x"), {w});
+      break;
+    }
+    case HFormatItem::Skip: {
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_get_edit_skip"), {n});
+      break;
+    }
+    case HFormatItem::Page:
+    case HFormatItem::Line:
+      // Line control is not meaningful on input in this stage; ignored.
+      break;
+    case HFormatItem::A: {
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      const Type& ty = t->ty;
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gech");
+      b_.CreateCall(runtimeFn("pli_get_edit_char"), {buf, i64(ty.len), w});
+      Val v;
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeGetTarget(t, v, s->loc);
+      break;
+    }
+    case HFormatItem::F:
+    case HFormatItem::E: {
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      Val v;
+      v.reg = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w});
+      v.ty = Type::flt(6);
+      storeGetTarget(t, v, s->loc);
+      break;
+    }
     }
   }
 }
 
 // Address of one call argument for a by-reference parameter (rule 4).
 llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
+  // A whole-structure argument is passed BY VALUE (rule 127): the source's
+  // storage is copied into a fresh buffer, so the callee's writes do not reach
+  // the caller's structure. Scalars and arrays remain by reference.
+  if (pty.isStruct()) {
+    llvm::Value* dst = entryAlloca(llvmTy(pty), "sv");
+    Val av = emitExpr(a);
+    llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(pty)));
+    b_.CreateMemCpy(dst, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), sz);
+    return dst;
+  }
   bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
                 a->sym->ty.k == pty.k && a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
                 a->sym->ty.varying == pty.varying;
@@ -1474,11 +1934,19 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
   const Dim& d = arr.dims[0];
   if (d.adj)
     return nullptr; // forwarding a `*` array: not served here
-  if (d.dyn) {
-    llvm::Value* ub = dynUb_.count(a->sym)
-                          ? dynUb_[a->sym]
-                          : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub));
-    return b_.CreateAdd(b_.CreateSub(ub, i64(d.lb), "e1"), i64(1), "ext");
+  if (d.dyn || d.lbDyn) {
+    llvm::Value* ub = d.dyn ? (dynUb_.count(a->sym)
+                                   ? dynUb_[a->sym]
+                                   : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub)))
+                            : i64(d.ub);
+    llvm::Value* lb = d.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d.lb)) : i64(d.lb);
+    llvm::Value* ext = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+    long long rest = 1;
+    for (size_t k = 1; k < arr.dims.size(); ++k)
+      rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+    if (rest != 1)
+      ext = b_.CreateMul(ext, i64(rest), "extall");
+    return ext;
   }
   return i64(d.ub - d.lb + 1);
 }
@@ -1523,6 +1991,12 @@ void IRGen::emitCall(HStmt* s) {
       en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
 
   std::vector<llvm::Value*> args;
+  // A structure-returning callee (rule 127) takes a hidden result buffer as its
+  // first argument; the CALL statement discards the returned value.
+  Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
+                : (callee ? callee->retTy : Type::voidTy());
+  if (rty.isStruct())
+    args.push_back(entryAlloca(llvmTy(rty), "sret"));
   for (size_t i = 0; i < s->args.size(); ++i) {
     HExpr* a = s->args[i].get();
     Type pty;
@@ -1574,19 +2048,29 @@ long long IRGen::arrayExtent(const Type& arr) {
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
 llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
                                      const std::vector<HExprP>& idxs, SourceLoc loc,
-                                     llvm::Value* dynUb) {
+                                     llvm::Value* dynUb, llvm::Value* dynLb) {
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
 
-  // Dynamic 1-D array (rule (13)): a runtime upper bound and a bare element
-  // buffer, so the flat offset is just (i - lb) and the GEP is on the element
-  // pointer. Only single-axis dynamic arrays are served in this stage.
+  // Dynamic array (rule (13)): the first axis has a runtime upper and/or lower
+  // bound (later axes are fixed in this stage) and the storage is a bare element
+  // buffer, so the flat offset is row-major over the runtime first-axis stride
+  // and the GEP is on the element pointer.
   if (arr.isDynamic()) {
-    const Dim& d = arr.dims[0];
-    llvm::Value* i = toI64(emitExpr(idxs[0].get()));
-    llvm::Value* ub = d.dyn ? dynUb : i64(d.ub);
-    llvm::Value* oob =
-        b_.CreateOr(b_.CreateICmpSLT(i, i64(d.lb), "lo"), b_.CreateICmpSGT(i, ub, "hi"), "oob");
+    llvm::Value* flat = i64(0);
+    llvm::Value* oob = b_.getInt1(false);
+    long long stride = 1;
+    for (size_t k = nAxes; k-- > 0;) {
+      const Dim& dk = arr.dims[k];
+      llvm::Value* i = toI64(emitExpr(idxs[k].get()));
+      llvm::Value* lb = k == 0 && dk.lbDyn ? dynLb : i64(dk.lb);
+      llvm::Value* ub = k == 0 && dk.dyn ? dynUb : i64(dk.ub);
+      oob = b_.CreateOr(
+          oob, b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi")), "oob");
+      llvm::Value* off = b_.CreateSub(i, lb, "off");
+      flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
+      stride *= (dk.ub - dk.lb + 1); // later axes are fixed; only axis 0 is runtime
+    }
     std::string id = std::to_string(n_++);
     llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
@@ -1595,8 +2079,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
     b_.CreateUnreachable();
     startBlock(okL);
-    llvm::Value* off = b_.CreateSub(i, i64(d.lb), "off");
-    return b_.CreateInBoundsGEP(llvmTy(el), base, {off}, "aelem");
+    return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "aelem");
   }
 
   // Emit every index and OR the per-axis out-of-bounds flags into one check,
@@ -1659,6 +2142,21 @@ llvm::Value* IRGen::elementMemberAddr(Symbol* base, const std::vector<unsigned>&
   return addr;
 }
 
+// Address of a member of a locator-qualified reference P->X.FIELD (rule 124):
+// GEP through the recorded field indices from a caller-supplied base address
+// (the loaded pointer value), against the based structure type (mirrors
+// memberAddr, which starts from the symbol's own base instead).
+llvm::Value* IRGen::locatorMemberAddr(Symbol* base, const std::vector<unsigned>& path,
+                                      llvm::Value* baseAddr) {
+  llvm::Value* addr = baseAddr;
+  const Type* cur = &base->ty;
+  for (unsigned f : path) {
+    addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "lmem");
+    cur = &cur->members[f]->ty;
+  }
+  return addr;
+}
+
 // The resolved type of a qualified member S.A.B (rule 124): walk the recorded
 // field indices (as memberAddr does, without emitting GEPs) to recover the leaf
 // member's type — for a subscripted member array S.A(i), this is the array type.
@@ -1667,6 +2165,19 @@ const Type& IRGen::memberType(Symbol* base, const std::vector<unsigned>& path) {
   for (unsigned f : path)
     cur = &cur->members[f]->ty;
   return *cur;
+}
+
+// Buffer pointer and live bounds of a dynamic-array structure member (rule 13):
+// the struct field holds a pointer to a bare runtime-sized element buffer
+// (allocated at entry), so load it; the bounds were recorded in memberDyn_ at
+// entry too. Returns the element-buffer pointer and sets ub/lb for
+// arrayElementAddr's runtime bounds check.
+llvm::Value* IRGen::dynamicMemberBase(Symbol* base, const std::vector<unsigned>& path,
+                                      SourceLoc loc, llvm::Value*& ub, llvm::Value*& lb) {
+  auto it = memberDyn_.find(MemberDyn{base, path});
+  ub = it != memberDyn_.end() ? it->second.ub : nullptr;
+  lb = it != memberDyn_.end() ? it->second.lb : nullptr;
+  return b_.CreateLoad(b_.getPtrTy(), memberAddr(base, path, loc), "mdynp");
 }
 
 // BY NAME assignment (rule 86): copy each member of `dst` (at dstBase) from the
@@ -1704,6 +2215,36 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
   }
 }
 
+// Store a structure's INITIAL element list (rule (26)) into its storage, walking
+// members in declaration order. A nested structure recurses; an array member is
+// filled element by element (an array of structures recurses per element); a
+// scalar leaf stores the next value, converted to its type.
+void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::vector<Expr*>& vals,
+                                 size_t& idx, SourceLoc loc) {
+  for (size_t i = 0; i < ty.members.size(); ++i) {
+    const Member& m = *ty.members[i];
+    llvm::Value* mem = b_.CreateStructGEP(llvmTy(ty), base, (unsigned)i, "init.mem");
+    if (m.ty.isStruct()) {
+      emitStructInitValues(mem, m.ty, vals, idx, loc);
+    } else if (m.ty.isArray()) {
+      const Type& el = m.ty.elementType();
+      llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(m.ty));
+      for (long long k = 0; k < arrayExtent(m.ty); ++k) {
+        llvm::Value* ep = b_.CreateInBoundsGEP(arrTy, mem, {i64(0), i64(k)}, "init.el");
+        if (el.isStruct())
+          emitStructInitValues(ep, el, vals, idx, loc);
+        else
+          storeScalarTo(ep, el, initValue(el, vals[idx++]));
+      }
+    } else {
+      if (m.ty.isChar())
+        d_.error(loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+      else
+        storeScalarTo(mem, m.ty, initValue(m.ty, vals[idx++]));
+    }
+  }
+}
+
 Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   Val v;
   v.ty = ty;
@@ -1722,7 +2263,10 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     return v;
   }
   llvm::Value* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
-  if (ty.isBit()) {
+  if (ty.isComplex()) {
+    // A complex value (QR2.2/CM5) is the {double,double} struct itself.
+    v.cpx = r;
+  } else if (ty.isBit()) {
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
   } else {
     v.reg = r;
@@ -1731,6 +2275,11 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
 }
 
 void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v) {
+  if (ty.isComplex()) {
+    // A complex value (QR2.2/CM5) is stored as the {double,double} struct.
+    b_.CreateStore(v.cpx, addr);
+    return;
+  }
   llvm::Value* val = v.reg;
   if (ty.isBit()) {
     val = b_.CreateZExt(val, b_.getInt8Ty(), "z8");
@@ -1777,7 +2326,8 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
     return v;
   }
   llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
-                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr);
+                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
   if (el.isBit())
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
@@ -1796,7 +2346,8 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
     return;
   }
   llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
-                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr);
+                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   Val cv = convert(src, el, loc);
   storeScalarTo(addr, el, cv);
 }
@@ -1979,6 +2530,33 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     return out;
   }
 
+  // A pointer value is passed through unchanged between POINTER targets
+  // (rule 15): pointer assignment copies the address, no numeric conversion.
+  if (v.ty.isPointer() && dst.isPointer())
+    return v;
+
+  // Complex conversions (QR2.2/CM5): a complex value is an {double,double}
+  // pair. complex -> complex passes through; complex -> real takes the real
+  // part and converts it as a real; real -> complex uses the value as the real
+  // part with a zero imaginary part.
+  if (v.ty.isComplex() && dst.isComplex())
+    return v;
+  if (v.ty.isComplex() && !dst.isComplex()) {
+    Val re;
+    re.ty = Type::flt(6);
+    re.reg = b_.CreateExtractValue(v.cpx, 0, "cpx.re");
+    return convert(re, dst, loc);
+  }
+  if (!v.ty.isComplex() && dst.isComplex()) {
+    Val re = convert(v, Type::flt(6), loc);
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, re.reg, 0, "cpx.re");
+    s = b_.CreateInsertValue(s, flt(0.0), 1, "cpx.im");
+    out.cpx = s;
+    return out;
+  }
+
   const bool srcFloat = v.ty.k == TK::Float;
   const bool dstFloat = dst.k == TK::Float;
   const bool srcBit = v.ty.isBit();
@@ -2000,22 +2578,58 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (srcFloat && dstFloat)
     return v;
   if (srcFloat && !dstFloat) { // FLOAT -> FIXED truncates toward zero
-    out.reg = b_.CreateFPToSI(v.reg, llvmTy(dst), "cvt");
+    // A FIXED DECIMAL target holds the value scaled by 10^q (ADR-006), so
+    // scale the float up first.
+    llvm::Value* f = v.reg;
+    if (dst.k == TK::FixedDec && dst.scale > 0)
+      f = b_.CreateFMul(f, flt((double)pliPow10(dst.scale)), "fsc");
+    out.reg = b_.CreateFPToSI(f, llvmTy(dst), "cvt");
     return out;
   }
   if (!srcFloat && dstFloat) {
-    out.reg = b_.CreateSIToFP(v.reg, b_.getDoubleTy(), "cvt");
+    // A FIXED DECIMAL source holds the value scaled by 10^q; divide back to
+    // the true value before converting to float.
+    llvm::Value* f = b_.CreateSIToFP(v.reg, b_.getDoubleTy(), "cvt");
+    if (v.ty.k == TK::FixedDec && v.ty.scale > 0)
+      f = b_.CreateFDiv(f, flt((double)pliPow10(v.ty.scale)), "fds");
+    out.reg = f;
     return out;
   }
-  // FIXED -> FIXED: adjust width
-  if (v.ty.intBits() == dst.intBits()) {
-    out.reg = v.reg;
+  // FIXED -> FIXED. A 10^q rescale applies only when a FIXED DECIMAL value
+  // (whose stored integer is scaled by 10^q) is involved (ADR-006); FIXED
+  // BINARY scale is 2-based and stays untouched by this feature. Rescale to
+  // a DECIMAL target by 10^(dst.scale - src.scale); a scaled DECIMAL source
+  // converting to a BINARY target reduces to its integer part.
+  if (v.ty.isFixed() && dst.isFixed()) {
+    bool rescale = dst.k == TK::FixedDec && v.ty.scale != dst.scale;
+    if (!rescale && (v.ty.k == TK::FixedDec && v.ty.scale > 0 && dst.k != TK::FixedDec))
+      rescale = true; // DECIMAL source -> BINARY target: drop the fraction
+    if (!rescale) {
+      if (v.ty.intBits() == dst.intBits()) {
+        out.reg = v.reg;
+        return out;
+      }
+      if (v.ty.intBits() < dst.intBits())
+        out.reg = b_.CreateSExt(v.reg, llvmTy(dst), "cvt");
+      else
+        out.reg = b_.CreateTrunc(v.reg, llvmTy(dst), "cvt");
+      return out;
+    }
+    llvm::Value* r = b_.CreateSExt(v.reg, b_.getInt64Ty(), "res");
+    int dq = dst.k == TK::FixedDec ? dst.scale - v.ty.scale : -v.ty.scale;
+    if (dq > 0) {
+      r = b_.CreateMul(r, i64(pliPow10(dq)), "res");
+    } else {
+      int k = -dq;
+      llvm::Value* div = i64(pliPow10(k));
+      // round half away from zero: r + 5*10^(k-1)*sign
+      llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i64(0), "sgn"), i64(-1), i64(1));
+      llvm::Value* adj = b_.CreateMul(i64(pliPow10(k - 1) * 5), sign, "adj");
+      r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+    }
+    out.reg = (unsigned)dst.intBits() == 64 ? r : b_.CreateTrunc(r, llvmTy(dst), "cvt");
     return out;
   }
-  if (v.ty.intBits() < dst.intBits())
-    out.reg = b_.CreateSExt(v.reg, llvmTy(dst), "cvt");
-  else
-    out.reg = b_.CreateTrunc(v.reg, llvmTy(dst), "cvt");
   return out;
 }
 
@@ -2059,6 +2673,10 @@ Val IRGen::emitExpr(HExpr* e) {
   case HExpr::Convert:
     return convert(emitExpr(e->a.get()), e->convTo, e->loc);
   case HExpr::IntLit:
+    v.ty = e->ty;
+    v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
+    return v;
+  case HExpr::DecLit:
     v.ty = e->ty;
     v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
     return v;
@@ -2114,8 +2732,8 @@ Val IRGen::emitExpr(HExpr* e) {
         return v;
       }
       // A subscripted member array S.A(i) (rules 124,126): the member array
-      // lives at memberAddr(...) (a [N x elemTy] field), so GEP into it as a
-      // normal array and load the leaf element.
+      // lives at memberAddr(...) (a [N x elemTy] field, or a buffer pointer for
+      // a dynamic member), so GEP into it as a normal array and load the leaf.
       const Type& arr = memberType(e->sym, e->memberPath);
       const Type& el = e->ty;
       if (el.isChar()) {
@@ -2124,8 +2742,10 @@ Val IRGen::emitExpr(HExpr* e) {
         v.reg = i64(0);
         return v;
       }
-      llvm::Value* addr =
-          arrayElementAddr(arr, memberAddr(e->sym, e->memberPath, e->loc), e->args, e->loc);
+      llvm::Value *ub = nullptr, *lb = nullptr;
+      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
+                                          : memberAddr(e->sym, e->memberPath, e->loc);
+      llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc, ub, lb);
       llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
       v.ty = el;
       v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
@@ -2157,17 +2777,25 @@ Val IRGen::emitExpr(HExpr* e) {
         v.reg = i64(0);
         return v;
       }
-      llvm::Value* addr = memberAddr(e->sym, e->memberPath, e->loc);
+      // A locator-qualified member P->X.FIELD (rule 124) GEPs off the loaded
+      // pointer value; otherwise off the based/symbol member address.
+      llvm::Value* addr =
+          e->locPtr ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
+                    : memberAddr(e->sym, e->memberPath, e->loc);
       v.ty = leaf;
+      if (leaf.isStruct()) {
+        // A whole minor structure member (rule 127): its value is its address.
+        v.ptr = addr;
+        return v;
+      }
       llvm::Value* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
       v.reg = leaf.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
     if (e->ty.isStruct()) {
-      // A whole structure as a value (rule 127) is not served in this stage.
-      d_.error(e->loc, "a whole structure cannot be used as a value in this stage", "(127)");
+      // A whole structure as a value (rule 127): carry its address.
       v.ty = e->ty;
-      v.reg = i64(0);
+      v.ptr = e->locPtr ? emitExpr(e->locPtr.get()).reg : addressOf(e->sym);
       return v;
     }
     return loadSym(e->sym, e->sym->ty);
@@ -2228,6 +2856,13 @@ Val IRGen::emitExpr(HExpr* e) {
       return v;
     } // diagnosed in emitProc
     std::vector<llvm::Value*> args;
+    llvm::Value* sretPtr = nullptr;
+    if (rty.isStruct()) {
+      // Structure-valued function (rule 127): the caller allocates the result
+      // buffer and passes its address as the hidden first argument.
+      sretPtr = entryAlloca(llvmTy(rty), "sret");
+      args.push_back(sretPtr);
+    }
     for (size_t i = 0; i < e->args.size(); ++i) {
       HExpr* a = e->args[i].get();
       Type pty;
@@ -2249,9 +2884,14 @@ Val IRGen::emitExpr(HExpr* e) {
         args.push_back(ext);
       }
     appendStaticLinks(callee, args);
-    llvm::CallInst* call = b_.CreateCall(calleeFn, args, "fres");
+    // A structure-returning callee returns void (the result is written to the
+    // hidden buffer), so the call cannot carry a value name.
+    llvm::CallInst* call =
+        rty.isStruct() ? b_.CreateCall(calleeFn, args) : b_.CreateCall(calleeFn, args, "fres");
     v.ty = rty;
-    if (rty.isBit()) {
+    if (rty.isStruct()) {
+      v.ptr = sretPtr; // the result lives in the caller's buffer
+    } else if (rty.isBit()) {
       v.reg = b_.CreateTrunc(call, b_.getInt1Ty(), "fb");
     } else {
       v.reg = call;
@@ -2347,13 +2987,34 @@ Val IRGen::emitExpr(HExpr* e) {
     return v;
   }
 
+  if (isCmp && a.ty.isPointer() && b.ty.isPointer()) {
+    // POINTER equality/inequality (rule (117)): compare the two addresses
+    // directly; ordered comparisons were rejected in sema.
+    llvm::CmpInst::Predicate pred = op == Tok::Eq ? llvm::CmpInst::ICMP_EQ : llvm::CmpInst::ICMP_NE;
+    v.ty = Type::bit(1);
+    v.reg = b_.CreateICmp(pred, a.reg, b.reg, "pcmp");
+    return v;
+  }
+
   Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
                                         b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
                       : e->ty;
   if (!isCmp && (op == Tok::Slash || op == Tok::Power))
     common = Type::flt(e->ty.prec);
-  Val av = convert(a, common, e->loc);
-  Val bv = convert(b, common, e->loc);
+  Val av, bv;
+  if (op == Tok::Star && common.isFixed()) {
+    // A product's scale is the sum of the operand scales (ADR-006); multiply
+    // the raw scaled integers without first rescaling either operand.
+    Type wa = common;
+    wa.scale = a.ty.isFixed() ? a.ty.scale : 0;
+    Type wb = common;
+    wb.scale = b.ty.isFixed() ? b.ty.scale : 0;
+    av = convert(a, wa, e->loc);
+    bv = convert(b, wb, e->loc);
+  } else {
+    av = convert(a, common, e->loc);
+    bv = convert(b, common, e->loc);
+  }
   const bool flt = common.k == TK::Float;
 
   if (isCmp) {
@@ -2461,6 +3122,28 @@ Val IRGen::emitExpr(HExpr* e) {
 bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // Names matching none of these are user function procedures.
   Val v;
+  if (e->name == "NULL") {
+    // NULL (rule 123, Appendix 1): the null POINTER value.
+    v.ty = e->ty;
+    v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+    result = v;
+    return true;
+  }
+  if (e->name == "ADDR") {
+    // ADDR (rule 123, Appendix 1): the address of a variable as a POINTER.
+    HExpr* a = e->args[0].get();
+    if (a->kind != HExpr::VarRef || !a->sym) {
+      d_.error(a->loc, "ADDR requires an unsubscripted variable in this stage", "(123)");
+      v.ty = e->ty;
+      v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+      result = v;
+      return true;
+    }
+    v.ty = e->ty;
+    v.reg = addressOf(a->sym);
+    result = v;
+    return true;
+  }
   if (e->name == "SUBSTR") {
     Val s = emitExpr(e->args[0].get());
     Val start = emitExpr(e->args[1].get());
@@ -2499,6 +3182,71 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
+  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
+  // ATANH, ERF, ERFC, and the degree trig variants SIND, COSD, TAND, ATAND.
+  // The argument is converted to FLOAT and the matching pli_* runtime wrapper
+  // is called.
+  if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
+      e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
+      e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
+      e->name == "COSH" || e->name == "TANH" || e->name == "ATANH" || e->name == "ERF" ||
+      e->name == "ERFC" || e->name == "SIND" || e->name == "COSD" || e->name == "TAND" ||
+      e->name == "ATAND") {
+    Val x = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
+    static const char* const kMathFn[] = {
+        "pli_floor", "pli_ceil", "pli_sqrt",  "pli_exp",  "pli_log",  "pli_sin",  "pli_cos",
+        "pli_tan",   "pli_log2", "pli_log10", "pli_atan", "pli_sinh", "pli_cosh", "pli_tanh",
+        "pli_atanh", "pli_erf",  "pli_erfc",  "pli_sind", "pli_cosd", "pli_tand", "pli_atand"};
+    static const char* const kMathName[] = {
+        "FLOOR", "CEIL", "SQRT", "EXP",   "LOG", "SIN",  "COS",  "TAN",  "LOG2", "LOG10", "ATAN",
+        "SINH",  "COSH", "TANH", "ATANH", "ERF", "ERFC", "SIND", "COSD", "TAND", "ATAND"};
+    int ix = 0;
+    for (int i = 0; i < 21; ++i)
+      if (e->name == kMathName[i])
+        ix = i;
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
+    result = v;
+    return true;
+  }
+  // Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1). A complex
+  // value is an {double,double} struct held in Val::cpx. COMPLEX builds one
+  // from two FLOAT parts; REAL/IMAG extract a part as a FLOAT; CONJG negates
+  // the imaginary part.
+  if (e->name == "COMPLEX") {
+    Val re = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
+    Val im = convert(emitExpr(e->args[1].get()), Type::flt(6), e->loc);
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, re.reg, 0, "cpx.re");
+    s = b_.CreateInsertValue(s, im.reg, 1, "cpx.im");
+    v.ty = e->ty;
+    v.cpx = s;
+    result = v;
+    return true;
+  }
+  if (e->name == "REAL" || e->name == "IMAG") {
+    Val z = emitExpr(e->args[0].get());
+    v.ty = e->ty;
+    v.reg = b_.CreateExtractValue(z.cpx, e->name == "REAL" ? 0 : 1, "part");
+    result = v;
+    return true;
+  }
+  if (e->name == "CONJG") {
+    Val z = emitExpr(e->args[0].get());
+    llvm::Value* re = b_.CreateExtractValue(z.cpx, 0, "cgr");
+    llvm::Value* im = b_.CreateExtractValue(z.cpx, 1, "cgi");
+    llvm::Value* nim = b_.CreateFNeg(im, "cgn");
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, re, 0, "cg.re");
+    s = b_.CreateInsertValue(s, nim, 1, "cg.im");
+    v.ty = e->ty;
+    v.cpx = s;
+    result = v;
+    return true;
+  }
   if (e->name == "LENGTH") {
     Val a = emitExpr(e->args[0].get());
     v.ty = e->ty;
@@ -2512,6 +3260,13 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* i = b_.CreateFPToSI(a.reg, b_.getInt64Ty(), "trunci");
       v.ty = e->ty;
       v.reg = b_.CreateSIToFP(i, b_.getDoubleTy(), "truncd");
+    } else if (a.ty.k == TK::FixedDec && a.ty.scale > 0) {
+      // Drop fractional digits toward zero: r = (r / 10^q) * 10^q (rule 135).
+      llvm::Value* i = toI64(a);
+      llvm::Value* p = i64(pliPow10(a.ty.scale));
+      llvm::Value* t = b_.CreateSDiv(i, p, "trunci");
+      v.ty = a.ty;
+      v.reg = b_.CreateTrunc(b_.CreateMul(t, p, "truncd"), llvmTy(a.ty), "trunc");
     } else {
       v = a;
     }
@@ -2559,8 +3314,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val a = emitExpr(e->args[0].get());
     Val b = emitExpr(e->args[1].get());
     const Type& common = e->ty;
-    Val av = convert(a, common, e->loc);
-    Val bv = convert(b, common, e->loc);
+    Val av, bv;
+    if (common.isFixed()) {
+      // Product scale is the sum of the operand scales (ADR-006): multiply
+      // the raw scaled integers without rescaling either operand first.
+      Type wa = common;
+      wa.scale = a.ty.isFixed() ? a.ty.scale : 0;
+      Type wb = common;
+      wb.scale = b.ty.isFixed() ? b.ty.scale : 0;
+      av = convert(a, wa, e->loc);
+      bv = convert(b, wb, e->loc);
+    } else {
+      av = convert(a, common, e->loc);
+      bv = convert(b, common, e->loc);
+    }
     llvm::Value* r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
                                            : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;
@@ -2649,17 +3416,44 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // count (the product over all axes).
   if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
     HExpr* a = e->args[0].get();
-    const Type& arr = a->sym ? a->sym->ty : Type::fixedBin(31, 0);
+    // The argument is an unsubscripted array reference, either a plain array
+    // (a->sym) or a qualified structure member array S.V (a->sym + memberPath).
+    const Type& arr = (a->sym && !a->memberPath.empty())
+                          ? memberType(a->sym, a->memberPath)
+                          : (a->sym ? a->sym->ty : Type::fixedBin(31, 0));
     v.ty = e->ty;
-    // A dynamic (runtime-extent) array reports the constant lower bound but a
-    // runtime upper bound / element count, read from the recorded dope slot.
+    // A dynamic (runtime-extent) array reports the live lower/upper bounds (a
+    // constant lower bound stays constant), read from the recorded dope slot
+    // (the member slot for a dynamic member, the symbol slot for a plain array).
     if (arr.isArray() && arr.isDynamic()) {
-      llvm::Value* lb = i64(arr.dims[0].lb);
-      llvm::Value* ub = dynUb_[a->sym];
+      const Dim& d0 = arr.dims[0];
+      llvm::Value* lb = nullptr;
+      llvm::Value* ub = nullptr;
+      if (!a->memberPath.empty()) {
+        auto it = memberDyn_.find(MemberDyn{a->sym, a->memberPath});
+        llvm::Value* mulb = it != memberDyn_.end() ? it->second.lb : nullptr;
+        llvm::Value* muub = it != memberDyn_.end() ? it->second.ub : nullptr;
+        lb = d0.lbDyn ? (mulb ? mulb : i64(d0.lb)) : i64(d0.lb);
+        ub = muub ? muub : i64(d0.ub);
+      } else {
+        lb = d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
+        ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(d0.ub);
+      }
+      // DIM of a dynamic multi-axis array is the first-axis runtime extent times
+      // the (fixed) product of the later axes' extents.
+      long long rest = 1;
+      for (size_t k = 1; k < arr.dims.size(); ++k)
+        rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
       llvm::Value* raw = e->name == "LBOUND" ? lb
                          : e->name == "HBOUND"
                              ? ub
-                             : b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+                             : [&] {
+                                 llvm::Value* dim =
+                                     b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+                                 if (rest != 1)
+                                   dim = b_.CreateMul(dim, i64(rest), "extall");
+                                 return dim;
+                               }();
       Val src;
       src.ty = Type::fixedBin(63, 0);
       src.reg = raw;
@@ -2688,11 +3482,18 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       result = v;
       return true;
     }
-    const Type& arr = a->sym->ty;
+    // The argument is an unsubscripted array reference: a plain array (a->sym)
+    // or a qualified structure member array S.V (a->sym + memberPath).
+    const bool isMember = !a->memberPath.empty();
+    const Type& arr = isMember ? memberType(a->sym, a->memberPath) : a->sym->ty;
     const Type& el = arr.elementType();
     const bool isBit = e->name == "ANY" || e->name == "ALL";
     const bool isFloat = !isBit && el.k == TK::Float;
-    llvm::Value* base = addressOf(a->sym);
+    llvm::Value *ub = nullptr, *lb = nullptr;
+    llvm::Value* base =
+        isMember ? (arr.isDynamic() ? dynamicMemberBase(a->sym, a->memberPath, e->loc, ub, lb)
+                                    : memberAddr(a->sym, a->memberPath, e->loc))
+                 : addressOf(a->sym);
     // A dynamic (runtime-extent) array is a bare element buffer sized by the
     // live bound; a fixed array is [N x elem]. Drive the loop by the element
     // count and address elements accordingly (rules (12),(13),(123)).
@@ -2700,8 +3501,25 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* n;
     llvm::Type* arrTy = nullptr;
     if (dyn) {
-      llvm::Value* ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(arr.dims[0].ub);
-      n = b_.CreateAdd(b_.CreateSub(ub, i64(arr.dims[0].lb), "e1"), i64(1), "rdn");
+      const Dim& d0 = arr.dims[0];
+      llvm::Value *mub = nullptr, *mlb = nullptr;
+      if (isMember) {
+        auto it = memberDyn_.find(MemberDyn{a->sym, a->memberPath});
+        mub = it != memberDyn_.end() ? it->second.ub : nullptr;
+        mlb = it != memberDyn_.end() ? it->second.lb : nullptr;
+      }
+      llvm::Value* rlb = d0.lbDyn
+                             ? (isMember ? (mlb ? mlb : i64(d0.lb))
+                                         : (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)))
+                             : i64(d0.lb);
+      llvm::Value* rub = isMember ? (mub ? mub : i64(d0.ub))
+                                  : (dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(d0.ub));
+      n = b_.CreateAdd(b_.CreateSub(rub, rlb, "e1"), i64(1), "rdn");
+      long long rest = 1;
+      for (size_t k = 1; k < arr.dims.size(); ++k)
+        rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+      if (rest != 1)
+        n = b_.CreateMul(n, i64(rest), "rdnall");
     } else {
       n = i64(arrayExtent(arr));
       arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));

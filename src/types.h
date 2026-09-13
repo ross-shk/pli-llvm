@@ -16,6 +16,8 @@ enum class TK {
   Char,     // CHARACTER(n) [VARYING]
   Bit,      // BIT(n)
   Struct,   // structure with level-numbered members (rule 11)
+  Pointer,  // POINTER: an address value (rules (15),(25))
+  Complex,  // COMPLEX: a pair of FLOAT real/imaginary parts (QR2.2/CM5)
   Void,
 };
 
@@ -27,15 +29,18 @@ struct Member;
 
 // One array axis (rules (12),(13)): a lower and upper bound. A dynamic (runtime)
 // upper bound — a general expression, or a `*` adjustable extent — is marked by
-// `dyn`; `ub` is then unused and the extent is only known at run time. The lower
-// bound stays constant in this stage.
+// `dyn`; `ub` is then unused and the extent is only known at run time. A dynamic
+// (runtime) lower bound is marked by `lbDyn`; `lb` is then a placeholder and the
+// live lower bound is evaluated at entry from the symbol's lower-bound
+// expression (`dynLb`, the mirror of `dynUb`).
 struct Dim {
   int lb = 1;
   int ub = 1;
-  bool dyn = false; // the upper bound is a runtime value (rule (13))
-  bool adj = false; // '*' adjustable extent: the bound comes from the caller (rule (13))
+  bool dyn = false;   // the upper bound is a runtime value (rule (13))
+  bool lbDyn = false; // the lower bound is a runtime value (rule (13))
+  bool adj = false;   // '*' adjustable extent: the bound comes from the caller (rule (13))
   bool operator==(const Dim& o) const {
-    return lb == o.lb && ub == o.ub && dyn == o.dyn && adj == o.adj;
+    return lb == o.lb && ub == o.ub && dyn == o.dyn && lbDyn == o.lbDyn && adj == o.adj;
   }
 };
 
@@ -67,7 +72,7 @@ struct Type {
   // True when any axis has a runtime (dynamic) extent (rule (13)).
   bool isDynamic() const {
     for (const auto& d : dims)
-      if (d.dyn)
+      if (d.dyn || d.lbDyn)
         return true;
     return false;
   }
@@ -116,6 +121,18 @@ struct Type {
     t.k = TK::Void;
     return t;
   }
+  static Type ptr() {
+    Type t;
+    t.k = TK::Pointer;
+    return t;
+  }
+  // A complex value (QR2.2/CM5): a pair of FLOAT real/imaginary parts.
+  static Type complexTy() {
+    Type t;
+    t.k = TK::Complex;
+    t.prec = 6;
+    return t;
+  }
   // Build a structure type from its level-numbered members (rule 11).
   static Type structTy(std::vector<Member> m);
 
@@ -123,7 +140,9 @@ struct Type {
   bool isNumeric() const { return isFixed() || k == TK::Float; }
   bool isChar() const { return k == TK::Char; }
   bool isBit() const { return k == TK::Bit; }
+  bool isPointer() const { return k == TK::Pointer; }
   bool isVoid() const { return k == TK::Void; }
+  bool isComplex() const { return k == TK::Complex; }
 
   // Integer width chosen for FIXED values (M0 keeps FIXED scale 0 only).
   int intBits() const {
@@ -149,6 +168,10 @@ struct Type {
       return "BIT(" + std::to_string(len) + ")";
     case TK::Struct:
       return "STRUCT";
+    case TK::Pointer:
+      return "POINTER";
+    case TK::Complex:
+      return "COMPLEX";
     case TK::Void:
       return "VOID";
     }
