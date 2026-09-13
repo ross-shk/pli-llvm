@@ -52,5 +52,15 @@ EOF
 $PLIC "$OUT.shared.pli" -o "$OUT.dylib" -shared 2>/dev/null || { echo "FAIL: -shared link failed"; ok=0; }
 [ -f "$OUT.dylib" ] || { echo "FAIL: -shared produced no output"; ok=0; }
 
+# --- dead code: hello-world must not carry unused runtime functions --------
+cat > "$OUT.hello.pli" <<'EOF'
+ hello: procedure options(main);
+    put skip list('hello');
+ end hello;
+EOF
+$PLIC "$OUT.hello.pli" -o "$OUT.hello" || { echo "FAIL: hello link failed"; ok=0; }
+nm "$OUT.hello" | grep -q "pli_put_list_char" || { echo "FAIL: used runtime fn stripped"; ok=0; }
+nm "$OUT.hello" | grep -q "pli_sin" && { echo "FAIL: unused runtime fn linked (bloat)"; ok=0; }
+
 [ "$ok" -eq 1 ] && echo PASS
 exit 0

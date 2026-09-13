@@ -49,6 +49,9 @@ RULES_OBJ := $(BUILD)/rules.o
 
 RT_SRCS  := runtime/pli_rt.c
 RT_OBJS  := $(patsubst runtime/%.c,$(BUILD)/rt_%.o,$(RT_SRCS))
+# One function/data item per section, so the linker's dead-code strip keeps
+# only the runtime pieces a program references (ADR-079).
+RTCFLAGS := $(CFLAGS) -ffunction-sections -fdata-sections
 
 # Baked-in default path to the runtime archive, so `plic hello.pli` just works.
 RTPATH   := $(abspath $(RTLIB))
@@ -86,7 +89,7 @@ $(RULES_OBJ): $(RULES_CPP) src/explain.h | $(BUILD)
 	$(CXX) $(PLIC_CXXFLAGS) -Isrc -c $< -o $@
 
 $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
-	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(RTCFLAGS) -MMD -MP -c $< -o $@
 
 $(BIN): $(OBJS) $(RULES_OBJ)
 	$(CXX) $(PLIC_CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) $(LLVM_SYSTEM_LIBS) -o $@
