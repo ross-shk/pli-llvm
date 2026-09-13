@@ -116,6 +116,12 @@ entry points below are where that chain terminates.
 | (123) | `emitExpr` (`Call`) | per-builtin handlers: SUBSTR, INDEX, ABS, LENGTH, TRUNC, PRECISION, MIN, MAX, MOD, MULTIPLY, DIVIDE, ROUND, REPEAT, VERIFY, TRANSLATE, HIGH, LOW, DATE, TIME, LBOUND, HBOUND, DIM, SUM, PROD, ANY, ALL |
 | (12),(13),(126) | `arrayExtent`, `arrayElementAddr`, `loadArrayElement`, `storeArrayElement` | `[N x elemTy]` flat row-major layout; multi-axis GEP offset = Σ (i_k − lb_k)·stride_k; per-axis SUBSCRIPTRANGE; `DIM` = product of extents; a structure array member lays out as `[N x elemTy]` inside the struct (`llvmTy` handles `isArray`) and is subscripted via `memberAddr` + `arrayElementAddr`; a single-axis dynamic array `A(n)` allocates a runtime-sized element buffer (`alloca i32, i64 extent`) from its bound expression evaluated at entry, records the live upper bound (`dynUb_`) for runtime SUBSCRIPTRANGE and runtime `LBOUND`/`HBOUND`/`DIM` (`allocaLocals` pass 2, `arrayElementAddr` dynamic path); an array of structures `arr(i).x` lays out as `[N x structTy]` and a member of one element is addressed by `arrayElementAddr` to the element struct then `elementMemberAddr` (a GEP through the member path from the element address) |
 
+## Extensions (not in TR 25.084)
+
+| Extension | Status | Component / test |
+|---|---|---|
+| `%REPLACE` (ADR-058) | served | `%REPLACE name BY <tokens> ;` substitutes an identifier with source text before parsing (`replace.pli`); other `%` directives and malformed directives diagnosed (`bad_replace.pli`) |
+
 ## Headline numbers (M0)
 
 - Rules fully implemented and tested: **40**

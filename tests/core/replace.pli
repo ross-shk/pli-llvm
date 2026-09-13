@@ -1,0 +1,18 @@
+  /* extension (ADR-058): %REPLACE substitutes
+     an identifier with source text before
+     parsing; strings are unaffected. */
+  %replace max by 5;
+  %replace greet by put skip list('hi');
+  replace: procedure options(main);
+     declare a(max) fixed bin(31);
+     declare i fixed bin(31);
+     declare c fixed bin(31);
+     do i = 1 to max;
+        a(i) = i * 10;
+     end;
+     c = max;
+     put skip list('bound', c);
+     put skip list('a5', a(5));
+     put skip list('max');
+     greet;
+  end replace;

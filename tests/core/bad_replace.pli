@@ -1,0 +1,7 @@
+  /* extension (ADR-058): only %REPLACE is
+     served; other % directives are
+     diagnosed. */
+  badreplace: procedure options(main);
+     %declare x character;
+     put skip list('x');
+  end badreplace;
