@@ -58,6 +58,7 @@ static void usage() {
                "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
                "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
                "  -L <dir>         add a library search path to the link step\n"
+               "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
                "  -l<lib>          link a library (e.g. -lm) on the link step\n"
                "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
                "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
@@ -111,6 +112,7 @@ int main(int argc, char** argv) {
   std::string clangPath = PLIC_CLANG;
   std::string optLevel = "-O2";
   std::vector<std::string> linkArgs; // extra args appended to the link step
+  std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
   int explain = 0;
@@ -148,6 +150,10 @@ int main(int argc, char** argv) {
       triple = next("--triple");
     else if (a == "-L")
       linkArgs.push_back("-L" + next("-L"));
+    else if (a == "-I")
+      includeDirs.push_back(next("-I"));
+    else if (a.rfind("-I", 0) == 0)
+      includeDirs.push_back(a.substr(2));
     else if (a.rfind("-l", 0) == 0)
       linkArgs.push_back(a);
     else if (a.rfind("-Wl,", 0) == 0)
@@ -215,6 +221,31 @@ int main(int argc, char** argv) {
 
   std::string src;
   Preprocessor preprocessor;
+  for (const std::string& d : includeDirs)
+    preprocessor.addIncludeDir(d);
+  // Colon-separated like CPATH: searched after -I, before the default dir.
+  bool hasEnvPath = false;
+  if (const char* env = std::getenv("PLIC_INCLUDE_PATH")) {
+    std::stringstream ss(env);
+    std::string dir;
+    while (std::getline(ss, dir, ':'))
+      if (!dir.empty()) {
+        preprocessor.addIncludeDir(dir);
+        hasEnvPath = true;
+      }
+  }
+  // Executable-relative default (mirrors the runtime-lib fallback below).
+  std::string defaultInc =
+      (executablePath(argv[0]).parent_path().parent_path() / "share/plic/include").string();
+  preprocessor.addIncludeDir(defaultInc);
+  if (verbose) {
+    std::cerr << "plic: include search dirs:\n";
+    for (const std::string& d : includeDirs)
+      std::cerr << "plic:   " << d << "\n";
+    if (hasEnvPath)
+      std::cerr << "plic:   $PLIC_INCLUDE_PATH\n";
+    std::cerr << "plic:   " << defaultInc << "\n";
+  }
   if (!preprocessor.run(input, src))
     return 1;
 

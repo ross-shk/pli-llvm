@@ -38,6 +38,10 @@ bool Preprocessor::run(const fs::path& input, std::string& output) {
   return expand(input, output);
 }
 
+void Preprocessor::addIncludeDir(const fs::path& dir) {
+  includeDirs_.push_back(dir);
+}
+
 bool Preprocessor::expand(const fs::path& input, std::string& output) {
   fs::path path = normalized(input);
   if (std::find(active_.begin(), active_.end(), path) != active_.end())
@@ -196,6 +200,19 @@ bool Preprocessor::handleInclude(const fs::path& input, const std::string& opera
   fs::path include = input.parent_path() / name;
   if (!fs::exists(include) && include.extension().empty())
     include += ".inc";
+  if (!fs::exists(include)) {
+    // Search the configured directories in order; the first hit wins
+    // (ADR-078). An absolute name resolves on its own in every candidate.
+    for (const fs::path& dir : includeDirs_) {
+      fs::path cand = dir / name;
+      if (!fs::exists(cand) && cand.extension().empty())
+        cand += ".inc";
+      if (fs::exists(cand)) {
+        include = cand;
+        break;
+      }
+    }
+  }
   return expand(include, output);
 }
 

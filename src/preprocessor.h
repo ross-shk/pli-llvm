@@ -7,6 +7,9 @@
 class Preprocessor {
 public:
   bool run(const std::filesystem::path& input, std::string& output);
+  // Extra %INCLUDE search directories, tried in order after the including
+  // file's own directory (ADR-078).
+  void addIncludeDir(const std::filesystem::path& dir);
 
 private:
   bool expand(const std::filesystem::path& input, std::string& output);
@@ -27,4 +30,5 @@ private:
   bool error(const std::filesystem::path& input, int line, int col, const std::string& message);
 
   std::vector<std::filesystem::path> active_;
+  std::vector<std::filesystem::path> includeDirs_;
 };
