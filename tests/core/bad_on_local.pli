@@ -1,0 +1,10 @@
+  /* rule (91): an ON-unit reaching an
+     automatic variable of the establishing
+     procedure is not implemented in this
+     stage. */
+  badonlocal: procedure options(main);
+     declare x fixed bin(31);
+     x = 0;
+     on error x = 1;
+     signal error;
+  end badonlocal;

@@ -176,6 +176,9 @@ bool Sema::run(Program& prog, bool compileOnly) {
   return d_.ok();
 }
 
+// True when any statement in `body` contains kind `k` (defined below).
+static bool stmtsHaveKind(const std::vector<StmtP>& body, Stmt::Kind k);
+
 void Sema::processProc(Proc* p) {
   Scope* sc = scopeFor(p);
 
@@ -227,6 +230,12 @@ void Sema::processProc(Proc* p) {
     checkStmt(s.get(), sc, p);
   }
   curEntry_ = nullptr;
+  // rule (91): unwinding handlers on a non-local exit is not implemented, so
+  // GO TO in a procedure that establishes an ON-unit is diagnosed.
+  if (stmtsHaveKind(p->body, Stmt::On) && stmtsHaveKind(p->body, Stmt::Goto))
+    d_.error(p->loc,
+             "GO TO in a procedure that establishes ON is not implemented in this stage",
+             "(91)");
 }
 
 // Parameters are always by reference; a DECLARE supplies their attributes,
@@ -633,6 +642,30 @@ void Sema::collectLabels(Stmt* s) {
     collectLabels(b.get());
 }
 
+// True when the statement subtree rooted at `s` contains kind `k` (through
+// branches, blocks and ON-units).
+static bool stmtHasKind(const Stmt* s, Stmt::Kind k) {
+  if (!s)
+    return false;
+  if (s->kind == k)
+    return true;
+  if (stmtHasKind(s->thenS.get(), k) || stmtHasKind(s->elseS.get(), k) ||
+      stmtHasKind(s->unit.get(), k))
+    return true;
+  for (auto& b : s->body)
+    if (stmtHasKind(b.get(), k))
+      return true;
+  return false;
+}
+
+// True when any statement in `body` contains kind `k`.
+static bool stmtsHaveKind(const std::vector<StmtP>& body, Stmt::Kind k) {
+  for (auto& s : body)
+    if (stmtHasKind(s.get(), k))
+      return true;
+  return false;
+}
+
 bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, const char* what) {
   if (dst.isStruct() || src.isStruct()) {
     // Whole-structure assignment (rule 127): a copy between two structures of
@@ -761,6 +794,79 @@ long long Sema::elementCount(const Type& ty) {
   for (const auto& d : ty.dims)
     n *= (long long)(d.ub - d.lb + 1);
   return n;
+}
+
+// Rule (91): an ON-unit compiles to a handler function without the
+// establishing frame, so constructs needing that frame are diagnosed:
+// automatic-variable access, RETURN, nested ON, DECLARE and ENTRY.
+void Sema::checkOnUnit(Stmt* u, Proc* p) {
+  if (!u)
+    return;
+  std::function<void(Expr*)> checkExpr = [&](Expr* e) {
+    if (!e)
+      return;
+    if ((e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->sym &&
+        e->sym->kind != Symbol::ProcName && e->sym->owner) {
+      d_.error(e->loc,
+               "an ON-unit reaching an automatic variable is not implemented in this stage",
+               "(91)");
+    }
+    if (e->a)
+      checkExpr(e->a.get());
+    if (e->b)
+      checkExpr(e->b.get());
+    for (auto& a : e->args)
+      checkExpr(a.get());
+  };
+  std::function<void(Stmt*)> check = [&](Stmt* s) {
+    if (!s)
+      return;
+    switch (s->kind) {
+    case Stmt::On:
+      d_.error(s->loc, "nested ON units are not implemented in this stage", "(91)");
+      break;
+    case Stmt::Return:
+      d_.error(s->loc, "RETURN inside an ON-unit is not implemented in this stage", "(91)");
+      break;
+    case Stmt::Declare:
+      d_.error(s->loc, "DECLARE inside an ON-unit is not implemented in this stage", "(91)");
+      break;
+    case Stmt::Entry:
+      d_.error(s->loc, "ENTRY inside an ON-unit is not implemented in this stage", "(91)");
+      break;
+    case Stmt::DoIter:
+      // The control variable lives in the establishing frame.
+      if (s->sym && s->sym->owner)
+        d_.error(s->loc,
+                 "an ON-unit reaching an automatic variable is not implemented in this stage",
+                 "(91)");
+      break;
+    default:
+      break;
+    }
+    checkExpr(s->target.get());
+    for (auto& t : s->extraTargets)
+      checkExpr(t.get());
+    checkExpr(s->value.get());
+    checkExpr(s->cond.get());
+    checkExpr(s->from.get());
+    checkExpr(s->to.get());
+    checkExpr(s->by.get());
+    checkExpr(s->skipCount.get());
+    for (auto& it : s->items)
+      checkExpr(it.get());
+    for (auto& a : s->args)
+      checkExpr(a.get());
+    if (s->thenS)
+      check(s->thenS.get());
+    if (s->elseS)
+      check(s->elseS.get());
+    if (s->unit)
+      check(s->unit.get());
+    for (auto& b : s->body)
+      check(b.get());
+  };
+  check(u);
 }
 
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
@@ -1035,6 +1141,19 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // GO TO target must be a label defined in this procedure (rules (64),(77)).
     if (procLabels_.find(s->name) == procLabels_.end())
       d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
+    break;
+  case Stmt::On:
+    // Only ERROR is served; the parser diagnoses every other condition, so
+    // the unit body only needs typing plus the establishing-frame checks.
+    if (!s->isSystem && s->unit) {
+      checkStmt(s->unit.get(), sc, p);
+      checkOnUnit(s->unit.get(), p);
+    }
+    break;
+  case Stmt::Revert:
+  case Stmt::Signal:
+    // Only ERROR is served (parser-enforced); nothing to type-check. A
+    // REVERT with no established handler is a no-op reverting to SYSTEM.
     break;
   }
 }
@@ -1673,6 +1792,18 @@ bool Sema::typeBuiltin(Expr* e) {
       return true;
     }
     e->ty = Type::chr(e->name == "DATE" ? 8 : 6);
+    return true;
+  }
+  // ONCODE built-in (rules (91)-(94)): ONCODE() yields the current ERROR
+  // code as FIXED BINARY(31): 1 inside an ERROR unit raised by SIGNAL,
+  // 0 elsewhere. Takes no arguments.
+  if (e->name == "ONCODE") {
+    if (!e->args.empty()) {
+      d_.error(e->loc, "ONCODE takes no arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
     return true;
   }
   // MULTIPLY built-in (M2): multiply(a, b) — product of two numerics; for

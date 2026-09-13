@@ -1,0 +1,28 @@
+  /* rules (91)-(94): ON ERROR establishes a
+     handler; SIGNAL ERROR raises it; the
+     unit runs, then control resumes after
+     the SIGNAL. ONCODE() is 1 inside the
+     unit, 0 outside. */
+  on_error: procedure options(main);
+     declare c fixed bin(31);
+
+     c = oncode();
+     put skip list('outside', c);
+
+     on error begin;
+        put skip list('caught', oncode());
+     end;
+
+     signal error;
+     put skip list('resumed');
+
+     revert error;
+
+     on error put skip list('re-on');
+     signal error;
+     revert error;
+
+     on error system;
+     revert error;
+     put skip list('done');
+  end on_error;

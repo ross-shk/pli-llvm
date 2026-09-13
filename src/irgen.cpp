@@ -239,12 +239,19 @@ std::string IRGen::run(HProgram& prog) {
 
   emitGlobals();
 
+  // ON ERROR handlers (rules (91)-(94)): number the established units, then
+  // pre-create their functions so SIGNAL dispatch resolves regardless of
+  // emission order (mirroring declareProc for procedures).
+  assignOnIds(prog);
+  declareOnHandlers(prog);
+
   // Pre-declare every procedure's functions/aliases so a call site resolves
   // regardless of the order the (flattened) procedures are emitted in.
   for (auto& p : prog.procs)
     declareProc(p.get());
   for (auto& p : prog.procs)
     emitProc(p.get());
+  emitOnHandlers(prog);
 
   // C entry point: initialise the runtime, invoke the MAIN procedure,
   // terminate normally (this is where FINISH would be raised, see M5).
@@ -739,15 +746,27 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   emitInitials(p); // INITIAL attribute on AUTOMATIC variables (rule 26)
   recordDynParamUbs(p->paramSyms);
 
+  // Rule (91): save the ERROR handler depth so procedure exit restores the
+  // caller's establishment state. Skipped when nothing establishes handlers.
+  curOnDepth_ = nullptr;
+  if (!onHandlers_.empty()) {
+    curOnDepth_ = entryAlloca(b_.getInt64Ty(), "ondepth");
+    b_.CreateStore(b_.CreateCall(runtimeFn("pli_on_depth_error"), {}), curOnDepth_);
+  }
+
   for (auto& st : p->body)
     emitStmt(st.get());
 
   if (!blockTerminated(b_.GetInsertBlock())) {
+    if (curOnDepth_)
+      b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                    {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
     if (p->isFunction)
       b_.CreateRet(llvm::Constant::getNullValue(retLLVM)); // fall-off: return a zero value
     else
       b_.CreateRetVoid();
   }
+  curOnDepth_ = nullptr;
   curFn_ = nullptr;
 }
 
@@ -791,6 +810,13 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   emitInitials(p);
   recordDynParamUbs(uni);
 
+  // Rule (91): save the ERROR handler depth for exit restore (see retPads).
+  curOnDepth_ = nullptr;
+  if (!onHandlers_.empty()) {
+    curOnDepth_ = entryAlloca(b_.getInt64Ty(), "ondepth");
+    b_.CreateStore(b_.CreateCall(runtimeFn("pli_on_depth_error"), {}), curOnDepth_);
+  }
+
   // Entry selector: dispatch to the segment each call entered through.
   std::vector<llvm::BasicBlock*> segs;
   for (size_t i = 0; i <= entries.size(); ++i) {
@@ -830,17 +856,141 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
     b_.CreateBr(retPads[seg]);
   for (size_t i = 0; i < retPads.size(); ++i) {
     b_.SetInsertPoint(retPads[i]);
+    // Rule (91): segment exit is procedure exit for handler scoping.
+    if (curOnDepth_)
+      b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                    {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
     if (implRet->isVoidTy())
       b_.CreateRetVoid();
     else
       b_.CreateRet(llvm::Constant::getNullValue(implRet));
   }
+  curOnDepth_ = nullptr;
   curFn_ = nullptr;
 }
 
 std::string IRGen::entryIrName(const std::string& proc, const std::string& parent,
                                const std::string& entry) {
   return "@PLI_" + (parent.empty() ? std::string() : parent + "$") + proc + "$entry$" + entry;
+}
+
+// ---------------------------------------------------------------------------
+// ON ERROR (rules (91)-(94))
+// ---------------------------------------------------------------------------
+
+// Assign dense handler ids (1-based; 0 means SYSTEM) to every established
+// (non-SYSTEM) ON-unit in emission order.
+static void assignOnIdsStmt(HStmt* s, int& next) {
+  if (!s)
+    return;
+  if (s->kind == HStmt::On && !s->isSystem)
+    s->onIndex = next++;
+  assignOnIdsStmt(s->thenS.get(), next);
+  assignOnIdsStmt(s->elseS.get(), next);
+  assignOnIdsStmt(s->unit.get(), next);
+  for (auto& b : s->body)
+    assignOnIdsStmt(b.get(), next);
+}
+
+void IRGen::assignOnIds(HProgram& prog) {
+  int next = 1;
+  for (auto& p : prog.procs)
+    for (auto& b : p->body)
+      assignOnIdsStmt(b.get(), next);
+}
+
+// Collect established ON-units keyed by handler id.
+static void collectOnStmts(HStmt* s, std::map<int, HStmt*>& out) {
+  if (!s)
+    return;
+  if (s->kind == HStmt::On && !s->isSystem)
+    out[s->onIndex] = s;
+  collectOnStmts(s->thenS.get(), out);
+  collectOnStmts(s->elseS.get(), out);
+  collectOnStmts(s->unit.get(), out);
+  for (auto& b : s->body)
+    collectOnStmts(b.get(), out);
+}
+
+void IRGen::declareOnHandlers(HProgram& prog) {
+  std::map<int, HStmt*> byId;
+  for (auto& p : prog.procs)
+    for (auto& b : p->body)
+      collectOnStmts(b.get(), byId);
+  for (auto& [id, _] : byId) {
+    llvm::FunctionType* ft = llvm::FunctionType::get(b_.getVoidTy(), false);
+    onHandlers_.push_back(llvm::Function::Create(ft, llvm::Function::InternalLinkage,
+                                                 "PLI_ON_" + std::to_string(id), &mod_));
+  }
+}
+
+// Fill every handler function body. A handler runs without the establishing
+// frame (sema rejected automatic-variable access), so only globals are seeded;
+// labels inside the unit get their own blocks.
+void IRGen::emitOnHandlers(HProgram& prog) {
+  for (auto& p : prog.procs) {
+    std::map<int, HStmt*> byId;
+    for (auto& b : p->body)
+      collectOnStmts(b.get(), byId);
+    for (auto& [id, s] : byId) {
+      llvm::Function* fn = onHandlers_[(size_t)id - 1];
+      curFn_ = fn;
+      curProc_ = p.get();
+      curRetTy_ = Type::voidTy();
+      inHandler_ = true;
+      llvm::AllocaInst* savedDepth = curOnDepth_;
+      curOnDepth_ = nullptr;
+      labelBlocks_.clear();
+      symAddr_.clear();
+      for (Symbol* gs : sema_.storage())
+        if (gs->isStatic && gs->kind == Symbol::Var)
+          symAddr_[gs] = mod_.getGlobalVariable(gs->irName.substr(1), true);
+      llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
+      b_.SetInsertPoint(entry);
+      collectGotoBlocks(s->unit.get());
+      emitStmt(s->unit.get());
+      if (!blockTerminated(b_.GetInsertBlock()))
+        b_.CreateRetVoid();
+      curOnDepth_ = savedDepth;
+      inHandler_ = false;
+      curFn_ = nullptr;
+      curProc_ = nullptr;
+    }
+  }
+}
+
+// Establish a handler: push its id, or 0 for the system action.
+void IRGen::emitOn(HStmt* s) {
+  long long id = s->isSystem ? 0 : s->onIndex;
+  b_.CreateCall(runtimeFn("pli_on_push_error"), {i64(id)});
+}
+
+// Raise ERROR: without an established handler take the system action
+// (abort); otherwise run the handler, then resume after the SIGNAL.
+void IRGen::emitSignal(HStmt* s) {
+  (void)s;
+  llvm::Value* top = b_.CreateCall(runtimeFn("pli_on_top_error"), {}, "ontop");
+  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "onnosystem");
+  llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
+  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", curFn_);
+  llvm::BasicBlock* resBB = llvm::BasicBlock::Create(ctx_, "on.resume", curFn_);
+  b_.CreateCondBr(none, defBB, dspBB);
+  b_.SetInsertPoint(defBB);
+  b_.CreateCall(runtimeFn("pli_signal_error"), {globalString("SIGNAL ERROR")});
+  b_.CreateUnreachable();
+  b_.SetInsertPoint(dspBB);
+  llvm::SwitchInst* sw = b_.CreateSwitch(top, resBB, onHandlers_.size());
+  for (size_t i = 0; i < onHandlers_.size(); ++i) {
+    llvm::BasicBlock* hbb =
+        llvm::BasicBlock::Create(ctx_, "on.handle." + std::to_string(i + 1), curFn_);
+    sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
+    b_.SetInsertPoint(hbb);
+    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
+    b_.CreateCall(onHandlers_[i], {});
+    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+    b_.CreateBr(resBB);
+  }
+  b_.SetInsertPoint(resBB);
 }
 
 // ---------------------------------------------------------------------------
@@ -866,10 +1016,22 @@ void IRGen::emitStmt(HStmt* s) {
     emitIf(s);
     break;
   case HStmt::Group:
-  case HStmt::Begin: // a block executes its body as a group (rule (68))
     for (auto& b : s->body)
       emitStmt(b.get());
     break;
+  case HStmt::Begin: {
+    // A BEGIN block scopes ON establishments (rule (91)): restore the entry
+    // depth when the block exits. Skipped when the module establishes no
+    // handlers, so the common path stays free.
+    llvm::Value* blkDepth = nullptr;
+    if (!onHandlers_.empty())
+      blkDepth = b_.CreateCall(runtimeFn("pli_on_depth_error"), {}, "onblkdepth");
+    for (auto& b : s->body)
+      emitStmt(b.get());
+    if (blkDepth)
+      b_.CreateCall(runtimeFn("pli_on_reset_error"), {blkDepth});
+    break;
+  }
   case HStmt::DoWhile:
     emitDoWhile(s);
     break;
@@ -883,6 +1045,11 @@ void IRGen::emitStmt(HStmt* s) {
     emitCall(s);
     break;
   case HStmt::Return: {
+    // Rule (91): procedure exit restores the entry ERROR depth, popping any
+    // handlers this procedure established.
+    if (curOnDepth_)
+      b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                    {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
     if (!curRetTy_.isVoid()) {
       Val v = emitExpr(s->value.get());
       Val rv = convert(v, curRetTy_, s->loc);
@@ -901,6 +1068,15 @@ void IRGen::emitStmt(HStmt* s) {
     b_.CreateUnreachable();
     break;
   case HStmt::Leave:
+    break;
+  case HStmt::On:
+    emitOn(s);
+    break;
+  case HStmt::Revert:
+    b_.CreateCall(runtimeFn("pli_on_pop_error"), {});
+    break;
+  case HStmt::Signal:
+    emitSignal(s);
     break;
   case HStmt::Goto:
     b_.CreateBr(labelBlocks_[s->name]);
@@ -1312,6 +1488,15 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
 void IRGen::appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args) {
   if (!callee)
     return;
+  // Rule (91): a handler function has no establishing frame, so a call that
+  // needs static links cannot be marshalled from an ON-unit.
+  if (inHandler_ && !callee->env.empty()) {
+    d_.error(callee->loc,
+             "calling a procedure that captures enclosing state from an ON-unit is not "
+             "implemented in this stage",
+             "(91)");
+    return;
+  }
   for (Symbol* v : callee->env) {
     // "cousin" call: a sibling internal procedure reaching a non-adjacent
     // enclosing variable is not yet supported.
@@ -2447,6 +2632,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     b_.CreateCall(runtimeFn(fn), {out.ptr, out.len});
     out.len = i64(e->ty.len);
     result = out;
+    return true;
+  }
+  // ONCODE (rules (91)-(94)): the current ERROR code (1 inside a SIGNAL-raised
+  // unit, 0 elsewhere); the runtime owns the value, codegen just reads it.
+  if (e->name == "ONCODE") {
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_oncode"), {}, "oncode");
+    result = v;
     return true;
   }
   // Array attribute built-ins (M2, rule (123)): constant bounds fold to a

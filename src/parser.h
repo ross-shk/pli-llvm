@@ -68,6 +68,14 @@ private:
   StmtP parsePut();
   StmtP parseCall();
   StmtP parseAssignment();
+  StmtP parseOn(Proc* owner); // rule (91)
+  StmtP parseRevert();        // rule (92)
+  StmtP parseSignal();        // rule (93)
+  // Parse one condition (rule 94); returns its name ("ERROR" when served,
+  // otherwise "" after diagnosing the unimplemented condition).
+  std::string parseCondition();
+  // Consume a balanced (...) group (e.g. an unimplemented CHECK list).
+  void skipParen(const char* rule);
   void parseProcOptions(Proc* p);
   bool parseDeclItem(DeclItem& item);
   // Parse the dimension + attribute tail shared by a declaration item and by a
