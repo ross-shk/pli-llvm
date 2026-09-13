@@ -85,6 +85,10 @@ private:
   void collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isStatic);
   void collectLabels(Stmt* s); // gather GO TO targets defined in this proc
   void checkStmt(Stmt* s, Scope* sc, Proc* p);
+  // Rule (91): reject ON-unit constructs that need the establishing frame
+  // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
+  // was already type-checked by checkStmt, so symbol references are resolved.
+  void checkOnUnit(Stmt* u, Proc* p);
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);

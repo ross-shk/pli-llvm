@@ -568,12 +568,12 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     expect(Tok::Semi, "(77)");
     return st;
   }
-  if (kw("ON") || kw("SIGNAL") || kw("REVERT")) {
-    d_.error(cur().loc, "condition handling (ON/SIGNAL/REVERT) is not implemented in this stage",
-             "(91)");
-    resync();
-    return nullptr;
-  }
+  if (kw("ON"))
+    return parseOn(owner); // rule (91)
+  if (kw("SIGNAL"))
+    return parseSignal(); // rule (93)
+  if (kw("REVERT"))
+    return parseRevert(); // rule (92)
   if (kw("ALLOCATE") || kw("FREE")) {
     d_.error(cur().loc, "dynamic storage (ALLOCATE/FREE) is not implemented in this stage", "(87)");
     resync();
@@ -585,6 +585,144 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     return nullptr;
   }
   return nullptr;
+}
+
+// Consume a balanced (...) group at the current token (the opening paren).
+void Parser::skipParen(const char* rule) {
+  if (!at(Tok::LParen)) {
+    d_.error(cur().loc, "expected '('", rule);
+    return;
+  }
+  int depth = 0;
+  while (!at(Tok::Eof)) {
+    if (at(Tok::LParen))
+      ++depth;
+    else if (at(Tok::RParen) && --depth == 0) {
+      advance();
+      return;
+    }
+    advance();
+  }
+}
+
+// One condition (rule 94). Only ERROR is served; every other condition is
+// diagnosed with its rule number, never silently accepted.
+std::string Parser::parseCondition() {
+  if (!at(Tok::Word)) {
+    d_.error(cur().loc, "expected a condition", "(94)");
+    return "";
+  }
+  SourceLoc l = cur().loc;
+  const std::string& w = cur().text;
+  if (w == "ERROR") {
+    advance();
+    return "ERROR";
+  }
+  if (w == "FINISH" || w == "AREA") {
+    advance();
+    d_.error(l, w + " conditions are not implemented in this stage", "(94)");
+    return "";
+  }
+  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" || w == "SIZE" ||
+      w == "SUBSCRIPTRANGE" || w == "STRINGRANGE" || w == "UNDERFLOW" || w == "ZERODIVIDE") {
+    advance();
+    d_.error(l, w + " conditions are not implemented in this stage", "(94)");
+    return "";
+  }
+  if (w == "CHECK") {
+    advance();
+    if (at(Tok::LParen))
+      skipParen("(95)");
+    d_.error(l, "CHECK conditions are not implemented in this stage", "(95)");
+    return "";
+  }
+  if (w == "CONDITION") {
+    advance();
+    if (at(Tok::LParen))
+      skipParen("(99)");
+    d_.error(l, "programmer-named conditions are not implemented in this stage", "(99)");
+    return "";
+  }
+  if (w == "ENDFILE" || w == "ENDPAGE" || w == "KEY" || w == "UNDEFINEDFILE" || w == "NAME" ||
+      w == "RECORD" || w == "TRANSMIT") {
+    advance();
+    if (at(Tok::LParen))
+      skipParen("(97)");
+    d_.error(l, w + " conditions are not implemented in this stage", "(97)");
+    return "";
+  }
+  d_.error(l, "expected a condition", "(94)");
+  return "";
+}
+
+// on-statement ::= ON condition [SNAP] {unconditional-statement | SYSTEM ; }
+//                                                              rule (91)
+StmtP Parser::parseOn(Proc* owner) {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  advance(); // ON
+  st->kind = Stmt::On;
+  st->condName = parseCondition();
+  if (st->condName.empty()) {
+    resync();
+    return nullptr;
+  }
+  if (atWord("SNAP")) {
+    SourceLoc l = cur().loc;
+    advance();
+    st->snap = true;
+    d_.warn(l, "SNAP is accepted but has no effect in this stage", "(91)");
+  }
+  // ON ERROR SYSTEM; establishes the system action (rule 91).
+  if (atWord("SYSTEM") && peek().kind == Tok::Semi) {
+    advance();
+    st->isSystem = true;
+    expect(Tok::Semi, "(91)");
+    return st;
+  }
+  StmtP u = parseStatement(owner);
+  if (!u) {
+    d_.error(cur().loc, "expected an unconditional statement as the ON-unit", "(91)");
+    resync();
+    return nullptr;
+  }
+  if (u->kind == Stmt::If) {
+    d_.error(u->loc, "an ON-unit must be an unconditional statement", "(91)");
+    resync();
+    return nullptr;
+  }
+  st->unit = std::move(u);
+  return st;
+}
+
+// revert-statement ::= REVERT condition ;                      rule (92)
+StmtP Parser::parseRevert() {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  advance(); // REVERT
+  st->kind = Stmt::Revert;
+  st->condName = parseCondition();
+  if (st->condName.empty()) {
+    resync();
+    return nullptr;
+  }
+  expect(Tok::Semi, "(92)");
+  return st;
+}
+
+// signal-statement ::= SIGNAL condition ;                      rule (93)
+StmtP Parser::parseSignal() {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  advance(); // SIGNAL
+  st->kind = Stmt::Signal;
+  st->condName = parseCondition();
+  if (st->condName.empty()) {
+    resync();
+    return nullptr;
+  }
+  expect(Tok::Semi, "(93)");
+  return st;
 }
 
 // declaration-sentence ::= [labellist] DECLARE declarationlist ;   rule (9)

@@ -113,6 +113,9 @@ struct Stmt {
     Entry,   // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
              //            an alternate entry point into this procedure
     Leave,   // (not in TR 25.084; modern LEAVE, rejected in M0)
+    On,      // rule (91)  ON condition [SNAP] (unit | SYSTEM)
+    Revert,  // rule (92)  REVERT condition
+    Signal,  // rule (93)  SIGNAL condition
   } kind = Null;
 
   SourceLoc loc{};
@@ -142,6 +145,15 @@ struct Stmt {
   std::vector<ExprP> items;
 
   std::vector<ExprP> args; // CALL arguments
+
+  // ON statement (rule 91): the established condition, whether SNAP was
+  // given, whether the unit is SYSTEM, and the unit body (null for SYSTEM).
+  // REVERT/SIGNAL (rules 92,93) use condName only.
+  std::string condName; // e.g. "ERROR"
+  bool snap = false;
+  bool isSystem = false;
+  StmtP unit;
+  int onIndex = -1; // dense handler id assigned during lowering (rule 91)
 };
 
 struct Proc {

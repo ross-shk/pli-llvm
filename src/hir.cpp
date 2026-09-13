@@ -128,6 +128,11 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->entryParamSyms = s->entryParamSyms;
   h->skip = s->skip;
   h->page = s->page;
+  h->condName = s->condName;
+  h->snap = s->snap;
+  h->isSystem = s->isSystem;
+  h->onIndex = s->onIndex;
+  h->unit = lowerStmt(s->unit.get(), owner);
 
   for (const auto& d : s->decls) {
     HDeclItem hd;
@@ -434,6 +439,12 @@ const char* stmtKind(HStmt::Kind k) {
     return "Entry";
   case HStmt::Leave:
     return "Leave";
+  case HStmt::On:
+    return "On";
+  case HStmt::Revert:
+    return "Revert";
+  case HStmt::Signal:
+    return "Signal";
   }
   return "?";
 }
@@ -509,6 +520,15 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Entry:
     os << " " << s->name;
     break;
+  case HStmt::On:
+    os << " " << s->condName;
+    if (s->isSystem)
+      os << " SYSTEM";
+    break;
+  case HStmt::Revert:
+  case HStmt::Signal:
+    os << " " << s->condName;
+    break;
   default:
     break;
   }
@@ -519,6 +539,8 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     os << pad << "else\n";
     printStmt(os, s->elseS.get(), ind + 1);
   }
+  if (s->unit)
+    printStmt(os, s->unit.get(), ind + 1);
   for (const auto& b : s->body)
     printStmt(os, b.get(), ind + 1);
 }

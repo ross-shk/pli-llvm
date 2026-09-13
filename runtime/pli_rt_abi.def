@@ -42,3 +42,11 @@ PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
 PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */
 PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE interim (M2) */
+
+PLI_FN(pli_on_push_error, VOID, (I64))  /* ON ERROR: establish handler id (0 = SYSTEM) */
+PLI_FN(pli_on_pop_error, VOID, (VOID))  /* REVERT ERROR */
+PLI_FN(pli_on_top_error, I64, (VOID))   /* SIGNAL dispatch: top id, 0 = none/SYSTEM */
+PLI_FN(pli_on_depth_error, I64, (VOID)) /* block-entry save */
+PLI_FN(pli_on_reset_error, VOID, (I64)) /* block/procedure-exit restore */
+PLI_FN(pli_oncode, I32, (VOID))         /* ONCODE() */
+PLI_FN(pli_set_oncode, VOID, (I32))

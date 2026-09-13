@@ -93,6 +93,9 @@ struct HStmt {
     Goto,
     Entry,
     Leave,
+    On,     // rule (91)
+    Revert, // rule (92)
+    Signal, // rule (93)
   } kind = Null;
 
   SourceLoc loc{};
@@ -122,6 +125,13 @@ struct HStmt {
   std::vector<HExprP> items;
 
   std::vector<HExprP> args; // CALL arguments
+
+  // ON statement (rule 91); REVERT/SIGNAL use condName only.
+  std::string condName;
+  bool snap = false;
+  bool isSystem = false;
+  HStmtP unit;
+  int onIndex = -1; // dense handler id assigned by irgen before emission
 };
 
 struct HProc {

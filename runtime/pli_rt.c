@@ -281,6 +281,42 @@ void pli_signal_error(const char *msg) {
   exit(8);
 }
 
+/* ERROR handler stack (rules (91)-(94)): ON ERROR pushes a handler id,
+ * REVERT pops, SIGNAL dispatches to the top. Id 0 (and an empty stack) means
+ * the system action. Single-threaded in this stage (tasking is M9). */
+#define PLI_ON_MAX 64
+static long long pli_err_stack[PLI_ON_MAX];
+static int pli_err_sp = 0;
+static int pli_oncode_val = 0;
+void pli_on_push_error(long long id) {
+  if (pli_err_sp < PLI_ON_MAX) {
+    pli_err_stack[pli_err_sp++] = id;
+  } else {
+    fprintf(stderr, "ON ERROR stack overflow\n");
+    exit(8);
+  }
+}
+void pli_on_pop_error(void) {
+  if (pli_err_sp > 0)
+    --pli_err_sp;
+}
+long long pli_on_top_error(void) {
+  return pli_err_sp > 0 ? pli_err_stack[pli_err_sp - 1] : 0;
+}
+long long pli_on_depth_error(void) {
+  return pli_err_sp;
+}
+void pli_on_reset_error(long long d) {
+  if (d >= 0 && d <= pli_err_sp)
+    pli_err_sp = (int)d;
+}
+int pli_oncode(void) {
+  return pli_oncode_val;
+}
+void pli_set_oncode(int c) {
+  pli_oncode_val = c;
+}
+
 /* SUBSCRIPTRANGE interim (M2): a runtime subscript is out of bounds. Raised as
  * a hard error until condition handling (M4) provides ON SUBSCRIPTRANGE. */
 void pli_subscript_oob(void) {

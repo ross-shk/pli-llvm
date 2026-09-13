@@ -72,6 +72,13 @@ private:
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
   static std::string entryIrName(const std::string& proc, const std::string& parent,
                                  const std::string& entry);
+  // ON ERROR handlers (rules (91)-(94)): assign dense handler ids (1-based;
+  // 0 means SYSTEM), pre-create the handler functions, and fill their bodies.
+  void assignOnIds(HProgram& prog);
+  void declareOnHandlers(HProgram& prog);
+  void emitOnHandlers(HProgram& prog);
+  void emitOn(HStmt* s);     // establish a handler (or SYSTEM)
+  void emitSignal(HStmt* s); // raise ERROR: dispatch or take the system action
 
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
@@ -195,4 +202,12 @@ private:
   Type curRetTy_; // result type of the function currently being emitted (the impl's
                   // common entry type for a multi-entry procedure, rule (56))
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
+  // ON ERROR state (rules (91)-(94)): handler id -> function (id 1-based).
+  std::vector<llvm::Function*> onHandlers_;
+  // Procedure-entry ERROR depth slot for exit restore; null when the module
+  // establishes no handlers (the common path stays free) or inside a handler.
+  llvm::AllocaInst* curOnDepth_ = nullptr;
+  // True while filling an ON-unit handler: calls needing static links are
+  // diagnosed (the handler has no establishing frame).
+  bool inHandler_ = false;
 };

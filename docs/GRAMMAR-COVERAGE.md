@@ -53,7 +53,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (84),(85) | `EXIT`, `STOP` | M0 | |
 | (86) | assignment (incl. `BY NAME`) | partial M2 | scalar single target; `SUBSTR` pseudo-variable (`substr_assign.pli`, ADR-024); whole-structure assignment between identical-shape structures (`struct_assign.pli`, rule (127)); multiple assignment `a, b, c = e` with one shared RHS and same-type scalar/array-element targets (`multiassign.pli`, `bad_multiassign.pli`, `bad_multiassign_type.pli`); `BY NAME` assignment `S = T, BY NAME` copies same-named members regardless of layout, recursing into minor structures and arrays, skipping names absent from either side (`struct_by_name.pli`, ADR-043); non-structure or multi-target `BY NAME` diagnosed (`bad_struct_byname.pli`) |
 | (87)–(90) | `ALLOCATE`/`FREE` | diag → M3 | |
-| (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | diag → M4 | |
+| (91)–(99) | conditions, `ON`/`REVERT`/`SIGNAL`, `CHECK` | partial M4 | ERROR only: `ON ERROR [SNAP] (unit \| SYSTEM;)` establishes a handler id (SNAP warned, no effect), `SIGNAL ERROR` runs the top handler then resumes (system action aborts), `REVERT ERROR` pops (empty pop is a no-op), `ONCODE()` reads 1 inside a raised unit else 0 (`on_error.pli`, ADR-057); every other condition diagnosed (`bad_on_cond.pli`); unit frame access, RETURN/nested-ON/DECLARE/ENTRY in units, and GO TO with ON diagnosed (`bad_on_local.pli`) |
 | (100)–(103) | `OPEN`/`CLOSE` | diag → M5 | |
 | (104),(105) | `GET`/`PUT` and options | partial M0 | `PUT [SKIP] [PAGE] LIST`; rest → M5 |
 | (106)–(111) | data specifications, data lists | partial M0 | list-directed output; common `DATA`/`EDIT` → M5, picture-directed forms → D1 |

@@ -1434,3 +1434,31 @@ ENTRYs plus an external ENTRY...RETURNS function call; the linkage (`.c`
 helper, cross-unit link) reuses the existing `cinterop` pattern. Truly mixed
 valued types stay diagnosed; USES/SETS/REDUCIBLE entry attributes stay
 out of scope.
+
+## ADR-057 — ON ERROR: handler-id stack, frameless units, ONCODE 1/0
+
+Context. ADR-009 specifies the M4 condition mechanism (runtime handler stack,
+units compiled to functions taking the establishing frame, compile-time
+enable-state). The first served slice is ERROR only with the ONCODE code, and
+it must not disturb programs that establish no handlers.
+
+Decision. The runtime owns a stack of handler ids (0 means the SYSTEM action;
+an empty stack behaves the same). Each established ON-unit gets a dense
+1-based id and its own internal `void()` function; SIGNAL reads the top id
+and either aborts (system action, exit 8 via the existing ERROR path) or
+calls the handler with `pli_set_oncode(1)` around it, then resumes after the
+SIGNAL. ONCODE() reads the runtime value: 1 inside a SIGNAL-raised unit, 0
+elsewhere. Units run without the establishing frame, so sema diagnoses
+automatic-variable access (including DO control variables), RETURN, nested
+ON, DECLARE, ENTRY, calls needing static links (diagnosed at codegen, where
+envs are known), and GO TO in an ON-establishing procedure. Scoping is
+dynamic: procedure entry saves the depth and every RETURN plus fall-through
+restores it; BEGIN blocks restore on exit; REVERT pops (a pop on an empty
+stack is a no-op). When the module establishes no handlers, no condition code
+is emitted at all. SNAP parses with a no-effect warning. Non-ERROR conditions
+are diagnosed at parse time with their rule numbers (`bad_on_cond.pli`).
+
+Consequences. `on_error.pli` (golden) covers establish/raise/resume, ONCODE
+inside and out, re-establishment after REVERT, and the SYSTEM/REVERT no-op
+path. Frame-carrying units, computational and I/O conditions, FINISH, and
+non-local GO TO unwinding stay diagnosed for later slices.
