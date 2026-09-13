@@ -2096,3 +2096,21 @@ multi-token (whole statement) substitution plus string immunity;
 `bad_replace.pli` covers non-REPLACE directives. Redefinition takes the
 last definition. `%INCLUDE`, `%IF`, `%DECLARE`, and recursive expansion
 stay out of scope.
+
+## ADR-078 — %INCLUDE search paths: file dir, -I, env, exe-relative default
+
+Context. ADR-071 resolves `%INCLUDE` only against the including file's
+directory, so shared snippet libraries need absolute paths baked into
+sources. Clang solves the same problem with an ordered search (-I, CPATH,
+built-in defaults) plus `-v` visibility.
+
+Decision. Search in order: the including file's directory (unchanged),
+repeatable `-I` (`-I dir` and `-Idir`, first wins), colon-separated
+`PLIC_INCLUDE_PATH` (CPATH-like, skipped when empty), then the
+executable-relative `share/plic/include` default (mirroring the runtime-lib
+fallback idiom; a missing default simply never hits). `-v` prints the
+configured dirs. No `-isystem`/`-iquote` split: one ordered list is enough
+for snippet libraries.
+
+Consequences. `driver/include_dirs` covers -I discovery, first-wins order,
+env discovery, missing-file rejection, and the -v default listing.
