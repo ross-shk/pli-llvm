@@ -1,0 +1,9 @@
+ /* The SET target of ALLOCATE must be a POINTER variable (rule (88)): storing
+    the allocated address into a numeric variable is diagnosed. */
+ bad_alloc_set: procedure options(main);
+    declare p pointer;
+    declare n fixed bin(31);
+    declare 1 rec based(p),
+           2 a fixed bin(31);
+    allocate rec set (n);
+ end bad_alloc_set;

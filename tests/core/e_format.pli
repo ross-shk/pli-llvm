@@ -1,0 +1,42 @@
+   /* E(w,d) edit-directed format (rules (108),(48)-(54)): a FLOAT value is
+      written in scientific notation (mantissa with d fractional digits,
+      exponent), right-justified in a width-w field, and read back. A STRING
+      round-trip recovers the original value. */
+   e_format_test: procedure options(main);
+      declare fails fixed bin(31);
+      declare buf char(40);
+      declare v float decimal(6);
+      declare w float decimal(6);
+      declare chunk char(12);
+      fails = 0;
+
+      /* E(w,d): scientific notation with 2 fractional digits. */
+      v = 12.5;
+      put string(buf) edit(v) (e(12,2));
+      get string(buf) edit(w) (e(12,2));
+      if w ^= 12.5 then do;
+         fails = fails + 1;
+         put skip list('FAIL E roundtrip 12.5 ->', w);
+      end;
+
+      /* The rendered field is right-justified scientific with a signed,
+         two-digit exponent: 1.25E+01. */
+      put string(buf) edit(v) (e(12,2));
+      chunk = substr(buf, 1, 12);
+      if chunk ^= '    1.25E+01' then do;
+         fails = fails + 1;
+         put skip list('FAIL E content', chunk);
+      end;
+
+      /* A negative value keeps its sign in the exponent field. */
+      v = -0.00375;
+      put string(buf) edit(v) (e(14,3));
+      get string(buf) edit(w) (e(14,3));
+      if w ^= -0.00375 then do;
+         fails = fails + 1;
+         put skip list('FAIL E roundtrip neg ->', w);
+      end;
+
+      if fails = 0 then put skip list('PASS e_format');
+      else put skip list('FAIL e_format: fails =', fails);
+   end e_format_test;

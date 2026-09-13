@@ -187,6 +187,7 @@ Token Lexer::lexNumber() {
       }
       t.text += exp;
       t.isFloat = true;
+      t.hasExp = true;
     } else {
       p_ = save;
       line_ = sl;
@@ -247,7 +248,7 @@ std::vector<Token> Lexer::run() {
       t.kind = Tok::Eof;
       t.loc = here();
       out.push_back(t);
-      // Extension (ADR-058): expand %REPLACE before parsing. Skipped when
+      // Extension (ADR-077): expand %REPLACE before parsing. Skipped when
       // lexing already failed, so one fault never cascades into another.
       if (!d_.ok())
         return out;
@@ -397,7 +398,7 @@ std::vector<Token> Lexer::run() {
   }
 }
 
-// Extension (ADR-058): %REPLACE name BY <tokens> ; substitutes an identifier
+// Extension (ADR-077): %REPLACE name BY <tokens> ; substitutes an identifier
 // with source text before parsing. One left-to-right pass: a use sees only
 // earlier directives, and spliced tokens are not re-expanded (so
 // %REPLACE A BY A; terminates). Strings and comments never reach this pass
@@ -419,7 +420,7 @@ std::vector<Token> Lexer::applyReplace(std::vector<Token> in) {
       if (i + 1 < in.size() && in[i + 1].isWord("REPLACE")) {
         size_t j = i + 2;
         if (j >= in.size() || in[j].kind != Tok::Word) {
-          d_.error(t.loc, "expected an identifier after %REPLACE (ADR-058)", "");
+          d_.error(t.loc, "expected an identifier after %REPLACE (ADR-077)", "");
           resync(j);
           i = j;
           continue;
@@ -427,7 +428,7 @@ std::vector<Token> Lexer::applyReplace(std::vector<Token> in) {
         std::string name = in[j].text;
         SourceLoc nl = in[j].loc;
         if (++j >= in.size() || !in[j].isWord("BY")) {
-          d_.error(nl, "expected BY after the %REPLACE identifier (ADR-058)", "");
+          d_.error(nl, "expected BY after the %REPLACE identifier (ADR-077)", "");
           resync(j);
           i = j;
           continue;
@@ -439,7 +440,7 @@ std::vector<Token> Lexer::applyReplace(std::vector<Token> in) {
         if (end > start && in[end - 1].kind == Tok::Semi)
           --end;
         if (end == start) {
-          d_.error(nl, "empty replacement text in %REPLACE (ADR-058)", "");
+          d_.error(nl, "empty replacement text in %REPLACE (ADR-077)", "");
           i = j;
           continue;
         }
@@ -447,7 +448,7 @@ std::vector<Token> Lexer::applyReplace(std::vector<Token> in) {
         i = j;
         continue;
       }
-      d_.error(t.loc, "only %REPLACE directives are implemented in this stage (ADR-058)", "");
+      d_.error(t.loc, "only %REPLACE directives are implemented in this stage (ADR-077)", "");
       ++i;
       continue;
     }

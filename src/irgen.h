@@ -22,11 +22,13 @@
 // A materialised PL/I value.
 //   scalars : `reg` holds the LLVM value (i32/i64/double, or i1 for BIT)
 //   strings : `ptr` holds a pointer to the first character and `len` an i64
+//   complex : `cpx` holds an {double,double} struct of the real/imaginary parts
 struct Val {
   Type ty{};
   llvm::Value* reg = nullptr;
   llvm::Value* ptr = nullptr;
   llvm::Value* len = nullptr;
+  llvm::Value* cpx = nullptr;
 };
 
 class IRGen {
@@ -56,6 +58,29 @@ private:
   // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
   // bound value of its dynamic axis, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynUb_;
+  // The runtime lower bound value of a dynamic lower bound (rule (13)), the
+  // mirror of `dynUb_`, loaded once at block entry.
+  std::unordered_map<Symbol*, llvm::Value*> dynLb_;
+  // Dynamic array member (rule 13) runtime bound values, keyed by (structure
+  // symbol, member field path), recorded once at block entry.
+  struct MemberDyn {
+    Symbol* sym;
+    std::vector<unsigned> path;
+    bool operator==(const MemberDyn& o) const { return sym == o.sym && path == o.path; }
+    struct Hash {
+      size_t operator()(const MemberDyn& k) const {
+        size_t h = std::hash<Symbol*>{}(k.sym);
+        for (unsigned u : k.path)
+          h = h * 31 + u;
+        return h;
+      }
+    };
+  };
+  struct MemberBounds {
+    llvm::Value* ub = nullptr;
+    llvm::Value* lb = nullptr;
+  };
+  std::unordered_map<MemberDyn, MemberBounds, MemberDyn::Hash> memberDyn_;
   void emitGlobals();
   void declareProc(HProc* p); // pre-create a proc's functions/aliases so calls resolve
   void emitProc(HProc* p);
@@ -87,7 +112,20 @@ private:
   void emitDoWhile(HStmt* s);
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
+  void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
+  // Edit-directed transmission (rule (108)): walk the format list, pairing each
+  // data item with its A/F format and emitting the control (X/SKIP/PAGE/LINE)
+  // items in order.
+  void emitPutEditItems(HStmt* s);
+  void emitGetEditItems(HStmt* s);
+  // Store a list-directed input value into a data-list reference (the same
+  // target-addressing as an assignment's left-hand side).
+  void storeGetTarget(HExpr* t, const Val& v, SourceLoc loc);
   void emitCall(HStmt* s);
+  void emitAllocate(HStmt* s); // ALLOCATE (rule 87)
+  void emitFree(HStmt* s);     // FREE (rule 90)
+  void emitOpen(HStmt* s);     // OPEN (rules 100,101)
+  void emitClose(HStmt* s);    // CLOSE (rules 102,103)
 
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is
@@ -122,9 +160,11 @@ private:
   // check on each axis. `arr` is the array type (bounds + element), `base` the
   // address of the array storage; `idxs` holds one index per axis. For a
   // dynamic (runtime-extent) array, `dynUb` supplies the runtime upper bound of
-  // the (single, 1-D) dynamic axis and `base` is a bare element pointer.
+  // the (single, 1-D) dynamic axis, `dynLb` the runtime lower bound, and `base`
+  // is a bare element pointer.
   llvm::Value* arrayElementAddr(const Type& arr, llvm::Value* base, const std::vector<HExprP>& idxs,
-                                SourceLoc loc, llvm::Value* dynUb = nullptr);
+                                SourceLoc loc, llvm::Value* dynUb = nullptr,
+                                llvm::Value* dynLb = nullptr);
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.
@@ -134,15 +174,32 @@ private:
   // through the recorded field indices against the element structure type.
   llvm::Value* elementMemberAddr(Symbol* base, const std::vector<unsigned>& path,
                                  llvm::Value* elemAddr);
+  // Address of a member of a locator-qualified reference P->X.FIELD (rule 124):
+  // like memberAddr, but GEPs from a caller-supplied base address (the loaded
+  // pointer value) through the field indices against the based structure type.
+  llvm::Value* locatorMemberAddr(Symbol* base, const std::vector<unsigned>& path,
+                                 llvm::Value* baseAddr);
   // The resolved type of a qualified member S.A.B (rule 124): walk the recorded
   // field indices to recover the leaf member's type (an array member's array
   // type), mirroring memberAddr without emitting GEPs.
   const Type& memberType(Symbol* base, const std::vector<unsigned>& path);
+  // Buffer pointer and live bounds of a dynamic-array structure member (rule
+  // 13): load the runtime-sized buffer pointer held in the struct field, and
+  // return the bounds recorded at entry. Caller passes a dynamic-array member
+  // path; the returned base is a bare element pointer.
+  llvm::Value* dynamicMemberBase(Symbol* base, const std::vector<unsigned>& path, SourceLoc loc,
+                                 llvm::Value*& ub, llvm::Value*& lb);
   // BY NAME assignment (rule 86): copy each same-named member of `dst` from
   // `src` at their struct bases, recursing into minor structures; names absent
   // from either side are skipped.
   void emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Type& dst, const Type& src,
                       SourceLoc loc);
+  // Store a structure's INITIAL element list (rule (26)) into its storage,
+  // walking members in declaration order and storing each value to the matching
+  // scalar leaf (recursing into nested structures and array members). `idx` is
+  // the position in `vals` and advances as leaves are consumed.
+  void emitStructInitValues(llvm::Value* base, const Type& ty, const std::vector<Expr*>& vals,
+                            size_t& idx, SourceLoc loc);
   // Emit a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.
@@ -201,6 +258,9 @@ private:
   HProc* curProc_ = nullptr;
   Type curRetTy_; // result type of the function currently being emitted (the impl's
                   // common entry type for a multi-entry procedure, rule (56))
+  // The hidden result pointer of a structure-valued function (rule 127): the
+  // caller-supplied buffer that a RETURN(struct) copies into before returning.
+  llvm::Value* structRetPtr_ = nullptr;
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
   // ON ERROR state (rules (91)-(94)): handler id -> function (id 1-based).
   std::vector<llvm::Function*> onHandlers_;

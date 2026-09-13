@@ -1,0 +1,7 @@
+ /* A POINTER is an address value, not a number (rules (15),(117)): mixing a
+    pointer with an arithmetic value is diagnosed rather than miscompiled. */
+ bad_pointer: procedure options(main);
+    declare p pointer;
+    declare n fixed bin(31);
+    n = p;
+ end bad_pointer;

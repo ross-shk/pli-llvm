@@ -1,0 +1,7 @@
+  /* A dynamic (runtime) extent on an axis beyond the first stays rejected:
+     only the first axis of a dynamic array may be dynamic in this stage
+     (rules (12),(13)). */
+  bad_dyn_multi: procedure options(main);
+     declare n fixed bin(31);
+     declare a(3, n) fixed bin(31);
+  end bad_dyn_multi;

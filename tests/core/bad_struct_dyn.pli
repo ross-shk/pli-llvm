@@ -1,0 +1,13 @@
+  /* A whole-structure assignment whose target/source contains a dynamic array
+     member is not served: the struct field is a pointer, so a storage copy
+     would copy the pointer rather than the pointed-to data (rules (13),(127)). */
+  bad_struct_dyn: procedure options(main);
+     declare n fixed bin(31);
+     declare 1 s,
+            2 a fixed bin(31),
+            2 v(n) fixed bin(31);
+     declare 1 t,
+            2 a fixed bin(31),
+            2 v(n) fixed bin(31);
+     t = s;
+  end bad_struct_dyn;

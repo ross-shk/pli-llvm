@@ -54,11 +54,14 @@ HExprP lowerExprBase(const Expr* e) {
   h->ty = e->ty;
   h->ival = e->ival;
   h->fval = e->fval;
+  h->decScale = e->decScale;
+  h->decPrec = e->decPrec;
   h->sval = e->sval;
   h->name = e->name;
   h->path = e->path;
   h->memberPath = e->memberPath;
   h->sym = e->sym;
+  h->locPtr = lowerExpr(e->locPtr.get());
   h->op = e->op;
   h->a = lowerExpr(e->a.get());
   h->b = lowerExpr(e->b.get());
@@ -93,11 +96,23 @@ HExprP lowerCallExpr(const Expr* e) {
   HExpr* he = h.get();
   const std::string& n = e->name;
 
-  if (n == "MIN" || n == "MAX" || n == "MOD" || n == "MULTIPLY" || n == "DIVIDE") {
+  if (n == "MIN" || n == "MAX" || n == "MOD" || n == "DIVIDE") {
     if (he->args.size() >= 2) {
       const Type& common = e->ty;
       he->args[0] = convIf(std::move(he->args[0]), common);
       he->args[1] = convIf(std::move(he->args[1]), common);
+    }
+  } else if (n == "MULTIPLY") {
+    // A product's scale is the sum of the operand scales (ADR-006); match each
+    // operand's width without rescaling it to the product scale first.
+    if (he->args.size() >= 2) {
+      const Type& common = e->ty;
+      Type a0 = common;
+      a0.scale = he->args[0]->ty.isFixed() ? he->args[0]->ty.scale : 0;
+      Type a1 = common;
+      a1.scale = he->args[1]->ty.isFixed() ? he->args[1]->ty.scale : 0;
+      he->args[0] = convIf(std::move(he->args[0]), a0);
+      he->args[1] = convIf(std::move(he->args[1]), a1);
     }
   } else if (n == "PRECISION") {
     if (!he->args.empty())
@@ -149,11 +164,32 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     hd.extName = d.extName;
     for (const auto& b : d.dynBounds)
       hd.dynBounds.push_back(b ? lowerExpr(b.get()) : nullptr);
+    for (const auto& b : d.dynLbBounds)
+      hd.dynLbBounds.push_back(b ? lowerExpr(b.get()) : nullptr);
     // The lowered dynamic upper bound rides on the symbol so irgen's allocaLocals
     // can size the runtime buffer (rules (12),(13)). Safe to keep a raw pointer:
     // the HExpr is owned by this HProgram, which outlives IRGen.
     if (hd.sym && !hd.dynBounds.empty())
       hd.sym->dynUb = hd.dynBounds[0].get();
+    if (hd.sym && !hd.dynLbBounds.empty())
+      hd.sym->dynLb = hd.dynLbBounds[0].get();
+    // Dynamic array members (rule 13): lower each member's bound exprs onto the
+    // symbol so irgen can size and address the member buffer at entry. The raw
+    // ub/lb pointers reference hd.dynMemberBounds, which owns the exprs.
+    if (hd.sym)
+      for (const auto& dm : d.dynMembers) {
+        Symbol::DynMemberH mh;
+        mh.path = dm.path;
+        if (dm.ub) {
+          hd.dynMemberBounds.push_back(lowerExpr(dm.ub));
+          mh.ub = hd.dynMemberBounds.back().get();
+        }
+        if (dm.lb) {
+          hd.dynMemberBounds.push_back(lowerExpr(dm.lb));
+          mh.lb = hd.dynMemberBounds.back().get();
+        }
+        hd.sym->dynMembers.push_back(std::move(mh));
+      }
     // The lowered INITIAL(CALL f(...)) expression (rule 27) rides on the symbol
     // so irgen's emitInitials can evaluate it at block entry; hd.initCall owns
     // the HExpr (freed with the HStmt), which outlives IRGen.
@@ -178,8 +214,24 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     h->body.push_back(lowerStmt(b.get(), owner));
 
   h->skipCount = lowerExpr(s->skipCount.get());
+  h->stringTarget = lowerExpr(s->stringTarget.get());
   for (const auto& it : s->items)
     h->items.push_back(lowerExpr(it.get()));
+  // Edit-directed format list (rule (108)): lower each item's width/decimals.
+  h->edit = s->edit;
+  for (const auto& f : s->formats) {
+    HFormatItem hf;
+    hf.kind = static_cast<HFormatItem::Kind>(f.kind);
+    hf.w = lowerExpr(f.w.get());
+    hf.d = lowerExpr(f.d.get());
+    h->formats.push_back(std::move(hf));
+  }
+
+  // OPEN/CLOSE and the FILE ( f ) stream option (rules 100-103,105): carry the
+  // resolved FILE symbol and the OPEN options across the lowering.
+  h->fileSym = s->fileSym;
+  h->openTitle = s->openTitle;
+  h->openInput = s->openInput;
 
   // CALL statement arguments: coerce to the callee's parameter types.
   for (const auto& a : s->args) {
@@ -196,6 +248,15 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     }
     h->args.push_back(std::move(ha));
   }
+
+  // ALLOCATE (rule 87) / FREE (rule 90): mirror the based variable references
+  // and their SET pointer targets / locators.
+  for (const auto& b : s->allocBase)
+    h->allocBase.push_back(lowerExpr(b.get()));
+  for (const auto& t : s->allocSet)
+    h->allocSet.push_back(lowerExpr(t.get()));
+  for (const auto& b : s->freeBase)
+    h->freeBase.push_back(lowerExpr(b.get()));
 
   // Statement-level conversions that IRGen applies inline, made explicit.
   switch (h->kind) {
@@ -286,6 +347,11 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
   switch (e->kind) {
   case HExpr::IntLit:
     os << "IntLit(" << e->ival << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
+  case HExpr::DecLit:
+    os << "DecLit(" << e->ival << ",q" << e->decScale << ":";
     printType(os, e->ty);
     os << ")";
     break;
@@ -427,6 +493,8 @@ const char* stmtKind(HStmt::Kind k) {
     return "DoIter";
   case HStmt::Put:
     return "Put";
+  case HStmt::Get:
+    return "Get";
   case HStmt::CallS:
     return "Call";
   case HStmt::Return:
@@ -437,6 +505,14 @@ const char* stmtKind(HStmt::Kind k) {
     return "Goto";
   case HStmt::Entry:
     return "Entry";
+  case HStmt::Allocate:
+    return "Allocate";
+  case HStmt::Free:
+    return "Free";
+  case HStmt::Open:
+    return "Open";
+  case HStmt::Close:
+    return "Close";
   case HStmt::Leave:
     return "Leave";
   case HStmt::On:
@@ -517,6 +593,16 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     os << "]";
     break;
   }
+  case HStmt::Get: {
+    os << " [";
+    for (size_t i = 0; i < s->items.size(); ++i) {
+      if (i)
+        os << ", ";
+      printExpr(os, s->items[i].get(), ind);
+    }
+    os << "]";
+    break;
+  }
   case HStmt::Entry:
     os << " " << s->name;
     break;
@@ -528,6 +614,28 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Revert:
   case HStmt::Signal:
     os << " " << s->condName;
+    break;
+  case HStmt::Allocate:
+    for (size_t i = 0; i < s->allocBase.size(); ++i) {
+      os << (i ? "," : " ");
+      printExpr(os, s->allocBase[i].get(), ind);
+      os << " set=";
+      printExpr(os, s->allocSet[i].get(), ind);
+    }
+    break;
+  case HStmt::Free:
+    for (size_t i = 0; i < s->freeBase.size(); ++i) {
+      os << (i ? "," : " ");
+      printExpr(os, s->freeBase[i].get(), ind);
+    }
+    break;
+  case HStmt::Open:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name) << (s->openInput ? " input" : " output");
+    if (!s->openTitle.empty())
+      os << " title(" << s->openTitle << ")";
+    break;
+  case HStmt::Close:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name);
     break;
   default:
     break;

@@ -1,4 +1,4 @@
-  /* extension (ADR-058): only %REPLACE is
+  /* extension (ADR-077): only %REPLACE is
      served; other % directives are
      diagnosed. */
   badreplace: procedure options(main);

@@ -1,6 +1,32 @@
 #include "parser.h"
 #include <cstdlib>
 
+// Parse an exact FIXED DECIMAL constant (rule 135): digits with a fraction
+// point and no exponent, e.g. "3.14". Sets ival to the value scaled by 10^q,
+// decScale to the fraction digit count q, and decPrec to the digit count p.
+static void parseDecConstant(const std::string& text, Expr& e) {
+  size_t dot = text.find('.');
+  std::string intPart = dot == std::string::npos ? text : text.substr(0, dot);
+  std::string fracPart = dot == std::string::npos ? "" : text.substr(dot + 1);
+  long long scaled = 0;
+  for (char c : intPart)
+    scaled = scaled * 10 + (c - '0');
+  for (char c : fracPart)
+    scaled = scaled * 10 + (c - '0');
+  e.ival = scaled;
+  e.decScale = (int)fracPart.size();
+  e.decPrec = (int)(intPart.size() + fracPart.size());
+}
+
+// True when a bare word is a scalar type/attribute keyword (rules (16)-(19)),
+// so `RETURNS(fixed)`/`RETURNS(float)` mean a scalar descriptor rather than a
+// structure template reference (rule 127).
+static bool isScalarTypeWord(const std::string& w) {
+  return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
+         w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
+         w == "VAR" || w == "ALIGNED" || w == "UNALIGNED" || w == "POINTER";
+}
+
 // ---------------------------------------------------------------------------
 // Operator mapping. Symbols, plus the 48-character-set operator words of
 // TR 25.084 §2.3.3 (NOT AND OR GT LT GE LE NG NL NE CAT).
@@ -270,11 +296,21 @@ void Parser::parseProcOptions(Proc* p) {
       continue;
     if (atWord("RETURNS")) {
       // RETURNS(data-attributes) ::= the result type of a function
-      // procedure (rules (5),(34)). Parse the type from the attribute words.
+      // procedure (rules (5),(34)). Parse the type from the attribute words, or
+      // — when the operand is a single name — treat it as a structure variable
+      // whose shape the function returns (rule (127), resolved in sema).
       advance();
       if (expect(Tok::LParen, "(34)")) {
         p->isFunction = true;
-        parseDescriptorType(p->retTy); // result type from the attribute words
+        // A lone identifier that is not a scalar type keyword names a structure
+        // template whose shape the function returns (rule 127).
+        if (cur().kind == Tok::Word && peek().kind == Tok::RParen &&
+            !isScalarTypeWord(cur().text)) {
+          p->returnsStructName = cur().text;
+          advance();
+        } else {
+          parseDescriptorType(p->retTy); // result type from the attribute words
+        }
         expect(Tok::RParen, "(34)");
       }
       continue;
@@ -534,11 +570,8 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     expect(Tok::Semi, "(85)");
     return st;
   }
-  if (kw("GET")) {
-    d_.error(cur().loc, "GET (stream input) is not implemented in this stage", "(104)");
-    resync();
-    return nullptr;
-  }
+  if (kw("GET"))
+    return parseGet();
   if (kw("GO") && peek().kind == Tok::Word && peek().isWord("TO")) {
     // GO TO label ;                                        rule (77)
     auto st = std::make_unique<Stmt>();
@@ -574,12 +607,15 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     return parseSignal(); // rule (93)
   if (kw("REVERT"))
     return parseRevert(); // rule (92)
-  if (kw("ALLOCATE") || kw("FREE")) {
-    d_.error(cur().loc, "dynamic storage (ALLOCATE/FREE) is not implemented in this stage", "(87)");
-    resync();
-    return nullptr;
-  }
-  if (kw("OPEN") || kw("CLOSE") || kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE")) {
+  if (kw("ALLOCATE"))
+    return parseAllocate();
+  if (kw("FREE"))
+    return parseFree();
+  if (kw("OPEN"))
+    return parseOpen();
+  if (kw("CLOSE"))
+    return parseClose();
+  if (kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE")) {
     d_.error(cur().loc, "file input/output is not implemented in this stage", "(100)");
     resync();
     return nullptr;
@@ -918,7 +954,8 @@ bool Parser::parseDeclTail(DeclItem& item) {
   // keyword follows; otherwise it is a precision/length (M0 scalar behaviour).
   std::vector<Dim> arrDims;
   std::vector<ExprP> arrDyn;
-  tryParseDimension(arrDims, arrDyn);
+  std::vector<ExprP> arrDynLb;
+  tryParseDimension(arrDims, arrDyn, arrDynLb);
 
   // Attribute bag (rules 14-32).
   AttrBag bag;
@@ -1118,9 +1155,47 @@ bool Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "COMPLEX" || w == "CPLX" || w == "PICTURE" || w == "PIC" || w == "POINTER" ||
-          w == "PTR" || w == "AREA" || w == "OFFSET" || w == "BASED" || w == "CONTROLLED" ||
-          w == "CTL" || w == "LABEL" || w == "FILE" || w == "TASK" || w == "EVENT" || w == "CELL" ||
+      if (w == "POINTER" || w == "PTR") {
+        advance();
+        bag.pointer = true;
+        continue;
+      }
+      if (w == "FILE") {
+        // file-name-attribute ::= FILE (rules 39,40): a named file variable,
+        // addressed by OPEN/CLOSE and the FILE ( f ) stream option.
+        advance();
+        bag.file = true;
+        continue;
+      }
+      if (w == "BASED") {
+        // based-attribute ::= BASED [ ( reference ) ]  rule (25): the declared
+        // item overlays the storage addressed by a POINTER variable, so it has
+        // no storage of its own. This stage requires the explicit BASED(P).
+        advance();
+        if (at(Tok::LParen)) {
+          advance();
+          if (at(Tok::Word)) {
+            item.basedBase = cur().text;
+            advance();
+          } else {
+            d_.error(cur().loc, "expected a POINTER reference after BASED(", "(25)");
+          }
+          expect(Tok::RParen, "(25)");
+        } else {
+          d_.error(cur().loc, "BASED without an explicit POINTER is not implemented in this stage",
+                   "(25)");
+        }
+        continue;
+      }
+      if (w == "COMPLEX" || w == "CPLX") {
+        // complex-attribute (QR2.2/CM5, rules (14),(15)): a value with real and
+        // imaginary parts. Consumed like the other scalar data attributes.
+        advance();
+        bag.complex = true;
+        continue;
+      }
+      if (w == "PICTURE" || w == "PIC" || w == "AREA" || w == "OFFSET" || w == "CONTROLLED" ||
+          w == "CTL" || w == "LABEL" || w == "TASK" || w == "EVENT" || w == "CELL" ||
           w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
@@ -1176,8 +1251,26 @@ bool Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "string and arithmetic attributes cannot be combined", "(15)");
   if (bag.varying && !bag.character && !bag.bit)
     d_.error(item.loc, "VARYING requires CHARACTER or BIT", "(15)");
+  if (bag.pointer &&
+      (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal))
+    d_.error(item.loc, "POINTER cannot be combined with a data attribute", "(15)");
+  if (bag.file && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
+                   bag.decimal || bag.pointer))
+    d_.error(item.loc, "FILE cannot be combined with a data attribute", "(15)");
+  if (bag.complex && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
+                      bag.decimal || bag.pointer || bag.file))
+    d_.error(item.loc, "COMPLEX cannot be combined with another data attribute", "(15)");
 
-  if (bag.character) {
+  if (bag.file) {
+    // A FILE variable carries no computational value (rules 39,40); the parser
+    // records the flag and sema assigns it a runtime slot at OPEN/CLOSE.
+    item.fileAttr = true;
+    item.ty = Type::voidTy();
+  } else if (bag.pointer) {
+    item.ty = Type::ptr();
+  } else if (bag.complex) {
+    item.ty = Type::complexTy();
+  } else if (bag.character) {
     item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
   } else if (bag.bit) {
     int n = bag.slen > 0 ? bag.slen : 1;
@@ -1202,6 +1295,7 @@ bool Parser::parseDeclTail(DeclItem& item) {
   }
   item.ty.dims = arrDims;
   item.dynBounds = std::move(arrDyn);
+  item.dynLbBounds = std::move(arrDynLb);
   item.init = std::move(init);
   return true;
 }
@@ -1210,7 +1304,8 @@ bool Parser::parseDeclTail(DeclItem& item) {
 // bound-pair (lb:ub) is always a dimension; a bare (n) is a dimension only when
 // followed by an attribute keyword (e.g. `DECLARE A(5) FIXED BINARY;`), else it
 // stays a precision/length for M0 scalar declarations.
-bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds) {
+bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBounds,
+                               std::vector<ExprP>& dynLbBounds) {
   if (!at(Tok::LParen))
     return false;
   size_t save = i_;
@@ -1235,7 +1330,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   // or a dynamic bound makes the whole group a dimension; all-bare constant
   // extents are a dimension only when an attribute keyword follows.
   std::vector<Dim> axes;
-  std::vector<ExprP> db; // parallel to axes: upper-bound expr (nullptr = constant)
+  std::vector<ExprP> db;  // upper-bound expr of each dynamic upper bound
+  std::vector<ExprP> dlb; // lower-bound expr of each dynamic lower bound
   bool anyColon = false;
   for (;;) {
     Dim d;
@@ -1256,9 +1352,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
         if (firstConst) {
           d.lb = (int)fv;
         } else {
-          d_.error(first->loc, "a dynamic array lower bound is not implemented in this stage",
-                   "(13)");
-          d.lb = 1;
+          d.lbDyn = true; // runtime lower bound (rule (13)); lb is a placeholder
+          dlb.push_back(std::move(first));
         }
         ExprP ubE = parseExpr();
         long long uv;
@@ -1291,6 +1386,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   if (anyColon) {
     out = std::move(axes);
     dynBounds = std::move(db);
+    dynLbBounds = std::move(dlb);
     return true;
   }
   // All bare constants (n): a dimension only when an attribute keyword follows.
@@ -1304,6 +1400,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
     dynBounds = std::move(db);
+    dynLbBounds = std::move(dlb);
     return true;
   }
   // A bare extent (n) directly after a name is unambiguously a dimension when
@@ -1313,6 +1410,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   if (at(Tok::Comma)) {
     out = std::move(axes);
     dynBounds = std::move(db);
+    dynLbBounds = std::move(dlb);
     return true;
   }
   i_ = save;
@@ -1484,21 +1582,43 @@ StmtP Parser::parsePut() {
     }
     if (atWord("FILE")) {
       advance();
-      SourceLoc l = cur().loc;
       if (eat(Tok::LParen)) {
-        if (at(Tok::Word))
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
           advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(105)");
+        }
         expect(Tok::RParen, "(105)");
       }
-      d_.warn(l, "FILE option ignored: this stage writes to SYSPRINT only", "(105)");
       continue;
     }
-    if (atWord("EDIT") || atWord("DATA")) {
-      d_.error(cur().loc, "only list-directed output is implemented in this stage", "(106)");
+    if (atWord("EDIT")) {
+      // Edit-directed transmission (rule (108)): `EDIT ( (datalist) formatlist )`.
+      if (!parseEditClause(st.get())) {
+        resync();
+        return nullptr;
+      }
+      continue;
+    }
+    if (atWord("DATA")) {
+      d_.error(cur().loc, "DATA-directed output is not implemented in this stage", "(106)");
       resync();
       return nullptr;
     }
-    if (atWord("LINE") || atWord("STRING") || atWord("COPY")) {
+    if (atWord("STRING")) {
+      // STRING ( reference ) option (rule 105): write list-directed output into
+      // the character variable instead of SYSPRINT.
+      advance();
+      if (eat(Tok::LParen)) {
+        st->stringTarget = parsePrimary();
+        expect(Tok::RParen, "(105)");
+      } else {
+        d_.error(cur().loc, "expected '(' after STRING", "(105)");
+      }
+      continue;
+    }
+    if (atWord("LINE") || atWord("COPY")) {
       d_.error(cur().loc, "PUT option " + cur().text + " is not implemented in this stage",
                "(105)");
       resync();
@@ -1511,6 +1631,173 @@ StmtP Parser::parsePut() {
   expect(Tok::Semi, "(104)");
   (void)sawData;
   return st;
+}
+
+// stream-io-statement ::= GET stream-optionslist ;    rules (104)-(109)
+// CM3 serves the list-directed form: GET [SKIP] LIST (datalist); reading scalar
+// values from SYSIN. FILE/STRING/EDIT/DATA/COPY/LINE/PAGE stay QR2.5.
+StmtP Parser::parseGet() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Get;
+  st->loc = cur().loc;
+  advance(); // GET
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("SKIP")) {
+      advance();
+      st->skip = true;
+      if (eat(Tok::LParen)) {
+        st->skipCount = parseExpr();
+        expect(Tok::RParen, "(105)");
+      }
+      continue;
+    }
+    if (atWord("LIST")) {
+      advance();
+      if (expect(Tok::LParen, "(109)")) {
+        if (!at(Tok::RParen)) {
+          for (;;) {
+            st->items.push_back(parseExpr());
+            if (!eat(Tok::Comma))
+              break;
+          }
+        }
+        expect(Tok::RParen, "(109)");
+      }
+      continue;
+    }
+    if (atWord("FILE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(105)");
+        }
+        expect(Tok::RParen, "(105)");
+      }
+      continue;
+    }
+    if (atWord("STRING")) {
+      // STRING ( reference ) option (rule 105): read list-directed input from
+      // the character variable instead of SYSIN.
+      advance();
+      if (eat(Tok::LParen)) {
+        st->stringTarget = parsePrimary();
+        expect(Tok::RParen, "(105)");
+      } else {
+        d_.error(cur().loc, "expected '(' after STRING", "(105)");
+      }
+      continue;
+    }
+    if (atWord("EDIT")) {
+      // Edit-directed transmission (rule (108)): `EDIT ( (datalist) formatlist )`.
+      if (!parseEditClause(st.get())) {
+        resync();
+        return nullptr;
+      }
+      continue;
+    }
+    if (atWord("DATA") || atWord("COPY") || atWord("LINE") || atWord("PAGE")) {
+      d_.error(cur().loc, "GET option " + cur().text + " is not implemented in this stage",
+               "(105)");
+      resync();
+      return nullptr;
+    }
+    d_.error(cur().loc, "unexpected token in GET statement", "(105)");
+    resync();
+    return nullptr;
+  }
+  expect(Tok::Semi, "(104)");
+  return st;
+}
+
+// EDIT ( { ( datalist ) formatlist }••• )          rules (108),(45)
+// Parses the edit-directed data specification into the statement's data items
+// and its paired format list. A bare word inside the datalist is a data item
+// (an expression); inside the formatlist it is a format descriptor (A/F/X/...).
+bool Parser::parseEditClause(Stmt* st) {
+  advance(); // EDIT
+  for (;;) {
+    // ( datalist )   rules (110),(111)
+    if (!expect(Tok::LParen, "(110)"))
+      return false;
+    if (!at(Tok::RParen)) {
+      for (;;) {
+        st->items.push_back(parseExpr());
+        if (!eat(Tok::Comma))
+          break;
+      }
+    }
+    expect(Tok::RParen, "(110)");
+    // formatlist  ( {,• format•••} )   rules (45)-(54)
+    if (!expect(Tok::LParen, "(45)"))
+      return false;
+    if (!at(Tok::RParen)) {
+      for (;;) {
+        if (!parseFormatItem(st))
+          return false;
+        if (!eat(Tok::Comma))
+          break;
+      }
+    }
+    expect(Tok::RParen, "(45)");
+    // A further ( datalist ) formatlist group, comma-separated.
+    if (!eat(Tok::Comma))
+      break;
+  }
+  st->edit = true;
+  return true;
+}
+
+// One format item (rules (46)-(54)): a data format (A character, F fixed) or a
+// control format (X spacing, SKIP/LINE/PAGE line control), each with an optional
+// parenthesised width and, for F, a fractional-digit count.
+bool Parser::parseFormatItem(Stmt* st) {
+  FormatItem fi;
+  if (cur().kind != Tok::Word) {
+    d_.error(cur().loc, "expected a format item", "(48)");
+    return false;
+  }
+  const std::string& w = cur().text;
+  // Format families recognised but not served by this slice (CM3).
+  if (w == "B" || w == "C" || w == "P" || w == "COLUMN" || w == "R") {
+    d_.error(cur().loc, "format item '" + w + "' is not implemented in this stage", "(48)");
+    return false;
+  }
+  if (w == "A") {
+    fi.kind = FormatItem::A;
+  } else if (w == "F") {
+    fi.kind = FormatItem::F;
+  } else if (w == "E") {
+    fi.kind = FormatItem::E;
+  } else if (w == "X") {
+    fi.kind = FormatItem::X;
+  } else if (w == "SKIP") {
+    fi.kind = FormatItem::Skip;
+  } else if (w == "PAGE") {
+    fi.kind = FormatItem::Page;
+  } else if (w == "LINE") {
+    fi.kind = FormatItem::Line;
+  } else {
+    d_.error(cur().loc, "'" + w + "' is not a format item", "(48)");
+    return false;
+  }
+  advance();              // the format descriptor word
+  if (eat(Tok::LParen)) { // optional ( width [, decimals ] )
+    fi.w = parseExpr();
+    if ((fi.kind == FormatItem::F || fi.kind == FormatItem::E) && eat(Tok::Comma)) {
+      fi.d = parseExpr();
+      if (eat(Tok::Comma)) { // the third F operand is a scale factor
+        d_.error(cur().loc, "a scale factor on an F format item is not implemented in this stage",
+                 "(50)");
+        return false;
+      }
+    }
+    expect(Tok::RParen, "(48)");
+  }
+  st->formats.push_back(std::move(fi));
+  return true;
 }
 
 // call-statement ::= CALL identifier [argumentlist] ... ;          rule (78)
@@ -1583,6 +1870,210 @@ StmtP Parser::parseAssignment() {
     }
   }
   expect(Tok::Semi, "(86)");
+  return st;
+}
+
+// ALLOCATE based-allocate-item{,...};  rule (87)
+// based-allocate-item ::= identifier ( SET ( reference ) [ IN ( reference ) ]
+//                                     | IN ( reference ) [ SET ( reference ) ] )  rule (88)
+// CM2 serves the SET option: heap-allocate the based structure's storage and
+// store the address in the pointer reference. The IN (AREA) option stays QR2.3.
+StmtP Parser::parseAllocate() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Allocate;
+  st->loc = cur().loc;
+  advance(); // ALLOCATE
+  for (;;) {
+    if (at(Tok::Word)) {
+      auto base = std::make_unique<Expr>();
+      base->kind = Expr::VarRef;
+      base->name = cur().text;
+      base->loc = cur().loc;
+      advance();
+      bool paren = eat(Tok::LParen); // optional: identifier ( SET ( ref ) )
+      if (atWord("SET")) {
+        advance();
+        expect(Tok::LParen, "(88)");
+        ExprP set = parsePrimary();
+        if (!set) {
+          resync();
+          return nullptr;
+        }
+        expect(Tok::RParen, "(88)");
+        if (paren)
+          expect(Tok::RParen, "(88)");
+        st->allocBase.push_back(std::move(base));
+        st->allocSet.push_back(std::move(set));
+      } else {
+        d_.error(cur().loc, "ALLOCATE requires the SET ( reference ) option in this stage", "(88)");
+        resync();
+        return nullptr;
+      }
+    } else {
+      d_.error(cur().loc, "expected an identifier after ALLOCATE", "(87)");
+      resync();
+      return nullptr;
+    }
+    if (!eat(Tok::Comma))
+      break;
+  }
+  expect(Tok::Semi, "(87)");
+  return st;
+}
+
+// FREE ( [reference ->] identifier [ IN ( reference ) ] ){,...};  rule (90)
+// CM2 serves the plain based-variable form and the locator-qualified form. The
+// IN (AREA) option stays QR2.3.
+StmtP Parser::parseFree() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Free;
+  st->loc = cur().loc;
+  advance(); // FREE
+  for (;;) {
+    bool paren = eat(Tok::LParen);
+    if (at(Tok::Word)) {
+      auto base = std::make_unique<Expr>();
+      base->kind = Expr::VarRef;
+      base->name = cur().text;
+      base->loc = cur().loc;
+      advance();
+      if (at(Tok::Arrow)) {
+        // [reference ->] identifier: the left word is the locator pointer, the
+        // right is the based variable.
+        auto loc = std::make_unique<Expr>();
+        loc->kind = Expr::VarRef;
+        loc->name = base->name;
+        loc->loc = base->loc;
+        advance(); // ->
+        if (at(Tok::Word)) {
+          base->name = cur().text;
+          base->loc = cur().loc;
+          base->locPtr = std::move(loc);
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a based variable after '->'", "(90)");
+        }
+      }
+      st->freeBase.push_back(std::move(base));
+    } else {
+      d_.error(cur().loc, "expected an identifier after FREE", "(90)");
+      resync();
+      return nullptr;
+    }
+    if (atWord("IN")) {
+      d_.error(cur().loc, "FREE ... IN ( AREA ) is not implemented in this stage", "(90)");
+      resync();
+      return nullptr;
+    }
+    if (paren)
+      expect(Tok::RParen, "(90)");
+    if (!eat(Tok::Comma))
+      break;
+  }
+  expect(Tok::Semi, "(90)");
+  return st;
+}
+
+// open-statement ::= OPEN {, open-optionslist};    rules (100),(101)
+// This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the
+// INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40). RECORD/KEYED/UPDATE and
+// the IDENT/LINESIZE/PAGESIZE/ENVIRONMENT options stay unimplemented.
+StmtP Parser::parseOpen() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Open;
+  st->loc = cur().loc;
+  advance(); // OPEN
+  bool sawFile = false;
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("FILE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(101)");
+        }
+        expect(Tok::RParen, "(101)");
+      } else {
+        d_.error(cur().loc, "expected '(' after FILE", "(101)");
+      }
+      sawFile = true;
+      continue;
+    }
+    if (atWord("TITLE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::CharLit)) {
+          st->openTitle = cur().sval;
+          advance();
+        } else {
+          d_.error(cur().loc, "TITLE requires a character-string constant", "(101)");
+        }
+        expect(Tok::RParen, "(101)");
+      }
+      continue;
+    }
+    if (atWord("INPUT")) {
+      st->openInput = true;
+      advance();
+      continue;
+    }
+    if (atWord("OUTPUT") || atWord("STREAM") || atWord("PRINT")) {
+      advance();
+      continue;
+    }
+    if (atWord("RECORD") || atWord("KEYED") || atWord("UPDATE") || atWord("ENVIRONMENT") ||
+        atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE")) {
+      d_.error(cur().loc, "OPEN option " + cur().text + " is not implemented in this stage",
+               "(101)");
+      resync();
+      return nullptr;
+    }
+    d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");
+    resync();
+    return nullptr;
+  }
+  if (!sawFile)
+    d_.error(st->loc, "OPEN requires a FILE ( f ) option in this stage", "(101)");
+  expect(Tok::Semi, "(100)");
+  return st;
+}
+
+// close-statement ::= CLOSE {, close-optionslist};   rules (102),(103)
+StmtP Parser::parseClose() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Close;
+  st->loc = cur().loc;
+  advance(); // CLOSE
+  bool sawFile = false;
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("FILE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(103)");
+        }
+        expect(Tok::RParen, "(103)");
+      }
+      sawFile = true;
+      continue;
+    }
+    if (atWord("IDENT")) {
+      d_.error(cur().loc, "CLOSE option IDENT is not implemented in this stage", "(103)");
+      resync();
+      return nullptr;
+    }
+    d_.error(cur().loc, "unexpected token in CLOSE statement", "(103)");
+    resync();
+    return nullptr;
+  }
+  if (!sawFile)
+    d_.error(st->loc, "CLOSE requires a FILE ( f ) option in this stage", "(103)");
+  expect(Tok::Semi, "(102)");
   return st;
 }
 
@@ -1693,8 +2184,13 @@ ExprP Parser::parsePrimary() {
   if (at(Tok::Number)) {
     const Token& t = cur();
     if (t.isFloat) {
-      e->kind = Expr::FltLit;
-      e->fval = strtod(t.text.c_str(), nullptr);
+      if (t.hasExp) { // exponent form is a FLOAT constant (rule 135)
+        e->kind = Expr::FltLit;
+        e->fval = strtod(t.text.c_str(), nullptr);
+      } else { // a bare fractional literal is an exact FIXED DECIMAL constant
+        e->kind = Expr::DecLit;
+        parseDecConstant(t.text, *e);
+      }
     } else if (t.binaryRadix) {
       e->kind = Expr::IntLit;
       e->ival = strtoll(t.text.c_str(), nullptr, 2);
@@ -1722,12 +2218,23 @@ ExprP Parser::parsePrimary() {
     e->name = cur().text;
     advance();
     if (at(Tok::Arrow)) {
-      d_.error(cur().loc, "locator-qualified references are not implemented in this stage",
-               "(124)");
-      advance();
-      if (at(Tok::Word))
+      // Locator-qualified reference P -> X (rule 124): the left reference is a
+      // POINTER, the right a based variable X (or X.FIELD). e currently holds
+      // the left P — move it into the locator, then parse the right-hand name.
+      auto ptr = std::make_unique<Expr>();
+      ptr->kind = Expr::VarRef;
+      ptr->name = e->name;
+      ptr->loc = e->loc;
+      advance(); // ->
+      if (at(Tok::Word)) {
+        e->name = cur().text;
+        e->loc = cur().loc;
+        e->locPtr = std::move(ptr);
         advance();
-      return e;
+      } else {
+        d_.error(cur().loc, "expected a based variable after '->'", "(124)");
+      }
+      // fall through: the X.FIELD member path is collected below
     }
     // A qualified name S.A.B (rule 124): collect the member qualifiers after
     // the base name; sema resolves them against the structure type.

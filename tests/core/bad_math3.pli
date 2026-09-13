@@ -1,0 +1,7 @@
+ /* Diagnostic test: a math built-in with a non-numeric argument is rejected. */
+ BADMATH3: PROCEDURE OPTIONS(MAIN);
+    DECLARE S CHAR(4);
+    DECLARE Y FLOAT DECIMAL(6);
+    S = 'abcd';
+    Y = SIND(S);
+ END BADMATH3;

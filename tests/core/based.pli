@@ -1,0 +1,40 @@
+  /* Based data (rules (25),(124)): a BASED(P) structure has no storage of its
+     own; its members are addressed through the POINTER P. The based reference
+     REC.A writes through P, and the locator-qualified form P -> REC.A does the
+     same. Pointing P at an existing structure via addr() lets the writes be
+     observed in that structure's storage. */
+  based_test: procedure options(main);
+     declare fails fixed bin(31);
+     declare p pointer;
+     declare 1 y,
+            2 a fixed bin(31);
+     declare 1 rec based(p),
+            2 a fixed bin(31);
+     fails = 0;
+     y.a = 0;
+     p = addr(y);
+     /* the based reference REC.A addresses through P */
+     rec.a = 42;
+     if y.a ^= 42 then do;
+        fails = fails + 1;
+        put skip list('FAIL rec.a write');
+     end;
+     /* the locator-qualified form P -> REC.A does the same */
+     p -> rec.a = 7;
+     if y.a ^= 7 then do;
+        fails = fails + 1;
+        put skip list('FAIL p->rec.a write');
+     end;
+     /* read back through the based reference */
+     if rec.a ^= 7 then do;
+        fails = fails + 1;
+        put skip list('FAIL rec.a read');
+     end;
+     /* reading through the locator matches */
+     if p -> rec.a ^= 7 then do;
+        fails = fails + 1;
+        put skip list('FAIL p->rec.a read');
+     end;
+     if fails = 0 then put skip list('PASS based');
+     else put skip list('FAIL based: fails =', fails);
+  end based_test;

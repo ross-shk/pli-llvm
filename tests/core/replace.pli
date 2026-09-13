@@ -1,4 +1,4 @@
-  /* extension (ADR-058): %REPLACE substitutes
+  /* extension (ADR-077): %REPLACE substitutes
      an identifier with source text before
      parsing; strings are unaffected. */
   %replace max by 5;

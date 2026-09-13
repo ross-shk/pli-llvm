@@ -1,0 +1,51 @@
+  /* ALLOCATE/FREE (rules (87)-(90)): heap-allocate a based structure, store
+     the address in a POINTER via SET, address its members through the locator,
+     and release the block with FREE. Two allocations of the same based
+     variable produce independent blocks. */
+  alloc_test: procedure options(main);
+     declare fails fixed bin(31);
+     declare p pointer;
+     declare q pointer;
+     declare 1 rec based(p),
+            2 a fixed bin(31),
+            2 b fixed bin(31);
+     fails = 0;
+     allocate rec set (p);
+     if p = null() then do;
+        fails = fails + 1;
+        put skip list('FAIL p null after ALLOCATE');
+     end;
+     /* write and read through the locator */
+     p -> rec.a = 42;
+     p -> rec.b = 7;
+     if p -> rec.a ^= 42 then do;
+        fails = fails + 1;
+        put skip list('FAIL rec.a after alloc');
+     end;
+     if p -> rec.b ^= 7 then do;
+        fails = fails + 1;
+        put skip list('FAIL rec.b after alloc');
+     end;
+     /* a second allocation of the same based variable gives a fresh block */
+     q = p;
+     allocate rec set (p);
+     if p = null() then do;
+        fails = fails + 1;
+        put skip list('FAIL second ALLOCATE null');
+     end;
+     if p = q then do;
+        fails = fails + 1;
+        put skip list('FAIL second block equals first');
+     end;
+     /* writes through the new block do not disturb the first */
+     p -> rec.a = 99;
+     if q -> rec.a ^= 42 then do;
+        fails = fails + 1;
+        put skip list('FAIL first block corrupted');
+     end;
+     /* FREE: the locator form and the based variable's own BASED pointer */
+     free q -> rec;
+     free rec;
+     if fails = 0 then put skip list('PASS alloc');
+     else put skip list('FAIL alloc: fails =', fails);
+  end alloc_test;

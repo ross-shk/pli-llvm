@@ -1,0 +1,4 @@
+ /* C28-6571-3 Chapter 9: missing include diagnostic. */
+ %include missing_include.inc;
+ main: procedure options(main);
+ end main;

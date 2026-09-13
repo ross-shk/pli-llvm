@@ -38,7 +38,7 @@ BUILD    := build
 BIN      := $(BUILD)/plic
 RTLIB    := $(BUILD)/libpli.a
 
-SRCS     := src/main.cpp src/diag.cpp src/explain.cpp src/hir.cpp src/lexer.cpp src/parser.cpp src/sema.cpp src/irgen.cpp
+SRCS     := src/main.cpp src/diag.cpp src/explain.cpp src/hir.cpp src/lexer.cpp src/parser.cpp src/preprocessor.cpp src/sema.cpp src/irgen.cpp
 OBJS     := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRCS))
 DEPS     := $(OBJS:.o=.d)
 
@@ -155,7 +155,12 @@ LIBDIR  := $(PREFIX)/lib
 
 install: all
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(LIBDIR)
-	install -m 755 $(BIN) $(DESTDIR)$(BINDIR)/plic
+	# Install a minimized (stripped) copy of the driver: keep the build tree
+	# binary intact, strip the installed one to reduce installed size.
+	cp $(BIN) $(BUILD)/plic.install
+	strip $(BUILD)/plic.install
+	install -m 755 $(BUILD)/plic.install $(DESTDIR)$(BINDIR)/plic
 	install -m 644 $(RTLIB) $(DESTDIR)$(LIBDIR)/libpli.a
+	rm -f $(BUILD)/plic.install
 
 -include $(DEPS)

@@ -1,0 +1,62 @@
+  /* Dynamic lower bound (rules (12),(13),(126)): an AUTOMATIC 1-D array whose
+     lower bound is a runtime expression — here the parameter lb — is sized when
+     the procedure is entered, so both bounds are fixed at entry. Subscripting is
+     bounds-checked against the runtime extent, and LBOUND/HBOUND/DIM report the
+     live bound values. */
+  dyn_lower_test: procedure options(main);
+     declare fails fixed bin(31);
+     fails = 0;
+     call check(3, 7);
+     call check(0, 4);
+     call check(5, 5);
+     if fails = 0 then put skip list('PASS dyn_lower');
+     else put skip list('FAIL dyn_lower: fails =', fails);
+
+     check: procedure(lb, ub);
+        declare lb fixed bin(31);
+        declare ub fixed bin(31);
+        declare a(lb:ub) fixed bin(31);
+        declare i fixed bin(31);
+        /* LBOUND/HBOUND/DIM report the runtime bounds */
+        if lbound(a) ^= lb then do;
+           fails = fails + 1;
+           put skip list('FAIL lbound', lbound(a));
+        end;
+        if hbound(a) ^= ub then do;
+           fails = fails + 1;
+           put skip list('FAIL hbound', hbound(a));
+        end;
+         if dim(a) ^= ub - lb + 1 then do;
+            fails = fails + 1;
+            put skip list('FAIL dim', dim(a));
+         end;
+         /* fill and read back with runtime-variable subscripts */
+         do i = lb to ub;
+            a(i) = i * 11;
+         end;
+         do i = lb to ub;
+            if a(i) ^= i * 11 then do;
+               fails = fails + 1;
+               put skip list('FAIL a(i) at i =', i);
+            end;
+         end;
+         /* a reduction walks the live extent (all elements present) */
+         if sum(a) ^= sumv(lb, ub) then do;
+            fails = fails + 1;
+            put skip list('FAIL sum', sum(a));
+         end;
+      end check;
+
+      /* expected sum of i*11 for i = lo to hi */
+      sumv: procedure(lo, hi) returns(fixed bin(31));
+         declare lo fixed bin(31);
+         declare hi fixed bin(31);
+         declare s fixed bin(31);
+         declare i fixed bin(31);
+         s = 0;
+         do i = lo to hi;
+            s = s + i * 11;
+         end;
+         return(s);
+      end sumv;
+   end dyn_lower_test;

@@ -28,6 +28,7 @@ struct HExpr {
   enum Kind {
     IntLit,
     FltLit,
+    DecLit, // FIXED DECIMAL constant (rule 135), exact
     CharLit,
     BitLit, // literals
     VarRef,
@@ -43,12 +44,15 @@ struct HExpr {
 
   long long ival = 0;
   double fval = 0;
+  int decScale = 0;                 // DecLit: fraction digits q (the 10^q scaling of ival)
+  int decPrec = 0;                  // DecLit: total significant digits p
   std::string sval;                 // CharLit / BitLit payload
   std::string name;                 // VarRef / Call target
   std::vector<std::string> path;    // VarRef: member qualifiers (S.A.B -> {"A","B"})
   std::vector<unsigned> memberPath; // VarRef: resolved LLVM struct field indices (sema)
   Symbol* sym = nullptr;            // resolved by sema
-  Tok op = Tok::Eof;                // Binary / Unary operator
+  HExprP locPtr;     // VarRef: the locator pointer of a P->X reference (rule 124); null = none
+  Tok op = Tok::Eof; // Binary / Unary operator
   HExprP a, b;
   std::vector<HExprP> args; // Call
 
@@ -66,6 +70,13 @@ struct HDeclItem {
   // Runtime upper-bound expressions for dynamic array axes (rule (13)); empty
   // for a fully constant array. Parallel to ty.dims.
   std::vector<HExprP> dynBounds;
+  // Runtime lower-bound expressions for dynamic array axes (rule (13)); empty
+  // when every lower bound is constant. Mirrors `dynBounds`.
+  std::vector<HExprP> dynLbBounds;
+  // Owns the lowered bound exprs of dynamic-array structure members (rule 13),
+  // which Symbol::DynMemberH.ub/lb point into; kept in HIR so IRGen can size the
+  // member buffers at entry. Mirrors dynBounds ownership.
+  std::vector<HExprP> dynMemberBounds;
   HExprP init;     // INITIAL(...) — scalar constant only in M0
   HExprP initCall; // INITIAL(CALL f(...)) — a function-call initializer (rule 27)
   Symbol* sym = nullptr;
@@ -74,6 +85,14 @@ struct HDeclItem {
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
+};
+
+// One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
+// FormatItem with lowered width/decimals expressions.
+struct HFormatItem {
+  enum Kind { A, F, E, X, Skip, Page, Line } kind = A;
+  HExprP w; // field width
+  HExprP d; // F/E: fractional digits
 };
 
 struct HStmt {
@@ -87,11 +106,16 @@ struct HStmt {
     DoWhile,
     DoIter,
     Put,
+    Get,
     CallS,
     Return,
     Stop,
     Goto,
     Entry,
+    Allocate,
+    Free,
+    Open,
+    Close,
     Leave,
     On,     // rule (91)
     Revert, // rule (92)
@@ -119,10 +143,24 @@ struct HStmt {
   Type entryRetTy{};
   std::vector<Symbol*> entryParamSyms; // resolved by sema
 
-  // PUT statement options
+  // GET/PUT stream statement options (rules (104),(105))
   bool skip = false, page = false;
   HExprP skipCount;
   std::vector<HExprP> items;
+  // Edit-directed transmission (rule (108)); mirrors the AST flag and format
+  // list, with lowered width/decimals expressions.
+  bool edit = false;
+  std::vector<HFormatItem> formats;
+  // STRING ( reference ) option (rule 105): the character variable the list-
+  // directed output is written into (PUT) or input read from (GET); null =
+  // SYSIN/SYSPRINT.
+  HExprP stringTarget;
+
+  // FILE ( f ) option (rule 105) and OPEN/CLOSE FILE ( f ): the resolved FILE
+  // variable and its runtime slot; OPEN carries the TITLE string and mode.
+  Symbol* fileSym = nullptr;
+  std::string openTitle;
+  bool openInput = false;
 
   std::vector<HExprP> args; // CALL arguments
 
@@ -132,6 +170,13 @@ struct HStmt {
   bool isSystem = false;
   HStmtP unit;
   int onIndex = -1; // dense handler id assigned by irgen before emission
+  // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
+  // and its SET(...) pointer target (rule 88).
+  std::vector<HExprP> allocBase;
+  std::vector<HExprP> allocSet;
+  // FREE (rule 90): per item, the based variable reference (locPtr carries an
+  // explicit locator, null = the BASED base).
+  std::vector<HExprP> freeBase;
 };
 
 struct HProc {
