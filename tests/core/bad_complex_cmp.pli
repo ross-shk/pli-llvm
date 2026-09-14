@@ -1,0 +1,8 @@
+  /* CM5: ordered comparison of complex
+     values stays diagnosed. */
+  badcomplexcmp: procedure options(main);
+     declare z, w complex;
+     z = complex(1.0, 2.0);
+     w = complex(3.0, 4.0);
+     if z < w then put skip list('x');
+  end badcomplexcmp;

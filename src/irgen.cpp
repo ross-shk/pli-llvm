@@ -2739,6 +2739,16 @@ Val IRGen::emitExpr(HExpr* e) {
     v.ty = e->ty;
     v.reg = flt(e->fval);
     return v;
+  case HExpr::ComplexLit: {
+    // Imaginary constant (rule 139): 0 + fval*i as a constant pair.
+    v.ty = e->ty;
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, flt(0.0), 0, "cpx.re");
+    s = b_.CreateInsertValue(s, flt(e->fval), 1, "cpx.im");
+    v.cpx = s;
+    return v;
+  }
   case HExpr::CharLit: {
     v.ty = e->ty;
     v.ptr = globalString(e->sval);
@@ -3051,6 +3061,24 @@ Val IRGen::emitExpr(HExpr* e) {
     return v;
   }
 
+  if (isCmp && (a.ty.isComplex() || b.ty.isComplex())) {
+    // Exact part-wise equality (CM5); ordered comparisons were diagnosed.
+    Val ac = convert(a, Type::complexTy(), e->loc);
+    Val bc = convert(b, Type::complexTy(), e->loc);
+    llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
+                                    b_.CreateExtractValue(ac.cpx, 0, "cpx.er"),
+                                    b_.CreateExtractValue(bc.cpx, 0, "cpx.er"), "cpx.er");
+    llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
+                                    b_.CreateExtractValue(ac.cpx, 1, "cpx.ei"),
+                                    b_.CreateExtractValue(bc.cpx, 1, "cpx.ei"), "cpx.ei");
+    llvm::Value* r = b_.CreateAnd(er, ei, "cpx.eq");
+    if (op == Tok::Ne)
+      r = b_.CreateNot(r, "cpx.ne");
+    v.ty = Type::bit(1);
+    v.reg = r;
+    return v;
+  }
+
   Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
                                         b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
                       : e->ty;
@@ -3143,6 +3171,49 @@ Val IRGen::emitExpr(HExpr* e) {
   }
 
   llvm::Value* r;
+  if (!isCmp && common.isComplex()) {
+    // Complex arithmetic (CM5) over {double,double} pairs; mixed reals
+    // arrive with a zero imaginary part via convert above.
+    llvm::Value* ar = b_.CreateExtractValue(av.cpx, 0, "cpx.ar");
+    llvm::Value* ai = b_.CreateExtractValue(av.cpx, 1, "cpx.ai");
+    llvm::Value* br = b_.CreateExtractValue(bv.cpx, 0, "cpx.br");
+    llvm::Value* bi = b_.CreateExtractValue(bv.cpx, 1, "cpx.bi");
+    llvm::Value* rr = nullptr;
+    llvm::Value* ri = nullptr;
+    switch (op) {
+    case Tok::Plus:
+      rr = b_.CreateFAdd(ar, br, "cpx.rr");
+      ri = b_.CreateFAdd(ai, bi, "cpx.ri");
+      break;
+    case Tok::Minus:
+      rr = b_.CreateFSub(ar, br, "cpx.rr");
+      ri = b_.CreateFSub(ai, bi, "cpx.ri");
+      break;
+    case Tok::Star:
+      // (a+bi)(c+di) = (ac-bd) + (ad+bc)i.
+      rr = b_.CreateFSub(b_.CreateFMul(ar, br), b_.CreateFMul(ai, bi), "cpx.rr");
+      ri = b_.CreateFAdd(b_.CreateFMul(ar, bi), b_.CreateFMul(ai, br), "cpx.ri");
+      break;
+    case Tok::Slash: {
+      // (a+bi)/(c+di) = ((ac+bd) + (bc-ad)i) / (c^2+d^2).
+      llvm::Value* den =
+          b_.CreateFAdd(b_.CreateFMul(br, br), b_.CreateFMul(bi, bi), "cpx.den");
+      rr = b_.CreateFDiv(b_.CreateFAdd(b_.CreateFMul(ar, br), b_.CreateFMul(ai, bi)), den,
+                         "cpx.rr");
+      ri = b_.CreateFDiv(b_.CreateFSub(b_.CreateFMul(ai, br), b_.CreateFMul(ar, bi)), den,
+                         "cpx.ri");
+      break;
+    }
+    default:
+      break; // complex ** is diagnosed by sema
+    }
+    llvm::Value* pair = llvm::UndefValue::get(llvmTy(common));
+    pair = b_.CreateInsertValue(pair, rr, 0, "cpx.r");
+    pair = b_.CreateInsertValue(pair, ri, 1, "cpx.i");
+    v.ty = common;
+    v.cpx = pair;
+    return v;
+  }
   switch (op) {
   case Tok::Plus:
     r = flt ? b_.CreateFAdd(av.reg, bv.reg, "bin") : b_.CreateAdd(av.reg, bv.reg, "bin");
