@@ -1221,7 +1221,10 @@ void IRGen::emitStmt(HStmt* s) {
     }
     case TK::FixedBin:
     case TK::FixedDec:
-      b_.CreateCall(runtimeFn("pli_display_fixed"), {toI64(v)});
+      if (v.ty.k == TK::FixedDec && v.ty.scale > 0)
+        b_.CreateCall(runtimeFn("pli_display_decfixed"), {toI64(v), i64(v.ty.scale)});
+      else
+        b_.CreateCall(runtimeFn("pli_display_fixed"), {toI64(v)});
       break;
     case TK::Pointer:
       d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
@@ -1704,7 +1707,10 @@ void IRGen::emitPut(HStmt* s) {
       }
       case TK::FixedBin:
       case TK::FixedDec:
-        b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+        if (v.ty.k == TK::FixedDec && v.ty.scale > 0)
+          b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
+        else
+          b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
         break;
       case TK::Void:
         break;
@@ -1757,8 +1763,17 @@ void IRGen::emitGet(HStmt* s) {
       switch (ty.k) {
       case TK::FixedBin:
       case TK::FixedDec:
-        v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
-        v.ty = Type::fixedBin(63, 0);
+        if (ty.k == TK::FixedDec && ty.scale > 0) {
+          // Already scaled by the reader; truncate to the target width
+          // without rescaling, then the store passes it through.
+          llvm::Value* raw =
+              b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
+          v.reg = b_.CreateTrunc(raw, llvmTy(ty), "gdec");
+          v.ty = ty;
+        } else {
+          v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
+          v.ty = Type::fixedBin(63, 0);
+        }
         break;
       case TK::Float:
         v.reg = b_.CreateCall(runtimeFn("pli_get_list_float"), {});
