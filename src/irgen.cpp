@@ -217,6 +217,30 @@ llvm::Function* IRGen::intrinsicFn(const std::string& name, llvm::Type* ret,
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
+// FIXED BINARY checked +,-,* (QR1.2): the overflow intrinsic yields the
+// value plus a flag; a set flag traps to pli_fixed_overflow (hard ERROR
+// until a SIZE condition can route it).
+llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
+  llvm::Type* ty = a->getType();
+  unsigned bits = ty->getIntegerBitWidth();
+  std::string base = op == Tok::Plus ? "sadd" : op == Tok::Minus ? "ssub" : "smul";
+  std::string iname = "llvm." + base + ".with.overflow.i" + std::to_string(bits);
+  llvm::Type* st = llvm::StructType::get(ctx_, {ty, b_.getInt1Ty()});
+  llvm::Value* ov = b_.CreateCall(intrinsicFn(iname, st, {ty, ty}), {a, b}, "ov");
+  llvm::Value* r = b_.CreateExtractValue(ov, 0, "bin");
+  llvm::Value* of = b_.CreateExtractValue(ov, 1, "ovf");
+  int seq = ovSeq_++;
+  llvm::BasicBlock* trapBB =
+      llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+  b_.CreateCondBr(of, trapBB, okBB);
+  b_.SetInsertPoint(trapBB);
+  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+  b_.CreateUnreachable();
+  b_.SetInsertPoint(okBB);
+  return r;
+}
+
 // Resolve the LLVM function a call targets. External C entries (rule (38)) have
 // no PL/I body, so no function is pre-declared; declare it on demand. Every
 // PL/I argument is passed by reference, so all parameters are pointers.
@@ -3004,7 +3028,25 @@ Val IRGen::emitExpr(HExpr* e) {
     v.ty = a.ty;
     if (a.ty.k == TK::Float)
       v.reg = b_.CreateFNeg(a.reg, "neg");
-    else
+    else if (a.ty.k == TK::FixedBin) {
+      // Negating INT_MIN overflows (QR1.2): trap before the wraparound.
+      llvm::Type* ty = a.reg->getType();
+      unsigned bits = ty->getIntegerBitWidth();
+      llvm::Value* lo =
+          llvm::ConstantInt::get(ty, 1ULL << (bits - 1), true);
+      llvm::Value* of = b_.CreateICmpEQ(a.reg, lo, "negof");
+      int seq = ovSeq_++;
+      llvm::BasicBlock* trapBB =
+          llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
+      llvm::BasicBlock* okBB =
+          llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+      b_.CreateCondBr(of, trapBB, okBB);
+      b_.SetInsertPoint(trapBB);
+      b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+      b_.CreateUnreachable();
+      b_.SetInsertPoint(okBB);
+      v.reg = b_.CreateSub(llvm::Constant::getNullValue(ty), a.reg, "neg");
+    } else
       v.reg = b_.CreateSub(llvm::Constant::getNullValue(llvmTy(a.ty)), a.reg, "neg");
     return v;
   }
@@ -3246,13 +3288,24 @@ Val IRGen::emitExpr(HExpr* e) {
   }
   switch (op) {
   case Tok::Plus:
-    r = flt ? b_.CreateFAdd(av.reg, bv.reg, "bin") : b_.CreateAdd(av.reg, bv.reg, "bin");
+    // FIXED BINARY overflow (QR1.2): checked op traps; BIT modular and
+    // DECIMAL precision arithmetic keep prior behavior.
+    if (!flt && !isCmp && common.k == TK::FixedBin)
+      r = checkedArith(op, av.reg, bv.reg);
+    else
+      r = flt ? b_.CreateFAdd(av.reg, bv.reg, "bin") : b_.CreateAdd(av.reg, bv.reg, "bin");
     break;
   case Tok::Minus:
-    r = flt ? b_.CreateFSub(av.reg, bv.reg, "bin") : b_.CreateSub(av.reg, bv.reg, "bin");
+    if (!flt && !isCmp && common.k == TK::FixedBin)
+      r = checkedArith(op, av.reg, bv.reg);
+    else
+      r = flt ? b_.CreateFSub(av.reg, bv.reg, "bin") : b_.CreateSub(av.reg, bv.reg, "bin");
     break;
   case Tok::Star:
-    r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin");
+    if (!flt && !isCmp && common.k == TK::FixedBin)
+      r = checkedArith(op, av.reg, bv.reg);
+    else
+      r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin");
     break;
   case Tok::Slash:
     r = b_.CreateFDiv(av.reg, bv.reg, "bin");

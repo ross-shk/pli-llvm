@@ -89,6 +89,7 @@ PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
 PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */
 PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE interim (M2) */
+PLI_FN(pli_fixed_overflow, VOID, (VOID))            /* FIXED overflow interim (QR1.2) */
 
 PLI_FN(pli_on_push_error, VOID, (I64))  /* ON ERROR: establish handler id (0 = SYSTEM) */
 PLI_FN(pli_on_pop_error, VOID, (VOID))  /* REVERT ERROR */

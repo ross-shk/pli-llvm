@@ -233,6 +233,9 @@ private:
   llvm::Value* toI64(const Val& v);
   Val charTemp(int len); // alloca [len x i8]
   Val charOf(HExpr* e);  // materialise a character value
+  // FIXED BINARY checked +,-,* (QR1.2): overflow traps to pli_fixed_overflow.
+  llvm::Value* checkedArith(Tok op, llvm::Value* a, llvm::Value* b);
+  int ovSeq_ = 0; // disambiguates overflow trap blocks within a function
 
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
   // The signature is taken from runtime/pli_rt_abi.def (the single source of

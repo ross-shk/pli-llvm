@@ -2290,3 +2290,20 @@ miscompiled this once during development).
 
 Consequences. `decimal_io.pli` (golden) and `driver/get_decimal` cover
 output, DISPLAY, and round-trip input. Overflow checks stay out (D1/QR2).
+
+## ADR-089 — FIXED BINARY overflow traps to hard ERROR
+
+Context. QR1.2 needs overflow checks, but routing them needs a SIZE
+condition (QR1.4). Wraparound was silent. The SUBSCRIPTRANGE interim
+(M2) sets the precedent: check now, hard error now, routable later.
+
+Decision. `+ - *` over FIXED BINARY lower through overflow intrinsics
+(width-generic via bit width) and unary minus guards INT_MIN; a set flag
+branches to `pli_fixed_overflow`, which raises through the ERROR path so
+a future ON ERROR/SIZE already observes it. FLOAT, BIT-modular, and
+DECIMAL-precision arithmetic are untouched. `TRUNC`/`MOD` sdiv edges and
+decimal precision overflow stay follow-ups; condition prefixes will gate
+the checks in QR1.4.
+
+Consequences. `driver/overflow` covers all four traps plus in-range
+edges; the `tests/ir` arith/func expectations track the checked shape.
