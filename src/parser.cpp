@@ -1023,7 +1023,7 @@ bool Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" ||
-          w == "INTERNAL") {
+          w == "INTERNAL" || w == "INT") {
         d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
                 "(15)");
         advance();
