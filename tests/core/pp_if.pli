@@ -1,0 +1,15 @@
+  /* Chapter 9 (ADR-083): %IF selects directives; %DECLARE variables
+     drive the condition; untaken arms vanish (nested %IF included). */
+  %declare debug, level;
+  %debug = 1;
+  %level = 2;
+  pp_if: procedure options(main);
+     %if debug = 1 %then %include 'pp_yes.inc';
+     %else %include 'pp_no.inc';
+     %if debug = 0 %then %include 'pp_no.inc';
+     %else %include 'pp_yes.inc';
+     %if level > 1 & debug = 1 %then %include 'pp_yes.inc';
+     %if level > 5 %then %include 'pp_no.inc';
+     %else %if debug = 1 %then %include 'pp_yes.inc';
+     %else %include 'pp_no.inc';
+  end pp_if;

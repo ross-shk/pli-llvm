@@ -1,0 +1,5 @@
+  /* Chapter 9 (ADR-083): an undeclared name in %IF is diagnosed. */
+  badppif: procedure options(main);
+     %if missing = 1 %then %include 'pp_yes.inc';
+     put skip list('x');
+  end badppif;
