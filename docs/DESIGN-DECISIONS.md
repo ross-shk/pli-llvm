@@ -2244,3 +2244,19 @@ diagnosed in sema beside the struct case, so front-end checks reject it.
 Consequences. `complex_io.pli` (golden) covers single/multi-item PUT and
 DISPLAY including negative parts; `bad_get_complex.pli` pins the input
 diagnostic. Complex input parsing stays out.
+
+## ADR-086 — Complex input as re+imI tokens through element pointers
+
+Context. Output serves `re+imI`; input was diagnosed in sema only, after
+slipping past it to a codegen backstop invisible to `-fsyntax-only`.
+
+Decision. `pli_get_list_complex` parses one token: an optional trailing
+`I` selects complex shape, split at the last interior sign that is not an
+exponent marker (so `1e-3+2I` works); no `I` means a bare real with zero
+imaginary part; missing or malformed parts read as zero, mirroring the
+other lenient readers. IRGen reads through element pointers into a pair
+alloca and loads it, reusing the normal store path; the sema diagnostic
+is lifted (the codegen backstop stays as defense).
+
+Consequences. `driver/get_complex` covers both shapes plus the bare-real
+rule; the transient `bad_get_complex.pli` pin is removed.

@@ -1779,6 +1779,16 @@ void IRGen::emitGet(HStmt* s) {
         v.ty = ty;
         break;
       }
+      case TK::Complex: {
+        // Read both parts through element pointers, then load the pair.
+        llvm::Value* pair = entryAlloca(llvmTy(ty), "gcx");
+        b_.CreateCall(runtimeFn("pli_get_list_complex"),
+                      {b_.CreateStructGEP(llvmTy(ty), pair, 0, "gcxr"),
+                       b_.CreateStructGEP(llvmTy(ty), pair, 1, "gcxi")});
+        v.cpx = b_.CreateLoad(llvmTy(ty), pair, "gcx");
+        v.ty = ty;
+        break;
+      }
       default:
         d_.error(item->loc, "GET LIST of this type is not implemented in this stage", "(110)");
         continue;
