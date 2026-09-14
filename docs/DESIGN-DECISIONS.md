@@ -2402,3 +2402,25 @@ Consequences. `struct_by_name_dyn.pli` covers cross-layout matching,
 `SUM` over the copied member, skip-on-absent both ways, and
 deep-not-aliased divergence; `bad_by_name_dyn.pli` pins the
 dynamic-vs-fixed pairing diagnostic.
+
+## ADR-094 — Callee parameters resolve before any body is typed
+
+Context. Argument checks (`checkAssignable` on `CALL` and function-call
+arguments, rules (34),(78)) read the callee's `paramSyms`, but those
+resolved in `processProc` — i.e. in procedure order. A caller typed
+before its callee saw an empty descriptor list and skipped every check,
+so e.g. a whole-structure value with a dynamic member passed by value
+to a nested procedure compiled cleanly into a pointer-aliased
+`memcpy` (the ADR-091 follow-up hole).
+
+Decision. Resolve every procedure's own and `ENTRY` parameters in pass
+1b right after its declarations are collected; `processProc` reuses the
+same `resolveProcParams` helper, which is a no-op when the lists are
+already populated (additionally guarded inside `resolveParams`). No
+diagnostic wording or accepted surface changes otherwise — previously
+silent mismatches now diagnose, previously valid calls type-check
+identically.
+
+Consequences. `bad_struct_dyn.pli` gains the by-value-argument case
+alongside its `LIKE` case; the full suite stays green (201/201), so no
+passing test relied on the hole.

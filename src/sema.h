@@ -103,6 +103,9 @@ private:
   // same storage is shared when a name repeats (proc param vs ENTRY param).
   void resolveParams(Scope* sc, Proc* p, const std::vector<std::string>& names,
                      std::vector<Symbol*>& out);
+  // Resolve a procedure's own parameters and its ENTRY statements' parameters
+  // (rules (34),(56)); safe to call twice, the second call is a no-op.
+  void resolveProcParams(Proc* p);
   void collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isStatic);
   void collectLabels(Stmt* s); // gather GO TO targets defined in this proc
   void checkStmt(Stmt* s, Scope* sc, Proc* p);
