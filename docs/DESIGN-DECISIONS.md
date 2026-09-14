@@ -2208,3 +2208,23 @@ effects and raise no file errors; newlines stay preserved for diagnostics.
 Consequences. `pp_if.pli` (golden, with `pp_yes.inc`/`pp_no.inc`) covers
 taken/untaken/else/nested arms; `bad_pp_if.pli` pins the undeclared-name
 diagnostic. `%DO` groups (multi-directive arms) stay out per the subplan.
+
+## ADR-084 — Complex arithmetic over pairs, exact equality, imaginary constants
+
+Context. CM5 serves complex values as {double,double} pairs with REAL/IMAG/
+COMPLEX/CONJG already in place, but operators were missing: arithmetic
+diagnosed complex operands, `2i` was rejected at lex time, and comparisons
+silently compared real parts only.
+
+Decision. `+ - * /` over complex-or-numeric operands yield COMPLEX (mixed
+reals convert with a zero imaginary part through the existing conversion);
+`/` divides by c^2+d^2 inline; `**` on complex stays diagnosed. `=`/`^=`
+compare part-wise exactly; ordered comparisons are diagnosed. An imaginary
+constant `2i` is a complex value with a zero real part (fractional and
+binary-radix forms reuse the existing value parsing).
+
+Consequences. `complex_arith.pli` covers all four operators, mixed reals,
+imaginary constants, and both equalities; `bad_complex_power.pli` and
+`bad_complex_cmp.pli` pin the two diagnostics. Complex I/O and remaining
+Appendix-1 math stay out. Bare factored `a, b <attr>;` typing only the
+last item is a known pre-existing parser limitation, untouched here.

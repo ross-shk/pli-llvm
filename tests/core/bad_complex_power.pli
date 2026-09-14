@@ -1,0 +1,7 @@
+  /* CM5: complex exponentiation stays
+     diagnosed. */
+  badcomplexpower: procedure options(main);
+     declare z complex;
+     z = complex(1.0, 2.0);
+     z = z ** 2;
+  end badcomplexpower;

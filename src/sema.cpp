@@ -57,6 +57,15 @@ bool crossSectionType(const Expr* e, const Type& full, Type& reduced, int& nStar
   return true;
 }
 
+// Complex arithmetic (QR2.2/CM5): an operator serves complex operands when
+// both sides are complex or numeric with at least one side complex; the
+// result is always a complex value.
+bool complexArith(const Type& a, const Type& b) {
+  bool ac = a.isComplex() || a.isNumeric();
+  bool bc = b.isComplex() || b.isNumeric();
+  return ac && bc && (a.isComplex() || b.isComplex());
+}
+
 Scope* Sema::scopeFor(Proc* p) {
   auto it = procScopes_.find(p);
   if (it != procScopes_.end())
@@ -1661,6 +1670,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
   case Expr::FltLit:
     e->ty = Type::flt(6);
     break;
+  case Expr::ComplexLit:
+    e->ty = Type::complexTy();
+    break;
   case Expr::CharLit:
     e->ty = Type::chr((int)e->sval.size());
     break;
@@ -1902,7 +1914,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     switch (e->op) {
     case Tok::Plus:
     case Tok::Minus:
-      if (!A.isNumeric() || !B.isNumeric()) {
+      if (complexArith(A, B)) {
+        e->ty = Type::complexTy();
+      } else if (!A.isNumeric() || !B.isNumeric()) {
         d_.error(e->loc,
                  "arithmetic operator requires arithmetic operands (" + A.desc() + ", " + B.desc() +
                      ")",
@@ -1914,7 +1928,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       break;
     case Tok::Star:
       // The product's scale is the sum of the operand scales (ADR-006).
-      if (!A.isNumeric() || !B.isNumeric()) {
+      if (complexArith(A, B)) {
+        e->ty = Type::complexTy();
+      } else if (!A.isNumeric() || !B.isNumeric()) {
         d_.error(e->loc,
                  "arithmetic operator requires arithmetic operands (" + A.desc() + ", " + B.desc() +
                      ")",
@@ -1929,7 +1945,12 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // Division and exponentiation are evaluated in floating point in M0;
       // PL/I's exact FIXED scale rules are M2 (ADR-006). Truncation on
       // assignment to a FIXED target preserves the usual observable result.
-      if (!A.isNumeric() || !B.isNumeric()) {
+      if (complexArith(A, B)) {
+        if (e->op == Tok::Power) {
+          d_.error(e->loc, "complex exponentiation is not implemented in this stage", "(121)");
+        }
+        e->ty = Type::complexTy();
+      } else if (!A.isNumeric() || !B.isNumeric()) {
         d_.error(e->loc, "operator requires arithmetic operands", "(121)");
         e->ty = Type::flt(6);
       } else {
@@ -1960,7 +1981,12 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // diagnosed rather than silently comparing an address as a number.
       if ((A.isPointer() || B.isPointer()) && !(A.isPointer() && B.isPointer()))
         d_.error(e->loc, "a POINTER can only be compared with a POINTER", "(117)");
-      else if (A.isChar() != B.isChar())
+      else if (A.isComplex() || B.isComplex()) {
+        // Exact part-wise equality (CM5); a complex side against anything
+        // but complex-or-numeric is diagnosed.
+        if (!(A.isComplex() || A.isNumeric()) || !(B.isComplex() || B.isNumeric()))
+          d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+      } else if (A.isChar() != B.isChar())
         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
       e->ty = Type::bit(1);
       break;
@@ -1971,7 +1997,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     case Tok::Ngt:
     case Tok::Nlt:
       // Ordered comparisons are not meaningful on addresses (rule (117)).
-      if (A.isPointer() || B.isPointer())
+      if (A.isComplex() || B.isComplex())
+        d_.error(e->loc, "ordered comparison of a COMPLEX value is not allowed", "(117)");
+      else if (A.isPointer() || B.isPointer())
         d_.error(e->loc, "ordered comparison of a POINTER is not allowed", "(117)");
       else if (A.isChar() != B.isChar())
         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");

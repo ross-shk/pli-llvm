@@ -201,7 +201,7 @@ Token Lexer::lexNumber() {
     bump();
   } else if (cur() == 'I' || cur() == 'i') { // imaginary (rule 139)
     bump();
-    d_.error(t.loc, "complex constants are not supported by this compiler stage", "(139)");
+    t.imaginary = true;
   }
   return t;
 }

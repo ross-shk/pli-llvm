@@ -361,6 +361,11 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
     printType(os, e->ty);
     os << ")";
     break;
+  case HExpr::ComplexLit:
+    os << "ComplexLit(" << e->fval << "i:";
+    printType(os, e->ty);
+    os << ")";
+    break;
   case HExpr::CharLit:
     os << "CharLit(\"" << e->sval << "\":";
     printType(os, e->ty);

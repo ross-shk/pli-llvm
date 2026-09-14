@@ -2221,7 +2221,16 @@ ExprP Parser::parsePrimary() {
   }
   if (at(Tok::Number)) {
     const Token& t = cur();
-    if (t.isFloat) {
+    if (t.imaginary) {
+      // Imaginary constant 2i (rule 139): 0 + value*i as a double pair part.
+      e->kind = Expr::ComplexLit;
+      if (t.isFloat)
+        e->fval = strtod(t.text.c_str(), nullptr);
+      else if (t.binaryRadix)
+        e->fval = (double)strtoll(t.text.c_str(), nullptr, 2);
+      else
+        e->fval = (double)strtoll(t.text.c_str(), nullptr, 10);
+    } else if (t.isFloat) {
       if (t.hasExp) { // exponent form is a FLOAT constant (rule 135)
         e->kind = Expr::FltLit;
         e->fval = strtod(t.text.c_str(), nullptr);

@@ -53,6 +53,7 @@ struct Token {
   std::string sval; // decoded value for CharLit/BitLit
   SourceLoc loc{};
   bool binaryRadix = false; // Number had the B suffix (rule 136)
+  bool imaginary = false;   // Number had the I suffix (rule 139)
   bool isFloat = false;
   bool hasExp = false; // Number had an E exponent (a FLOAT constant, rule 135)
 

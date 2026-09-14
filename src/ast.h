@@ -29,7 +29,8 @@ struct Expr {
     Unary,
     Call,
     Subscript,
-    Star // '*' in a subscript list — a cross-section axis (rule 126); not a value
+    Star, // '*' in a subscript list — a cross-section axis (rule 126); not a value
+    ComplexLit, // imaginary constant 2i (rule 139): fval is the imaginary part
   } kind = IntLit;
   SourceLoc loc{};
   Type ty{}; // assigned by sema
