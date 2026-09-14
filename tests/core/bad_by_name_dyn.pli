@@ -1,0 +1,13 @@
+ /* BY NAME array members must match in type (rule
+    (86)): a dynamic member against a fixed member of
+    the same name is rejected; same-shaped dynamic
+    members are served (see struct_by_name_dyn.pli). */
+ bad_by_name_dyn: procedure options(main);
+    declare n fixed bin(31);
+    declare 1 s,
+           2 v(n) fixed bin(31);
+    declare 1 t,
+           2 v(4) fixed bin(31);
+    n = 4;
+    t = s, by name;
+ end bad_by_name_dyn;

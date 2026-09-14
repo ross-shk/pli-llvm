@@ -191,9 +191,12 @@ private:
                                  llvm::Value*& ub, llvm::Value*& lb);
   // BY NAME assignment (rule 86): copy each same-named member of `dst` from
   // `src` at their struct bases, recursing into minor structures; names absent
-  // from either side are skipped.
+  // from either side are skipped. The symbol/root-path pairs address dynamic
+  // member buffers (rule (13), ADR-093); empty when the base is not a plain
+  // variable (then dynamic members are diagnosed, never pointer-copied).
   void emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Type& dst, const Type& src,
-                      SourceLoc loc);
+                      SourceLoc loc, Symbol* dstSym, const std::vector<unsigned>& dstPrefix,
+                      Symbol* srcSym, const std::vector<unsigned>& srcPrefix);
   // Store a structure's INITIAL element list (rule (26)) into its storage,
   // walking members in declaration order and storing each value to the matching
   // scalar leaf (recursing into nested structures and array members). `idx` is

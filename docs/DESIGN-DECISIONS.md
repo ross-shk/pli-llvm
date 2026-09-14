@@ -2379,3 +2379,26 @@ Consequences. `struct_dyn_init.pli` covers full/short/iterated lists,
 bounds inquiries, per-variable buffers, and reactivation;
 `bad_struct_dyn_init.pli` pins the non-trailing and nested
 diagnostics.
+
+## ADR-093 — BY NAME copies dynamic members by buffer contents
+
+Context. QR1.1 serves `BY NAME` across differing layouts (ADR-043) and
+plain whole-structure deep copy (ADR-091), but a same-named dynamic
+member was storage-copied: the field holds a buffer pointer, so the
+target aliased the source buffer and later writes bled across. Sema
+already requires identical array types for `BY NAME` array members, so
+the mismatch shape was diagnosed (rule (86)) and only the identical
+shape miscompiled.
+
+Decision. Thread each side's symbol and root field path through
+`emitByNameCopy` (layouts may differ, so paths extend independently on
+recursion) and copy a matched dynamic member's buffer contents
+positionally, never the pointer field. Live extents compare first with
+a mismatch trap through `pli_subscript_oob` (same convention as
+ADR-091); unresolvable buffers are diagnosed with rule (13). No sema
+change was needed. Fixed members keep their paths untouched.
+
+Consequences. `struct_by_name_dyn.pli` covers cross-layout matching,
+`SUM` over the copied member, skip-on-absent both ways, and
+deep-not-aliased divergence; `bad_by_name_dyn.pli` pins the
+dynamic-vs-fixed pairing diagnostic.
