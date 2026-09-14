@@ -1,0 +1,7 @@
+  /* rule (99): a condition name must not
+     collide with a declared variable. */
+  badonconddecl: procedure options(main);
+     declare neterror fixed bin(31);
+     neterror = 0;
+     signal condition(neterror);
+  end badonconddecl;

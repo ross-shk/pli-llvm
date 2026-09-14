@@ -547,6 +547,9 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
   if (kw("PUT")) {
     return parsePut();
   } // rules (104)-(109)
+  if (kw("DISPLAY")) {
+    return parseDisplay();
+  } // rule (114)
   if (kw("CALL")) {
     return parseCall();
   } // rules (78)-(80)
@@ -674,10 +677,24 @@ std::string Parser::parseCondition() {
   }
   if (w == "CONDITION") {
     advance();
-    if (at(Tok::LParen))
-      skipParen("(99)");
-    d_.error(l, "programmer-named conditions are not implemented in this stage", "(99)");
-    return "";
+    // A programmer-named condition (rule 99): the name is use-declared,
+    // like an implicit variable (ADR-011); sema assigns its dispatch key.
+    if (!expect(Tok::LParen, "(99)"))
+      return "";
+    if (!at(Tok::Word)) {
+      d_.error(cur().loc, "expected a condition name", "(99)");
+      return "";
+    }
+    std::string name = cur().text;
+    SourceLoc nl = cur().loc;
+    advance();
+    if (!expect(Tok::RParen, "(99)"))
+      return "";
+    if (name == "ERROR") {
+      d_.error(nl, "ERROR is not a valid programmer-named condition", "(99)");
+      return "";
+    }
+    return name;
   }
   if (w == "ENDFILE" || w == "ENDPAGE" || w == "KEY" || w == "UNDEFINEDFILE" || w == "NAME" ||
       w == "RECORD" || w == "TRANSMIT") {
@@ -1540,6 +1557,27 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
   EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
   if (e.present && !e.label.empty())
     pendingEnd_ = e; // multiple closure
+  return st;
+}
+
+// display-statement ::= DISPLAY ( expression )                  rule (114)
+StmtP Parser::parseDisplay() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Display;
+  st->loc = cur().loc;
+  advance(); // DISPLAY
+  if (!expect(Tok::LParen, "(114)"))
+    return nullptr;
+  st->value = parseExpr();
+  if (!expect(Tok::RParen, "(114)"))
+    return nullptr;
+  // The REPLY form stays diagnosed.
+  if (atWord("REPLY")) {
+    d_.error(cur().loc, "DISPLAY ... REPLY is not implemented in this stage", "(114)");
+    resync();
+    return nullptr;
+  }
+  expect(Tok::Semi, "(114)");
   return st;
 }
 

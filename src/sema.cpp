@@ -1107,6 +1107,25 @@ void Sema::foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t
   }
 }
 
+// Rule (99): resolve a programmer-named condition to its dispatch key.
+int Sema::resolveCondKey(Stmt* s, Scope* sc) {
+  if (s->condName == "ERROR")
+    return 0;
+  auto& names = prog_->condNames;
+  auto it = std::find(names.begin(), names.end(), s->condName);
+  int key = it == names.end() ? (int)names.size() + 1 : (int)(it - names.begin()) + 1;
+  if (it == names.end())
+    names.push_back(s->condName);
+  // A use-declared name must not collide with a declared entity.
+  if (Symbol* sym = lookup(sc, s->condName)) {
+    if (sym->kind == Symbol::ProcName)
+      d_.error(s->loc, "'" + s->condName + "' is a procedure, not a condition name", "(99)");
+    else
+      d_.error(s->loc, "'" + s->condName + "' is a variable, not a condition name", "(99)");
+  }
+  return key;
+}
+
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   if (!s)
     return;
@@ -1421,6 +1440,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Leave:
   case Stmt::Entry: // declaration-like; params/type resolved in processProc
     break;
+  case Stmt::Display: {
+    // Rule (114): DISPLAY takes one scalar value.
+    typeExpr(s->value.get(), sc, p);
+    if (s->value && (s->value->ty.isArray() || s->value->ty.isStruct()))
+      d_.error(s->loc, "DISPLAY takes a scalar value", "(114)");
+    break;
+  }
   case Stmt::Allocate:
     // ALLOCATE (rules 87,88): heap-allocate each based structure and store its
     // address in the SET pointer target. The based variable must be fixed-size
@@ -1471,8 +1497,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
     break;
   case Stmt::On:
-    // Only ERROR is served; the parser diagnoses every other condition, so
-    // the unit body only needs typing plus the establishing-frame checks.
+    // Rules (91),(94),(99): ERROR or a programmer-named condition; the unit
+    // body only needs typing plus the establishing-frame checks.
+    s->condKey = resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
       checkStmt(s->unit.get(), sc, p);
       checkOnUnit(s->unit.get(), p);
@@ -1480,8 +1507,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   case Stmt::Revert:
   case Stmt::Signal:
-    // Only ERROR is served (parser-enforced); nothing to type-check. A
-    // REVERT with no established handler is a no-op reverting to SYSTEM.
+    // A REVERT with no established handler is a no-op reverting to SYSTEM.
+    s->condKey = resolveCondKey(s, sc);
     break;
   }
 }

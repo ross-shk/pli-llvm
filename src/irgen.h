@@ -262,8 +262,9 @@ private:
   // caller-supplied buffer that a RETURN(struct) copies into before returning.
   llvm::Value* structRetPtr_ = nullptr;
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
-  // ON ERROR state (rules (91)-(94)): handler id -> function (id 1-based).
-  std::vector<llvm::Function*> onHandlers_;
+  // ON state (rules (91)-(94),(99)): condition key (0 = ERROR) to handler
+  // functions, ids dense from 1 within a key.
+  std::map<int, std::vector<llvm::Function*>> onHandlers_;
   // Procedure-entry ERROR depth slot for exit restore; null when the module
   // establishes no handlers (the common path stays free) or inside a handler.
   llvm::AllocaInst* curOnDepth_ = nullptr;

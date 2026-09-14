@@ -1020,13 +1020,13 @@ std::string IRGen::entryIrName(const std::string& proc, const std::string& paren
 // ON ERROR (rules (91)-(94))
 // ---------------------------------------------------------------------------
 
-// Assign dense handler ids (1-based; 0 means SYSTEM) to every established
-// (non-SYSTEM) ON-unit in emission order.
-static void assignOnIdsStmt(HStmt* s, int& next) {
+// Assign dense handler ids (1-based per condition; 0 means SYSTEM) to every
+// established (non-SYSTEM) ON-unit in emission order.
+static void assignOnIdsStmt(HStmt* s, std::map<int, int>& next) {
   if (!s)
     return;
   if (s->kind == HStmt::On && !s->isSystem)
-    s->onIndex = next++;
+    s->onIndex = ++next[s->condKey];
   assignOnIdsStmt(s->thenS.get(), next);
   assignOnIdsStmt(s->elseS.get(), next);
   assignOnIdsStmt(s->unit.get(), next);
@@ -1035,18 +1035,18 @@ static void assignOnIdsStmt(HStmt* s, int& next) {
 }
 
 void IRGen::assignOnIds(HProgram& prog) {
-  int next = 1;
+  std::map<int, int> next;
   for (auto& p : prog.procs)
     for (auto& b : p->body)
       assignOnIdsStmt(b.get(), next);
 }
 
-// Collect established ON-units keyed by handler id.
-static void collectOnStmts(HStmt* s, std::map<int, HStmt*>& out) {
+// Collect established ON-units keyed by (condition key, handler id).
+static void collectOnStmts(HStmt* s, std::map<std::pair<int, int>, HStmt*>& out) {
   if (!s)
     return;
   if (s->kind == HStmt::On && !s->isSystem)
-    out[s->onIndex] = s;
+    out[{s->condKey, s->onIndex}] = s;
   collectOnStmts(s->thenS.get(), out);
   collectOnStmts(s->elseS.get(), out);
   collectOnStmts(s->unit.get(), out);
@@ -1055,14 +1055,24 @@ static void collectOnStmts(HStmt* s, std::map<int, HStmt*>& out) {
 }
 
 void IRGen::declareOnHandlers(HProgram& prog) {
-  std::map<int, HStmt*> byId;
+  std::map<std::pair<int, int>, HStmt*> byId;
   for (auto& p : prog.procs)
     for (auto& b : p->body)
       collectOnStmts(b.get(), byId);
-  for (auto& [id, _] : byId) {
+  int lastKey = -1;
+  for (auto& [keyId, _] : byId) {
+    // A fresh function list per condition; ids restart at 1 within a key.
+    if (keyId.first != lastKey) {
+      onHandlers_[keyId.first] = {};
+      lastKey = keyId.first;
+    }
     llvm::FunctionType* ft = llvm::FunctionType::get(b_.getVoidTy(), false);
-    onHandlers_.push_back(llvm::Function::Create(ft, llvm::Function::InternalLinkage,
-                                                 "PLI_ON_" + std::to_string(id), &mod_));
+    std::string name = keyId.first == 0
+                           ? "PLI_ON_" + std::to_string(keyId.second)
+                           : "PLI_ONC_" + std::to_string(keyId.first) + "_" +
+                                 std::to_string(keyId.second);
+    onHandlers_[keyId.first].push_back(llvm::Function::Create(
+        ft, llvm::Function::InternalLinkage, name, &mod_));
   }
 }
 
@@ -1071,11 +1081,11 @@ void IRGen::declareOnHandlers(HProgram& prog) {
 // labels inside the unit get their own blocks.
 void IRGen::emitOnHandlers(HProgram& prog) {
   for (auto& p : prog.procs) {
-    std::map<int, HStmt*> byId;
+    std::map<std::pair<int, int>, HStmt*> byId;
     for (auto& b : p->body)
       collectOnStmts(b.get(), byId);
-    for (auto& [id, s] : byId) {
-      llvm::Function* fn = onHandlers_[(size_t)id - 1];
+    for (auto& [keyId, s] : byId) {
+      llvm::Function* fn = onHandlers_[keyId.first][(size_t)keyId.second - 1];
       curFn_ = fn;
       curProc_ = p.get();
       curRetTy_ = Type::voidTy();
@@ -1104,32 +1114,43 @@ void IRGen::emitOnHandlers(HProgram& prog) {
 // Establish a handler: push its id, or 0 for the system action.
 void IRGen::emitOn(HStmt* s) {
   long long id = s->isSystem ? 0 : s->onIndex;
-  b_.CreateCall(runtimeFn("pli_on_push_error"), {i64(id)});
+  if (s->condKey == 0)
+    b_.CreateCall(runtimeFn("pli_on_push_error"), {i64(id)});
+  else
+    b_.CreateCall(runtimeFn("pli_on_push_cond"), {i64(s->condKey), i64(id)});
 }
 
-// Raise ERROR: without an established handler take the system action
-// (abort); otherwise run the handler, then resume after the SIGNAL.
+// Raise a condition: without an established handler take the system action
+// (abort); otherwise run the topmost handler for that condition, then resume
+// after the SIGNAL. Only ERROR touches ONCODE.
 void IRGen::emitSignal(HStmt* s) {
-  (void)s;
-  llvm::Value* top = b_.CreateCall(runtimeFn("pli_on_top_error"), {}, "ontop");
+  const std::vector<llvm::Function*>& handlers = onHandlers_[s->condKey];
+  llvm::Value* top = s->condKey == 0
+                         ? b_.CreateCall(runtimeFn("pli_on_top_error"), {}, "ontop")
+                         : b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64(s->condKey)},
+                                         "ontop");
   llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "onnosystem");
   llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", curFn_);
   llvm::BasicBlock* resBB = llvm::BasicBlock::Create(ctx_, "on.resume", curFn_);
   b_.CreateCondBr(none, defBB, dspBB);
   b_.SetInsertPoint(defBB);
-  b_.CreateCall(runtimeFn("pli_signal_error"), {globalString("SIGNAL ERROR")});
+  std::string msg =
+      s->condKey == 0 ? "SIGNAL ERROR" : "SIGNAL CONDITION(" + s->condName + ")";
+  b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
   b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
-  llvm::SwitchInst* sw = b_.CreateSwitch(top, resBB, onHandlers_.size());
-  for (size_t i = 0; i < onHandlers_.size(); ++i) {
+  llvm::SwitchInst* sw = b_.CreateSwitch(top, resBB, handlers.size());
+  for (size_t i = 0; i < handlers.size(); ++i) {
     llvm::BasicBlock* hbb =
         llvm::BasicBlock::Create(ctx_, "on.handle." + std::to_string(i + 1), curFn_);
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
     b_.SetInsertPoint(hbb);
-    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
-    b_.CreateCall(onHandlers_[i], {});
-    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+    if (s->condKey == 0)
+      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
+    b_.CreateCall(handlers[i], {});
+    if (s->condKey == 0)
+      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
     b_.CreateBr(resBB);
   }
   b_.SetInsertPoint(resBB);
@@ -1183,6 +1204,36 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Put:
     emitPut(s);
     break;
+  case HStmt::Display: {
+    // Rule (114): one scalar value plus a newline (REPLY stays diagnosed).
+    Val v = emitExpr(s->value.get());
+    switch (v.ty.k) {
+    case TK::Char:
+      b_.CreateCall(runtimeFn("pli_display_char"), {v.ptr, v.len});
+      break;
+    case TK::Float:
+      b_.CreateCall(runtimeFn("pli_display_float"), {v.reg});
+      break;
+    case TK::Bit: {
+      llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+      b_.CreateCall(runtimeFn("pli_display_bit"), {bit});
+      break;
+    }
+    case TK::FixedBin:
+    case TK::FixedDec:
+      b_.CreateCall(runtimeFn("pli_display_fixed"), {toI64(v)});
+      break;
+    case TK::Pointer:
+      d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
+      break;
+    case TK::Complex:
+      d_.error(s->loc, "a COMPLEX value cannot be written with DISPLAY in this stage", "(114)");
+      break;
+    default:
+      break; // array/struct operands are diagnosed by sema
+    }
+    break;
+  }
   case HStmt::Get:
     emitGet(s);
     break;
@@ -1239,7 +1290,11 @@ void IRGen::emitStmt(HStmt* s) {
     emitOn(s);
     break;
   case HStmt::Revert:
-    b_.CreateCall(runtimeFn("pli_on_pop_error"), {});
+    // REVERT pops one handler for the condition (a no-op when none).
+    if (s->condKey == 0)
+      b_.CreateCall(runtimeFn("pli_on_pop_error"), {});
+    else
+      b_.CreateCall(runtimeFn("pli_on_pop_cond"), {i64(s->condKey)});
     break;
   case HStmt::Signal:
     emitSignal(s);

@@ -1,0 +1,6 @@
+  /* rule (114): only a scalar value is
+     displayed. */
+  baddisplay: procedure options(main);
+     declare a(3) fixed bin(31);
+     display(a);
+  end baddisplay;

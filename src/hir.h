@@ -120,6 +120,7 @@ struct HStmt {
     On,     // rule (91)
     Revert, // rule (92)
     Signal, // rule (93)
+    Display, // rule (114)
   } kind = Null;
 
   SourceLoc loc{};
@@ -164,8 +165,9 @@ struct HStmt {
 
   std::vector<HExprP> args; // CALL arguments
 
-  // ON statement (rule 91); REVERT/SIGNAL use condName only.
+  // ON statement (rule 91); REVERT/SIGNAL use condName/condKey only.
   std::string condName;
+  int condKey = 0; // 0 = ERROR, else the use-site key assigned by sema
   bool snap = false;
   bool isSystem = false;
   HStmtP unit;

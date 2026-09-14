@@ -2130,3 +2130,41 @@ keeps exactly its reachable set (`pli_rt_init/fini`, `put_skip`,
 
 Consequences. `driver/link` asserts an unused probe (`pli_sin`) is absent
 and a used one present. A future source split composes with this unchanged.
+
+## ADR-080 — Programmer-named conditions: use-declared names, tagged dispatch
+
+Context. Rule (99) names conditions as `CONDITION (identifier)`, but no TR
+production declares the name (rule (15) has no CONDITION attribute), so
+names are use-declared in first-use order, consistent with implicit
+declarations (ADR-011). Dispatch must isolate conditions while sharing
+block scoping with ERROR.
+
+Decision. Sema registers each name program-wide (key = order + 1, key 0 is
+ERROR) and rejects names that collide with a declared variable, parameter,
+or procedure, and `CONDITION(ERROR)`. The runtime stack carries tagged
+(key, id) entries: SIGNAL runs the topmost handler for its own condition
+(or aborts when none), REVERT drops the topmost entry for its condition
+(no-op when none), and depth/reset scope both conditions uniformly.
+Handlers are per-(key, id); only ERROR touches ONCODE, so units observe
+state through globals/output.
+
+Consequences. `on_cond.pli` (golden) covers per-condition dispatch beside
+ERROR, resume, and re-establishment; `bad_on_cond_decl.pli` and
+`bad_on_cond_error.pli` pin the two diagnostics. Computational, I/O,
+FINISH, AREA, and CHECK conditions stay diagnosed.
+
+## ADR-081 — Minimal DISPLAY: one scalar plus a newline
+
+Context. Rule (114) is `DISPLAY ( expression )` (Y33 attests a scalar print
+and a REPLY form). The runtime terminates lines lazily (a `col` counter plus
+`fini`), while DISPLAY must end its own line eagerly.
+
+Decision. Serve `DISPLAY (scalar)` for fixed/float/char/bit via four
+`pli_display_*` runtime functions sharing the list-directed value formats;
+array/struct operands are diagnosed by sema, POINTER/COMPLEX at codegen
+(mirroring PUT LIST), and `REPLY` stays diagnosed. Each call starts on a
+fresh line (ending a pending PUT line first, as SKIP does) and resets the
+column/item state, so mixed PUT/DISPLAY output never joins or splits lines.
+
+Consequences. `display.pli` (golden) covers all four scalar types;
+`bad_display.pli` pins the non-scalar diagnostic. `REPLY` is a later slice.

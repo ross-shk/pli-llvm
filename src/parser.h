@@ -66,6 +66,7 @@ private:
   StmtP parseIf(Proc* owner);
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
   StmtP parsePut();
+  StmtP parseDisplay(); // display-statement (rule 114)
   StmtP parseGet();
   // Edit-directed transmission (rule (108)): parse `EDIT ( { ( datalist )
   // formatlist }••• )` into st->items/st->formats with st->edit set. Returns
@@ -79,8 +80,9 @@ private:
   StmtP parseOn(Proc* owner); // rule (91)
   StmtP parseRevert();        // rule (92)
   StmtP parseSignal();        // rule (93)
-  // Parse one condition (rule 94); returns its name ("ERROR" when served,
-  // otherwise "" after diagnosing the unimplemented condition).
+  // Parse one condition (rule 94); returns its name ("ERROR" or a rule (99)
+  // programmer-named condition, otherwise "" after diagnosing the
+  // unimplemented condition).
   std::string parseCondition();
   // Consume a balanced (...) group (e.g. an unimplemented CHECK list).
   void skipParen(const char* rule);

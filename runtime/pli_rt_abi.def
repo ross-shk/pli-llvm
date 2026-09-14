@@ -21,6 +21,11 @@ PLI_FN(pli_put_list_fixed, VOID, (I64))
 PLI_FN(pli_put_list_fixed_scaled, VOID, (I64, I64))   /* scaled FIXED (ADR-006) */
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
+/* DISPLAY one scalar value (rule 114, ADR-081) */
+PLI_FN(pli_display_char, VOID, (CPTR, I64))
+PLI_FN(pli_display_fixed, VOID, (I64))
+PLI_FN(pli_display_float, VOID, (DOUBLE))
+PLI_FN(pli_display_bit, VOID, (I8))
 
 /* Edit-directed output (rules (108),(44)-(54)): F(w,d), A(w), and the control
  * X/SKIP/PAGE/LINE items. The fixed form takes the stored value, its decimal
@@ -83,6 +88,11 @@ PLI_FN(pli_on_depth_error, I64, (VOID)) /* block-entry save */
 PLI_FN(pli_on_reset_error, VOID, (I64)) /* block/procedure-exit restore */
 PLI_FN(pli_oncode, I32, (VOID))         /* ONCODE() */
 PLI_FN(pli_set_oncode, VOID, (I32))
+/* Programmer-named conditions (rules (94),(99)): same stack, tagged entries.
+ * Key 0 is ERROR; the ERROR functions above address key 0 only. */
+PLI_FN(pli_on_push_cond, VOID, (I64, I64)) /* ON CONDITION: key, handler id */
+PLI_FN(pli_on_pop_cond, VOID, (I64))       /* REVERT CONDITION: drop topmost key */
+PLI_FN(pli_on_top_cond, I64, (I64))        /* SIGNAL dispatch: topmost key id */
 
 PLI_FN(pli_alloc, PTR, (I64))                         /* ALLOCATE (87) */
 PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */

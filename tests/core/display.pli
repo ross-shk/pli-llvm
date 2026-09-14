@@ -1,0 +1,16 @@
+  /* rule (114): DISPLAY prints one scalar
+     value. */
+  display: procedure options(main);
+     declare c fixed bin(31);
+     declare f float;
+     declare s char(5);
+     declare b bit(1);
+     c = 42;
+     f = 1.5;
+     s = 'hi';
+     b = '1'b;
+     display(c);
+     display(f);
+     display(s);
+     display(b);
+  end display;
