@@ -1,0 +1,6 @@
+  /* bridge plan B2: %process stays diagnosed;
+     the port drops the line. */
+  badprocess: procedure options(main);
+     %process options(extended_replace);
+     put skip list('x');
+  end badprocess;

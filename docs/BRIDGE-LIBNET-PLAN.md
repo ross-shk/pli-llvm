@@ -1,5 +1,8 @@
 # Bridge plan: libnet toward TR-shaped PL/I
 
+Status: all plic-side items complete (A1, A2, B1, B3, B2 pin); the
+remaining restructures are libnet-side (see below).
+
 Goal: compile a ported libnet subset with plic-llvm without weakening
 TR conformance. Two lanes: TR-shaped work (spec-conformant, normal ADRs)
 and TR-silent work (marked extensions, ADR each). Anything TR-contradicting
