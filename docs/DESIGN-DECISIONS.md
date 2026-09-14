@@ -2326,3 +2326,27 @@ Consequences. `dyn_param_lower.pli` covers l=1, remapped l=0/2/5,
 writes-through, and a function result; `bad_dyn_param.pli` keeps only
 the multi-axis case and `bad_dyn_lower.pli` the beyond-first-axis
 lower case.
+
+## ADR-091 — Whole-structure copy with dynamic members deep-copies
+
+Context. QR1.1 serves whole-structure copy for fixed shapes by storage
+`memcpy` (rule 127), but a struct holding a dynamic-array member stores
+a buffer pointer: `memcpy` would alias the source buffer, so a later
+write through either side would corrupt the other. The copy was
+diagnosed rather than miscompiled.
+
+Decision. Plain assignment `t = s` (identical shapes) deep-copies:
+save each target buffer pointer, `memcpy` the storage, restore the
+pointers, then `memcpy` each buffer's contents positionally (lower
+bounds may differ; only the extent matters). Live extents are compared
+first and a mismatch traps through `pli_subscript_oob` rather than
+overflowing or silently truncating. Non-`VarRef` struct sources are
+diagnosed. `LIKE`, `RETURNS`, by-value arguments, and `BY NAME` stay
+diagnosed follow-ups (QR2.1); struct-typed call-argument checking for
+nested callees is a known hole (params resolve after callers type-check,
+so the check is skipped) and needs its own fix.
+
+Consequences. `struct_dyn_copy.pli` covers scalar/element copy,
+`LBOUND`/`HBOUND`/`DIM`/`SUM` over the copied member, and
+deep-not-aliased divergence; `bad_struct_dyn.pli` now pins the
+`LIKE`-with-dynamic-member diagnostic.

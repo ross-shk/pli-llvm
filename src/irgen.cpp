@@ -42,6 +42,31 @@ static double iniNumeric(const Expr* e) {
   return (double)e->ival;
 }
 
+// Field paths of every dynamic-array member in a structure type (rule (13)),
+// relative to the structure root; nested structures recurse (ADR-091).
+static void collectDynMemberPaths(const Type& ty, std::vector<unsigned>& prefix,
+                                  std::vector<std::vector<unsigned>>& out) {
+  for (unsigned i = 0; i < ty.members.size(); ++i) {
+    const Type& m = ty.members[i]->ty;
+    prefix.push_back(i);
+    if (m.isArray() && m.isDynamic())
+      out.push_back(prefix);
+    else if (m.isStruct())
+      collectDynMemberPaths(m, prefix, out);
+    prefix.pop_back();
+  }
+}
+
+// The array type at a field path inside a structure type (rule 124): walk the
+// recorded field indices like memberType does, but from a type root so it
+// also serves minor-structure bases (ADR-091).
+static const Type& structPathType(const Type& root, const std::vector<unsigned>& path) {
+  const Type* cur = &root;
+  for (unsigned f : path)
+    cur = &cur->members[f]->ty;
+  return *cur;
+}
+
 llvm::Type* IRGen::llvmTy(const Type& t) {
   // An array is a [N x elemTy] aggregate (rules (12),(13)); handled here so a
   // struct member that is itself an array (2 A(10) ...) lays out correctly.
@@ -1501,7 +1526,90 @@ void IRGen::emitAssign(HStmt* s) {
         t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
     llvm::Type* sty = llvmTy(t->ty);
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(sty));
+    // Deep copy when a dynamic member is present (rule (13), ADR-091): the
+    // struct field holds a buffer pointer, so save the target pointers,
+    // copy the storage, restore them, then copy each buffer's contents.
+    std::vector<std::vector<unsigned>> dynPaths;
+    std::vector<unsigned> dynPrefix;
+    collectDynMemberPaths(t->ty, dynPrefix, dynPaths);
+    if (dynPaths.empty()) {
+      b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+      return;
+    }
+    HExpr* sv = s->value.get();
+    if (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr) {
+      d_.error(s->loc,
+               "a whole-structure source with a dynamic member must be a plain variable here",
+               "(13)");
+      return;
+    }
+    // One helper GEPs from an arbitrary struct base through a relative field
+    // path (memberAddr always starts from the symbol's own base).
+    auto fieldAddr = [&](llvm::Value* base, const Type& root,
+                         const std::vector<unsigned>& rel) {
+      llvm::Value* addr = base;
+      const Type* cur = &root;
+      for (unsigned f : rel) {
+        addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "dcp.f");
+        cur = &cur->members[f]->ty;
+      }
+      return addr;
+    };
+    std::vector<llvm::Value*> savedPtrs;
+    savedPtrs.reserve(dynPaths.size());
+    for (const auto& rel : dynPaths)
+      savedPtrs.push_back(b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.sv"));
     b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+    for (size_t i = 0; i < dynPaths.size(); ++i)
+      b_.CreateStore(savedPtrs[i], fieldAddr(dst, t->ty, dynPaths[i]));
+    for (const auto& rel : dynPaths) {
+      const Type& arr = structPathType(t->ty, rel);
+      const Type& el = arr.elementType();
+      std::vector<unsigned> dstFull = t->memberPath;
+      dstFull.insert(dstFull.end(), rel.begin(), rel.end());
+      std::vector<unsigned> srcFull = sv->memberPath;
+      srcFull.insert(srcFull.end(), rel.begin(), rel.end());
+      auto dstIt = memberDyn_.find(MemberDyn{t->sym, dstFull});
+      auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
+      llvm::Value* dub = dstIt != memberDyn_.end() ? dstIt->second.ub : nullptr;
+      llvm::Value* dlb = dstIt != memberDyn_.end() ? dstIt->second.lb : nullptr;
+      llvm::Value* sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
+      llvm::Value* slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
+      if (!dub || !sub) {
+        d_.error(s->loc, "a whole-structure source with a dynamic member is not addressable here",
+                 "(13)");
+        return;
+      }
+      const Dim& d0 = arr.dims[0];
+      llvm::Value* dl = d0.lbDyn && dlb ? dlb : i64(d0.lb);
+      llvm::Value* du = dub;
+      llvm::Value* sl = d0.lbDyn && slb ? slb : i64(d0.lb);
+      llvm::Value* su = sub;
+      llvm::Value* dext = b_.CreateAdd(b_.CreateSub(du, dl, "dcp.e1"), i64(1), "dcp.dext");
+      llvm::Value* sext = b_.CreateAdd(b_.CreateSub(su, sl, "dcp.e2"), i64(1), "dcp.sext");
+      long long rest = 1;
+      for (size_t k = 1; k < arr.dims.size(); ++k)
+        rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+      if (rest != 1) {
+        dext = b_.CreateMul(dext, i64(rest), "dcp.dall");
+        sext = b_.CreateMul(sext, i64(rest), "dcp.sall");
+      }
+      // Mismatched live extents would overflow the target: trap loudly
+      // through the subscript path rather than silently truncating.
+      std::string id = std::to_string(n_++);
+      llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "dcp.fail." + id, curFn_);
+      llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "dcp.ok." + id, curFn_);
+      b_.CreateCondBr(b_.CreateICmpNE(dext, sext, "dcp.mis"), failL, okL);
+      startBlock(failL);
+      b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+      b_.CreateUnreachable();
+      startBlock(okL);
+      llvm::Value* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.dp");
+      llvm::Value* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "dcp.sp");
+      llvm::Value* nbytes =
+          b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "dcp.n");
+      b_.CreateMemCpy(dbuf, llvm::MaybeAlign(), sbuf, llvm::MaybeAlign(), nbytes);
+    }
     return;
   }
   // Qualified member assignment: S.A = e (rule 124).
