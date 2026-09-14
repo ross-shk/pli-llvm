@@ -544,6 +544,42 @@ void pli_get_list_char(char *dst, long long cap) {
     dst[i] = ' ';
 }
 
+/* List-directed complex input (CM5, ADR-086): a `re+imI` token reads both
+ * parts; a bare number reads with a zero imaginary part. Lenient like the
+ * other readers: missing or malformed parts read as zero. */
+void pli_get_list_complex(char *re_ptr, char *im_ptr) {
+  // The ABI token set has no double-pointer: the caller passes double* for
+  // both (INCITS parity aside, the effective type stays double throughout).
+  double *re = (double *)re_ptr;
+  double *im = (double *)im_ptr;
+  char tok[128];
+  if (!get_token(tok, sizeof tok)) {
+    *re = 0.0;
+    *im = 0.0;
+    return;
+  }
+  size_t n = strlen(tok);
+  if (n > 0 && (tok[n - 1] == 'I' || tok[n - 1] == 'i')) {
+    tok[n - 1] = '\0';
+    // Split at the last interior sign that is not an exponent marker.
+    size_t k = strlen(tok);
+    size_t split = 0;
+    for (size_t j = 1; j < k; ++j)
+      if ((tok[j] == '+' || tok[j] == '-') && tok[j - 1] != 'e' && tok[j - 1] != 'E')
+        split = j;
+    if (split == 0) {
+      *re = 0.0;
+      *im = strtod(tok, NULL);
+    } else {
+      *re = strtod(tok, NULL);
+      *im = strtod(tok + split, NULL);
+    }
+  } else {
+    *re = strtod(tok, NULL);
+    *im = 0.0;
+  }
+}
+
 unsigned char pli_get_list_bit(void) {
   char tok[16];
   if (!get_token(tok, sizeof tok))

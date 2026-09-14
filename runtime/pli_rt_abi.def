@@ -102,6 +102,7 @@ PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */
 PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))
 PLI_FN(pli_get_list_char, VOID, (PTR, I64))
+PLI_FN(pli_get_list_complex, VOID, (PTR, PTR)) /* CM5 (ADR-086) */
 PLI_FN(pli_get_list_bit, I8, (VOID))
 
 /* Edit-directed input (rules (108),(44)-(54)): F(w,d) is parsed to a double

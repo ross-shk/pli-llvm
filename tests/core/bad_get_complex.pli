@@ -1,6 +1,0 @@
-  /* CM5: list-directed complex input stays
-     diagnosed. */
-  badgetcomplex: procedure options(main);
-     declare z complex;
-     get list(z);
-  end badgetcomplex;
