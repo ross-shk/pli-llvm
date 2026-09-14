@@ -1,0 +1,15 @@
+ /* INITIAL covering a dynamic member is served only
+    for a trailing top-level dynamic array (see
+    struct_dyn_init.pli); a dynamic member followed by
+    more members, or a nested dynamic member, still
+    diagnoses rule (26). */
+ bad_struct_dyn_init: procedure options(main);
+    declare n fixed bin(31);
+    declare 1 s init(7, 1, 2, 99),
+           2 a fixed bin(31),
+           2 v(n) fixed bin(31),
+           2 b fixed bin(31);
+    declare 1 t init(1, 2, 3),
+           2 x,
+             3 v(n) fixed bin(31);
+ end bad_struct_dyn_init;
