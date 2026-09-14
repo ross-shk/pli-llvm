@@ -1,0 +1,37 @@
+  /* QR1.6 (TR §3.1): every abbreviation of
+     a served keyword is accepted. */
+  abbrev: proc options(main);
+     dcl a fixed bin(31) init(1) auto int;
+     dcl b fixed dec(4, 2) init(2.5);
+     dcl s char(5) var init('hi');
+     dcl p ptr;
+     dcl x fixed bin(31);
+     dcl y fixed bin(31) def x;
+     dcl z cplx;
+     dcl em_ext entry(fixed bin(31)) ext('em_ext');
+     declare fails fixed bin(31);
+     fails = 0;
+     x = 41;
+     y = y + 1;
+     if y ^= 42 then do;
+        fails = fails + 1;
+        put skip list('FAIL def');
+     end;
+     z = complex(1.0, 2.0);
+     if real(z) ^= 1.0 then do;
+        fails = fails + 1;
+        put skip list('FAIL cplx');
+     end;
+     p = null();
+     if p ^= null() then do;
+        fails = fails + 1;
+        put skip list('FAIL ptr');
+     end;
+     if a + b ^= 3.5 then do;
+        fails = fails + 1;
+        put skip list('FAIL init');
+     end;
+     if fails = 0
+        then put skip list('PASS abbrev');
+        else put skip list('FAIL abbrev');
+  end abbrev;
