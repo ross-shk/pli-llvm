@@ -21,11 +21,13 @@ PLI_FN(pli_put_list_fixed, VOID, (I64))
 PLI_FN(pli_put_list_fixed_scaled, VOID, (I64, I64))   /* scaled FIXED (ADR-006) */
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
+PLI_FN(pli_put_list_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */
 /* DISPLAY one scalar value (rule 114, ADR-081) */
 PLI_FN(pli_display_char, VOID, (CPTR, I64))
 PLI_FN(pli_display_fixed, VOID, (I64))
 PLI_FN(pli_display_float, VOID, (DOUBLE))
 PLI_FN(pli_display_bit, VOID, (I8))
+PLI_FN(pli_display_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */
 
 /* Edit-directed output (rules (108),(44)-(54)): F(w,d), A(w), and the control
  * X/SKIP/PAGE/LINE items. The fixed form takes the stored value, its decimal

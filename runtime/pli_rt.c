@@ -145,6 +145,13 @@ void pli_display_bit(unsigned char b) {
   put_raw(b ? "1" : "0", 1);
   display_end();
 }
+void pli_display_complex(double re, double im) {
+  char buf[128];
+  int n = snprintf(buf, sizeof buf, "%.6g%+.6gI", re, im);
+  display_begin();
+  put_raw(buf, (size_t)n);
+  display_end();
+}
 
 void pli_put_list_fixed(long long v) {
   char buf[32];
@@ -194,6 +201,14 @@ void pli_put_list_float(double v) {
 void pli_put_list_bit(unsigned char b) {
   separate();
   put_raw(b ? "1" : "0", 1);
+}
+
+/* Complex output (CM5, ADR-085): real part, sign, imaginary magnitude, I. */
+void pli_put_list_complex(double re, double im) {
+  char buf[128];
+  int n = snprintf(buf, sizeof buf, "%.6g%+.6gI", re, im);
+  separate();
+  put_raw(buf, (size_t)n);
 }
 
 /* Assignment to CHARACTER(n) NONVARYING: truncate or pad with blanks. */

@@ -2228,3 +2228,19 @@ imaginary constants, and both equalities; `bad_complex_power.pli` and
 `bad_complex_cmp.pli` pin the two diagnostics. Complex I/O and remaining
 Appendix-1 math stay out. Bare factored `a, b <attr>;` typing only the
 last item is a known pre-existing parser limitation, untouched here.
+
+## ADR-085 — Complex output as real, sign, imaginary, I
+
+Context. CM5 values exist with arithmetic served, but output was diagnosed
+while input parsing (`4+6I` back into a pair) is a separate string-parsing
+feature. List-directed input of complex also slipped past sema to a codegen
+backstop, invisible to `-fsyntax-only`.
+
+Decision. `PUT LIST` and `DISPLAY` print complex as `%.6g%+.6gI` (real,
+sign, magnitude, I) through `pli_put_list_complex` / `pli_display_complex`,
+the latter framed by the DISPLAY line discipline. `GET LIST` of complex is
+diagnosed in sema beside the struct case, so front-end checks reject it.
+
+Consequences. `complex_io.pli` (golden) covers single/multi-item PUT and
+DISPLAY including negative parts; `bad_get_complex.pli` pins the input
+diagnostic. Complex input parsing stays out.
