@@ -1,0 +1,12 @@
+  /* extension (ADR-082): a quoted %REPLACE
+     operand is re-scanned as source text;
+     the unquoted form is unchanged. */
+  %replace max by "5";
+  %replace greet by "put skip list('hi')";
+  %replace plain by 7;
+  replace_quoted: procedure options(main);
+     declare c fixed bin(31);
+     c = max + plain;
+     put skip list('bound', c);
+     greet;
+  end replace_quoted;

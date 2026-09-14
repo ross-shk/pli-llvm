@@ -127,7 +127,7 @@ entry points below are where that chain terminates.
 
 | Extension | Status | Component / test |
 |---|---|---|
-| `%REPLACE` (ADR-077) | served | `%REPLACE name BY <tokens> ;` substitutes an identifier with source text before parsing (`replace.pli`); other `%` directives and malformed directives diagnosed (`bad_replace.pli`) |
+| `%REPLACE` (ADR-077) | served | `%REPLACE name BY <tokens> ;` substitutes an identifier with source text before parsing (`replace.pli`); a lone `"..."` operand is re-scanned as source text (`replace_quoted.pli`, ADR-082); stray double quotes and mixed quoted/raw replacements diagnosed (`bad_dqstring.pli`, `bad_replace_mixed.pli`); other `%` directives and malformed directives diagnosed (`bad_replace.pli`) |
 | `%INCLUDE` search paths (ADR-078) | served | including file's directory, then repeatable `-I` (first wins, `-I<dir>` too), then `PLIC_INCLUDE_PATH`, then the executable-relative `share/plic/include` default; `-v` lists the configured dirs (`driver/include_dirs`) |
 
 ## Headline numbers (M0)

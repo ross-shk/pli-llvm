@@ -15,6 +15,8 @@ const char* tokName(Tok t) {
     return "iSUB";
   case Tok::CharLit:
     return "character constant";
+  case Tok::DqString:
+    return "double-quoted string";
   case Tok::BitLit:
     return "bit constant";
   case Tok::Semi:
@@ -239,7 +241,59 @@ Token Lexer::lexString() {
   return t;
 }
 
+// A double-quoted literal (extension: only a %REPLACE replacement operand,
+// ADR-082). "" denotes a contained quotation mark, mirroring lexString.
+Token Lexer::lexDqString() {
+  Token t;
+  t.kind = Tok::DqString;
+  t.loc = here();
+  bump(); // opening quote
+  std::string v;
+  for (;;) {
+    if (!cur() || cur() == '\n') {
+      d_.error(t.loc, "unterminated double-quoted string", "");
+      break;
+    }
+    if (cur() == '"') {
+      if (peek() == '"') {
+        v.push_back('"');
+        bump();
+        bump();
+        continue;
+      }
+      bump();
+      break;
+    }
+    v.push_back(cur());
+    bump();
+  }
+  t.sval = v;
+  return t;
+}
+
 std::vector<Token> Lexer::run() {
+  std::vector<Token> out = lexAll();
+  // Extension (ADR-077): expand %REPLACE before parsing. Skipped when
+  // lexing already failed, so one fault never cascades into another.
+  if (!d_.ok())
+    return out;
+  return applyReplace(std::move(out));
+}
+
+// Re-lex quoted %REPLACE replacement text as source tokens (ADR-082).
+// Stamped with the directive's location; nested directives are not
+// expanded (single-pass substitution).
+std::vector<Token> Lexer::lexSnippet(const std::string& text, SourceLoc loc) {
+  Lexer sub(text, d_);
+  std::vector<Token> toks = sub.lexAll();
+  if (!toks.empty() && toks.back().kind == Tok::Eof)
+    toks.pop_back();
+  for (Token& t : toks)
+    t.loc = loc;
+  return toks;
+}
+
+std::vector<Token> Lexer::lexAll() {
   std::vector<Token> out;
   for (;;) {
     skipSpaceAndComments();
@@ -248,11 +302,7 @@ std::vector<Token> Lexer::run() {
       t.kind = Tok::Eof;
       t.loc = here();
       out.push_back(t);
-      // Extension (ADR-077): expand %REPLACE before parsing. Skipped when
-      // lexing already failed, so one fault never cascades into another.
-      if (!d_.ok())
-        return out;
-      return applyReplace(std::move(out));
+      return out;
     }
 
     SourceLoc loc = here();
@@ -268,6 +318,10 @@ std::vector<Token> Lexer::run() {
     }
     if (c == '\'') {
       out.push_back(lexString());
+      continue;
+    }
+    if (c == '"') {
+      out.push_back(lexDqString());
       continue;
     }
 
@@ -441,6 +495,33 @@ std::vector<Token> Lexer::applyReplace(std::vector<Token> in) {
           --end;
         if (end == start) {
           d_.error(nl, "empty replacement text in %REPLACE (ADR-077)", "");
+          i = j;
+          continue;
+        }
+        // A lone double-quoted operand is re-scanned as source text
+        // (ADR-082); mixed with other tokens it is diagnosed.
+        bool quoted = false;
+        for (size_t k = start; k < end; ++k)
+          quoted = quoted || in[k].kind == Tok::DqString;
+        if (quoted) {
+          if (end - start != 1) {
+            d_.error(nl, "a quoted %REPLACE operand must be the whole replacement text (ADR-082)", "");
+            i = j;
+            continue;
+          }
+          bool subOk = d_.ok();
+          std::vector<Token> body = lexSnippet(in[start].sval, in[start].loc);
+          if (subOk && !d_.ok()) {
+            d_.error(nl, "cannot re-scan quoted %REPLACE text (ADR-082)", "");
+            i = j;
+            continue;
+          }
+          if (body.empty()) {
+            d_.error(nl, "empty replacement text in %REPLACE (ADR-077)", "");
+            i = j;
+            continue;
+          }
+          reps[name] = std::move(body);
           i = j;
           continue;
         }

@@ -2168,3 +2168,21 @@ column/item state, so mixed PUT/DISPLAY output never joins or splits lines.
 
 Consequences. `display.pli` (golden) covers all four scalar types;
 `bad_display.pli` pins the non-scalar diagnostic. `REPLY` is a later slice.
+
+## ADR-082 — Quoted %REPLACE operands are re-scanned as source text
+
+Context. Iron Spring writes replacements as double-quoted strings
+(`%replace X by "...";`), but `"` is not a plic source character. The
+quoted form must work without making `"..."` legal elsewhere.
+
+Decision. The lexer produces a dedicated `DqString` token (`""` escapes a
+quote, as with `'`). A replacement that is exactly one `DqString` is
+re-lexed as source through a fresh lexer over the contents (locations
+stamped at the directive; nested directives are not expanded, keeping the
+single-pass guarantee); anything mixing quotes with raw tokens is
+diagnosed. The parser rejects a stray `DqString` with an explicit
+diagnostic instead of the generic expression error.
+
+Consequences. `replace_quoted.pli` (golden) covers quoted single-token,
+quoted multi-token, and unquoted coexistence; `bad_replace_mixed.pli` and
+`bad_dqstring.pli` pin the two diagnostics. Unquoted behavior is unchanged.

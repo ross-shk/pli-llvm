@@ -17,6 +17,7 @@ enum class Tok {
   Isub,    // iSUB dummy variable, 'integer SUB' with no blanks (rule 134)
   CharLit, // '...'   (character-string constant)
   BitLit,  // '...'B  (bit-string constant)
+  DqString, // "..."  (extension: quoted %REPLACE replacement, ADR-082)
   // Punctuation
   Semi,
   Colon,

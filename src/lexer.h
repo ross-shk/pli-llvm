@@ -12,6 +12,11 @@ public:
   std::vector<Token> run();
 
 private:
+  // Raw token stream including the trailing Eof, before %REPLACE expansion.
+  std::vector<Token> lexAll();
+  // Re-lex quoted %REPLACE replacement text as source tokens (ADR-082),
+  // stamped with the directive's location and without the trailing Eof.
+  std::vector<Token> lexSnippet(const std::string& text, SourceLoc loc);
   // Extension (ADR-077): serve %REPLACE directives found in the token stream.
   std::vector<Token> applyReplace(std::vector<Token> in);
   char cur() const { return p_ < s_.size() ? s_[p_] : '\0'; }
@@ -23,6 +28,7 @@ private:
   Token lexWord();
   Token lexNumber();
   Token lexString();
+  Token lexDqString(); // "..." with "" escape; only a %REPLACE operand (ADR-082)
 
   const std::string& s_;
   Diags& d_;
