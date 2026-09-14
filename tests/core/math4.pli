@@ -1,0 +1,50 @@
+ /* Scalar math built-ins (CM5, C <math.h>
+    analogues): ASIN, ACOS, ATAN2(y, x),
+    CBRT. Each yields a FLOAT value,
+    compared within a small tolerance like
+    the earlier math tests. */
+ math4_test: procedure options(main);
+    declare y float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    y = asin(0.5);
+    if abs(y - 0.5235988) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL asin(0.5) =', y);
+    end;
+
+    y = acos(0.5);
+    if abs(y - 1.0471976) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL acos(0.5) =', y);
+    end;
+
+    y = atan2(1.0, 1.0);
+    if abs(y - 0.7853982) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL atan2(1,1) =', y);
+    end;
+
+    y = atan2(0.0, -1.0);
+    if abs(y - 3.1415927) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL atan2(0,-1) =', y);
+    end;
+
+    y = cbrt(27.0);
+    if abs(y - 3.0) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL cbrt(27) =', y);
+    end;
+
+    y = cbrt(-8.0);
+    if abs(y - (-2.0)) > 1e-6 then do;
+       fails = fails + 1;
+       put skip list('FAIL cbrt(-8) =', y);
+    end;
+
+    if fails = 0 then put skip list('PASS math4');
+    else put skip list('FAIL math4: fails =', fails);
+ end math4_test;

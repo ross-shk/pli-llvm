@@ -1,0 +1,7 @@
+  /* CM5: ATAN2 needs two numeric arguments;
+     ASIN needs a numeric one. */
+  badmath4: procedure options(main);
+     declare y float dec(6);
+     y = atan2(1.0);
+     y = asin('s');
+  end badmath4;

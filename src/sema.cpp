@@ -2118,7 +2118,7 @@ bool Sema::typeBuiltin(Expr* e) {
       e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
       e->name == "COSH" || e->name == "TANH" || e->name == "ATANH" || e->name == "ERF" ||
       e->name == "ERFC" || e->name == "SIND" || e->name == "COSD" || e->name == "TAND" ||
-      e->name == "ATAND") {
+      e->name == "ATAND" || e->name == "ASIN" || e->name == "ACOS" || e->name == "CBRT") {
     if (e->args.size() != 1) {
       d_.error(e->loc, e->name + " expects 1 argument", "(123)");
       e->ty = Type::voidTy();
@@ -2126,6 +2126,21 @@ bool Sema::typeBuiltin(Expr* e) {
     }
     if (!e->args[0]->ty.isNumeric()) {
       d_.error(e->args[0]->loc, e->name + " argument must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::flt(6);
+    return true;
+  }
+  // ATAN2(y, x) (CM5, Appendix 1): C-order two-argument arctangent.
+  if (e->name == "ATAN2") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "ATAN2 expects 2 arguments (y, x)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+      d_.error(e->loc, "ATAN2 arguments must be numeric", "(123)");
       e->ty = Type::voidTy();
       return true;
     }

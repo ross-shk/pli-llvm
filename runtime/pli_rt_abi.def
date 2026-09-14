@@ -61,6 +61,10 @@ PLI_FN(pli_tan, DOUBLE, (DOUBLE))
 PLI_FN(pli_log2, DOUBLE, (DOUBLE))
 PLI_FN(pli_log10, DOUBLE, (DOUBLE))
 PLI_FN(pli_atan, DOUBLE, (DOUBLE))
+PLI_FN(pli_asin, DOUBLE, (DOUBLE))   /* ASIN (CM5) */
+PLI_FN(pli_acos, DOUBLE, (DOUBLE))   /* ACOS (CM5) */
+PLI_FN(pli_atan2, DOUBLE, (DOUBLE, DOUBLE)) /* ATAN2(y, x) (CM5) */
+PLI_FN(pli_cbrt, DOUBLE, (DOUBLE))   /* CBRT (CM5) */
 PLI_FN(pli_sinh, DOUBLE, (DOUBLE))
 PLI_FN(pli_cosh, DOUBLE, (DOUBLE))
 PLI_FN(pli_tanh, DOUBLE, (DOUBLE))

@@ -2260,3 +2260,16 @@ is lifted (the codegen backstop stays as defense).
 
 Consequences. `driver/get_complex` covers both shapes plus the bare-real
 rule; the transient `bad_get_complex.pli` pin is removed.
+
+## ADR-087 — ASIN, ACOS, ATAN2, CBRT through thin runtime wrappers
+
+Context. The Appendix-1 math family stops at ATAND, leaving the remaining
+C counterparts ASIN, ACOS, two-argument ATAN2, and CBRT unserved.
+
+Decision. ASIN/ACOS/CBRT join the one-argument table (numeric in, FLOAT
+out); ATAN2 gets its own two-numeric-argument block in C order (y, x),
+mirroring the one-arg shape otherwise. All four lower through thin
+`pli_*` wrappers over C99 `asin`/`acos`/`atan2`/`cbrt`, like the family.
+
+Consequences. `math4.pli` checks all four within tolerance;
+`bad_math4.pli` pins arity and numeric diagnostics.

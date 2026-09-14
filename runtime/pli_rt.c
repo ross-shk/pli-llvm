@@ -295,6 +295,10 @@ double pli_tan(double x) { return tan(x); }
 double pli_log2(double x) { return log2(x); }
 double pli_log10(double x) { return log10(x); }
 double pli_atan(double x) { return atan(x); }
+double pli_asin(double x) { return asin(x); }
+double pli_acos(double x) { return acos(x); }
+double pli_atan2(double y, double x) { return atan2(y, x); }
+double pli_cbrt(double x) { return cbrt(x); }
 double pli_sinh(double x) { return sinh(x); }
 double pli_cosh(double x) { return cosh(x); }
 double pli_tanh(double x) { return tanh(x); }
