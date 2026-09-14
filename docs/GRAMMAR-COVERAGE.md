@@ -47,7 +47,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (69)–(73) | `DO` groups, specifications, `WHILE` | M0 | `loops.pli` |
 | (74)–(76) | `IF`/`THEN`/`ELSE`, balanced statements | M0 | `ifelse.pli` |
 | (77) | `GO TO` | M1/M4 | local `GO TO`/`GOTO` implemented (`goto.pli`, `bad_goto.pli`); non-local to an enclosing procedure → M4 |
-| (78)–(80) | `CALL`, options, argumentlist | M0 (opts M9) | `procs.pli`; `TASK`/`EVENT` → M9 |
+| (78)–(80) | `CALL`, options, argumentlist | M0 (opts M9) | `procs.pli`; callee parameters resolve before any body is typed so argument checks apply regardless of procedure order, incl. whole-structure values with dynamic members (`bad_struct_dyn.pli`, ADR-094); `TASK`/`EVENT` → M9 |
 | (81) | `RETURN` | M0/M1 | plain `RETURN` (M0); `RETURN(value)` for function procedures (M1, `func.pli`) |
 | (82),(83) | `WAIT`, `DELAY` | M9 | |
 | (84),(85) | `EXIT`, `STOP` | M0 | |

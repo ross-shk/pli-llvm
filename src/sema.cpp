@@ -172,9 +172,13 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // 127) resolves against an already-declared enclosing template. Runs after
   // pass 1 (procedure names are declared), so INITIAL CALL (rule 27) can resolve
   // its function. processProc (pass 2) skips re-collecting (declsCollected_).
+  // Parameters resolve here too, so a caller's argument checks (rules (34),
+  // (78)) see every callee's descriptors regardless of procedure order
+  // (ADR-094); processProc skips re-resolving them.
   for (auto& p : prog.procs) {
     beginScopes_.clear();
     collectDecls(p->body, scopeFor(p.get()), p.get(), false);
+    resolveProcParams(p.get());
   }
   declsCollected_ = true;
   for (auto& p : prog.procs)
@@ -229,14 +233,8 @@ void Sema::processProc(Proc* p) {
 
   // Parameters: a DECLARE inside the procedure supplies their attributes;
   // otherwise the implicit rule applies. Parameters are always by reference.
-  resolveParams(sc, p, p->params, p->paramSyms);
-
-  // rule (56) ENTRY statements: each entry point declares its own parameters,
-  // by reference, in the same scope (so a name shared with the procedure's own
-  // parameter list refers to the same variable).
-  for (auto& st : p->body)
-    if (st && st->kind == Stmt::Entry)
-      resolveParams(sc, p, st->params, st->entryParamSyms);
+  // Already resolved in pass 1b when coming through run() (ADR-094).
+  resolveProcParams(p);
 
   // Every function-valued entry point (the procedure's own RETURNS and each
   // ENTRY's RETURNS, rule (34)) must share one result type, which the shared
@@ -298,8 +296,25 @@ void Sema::resolveStructReturn(Proc* p) {
 // otherwise the implicit rule applies. A name already resolved as a parameter
 // (e.g. an ENTRY parameter reusing a procedure parameter) is reused, so the
 // two spellings refer to one variable.
+// Resolve one procedure's own parameters and its ENTRY statements' parameters
+// (rules (34),(56)); resolving twice is a no-op so pass 1b can run ahead of
+// pass 2 (ADR-094).
+void Sema::resolveProcParams(Proc* p) {
+  Scope* sc = scopeFor(p);
+  if (p->paramSyms.empty())
+    resolveParams(sc, p, p->params, p->paramSyms);
+  // rule (56) ENTRY statements: each entry point declares its own parameters,
+  // by reference, in the same scope (so a name shared with the procedure's own
+  // parameter list refers to the same variable).
+  for (auto& st : p->body)
+    if (st && st->kind == Stmt::Entry && st->entryParamSyms.empty())
+      resolveParams(sc, p, st->params, st->entryParamSyms);
+}
+
 void Sema::resolveParams(Scope* sc, Proc* p, const std::vector<std::string>& names,
                          std::vector<Symbol*>& out) {
+  if (!out.empty())
+    return; // already resolved (pass 1b ran ahead of pass 2)
   for (const std::string& pname : names) {
     Symbol* s = nullptr;
     auto it = sc->tab.find(pname);

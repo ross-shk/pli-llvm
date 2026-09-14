@@ -1,11 +1,19 @@
  /* Whole-structure values with a dynamic member outside
     plain assignment stay rejected (rules (13),(127)):
     `t = s` is served (see struct_dyn_copy.pli), but
-    LIKE of such a structure still diagnoses rule (13). */
+    LIKE and by-value arguments of such a structure
+    still diagnose rule (13). */
  bad_struct_dyn: procedure options(main);
     declare n fixed bin(31);
     declare 1 s,
            2 a fixed bin(31),
            2 v(n) fixed bin(31);
     declare 1 t like s;
+    n = 4;
+    call p(s);
+ p: procedure(x);
+    declare 1 x,
+           2 a fixed bin(31),
+           2 v(n) fixed bin(31);
+ end p;
  end bad_struct_dyn;
