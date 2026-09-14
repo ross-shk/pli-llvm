@@ -2186,3 +2186,25 @@ diagnostic instead of the generic expression error.
 Consequences. `replace_quoted.pli` (golden) covers quoted single-token,
 quoted multi-token, and unquoted coexistence; `bad_replace_mixed.pli` and
 `bad_dqstring.pli` pin the two diagnostics. Unquoted behavior is unchanged.
+
+## ADR-083 — Preprocessor conditionals: %IF over integer variables
+
+Context. CM4 needs conditional compilation (`#if` analogue); the Chapter 9
+stubs reject everything past `%INCLUDE`. Literals-only conditions would
+prove machinery without utility, so minimal integer variables ship in the
+same slice.
+
+Decision. `%DECLARE a, b;` declares integer variables (default 0;
+redeclaration keeps the value, so double inclusion is idempotent);
+`%X = expr;` assigns (undeclared target and bare `%X` diagnosed).
+`%IF expr %THEN directive [%ELSE directive]` evaluates literals, vars,
+parens, unary minus, `+-*/` (div-by-zero diagnosed), comparisons, and
+`& | ¬` (all not-sign spellings) to select exactly one arm; arms are full
+directives run or structurally skipped recursively, so nesting, conditional
+`%INCLUDE`, and conditional `%REPLACE` text all work. Skipped arms have no
+effects and raise no file errors; newlines stay preserved for diagnostics.
+`CHARACTER` variables, `%ACTIVATE`, and the other stubs stay diagnosed.
+
+Consequences. `pp_if.pli` (golden, with `pp_yes.inc`/`pp_no.inc`) covers
+taken/untaken/else/nested arms; `bad_pp_if.pli` pins the undeclared-name
+diagnostic. `%DO` groups (multi-directive arms) stay out per the subplan.

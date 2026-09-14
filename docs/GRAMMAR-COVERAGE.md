@@ -90,7 +90,8 @@ The ledger that ties the implementation to the specification. Status values:
 | Section | Feature | Status | Component / test |
 |---|---|---|---|
 | Chapter 9, The INCLUDE Statement | `%INCLUDE` | QR1 | recursive relative member/path expansion, `.inc` fallback, comments/strings ignored, cycle and missing-member diagnostics (`preprocessor.cpp`, `include.pli`, `bad_include.pli`, `bad_include_cycle.pli`, ADR-071) |
-| Chapter 9, remaining processor statements | declarations, replacement, activation, conditionals, loops, transfers, procedures | diag → QR2 | directive handler stubs reject with a Chapter 9 citation (`bad_preprocessor.pli`, ADR-071) |
+| Chapter 9, remaining processor statements | declarations, replacement, activation, conditionals, loops, transfers, procedures | partial QR2 | `%DECLARE a, b;` integer variables (default 0, include-twice idempotent), `%X = expr;` assignment, and `%IF expr %THEN directive [%ELSE directive]` over literals, variables, arithmetic, comparisons, and `& \|
+ ¬` select or drop directive text with recursion for nesting (`pp_if.pli`, `pp_yes.inc`, `pp_no.inc`, ADR-083); undeclared names in `%IF`, missing `%THEN`, and stray `%THEN`/`%ELSE` diagnosed (`bad_pp_if.pli`); `%ACTIVATE`/`%DO`/`%GO TO`/procedures and other stubs still reject (`bad_preprocessor.pli`, ADR-071) |
 
 ## IRGen touch-points
 
