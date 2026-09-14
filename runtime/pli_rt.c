@@ -528,6 +528,13 @@ void pli_subscript_oob(void) {
   exit(8);
 }
 
+/* FIXED BINARY overflow (QR1.2): hard ERROR until a SIZE condition (QR1.4)
+ * can route it. Raised through the ERROR path so a future ON ERROR already
+ * observes it. */
+void pli_fixed_overflow(void) {
+  pli_signal_error("FIXED BINARY overflow");
+}
+
 /* ALLOCATE (rule 87): heap-allocate n bytes for a based structure. A null
  * return would be an ALLOCATION condition (M4); the interim raises a hard
  * error. */
