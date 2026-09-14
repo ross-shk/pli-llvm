@@ -2424,3 +2424,32 @@ identically.
 Consequences. `bad_struct_dyn.pli` gains the by-value-argument case
 alongside its `LIKE` case; the full suite stays green (201/201), so no
 passing test relied on the hole.
+
+## ADR-095 — FIXED DECIMAL overflow traps to hard ERROR
+
+Context. QR1.2 serves FIXED DECIMAL storage, scaled arithmetic, I/O,
+and comparison (ADR-006/056/088), and ADR-089 traps FIXED BINARY
+`+ - *`/negation while explicitly leaving DECIMAL precision overflow
+wrapping silently: `999.99 + 0.01` into `(5,2)` printed `1000.00`, and
+narrowing conversions truncated. Full precision conformance (widened
+intermediates, exact result precisions) is D1/QR2 scope, not this slice.
+
+Decision. Two complementary checks through the existing
+`pli_fixed_overflow` hard-ERROR path (routable by a future SIZE, same
+as ADR-089): binary `+ - *` and the `MULTIPLY` builtin use width-checked
+ops for decimal intermediates too (a wrapped intermediate always
+exceeds any declared digits); narrowing conversions trap past the
+target — `10^prec` digits for a `FIXED DECIMAL` target at prec 18 or
+below (any i64 fits wider targets, so they skip), storage width for a
+32-bit `FIXED BINARY` target — with statically fitting values
+(same-or-wider decimal source after rescale) skipping the check and
+scale-up rescaling itself overflow-checked so the magnitude check never
+reads a wrapped value. Unary minus needs no guard: every storable
+decimal magnitude fits its width, so negation cannot wrap.
+
+Consequences. `driver/decimal_overflow` covers add/sub/mul/convert
+traps plus fitting edges (rescaled narrowing, decimal-to-binary);
+`decimal.pli` and `decimal_io.pli` stay green unchanged. Known
+limitation: an intermediate wider than its storage width traps even
+when the final target could hold the value — serving that needs the
+deferred widened intermediates.
