@@ -1,0 +1,5 @@
+  /* extension (ADR-082): double quotes are
+     only valid as a %REPLACE operand. */
+  baddqstring: procedure options(main);
+     put skip list("hi");
+  end baddqstring;

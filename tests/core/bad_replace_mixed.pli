@@ -1,0 +1,7 @@
+  /* extension (ADR-082): a quoted operand
+     must be the whole replacement text. */
+  badreplacemixed: procedure options(main);
+     declare x fixed bin(31);
+     %replace x by "5" 6;
+     x = 1;
+  end badreplacemixed;
