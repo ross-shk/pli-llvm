@@ -663,12 +663,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 d_.error(item.loc,
                          "a dynamic array may only have a dynamic first axis in this stage",
                          "(13)");
-            // A dynamic lower bound on a parameter is not served: the dyn-param /
-            // `*` calling conventions convey only the upper bound (or extent), so
-            // a lower-bound parameter would be sized from the wrong origin.
-            if (isParam && !item.ty.dims.empty() && item.ty.dims[0].lbDyn)
-              d_.error(item.loc, "a dynamic lower bound on a parameter is not served in this stage",
-                       "(13)");
+            // A single-axis dynamic lower bound on a parameter is served:
+            // the bound exprs name caller-supplied params read at entry.
             if (item.sym->isStatic)
               d_.error(item.loc, "a dynamic array must be AUTOMATIC in this stage", "(13)");
             if (!item.initItems.empty()) {
