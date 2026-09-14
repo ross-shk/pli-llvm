@@ -2307,3 +2307,22 @@ the checks in QR1.4.
 
 Consequences. `driver/overflow` covers all four traps plus in-range
 edges; the `tests/ir` arith/func expectations track the checked shape.
+
+## ADR-090 — Dynamic lower-bound params read both bounds at entry
+
+Context. QR1.1 serves single-axis `A(lb:ub)` locals (ADR-058) and `x(k)`
+params (ADR-054), but `x(l:u)` was diagnosed: the convention was thought
+to convey only the upper bound, so a lower-bound param would index from
+the wrong origin.
+
+Decision. No ABI change. The bound exprs name caller-supplied params
+already passed by reference, so the callee evaluates both at entry into
+`dynUb_`/`dynLb_` (mirroring locals). Indexing is remap-by-position:
+`x(l)` addresses the caller's first element, with per-axis
+SUBSCRIPTRANGE and `LBOUND`/`HBOUND`/`DIM`/reductions over the live
+bounds. Multi-axis dynamic params stay diagnosed.
+
+Consequences. `dyn_param_lower.pli` covers l=1, remapped l=0/2/5,
+writes-through, and a function result; `bad_dyn_param.pli` keeps only
+the multi-axis case and `bad_dyn_lower.pli` the beyond-first-axis
+lower case.

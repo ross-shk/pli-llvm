@@ -586,9 +586,12 @@ void IRGen::allocaLocals(HProc* p) {
 // bound argument (itself by-ref) at entry. Record it so subscripting and the
 // array built-ins bounds-check against the live extent (rules (12),(13),(34)).
 void IRGen::recordDynParamUbs(const std::vector<Symbol*>& params) {
-  for (Symbol* s : params)
+  for (Symbol* s : params) {
     if (s->ty.isDynamic() && s->dynUb && !dynUb_.count(s))
       dynUb_[s] = toI64(emitExpr(s->dynUb));
+    if (s->ty.isDynamic() && s->dynLb && !dynLb_.count(s))
+      dynLb_[s] = toI64(emitExpr(s->dynLb));
+  }
 }
 
 // INITIAL attribute on AUTOMATIC variables (rule 26): runs on every

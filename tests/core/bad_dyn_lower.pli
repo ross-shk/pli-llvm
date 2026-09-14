@@ -1,10 +1,10 @@
-  /* A dynamic (runtime) lower bound on a parameter array stays rejected: the
-     dyn-param / '*' calling conventions convey only the upper bound (or extent),
-     so a lower-bound parameter would be sized from the wrong origin (rule (13)). */
-  bad_dyn_lower: procedure options(main);
-     p: procedure(x, lb, ub);
-        declare lb fixed bin(31);
-        declare ub fixed bin(31);
-        declare x(lb:ub) fixed bin(31);
-     end p;
-  end bad_dyn_lower;
+ /* A dynamic lower bound beyond the first axis stays
+    rejected (rules (12),(13)); single-axis `x(l:u)` is
+    served (see dyn_param_lower.pli). */
+ bad_dyn_lower: procedure options(main);
+    p: procedure(x, lb, ub);
+       declare lb fixed bin(31);
+       declare ub fixed bin(31);
+       declare x(4, lb:ub) fixed bin(31);
+    end p;
+ end bad_dyn_lower;

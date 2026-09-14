@@ -1,26 +1,16 @@
- /* Dynamic (runtime-extent) array parameter forms that are not implemented in
-    this stage (rules (12),(13)): a multi-axis dynamic parameter and a
-    parameter with a dynamic lower bound are both diagnosed with rule (13). */
+ /* Dynamic array param forms still rejected (rules
+    (12),(13)): a multi-axis dynamic param stays
+    diagnosed; single-axis `x(l:u)` is served (see
+    dyn_param_lower.pli). */
  bad_dyn_param: procedure options(main);
     declare a(4,4) fixed bin(31);
-    declare m(10) fixed bin(31);
     declare n fixed bin(31);
-    declare lo fixed bin(31);
     n = 4;
     call two(a, n, n);
-    lo = 2;
-    n = 8;
-    call off(m, lo, n);
 
  two: procedure(x, r, c);
     declare r fixed bin(31);
     declare c fixed bin(31);
-    declare x(r,c) fixed bin(31);   /* multi-axis dynamic -> rule (13) */
+    declare x(r,c) fixed bin(31);   /* multi-axis -> rule (13) */
  end two;
-
- off: procedure(x, l, u);
-    declare l fixed bin(31);
-    declare u fixed bin(31);
-    declare x(l:u) fixed bin(31);   /* dynamic lower bound -> rule (13) */
- end off;
  end bad_dyn_param;
