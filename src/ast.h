@@ -149,6 +149,7 @@ struct Stmt {
     On,       // rule (91)  ON condition [SNAP] (unit | SYSTEM)
     Revert,   // rule (92)  REVERT condition
     Signal,   // rule (93)  SIGNAL condition
+    Display,  // rule (114) DISPLAY (expression) — one scalar value
   } kind = Null;
 
   SourceLoc loc{};
@@ -197,7 +198,8 @@ struct Stmt {
   // ON statement (rule 91): the established condition, whether SNAP was
   // given, whether the unit is SYSTEM, and the unit body (null for SYSTEM).
   // REVERT/SIGNAL (rules 92,93) use condName only.
-  std::string condName; // e.g. "ERROR"
+  std::string condName; // e.g. "ERROR" or a rule (99) condition name
+  int condKey = 0;      // 0 = ERROR, else index + 1 into Program::condNames
   bool snap = false;
   bool isSystem = false;
   StmtP unit;
@@ -239,4 +241,7 @@ struct Program {
   // All procedures, flattened; `parent` preserves lexical nesting.
   std::vector<std::unique_ptr<Proc>> procs;
   Proc* mainProc = nullptr;
+  // Programmer-named conditions in first-use order (rule 99); a use-site key
+  // is its index + 1 (key 0 means ERROR).
+  std::vector<std::string> condNames;
 };

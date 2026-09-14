@@ -110,6 +110,10 @@ private:
   // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
   // was already type-checked by checkStmt, so symbol references are resolved.
   void checkOnUnit(Stmt* u, Proc* p);
+  // Rule (99): resolve a programmer-named condition to its dispatch key
+  // (first-use order in prog_->condNames; 0 means ERROR). A name already
+  // declared as a variable, parameter, or procedure is diagnosed.
+  int resolveCondKey(Stmt* s, Scope* sc);
   // Validate the STRING ( reference ) stream option (rule 105): the target must
   // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only.
   void checkStringTarget(Stmt* s, Scope* sc, Proc* p);

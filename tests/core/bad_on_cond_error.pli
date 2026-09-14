@@ -1,0 +1,5 @@
+  /* rule (99): ERROR is not a valid
+     programmer-named condition. */
+  badonconderror: procedure options(main);
+     signal condition(error);
+  end badonconderror;

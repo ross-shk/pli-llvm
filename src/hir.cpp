@@ -144,6 +144,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->skip = s->skip;
   h->page = s->page;
   h->condName = s->condName;
+  h->condKey = s->condKey;
   h->snap = s->snap;
   h->isSystem = s->isSystem;
   h->onIndex = s->onIndex;
@@ -521,6 +522,8 @@ const char* stmtKind(HStmt::Kind k) {
     return "Revert";
   case HStmt::Signal:
     return "Signal";
+  case HStmt::Display:
+    return "Display";
   }
   return "?";
 }
@@ -614,6 +617,10 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Revert:
   case HStmt::Signal:
     os << " " << s->condName;
+    break;
+  case HStmt::Display:
+    os << " ";
+    printExpr(os, s->value.get(), ind);
     break;
   case HStmt::Allocate:
     for (size_t i = 0; i < s->allocBase.size(); ++i) {

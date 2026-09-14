@@ -1,0 +1,24 @@
+  /* rules (94),(99): programmer-named
+     conditions dispatch per condition;
+     ERROR handlers are unaffected. State
+     is observed via output only, as with
+     ERROR units. */
+  on_cond: procedure options(main);
+     on condition(neterror) begin;
+        put skip list('caught neterror');
+     end;
+     signal condition(neterror);
+     put skip list('resumed');
+
+     revert condition(neterror);
+
+     on condition(other)
+        put skip list('caught other');
+     signal condition(other);
+     revert condition(other);
+
+     on error put skip list('caught error');
+     signal error;
+     revert error;
+     put skip list('done');
+  end on_cond;

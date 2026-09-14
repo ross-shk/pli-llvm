@@ -103,6 +103,49 @@ void pli_put_list_char(const char *p, long long len) {
   if (len > 0) put_raw(p, (size_t)len);
 }
 
+/* DISPLAY (rule 114, ADR-081): one scalar value plus a newline, with the
+ * same value formats as list-directed output but no item separator. */
+static void display_end(void) {
+  // The line is complete: reset the column and item count so fini and a
+  // following PUT start clean.
+  put_raw("\n", 1);
+  col = 0;
+  items_on_line = 0;
+}
+/* A DISPLAY starts on a fresh line: end a pending PUT line first (as SKIP
+ * does), so mixed PUT/DISPLAY output never joins two values on one line. */
+static void display_begin(void) {
+  if (col > 0) {
+    put_raw("\n", 1);
+    col = 0;
+  }
+  items_on_line = 0;
+}
+void pli_display_char(const char *p, long long len) {
+  display_begin();
+  if (len > 0) put_raw(p, (size_t)len);
+  display_end();
+}
+void pli_display_fixed(long long v) {
+  char buf[32];
+  int n = snprintf(buf, sizeof buf, "%lld", v);
+  display_begin();
+  put_raw(buf, (size_t)n);
+  display_end();
+}
+void pli_display_float(double v) {
+  char buf[64];
+  int n = snprintf(buf, sizeof buf, "%.6g", v);
+  display_begin();
+  put_raw(buf, (size_t)n);
+  display_end();
+}
+void pli_display_bit(unsigned char b) {
+  display_begin();
+  put_raw(b ? "1" : "0", 1);
+  display_end();
+}
+
 void pli_put_list_fixed(long long v) {
   char buf[32];
   int n = snprintf(buf, sizeof buf, "%lld", v);
@@ -348,25 +391,61 @@ void pli_signal_error(const char *msg) {
 
 /* ERROR handler stack (rules (91)-(94)): ON ERROR pushes a handler id,
  * REVERT pops, SIGNAL dispatches to the top. Id 0 (and an empty stack) means
- * the system action. Single-threaded in this stage (tasking is M9). */
+ * the system action. Programmer-named conditions (rules (94),(99)) share the
+ * stack as tagged entries (key 0 is ERROR): a SIGNAL runs the topmost
+ * handler established for its own condition. Single-threaded in this stage
+ * (tasking is M9). */
 #define PLI_ON_MAX 64
-static long long pli_err_stack[PLI_ON_MAX];
+static struct {
+  long long key; /* 0 = ERROR, else the sema-assigned condition key */
+  long long id;  /* handler id; 0 = the system action */
+} pli_err_stack[PLI_ON_MAX];
 static int pli_err_sp = 0;
 static int pli_oncode_val = 0;
-void pli_on_push_error(long long id) {
+static void pli_on_push(long long key, long long id) {
   if (pli_err_sp < PLI_ON_MAX) {
-    pli_err_stack[pli_err_sp++] = id;
+    pli_err_stack[pli_err_sp].key = key;
+    pli_err_stack[pli_err_sp].id = id;
+    ++pli_err_sp;
   } else {
     fprintf(stderr, "ON ERROR stack overflow\n");
     exit(8);
   }
 }
+/* Topmost id for a key, or 0 when none (or SYSTEM) is established for it. */
+static long long pli_on_top(long long key) {
+  for (int i = pli_err_sp - 1; i >= 0; --i)
+    if (pli_err_stack[i].key == key)
+      return pli_err_stack[i].id;
+  return 0;
+}
+/* Drop the topmost entry for a key; a no-op when none is established. */
+static void pli_on_pop(long long key) {
+  for (int i = pli_err_sp - 1; i >= 0; --i)
+    if (pli_err_stack[i].key == key) {
+      for (int j = i; j < pli_err_sp - 1; ++j)
+        pli_err_stack[j] = pli_err_stack[j + 1];
+      --pli_err_sp;
+      return;
+    }
+}
+void pli_on_push_error(long long id) {
+  pli_on_push(0, id);
+}
 void pli_on_pop_error(void) {
-  if (pli_err_sp > 0)
-    --pli_err_sp;
+  pli_on_pop(0);
 }
 long long pli_on_top_error(void) {
-  return pli_err_sp > 0 ? pli_err_stack[pli_err_sp - 1] : 0;
+  return pli_on_top(0);
+}
+void pli_on_push_cond(long long key, long long id) {
+  pli_on_push(key, id);
+}
+void pli_on_pop_cond(long long key) {
+  pli_on_pop(key);
+}
+long long pli_on_top_cond(long long key) {
+  return pli_on_top(key);
 }
 long long pli_on_depth_error(void) {
   return pli_err_sp;
