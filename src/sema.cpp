@@ -695,6 +695,54 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (item.sym->isStatic) {
             d_.error(item.loc, "INITIAL on a static structure is not implemented in this stage",
                      "(26)");
+          } else if (hasDynamicMember(item.ty)) {
+            // INITIAL covering a dynamic member (rules (13),(26), ADR-092):
+            // only a trailing top-level dynamic array member is served — the
+            // itemlist fills the static leaves first, then one buffer element
+            // per remaining value (no compile-time count check: the extent is
+            // runtime). Any other dynamic layout is diagnosed, never silently
+            // misfilled.
+            // A member counts when it is itself a dynamic array or holds one
+            // deeper: hasDynamicMember only sees dynamics nested inside its
+            // argument, never a dynamic array passed directly.
+            std::vector<unsigned> dynTops;
+            for (unsigned i = 0; i < item.ty.members.size(); ++i) {
+              const Type& mt = item.ty.members[i]->ty;
+              if ((mt.isArray() && mt.isDynamic()) || hasDynamicMember(mt))
+                dynTops.push_back(i);
+            }
+            const unsigned last = (unsigned)item.ty.members.size() - 1;
+            const Type& tail = item.ty.members[last]->ty;
+            if (dynTops.size() != 1 || dynTops[0] != last || !tail.isArray() ||
+                tail.elementType().isStruct() || tail.elementType().isChar()) {
+              d_.error(item.loc,
+                       "INITIAL on a structure with a non-trailing or nested dynamic member is "
+                       "not implemented in this stage",
+                       "(26)");
+            } else {
+              std::vector<Expr*> raw;
+              flattenInitItems(item.initItems, item.loc, raw);
+              long long statics = 0;
+              for (unsigned i = 0; i < last; ++i)
+                statics += structureLeafCount(item.ty.members[i]->ty);
+              if ((long long)raw.size() < statics)
+                d_.error(item.loc,
+                         "INITIAL supplies " + std::to_string(raw.size()) +
+                             " value(s) for a structure needing " + std::to_string(statics) +
+                             " static value(s) first",
+                         "(26)");
+              else {
+                std::vector<Expr*> folded;
+                size_t idx = 0;
+                for (unsigned i = 0; i < last; ++i)
+                  foldStructInit(item.ty.members[i]->ty, raw, idx, item.loc, folded);
+                const Type& el = tail.elementType();
+                while (idx < raw.size())
+                  if (Expr* f = foldInitialConstant(raw[idx++], el, item.loc))
+                    folded.push_back(f);
+                item.sym->initElems = std::move(folded);
+              }
+            }
           } else {
             std::vector<Expr*> raw;
             flattenInitItems(item.initItems, item.loc, raw);

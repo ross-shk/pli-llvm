@@ -1,0 +1,57 @@
+ /* INITIAL on a structure with a trailing dynamic
+    member (rules (13),(26)): the flat itemlist fills
+    scalar leaves first, then one buffer element per
+    remaining value; it re-runs on every activation and
+    each variable keeps its own buffer. Bounds come from
+    parameters (the entry-time value extents read). */
+ struct_dyn_init_test: procedure options(main);
+    declare fails fixed bin(31);
+    fails = 0;
+    call check(4);
+    call short(3);
+    call twice(4);
+    call twice(4);
+    if fails = 0 then put skip list('PASS struct_dyn_init');
+    else put skip list('FAIL struct_dyn_init: fails =',
+       fails);
+ check: procedure(n);
+    declare n fixed bin(31);
+    declare 1 s init(7, 10, 20, 30, 40),
+           2 a fixed bin(31),
+           2 v(n) fixed bin(31);
+    declare 1 t init(1, (2)(5, 6)),
+           2 a fixed bin(31),
+           2 v(n) fixed bin(31);
+    if s.a ^= 7 then fails = fails + 1;
+    if s.v(1) ^= 10 then fails = fails + 1;
+    if s.v(4) ^= 40 then fails = fails + 1;
+    if lbound(s.v) ^= 1 then fails = fails + 1;
+    if hbound(s.v) ^= n then fails = fails + 1;
+    if dim(s.v) ^= n then fails = fails + 1;
+    if sum(s.v) ^= 100 then fails = fails + 1;
+    /* iteration factors flatten before the split */
+    if t.a ^= 1 then fails = fails + 1;
+    if t.v(3) ^= 5 then fails = fails + 1;
+    if sum(t.v) ^= 22 then fails = fails + 1;
+    /* separate buffers: dirtying one spares the other */
+    s.v(1) = 111;
+    if t.v(1) ^= 5 then fails = fails + 1;
+ end check;
+ short: procedure(n);
+    declare n fixed bin(31);
+    declare 1 s init(7, 10, 20),
+           2 a fixed bin(31),
+           2 v(n) fixed bin(31);
+    if s.a ^= 7 then fails = fails + 1;
+    if s.v(1) ^= 10 then fails = fails + 1;
+    if s.v(2) ^= 20 then fails = fails + 1;
+ end short;
+ twice: procedure(n);
+    declare n fixed bin(31);
+    declare 1 s init(7, 10, 20, 30, 40),
+           2 a fixed bin(31),
+           2 v(n) fixed bin(31);
+    if s.v(1) ^= 10 then fails = fails + 1;
+    s.v(1) = 0;
+ end twice;
+ end struct_dyn_init_test;

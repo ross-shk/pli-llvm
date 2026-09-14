@@ -2350,3 +2350,32 @@ Consequences. `struct_dyn_copy.pli` covers scalar/element copy,
 `LBOUND`/`HBOUND`/`DIM`/`SUM` over the copied member, and
 deep-not-aliased divergence; `bad_struct_dyn.pli` now pins the
 `LIKE`-with-dynamic-member diagnostic.
+
+## ADR-092 — INITIAL on structures with a trailing dynamic member
+
+Context. QR1.1 serves `INITIAL` on dynamic arrays (ADR-061) and on
+fixed-member structures (ADR-057), but a struct-level itemlist covering
+a dynamic member was rejected with a misleading leaf-count diagnostic:
+the member's runtime extent counted as one leaf. Member-level
+`INITIAL` (on a `2`-level item) is silently dropped, for fixed members
+too — a separate pre-existing hole left untouched here.
+
+Decision. Only a trailing top-level dynamic array member with scalar,
+non-`CHARACTER` elements is served: the flat itemlist (already
+flattened for iteration factors, `*`, groups) fills the static leaves
+first with the usual count check ("too few" diagnosed), then one buffer
+element per remaining value with no count check (the extent is
+runtime), each folded against the element type. Codegen stores the
+statics to their fields and the remainder straight-line into the loaded
+member buffer, which pass 3 pre-sizes by the whole itemlist length (an
+over-approximation — only trailing values target the member — mirroring
+the ADR-061 pre-size). Any other dynamic layout (non-trailing, nested,
+struct/`CHARACTER` elements) is diagnosed with rule (26), never
+silently misfilled. The shape walk tests each top-level member for
+being or holding a dynamic array directly, since `hasDynamicMember`
+only sees dynamics nested inside its argument.
+
+Consequences. `struct_dyn_init.pli` covers full/short/iterated lists,
+bounds inquiries, per-variable buffers, and reactivation;
+`bad_struct_dyn_init.pli` pins the non-trailing and nested
+diagnostics.

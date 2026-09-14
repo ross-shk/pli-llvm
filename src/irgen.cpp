@@ -599,6 +599,13 @@ void IRGen::allocaLocals(HProc* p) {
         rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
       if (rest != 1)
         extent = b_.CreateMul(extent, i64(rest), "mextall");
+      // An INITIAL itemlist (rule (26), ADR-092) may exceed the live extent;
+      // the emission stores every supplied value straight-line, so grow the
+      // buffer by the whole itemlist length (an over-approximation — only the
+      // trailing values target this member — mirroring the top-level dynamic
+      // INITIAL pre-size).
+      if (!s->initElems.empty())
+        extent = b_.CreateAdd(extent, i64((long long)s->initElems.size()), "mextinit");
       llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".mdyn");
       b_.CreateStore(buf, memberAddr(s, mh.path, s->loc));
       memberDyn_[MemberDyn{s, mh.path}] = MemberBounds{ub, lb};
@@ -2448,13 +2455,26 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
       emitStructInitValues(mem, m.ty, vals, idx, loc);
     } else if (m.ty.isArray()) {
       const Type& el = m.ty.elementType();
-      llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(m.ty));
-      for (long long k = 0; k < arrayExtent(m.ty); ++k) {
-        llvm::Value* ep = b_.CreateInBoundsGEP(arrTy, mem, {i64(0), i64(k)}, "init.el");
-        if (el.isStruct())
-          emitStructInitValues(ep, el, vals, idx, loc);
-        else
+      if (m.ty.isDynamic()) {
+        // A trailing dynamic member (rules (13),(26), ADR-092): the field
+        // holds a runtime-sized buffer pointer (pass 3, pre-sized for the
+        // itemlist), so store each remaining value straight-line like a
+        // dynamic array. Sema restricted this to scalar elements.
+        llvm::Value* buf = b_.CreateLoad(b_.getPtrTy(), mem, "init.mdyn");
+        long long k = 0;
+        while (idx < vals.size()) {
+          llvm::Value* ep = b_.CreateGEP(llvmTy(el), buf, {i64(k++)}, "init.el");
           storeScalarTo(ep, el, initValue(el, vals[idx++]));
+        }
+      } else {
+        llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(m.ty));
+        for (long long k = 0; k < arrayExtent(m.ty); ++k) {
+          llvm::Value* ep = b_.CreateInBoundsGEP(arrTy, mem, {i64(0), i64(k)}, "init.el");
+          if (el.isStruct())
+            emitStructInitValues(ep, el, vals, idx, loc);
+          else
+            storeScalarTo(ep, el, initValue(el, vals[idx++]));
+        }
       }
     } else {
       if (m.ty.isChar())
