@@ -1436,7 +1436,8 @@ void IRGen::emitAssign(HStmt* s) {
         t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
     llvm::Value* src =
         v->memberPath.empty() ? addressOf(v->sym) : memberAddr(v->sym, v->memberPath, s->loc);
-    emitByNameCopy(dst, src, t->ty, v->ty, s->loc);
+    emitByNameCopy(dst, src, t->ty, v->ty, s->loc, t->sym, t->memberPath, v->sym,
+                   v->memberPath);
     return;
   }
   if (s->target->kind == HExpr::Call && s->target->name == "SUBSTR") {
@@ -2412,7 +2413,9 @@ llvm::Value* IRGen::dynamicMemberBase(Symbol* base, const std::vector<unsigned>&
 // array member is copied whole (sema required identical array types); a scalar
 // member is loaded, converted to the target type and stored.
 void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Type& dst,
-                           const Type& src, SourceLoc loc) {
+                           const Type& src, SourceLoc loc, Symbol* dstSym,
+                           const std::vector<unsigned>& dstPrefix, Symbol* srcSym,
+                           const std::vector<unsigned>& srcPrefix) {
   for (size_t i = 0; i < dst.members.size(); ++i) {
     const Member& dm = *dst.members[i];
     size_t j = (size_t)-1;
@@ -2427,10 +2430,64 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
     llvm::Value* d = b_.CreateStructGEP(llvmTy(dst), dstBase, (unsigned)i, "bnm.d");
     llvm::Value* s = b_.CreateStructGEP(llvmTy(src), srcBase, (unsigned)j, "bnm.s");
     if (dm.ty.isStruct() && sm.ty.isStruct()) {
-      emitByNameCopy(d, s, dm.ty, sm.ty, loc);
+      std::vector<unsigned> dp = dstPrefix;
+      dp.push_back((unsigned)i);
+      std::vector<unsigned> sp = srcPrefix;
+      sp.push_back((unsigned)j);
+      emitByNameCopy(d, s, dm.ty, sm.ty, loc, dstSym, dp, srcSym, sp);
     } else if (dm.ty.isArray()) {
-      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(dm.ty)));
-      b_.CreateMemCpy(d, llvm::MaybeAlign(), s, llvm::MaybeAlign(), sz);
+      if (dm.ty.isDynamic()) {
+        // A same-named dynamic member (rules (13),(86), ADR-093): the field
+        // holds a buffer pointer, so copy the buffer contents, not the
+        // pointer (sema required identical array types). Layouts may differ,
+        // so each side resolves its own path; a live-extent mismatch traps
+        // rather than overflowing.
+        if (!dstSym || !srcSym) {
+          d_.error(loc, "BY NAME copy of a dynamic member needs plain variables here", "(13)");
+          return;
+        }
+        std::vector<unsigned> dp = dstPrefix;
+        dp.push_back((unsigned)i);
+        std::vector<unsigned> sp = srcPrefix;
+        sp.push_back((unsigned)j);
+        auto dstIt = memberDyn_.find(MemberDyn{dstSym, dp});
+        auto srcIt = memberDyn_.find(MemberDyn{srcSym, sp});
+        if (dstIt == memberDyn_.end() || srcIt == memberDyn_.end()) {
+          d_.error(loc, "BY NAME copy of a dynamic member is not addressable here", "(13)");
+          return;
+        }
+        const Dim& d0 = dm.ty.dims[0];
+        llvm::Value* dl = d0.lbDyn && dstIt->second.lb ? dstIt->second.lb : i64(d0.lb);
+        llvm::Value* sl = d0.lbDyn && srcIt->second.lb ? srcIt->second.lb : i64(d0.lb);
+        llvm::Value* dext =
+            b_.CreateAdd(b_.CreateSub(dstIt->second.ub, dl, "bnm.e1"), i64(1), "bnm.dext");
+        llvm::Value* sext =
+            b_.CreateAdd(b_.CreateSub(srcIt->second.ub, sl, "bnm.e2"), i64(1), "bnm.sext");
+        long long rest = 1;
+        for (size_t k = 1; k < dm.ty.dims.size(); ++k)
+          rest *= (dm.ty.dims[k].ub - dm.ty.dims[k].lb + 1);
+        if (rest != 1) {
+          dext = b_.CreateMul(dext, i64(rest), "bnm.dall");
+          sext = b_.CreateMul(sext, i64(rest), "bnm.sall");
+        }
+        std::string id = std::to_string(n_++);
+        llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "bnm.fail." + id, curFn_);
+        llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "bnm.ok." + id, curFn_);
+        b_.CreateCondBr(b_.CreateICmpNE(dext, sext, "bnm.mis"), failL, okL);
+        startBlock(failL);
+        b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+        b_.CreateUnreachable();
+        startBlock(okL);
+        const Type& el = dm.ty.elementType();
+        llvm::Value* dbuf = b_.CreateLoad(b_.getPtrTy(), d, "bnm.dp");
+        llvm::Value* sbuf = b_.CreateLoad(b_.getPtrTy(), s, "bnm.sp");
+        llvm::Value* nbytes =
+            b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "bnm.n");
+        b_.CreateMemCpy(dbuf, llvm::MaybeAlign(), sbuf, llvm::MaybeAlign(), nbytes);
+      } else {
+        llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(dm.ty)));
+        b_.CreateMemCpy(d, llvm::MaybeAlign(), s, llvm::MaybeAlign(), sz);
+      }
     } else {
       Val sv;
       sv.ty = sm.ty;
