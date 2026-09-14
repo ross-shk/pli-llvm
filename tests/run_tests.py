@@ -35,17 +35,22 @@ TYPES = ("driver", "exec", "diag", "ir")
 def run_cmd(cmd, outfile):
     """Run `cmd`, appending stdout+stderr to `outfile`; kill the process group
     if it exceeds TIMEOUT. Return (returncode, timeout_bool) — 124 on timeout."""
-    try:
-        with open(outfile, "wb") as fh:
-            p = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT,
-                               start_new_session=True, timeout=TIMEOUT)
-        return p.returncode, False
-    except subprocess.TimeoutExpired:
+    # Popen (not run) so the timeout path still owns the child handle: `run`
+    # raises before binding its result, which crashed the whole suite instead
+    # of failing the one slow job.
+    with open(outfile, "wb") as fh:
+        proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                                start_new_session=True)
         try:
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        return 124, True
+            proc.wait(timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            proc.wait()
+            return 124, True
+        return proc.returncode, False
 
 
 def indented(text):

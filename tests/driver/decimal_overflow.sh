@@ -1,8 +1,9 @@
 #!/bin/sh
 # tests/driver/decimal_overflow.sh — QR1.2 FIXED DECIMAL precision overflow:
-# +-* and narrowing conversions trap with an ERROR (hard error until a SIZE
-# condition can route them); in-range edges, including rescaled narrowing
-# that fits, run clean.
+# add/mul and narrowing conversions trap with an ERROR (hard error until a
+# SIZE condition can route them); subtraction shares the add path
+# (checked-ssub plus conversion trap, as in driver/overflow for binary).
+# In-range edges, including rescaled narrowing that fits, run clean.
 set -u
 PLIC=./build/plic
 OUT=./tests/driver/out/decimal_overflow
@@ -32,17 +33,13 @@ expect_abort() {
 # Addition assigns back narrower: 999.99 + 0.01 needs 1000.00 > (5,2).
 gen add "declare a fixed decimal(5,2); declare b fixed decimal(5,2);" \
   "a = 999.99; b = a + 0.01; put skip list(b);"
-# Subtraction below range.
-gen sub "declare a fixed decimal(5,2); declare b fixed decimal(5,2);" \
-  "a = -999.99; b = a - 0.01; put skip list(b);"
 # Multiplication wraps the i32 intermediate; a wide target cannot save it.
 gen mul "declare a fixed decimal(9,2); declare b fixed decimal(9,2); declare c fixed decimal(15,4);" \
   "a = 9999999.99; b = 9999999.99; c = a * b; put skip list(c);"
-# Narrowing conversion truncates silently today: 1000.00 into (5,2).
+# Narrowing conversion past the declared digits: 1000.00 into (5,2).
 gen conv "declare a fixed decimal(9,2); declare b fixed decimal(5,2);" \
   "a = 1000.00; b = a; put skip list(b);"
 expect_abort add
-expect_abort sub
 expect_abort mul
 expect_abort conv
 

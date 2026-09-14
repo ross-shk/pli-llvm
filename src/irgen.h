@@ -241,6 +241,10 @@ private:
   // FIXED DECIMAL precision trap (QR1.2): an i64 magnitude at or beyond
   // `limit` (10^prec digits, or a binary width) traps to pli_fixed_overflow.
   void magTrap(llvm::Value* v, long long limit);
+  // FLOAT -> FIXED range trap (QR1.2): FPToSI outside the destination range
+  // is UB, so the float is checked first (ordered compares, so NaN traps).
+  // `loIncl` selects the closed lower bound (exact INT_MIN stays storable).
+  void floatRangeTrap(llvm::Value* f, double lo, bool loIncl, double hi);
   int ovSeq_ = 0; // disambiguates overflow trap blocks within a function
 
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
