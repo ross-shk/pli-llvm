@@ -285,6 +285,26 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
   b_.SetInsertPoint(okBB);
 }
 
+// FLOAT -> FIXED range trap (QR1.2): FPToSI outside [lo, hi) is UB, so trap
+// first through the overflow path (hard ERROR until CONVERSION/SIZE can
+// route it). Ordered compares fail on NaN, which therefore traps as well.
+void IRGen::floatRangeTrap(llvm::Value* f, double lo, bool loIncl, double hi) {
+  llvm::Value* okLo = loIncl ? b_.CreateFCmpOGE(f, flt(lo), "frt.lo")
+                             : b_.CreateFCmpOGT(f, flt(lo), "frt.lo");
+  llvm::Value* okHi = b_.CreateFCmpOLT(f, flt(hi), "frt.hi");
+  llvm::Value* ok = b_.CreateAnd(okLo, okHi, "frt.ok");
+  int seq = ovSeq_++;
+  llvm::BasicBlock* trapBB =
+      llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
+  llvm::BasicBlock* okBB =
+      llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+  b_.CreateCondBr(ok, okBB, trapBB);
+  b_.SetInsertPoint(trapBB);
+  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+  b_.CreateUnreachable();
+  b_.SetInsertPoint(okBB);
+}
+
 // Resolve the LLVM function a call targets. External C entries (rule (38)) have
 // no PL/I body, so no function is pre-declared; declare it on demand. Every
 // PL/I argument is passed by reference, so all parameters are pointers.
@@ -2899,6 +2919,19 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     llvm::Value* f = v.reg;
     if (dst.k == TK::FixedDec && dst.scale > 0)
       f = b_.CreateFMul(f, flt((double)pliPow10(dst.scale)), "fsc");
+    // FPToSI outside the destination range is UB (QR1.2): check the float
+    // first (a decimal target wider than i64 range still needs the i64
+    // check, since the conversion itself goes through i64).
+    if (dst.k == TK::FixedDec) {
+      if (dst.prec <= 18)
+        floatRangeTrap(f, -(double)pliPow10(dst.prec), false, (double)pliPow10(dst.prec));
+      else
+        floatRangeTrap(f, -9223372036854775808.0, true, 9223372036854775808.0);
+    } else if (llvmTy(dst)->getIntegerBitWidth() == 64) {
+      floatRangeTrap(f, -9223372036854775808.0, true, 9223372036854775808.0);
+    } else {
+      floatRangeTrap(f, -2147483648.0, true, 2147483648.0);
+    }
     out.reg = b_.CreateFPToSI(f, llvmTy(dst), "cvt");
     return out;
   }

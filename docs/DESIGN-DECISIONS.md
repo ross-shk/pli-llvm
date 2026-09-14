@@ -2453,3 +2453,27 @@ traps plus fitting edges (rescaled narrowing, decimal-to-binary);
 limitation: an intermediate wider than its storage width traps even
 when the final target could hold the value — serving that needs the
 deferred widened intermediates.
+
+## ADR-096 — FLOAT to FIXED conversions trap outside the range
+
+Context. QR1.2 traps FIXED arithmetic and narrowing overflow (ADR-089,
+ADR-095), but `FLOAT -> FIXED` converted via a bare `FPToSI`, which is
+UB outside the destination range: `1.0e20` into `FIXED BIN(31)`
+silently produced garbage. `FIXED -> FLOAT` needs no check (every i64
+is representable, approximately).
+
+Decision. Check the float domain before converting, through the same
+`pli_fixed_overflow` hard-ERROR path: binary targets use a closed lower
+bound (so exact `INT_MIN` stays storable) with an open upper bound;
+decimal targets use open digit bounds at prec 18 or below and the i64
+bounds above (the conversion itself goes through i64). Ordered
+compares make NaN trap as well. No sema change was needed.
+
+Consequences. `driver/float_fixed_overflow` covers binary-32,
+binary-64, and scaled-decimal aborts plus fitting edges (exact
+`INT32_MIN`, `±999.99`); `decimal.pli` stays green unchanged. While
+landing this, the runner's timeout path (which crashed the whole suite
+on one slow job instead of failing it) was fixed, the overflow message
+generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
+`driver/decimal_overflow` dropped its redundant subtraction case to
+stay comfortably inside the per-job timeout under parallel load.
