@@ -1227,7 +1227,9 @@ void IRGen::emitStmt(HStmt* s) {
       d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
       break;
     case TK::Complex:
-      d_.error(s->loc, "a COMPLEX value cannot be written with DISPLAY in this stage", "(114)");
+      b_.CreateCall(runtimeFn("pli_display_complex"),
+                    {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
+                     b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
       break;
     default:
       break; // array/struct operands are diagnosed by sema
@@ -1714,7 +1716,10 @@ void IRGen::emitPut(HStmt* s) {
         d_.error(s->loc, "a POINTER value cannot be written with PUT LIST in this stage", "(110)");
         break;
       case TK::Complex:
-        d_.error(s->loc, "a COMPLEX value cannot be written with PUT LIST in this stage", "(110)");
+        // Complex output (CM5): real, sign, imaginary magnitude, I.
+        b_.CreateCall(runtimeFn("pli_put_list_complex"),
+                      {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
+                       b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
         break;
       }
     }

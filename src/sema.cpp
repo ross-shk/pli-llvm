@@ -1366,6 +1366,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(it->loc, "a whole structure cannot be read with GET LIST in this stage", "(110)");
         continue;
       }
+      if (it->ty.isComplex()) {
+        d_.error(it->loc, "a whole complex value cannot be read with GET LIST in this stage",
+                 "(110)");
+        continue;
+      }
       // A CHARACTER member or array element is read through storeArrayElement
       // /member paths, which are not served (mirrors assignment, rule (11)/(12)).
       if (it->ty.isChar() &&

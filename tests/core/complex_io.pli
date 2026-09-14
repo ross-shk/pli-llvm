@@ -1,0 +1,13 @@
+  /* CM5: complex list-directed and DISPLAY
+     output prints real, sign, imaginary
+     magnitude, I. */
+  complex_io: procedure options(main);
+     declare (z, w) complex;
+     z = complex(4.0, 6.0);
+     w = complex(-5.0, 10.0);
+     put skip list(z);
+     put skip list(w);
+     put skip list(z, w);
+     display(z);
+     display(2i);
+  end complex_io;
