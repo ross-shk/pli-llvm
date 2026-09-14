@@ -266,6 +266,25 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   return r;
 }
 
+// FIXED DECIMAL precision trap (QR1.2): |v| >= limit holds more digits than
+// the target (hard ERROR until a SIZE condition can route it). Two-sided so
+// INT64_MIN is caught without negating it.
+void IRGen::magTrap(llvm::Value* v, long long limit) {
+  llvm::Value* hi = b_.CreateICmpSGE(v, i64(limit), "dov.hi");
+  llvm::Value* lo = b_.CreateICmpSLE(v, i64(-limit), "dov.lo");
+  llvm::Value* of = b_.CreateOr(hi, lo, "dov");
+  int seq = ovSeq_++;
+  llvm::BasicBlock* trapBB =
+      llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
+  llvm::BasicBlock* okBB =
+      llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+  b_.CreateCondBr(of, trapBB, okBB);
+  b_.SetInsertPoint(trapBB);
+  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+  b_.CreateUnreachable();
+  b_.SetInsertPoint(okBB);
+}
+
 // Resolve the LLVM function a call targets. External C entries (rule (38)) have
 // no PL/I body, so no function is pre-declared; declare it on demand. Every
 // PL/I argument is passed by reference, so all parameters are pointers.
@@ -2898,10 +2917,26 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   // a DECIMAL target by 10^(dst.scale - src.scale); a scaled DECIMAL source
   // converting to a BINARY target reduces to its integer part.
   if (v.ty.isFixed() && dst.isFixed()) {
+    // FIXED narrowing traps (QR1.2): a value the target cannot hold is a SIZE
+    // overflow (hard ERROR until SIZE can route it). A DECIMAL target wider
+    // than i64 range needs no check; a same-or-wider decimal source whose
+    // rescaled digits fit is proven safe statically. BINARY targets keep the
+    // arithmetic convention (width-checked, precision is not enforced).
+    int dqDec = (dst.k == TK::FixedDec && v.ty.k == TK::FixedDec) ? dst.scale - v.ty.scale : 0;
+    bool decFits = v.ty.k == TK::FixedDec && v.ty.prec + std::max(dqDec, 0) <= dst.prec;
+    bool needDec = dst.k == TK::FixedDec && dst.prec <= 18 && !decFits;
+    bool needBin = dst.k == TK::FixedBin && dst.intBits() == 32 && v.ty.intBits() == 64;
+    long long limit = dst.k == TK::FixedDec ? pliPow10(dst.prec) : (1LL << 31);
     bool rescale = dst.k == TK::FixedDec && v.ty.scale != dst.scale;
     if (!rescale && (v.ty.k == TK::FixedDec && v.ty.scale > 0 && dst.k != TK::FixedDec))
       rescale = true; // DECIMAL source -> BINARY target: drop the fraction
     if (!rescale) {
+      if (needDec || needBin) {
+        llvm::Value* w = v.reg->getType()->getIntegerBitWidth() == 64
+                              ? v.reg
+                              : b_.CreateSExt(v.reg, b_.getInt64Ty(), "cvtw");
+        magTrap(w, limit);
+      }
       if (v.ty.intBits() == dst.intBits()) {
         out.reg = v.reg;
         return out;
@@ -2915,7 +2950,9 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     llvm::Value* r = b_.CreateSExt(v.reg, b_.getInt64Ty(), "res");
     int dq = dst.k == TK::FixedDec ? dst.scale - v.ty.scale : -v.ty.scale;
     if (dq > 0) {
-      r = b_.CreateMul(r, i64(pliPow10(dq)), "res");
+      // A scale-up that wraps already exceeds any target: trap, so the
+      // magnitude check below never reads a wrapped value.
+      r = checkedArith(Tok::Star, r, i64(pliPow10(dq)));
     } else {
       int k = -dq;
       llvm::Value* div = i64(pliPow10(k));
@@ -2924,6 +2961,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       llvm::Value* adj = b_.CreateMul(i64(pliPow10(k - 1) * 5), sign, "adj");
       r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
     }
+    if (needDec || needBin)
+      magTrap(r, limit);
     out.reg = (unsigned)dst.intBits() == 64 ? r : b_.CreateTrunc(r, llvmTy(dst), "cvt");
     return out;
   }
@@ -3476,21 +3515,23 @@ Val IRGen::emitExpr(HExpr* e) {
   }
   switch (op) {
   case Tok::Plus:
-    // FIXED BINARY overflow (QR1.2): checked op traps; BIT modular and
-    // DECIMAL precision arithmetic keep prior behavior.
-    if (!flt && !isCmp && common.k == TK::FixedBin)
+    // FIXED overflow (QR1.2): a checked op traps on a wrapped intermediate
+    // (BIT arithmetic is diagnosed in sema, so only FIXED reaches here);
+    // DECIMAL precision against the declared digits is checked at narrowing
+    // conversions instead (full widening stays D1/QR2).
+    if (!flt && !isCmp && common.isFixed())
       r = checkedArith(op, av.reg, bv.reg);
     else
       r = flt ? b_.CreateFAdd(av.reg, bv.reg, "bin") : b_.CreateAdd(av.reg, bv.reg, "bin");
     break;
   case Tok::Minus:
-    if (!flt && !isCmp && common.k == TK::FixedBin)
+    if (!flt && !isCmp && common.isFixed())
       r = checkedArith(op, av.reg, bv.reg);
     else
       r = flt ? b_.CreateFSub(av.reg, bv.reg, "bin") : b_.CreateSub(av.reg, bv.reg, "bin");
     break;
   case Tok::Star:
-    if (!flt && !isCmp && common.k == TK::FixedBin)
+    if (!flt && !isCmp && common.isFixed())
       r = checkedArith(op, av.reg, bv.reg);
     else
       r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin");
@@ -3736,8 +3777,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       av = convert(a, common, e->loc);
       bv = convert(b, common, e->loc);
     }
-    llvm::Value* r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
-                                           : b_.CreateMul(av.reg, bv.reg, "mul");
+    // FIXED overflow (QR1.2): like Binary `*`, a wrapped product traps.
+    llvm::Value* r = common.k == TK::Float  ? b_.CreateFMul(av.reg, bv.reg, "mul")
+                      : common.isFixed()     ? checkedArith(Tok::Star, av.reg, bv.reg)
+                                             : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;
     v.reg = r;
     result = v;

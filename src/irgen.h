@@ -238,6 +238,9 @@ private:
   Val charOf(HExpr* e);  // materialise a character value
   // FIXED BINARY checked +,-,* (QR1.2): overflow traps to pli_fixed_overflow.
   llvm::Value* checkedArith(Tok op, llvm::Value* a, llvm::Value* b);
+  // FIXED DECIMAL precision trap (QR1.2): an i64 magnitude at or beyond
+  // `limit` (10^prec digits, or a binary width) traps to pli_fixed_overflow.
+  void magTrap(llvm::Value* v, long long limit);
   int ovSeq_ = 0; // disambiguates overflow trap blocks within a function
 
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
