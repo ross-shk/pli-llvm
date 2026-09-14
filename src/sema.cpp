@@ -826,12 +826,13 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     // mismatch, or mixing a structure with a non-structure — is diagnosed.
     if (dst.isStruct() && src.isStruct() && dst == src) {
       // A struct with a dynamic-array member holds a pointer to a runtime
-      // buffer, so a storage copy would copy the pointer, not the data (rule
-      // 13): diagnose rather than miscompile.
-      if (hasDynamicMember(dst))
+      // buffer: plain assignment deep-copies each buffer (rule (13),
+      // ADR-091), while by-value arguments and function results stay
+      // diagnosed so they are never silently pointer-copied.
+      if (hasDynamicMember(dst) && std::string(what) != "assignment")
         d_.error(loc,
                  std::string(what) +
-                     ": a whole-structure assignment with a dynamic member is not implemented",
+                     ": a whole-structure value with a dynamic member is not implemented here",
                  "(13)");
       return true;
     }

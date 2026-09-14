@@ -1,13 +1,11 @@
-  /* A whole-structure assignment whose target/source contains a dynamic array
-     member is not served: the struct field is a pointer, so a storage copy
-     would copy the pointer rather than the pointed-to data (rules (13),(127)). */
-  bad_struct_dyn: procedure options(main);
-     declare n fixed bin(31);
-     declare 1 s,
-            2 a fixed bin(31),
-            2 v(n) fixed bin(31);
-     declare 1 t,
-            2 a fixed bin(31),
-            2 v(n) fixed bin(31);
-     t = s;
-  end bad_struct_dyn;
+ /* Whole-structure values with a dynamic member outside
+    plain assignment stay rejected (rules (13),(127)):
+    `t = s` is served (see struct_dyn_copy.pli), but
+    LIKE of such a structure still diagnoses rule (13). */
+ bad_struct_dyn: procedure options(main);
+    declare n fixed bin(31);
+    declare 1 s,
+           2 a fixed bin(31),
+           2 v(n) fixed bin(31);
+    declare 1 t like s;
+ end bad_struct_dyn;
