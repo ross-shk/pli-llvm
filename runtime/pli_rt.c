@@ -160,6 +160,46 @@ void pli_put_list_fixed(long long v) {
   put_raw(buf, (size_t)n);
 }
 
+/* FIXED DECIMAL output (QR1.2): the stored integer holds value * 10^q, so
+ * print exactly q fraction digits. */
+static void format_decfixed(char *buf, size_t cap, long long v, long long q) {
+  char *p = buf;
+  if (v < 0) {
+    *p++ = '-';
+    v = -v;
+  }
+  long long factor = 1;
+  for (long long i = 0; i < q && i < 18; ++i)
+    factor *= 10;
+  int n = snprintf(p, cap - (size_t)(p - buf), "%lld", v / factor);
+  p += n;
+  if (q > 0) {
+    *p++ = '.';
+    long long rem = v % factor;
+    for (long long i = q - 1; i >= 0; --i) {
+      long long digit = 1;
+      for (long long j = 0; j < i; ++j)
+        digit *= 10;
+      *p++ = (char)('0' + rem / digit);
+      rem %= digit;
+    }
+  }
+  *p = '\0';
+}
+void pli_put_list_decfixed(long long v, long long q) {
+  char buf[64];
+  format_decfixed(buf, sizeof buf, v, q);
+  separate();
+  put_raw(buf, strlen(buf));
+}
+void pli_display_decfixed(long long v, long long q) {
+  char buf[64];
+  format_decfixed(buf, sizeof buf, v, q);
+  display_begin();
+  put_raw(buf, strlen(buf));
+  display_end();
+}
+
 /* List-directed output of a scaled FIXED value (ADR-006): the stored integer v
  * holds the value * 2^scale, so print v / 2^scale exactly as a decimal. The
  * fractional part of a dyadic rational terminates, so the digit loop is exact. */
@@ -546,6 +586,41 @@ void pli_get_list_char(char *dst, long long cap) {
     dst[i] = tok[i];
   for (; i < cap; ++i)
     dst[i] = ' ';
+}
+
+/* FIXED DECIMAL input (QR1.2): scale the token by 10^q, truncating extra
+ * fraction digits; lenient like the other readers. */
+long long pli_get_list_decfixed(long long q) {
+  char tok[64];
+  if (!get_token(tok, sizeof tok))
+    return 0;
+  int neg = 0;
+  const char *p = tok;
+  if (*p == '+' || *p == '-') {
+    neg = *p == '-';
+    ++p;
+  }
+  long long whole = 0;
+  while (*p >= '0' && *p <= '9')
+    whole = whole * 10 + (*p++ - '0');
+  long long frac = 0;
+  long long qd = 0;
+  if (*p == '.') {
+    ++p;
+    while (*p >= '0' && *p <= '9' && qd < q) {
+      frac = frac * 10 + (*p++ - '0');
+      ++qd;
+    }
+    while (*p >= '0' && *p <= '9')
+      ++p; // truncate beyond q
+  }
+  while (qd++ < q)
+    frac *= 10;
+  long long v = whole;
+  for (long long i = 0; i < q; ++i)
+    v *= 10;
+  v += frac;
+  return neg ? -v : v;
 }
 
 /* List-directed complex input (CM5, ADR-086): a `re+imI` token reads both

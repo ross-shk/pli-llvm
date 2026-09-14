@@ -19,6 +19,9 @@ PLI_FN(pli_put_page, VOID, (VOID))
 PLI_FN(pli_put_list_char, VOID, (CPTR, I64))
 PLI_FN(pli_put_list_fixed, VOID, (I64))
 PLI_FN(pli_put_list_fixed_scaled, VOID, (I64, I64))   /* scaled FIXED (ADR-006) */
+PLI_FN(pli_put_list_decfixed, VOID, (I64, I64))   /* decimal point (QR1.2) */
+PLI_FN(pli_display_decfixed, VOID, (I64, I64))    /* decimal point (QR1.2) */
+PLI_FN(pli_get_list_decfixed, I64, (I64))         /* decimal input (QR1.2) */
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
 PLI_FN(pli_put_list_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */

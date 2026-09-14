@@ -2273,3 +2273,20 @@ mirroring the one-arg shape otherwise. All four lower through thin
 
 Consequences. `math4.pli` checks all four within tolerance;
 `bad_math4.pli` pins arity and numeric diagnostics.
+
+## ADR-088 — Decimal I/O prints and reads the 10^q point
+
+Context. FIXED DECIMAL values store integer x 10^q, but PUT printed the
+raw integer (`12.5` as `1250`) and GET read it back unscaled: silently
+wrong output with no test coverage.
+
+Decision. New `pli_put_list_decfixed` / `pli_display_decfixed` print
+exactly q fraction digits (the DISPLAY form framed by the line
+discipline); `pli_get_list_decfixed` scales the token (truncating beyond
+q, lenient like the other readers). IRGen routes scaled FIXED DECIMAL
+through them; the GET value is truncated to the target width without
+rescaling so the store passes it through (an i64-into-narrow store
+miscompiled this once during development).
+
+Consequences. `decimal_io.pli` (golden) and `driver/get_decimal` cover
+output, DISPLAY, and round-trip input. Overflow checks stay out (D1/QR2).

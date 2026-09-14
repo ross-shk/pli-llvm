@@ -1,0 +1,15 @@
+  /* QR1.2: list-directed and DISPLAY output
+     of FIXED DECIMAL prints the 10^q point;
+     scale 0 prints plain. */
+  decimal_io: procedure options(main);
+     declare a fixed dec(4, 2);
+     declare b fixed dec(4, 2);
+     declare c fixed dec(5);
+     a = 12.5;
+     b = -3.25;
+     c = 42;
+     put skip list(a);
+     put skip list(b);
+     put skip list(c);
+     display(a);
+  end decimal_io;
