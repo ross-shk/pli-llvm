@@ -1,6 +1,8 @@
 #include "sema.h"
 #include <algorithm>
 #include <functional>
+#include <unordered_map>
+#include <unordered_set>
 
 // True when a structure type contains a dynamic (runtime-extent) array member
 // (rule 13); forward-declared here because resolveStructReturn (rule 127) and
@@ -188,6 +190,10 @@ bool Sema::run(Program& prog, bool compileOnly) {
   for (auto& p : prog.procs)
     processProc(p.get());
 
+  // Rule (5): every procedure in a static call cycle must carry RECURSIVE.
+  // Runs here so CALL and function-reference callees are already resolved.
+  checkRecursion();
+
   // Pass 3: bottom-up static-link environments (rule (8)); a proc's env is the
   // set of enclosing variables its whole subtree accesses.
   for (auto& p : prog.procs)
@@ -368,6 +374,142 @@ void Sema::computeEnv(Proc* p) {
         addEnv(env, s); // owned higher up: thread it through
   }
   p->env = env;
+}
+
+// Rule (5): collect the static call edges out of one expression. A Call whose
+// symbol resolves to a PL/I procedure (including an alias or ENTRY name that
+// maps to the same Proc) is an edge; builtin and C ENTRY calls have no body.
+void Sema::collectExprCallees(const Expr* e, std::vector<Proc*>& out) {
+  if (!e)
+    return;
+  if (e->locPtr)
+    collectExprCallees(e->locPtr.get(), out);
+  switch (e->kind) {
+  case Expr::Call:
+    if (e->sym && e->sym->proc &&
+        std::find(out.begin(), out.end(), e->sym->proc) == out.end())
+      out.push_back(e->sym->proc);
+    for (auto& a : e->args)
+      collectExprCallees(a.get(), out);
+    break;
+  case Expr::Binary:
+    collectExprCallees(e->a.get(), out);
+    collectExprCallees(e->b.get(), out);
+    break;
+  case Expr::Unary:
+    collectExprCallees(e->a.get(), out);
+    break;
+  case Expr::Subscript:
+    for (auto& a : e->args)
+      collectExprCallees(a.get(), out);
+    break;
+  default:
+    break;
+  }
+}
+
+// Rule (5): collect the static call edges out of one INITIAL item.
+void Sema::collectInitItemCallees(const InitItem& item, std::vector<Proc*>& out) {
+  collectExprCallees(item.value.get(), out);
+  for (auto& sub : item.items)
+    collectInitItemCallees(sub, out);
+}
+
+// Rule (5): collect the static call edges out of one statement, including the
+// ON-unit body (conservative: a unit that re-enters its procedure needs
+// RECURSIVE too) and INITIAL CALL / bound expressions in declarations.
+void Sema::collectStmtCallees(const Stmt* s, std::vector<Proc*>& out) {
+  if (!s)
+    return;
+  collectExprCallees(s->target.get(), out);
+  collectExprCallees(s->value.get(), out);
+  collectExprCallees(s->cond.get(), out);
+  collectExprCallees(s->from.get(), out);
+  collectExprCallees(s->to.get(), out);
+  collectExprCallees(s->by.get(), out);
+  collectExprCallees(s->skipCount.get(), out);
+  collectExprCallees(s->stringTarget.get(), out);
+  for (auto& it : s->items)
+    collectExprCallees(it.get(), out);
+  for (auto& t : s->extraTargets)
+    collectExprCallees(t.get(), out);
+  for (auto& a : s->args)
+    collectExprCallees(a.get(), out);
+  for (auto& f : s->formats) {
+    collectExprCallees(f.w.get(), out);
+    collectExprCallees(f.d.get(), out);
+  }
+  for (auto& b : s->allocBase)
+    collectExprCallees(b.get(), out);
+  for (auto& b : s->allocSet)
+    collectExprCallees(b.get(), out);
+  for (auto& b : s->freeBase)
+    collectExprCallees(b.get(), out);
+  if (s->kind == Stmt::CallS && s->sym && s->sym->proc &&
+      std::find(out.begin(), out.end(), s->sym->proc) == out.end())
+    out.push_back(s->sym->proc);
+  if (s->kind == Stmt::Declare)
+    for (auto& d : s->decls) {
+      collectExprCallees(d.init.get(), out);
+      collectExprCallees(d.initCall.get(), out);
+      for (auto& b : d.dynBounds)
+        collectExprCallees(b.get(), out);
+      for (auto& b : d.dynLbBounds)
+        collectExprCallees(b.get(), out);
+      for (auto& item : d.initItems)
+        collectInitItemCallees(item, out);
+    }
+  collectStmtCallees(s->thenS.get(), out);
+  collectStmtCallees(s->elseS.get(), out);
+  collectStmtCallees(s->unit.get(), out);
+  for (auto& b : s->body)
+    collectStmtCallees(b.get(), out);
+}
+
+// Rule (5): collect the static call edges out of one procedure body.
+void Sema::collectCallees(const std::vector<StmtP>& body, std::vector<Proc*>& out) {
+  for (auto& s : body)
+    collectStmtCallees(s.get(), out);
+}
+
+// Rule (5): every procedure in a static call cycle must carry RECURSIVE.
+// A self-edge through an entry-namelist alias or ENTRY name still maps to
+// the same Proc, so it is direct recursion. One error per non-recursive
+// cycle member, at the procedure definition where the fix goes. Calls
+// across translation units cannot be seen and stay unchecked.
+void Sema::checkRecursion() {
+  std::unordered_map<Proc*, std::vector<Proc*>> adj;
+  for (auto& p : prog_->procs) {
+    std::vector<Proc*> out;
+    collectCallees(p->body, out);
+    adj[p.get()] = out;
+  }
+  for (auto& p : prog_->procs) {
+    Proc* start = p.get();
+    std::vector<Proc*> stack = adj[start];
+    std::unordered_set<Proc*> seen;
+    bool cycle = false;
+    while (!stack.empty()) {
+      Proc* q = stack.back();
+      stack.pop_back();
+      if (q == start) {
+        cycle = true;
+        break;
+      }
+      if (!seen.insert(q).second)
+        continue;
+      auto it = adj.find(q);
+      if (it != adj.end())
+        for (Proc* r : it->second)
+          stack.push_back(r);
+    }
+    if (cycle && !start->isRecursive)
+      d_.error(start->loc,
+               "procedure '" + start->name +
+                   "' is invoked recursively but lacks the RECURSIVE attribute; add "
+                   "RECURSIVE to its PROCEDURE statement",
+               "(5)");
+  }
 }
 
 // True when a structure type contains a dynamic (runtime-extent) array member,

@@ -305,6 +305,7 @@ HProgram lower(const Program& prog) {
     hp->name = prog.procs[i]->name;
     hp->loc = prog.procs[i]->loc;
     hp->isMain = prog.procs[i]->isMain;
+    hp->isRecursive = prog.procs[i]->isRecursive;
     hp->isFunction = prog.procs[i]->isFunction;
     hp->retTy = prog.procs[i]->retTy;
     hp->commonRetTy = prog.procs[i]->commonRetTy;
@@ -671,7 +672,8 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
 
 void printHIR(const HProgram& p, std::ostream& os) {
   for (const auto& proc : p.procs) {
-    os << (proc->isMain ? "main " : "") << "proc " << proc->name;
+    os << (proc->isMain ? "main " : "") << (proc->isRecursive ? "recursive " : "")
+       << "proc " << proc->name;
     if (proc->isFunction)
       os << " returns " << proc->retTy.desc();
     os << "\n";

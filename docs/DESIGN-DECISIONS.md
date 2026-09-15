@@ -2554,3 +2554,31 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  skipped; `bad_get_data.pli` pins the non-variable diagnostic. Known
  limits: subscripted/qualified items and non-scalar types stay
  diagnosed, as do `COPY`/`LINE` options.
+
+ ## ADR-100 — Static recursion cycles require RECURSIVE on every member
+
+ Context. Rule (5) carries a `RECURSIVE` procedure option, but the
+ parser accepted and discarded it, so direct and mutual recursion
+ compiled with or without it. Codegen already gives each activation
+ its own AUTOMATIC storage, so recursion happens to work; the gap is
+ conformance, not lowering.
+
+ Decision. Record `RECURSIVE` on the AST `Proc` (mirrored to HIR and
+ shown by `--print-hir`) and check it in sema after all bodies are
+ typed, when `CALL` and function-reference callees are resolved. Build
+ the static call graph (a call through an entry-namelist alias or an
+ `ENTRY` name maps to the same owning `Proc`, so it is still a
+ self-edge; `INITIAL CALL`, bound/format expressions, and `ON`-unit
+ bodies count as edges) and report one error at the procedure
+ definition of each cycle member lacking the attribute, citing rule
+ (5). Every procedure in a cycle must carry `RECURSIVE`, since each
+ activation is re-entered while still live.
+
+ Consequences. `recursive.pli` covers direct, mutual, `CALL`, and
+ per-activation AUTOMATIC recursion with the attribute present;
+ `bad_recursive.pli` pins the direct diagnostic and
+ `bad_recursive_mutual.pli` the mutual one; `func.pli`,
+ `multientry.pli`, `staticlink.pli`, and `ir/func.pli` now carry
+ `RECURSIVE`. Known limits: calls across translation units cannot be
+ seen and stay unchecked, and `STATIC` storage keeps its existing
+ AUTOMATIC treatment across recursion.

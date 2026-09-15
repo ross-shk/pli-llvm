@@ -41,7 +41,7 @@
        end;
     end readi;
 
-    f: procedure(n) returns(fixed);
+    f: procedure(n) recursive returns(fixed);
        declare n fixed bin(31);
        declare v fixed bin(31);
        v = n;

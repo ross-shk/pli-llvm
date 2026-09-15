@@ -15,7 +15,7 @@
     else put skip list('FAIL factorial(5) =', f);
  end multientry;
 
- fact, factorial: procedure(n) returns(fixed bin(31));
+ fact, factorial: procedure(n) recursive returns(fixed bin(31));
     declare n fixed bin(31);
     if n <= 1 then return(1);
     return(n * fact(n - 1));

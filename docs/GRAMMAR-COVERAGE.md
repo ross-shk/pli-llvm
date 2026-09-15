@@ -13,7 +13,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (2) | procedure, entry-namelist, options | M0 | `parseExternalProcedure` / `hello.pli` |
 | (3) | entry-namelist (multiple entry names) | M0 | `a, b: PROCEDURE` shares one body; callable by any name (`multientry.pli`); extra names are internal aliases |
 | (4) | parameterlist | M0 | `procs.pli` |
-| (5) | procedure options (`OPTIONS`, `RECURSIVE`, `RETURNS`) | M0/M1 | `MAIN` honoured; `RETURNS` → function procedures (`func.pli`); `RECURSIVE` accepted |
+| (5) | procedure options (`OPTIONS`, `RECURSIVE`, `RETURNS`) | M0/M1 | `MAIN` honoured; `RETURNS` → function procedures (`func.pli`); `RECURSIVE` recorded and enforced — every procedure in a static call cycle must carry it, else diagnosed (`recursive.pli`, `bad_recursive.pli`, `bad_recursive_mutual.pli`, ADR-100) |
 | (6),(7) | sentencelist, end-clause, multiple closure | M0 | `parseBody` / `loops.pli` (`END OUTER;`) |
 | (8) | sentence kinds | M0 | `parseStatement`; internal procedures reach enclosing automatic storage via a static link (ADR-027, `staticlink.pli`) |
 | (9),(10) | `DECLARE`, declarationlist | M0 | `parseDeclare` / `ifelse.pli` |

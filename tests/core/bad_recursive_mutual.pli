@@ -1,0 +1,17 @@
+ /* rule (5): each procedure in a call cycle needs
+    RECURSIVE; neither even nor odd has it. */
+ badrecm: procedure options(main);
+    declare r fixed bin(31);
+    r = even(4);
+    put skip list(r);
+    even: procedure(n) returns(fixed bin(31));
+       declare n fixed bin(31);
+       if n = 0 then return(1);
+       return(odd(n - 1));
+    end even;
+    odd: procedure(n) returns(fixed bin(31));
+       declare n fixed bin(31);
+       if n = 0 then return(0);
+       return(even(n - 1));
+    end odd;
+ end badrecm;
