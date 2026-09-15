@@ -205,6 +205,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   for (const auto& t : s->extraTargets)
     h->extraTargets.push_back(lowerExpr(t.get()));
   h->byName = s->byName;
+  h->until = s->until;
   h->cond = lowerExpr(s->cond.get());
   h->from = lowerExpr(s->from.get());
   h->to = lowerExpr(s->to.get());
@@ -573,7 +574,7 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     printExpr(os, s->cond.get(), ind);
     break;
   case HStmt::DoWhile:
-    os << " cond=";
+    os << (s->until ? " until=" : " cond=");
     printExpr(os, s->cond.get(), ind);
     break;
   case HStmt::DoIter:

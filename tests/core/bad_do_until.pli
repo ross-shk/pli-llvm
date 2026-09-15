@@ -1,0 +1,9 @@
+ /* extension (ADR-106): UNTIL combined with an
+    iterative specification, or with WHILE, is
+    diagnosed, never silently accepted. */
+ baddountil: procedure options(main);
+    declare i fixed bin(31);
+    do i = 1 to 5 until (i > 2);
+       put skip list(i);
+    end;
+ end baddountil;

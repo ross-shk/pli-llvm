@@ -1739,7 +1739,41 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
       st->cond = parseExpr();
       expect(Tok::RParen, "(71)");
     }
+    if (atWord("UNTIL")) {
+      d_.error(cur().loc,
+               "DO with both WHILE and UNTIL is not implemented in this stage (ADR-106)", "");
+      resync();
+      return nullptr;
+    }
     expect(Tok::Semi, "(71)");
+  } else if (atWord("UNTIL")) {
+    // DO UNTIL (expr) (extension, ADR-106): post-test loop; the same shape
+    // as WHILE but the condition is tested after the body.
+    advance();
+    st->kind = Stmt::DoWhile;
+    st->until = true;
+    if (!eat(Tok::LParen)) {
+      d_.error(cur().loc, "expected '(' after UNTIL (ADR-106)", "");
+      resync();
+      return nullptr;
+    }
+    st->cond = parseExpr();
+    if (!eat(Tok::RParen)) {
+      d_.error(cur().loc, "expected ')' after the UNTIL condition (ADR-106)", "");
+      resync();
+      return nullptr;
+    }
+    if (atWord("WHILE")) {
+      d_.error(cur().loc,
+               "DO with both UNTIL and WHILE is not implemented in this stage (ADR-106)", "");
+      resync();
+      return nullptr;
+    }
+    if (!eat(Tok::Semi)) {
+      d_.error(cur().loc, "expected ';' after UNTIL ( expr ) (ADR-106)", "");
+      resync();
+      return nullptr;
+    }
   } else if (at(Tok::Word)) {
     st->kind = Stmt::DoIter;
     st->name = cur().text;
@@ -1767,6 +1801,14 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
           expect(Tok::RParen, "(73)");
         }
         continue;
+      }
+      if (atWord("UNTIL")) {
+        d_.error(cur().loc,
+                 "DO with an iterative specification and UNTIL is not implemented in this stage "
+                 "(ADR-106)",
+                 "");
+        resync();
+        return nullptr;
       }
       break;
     }
