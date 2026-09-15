@@ -1,0 +1,17 @@
+ /* extension (ADR-108): VALUE declares a named
+    constant usable in expressions and bounds;
+    reassignment is diagnosed. */
+ valuedemo: procedure options(main);
+    declare max fixed bin(31) value(100);
+    declare pi float value(3.5);
+    declare tag char(4) value('pli');
+    declare yes bit(1) value('1'b);
+    declare total fixed bin(31);
+    declare t(max) fixed bin(31);
+    total = max + 1;
+    put skip list(total);
+    put skip list(pi);
+    put skip list('[' || tag || ']');
+    put skip list(yes);
+    put skip list(hbound(t));
+ end valuedemo;

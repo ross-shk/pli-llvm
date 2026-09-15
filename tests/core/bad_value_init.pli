@@ -1,0 +1,5 @@
+ /* extension (ADR-108): INITIAL+VALUE combinations
+    are diagnosed, never silently accepted. */
+ badvalueinit: procedure options(main);
+    declare bad fixed bin(31) init(1) value(2);
+ end badvalueinit;

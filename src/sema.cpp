@@ -549,6 +549,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           item.entryIsFunction = false;
         }
         if (item.isEntry) {
+          if (item.valueInit)
+            d_.error(item.loc,
+                     "VALUE on an ENTRY declaration is not implemented in this stage (ADR-108)",
+                     "");
           // External C entry: a ProcName symbol with no PL/I body. The C
           // symbol is the EXTERNAL('name') override when given, else the
           // upper-cased PL/I identifier (rules (34),(38); z/OS ILC naming).
@@ -944,6 +948,30 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           typeExpr(item.initCall.get(), sc, p);
           if (!item.initCall->ty.isVoid())
             item.sym->initCall = item.initCall.get(); // consumed by codegen
+        }
+        if (item.valueInit) {
+          // VALUE(const) (extension, ADR-108): a scalar named constant. It
+          // keeps AUTOMATIC storage initialized once from the folded
+          // constant; every write position is diagnosed via checkValueTarget.
+          if (item.sym->fileAttr)
+            d_.error(item.loc,
+                     "VALUE on a FILE variable is not implemented in this stage (ADR-108)", "");
+          else if (!item.definedBase.empty() || !item.basedBase.empty())
+            d_.error(item.loc,
+                     "VALUE on a DEFINED/BASED variable is not implemented in this stage "
+                     "(ADR-108)",
+                     "");
+          else if (item.ty.isArray() || item.ty.isStruct() || item.ty.isPointer() ||
+                   item.ty.isComplex())
+            d_.error(item.loc,
+                     "VALUE on arrays, structures, pointers, and complex data is not implemented "
+                     "in this stage (ADR-108)",
+                     "");
+          else {
+            if (Expr* folded = foldInitialConstant(item.valueInit.get(), item.ty, item.loc))
+              item.sym->initExpr = folded; // consumed by code generation
+            item.sym->isValue = true;
+          }
         }
       }
       continue;
@@ -1409,6 +1437,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           d_.error(t->loc, "cannot assign to procedure '" + t->name + "'", "(86)");
           return false;
         }
+        checkValueTarget(t); // VALUE constants cannot receive values (ADR-108)
         if (!s->value->ty.isVoid() && !t->ty.isVoid())
           checkAssignable(t->ty, s->value->ty, t->loc, "assignment");
         return true;
@@ -1433,6 +1462,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                  "SUBSTR assignment target must be a modifiable character variable", "(86)");
         break;
       }
+      checkValueTarget(t->args[0].get()); // VALUE constants cannot receive values (ADR-108)
       if (!s->value->ty.isVoid())
         checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
       break;
@@ -1452,6 +1482,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->target->loc, "cannot assign to procedure '" + s->target->name + "'", "(86)");
       break;
     }
+    checkValueTarget(s->target.get()); // VALUE constants cannot receive values (ADR-108)
     // Cross-section assignment (rule 126): B = A(i, *) — the right-hand side is
     // a reduced-dim array value produced by a '*' subscript. The target must be
     // a whole array of exactly that reduced shape.
@@ -1529,6 +1560,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       p->localSyms.push_back(sym); // implicit vars are AUTOMATIC storage
     }
     s->sym = sym;
+    if (sym->isValue)
+      d_.error(s->loc,
+               "cannot assign to the VALUE constant '" + sym->name +
+                   "' as a DO control variable (ADR-108)",
+               "");
     if (!sym->ty.isNumeric())
       d_.error(s->loc, "DO control variable must be arithmetic, found " + sym->ty.desc(), "(72)");
     // A scaled FIXED control variable would miscompile the loop step and
@@ -1553,7 +1589,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   }
   case Stmt::Put: {
     typeExpr(s->skipCount.get(), sc, p);
-    checkStringTarget(s, sc, p);
+    checkStringTarget(s, sc, p, false);
     checkFileTarget(s, sc);
     if (s->edit) {
       checkEditFormats(s, sc, p, false);
@@ -1589,7 +1625,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // item must be an assignable scalar reference, not a constant or procedure
     // (rules (109),(110)).
     typeExpr(s->skipCount.get(), sc, p);
-    checkStringTarget(s, sc, p);
+    checkStringTarget(s, sc, p, true);
     checkFileTarget(s, sc);
     if (s->edit) {
       checkEditFormats(s, sc, p, true);
@@ -1622,6 +1658,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(it->loc, "GET LIST item must be a variable to receive the value", "(110)");
         continue;
       }
+      checkValueTarget(it.get()); // VALUE constants cannot receive values (ADR-108)
       if (it->ty.isVoid()) {
         d_.error(it->loc, "invalid data list item", "(110)");
         continue;
@@ -1757,6 +1794,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "READ INTO requires a variable to receive the record", "(112)");
       break;
     }
+    checkValueTarget(t); // VALUE constants cannot receive values (ADR-108)
     if (t->ty.isVoid() || t->ty.isArray() || t->ty.isStruct() || t->ty.isPointer() ||
         t->ty.isComplex() || (t->ty.isChar() && t->ty.varying))
       d_.error(s->loc, "READ INTO of this type is not implemented in this stage", "(112)");
@@ -1847,7 +1885,14 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
 // The STRING ( reference ) stream option (rule 105): the target must be a
 // NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only, meaningless
 // against a string sink/source.
-void Sema::checkStringTarget(Stmt* s, Scope* sc, Proc* p) {
+// Extension (ADR-108): a VALUE named constant keeps its storage but no
+// statement may receive a value into it.
+void Sema::checkValueTarget(Expr* t) {
+  if (t && t->kind == Expr::VarRef && t->sym && t->sym->isValue)
+    d_.error(t->loc, "cannot assign to the VALUE constant '" + t->sym->name + "' (ADR-108)", "");
+}
+
+void Sema::checkStringTarget(Stmt* s, Scope* sc, Proc* p, bool isGet) {
   if (!s->stringTarget)
     return;
   typeExpr(s->stringTarget.get(), sc, p);
@@ -1856,6 +1901,8 @@ void Sema::checkStringTarget(Stmt* s, Scope* sc, Proc* p) {
     d_.error(t->loc, "the STRING option requires a character variable", "(105)");
   else if (!t->ty.isChar() || t->ty.varying)
     d_.error(t->loc, "the STRING option requires a NONVARYING CHARACTER variable", "(105)");
+  else if (!isGet)
+    checkValueTarget(t); // PUT STRING formats into its target (ADR-108)
   if (s->page || s->skip)
     d_.error(s->loc, "PAGE/SKIP cannot be combined with the STRING option", "(105)");
 }
@@ -1912,6 +1959,8 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
         d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
       else if (it->ty.isStruct())
         d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
+      else
+        checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
     } else if (it->ty.isVoid()) {
       d_.error(it->loc, "invalid data list item", "(110)");
     }
