@@ -126,6 +126,24 @@ cc caller.o c_set.o build/libpli.a -o caller
 Full entry descriptors, `USES`/`SETS`, character-valued results, and
 `OPTIONS(BYVALUE)` value-passing are not yet implemented (M2 / M9).
 
+## Multi-module PL/I programs
+
+A top-level (non-`MAIN`, non-nested) procedure is externally linked
+under its upper-cased name (rule 42; ADR-103), so another unit's
+`ENTRY...EXTERNAL` declaration resolves at link time. Compile each
+unit with `-c` and link the objects with the runtime:
+
+```
+./build/plic main.pli -c -o main.o
+./build/plic lib.pli -c -o lib.o
+cc main.o lib.o build/libpli.a -o prog
+```
+
+Scalar parameters are passed by reference and function returns work
+across the link, exactly as in the C-interop form above (array and
+structure parameters need full entry descriptors, M2; shared
+`EXTERNAL` variables are a follow-up).
+
 ## Usage
 
 ```

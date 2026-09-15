@@ -191,6 +191,7 @@ struct HProc {
   std::string name;
   SourceLoc loc{};
   bool isMain = false;
+  bool isExternal = false;             // rule (42): externally linked, upper-cased name
   bool isRecursive = false;            // RECURSIVE option (rule (5))
   bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
   Type retTy{};                        // function return type (RETURNS)

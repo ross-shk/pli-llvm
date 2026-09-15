@@ -144,14 +144,21 @@ bool Sema::run(Program& prog, bool compileOnly) {
   scopes_.push_back(std::unique_ptr<Scope>(rootScope_));
 
   for (auto& p : prog.procs) {
-    p->irName = "@PLI_" + p->name;
+    // Rule (42): a top-level non-MAIN procedure is externally linked under
+    // its upper-cased name (already upper-cased by the lexer), so another
+    // translation unit's ENTRY reference resolves at link time. The MAIN
+    // procedure keeps its module-private name: only its own `main` shim
+    // invokes it. Nested procedures stay module-private.
+    p->isExternal = !p->parent && !p->isMain;
+    p->irName = p->isExternal ? "@" + p->name
+                              : "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) +
+                                    p->name;
     // A function procedure's symbol carries its result type so that a
     // function reference (rule (123)) types as the returned value.
     Scope* outer = p->parent ? scopeFor(p->parent) : rootScope_;
     Type symTy = p->isFunction ? p->retTy : Type::voidTy();
     Symbol* s = declare(outer, p->name, symTy, p->loc, Symbol::ProcName, false);
     s->proc = p.get();
-    p->irName = "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name;
     // rule (3) entry-namelist: every extra name is another entry point to
     // the same procedure body, so each resolves to this Proc.
     for (const auto& en : p->entryNames) {
