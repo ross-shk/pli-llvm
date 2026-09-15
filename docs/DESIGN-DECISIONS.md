@@ -2717,3 +2717,23 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  coexistence; `bad_leave.pli` pins outside-loop uses and
  `bad_leave_label.pli` unknown/plain-group targets. Known limits:
  MX3–MX8 are untouched.
+
+ ## ADR-106 — DO UNTIL as a post-test flag on the DO-group
+
+ Context. Post-test loops (MX3) have no TR production; only `DO
+ WHILE` (rules (69)–(73)) is served. The gap between them is one
+ branch direction, so a new AST kind would duplicate every
+ statement walker for no semantic difference.
+
+ Decision. `DO UNTIL (expr)` sets an `until` flag on the ordinary
+ DO-group (mirrored to HIR and shown by `--print-hir`); codegen
+ emits body-first with a true-condition exit, sharing the
+ LEAVE/ITERATE re-entry targets with WHILE. Iterative or combined
+ WHILE+UNTIL forms are diagnosed, never silently accepted;
+ `until` stays usable as an identifier via the existing
+ assignment-lookahead dispatch.
+
+ Consequences. `do_until.pli` covers runs-once, counting, nesting,
+ and LEAVE/ITERATE interplay; `bad_do_until.pli` pins the
+ iterative-combination diagnostic. Known limits: MX4–MX8 are
+ untouched.

@@ -1923,6 +1923,22 @@ void IRGen::emitDoWhile(HStmt* s) {
   llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
   llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);
+  if (s->until) {
+    // DO UNTIL (extension, ADR-106): the body runs first, then a true
+    // condition exits (LEAVE targets endL, ITERATE re-tests via condL).
+    branch(bodyL);
+    startBlock(bodyL);
+    loopStack_.push_back({s->labels, endL, condL});
+    for (auto& b : s->body)
+      emitStmt(b.get());
+    loopStack_.pop_back();
+    branch(condL);
+    startBlock(condL);
+    Val c = emitExpr(s->cond.get());
+    b_.CreateCondBr(toI1(c, s->loc), endL, bodyL);
+    startBlock(endL);
+    return;
+  }
   branch(condL);
   startBlock(condL);
   Val c = emitExpr(s->cond.get());

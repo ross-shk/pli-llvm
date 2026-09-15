@@ -1,0 +1,45 @@
+ /* extension (ADR-106): DO UNTIL tests after
+    the body, so it runs at least once; LEAVE
+    and ITERATE work inside, and until stays
+    usable as an identifier. */
+ dountil: procedure options(main);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare s fixed bin(31);
+    declare until fixed bin(31);
+    until = 3;
+    put skip list('ident', until);
+    i = 0;
+    s = 0;
+    do until (i > 0);
+       s = s + 1;
+       i = i + 1;
+    end;
+    put skip list('once', s);
+    i = 0;
+    s = 0;
+    do until (i >= 5);
+       i = i + 1;
+       s = s + i;
+    end;
+    put skip list('sum', s);
+    s = 0;
+    do until (i >= 10);
+       i = i + 1;
+       if i = 3 then iterate;
+       if i = 7 then leave;
+       s = s + i;
+    end;
+    put skip list('leave', s, i);
+    s = 0;
+    i = 0;
+    do until (i >= 2);
+       i = i + 1;
+       j = 0;
+       do until (j >= 3);
+          j = j + 1;
+          s = s + 1;
+       end;
+    end;
+    put skip list('nested', s);
+ end dountil;
