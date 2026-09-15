@@ -146,7 +146,8 @@ struct Stmt {
     Free,     // rule (90)  FREE ( [reference ->] identifier ){,...}
     Open,     // rule (100) OPEN open-optionslist{,...};
     Close,    // rule (102) CLOSE close-optionslist{,...};
-    Leave,    // (not in TR 25.084; modern LEAVE, rejected in M0)
+    Leave,    // extension (ADR-105): LEAVE [label]; exits an iterative group
+    Iterate,  // extension (ADR-105): ITERATE [label]; continues one (`name` = target)
     On,       // rule (91)  ON condition [SNAP] (unit | SYSTEM)
     Revert,   // rule (92)  REVERT condition
     Signal,   // rule (93)  SIGNAL condition

@@ -1,0 +1,6 @@
+ /* extension (ADR-105): LEAVE and ITERATE outside
+    an iterative group are diagnosed. */
+ badleave: procedure options(main);
+    leave;
+    iterate;
+ end badleave;

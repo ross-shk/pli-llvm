@@ -131,6 +131,7 @@ entry points below are where that chain terminates.
 | `%REPLACE` (ADR-077) | served | `%REPLACE name BY <tokens> ;` substitutes an identifier with source text before parsing (`replace.pli`); a lone `"..."` operand is re-scanned as source text (`replace_quoted.pli`, ADR-082); stray double quotes and mixed quoted/raw replacements diagnosed (`bad_dqstring.pli`, `bad_replace_mixed.pli`); other `%` directives and malformed directives diagnosed (`bad_replace.pli`) |
 | `%INCLUDE` search paths (ADR-078) | served | including file's directory, then repeatable `-I` (first wins, `-I<dir>` too), then `PLIC_INCLUDE_PATH`, then the executable-relative `share/plic/include` default; `-v` lists the configured dirs (`driver/include_dirs`) |
 | `SELECT` / `WHEN` / `OTHERWISE` (ADR-104) | served | `SELECT [(expr)]; WHEN ...; [OTHERWISE ...] END;` desugars in the parser to an IF-chain (bare predicates, or value lists against the SELECT expression); missing WHEN, WHEN-after-OTHERWISE, second OTHERWISE, and mixed forms diagnosed (`select.pli`, `bad_select.pli`) |
+| `LEAVE` / `ITERATE` [label] (ADR-105) | served | loop exit/continue over iterative DO-groups (WHILE re-entry is the condition, DO-loop re-entry is the step); labeled forms resolve against enclosing loop labels; outside-loop, unknown-label, and ON-unit uses diagnosed (`leave.pli`, `bad_leave.pli`, `bad_leave_label.pli`) |
 
 ## Headline numbers (M0)
 
