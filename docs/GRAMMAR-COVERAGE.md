@@ -135,6 +135,7 @@ entry points below are where that chain terminates.
 | `DO UNTIL (expr)` (ADR-106) | served | post-test loop via an `until` flag on the DO-group (body first, true condition exits); LEAVE/ITERATE re-entry targets shared with WHILE; iterative or combined WHILE+UNTIL forms diagnosed (`do_until.pli`, `bad_do_until.pli`) |
 | `TRIM` / `TALLY` (ADR-107) | served | `TRIM(s[, pad])` strips leading/trailing blanks (or pad-set chars), left-justified and blank-padded to the input length; `TALLY(x, y)` counts non-overlapping case-sensitive occurrences (`trim.pli`, `tally.pli`, `bad_trim.pli`, `bad_tally.pli`) |
 | `VALUE` named constants (ADR-108) | served | `DECLARE x ... VALUE(const)` keeps AUTOMATIC storage initialized once; plain/multiple assignment, SUBSTR-target, GET, READ INTO, DO control, and PUT STRING targets diagnosed (`value.pli`, `bad_value.pli`, `bad_value_init.pli`) |
+| `PACKAGE` / `EXPORTS` (ADR-109) | served | `name: PACKAGE [EXPORTS (a, ...)] ... END [name]` groups procedures under one scope; listed members link externally, the rest stay module-private; package-level data, bad EXPORTS, and nested/multi-name packages diagnosed (`package.pli`, `driver/package`, `bad_package.pli`, `bad_package_nest.pli`) |
 
 ## Headline numbers (M0)
 

@@ -122,6 +122,12 @@ private:
   // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
   // was already type-checked by checkStmt, so symbol references are resolved.
   void checkOnUnit(Stmt* u, Proc* p);
+  // Extension (ADR-109): resolve PACKAGE EXPORTS against hoisted members,
+  // marking listed member procedures external. Runs before pass 1.
+  void resolvePackageExports();
+  // Extension (ADR-109): a package contributes scope and linkage only —
+  // diagnose package-level data and non-member statements in its body.
+  void processPackage(Proc* p);
   // Rules (94),(99): resolve a condition to its dispatch key
   // (0 means ERROR, negative Stmt::k*CondKey are the fixed conditions,
   // else first-use order in prog_->condNames). A programmer-named name

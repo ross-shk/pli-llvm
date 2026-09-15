@@ -249,6 +249,9 @@ struct Proc {
   // records the name; sema resolves it to a deep copy of that type into retTy.
   std::string returnsStructName;
   std::vector<std::string> params;     // rule (4) parameterlist
+  bool isPackage = false;              // extension (ADR-109): a PACKAGE block —
+                                       // scope and linkage only, never emitted
+  std::vector<std::string> exports;    // extension (ADR-109): EXPORTS member names
   std::vector<std::string> entryNames; // rule (3) entry-namelist extra names
   std::vector<StmtP> body;
   Proc* parent = nullptr; // lexical nesting (rule (8) sentence)

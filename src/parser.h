@@ -58,6 +58,7 @@ private:
 
   // --- grammar --------------------------------------------------------
   void parseExternalProcedure();
+  void parsePackage(const std::string& name, SourceLoc loc); // PACKAGE (extension, ADR-109)
   Proc* startProc(const std::string& name, SourceLoc loc, Proc* parent);
   EndInfo parseProcBody(Proc* p);
   EndInfo parseBody(Proc* owner, std::vector<StmtP>& body, const std::string& ownName);

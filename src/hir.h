@@ -199,6 +199,7 @@ struct HProc {
   Type retTy{};                        // function return type (RETURNS)
   Type commonRetTy{};                  // rule (56): the single result type shared by all
                                        // function-valued entry points (void if none)
+  bool isPackage = false;              // extension (ADR-109): skipped in codegen
   std::vector<std::string> params;     // rule (4) parameterlist
   std::vector<std::string> entryNames; // rule (3) entry-namelist extra names
   std::vector<HStmtP> body;

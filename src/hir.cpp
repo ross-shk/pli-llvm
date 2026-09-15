@@ -307,6 +307,7 @@ HProgram lower(const Program& prog) {
     hp->name = prog.procs[i]->name;
     hp->loc = prog.procs[i]->loc;
     hp->isMain = prog.procs[i]->isMain;
+    hp->isPackage = prog.procs[i]->isPackage;
     hp->isExternal = prog.procs[i]->isExternal;
     hp->isRecursive = prog.procs[i]->isRecursive;
     hp->isFunction = prog.procs[i]->isFunction;

@@ -1,0 +1,26 @@
+ /* extension (ADR-109): PACKAGE groups procedures
+    under one scope; EXPORTS controls linkage;
+    external callers use ENTRY references. */
+ mathlib: package exports(doubleit);
+    doubleit: procedure(x) returns(fixed bin(31));
+       declare x fixed bin(31);
+       return(helper(x) + x);
+    end doubleit;
+    helper: procedure(x) returns(fixed bin(31));
+       declare x fixed bin(31);
+       return(x + 1);
+    end helper;
+ end mathlib;
+ otherlib: package;
+    helper: procedure(x) returns(fixed bin(31));
+       declare x fixed bin(31);
+       return(x * 10);
+    end helper;
+ end otherlib;
+ main: procedure options(main);
+    declare doubleit entry(fixed bin(31))
+       returns(fixed bin(31)) external;
+    declare r fixed bin(31);
+    r = doubleit(21);
+    put skip list(r);
+ end main;

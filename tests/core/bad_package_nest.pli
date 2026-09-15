@@ -1,0 +1,9 @@
+ /* extension (ADR-109): nested and multi-name
+    packages are diagnosed, never silently
+    accepted. */
+ a, b: package;
+ end a;
+ outer: package;
+    inner: package;
+    end inner;
+ end outer;
