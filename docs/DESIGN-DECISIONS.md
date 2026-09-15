@@ -2671,3 +2671,26 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  shared `EXTERNAL` variables need storage promotion from AUTOMATIC
  allocas to agreed globals and stay a follow-up; multi-file driver
  arguments stay a follow-up.
+
+ ## ADR-104 — SELECT desugars to an IF-chain in the parser
+
+ Context. `SELECT`/`WHEN`/`OTHERWISE` is the highest-value modern
+ nicety (MX1) but has no TR production, so it enters through the
+ Extensions vehicle with contextual keywords only: the lexer still
+ classifies nothing, and `select` keeps working as an identifier.
+
+ Decision. Desugar in `parseSelect` rather than adding an AST kind:
+ a bare `SELECT` takes one boolean predicate per `WHEN`, while
+ `SELECT (expr)` takes value lists compiled to `expr=value`
+ comparisons ORed per clause (the expression is cloned per value).
+ The result is ordinary `If` nodes, so sema, all statement walkers,
+ ON-unit restrictions, HIR, and codegen work unchanged; `--print-hir`
+ shows the chain. Missing `WHEN`, `WHEN`-after-`OTHERWISE`, a second
+ `OTHERWISE`, mixed forms, and a labeled `END` for an outer block
+ (multiple closure) are all handled; diagnostics cite ADR-104.
+
+ Consequences. `select.pli` covers boolean WHENs, value lists,
+ nested use, omitted OTHERWISE, and `select` as an identifier;
+ `bad_select.pli` pins the missing-WHEN diagnostic. Known limits:
+ `WHEN` value ranges/patterns beyond equality lists stay a
+ follow-up; MX2–MX8 are untouched.

@@ -1,0 +1,7 @@
+ /* extension (ADR-104): a SELECT with no WHEN
+    is diagnosed, never silently accepted. */
+ badselect: procedure options(main);
+    select;
+       otherwise put skip list('x');
+    end;
+ end badselect;
