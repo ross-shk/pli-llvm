@@ -51,6 +51,7 @@ static void usage() {
                "  --print-hir      lower to HIR and print it, then stop\n"
                "  -fsyntax-only    parse and analyse only\n"
                "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
+               "  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE), ADR-111)\n"
                "  --release        maximum optimization + stripped binary (minimal size)\n"
                "  --debug          no optimization + debug info (-O0 -g)\n"
                "  --keep-ll        keep the intermediate .ll next to the output\n"
@@ -115,6 +116,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
+  bool noSizeChecks = false;
   int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -184,6 +186,8 @@ int main(int argc, char** argv) {
       optLevel = a;
     else if (a == "--release")
       release = true;
+    else if (a == "--no-size-checks")
+      noSizeChecks = true;
     else if (a == "--debug")
       debug = true;
     else if (!a.empty() && a[0] == '-') {
@@ -281,7 +285,7 @@ int main(int argc, char** argv) {
   // --- code generation ---------------------------------------------------
   if (triple.empty())
     triple = runCapture((shellQuote(clangPath) + " -dumpmachine 2>/dev/null").c_str());
-  IRGen irgen(diags, sema, triple);
+  IRGen irgen(diags, sema, triple, noSizeChecks);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return 1;
