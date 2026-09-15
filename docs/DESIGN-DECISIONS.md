@@ -2761,3 +2761,29 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  the non-overlapping `aaa`/`aa` case; `bad_trim.pli` and
  `bad_tally.pli` pin the arity/type diagnostics. Known limits:
  MX5–MX8 are untouched.
+
+ ## ADR-108 — VALUE named constants as read-only storage
+
+ Context. Named constants (MX6) have no TR production. Folding
+ use-sites to literals would break address-taken uses (`ADDR`,
+ by-reference call arguments), so the stage keeps ordinary
+ storage and enforces read-only use instead.
+
+ Decision. `VALUE(const)` stores its folded constant through the
+ existing scalar-`INITIAL` path (`initExpr`, initialized once at
+ entry) and marks the symbol; every write position — plain and
+ multiple assignment, `SUBSTR`-target, `GET LIST`/`GET EDIT`,
+ `READ INTO`, `DO` control, `PUT STRING` (`GET STRING` reads and
+ stays allowed) — is diagnosed via one helper. Scalar-only:
+ arrays, structures, pointers, complex data, `FILE`, and
+ `DEFINED`/`BASED` combinations are diagnosed, as is any
+ `INITIAL`+`VALUE` combination (in either order). Diagnostics
+ cite ADR-108.
+
+ Consequences. `value.pli` covers fixed, float, character, and
+ bit constants in expressions and a dynamic bound;
+ `bad_value.pli` pins all seven write positions and
+ `bad_value_init.pli` the combination (split because a parse
+ diagnostic skips sema per the pipeline staging). Known limits:
+ by-reference writes through call arguments are invisible to the
+ checker; MX7–MX8 are untouched.

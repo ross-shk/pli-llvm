@@ -1,0 +1,19 @@
+ /* extension (ADR-108): writes to VALUE constants
+    are diagnosed, never silently accepted. */
+ badvalue: procedure options(main);
+    declare c fixed bin(31) value(5);
+    declare d fixed bin(31);
+    declare s char(8);
+    declare v char(8) value('abcdefgh');
+    declare f file;
+    c = 6;
+    c, d = 7;
+    get list(c);
+    do c = 1 to 3;
+       put skip list(c);
+    end;
+    substr(v, 1, 1) = 'x';
+    read file(f) into(c);
+    put string(s) list(c);
+    put string(v) list(d);
+ end badvalue;

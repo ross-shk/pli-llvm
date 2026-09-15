@@ -100,6 +100,7 @@ struct DeclItem {
   // when every lower bound is constant. Mirrors `dynBounds` for the lower bound.
   std::vector<ExprP> dynLbBounds;
   ExprP init;     // INITIAL(...) — a single simple scalar constant (M0 scalar path)
+  ExprP valueInit; // VALUE(const) — a named-constant value (extension, ADR-108)
   ExprP initCall; // INITIAL(CALL f(...)) — a function call initializer (rule 27)
   std::vector<InitItem> initItems;     // INITIAL(...) itemlist (arrays, rule 26-31)
   std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)

@@ -18,6 +18,7 @@ struct Symbol {
   bool isStatic = false;         // STATIC storage: an LLVM global
   bool implicit = false;         // created by the implicit-declaration rule
   bool isEntry = false;          // external C entry (DECLARE ... ENTRY): no body
+  bool isValue = false;          // VALUE named constant (extension, ADR-108): reassignment diagnosed
   bool fileAttr = false;         // FILE variable (rules 39,40): a named file
   int fileSlot = -1;             // runtime slot index for a FILE variable (100-103)
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
@@ -127,8 +128,11 @@ private:
   // already declared as a variable, parameter, or procedure is diagnosed.
   int resolveCondKey(Stmt* s, Scope* sc);
   // Validate the STRING ( reference ) stream option (rule 105): the target must
-  // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only.
-  void checkStringTarget(Stmt* s, Scope* sc, Proc* p);
+  // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only. A PUT
+  // STRING formats into its target, so a VALUE constant is diagnosed there.
+  void checkStringTarget(Stmt* s, Scope* sc, Proc* p, bool isGet);
+  // Extension (ADR-108): diagnose a write to a VALUE named constant.
+  void checkValueTarget(Expr* t);
   // Resolve and validate the FILE ( f ) stream option (rule 105) and the
   // OPEN/CLOSE FILE ( f ): `f` must be a declared FILE variable. Resolves
   // s->fileIdent to s->fileSym.

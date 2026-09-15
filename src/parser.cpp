@@ -1011,6 +1011,9 @@ bool Parser::parseDeclTail(DeclItem& item) {
     if (at(Tok::Word)) {
       const std::string& w = cur().text;
       if (w == "INITIAL" || w == "INIT") {
+        if (item.valueInit)
+          d_.error(cur().loc, "VALUE cannot be combined with INITIAL or a second VALUE (ADR-108)",
+                   "");
         advance();
         if (expect(Tok::LParen, "(26)")) {
           if (atWord("CALL")) {
@@ -1047,6 +1050,27 @@ bool Parser::parseDeclTail(DeclItem& item) {
               init = std::move(item.initItems[0].value);
           }
         }
+        continue;
+      }
+      if (w == "VALUE") {
+        // VALUE(const) (extension, ADR-108): a named constant. The single
+        // constant is stored like a scalar INITIAL; combining it with
+        // INITIAL (or a second VALUE) is diagnosed, never merged silently.
+        advance();
+        if (!eat(Tok::LParen)) {
+          d_.error(cur().loc, "expected '(' after VALUE (ADR-108)", "");
+          continue;
+        }
+        ExprP v = parseExpr();
+        if (!eat(Tok::RParen)) {
+          d_.error(cur().loc, "expected ')' after the VALUE constant (ADR-108)", "");
+          continue;
+        }
+        if (item.init || item.initCall || !item.initItems.empty() || item.valueInit)
+          d_.error(item.loc, "VALUE cannot be combined with INITIAL or a second VALUE (ADR-108)",
+                   "");
+        else
+          item.valueInit = std::move(v);
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" ||
@@ -1439,7 +1463,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
            w == "VAR" || w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
            w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" || w == "INIT" ||
-           w == "EXTERNAL" || w == "EXT";
+           w == "VALUE" || w == "EXTERNAL" || w == "EXT";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
