@@ -538,6 +538,9 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
   if (kw("DO")) {
     return parseDo(owner, labels);
   } // rules (69)-(73)
+  if (kw("SELECT")) {
+    return parseSelect(owner);
+  } // extension (ADR-104)
   if (kw("BEGIN")) { // rule (68)
     auto st = std::make_unique<Stmt>();
     st->loc = cur().loc;
@@ -1485,6 +1488,185 @@ bool Parser::parseEntryParams(std::vector<Type>& params) {
   }
   expect(Tok::RParen, "(38)");
   return true;
+}
+
+// Deep copy of a parsed expression for SELECT value lists (extension,
+// ADR-104): each WHEN value compares against its own copy of the SELECT
+// expression. Only parse-time state is copied; sema resolves the copies.
+ExprP Parser::cloneExpr(const Expr* e) {
+  if (!e)
+    return nullptr;
+  auto c = std::make_unique<Expr>();
+  c->kind = e->kind;
+  c->loc = e->loc;
+  c->ty = e->ty;
+  c->ival = e->ival;
+  c->fval = e->fval;
+  c->decScale = e->decScale;
+  c->decPrec = e->decPrec;
+  c->sval = e->sval;
+  c->name = e->name;
+  c->path = e->path;
+  c->memberPath = e->memberPath;
+  c->op = e->op;
+  c->a = cloneExpr(e->a.get());
+  c->b = cloneExpr(e->b.get());
+  c->locPtr = cloneExpr(e->locPtr.get());
+  for (auto& a : e->args)
+    c->args.push_back(cloneExpr(a.get()));
+  return c;
+}
+
+// select-statement (extension, ADR-104): SELECT [( expr )]; WHEN ...; END;
+// desugars in the parser to an IF-chain, so sema and codegen are untouched:
+//   SELECT; WHEN (p) S; OTHERWISE T; END;  ->  IF p THEN S; ELSE T;
+//   SELECT (E); WHEN (a, b) S; ...         ->  IF E=a | E=b THEN S; ...
+// WHEN bodies are single statements (groups included). A SELECT with no
+// WHEN, a WHEN after OTHERWISE, a second OTHERWISE, and mixing value
+// lists with a bare SELECT (or a bare predicate with SELECT(expr)) are
+// diagnosed, never silently accepted.
+StmtP Parser::parseSelect(Proc* owner) {
+  advance(); // SELECT
+  ExprP selExpr;
+  if (eat(Tok::LParen)) {
+    selExpr = parseExpr();
+    if (!eat(Tok::RParen)) {
+      d_.error(cur().loc, "expected ')' after the SELECT expression (ADR-104)", "");
+      resync();
+      return nullptr;
+    }
+  }
+  if (!eat(Tok::Semi)) {
+    d_.error(cur().loc, "expected ';' after SELECT (ADR-104)", "");
+    resync();
+    return nullptr;
+  }
+  StmtP head;
+  Stmt* tail = nullptr; // open IF node awaiting its elseS
+  bool sawWhen = false, sawOtherwise = false;
+  for (;;) {
+    if (at(Tok::Eof)) {
+      d_.error(cur().loc, "unexpected end of file: missing END for SELECT (ADR-104)", "");
+      return head;
+    }
+    if (pendingEnd_.present)
+      return head; // multiple closure from a WHEN body
+    bool isWhen = cur().isWord("WHEN") && !looksLikeAssignment();
+    bool isOtherwise = cur().isWord("OTHERWISE") && !looksLikeAssignment();
+    if (atStmtKeyword("END")) {
+      SourceLoc l = cur().loc;
+      advance(); // END
+      std::string lab;
+      if (at(Tok::Word)) {
+        lab = cur().text;
+        advance();
+      }
+      if (!eat(Tok::Semi)) {
+        d_.error(cur().loc, "expected ';' after END", "(7)");
+        resync();
+        return head;
+      }
+      if (!lab.empty()) {
+        EndInfo e;
+        e.present = true;
+        e.loc = l;
+        e.label = lab;
+        pendingEnd_ = e; // multiple closure: closes an outer block
+        return head;
+      }
+      if (!sawWhen)
+        d_.error(l, "SELECT requires at least one WHEN (ADR-104)", "");
+      return head;
+    }
+    if (!isWhen && !isOtherwise) {
+      d_.error(cur().loc, "expected WHEN, OTHERWISE, or END in SELECT (ADR-104)", "");
+      resync();
+      return head;
+    }
+    if (isWhen) {
+      if (sawOtherwise) {
+        d_.error(cur().loc, "WHEN after OTHERWISE (ADR-104)", "");
+        resync();
+        return head;
+      }
+      SourceLoc l = cur().loc;
+      advance(); // WHEN
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after WHEN (ADR-104)", "");
+        resync();
+        return head;
+      }
+      std::vector<ExprP> vals;
+      vals.push_back(parseExpr());
+      while (eat(Tok::Comma))
+        vals.push_back(parseExpr());
+      if (!eat(Tok::RParen)) {
+        d_.error(cur().loc, "expected ')' after the WHEN values (ADR-104)", "");
+        resync();
+        return head;
+      }
+      ExprP pred;
+      if (!selExpr) {
+        if (vals.size() != 1) {
+          d_.error(cur().loc, "WHEN with multiple values needs SELECT ( expr ) (ADR-104)", "");
+          resync();
+          return head;
+        }
+        pred = std::move(vals[0]);
+      } else {
+        for (auto& v : vals) {
+          auto eq = std::make_unique<Expr>();
+          eq->kind = Expr::Binary;
+          eq->op = Tok::Eq;
+          eq->loc = v->loc;
+          eq->a = cloneExpr(selExpr.get());
+          eq->b = std::move(v);
+          if (!pred) {
+            pred = std::move(eq);
+          } else {
+            auto orE = std::make_unique<Expr>();
+            orE->kind = Expr::Binary;
+            orE->op = Tok::Bar;
+            orE->loc = eq->loc;
+            orE->a = std::move(pred);
+            orE->b = std::move(eq);
+            pred = std::move(orE);
+          }
+        }
+      }
+      StmtP body = parseStatement(owner);
+      auto ifs = std::make_unique<Stmt>();
+      ifs->kind = Stmt::If;
+      ifs->loc = l;
+      ifs->cond = std::move(pred);
+      ifs->thenS = std::move(body);
+      if (!head) {
+        head = std::move(ifs);
+        tail = head.get();
+      } else {
+        tail->elseS = std::move(ifs);
+        tail = tail->elseS.get();
+      }
+      sawWhen = true;
+      if (pendingEnd_.present)
+        return head; // multiple closure from the WHEN body
+      continue;
+    }
+    // OTHERWISE (exactly one; a second is diagnosed above via sawOtherwise).
+    if (sawOtherwise) {
+      d_.error(cur().loc, "only one OTHERWISE is allowed in SELECT (ADR-104)", "");
+      resync();
+      return head;
+    }
+    advance(); // OTHERWISE
+    sawOtherwise = true;
+    StmtP body = parseStatement(owner);
+    if (tail)
+      tail->elseS = std::move(body);
+    // Without a preceding WHEN the rejection surfaces at END (!sawWhen).
+    if (pendingEnd_.present)
+      return head; // multiple closure from the OTHERWISE body
+  }
 }
 
 // if-statement ::= if-clause statement | if-clause balanced-statement

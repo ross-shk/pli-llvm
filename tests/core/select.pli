@@ -1,0 +1,39 @@
+ /* extension (ADR-104): SELECT with boolean
+    WHENs and SELECT(expr) with value lists
+    lower to an IF-chain; OTHERWISE is
+    optional, END closes, and select stays
+    usable as an identifier. */
+ selectdemo: procedure options(main);
+    declare g fixed bin(31);
+    declare r fixed bin(31);
+    declare select fixed bin(31);
+    select = 7;
+    put skip list('ident', select);
+    g = 2;
+    select (g);
+       when (1) r = 10;
+       when (2, 3) r = 20;
+       when (4) r = 40;
+       otherwise r = 99;
+    end;
+    put skip list('value', r);
+    select;
+       when (r > 100) put skip list('big');
+       when (r = 20) put skip list('twenty');
+       otherwise put skip list('other');
+    end;
+    g = 1;
+    select;
+       when (r = 20) select (g);
+          when (1) put skip list('nested one');
+          otherwise put skip list('nested other');
+       end;
+       otherwise put skip list('outer other');
+    end;
+    g = 9;
+    select (g);
+       when (1) put skip list('one');
+       when (2) put skip list('two');
+    end;
+    put skip list('done');
+ end selectdemo;

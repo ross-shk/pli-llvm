@@ -65,6 +65,8 @@ private:
   StmtP parseDeclare();
   StmtP parseIf(Proc* owner);
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
+  StmtP parseSelect(Proc* owner); // SELECT (extension, ADR-104): desugars to IFs
+  static ExprP cloneExpr(const Expr* e); // deep copy for SELECT value lists
   StmtP parsePut();
   StmtP parseDisplay(); // display-statement (rule 114)
   StmtP parseGet();
