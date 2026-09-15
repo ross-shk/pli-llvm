@@ -318,6 +318,8 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   llvm::Type* st = llvm::StructType::get(ctx_, {ty, b_.getInt1Ty()});
   llvm::Value* ov = b_.CreateCall(intrinsicFn(iname, st, {ty, ty}), {a, b}, "ov");
   llvm::Value* r = b_.CreateExtractValue(ov, 0, "bin");
+  if (!sizeChecks())
+    return r; // (NOSIZE): the wrapped value stands (rules (60)-(63), ADR-110)
   llvm::Value* of = b_.CreateExtractValue(ov, 1, "ovf");
   int seq = ovSeq_++;
   llvm::BasicBlock* trapBB =
@@ -334,6 +336,8 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
 // the target (SIZE path, hard ERROR when unhandled). Two-sided so
 // INT64_MIN is caught without negating it.
 void IRGen::magTrap(llvm::Value* v, long long limit) {
+  if (!sizeChecks())
+    return; // (NOSIZE): the wrapped value stands (rules (60)-(63), ADR-110)
   llvm::Value* hi = b_.CreateICmpSGE(v, i64(limit), "dov.hi");
   llvm::Value* lo = b_.CreateICmpSLE(v, i64(-limit), "dov.lo");
   llvm::Value* of = b_.CreateOr(hi, lo, "dov");
@@ -352,6 +356,8 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
 // first through the SIZE path (hard ERROR when unhandled). Ordered compares
 // fail on NaN, which therefore traps as well.
 void IRGen::floatRangeTrap(llvm::Value* f, double lo, bool loIncl, double hi) {
+  if (!sizeChecks())
+    return; // (NOSIZE): the wrapped value stands (rules (60)-(63), ADR-110)
   llvm::Value* okLo = loIncl ? b_.CreateFCmpOGE(f, flt(lo), "frt.lo")
                              : b_.CreateFCmpOGT(f, flt(lo), "frt.lo");
   llvm::Value* okHi = b_.CreateFCmpOLT(f, flt(hi), "frt.hi");
@@ -1356,6 +1362,10 @@ void IRGen::emitStmt(HStmt* s) {
   } else if (blockTerminated(b_.GetInsertBlock())) {
     newBlock(); // unreachable code (e.g. after STOP): start a fresh block
   }
+  // Condition enable-state (rules (60)-(63), ADR-110): each statement sees
+  // its own (NOSIZE) OR-inherited through enclosing statements, so a
+  // prefixed group covers its body. Balanced by construction (single exit).
+  noSizeStack_.push_back(s->noSize || (!noSizeStack_.empty() && noSizeStack_.back()));
   switch (s->kind) {
   case HStmt::Null:
   case HStmt::Declare:
@@ -1517,6 +1527,7 @@ void IRGen::emitStmt(HStmt* s) {
     b_.CreateBr(labelBlocks_[s->name]);
     break;
   }
+  noSizeStack_.pop_back();
 }
 
 void IRGen::emitAssign(HStmt* s) {
@@ -3619,6 +3630,11 @@ Val IRGen::emitExpr(HExpr* e) {
     else if (a.ty.k == TK::FixedBin) {
       // Negating INT_MIN overflows (QR1.2): trap through the SIZE path.
       llvm::Type* ty = a.reg->getType();
+      if (!sizeChecks()) {
+        // (NOSIZE): the wrapped value stands (rules (60)-(63), ADR-110).
+        v.reg = b_.CreateSub(llvm::Constant::getNullValue(ty), a.reg, "neg");
+        return v;
+      }
       unsigned bits = ty->getIntegerBitWidth();
       llvm::Value* lo =
           llvm::ConstantInt::get(ty, 1ULL << (bits - 1), true);

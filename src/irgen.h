@@ -312,6 +312,11 @@ private:
     llvm::BasicBlock* contBB = nullptr;
   };
   std::vector<LoopTargets> loopStack_;
+  // Condition enable-state (rules (60)-(63), ADR-110): effective (NOSIZE)
+  // per statement, OR-inherited through compound statements so a prefixed
+  // group covers its body. SIZE checks read the top.
+  std::vector<char> noSizeStack_;
+  bool sizeChecks() const { return noSizeStack_.empty() || !noSizeStack_.back(); }
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.

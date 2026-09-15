@@ -39,7 +39,7 @@ The ledger that ties the implementation to the specification. Status values:
 | (44)–(55) | `FORMAT` statement and format items | partial M2 (picture items D1) | the common edit-directed format items `F(w,d)`, `A(w)`, `E(w,d)`, `X(w)`, `SKIP(n)`, `PAGE`, and `LINE(n)` are served inside `PUT/GET EDIT` (rule 108, ADR-069/070); `B`/`C`/`P`/`COLUMN`/`R` items, format iteration `(n) (item)`, remote `R(ref)`, and a standalone `FORMAT` statement → M5/D1 |
 | (56) | `ENTRY` statement | M1 | `label: ENTRY(params) [RETURNS(...)]` declares an alternate entry point with its own params (any count) and result type; body split into segments behind a shared impl, one thunk per entry name (`entry.pli`); every function-valued entry point shares one result type (the shared impl's type); a void primary may coexist with function ENTRYs, but a plain `RETURN` in a valued impl and `RETURN(value)` in a void impl are diagnosed (`entry_mixed.pli`, `bad_entry_ret.pli`); segments never fall through (each closes on its own return pad); truly mixed return types diagnosed unimplemented (ADR-026, ADR-075) |
 | (57)–(59) | statement, unconditional, simple | M0 | |
-| (60)–(63) | condition prefixes | parsed M0 → M4 | warned as unenforced |
+| (60)–(63) | condition prefixes | partial M4 | `SIZE` accepted (already enabled) and `(NOSIZE)` elides the overflow traps so arithmetic wraps, inherited through compound statements (`nosize.pli`, ADR-110); every other condition keeps the unenforced warning |
 | (64) | labellist | M0 | label prefixes parsed; used by (7) |
 | (65) | initial-label (subscripted labels) | M2/M4 | scan damaged; see ⚠ in grammar |
 | (66),(67) | proper-statement, null statement | M0 | |

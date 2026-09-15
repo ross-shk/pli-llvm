@@ -2816,3 +2816,24 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  `bad_package_nest.pli` structural ones. Known limits: shared
  package data needs static storage promotion (same bucket as
  shared EXTERNAL variables); MX8 is untouched.
+
+ ## ADR-110 — Condition-prefix enablement framework with NOSIZE
+
+ Context. Condition prefixes (rules (60)–(63), MX4) parsed with a
+ blanket "not yet enforced" warning. Per ARCHITECTURE §8 the
+ enable-state propagates down the statement tree to codegen.
+
+ Decision. The parser records `SIZE` (no-op, already enabled) and
+ `NOSIZE` (a `noSize` flag mirrored to HIR and forwarded with
+ labels at every `parseStatement` return point, including the
+ probe path); every other condition keeps the warning. IRGen
+ carries an OR-inheriting stack pushed/popped in `emitStmt`, so a
+ prefixed group covers its body (including lexically nested
+ handler bodies). All four SIZE trap sites
+ (`checkedArith`, decimal `magTrap`, float-range, neg-`INT_MIN`)
+ elide with the wrapped value standing. Diagnostics cite ADR-110.
+
+ Consequences. `nosize.pli` covers wrap-on-overflow, the `(SIZE)`
+ no-op, and group inheritance. Known limits: `NOSUBSCRIPTRANGE`
+ and `NOZERODIVIDE` keep the warning until MX4b; handler-body
+ inheritance is lexical, not dynamic.

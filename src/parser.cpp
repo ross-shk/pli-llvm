@@ -452,7 +452,24 @@ StmtP Parser::parseStatement(Proc* owner) {
     }
     if (at(Tok::Colon)) {
       advance();
-      d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
+      // Extension (ADR-110): SIZE/NOSIZE prefixes are enforced (MX4a);
+      // any other condition keeps the unenforced warning.
+      bool anyWord = false, allHandled = true;
+      for (size_t k = save; k < i_; ++k) {
+        if (t_[k].kind != Tok::Word)
+          continue;
+        anyWord = true;
+        const std::string& w = t_[k].text;
+        if (w == "SIZE")
+          continue; // already enabled: no-op
+        if (w == "NOSIZE") {
+          st->noSize = true;
+          continue;
+        }
+        allHandled = false;
+      }
+      if (!anyWord || !allHandled)
+        d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
     } else {
       i_ = save;
       break;
@@ -533,19 +550,25 @@ StmtP Parser::parseStatement(Proc* owner) {
   // fall through and let the word be an assignment target.
   if (cur().kind == Tok::Word && looksLikeAssignment() && stmtKeywordSpelling(cur().text)) {
     StmtP s = probeKeywordStatement(owner, st->labels);
-    if (s)
+    if (s) {
+      // Condition prefixes (rules (60)-(63), ADR-110) ride with labels.
+      s->noSize = st->noSize;
       return s;
+    }
   }
 
   StmtP k = keywordStatement(owner, st->labels, /*probe=*/false);
   if (k) {
     k->labels = st->labels;
+    k->noSize = st->noSize;
     return k;
   }
 
   auto s = parseAssignment();
-  if (s)
+  if (s) {
     s->labels = st->labels;
+    s->noSize = st->noSize;
+  }
   return s;
 }
 
