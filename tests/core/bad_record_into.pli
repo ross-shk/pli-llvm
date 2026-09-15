@@ -1,0 +1,6 @@
+ /* rule (112): READ INTO needs a plain scalar
+    variable to receive the record. */
+ badrecordin: procedure options(main);
+    declare f file;
+    read file(f) into(5);
+ end badrecordin;

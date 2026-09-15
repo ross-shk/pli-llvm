@@ -623,8 +623,11 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     return parseOpen();
   if (kw("CLOSE"))
     return parseClose();
-  if (kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE")) {
-    d_.error(cur().loc, "file input/output is not implemented in this stage", "(100)");
+  if (kw("READ") || kw("WRITE"))
+    return parseRecordIO(); // rules (112),(113): sequential slice
+  if (kw("REWRITE") || kw("DELETE")) {
+    d_.error(cur().loc, "REWRITE/DELETE file input/output is not implemented in this stage",
+             "(112)");
     resync();
     return nullptr;
   }
@@ -2051,9 +2054,68 @@ StmtP Parser::parseFree() {
   return st;
 }
 
+// read-statement ::= READ FILE ( f ) INTO ( reference ) ;    rules (112),(113)
+// write-statement ::= WRITE FILE ( f ) FROM ( expression ) ; sequential slice:
+// one fixed-size binary record per statement on a RECORD SEQUENTIAL file.
+// IGNORE/KEYTO/KEY/NOLOCK/SET/KEYFROM/EVENT stay diagnosed with rule (113).
+StmtP Parser::parseRecordIO() {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  bool isRead = atWord("READ");
+  advance(); // READ / WRITE
+  st->kind = isRead ? Stmt::Read : Stmt::Write;
+  if (atWord("FILE")) {
+    advance();
+    if (eat(Tok::LParen)) {
+      if (at(Tok::Word)) {
+        st->fileIdent = cur().text;
+        advance();
+      } else {
+        d_.error(cur().loc, "expected a FILE variable after FILE(", "(113)");
+      }
+      expect(Tok::RParen, "(113)");
+    } else {
+      d_.error(cur().loc, "expected '(' after FILE", "(113)");
+    }
+  } else {
+    d_.error(cur().loc, "READ/WRITE require a FILE ( f ) option in this stage", "(113)");
+  }
+  const char* want = isRead ? "INTO" : "FROM";
+  if (atWord(want)) {
+    advance();
+    if (eat(Tok::LParen)) {
+      if (isRead)
+        st->target = parseExpr();
+      else
+        st->value = parseExpr();
+      expect(Tok::RParen, "(113)");
+    } else {
+      d_.error(cur().loc, std::string("expected '(' after ") + want, "(113)");
+    }
+  } else {
+    d_.error(cur().loc,
+             std::string(isRead ? "READ requires an INTO ( reference ) option; "
+                                : "WRITE requires a FROM ( expression ) option; ") +
+                 "it is not implemented otherwise in this stage",
+             "(113)");
+  }
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    d_.error(cur().loc,
+             "record option '" +
+                 (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) +
+                 "' is not implemented in this stage",
+             "(113)");
+    resync();
+    return nullptr;
+  }
+  expect(Tok::Semi, "(112)");
+  return st;
+}
+
 // open-statement ::= OPEN {, open-optionslist};    rules (100),(101)
 // This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the
-// INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40). RECORD/KEYED/UPDATE and
+// INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40); and the sequential
+// record form with RECORD SEQUENTIAL (rules (101),(112)). KEYED/UPDATE and
 // the IDENT/LINESIZE/PAGESIZE/ENVIRONMENT options stay unimplemented.
 StmtP Parser::parseOpen() {
   auto st = std::make_unique<Stmt>();
@@ -2061,6 +2123,7 @@ StmtP Parser::parseOpen() {
   st->loc = cur().loc;
   advance(); // OPEN
   bool sawFile = false;
+  bool sawStream = false;
   while (!at(Tok::Semi) && !at(Tok::Eof)) {
     if (atWord("FILE")) {
       advance();
@@ -2096,11 +2159,23 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("OUTPUT") || atWord("STREAM") || atWord("PRINT")) {
+    if (atWord("OUTPUT")) {
       advance();
       continue;
     }
-    if (atWord("RECORD") || atWord("KEYED") || atWord("UPDATE") || atWord("ENVIRONMENT") ||
+    if (atWord("STREAM") || atWord("PRINT")) {
+      sawStream = true;
+      advance();
+      continue;
+    }
+    if (atWord("RECORD") || atWord("SEQUENTIAL")) {
+      // Sequential record organisation (rules (101),(112)): the only record
+      // form served in this stage; DIRECT/KEYED stay diagnosed below.
+      st->openRecord = true;
+      advance();
+      continue;
+    }
+    if (atWord("KEYED") || atWord("UPDATE") || atWord("ENVIRONMENT") ||
         atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE")) {
       d_.error(cur().loc, "OPEN option " + cur().text + " is not implemented in this stage",
                "(101)");
@@ -2113,6 +2188,8 @@ StmtP Parser::parseOpen() {
   }
   if (!sawFile)
     d_.error(st->loc, "OPEN requires a FILE ( f ) option in this stage", "(101)");
+  if (st->openRecord && sawStream)
+    d_.error(st->loc, "OPEN cannot combine RECORD with STREAM/PRINT in this stage", "(101)");
   expect(Tok::Semi, "(100)");
   return st;
 }

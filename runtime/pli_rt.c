@@ -848,6 +848,104 @@ void pli_get_unselect(void) {
   in_f = NULL;
 }
 
+/* SEQUENTIAL RECORD files (rules (112),(113), ADR-101): fixed-size binary
+ * records on the same slot table as stream files. Each WRITE appends one
+ * record, each READ consumes one; the byte size comes from the caller's
+ * type (FIXED 8, FLOAT 8, BIT 1, CHAR n). A use of a closed slot, a failed
+ * transfer, or a short READ (EOF) raises ERROR, since ON ENDFILE stays
+ * diagnosed. Images are host byte order (implementation-defined). */
+void pli_file_open_record(long long slot, const char *name, long long namelen,
+                          long long mode) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  char buf[256];
+  size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
+  memcpy(buf, name, n);
+  buf[n] = '\0';
+  if (pli_files[slot])
+    fclose(pli_files[slot]);
+  pli_files[slot] = fopen(buf, mode ? "wb" : "rb");
+}
+
+static FILE *rec_file(long long slot, const char *what) {
+  if (slot < 0 || slot >= PLI_MAX_FILES || !pli_files[slot]) {
+    pli_signal_error("record file is not open");
+    return NULL;
+  }
+  (void)what;
+  return pli_files[slot];
+}
+
+void pli_record_write_fixed(long long slot, long long v) {
+  FILE *f = rec_file(slot, "WRITE");
+  if (!f)
+    return;
+  if (fwrite(&v, sizeof v, 1, f) != 1)
+    pli_signal_error("WRITE to record file failed");
+}
+
+void pli_record_write_float(long long slot, double v) {
+  FILE *f = rec_file(slot, "WRITE");
+  if (!f)
+    return;
+  if (fwrite(&v, sizeof v, 1, f) != 1)
+    pli_signal_error("WRITE to record file failed");
+}
+
+void pli_record_write_char(long long slot, char *p, long long len) {
+  FILE *f = rec_file(slot, "WRITE");
+  if (!f || len <= 0)
+    return;
+  if (fwrite(p, 1, (size_t)len, f) != (size_t)len)
+    pli_signal_error("WRITE to record file failed");
+}
+
+void pli_record_write_bit(long long slot, unsigned char v) {
+  FILE *f = rec_file(slot, "WRITE");
+  if (!f)
+    return;
+  if (fwrite(&v, sizeof v, 1, f) != 1)
+    pli_signal_error("WRITE to record file failed");
+}
+
+long long pli_record_read_fixed(long long slot) {
+  FILE *f = rec_file(slot, "READ");
+  long long v = 0;
+  if (!f)
+    return 0;
+  if (fread(&v, sizeof v, 1, f) != 1)
+    pli_signal_error("ENDFILE on record file: no more records");
+  return v;
+}
+
+double pli_record_read_float(long long slot) {
+  FILE *f = rec_file(slot, "READ");
+  double v = 0;
+  if (!f)
+    return 0;
+  if (fread(&v, sizeof v, 1, f) != 1)
+    pli_signal_error("ENDFILE on record file: no more records");
+  return v;
+}
+
+void pli_record_read_char(long long slot, char *p, long long len) {
+  FILE *f = rec_file(slot, "READ");
+  if (!f || len <= 0)
+    return;
+  if (fread(p, 1, (size_t)len, f) != (size_t)len)
+    pli_signal_error("ENDFILE on record file: no more records");
+}
+
+unsigned char pli_record_read_bit(long long slot) {
+  FILE *f = rec_file(slot, "READ");
+  unsigned char v = 0;
+  if (!f)
+    return 0;
+  if (fread(&v, sizeof v, 1, f) != 1)
+    pli_signal_error("ENDFILE on record file: no more records");
+  return v;
+}
+
 /* Edit-directed output (rules (108),(44)-(54)). All output routes through
  * put_raw so STRING/FILE sources and sinks are honoured. */
 

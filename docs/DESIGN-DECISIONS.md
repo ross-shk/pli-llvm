@@ -2582,3 +2582,33 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  `RECURSIVE`. Known limits: calls across translation units cannot be
  seen and stay unchecked, and `STATIC` storage keeps its existing
  AUTOMATIC treatment across recursion.
+
+ ## ADR-101 — Sequential RECORD files transfer fixed-size binary records
+
+ Context. Rules (112),(113) record I/O stood fully diagnosed (`diag →
+ M6`), so files were stream-text only; full record I/O (sequential,
+ direct, keyed, buffering, file status) is QR2.5 scale. The smallest
+ change that proves file processing beyond text streams is one
+ organisation end to end.
+
+ Decision. Serve the SEQUENTIAL record form only: `OPEN FILE ( f )
+ RECORD SEQUENTIAL [INPUT|OUTPUT] TITLE ('name')` opens a binary file
+ (`wb`/`rb` on the existing FILE slot table via `pli_file_open_record`);
+ `WRITE FILE ( f ) FROM (v)` appends one record, `READ FILE ( f ) INTO
+ (v)` consumes one, with new `Read`/`Write` AST/HIR kinds flowing
+ through the usual chain. FROM accepts any scalar value expression
+ (only the value is read, as with DISPLAY); INTO requires a plain
+ scalar variable (it needs storage, as with PUT DATA). The image is
+ FIXED 8B, FLOAT 8B, BIT(1) 1B, CHAR(n) nB in host byte order
+ (implementation-defined). A use of a closed slot, a failed transfer,
+ or a short READ raises ERROR in the runtime, since ON ENDFILE stays
+ diagnosed (97); cross-mode misuse (stream verbs on a record slot and
+ vice versa) is unchecked in this slice.
+
+ Consequences. `driver/record` round-trips FIXED (incl. negative),
+ FLOAT, CHAR, and BIT through a RECORD SEQUENTIAL file;
+ `bad_record.pli` pins the REWRITE/DELETE diagnostic and
+ `bad_record_into.pli` the INTO-variable diagnostic. Known limits:
+ REWRITE/DELETE/LOCATE/UNLOCK, IGNORE/KEYTO/KEY/NOLOCK/SET/KEYFROM/
+ EVENT, keyed/direct organisations, RECORD+STREAM, and ON ENDFILE
+ stay diagnosed for the M6/QR2.5 remainder.

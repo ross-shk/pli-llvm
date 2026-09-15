@@ -66,6 +66,9 @@ make install
 - `PUT [PAGE] [SKIP(n)] LIST(...)` to SYSPRINT; `PUT DATA(a, ...)`
   writes each variable as `NAME=value`, `", "`-separated and `;`-terminated,
   and `GET DATA(a, ...)` reads such pairs back in any order
+- SEQUENTIAL RECORD files: `OPEN FILE(f) RECORD SEQUENTIAL ...` plus
+  `WRITE FILE(f) FROM(v)` / `READ FILE(f) INTO(v)` fixed-size binary
+  records (`driver/record`, rules (112),(113))
 - full operator set at spec precedence, including `**` right-associativity,
   `¬`/`^`/`~`, and the 48-character-set operator words (`AND`, `GT`, `CAT`, …)
 - `CHARACTER(n)`, `CHARACTER(n) VARYING`, concatenation, blank-padded

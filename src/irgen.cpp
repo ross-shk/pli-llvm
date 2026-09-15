@@ -1396,6 +1396,12 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Close:
     emitClose(s);
     break;
+  case HStmt::Read:
+    emitRecordRead(s);
+    break;
+  case HStmt::Write:
+    emitRecordWrite(s);
+    break;
   case HStmt::Return: {
     // Rule (91): procedure exit restores the entry ERROR depth, popping any
     // handlers this procedure established.
@@ -1744,12 +1750,81 @@ void IRGen::emitFree(HStmt* s) {
 
 // OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
 // The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 = OUTPUT.
+// A RECORD SEQUENTIAL open (rules (101),(112)) uses the binary record runtime.
 void IRGen::emitOpen(HStmt* s) {
   Symbol* f = s->fileSym;
   llvm::Value* name = globalString(s->openTitle);
   b_.CreateCall(
-      runtimeFn("pli_file_open"),
+      runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
       {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(s->openInput ? 0 : 1)});
+}
+
+// WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
+// bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
+void IRGen::emitRecordWrite(HStmt* s) {
+  llvm::Value* slot = i64(s->fileSym->fileSlot);
+  Val v = emitExpr(s->value.get());
+  switch (v.ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, toI64(v)});
+    break;
+  case TK::Float:
+    b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, v.reg});
+    break;
+  case TK::Bit: {
+    llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "rbit");
+    b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
+    break;
+  }
+  case TK::Char:
+    b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, v.ptr, v.len});
+    break;
+  default:
+    break; // other types are diagnosed by sema
+  }
+}
+
+// READ (rules (112),(113)): consume one fixed-size binary record into a plain
+// scalar variable; a short read (EOF) raises ERROR in the runtime, since ON
+// ENDFILE stays diagnosed.
+void IRGen::emitRecordRead(HStmt* s) {
+  llvm::Value* slot = i64(s->fileSym->fileSlot);
+  HExpr* t = s->target.get();
+  const Type& ty = t->ty;
+  Val v;
+  switch (ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
+    v.ty = Type::fixedBin(63, 0);
+    storeTo(t->sym, v, s->loc);
+    break;
+  case TK::Float:
+    v.reg = b_.CreateCall(runtimeFn("pli_record_read_float"), {slot});
+    v.ty = Type::flt(6);
+    storeTo(t->sym, v, s->loc);
+    break;
+  case TK::Bit: {
+    llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_bit"), {slot});
+    v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+    v.ty = Type::bit();
+    storeTo(t->sym, v, s->loc);
+    break;
+  }
+  case TK::Char: {
+    // Fill a reusable entry buffer, then assign into the target.
+    llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+    b_.CreateCall(runtimeFn("pli_record_read_char"), {slot, buf, i64(ty.len)});
+    v.ptr = buf;
+    v.len = i64(ty.len);
+    v.ty = ty;
+    storeTo(t->sym, v, s->loc);
+    break;
+  }
+  default:
+    break; // other types are diagnosed by sema
+  }
 }
 
 // CLOSE (rules 102,103): close the FILE variable's slot.

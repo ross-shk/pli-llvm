@@ -1,0 +1,9 @@
+ /* rules (112),(113): REWRITE and DELETE stay
+    diagnosed; only sequential READ/WRITE
+    are served in this stage. */
+ badrecord: procedure options(main);
+    declare f file;
+    declare x fixed bin(31);
+    rewrite file(f) from(x);
+    delete file(f);
+ end badrecord;

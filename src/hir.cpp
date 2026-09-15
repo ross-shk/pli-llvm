@@ -235,6 +235,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->fileSym = s->fileSym;
   h->openTitle = s->openTitle;
   h->openInput = s->openInput;
+  h->openRecord = s->openRecord;
 
   // CALL statement arguments: coerce to the callee's parameter types.
   for (const auto& a : s->args) {
@@ -532,6 +533,10 @@ const char* stmtKind(HStmt::Kind k) {
     return "Signal";
   case HStmt::Display:
     return "Display";
+  case HStmt::Read:
+    return "Read";
+  case HStmt::Write:
+    return "Write";
   }
   return "?";
 }
@@ -630,6 +635,14 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     os << " ";
     printExpr(os, s->value.get(), ind);
     break;
+  case HStmt::Read:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name) << " into=";
+    printExpr(os, s->target.get(), ind);
+    break;
+  case HStmt::Write:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name) << " from=";
+    printExpr(os, s->value.get(), ind);
+    break;
   case HStmt::Allocate:
     for (size_t i = 0; i < s->allocBase.size(); ++i) {
       os << (i ? "," : " ");
@@ -645,7 +658,8 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     }
     break;
   case HStmt::Open:
-    os << " " << (s->fileSym ? s->fileSym->name : s->name) << (s->openInput ? " input" : " output");
+    os << " " << (s->fileSym ? s->fileSym->name : s->name)
+       << (s->openRecord ? " record" : "") << (s->openInput ? " input" : " output");
     if (!s->openTitle.empty())
       os << " title(" << s->openTitle << ")";
     break;

@@ -137,3 +137,17 @@ PLI_FN(pli_put_select, VOID, (I64))                   /* FILE output routing (10
 PLI_FN(pli_put_unselect, VOID, (VOID))
 PLI_FN(pli_get_select, VOID, (I64))                   /* FILE input routing (105) */
 PLI_FN(pli_get_unselect, VOID, (VOID))
+
+/* SEQUENTIAL RECORD files (rules (112),(113), ADR-101): fixed-size binary
+ * records — FIXED as 8 bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n)
+ * as n raw bytes. A short READ (EOF) raises ERROR; ON ENDFILE stays
+ * diagnosed. Mode 0 = INPUT, 1 = OUTPUT, like pli_file_open. */
+PLI_FN(pli_file_open_record, VOID, (I64, CPTR, I64, I64))
+PLI_FN(pli_record_write_fixed, VOID, (I64, I64))
+PLI_FN(pli_record_write_float, VOID, (I64, DOUBLE))
+PLI_FN(pli_record_write_char, VOID, (I64, PTR, I64))
+PLI_FN(pli_record_write_bit, VOID, (I64, I8))
+PLI_FN(pli_record_read_fixed, I64, (I64))
+PLI_FN(pli_record_read_float, DOUBLE, (I64))
+PLI_FN(pli_record_read_char, VOID, (I64, PTR, I64))
+PLI_FN(pli_record_read_bit, I8, (I64))

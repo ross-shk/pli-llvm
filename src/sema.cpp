@@ -1698,6 +1698,43 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "DISPLAY takes a scalar value", "(114)");
     break;
   }
+  case Stmt::Read: {
+    // Rules (112),(113): READ FILE ( f ) INTO ( reference ) — one fixed-size
+    // binary record into a plain scalar variable (sequential slice).
+    Symbol* rsym = lookup(sc, s->fileIdent);
+    if (!rsym || rsym->kind == Symbol::ProcName || !rsym->fileAttr) {
+      d_.error(s->loc, "'" + s->fileIdent + "' is not a FILE variable", "(112)");
+      break;
+    }
+    s->fileSym = rsym;
+    typeExpr(s->target.get(), sc, p);
+    Expr* t = s->target.get();
+    if (!t || t->kind != Expr::VarRef || !t->sym || t->sym->kind == Symbol::ProcName ||
+        !t->memberPath.empty()) {
+      d_.error(s->loc, "READ INTO requires a variable to receive the record", "(112)");
+      break;
+    }
+    if (t->ty.isVoid() || t->ty.isArray() || t->ty.isStruct() || t->ty.isPointer() ||
+        t->ty.isComplex() || (t->ty.isChar() && t->ty.varying))
+      d_.error(s->loc, "READ INTO of this type is not implemented in this stage", "(112)");
+    break;
+  }
+  case Stmt::Write: {
+    // Rules (112),(113): WRITE FILE ( f ) FROM ( expression ) — one fixed-size
+    // binary record from a scalar value (sequential slice).
+    Symbol* rsym = lookup(sc, s->fileIdent);
+    if (!rsym || rsym->kind == Symbol::ProcName || !rsym->fileAttr) {
+      d_.error(s->loc, "'" + s->fileIdent + "' is not a FILE variable", "(112)");
+      break;
+    }
+    s->fileSym = rsym;
+    typeExpr(s->value.get(), sc, p);
+    Expr* v = s->value.get();
+    if (!v || v->ty.isVoid() || v->ty.isArray() || v->ty.isStruct() || v->ty.isPointer() ||
+        v->ty.isComplex() || (v->ty.isChar() && v->ty.varying))
+      d_.error(s->loc, "WRITE FROM of this type is not implemented in this stage", "(112)");
+    break;
+  }
   case Stmt::Allocate:
     // ALLOCATE (rules 87,88): heap-allocate each based structure and store its
     // address in the SET pointer target. The based variable must be fixed-size
