@@ -24,7 +24,12 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-TIMEOUT = 10  # seconds per test
+TIMEOUT = 10  # seconds per exec run step
+# Driver scripts compile and link several programs each, so one 10s budget
+# starves them under parallel load (the overflow drivers timed out cold);
+# they get their own budget while single-binary runs stay tight enough to
+# catch genuine hangs quickly.
+DRIVER_TIMEOUT = 60  # seconds per driver test
 ROOT = Path(__file__).resolve().parent.parent
 PLIC = os.environ.get("PLIC", str(ROOT / "build" / "plic"))
 RTLIB = os.environ.get("RTLIB", str(ROOT / "build" / "libpli.a"))
@@ -32,9 +37,9 @@ CLANG = os.environ.get("CLANG", "clang")
 TYPES = ("driver", "exec", "diag", "ir")
 
 
-def run_cmd(cmd, outfile):
+def run_cmd(cmd, outfile, timeout=TIMEOUT):
     """Run `cmd`, appending stdout+stderr to `outfile`; kill the process group
-    if it exceeds TIMEOUT. Return (returncode, timeout_bool) — 124 on timeout."""
+    if it exceeds `timeout`. Return (returncode, timeout_bool) — 124 on timeout."""
     # Popen (not run) so the timeout path still owns the child handle: `run`
     # raises before binding its result, which crashed the whole suite instead
     # of failing the one slow job.
@@ -42,7 +47,7 @@ def run_cmd(cmd, outfile):
         proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
                                 start_new_session=True)
         try:
-            proc.wait(timeout=TIMEOUT)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -109,9 +114,9 @@ class Runner:
 
     def driver(self):
         rc, _ = run_cmd(["sh", str(self.dir / f"{self.name}.sh")],
-                        self.out / f"{self.name}.out")
+                        self.out / f"{self.name}.out", DRIVER_TIMEOUT)
         if rc == 124:
-            return f"FAIL {self.name} (timed out after {TIMEOUT}s)\n", 1
+            return f"FAIL {self.name} (timed out after {DRIVER_TIMEOUT}s)\n", 1
         return self.check_out()
 
     def exec_test(self):
