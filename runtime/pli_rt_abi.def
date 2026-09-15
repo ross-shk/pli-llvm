@@ -114,6 +114,9 @@ PLI_FN(pli_get_list_float, DOUBLE, (VOID))
 PLI_FN(pli_get_list_char, VOID, (PTR, I64))
 PLI_FN(pli_get_list_complex, VOID, (PTR, PTR)) /* CM5 (ADR-086) */
 PLI_FN(pli_get_list_bit, I8, (VOID))
+PLI_FN(pli_get_data_next, I64, (PTR, I64))           /* DATA-directed input (106) */
+PLI_FN(pli_get_data_skip, VOID, (VOID))
+PLI_FN(pli_data_name_is, I32, (CPTR, I64, CPTR, I64))
 
 /* Edit-directed input (rules (108),(44)-(54)): F(w,d) is parsed to a double
  * (the caller converts to the target's type), A(w) reads a character field,

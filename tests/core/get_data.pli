@@ -1,0 +1,56 @@
+   /* rules (104)-(106),(109),(110): GET
+     DATA reads NAME=value pairs in any
+     order, skipping unknown names; a
+     PUT DATA / GET DATA round-trip
+     recovers every value. */
+   get_data: procedure options(main);
+      declare fails fixed bin(31);
+      declare a fixed bin(31);
+      declare x float;
+      declare s char(4);
+      declare b bit(1);
+      declare c fixed bin(31);
+      declare y float;
+      declare buf char(64);
+      fails = 0;
+      a = 42;
+      x = 2.5;
+      s = 'ab';
+      b = '1'b;
+      put string(buf) data(a, x, s, b);
+      a = 0;
+      x = 0;
+      s = '';
+      b = '0'b;
+      get string(buf) data(a, x, s, b);
+      if a ^= 42 then do;
+         fails = fails + 1;
+         put skip list('FAIL a');
+      end;
+      if x ^= 2.5 then do;
+         fails = fails + 1;
+         put skip list('FAIL x');
+      end;
+      if s ^= 'ab' then do;
+         fails = fails + 1;
+         put skip list('FAIL s');
+      end;
+      if b ^= '1'b then do;
+         fails = fails + 1;
+         put skip list('FAIL b');
+      end;
+      buf = 'Y=7.0, ZZ=99, C=3;';
+      c = 0;
+      y = 0;
+      get string(buf) data(c, y);
+      if c ^= 3 then do;
+         fails = fails + 1;
+         put skip list('FAIL reorder c');
+      end;
+      if y ^= 7.0 then do;
+         fails = fails + 1;
+         put skip list('FAIL reorder y');
+      end;
+      if fails = 0 then put skip list('PASS get-data');
+      else put skip list('FAIL get-data');
+   end get_data;

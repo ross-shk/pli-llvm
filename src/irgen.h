@@ -122,6 +122,9 @@ private:
   // and ";"-terminated; names are compile-time globals, values reuse the
   // list-directed printers.
   void emitPutDataItems(HStmt* s);
+  // Data-directed input (rule (106)): read NAME=value pairs in any order,
+  // storing each into the matching item and skipping unknown names.
+  void emitGetDataItems(HStmt* s);
   // Store a list-directed input value into a data-list reference (the same
   // target-addressing as an assignment's left-hand side).
   void storeGetTarget(HExpr* t, const Val& v, SourceLoc loc);

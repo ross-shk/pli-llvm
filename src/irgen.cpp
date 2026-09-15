@@ -1999,6 +1999,82 @@ void IRGen::emitPut(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_put_unselect"), {});
 }
 
+// GET DATA (rule (106), QR1.5): read NAME=value pairs in any order, storing
+// each into the matching data-list item and skipping unknown names. Sema
+// restricted items to plain scalar variables, so names are compile-time
+// globals and any other shape here is already diagnosed.
+void IRGen::emitGetDataItems(HStmt* s) {
+  llvm::Value* nameBuf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), 64), "dataname");
+  llvm::BasicBlock* loopL = llvm::BasicBlock::Create(ctx_, "data.loop", curFn_);
+  llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "data.body", curFn_);
+  llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "data.end", curFn_);
+  b_.CreateBr(loopL);
+  startBlock(loopL);
+  llvm::Value* namelen =
+      b_.CreateCall(runtimeFn("pli_get_data_next"), {nameBuf, i64(64)}, "dataname.len");
+  llvm::Value* more = b_.CreateICmpNE(namelen, i64(0), "datamore");
+  b_.CreateCondBr(more, bodyL, endL);
+  startBlock(bodyL);
+  for (auto& item : s->items) {
+    HExpr* t = item.get();
+    llvm::BasicBlock* readL = llvm::BasicBlock::Create(ctx_, "data.read", curFn_);
+    llvm::BasicBlock* nextL = llvm::BasicBlock::Create(ctx_, "data.next", curFn_);
+    llvm::Value* want = globalString(t->sym->name);
+    llvm::Value* match = b_.CreateCall(runtimeFn("pli_data_name_is"),
+                                       {nameBuf, namelen, want, i64((long long)t->sym->name.size())},
+                                       "datamatch");
+    b_.CreateCondBr(b_.CreateICmpNE(match, i32(0), "datahit"), readL, nextL);
+    startBlock(readL);
+    const Type& ty = t->ty;
+    Val v;
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      if (ty.k == TK::FixedDec && ty.scale > 0) {
+        llvm::Value* raw =
+            b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
+        v.reg = b_.CreateTrunc(raw, llvmTy(ty), "gdec");
+        v.ty = ty;
+      } else {
+        v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
+        v.ty = Type::fixedBin(63, 0);
+      }
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_get_list_float"), {});
+      v.ty = Type::flt(6);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_get_list_bit"), {});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "gbit");
+      v.ty = Type::bit();
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gdch");
+      b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      break;
+    }
+    default:
+      d_.error(item->loc, "GET DATA of this type is not implemented in this stage", "(110)");
+      b_.CreateCall(runtimeFn("pli_get_data_skip"), {});
+      b_.CreateBr(loopL);
+      startBlock(nextL);
+      continue;
+    }
+    storeGetTarget(t, v, s->loc);
+    b_.CreateBr(loopL);
+    startBlock(nextL);
+  }
+  // No item matched: discard the pair's value and read on.
+  b_.CreateCall(runtimeFn("pli_get_data_skip"), {});
+  b_.CreateBr(loopL);
+  startBlock(endL);
+}
+
 // GET (rules 104-109): list-directed input reads each data-list reference from
 // SYSIN and stores the value, like an assignment target.
 void IRGen::emitGet(HStmt* s) {
@@ -2018,6 +2094,8 @@ void IRGen::emitGet(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
   if (s->edit) {
     emitGetEditItems(s);
+  } else if (s->data) {
+    emitGetDataItems(s);
   } else {
     for (auto& item : s->items) {
       HExpr* t = item.get();

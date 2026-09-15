@@ -1,5 +1,6 @@
 /* pli_rt.c — PL/I runtime library (libpli), M0 subset. */
 #include "pli_rt.h"
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,9 @@ static int items_on_line = 0;
  * list, and a flag suppressing the value's blank separator after NAME=. */
 static int data_items = 0;
 static int data_value_next = 0;
+/* Set when get_token terminates at ';' (data-directed pairs, rule (106)),
+ * so pli_get_data_next ends the list there. */
+static int tok_semi = 0;
 
 /* STRING (rule 105) sink/source: when out_buf is non-null, list-directed output
  * is written into it instead of stdout; when in_buf is non-null, list-directed
@@ -62,6 +66,7 @@ void pli_rt_init(void) {
   items_on_line = 0;
   data_items = 0;
   data_value_next = 0;
+  tok_semi = 0;
 }
 
 void pli_rt_fini(void) {
@@ -582,8 +587,9 @@ char *pli_alloc(long long n) {
 void pli_free(char *p) { free(p); }
 
 /* List-directed input (rule 109): read the next whitespace/comma-delimited
- * token from SYSIN (stdin) into buf (nul-terminated). Returns 0 at end of
- * input. */
+ * token from SYSIN (stdin) into buf (nul-terminated). A ';' also terminates
+ * a token (for data-directed NAME=value pairs, rule (106)) and raises
+ * tok_semi for pli_get_data_next. Returns 0 at end of input. */
 static int get_token(char *buf, size_t cap) {
   int c;
   do {
@@ -592,12 +598,14 @@ static int get_token(char *buf, size_t cap) {
   if (c == EOF)
     return 0;
   size_t n = 0;
-  while (c != EOF && c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != ',') {
+  while (c != EOF && c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != ',' && c != ';') {
     if (n + 1 < cap)
       buf[n++] = (char)c;
     c = next_char();
   }
   buf[n] = '\0';
+  if (c == ';')
+    tok_semi = 1;
   return 1;
 }
 
@@ -701,6 +709,66 @@ unsigned char pli_get_list_bit(void) {
   if (!get_token(tok, sizeof tok))
     return 0;
   return tok[0] == '1' ? 1 : 0;
+}
+
+/* Data-directed input (rule (106), QR1.5): read the next NAME= pair head.
+ * Returns the uppercased name length (0 at ';'/EOF, consuming the ';');
+ * malformed pairs without '=' are skipped. The value itself stays queued
+ * for the typed list-directed reader (get_token stops at ';', raising
+ * tok_semi for the following call). Lenient like the other readers. */
+static int data_namechar(int c) {
+  return isalnum(c) || c == '_' || c == '$' || c == '#';
+}
+
+long long pli_get_data_next(char *buf, long long cap) {
+  for (;;) {
+    if (tok_semi) {
+      tok_semi = 0;
+      return 0;
+    }
+    int c;
+    do {
+      c = next_char();
+    } while (c != EOF && (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ','));
+    if (c == EOF || c == ';')
+      return 0;
+    size_t n = 0;
+    while (c != EOF && data_namechar(c)) {
+      if (n + 1 < (size_t)cap)
+        buf[n++] = (char)toupper(c);
+      c = next_char();
+    }
+    buf[n] = '\0';
+    while (c == ' ' || c == '\t')
+      c = next_char();
+    if (c != '=') {
+      // Malformed pair without '=': skip to the next pair and retry.
+      while (c != EOF && c != ',' && c != ';' && c != '\n')
+        c = next_char();
+      if (c == ';')
+        return 0;
+      continue;
+    }
+    if (n == 0) {
+      // Bare '=value': discard the value and retry.
+      char tok[256];
+      get_token(tok, sizeof tok);
+      continue;
+    }
+    return (long long)n;
+  }
+}
+
+/* Discard one data-directed value (unknown NAME): the token queued by
+ * pli_get_data_next. */
+void pli_get_data_skip(void) {
+  char tok[256];
+  get_token(tok, sizeof tok);
+}
+
+/* Compare an input NAME against an expected variable name. */
+int pli_data_name_is(const char *p, long long n, const char *q, long long m) {
+  return n == m && memcmp(p, q, (size_t)n) == 0;
 }
 
 /* STRING (rule 105) PUT: route list-directed output into buf (cap bytes). */
