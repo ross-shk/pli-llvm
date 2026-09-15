@@ -2612,3 +2612,36 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  REWRITE/DELETE/LOCATE/UNLOCK, IGNORE/KEYTO/KEY/NOLOCK/SET/KEYFROM/
  EVENT, keyed/direct organisations, RECORD+STREAM, and ON ENDFILE
  stay diagnosed for the M6/QR2.5 remainder.
+
+ ## ADR-102 — Recoverable SUBSCRIPTRANGE and ZERODIVIDE traps
+
+ Context. Only ERROR/SIZE/`CONDITION(name)` dispatched through the
+ handler stack; a subscript slip died in `pli_subscript_oob` with no
+ handler, and a zero divisor died downstream as a misleading FIXED
+ overflow (`7/0` is float division yielding inf, which then fails the
+ float-to-fixed conversion). Both conditions are rule (94) and share
+ the SIZE establish/raise/pop mechanics, so they plug into the same
+ keyed dispatch.
+
+ Decision. New fixed keys (-2/-3) served in the parser (which now
+ rejects them in `CONDITION()`), resolved in sema, and dispatched in
+ irgen through a shared `emitCondTrap` (the SIZE emitter is now a
+ wrapper with identical output). A trapped SUBSCRIPTRANGE on an
+ index check resumes with the index clamped into range
+ (implementation-defined; the guarded computation uses the clamped
+ index); by-name extent mismatches notify the handler, then abort,
+ since no index exists to resume with. A trapped ZERODIVIDE (`/`,
+ DIVIDE, MOD over a zero divisor) resumes with 0
+ (implementation-defined). Unhandled traps keep the old aborts
+ (`pli_subscript_oob`, new `pli_zerodivide`), so code without these
+ ON-units is unchanged apart from two selects per subscript axis and
+ one compare per division. Float `/` by zero now traps instead of
+ yielding inf, and complex division by zero is untouched.
+
+ Consequences. `on_subscriptrange.pli` covers SIGNAL plus fixed and
+ dynamic read/write slips; `on_zerodivide.pli` covers SIGNAL plus
+ `/` (float and fixed targets) and MOD; `bad_on_cond_subrange.pli`
+ and `bad_on_cond_zerodivide.pli` pin the `CONDITION()` exclusions,
+ and `bad_on_cond.pli` now uses OVERFLOW. Known limits: complex
+ division by zero, CONVERSION/FIXEDOVERFLOW/OVERFLOW/UNDERFLOW/
+ STRINGRANGE/AREA/FINISH and the I/O conditions stay diagnosed.

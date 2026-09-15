@@ -242,38 +242,69 @@ llvm::Function* IRGen::intrinsicFn(const std::string& name, llvm::Type* ret,
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
-// SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
-// block. Without ON SIZE in the module keep the unconditional hard-ERROR
-// call so existing code pays nothing; otherwise consult the SIZE stack —
-// empty takes the abort path, established runs the matching handler then
-// resumes at okBB with the wrapped value.
-void IRGen::emitSizeTrap(llvm::BasicBlock* okBB) {
-  auto it = onHandlers_.find(Stmt::kSizeCondKey);
+// Computational-condition trap (rules (91)-(94)): the shared shape behind
+// the SIZE dispatch. Without an ON unit for `key` in the module keep the
+// unconditional abort call so existing code pays nothing; otherwise consult
+// the stack — empty takes the abort path, established runs the matching
+// handler then branches to okBB, where the caller resumes with its own
+// recovery value.
+void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
+                         llvm::BasicBlock* okBB) {
+  auto it = onHandlers_.find(key);
   if (it == onHandlers_.end()) {
-    b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+    b_.CreateCall(runtimeFn(abortFn), {});
     b_.CreateUnreachable();
     return;
   }
   const std::vector<llvm::Function*>& handlers = it->second;
-  llvm::Value* top = b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64(Stmt::kSizeCondKey)},
-                                   "sizetop");
-  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "sizenone");
-  llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, "size.abort", curFn_);
-  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "size.dispatch", curFn_);
+  llvm::Value* top =
+      b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64((long long)key)}, tag + "top");
+  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), tag + "none");
+  llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, tag + ".abort", curFn_);
+  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, tag + ".dispatch", curFn_);
   b_.CreateCondBr(none, abortBB, dspBB);
   b_.SetInsertPoint(abortBB);
-  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+  b_.CreateCall(runtimeFn(abortFn), {});
   b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
   llvm::SwitchInst* sw = b_.CreateSwitch(top, okBB, handlers.size());
   for (size_t i = 0; i < handlers.size(); ++i) {
     llvm::BasicBlock* hbb =
-        llvm::BasicBlock::Create(ctx_, "size.handle." + std::to_string(i + 1), curFn_);
+        llvm::BasicBlock::Create(ctx_, tag + ".handle." + std::to_string(i + 1), curFn_);
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
     b_.SetInsertPoint(hbb);
     b_.CreateCall(handlers[i], {});
     b_.CreateBr(okBB);
   }
+}
+
+// SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
+// block; the computational-trap shape with the SIZE key and abort call.
+void IRGen::emitSizeTrap(llvm::BasicBlock* okBB) {
+  emitCondTrap(Stmt::kSizeCondKey, "pli_fixed_overflow", "size", okBB);
+}
+
+// Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94): the
+// guarded address computation uses the clamped index, so a handled slip
+// touches the nearest edge element instead of out-of-bounds storage.
+llvm::Value* IRGen::clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub) {
+  llvm::Value* lo = b_.CreateSelect(b_.CreateICmpSLT(i, lb, "clo"), lb, i, "cidx.lo");
+  return b_.CreateSelect(b_.CreateICmpSGT(lo, ub, "chi"), ub, lo, "cidx");
+}
+
+// ZERODIVIDE value trap (rule 94): branch on `isZero`; the trap block routes
+// through the ZERODIVIDE dispatch (abort when unhandled) and rejoins,
+// resuming with `zero` instead of `computed`.
+llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
+                                     llvm::Value* zero) {
+  std::string zid = std::to_string(n_++);
+  llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "zd.trap." + zid, curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "zd.ok." + zid, curFn_);
+  b_.CreateCondBr(isZero, trapBB, okBB);
+  b_.SetInsertPoint(trapBB);
+  emitCondTrap(Stmt::kZerodivideCondKey, "pli_zerodivide", "zd", okBB);
+  b_.SetInsertPoint(okBB);
+  return b_.CreateSelect(isZero, zero, computed, "zdiv.r");
 }
 
 // FIXED BINARY checked +,-,* (QR1.2): the overflow intrinsic yields the
@@ -1203,6 +1234,10 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       name = "PLI_ON_" + std::to_string(keyId.second);
     else if (keyId.first == Stmt::kSizeCondKey)
       name = "PLI_ON_SIZE_" + std::to_string(keyId.second);
+    else if (keyId.first == Stmt::kSubscriptrangeCondKey)
+      name = "PLI_ON_SUBSCRIPT_" + std::to_string(keyId.second);
+    else if (keyId.first == Stmt::kZerodivideCondKey)
+      name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
     else
       name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
     onHandlers_[keyId.first].push_back(llvm::Function::Create(
@@ -1274,6 +1309,10 @@ void IRGen::emitSignal(HStmt* s) {
     msg = "SIGNAL ERROR";
   else if (s->condKey == Stmt::kSizeCondKey)
     msg = "SIGNAL SIZE";
+  else if (s->condKey == Stmt::kSubscriptrangeCondKey)
+    msg = "SIGNAL SUBSCRIPTRANGE";
+  else if (s->condKey == Stmt::kZerodivideCondKey)
+    msg = "SIGNAL ZERODIVIDE";
   else
     msg = "SIGNAL CONDITION(" + s->condName + ")";
   b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
@@ -1695,7 +1734,11 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "dcp.ok." + id, curFn_);
       b_.CreateCondBr(b_.CreateICmpNE(dext, sext, "dcp.mis"), failL, okL);
       startBlock(failL);
-      b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+      // A shape mismatch has no index to clamp: a handled trap notifies the
+      // handler, then aborts (rule 94).
+      llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "dcp.abort." + id, curFn_);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", abL);
+      b_.SetInsertPoint(abL);
       b_.CreateUnreachable();
       startBlock(okL);
       llvm::Value* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.dp");
@@ -2568,7 +2611,8 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
       llvm::Value* ub = k == 0 && dk.dyn ? dynUb : i64(dk.ub);
       oob = b_.CreateOr(
           oob, b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi")), "oob");
-      llvm::Value* off = b_.CreateSub(i, lb, "off");
+      // A handled slip resumes with this axis clamped into range (rule 94).
+      llvm::Value* off = b_.CreateSub(clampIndex(i, lb, ub), lb, "off");
       flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
       stride *= (dk.ub - dk.lb + 1); // later axes are fixed; only axis 0 is runtime
     }
@@ -2577,8 +2621,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
-    b_.CreateUnreachable();
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
     startBlock(okL);
     return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "aelem");
   }
@@ -2594,7 +2637,8 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     oob = b_.CreateOr(
         oob, b_.CreateOr(b_.CreateICmpSLT(i, i64(lb), "lo"), b_.CreateICmpSGT(i, i64(ub), "hi")),
         "oob");
-    llvm::Value* off = b_.CreateSub(i, i64(lb), "off");
+    // A handled slip resumes with this axis clamped into range (rule 94).
+    llvm::Value* off = b_.CreateSub(clampIndex(i, i64(lb), i64(ub)), i64(lb), "off");
     flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
     stride *= (ub - lb + 1);
   }
@@ -2605,8 +2649,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
   b_.CreateCondBr(oob, failL, okL);
 
   startBlock(failL);
-  b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
-  b_.CreateUnreachable();
+  emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
 
   startBlock(okL);
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));
@@ -2748,7 +2791,11 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
         llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "bnm.ok." + id, curFn_);
         b_.CreateCondBr(b_.CreateICmpNE(dext, sext, "bnm.mis"), failL, okL);
         startBlock(failL);
-        b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
+        // A shape mismatch has no index to clamp: a handled trap notifies
+        // the handler, then aborts (rule 94).
+        llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "bnm.abort." + id, curFn_);
+        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", abL);
+        b_.SetInsertPoint(abL);
         b_.CreateUnreachable();
         startBlock(okL);
         const Type& el = dm.ty.elementType();
@@ -2965,16 +3012,17 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
     llvm::Value* ub = i64(srcArr.dims[k].ub);
     llvm::Value* oob =
         b_.CreateOr(b_.CreateICmpSLT(iv, lb, "lo"), b_.CreateICmpSGT(iv, ub, "hi"), "oob");
+    // A handled slip resumes with the index clamped into range (rule 94).
+    llvm::Value* civ = clampIndex(iv, lb, ub);
     std::string fid = std::to_string(n_++);
     llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "cs.fail." + fid, curFn_);
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "cs.ok." + fid, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
-    b_.CreateUnreachable();
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
     startBlock(okL);
     fixedFlat = b_.CreateAdd(
-        fixedFlat, b_.CreateMul(b_.CreateSub(iv, lb, "off"), i64(stride[k]), "scaled"), "ff");
+        fixedFlat, b_.CreateMul(b_.CreateSub(civ, lb, "off"), i64(stride[k]), "scaled"), "ff");
   }
 
   // Target is rank m. Its row-major strides and total extent let a single linear
@@ -3062,19 +3110,20 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
       b_.CreateAdd(b_.CreateMul(yidx, i64(y->definedIsubMult), "m"), i64(y->definedIsubAdd), "c");
   llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(bidx, i64(ilb), "lo"),
                                  b_.CreateICmpSGT(bidx, i64(iub), "hi"), "oob");
+  // A handled slip resumes with the base index clamped into range (rule 94).
+  llvm::Value* cbidx = clampIndex(bidx, i64(ilb), i64(iub));
   std::string id = std::to_string(n_++);
   llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
   llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
   b_.CreateCondBr(oob, failL, okL);
   startBlock(failL);
-  b_.CreateCall(runtimeFn("pli_subscript_oob"), {});
-  b_.CreateUnreachable();
+  emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
   startBlock(okL);
 
   llvm::Value* flat = i64(0);
   long long stride = 1;
   for (size_t k = n; k-- > 0;) {
-    llvm::Value* iv = (int)k == y->definedIsubAxis ? bidx : i64(y->definedConst[k]);
+    llvm::Value* iv = (int)k == y->definedIsubAxis ? cbidx : i64(y->definedConst[k]);
     flat = b_.CreateAdd(
         flat, b_.CreateMul(b_.CreateSub(iv, i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
     stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);
@@ -3802,9 +3851,16 @@ Val IRGen::emitExpr(HExpr* e) {
     else
       r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin");
     break;
-  case Tok::Slash:
-    r = b_.CreateFDiv(av.reg, bv.reg, "bin");
+  case Tok::Slash: {
+    // ZERODIVIDE (rule 94): a zero divisor traps — hard abort when no handler
+    // is established, else the handler runs and the division resumes with 0.
+    // (Spelled out: the local `flt` flag shadows the flt() constant helper.)
+    llvm::Value* fzero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
+    llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, fzero, "zdiv");
+    llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
+    r = zerodivideResume(dz, div, fzero);
     break;
+  }
   case Tok::Power:
     r = b_.CreateCall(
         intrinsicFn("llvm.pow.f64", b_.getDoubleTy(), {b_.getDoubleTy(), b_.getDoubleTy()}),
@@ -4017,10 +4073,17 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val bv = convert(b, common, e->loc);
     v.ty = common;
     if (common.k == TK::Float) {
-      v.reg = b_.CreateCall(runtimeFn("pli_mod_dd"), {av.reg, bv.reg}, "mod");
+      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
+      llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
+      llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_dd"), {av.reg, bv.reg}, "mod");
+      v.reg = zerodivideResume(dz, m, flt(0.0));
     } else {
-      llvm::Value* r = b_.CreateCall(runtimeFn("pli_mod_ll"), {toI64(av), toI64(bv)});
-      v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "mod32");
+      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0 (the
+      // runtime already yields 0 for this case; the trap adds notification).
+      llvm::Value* bi = toI64(bv);
+      llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
+      llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_ll"), {toI64(av), bi});
+      v.reg = b_.CreateTrunc(zerodivideResume(dz, m, i64(0)), b_.getInt32Ty(), "mod32");
     }
     result = v;
     return true;
@@ -4059,7 +4122,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val av = convert(a, common, e->loc);
     Val bv = convert(b, common, e->loc);
     v.ty = common;
-    v.reg = b_.CreateFDiv(av.reg, bv.reg, "div");
+    // ZERODIVIDE (rule 94): as for `/`, a zero divisor traps, resuming with 0.
+    llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
+    llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
+    v.reg = zerodivideResume(dz, div, flt(0.0));
     result = v;
     return true;
   }

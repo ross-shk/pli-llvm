@@ -1,0 +1,5 @@
+ /* rule (99): SUBSCRIPTRANGE is not a valid
+    programmer-named condition. */
+ badoncondsub: procedure options(main);
+    signal condition(subscriptrange);
+ end badoncondsub;

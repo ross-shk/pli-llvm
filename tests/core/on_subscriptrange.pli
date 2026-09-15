@@ -1,0 +1,62 @@
+ /* rules (91)-(94): ON SUBSCRIPTRANGE establishes
+    a handler; SIGNAL SUBSCRIPTRANGE raises it; a
+    runtime subscript slip traps route to the handler
+    when one is established, then resume with the
+    index clamped into range. */
+ onsubrange: procedure options(main);
+    declare a(5) fixed bin(31);
+    declare i fixed bin(31);
+    declare v fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    do i = 1 to 5;
+       a(i) = i * 10;
+    end;
+    on subscriptrange put skip list('caught subscript');
+    signal subscriptrange;
+    put skip list('resumed');
+    revert subscriptrange;
+    on subscriptrange put skip list('caught slip');
+    i = 0;
+    v = a(i);
+    if v ^= 10 then do;
+       fails = fails + 1;
+       put skip list('FAIL low', v);
+    end;
+    i = 6;
+    v = a(i);
+    if v ^= 50 then do;
+       fails = fails + 1;
+       put skip list('FAIL high', v);
+    end;
+    i = 7;
+    a(i) = 99;
+    if a(5) ^= 99 then do;
+       fails = fails + 1;
+       put skip list('FAIL store');
+    end;
+    call dynslip(4);
+    revert subscriptrange;
+    if fails = 0 then put skip list('PASS subscriptrange');
+    else put skip list('FAIL subscriptrange: fails =', fails);
+    dynslip: procedure(n);
+       declare n fixed bin(31);
+       declare d(n) fixed bin(31);
+       declare j fixed bin(31);
+       declare w fixed bin(31);
+       do j = 1 to n;
+          d(j) = j + 100;
+       end;
+       j = 0;
+       w = d(j);
+       if w ^= 101 then do;
+          fails = fails + 1;
+          put skip list('FAIL dyn low', w);
+       end;
+       w = d(n + 1);
+       if w ^= 104 then do;
+          fails = fails + 1;
+          put skip list('FAIL dyn high', w);
+       end;
+    end dynslip;
+ end onsubrange;

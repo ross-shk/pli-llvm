@@ -261,6 +261,19 @@ private:
   // abort path, established runs the top handler then branches to okBB.
   // Resumes with the wrapped value; ONCODE stays ERROR-only in this stage.
   void emitSizeTrap(llvm::BasicBlock* okBB);
+  // Computational-condition trap (rules (91)-(94)): the shared shape behind
+  // emitSizeTrap. Without an ON unit for `key` in the module emit the
+  // unconditional `abortFn` call; otherwise consult the stack — empty takes
+  // the abort path, established runs the matching handler then branches to
+  // okBB, where the caller resumes with its own recovery value.
+  void emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
+                    llvm::BasicBlock* okBB);
+  // Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94).
+  llvm::Value* clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub);
+  // ZERODIVIDE value trap (rule 94): branch on `isZero`; the trap block
+  // routes through the ZERODIVIDE dispatch (abort when unhandled) and
+  // rejoins, resuming with `zero` instead of `computed`.
+  llvm::Value* zerodivideResume(llvm::Value* isZero, llvm::Value* computed, llvm::Value* zero);
   int ovSeq_ = 0; // disambiguates overflow trap blocks within a function
 
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
