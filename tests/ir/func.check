@@ -1,6 +1,6 @@
-CHECK: define {{.*}}@PLI_FACT\(ptr
+CHECK: define {{.*}}@FACT\(ptr
 CHECK: icmp sle i32
 CHECK: br i1
 CHECK: ret i32 1
-CHECK: call {{.*}}@PLI_FACT\(ptr
+CHECK: call {{.*}}@FACT\(ptr
 CHECK: call {{.*}}@llvm.smul.with.overflow.i32

@@ -2645,3 +2645,29 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  and `bad_on_cond.pli` now uses OVERFLOW. Known limits: complex
  division by zero, CONVERSION/FIXEDOVERFLOW/OVERFLOW/UNDERFLOW/
  STRINGRANGE/AREA/FINISH and the I/O conditions stay diagnosed.
+
+ ## ADR-103 — External linkage for top-level PL/I procedures
+
+ Context. Every procedure was emitted with internal linkage under a
+ `PLI_`-prefixed name, so a cross-module `ENTRY...EXTERNAL`
+ reference (rules (34),(38)) could only resolve against C: linking
+ two PL/I units failed with undefined `_NAME`. The documented model
+ (ARCHITECTURE name mangling) already promises that EXTERNAL
+ procedures keep their upper-cased PL/I name.
+
+ Decision. A top-level non-MAIN procedure is externally linked under
+ its upper-cased name (already upper-cased by the lexer); the MAIN
+ procedure keeps its module-private name since only its own `main`
+ shim invokes it, and nested procedures and rule-(3) extra entry
+ names stay module-private as documented. Multi-entry primaries
+ expose the primary thunk; the shared impl stays private. Each unit
+ still compiles with `-c` and links with `cc` plus libpli; the
+ driver keeps its single-input form.
+
+ Consequences. `driver/multimod` links a MAIN unit against a
+ library unit (function return plus `CALL` across the link);
+ `tests/ir/func.check` now expects `@FACT`. Known limits: array and
+ structure parameters need full entry descriptors (rule (38), M2);
+ shared `EXTERNAL` variables need storage promotion from AUTOMATIC
+ allocas to agreed globals and stay a follow-up; multi-file driver
+ arguments stay a follow-up.

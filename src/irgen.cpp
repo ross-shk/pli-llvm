@@ -889,8 +889,11 @@ void IRGen::declareProc(HProc* p) {
     for (size_t i = 0; i < p->env.size(); ++i)
       pt.push_back(b_.getPtrTy()); // links
     llvm::FunctionType* ft = llvm::FunctionType::get(implRet, pt, false);
-    llvm::Function* fn =
-        llvm::Function::Create(ft, llvm::Function::InternalLinkage, p->irName.substr(1), &mod_);
+    // Rule (42): an external procedure is visible to the linker under its
+    // upper-cased name; every other procedure stays module-private.
+    auto linkage = p->isExternal ? llvm::Function::ExternalLinkage
+                                 : llvm::Function::InternalLinkage;
+    llvm::Function* fn = llvm::Function::Create(ft, linkage, p->irName.substr(1), &mod_);
     for (const auto& en : p->entryNames)
       aliasFor(en, fn);
     return;
@@ -976,6 +979,10 @@ void IRGen::declareProc(HProc* p) {
 
   llvm::Function* t0 = thunk(p->paramSyms, i64(0), p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
   t0->setName(p->irName.substr(1));
+  // Rule (42): the primary entry thunk of an external procedure is the
+  // link-visible symbol; the shared impl stays module-private.
+  if (p->isExternal)
+    t0->setLinkage(llvm::Function::ExternalLinkage);
   for (const auto& en : p->entryNames)
     aliasFor(en, t0);
   for (size_t i = 0; i < entries.size(); ++i) {
