@@ -90,6 +90,7 @@ private:
   StmtP parseFree();     // FREE (rule 90)
   StmtP parseOpen();     // OPEN (rules 100,101)
   StmtP parseClose();    // CLOSE (rules 102,103)
+  StmtP parseRecordIO(); // READ/WRITE (rules (112),(113)): sequential slice
   void parseProcOptions(Proc* p);
   bool parseDeclItem(DeclItem& item);
   // Parse the dimension + attribute tail shared by a declaration item and by a

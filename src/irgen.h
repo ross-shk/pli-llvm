@@ -133,6 +133,8 @@ private:
   void emitFree(HStmt* s);     // FREE (rule 90)
   void emitOpen(HStmt* s);     // OPEN (rules 100,101)
   void emitClose(HStmt* s);    // CLOSE (rules 102,103)
+  void emitRecordRead(HStmt* s);  // READ (rules (112),(113)): one binary record in
+  void emitRecordWrite(HStmt* s); // WRITE (rules (112),(113)): one binary record out
 
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is

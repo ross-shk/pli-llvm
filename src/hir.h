@@ -122,6 +122,8 @@ struct HStmt {
     Revert, // rule (92)
     Signal, // rule (93)
     Display, // rule (114)
+    Read,    // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
+    Write,   // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
   } kind = Null;
 
   SourceLoc loc{};
@@ -165,6 +167,7 @@ struct HStmt {
   Symbol* fileSym = nullptr;
   std::string openTitle;
   bool openInput = false;
+  bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
 
   std::vector<HExprP> args; // CALL arguments
 

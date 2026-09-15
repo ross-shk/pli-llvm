@@ -151,6 +151,8 @@ struct Stmt {
     Revert,   // rule (92)  REVERT condition
     Signal,   // rule (93)  SIGNAL condition
     Display,  // rule (114) DISPLAY (expression) — one scalar value
+    Read,     // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
+    Write,    // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
   } kind = Null;
 
   SourceLoc loc{};
@@ -196,6 +198,8 @@ struct Stmt {
   Symbol* fileSym = nullptr;
   std::string openTitle;
   bool openInput = false;
+  bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
+                           // file; READ/WRITE transfer fixed-size binary records
 
   std::vector<ExprP> args; // CALL arguments
 
