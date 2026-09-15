@@ -1,0 +1,22 @@
+   /* rules (91)-(94): ON SIZE establishes a
+     handler; SIGNAL SIZE raises it; a
+     FIXED overflow traps route to the
+     SIZE handler when one is established,
+     then resume after the failing op. */
+   on_size: procedure options(main);
+      declare a fixed bin(31);
+      declare b fixed bin(31);
+      on size put skip list('caught');
+      signal size;
+      put skip list('resumed');
+      revert size;
+      on size put skip list('re-on');
+      signal size;
+      revert size;
+      on size put skip list('caught overflow');
+      a = 2147483647;
+      b = a + 1;
+      put skip list('after overflow', b);
+      revert size;
+      put skip list('done');
+   end on_size;

@@ -1176,10 +1176,13 @@ void Sema::foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t
   }
 }
 
-// Rule (99): resolve a programmer-named condition to its dispatch key.
+// Rules (94),(99): resolve a condition to its dispatch key (0 = ERROR,
+// kSizeCondKey = SIZE, else a programmer-named condition index + 1).
 int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   if (s->condName == "ERROR")
     return 0;
+  if (s->condName == "SIZE")
+    return Stmt::kSizeCondKey;
   auto& names = prog_->condNames;
   auto it = std::find(names.begin(), names.end(), s->condName);
   int key = it == names.end() ? (int)names.size() + 1 : (int)(it - names.begin()) + 1;
@@ -1566,8 +1569,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
     break;
   case Stmt::On:
-    // Rules (91),(94),(99): ERROR or a programmer-named condition; the unit
-    // body only needs typing plus the establishing-frame checks.
+    // Rules (91),(94),(99): ERROR, SIZE, or a programmer-named condition;
+    // the unit body only needs typing plus the establishing-frame checks.
     s->condKey = resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
       checkStmt(s->unit.get(), sc, p);

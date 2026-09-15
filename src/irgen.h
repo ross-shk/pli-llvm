@@ -236,15 +236,22 @@ private:
   llvm::Value* toI64(const Val& v);
   Val charTemp(int len); // alloca [len x i8]
   Val charOf(HExpr* e);  // materialise a character value
-  // FIXED BINARY checked +,-,* (QR1.2): overflow traps to pli_fixed_overflow.
+  // FIXED BINARY checked +,-,* (QR1.2): overflow traps to the SIZE path
+  // (hard ERROR when no SIZE handler is established, QR1.4).
   llvm::Value* checkedArith(Tok op, llvm::Value* a, llvm::Value* b);
   // FIXED DECIMAL precision trap (QR1.2): an i64 magnitude at or beyond
-  // `limit` (10^prec digits, or a binary width) traps to pli_fixed_overflow.
+  // `limit` (10^prec digits, or a binary width) traps to the SIZE path.
   void magTrap(llvm::Value* v, long long limit);
   // FLOAT -> FIXED range trap (QR1.2): FPToSI outside the destination range
   // is UB, so the float is checked first (ordered compares, so NaN traps).
   // `loIncl` selects the closed lower bound (exact INT_MIN stays storable).
   void floatRangeTrap(llvm::Value* f, double lo, bool loIncl, double hi);
+  // SIZE dispatch (QR1.4, rules (91)-(94)): emit the body of an overflow
+  // trap block. With no ON SIZE in the module this is the unconditional
+  // hard-ERROR call; otherwise check the SIZE stack — empty resumes the
+  // abort path, established runs the top handler then branches to okBB.
+  // Resumes with the wrapped value; ONCODE stays ERROR-only in this stage.
+  void emitSizeTrap(llvm::BasicBlock* okBB);
   int ovSeq_ = 0; // disambiguates overflow trap blocks within a function
 
   // Runtime callee lookup: get-or-create the declaration for a pli_* symbol.
@@ -275,7 +282,8 @@ private:
   // caller-supplied buffer that a RETURN(struct) copies into before returning.
   llvm::Value* structRetPtr_ = nullptr;
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
-  // ON state (rules (91)-(94),(99)): condition key (0 = ERROR) to handler
+  // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
+  // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.
   std::map<int, std::vector<llvm::Function*>> onHandlers_;
   // Procedure-entry ERROR depth slot for exit restore; null when the module

@@ -242,9 +242,43 @@ llvm::Function* IRGen::intrinsicFn(const std::string& name, llvm::Type* ret,
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
+// SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
+// block. Without ON SIZE in the module keep the unconditional hard-ERROR
+// call so existing code pays nothing; otherwise consult the SIZE stack —
+// empty takes the abort path, established runs the matching handler then
+// resumes at okBB with the wrapped value.
+void IRGen::emitSizeTrap(llvm::BasicBlock* okBB) {
+  auto it = onHandlers_.find(Stmt::kSizeCondKey);
+  if (it == onHandlers_.end()) {
+    b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+    b_.CreateUnreachable();
+    return;
+  }
+  const std::vector<llvm::Function*>& handlers = it->second;
+  llvm::Value* top = b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64(Stmt::kSizeCondKey)},
+                                   "sizetop");
+  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "sizenone");
+  llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, "size.abort", curFn_);
+  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "size.dispatch", curFn_);
+  b_.CreateCondBr(none, abortBB, dspBB);
+  b_.SetInsertPoint(abortBB);
+  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
+  b_.CreateUnreachable();
+  b_.SetInsertPoint(dspBB);
+  llvm::SwitchInst* sw = b_.CreateSwitch(top, okBB, handlers.size());
+  for (size_t i = 0; i < handlers.size(); ++i) {
+    llvm::BasicBlock* hbb =
+        llvm::BasicBlock::Create(ctx_, "size.handle." + std::to_string(i + 1), curFn_);
+    sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
+    b_.SetInsertPoint(hbb);
+    b_.CreateCall(handlers[i], {});
+    b_.CreateBr(okBB);
+  }
+}
+
 // FIXED BINARY checked +,-,* (QR1.2): the overflow intrinsic yields the
-// value plus a flag; a set flag traps to pli_fixed_overflow (hard ERROR
-// until a SIZE condition can route it).
+// value plus a flag; a set flag traps through the SIZE path (hard ERROR
+// when no SIZE handler is established, QR1.4).
 llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   llvm::Type* ty = a->getType();
   unsigned bits = ty->getIntegerBitWidth();
@@ -260,14 +294,13 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
   b_.CreateCondBr(of, trapBB, okBB);
   b_.SetInsertPoint(trapBB);
-  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
-  b_.CreateUnreachable();
+  emitSizeTrap(okBB);
   b_.SetInsertPoint(okBB);
   return r;
 }
 
 // FIXED DECIMAL precision trap (QR1.2): |v| >= limit holds more digits than
-// the target (hard ERROR until a SIZE condition can route it). Two-sided so
+// the target (SIZE path, hard ERROR when unhandled). Two-sided so
 // INT64_MIN is caught without negating it.
 void IRGen::magTrap(llvm::Value* v, long long limit) {
   llvm::Value* hi = b_.CreateICmpSGE(v, i64(limit), "dov.hi");
@@ -280,14 +313,13 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
       llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
   b_.CreateCondBr(of, trapBB, okBB);
   b_.SetInsertPoint(trapBB);
-  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
-  b_.CreateUnreachable();
+  emitSizeTrap(okBB);
   b_.SetInsertPoint(okBB);
 }
 
 // FLOAT -> FIXED range trap (QR1.2): FPToSI outside [lo, hi) is UB, so trap
-// first through the overflow path (hard ERROR until CONVERSION/SIZE can
-// route it). Ordered compares fail on NaN, which therefore traps as well.
+// first through the SIZE path (hard ERROR when unhandled). Ordered compares
+// fail on NaN, which therefore traps as well.
 void IRGen::floatRangeTrap(llvm::Value* f, double lo, bool loIncl, double hi) {
   llvm::Value* okLo = loIncl ? b_.CreateFCmpOGE(f, flt(lo), "frt.lo")
                              : b_.CreateFCmpOGT(f, flt(lo), "frt.lo");
@@ -300,8 +332,7 @@ void IRGen::floatRangeTrap(llvm::Value* f, double lo, bool loIncl, double hi) {
       llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
   b_.CreateCondBr(ok, okBB, trapBB);
   b_.SetInsertPoint(trapBB);
-  b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
-  b_.CreateUnreachable();
+  emitSizeTrap(okBB);
   b_.SetInsertPoint(okBB);
 }
 
@@ -1157,18 +1188,23 @@ void IRGen::declareOnHandlers(HProgram& prog) {
   for (auto& p : prog.procs)
     for (auto& b : p->body)
       collectOnStmts(b.get(), byId);
-  int lastKey = -1;
+  bool first = true;
+  int lastKey = 0;
   for (auto& [keyId, _] : byId) {
     // A fresh function list per condition; ids restart at 1 within a key.
-    if (keyId.first != lastKey) {
+    if (first || keyId.first != lastKey) {
       onHandlers_[keyId.first] = {};
       lastKey = keyId.first;
+      first = false;
     }
     llvm::FunctionType* ft = llvm::FunctionType::get(b_.getVoidTy(), false);
-    std::string name = keyId.first == 0
-                           ? "PLI_ON_" + std::to_string(keyId.second)
-                           : "PLI_ONC_" + std::to_string(keyId.first) + "_" +
-                                 std::to_string(keyId.second);
+    std::string name;
+    if (keyId.first == 0)
+      name = "PLI_ON_" + std::to_string(keyId.second);
+    else if (keyId.first == Stmt::kSizeCondKey)
+      name = "PLI_ON_SIZE_" + std::to_string(keyId.second);
+    else
+      name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
     onHandlers_[keyId.first].push_back(llvm::Function::Create(
         ft, llvm::Function::InternalLinkage, name, &mod_));
   }
@@ -1233,8 +1269,13 @@ void IRGen::emitSignal(HStmt* s) {
   llvm::BasicBlock* resBB = llvm::BasicBlock::Create(ctx_, "on.resume", curFn_);
   b_.CreateCondBr(none, defBB, dspBB);
   b_.SetInsertPoint(defBB);
-  std::string msg =
-      s->condKey == 0 ? "SIGNAL ERROR" : "SIGNAL CONDITION(" + s->condName + ")";
+  std::string msg;
+  if (s->condKey == 0)
+    msg = "SIGNAL ERROR";
+  else if (s->condKey == Stmt::kSizeCondKey)
+    msg = "SIGNAL SIZE";
+  else
+    msg = "SIGNAL CONDITION(" + s->condName + ")";
   b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
   b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
@@ -3289,7 +3330,7 @@ Val IRGen::emitExpr(HExpr* e) {
     if (a.ty.k == TK::Float)
       v.reg = b_.CreateFNeg(a.reg, "neg");
     else if (a.ty.k == TK::FixedBin) {
-      // Negating INT_MIN overflows (QR1.2): trap before the wraparound.
+      // Negating INT_MIN overflows (QR1.2): trap through the SIZE path.
       llvm::Type* ty = a.reg->getType();
       unsigned bits = ty->getIntegerBitWidth();
       llvm::Value* lo =
@@ -3302,8 +3343,7 @@ Val IRGen::emitExpr(HExpr* e) {
           llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
       b_.CreateCondBr(of, trapBB, okBB);
       b_.SetInsertPoint(trapBB);
-      b_.CreateCall(runtimeFn("pli_fixed_overflow"), {});
-      b_.CreateUnreachable();
+      emitSizeTrap(okBB);
       b_.SetInsertPoint(okBB);
       v.reg = b_.CreateSub(llvm::Constant::getNullValue(ty), a.reg, "neg");
     } else

@@ -168,7 +168,7 @@ struct HStmt {
 
   // ON statement (rule 91); REVERT/SIGNAL use condName/condKey only.
   std::string condName;
-  int condKey = 0; // 0 = ERROR, else the use-site key assigned by sema
+  int condKey = 0; // 0 = ERROR, Stmt::kSizeCondKey = SIZE, else sema key
   bool snap = false;
   bool isSystem = false;
   HStmtP unit;

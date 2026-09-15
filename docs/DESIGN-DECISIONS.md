@@ -2476,4 +2476,33 @@ landing this, the runner's timeout path (which crashed the whole suite
 on one slow job instead of failing it) was fixed, the overflow message
 generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
 `driver/decimal_overflow` dropped its redundant subtraction case to
-stay comfortably inside the per-job timeout under parallel load.
+ stay comfortably inside the per-job timeout under parallel load.
+
+ ## ADR-097 — SIZE routes fixed-overflow traps with abort fallback
+
+ Context. QR1.4 needs recoverable conditions, and ADR-089/095/096 leave
+ every fixed-overflow trap (binary `checkedArith`, decimal `magTrap`,
+ float-to-fixed `floatRangeTrap`, neg-`INT_MIN`) on the abort path
+ `pli_fixed_overflow` pending a SIZE condition that can route it.
+
+ Decision. SIZE is a builtin with fixed key -1 (0 is ERROR, >= 1 are
+ rule (99) names in first-use order), so it never collides with user
+ conditions; `CONDITION(SIZE)` is diagnosed like `CONDITION(ERROR)`.
+ `ON`/`REVERT`/`SIGNAL SIZE` reuse the generic keyed push/top/pop and
+ per-(key, id) handlers (`PLI_ON_SIZE_n`); `SIGNAL SIZE` without a
+ handler aborts like ERROR. Each trap site calls `emitSizeTrap(okBB)`:
+ with no ON SIZE in the module it keeps the unconditional abort call
+ (no IR change for existing programs); otherwise it checks
+ `pli_on_top_cond(SIZE)` — empty aborts, established switches to the
+ handler and resumes at `okBB` with the wrapped value. Block/procedure
+ scoping reuses the shared stack depth/reset, so SIZE pops with ERROR.
+ Only ERROR touches ONCODE in this stage.
+
+ Consequences. `on_size.pli` covers establish/raise/resume,
+ re-establishment, and a binary-overflow recovery
+ (`2147483647 + 1` resumes as `-2147483648`); `bad_on_cond_size.pli`
+ pins the `CONDITION(SIZE)` diagnostic; `driver/overflow`,
+ `driver/decimal_overflow`, and `driver/float_fixed_overflow` still
+ abort unhandled. Known limits: resume continues with the wrapped
+ value, SIZE sets no ONCODE, and remaining computational conditions
+ stay diagnosed.

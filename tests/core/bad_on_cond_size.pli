@@ -1,0 +1,5 @@
+   /* rule (99): SIZE is not a valid
+     programmer-named condition. */
+   badoncondsize: procedure options(main);
+      signal condition(size);
+   end badoncondsize;

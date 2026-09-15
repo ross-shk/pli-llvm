@@ -529,9 +529,9 @@ void pli_subscript_oob(void) {
 }
 
 /* FIXED overflow (QR1.2: binary arithmetic, decimal precision, float to
- * fixed conversions): hard ERROR until a SIZE condition (QR1.4) can route
- * it. Raised through the ERROR path so a future ON ERROR already observes
- * it. */
+ * fixed conversions): abort path of the SIZE dispatch (QR1.4, ADR-097).
+ * Reached when no SIZE handler is established; otherwise IRGen routes the
+ * trap to the SIZE handler and resumes. */
 void pli_fixed_overflow(void) {
   pli_signal_error("FIXED overflow");
 }
