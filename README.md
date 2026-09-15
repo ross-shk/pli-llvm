@@ -63,7 +63,8 @@ make install
   (`goto.pli`); non-local `GO TO` is M5
 - **multiple closure**: one `END L;` closes every open block up to `L`
 - `PUT [PAGE] [SKIP(n)] LIST(...)` to SYSPRINT; `PUT DATA(a, ...)`
-  writes each variable as `NAME=value`, `", "`-separated and `;`-terminated
+  writes each variable as `NAME=value`, `", "`-separated and `;`-terminated,
+  and `GET DATA(a, ...)` reads such pairs back in any order
 - full operator set at spec precedence, including `**` right-associativity,
   `¬`/`^`/`~`, and the 48-character-set operator words (`AND`, `GT`, `CAT`, …)
 - `CHARACTER(n)`, `CHARACTER(n) VARYING`, concatenation, blank-padded

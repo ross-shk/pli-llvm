@@ -1689,8 +1689,8 @@ StmtP Parser::parsePut() {
 }
 
 // stream-io-statement ::= GET stream-optionslist ;    rules (104)-(109)
-// CM3 serves the list-directed form: GET [SKIP] LIST (datalist); reading scalar
-// values from SYSIN. FILE/STRING/EDIT/DATA/COPY/LINE/PAGE stay QR2.5.
+// List-directed, edit-directed, and data-directed input read scalar values
+// from SYSIN (or FILE/STRING); COPY/LINE/PAGE stay unimplemented.
 StmtP Parser::parseGet() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Get;
@@ -1753,7 +1753,24 @@ StmtP Parser::parseGet() {
       }
       continue;
     }
-    if (atWord("DATA") || atWord("COPY") || atWord("LINE") || atWord("PAGE")) {
+    if (atWord("DATA")) {
+      // Data-directed transmission (rule (106)): `DATA ( item, ... )`; each
+      // item must name a variable (checked in sema) to receive its pair.
+      advance();
+      st->data = true;
+      if (expect(Tok::LParen, "(106)")) {
+        if (!at(Tok::RParen)) {
+          for (;;) {
+            st->items.push_back(parseExpr());
+            if (!eat(Tok::Comma))
+              break;
+          }
+        }
+        expect(Tok::RParen, "(106)");
+      }
+      continue;
+    }
+    if (atWord("COPY") || atWord("LINE") || atWord("PAGE")) {
       d_.error(cur().loc, "GET option " + cur().text + " is not implemented in this stage",
                "(105)");
       resync();

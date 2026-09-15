@@ -1,0 +1,7 @@
+   /* rule (110): a GET DATA item must be a
+     variable so a NAME=value pair has a
+     target; a constant is diagnosed. */
+   badgetdata: procedure options(main);
+      declare a fixed bin(31);
+      get data(a, 1 + 2);
+   end badgetdata;

@@ -12,7 +12,7 @@ publication chapter/named subsection (no spec prose). `TR overlap` maps to
 | Ch.4 Data Description (declarations, attributes, storage, DEFINED, INITIAL, LIKE, FILE, structures) | (9)-(43) | QR1.1/QR2.1/QR2.3/QR2.6 | partial: `init_*`, `struct_init.pli`, `struct_dyn_init.pli`, `like.pli`, `defined.pli`, `driver/file` |
 | Ch.5 Procedures (params, references, ENTRY, RECURSIVE, GENERIC/BUILTIN) | (2)-(5),(34)-(38),(56),(78)-(81) | QR2.6 | served (M0/M1/M2): `procs.pli`, `func.pli`, `entry*.pli`, `staticlink.pli` |
 | Ch.6 Dynamic Structure (activation, storage, tasks, interrupts, ON/REVERT, checkout) | (60)-(63),(77),(82),(83),(87)-(99) | QR1.3/QR1.4/QR2.3/QR2.4/QR2.8 | partial: `alloc.pli`, `on_error.pli`, `on_cond.pli`, `on_size.pli`; prefixes unenforced |
-| Ch.7 I/O (file opening, list/data/edit stream, record, files) | (39),(40),(44)-(55),(100)-(113) | QR1.5/QR2.5 | partial: `get.pli`, `string.pli`, `edit.pli`, `e_format.pli`, `display.pli`, `put_data.pli`, `driver/file` |
+| Ch.7 I/O (file opening, list/data/edit stream, record, files) | (39),(40),(44)-(55),(100)-(113) | QR1.5/QR2.5 | partial: `get.pli`, `string.pli`, `edit.pli`, `e_format.pli`, `display.pli`, `put_data.pli`, `get_data.pli`, `driver/file` |
 | Ch.8 Statements (alphabetic list + classification) | (56)-(114) | per-slice | partial: one test per statement family; see TR rows |
 | Ch.9 Compile-time (processor, DECLARE/assign/ACTIVATE/GO TO/NULL/IF/DO/INCLUDE/procedures) | suppl. | QR1.6/QR2.9 | partial: `include.pli`, `pp_if.pli`, `replace.pli` (ADR-071/077/083) |
 | Ch.10 Special Topics (args/params, allocation, abnormality, list processing, built-ins) | (34)-(38) | QR1.1/QR2.1/QR2.3/QR2.6 | partial: `dyn_param.pli`, `dyn_param_lower.pli`, `star_param.pli` |

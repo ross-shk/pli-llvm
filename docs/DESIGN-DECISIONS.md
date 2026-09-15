@@ -2529,5 +2529,28 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  Consequences. `put_data.pli` covers FIXED/FLOAT/CHAR/BIT output
  (`A=42, X=2.5, S=ab  , B=1;`; CHAR keeps its blank padding, as in
  LIST); `bad_put_data.pli` pins the non-variable diagnostic. Known
- limits: GET DATA stays diagnosed, as do subscripted/qualified items
- and non-scalar types.
+ limits (see ADR-099 for the input half): subscripted/qualified items
+ and non-scalar types stay diagnosed.
+
+ ## ADR-099 — GET DATA input matches NAME=value pairs in any order
+
+ Context. ADR-098 serves PUT DATA output; the input half (rule (106))
+ must read `NAME=value` pairs back, in any order and skipping unknown
+ names, through the same SYSIN/FILE/STRING sources as GET LIST.
+
+ Decision. `GET DATA(a, ...)` parses like PUT DATA with the same sema
+ shape rule (plain scalar variable references only). IRGen emits a
+ runtime-driven pair loop: `pli_get_data_next` returns each uppercased
+ NAME length (0 at `;`/EOF, consuming the terminator; malformed pairs
+ without `=` are skipped), a per-item `pli_data_name_is` chain stores
+ into the matching variable through the existing typed list-directed
+ readers and `storeGetTarget`, and `pli_get_data_skip` discards unknown
+ names' values. `get_token` also terminates at `;` (raising `tok_semi`
+ for the following pair call); numbers already tolerate the prefix
+ parse, so GET LIST behaviour is unchanged.
+
+ Consequences. `get_data.pli` covers a PUT/GET round-trip over
+ FIXED/FLOAT/CHAR/BIT plus out-of-order pairs with an unknown name
+ skipped; `bad_get_data.pli` pins the non-variable diagnostic. Known
+ limits: subscripted/qualified items and non-scalar types stay
+ diagnosed, as do `COPY`/`LINE` options.

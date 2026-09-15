@@ -1431,6 +1431,25 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       checkEditFormats(s, sc, p, true);
       break;
     }
+    if (s->data) {
+      // Data-directed input (rule (106)): each NAME=value pair stores into
+      // the named variable, so items must be plain scalar variable
+      // references, mirroring PUT DATA (subscripted, qualified, structure,
+      // pointer, complex, and array items stay diagnosed).
+      for (auto& it : s->items) {
+        typeExpr(it.get(), sc, p);
+        if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName ||
+            !it->memberPath.empty()) {
+          d_.error(it->loc, "a GET DATA item must be a scalar variable", "(110)");
+          continue;
+        }
+        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() || it->ty.isComplex() ||
+            it->ty.isArray()) {
+          d_.error(it->loc, "GET DATA of this type is not implemented in this stage", "(110)");
+        }
+      }
+      break;
+    }
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
