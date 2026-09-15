@@ -1,6 +1,6 @@
-  /* rule (94): only ERROR is served; other
-     conditions are diagnosed, never
-     silently accepted. */
+   /* rule (94): ERROR and SIZE are served;
+     other conditions are diagnosed,
+     never silently accepted. */
   badoncond: procedure options(main);
      on zerodivide put skip list('x');
   end badoncond;

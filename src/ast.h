@@ -199,8 +199,11 @@ struct Stmt {
   // ON statement (rule 91): the established condition, whether SNAP was
   // given, whether the unit is SYSTEM, and the unit body (null for SYSTEM).
   // REVERT/SIGNAL (rules 92,93) use condName only.
-  std::string condName; // e.g. "ERROR" or a rule (99) condition name
-  int condKey = 0;      // 0 = ERROR, else index + 1 into Program::condNames
+  // Condition keys: 0 = ERROR, kSizeCondKey = SIZE (rule 94, QR1.4),
+  // else index + 1 into Program::condNames for a rule (99) name.
+  static constexpr int kSizeCondKey = -1;
+  std::string condName; // e.g. "ERROR", "SIZE", or a rule (99) condition name
+  int condKey = 0;      // 0 = ERROR, kSizeCondKey = SIZE, else condNames index + 1
   bool snap = false;
   bool isSystem = false;
   StmtP unit;
@@ -243,6 +246,6 @@ struct Program {
   std::vector<std::unique_ptr<Proc>> procs;
   Proc* mainProc = nullptr;
   // Programmer-named conditions in first-use order (rule 99); a use-site key
-  // is its index + 1 (key 0 means ERROR).
+  // is its index + 1 (key 0 means ERROR, kSizeCondKey means SIZE).
   std::vector<std::string> condNames;
 };
