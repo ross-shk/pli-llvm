@@ -118,6 +118,10 @@ private:
   // items in order.
   void emitPutEditItems(HStmt* s);
   void emitGetEditItems(HStmt* s);
+  // Data-directed output (rule (106)): each item as NAME=value, ", "-separated
+  // and ";"-terminated; names are compile-time globals, values reuse the
+  // list-directed printers.
+  void emitPutDataItems(HStmt* s);
   // Store a list-directed input value into a data-list reference (the same
   // target-addressing as an assignment's left-hand side).
   void storeGetTarget(HExpr* t, const Val& v, SourceLoc loc);

@@ -1,0 +1,15 @@
+   /* rules (104)-(106),(109),(110): PUT
+     DATA writes each variable as
+     NAME=value, terminated by a
+     semicolon. */
+   put_data: procedure options(main);
+      declare a fixed bin(31);
+      declare x float;
+      declare s char(4);
+      declare b bit(1);
+      a = 42;
+      x = 2.5;
+      s = 'ab';
+      b = '1'b;
+      put skip data(a, x, s, b);
+   end put_data;

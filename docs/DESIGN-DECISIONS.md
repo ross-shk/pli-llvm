@@ -2506,3 +2506,28 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  abort unhandled. Known limits: resume continues with the wrapped
  value, SIZE sets no ONCODE, and remaining computational conditions
  stay diagnosed.
+
+ ## ADR-098 — PUT DATA output as NAME=value pairs
+
+ Context. QR1.5 needs data-directed transmission (rule (106)); only
+ list-directed and edit-directed PUT exist. GET DATA input (matching
+ `NAME=value` pairs back to variables) is the larger half; output alone
+ is independently useful (state dumps, golden-testable) and shares the
+ SKIP/PAGE/FILE/STRING routing with LIST.
+
+ Decision. `PUT DATA(a, ...)` parses like a LIST datalist with a `data`
+ flag carried through HIR; sema requires plain scalar variable
+ references (names must be printable), diagnosing constants,
+ subscripted/qualified references, and non-scalar types. IRGen emits
+ each name as a compile-time global via `pli_put_data_name` (", "
+ between items, "=" after each name) then the value through the
+ existing list-directed printer, closing with `pli_put_data_end`
+ (";"). The runtime suppresses the value's blank separator after a
+ name via a `data_value_next` flag, so FILE/STRING sinks keep working
+ through `put_raw`.
+
+ Consequences. `put_data.pli` covers FIXED/FLOAT/CHAR/BIT output
+ (`A=42, X=2.5, S=ab  , B=1;`; CHAR keeps its blank padding, as in
+ LIST); `bad_put_data.pli` pins the non-variable diagnostic. Known
+ limits: GET DATA stays diagnosed, as do subscripted/qualified items
+ and non-scalar types.

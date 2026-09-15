@@ -10,6 +10,10 @@
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
 static int col = 0;
 static int items_on_line = 0;
+/* Data-directed output (rule (106), QR1.5): names emitted in the open DATA
+ * list, and a flag suppressing the value's blank separator after NAME=. */
+static int data_items = 0;
+static int data_value_next = 0;
 
 /* STRING (rule 105) sink/source: when out_buf is non-null, list-directed output
  * is written into it instead of stdout; when in_buf is non-null, list-directed
@@ -56,6 +60,8 @@ static int next_char(void) {
 void pli_rt_init(void) {
   col = 0;
   items_on_line = 0;
+  data_items = 0;
+  data_value_next = 0;
 }
 
 void pli_rt_fini(void) {
@@ -92,8 +98,14 @@ void pli_put_page(void) {
 }
 
 /* List-directed output separates successive items by a blank; character
- * values are written without enclosing quotation marks. */
+ * values are written without enclosing quotation marks. After a DATA name
+ * the value follows its '=' directly, with no blank. */
 static void separate(void) {
+  if (data_value_next) {
+    data_value_next = 0;
+    items_on_line++;
+    return;
+  }
   if (items_on_line > 0) put_raw(" ", 1);
   items_on_line++;
 }
@@ -249,6 +261,23 @@ void pli_put_list_complex(double re, double im) {
   int n = snprintf(buf, sizeof buf, "%.6g%+.6gI", re, im);
   separate();
   put_raw(buf, (size_t)n);
+}
+
+/* Data-directed output (rule (106), QR1.5): `NAME=` opens an item (", "
+ * between items) and the value follows with no blank; `;` closes the list. */
+void pli_put_data_name(const char *p, long long len) {
+  if (data_items > 0) put_raw(", ", 2);
+  if (len > 0) put_raw(p, (size_t)len);
+  put_raw("=", 1);
+  data_items++;
+  data_value_next = 1;
+}
+
+void pli_put_data_end(void) {
+  put_raw(";", 1);
+  items_on_line++;
+  data_items = 0;
+  data_value_next = 0;
 }
 
 /* Assignment to CHARACTER(n) NONVARYING: truncate or pad with blanks. */

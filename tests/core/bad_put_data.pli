@@ -1,0 +1,6 @@
+   /* rule (110): a PUT DATA item must be a
+     variable so its name can be written;
+     a constant is diagnosed. */
+   badputdata: procedure options(main);
+      put data(1 + 2);
+   end badputdata;

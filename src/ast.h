@@ -181,6 +181,9 @@ struct Stmt {
   // Edit-directed transmission (rule (108)): when true, the data items are
   // written/read through the paired format list instead of list-directed.
   bool edit = false;
+  // Data-directed transmission (rule (106)): when true, PUT writes each item
+  // as NAME=value (GET DATA stays diagnosed in this stage).
+  bool data = false;
   std::vector<FormatItem> formats; // one per data item or control action
   // STRING ( reference ) option (rule 105): the character variable that the
   // list-directed output is written into (PUT) or input is read from (GET);

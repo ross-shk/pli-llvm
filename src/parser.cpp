@@ -1644,9 +1644,22 @@ StmtP Parser::parsePut() {
       continue;
     }
     if (atWord("DATA")) {
-      d_.error(cur().loc, "DATA-directed output is not implemented in this stage", "(106)");
-      resync();
-      return nullptr;
+      // Data-directed transmission (rule (106)): `DATA ( item, ... )`; each
+      // item must name a variable (checked in sema) so it prints as NAME=value.
+      advance();
+      st->data = true;
+      sawData = true;
+      if (expect(Tok::LParen, "(106)")) {
+        if (!at(Tok::RParen)) {
+          for (;;) {
+            st->items.push_back(parseExpr());
+            if (!eat(Tok::Comma))
+              break;
+          }
+        }
+        expect(Tok::RParen, "(106)");
+      }
+      continue;
     }
     if (atWord("STRING")) {
       // STRING ( reference ) option (rule 105): write list-directed output into

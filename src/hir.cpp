@@ -220,6 +220,8 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     h->items.push_back(lowerExpr(it.get()));
   // Edit-directed format list (rule (108)): lower each item's width/decimals.
   h->edit = s->edit;
+  // Data-directed transmission (rule (106)): carry the mode flag.
+  h->data = s->data;
   for (const auto& f : s->formats) {
     HFormatItem hf;
     hf.kind = static_cast<HFormatItem::Kind>(f.kind);

@@ -152,6 +152,8 @@ struct HStmt {
   // Edit-directed transmission (rule (108)); mirrors the AST flag and format
   // list, with lowered width/decimals expressions.
   bool edit = false;
+  // Data-directed transmission (rule (106)); mirrors the AST flag.
+  bool data = false;
   std::vector<HFormatItem> formats;
   // STRING ( reference ) option (rule 105): the character variable the list-
   // directed output is written into (PUT) or input read from (GET); null =

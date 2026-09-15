@@ -1395,6 +1395,24 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       checkEditFormats(s, sc, p, false);
       break;
     }
+    if (s->data) {
+      // Data-directed output (rule (106)): each item prints as NAME=value,
+      // so it must be a plain scalar variable reference. Subscripted,
+      // qualified, structure, pointer, and complex items stay diagnosed.
+      for (auto& it : s->items) {
+        typeExpr(it.get(), sc, p);
+        if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName ||
+            !it->memberPath.empty()) {
+          d_.error(it->loc, "a PUT DATA item must be a scalar variable", "(110)");
+          continue;
+        }
+        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() || it->ty.isComplex() ||
+            it->ty.isArray()) {
+          d_.error(it->loc, "PUT DATA of this type is not implemented in this stage", "(110)");
+        }
+      }
+      break;
+    }
     for (auto& it : s->items) {
       typeExpr(it.get(), sc, p);
       if (it->ty.isVoid())
