@@ -136,6 +136,7 @@ struct HStmt {
   bool until = false; // DO UNTIL (extension, ADR-106): test cond after the body
   std::vector<HExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
   bool byName = false;              // rule (86) trailing ", BY NAME" on assignment
+  bool noSize = false;              // (NOSIZE) prefix (rules (60)-(63), ADR-110)
   HStmtP thenS, elseS;
   std::vector<HStmtP> body;
 

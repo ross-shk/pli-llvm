@@ -205,6 +205,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   for (const auto& t : s->extraTargets)
     h->extraTargets.push_back(lowerExpr(t.get()));
   h->byName = s->byName;
+  h->noSize = s->noSize;
   h->until = s->until;
   h->cond = lowerExpr(s->cond.get());
   h->from = lowerExpr(s->from.get());
