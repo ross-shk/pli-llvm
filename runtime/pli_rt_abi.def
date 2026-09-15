@@ -83,6 +83,8 @@ PLI_FN(pli_atand, DOUBLE, (DOUBLE))
 PLI_FN(pli_repeat, VOID, (PTR, I64, CPTR, I64, I64))  /* REPEAT */
 PLI_FN(pli_verify, I64, (CPTR, I64, CPTR, I64))       /* VERIFY */
 PLI_FN(pli_translate, VOID, (PTR, I64, CPTR, I64, CPTR, I64, CPTR, I64)) /* TRANSLATE */
+PLI_FN(pli_trim, VOID, (PTR, I64, CPTR, I64, CPTR, I64))   /* TRIM (extension) */
+PLI_FN(pli_tally, I64, (CPTR, I64, CPTR, I64))             /* TALLY (extension) */
 PLI_FN(pli_high, VOID, (PTR, I64))                    /* HIGH(n) */
 PLI_FN(pli_low, VOID, (PTR, I64))                     /* LOW(n) */
 PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */

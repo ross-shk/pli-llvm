@@ -2669,6 +2669,40 @@ bool Sema::typeBuiltin(Expr* e) {
     e->ty = Type::chr(e->args[0]->ty.len);
     return true;
   }
+  // TRIM built-in (extension, ADR-107): trim(s[, pad]) — s minus
+  // leading/trailing blanks (or pad-set characters); the result keeps
+  // the input length, left-justified and blank-padded.
+  if (e->name == "TRIM") {
+    if (e->args.size() < 1 || e->args.size() > 2) {
+      d_.error(e->loc, "TRIM expects 1 or 2 arguments (string[, pad])", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    for (auto& a : e->args)
+      if (!a->ty.isChar()) {
+        d_.error(a->loc, "TRIM arguments must be character strings", "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+    e->ty = Type::chr(e->args[0]->ty.len);
+    return true;
+  }
+  // TALLY built-in (extension, ADR-107): tally(x, y) — non-overlapping
+  // occurrences of y in x, case-sensitive; zero when absent or null.
+  if (e->name == "TALLY") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "TALLY expects 2 arguments (string, substring)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
+      d_.error(e->loc, "TALLY arguments must be character strings", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
   // HIGH/LOW built-ins (M2): high(n)/low(n) — n copies of the top/bottom
   // collating character; n must be constant to size the result.
   if (e->name == "HIGH" || e->name == "LOW") {

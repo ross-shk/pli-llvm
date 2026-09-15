@@ -1,0 +1,12 @@
+ /* extension (ADR-107): TALLY(x, y) counts
+    non-overlapping occurrences of y in x,
+    case-sensitive, zero when absent. */
+ tallydemo: procedure options(main);
+    put skip list(tally('abcabc', 'bc'));
+    put skip list(tally('abcabc', 'B'));
+    put skip list(tally('a b c', ' '));
+    put skip list(tally('aaa', 'aa'));
+    put skip list(tally('abc', 'z'));
+    put skip list(tally('', 'a'));
+    put skip list(tally('abc', ''));
+ end tallydemo;

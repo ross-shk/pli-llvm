@@ -1,0 +1,4 @@
+ /* extension (ADR-107): TALLY arity is diagnosed. */
+ badtally: procedure options(main);
+    put skip list(tally('abc'));
+ end badtally;
