@@ -421,6 +421,47 @@ void pli_translate(char *dst, long long dstcap, const char *s, long long slen,
   }
 }
 
+/* TRIM(s[, pad]): copy s minus leading/trailing blanks (or pad-set
+ * characters), left-justified and blank-padded to dstcap. A null pad
+ * means blanks; an empty pad set trims nothing. */
+void pli_trim(char *dst, long long dstcap, const char *s, long long slen,
+              const char *pad, long long padlen) {
+  long long lo = 0, hi = slen;
+  if (!pad) {
+    while (lo < hi && s[lo] == ' ')
+      ++lo;
+    while (hi > lo && s[hi - 1] == ' ')
+      --hi;
+  } else {
+    while (lo < hi && memchr(pad, s[lo], (size_t)padlen))
+      ++lo;
+    while (hi > lo && memchr(pad, s[hi - 1], (size_t)padlen))
+      --hi;
+  }
+  long long out = 0;
+  for (long long i = lo; i < hi && out < dstcap; ++i)
+    dst[out++] = s[i];
+  while (out < dstcap)
+    dst[out++] = ' ';
+}
+
+/* TALLY(x, y): non-overlapping occurrences of y in x (Enterprise PL/I:
+ * FIXED BINARY(31,0), case-sensitive, zero when absent or null). */
+long long pli_tally(const char *x, long long xlen, const char *y, long long ylen) {
+  if (ylen <= 0 || xlen < ylen)
+    return 0;
+  long long n = 0;
+  for (long long i = 0; i + ylen <= xlen;) {
+    if (memcmp(x + i, y, (size_t)ylen) == 0) {
+      ++n;
+      i += ylen;
+    } else {
+      ++i;
+    }
+  }
+  return n;
+}
+
 /* HIGH(n): n copies of the highest collating character (0xFF). */
 void pli_high(char *dst, long long n) { memset(dst, 0xFF, (size_t)n); }
 

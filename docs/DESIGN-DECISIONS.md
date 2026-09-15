@@ -2737,3 +2737,27 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  and LEAVE/ITERATE interplay; `bad_do_until.pli` pins the
  iterative-combination diagnostic. Known limits: MX4–MX8 are
  untouched.
+
+ ## ADR-107 — TRIM and TALLY string built-ins
+
+ Context. Enterprise verification first: `TALLY(x, y)` is confirmed
+ (FIXED BINARY(31,0) non-overlapping case-sensitive count, zero
+ when absent or null, character and bit strings) and `TRIM` is
+ confirmed as a both-ends trimmer; `LTRIM`/`RTRIM` do not appear in
+ the Language Reference index, so they are not implemented rather
+ than invented.
+
+ Decision. `TRIM(s[, pad])` takes one or two character arguments
+ and returns fixed `CHAR(n)` at the input length, left-justified
+ and blank-padded (the TRANSLATE precedent; a null pad means
+ blanks, an empty pad set trims nothing); varying-length results
+ stay a follow-up. `TALLY(x, y)` takes two character arguments and
+ returns `FIXED BIN(31)`. Non-character arguments and arities are
+ diagnosed under rule (123) like the neighbouring built-ins; `BIT`
+ stays diagnosed until longer bit strings arrive (QR2.2).
+
+ Consequences. `trim.pli` covers blank and pad-set trims plus the
+ all-blank input; `tally.pli` mirrors the IBM examples including
+ the non-overlapping `aaa`/`aa` case; `bad_trim.pli` and
+ `bad_tally.pli` pin the arity/type diagnostics. Known limits:
+ MX5–MX8 are untouched.

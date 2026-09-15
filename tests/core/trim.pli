@@ -1,0 +1,16 @@
+ /* extension (ADR-107): TRIM(s[, pad]) strips
+    leading/trailing blanks (or pad-set chars),
+    left-justified and blank-padded to the
+    input length. */
+ trimdemo: procedure options(main);
+    declare a char(8);
+    declare b char(6);
+    declare c char(6);
+    a = '  ab  ';
+    put skip list('[' || trim(a) || ']');
+    b = 'xxabxx';
+    put skip list('[' || trim(b, 'x') || ']');
+    c = '      ';
+    put skip list('[' || trim(c) || ']');
+    put skip list('[' || trim('  q') || ']');
+ end trimdemo;

@@ -30,7 +30,7 @@ tasking, keyed files).
 
 | Order | Slice | Effort | Deliverable |
 |---|---|---:|---|
-| MX5 | Modern string built-ins | 1w | `TRIM`/`LTRIM`/`RTRIM` and `TALLY`, verified against Enterprise semantics first; each is an independent runtime + `emitBuiltin` case with golden tests; anything beyond (e.g. `COMPARE`, `MEMCONVERT`) stays diagnosed |
+| MX5 | Modern string built-ins | 1w | `TRIM` and `TALLY`, verified against Enterprise semantics first (`LTRIM`/`RTRIM` are not Enterprise built-ins — dropped, ADR-107); each is an independent runtime + `emitBuiltin` case with golden tests; anything beyond (e.g. `COMPARE`, `MEMCONVERT`) stays diagnosed |
 | MX6 | `VALUE` named constants | 1w | `DECLARE name ... VALUE (const)`; use-sites fold as constants, reassignment diagnosed; dynamic/initializer interplay diagnosed, not guessed |
 | MX7 | `PACKAGE` / `EXPORTS` structure | 1w | package blocks as link-level namespaces generalizing ADR-103 external linkage; unexported names stay module-private; `FETCH`/`RELEASE` explicitly excluded (platform loading, stretch only) |
 

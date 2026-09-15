@@ -133,6 +133,7 @@ entry points below are where that chain terminates.
 | `SELECT` / `WHEN` / `OTHERWISE` (ADR-104) | served | `SELECT [(expr)]; WHEN ...; [OTHERWISE ...] END;` desugars in the parser to an IF-chain (bare predicates, or value lists against the SELECT expression); missing WHEN, WHEN-after-OTHERWISE, second OTHERWISE, and mixed forms diagnosed (`select.pli`, `bad_select.pli`) |
 | `LEAVE` / `ITERATE` [label] (ADR-105) | served | loop exit/continue over iterative DO-groups (WHILE re-entry is the condition, DO-loop re-entry is the step); labeled forms resolve against enclosing loop labels; outside-loop, unknown-label, and ON-unit uses diagnosed (`leave.pli`, `bad_leave.pli`, `bad_leave_label.pli`) |
 | `DO UNTIL (expr)` (ADR-106) | served | post-test loop via an `until` flag on the DO-group (body first, true condition exits); LEAVE/ITERATE re-entry targets shared with WHILE; iterative or combined WHILE+UNTIL forms diagnosed (`do_until.pli`, `bad_do_until.pli`) |
+| `TRIM` / `TALLY` (ADR-107) | served | `TRIM(s[, pad])` strips leading/trailing blanks (or pad-set chars), left-justified and blank-padded to the input length; `TALLY(x, y)` counts non-overlapping case-sensitive occurrences (`trim.pli`, `tally.pli`, `bad_trim.pli`, `bad_tally.pli`) |
 
 ## Headline numbers (M0)
 

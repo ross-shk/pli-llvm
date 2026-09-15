@@ -4208,6 +4208,30 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = dst;
     return true;
   }
+  if (e->name == "TRIM") {
+    Val s = emitExpr(e->args[0].get());
+    Val dst = charTemp(e->ty.len);
+    llvm::Value* pad = llvm::ConstantPointerNull::get(b_.getPtrTy());
+    llvm::Value* padlen = i64(0);
+    if (e->args.size() > 1) {
+      Val p = emitExpr(e->args[1].get());
+      pad = p.ptr;
+      padlen = p.len;
+    }
+    b_.CreateCall(runtimeFn("pli_trim"), {dst.ptr, dst.len, s.ptr, s.len, pad, padlen});
+    dst.len = i64(e->ty.len);
+    result = dst;
+    return true;
+  }
+  if (e->name == "TALLY") {
+    Val x = emitExpr(e->args[0].get());
+    Val y = emitExpr(e->args[1].get());
+    llvm::Value* r = b_.CreateCall(runtimeFn("pli_tally"), {x.ptr, x.len, y.ptr, y.len});
+    v.ty = e->ty;
+    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "tal32");
+    result = v;
+    return true;
+  }
   if (e->name == "HIGH" || e->name == "LOW") {
     Val n = emitExpr(e->args[0].get());
     Val out = charTemp(e->ty.len);
