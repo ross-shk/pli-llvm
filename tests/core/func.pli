@@ -7,7 +7,7 @@
     declare f fixed bin(31);
 
     /* A recursive function procedure. */
-    fact: procedure(n) returns(fixed bin(31));
+    fact: procedure(n) recursive returns(fixed bin(31));
        declare n fixed bin(31);
        if n <= 1 then return(1);
        return(n * fact(n - 1));

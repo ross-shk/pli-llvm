@@ -1,0 +1,12 @@
+ /* rule (5): direct recursion without RECURSIVE
+    is rejected; add RECURSIVE to the procedure. */
+ badrec: procedure options(main);
+    declare r fixed bin(31);
+    r = fact(3);
+    put skip list(r);
+    fact: procedure(n) returns(fixed bin(31));
+       declare n fixed bin(31);
+       if n <= 1 then return(1);
+       return(n * fact(n - 1));
+    end fact;
+ end badrec;

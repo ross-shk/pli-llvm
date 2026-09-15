@@ -188,6 +188,7 @@ struct HProc {
   std::string name;
   SourceLoc loc{};
   bool isMain = false;
+  bool isRecursive = false;            // RECURSIVE option (rule (5))
   bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
   Type retTy{};                        // function return type (RETURNS)
   Type commonRetTy{};                  // rule (56): the single result type shared by all

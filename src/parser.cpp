@@ -292,8 +292,13 @@ void Parser::parseProcOptions(Proc* p) {
       }
       continue;
     }
-    if (eatWord("RECURSIVE"))
+    // RECURSIVE ::= the procedure may be invoked recursively (rule (5)).
+    // Recorded for the sema cycle check; codegen needs no change since
+    // every activation already owns its AUTOMATIC storage.
+    if (eatWord("RECURSIVE")) {
+      p->isRecursive = true;
       continue;
+    }
     if (atWord("RETURNS")) {
       // RETURNS(data-attributes) ::= the result type of a function
       // procedure (rules (5),(34)). Parse the type from the attribute words, or

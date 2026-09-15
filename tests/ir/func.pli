@@ -1,7 +1,7 @@
 /* A recursive function procedure: the recursion (self-call), the signed
    comparison and branch, and the multiply lower to real LLVM IR. M1 exit
    criterion (ADR-022). Rules (5),(81),(115). */
- fact: procedure(n) returns(fixed bin(31));
+ fact: procedure(n) recursive returns(fixed bin(31));
    declare n fixed bin(31);
    if n <= 1 then return(1);
    else return(n * fact(n - 1));
