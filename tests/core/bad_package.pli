@@ -1,0 +1,13 @@
+ /* extension (ADR-109): package-level data and
+    bad EXPORTS names are diagnosed, never
+    silently accepted. */
+ lib: package exports(nosuch);
+    declare shared fixed bin(31);
+    getter: procedure;
+       declare dummy fixed bin(31);
+       dummy = 0;
+    end getter;
+ end lib;
+ main: procedure options(main);
+    put skip list('x');
+ end main;

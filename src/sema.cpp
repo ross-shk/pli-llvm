@@ -134,6 +134,50 @@ Symbol* Sema::implicitDeclare(Scope* sc, const std::string& n, SourceLoc l, bool
   return s;
 }
 
+// Extension (ADR-109): resolve PACKAGE EXPORTS against hoisted members,
+// marking listed member procedures external. Runs before pass 1 assigns
+// linkage, so exports keep their upper-cased external names.
+void Sema::resolvePackageExports() {
+  for (auto& p : prog_->procs) {
+    if (!p->isPackage)
+      continue;
+    for (const auto& en : p->exports) {
+      Proc* m = nullptr;
+      for (auto& q : prog_->procs)
+        if (q->parent == p.get() && q->name == en) {
+          m = q.get();
+          break;
+        }
+      if (!m) {
+        d_.error(p->loc,
+                 "EXPORTS name '" + en + "' is not a procedure of package '" + p->name +
+                     "' (ADR-109)",
+                 "");
+        continue;
+      }
+      if (m->isMain) {
+        d_.error(p->loc,
+                 "cannot EXPORT the MAIN procedure '" + en + "' (ADR-109)", "");
+        continue;
+      }
+      m->isExternal = true;
+    }
+  }
+}
+
+// Extension (ADR-109): a package contributes scope and linkage only; member
+// procedures were hoisted and are processed in their own iterations.
+void Sema::processPackage(Proc* p) {
+  for (auto& b : p->body) {
+    if (!b || b->kind == Stmt::Null)
+      continue;
+    if (b->kind == Stmt::Declare)
+      d_.error(b->loc, "package-level data is not implemented in this stage (ADR-109)", "");
+    else
+      d_.error(b->loc, "only DECLARE and PROCEDURE may appear in a PACKAGE body (ADR-109)", "");
+  }
+}
+
 bool Sema::run(Program& prog, bool compileOnly) {
   prog_ = &prog;
 
@@ -143,13 +187,18 @@ bool Sema::run(Program& prog, bool compileOnly) {
   rootScope_ = new Scope();
   scopes_.push_back(std::unique_ptr<Scope>(rootScope_));
 
+  // Extension (ADR-109): resolve PACKAGE EXPORTS before pass 1 assigns
+  // linkage, so listed members keep their upper-cased external names.
+  resolvePackageExports();
   for (auto& p : prog.procs) {
+    if (p->isPackage)
+      continue; // packages declare no symbol and need no irName
     // Rule (42): a top-level non-MAIN procedure is externally linked under
     // its upper-cased name (already upper-cased by the lexer), so another
     // translation unit's ENTRY reference resolves at link time. The MAIN
     // procedure keeps its module-private name: only its own `main` shim
-    // invokes it. Nested procedures stay module-private.
-    p->isExternal = !p->parent && !p->isMain;
+    // invokes it. Nested procedures stay module-private unless exported.
+    p->isExternal = p->isExternal || (!p->parent && !p->isMain);
     p->irName = p->isExternal ? "@" + p->name
                               : "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) +
                                     p->name;
@@ -185,6 +234,8 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // (78)) see every callee's descriptors regardless of procedure order
   // (ADR-094); processProc skips re-resolving them.
   for (auto& p : prog.procs) {
+    if (p->isPackage)
+      continue; // package-level data is diagnosed in processPackage
     beginScopes_.clear();
     collectDecls(p->body, scopeFor(p.get()), p.get(), false);
     resolveProcParams(p.get());
@@ -194,8 +245,13 @@ bool Sema::run(Program& prog, bool compileOnly) {
     resolveStructReturn(p.get());
 
   // Pass 2: declarations, resolution and typing, procedure by procedure.
-  for (auto& p : prog.procs)
+  for (auto& p : prog.procs) {
+    if (p->isPackage) {
+      processPackage(p.get());
+      continue;
+    }
     processProc(p.get());
+  }
 
   // Rule (5): every procedure in a static call cycle must carry RECURSIVE.
   // Runs here so CALL and function-reference callees are already resolved.
@@ -208,19 +264,30 @@ bool Sema::run(Program& prog, bool compileOnly) {
       computeEnv(p.get());
 
   if (!prog.mainProc) {
-    if (!prog.procs.empty()) {
+    // A package block is scope and linkage only, never an entry point.
+    Proc* entry = nullptr;
+    for (auto& p : prog.procs)
+      if (!p->isPackage) {
+        entry = p.get();
+        break;
+      }
+    if (entry) {
       // A relocatable object (`-c`) may be a library with no entry point; the
       // caller links it against its own `main` (e.g. a C driver).
       if (!compileOnly) {
-        d_.warn(prog.procs.front()->loc,
-                "no procedure has OPTIONS(MAIN); using '" + prog.procs.front()->name +
+        d_.warn(entry->loc,
+                "no procedure has OPTIONS(MAIN); using '" + entry->name +
                     "' as the program entry point",
                 "(5)");
-        prog.mainProc = prog.procs.front().get();
+        prog.mainProc = entry;
         prog.mainProc->isMain = true;
       }
-    } else {
+    } else if (prog.procs.empty()) {
       d_.error({}, "translation unit contains no procedure", "(1)");
+    } else if (!compileOnly) {
+      // Packages only: a library needs `-c`; an executable has no entry point.
+      d_.error({}, "translation unit holds only PACKAGE blocks and no entry point (ADR-109)",
+               "(1)");
     }
   }
   return d_.ok();

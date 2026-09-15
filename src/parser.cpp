@@ -208,6 +208,45 @@ std::unique_ptr<Program> Parser::parse() {
   return std::move(prog_);
 }
 
+// package-block (extension, ADR-109): name: PACKAGE [EXPORTS (a, ...)];
+// declarations and procedures, closed by END [name]. Member procedures
+// parse exactly like nested procedures (hoisted with parent set), so END
+// matching and multiple closure come from parseBody; sema resolves EXPORTS
+// and diagnoses package-level data. Errors continue into the body rather
+// than resyncing, so following members keep their package scope.
+void Parser::parsePackage(const std::string& name, SourceLoc loc) {
+  advance(); // PACKAGE
+  Proc* pkg = startProc(name, loc, nullptr);
+  pkg->isPackage = true;
+  if (atWord("EXPORTS")) {
+    advance();
+    if (!eat(Tok::LParen)) {
+      d_.error(cur().loc, "expected '(' after EXPORTS (ADR-109)", "");
+    } else {
+      if (!at(Tok::RParen)) {
+        for (;;) {
+          if (at(Tok::Word)) {
+            pkg->exports.push_back(cur().text);
+            advance();
+          } else {
+            d_.error(cur().loc, "expected an exported procedure name (ADR-109)", "");
+            break;
+          }
+          if (!eat(Tok::Comma))
+            break;
+        }
+      }
+      if (!eat(Tok::RParen))
+        d_.error(cur().loc, "expected ')' after the EXPORTS list (ADR-109)", "");
+    }
+  }
+  if (!eat(Tok::Semi))
+    d_.error(cur().loc, "expected ';' after the PACKAGE statement (ADR-109)", "");
+  EndInfo e = parseBody(pkg, pkg->body, name);
+  if (e.present && !e.label.empty())
+    d_.error(e.loc, "END label '" + e.label + "' does not match any open block", "(7)");
+}
+
 Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
   auto p = std::make_unique<Proc>();
   p->name = name;
@@ -244,6 +283,14 @@ void Parser::parseExternalProcedure() {
   }
   if (!expect(Tok::Colon, "(64)")) {
     resync();
+    return;
+  }
+  if (atStmtKeyword("PACKAGE")) {
+    // Package block (extension, ADR-109): member procedures nest under the
+    // package scope; EXPORTS controls linkage (resolved in sema).
+    if (!entryNames.empty())
+      d_.error(cur().loc, "only a single name is allowed on a PACKAGE statement (ADR-109)", "");
+    parsePackage(name, loc);
     return;
   }
   if (!(atStmtKeyword("PROCEDURE") || atStmtKeyword("PROC"))) {
@@ -417,6 +464,14 @@ StmtP Parser::parseStatement(Proc* owner) {
     st->labels.push_back(cur().text);
     advance();
     advance();
+  }
+
+  // nested package (extension, ADR-109): packages nest nothing; a labelled
+  // PACKAGE inside a body is diagnosed, never silently accepted.
+  if (atStmtKeyword("PACKAGE") && !st->labels.empty()) {
+    d_.error(cur().loc, "nested packages are not implemented in this stage (ADR-109)", "");
+    resync();
+    return nullptr;
   }
 
   // nested procedure                                          rules (2),(8)

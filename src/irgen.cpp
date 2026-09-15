@@ -858,6 +858,8 @@ void IRGen::collectGotoBlocks(HStmt* s) {
 // emitPlainProc); multi-entry procedures get the shared impl (filled by
 // emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
 void IRGen::declareProc(HProc* p) {
+  if (p->isPackage)
+    return; // packages emit no function (extension, ADR-109)
   bool sret = p->isFunction && p->retTy.isStruct();
   // A structure-valued function (rule 127) returns through a hidden result
   // pointer and returns void: the caller allocates the storage and passes its
@@ -994,6 +996,8 @@ void IRGen::declareProc(HProc* p) {
 }
 
 void IRGen::emitProc(HProc* p) {
+  if (p->isPackage)
+    return; // packages emit no function (extension, ADR-109)
   curProc_ = p;
   labelBlocks_.clear();
   symAddr_.clear();
