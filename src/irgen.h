@@ -33,8 +33,13 @@ struct Val {
 
 class IRGen {
 public:
-  IRGen(Diags& d, Sema& s, std::string triple)
-      : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_) {}
+  IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false)
+      : d_(d),
+        sema_(s),
+        triple_(std::move(triple)),
+        noSizeChecks_(noSizeChecks),
+        mod_("plic", ctx_),
+        b_(ctx_) {}
 
   std::string run(HProgram& prog);
 
@@ -316,7 +321,12 @@ private:
   // per statement, OR-inherited through compound statements so a prefixed
   // group covers its body. SIZE checks read the top.
   std::vector<char> noSizeStack_;
-  bool sizeChecks() const { return noSizeStack_.empty() || !noSizeStack_.back(); }
+  // Global --no-size-checks (ADR-111) disables every SIZE trap, including
+  // ones an ON SIZE handler would otherwise route.
+  bool noSizeChecks_ = false;
+  bool sizeChecks() const {
+    return !noSizeChecks_ && (noSizeStack_.empty() || !noSizeStack_.back());
+  }
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.

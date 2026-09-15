@@ -2837,3 +2837,23 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  no-op, and group inheritance. Known limits: `NOSUBSCRIPTRANGE`
  and `NOZERODIVIDE` keep the warning until MX4b; handler-body
  inheritance is lexical, not dynamic.
+
+ ## ADR-111 — Global --no-size-checks off-switch
+
+ Context. Benchmarking showed the per-add SIZE traps cost ~45% on
+ a tight integer loop (0.038s vs 0.021s with `(NOSIZE)`), and
+ annotating every statement is impractical for numerically hot
+ programs. The remaining gap to C (0.002s) is auto-vectorization,
+ which needs loop-codegen work and stays out of this slice
+ (measured: `--extra -march=native` changes nothing on arm64).
+
+ Decision. `--no-size-checks` threads a flag from the driver to
+ `IRGen::sizeChecks`, eliding every SIZE trap program-wide
+ through the same mechanism as `(NOSIZE)`. Established `ON SIZE`
+ handlers never fire under the flag — opting out removes the
+ guarantee, like the prefix. `SUBSCRIPTRANGE`/`ZERODIVIDE` checks
+ are unaffected (separate conditions, separate switches).
+
+ Consequences. `driver/nosize_flag` proves an unprefixed overflow
+ wraps instead of aborting. Known limits: no per-procedure
+ granularity (use `(NOSIZE)` for that); MX4b is untouched.

@@ -154,6 +154,7 @@ plic [options] file.pli
   -emit-llvm       write LLVM IR and stop
   -fsyntax-only    parse and analyse only
   -O0 … -O3        optimization level (default -O2)
+  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE))
   --keep-ll        keep the intermediate .ll
   --runtime <lib>  path to libpli.a
   --triple <t>     target triple
