@@ -1481,7 +1481,21 @@ void IRGen::emitStmt(HStmt* s) {
     b_.CreateUnreachable();
     break;
   case HStmt::Leave:
+  case HStmt::Iterate: {
+    // Extension (ADR-105): branch to the enclosing iterative group's end
+    // (LEAVE) or re-entry (ITERATE: condition for WHILE, step for DO-loop).
+    // Sema validated the target, so it is always present here.
+    const LoopTargets* t = nullptr;
+    for (auto it = loopStack_.rbegin(); it != loopStack_.rend(); ++it)
+      if (s->name.empty() ||
+          std::find(it->labels.begin(), it->labels.end(), s->name) != it->labels.end()) {
+        t = &(*it);
+        break;
+      }
+    if (t)
+      branch(s->kind == HStmt::Leave ? t->breakBB : t->contBB);
     break;
+  }
   case HStmt::On:
     emitOn(s);
     break;
@@ -1914,8 +1928,10 @@ void IRGen::emitDoWhile(HStmt* s) {
   Val c = emitExpr(s->cond.get());
   b_.CreateCondBr(toI1(c, s->loc), bodyL, endL);
   startBlock(bodyL);
+  loopStack_.push_back({s->labels, endL, condL});
   for (auto& b : s->body)
     emitStmt(b.get());
+  loopStack_.pop_back();
   branch(condL);
   startBlock(endL);
 }
@@ -1993,8 +2009,10 @@ void IRGen::emitDoIter(HStmt* s) {
   }
 
   startBlock(bodyL);
+  loopStack_.push_back({s->labels, endL, stepL});
   for (auto& b : s->body)
     emitStmt(b.get());
+  loopStack_.pop_back();
   branch(stepL);
 
   startBlock(stepL);

@@ -526,6 +526,8 @@ const char* stmtKind(HStmt::Kind k) {
     return "Close";
   case HStmt::Leave:
     return "Leave";
+  case HStmt::Iterate:
+    return "Iterate";
   case HStmt::On:
     return "On";
   case HStmt::Revert:
@@ -599,6 +601,11 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     break;
   case HStmt::Goto:
     os << " " << s->name;
+    break;
+  case HStmt::Leave:
+  case HStmt::Iterate:
+    if (!s->name.empty())
+      os << " " << s->name;
     break;
   case HStmt::Put: {
     os << " [";

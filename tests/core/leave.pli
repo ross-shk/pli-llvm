@@ -1,0 +1,49 @@
+ /* extension (ADR-105): LEAVE exits the innermost
+    iterative group, ITERATE continues it; labeled
+    forms target the named group; leave and iterate
+    stay usable as identifiers. */
+ leavedemo: procedure options(main);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare s fixed bin(31);
+    declare leave fixed bin(31);
+    declare iterate fixed bin(31);
+    leave = 7;
+    iterate = 8;
+    put skip list('ident', leave + iterate);
+    s = 0;
+    do i = 1 to 10;
+       if i > 3 then leave;
+       s = s + i;
+    end;
+    put skip list('sum', s);
+    s = 0;
+    do i = 1 to 5;
+       if i = 2 then iterate;
+       if i = 4 then iterate;
+       s = s + i;
+    end;
+    put skip list('skip', s);
+    s = 0;
+    outer: do i = 1 to 5;
+       inner: do j = 1 to 5;
+          if j = 2 then leave outer;
+          s = s + 1;
+       end inner;
+    end outer;
+    put skip list('labeled', s);
+    s = 0;
+    up: do i = 1 to 4;
+       if i = 3 then iterate up;
+       s = s + i;
+    end up;
+    put skip list('up', s);
+    i = 1;
+    s = 0;
+    do while (i < 100);
+       if i > 5 then leave;
+       s = s + i;
+       i = i + 1;
+    end;
+    put skip list('while', s);
+ end leavedemo;

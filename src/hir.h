@@ -118,6 +118,7 @@ struct HStmt {
     Open,
     Close,
     Leave,
+    Iterate, // extension (ADR-105)
     On,     // rule (91)
     Revert, // rule (92)
     Signal, // rule (93)

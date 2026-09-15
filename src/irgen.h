@@ -304,6 +304,14 @@ private:
   // caller-supplied buffer that a RETURN(struct) copies into before returning.
   llvm::Value* structRetPtr_ = nullptr;
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
+  // Enclosing iterative groups for LEAVE/ITERATE (extension, ADR-105):
+  // labels with the break (end) and continue (re-entry) blocks, innermost last.
+  struct LoopTargets {
+    std::vector<std::string> labels;
+    llvm::BasicBlock* breakBB = nullptr;
+    llvm::BasicBlock* contBB = nullptr;
+  };
+  std::vector<LoopTargets> loopStack_;
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.

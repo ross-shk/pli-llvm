@@ -1216,6 +1216,12 @@ void Sema::checkOnUnit(Stmt* u, Proc* p) {
     case Stmt::Return:
       d_.error(s->loc, "RETURN inside an ON-unit is not implemented in this stage", "(91)");
       break;
+    case Stmt::Leave:
+      d_.error(s->loc, "LEAVE inside an ON-unit is not implemented in this stage", "(91)");
+      break;
+    case Stmt::Iterate:
+      d_.error(s->loc, "ITERATE inside an ON-unit is not implemented in this stage", "(91)");
+      break;
     case Stmt::Declare:
       d_.error(s->loc, "DECLARE inside an ON-unit is not implemented in this stage", "(91)");
       break;
@@ -1505,11 +1511,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::DoWhile: {
     typeExpr(s->cond.get(), sc, p);
     Stmt* save = curEntry_;
+    loopStack_.push_back(s->labels);
     for (auto& b : s->body) {
       if (b && b->kind == Stmt::Entry)
         curEntry_ = b.get();
       checkStmt(b.get(), sc, p);
     }
+    loopStack_.pop_back();
     curEntry_ = save;
     break;
   }
@@ -1533,11 +1541,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     typeExpr(s->by.get(), sc, p);
     typeExpr(s->cond.get(), sc, p);
     Stmt* save = curEntry_;
+    loopStack_.push_back(s->labels);
     for (auto& b : s->body) {
       if (b && b->kind == Stmt::Entry)
         curEntry_ = b.get();
       checkStmt(b.get(), sc, p);
     }
+    loopStack_.pop_back();
     curEntry_ = save;
     break;
   }
@@ -1700,9 +1710,30 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   }
   case Stmt::Stop:
-  case Stmt::Leave:
   case Stmt::Entry: // declaration-like; params/type resolved in processProc
     break;
+  case Stmt::Leave:
+  case Stmt::Iterate: {
+    // Extension (ADR-105): LEAVE exits / ITERATE continues the innermost
+    // enclosing iterative DO-group, or the named one. Plain groups and
+    // BEGIN blocks are transparent (only iterative frames are tracked).
+    const char* what = s->kind == Stmt::Leave ? "LEAVE" : "ITERATE";
+    if (s->name.empty()) {
+      if (loopStack_.empty())
+        d_.error(s->loc, std::string(what) + " outside an iterative DO-group (ADR-105)", "");
+    } else {
+      bool found = false;
+      for (auto it = loopStack_.rbegin(); it != loopStack_.rend(); ++it)
+        if (std::find(it->begin(), it->end(), s->name) != it->end()) {
+          found = true;
+          break;
+        }
+      if (!found)
+        d_.error(s->loc,
+                 "no enclosing iterative DO-group named '" + s->name + "' (ADR-105)", "");
+    }
+    break;
+  }
   case Stmt::Display: {
     // Rule (114): DISPLAY takes one scalar value.
     typeExpr(s->value.get(), sc, p);

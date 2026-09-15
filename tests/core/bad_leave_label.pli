@@ -1,0 +1,13 @@
+ /* extension (ADR-105): naming no enclosing
+    iterative group, and ITERATE of a plain
+    group, are diagnosed. */
+ badleavelab: procedure options(main);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    do i = 1 to 3;
+       leave nosuch;
+    end;
+    outer: do;
+       iterate outer;
+    end outer;
+ end badleavelab;

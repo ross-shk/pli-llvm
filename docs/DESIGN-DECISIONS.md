@@ -2694,3 +2694,26 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  `bad_select.pli` pins the missing-WHEN diagnostic. Known limits:
  `WHEN` value ranges/patterns beyond equality lists stay a
  follow-up; MX2–MX8 are untouched.
+
+ ## ADR-105 — LEAVE/ITERATE over iterative DO-groups
+
+ Context. Loop exit/continue (MX2) has no TR production, so it
+ enters through the Extensions vehicle with contextual keywords
+ only: `leave` and `iterate` keep working as identifiers. A dead
+ `Stmt::Leave` kind (rejected in M0) already held the place.
+
+ Decision. `LEAVE [label]` exits and `ITERATE [label]` continues
+ the innermost enclosing iterative DO-group, or the named one;
+ plain groups and `BEGIN` blocks are transparent, and a label
+ naming one reports the same unknown-target diagnostic. WHILE
+ re-entry branches to the condition, DO-loop re-entry to the
+ step. Scope validation lives in sema on a loop-label stack;
+ codegen keeps a parallel block stack. `LEAVE`/`ITERATE` inside
+ an ON-unit is diagnosed alongside `RETURN` (the unit has no
+ loop frame to branch to).
+
+ Consequences. `leave.pli` covers unlabeled and labeled exit and
+ continue over `DO`-loop and `WHILE` groups plus identifier
+ coexistence; `bad_leave.pli` pins outside-loop uses and
+ `bad_leave_label.pli` unknown/plain-group targets. Known limits:
+ MX3–MX8 are untouched.

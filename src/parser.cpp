@@ -541,6 +541,12 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
   if (kw("SELECT")) {
     return parseSelect(owner);
   } // extension (ADR-104)
+  if (kw("LEAVE")) {
+    return parseLoopExit(false);
+  } // extension (ADR-105)
+  if (kw("ITERATE")) {
+    return parseLoopExit(true);
+  } // extension (ADR-105)
   if (kw("BEGIN")) { // rule (68)
     auto st = std::make_unique<Stmt>();
     st->loc = cur().loc;
@@ -1667,6 +1673,28 @@ StmtP Parser::parseSelect(Proc* owner) {
     if (pendingEnd_.present)
       return head; // multiple closure from the OTHERWISE body
   }
+}
+
+// LEAVE [label]; / ITERATE [label]; (extension, ADR-105): loop exit and
+// continue. The label (when present) names the target iterative DO-group;
+// scope validation happens in sema, which sees the enclosing loops.
+StmtP Parser::parseLoopExit(bool isIterate) {
+  auto st = std::make_unique<Stmt>();
+  st->kind = isIterate ? Stmt::Iterate : Stmt::Leave;
+  st->loc = cur().loc;
+  advance(); // LEAVE / ITERATE
+  if (at(Tok::Word)) {
+    st->name = cur().text;
+    advance();
+  }
+  if (!eat(Tok::Semi)) {
+    d_.error(cur().loc,
+             std::string("expected ';' after ") + (isIterate ? "ITERATE (ADR-105)" : "LEAVE (ADR-105)"),
+             "");
+    resync();
+    return nullptr;
+  }
+  return st;
 }
 
 // if-statement ::= if-clause statement | if-clause balanced-statement
