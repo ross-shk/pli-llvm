@@ -1318,13 +1318,18 @@ void Sema::foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t
   }
 }
 
-// Rules (94),(99): resolve a condition to its dispatch key (0 = ERROR,
-// kSizeCondKey = SIZE, else a programmer-named condition index + 1).
+// Rules (94),(99): resolve a condition to its dispatch key (0 = ERROR, the
+// negative Stmt::k*CondKey constants are the fixed conditions, else a
+// programmer-named condition index + 1).
 int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   if (s->condName == "ERROR")
     return 0;
   if (s->condName == "SIZE")
     return Stmt::kSizeCondKey;
+  if (s->condName == "SUBSCRIPTRANGE")
+    return Stmt::kSubscriptrangeCondKey;
+  if (s->condName == "ZERODIVIDE")
+    return Stmt::kZerodivideCondKey;
   auto& names = prog_->condNames;
   auto it = std::find(names.begin(), names.end(), s->condName);
   int key = it == names.end() ? (int)names.size() + 1 : (int)(it - names.begin()) + 1;

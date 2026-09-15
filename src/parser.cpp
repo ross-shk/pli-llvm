@@ -652,8 +652,9 @@ void Parser::skipParen(const char* rule) {
   }
 }
 
-// One condition (rule 94). ERROR and SIZE are served; every other condition
-// is diagnosed with its rule number, never silently accepted.
+// One condition (rule 94). ERROR, SIZE, SUBSCRIPTRANGE, and ZERODIVIDE are
+// served; every other condition is diagnosed with its rule number, never
+// silently accepted.
 std::string Parser::parseCondition() {
   if (!at(Tok::Word)) {
     d_.error(cur().loc, "expected a condition", "(94)");
@@ -669,13 +670,17 @@ std::string Parser::parseCondition() {
     advance();
     return "SIZE";
   }
+  if (w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE") {
+    advance();
+    return w;
+  }
   if (w == "FINISH" || w == "AREA") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
   }
-  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" ||
-      w == "SUBSCRIPTRANGE" || w == "STRINGRANGE" || w == "UNDERFLOW" || w == "ZERODIVIDE") {
+  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" || w == "STRINGRANGE" ||
+      w == "UNDERFLOW") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
@@ -702,7 +707,8 @@ std::string Parser::parseCondition() {
     advance();
     if (!expect(Tok::RParen, "(99)"))
       return "";
-    if (name == "ERROR" || name == "SIZE") {
+    if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" ||
+        name == "ZERODIVIDE") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

@@ -1,0 +1,36 @@
+ /* rules (91)-(94): ON ZERODIVIDE establishes a
+    handler; SIGNAL ZERODIVIDE raises it; division and
+    modulo by zero trap route to the handler when one is
+    established, then resume with 0. */
+ onzerodiv: procedure options(main);
+    declare z fixed bin(31);
+    declare q float;
+    declare r fixed bin(31);
+    declare m fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    z = 0;
+    on zerodivide put skip list('caught zero');
+    signal zerodivide;
+    put skip list('resumed');
+    revert zerodivide;
+    on zerodivide put skip list('caught divide');
+    q = 7 / z;
+    if q ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL quot', q);
+    end;
+    r = 7 / z;
+    if r ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL fixed', r);
+    end;
+    m = mod(7, z);
+    if m ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL mod', m);
+    end;
+    revert zerodivide;
+    if fails = 0 then put skip list('PASS zerodivide');
+    else put skip list('FAIL zerodivide: fails =', fails);
+ end onzerodiv;

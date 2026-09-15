@@ -554,11 +554,21 @@ void pli_set_oncode(int c) {
   pli_oncode_val = c;
 }
 
-/* SUBSCRIPTRANGE interim (M2): a runtime subscript is out of bounds. Raised as
- * a hard error until condition handling (M4) provides ON SUBSCRIPTRANGE. */
+/* SUBSCRIPTRANGE abort (no handler): a runtime subscript is out of bounds.
+ * Reached when no SUBSCRIPTRANGE handler is established; otherwise IRGen
+ * routes the trap to the handler and resumes with the index clamped. */
 void pli_subscript_oob(void) {
   pli_rt_fini();
   fprintf(stderr, "SUBSCRIPTRANGE: array subscript out of bounds\n");
+  exit(8);
+}
+
+/* ZERODIVIDE abort (no handler): division or modulo by zero. Reached when no
+ * ZERODIVIDE handler is established; otherwise IRGen routes the trap to the
+ * handler and resumes with 0. */
+void pli_zerodivide(void) {
+  pli_rt_fini();
+  fprintf(stderr, "ZERODIVIDE: division by zero\n");
   exit(8);
 }
 
