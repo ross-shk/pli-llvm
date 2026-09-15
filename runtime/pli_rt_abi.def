@@ -25,6 +25,8 @@ PLI_FN(pli_get_list_decfixed, I64, (I64))         /* decimal input (QR1.2) */
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
 PLI_FN(pli_put_list_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */
+PLI_FN(pli_put_data_name, VOID, (CPTR, I64))         /* DATA-directed (106, QR1.5) */
+PLI_FN(pli_put_data_end, VOID, (VOID))
 /* DISPLAY one scalar value (rule 114, ADR-081) */
 PLI_FN(pli_display_char, VOID, (CPTR, I64))
 PLI_FN(pli_display_fixed, VOID, (I64))

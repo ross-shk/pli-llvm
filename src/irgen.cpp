@@ -1886,6 +1886,44 @@ void IRGen::emitDoIter(HStmt* s) {
   startBlock(endL);
 }
 
+// Data-directed output (rule (106), QR1.5): each item prints as NAME=value,
+// ", "-separated and ";"-terminated. Names are compile-time globals; values
+// reuse the list-directed printers (the runtime suppresses the blank
+// separator after a name). Sema restricted items to plain scalar variables,
+// so any other shape here is already diagnosed.
+void IRGen::emitPutDataItems(HStmt* s) {
+  for (auto& item : s->items) {
+    HExpr* t = item.get();
+    llvm::Value* name = globalString(t->sym->name);
+    b_.CreateCall(runtimeFn("pli_put_data_name"),
+                  {name, i64((long long)t->sym->name.size())});
+    Val v = emitExpr(item.get());
+    switch (v.ty.k) {
+    case TK::Char:
+      b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
+      break;
+    case TK::Float:
+      b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
+      break;
+    case TK::Bit: {
+      llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+      b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
+      break;
+    }
+    case TK::FixedBin:
+    case TK::FixedDec:
+      if (v.ty.k == TK::FixedDec && v.ty.scale > 0)
+        b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
+      else
+        b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+      break;
+    default:
+      break;
+    }
+  }
+  b_.CreateCall(runtimeFn("pli_put_data_end"), {});
+}
+
 void IRGen::emitPut(HStmt* s) {
   if (s->page)
     b_.CreateCall(runtimeFn("pli_put_page"), {});
@@ -1913,6 +1951,8 @@ void IRGen::emitPut(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_put_select"), {i64(s->fileSym->fileSlot)});
   if (s->edit) {
     emitPutEditItems(s);
+  } else if (s->data) {
+    emitPutDataItems(s);
   } else {
     for (auto& item : s->items) {
       Val v = emitExpr(item.get());
