@@ -53,3 +53,8 @@ parameters, `VALUE` constants, and the MX5 built-ins compiles without
 source rewriting and prints checked reference output; the Extensions
 ledger lists every admitted nicety with its ADR; `SELECT`/`LEAVE` as
 plain identifiers still compile (no-reserved-words guard test).
+
+Status: met by `tests/core/modern.pli` (+ `modern.inc`) — all
+approved track items (MX1–MX7, MX4a/b, `%ACTIVATE` substitution)
+compose in one checked program. Remaining: `%DO` and the
+explicitly unapproved stretch list.

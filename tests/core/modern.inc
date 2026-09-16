@@ -1,0 +1,12 @@
+     declare a(%width) fixed bin(31);
+     declare k fixed bin(31);
+     declare t fixed bin(31);
+     t = 0;
+     do k = 1 to %width;
+        a(k) = k;
+        t = t + a(k);
+     end;
+     if t ^= 10 then do;
+        fails = fails + 1;
+        put skip list('FAIL inc =', t);
+     end;
