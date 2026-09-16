@@ -297,6 +297,8 @@ llvm::Value* IRGen::clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub)
 // resuming with `zero` instead of `computed`.
 llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
                                      llvm::Value* zero) {
+  if (!zdivChecks())
+    return computed; // (NOZERODIVIDE): the raw result stands (rules (60)-(63), ADR-112)
   std::string zid = std::to_string(n_++);
   llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "zd.trap." + zid, curFn_);
   llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "zd.ok." + zid, curFn_);
@@ -1362,10 +1364,16 @@ void IRGen::emitStmt(HStmt* s) {
   } else if (blockTerminated(b_.GetInsertBlock())) {
     newBlock(); // unreachable code (e.g. after STOP): start a fresh block
   }
-  // Condition enable-state (rules (60)-(63), ADR-110): each statement sees
-  // its own (NOSIZE) OR-inherited through enclosing statements, so a
+  // Condition enable-state (rules (60)-(63), ADR-110/112): each statement
+  // sees its own disables OR-inherited through enclosing statements, so a
   // prefixed group covers its body. Balanced by construction (single exit).
-  noSizeStack_.push_back(s->noSize || (!noSizeStack_.empty() && noSizeStack_.back()));
+  CheckState top;
+  if (!checkStack_.empty())
+    top = checkStack_.back();
+  top.noSize = top.noSize || s->noSize;
+  top.noSub = top.noSub || s->noSub;
+  top.noZdiv = top.noZdiv || s->noZdiv;
+  checkStack_.push_back(top);
   switch (s->kind) {
   case HStmt::Null:
   case HStmt::Declare:
@@ -1527,7 +1535,7 @@ void IRGen::emitStmt(HStmt* s) {
     b_.CreateBr(labelBlocks_[s->name]);
     break;
   }
-  noSizeStack_.pop_back();
+  checkStack_.pop_back();
 }
 
 void IRGen::emitAssign(HStmt* s) {
@@ -2667,18 +2675,22 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
       llvm::Value* ub = k == 0 && dk.dyn ? dynUb : i64(dk.ub);
       oob = b_.CreateOr(
           oob, b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi")), "oob");
-      // A handled slip resumes with this axis clamped into range (rule 94).
-      llvm::Value* off = b_.CreateSub(clampIndex(i, lb, ub), lb, "off");
+      // A handled slip resumes with this axis clamped into range (rule 94);
+      // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
+      llvm::Value* idx = subChecks() ? clampIndex(i, lb, ub) : i;
+      llvm::Value* off = b_.CreateSub(idx, lb, "off");
       flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
       stride *= (dk.ub - dk.lb + 1); // later axes are fixed; only axis 0 is runtime
     }
-    std::string id = std::to_string(n_++);
-    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
-    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
-    b_.CreateCondBr(oob, failL, okL);
-    startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
-    startBlock(okL);
+    if (subChecks()) {
+      std::string id = std::to_string(n_++);
+      llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
+      llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
+      b_.CreateCondBr(oob, failL, okL);
+      startBlock(failL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+      startBlock(okL);
+    }
     return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "aelem");
   }
 
@@ -2693,21 +2705,25 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     oob = b_.CreateOr(
         oob, b_.CreateOr(b_.CreateICmpSLT(i, i64(lb), "lo"), b_.CreateICmpSGT(i, i64(ub), "hi")),
         "oob");
-    // A handled slip resumes with this axis clamped into range (rule 94).
-    llvm::Value* off = b_.CreateSub(clampIndex(i, i64(lb), i64(ub)), i64(lb), "off");
+    // A handled slip resumes with this axis clamped into range (rule 94);
+    // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
+    llvm::Value* idx = subChecks() ? clampIndex(i, i64(lb), i64(ub)) : i;
+    llvm::Value* off = b_.CreateSub(idx, i64(lb), "off");
     flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
     stride *= (ub - lb + 1);
   }
 
-  std::string id = std::to_string(n_++);
-  llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
-  llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
-  b_.CreateCondBr(oob, failL, okL);
+  if (subChecks()) {
+    std::string id = std::to_string(n_++);
+    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
+    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
+    b_.CreateCondBr(oob, failL, okL);
 
-  startBlock(failL);
-  emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    startBlock(failL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
 
-  startBlock(okL);
+    startBlock(okL);
+  }
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));
   return b_.CreateInBoundsGEP(arrTy, base, {i64(0), flat}, "aelem");
 }
@@ -3068,15 +3084,18 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
     llvm::Value* ub = i64(srcArr.dims[k].ub);
     llvm::Value* oob =
         b_.CreateOr(b_.CreateICmpSLT(iv, lb, "lo"), b_.CreateICmpSGT(iv, ub, "hi"), "oob");
-    // A handled slip resumes with the index clamped into range (rule 94).
-    llvm::Value* civ = clampIndex(iv, lb, ub);
-    std::string fid = std::to_string(n_++);
-    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "cs.fail." + fid, curFn_);
-    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "cs.ok." + fid, curFn_);
-    b_.CreateCondBr(oob, failL, okL);
-    startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
-    startBlock(okL);
+    // A handled slip resumes with the index clamped into range (rule 94);
+    // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
+    llvm::Value* civ = subChecks() ? clampIndex(iv, lb, ub) : iv;
+    if (subChecks()) {
+      std::string fid = std::to_string(n_++);
+      llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "cs.fail." + fid, curFn_);
+      llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "cs.ok." + fid, curFn_);
+      b_.CreateCondBr(oob, failL, okL);
+      startBlock(failL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+      startBlock(okL);
+    }
     fixedFlat = b_.CreateAdd(
         fixedFlat, b_.CreateMul(b_.CreateSub(civ, lb, "off"), i64(stride[k]), "scaled"), "ff");
   }
@@ -3166,15 +3185,18 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
       b_.CreateAdd(b_.CreateMul(yidx, i64(y->definedIsubMult), "m"), i64(y->definedIsubAdd), "c");
   llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(bidx, i64(ilb), "lo"),
                                  b_.CreateICmpSGT(bidx, i64(iub), "hi"), "oob");
-  // A handled slip resumes with the base index clamped into range (rule 94).
-  llvm::Value* cbidx = clampIndex(bidx, i64(ilb), i64(iub));
-  std::string id = std::to_string(n_++);
-  llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
-  llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
-  b_.CreateCondBr(oob, failL, okL);
-  startBlock(failL);
-  emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
-  startBlock(okL);
+  // A handled slip resumes with the base index clamped into range (rule 94);
+  // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
+  llvm::Value* cbidx = subChecks() ? clampIndex(bidx, i64(ilb), i64(iub)) : bidx;
+  if (subChecks()) {
+    std::string id = std::to_string(n_++);
+    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
+    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
+    b_.CreateCondBr(oob, failL, okL);
+    startBlock(failL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    startBlock(okL);
+  }
 
   llvm::Value* flat = i64(0);
   long long stride = 1;

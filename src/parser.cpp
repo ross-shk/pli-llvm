@@ -452,18 +452,27 @@ StmtP Parser::parseStatement(Proc* owner) {
     }
     if (at(Tok::Colon)) {
       advance();
-      // Extension (ADR-110): SIZE/NOSIZE prefixes are enforced (MX4a);
-      // any other condition keeps the unenforced warning.
+      // Extensions (ADR-110/112): SIZE/NOSIZE and SUBSCRIPTRANGE/
+      // NOSUBSCRIPTRANGE and ZERODIVIDE/NOZERODIVIDE prefixes are
+      // enforced; any other condition keeps the unenforced warning.
       bool anyWord = false, allHandled = true;
       for (size_t k = save; k < i_; ++k) {
         if (t_[k].kind != Tok::Word)
           continue;
         anyWord = true;
         const std::string& w = t_[k].text;
-        if (w == "SIZE")
+        if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE")
           continue; // already enabled: no-op
         if (w == "NOSIZE") {
           st->noSize = true;
+          continue;
+        }
+        if (w == "NOSUBSCRIPTRANGE") {
+          st->noSub = true;
+          continue;
+        }
+        if (w == "NOZERODIVIDE") {
+          st->noZdiv = true;
           continue;
         }
         allHandled = false;
@@ -553,6 +562,8 @@ StmtP Parser::parseStatement(Proc* owner) {
     if (s) {
       // Condition prefixes (rules (60)-(63), ADR-110) ride with labels.
       s->noSize = st->noSize;
+      s->noSub = st->noSub;
+      s->noZdiv = st->noZdiv;
       return s;
     }
   }
@@ -561,6 +572,8 @@ StmtP Parser::parseStatement(Proc* owner) {
   if (k) {
     k->labels = st->labels;
     k->noSize = st->noSize;
+    k->noSub = st->noSub;
+    k->noZdiv = st->noZdiv;
     return k;
   }
 
@@ -568,6 +581,8 @@ StmtP Parser::parseStatement(Proc* owner) {
   if (s) {
     s->labels = st->labels;
     s->noSize = st->noSize;
+    s->noSub = st->noSub;
+    s->noZdiv = st->noZdiv;
   }
   return s;
 }
