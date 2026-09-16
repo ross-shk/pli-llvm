@@ -1,0 +1,16 @@
+ /* Chapter 9 (ADR-113): parameterized includes —
+    the includer sets activated % variables; the
+    include sizes an array and selects members. */
+ %declare n, tag;
+ %activate n, tag;
+ %n = 3;
+ %tag = 1;
+ %deactivate tag;
+ %activate tag;
+ ppmain: procedure options(main);
+    declare fails fixed bin(31);
+    fails = 0;
+    %include 'pp_arr.inc';
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL param: fails =', fails);
+ end ppmain;

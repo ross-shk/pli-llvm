@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -33,8 +34,12 @@ private:
                      int col);
   bool handleAssignment(const std::filesystem::path& input, const std::string& name,
                         const std::string& operand, int line, int col);
-  bool handleActivation(const std::filesystem::path& input, const std::string& name, int line,
-                        int col);
+  bool handleActivation(const std::filesystem::path& input, const std::string& name,
+                        const std::string& operand, int line, int col);
+  // Bare %NAME (extension, ADR-113): expand an activated preprocessor
+  // variable to its decimal value.
+  bool substituteRef(const std::filesystem::path& input, const std::string& name, int line,
+                     int col, std::string& output);
   bool handleConditional(const std::filesystem::path& input, const std::string& name, int line,
                          int col);
   bool handleDo(const std::filesystem::path& input, const std::string& name, int line, int col);
@@ -48,4 +53,6 @@ private:
   std::vector<std::filesystem::path> includeDirs_;
   // Preprocessor integer variables (%DECLARE), keyed uppercase (ADR-083).
   std::map<std::string, long long> ppVars_;
+  // Activated variables (extension, ADR-113): only these expand as %NAME.
+  std::set<std::string> ppActive_;
 };
