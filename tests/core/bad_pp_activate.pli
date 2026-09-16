@@ -1,0 +1,5 @@
+ /* Chapter 9 (ADR-113): activating an undeclared
+    preprocessor variable is diagnosed. */
+ %activate nosuch;
+ badactivate: procedure options(main);
+ end badactivate;

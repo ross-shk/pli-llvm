@@ -1,0 +1,13 @@
+     declare a(%n) fixed bin(31);
+     declare i fixed bin(31);
+     declare s fixed bin(31);
+     s = 0;
+     do i = 1 to %n;
+        a(i) = i * 10;
+        s = s + a(i);
+     end;
+     if s ^= 60 then do;
+        fails = fails + 1;
+        put skip list('FAIL arr =', s);
+     end;
+     %if tag = 1 %then %include 'pp_tag.inc';

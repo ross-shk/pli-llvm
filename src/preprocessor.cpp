@@ -316,7 +316,8 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
       ok = true;
   } else if (name == "ACTIVATE" || name == "DEACTIVATE") {
     if (active)
-      ok = handleActivation(path, name, directiveLine, directiveCol);
+      ok = handleActivation(path, name, source.substr(wordEnd, end - wordEnd), directiveLine,
+                            directiveCol);
     else
       ok = true;
   } else if (name == "DO" || name == "END") {
@@ -345,6 +346,23 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     }
     ok = true;
   } else {
+    // Bare %NAME (extension, ADR-113): a reference expanding an activated
+    // variable. Anything else stays an assignment attempt. The reference
+    // ends at the name itself (mid-statement uses like `a(%N)` never reach
+    // the directive-terminating `;`).
+    size_t rs = wordEnd;
+    while (rs < source.size() &&
+           (source[rs] == ' ' || source[rs] == '\t' || source[rs] == '\f'))
+      ++rs;
+    if (rs >= source.size() || source[rs] != '=') {
+      if (active)
+        ok = substituteRef(path, name, directiveLine, directiveCol, output);
+      else
+        ok = true;
+      if (!ok)
+        return npos;
+      return wordEnd;
+    }
     if (active)
       ok = handleAssignment(path, name, source.substr(wordEnd, end - wordEnd), directiveLine,
                             directiveCol);
@@ -629,9 +647,45 @@ bool Preprocessor::handleAssignment(const fs::path& input, const std::string& na
   return true;
 }
 
-bool Preprocessor::handleActivation(const fs::path& input, const std::string& name, int line,
-                                    int col) {
-  return unsupported(input, name, line, col);
+bool Preprocessor::handleActivation(const fs::path& input, const std::string& name,
+                                    const std::string& operand, int line, int col) {
+  // %ACTIVATE a, b / %DEACTIVATE a, b (extension, ADR-113): gate reference
+  // substitution; idempotent like %DECLARE redeclaration.
+  std::stringstream ss(operand);
+  std::string item;
+  bool any = false;
+  while (std::getline(ss, item, ',')) {
+    std::string var = upper(trim(item));
+    if (var.empty()) {
+      error(input, line, col, "expected a name in %" + name);
+      return false;
+    }
+    if (!ppVars_.count(var)) {
+      error(input, line, col, "%" + var + " is not a declared preprocessor variable");
+      return false;
+    }
+    any = true;
+    if (name == "ACTIVATE")
+      ppActive_.insert(var);
+    else
+      ppActive_.erase(var);
+  }
+  if (!any) {
+    error(input, line, col, "expected a name in %" + name);
+    return false;
+  }
+  return true;
+}
+
+bool Preprocessor::substituteRef(const fs::path& input, const std::string& name, int line, int col,
+                                 std::string& output) {
+  auto it = ppVars_.find(name);
+  if (it == ppVars_.end())
+    return error(input, line, col, "%" + name + " is not a declared preprocessor variable");
+  if (!ppActive_.count(name))
+    return error(input, line, col, "%" + name + " is not an active preprocessor variable");
+  output += std::to_string(it->second);
+  return true;
 }
 
 bool Preprocessor::handleConditional(const fs::path& input, const std::string& name, int line,

@@ -1,0 +1,7 @@
+ /* Chapter 9 (ADR-113): referencing an inactivated
+    preprocessor variable is diagnosed. */
+ %declare n;
+ %n = 3;
+ badactive: procedure options(main);
+    declare a(%n) fixed bin(31);
+ end badactive;

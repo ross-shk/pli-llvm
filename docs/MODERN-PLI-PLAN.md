@@ -38,7 +38,7 @@ tasking, keyed files).
 
 | Order | Slice | Effort | Deliverable |
 |---|---|---:|---|
-| MX8 | Iterative/conditional preprocessing | 2–3w | complete `%DECLARE`/`%ACTIVATE`/`%DO`/`%IF` to the point where ordinary parameterized includes work, with recursion and depth diagnostics matching the `%INCLUDE` precedent; full macro evaluation stays diagnosed |
+| MX8 | Iterative/conditional preprocessing | 2–3w | `%ACTIVATE`/`%DEACTIVATE` gating bare-`%NAME` substitution done, so ordinary parameterized includes work (ADR-113); `%DO` loops still diagnosed; full macro evaluation stays diagnosed |
 
 ## Stretch (unestimated, admit one at a time)
 

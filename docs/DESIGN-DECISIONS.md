@@ -2880,3 +2880,28 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  from the IR and that formerly-aborting programs complete, plus
  in-bounds behavior. Known limits: extent-mismatch aborts stay;
  MX8 is untouched.
+
+ ## ADR-113 — Parameterized includes via activated substitution
+
+ Context. Preprocessor variables (`%DECLARE`, ADR-083) could only
+ drive `%IF` conditions: a bare `%NAME` fell into the assignment
+ path and errored, so no include could depend on includer-set
+ values. `%ACTIVATE` was a stub rejection.
+
+ Decision. `%ACTIVATE`/`%DEACTIVATE` take a name list (undeclared
+ names diagnosed; idempotent like `%DECLARE` redeclaration) and
+ gate substitution: a bare `%NAME` with any other following text
+ expands an activated variable to its decimal value, ending at
+ the name so mid-statement uses like `a(%N)` work; anything with
+ `=` stays an assignment, and declared-but-inactive or
+ undeclared names are diagnosed. Substitution shares state
+ across `%INCLUDE` nesting, which is exactly the parameter
+ mechanism; strings, comments, and inactive `%IF` arms are
+ untouched. Diagnostics cite C28 Chapter 9.
+
+ Consequences. `pp_param.pli` with `pp_arr.inc`/`pp_tag.inc`
+ proves context-driven bounds and member selection;
+ `bad_pp_active.pli` and `bad_pp_activate.pli` pin the gate.
+ Known limits: `%DO`, `%GO TO`, and `%PROCEDURE` macros stay
+ diagnosed; activation is not consulted inside `%IF`
+ expressions (pre-existing behavior).
