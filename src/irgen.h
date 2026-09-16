@@ -317,16 +317,23 @@ private:
     llvm::BasicBlock* contBB = nullptr;
   };
   std::vector<LoopTargets> loopStack_;
-  // Condition enable-state (rules (60)-(63), ADR-110): effective (NOSIZE)
-  // per statement, OR-inherited through compound statements so a prefixed
-  // group covers its body. SIZE checks read the top.
-  std::vector<char> noSizeStack_;
+  // Condition enable-state (rules (60)-(63), ADR-110/112): effective
+  // disables per statement, OR-inherited through compound statements so a
+  // prefixed group covers its body. The trap sites read the top.
+  struct CheckState {
+    bool noSize = false;
+    bool noSub = false;
+    bool noZdiv = false;
+  };
+  std::vector<CheckState> checkStack_;
   // Global --no-size-checks (ADR-111) disables every SIZE trap, including
   // ones an ON SIZE handler would otherwise route.
   bool noSizeChecks_ = false;
   bool sizeChecks() const {
-    return !noSizeChecks_ && (noSizeStack_.empty() || !noSizeStack_.back());
+    return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
   }
+  bool subChecks() const { return checkStack_.empty() || !checkStack_.back().noSub; }
+  bool zdivChecks() const { return checkStack_.empty() || !checkStack_.back().noZdiv; }
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.

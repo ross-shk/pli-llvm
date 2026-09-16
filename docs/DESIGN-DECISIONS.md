@@ -2857,3 +2857,26 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  Consequences. `driver/nosize_flag` proves an unprefixed overflow
  wraps instead of aborting. Known limits: no per-procedure
  granularity (use `(NOSIZE)` for that); MX4b is untouched.
+
+ ## ADR-112 — NOSUBSCRIPTRANGE and NOZERODIVIDE elision
+
+ Context. The MX4a enable-state stack carried only `SIZE`; the
+ `SUBSCRIPTRANGE` and `ZERODIVIDE` traps still fired under their
+ prefixes. The stack generalizes to a three-flag state with the
+ same OR-inheritance.
+
+ Decision. `(NOSUBSCRIPTRANGE)` uses raw indices with no bounds
+ blocks at all four index sites (fixed/dynamic subscripts,
+ cross-sections, DEFINED-`iSUB` overlays); by-name extent
+ mismatches keep notifying-then-aborting since no index exists
+ to resume with and skipping the copy would corrupt memory.
+ `(NOZERODIVIDE)` returns the raw result from the shared
+ `zerodivideResume` helper, covering `/`, `DIVIDE`, and both
+ `MOD` forms at once. Both reuse the MX4a stack, parser
+ forwarding (fixed to carry all three flags), and warning rule:
+ only fully-handled prefix lists stay silent.
+
+ Consequences. `driver/nochecks` asserts the trap blocks vanish
+ from the IR and that formerly-aborting programs complete, plus
+ in-bounds behavior. Known limits: extent-mismatch aborts stay;
+ MX8 is untouched.
