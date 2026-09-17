@@ -1,12 +1,16 @@
 # Implementation plan
 
 M0, M1, and M2 are complete. Remaining 1966 language coverage has moved to
-`QUICK-RELEASE-IMPLEMENTATION-PLAN.md`: `QR1` is the Pareto release and `QR2`
+`archive/QUICK-RELEASE-IMPLEMENTATION-PLAN.md`: `QR1` is the Pareto release and `QR2`
 is the complete conformance pass. The milestone descriptions below remain as
 subsystem context, not as a second scheduling queue. Optimization, debug
 information, and non-1966 interoperability remain scheduled here.
 Completed features mentioned in the subsystem descriptions are context only and
-are excluded from quick release deliverables and estimates.
+are excluded from quick release deliverables and estimates. The quick-release
+supplements are archived under `archive/` (scheduling superseded; live
+coverage is tracked in `GRAMMAR-COVERAGE.md` and `archive/C28-COVERAGE.md`), and
+non-1966 extension work is scheduled by `MODERN-PLI-PLAN.md`; milestone rows
+below marked "moved to QR1/QR2" refer to that frozen matrix.
 
 Effort is in engineer-weeks for one experienced compiler engineer; parallelism
 notes say what can proceed concurrently.
@@ -33,8 +37,8 @@ both plans.
 
 ## Prioritization policy
 
-For transferred language coverage, the quick release plan controls phase and
-ordering. Work enters QR1 when it unlocks many ordinary programs or is a
+For transferred language coverage, the quick release plan controlled phase and
+ordering (supplements archived; the coverage ledgers govern now). Work enters QR1 when it unlocks many ordinary programs or is a
 dependency of several later features. Within each slice, implement the smallest
 generally useful part first and diagnose the remainder with its rule number.
 
@@ -241,7 +245,8 @@ pass.
 **Conformance.** GRAMMAR-COVERAGE.md remains the rule ledger. Definition of
 done for a milestone includes moving its rules to implemented and tested.
 Rules keep their current milestone labels until their quick release slice lands;
-planned 1966 scope is scheduled by QR1/QR2. Unsupported rules must continue to
+the archived QR1/QR2 matrix no longer schedules new work — GRAMMAR-COVERAGE.md
+and archive/C28-COVERAGE.md govern. Unsupported rules must continue to
 cite a TR rule number or, for unique 1966 scope, the C28-6571-3 chapter and
 named subsection.
 
