@@ -1110,7 +1110,14 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
   if (w == "CHARACTER" || w == "CHAR") {
     bag.character = true;
     advance();
-    if (at(Tok::LParen)) {
+    if (at(Tok::LParen) && peek().kind == Tok::Star) {
+      // A '*' length (rule (18)) is an adjustable extent; recorded for sema
+      // to diagnose where it is not served, never silently defaulted.
+      advance();
+      advance();
+      bag.starLen = true;
+      expect(Tok::RParen, rule);
+    } else if (at(Tok::LParen)) {
       parenNums(a, b);
       if (a > 0)
         bag.slen = a;
@@ -1120,7 +1127,13 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
   if (w == "BIT") {
     bag.bit = true;
     advance();
-    if (at(Tok::LParen)) {
+    if (at(Tok::LParen) && peek().kind == Tok::Star) {
+      // Same adjustable-extent marker as CHARACTER (rule (18)).
+      advance();
+      advance();
+      bag.starLen = true;
+      expect(Tok::RParen, rule);
+    } else if (at(Tok::LParen)) {
       parenNums(a, b);
       if (a > 0)
         bag.slen = a;
@@ -1524,10 +1537,14 @@ void Parser::parseDeclTail(DeclItem& item) {
   } else if (bag.complex) {
     item.ty = Type::complexTy();
   } else if (bag.character) {
+    if (bag.starLen)
+      d_.error(item.loc, "a '*' string length is not implemented in this stage", "(18)");
     item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
   } else if (bag.bit) {
     int n = bag.slen > 0 ? bag.slen : 1;
     item.ty = Type::bit(n);
+    if (bag.starLen)
+      d_.error(item.loc, "a '*' string length is not implemented in this stage", "(18)");
     if (n != 1) {
       // Only BIT(1) is served; arbitrary-length bit strings are M2. Never
       // silently miscompile a wider bit value as a single bit (invariant 2).
@@ -1673,9 +1690,12 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
 // Parse a single ENTRY parameter type, using the same scalar-attribute
 // accumulator as parseDeclItem, restricted to the scalar computational types.
 bool Parser::parseDescriptorType(Type& out) {
+  SourceLoc l = cur().loc;
   AttrBag bag;
   while (parseScalarAttr(bag, "(38)")) {
   }
+  if (bag.starLen)
+    d_.error(l, "a '*' string length is not implemented in this stage", "(38)");
   if (bag.character)
     out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
   else if (bag.bit)

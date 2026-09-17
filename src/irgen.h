@@ -220,6 +220,9 @@ private:
   Val loadSym(Symbol* sym, const Type& ty);
   void storeTo(Symbol* sym, const Val& v, SourceLoc loc);
   void storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v);
+  // Copy a character value into a buffer (rules (34),(37),(86)): blank-pad or
+  // truncate to the destination length, setting the live length for VARYING.
+  void storeCharTo(llvm::Value* addr, const Type& dst, const Val& v, SourceLoc loc);
   // An LLVM scalar constant for an INITIAL element value (rule 26), or null for
   // types without a constant form (e.g. STRUCT).
   llvm::Constant* scalarInitConstant(const Type& ty, const Expr* ini);
@@ -301,8 +304,9 @@ private:
   HProc* curProc_ = nullptr;
   Type curRetTy_; // result type of the function currently being emitted (the impl's
                   // common entry type for a multi-entry procedure, rule (56))
-  // The hidden result pointer of a structure-valued function (rule 127): the
-  // caller-supplied buffer that a RETURN(struct) copies into before returning.
+  // The hidden result pointer of a structure- or character-valued function
+  // (rules 127 and (34),(37)): the caller-supplied buffer that a RETURN
+  // copies into before returning void.
   llvm::Value* structRetPtr_ = nullptr;
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
   // Enclosing iterative groups for LEAVE/ITERATE (extension, ADR-105):

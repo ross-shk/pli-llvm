@@ -405,8 +405,15 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
   for (const Type& t : sym->entryParams)
     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
       pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
+  // An external character-valued function (rule (34)) has no PL/I caller to
+  // supply the hidden result buffer; diagnosed, and given a void stub so
+  // emission continues toward the final diagnostic check.
+  bool extChar = sym->entryIsFunction && sym->entryRetTy.isChar();
+  if (extChar)
+    d_.error(sym->loc, "external character-valued functions are not implemented in this stage",
+             "(34)");
   llvm::Type* rty =
-      sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34) RETURNS
+      sym->entryIsFunction && !extChar ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34)
   llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
@@ -417,8 +424,22 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
 std::string IRGen::run(HProgram& prog) {
   // Reject unsupported signatures before constructing a partial module.
   for (auto& p : prog.procs) {
-    if (p->isFunction && p->retTy.isChar())
-      d_.error(p->loc, "character-valued functions are not implemented in this stage", "(34)");
+    bool hasEntries = false;
+    for (auto& st : p->body)
+      if (st && st->kind == HStmt::Entry) {
+        hasEntries = true;
+        break;
+      }
+    // A character-valued function (rules (34),(37)) returns through a hidden
+    // result buffer like a structure (rule 127); with ENTRY segments the
+    // shared impl cannot carry the buffer, so it stays diagnosed (rule 56).
+    if (hasEntries && p->commonRetTy.isChar())
+      for (auto& st : p->body)
+        if (st && st->kind == HStmt::Entry)
+          d_.error(st->loc,
+                   "a character-returning procedure with ENTRY statements is not implemented in "
+                   "this stage",
+                   "(56)");
     if (p->isFunction && p->retTy.isStruct()) {
       for (auto& st : p->body)
         if (st && st->kind == HStmt::Entry)
@@ -869,10 +890,10 @@ void IRGen::collectGotoBlocks(HStmt* s) {
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
-  bool sret = p->isFunction && p->retTy.isStruct();
-  // A structure-valued function (rule 127) returns through a hidden result
-  // pointer and returns void: the caller allocates the storage and passes its
-  // address as the first argument.
+  bool sret = p->isFunction && (p->retTy.isStruct() || p->retTy.isChar());
+  // A structure-valued (rule 127) or character-valued (rules (34),(37))
+  // function returns through a hidden result pointer and returns void: the
+  // caller allocates the storage and passes its address as the first argument.
   // The shared implementation returns the single result type shared by every
   // function-valued entry point (rule 56): the procedure's own RETURNS type
   // when it is a function, else the common RETURNS type of its function ENTRYs
@@ -1016,9 +1037,9 @@ void IRGen::emitProc(HProc* p) {
     if (s->isStatic && s->kind == Symbol::Var)
       symAddr_[s] = mod_.getGlobalVariable(s->irName.substr(1), true);
 
-  llvm::Type* retLLVM = (p->isFunction && p->retTy.isStruct())
-                            ? b_.getVoidTy()
-                            : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
+  llvm::Type* retLLVM = (p->isFunction && (p->retTy.isStruct() || p->retTy.isChar()))
+                                ? b_.getVoidTy()
+                                : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
 
   // rule (56): ENTRY statements declare alternate entry points.
   std::vector<HStmt*> entries;
@@ -1050,8 +1071,8 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
   // dope slot; the trailing args are the static links (rule (8)).
   size_t ai = 0;
-  if (p->isFunction && p->retTy.isStruct())
-    structRetPtr_ = fn->getArg(ai++); // hidden result pointer (rule 127)
+  if (p->isFunction && (p->retTy.isStruct() || p->retTy.isChar()))
+    structRetPtr_ = fn->getArg(ai++); // hidden result pointer (rules 127, (34))
   for (Symbol* s : p->paramSyms)
     symAddr_[s] = fn->getArg(ai++);
   for (Symbol* s : p->paramSyms)
@@ -1081,8 +1102,8 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
-    if (p->isFunction && p->retTy.isStruct())
-      b_.CreateRetVoid(); // structure-valued: result written to the hidden pointer
+    if (p->isFunction && (p->retTy.isStruct() || p->retTy.isChar()))
+      b_.CreateRetVoid(); // hidden-buffer result already written by RETURN
     else if (p->isFunction)
       b_.CreateRet(llvm::Constant::getNullValue(retLLVM)); // fall-off: return a zero value
     else
@@ -1481,6 +1502,12 @@ void IRGen::emitStmt(HStmt* s) {
       Val v = emitExpr(s->value.get());
       llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curProc_->retTy)));
       b_.CreateMemCpy(structRetPtr_, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+      b_.CreateRetVoid();
+    } else if (curProc_->isFunction && curProc_->retTy.isChar()) {
+      // Character-valued function (rules (34),(37)): copy the value into the
+      // caller's hidden buffer, blank-padding or truncating (rule (86)).
+      Val v = emitExpr(s->value.get());
+      storeCharTo(structRetPtr_, curProc_->retTy, v, s->loc);
       b_.CreateRetVoid();
     } else if (!curRetTy_.isVoid()) {
       // Valued return: the impl's common entry type (rule (56)) may be valued
@@ -2593,11 +2620,12 @@ void IRGen::emitCall(HStmt* s) {
       en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
 
   std::vector<llvm::Value*> args;
-  // A structure-returning callee (rule 127) takes a hidden result buffer as its
-  // first argument; the CALL statement discards the returned value.
+  // A structure-returning (rule 127) or character-returning (rules (34),(37))
+  // callee takes a hidden result buffer as its first argument; the CALL
+  // statement discards the returned value.
   Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
                 : (callee ? callee->retTy : Type::voidTy());
-  if (rty.isStruct())
+  if (rty.isStruct() || rty.isChar())
     args.push_back(entryAlloca(llvmTy(rty), "sret"));
   for (size_t i = 0; i < s->args.size(); ++i) {
     HExpr* a = s->args[i].get();
@@ -2970,26 +2998,30 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v) {
   b_.CreateStore(val, addr);
 }
 
+void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceLoc loc) {
+  if (!v.ty.isChar()) {
+    d_.error(loc,
+             "conversion from " + v.ty.desc() + " to " + dt.desc() +
+                 " is not implemented in this stage",
+             "(86)");
+    return;
+  }
+  if (dt.varying) {
+    llvm::Value* dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
+    llvm::Value* ln =
+        b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(dt.len), v.ptr, v.len});
+    llvm::Value* lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
+    b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
+  } else {
+    b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(dt.len), v.ptr, v.len});
+  }
+}
+
 void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
   const Type& dt = sym->ty;
   llvm::Value* addr = addressOf(sym);
   if (dt.isChar()) {
-    if (!v.ty.isChar()) {
-      d_.error(loc,
-               "conversion from " + v.ty.desc() + " to " + dt.desc() +
-                   " is not implemented in this stage",
-               "(86)");
-      return;
-    }
-    if (dt.varying) {
-      llvm::Value* dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
-      llvm::Value* ln =
-          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(dt.len), v.ptr, v.len});
-      llvm::Value* lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
-      b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
-    } else {
-      b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(dt.len), v.ptr, v.len});
-    }
+    storeCharTo(addr, dt, v, loc);
     return;
   }
   Val cv = convert(v, dt, loc);
@@ -3554,6 +3586,14 @@ Val IRGen::emitExpr(HExpr* e) {
       }
       Type rty = e->sym->entryIsFunction ? e->sym->entryRetTy : Type::voidTy();
       llvm::Function* extFn = calleeFn(e->sym);
+      if (rty.isChar()) {
+        // External character-valued function: diagnosed in calleeFn (rule
+        // (34)); yield a dummy buffer so emission continues safely.
+        v.ty = rty;
+        v.ptr = entryAlloca(llvmTy(rty), "sret");
+        v.len = rty.varying ? i64(0) : i64(rty.len);
+        return v;
+      }
       std::vector<llvm::Value*> args;
       for (size_t i = 0; i < e->args.size() && i < e->sym->entryParams.size(); ++i) {
         HExpr* a = e->args[i].get();
@@ -3584,16 +3624,11 @@ Val IRGen::emitExpr(HExpr* e) {
                      .substr(1))
            : mod_.getFunction(callee->irName.substr(1));
     std::vector<Symbol*> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
-    if (rty.isChar()) {
-      v.ty = e->ty;
-      v.reg = i64(0);
-      return v;
-    } // diagnosed in emitProc
     std::vector<llvm::Value*> args;
     llvm::Value* sretPtr = nullptr;
-    if (rty.isStruct()) {
-      // Structure-valued function (rule 127): the caller allocates the result
-      // buffer and passes its address as the hidden first argument.
+    if (rty.isStruct() || rty.isChar()) {
+      // Hidden-buffer result (rules 127 and (34),(37)): the caller allocates
+      // the result buffer and passes its address as the first argument.
       sretPtr = entryAlloca(llvmTy(rty), "sret");
       args.push_back(sretPtr);
     }
@@ -3618,13 +3653,25 @@ Val IRGen::emitExpr(HExpr* e) {
         args.push_back(ext);
       }
     appendStaticLinks(callee, args);
-    // A structure-returning callee returns void (the result is written to the
-    // hidden buffer), so the call cannot carry a value name.
-    llvm::CallInst* call =
-        rty.isStruct() ? b_.CreateCall(calleeFn, args) : b_.CreateCall(calleeFn, args, "fres");
+    // A hidden-buffer callee returns void (the result is written to the
+    // buffer), so the call cannot carry a value name.
+    llvm::CallInst* call = (rty.isStruct() || rty.isChar())
+                               ? b_.CreateCall(calleeFn, args)
+                               : b_.CreateCall(calleeFn, args, "fres");
     v.ty = rty;
     if (rty.isStruct()) {
       v.ptr = sretPtr; // the result lives in the caller's buffer
+    } else if (rty.isChar()) {
+      // The character result lives in the caller's buffer: data pointer plus
+      // live length (reloaded for VARYING, declared for fixed length).
+      if (rty.varying) {
+        llvm::Value* lp = b_.CreateStructGEP(llvmTy(rty), sretPtr, 0, "clenp");
+        v.ptr = b_.CreateStructGEP(llvmTy(rty), sretPtr, 1, "cdata");
+        v.len = b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
+      } else {
+        v.ptr = sretPtr;
+        v.len = i64(rty.len);
+      }
     } else if (rty.isBit()) {
       v.reg = b_.CreateTrunc(call, b_.getInt1Ty(), "fb");
     } else {

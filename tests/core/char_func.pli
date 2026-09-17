@@ -1,0 +1,46 @@
+ /* Character-valued functions (rules (34),
+    (37)): a fixed CHAR(n) or CHAR(n)
+    VARYING result returns through a
+    hidden buffer, padded/truncated. */
+ char_func: procedure options(main);
+    declare s char(5);
+    declare u char(6);
+    declare v char(10) varying;
+    declare w char(3);
+    declare fails fixed bin(31);
+    fails = 0;
+    greet: procedure returns(char(5));
+       return('hi');
+    end greet;
+    shout: procedure returns(char(10)
+       varying);
+       return('hey');
+    end shout;
+    long: procedure returns(char(3));
+       return('abcdef');
+    end long;
+    s = greet();
+    if substr(s, 1, 2) ^= 'hi' then
+       fails = fails + 1;
+    if substr(s, 3, 3) ^= '   ' then
+       fails = fails + 1;
+    v = shout();
+    if v ^= 'hey' then fails = fails + 1;
+    if length(v) ^= 3 then fails = fails + 1;
+    w = long();
+    if w ^= 'abc' then fails = fails + 1;
+    s = greet() || '!';
+    if substr(s, 1, 2) ^= 'hi' then
+       fails = fails + 1;
+    if substr(s, 3, 1) ^= ' ' then
+       fails = fails + 1;
+    u = greet() || '!';
+    if substr(u, 1, 2) ^= 'hi' then
+       fails = fails + 1;
+    if substr(u, 6, 1) ^= '!' then
+       fails = fails + 1;
+    if fails = 0 then
+       put skip list('PASS char_func');
+    else put skip list('FAIL char_func:',
+       fails);
+ end char_func;
