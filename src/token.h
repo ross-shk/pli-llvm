@@ -12,11 +12,11 @@
 
 enum class Tok {
   Eof,
-  Word,    // identifier or contextual keyword
-  Number,  // arithmetic constant
-  Isub,    // iSUB dummy variable, 'integer SUB' with no blanks (rule 134)
-  CharLit, // '...'   (character-string constant)
-  BitLit,  // '...'B  (bit-string constant)
+  Word,     // identifier or contextual keyword
+  Number,   // arithmetic constant
+  Isub,     // iSUB dummy variable, 'integer SUB' with no blanks (rule 134)
+  CharLit,  // '...'   (character-string constant)
+  BitLit,   // '...'B  (bit-string constant)
   DqString, // "..."  (extension: quoted %REPLACE replacement, ADR-082)
   // Punctuation
   Semi,
@@ -42,8 +42,8 @@ enum class Tok {
   Ge,
   Ne,
   Ngt,
-  Nlt,   // < <= > >= ¬= ¬> ¬<
-  Arrow, // ->  locator qualification
+  Nlt,     // < <= > >= ¬= ¬> ¬<
+  Arrow,   // ->  locator qualification
   Percent, // %  (extension: preprocessor directives, ADR-077)
 };
 

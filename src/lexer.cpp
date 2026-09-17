@@ -505,7 +505,8 @@ std::vector<Token> Lexer::applyReplace(std::vector<Token> in) {
           quoted = quoted || in[k].kind == Tok::DqString;
         if (quoted) {
           if (end - start != 1) {
-            d_.error(nl, "a quoted %REPLACE operand must be the whole replacement text (ADR-082)", "");
+            d_.error(nl, "a quoted %REPLACE operand must be the whole replacement text (ADR-082)",
+                     "");
             i = j;
             continue;
           }

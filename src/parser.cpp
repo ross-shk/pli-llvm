@@ -1,5 +1,24 @@
 #include "parser.h"
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
+
+// Bounded non-negative integer literal for precisions, scales, lengths and
+// levels (static-analysis P2): atoi() is undefined on overflow, so parse
+// with strtol and diagnose out-of-range input instead of wrapping silently.
+// Returns 0 after diagnosing; callers must not emit code once diagnostics
+// failed (the driver skips sema/codegen then, as for every parse error).
+static int boundedNonNeg(const std::string& text, SourceLoc loc, Diags& d, const char* what,
+                         const char* rule) {
+  errno = 0;
+  char* end = nullptr;
+  long v = strtol(text.c_str(), &end, 10);
+  if (errno == ERANGE || end == text.c_str() || *end != '\0' || v < 0 || v > INT_MAX) {
+    d.error(loc, std::string(what) + " is out of range", rule);
+    return 0;
+  }
+  return (int)v;
+}
 
 // Parse an exact FIXED DECIMAL constant (rule 135): digits with a fraction
 // point and no exponent, e.g. "3.14". Sets ival to the value scaled by 10^q,
@@ -244,10 +263,9 @@ StmtP Parser::parseDefineAlias() {
     return nullptr;
   }
   if (item.level != 0 || item.init || item.initCall || !item.initItems.empty() || item.valueInit ||
-      !item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty() ||
-      item.isEntry || item.fileAttr || !item.entryParams.empty()) {
-    d_.error(item.loc, "only scalar data attributes are implemented in DEFINE ALIAS (ADR-114)",
-             "");
+      !item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty() || item.isEntry ||
+      item.fileAttr || !item.entryParams.empty()) {
+    d_.error(item.loc, "only scalar data attributes are implemented in DEFINE ALIAS (ADR-114)", "");
     resync();
     return nullptr;
   }
@@ -868,8 +886,7 @@ std::string Parser::parseCondition() {
     advance();
     if (!expect(Tok::RParen, "(99)"))
       return "";
-    if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" ||
-        name == "ZERODIVIDE") {
+    if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }
@@ -985,10 +1002,7 @@ StmtP Parser::parseDeclare() {
       if (names.empty())
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
-      if (!parseDeclTail(base)) {
-        resync();
-        return st;
-      }
+      parseDeclTail(base);
       if (base.init)
         d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage",
                  "(26)");
@@ -1036,11 +1050,11 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     if (!eat(Tok::LParen))
       return false;
     if (at(Tok::Number)) {
-      n1 = atoi(cur().text.c_str());
+      n1 = boundedNonNeg(cur().text, cur().loc, d_, "precision", rule);
       advance();
     }
     if (eat(Tok::Comma) && at(Tok::Number)) {
-      n2 = atoi(cur().text.c_str());
+      n2 = boundedNonNeg(cur().text, cur().loc, d_, "precision", rule);
       advance();
     }
     expect(Tok::RParen, rule);
@@ -1128,7 +1142,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
 // declaration ::= [integer] identifier [dimension] [attribute•••]  rule (11)
 bool Parser::parseDeclItem(DeclItem& item) {
   if (at(Tok::Number) && !cur().isFloat) {
-    item.level = atoi(cur().text.c_str());
+    item.level = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
     advance();
   }
   if (!at(Tok::Word)) {
@@ -1138,13 +1152,14 @@ bool Parser::parseDeclItem(DeclItem& item) {
   item.name = cur().text;
   item.loc = cur().loc;
   advance();
-  return parseDeclTail(item);
+  parseDeclTail(item);
+  return true;
 }
 
 // Dimension + attribute tail of a declaration (rule 11), shared verbatim by a
 // factored declaration list (DECLARE (A, B) FIXED): the dimension attribute
 // first, then the attribute bag, ending by building item.ty / dims / init.
-bool Parser::parseDeclTail(DeclItem& item) {
+void Parser::parseDeclTail(DeclItem& item) {
   // Dimension attribute (rules (12),(13)): a leading parenthesised group after
   // the name is a dimension when a bound-pair ':' is present or an attribute
   // keyword follows; otherwise it is a precision/length (M0 scalar behaviour).
@@ -1452,11 +1467,11 @@ bool Parser::parseDeclTail(DeclItem& item) {
       SourceLoc l = cur().loc;
       eat(Tok::LParen);
       if (at(Tok::Number)) {
-        a = atoi(cur().text.c_str());
+        a = boundedNonNeg(cur().text, cur().loc, d_, "precision or length", "(16)");
         advance();
       }
       if (eat(Tok::Comma) && at(Tok::Number)) {
-        b = atoi(cur().text.c_str());
+        b = boundedNonNeg(cur().text, cur().loc, d_, "precision or length", "(16)");
         advance();
       }
       expect(Tok::RParen, "(16)");
@@ -1535,7 +1550,6 @@ bool Parser::parseDeclTail(DeclItem& item) {
   item.dynBounds = std::move(arrDyn);
   item.dynLbBounds = std::move(arrDynLb);
   item.init = std::move(init);
-  return true;
 }
 
 // See parser.h. Disambiguates a leading (n) after a name from a precision: a
@@ -1632,8 +1646,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
     return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
            w == "VAR" || w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
-           w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" || w == "INIT" ||
-           w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT";
+           w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" || w == "INIT" || w == "VALUE" ||
+           w == "TYPE" || w == "EXTERNAL" || w == "EXT";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -1883,7 +1897,8 @@ StmtP Parser::parseLoopExit(bool isIterate) {
   }
   if (!eat(Tok::Semi)) {
     d_.error(cur().loc,
-             std::string("expected ';' after ") + (isIterate ? "ITERATE (ADR-105)" : "LEAVE (ADR-105)"),
+             std::string("expected ';' after ") +
+                 (isIterate ? "ITERATE (ADR-105)" : "LEAVE (ADR-105)"),
              "");
     resync();
     return nullptr;
@@ -1934,8 +1949,8 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
       expect(Tok::RParen, "(71)");
     }
     if (atWord("UNTIL")) {
-      d_.error(cur().loc,
-               "DO with both WHILE and UNTIL is not implemented in this stage (ADR-106)", "");
+      d_.error(cur().loc, "DO with both WHILE and UNTIL is not implemented in this stage (ADR-106)",
+               "");
       resync();
       return nullptr;
     }
@@ -1958,8 +1973,8 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
       return nullptr;
     }
     if (atWord("WHILE")) {
-      d_.error(cur().loc,
-               "DO with both UNTIL and WHILE is not implemented in this stage (ADR-106)", "");
+      d_.error(cur().loc, "DO with both UNTIL and WHILE is not implemented in this stage (ADR-106)",
+               "");
       resync();
       return nullptr;
     }
@@ -2627,8 +2642,8 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("KEYED") || atWord("UPDATE") || atWord("ENVIRONMENT") ||
-        atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE")) {
+    if (atWord("KEYED") || atWord("UPDATE") || atWord("ENVIRONMENT") || atWord("IDENT") ||
+        atWord("LINESIZE") || atWord("PAGESIZE")) {
       d_.error(cur().loc, "OPEN option " + cur().text + " is not implemented in this stage",
                "(101)");
       resync();

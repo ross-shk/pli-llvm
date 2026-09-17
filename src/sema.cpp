@@ -156,8 +156,7 @@ void Sema::resolvePackageExports() {
         continue;
       }
       if (m->isMain) {
-        d_.error(p->loc,
-                 "cannot EXPORT the MAIN procedure '" + en + "' (ADR-109)", "");
+        d_.error(p->loc, "cannot EXPORT the MAIN procedure '" + en + "' (ADR-109)", "");
         continue;
       }
       m->isExternal = true;
@@ -205,9 +204,9 @@ bool Sema::run(Program& prog, bool compileOnly) {
     // procedure keeps its module-private name: only its own `main` shim
     // invokes it. Nested procedures stay module-private unless exported.
     p->isExternal = p->isExternal || (!p->parent && !p->isMain);
-    p->irName = p->isExternal ? "@" + p->name
-                              : "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) +
-                                    p->name;
+    p->irName = p->isExternal
+                    ? "@" + p->name
+                    : "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name;
     // A function procedure's symbol carries its result type so that a
     // function reference (rule (123)) types as the returned value.
     Scope* outer = p->parent ? scopeFor(p->parent) : rootScope_;
@@ -362,8 +361,7 @@ void Sema::processProc(Proc* p) {
   // rule (91): unwinding handlers on a non-local exit is not implemented, so
   // GO TO in a procedure that establishes an ON-unit is diagnosed.
   if (stmtsHaveKind(p->body, Stmt::On) && stmtsHaveKind(p->body, Stmt::Goto))
-    d_.error(p->loc,
-             "GO TO in a procedure that establishes ON is not implemented in this stage",
+    d_.error(p->loc, "GO TO in a procedure that establishes ON is not implemented in this stage",
              "(91)");
 }
 
@@ -476,8 +474,7 @@ void Sema::collectExprCallees(const Expr* e, std::vector<Proc*>& out) {
     collectExprCallees(e->locPtr.get(), out);
   switch (e->kind) {
   case Expr::Call:
-    if (e->sym && e->sym->proc &&
-        std::find(out.begin(), out.end(), e->sym->proc) == out.end())
+    if (e->sym && e->sym->proc && std::find(out.begin(), out.end(), e->sym->proc) == out.end())
       out.push_back(e->sym->proc);
     for (auto& a : e->args)
       collectExprCallees(a.get(), out);
@@ -1002,11 +999,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                          "(26)");
               else {
                 std::vector<Expr*> folded;
-                size_t idx = 0;
+                size_t foldIdx = 0;
                 for (unsigned i = 0; i < last; ++i)
-                  foldStructInit(item.ty.members[i]->ty, raw, idx, item.loc, folded);
+                  foldStructInit(item.ty.members[i]->ty, raw, foldIdx, item.loc, folded);
                 const Type& el = tail.elementType();
-                while (idx < raw.size())
+                while (idx < (int)raw.size())
                   if (Expr* f = foldInitialConstant(raw[idx++], el, item.loc))
                     folded.push_back(f);
                 item.sym->initElems = std::move(folded);
@@ -1023,8 +1020,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                        "(26)");
             else {
               std::vector<Expr*> folded;
-              size_t idx = 0;
-              foldStructInit(item.ty, raw, idx, item.loc, folded);
+              size_t foldIdx = 0;
+              foldStructInit(item.ty, raw, foldIdx, item.loc, folded);
               item.sym->initElems = std::move(folded);
             }
           }
@@ -1324,8 +1321,7 @@ void Sema::checkOnUnit(Stmt* u, Proc* p) {
       return;
     if ((e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->sym &&
         e->sym->kind != Symbol::ProcName && e->sym->owner) {
-      d_.error(e->loc,
-               "an ON-unit reaching an automatic variable is not implemented in this stage",
+      d_.error(e->loc, "an ON-unit reaching an automatic variable is not implemented in this stage",
                "(91)");
     }
     if (e->a)
@@ -1872,8 +1868,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           break;
         }
       if (!found)
-        d_.error(s->loc,
-                 "no enclosing iterative DO-group named '" + s->name + "' (ADR-105)", "");
+        d_.error(s->loc, "no enclosing iterative DO-group named '" + s->name + "' (ADR-105)", "");
     }
     break;
   }
@@ -2357,8 +2352,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // there is no per-argument type check against callee symbols.
     std::vector<Symbol*> calleeParams =
         en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
-    const size_t expect = en ? en->params.size() : (callee ? callee->params.size()
-                                                          : sym->entryParams.size());
+    const size_t expect =
+        en ? en->params.size() : (callee ? callee->params.size() : sym->entryParams.size());
     if (e->args.size() != expect) {
       d_.error(e->loc,
                "'" + e->name + "' expects " + std::to_string(expect) + " argument(s), " +
@@ -2370,9 +2365,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     for (size_t i = 0; i < e->args.size(); ++i)
       if (i < calleeParams.size())
         checkAssignable(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
-    e->ty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
-               : (callee ? callee->retTy
-                         : (sym->entryIsFunction ? sym->entryRetTy : Type::voidTy()));
+    e->ty =
+        en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
+           : (callee ? callee->retTy : (sym->entryIsFunction ? sym->entryRetTy : Type::voidTy()));
     break;
   }
   case Expr::Unary: {

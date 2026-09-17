@@ -66,9 +66,9 @@ private:
   StmtP parseDeclare();
   StmtP parseIf(Proc* owner);
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
-  StmtP parseSelect(Proc* owner); // SELECT (extension, ADR-104): desugars to IFs
-  StmtP parseLoopExit(bool isIterate); // LEAVE/ITERATE [label] (extension, ADR-105)
-  StmtP parseDefineAlias(); // DEFINE ALIAS name attrs (extension, ADR-114)
+  StmtP parseSelect(Proc* owner);        // SELECT (extension, ADR-104): desugars to IFs
+  StmtP parseLoopExit(bool isIterate);   // LEAVE/ITERATE [label] (extension, ADR-105)
+  StmtP parseDefineAlias();              // DEFINE ALIAS name attrs (extension, ADR-114)
   static ExprP cloneExpr(const Expr* e); // deep copy for SELECT value lists
   StmtP parsePut();
   StmtP parseDisplay(); // display-statement (rule 114)
@@ -100,7 +100,7 @@ private:
   bool parseDeclItem(DeclItem& item);
   // Parse the dimension + attribute tail shared by a declaration item and by a
   // factored declaration list (rule 11); builds item.ty / item.dims / item.init.
-  bool parseDeclTail(DeclItem& item);
+  void parseDeclTail(DeclItem& item);
   // Try to parse a dimension (rules (12),(13)) at the current LParen. Consumes
   // tokens only when it is genuinely a dimension; returns false (with the token
   // stream restored) so the caller can treat the group as a precision/length.

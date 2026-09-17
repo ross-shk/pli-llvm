@@ -15,12 +15,12 @@ struct Symbol {
   Type ty{};
   SourceLoc loc{};
   enum Kind { Var, Param, ProcName } kind = Var;
-  bool isStatic = false;         // STATIC storage: an LLVM global
-  bool implicit = false;         // created by the implicit-declaration rule
-  bool isEntry = false;          // external C entry (DECLARE ... ENTRY): no body
-  bool isValue = false;          // VALUE named constant (extension, ADR-108): reassignment diagnosed
-  bool fileAttr = false;         // FILE variable (rules 39,40): a named file
-  int fileSlot = -1;             // runtime slot index for a FILE variable (100-103)
+  bool isStatic = false; // STATIC storage: an LLVM global
+  bool implicit = false; // created by the implicit-declaration rule
+  bool isEntry = false;  // external C entry (DECLARE ... ENTRY): no body
+  bool isValue = false;  // VALUE named constant (extension, ADR-108): reassignment diagnosed
+  bool fileAttr = false; // FILE variable (rules 39,40): a named file
+  int fileSlot = -1;     // runtime slot index for a FILE variable (100-103)
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
@@ -205,16 +205,16 @@ private:
   std::unordered_map<Proc*, Scope*> procScopes_;
   Scope* rootScope_ = nullptr; // program scope: all external procedure names
   std::vector<Symbol*> storage_;
-  std::vector<Symbol*> entries_;                  // external C entries, in declaration order
-  int nextFileSlot_ = 0;                          // next FILE variable slot index (100-103)
-  std::set<std::string> procLabels_;              // GO TO targets in the current proc (rule 77)
-  Stmt* curEntry_ = nullptr;                      // the ENTRY segment currently being checked
+  std::vector<Symbol*> entries_;                    // external C entries, in declaration order
+  int nextFileSlot_ = 0;                            // next FILE variable slot index (100-103)
+  std::set<std::string> procLabels_;                // GO TO targets in the current proc (rule 77)
+  Stmt* curEntry_ = nullptr;                        // the ENTRY segment currently being checked
                                                     // (rule 56): enables RETURN(value) in its body
   std::vector<std::vector<std::string>> loopStack_; // labels of enclosing iterative
                                                     // DO-groups, innermost last (ADR-105)
-  std::set<std::string> irNames_;                 // irNames in use, to disambiguate shadowing
-  std::unordered_map<Stmt*, Scope*> beginScopes_; // BEGIN block -> its scope
-  bool declsCollected_ = false;                   // true once the pass-0 collectDecls pre-pass ran
+  std::set<std::string> irNames_;                   // irNames in use, to disambiguate shadowing
+  std::unordered_map<Stmt*, Scope*> beginScopes_;   // BEGIN block -> its scope
+  bool declsCollected_ = false; // true once the pass-0 collectDecls pre-pass ran
 };
 
 // Arithmetic result type per the conversion rules (M0 approximation).

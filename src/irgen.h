@@ -34,12 +34,8 @@ struct Val {
 class IRGen {
 public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false)
-      : d_(d),
-        sema_(s),
-        triple_(std::move(triple)),
-        noSizeChecks_(noSizeChecks),
-        mod_("plic", ctx_),
-        b_(ctx_) {}
+      : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
+        noSizeChecks_(noSizeChecks) {}
 
   std::string run(HProgram& prog);
 
@@ -134,10 +130,10 @@ private:
   // target-addressing as an assignment's left-hand side).
   void storeGetTarget(HExpr* t, const Val& v, SourceLoc loc);
   void emitCall(HStmt* s);
-  void emitAllocate(HStmt* s); // ALLOCATE (rule 87)
-  void emitFree(HStmt* s);     // FREE (rule 90)
-  void emitOpen(HStmt* s);     // OPEN (rules 100,101)
-  void emitClose(HStmt* s);    // CLOSE (rules 102,103)
+  void emitAllocate(HStmt* s);    // ALLOCATE (rule 87)
+  void emitFree(HStmt* s);        // FREE (rule 90)
+  void emitOpen(HStmt* s);        // OPEN (rules 100,101)
+  void emitClose(HStmt* s);       // CLOSE (rules 102,103)
   void emitRecordRead(HStmt* s);  // READ (rules (112),(113)): one binary record in
   void emitRecordWrite(HStmt* s); // WRITE (rules (112),(113)): one binary record out
 
