@@ -2905,3 +2905,33 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  Known limits: `%DO`, `%GO TO`, and `%PROCEDURE` macros stay
  diagnosed; activation is not consulted inside `%IF`
  expressions (pre-existing behavior).
+
+ ## ADR-114 — DEFINE ALIAS with TYPE references
+
+ Context. User-defined type names (stretch-listed, now admitted
+ per-request with Enterprise verification) need `DEFINE ALIAS`
+ plus `TYPE` references. Enterprise confirms the shape:
+ `DEFINE ALIAS name attrs;`, use as `DCL x TYPE name;`, no
+ arrays/structures in the body, no aliases of aliases,
+ define-before-use.
+
+ Decision. The alias body parses as one declaration item, so
+ attribute spellings and defaults match `DECLARE` exactly; only
+ scalar data attributes survive (dimensions, `INITIAL`/`VALUE`,
+ `LIKE`/`DEFINED`/`BASED`, `ENTRY`/`FILE`, and `TYPE`-in-body
+ are diagnosed). The type lives in a per-scope alias namespace
+ separate from variables. `DECLARE x TYPE a` resolves lexically
+ (unknown names diagnosed) and keeps the declaration's own
+ dimensions, so arrays of aliased elements work; combining
+ `TYPE` with explicit data attributes is diagnosed either
+ order. File-scope aliases register in the root scope before
+ pass 1; `TYPE` required its `isAttrWord` entry for dimension
+ disambiguation. HIR and codegen are untouched — aliases vanish
+ into ordinary types. Diagnostics cite ADR-114.
+
+ Consequences. `define_alias.pli` covers scalar aliases,
+ `INITIAL` composition, arrays of aliases, and `define`/`type`
+ as identifiers; three bad files pin unknown/combined/
+ duplicate aliases, array bodies, and aliases of aliases.
+ Known limits: `DEFINE STRUCTURE`/`ORDINAL`, package-level
+ `DEFINE`, and `IF`-branch definitions stay diagnosed.

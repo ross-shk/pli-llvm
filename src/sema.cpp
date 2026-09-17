@@ -190,6 +190,12 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // Extension (ADR-109): resolve PACKAGE EXPORTS before pass 1 assigns
   // linkage, so listed members keep their upper-cased external names.
   resolvePackageExports();
+  // Extension (ADR-114): file-scope DEFINE ALIAS registers in the root
+  // scope before any procedure resolves TYPE references against it.
+  for (auto& d : prog.defines)
+    if (d && d->kind == Stmt::DefineAlias)
+      defineAlias(rootScope_, d->name, d->aliasTy, d->loc);
+
   for (auto& p : prog.procs) {
     if (p->isPackage)
       continue; // packages declare no symbol and need no irName
@@ -295,6 +301,16 @@ bool Sema::run(Program& prog, bool compileOnly) {
 
 // True when any statement in `body` contains kind `k` (defined below).
 static bool stmtsHaveKind(const std::vector<StmtP>& body, Stmt::Kind k);
+
+// Extension (ADR-114): find a DEFINE ALIAS type by lexical scope chain.
+static const Type* lookupAlias(Scope* sc, const std::string& name) {
+  for (Scope* s = sc; s; s = s->parent) {
+    auto it = s->aliases.find(name);
+    if (it != s->aliases.end())
+      return &it->second;
+  }
+  return nullptr;
+}
 
 void Sema::processProc(Proc* p) {
   Scope* sc = scopeFor(p);
@@ -602,6 +618,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
   for (auto& s : body) {
     if (!s)
       continue;
+    if (s->kind == Stmt::DefineAlias) {
+      // DEFINE ALIAS (extension, ADR-114): register the parser-built type
+      // in this scope's alias namespace (separate from variables).
+      defineAlias(sc, s->name, s->aliasTy, s->loc);
+      continue;
+    }
     if (s->kind == Stmt::Declare) {
       // Build the level-numbered structure hierarchy (rule 11): a member item
       // belongs to the nearest preceding item with a strictly smaller level.
@@ -719,6 +741,18 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         DeclItem& item = *items[idx];
         std::vector<DeclItem::DynMemberInfo> dynMs;
         item.ty = buildType(idx, {}, dynMs);
+        if (!item.typeRef.empty()) {
+          // TYPE <alias> (extension, ADR-114): the element type comes from
+          // the alias, dimensions (if any) from this declaration.
+          const Type* aty = lookupAlias(sc, item.typeRef);
+          if (!aty)
+            d_.error(item.loc, "unknown TYPE alias '" + item.typeRef + "' (ADR-114)", "");
+          else {
+            Type t = *aty;
+            t.dims = item.ty.dims;
+            item.ty = t;
+          }
+        }
         item.dynMembers = std::move(dynMs);
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p; // which procedure's frame holds this variable
@@ -1067,8 +1101,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         scopes_.push_back(std::move(child));
         beginScopes_[s->thenS.get()] = raw;
         collectDecls(s->thenS->body, raw, p, isStatic);
-      } else if (s->thenS->kind == Stmt::Declare) {
-        d_.error(s->thenS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
+      } else if (s->thenS->kind == Stmt::Declare || s->thenS->kind == Stmt::DefineAlias) {
+        d_.error(s->thenS->loc, "DECLARE/DEFINE cannot be the body of an IF statement", "(74)");
       }
     }
     if (s->elseS) {
@@ -1079,8 +1113,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         scopes_.push_back(std::move(child));
         beginScopes_[s->elseS.get()] = raw;
         collectDecls(s->elseS->body, raw, p, isStatic);
-      } else if (s->elseS->kind == Stmt::Declare) {
-        d_.error(s->elseS->loc, "DECLARE cannot be the body of an IF statement", "(74)");
+      } else if (s->elseS->kind == Stmt::Declare || s->elseS->kind == Stmt::DefineAlias) {
+        d_.error(s->elseS->loc, "DECLARE/DEFINE cannot be the body of an IF statement", "(74)");
       }
     }
   }
@@ -1320,6 +1354,9 @@ void Sema::checkOnUnit(Stmt* u, Proc* p) {
     case Stmt::Declare:
       d_.error(s->loc, "DECLARE inside an ON-unit is not implemented in this stage", "(91)");
       break;
+    case Stmt::DefineAlias:
+      d_.error(s->loc, "DEFINE ALIAS inside an ON-unit is not implemented in this stage", "(91)");
+      break;
     case Stmt::Entry:
       d_.error(s->loc, "ENTRY inside an ON-unit is not implemented in this stage", "(91)");
       break;
@@ -1460,6 +1497,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Null:
     break;
   case Stmt::Declare:
+    break; // handled in collectDecls
+  case Stmt::DefineAlias:
     break; // handled in collectDecls
   case Stmt::Assign: {
     typeExpr(s->value.get(), sc, p);
@@ -1952,6 +1991,14 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
 // The STRING ( reference ) stream option (rule 105): the target must be a
 // NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only, meaningless
 // against a string sink/source.
+// Extension (ADR-114): register a DEFINE ALIAS type in scope.
+void Sema::defineAlias(Scope* sc, const std::string& name, const Type& ty, SourceLoc loc) {
+  if (sc->aliases.count(name))
+    d_.error(loc, "'" + name + "' is already declared in this block (ADR-114)", "");
+  else
+    sc->aliases[name] = ty;
+}
+
 // Extension (ADR-108): a VALUE named constant keeps its storage but no
 // statement may receive a value into it.
 void Sema::checkValueTarget(Expr* t) {

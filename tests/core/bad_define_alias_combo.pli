@@ -1,0 +1,6 @@
+ /* extension (ADR-114): TYPE combined with
+    explicit data attributes is diagnosed. */
+ define alias count fixed bin(31);
+ badaliascombo: procedure options(main);
+    declare y type count fixed bin(15);
+ end badaliascombo;

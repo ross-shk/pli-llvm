@@ -69,6 +69,9 @@ struct Scope {
   Scope* parent = nullptr;
   std::unordered_map<std::string, Symbol*> tab;
   std::vector<Symbol*> order; // declaration order, for deterministic output
+  // DEFINE ALIAS types (extension, ADR-114): a separate namespace from
+  // variables, so an alias never collides with a variable of any type.
+  std::unordered_map<std::string, Type> aliases;
 };
 
 class Sema {
@@ -139,6 +142,8 @@ private:
   void checkStringTarget(Stmt* s, Scope* sc, Proc* p, bool isGet);
   // Extension (ADR-108): diagnose a write to a VALUE named constant.
   void checkValueTarget(Expr* t);
+  // Extension (ADR-114): register a DEFINE ALIAS type in scope.
+  void defineAlias(Scope* sc, const std::string& name, const Type& ty, SourceLoc loc);
   // Resolve and validate the FILE ( f ) stream option (rule 105) and the
   // OPEN/CLOSE FILE ( f ): `f` must be a declared FILE variable. Resolves
   // s->fileIdent to s->fileSym.

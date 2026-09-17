@@ -104,6 +104,7 @@ struct DeclItem {
   ExprP initCall; // INITIAL(CALL f(...)) — a function call initializer (rule 27)
   std::vector<InitItem> initItems;     // INITIAL(...) itemlist (arrays, rule 26-31)
   std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)
+  std::string typeRef;                 // TYPE <alias> (extension, ADR-114); empty = none
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
@@ -155,6 +156,8 @@ struct Stmt {
     Display,  // rule (114) DISPLAY (expression) — one scalar value
     Read,     // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
     Write,    // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
+    DefineAlias, // extension (ADR-114): DEFINE ALIAS name attrs (no HIR twin;
+                 // dropped in lowering after sema registers the type)
   } kind = Null;
 
   SourceLoc loc{};
@@ -174,6 +177,7 @@ struct Stmt {
 
   std::string name;      // DO control variable, CALL target, ENTRY name
   Symbol* sym = nullptr; // resolved control variable / callee
+  Type aliasTy;          // DEFINE ALIAS type (extension, ADR-114)
 
   // ENTRY statement (rule 56): an alternate entry point, with its own params
   // and optional RETURNS type.
@@ -268,6 +272,8 @@ struct Proc {
 struct Program {
   // All procedures, flattened; `parent` preserves lexical nesting.
   std::vector<std::unique_ptr<Proc>> procs;
+  // File-scope DEFINE ALIAS statements (extension, ADR-114), in order.
+  std::vector<StmtP> defines;
   Proc* mainProc = nullptr;
   // Programmer-named conditions in first-use order (rule 99); a use-site key
   // is its index + 1 (key 0 means ERROR, negative keys are the fixed

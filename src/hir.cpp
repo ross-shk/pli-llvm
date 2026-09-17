@@ -131,6 +131,8 @@ HExprP lowerCallExpr(const Expr* e) {
 HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   if (!s)
     return nullptr;
+  if (s->kind == Stmt::DefineAlias)
+    return nullptr; // registered in sema; no runtime statement (extension, ADR-114)
   auto h = std::make_unique<HStmt>();
   h->kind = static_cast<HStmt::Kind>(s->kind);
   h->loc = s->loc;

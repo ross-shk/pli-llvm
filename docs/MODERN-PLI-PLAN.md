@@ -42,9 +42,10 @@ tasking, keyed files).
 
 ## Stretch (unestimated, admit one at a time)
 
-`ORDINAL`, `DEFINE ALIAS`, extended `DATETIME` patterns, `FETCH`/`RELEASE`.
+`ORDINAL`, extended `DATETIME` patterns, `FETCH`/`RELEASE`.
+(`DEFINE ALIAS` admitted per-request with verification, ADR-114.)
 Each needs its own Enterprise-semantics verification note before planning;
-none is approved by this document.
+none else is approved by this document.
 
 ## Exit criterion
 
