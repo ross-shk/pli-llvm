@@ -1,0 +1,7 @@
+ /* extension (ADR-114): array aliases and
+    aliases of aliases are diagnosed. */
+ define alias tab(5) fixed bin(31);
+ define alias base fixed bin(31);
+ define alias chained type base;
+ badaliassyn: procedure options(main);
+ end badaliassyn;

@@ -1,0 +1,35 @@
+ /* extension (ADR-114): DEFINE ALIAS names a
+    scalar attribute set; DECLARE ... TYPE
+    uses it; define and type stay usable as
+    identifiers. */
+ define alias count fixed bin(31);
+ define alias ratio float;
+ define alias name char(8);
+ define alias flag bit(1);
+ aliastest: procedure options(main);
+    declare c type count;
+    declare r type ratio init(0.5);
+    declare n type name;
+    declare f type flag;
+    declare define fixed bin(31);
+    declare type fixed bin(31);
+    declare arr(3) type count;
+    declare k fixed bin(31);
+    declare asum fixed bin(31);
+    define = 7;
+    type = 8;
+    c = 40 + define + type;
+    asum = 0;
+    do k = 1 to 3;
+       arr(k) = k * 2;
+       asum = asum + arr(k);
+    end;
+    if asum ^= 12 then put skip list('FAIL arr =', asum);
+    n = 'ab';
+    f = '1'b;
+    if c ^= 55 then put skip list('FAIL c =', c);
+    if n ^= 'ab' then put skip list('FAIL n');
+    if f ^= '1'b then put skip list('FAIL f');
+    if r < 0.4 then put skip list('FAIL r');
+    put skip list('PASS alias');
+ end aliastest;

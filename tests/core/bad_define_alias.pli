@@ -1,0 +1,8 @@
+ /* extension (ADR-114): unknown TYPE names and
+    duplicate aliases are diagnosed, never
+    silently accepted. */
+ define alias count fixed bin(31);
+ define alias count float;
+ badalias: procedure options(main);
+    declare x type nosuch;
+ end badalias;

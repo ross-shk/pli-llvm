@@ -136,6 +136,7 @@ entry points below are where that chain terminates.
 | `TRIM` / `TALLY` (ADR-107) | served | `TRIM(s[, pad])` strips leading/trailing blanks (or pad-set chars), left-justified and blank-padded to the input length; `TALLY(x, y)` counts non-overlapping case-sensitive occurrences (`trim.pli`, `tally.pli`, `bad_trim.pli`, `bad_tally.pli`) |
 | `VALUE` named constants (ADR-108) | served | `DECLARE x ... VALUE(const)` keeps AUTOMATIC storage initialized once; plain/multiple assignment, SUBSTR-target, GET, READ INTO, DO control, and PUT STRING targets diagnosed (`value.pli`, `bad_value.pli`, `bad_value_init.pli`) |
 | `PACKAGE` / `EXPORTS` (ADR-109) | served | `name: PACKAGE [EXPORTS (a, ...)] ... END [name]` groups procedures under one scope; listed members link externally, the rest stay module-private; package-level data, bad EXPORTS, and nested/multi-name packages diagnosed (`package.pli`, `driver/package`, `bad_package.pli`, `bad_package_nest.pli`) |
+| `DEFINE ALIAS` / `TYPE` (ADR-114) | served | `DEFINE ALIAS name attrs;` names a scalar attribute set (file or block scope, separate namespace); `DECLARE x TYPE a` takes the element type from the alias with dimensions from the declaration; unknown aliases, combinations, duplicates, array/alias-of-alias bodies diagnosed (`define_alias.pli`, `bad_define_alias.pli`, `bad_define_alias_combo.pli`, `bad_define_alias_syntax.pli`) |
 
 ## Headline numbers (M0)
 

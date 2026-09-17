@@ -68,6 +68,7 @@ private:
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
   StmtP parseSelect(Proc* owner); // SELECT (extension, ADR-104): desugars to IFs
   StmtP parseLoopExit(bool isIterate); // LEAVE/ITERATE [label] (extension, ADR-105)
+  StmtP parseDefineAlias(); // DEFINE ALIAS name attrs (extension, ADR-114)
   static ExprP cloneExpr(const Expr* e); // deep copy for SELECT value lists
   StmtP parsePut();
   StmtP parseDisplay(); // display-statement (rule 114)

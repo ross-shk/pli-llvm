@@ -199,13 +199,69 @@ bool Parser::atStmtKeyword(const char* w) const {
 std::unique_ptr<Program> Parser::parse() {
   while (!at(Tok::Eof)) {
     size_t before = i_;
-    parseExternalProcedure();
+    // DEFINE ALIAS at file scope (extension, ADR-114): `define:` with a
+    // colon stays a procedure definition; without one it is an alias.
+    if (cur().isWord("DEFINE") && peek().isWord("ALIAS")) {
+      if (StmtP d = parseDefineAlias())
+        prog_->defines.push_back(std::move(d));
+    } else {
+      parseExternalProcedure();
+    }
     if (i_ == before) {
       d_.error(cur().loc, "expected an external procedure", "(1)");
       break;
     }
   }
   return std::move(prog_);
+}
+
+// define-alias-statement (extension, ADR-114): DEFINE ALIAS name attrs;
+// the remainder parses as one declaration item, so attribute spellings and
+// defaults match DECLARE exactly. Only scalar data attributes survive:
+// dimensions, INITIAL/VALUE, LIKE/DEFINED/BASED, ENTRY/FILE, and aliases
+// of aliases are diagnosed, never silently dropped.
+StmtP Parser::parseDefineAlias() {
+  advance(); // DEFINE
+  if (!atWord("ALIAS")) {
+    d_.error(cur().loc, "expected ALIAS after DEFINE (ADR-114)", "");
+    resync();
+    return nullptr;
+  }
+  advance(); // ALIAS
+  DeclItem item;
+  if (!parseDeclItem(item)) {
+    resync();
+    return nullptr;
+  }
+  if (!item.typeRef.empty()) {
+    d_.error(item.loc, "aliases of aliases are not implemented in this stage (ADR-114)", "");
+    resync();
+    return nullptr;
+  }
+  if (!item.ty.dims.empty() || !item.dynBounds.empty() || !item.dynLbBounds.empty()) {
+    d_.error(item.loc, "array aliases are not implemented in this stage (ADR-114)", "");
+    resync();
+    return nullptr;
+  }
+  if (item.level != 0 || item.init || item.initCall || !item.initItems.empty() || item.valueInit ||
+      !item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty() ||
+      item.isEntry || item.fileAttr || !item.entryParams.empty()) {
+    d_.error(item.loc, "only scalar data attributes are implemented in DEFINE ALIAS (ADR-114)",
+             "");
+    resync();
+    return nullptr;
+  }
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::DefineAlias;
+  st->loc = item.loc;
+  st->name = item.name;
+  st->aliasTy = item.ty;
+  if (!eat(Tok::Semi)) {
+    d_.error(cur().loc, "expected ';' after the DEFINE ALIAS statement (ADR-114)", "");
+    resync();
+    return nullptr;
+  }
+  return st;
 }
 
 // package-block (extension, ADR-109): name: PACKAGE [EXPORTS (a, ...)];
@@ -625,6 +681,9 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     advance();
     return parseDeclare();
   } // rule (9)
+  if (kw("DEFINE")) {
+    return parseDefineAlias();
+  } // extension (ADR-114)
   if (kw("IF")) {
     return parseIf(owner);
   } // rules (74),(75)
@@ -1145,6 +1204,20 @@ bool Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
+      if (w == "TYPE") {
+        // TYPE <alias> (extension, ADR-114): the declaration takes its type
+        // from a defined alias. Combining it with explicit data attributes
+        // is diagnosed at the end of the item (either order); dimensions
+        // are kept from this declaration (arrays of aliased elements).
+        advance();
+        if (!at(Tok::Word)) {
+          d_.error(cur().loc, "expected an alias name after TYPE (ADR-114)", "");
+        } else {
+          item.typeRef = cur().text;
+          advance();
+        }
+        continue;
+      }
       if (w == "VALUE") {
         // VALUE(const) (extension, ADR-108): a named constant. The single
         // constant is stored like a scalar INITIAL; combining it with
@@ -1402,6 +1475,10 @@ bool Parser::parseDeclTail(DeclItem& item) {
 
   // Attribute -> type, applying the default rules of TR 25.084 rules (15)-(18).
   // Conflicting attributes are diagnosed first.
+  if (!item.typeRef.empty() &&
+      (bag.fixed || bag.floating || bag.binary || bag.decimal || bag.character || bag.bit ||
+       bag.varying || bag.pointer || bag.complex || bag.file))
+    d_.error(item.loc, "TYPE cannot be combined with explicit data attributes (ADR-114)", "");
   if (bag.fixed && bag.floating)
     d_.error(item.loc, "FIXED and FLOAT are conflicting attributes", "(16)");
   if (bag.binary && bag.decimal)
@@ -1556,7 +1633,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
            w == "VAR" || w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
            w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" || w == "INIT" ||
-           w == "VALUE" || w == "EXTERNAL" || w == "EXT";
+           w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
