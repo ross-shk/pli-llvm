@@ -124,6 +124,7 @@ private:
     bool complex = false; // COMPLEX (QR2.2/CM5): a real+imaginary pair
     bool file = false;    // FILE (rules 39,40): a named file variable
     int prec = -1, scale = 0, slen = -1;
+    bool starLen = false; // '*' string length (rule (18)): adjustable extent
   };
   // Consume one attribute word (FIXED, FLOAT, BINARY, DECIMAL, CHARACTER,
   // BIT, VARYING, REAL) with its optional precision into `bag`. Returns true

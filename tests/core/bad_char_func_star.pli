@@ -1,0 +1,8 @@
+ /* rule (34)/(18): a '*' length in
+    RETURNS is not served in this
+    stage; diagnosed, never accepted. */
+ badstar: procedure options(main);
+    starf: procedure returns(char(*));
+       return('hi');
+    end starf;
+ end badstar;

@@ -2960,8 +2960,32 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  padding note dismissed as churn; the two `identicalInnerCondition`
  hits are balanced-scan-loop false positives.
 
- Consequences. `make check` is green end to end including the
- `scan-build` step ("No bugs found"). Known limits: oversized
- integer literals still clamp via `strtoll` to a loud runtime
- trap rather than a compile-time diagnostic; parser recursion
- depth on adversarial nesting remains fuzzer territory.
+  Consequences. `make check` is green end to end including the
+  `scan-build` step ("No bugs found"). Known limits: oversized
+  integer literals still clamp via `strtoll` to a loud runtime
+  trap rather than a compile-time diagnostic; parser recursion
+  depth on adversarial nesting remains fuzzer territory.
+
+  ## ADR-116 — Character-valued functions via hidden result buffer
+
+  Context. Rules (34),(37) allow `RETURNS(CHAR(n) [VARYING])`, but
+  IRGen rejected every character-valued function (rule (34)). The
+  Multics PL/I design for variable-length returns extends the
+  callee frame on the stack; LLVM allocas plus the existing rule-127
+  struct-`sret` path offer the same discipline with less machinery.
+
+  Decision. Fixed-max `CHAR(n)` and `CHAR(n) VARYING` results return
+  through a caller-allocated hidden buffer (first LLVM argument,
+  void return), mirroring `struct_return.pli` (ADR-070): `RETURN`
+  copies via the shared `storeCharTo` helper (blank-pad/truncate,
+  live length for VARYING), and a call rebuilds a `Val{ptr,len}`
+  from the buffer. True `CHAR(*)` runtime-max, `ENTRY` segments
+  with a character result (rule 56), and external C entries with a
+  character result (rule (34), no PL/I caller for the buffer) stay
+  diagnosed; a `*` string length anywhere else is diagnosed (18)/(38).
+
+  Consequences. `char_func.pli` runs (pad, varying length,
+  truncation, call-in-expression); `bad_char_func_star.pli`
+  pins the star rejection. Entry/external-char limits follow the
+  struct+ENTRY precedent: IRGen-stage diagnostics, no `bad_` test
+  (`-fsyntax-only` never reaches them).
