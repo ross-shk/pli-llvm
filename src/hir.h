@@ -34,11 +34,11 @@ struct HExpr {
     VarRef,
     Binary,
     Unary,
-    Call,      // compound
-    Subscript, // array element A(i) — rules (126)
-    Star,      // '*' in a subscript list — a cross-section axis (rule 126)
+    Call,       // compound
+    Subscript,  // array element A(i) — rules (126)
+    Star,       // '*' in a subscript list — a cross-section axis (rule 126)
     ComplexLit, // imaginary constant (rule 139): fval is the imaginary part
-    Convert,   // explicit conversion (HIR only)
+    Convert,    // explicit conversion (HIR only)
   } kind = IntLit;
   SourceLoc loc{};
   Type ty{}; // the value's type after sema typing
@@ -119,9 +119,9 @@ struct HStmt {
     Close,
     Leave,
     Iterate, // extension (ADR-105)
-    On,     // rule (91)
-    Revert, // rule (92)
-    Signal, // rule (93)
+    On,      // rule (91)
+    Revert,  // rule (92)
+    Signal,  // rule (93)
     Display, // rule (114)
     Read,    // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
     Write,   // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
@@ -133,7 +133,7 @@ struct HStmt {
   std::vector<HDeclItem> decls;
 
   HExprP target, value, cond, from, to, by;
-  bool until = false; // DO UNTIL (extension, ADR-106): test cond after the body
+  bool until = false;               // DO UNTIL (extension, ADR-106): test cond after the body
   std::vector<HExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
   bool byName = false;              // rule (86) trailing ", BY NAME" on assignment
   bool noSize = false;              // (NOSIZE) prefix (rules (60)-(63), ADR-110)

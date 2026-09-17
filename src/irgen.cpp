@@ -346,8 +346,7 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
   int seq = ovSeq_++;
   llvm::BasicBlock* trapBB =
       llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
-  llvm::BasicBlock* okBB =
-      llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
   b_.CreateCondBr(of, trapBB, okBB);
   b_.SetInsertPoint(trapBB);
   emitSizeTrap(okBB);
@@ -360,15 +359,14 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
 void IRGen::floatRangeTrap(llvm::Value* f, double lo, bool loIncl, double hi) {
   if (!sizeChecks())
     return; // (NOSIZE): the wrapped value stands (rules (60)-(63), ADR-110)
-  llvm::Value* okLo = loIncl ? b_.CreateFCmpOGE(f, flt(lo), "frt.lo")
-                             : b_.CreateFCmpOGT(f, flt(lo), "frt.lo");
+  llvm::Value* okLo =
+      loIncl ? b_.CreateFCmpOGE(f, flt(lo), "frt.lo") : b_.CreateFCmpOGT(f, flt(lo), "frt.lo");
   llvm::Value* okHi = b_.CreateFCmpOLT(f, flt(hi), "frt.hi");
   llvm::Value* ok = b_.CreateAnd(okLo, okHi, "frt.ok");
   int seq = ovSeq_++;
   llvm::BasicBlock* trapBB =
       llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
-  llvm::BasicBlock* okBB =
-      llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
   b_.CreateCondBr(ok, okBB, trapBB);
   b_.SetInsertPoint(trapBB);
   emitSizeTrap(okBB);
@@ -382,7 +380,10 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
   Proc* callee = sym->proc;
   Stmt* en = sym->entry;
   std::string name;
-  if (en)
+  // Static-analysis P1: every ENTRY symbol is created alongside its Proc, but
+  // guard the dereference anyway — an entry without a procedure falls through
+  // to the existing null (caller-must-handle) tail below instead of crashing.
+  if (en && callee)
     name =
         entryIrName(callee->name, callee->parent ? callee->parent->name : "", en->name).substr(1);
   else if (callee)
@@ -876,8 +877,7 @@ void IRGen::declareProc(HProc* p) {
   // function-valued entry point (rule 56): the procedure's own RETURNS type
   // when it is a function, else the common RETURNS type of its function ENTRYs
   // (a non-function primary entry may coexist with function segments).
-  llvm::Type* implRet =
-      (sret || p->commonRetTy.isVoid()) ? b_.getVoidTy() : llvmTy(p->commonRetTy);
+  llvm::Type* implRet = (sret || p->commonRetTy.isVoid()) ? b_.getVoidTy() : llvmTy(p->commonRetTy);
   std::vector<HStmt*> entries;
   for (auto& st : p->body)
     if (st && st->kind == HStmt::Entry)
@@ -901,8 +901,8 @@ void IRGen::declareProc(HProc* p) {
     llvm::FunctionType* ft = llvm::FunctionType::get(implRet, pt, false);
     // Rule (42): an external procedure is visible to the linker under its
     // upper-cased name; every other procedure stays module-private.
-    auto linkage = p->isExternal ? llvm::Function::ExternalLinkage
-                                 : llvm::Function::InternalLinkage;
+    auto linkage =
+        p->isExternal ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
     llvm::Function* fn = llvm::Function::Create(ft, linkage, p->irName.substr(1), &mod_);
     for (const auto& en : p->entryNames)
       aliasFor(en, fn);
@@ -987,7 +987,8 @@ void IRGen::declareProc(HProc* p) {
     return tf;
   };
 
-  llvm::Function* t0 = thunk(p->paramSyms, i64(0), p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
+  llvm::Function* t0 =
+      thunk(p->paramSyms, i64(0), p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
   t0->setName(p->irName.substr(1));
   // Rule (42): the primary entry thunk of an external procedure is the
   // link-visible symbol; the shared impl stays module-private.
@@ -996,9 +997,9 @@ void IRGen::declareProc(HProc* p) {
   for (const auto& en : p->entryNames)
     aliasFor(en, t0);
   for (size_t i = 0; i < entries.size(); ++i) {
-    llvm::Function* tf = thunk(entries[i]->entryParamSyms, i64(i + 1),
-                               entries[i]->entryIsFunction ? llvmTy(entries[i]->entryRetTy)
-                                                           : b_.getVoidTy());
+    llvm::Function* tf =
+        thunk(entries[i]->entryParamSyms, i64(i + 1),
+              entries[i]->entryIsFunction ? llvmTy(entries[i]->entryRetTy) : b_.getVoidTy());
     tf->setName(entryIrName(p->name, p->parent ? p->parent->name : "", entries[i]->name).substr(1));
   }
 }
@@ -1259,8 +1260,8 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
     else
       name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
-    onHandlers_[keyId.first].push_back(llvm::Function::Create(
-        ft, llvm::Function::InternalLinkage, name, &mod_));
+    onHandlers_[keyId.first].push_back(
+        llvm::Function::Create(ft, llvm::Function::InternalLinkage, name, &mod_));
   }
 }
 
@@ -1315,8 +1316,7 @@ void IRGen::emitSignal(HStmt* s) {
   const std::vector<llvm::Function*>& handlers = onHandlers_[s->condKey];
   llvm::Value* top = s->condKey == 0
                          ? b_.CreateCall(runtimeFn("pli_on_top_error"), {}, "ontop")
-                         : b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64(s->condKey)},
-                                         "ontop");
+                         : b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64(s->condKey)}, "ontop");
   llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "onnosystem");
   llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", curFn_);
@@ -1437,9 +1437,8 @@ void IRGen::emitStmt(HStmt* s) {
       d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
       break;
     case TK::Complex:
-      b_.CreateCall(runtimeFn("pli_display_complex"),
-                    {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                     b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+      b_.CreateCall(runtimeFn("pli_display_complex"), {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
+                                                       b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
       break;
     default:
       break; // array/struct operands are diagnosed by sema
@@ -1605,8 +1604,7 @@ void IRGen::emitAssign(HStmt* s) {
         t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
     llvm::Value* src =
         v->memberPath.empty() ? addressOf(v->sym) : memberAddr(v->sym, v->memberPath, s->loc);
-    emitByNameCopy(dst, src, t->ty, v->ty, s->loc, t->sym, t->memberPath, v->sym,
-                   v->memberPath);
+    emitByNameCopy(dst, src, t->ty, v->ty, s->loc, t->sym, t->memberPath, v->sym, v->memberPath);
     return;
   }
   if (s->target->kind == HExpr::Call && s->target->name == "SUBSTR") {
@@ -1722,8 +1720,7 @@ void IRGen::emitAssign(HStmt* s) {
     }
     // One helper GEPs from an arbitrary struct base through a relative field
     // path (memberAddr always starts from the symbol's own base).
-    auto fieldAddr = [&](llvm::Value* base, const Type& root,
-                         const std::vector<unsigned>& rel) {
+    auto fieldAddr = [&](llvm::Value* base, const Type& root, const std::vector<unsigned>& rel) {
       llvm::Value* addr = base;
       const Type* cur = &root;
       for (unsigned f : rel) {
@@ -2077,8 +2074,7 @@ void IRGen::emitPutDataItems(HStmt* s) {
   for (auto& item : s->items) {
     HExpr* t = item.get();
     llvm::Value* name = globalString(t->sym->name);
-    b_.CreateCall(runtimeFn("pli_put_data_name"),
-                  {name, i64((long long)t->sym->name.size())});
+    b_.CreateCall(runtimeFn("pli_put_data_name"), {name, i64((long long)t->sym->name.size())});
     Val v = emitExpr(item.get());
     switch (v.ty.k) {
     case TK::Char:
@@ -2168,9 +2164,9 @@ void IRGen::emitPut(HStmt* s) {
         break;
       case TK::Complex:
         // Complex output (CM5): real, sign, imaginary magnitude, I.
-        b_.CreateCall(runtimeFn("pli_put_list_complex"),
-                      {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                       b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+        b_.CreateCall(
+            runtimeFn("pli_put_list_complex"),
+            {b_.CreateExtractValue(v.cpx, 0, "cpx.re"), b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
         break;
       }
     }
@@ -2202,9 +2198,9 @@ void IRGen::emitGetDataItems(HStmt* s) {
     llvm::BasicBlock* readL = llvm::BasicBlock::Create(ctx_, "data.read", curFn_);
     llvm::BasicBlock* nextL = llvm::BasicBlock::Create(ctx_, "data.next", curFn_);
     llvm::Value* want = globalString(t->sym->name);
-    llvm::Value* match = b_.CreateCall(runtimeFn("pli_data_name_is"),
-                                       {nameBuf, namelen, want, i64((long long)t->sym->name.size())},
-                                       "datamatch");
+    llvm::Value* match =
+        b_.CreateCall(runtimeFn("pli_data_name_is"),
+                      {nameBuf, namelen, want, i64((long long)t->sym->name.size())}, "datamatch");
     b_.CreateCondBr(b_.CreateICmpNE(match, i32(0), "datahit"), readL, nextL);
     startBlock(readL);
     const Type& ty = t->ty;
@@ -2213,8 +2209,7 @@ void IRGen::emitGetDataItems(HStmt* s) {
     case TK::FixedBin:
     case TK::FixedDec:
       if (ty.k == TK::FixedDec && ty.scale > 0) {
-        llvm::Value* raw =
-            b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
+        llvm::Value* raw = b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
         v.reg = b_.CreateTrunc(raw, llvmTy(ty), "gdec");
         v.ty = ty;
       } else {
@@ -2289,8 +2284,7 @@ void IRGen::emitGet(HStmt* s) {
         if (ty.k == TK::FixedDec && ty.scale > 0) {
           // Already scaled by the reader; truncate to the target width
           // without rescaling, then the store passes it through.
-          llvm::Value* raw =
-              b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
+          llvm::Value* raw = b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
           v.reg = b_.CreateTrunc(raw, llvmTy(ty), "gdec");
           v.ty = ty;
         } else {
@@ -3327,8 +3321,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     if (!rescale) {
       if (needDec || needBin) {
         llvm::Value* w = v.reg->getType()->getIntegerBitWidth() == 64
-                              ? v.reg
-                              : b_.CreateSExt(v.reg, b_.getInt64Ty(), "cvtw");
+                             ? v.reg
+                             : b_.CreateSExt(v.reg, b_.getInt64Ty(), "cvtw");
         magTrap(w, limit);
       }
       if (v.ty.intBits() == dst.intBits()) {
@@ -3658,8 +3652,7 @@ Val IRGen::emitExpr(HExpr* e) {
         return v;
       }
       unsigned bits = ty->getIntegerBitWidth();
-      llvm::Value* lo =
-          llvm::ConstantInt::get(ty, 1ULL << (bits - 1), true);
+      llvm::Value* lo = llvm::ConstantInt::get(ty, 1ULL << (bits - 1), true);
       llvm::Value* of = b_.CreateICmpEQ(a.reg, lo, "negof");
       int seq = ovSeq_++;
       llvm::BasicBlock* trapBB =
@@ -3762,12 +3755,12 @@ Val IRGen::emitExpr(HExpr* e) {
     // Exact part-wise equality (CM5); ordered comparisons were diagnosed.
     Val ac = convert(a, Type::complexTy(), e->loc);
     Val bc = convert(b, Type::complexTy(), e->loc);
-    llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                    b_.CreateExtractValue(ac.cpx, 0, "cpx.er"),
-                                    b_.CreateExtractValue(bc.cpx, 0, "cpx.er"), "cpx.er");
-    llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                    b_.CreateExtractValue(ac.cpx, 1, "cpx.ei"),
-                                    b_.CreateExtractValue(bc.cpx, 1, "cpx.ei"), "cpx.ei");
+    llvm::Value* er =
+        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpx, 0, "cpx.er"),
+                      b_.CreateExtractValue(bc.cpx, 0, "cpx.er"), "cpx.er");
+    llvm::Value* ei =
+        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpx, 1, "cpx.ei"),
+                      b_.CreateExtractValue(bc.cpx, 1, "cpx.ei"), "cpx.ei");
     llvm::Value* r = b_.CreateAnd(er, ei, "cpx.eq");
     if (op == Tok::Ne)
       r = b_.CreateNot(r, "cpx.ne");
@@ -3893,12 +3886,11 @@ Val IRGen::emitExpr(HExpr* e) {
       break;
     case Tok::Slash: {
       // (a+bi)/(c+di) = ((ac+bd) + (bc-ad)i) / (c^2+d^2).
-      llvm::Value* den =
-          b_.CreateFAdd(b_.CreateFMul(br, br), b_.CreateFMul(bi, bi), "cpx.den");
-      rr = b_.CreateFDiv(b_.CreateFAdd(b_.CreateFMul(ar, br), b_.CreateFMul(ai, bi)), den,
-                         "cpx.rr");
-      ri = b_.CreateFDiv(b_.CreateFSub(b_.CreateFMul(ai, br), b_.CreateFMul(ar, bi)), den,
-                         "cpx.ri");
+      llvm::Value* den = b_.CreateFAdd(b_.CreateFMul(br, br), b_.CreateFMul(bi, bi), "cpx.den");
+      rr =
+          b_.CreateFDiv(b_.CreateFAdd(b_.CreateFMul(ar, br), b_.CreateFMul(ai, bi)), den, "cpx.rr");
+      ri =
+          b_.CreateFDiv(b_.CreateFSub(b_.CreateFMul(ai, br), b_.CreateFMul(ar, bi)), den, "cpx.ri");
       break;
     }
     default:
@@ -4038,14 +4030,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       e->name == "ATAND" || e->name == "ASIN" || e->name == "ACOS" || e->name == "CBRT") {
     Val x = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
     static const char* const kMathFn[] = {
-        "pli_floor", "pli_ceil", "pli_sqrt",  "pli_exp",  "pli_log",  "pli_sin",  "pli_cos",
-        "pli_tan",   "pli_log2", "pli_log10", "pli_atan", "pli_sinh", "pli_cosh", "pli_tanh",
-        "pli_atanh", "pli_erf",  "pli_erfc",  "pli_sind", "pli_cosd", "pli_tand", "pli_atand",
-        "pli_asin",  "pli_acos", "pli_cbrt"};
-    static const char* const kMathName[] = {
-        "FLOOR", "CEIL", "SQRT", "EXP",   "LOG", "SIN",  "COS",  "TAN",  "LOG2", "LOG10", "ATAN",
-        "SINH",  "COSH", "TANH", "ATANH", "ERF", "ERFC", "SIND", "COSD", "TAND", "ATAND",
-        "ASIN",  "ACOS", "CBRT"};
+        "pli_floor", "pli_ceil", "pli_sqrt",  "pli_exp",   "pli_log",  "pli_sin",
+        "pli_cos",   "pli_tan",  "pli_log2",  "pli_log10", "pli_atan", "pli_sinh",
+        "pli_cosh",  "pli_tanh", "pli_atanh", "pli_erf",   "pli_erfc", "pli_sind",
+        "pli_cosd",  "pli_tand", "pli_atand", "pli_asin",  "pli_acos", "pli_cbrt"};
+    static const char* const kMathName[] = {"FLOOR", "CEIL", "SQRT",  "EXP",   "LOG",  "SIN",
+                                            "COS",   "TAN",  "LOG2",  "LOG10", "ATAN", "SINH",
+                                            "COSH",  "TANH", "ATANH", "ERF",   "ERFC", "SIND",
+                                            "COSD",  "TAND", "ATAND", "ASIN",  "ACOS", "CBRT"};
     int ix = 0;
     for (int i = 0; i < 24; ++i)
       if (e->name == kMathName[i])
@@ -4190,9 +4182,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       bv = convert(b, common, e->loc);
     }
     // FIXED overflow (QR1.2): like Binary `*`, a wrapped product traps.
-    llvm::Value* r = common.k == TK::Float  ? b_.CreateFMul(av.reg, bv.reg, "mul")
-                      : common.isFixed()     ? checkedArith(Tok::Star, av.reg, bv.reg)
-                                             : b_.CreateMul(av.reg, bv.reg, "mul");
+    llvm::Value* r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
+                     : common.isFixed()    ? checkedArith(Tok::Star, av.reg, bv.reg)
+                                           : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;
     v.reg = r;
     result = v;

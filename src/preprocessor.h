@@ -38,8 +38,8 @@ private:
                         const std::string& operand, int line, int col);
   // Bare %NAME (extension, ADR-113): expand an activated preprocessor
   // variable to its decimal value.
-  bool substituteRef(const std::filesystem::path& input, const std::string& name, int line,
-                     int col, std::string& output);
+  bool substituteRef(const std::filesystem::path& input, const std::string& name, int line, int col,
+                     std::string& output);
   bool handleConditional(const std::filesystem::path& input, const std::string& name, int line,
                          int col);
   bool handleDo(const std::filesystem::path& input, const std::string& name, int line, int col);

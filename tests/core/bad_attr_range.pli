@@ -1,0 +1,8 @@
+ /* Diagnostic test: out-of-range precisions, scales, lengths, and
+    levels are diagnosed, never wrapped silently (static-analysis P2). */
+ badattrrange: procedure options(main);
+    declare a fixed bin(99999999999999999999);
+    declare b char(99999999999999999999);
+    declare c fixed bin(31, 99999999999999999999);
+    declare 9999999999 d fixed;
+ end badattrrange;

@@ -2935,3 +2935,33 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  duplicate aliases, array bodies, and aliases of aliases.
  Known limits: `DEFINE STRUCTURE`/`ORDINAL`, package-level
  `DEFINE`, and `IF`-branch definitions stay diagnosed.
+
+ ## ADR-115 — Static-analysis robustness batch
+
+ Context. `make check` (the `-Werror` + format + `tidy` + `scan-build`
+ gate) was red, and no dedicated analyzer had ever run cleanly over
+ the tree (`scan-build`/`clang-tidy`/`cppcheck` were absent from
+ `PATH`; the LLVM cellar ships all three). Fixes below, each
+ verified by the gate plus the full suite.
+
+ Decision. P0: `-Wreorder-ctor` init-list order in `irgen.h`, plus
+ a latent `-Wsign-compare` it had masked (`idx < (int)raw.size()`).
+ P3: two shadowed `idx` locals renamed `foldIdx`. P2: bounded
+ `strtol` parsing for attribute precisions/scales/lengths/levels,
+ which previously wrapped silently via `atoi` (`bad_attr_range.pli`).
+ P1: null-guard on the `ENTRY`-without-`Proc` path in `calleeFn`
+ (unreachable — every ENTRY symbol is created with its Proc — but
+ flagged independently by both analyzer runs and the gate's own
+ scan step). P4: audited the `int`/`size_t` bound-arithmetic
+ cluster as provably non-negative; added `array_negbounds.pli`
+ runtime coverage for negative lower bounds instead of touching
+ working code. P5: `parseDeclTail` now returns `void`. cppcheck
+ style nits (`useStlAlgorithm`, const-correctness) and the `Stmt`
+ padding note dismissed as churn; the two `identicalInnerCondition`
+ hits are balanced-scan-loop false positives.
+
+ Consequences. `make check` is green end to end including the
+ `scan-build` step ("No bugs found"). Known limits: oversized
+ integer literals still clamp via `strtoll` to a loud runtime
+ trap rather than a compile-time diagnostic; parser recursion
+ depth on adversarial nesting remains fuzzer territory.

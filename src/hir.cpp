@@ -673,8 +673,8 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     }
     break;
   case HStmt::Open:
-    os << " " << (s->fileSym ? s->fileSym->name : s->name)
-       << (s->openRecord ? " record" : "") << (s->openInput ? " input" : " output");
+    os << " " << (s->fileSym ? s->fileSym->name : s->name) << (s->openRecord ? " record" : "")
+       << (s->openInput ? " input" : " output");
     if (!s->openTitle.empty())
       os << " title(" << s->openTitle << ")";
     break;
@@ -701,8 +701,8 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
 
 void printHIR(const HProgram& p, std::ostream& os) {
   for (const auto& proc : p.procs) {
-    os << (proc->isMain ? "main " : "") << (proc->isRecursive ? "recursive " : "")
-       << "proc " << proc->name;
+    os << (proc->isMain ? "main " : "") << (proc->isRecursive ? "recursive " : "") << "proc "
+       << proc->name;
     if (proc->isFunction)
       os << " returns " << proc->retTy.desc();
     os << "\n";

@@ -39,9 +39,7 @@ bool Preprocessor::run(const fs::path& input, std::string& output) {
   return expand(input, output);
 }
 
-void Preprocessor::addIncludeDir(const fs::path& dir) {
-  includeDirs_.push_back(dir);
-}
+void Preprocessor::addIncludeDir(const fs::path& dir) { includeDirs_.push_back(dir); }
 
 namespace {
 
@@ -55,9 +53,8 @@ struct PPCondParser {
   std::string error;
 
   void skipWs() {
-    while (pos < text.size() &&
-           (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r' || text[pos] == '\n' ||
-            text[pos] == '\f'))
+    while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r' ||
+                                 text[pos] == '\n' || text[pos] == '\f'))
       ++pos;
   }
   bool atEnd() {
@@ -216,9 +213,8 @@ struct PPCondParser {
         v = v * 10 + (text[pos++] - '0');
       return v;
     }
-    if (pos < text.size() &&
-        (std::isalpha((unsigned char)text[pos]) || text[pos] == '_' || text[pos] == '$' ||
-         text[pos] == '#' || text[pos] == '@')) {
+    if (pos < text.size() && (std::isalpha((unsigned char)text[pos]) || text[pos] == '_' ||
+                              text[pos] == '$' || text[pos] == '#' || text[pos] == '@')) {
       size_t start = pos;
       while (pos < text.size() && (std::isalnum((unsigned char)text[pos]) || text[pos] == '_' ||
                                    text[pos] == '$' || text[pos] == '#' || text[pos] == '@'))
@@ -304,14 +300,13 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
   bool ok = false;
   if (name == "INCLUDE") {
     if (active)
-      ok = handleInclude(path, source.substr(wordEnd, end - wordEnd), directiveLine,
-                         directiveCol, output);
+      ok = handleInclude(path, source.substr(wordEnd, end - wordEnd), directiveLine, directiveCol,
+                         output);
     else
       ok = true;
   } else if (name == "DECLARE" || name == "DCL") {
     if (active)
-      ok = handleDeclare(path, source.substr(wordEnd, end - wordEnd), directiveLine,
-                         directiveCol);
+      ok = handleDeclare(path, source.substr(wordEnd, end - wordEnd), directiveLine, directiveCol);
     else
       ok = true;
   } else if (name == "ACTIVATE" || name == "DEACTIVATE") {
@@ -351,8 +346,7 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     // ends at the name itself (mid-statement uses like `a(%N)` never reach
     // the directive-terminating `;`).
     size_t rs = wordEnd;
-    while (rs < source.size() &&
-           (source[rs] == ' ' || source[rs] == '\t' || source[rs] == '\f'))
+    while (rs < source.size() && (source[rs] == ' ' || source[rs] == '\t' || source[rs] == '\f'))
       ++rs;
     if (rs >= source.size() || source[rs] != '=') {
       if (active)
@@ -399,8 +393,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
     }
     if (source[t] == '%') {
       size_t ws = t + 1;
-      while (ws < source.size() &&
-             (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
+      while (ws < source.size() && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
         ++ws;
       size_t we = ws;
       while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
@@ -431,15 +424,13 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
   // thenAt points at '%': re-scan to the end of the THEN word itself, since
   // spaces may sit between them.
   size_t arm = thenAt + 1;
-  while (arm < source.size() &&
-         (source[arm] == ' ' || source[arm] == '\t' || source[arm] == '\f'))
+  while (arm < source.size() && (source[arm] == ' ' || source[arm] == '\t' || source[arm] == '\f'))
     ++arm;
   while (arm < source.size() && (std::isalnum((unsigned char)source[arm]) || source[arm] == '_' ||
                                  source[arm] == '$' || source[arm] == '#' || source[arm] == '@'))
     ++arm;
-  while (arm < source.size() &&
-         (source[arm] == ' ' || source[arm] == '\t' || source[arm] == '\r' ||
-          source[arm] == '\n' || source[arm] == '\f'))
+  while (arm < source.size() && (source[arm] == ' ' || source[arm] == '\t' || source[arm] == '\r' ||
+                                 source[arm] == '\n' || source[arm] == '\f'))
     ++arm;
   if (arm >= source.size() || source[arm] != '%') {
     error(path, directiveLine, directiveCol, "expected a directive after %THEN");
@@ -450,14 +441,12 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
     return npos;
   // An optional %ELSE arm takes the inverted condition.
   size_t e = next;
-  while (e < source.size() &&
-         (source[e] == ' ' || source[e] == '\t' || source[e] == '\r' || source[e] == '\n' ||
-          source[e] == '\f'))
+  while (e < source.size() && (source[e] == ' ' || source[e] == '\t' || source[e] == '\r' ||
+                               source[e] == '\n' || source[e] == '\f'))
     ++e;
   if (e < source.size() && source[e] == '%') {
     size_t ws = e + 1;
-    while (ws < source.size() &&
-           (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
+    while (ws < source.size() && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
       ++ws;
     size_t we = ws;
     while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
@@ -465,9 +454,9 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
       ++we;
     if (upper(source.substr(ws, we - ws)) == "ELSE") {
       size_t arm2 = we;
-      while (arm2 < source.size() && (source[arm2] == ' ' || source[arm2] == '\t' ||
-                                      source[arm2] == '\r' || source[arm2] == '\n' ||
-                                      source[arm2] == '\f'))
+      while (arm2 < source.size() &&
+             (source[arm2] == ' ' || source[arm2] == '\t' || source[arm2] == '\r' ||
+              source[arm2] == '\n' || source[arm2] == '\f'))
         ++arm2;
       if (arm2 >= source.size() || source[arm2] != '%') {
         error(path, directiveLine, directiveCol, "expected a directive after %ELSE");

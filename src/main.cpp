@@ -40,34 +40,35 @@
 namespace fs = std::filesystem;
 
 static void usage() {
-  std::cout << "plic — PL/I compiler (LLVM backend)\n"
-               "\n"
-               "usage: plic [options] file.pli\n"
-               "\n"
-               "options:\n"
-               "  -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)\n"
-               "  -c               compile to a relocatable object (no linking)\n"
-               "  -emit-llvm       write LLVM IR and stop\n"
-               "  --print-hir      lower to HIR and print it, then stop\n"
-               "  -fsyntax-only    parse and analyse only\n"
-               "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
-               "  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE), ADR-111)\n"
-               "  --release        maximum optimization + stripped binary (minimal size)\n"
-               "  --debug          no optimization + debug info (-O0 -g)\n"
-               "  --keep-ll        keep the intermediate .ll next to the output\n"
-               "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
-               "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
-               "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
-               "  -L <dir>         add a library search path to the link step\n"
-               "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
-               "  -l<lib>          link a library (e.g. -lm) on the link step\n"
-               "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
-               "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
-               "  -shared -static  produce a shared / static binary\n"
-               "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
-               "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-               "  -v               show the sub-commands being run\n"
-               "  -h, --help       this message\n";
+  std::cout
+      << "plic — PL/I compiler (LLVM backend)\n"
+         "\n"
+         "usage: plic [options] file.pli\n"
+         "\n"
+         "options:\n"
+         "  -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)\n"
+         "  -c               compile to a relocatable object (no linking)\n"
+         "  -emit-llvm       write LLVM IR and stop\n"
+         "  --print-hir      lower to HIR and print it, then stop\n"
+         "  -fsyntax-only    parse and analyse only\n"
+         "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
+         "  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE), ADR-111)\n"
+         "  --release        maximum optimization + stripped binary (minimal size)\n"
+         "  --debug          no optimization + debug info (-O0 -g)\n"
+         "  --keep-ll        keep the intermediate .ll next to the output\n"
+         "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
+         "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
+         "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
+         "  -L <dir>         add a library search path to the link step\n"
+         "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
+         "  -l<lib>          link a library (e.g. -lm) on the link step\n"
+         "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
+         "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
+         "  -shared -static  produce a shared / static binary\n"
+         "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
+         "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
+         "  -v               show the sub-commands being run\n"
+         "  -h, --help       this message\n";
 }
 
 static std::string runCapture(const char* cmd) {
@@ -112,7 +113,7 @@ int main(int argc, char** argv) {
   std::string input, output, runtimeLib = PLIC_RUNTIME_LIB, triple;
   std::string clangPath = PLIC_CLANG;
   std::string optLevel = "-O2";
-  std::vector<std::string> linkArgs; // extra args appended to the link step
+  std::vector<std::string> linkArgs;    // extra args appended to the link step
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;

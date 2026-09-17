@@ -29,7 +29,7 @@ struct Expr {
     Unary,
     Call,
     Subscript,
-    Star, // '*' in a subscript list — a cross-section axis (rule 126); not a value
+    Star,       // '*' in a subscript list — a cross-section axis (rule 126); not a value
     ComplexLit, // imaginary constant 2i (rule 139): fval is the imaginary part
   } kind = IntLit;
   SourceLoc loc{};
@@ -99,9 +99,9 @@ struct DeclItem {
   // Runtime lower-bound expressions for dynamic array axes (rule (13)); empty
   // when every lower bound is constant. Mirrors `dynBounds` for the lower bound.
   std::vector<ExprP> dynLbBounds;
-  ExprP init;     // INITIAL(...) — a single simple scalar constant (M0 scalar path)
+  ExprP init;      // INITIAL(...) — a single simple scalar constant (M0 scalar path)
   ExprP valueInit; // VALUE(const) — a named-constant value (extension, ADR-108)
-  ExprP initCall; // INITIAL(CALL f(...)) — a function call initializer (rule 27)
+  ExprP initCall;  // INITIAL(CALL f(...)) — a function call initializer (rule 27)
   std::vector<InitItem> initItems;     // INITIAL(...) itemlist (arrays, rule 26-31)
   std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)
   std::string typeRef;                 // TYPE <alias> (extension, ADR-114); empty = none
@@ -128,34 +128,34 @@ struct DeclItem {
 
 struct Stmt {
   enum Kind {
-    Null,     // rule (67)
-    Declare,  // rule (9)
-    Assign,   // rule (86)
-    If,       // rule (74)
-    Group,    // rule (70)  DO; ... END;
-    Begin,    // rule (68)  BEGIN; ... END; — a block with its own scope
-    DoWhile,  // rule (71)  DO WHILE(e);
-    DoIter,   // rule (71)+(72)+(73)
-    Put,      // rules (104)-(109)
-    Get,      // rules (104)-(109)
-    CallS,    // rule (78)
-    Return,   // rule (81)
-    Stop,     // rule (85)
-    Goto,     // rule (77)  GO TO label — local, within a procedure (M1)
-    Entry,    // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
-              //            an alternate entry point into this procedure
-    Allocate, // rule (87)  ALLOCATE based-allocate-item{,...}
-    Free,     // rule (90)  FREE ( [reference ->] identifier ){,...}
-    Open,     // rule (100) OPEN open-optionslist{,...};
-    Close,    // rule (102) CLOSE close-optionslist{,...};
-    Leave,    // extension (ADR-105): LEAVE [label]; exits an iterative group
-    Iterate,  // extension (ADR-105): ITERATE [label]; continues one (`name` = target)
-    On,       // rule (91)  ON condition [SNAP] (unit | SYSTEM)
-    Revert,   // rule (92)  REVERT condition
-    Signal,   // rule (93)  SIGNAL condition
-    Display,  // rule (114) DISPLAY (expression) — one scalar value
-    Read,     // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
-    Write,    // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
+    Null,        // rule (67)
+    Declare,     // rule (9)
+    Assign,      // rule (86)
+    If,          // rule (74)
+    Group,       // rule (70)  DO; ... END;
+    Begin,       // rule (68)  BEGIN; ... END; — a block with its own scope
+    DoWhile,     // rule (71)  DO WHILE(e);
+    DoIter,      // rule (71)+(72)+(73)
+    Put,         // rules (104)-(109)
+    Get,         // rules (104)-(109)
+    CallS,       // rule (78)
+    Return,      // rule (81)
+    Stop,        // rule (85)
+    Goto,        // rule (77)  GO TO label — local, within a procedure (M1)
+    Entry,       // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
+                 //            an alternate entry point into this procedure
+    Allocate,    // rule (87)  ALLOCATE based-allocate-item{,...}
+    Free,        // rule (90)  FREE ( [reference ->] identifier ){,...}
+    Open,        // rule (100) OPEN open-optionslist{,...};
+    Close,       // rule (102) CLOSE close-optionslist{,...};
+    Leave,       // extension (ADR-105): LEAVE [label]; exits an iterative group
+    Iterate,     // extension (ADR-105): ITERATE [label]; continues one (`name` = target)
+    On,          // rule (91)  ON condition [SNAP] (unit | SYSTEM)
+    Revert,      // rule (92)  REVERT condition
+    Signal,      // rule (93)  SIGNAL condition
+    Display,     // rule (114) DISPLAY (expression) — one scalar value
+    Read,        // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
+    Write,       // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
     DefineAlias, // extension (ADR-114): DEFINE ALIAS name attrs (no HIR twin;
                  // dropped in lowering after sema registers the type)
   } kind = Null;
@@ -166,7 +166,7 @@ struct Stmt {
   std::vector<DeclItem> decls;
 
   ExprP target, value, cond, from, to, by;
-  bool until = false; // DO UNTIL (extension, ADR-106): test cond after the body
+  bool until = false;              // DO UNTIL (extension, ADR-106): test cond after the body
   std::vector<ExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
   bool byName = false;             // rule (86) trailing ", BY NAME" on assignment
   bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)
@@ -244,13 +244,13 @@ struct Proc {
   std::string name;
   SourceLoc loc{};
   bool isMain = false;
-  bool isExternal = false;             // rule (42): a top-level non-MAIN procedure is
-                                       // externally linked under its upper-cased name
-  bool isRecursive = false;            // RECURSIVE option (rule (5))
-  bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
-  Type retTy{};                        // function return type (RETURNS)
-  Type commonRetTy{};                  // rule (56): the single result type shared by all
-                                       // function-valued entry points (void if none)
+  bool isExternal = false;  // rule (42): a top-level non-MAIN procedure is
+                            // externally linked under its upper-cased name
+  bool isRecursive = false; // RECURSIVE option (rule (5))
+  bool isFunction = false;  // has a RETURNS attribute (rules (5),(34))
+  Type retTy{};             // function return type (RETURNS)
+  Type commonRetTy{};       // rule (56): the single result type shared by all
+                            // function-valued entry points (void if none)
   // A structure-valued function's result type (rule 127): the name of an
   // enclosing structure variable whose shape the function returns. The parser
   // records the name; sema resolves it to a deep copy of that type into retTy.
