@@ -1,0 +1,6 @@
+ /* OPTIONAL (extension): the attribute is
+    only valid on a procedure parameter. */
+ badoptdecl: procedure options(main);
+    declare x fixed bin(31) optional;
+    x = 1;
+ end badoptdecl;

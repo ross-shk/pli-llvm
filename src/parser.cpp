@@ -1209,7 +1209,17 @@ void Parser::parseDeclTail(DeclItem& item) {
                 advance();
                 if (!at(Tok::RParen)) {
                   for (;;) {
-                    call->args.push_back(parseExpr());
+                    // A '*' argument omits an OPTIONAL parameter (extension),
+                    // as in a CALL statement (rule (78)).
+                    if (at(Tok::Star)) {
+                      auto star = std::make_unique<Expr>();
+                      star->kind = Expr::Star;
+                      star->loc = cur().loc;
+                      call->args.push_back(std::move(star));
+                      advance();
+                    } else {
+                      call->args.push_back(parseExpr());
+                    }
                     if (!eat(Tok::Comma))
                       break;
                   }
@@ -1265,6 +1275,14 @@ void Parser::parseDeclTail(DeclItem& item) {
                    "");
         else
           item.valueInit = std::move(v);
+        continue;
+      }
+      if (w == "OPTIONAL") {
+        // OPTIONAL (extension): the parameter may be omitted at a call
+        // (passed '*' or left out when trailing). Validity (parameters
+        // only) is checked in sema, which sees the parameter list.
+        advance();
+        item.optional = true;
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" ||
@@ -1664,7 +1682,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
            w == "VAR" || w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
            w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" || w == "INIT" || w == "VALUE" ||
-           w == "TYPE" || w == "EXTERNAL" || w == "EXT";
+           w == "TYPE" || w == "EXTERNAL" || w == "EXT" || w == "OPTIONAL";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -2383,7 +2401,18 @@ StmtP Parser::parseCall() {
   if (eat(Tok::LParen)) { // rule (80)
     if (!at(Tok::RParen)) {
       for (;;) {
-        st->args.push_back(parseExpr());
+        // A '*' argument omits an OPTIONAL parameter (extension): recorded
+        // as a Star node; sema validates it against the callee. It is not
+        // an expression; parseExpr would reject it.
+        if (at(Tok::Star)) {
+          auto star = std::make_unique<Expr>();
+          star->kind = Expr::Star;
+          star->loc = cur().loc;
+          st->args.push_back(std::move(star));
+          advance();
+        } else {
+          st->args.push_back(parseExpr());
+        }
         if (!eat(Tok::Comma))
           break;
       }

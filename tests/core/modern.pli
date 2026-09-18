@@ -1,7 +1,8 @@
  /* Extension track capstone (MODERN-PLI-PLAN exit
     criterion): SELECT with loop exits, a
-    parameterized include, VALUE constants, and
-    modern string built-ins, composed. */
+    parameterized include, VALUE constants,
+    modern string built-ins, and OPTIONAL
+    parameters, composed. */
  %declare width;
  %activate width;
  %width = 4;
@@ -28,6 +29,23 @@
        put skip list('FAIL trim/tally');
     end;
     %include 'modern.inc';
+    call optm(5, *);
+    call optm(5);
+    if optf(5) ^= 5 then fails = fails + 1;
     if fails = 0 then put skip list('PASS modern');
     else put skip list('FAIL modern: fails =', fails);
+
+ optm: procedure(a, b);
+    declare a fixed bin(31);
+    declare b fixed bin(31) optional;
+    if omitted(b) then s = s + a;
+    else s = s - a;
+ end optm;
+
+ optf: procedure(a, b) returns(fixed bin(31));
+    declare a fixed bin(31);
+    declare b fixed bin(31) optional;
+    if omitted(b) then return(a);
+    return(a + b);
+ end optf;
  end modern;

@@ -891,6 +891,22 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           else
             item.sym->basedBase = base;
         }
+        // OPTIONAL (extension, ADR-119): only valid on a procedure parameter;
+        // the flag rides the symbol into call checking. ENTRY-statement
+        // parameters resolve by name as well (rule 56).
+        if (item.optional) {
+          bool isParam =
+              std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+          if (!isParam)
+            for (auto& st : p->body)
+              if (st && st->kind == Stmt::Entry &&
+                  std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
+                isParam = true;
+          if (!isParam)
+            d_.error(item.loc, "OPTIONAL is only valid on a procedure parameter (ADR-119)", "");
+          else
+            item.sym->isOptional = true;
+        }
         // Only scalar (numeric/BIT) element arrays are served in this stage;
         // character element arrays are diagnosed, never silently miscompiled
         // (invariant 2). INITIAL on an array (rule 26) expands its itemlist
@@ -1590,15 +1606,16 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     checkValueTarget(s->target.get()); // VALUE constants cannot receive values (ADR-108)
     // Cross-section assignment (rule 126): B = A(i, *) — the right-hand side is
-    // a reduced-dim array value produced by a '*' subscript. The target must be
-    // a whole array of exactly that reduced shape.
+    // a reduced-dim array value produced by a '*' subscript. Only a subscript
+    // carries Star axes; a call's '*' arguments omit OPTIONALs (extension).
     {
       bool isCross = false;
-      for (auto& a : s->value->args)
-        if (a->kind == Expr::Star) {
-          isCross = true;
-          break;
-        }
+      if (s->value->kind == Expr::Subscript)
+        for (auto& a : s->value->args)
+          if (a->kind == Expr::Star) {
+            isCross = true;
+            break;
+          }
       if (isCross) {
         if (s->target->ty.isArray() && s->target->ty == s->value->ty)
           break;
@@ -1800,20 +1817,52 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     for (auto& a : s->args)
       typeExpr(a.get(), sc, p);
     // External entries carry their descriptor in entryParams (rule (38)).
+    // Arity counts parameter NAMES: resolved symbols may still lag for a
+    // nested callee (ADR-094), when per-argument checks are skipped as before.
     const size_t expect = en       ? en->params.size()
                           : callee ? callee->params.size()
                                    : sym->entryParams.size();
-    if (s->args.size() != expect) {
+    if (callee || en) {
+      // OPTIONAL parameters (extension, ADR-119): a '*' argument omits an
+      // OPTIONAL parameter in any position, and trailing OPTIONALs may be
+      // left out entirely. Anything else keeps the exact-count rule (78).
+      if (s->args.size() > expect) {
+        d_.error(s->loc,
+                 "'" + s->name + "' expects " + std::to_string(expect) + " argument(s), " +
+                     std::to_string(s->args.size()) + " given",
+                 "(78)");
+      } else {
+        size_t i = 0;
+        for (; i < s->args.size(); ++i) {
+          if (s->args[i]->kind == Expr::Star) {
+            if (i >= calleeParams.size() || !calleeParams[i]->isOptional)
+              d_.error(s->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)",
+                       "");
+          } else if (i < calleeParams.size())
+            checkAssignable(calleeParams[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
+        }
+        for (; i < expect; ++i)
+          if (i >= calleeParams.size() || !calleeParams[i]->isOptional) {
+            d_.error(s->loc,
+                     "'" + s->name + "' expects " + std::to_string(expect) + " argument(s), " +
+                         std::to_string(s->args.size()) + " given",
+                     "(78)");
+            break;
+          }
+      }
+    } else if (s->args.size() != expect) {
       d_.error(s->loc,
                "'" + s->name + "' expects " + std::to_string(expect) + " argument(s), " +
                    std::to_string(s->args.size()) + " given",
                "(78)");
-      break;
+    } else {
+      // External entries carry Type descriptors with no OPTIONAL info, so a
+      // '*' argument cannot be validated and stays diagnosed (rule (38)).
+      for (auto& a : s->args)
+        if (a->kind == Expr::Star)
+          d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)",
+                   "");
     }
-    if (callee)
-      for (size_t i = 0; i < s->args.size(); ++i)
-        if (i < calleeParams.size())
-          checkAssignable(calleeParams[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
     break;
   }
   case Stmt::Return: {
@@ -2366,17 +2415,54 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
     const size_t expect =
         en ? en->params.size() : (callee ? callee->params.size() : sym->entryParams.size());
-    if (e->args.size() != expect) {
-      d_.error(e->loc,
-               "'" + e->name + "' expects " + std::to_string(expect) + " argument(s), " +
-                   std::to_string(e->args.size()) + " given",
-               "(78)");
-      e->ty = Type::voidTy();
-      break;
+    // OPTIONAL parameters (extension, ADR-119): as in the CALL statement,
+    // '*' omits an OPTIONAL in any position and trailing OPTIONALs may be
+    // left out. External entries keep the exact-count rule (38).
+    // Arity counts parameter NAMES: resolved symbols may still lag for a
+    // nested callee at INITIAL CALL time, when per-argument checks are
+    // skipped exactly as before (ADR-094).
+    if (callee || en) {
+      const size_t nparams = en ? en->params.size() : callee->params.size();
+      if (e->args.size() > nparams) {
+        d_.error(e->loc,
+                 "'" + e->name + "' expects " + std::to_string(nparams) + " argument(s), " +
+                     std::to_string(e->args.size()) + " given",
+                 "(78)");
+        e->ty = Type::voidTy();
+        break;
+      }
+      size_t i = 0;
+      for (; i < e->args.size(); ++i) {
+        if (e->args[i]->kind == Expr::Star) {
+          if (i >= calleeParams.size() || !calleeParams[i]->isOptional)
+            d_.error(e->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)",
+                     "");
+        } else if (i < calleeParams.size())
+          checkAssignable(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
+      }
+      for (; i < nparams; ++i)
+        if (i >= calleeParams.size() || !calleeParams[i]->isOptional) {
+          d_.error(e->loc,
+                   "'" + e->name + "' expects " + std::to_string(nparams) + " argument(s), " +
+                       std::to_string(e->args.size()) + " given",
+                   "(78)");
+          e->ty = Type::voidTy();
+          break;
+        }
+    } else {
+      if (e->args.size() != expect) {
+        d_.error(e->loc,
+                 "'" + e->name + "' expects " + std::to_string(expect) + " argument(s), " +
+                     std::to_string(e->args.size()) + " given",
+                 "(78)");
+        e->ty = Type::voidTy();
+        break;
+      }
+      for (auto& a : e->args)
+        if (a->kind == Expr::Star)
+          d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)",
+                   "");
     }
-    for (size_t i = 0; i < e->args.size(); ++i)
-      if (i < calleeParams.size())
-        checkAssignable(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
     e->ty =
         en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
            : (callee ? callee->retTy : (sym->entryIsFunction ? sym->entryRetTy : Type::voidTy()));
@@ -2599,6 +2685,25 @@ bool Sema::typeBuiltin(Expr* e) {
       return true;
     }
     e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // OMITTED/PRESENT (extension, ADR-119): test whether an OPTIONAL
+  // parameter was omitted at the call (passed '*' or left out). Codegen
+  // compares the by-reference slot against null.
+  if (e->name == "OMITTED" || e->name == "PRESENT") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, e->name + " expects 1 argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    Expr* a = e->args[0].get();
+    if (a->kind != Expr::VarRef || !a->sym ||
+        (a->sym->kind != Symbol::Var && a->sym->kind != Symbol::Param) || !a->sym->isOptional) {
+      d_.error(a->loc, e->name + " takes an OPTIONAL parameter (ADR-119)", "");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::bit(1);
     return true;
   }
   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,

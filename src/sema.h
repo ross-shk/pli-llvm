@@ -19,6 +19,7 @@ struct Symbol {
   bool implicit = false; // created by the implicit-declaration rule
   bool isEntry = false;  // external C entry (DECLARE ... ENTRY): no body
   bool isValue = false;  // VALUE named constant (extension, ADR-108): reassignment diagnosed
+  bool isOptional = false; // OPTIONAL parameter (extension): may be omitted at a call
   bool fileAttr = false; // FILE variable (rules 39,40): a named file
   int fileSlot = -1;     // runtime slot index for a FILE variable (100-103)
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen

@@ -108,6 +108,7 @@ struct DeclItem {
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
+  bool optional = false; // OPTIONAL parameter (extension); valid only on parameters
   // A dynamic (runtime-extent) array that is a structure member (rule 13): its
   // field path (the indices memberAddr walks) and its bound expressions. The
   // member's DeclItem still owns dynBounds/dynLbBounds; these reference them.
