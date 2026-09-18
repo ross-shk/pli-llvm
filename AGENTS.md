@@ -24,7 +24,8 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `src/`                        | `lexer` → `parser` → `sema` → `irgen` (+ `diag`, `types`, `ast`, `main`)                                  |
 | `runtime/`                    | `libpli`: list-directed I/O, string semantics, conditions (C11)                                           |
-| `tests/`                      | `run_tests.py` + groups: golden (`expected/*.out` diff) or self-checking (prints PASS), `bad_*` must fail |
+| `tests/`                      | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`): golden (`expected/*.out` diff) or self-checking (prints PASS), `bad_*` must fail |
+| `tests/builtins/`             | built-in function tests — `typeBuiltin`/`emitBuiltin` + `pli_*` helpers (track: `docs/BUILTINS-PLAN.md`); touch only on builtin work |
 | `docs/`                       | ARCHITECTURE, DESIGN-DECISIONS (ADRs), OPTIMIZATION, IMPLEMENTATION-PLAN, GRAMMAR-COVERAGE                |
 | `examples/`                   | scratch programs, git-ignored                                                                             |
 | `TR25.084-concrete-syntax.md` | the spec: rules (1)–(151), with ⚠ notes where the scan was damaged                                        |
@@ -52,7 +53,7 @@ runs its compile+run jobs concurrently (`JOBS` overrides the worker count).
 ## Feature work
 
 1. find the rule in `docs/GRAMMAR-COVERAGE.md` — not in TR 25.084 ⇒ out of scope, say so
-2. test first (`tests/core/x.pli` golden or `tests/usecases/` self-checking, lowercase PL/I), then AST kind → parse → sema → irgen → runtime
+2. test first (`tests/core/x.pli` golden or `tests/usecases/` self-checking, lowercase PL/I; builtins go in `tests/builtins/`), then AST kind → parse → sema → irgen → runtime
 3. `make test`; golden: record expected output, **read it**; self: print PASS
 4. update `GRAMMAR-COVERAGE.md`; add an ADR if a decision was made
 5. stage; report rules moved + test counts
@@ -74,5 +75,8 @@ copy features from it into this compiler
 - silo `tests/`: don't list, glob, or read the tree during source work — open  
 only the specific test you are writing/fixing or running; `tests/*/out/` is  
 gitignored scratch, never worth reading
+- silo `tests/builtins/`, `typeBuiltin`/`emitBuiltin`: don't list,
+glob, or read unless working on built-in functions — open only the specific
+test or builtin under work
 - silo `runtime/`: don't list, glob, or read unless extending or changing the runtime
 - `docs/DESIGN-DECISIONS.md` contains the historical track of design decisions, don't read unless you need to check or modify already implemented features
