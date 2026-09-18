@@ -1,0 +1,10 @@
+ /* OPTIONAL (extension): '*' for a
+    non-OPTIONAL parameter is diagnosed,
+    never passed as null. */
+ badoptarg: procedure options(main);
+    call p(1, *);
+    p: procedure(x, y);
+       declare x fixed bin(31);
+       declare y fixed bin(31);
+    end p;
+ end badoptarg;

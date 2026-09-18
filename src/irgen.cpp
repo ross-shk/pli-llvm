@@ -2665,13 +2665,29 @@ void IRGen::emitCall(HStmt* s) {
       else
         break;
     }
+    if (a->kind == HExpr::Star) {
+      // Omitted OPTIONAL (extension, ADR-119): the generated code supplies
+      // a null pointer, which OMITTED/PRESENT test. Sema validated it.
+      args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+      continue;
+    }
     args.push_back(argAddr(a, pty));
   }
+  // Trailing omitted OPTIONALs pad with nulls to the full signature, so the
+  // callee's hidden-result and static-link positions never shift (sema
+  // validated the remainder is OPTIONAL).
+  if (en || callee)
+    for (size_t i = s->args.size(); i < calleeParams.size(); ++i)
+      args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
   // Hidden extent args for `*`-extent parameters (rule 13): the caller passes
   // the actual element count of each matching array argument.
-  for (size_t i = 0; i < calleeParams.size() && i < s->args.size(); ++i) {
+  for (size_t i = 0; i < calleeParams.size(); ++i) {
     if (isAdjustable(calleeParams[i])) {
-      llvm::Value* ext = argExtent(s->args[i].get());
+      // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent
+      // alongside its null address (extension, ADR-119).
+      llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
+                             ? i64(0)
+                             : argExtent(s->args[i].get());
       if (!ext) {
         d_.error(s->args[i]->loc,
                  "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -3663,11 +3679,22 @@ Val IRGen::emitExpr(HExpr* e) {
         pty = calleeParams[i]->ty;
       else
         break;
+      if (a->kind == HExpr::Star) {
+        // Omitted OPTIONAL (extension, ADR-119): null pointer, as in emitCall.
+        args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+        continue;
+      }
       args.push_back(argAddr(a, pty));
     }
-    for (size_t i = 0; i < calleeParams.size() && i < e->args.size(); ++i)
+    // Trailing omitted OPTIONALs pad with nulls to the full signature.
+    for (size_t i = e->args.size(); i < calleeParams.size(); ++i)
+      args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+    for (size_t i = 0; i < calleeParams.size(); ++i)
       if (isAdjustable(calleeParams[i])) {
-        llvm::Value* ext = argExtent(e->args[i].get());
+        // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent.
+        llvm::Value* ext = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
+                               ? i64(0)
+                               : argExtent(e->args[i].get());
         if (!ext) {
           d_.error(e->args[i]->loc,
                    "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -4161,6 +4188,28 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     s = b_.CreateInsertValue(s, nim, 1, "cg.im");
     v.ty = e->ty;
     v.cpx = s;
+    result = v;
+    return true;
+  }
+  // OMITTED/PRESENT (extension, ADR-119): an omitted OPTIONAL arrives as a
+  // null by-reference slot. Compare the parameter's address, never loading
+  // through it — the slot itself may be null. Sema restricted the argument
+  // to an OPTIONAL parameter.
+  if (e->name == "OMITTED" || e->name == "PRESENT") {
+    HExpr* a = e->args[0].get();
+    llvm::Value* addr =
+        (a->sym && a->sym->kind != Symbol::ProcName) ? addressOf(a->sym) : nullptr;
+    if (!addr) {
+      d_.error(e->loc, "could not address the OPTIONAL parameter", "(123)");
+      v.ty = e->ty;
+      v.reg = b_.getInt1(false);
+      result = v;
+      return true;
+    }
+    llvm::Value* isNull =
+        b_.CreateICmpEQ(addr, llvm::Constant::getNullValue(b_.getPtrTy()), "omnull");
+    v.ty = e->ty;
+    v.reg = e->name == "OMITTED" ? isNull : b_.CreateNot(isNull, "ompres");
     result = v;
     return true;
   }

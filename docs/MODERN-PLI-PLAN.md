@@ -40,6 +40,12 @@ tasking, keyed files).
 |---|---|---:|---|
 | MX8 | Iterative/conditional preprocessing | 2–3w | `%ACTIVATE`/`%DEACTIVATE` gating bare-`%NAME` substitution done, so ordinary parameterized includes work (ADR-113); `%DO` loops still diagnosed; full macro evaluation stays diagnosed |
 
+## Phase MX-D — procedure interface (1 engineer-week)
+
+| Order | Slice | Effort | Deliverable |
+|---|---|---:|---|
+| MX9 | `OPTIONAL` parameters | 1w | Enterprise form: `DECLARE p ... OPTIONAL` on parameters; `*` omission in any position and trailing elision; null marshalling with `OMITTED`/`PRESENT` tests; non-OPTIONAL `*`, non-parameter `OPTIONAL`, and external-entry `*` diagnosed (ADR-119) |
+
 ## Stretch (unestimated, admit one at a time)
 
 `ORDINAL`, extended `DATETIME` patterns, `FETCH`/`RELEASE`.
@@ -50,12 +56,13 @@ none else is approved by this document.
 ## Exit criterion
 
 A modern-idiom program using `SELECT` with loop exits, `%INCLUDE` with
-parameters, `VALUE` constants, and the MX5 built-ins compiles without
-source rewriting and prints checked reference output; the Extensions
-ledger lists every admitted nicety with its ADR; `SELECT`/`LEAVE` as
-plain identifiers still compile (no-reserved-words guard test).
+parameters, `VALUE` constants, the MX5 built-ins, and an `OPTIONAL`
+parameter compiles without source rewriting and prints checked reference
+output; the Extensions ledger lists every admitted nicety with its ADR;
+`SELECT`/`LEAVE` as plain identifiers still compile (no-reserved-words
+guard test).
 
 Status: met by `tests/core/modern.pli` (+ `modern.inc`) — all
-approved track items (MX1–MX7, MX4a/b, `%ACTIVATE` substitution)
+approved track items (MX1–MX7, MX4a/b, `%ACTIVATE` substitution, MX9)
 compose in one checked program. Remaining: `%DO` and the
 explicitly unapproved stretch list.

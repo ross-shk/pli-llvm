@@ -1,0 +1,41 @@
+ /* OPTIONAL parameters (extension): a
+    trailing parameter declared OPTIONAL
+    may be passed '*', forwarded, or left
+    out; omitted() and present() observe
+    the omission (null address). */
+ optional_test: procedure options(main);
+    declare t fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    call greet('hey', '!');
+    call greet('hey', *);
+    call greet('hey');
+    t = addb(3, 4);
+    if t ^= 7 then fails = fails + 1;
+    t = addb(3, *);
+    if t ^= 3 then fails = fails + 1;
+    t = addb(3);
+    if t ^= 3 then fails = fails + 1;
+    if fails = 0 then
+       put skip list('PASS optional');
+    else put skip list('FAIL optional:',
+       fails);
+
+ greet: procedure(s, ending);
+    declare s char(5);
+    declare ending char(1) optional;
+    if omitted(ending) then
+       put skip list(s);
+    else put skip list(s || ending);
+    if present(ending) = omitted(ending)
+       then put skip list('BAD present');
+ end greet;
+
+ addb: procedure(a, b)
+    returns(fixed bin(31));
+    declare a fixed bin(31);
+    declare b fixed bin(31) optional;
+    if omitted(b) then return(a);
+    return(a + b);
+ end addb;
+ end optional_test;

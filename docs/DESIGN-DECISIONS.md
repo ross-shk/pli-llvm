@@ -3032,3 +3032,28 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   skipped output, resume proven by post-SIGNAL output). Units in
   FUNCTION procedures work too. Frame access, valued RETURN,
   nested-ON/DECLARE/ENTRY, and GO TO with ON stay diagnosed.
+
+  ## ADR-119 — OPTIONAL parameters (Enterprise PL/I form)
+
+  Context. Enterprise PL/I lets a parameter carry OPTIONAL: callers
+  omit it with `*` in any position or drop trailing OPTIONALs, the
+  generated code supplies null pointers, and the receiver tests with
+  OMITTED/PRESENT. TR 25.084 has no such attribute, so this is an
+  extension in the PACKAGE/SELECT/VALUE line, not a rule move.
+
+  Decision. `OPTIONAL` parses as a declaration attribute (parameters
+  only, ENTRY params included); both call checkers accept `*` for
+  OPTIONAL params and trailing elision while keeping exact-count
+  rule (78) otherwise; arity counts parameter NAMES because resolved
+  symbols still lag for nested callees at INITIAL CALL time
+  (ADR-094); omitted args marshal as null (zero hidden extent),
+  which OMITTED/PRESENT compare without loading through. Externals
+  keep exact counts (`*` diagnosed — descriptors carry no OPTIONAL);
+  a cross-section check that misfired on call args is scoped back to
+  subscripts (rule 126).
+
+  Consequences. `optional.pli` runs (`*`, trailing, and function-ref
+  omission with omitted()/present() cross-checks); three bad tests
+  pin the diagnostics. Omitted-to-OPTIONAL forwarding works
+  unchanged (null flows through). ENTRY-descriptor OPTIONAL stays
+  out (rule 36 is its own slice).
