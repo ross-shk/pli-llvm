@@ -1,0 +1,38 @@
+ /* '*' extent forwarding (rules (12),
+    (13),(34)): a '*' parameter passed to
+    another '*' parameter carries the
+    caller's hidden extent, so bounds,
+    DIM, reductions, and by-reference
+    writes observe the live extent. */
+ star_fwd_test: procedure options(main);
+    declare a(6) fixed bin(31);
+    declare i fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    do i = 1 to 6;
+       a(i) = i * 2;
+    end;
+    call outer(a);
+    if a(1) ^= 102 then fails = fails + 1;
+    if fails = 0 then
+       put skip list('PASS star_forward');
+    else put skip list('FAIL star_forward:',
+       fails);
+
+ outer: procedure(x);
+    declare x(*) fixed bin(31);
+    if hbound(x) ^= 6 then fails = fails + 1;
+    call inner(x);
+    if dim(x) ^= 6 then fails = fails + 1;
+ end outer;
+
+ inner: procedure(y);
+    declare y(*) fixed bin(31);
+    declare i fixed bin(31);
+    if hbound(y) ^= 6 then fails = fails + 1;
+    if sum(y) ^= 42 then fails = fails + 1;
+    do i = 1 to hbound(y);
+       y(i) = y(i) + 100;
+    end;
+ end inner;
+ end star_fwd_test;

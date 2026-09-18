@@ -2989,3 +2989,25 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   pins the star rejection. Entry/external-char limits follow the
   struct+ENTRY precedent: IRGen-stage diagnostics, no `bad_` test
   (`-fsyntax-only` never reaches them).
+
+  ## ADR-117 — Forwarding `*` hidden extents through chained calls
+
+  Context. A `*` adjustable-extent parameter (rule (13)) receives
+  its live extent as a hidden i64 argument (ADR-055), but `argExtent`
+  returned null for a `*` actual, so passing one `*` parameter to
+  another was diagnosed — the descriptor was dropped at the second
+  hop instead of riding the call like any other argument.
+
+  Decision. `argExtent` forwards the frame's own hidden-extent slot
+  (`dynUb_`) when the actual is a parameter of the procedure being
+  emitted (primary or ENTRY segment); any other `*` reference (e.g.
+  an outer procedure's parameter, which has no addressable extent
+  value in this frame) stays diagnosed at the call site. Both call
+  paths (CALL statement, function reference) share the helper, and
+  the base address already chains by reference, so writes stay
+  visible end to end.
+
+  Consequences. `star_forward.pli` runs (live `HBOUND`/`DIM`/`SUM`
+  and two-level writes through a forwarded `*`). Cross-frame
+  forwarding stays a rule-(13) diagnostic. ENTRY array descriptors
+  (rule 36) remain unparsed — the next descriptor slice, not this one.
