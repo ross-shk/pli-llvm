@@ -2553,16 +2553,35 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
 
 // Element count of a call argument passed to a `*`-extent parameter (rule 13):
 // a fixed array contributes its constant extent, a dynamic-bound array its live
-// recorded bound. Returns null for an unsupported argument form (the caller
-// diagnoses it), so a `*` array cannot be forwarded to another `*` parameter in
-// this stage.
+// recorded bound, and a `*` parameter forwards this frame's own hidden extent.
+// Returns null for an unsupported argument form (the caller diagnoses it).
 llvm::Value* IRGen::argExtent(HExpr* a) {
   if (a->kind != HExpr::VarRef || !a->sym || !a->sym->ty.isArray())
     return nullptr;
   const Type& arr = a->sym->ty;
   const Dim& d = arr.dims[0];
-  if (d.adj)
-    return nullptr; // forwarding a `*` array: not served here
+  if (d.adj) {
+    // Forwarding a `*` parameter (rule (13)): pass along the hidden extent
+    // this frame received for it. Only a parameter of the procedure being
+    // emitted owns a live slot here — a `*` reference from another frame
+    // (e.g. an outer procedure's parameter) has no addressable extent value
+    // and stays diagnosed at the call site.
+    bool mine = false;
+    if (curProc_) {
+      for (Symbol* q : curProc_->paramSyms)
+        if (q == a->sym)
+          mine = true;
+      for (auto& st : curProc_->body)
+        if (st && st->kind == HStmt::Entry)
+          for (Symbol* q : st->entryParamSyms)
+            if (q == a->sym)
+              mine = true;
+    }
+    auto it = dynUb_.find(a->sym);
+    if (mine && it != dynUb_.end())
+      return it->second;
+    return nullptr;
+  }
   if (d.dyn || d.lbDyn) {
     llvm::Value* ub = d.dyn ? (dynUb_.count(a->sym)
                                    ? dynUb_[a->sym]
