@@ -209,7 +209,9 @@ private:
   int nextFileSlot_ = 0;                            // next FILE variable slot index (100-103)
   std::set<std::string> procLabels_;                // GO TO targets in the current proc (rule 77)
   Stmt* curEntry_ = nullptr;                        // the ENTRY segment currently being checked
-                                                    // (rule 56): enables RETURN(value) in its body
+                                                     // (rule 56): enables RETURN(value) in its body
+  bool inUnit_ = false; // true while checking an ON-unit body (rule 91):
+                        // a bare RETURN there ends the unit, never the function
   std::vector<std::vector<std::string>> loopStack_; // labels of enclosing iterative
                                                     // DO-groups, innermost last (ADR-105)
   std::set<std::string> irNames_;                   // irNames in use, to disambiguate shadowing

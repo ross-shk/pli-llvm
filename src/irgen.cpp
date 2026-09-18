@@ -1496,7 +1496,12 @@ void IRGen::emitStmt(HStmt* s) {
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
-    if (curProc_->isFunction && curProc_->retTy.isStruct()) {
+    if (!s->value) {
+      // A bare RETURN ends an ON-unit and resumes after the SIGNAL (rule
+      // 91); sema rejects it in procedure bodies, so a handler (whose
+      // hidden result pointers are null) is the only path that gets here.
+      b_.CreateRetVoid();
+    } else if (curProc_->isFunction && curProc_->retTy.isStruct()) {
       // Structure-valued function (rule 127): copy the returned structure's
       // storage into the caller's result buffer, then return void.
       Val v = emitExpr(s->value.get());
