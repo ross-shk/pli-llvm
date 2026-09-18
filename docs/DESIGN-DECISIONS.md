@@ -3011,3 +3011,24 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   and two-level writes through a forwarded `*`). Cross-frame
   forwarding stays a rule-(13) diagnostic. ENTRY array descriptors
   (rule 36) remain unparsed — the next descriptor slice, not this one.
+
+  ## ADR-118 — Bare RETURN in ON-units resumes after the SIGNAL
+
+  Context. Every RETURN inside an ON-unit was diagnosed (rule 91),
+  even though the handler already resumes by falling off its end:
+  the dispatcher runs the handler function and rejoins after the
+  SIGNAL. Full frame capture for units (Multics-style internal
+  procedures with environments) needs runtime + signature surgery
+  and stays M4; but bare RETURN-as-resume needs none of it.
+
+  Decision. A valueless RETURN in a unit is served: sema tracks an
+  `inUnit_` flag so the must-RETURN-a-value (81) and common-type
+  (56) checks skip it, `checkOnUnit` accepts it while still
+  diagnosing RETURN with a value, and IRGen emits a plain `RetVoid`
+  (which also hardens error paths — a valueless RETURN in a
+  struct/char function previously reached memcpy-from-null).
+
+  Consequences. `on_return.pli` runs (early unit exit proven by
+  skipped output, resume proven by post-SIGNAL output). Units in
+  FUNCTION procedures work too. Frame access, valued RETURN,
+  nested-ON/DECLARE/ENTRY, and GO TO with ON stay diagnosed.

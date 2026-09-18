@@ -1,0 +1,13 @@
+ /* rules (91)-(94): a bare RETURN in an
+    ON-unit ends the unit and resumes
+    after the SIGNAL; statements after it
+    do not run. */
+ on_return: procedure options(main);
+    on error do;
+       put skip list('unit');
+       if oncode() = 1 then return;
+       put skip list('skipped');
+    end;
+    signal error;
+    put skip list('resumed');
+ end on_return;

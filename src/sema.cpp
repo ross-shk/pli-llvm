@@ -1339,7 +1339,11 @@ void Sema::checkOnUnit(Stmt* u, Proc* p) {
       d_.error(s->loc, "nested ON units are not implemented in this stage", "(91)");
       break;
     case Stmt::Return:
-      d_.error(s->loc, "RETURN inside an ON-unit is not implemented in this stage", "(91)");
+      // A bare RETURN ends the unit and resumes after the SIGNAL (rule 91);
+      // RETURN with a value has no function to return from here.
+      if (s->value)
+        d_.error(s->loc, "RETURN with a value inside an ON-unit is not implemented in this stage",
+                 "(91)");
       break;
     case Stmt::Leave:
       d_.error(s->loc, "LEAVE inside an ON-unit is not implemented in this stage", "(91)");
@@ -1835,6 +1839,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (!s->value->ty.isVoid())
         checkAssignable(rty, s->value->ty, s->loc, "RETURN value");
     } else {
+      // A bare RETURN in an ON-unit ends the unit and resumes after the
+      // SIGNAL (rule 91): it answers neither the value nor the common-type
+      // checks below. Elsewhere a function must RETURN a value (81).
+      if (inUnit_)
+        break;
       if (isFunc) {
         d_.error(s->loc, "a function procedure must RETURN a value", "(81)");
         break;
@@ -1971,8 +1980,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // the unit body only needs typing plus the establishing-frame checks.
     s->condKey = resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
+      bool savedUnit = inUnit_;
+      inUnit_ = true;
       checkStmt(s->unit.get(), sc, p);
       checkOnUnit(s->unit.get(), p);
+      inUnit_ = savedUnit;
     }
     break;
   case Stmt::Revert:
