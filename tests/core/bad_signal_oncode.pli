@@ -1,0 +1,8 @@
+ /* SIGNAL SET ONCODE limits (rule (93)): the code expression
+    must be numeric. */
+ bad_sigcode: procedure options(main);
+    on condition(neterror) begin;
+       put skip list('no');
+    end;
+    signal condition(neterror) set oncode('x');
+ end bad_sigcode;

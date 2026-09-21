@@ -1,0 +1,16 @@
+ /* SIGNAL with SET ONCODE (rule (93)): the expression value is
+    stored as ONCODE before the unit runs, so handlers observe
+    the signalled code (a variable, then an errno-style call).
+    State is observed via output only, as with other ON-units. */
+ sigcode: procedure options(main);
+    on condition(neterror) begin;
+       put skip list(oncode());
+    end;
+    signal condition(neterror) set oncode(5);
+    signal condition(neterror) set oncode(err());
+    revert condition(neterror);
+    put skip list('PASS sigcode');
+ end sigcode;
+ err: procedure returns(fixed bin(31));
+    return(11);
+ end err;

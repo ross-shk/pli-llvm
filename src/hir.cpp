@@ -155,6 +155,9 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->isSystem = s->isSystem;
   h->onIndex = s->onIndex;
   h->unit = lowerStmt(s->unit.get(), owner);
+  // SIGNAL ... SET ONCODE(expr) (rule (93)): lower the code expression.
+  if (s->kind == Stmt::Signal && s->oncodeExpr)
+    h->oncodeExpr = lowerExpr(s->oncodeExpr.get());
 
   for (const auto& d : s->decls) {
     HDeclItem hd;
@@ -691,8 +694,15 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
       os << " SYSTEM";
     break;
   case HStmt::Revert:
+    os << " " << s->condName;
+    break;
   case HStmt::Signal:
     os << " " << s->condName;
+    if (s->oncodeExpr) {
+      os << " SET ONCODE(";
+      printExpr(os, s->oncodeExpr.get(), ind);
+      os << ")";
+    }
     break;
   case HStmt::Display:
     os << " ";

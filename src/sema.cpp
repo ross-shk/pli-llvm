@@ -2630,6 +2630,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Signal:
     // A REVERT with no established handler is a no-op reverting to SYSTEM.
     s->condKey = resolveCondKey(s, sc);
+    // SIGNAL ... SET ONCODE(expr) (rule (93)): the code is numeric.
+    if (s->oncodeExpr) {
+      typeExpr(s->oncodeExpr.get(), sc, p);
+      if (!s->oncodeExpr->ty.isVoid() && !s->oncodeExpr->ty.isNumeric())
+        d_.error(s->oncodeExpr->loc, "SET ONCODE requires a numeric code expression", "(93)");
+    }
     break;
   }
 }
