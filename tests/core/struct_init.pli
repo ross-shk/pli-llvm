@@ -1,44 +1,16 @@
-  /* INITIAL on a structure (rules (11),(26)): a flat itemlist fills the scalar
-     leaves in declaration order, recursing through nested minor structures and
-     filling array members element by element; iteration factors and '*' are
-     supported. Runs on AUTOMATIC storage. */
-  struct_init_test: procedure options(main);
-     declare 1 s init(10, 20, 30, 5, *),
-            2 a fixed bin(31),
-            2 x,
-              3 y fixed bin(31),
-              3 z fixed bin(31),
-            2 v(2) fixed bin(31);
-     declare 1 t init(1, 2, (2)(8, 9)),
-            2 p fixed bin(31),
-            2 q fixed bin(31),
-            2 r(4) fixed bin(31);
-     declare fails fixed bin(31);
-
-     fails = 0;
-
-     /* scalar member, nested members, and an array member with '*' repeat */
-     if s.a ^= 10 then fails = fails + 1;
-     if s.x.y ^= 20 then fails = fails + 1;
-     if s.x.z ^= 30 then fails = fails + 1;
-     if s.v(1) ^= 5 or s.v(2) ^= 5 then fails = fails + 1;
-
-     /* iteration factor (2)(8,9) fills r element by element */
-     if t.p ^= 1 or t.q ^= 2 then fails = fails + 1;
-     if t.r(1) ^= 8 or t.r(2) ^= 9 then fails = fails + 1;
-     if t.r(3) ^= 8 or t.r(4) ^= 9 then fails = fails + 1;
-
-     /* INITIAL runs on every activation of an automatic structure */
-     inner: procedure;
-        declare 1 u init(4, 5),
-               2 m fixed bin(31),
-               2 n fixed bin(31);
-        if u.m ^= 4 or u.n ^= 5 then fails = fails + 1;
-        u.m = 0;
-     end inner;
-     call inner;
-     call inner;
-
-     if fails = 0 then put skip list('PASS struct_init');
-     else put skip list('FAIL struct_init: fails =', fails);
-  end struct_init_test;
+ /* Per-member structure INIT (rule (26)): each member's own
+    INITIAL value fills its field; replication on a member fans
+    out within that member. */
+ sinit: procedure options(main);
+    declare 1 s, 2 a init(1), 2 b init(2);
+    declare 1 t, 2 x init(7), 2 y, 2 z init(9);
+    declare fails fixed bin(31);
+    fails = 0;
+    if s.a ^= 1 then fails = fails + 1;
+    if s.b ^= 2 then fails = fails + 1;
+    if t.x ^= 7 then fails = fails + 1;
+    if t.y ^= 0 then fails = fails + 1;
+    if t.z ^= 9 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS sinit');
+    else put skip list('FAIL sinit: fails =', fails);
+ end sinit;

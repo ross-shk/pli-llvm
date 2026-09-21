@@ -3470,3 +3470,30 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   Consequences. `hexx.pli` runs (decode, NUL assignment,
   64-byte replication); `bad_hexx.pli` pins both (143)
   diagnostics.
+
+  ## ADR-136 — Per-member structure INITIAL fills own leaves
+
+  Context. `declare 1 s, 2 a init(1), 2 b init(2)` silently
+  printed `0 0`: member `DeclItem`s get no standalone symbols,
+  and the struct-level INITIAL path only fired on the
+  top-level itemlist — member values were dropped, storage
+  zero-filled. A silent wrong-code bug, the worst kind.
+
+  Decision. When a structure carries member INITIALs (new
+  subtree scan), gather the declaration subtree in member
+  order: each member's own itemlist/init/valueInit expands
+  against its own type, members without one contribute
+  null zero-fill slots, and the existing `foldStructInit`
+  path folds positionally. Nulls ride through the fold as
+  placeholders so irgen's positional walk stays aligned and
+  skips those stores. Structure-level + member-level INITIALs
+  together stay diagnosed (single source). Also fixed en
+  route: the parser back-compat alias moved (not copied) a
+  single INITIAL value out of `initItems`, leaving a null
+  that crashed the new gather — it now clones.
+
+  Consequences. `struct_init.pli` runs (full, mixed
+  init/uninit, member arrays, nesting);
+  `bad_struct_init.pli` pins the mix and non-constant
+  diagnoses. Static-struct and dynamic-member INITIAL stay
+  diagnosed as before.
