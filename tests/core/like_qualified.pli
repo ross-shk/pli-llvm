@@ -1,0 +1,40 @@
+ /* LIKE with a qualified template (rule 43): the declared item takes
+    the shape of a minor structure of an already-declared structure,
+    narrowing to any depth; the copy owns independent storage. */
+ like_qualified: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31),
+           2 g,
+            3 x fixed bin(31),
+            3 y fixed bin(31),
+           2 h,
+            3 k,
+             4 v fixed bin(31);
+    declare 1 t like s.g;
+    declare 1 u like s.h.k;
+    declare 1 p,
+           2 m like s.g;
+    declare fails fixed bin(31);
+
+    fails = 0;
+    s.g.x = 1;
+    s.g.y = 2;
+    /* narrowed copies expose the minor structure's members */
+    t.x = 7;
+    t.y = 8;
+    if t.x ^= 7 or t.y ^= 8 then fails = fails + 1;
+    u.v = 9;
+    if u.v ^= 9 then fails = fails + 1;
+    /* independent storage: the template is untouched */
+    if s.g.x ^= 1 or s.g.y ^= 2 then fails = fails + 1;
+    /* nested LIKE of a qualified template */
+    p.m.x = 5;
+    p.m.y = 6;
+    if p.m.x ^= 5 or p.m.y ^= 6 then fails = fails + 1;
+    /* the same narrowed shape assigns whole */
+    t = s.g;
+    if t.x ^= 1 or t.y ^= 2 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS like qualified');
+    else put skip list('FAIL like qualified: fails =', fails);
+ end like_qualified;

@@ -689,16 +689,65 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 it.loc,
                 "LIKE combined with members is not implemented in this stage; use a plain LIKE",
                 "(43)");
-          Symbol* tpl = lookup(sc, it.like);
-          if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
-            d_.error(it.loc, "LIKE reference '" + it.like + "' is not a structure in this scope",
-                     "(43)");
-            return Type::voidTy();
+          Symbol* tpl = nullptr;
+          const Type* tplTy = nullptr;
+          // A qualified template LIKE S.A.B (rule 43) narrows to a minor
+          // structure: the head names an already-declared structure variable
+          // and each further segment names a member of it.
+          size_t dot = it.like.find('.');
+          if (dot == std::string::npos) {
+            tpl = lookup(sc, it.like);
+            if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
+              d_.error(it.loc, "LIKE reference '" + it.like + "' is not a structure in this scope",
+                       "(43)");
+              return Type::voidTy();
+            }
+            tplTy = &tpl->ty;
+          } else {
+            tpl = lookup(sc, it.like.substr(0, dot));
+            if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
+              d_.error(it.loc, "LIKE reference '" + it.like + "' is not a structure in this scope",
+                       "(43)");
+              return Type::voidTy();
+            }
+            tplTy = &tpl->ty;
+            size_t pos = dot + 1;
+            while (pos <= it.like.size()) {
+              size_t next = it.like.find('.', pos);
+              std::string seg =
+                  it.like.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+              const Member* found = nullptr;
+              if (!tplTy->isStruct()) {
+                d_.error(it.loc,
+                         "LIKE reference '" + it.like.substr(0, pos - 1) + "' is not a structure" +
+                             ", so it cannot be qualified by '" + seg + "'",
+                         "(43)");
+                return Type::voidTy();
+              }
+              for (const auto& m : tplTy->members)
+                if (m->name == seg) {
+                  found = m.get();
+                  break;
+                }
+              if (!found) {
+                d_.error(it.loc, "LIKE reference '" + it.like + "' has no member '" + seg + "'",
+                         "(43)");
+                return Type::voidTy();
+              }
+              tplTy = &found->ty;
+              if (next == std::string::npos)
+                break;
+              pos = next + 1;
+            }
+            if (!tplTy->isStruct()) {
+              d_.error(it.loc, "LIKE reference '" + it.like + "' is not a structure", "(43)");
+              return Type::voidTy();
+            }
           }
-          if (hasDynamicMember(tpl->ty))
+          if (hasDynamicMember(*tplTy))
             d_.error(it.loc, "LIKE of a structure with a dynamic member is not implemented",
                      "(13)");
-          return tpl->ty; // deep copy via Type's copy constructor
+          return *tplTy; // deep copy via Type's copy constructor
         }
         if (children[idx].empty())
           return it.ty;

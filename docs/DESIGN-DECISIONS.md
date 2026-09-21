@@ -3052,8 +3052,30 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   a cross-section check that misfired on call args is scoped back to
   subscripts (rule 126).
 
-  Consequences. `optional.pli` runs (`*`, trailing, and function-ref
-  omission with omitted()/present() cross-checks); three bad tests
-  pin the diagnostics. Omitted-to-OPTIONAL forwarding works
-  unchanged (null flows through). ENTRY-descriptor OPTIONAL stays
-  out (rule 36 is its own slice).
+   Consequences. `optional.pli` runs (`*`, trailing, and function-ref
+   omission with omitted()/present() cross-checks); three bad tests
+   pin the diagnostics. Omitted-to-OPTIONAL forwarding works
+   unchanged (null flows through). ENTRY-descriptor OPTIONAL stays
+   out (rule 36 is its own slice).
+
+  ## ADR-120 — Qualified LIKE templates narrow to a minor structure
+
+  Context. Rule (43) reads `LIKE unsubscripted-reference`, and the
+  corpus (B2) narrows templates to a minor structure (`1 T LIKE S.G`).
+  Plain `LIKE S` already deep-copies the template's type in sema, so
+  no codegen change is needed if a qualified template resolves to a
+  type the same way.
+
+  Decision. The parser carries the dotted path (`S.A.B`) on the item
+  and sema walks it: the head must be an already-declared structure
+  variable, each segment a member, the final a structure type. The
+  item takes a deep copy of that minor structure's type (dynamic
+  members still diagnosed under rule 13, item-level dimension and
+  extend-form members still diagnosed under 43). A scalar final, a
+  scalar intermediate, or an unknown member is diagnosed with (43).
+
+  Consequences. `like_qualified.pli` runs (two- and three-segment
+  paths, nested member position, independence, whole-assign from the
+  same minor structure); `bad_like_qualified.pli` pins the three
+  diagnostics. `LIKE` with a dimension on the item and the extend
+  form stay out as before.
