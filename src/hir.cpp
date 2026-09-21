@@ -258,6 +258,16 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     }
     h->args.push_back(std::move(ha));
   }
+  // CALL task options (rule (79), QR2.8): task/event refs need no conversion;
+  // the priority expression converts to FIXED like an arithmetic operand.
+  h->hasTaskOpt = s->hasTaskOpt;
+  h->taskRef = lowerExpr(s->taskRef.get());
+  h->eventRef = lowerExpr(s->eventRef.get());
+  h->priorityExpr = lowerExpr(s->priorityExpr.get());
+  // WAIT event list (rule (82)): plain references, no conversion.
+  for (const auto& e : s->waitEvents)
+    h->waitEvents.push_back(lowerExpr(e.get()));
+  h->waitCount = lowerExpr(s->waitCount.get());
 
   // ALLOCATE (rule 87) / FREE (rule 90): mirror the based variable references
   // and their SET pointer targets / locators.
@@ -515,6 +525,10 @@ const char* stmtKind(HStmt::Kind k) {
     return "Get";
   case HStmt::CallS:
     return "Call";
+  case HStmt::Wait:
+    return "Wait";
+  case HStmt::Delay:
+    return "Delay";
   case HStmt::Return:
     return "Return";
   case HStmt::Stop:
@@ -601,6 +615,32 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
       os << " ";
       printExpr(os, a.get(), ind);
     }
+    if (s->hasTaskOpt)
+      os << " TASK";
+    if (s->taskRef) {
+      os << " task=";
+      printExpr(os, s->taskRef.get(), ind);
+    }
+    if (s->eventRef) {
+      os << " event=";
+      printExpr(os, s->eventRef.get(), ind);
+    }
+    break;
+  case HStmt::Wait:
+    os << " ";
+    for (size_t i = 0; i < s->waitEvents.size(); ++i) {
+      if (i)
+        os << ", ";
+      printExpr(os, s->waitEvents[i].get(), ind);
+    }
+    if (s->waitCount) {
+      os << " count=";
+      printExpr(os, s->waitCount.get(), ind);
+    }
+    break;
+  case HStmt::Delay:
+    os << " ";
+    printExpr(os, s->value.get(), ind);
     break;
   case HStmt::Return:
     os << " ";

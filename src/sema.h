@@ -15,13 +15,13 @@ struct Symbol {
   Type ty{};
   SourceLoc loc{};
   enum Kind { Var, Param, ProcName } kind = Var;
-  bool isStatic = false; // STATIC storage: an LLVM global
-  bool implicit = false; // created by the implicit-declaration rule
-  bool isEntry = false;  // external C entry (DECLARE ... ENTRY): no body
-  bool isValue = false;  // VALUE named constant (extension, ADR-108): reassignment diagnosed
+  bool isStatic = false;   // STATIC storage: an LLVM global
+  bool implicit = false;   // created by the implicit-declaration rule
+  bool isEntry = false;    // external C entry (DECLARE ... ENTRY): no body
+  bool isValue = false;    // VALUE named constant (extension, ADR-108): reassignment diagnosed
   bool isOptional = false; // OPTIONAL parameter (extension): may be omitted at a call
-  bool fileAttr = false; // FILE variable (rules 39,40): a named file
-  int fileSlot = -1;     // runtime slot index for a FILE variable (100-103)
+  bool fileAttr = false;   // FILE variable (rules 39,40): a named file
+  int fileSlot = -1;       // runtime slot index for a FILE variable (100-103)
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
@@ -206,13 +206,13 @@ private:
   std::unordered_map<Proc*, Scope*> procScopes_;
   Scope* rootScope_ = nullptr; // program scope: all external procedure names
   std::vector<Symbol*> storage_;
-  std::vector<Symbol*> entries_;                    // external C entries, in declaration order
-  int nextFileSlot_ = 0;                            // next FILE variable slot index (100-103)
-  std::set<std::string> procLabels_;                // GO TO targets in the current proc (rule 77)
-  Stmt* curEntry_ = nullptr;                        // the ENTRY segment currently being checked
-                                                     // (rule 56): enables RETURN(value) in its body
-  bool inUnit_ = false; // true while checking an ON-unit body (rule 91):
-                        // a bare RETURN there ends the unit, never the function
+  std::vector<Symbol*> entries_;     // external C entries, in declaration order
+  int nextFileSlot_ = 0;             // next FILE variable slot index (100-103)
+  std::set<std::string> procLabels_; // GO TO targets in the current proc (rule 77)
+  Stmt* curEntry_ = nullptr;         // the ENTRY segment currently being checked
+                                     // (rule 56): enables RETURN(value) in its body
+  bool inUnit_ = false;              // true while checking an ON-unit body (rule 91):
+                                     // a bare RETURN there ends the unit, never the function
   std::vector<std::vector<std::string>> loopStack_; // labels of enclosing iterative
                                                     // DO-groups, innermost last (ADR-105)
   std::set<std::string> irNames_;                   // irNames in use, to disambiguate shadowing
