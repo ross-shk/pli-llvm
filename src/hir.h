@@ -91,7 +91,7 @@ struct HDeclItem {
 // One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
 // FormatItem with lowered width/decimals expressions.
 struct HFormatItem {
-  enum Kind { A, F, E, X, Skip, Page, Line } kind = A;
+  enum Kind { A, F, E, X, Skip, Page, Line, Column } kind = A;
   HExprP w; // field width
   HExprP d; // F/E: fractional digits
 };

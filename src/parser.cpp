@@ -2407,11 +2407,19 @@ bool Parser::parseFormatItem(Stmt* st) {
     fi.kind = FormatItem::Page;
   } else if (w == "LINE") {
     fi.kind = FormatItem::Line;
+  } else if (w == "COL") {
+    // Column positioning (rule (48)): COL(n) starts the next item at
+    // 1-based column n. The full word COLUMN stays diagnosed above.
+    fi.kind = FormatItem::Column;
   } else {
     d_.error(cur().loc, "'" + w + "' is not a format item", "(48)");
     return false;
   }
   advance();              // the format descriptor word
+  if (fi.kind == FormatItem::Column && cur().kind != Tok::LParen) {
+    d_.error(cur().loc, "COL requires a column number in parentheses", "(48)");
+    return false;
+  }
   if (eat(Tok::LParen)) { // optional ( width [, decimals ] )
     fi.w = parseExpr();
     if ((fi.kind == FormatItem::F || fi.kind == FormatItem::E) && eat(Tok::Comma)) {

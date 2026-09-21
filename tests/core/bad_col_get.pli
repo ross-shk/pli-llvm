@@ -1,0 +1,6 @@
+ /* COLUMN limits (rule (108)): input positioning stays diagnosed
+    in this stage (kept parse-clean so sema runs). */
+ bad_col_get: procedure options(main);
+    declare x char(8);
+    get edit (x) (col(5), a);
+ end bad_col_get;

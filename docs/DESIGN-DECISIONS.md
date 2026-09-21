@@ -3236,3 +3236,28 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   and member/element/cross loads assumed single-bit storage.
   Wide arrays, stream items, wide reductions, function results,
   and descriptors stay later slices.
+
+  ## ADR-127 — COL(n) positioning for PUT EDIT
+
+  Context. The `COLUMN` family was rejected at parse (rule (48)),
+  so no column-positioned EDIT program compiled. The runtime
+  already tracks the output column for `SKIP` handling, and format
+  emission is table-driven per format kind with one runtime call
+  each, but `GET` tracks no input column.
+
+  Decision. Parse `COL(n)` (the full word `COLUMN` stays
+  diagnosed; a bare `COL` without parentheses is diagnosed) into
+  a `Column` format kind appended to both format enums so the
+  `static_cast` lowering holds. Sema pairs it as a control item
+  consuming nothing; `GET` positions are diagnosed with (108).
+  `pli_put_edit_column(n)` pads blanks to 1-based column `n` and
+  opens a fresh line first when already past `n`, so the next
+  item always starts at column `n` (`n < 1` behaves as 1).
+
+  Consequences. `edit_col.pli` golden covers forward pads,
+  newline-on-past, expression widths, F-field interplay, and a
+  `col(16)` landing; `bad_col.pli` pins bare/`COLUMN`
+  diagnostics, `bad_col_get.pli` the input diagnosis. Adjacent
+  gaps left alone: bare `A` (no width) prints nothing even on the
+  base compiler, and literal `A` items share it — both
+  pre-existing, diagnosed nowhere, out of this slice.
