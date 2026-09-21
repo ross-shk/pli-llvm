@@ -32,20 +32,46 @@ FILE *rt_pli_files[PLI_MAX_FILES] = {0};
 FILE *rt_out_f = NULL;
 FILE *rt_in_f = NULL;
 
+void rt_put_raw(const char *p, size_t n) {
+  if (rt_out_f) {
+    fwrite(p, 1, n, rt_out_f);
+    return;
+  }
+  if (rt_out_buf) {
+    size_t take = n < (rt_out_cap - rt_out_len) ? n : (rt_out_cap - rt_out_len);
+    if (take > 0)
+      memmove(rt_out_buf + rt_out_len, p, take);
+    rt_out_len += take;
+    return;
+  }
+  fwrite(p, 1, n, stdout);
+  rt_col += (int)n;
+}
+
+/* Read one input character from the active FILE stream, STRING source, or
+ * stdin. */
+int rt_next_char(void) {
+  if (rt_in_f)
+    return getc(rt_in_f);
+  if (rt_in_buf)
+    return rt_in_pos < rt_in_len ? (unsigned char)rt_in_buf[rt_in_pos++] : EOF;
+  return getchar();
+}
+
 void pli_put_skip(long long n) {
   if (n < 1) n = 1;
-  if (col > 0) {
+  if (rt_col > 0) {
     fputc('\n', stdout);
-    col = 0;
+    rt_col = 0;
   }
   for (long long i = 1; i < n; ++i) fputc('\n', stdout);
   rt_items_on_line = 0;
 }
 
 void pli_put_page(void) {
-  if (col > 0) fputc('\n', stdout);
+  if (rt_col > 0) fputc('\n', stdout);
   fputc('\f', stdout);
-  col = 0;
+  rt_col = 0;
   rt_items_on_line = 0;
 }
 
@@ -73,15 +99,15 @@ void rt_display_end(void) {
   // The line is complete: reset the column and item count so fini and a
   // following PUT start clean.
   rt_put_raw("\n", 1);
-  col = 0;
+  rt_col = 0;
   rt_items_on_line = 0;
 }
 /* A DISPLAY starts on a fresh line: end a pending PUT line first (as SKIP
  * does), so mixed PUT/DISPLAY output never joins two values on one line. */
 void rt_display_begin(void) {
-  if (col > 0) {
+  if (rt_col > 0) {
     rt_put_raw("\n", 1);
-    col = 0;
+    rt_col = 0;
   }
   rt_items_on_line = 0;
 }

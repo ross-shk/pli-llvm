@@ -3400,3 +3400,28 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   binary sizes are unchanged. Verified by full suite green
   plus byte-identical golden outputs (`edit_col`,
   `put_array`) and live runs (`conv_cf`, `cbyvalue`).
+
+  ## ADR-133 — Bridge string-search builtins merge (libc-native)
+
+  Context. `examples/builtins` carried C-tested string builtins
+  the compiler could not name (`LOWERCASE`, `CENTER`, `SEARCH`,
+  `VERIFY`-from, `RANK`, `COLLATE`); the merge plan asked for
+  them end-to-end with the "bridge" label dropped. The in-tree
+  runtime already uses libc (`snprintf`, `memmove`), so the
+  bridge's self-contained `pbi_*` helpers were unnecessary —
+  only plain loops and padding were ported, no helper header.
+
+  Decision. Append the six ABI rows and port the six functions
+  verbatim-logic into `rt_string.c` (blank-padded, 1-based
+  positions). `VERIFY` grows a 3-arg form (`pli_verify_from`)
+  alongside the served 2-arg `pli_verify`; the four landed
+  `CHAR`/`FIXED` conversions and `pli_cmp_char` are untouched
+  (no duplicates). Sema/irgen follow the UPPERCASE precedent:
+  char builders via `charTemp`, scalars via direct calls.
+
+  Consequences. `tests/builtins/strcase.pli` runs (folding,
+  centering incl. truncation, set searches, code points);
+  `bad_strcase.pli` pins operand/arity diagnostics. Remaining
+  bridge rows (INLIST/BETWEEN/IFTHENELSE-char, bits, dates,
+  random, numeric, storage, conversions, arithmetic) merge in
+  later slices per the boot order.

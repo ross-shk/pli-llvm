@@ -197,3 +197,77 @@ long long pli_index(const char *a, long long alen, const char *b, long long blen
   return 0;
 }
 
+
+/* LOWERCASE(s): copy s folding A-Z to a-z, blank-padding to dstcap. */
+void pli_lowercase(char *dst, long long dstcap, const char *s, long long slen) {
+  long long i = 0;
+  for (; i < slen && i < dstcap; ++i) {
+    char c = s[i];
+    if (c >= 'A' && c <= 'Z')
+      c = (char)(c - 'A' + 'a');
+    dst[i] = c;
+  }
+  while (i < dstcap)
+    dst[i++] = ' ';
+}
+
+/* CENTER(s, w): center s in a field of w blanks (extra pad goes right),
+ * truncating on the right when s is longer; blank-pad dst to dstcap. */
+void pli_center(char *dst, long long dstcap, const char *s, long long slen, long long w) {
+  if (w < 0)
+    w = 0;
+  long long field = w < dstcap ? w : dstcap;
+  long long take = slen < field ? slen : field;
+  long long left = (field - take) / 2;
+  long long i = 0;
+  for (; i < left; ++i)
+    dst[i] = ' ';
+  for (long long k = 0; k < take; ++k)
+    dst[i++] = s[k];
+  while (i < field)
+    dst[i++] = ' ';
+  while (i < dstcap)
+    dst[i++] = ' ';
+}
+
+/* SEARCH(s, t, start): 1-based position of the first character of s at or
+ * after start that occurs in t, or 0 (complement of VERIFY). */
+long long pli_search(const char *s, long long slen, const char *t, long long tlen,
+                     long long start) {
+  if (start < 1)
+    start = 1;
+  for (long long i = start - 1; i < slen; ++i)
+    for (long long j = 0; j < tlen; ++j)
+      if (s[i] == t[j])
+        return i + 1;
+  return 0;
+}
+
+/* VERIFY(s, t, start): 3-arg form — first position at or after start whose
+ * character is absent from t, or 0. */
+long long pli_verify_from(const char *s, long long slen, const char *t, long long tlen,
+                           long long start) {
+  if (start < 1)
+    start = 1;
+  for (long long i = start - 1; i < slen; ++i) {
+    long long j = 0;
+    while (j < tlen && s[i] != t[j])
+      ++j;
+    if (j == tlen)
+      return i + 1;
+  }
+  return 0;
+}
+
+/* RANK(c): code point of the first character, 0 when empty. */
+long long pli_rank(const char *s, long long slen) {
+  return slen > 0 ? (unsigned char)s[0] : 0;
+}
+
+/* COLLATE(n): the character with code n mod 256, blank-padding the tail. */
+void pli_collate(char *dst, long long dstcap, long long n) {
+  if (dstcap > 0)
+    dst[0] = (char)(n & 0xFF);
+  for (long long i = 1; i < dstcap; ++i)
+    dst[i] = ' ';
+}

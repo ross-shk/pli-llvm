@@ -3726,15 +3726,22 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::chr(e->args[0]->ty.len * n);
     return true;
   }
-  // VERIFY built-in (M2): verify(s, t) yields a FIXED BINARY position.
+  // VERIFY built-in (M2): verify(s, t[, start]) yields a FIXED BINARY
+  // position — the 2-arg form searches from 1, the 3-arg merged-bridge form
+  // from start (rule (123)).
   if (e->name == "VERIFY") {
-    if (e->args.size() != 2) {
-      d_.error(e->loc, "VERIFY expects 2 arguments (string, set)", "(123)");
+    if (e->args.size() != 2 && e->args.size() != 3) {
+      d_.error(e->loc, "VERIFY expects 2 or 3 arguments (string, set[, start])", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
     if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar()) {
-      d_.error(e->loc, "VERIFY arguments must be character strings", "(123)");
+      d_.error(e->loc, "VERIFY arguments must be (string, set[, start])", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (e->args.size() == 3 && !e->args[2]->ty.isNumeric()) {
+      d_.error(e->args[2]->loc, "VERIFY start must be numeric", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
@@ -3804,6 +3811,84 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::chr(e->args[0]->ty.len);
+    return true;
+  }
+  // LOWERCASE/CENTER/SEARCH/VERIFY/RANK/COLLATE (rule (123)): merged
+  // from the builtins bridge (libc-native, blank-padded, 1-based positions).
+  if (e->name == "LOWERCASE") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "LOWERCASE expects 1 argument (string)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isChar()) {
+      d_.error(e->args[0]->loc, "LOWERCASE argument must be a character string", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::chr(e->args[0]->ty.len);
+    return true;
+  }
+  if (e->name == "CENTER") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "CENTER expects 2 arguments (string, width)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isNumeric()) {
+      d_.error(e->loc, "CENTER arguments must be (string, width)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    int n = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
+    if (n < 0) {
+      d_.error(e->args[1]->loc, "CENTER width must be a constant in this stage", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::chr(n);
+    return true;
+  }
+  if (e->name == "SEARCH") {
+    if (e->args.size() != 3) {
+      d_.error(e->loc, "SEARCH expects 3 arguments (string, set, start)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isChar() || !e->args[1]->ty.isChar() || !e->args[2]->ty.isNumeric()) {
+      d_.error(e->loc, "SEARCH arguments must be (string, set, start)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  if (e->name == "RANK") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "RANK expects 1 argument (string)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isChar()) {
+      d_.error(e->args[0]->loc, "RANK argument must be a character string", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  if (e->name == "COLLATE") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "COLLATE expects 1 argument (code)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric()) {
+      d_.error(e->args[0]->loc, "COLLATE argument must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::chr(1);
     return true;
   }
   // HIGH/LOW built-ins (M2): high(n)/low(n) — n copies of the top/bottom
