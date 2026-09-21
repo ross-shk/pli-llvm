@@ -2379,10 +2379,89 @@ bool Parser::parseEditClause(Stmt* st) {
 }
 
 // One format item (rules (46)-(54)): a data format (A character, F fixed) or a
-// control format (X spacing, SKIP/LINE/PAGE line control), each with an optional
-// parenthesised width and, for F, a fractional-digit count.
-bool Parser::parseFormatItem(Stmt* st) {
+// control format (X spacing, SKIP/LINE/PAGE line control, COL positioning),
+// each with an optional parenthesised width and, for F, a fractional-digit
+// count. An iteration group (n)(item...) unrolls inline here, nesting by
+// recursion; only an integer literal repeats a group.
+bool Parser::parseFormatItem(Stmt* st) { return parseFormatItemInto(st->formats); }
+
+// Deep-copy a format width/decimals tree (iteration groups fan out to one
+// copy per use).
+static ExprP cloneFormatExpr(const Expr* e) {
+  if (!e)
+    return nullptr;
+  auto c = std::make_unique<Expr>();
+  c->kind = e->kind;
+  c->loc = e->loc;
+  c->ty = e->ty;
+  c->ival = e->ival;
+  c->fval = e->fval;
+  c->decScale = e->decScale;
+  c->decPrec = e->decPrec;
+  c->sval = e->sval;
+  c->name = e->name;
+  c->path = e->path;
+  c->memberPath = e->memberPath;
+  c->sym = e->sym;
+  if (e->locPtr)
+    c->locPtr = cloneFormatExpr(e->locPtr.get());
+  c->op = e->op;
+  if (e->a)
+    c->a = cloneFormatExpr(e->a.get());
+  if (e->b)
+    c->b = cloneFormatExpr(e->b.get());
+  for (const auto& a : e->args)
+    c->args.push_back(cloneFormatExpr(a.get()));
+  return c;
+}
+
+static FormatItem cloneFormatItem(const FormatItem& f) {
+  FormatItem c;
+  c.kind = f.kind;
+  c.w = cloneFormatExpr(f.w.get());
+  c.d = cloneFormatExpr(f.d.get());
+  return c;
+}
+
+bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
+  if (cur().kind == Tok::LParen) {
+    advance();
+    if (cur().kind != Tok::Number || cur().isFloat) {
+      d_.error(cur().loc, "a format repetition count must be an integer literal", "(48)");
+      return false;
+    }
+    int n = boundedNonNeg(cur().text, cur().loc, d_, "repetition count", "(48)");
+    advance();
+    if (!expect(Tok::RParen, "(48)"))
+      return false;
+    if (!eat(Tok::LParen)) {
+      d_.error(cur().loc, "expected '(' to open the repeated format group", "(48)");
+      return false;
+    }
+    std::vector<FormatItem> group;
+    if (!at(Tok::RParen)) {
+      for (;;) {
+        if (!parseFormatItemInto(group))
+          return false;
+        if (!eat(Tok::Comma))
+          break;
+      }
+    }
+    if (!expect(Tok::RParen, "(48)"))
+      return false;
+    for (int i = 0; i < n; ++i)
+      for (const FormatItem& gi : group)
+        out.push_back(cloneFormatItem(gi));
+    return true;
+  }
   FormatItem fi;
+  if (!parseSingleFormatItem(fi))
+    return false;
+  out.push_back(std::move(fi));
+  return true;
+}
+
+bool Parser::parseSingleFormatItem(FormatItem& fi) {
   if (cur().kind != Tok::Word) {
     d_.error(cur().loc, "expected a format item", "(48)");
     return false;
@@ -2432,7 +2511,6 @@ bool Parser::parseFormatItem(Stmt* st) {
     }
     expect(Tok::RParen, "(48)");
   }
-  st->formats.push_back(std::move(fi));
   return true;
 }
 

@@ -3261,3 +3261,27 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   gaps left alone: bare `A` (no width) prints nothing even on the
   base compiler, and literal `A` items share it — both
   pre-existing, diagnosed nowhere, out of this slice.
+
+  ## ADR-128 — Literal format repetition unrolls at parse time
+
+  Context. Repetition groups `(n)(...)` (rules (45)-(54)) were
+  rejected at the first parenthesis, so corpus-style dense
+  formats (`(5)E(...)`, `(10)F(...)`) never parsed. Counts can be
+  runtime expressions in full PL/I, which would need looped
+  emission.
+
+  Decision. A group whose count is an integer literal unrolls
+  inline during parsing: the items parse once into a side vector
+  (nested groups recurse), then fan out to one clone per use.
+  Anything else — a non-literal count, a missing group opener —
+  is diagnosed with (48). Unrolling at parse time keeps every
+  downstream stage (pairing, HIR, codegen) untouched. Cloned
+  width expressions type once each downstream, so a broken width
+  can report per copy — duplicates only on already-broken input,
+  same wart class as ADR-123.
+
+  Consequences. `edit_iter.pli` golden covers flat, nested, and
+  control-item groups; `bad_edit_iter.pli` pins dynamic and
+  negative counts. Dynamic counts, `R()` remote formats, a
+  standalone `FORMAT` statement, and iterative data lists stay
+  later slices.

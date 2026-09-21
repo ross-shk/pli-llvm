@@ -78,8 +78,14 @@ private:
   // true on success; on error emits a diagnostic, resyncs, and returns false.
   bool parseEditClause(Stmt* st);
   // Parse one format item (rules (46)-(54)) into st->formats; returns false
-  // (after a diagnostic) on an unimplemented or malformed item.
+  // (after a diagnostic) on an unimplemented or malformed item. An
+  // iteration group (n)(...) unrolls inline, nesting by recursion.
   bool parseFormatItem(Stmt* st);
+  // Parse one format item into out (groups unroll here); single items land
+  // in parseSingleFormatItem.
+  bool parseFormatItemInto(std::vector<FormatItem>& out);
+  // Parse one non-group format item into fi.
+  bool parseSingleFormatItem(FormatItem& fi);
   StmtP parseCall();
   StmtP parseWait();  // WAIT (rule 82, QR2.8): WAIT(ev,...)[(count)];
   StmtP parseDelay(); // DELAY (rule 83, QR2.8): DELAY(expr);
