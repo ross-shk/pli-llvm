@@ -1,0 +1,8 @@
+ /* COLUMN limits (rule (48)): bare COL and the long-form COLUMN
+    stay diagnosed in this stage. */
+ bad_col: procedure options(main);
+    declare x char(8);
+    x = 'ab';
+    put edit (x) (col, a);
+    put edit (x) (column(5), a);
+ end bad_col;

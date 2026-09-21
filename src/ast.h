@@ -82,7 +82,7 @@ struct DefinedSub {
 // (X spacing, SKIP/PAGE/LINE line control) that acts without consuming data.
 // F(w,d): w = field width, d = fractional digits; A(w)/X(w): w = field width.
 struct FormatItem {
-  enum Kind { A, F, E, X, Skip, Page, Line } kind = A;
+  enum Kind { A, F, E, X, Skip, Page, Line, Column } kind = A;
   ExprP w; // field width
   ExprP d; // F/E: fractional digits
 };

@@ -2701,8 +2701,12 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     return;
   size_t dataIdx = 0;
   for (auto& f : s->formats) {
+    if (isGet && f.kind == FormatItem::Column) {
+      d_.error(s->loc, "COLUMN positioning on input is not implemented in this stage", "(108)");
+      continue;
+    }
     if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
-        f.kind == FormatItem::Line)
+        f.kind == FormatItem::Line || f.kind == FormatItem::Column)
       continue; // a control format consumes no data item
     if (dataIdx >= s->items.size()) {
       d_.error(s->loc, "more data formats than data items in EDIT", "(108)");

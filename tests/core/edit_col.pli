@@ -1,0 +1,23 @@
+ /* COLUMN positioning (rules (48),(108)): COL(n) starts the next
+    item at 1-based column n, padding blanks, opening a fresh line
+    first when already past n. */
+ ecol: procedure options(main);
+    declare k fixed bin(31);
+    declare s1 char(8);
+    declare s2 char(8);
+    declare s3 char(8);
+    k = 4;
+    s1 = 'ab';
+    s2 = 'abcdef';
+    s3 = 'yz';
+    put edit (s1) (col(5), a(8));
+    put skip list('e1');
+    put edit (s2, s2) (a(8), col(3), a(8));
+    put skip list('e2');
+    put edit (s1) (col(k), a(8));
+    put skip list('e3');
+    put edit (123) (col(4), f(6));
+    put skip list('e4');
+    put edit (s1, s3) (a(8), col(16), a(8));
+    put skip list('e5');
+ end ecol;

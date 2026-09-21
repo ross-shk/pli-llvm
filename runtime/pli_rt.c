@@ -1116,6 +1116,19 @@ void pli_put_edit_x(long long w) {
   for (long long i = 0; i < w; ++i) put_raw(" ", 1);
 }
 
+/* COLUMN(n) (rule (48)): the next item starts at 1-based column n; pad
+ * blanks, opening a fresh line first when already past n. n < 1 is 1. */
+void pli_put_edit_column(long long n) {
+  if (n < 1)
+    n = 1;
+  if (col > 0 && col + 1 > (int)n) {
+    put_raw("\n", 1);
+    col = 0;
+  }
+  while (col + 1 < (int)n)
+    put_raw(" ", 1);
+}
+
 /* SKIP(n): advance to the start of a line and then n-1 further lines. */
 void pli_put_edit_skip(long long n) {
   if (n < 1) n = 1;

@@ -2543,6 +2543,13 @@ void IRGen::emitPutEditItems(HStmt* s) {
       b_.CreateCall(runtimeFn("pli_put_edit_line"), {n});
       break;
     }
+    case HFormatItem::Column: {
+      // Column positioning (rule (48)): GET columns are diagnosed in sema,
+      // so only output reaches here.
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_put_edit_column"), {n});
+      break;
+    }
     case HFormatItem::A: {
       if (di >= s->items.size())
         break;
@@ -2601,6 +2608,9 @@ void IRGen::emitGetEditItems(HStmt* s) {
     case HFormatItem::Page:
     case HFormatItem::Line:
       // Line control is not meaningful on input in this stage; ignored.
+      break;
+    case HFormatItem::Column:
+      // Input positioning is diagnosed in sema; unreachable here.
       break;
     case HFormatItem::A: {
       if (di >= s->items.size())
