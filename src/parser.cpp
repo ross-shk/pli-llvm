@@ -3372,9 +3372,14 @@ InitItem Parser::parseInitialItem() {
     // A leading '(' is an iteration factor '( n )' when a value or sublist
     // follows it; a parenthesised constant '( n )' when ',' or ')' follows;
     // otherwise it is a group '( item, ... )'. Decide without consuming.
-    bool iter = peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
-                (peek(3).kind == Tok::LParen || valueStart(peek(3).kind));
-    bool parenConst = peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+    // A replicated literal '( n )'X (rule (129)+(143)) is an iteration
+    // factor over the hex constant, not a parenthesised number.
+    bool iterHex = peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+                   peek(3).kind == Tok::HexLit;
+    bool iter = iterHex ||
+                (peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+                            (peek(3).kind == Tok::LParen || valueStart(peek(3).kind)));
+    bool parenConst = !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                       (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);
     advance(); // (
     if (iter) {

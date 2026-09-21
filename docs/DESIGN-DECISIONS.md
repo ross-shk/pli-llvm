@@ -3448,3 +3448,25 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   comparing a `CHAR(5)` result against a longer literal pads
   the comparison, so single-char cases assert via `SUBSTR`
   instead of `TRIM`.
+
+  ## ADR-135 — Hex X literals decode at parse time
+
+  Context. libnet NUL-terminates C strings with `'00'X` and
+  zero-fills buffers with `(64)'00'X`, but the lexer had no X
+  suffix: `'4142'X` died as a stray `X` word. No downstream
+  stage can see raw hex — the value must be bytes by the time
+  sema types it.
+
+  Decision. Lex `'..'X` as a `HexLit` token and decode it once
+  in the parser (shared helper, also serving the replicated
+  `(n)'..'X` expression form) into a plain `CharLit` carrying
+  the bytes — NULs included. Odd digit counts and non-hex
+  digits are diagnosed with (143); everything downstream
+  (assignment padding, `SUBSTR`, `LENGTH`, repetition counts)
+  rides unchanged. The INITIAL-list `(n)'..'X` spelling stays
+  out: INITIAL iteration factors bind `(n)` to the next item,
+  and a general fix there is its own slice.
+
+  Consequences. `hexx.pli` runs (decode, NUL assignment,
+  64-byte replication); `bad_hexx.pli` pins both (143)
+  diagnostics.
