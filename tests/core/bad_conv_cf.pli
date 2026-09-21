@@ -1,0 +1,10 @@
+ /* CHAR/FIXED limits (rule (123)): operands keep their kinds —
+    FIXED takes character or numeric, CHAR takes a scalar value
+    but not a structure. */
+ bad_conv: procedure options(main);
+    declare 1 s, 2 a fixed bin(31);
+    declare p fixed bin(31);
+    declare c char(8);
+    p = fixed(s);
+    c = char(s);
+ end bad_conv;

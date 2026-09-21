@@ -1054,6 +1054,7 @@ StmtP Parser::parseDeclare() {
         item.isEntry = base.isEntry;
         item.extName = base.extName;
         item.entryParams = base.entryParams;
+        item.entryByValue = base.entryByValue;
         item.like = base.like;
         st->decls.push_back(std::move(item));
       }
@@ -1335,6 +1336,40 @@ void Parser::parseDeclTail(DeclItem& item) {
           advance(); // the quoted symbol
           if (at(Tok::RParen))
             advance();
+        }
+        continue;
+      }
+      if (w == "OPTIONS") {
+        // ENTRY OPTIONS (rule (34)): LINKAGE(SYSTEM) and BYVALUE both select
+        // C-ABI by-value scalar marshalling, validated against ENTRY in sema
+        // (order-independent with the ENTRY keyword itself).
+        advance();
+        if (expect(Tok::LParen, "(34)")) {
+          for (;;) {
+            if (atWord("BYVALUE")) {
+              item.entryByValue = true;
+              advance();
+            } else if (atWord("LINKAGE")) {
+              advance();
+              if (expect(Tok::LParen, "(34)")) {
+                if (!atWord("SYSTEM"))
+                  d_.error(cur().loc, "LINKAGE other than SYSTEM is not implemented in this stage",
+                           "(34)");
+                else {
+                  advance();
+                  item.entryByValue = true;
+                }
+                expect(Tok::RParen, "(34)");
+              }
+            } else {
+              std::string opt = cur().kind == Tok::Word ? cur().text : tokName(cur().kind);
+              d_.warn(cur().loc, "ignoring unsupported entry option '" + opt + "'", "(34)");
+              advance();
+            }
+            if (!eat(Tok::Comma))
+              break;
+          }
+          expect(Tok::RParen, "(34)");
         }
         continue;
       }
@@ -1772,6 +1807,13 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
 // accumulator as parseDeclItem, restricted to the scalar computational types.
 bool Parser::parseDescriptorType(Type& out) {
   SourceLoc l = cur().loc;
+  // A POINTER descriptor (rule (38)): C `void*` parameters ride as the
+  // pointer value itself under LINKAGE(SYSTEM)/BYVALUE.
+  if (atWord("POINTER") || atWord("PTR")) {
+    advance();
+    out = Type::ptr();
+    return true;
+  }
   AttrBag bag;
   while (parseScalarAttr(bag, "(38)")) {
   }

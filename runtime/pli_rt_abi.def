@@ -91,6 +91,10 @@ PLI_FN(pli_high, VOID, (PTR, I64))                    /* HIGH(n) */
 PLI_FN(pli_low, VOID, (PTR, I64))                     /* LOW(n) */
 PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */
 PLI_FN(pli_time, VOID, (PTR, I64))                    /* TIME() */
+PLI_FN(pli_char_of_fixed, VOID, (PTR, I64, I64))      /* CHAR(fixed) */
+PLI_FN(pli_char_of_float, VOID, (PTR, I64, DOUBLE))   /* CHAR(float) */
+PLI_FN(pli_fixed_of_char, I64, (CPTR, I64))           /* FIXED(char) */
+PLI_FN(pli_fixed_of_float, I64, (DOUBLE))             /* FIXED(float) */
 PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
 PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */

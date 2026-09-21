@@ -3307,3 +3307,65 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   non-numeric diagnosis. The test uses output-only observation
   because ON-units cannot yet reach automatic variables (rule
   (91), separate listed item).
+
+  ## ADR-130 — By-value C entries marshal scalars as values
+
+  Context. External `ENTRY` calls passed every argument by
+  reference, so a C function taking `int` read caller addresses
+  as integers. libnet's `c_bridge` takes scalars by value
+  (`socket(int,int,int)`, `c_send(int,void*,int,int)`), declared
+  with `OPTIONS(LINKAGE(SYSTEM))` — a spelling this compiler
+  rejected on declarations outright, as it did `POINTER`
+  descriptor parameters (silently mistyped as FIXED).
+
+  Decision. `ENTRY` declarations accept `OPTIONS(...)` where
+  `LINKAGE(SYSTEM)` and `BYVALUE` both set one flag (internal
+  `OPTIONS(BYVALUE)` keeps its existing ignore: the internal
+  convention is fixed); anything else warns like rule (5), and
+  the flag anywhere else is diagnosed with (34). A flagged
+  entry builds a per-parameter C signature and marshals
+  `FIXED`/`FLOAT` by converted value and `POINTER` as the
+  pointer itself; all other kinds keep the address form.
+  `POINTER` joins the descriptor types. Sema checks descriptor
+  arity as before plus, on flagged entries, pointer-argument
+  shape, structure parameters (C struct-by-value stays out),
+  and general assignability; irgen carries a backstop for the
+  pointer case. Scalar C results already lowered by value and
+  needed no change.
+
+  Consequences. `cbyvalue.pli` + C covers both spellings,
+  FIXED vars and literals, `ADDR` pointers, FLOAT, scalar
+  returns, and the CALL-statement path; `bad_cbyvalue.pli` pins
+  the non-ENTRY flag and the pointer mismatch. Struct params,
+  wide-bit/char conversions at the boundary beyond `convert`,
+  and descriptors stay later slices.
+
+  ## ADR-131 — CHAR/FIXED value conversions as builtins
+
+  Context. libnet converts at the boundary everywhere it parses
+  or renders: `port = fixed(substr(url, pos+1))`,
+  `trim(char(moves))`, `'...' || char(port)`. The compiler had
+  no `CHAR`/`FIXED` value builtins, so every such call failed
+  name resolution. The entregent semantics were already
+  delivered and C-tested in `examples/builtins`
+  (`pli_fixed_of_char`, `pli_char_of_fixed/float`); this slice
+  merges them natively into `pli-llvm/runtime`.
+
+  Decision. Sema types `FIXED(x)` as `FIXED BIN(31,0)` over
+  character or numeric arguments and `CHAR(x)` as `CHAR(24)`
+  over numeric/bit (character passes through at its own
+  length); structures are diagnosed. Irgen lowers to four new
+  runtime helpers matching the entregent contracts: decimal
+  text parsing with truncation (`FIXED(char)`), `%.6g` images
+  (`CHAR(float)`), decimal images (`CHAR(fixed)`), and
+  truncation toward zero (`FIXED(float)`, with NaN-as-0 and
+  clamping documented as SIZE-routing follow-ups).
+
+  Consequences. `conv_cf.pli` runs (parsing incl. truncation of
+  fractions, both `CHAR` images, float narrowing, the `||`
+  corpus chain); `bad_conv_cf.pli` pins the structure
+  diagnoses. One observable pinned along the way: compiler
+  `FIXED DECIMAL` literals round-half-away at lowering
+  (`fixed(9.9)` is 10), so the test pins 10 rather than C-trunc
+  9. `FLOAT`/`DECIMAL`/`BINARY` precision forms and the
+  conversion lattice stay later slices.

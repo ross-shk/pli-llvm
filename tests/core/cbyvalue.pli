@@ -1,0 +1,33 @@
+ /* C FFI by value (rules (34),(38)): an ENTRY with
+    OPTIONS(LINKAGE(SYSTEM)) or OPTIONS(BYVALUE) marshals FIXED
+    and FLOAT scalars plus POINTERs as C values, and takes C
+    scalar results by value. */
+ cbyvalue: procedure options(main);
+    declare c_add entry (fixed bin(31), fixed bin(31))
+       returns(fixed bin(31))
+       options(linkage(system)) external('c_byval_add');
+    declare c_scale entry (pointer, fixed bin(31))
+       returns(fixed bin(31))
+       options(byvalue) external('c_byval_scale');
+    declare c_dbl entry (float)
+       returns(float)
+       options(linkage(system)) external('c_byval_double');
+    declare c_touch entry (pointer)
+       options(linkage(system)) external('c_byval_touch');
+    declare x fixed bin(31);
+    declare r fixed bin(31);
+    declare y float;
+    declare fails fixed bin(31);
+    fails = 0;
+    x = 41;
+    r = c_add(x, 1);
+    if r ^= 41001 then fails = fails + 1;
+    r = c_scale(addr(x), 2);
+    if r ^= 82 then fails = fails + 1;
+    call c_touch(addr(x));
+    if x ^= 7 then fails = fails + 1;
+    y = c_dbl(1.5);
+    if y ^= 3.0 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS cbyvalue');
+    else put skip list('FAIL cbyvalue: fails =', fails);
+ end cbyvalue;
