@@ -1183,8 +1183,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 if (!mi->initItems.empty()) {
                   std::vector<Expr*> sub;
                   flattenInitItems(mi->initItems, mi->loc, sub);
+                  // A member array INITIAL fills its own elements (rule (26)):
+                  // pad short lists with zero-fill slots so the member always
+                  // contributes its full element count.
+                  long long need = mt && mt->isArray() ? elementCount(*mt) : 1;
                   for (Expr* se : sub)
                     raw.push_back(se);
+                  for (long long k = (long long)sub.size(); k < need; ++k)
+                    raw.push_back(nullptr); // zero-fill slot
                 } else if (mi->init) {
                   raw.push_back(mi->init.get());
                 } else if (mi->valueInit) {
