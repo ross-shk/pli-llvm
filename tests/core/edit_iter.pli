@@ -1,0 +1,11 @@
+ /* Format iteration (rules (45)-(54)): a literal repetition count
+    (n) unrolls its group inline; nesting composes; control items
+    inside groups expand in place. */
+ eiter: procedure options(main);
+    put edit (1, 2, 3) ((2)(f(4)), f(4));
+    put skip list('e1');
+    put edit (5, 6, 7, 8) ((2)((2)(f(4))));
+    put skip list('e2');
+    put edit ('ab', 'cd') ((2)(x, a(4)));
+    put skip list('e3');
+ end eiter;

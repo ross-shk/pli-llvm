@@ -1,0 +1,8 @@
+ /* Format iteration limits (rule (48)): only an integer literal
+    repeats a group; anything else stays diagnosed. */
+ bad_iter: procedure options(main);
+    declare k fixed bin(31);
+    k = 2;
+    put edit (1, 2) ((k)(f(4)));
+    put edit (1, 2) ((-1)(f(4)));
+ end bad_iter;
