@@ -3298,10 +3298,21 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
         llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(m.ty));
         for (long long k = 0; k < arrayExtent(m.ty); ++k) {
           llvm::Value* ep = b_.CreateInBoundsGEP(arrTy, mem, {i64(0), i64(k)}, "init.el");
-          if (el.isStruct())
+          if (el.isStruct()) {
             emitStructInitValues(ep, el, vals, idx, loc);
-          else
-            storeScalarTo(ep, el, initValue(el, vals[idx++]));
+          } else {
+            // A null slot marks a per-member-INIT zero-fill (rule (26)):
+            // keep the zero-initialised element, still consuming the slot.
+            if (idx >= vals.size())
+              return;
+            Expr* ve = vals[idx++];
+            if (!ve)
+              continue;
+            if (el.isChar())
+              storeCharTo(ep, el, initValue(el, ve), loc);
+            else
+              storeScalarTo(ep, el, initValue(el, ve));
+          }
         }
       }
     } else {

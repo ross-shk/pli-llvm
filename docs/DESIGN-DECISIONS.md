@@ -3497,3 +3497,27 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   `bad_struct_init.pli` pins the mix and non-constant
   diagnoses. Static-struct and dynamic-member INITIAL stay
   diagnosed as before.
+
+  ## ADR-137 — CHARACTER structure members ride char paths
+
+  Context. Every CHARACTER member access was diagnosed with
+  (11) at five irgen sites, although plain CHAR variables
+  already had complete load/store/INIT paths. libnet's
+  `conncb`-style blocks need fixed strings in structures.
+
+  Decision. Route member CHAR through the existing variable
+  paths: stores (single, multi-target, array-of-struct,
+  member-array element) via `storeCharTo` (blank-padding),
+  loads (scalar member, member-array element) via the
+  ptr+len form, member INIT via a new `initValue` CHAR case
+  (blank-padded bytes in a private global, giving the pointer
+  form `pli_assign_char` needs). Also fixed en route: the
+  per-member-INIT array walk in `emitStructInitValues`
+  assumed non-null slots and overran `initElems` whenever a
+  member array preceded a sibling INIT — it now consumes
+  null zero-fill slots like the scalar walk.
+
+  Consequences. `struct_charmem.pli` runs (scalar
+  store/load, member-array elements, member INIT).
+  VARYING members, DEFINED/BASED member overlays, and
+  whole-struct char assignment stay later slices.
