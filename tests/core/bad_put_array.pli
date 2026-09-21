@@ -1,0 +1,12 @@
+ /* Aggregate items in stream I/O (rules (104)-(110)): dynamic
+    extents cannot be enumerated at compile time and stay diagnosed
+    in this stage. */
+ bad_put_array: procedure options(main);
+    declare n fixed bin(31) init(3);
+    declare d(n) fixed bin(31);
+    declare dm(n, 2) fixed bin(31);
+    put list(d);
+    get list(d);
+    put list(dm(*, 1));
+    put edit (d) (f(6));
+ end bad_put_array;

@@ -1,0 +1,16 @@
+ /* Reductions over array expressions (rule (123)): dynamic extents,
+    mismatched shapes, nested cross-sections, and positions outside
+    direct assignment stay diagnosed in this stage. */
+ bad_sum_expr: procedure options(main);
+    declare a(3) fixed bin(31);
+    declare c(4) fixed bin(31);
+    declare n fixed bin(31) init(3);
+    declare d(n) fixed bin(31);
+    declare e(n) fixed bin(31);
+    declare m(2, 2) fixed bin(31);
+    declare s fixed bin(31);
+    s = sum(d + e);
+    s = sum(a + c);
+    s = sum(m(1, *) + a);
+    put skip list(sum(a ** 2));
+ end bad_sum_expr;

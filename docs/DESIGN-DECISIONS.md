@@ -3134,3 +3134,74 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   `bad_array_expr.pli` pins the three diagnostics. Array-valued
   `SUM(expr)` reductions, whole-row `PUT EDIT`, adjustable autos,
   and multi-dim `CONTROLLED` allocation stay later slices.
+
+  ## ADR-123 — Reductions over array expressions via static temps
+
+  Context. `SUM(a ** 2)` (rule (123)) was diagnosed: reductions only
+  took bare array references. The corpus reduces expressions
+  directly (`sum(a*b)`, `sqrt(sum(A**2)/n)`), and the expression may
+  nest anywhere inside an assignment value.
+
+  Decision. `typeBuiltin` validates an array-expression argument
+  (every whole reference outside calls shares one static
+  plain-storage shape; the temp takes the argument's scalar type so
+  `SUM(a/2)` sums exact floats) and defers it on a per-procedure
+  pending list instead of diagnosing. Direct assignment expands each
+  pending call found in its value into a static `PLI$WS` temp filled
+  by the ordinary whole-array desugar (ADR-122), then checks itself
+  as a `Group` of the fills plus the original with bare-temp
+  arguments. Anything left pending at `processProc` end (other
+  positions, dynamic extents, mismatched shapes, nested
+  cross-sections) is diagnosed once with (123). Reductions keep
+  whole references inside calls, so `SUM(a)+SUM(b)` gets one temp
+  per call and served nested reductions compose.
+
+  Consequences. `sum_expr.pli` runs (squares, dot product, nesting,
+  `PROD`, `ANY`/`ALL` over `BIT` expressions, member arrays);
+  `bad_sum_expr.pli` pins dynamic/mismatch/cross/position
+  diagnostics. Dynamic-shape reductions, cross-section reductions,
+  and non-assignment positions stay later slices.
+
+  ## ADR-124 — Aggregate PUT/GET items expand to element items
+
+  Context. `PUT LIST(a)` and `GET LIST(a)` reached codegen, which
+  only lowers scalar items, and crashed LLVM verification; a
+  cross-section item was rejected in irgen instead. Rules
+  (104)-(110) transmit data items in order, and EDIT pairs each
+  item with a format.
+
+  Decision. Sema expands whole-array and cross-section items into
+  element subscript calls in row-major order before any other item
+  checks, so EDIT pairing counts the expanded list. Only static
+  plain-storage shapes expand (cross-sections need static star
+  axes; a `dm(1,*)` row of a dynamic array expands over its static
+  axis); dynamic extents and parameter/`DEFINED`/`BASED` storage
+  are diagnosed with the position's rule, and `GET` re-checks
+  `VALUE` on the original item. The statement itself is retained,
+  so `SKIP`/`PAGE` positioning is unchanged. A test-side lesson:
+  comparing a never-assigned element is undefined behaviour that
+  `-O2` traps on — tests must initialise everything they read.
+
+  Consequences. `put_array.pli` golden covers LIST whole/2-D/row/
+  column/member/dynamic-base rows plus EDIT pairing;
+  `driver/get_array` covers LIST whole/cross reads with piped
+  stdin; `bad_put_array.pli` pins the dynamic diagnostics.
+  Dynamic aggregates, `PUT`/`GET DATA` aggregates, and format
+  iteration stay later slices.
+
+  ## ADR-125 — `!!` lexes as concatenation
+
+  Context. Modern PL/I spells the rule-(119) concatenation
+  operator `||` or `!!` (the corpus, B4, uses `!!`), but the lexer
+  rejected `!` as an invalid character, so no `!!` program parsed.
+
+  Decision. Lex `!!` as the existing `Tok::Concat`: one token
+  carries both spellings, so precedence, typing, and codegen are
+  shared by construction and no downstream component changes. A
+  lone `!` is not an operator and keeps the byte-identical
+  invalid-character diagnostic (a `break` there would push an
+  unset token — the error path must `continue` the lex loop).
+
+  Consequences. `concat_bang.pli` runs (single and chained `!!`);
+  `bad_bang.pli` pins the lone-`!` rejection. Quad `1.0q0`
+  literals and `BIT(n>1)` storage stay later slices.
