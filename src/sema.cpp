@@ -300,6 +300,10 @@ bool Sema::run(Program& prog, bool compileOnly) {
 
 // True when any statement in `body` contains kind `k` (defined below).
 static bool stmtsHaveKind(const std::vector<StmtP>& body, Stmt::Kind k);
+// True when a declaration subtree carries a per-member INITIAL (rule (26)):
+// any descendant with its own init/initItems/initCall/valueInit.
+static bool structHasMemberInit(const std::vector<DeclItem*>& items,
+                                const std::vector<std::vector<int>>& children, int idx);
 
 // Extension (ADR-114): find a DEFINE ALIAS type by lexical scope chain.
 static const Type* lookupAlias(Scope* sc, const std::string& name) {
@@ -636,6 +640,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
     if (s->kind == Stmt::Declare) {
       // Build the level-numbered structure hierarchy (rule 11): a member item
       // belongs to the nearest preceding item with a strictly smaller level.
+      // Indices below address s->decls directly (items[i] aliases s->decls[i]).
       std::vector<DeclItem*> items;
       std::vector<int> parentOf;
       std::vector<std::vector<int>> children;
@@ -1059,7 +1064,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               item.sym->initElems = std::move(elems);
           }
         }
-        if (item.ty.isStruct() && !item.initItems.empty()) {
+        if (item.ty.isStruct() &&
+            (!item.initItems.empty() || structHasMemberInit(items, children, idx))) {
           // INITIAL on a structure (rule (26)): flatten the itemlist (iteration
           // factors, '*' and groups) and fold each value against its member's
           // type in declaration order. The count must match the scalar leaves.
@@ -1115,8 +1121,81 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               }
             }
           } else {
+            // Per-member INITIAL (rule (26)): each member's own itemlist (or
+            // scalar init) fills its own leaves in member order; a member
+            // without one contributes no values. A structure-level itemlist
+            // combined with member INITIALs stays diagnosed (single source).
             std::vector<Expr*> raw;
-            flattenInitItems(item.initItems, item.loc, raw);
+            if (!item.initItems.empty() || item.init || item.initCall || item.valueInit) {
+              if (structHasMemberInit(items, children, idx))
+                d_.error(item.loc,
+                         "INITIAL on a structure combined with a member INITIAL is not "
+                         "implemented in this stage",
+                         "(26)");
+              else if (!item.initItems.empty())
+                flattenInitItems(item.initItems, item.loc, raw);
+              else if (item.init)
+                raw.push_back(item.init.get());
+              else if (item.valueInit)
+                raw.push_back(item.valueInit.get());
+              else
+                typeExpr(item.initCall.get(), sc, p); // diagnosed below like scalars
+            } else {
+              // Walk the declaration subtree in member order, expanding each
+              // member's own INITIAL (recursing into nested structures). A
+              // member without one contributes its zero-fill slot: the raw
+              // list always covers every scalar leaf, so per-member INITIAL
+              // never shifts its siblings (invariant 2).
+              std::function<void(const Type&)> gatherEmpty = [&](const Type& mt) {
+                if (mt.isStruct()) {
+                  for (const auto& m : mt.members)
+                    gatherEmpty(m->ty);
+                  return;
+                }
+                if (mt.isArray()) {
+                  long long cnt = elementCount(mt);
+                  const Type& el = mt.elementType();
+                  for (long long k = 0; k < cnt; ++k) {
+                    if (el.isStruct())
+                      gatherEmpty(el);
+                    else
+                      raw.push_back(nullptr); // zero-fill slot
+                  }
+                  return;
+                }
+                raw.push_back(nullptr); // zero-fill slot
+              };
+              std::function<void(int)> gather = [&](int c) {
+                const DeclItem* mi = items[c];
+                if (!children[c].empty()) {
+                  for (int g : children[c])
+                    gather(g);
+                  return;
+                }
+                // The member's own type comes from the built parent type
+                // (dimensions live there, not on the raw DeclItem).
+                const Type* mt = nullptr;
+                for (const auto& m : item.ty.members)
+                  if (m->name == mi->name) {
+                    mt = &m->ty;
+                    break;
+                  }
+                if (!mi->initItems.empty()) {
+                  std::vector<Expr*> sub;
+                  flattenInitItems(mi->initItems, mi->loc, sub);
+                  for (Expr* se : sub)
+                    raw.push_back(se);
+                } else if (mi->init) {
+                  raw.push_back(mi->init.get());
+                } else if (mi->valueInit) {
+                  raw.push_back(mi->valueInit.get());
+                } else if (mt) {
+                  gatherEmpty(*mt);
+                }
+              };
+              for (int c : children[idx])
+                gather(c);
+            }
             long long leaves = structureLeafCount(item.ty);
             if ((long long)raw.size() != leaves)
               d_.error(item.loc,
@@ -1259,6 +1338,20 @@ static bool stmtsHaveKind(const std::vector<StmtP>& body, Stmt::Kind k) {
   for (auto& s : body)
     if (stmtHasKind(s.get(), k))
       return true;
+  return false;
+}
+
+// True when a declaration subtree carries a per-member INITIAL (rule (26)):
+// any descendant with its own init/initItems/initCall/valueInit.
+static bool structHasMemberInit(const std::vector<DeclItem*>& items,
+                                const std::vector<std::vector<int>>& children, int idx) {
+  for (int c : children[idx]) {
+    const DeclItem* it = items[c];
+    if (it->init || it->initCall || it->valueInit || !it->initItems.empty())
+      return true;
+    if (structHasMemberInit(items, children, c))
+      return true;
+  }
   return false;
 }
 
@@ -1561,14 +1654,27 @@ void Sema::foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t
       long long cnt = elementCount(m->ty);
       const Type& el = m->ty.elementType();
       for (long long k = 0; k < cnt; ++k) {
-        if (el.isStruct())
+        if (el.isStruct()) {
           foldStructInit(el, vals, idx, loc, out);
-        else if (idx < vals.size())
-          if (Expr* f = foldInitialConstant(vals[idx++], el, loc))
+        } else if (idx < vals.size()) {
+          // A null slot marks a per-member-INIT zero-fill (rule (26)): push
+          // it through so irgen's positional walk stays aligned.
+          Expr* ve = vals[idx++];
+          if (!ve) {
+            out.push_back(nullptr);
+            continue;
+          }
+          if (Expr* f = foldInitialConstant(ve, el, loc))
             out.push_back(f);
+        }
       }
     } else if (idx < vals.size()) {
-      if (Expr* f = foldInitialConstant(vals[idx++], m->ty, loc))
+      Expr* ve = vals[idx++];
+      if (!ve) {
+        out.push_back(nullptr);
+        continue;
+      }
+      if (Expr* f = foldInitialConstant(ve, m->ty, loc))
         out.push_back(f);
     }
   }

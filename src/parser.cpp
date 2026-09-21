@@ -1270,8 +1270,11 @@ void Parser::parseDeclTail(DeclItem& item) {
           } else {
             item.initItems = parseInitialList();
             // Back-compat: a single plain value is also the M0 scalar item.init.
-            if (item.initItems.size() == 1 && item.initItems[0].kind == InitItem::Value)
-              init = std::move(item.initItems[0].value);
+            // Copy (not move) the pointer: member-INIT gathering reads
+            // initItems, and a moved-from unique_ptr would leave a null.
+            if (item.initItems.size() == 1 && item.initItems[0].kind == InitItem::Value &&
+                item.initItems[0].value)
+              init = cloneExpr(item.initItems[0].value.get());
           }
         }
         continue;

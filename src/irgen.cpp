@@ -3294,10 +3294,18 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
         }
       }
     } else {
+      // A null slot marks a per-member-INIT zero-fill (rule (26)): the
+      // field keeps its zero-initialised storage, so skip the store — but
+      // still consume the slot so siblings stay aligned.
+      if (idx >= vals.size())
+        return;
+      Expr* ve = vals[idx++];
+      if (!ve)
+        continue;
       if (m.ty.isChar())
         d_.error(loc, "CHARACTER structure members are not implemented in this stage", "(11)");
       else
-        storeScalarTo(mem, m.ty, initValue(m.ty, vals[idx++]));
+        storeScalarTo(mem, m.ty, initValue(m.ty, ve));
     }
   }
 }
