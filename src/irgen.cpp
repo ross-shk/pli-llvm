@@ -1723,16 +1723,14 @@ void IRGen::emitAssign(HStmt* s) {
       if (t->kind == HExpr::VarRef && t->sym) {
         if (!t->memberPath.empty()) {
           const Type& leaf = t->ty;
-          if (leaf.isChar()) {
-            d_.error(s->loc, "CHARACTER structure members are not implemented in this stage",
-                     "(11)");
-            return;
-          }
           // A locator-qualified target P->X.FIELD stores off the loaded pointer.
           llvm::Value* addr =
               t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
                         : memberAddr(t->sym, t->memberPath, s->loc);
-          storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
+          if (leaf.isChar())
+            storeCharTo(addr, leaf, v, s->loc);
+          else
+            storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
           return;
         }
         storeTo(t->sym, v, s->loc);
@@ -1805,11 +1803,10 @@ void IRGen::emitAssign(HStmt* s) {
         llvm::Value* elem = arrayElementAddr(t->sym->ty, addressOf(t->sym), t->args, s->loc);
         llvm::Value* addr = elementMemberAddr(t->sym, t->memberPath, elem);
         const Type& el = t->ty;
-        if (el.isChar()) {
-          d_.error(s->loc, "CHARACTER structure members are not implemented in this stage", "(11)");
-          return;
-        }
-        storeScalarTo(addr, el, convert(v, el, s->loc));
+        if (el.isChar())
+          storeCharTo(addr, el, v, s->loc);
+        else
+          storeScalarTo(addr, el, convert(v, el, s->loc));
         return;
       }
       // A subscripted member array S.A(i) = e (rules 124,126): store through

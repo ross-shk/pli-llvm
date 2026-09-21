@@ -1,0 +1,20 @@
+ /* CHARACTER structure members (rule (11)): fixed strings live
+    in struct fields with blank-padding; member arrays and
+    member INIT ride along. */
+ charmem: procedure options(main);
+    declare 1 s, 2 a char(4), 2 b fixed bin(31);
+    declare 1 t, 2 v(2) char(3), 2 w char(2) init('hi');
+    declare fails fixed bin(31);
+    fails = 0;
+    s.a = 'ab';
+    s.b = 7;
+    if s.a ^= 'ab  ' then fails = fails + 1;
+    if s.b ^= 7 then fails = fails + 1;
+    t.v(1) = 'x';
+    t.v(2) = 'yz';
+    if t.v(1) ^= 'x  ' then fails = fails + 1;
+    if t.v(2) ^= 'yz ' then fails = fails + 1;
+    if t.w ^= 'hi' then fails = fails + 1;
+    if fails = 0 then put skip list('PASS charmem');
+    else put skip list('FAIL charmem: fails =', fails);
+ end charmem;
