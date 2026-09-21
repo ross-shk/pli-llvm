@@ -81,6 +81,8 @@ private:
   // (after a diagnostic) on an unimplemented or malformed item.
   bool parseFormatItem(Stmt* st);
   StmtP parseCall();
+  StmtP parseWait();  // WAIT (rule 82, QR2.8): WAIT(ev,...)[(count)];
+  StmtP parseDelay(); // DELAY (rule 83, QR2.8): DELAY(expr);
   StmtP parseAssignment();
   StmtP parseOn(Proc* owner); // rule (91)
   StmtP parseRevert();        // rule (92)
@@ -123,6 +125,8 @@ private:
     bool pointer = false;
     bool complex = false; // COMPLEX (QR2.2/CM5): a real+imaginary pair
     bool file = false;    // FILE (rules 39,40): a named file variable
+    bool task = false;    // TASK (rules (15),(79), QR2.8): a task name
+    bool event = false;   // EVENT (rules (15),(79),(82), QR2.8): an event name
     int prec = -1, scale = 0, slen = -1;
     bool starLen = false; // '*' string length (rule (18)): adjustable extent
   };

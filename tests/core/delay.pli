@@ -1,0 +1,7 @@
+ /* rule (83): DELAY(n) suspends for n
+    milliseconds; 0 is a no-op. */
+ delay: procedure options(main);
+    delay(10);
+    delay(0);
+    put skip list('PASS');
+ end delay;

@@ -102,6 +102,11 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   }
   case TK::Pointer:
     return b_.getPtrTy();
+  case TK::Task:
+  case TK::Event:
+    // A TASK handle id / EVENT completion flag (rules (15),(79),(82), QR2.8):
+    // a plain i32 word owned by the PL/I variable; the runtime serialises it.
+    return b_.getInt32Ty();
   case TK::Complex: {
     // A complex value (QR2.2/CM5): a pair of FLOAT real/imaginary parts.
     llvm::Type* d = b_.getDoubleTy();
@@ -553,6 +558,12 @@ llvm::Constant* IRGen::scalarInitConstant(const Type& t, const Expr* ini) {
                                     : (ini->ival != 0 || ini->fval != 0);
     return llvm::ConstantInt::get(b_.getInt8Ty(), v);
   }
+  case TK::Task:
+    return llvm::ConstantInt::get(b_.getInt32Ty(), 0, true);
+  case TK::Event:
+    // A fresh EVENT is complete (1), so WAIT before any CALL returns at once;
+    // CALL resets it to 0 and the task's end sets it back to 1 (rule (79)).
+    return llvm::ConstantInt::get(b_.getInt32Ty(), 1, true);
   case TK::Char: {
     std::string text(t.len, ' ');
     if (ini) {
@@ -666,6 +677,11 @@ void IRGen::allocaLocals(HProc* p) {
       a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
     }
     symAddr_[s] = a;
+    if (s->ty.isTask())
+      b_.CreateStore(i32(0), a);
+    else if (s->ty.isEvent())
+      // A fresh EVENT is complete (1); CALL resets it (rule (79), QR2.8).
+      b_.CreateStore(i32(1), a);
     if (s->ty.isChar() && !s->ty.isArray()) { // blank fill (scalar char only)
       std::string blanks(s->ty.len, ' ');
       llvm::Value* g = globalString(blanks);
@@ -1038,8 +1054,8 @@ void IRGen::emitProc(HProc* p) {
       symAddr_[s] = mod_.getGlobalVariable(s->irName.substr(1), true);
 
   llvm::Type* retLLVM = (p->isFunction && (p->retTy.isStruct() || p->retTy.isChar()))
-                                ? b_.getVoidTy()
-                                : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
+                            ? b_.getVoidTy()
+                            : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
 
   // rule (56): ENTRY statements declare alternate entry points.
   std::vector<HStmt*> entries;
@@ -1471,6 +1487,12 @@ void IRGen::emitStmt(HStmt* s) {
     break;
   case HStmt::CallS:
     emitCall(s);
+    break;
+  case HStmt::Wait:
+    emitWait(s);
+    break;
+  case HStmt::Delay:
+    emitDelay(s);
     break;
   case HStmt::Allocate:
     emitAllocate(s);
@@ -2200,6 +2222,11 @@ void IRGen::emitPut(HStmt* s) {
             runtimeFn("pli_put_list_complex"),
             {b_.CreateExtractValue(v.cpx, 0, "cpx.re"), b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
         break;
+      case TK::Task:
+      case TK::Event:
+        d_.error(s->loc, "a TASK/EVENT value cannot be written with PUT LIST in this stage",
+                 "(110)");
+        break;
       }
     }
   }
@@ -2636,6 +2663,11 @@ void IRGen::appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args) {
 void IRGen::emitCall(HStmt* s) {
   if (!s->sym)
     return;
+  // Any task option makes the CALL asynchronous (rule (79), QR2.8).
+  if (s->hasTaskOpt || s->eventRef || s->priorityExpr) {
+    emitAsyncCall(s);
+    return;
+  }
   Symbol* calleeSym = s->sym;
   Proc* callee = calleeSym->proc;
   Stmt* en = calleeSym->entry;
@@ -2699,6 +2731,146 @@ void IRGen::emitCall(HStmt* s) {
   }
   appendStaticLinks(callee, args);
   b_.CreateCall(calleeF, args);
+}
+
+// Asynchronous CALL (rule (79), QR2.8): marshal the callee arguments as for a
+// synchronous call, pack them into a heap context, and run a per-site wrapper
+// on a detached thread. The caller returns at once; WAIT/EVENT synchronises.
+// Async argument storage shares the caller's frame, so the caller must WAIT
+// for the task before leaving the block (C28 task-storage rule).
+void IRGen::emitAsyncCall(HStmt* s) {
+  Symbol* calleeSym = s->sym;
+  Proc* callee = calleeSym->proc;
+  Stmt* en = calleeSym->entry;
+  if (!callee && !en)
+    return; // external async: diagnosed by sema (79)
+  llvm::Function* calleeF = calleeFn(calleeSym);
+  std::vector<Symbol*> calleeParams =
+      en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
+
+  // Marshal the callee arguments exactly as a synchronous call would.
+  std::vector<llvm::Value*> callArgs;
+  Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
+                : (callee ? callee->retTy : Type::voidTy());
+  if (rty.isStruct() || rty.isChar())
+    callArgs.push_back(entryAlloca(llvmTy(rty), "sret"));
+  for (size_t i = 0; i < s->args.size(); ++i) {
+    HExpr* a = s->args[i].get();
+    Type pty;
+    if (i < calleeParams.size())
+      pty = calleeParams[i]->ty;
+    else
+      break;
+    if (a->kind == HExpr::Star) {
+      callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+      continue;
+    }
+    callArgs.push_back(argAddr(a, pty));
+  }
+  if (en || callee)
+    for (size_t i = s->args.size(); i < calleeParams.size(); ++i)
+      callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+  for (size_t i = 0; i < calleeParams.size(); ++i) {
+    if (isAdjustable(calleeParams[i])) {
+      llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
+                             ? i64(0)
+                             : argExtent(s->args[i].get());
+      if (!ext)
+        ext = i64(0); // diagnosed by sema through the sync path (13)
+      callArgs.push_back(ext);
+    }
+  }
+  appendStaticLinks(callee, callArgs);
+  // PRIORITY is evaluated for its effects, then ignored (best-effort, (79)).
+  if (s->priorityExpr) {
+    Val pv = emitExpr(s->priorityExpr.get());
+    (void)toI64(pv);
+  }
+
+  llvm::Value* eventAddr = llvm::Constant::getNullValue(b_.getPtrTy());
+  if (s->eventRef && s->eventRef->sym)
+    eventAddr = addressOf(s->eventRef->sym);
+  llvm::Value* taskAddr = nullptr;
+  if (s->taskRef && s->taskRef->sym)
+    taskAddr = addressOf(s->taskRef->sym);
+
+  // Context layout: [event addr, ...callArgs in order]. All addresses are
+  // opaque pointers; extents are i64.
+  std::vector<llvm::Type*> fields = {b_.getPtrTy()};
+  for (llvm::Value* v : callArgs)
+    fields.push_back(v->getType());
+  llvm::StructType* ctxTy = llvm::StructType::get(ctx_, fields);
+
+  // Per-site wrapper: unpack the context, call the procedure, complete the
+  // event, free the context, return null.
+  llvm::FunctionType* wft = llvm::FunctionType::get(b_.getPtrTy(), {b_.getPtrTy()}, false);
+  llvm::Function* wrap = llvm::Function::Create(wft, llvm::Function::InternalLinkage,
+                                                "pli_task_wrap_" + std::to_string(n_++), &mod_);
+  llvm::BasicBlock* savedBB = b_.GetInsertBlock();
+  llvm::BasicBlock* wbb = llvm::BasicBlock::Create(ctx_, "entry", wrap);
+  b_.SetInsertPoint(wbb);
+  llvm::Value* ctx = wrap->arg_begin();
+  std::vector<llvm::Value*> wargs;
+  for (size_t k = 0; k < callArgs.size(); ++k) {
+    llvm::Value* fp = b_.CreateStructGEP(ctxTy, ctx, (unsigned)(k + 1), "carg");
+    wargs.push_back(b_.CreateLoad(fields[k + 1], fp, "cval"));
+  }
+  b_.CreateCall(calleeF, wargs);
+  llvm::Value* evp = b_.CreateStructGEP(ctxTy, ctx, 0, "cev");
+  llvm::Value* ev = b_.CreateLoad(b_.getPtrTy(), evp, "ev");
+  b_.CreateCall(runtimeFn("pli_event_complete"), {ev});
+  b_.CreateCall(runtimeFn("pli_free"), {ctx});
+  b_.CreateRet(llvm::Constant::getNullValue(b_.getPtrTy()));
+  b_.SetInsertPoint(savedBB);
+
+  // Fill the context at the call site, reset the event first so a fast task
+  // cannot complete before the reset (lost wakeup), then spawn.
+  llvm::Value* size = i64((long long)mod_.getDataLayout().getTypeStoreSize(ctxTy));
+  llvm::Value* ctxRaw = b_.CreateCall(runtimeFn("pli_alloc"), {size}, "tctx");
+  llvm::Value* evField = b_.CreateStructGEP(ctxTy, ctxRaw, 0, "tev");
+  b_.CreateStore(eventAddr, evField);
+  for (size_t k = 0; k < callArgs.size(); ++k) {
+    llvm::Value* fp = b_.CreateStructGEP(ctxTy, ctxRaw, (unsigned)(k + 1), "targ");
+    b_.CreateStore(callArgs[k], fp);
+  }
+  if (s->eventRef)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+  if (taskAddr)
+    b_.CreateCall(runtimeFn("pli_task_note"), {taskAddr});
+  llvm::Value* fnPtr = b_.CreateBitCast(wrap, b_.getPtrTy(), "twrap");
+  b_.CreateCall(runtimeFn("pli_task_spawn"), {fnPtr, ctxRaw});
+}
+
+void IRGen::emitWait(HStmt* s) {
+  // WAIT (rule (82)): no count waits for every event; WAIT(evs)(k) waits for
+  // any k of them through pli_wait_n.
+  if (!s->waitCount) {
+    for (auto& e : s->waitEvents) {
+      if (!e->sym)
+        continue;
+      b_.CreateCall(runtimeFn("pli_event_wait"), {addressOf(e->sym)});
+    }
+    return;
+  }
+  size_t n = s->waitEvents.size();
+  llvm::Value* arr = entryAlloca(llvm::ArrayType::get(b_.getPtrTy(), (unsigned)n), "wait.evs");
+  for (size_t i = 0; i < n; ++i) {
+    llvm::Value* ep = b_.CreateInBoundsGEP(llvm::ArrayType::get(b_.getPtrTy(), (unsigned)n), arr,
+                                           {i64(0), i64((long long)i)}, "we");
+    llvm::Value* addr = s->waitEvents[i]->sym ? addressOf(s->waitEvents[i]->sym)
+                                              : llvm::Constant::getNullValue(b_.getPtrTy());
+    b_.CreateStore(addr, ep);
+  }
+  Val need = emitExpr(s->waitCount.get());
+  b_.CreateCall(runtimeFn("pli_wait_n"), {arr, i64((long long)n), toI64(need)});
+}
+
+void IRGen::emitDelay(HStmt* s) {
+  // DELAY (rule (83)): sleep N milliseconds; N <= 0 is a no-op.
+  if (!s->value)
+    return;
+  Val v = emitExpr(s->value.get());
+  b_.CreateCall(runtimeFn("pli_delay"), {toI64(v)});
 }
 
 // ---------------------------------------------------------------------------
@@ -3298,6 +3470,13 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (v.ty.isPointer() && dst.isPointer())
     return v;
 
+  // TASK/EVENT handles (rules (15),(79),(82), QR2.8): same-type copies pass
+  // through; mixing them with anything else stays diagnosed by sema.
+  if (v.ty.isTask() && dst.isTask())
+    return v;
+  if (v.ty.isEvent() && dst.isEvent())
+    return v;
+
   // Complex conversions (QR2.2/CM5): a complex value is an {double,double}
   // pair. complex -> complex passes through; complex -> real takes the real
   // part and converts it as a real; real -> complex uses the value as the real
@@ -3706,9 +3885,8 @@ Val IRGen::emitExpr(HExpr* e) {
     appendStaticLinks(callee, args);
     // A hidden-buffer callee returns void (the result is written to the
     // buffer), so the call cannot carry a value name.
-    llvm::CallInst* call = (rty.isStruct() || rty.isChar())
-                               ? b_.CreateCall(calleeFn, args)
-                               : b_.CreateCall(calleeFn, args, "fres");
+    llvm::CallInst* call = (rty.isStruct() || rty.isChar()) ? b_.CreateCall(calleeFn, args)
+                                                            : b_.CreateCall(calleeFn, args, "fres");
     v.ty = rty;
     if (rty.isStruct()) {
       v.ptr = sretPtr; // the result lives in the caller's buffer
@@ -4197,8 +4375,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // to an OPTIONAL parameter.
   if (e->name == "OMITTED" || e->name == "PRESENT") {
     HExpr* a = e->args[0].get();
-    llvm::Value* addr =
-        (a->sym && a->sym->kind != Symbol::ProcName) ? addressOf(a->sym) : nullptr;
+    llvm::Value* addr = (a->sym && a->sym->kind != Symbol::ProcName) ? addressOf(a->sym) : nullptr;
     if (!addr) {
       d_.error(e->loc, "could not address the OPTIONAL parameter", "(123)");
       v.ty = e->ty;
@@ -4386,6 +4563,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  if (e->name == "UPPERCASE") {
+    Val s = emitExpr(e->args[0].get());
+    Val dst = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_uppercase"), {dst.ptr, dst.len, s.ptr, s.len});
+    dst.len = i64(e->ty.len);
+    result = dst;
+    return true;
+  }
   if (e->name == "HIGH" || e->name == "LOW") {
     Val n = emitExpr(e->args[0].get());
     Val out = charTemp(e->ty.len);
@@ -4408,6 +4593,17 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "ONCODE") {
     v.ty = e->ty;
     v.reg = b_.CreateCall(runtimeFn("pli_oncode"), {}, "oncode");
+    result = v;
+    return true;
+  }
+  // EVENT (rules (79),(82), QR2.8): poll an event's completion as BIT(1).
+  if (e->name == "EVENT") {
+    HExpr* a = e->args[0].get();
+    llvm::Value* addr =
+        (a && a->sym) ? addressOf(a->sym) : llvm::Constant::getNullValue(b_.getPtrTy());
+    llvm::Value* st = b_.CreateCall(runtimeFn("pli_event_status"), {addr}, "evst");
+    v.ty = e->ty;
+    v.reg = b_.CreateTrunc(st, b_.getInt1Ty(), "evb");
     result = v;
     return true;
   }

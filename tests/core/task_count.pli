@@ -1,0 +1,28 @@
+ /* rules (79),(82): WAIT(e1,e2)(1) resumes
+    after any one event; a plain WAIT
+    resumes after all of them. */
+ task_count: procedure options(main);
+    declare e1 event;
+    declare e2 event;
+    declare c1 fixed binary(31);
+    declare c2 fixed binary(31);
+    c1 = 0;
+    c2 = 0;
+    call w1 event(e1);
+    call w2 event(e2);
+    wait(e1, e2)(1);
+    wait(e1, e2);
+    if c1 = 1 then
+       if c2 = 1 then
+          put skip list('PASS');
+       else
+          put skip list('FAIL c2', c2);
+    else
+       put skip list('FAIL c1', c1);
+    w1: procedure;
+       c1 = c1 + 1;
+    end w1;
+    w2: procedure;
+       c2 = c2 + 1;
+    end w2;
+ end task_count;

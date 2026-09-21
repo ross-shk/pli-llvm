@@ -1,0 +1,21 @@
+ /* rules (79),(82): CALL with EVENT runs
+    the procedure asynchronously; WAIT
+    suspends until the event completes;
+    EVENT(ev) polls the completion. */
+ task: procedure options(main);
+    declare done event;
+    declare counter fixed binary(31);
+    counter = 0;
+    call worker event(done);
+    wait(done);
+    if counter = 1 then
+       if event(done) then
+          put skip list('PASS');
+       else
+          put skip list('FAIL event poll');
+    else
+       put skip list('FAIL counter', counter);
+    worker: procedure;
+       counter = counter + 1;
+    end worker;
+ end task;
