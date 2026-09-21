@@ -4642,6 +4642,23 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // REVERSE (rule (123)): mirror the string via the runtime.
+  if (e->name == "REVERSE") {
+    Val s = emitExpr(e->args[0].get());
+    Val dst = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_reverse"), {dst.ptr, dst.len, s.ptr, s.len});
+    dst.len = i64(e->ty.len);
+    result = dst;
+    return true;
+  }
+  // MAXLENGTH (rule (123)): the declared VARYING maximum — a constant fold,
+  // no runtime call.
+  if (e->name == "MAXLENGTH") {
+    v.ty = e->ty;
+    v.reg = llvm::ConstantInt::get(llvmTy(e->ty), (uint64_t)e->args[0]->ty.len, false);
+    result = v;
+    return true;
+  }
   if (e->name == "TRUNC") {
     Val a = emitExpr(e->args[0].get());
     if (a.ty.k == TK::Float) {

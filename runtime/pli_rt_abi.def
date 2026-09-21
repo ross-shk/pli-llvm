@@ -93,6 +93,7 @@ PLI_FN(pli_search, I64, (CPTR, I64, CPTR, I64, I64))     /* SEARCH(s, set, start
 PLI_FN(pli_verify_from, I64, (CPTR, I64, CPTR, I64, I64)) /* VERIFY(s, set, start) */
 PLI_FN(pli_rank, I64, (CPTR, I64))                       /* RANK(c) */
 PLI_FN(pli_collate, VOID, (PTR, I64, I64))              /* COLLATE(n) */
+PLI_FN(pli_reverse, VOID, (PTR, I64, CPTR, I64))       /* REVERSE(s) */
 PLI_FN(pli_high, VOID, (PTR, I64))                    /* HIGH(n) */
 PLI_FN(pli_low, VOID, (PTR, I64))                     /* LOW(n) */
 PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */

@@ -1,0 +1,20 @@
+ /* REVERSE + MAXLENGTH (rule (123)): REVERSE mirrors a string,
+    MAXLENGTH folds from the declared varying maximum — the two
+    libnet heap-guard forms. */
+ revmax: procedure options(main);
+    declare v char(10) varying;
+    declare s char(5);
+    declare fails fixed bin(31);
+    fails = 0;
+    s = reverse('abcde');
+    if s ^= 'edcba' then fails = fails + 1;
+    s = reverse('a');
+    if substr(s, 1, 1) ^= 'a' then fails = fails + 1;
+    v = 'ab';
+    if maxlength(v) ^= 10 then fails = fails + 1;
+    if length(v) + 3 > maxlength(v) then fails = fails + 1;
+    v = '0123456789';
+    if ^(length(v) + 1 > maxlength(v)) then fails = fails + 1;
+    if fails = 0 then put skip list('PASS revmax');
+    else put skip list('FAIL revmax: fails =', fails);
+ end revmax;
