@@ -148,6 +148,12 @@ private:
   // copied into a fresh dummy argument. Shared by emitCall and emitExpr so the
   // marshalling logic has a single home.
   llvm::Value* argAddr(HExpr* a, const Type& pty);
+  // Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
+  // FLOAT scalars convert to the parameter type and ride as values, POINTERs
+  // ride as the pointer itself; anything else keeps the argAddr form. A
+  // POINTER parameter given a non-pointer is diagnosed (sema pins the common
+  // case; this is the backstop).
+  llvm::Value* marshalArg(HExpr* a, const Type& pty, SourceLoc loc);
   // Append the callee's static-link arguments (its enclosing automatic
   // variables, rule 8). Shared by emitCall and emitExpr.
   void appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args);

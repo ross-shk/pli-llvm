@@ -25,6 +25,7 @@ struct Symbol {
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+  bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
   std::string irName;            // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc* proc = nullptr;          // for ProcName
   Proc* owner = nullptr;         // the procedure that declares this variable (static link)
@@ -189,6 +190,11 @@ private:
   // Backstop (rule (123)): reductions over array expressions only expand in
   // direct assignment; diagnose anything left pending for this procedure.
   void drainPendingReduces(Proc* p);
+  // By-value C entries (rule (34)): a POINTER parameter takes a pointer
+  // argument, structure parameters stay diagnosed, and anything else rides
+  // checkAssignable. No-op unless the entry carries
+  // OPTIONS(LINKAGE(SYSTEM)/BYVALUE).
+  void checkByValueArgs(Symbol* sym, const std::vector<ExprP>& args);
   // Expand whole-array and cross-section PUT/GET items into element subscript
   // calls in row-major order (rules (104)-(110)). Static plain-storage
   // shapes only; anything else is diagnosed with the position's rule.

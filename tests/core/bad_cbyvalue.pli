@@ -1,0 +1,10 @@
+ /* C FFI by-value limits (rules (34),(38)): OPTIONS(BYVALUE)
+    marks ENTRY declarations only, and a POINTER parameter takes
+    a pointer argument. */
+ bad_cbyvalue: procedure options(main);
+    declare v fixed bin(31) options(byvalue);
+    declare c_f entry (pointer) returns(fixed bin(31))
+       options(linkage(system)) external('c_byval_add');
+    declare r fixed bin(31);
+    r = c_f(0);
+ end bad_cbyvalue;

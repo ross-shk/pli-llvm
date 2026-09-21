@@ -179,6 +179,63 @@ void pli_put_list_fixed(long long v) {
   put_raw(buf, (size_t)n);
 }
 
+/* CHAR(fixed): decimal image of v, blank-padded to dstcap. */
+void pli_char_of_fixed(char *dst, long long dstcap, long long v) {
+  char tmp[24];
+  int n = snprintf(tmp, sizeof tmp, "%lld", v);
+  long long i = 0;
+  for (; i < n && i < dstcap; ++i)
+    dst[i] = tmp[i];
+  for (; i < dstcap; ++i)
+    dst[i] = ' ';
+}
+
+/* CHAR(float): %.6g image (the same readable choice as PUT LIST output),
+ * blank-padded to dstcap. */
+void pli_char_of_float(char *dst, long long dstcap, double x) {
+  char tmp[48];
+  int n = snprintf(tmp, sizeof tmp, "%.6g", x);
+  long long i = 0;
+  while (i < n && i < dstcap) {
+    dst[i] = tmp[i];
+    ++i;
+  }
+  for (; i < dstcap; ++i)
+    dst[i] = ' ';
+}
+
+/* FIXED(char): parse decimal text, truncating any fraction toward zero.
+ * Leading blanks, one optional sign, then digits; stops at the first
+ * non-digit (no CONVERSION condition in this stage). */
+long long pli_fixed_of_char(const char *s, long long slen) {
+  long long i = 0;
+  while (i < slen && (s[i] == ' ' || s[i] == '\t'))
+    ++i;
+  int neg = 0;
+  if (i < slen && (s[i] == '+' || s[i] == '-')) {
+    neg = s[i] == '-';
+    ++i;
+  }
+  long long v = 0;
+  while (i < slen && s[i] >= '0' && s[i] <= '9') {
+    v = v * 10 + (s[i] - '0');
+    ++i;
+  }
+  return neg ? -v : v;
+}
+
+/* FIXED(float): truncate toward zero (NaN reads as 0, out-of-range clamps;
+ * SIZE routing for the clamping case is a follow-up). */
+long long pli_fixed_of_float(double x) {
+  if (x != x)
+    return 0;
+  if (x >= 9223372036854775807.0)
+    return 9223372036854775807LL;
+  if (x < -9223372036854775808.0)
+    return (-9223372036854775807LL - 1);
+  return (long long)x;
+}
+
 /* FIXED DECIMAL output (QR1.2): the stored integer holds value * 10^q, so
  * print exactly q fraction digits. */
 static void format_decfixed(char *buf, size_t cap, long long v, long long q) {

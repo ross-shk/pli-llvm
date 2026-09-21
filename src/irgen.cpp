@@ -476,8 +476,15 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     return f; // internal callee missing a declaration is a bug
 
   std::vector<llvm::Type*> pt;
-  for (size_t i = 0; i < sym->entryParams.size(); ++i)
-    pt.push_back(b_.getPtrTy());
+  for (size_t i = 0; i < sym->entryParams.size(); ++i) {
+    // A by-value entry (rules (34),(38)) takes FIXED/FLOAT/POINTER scalars
+    // as C values; everything else keeps the by-reference address form.
+    const Type& t = sym->entryParams[i];
+    if (sym->entryByValue && (t.isFixed() || t.k == TK::Float || t.isPointer()))
+      pt.push_back(llvmTy(t));
+    else
+      pt.push_back(b_.getPtrTy());
+  }
   for (const Type& t : sym->entryParams)
     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
       pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
@@ -2686,6 +2693,26 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   return addr;
 }
 
+// Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
+// FLOAT scalars convert to the parameter type and ride as values, POINTERs
+// ride as the pointer itself; anything else keeps the argAddr form.
+llvm::Value* IRGen::marshalArg(HExpr* a, const Type& pty, SourceLoc loc) {
+  if (pty.isFixed() || pty.k == TK::Float) {
+    Val av = emitExpr(a);
+    Val cv = convert(av, pty, loc);
+    return cv.reg;
+  }
+  if (pty.isPointer()) {
+    Val av = emitExpr(a);
+    if (!av.ty.isPointer()) {
+      d_.error(loc, "by-value POINTER parameter requires a pointer argument", "(38)");
+      return llvm::ConstantPointerNull::get(b_.getPtrTy());
+    }
+    return av.reg;
+  }
+  return argAddr(a, pty);
+}
+
 // Element count of a call argument passed to a `*`-extent parameter (rule 13):
 // a fixed array contributes its constant extent, a dynamic-bound array its live
 // recorded bound, and a `*` parameter forwards this frame's own hidden extent.
@@ -2806,7 +2833,11 @@ void IRGen::emitCall(HStmt* s) {
       args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
       continue;
     }
-    args.push_back(argAddr(a, pty));
+    // A by-value C entry (rules (34),(38)) takes scalar/pointer values.
+    if (calleeSym->entryByValue)
+      args.push_back(marshalArg(a, pty, s->loc));
+    else
+      args.push_back(argAddr(a, pty));
   }
   // Trailing omitted OPTIONALs pad with nulls to the full signature, so the
   // callee's hidden-result and static-link positions never shift (sema
@@ -3986,7 +4017,11 @@ Val IRGen::emitExpr(HExpr* e) {
       for (size_t i = 0; i < e->args.size() && i < e->sym->entryParams.size(); ++i) {
         HExpr* a = e->args[i].get();
         Type pty = e->sym->entryParams[i];
-        args.push_back(argAddr(a, pty));
+        // A by-value C entry (rules (34),(38)) takes scalar/pointer values.
+        if (e->sym->entryByValue)
+          args.push_back(marshalArg(a, pty, e->loc));
+        else
+          args.push_back(argAddr(a, pty));
         if (pty.isArray() && !pty.dims.empty() && pty.dims[0].adj) {
           llvm::Value* ext = argExtent(a);
           args.push_back(ext ? ext : i64(0)); // hidden `*` extent arg (rule (13))
@@ -4796,6 +4831,47 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     b_.CreateCall(runtimeFn(fn), {out.ptr, out.len});
     out.len = i64(e->ty.len);
     result = out;
+    return true;
+  }
+  // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
+  // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
+  if (e->name == "FIXED") {
+    Val a = emitExpr(e->args[0].get());
+    if (a.ty.isChar()) {
+      llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len});
+      v.ty = e->ty;
+      v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
+      result = v;
+      return true;
+    }
+    if (a.ty.k == TK::Float) {
+      llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_float"), {a.reg});
+      v.ty = e->ty;
+      v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxf");
+      result = v;
+      return true;
+    }
+    v = convert(a, e->ty, e->loc);
+    result = v;
+    return true;
+  }
+  // CHAR (rule (123)): renders a scalar value as text into a fresh buffer;
+  // a character argument passes through (truncated/padded by assignment).
+  if (e->name == "CHAR") {
+    Val a = emitExpr(e->args[0].get());
+    if (a.ty.isChar()) {
+      result = a;
+      return true;
+    }
+    Val dst = charTemp(e->ty.len);
+    if (a.ty.k == TK::Float) {
+      b_.CreateCall(runtimeFn("pli_char_of_float"), {dst.ptr, dst.len, a.reg});
+    } else {
+      llvm::Value* iv = toI64(convert(a, Type::fixedBin(31, 0), e->loc));
+      b_.CreateCall(runtimeFn("pli_char_of_fixed"), {dst.ptr, dst.len, iv});
+    }
+    dst.len = i64(e->ty.len);
+    result = dst;
     return true;
   }
   // ONCODE (rules (91)-(94)): the current ERROR code (1 inside a SIGNAL-raised

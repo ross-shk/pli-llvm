@@ -646,6 +646,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           d_.error(item.loc, "RETURNS is only valid on an ENTRY declaration", "(34)");
           item.entryIsFunction = false;
         }
+        if (item.entryByValue && !item.isEntry) {
+          // OPTIONS(BYVALUE/LINKAGE) selects C-ABI marshalling on an ENTRY
+          // declaration only; elsewhere it has no meaning. Never silently
+          // accepted.
+          d_.error(item.loc, "OPTIONS(BYVALUE/LINKAGE) is only valid on an ENTRY declaration",
+                   "(34)");
+          item.entryByValue = false;
+        }
         if (item.isEntry) {
           if (item.valueInit)
             d_.error(item.loc,
@@ -662,6 +670,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           sym->entryParams = item.entryParams;
           sym->entryIsFunction = item.entryIsFunction;
           sym->entryRetTy = item.entryRetTy;
+          sym->entryByValue = item.entryByValue;
           sym->irName = "@" + (item.extName.empty() ? item.name : item.extName);
           item.sym = sym;
           entries_.push_back(sym);
@@ -2377,6 +2386,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       for (auto& a : s->args)
         if (a->kind == Expr::Star)
           d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)", "");
+      checkByValueArgs(sym, s->args);
     }
     // Task options (rule (79), QR2.8): any option makes the CALL asynchronous.
     // TASK takes a TASK variable (or nothing), EVENT an EVENT variable,
@@ -3064,6 +3074,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       for (auto& a : e->args)
         if (a->kind == Expr::Star)
           d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)", "");
+      checkByValueArgs(sym, e->args);
     }
     e->ty =
         en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
@@ -3365,6 +3376,32 @@ void Sema::drainPendingReduces(Proc* p) {
   pendingReduces_.erase(std::remove_if(pendingReduces_.begin(), pendingReduces_.end(),
                                        [&](const PendingReduce& pr) { return pr.owner == p; }),
                         pendingReduces_.end());
+}
+
+// By-value C entries (rule (34)): a POINTER parameter takes a pointer
+// argument, and a structure parameter stays diagnosed (C struct-by-value is
+// unimplemented; the by-reference copy would silently mismatch the ABI).
+// Anything else rides checkAssignable, with scalar conversions handled by
+// convert() at emission.
+void Sema::checkByValueArgs(Symbol* sym, const std::vector<ExprP>& args) {
+  if (!sym->entryByValue)
+    return;
+  for (size_t i = 0; i < args.size() && i < sym->entryParams.size(); ++i) {
+    const Expr* a = args[i].get();
+    if (!a || a->kind == Expr::Star || a->ty.isVoid())
+      continue;
+    const Type& pty = sym->entryParams[i];
+    if (pty.isPointer() && !a->ty.isPointer()) {
+      d_.error(a->loc, "a POINTER parameter of a by-value entry requires a pointer argument",
+               "(38)");
+      continue;
+    }
+    if (pty.isStruct()) {
+      d_.error(a->loc, "a structure parameter of a by-value entry is not implemented", "(38)");
+      continue;
+    }
+    checkAssignable(pty, a->ty, a->loc, "argument");
+  }
 }
 // Type a built-in function call; return true if `e` is one of the
 // recognised built-ins (typed or diagnosed here). Extracted from the
@@ -3810,6 +3847,47 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // FIXED built-in (rule (123)): FIXED(char) parses decimal text with
+  // truncation, FIXED(numeric) truncates toward zero (the PL/I
+  // FIXED(x) conversion entry point used by libnet's `port =
+  // fixed(substr(url, pos+1))`).
+  if (e->name == "FIXED") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "FIXED expects 1 argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    const Type& a = e->args[0]->ty;
+    if (a.isChar() || a.isNumeric()) {
+      e->ty = Type::fixedBin(31, 0);
+      return true;
+    }
+    d_.error(e->args[0]->loc, "FIXED argument must be character or numeric", "(123)");
+    e->ty = Type::voidTy();
+    return true;
+  }
+  // CHAR built-in (rule (123)): CHAR(x) renders a scalar value as text
+  // (the PL/I CHAR(x) conversion used by libnet's
+  // `trim(char(moves))` and `'...' || char(port)` chains).
+  if (e->name == "CHAR") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "CHAR expects 1 argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    const Type& a = e->args[0]->ty;
+    if (a.isChar()) {
+      e->ty = Type::chr(a.len);
+      return true;
+    }
+    if (a.isNumeric() || a.isBit()) {
+      e->ty = Type::chr(24); // decimal or %.6g image, blank-padded
+      return true;
+    }
+    d_.error(e->args[0]->loc, "CHAR argument must be a scalar value in this stage", "(123)");
+    e->ty = Type::voidTy();
     return true;
   }
   // EVENT built-in (rules (79),(82), QR2.8): EVENT(ev) polls an event's
