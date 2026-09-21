@@ -19,6 +19,8 @@ const char* tokName(Tok t) {
     return "double-quoted string";
   case Tok::BitLit:
     return "bit constant";
+  case Tok::HexLit:
+    return "hex constant";
   case Tok::Semi:
     return "';'";
   case Tok::Colon:
@@ -234,6 +236,11 @@ Token Lexer::lexString() {
   if (cur() == 'B' || cur() == 'b') {
     bump();
     t.kind = Tok::BitLit;
+  } else if (cur() == 'X' || cur() == 'x') {
+    // Hex X literal (rule (143)): the payload decodes in the parser; any
+    // odd-count or non-hex content is diagnosed there with (143).
+    bump();
+    t.kind = Tok::HexLit;
   } else {
     t.kind = Tok::CharLit;
   }

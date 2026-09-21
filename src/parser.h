@@ -70,6 +70,9 @@ private:
   StmtP parseLoopExit(bool isIterate);   // LEAVE/ITERATE [label] (extension, ADR-105)
   StmtP parseDefineAlias();              // DEFINE ALIAS name attrs (extension, ADR-114)
   static ExprP cloneExpr(const Expr* e); // deep copy for SELECT value lists
+  // Decode a hex X literal payload to bytes (rule (143)); false after a
+  // diagnostic, in which case out is untouched.
+  bool decodeHexLiteral(const std::string& hex, SourceLoc loc, std::string& out);
   StmtP parsePut();
   StmtP parseDisplay(); // display-statement (rule 114)
   StmtP parseGet();

@@ -3130,21 +3130,63 @@ ExprP Parser::parsePower() {
 }
 
 // primitive-expression ::= (expression) | reference | constant     rule (123)
+bool Parser::decodeHexLiteral(const std::string& hex, SourceLoc loc, std::string& out) {
+  auto nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9')
+      return c - '0';
+    if (c >= 'A' && c <= 'F')
+      return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f')
+      return c - 'a' + 10;
+    return -1;
+  };
+  if (hex.size() % 2 != 0) {
+    d_.error(loc, "a hex X literal needs an even digit count", "(143)");
+    return false;
+  }
+  std::string bytes;
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    int hi = nibble(hex[i]), lo = nibble(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      d_.error(loc, "a hex X literal needs hex digits", "(143)");
+      return false;
+    }
+    bytes.push_back((char)(hi * 16 + lo));
+  }
+  out = bytes;
+  return true;
+}
+
 ExprP Parser::parsePrimary() {
   auto e = std::make_unique<Expr>();
   e->loc = cur().loc;
 
   // replicated-string-constant ::= ( integer ) simple-string-constant (129)
-  // Expand `(3)'AB'` into `'ABABAB'` at parse time; also covers bit strings.
+  // Expand `(3)'AB'` into `'ABABAB'` at parse time; also covers bit strings
+  // and hex X literals (decoded to bytes below).
   if (at(Tok::LParen) && peek().kind == Tok::Number && !peek().isFloat &&
       peek(2).kind == Tok::RParen &&
-      (peek(3).kind == Tok::CharLit || peek(3).kind == Tok::BitLit)) {
+      (peek(3).kind == Tok::CharLit || peek(3).kind == Tok::BitLit ||
+       peek(3).kind == Tok::HexLit)) {
     advance(); // (
     long long count = strtoll(cur().text.c_str(), nullptr, 10);
     advance(); // integer
     advance(); // )
     const Token& lit = cur();
+    SourceLoc ll = lit.loc;
     advance(); // simple-string-constant
+    if (lit.kind == Tok::HexLit) {
+      // Replicated hex (rule (129)+(143)): decode once, repeat the bytes.
+      std::string one;
+      if (!decodeHexLiteral(lit.sval, ll, one))
+        return e;
+      std::string out;
+      for (long long i = 0; i < count; ++i)
+        out += one;
+      e->kind = Expr::CharLit;
+      e->sval = out;
+      return e;
+    }
     std::string out;
     for (long long i = 0; i < count; ++i)
       out += lit.sval;
@@ -3192,6 +3234,19 @@ ExprP Parser::parsePrimary() {
     e->kind = Expr::CharLit;
     e->sval = cur().sval;
     advance();
+    return e;
+  }
+  if (at(Tok::HexLit)) {
+    // Hex X literal (rule (143)): decode hex pairs to bytes; validation with
+    // (143) keeps malformed digits out of every downstream stage.
+    std::string out;
+    SourceLoc ll = cur().loc;
+    std::string hex = cur().sval;
+    advance();
+    if (!decodeHexLiteral(hex, ll, out))
+      return e;
+    e->kind = Expr::CharLit;
+    e->sval = out;
     return e;
   }
   if (at(Tok::BitLit)) {
@@ -3306,8 +3361,8 @@ std::vector<InitItem> Parser::parseInitialList() {
 // '( n )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
 InitItem Parser::parseInitialItem() {
   auto valueStart = [](Tok k) {
-    return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::Word ||
-           k == Tok::Minus || k == Tok::Plus || k == Tok::Star || k == Tok::LParen;
+    return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::HexLit ||
+           k == Tok::Word || k == Tok::Minus || k == Tok::Plus || k == Tok::Star || k == Tok::LParen;
   };
   if (at(Tok::Star)) {
     advance();

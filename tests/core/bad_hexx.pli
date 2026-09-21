@@ -1,0 +1,7 @@
+ /* Hex X literal limits (rule (143)): an odd digit count or a
+    non-hex digit stays diagnosed. */
+ bad_hexx: procedure options(main);
+    declare s char(4);
+    s = '414'X;
+    s = 'ZZ'X;
+ end bad_hexx;
