@@ -198,9 +198,9 @@ bool Parser::looksLikeAssignment() const {
 // probe (ADR-004 step 3) is gated on this.
 static bool stmtKeywordSpelling(const std::string& w) {
   static const char* const kws[] = {
-      "DECLARE",  "DCL",  "IF",   "DO",    "BEGIN", "PUT",   "CALL",    "RETURN",
-      "STOP",     "EXIT", "GET",  "GO",    "GOTO",  "ON",    "SIGNAL",  "REVERT",
-      "ALLOCATE", "FREE", "OPEN", "CLOSE", "READ",  "WRITE", "REWRITE", "DELETE",
+      "DECLARE", "DCL",   "IF",   "DO",    "BEGIN",   "PUT",    "CALL",   "RETURN",   "STOP",
+      "EXIT",    "GET",   "GO",   "GOTO",  "ON",      "SIGNAL", "REVERT", "ALLOCATE", "FREE",
+      "OPEN",    "CLOSE", "READ", "WRITE", "REWRITE", "DELETE", "WAIT",   "DELAY",
   };
   for (const char* k : kws)
     if (w == k)
@@ -737,6 +737,12 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
   if (kw("CALL")) {
     return parseCall();
   } // rules (78)-(80)
+  if (kw("WAIT")) {
+    return parseWait();
+  } // rule (82)
+  if (kw("DELAY")) {
+    return parseDelay();
+  } // rule (83)
   if (kw("RETURN")) { // rule (81)
     auto st = std::make_unique<Stmt>();
     st->loc = cur().loc;
@@ -1456,6 +1462,19 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.file = true;
         continue;
       }
+      if (w == "TASK") {
+        // task-attribute (rules (15),(79), QR2.8): a task name for CALL TASK.
+        advance();
+        bag.task = true;
+        continue;
+      }
+      if (w == "EVENT") {
+        // event-attribute (rules (15),(79),(82), QR2.8): an event name for
+        // CALL EVENT / WAIT synchronisation.
+        advance();
+        bag.event = true;
+        continue;
+      }
       if (w == "BASED") {
         // based-attribute ::= BASED [ ( reference ) ]  rule (25): the declared
         // item overlays the storage addressed by a POINTER variable, so it has
@@ -1484,8 +1503,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "PICTURE" || w == "PIC" || w == "AREA" || w == "OFFSET" || w == "CONTROLLED" ||
-          w == "CTL" || w == "LABEL" || w == "TASK" || w == "EVENT" || w == "CELL" ||
-          w == "GENERIC" || w == "BUILTIN") {
+          w == "CTL" || w == "LABEL" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -1532,7 +1550,7 @@ void Parser::parseDeclTail(DeclItem& item) {
   // Conflicting attributes are diagnosed first.
   if (!item.typeRef.empty() &&
       (bag.fixed || bag.floating || bag.binary || bag.decimal || bag.character || bag.bit ||
-       bag.varying || bag.pointer || bag.complex || bag.file))
+       bag.varying || bag.pointer || bag.complex || bag.file || bag.task || bag.event))
     d_.error(item.loc, "TYPE cannot be combined with explicit data attributes (ADR-114)", "");
   if (bag.fixed && bag.floating)
     d_.error(item.loc, "FIXED and FLOAT are conflicting attributes", "(16)");
@@ -1553,8 +1571,20 @@ void Parser::parseDeclTail(DeclItem& item) {
   if (bag.complex && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
                       bag.decimal || bag.pointer || bag.file))
     d_.error(item.loc, "COMPLEX cannot be combined with another data attribute", "(15)");
+  if ((bag.task || bag.event) &&
+      (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal ||
+       bag.pointer || bag.complex || bag.file || bag.varying))
+    d_.error(item.loc, "TASK/EVENT cannot be combined with a data attribute", "(15)");
+  if (bag.task && bag.event)
+    d_.error(item.loc, "TASK and EVENT are conflicting attributes", "(15)");
 
-  if (bag.file) {
+  if (bag.task) {
+    // A TASK name (rules (15),(79), QR2.8): an opaque handle for CALL TASK.
+    item.ty = Type::taskTy();
+  } else if (bag.event) {
+    // An EVENT name (rules (15),(79),(82), QR2.8): a completion flag.
+    item.ty = Type::eventTy();
+  } else if (bag.file) {
     // A FILE variable carries no computational value (rules 39,40); the parser
     // records the flag and sema assigns it a runtime slot at OPEN/CLOSE.
     item.fileAttr = true;
@@ -2395,6 +2425,7 @@ bool Parser::parseFormatItem(Stmt* st) {
 }
 
 // call-statement ::= CALL identifier [argumentlist] ... ;          rule (78)
+// call-optionslist ::= TASK[(ref)] | EVENT(ref) | PRIORITY(expr)  rule (79)
 StmtP Parser::parseCall() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::CallS;
@@ -2428,7 +2459,123 @@ StmtP Parser::parseCall() {
     }
     expect(Tok::RParen, "(80)");
   }
+  // Task options (rule (79), QR2.8): TASK[(ref)], EVENT(ref),
+  // PRIORITY(expr) in any order, blank-separated. Any combination makes the
+  // CALL asynchronous; sema validates the referenced TASK/EVENT variables.
+  for (;;) {
+    if (atWord("TASK")) {
+      if (st->hasTaskOpt) {
+        d_.error(cur().loc, "duplicate TASK option on CALL", "(79)");
+        advance();
+      } else {
+        SourceLoc l = cur().loc;
+        advance();
+        st->hasTaskOpt = true;
+        if (eat(Tok::LParen)) {
+          if (!at(Tok::RParen)) {
+            st->taskRef = parsePrimary();
+            if (!st->taskRef) {
+              resync();
+              return nullptr;
+            }
+          } else {
+            // Bare TASK() — like a bare TASK with no name.
+            (void)l;
+          }
+          expect(Tok::RParen, "(79)");
+        }
+      }
+      continue;
+    }
+    if (atWord("EVENT")) {
+      if (st->eventRef) {
+        d_.error(cur().loc, "duplicate EVENT option on CALL", "(79)");
+        advance();
+      } else {
+        advance();
+        if (!expect(Tok::LParen, "(79)")) {
+          resync();
+          return nullptr;
+        }
+        st->eventRef = parsePrimary();
+        if (!st->eventRef) {
+          resync();
+          return nullptr;
+        }
+        expect(Tok::RParen, "(79)");
+      }
+      continue;
+    }
+    if (atWord("PRIORITY")) {
+      if (st->priorityExpr) {
+        d_.error(cur().loc, "duplicate PRIORITY option on CALL", "(79)");
+        advance();
+      } else {
+        advance();
+        if (!expect(Tok::LParen, "(79)")) {
+          resync();
+          return nullptr;
+        }
+        st->priorityExpr = parseExpr();
+        expect(Tok::RParen, "(79)");
+      }
+      continue;
+    }
+    break;
+  }
   expect(Tok::Semi, "(78)");
+  return st;
+}
+
+// wait-statement ::= WAIT(ev,...)[(count)] ;                        rule (82)
+StmtP Parser::parseWait() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Wait;
+  st->loc = cur().loc;
+  advance(); // WAIT
+  if (!expect(Tok::LParen, "(82)")) {
+    resync();
+    return nullptr;
+  }
+  if (!at(Tok::RParen)) {
+    for (;;) {
+      ExprP ev = parsePrimary();
+      if (!ev) {
+        resync();
+        return nullptr;
+      }
+      st->waitEvents.push_back(std::move(ev));
+      if (!eat(Tok::Comma))
+        break;
+    }
+  }
+  if (!expect(Tok::RParen, "(82)")) {
+    resync();
+    return nullptr;
+  }
+  // Optional count: WAIT(evs)(n) waits for any n of the events.
+  if (at(Tok::LParen)) {
+    advance();
+    st->waitCount = parseExpr();
+    expect(Tok::RParen, "(82)");
+  }
+  expect(Tok::Semi, "(82)");
+  return st;
+}
+
+// delay-statement ::= DELAY(expr) ;                                 rule (83)
+StmtP Parser::parseDelay() {
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::Delay;
+  st->loc = cur().loc;
+  advance(); // DELAY
+  if (!expect(Tok::LParen, "(83)")) {
+    resync();
+    return nullptr;
+  }
+  st->value = parseExpr();
+  expect(Tok::RParen, "(83)");
+  expect(Tok::Semi, "(83)");
   return st;
 }
 

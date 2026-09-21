@@ -1,0 +1,5 @@
+ /* rule (82): WAIT requires EVENT vars. */
+ bad_task: procedure options(main);
+    declare e fixed binary(31);
+    wait(e);
+ end bad_task;

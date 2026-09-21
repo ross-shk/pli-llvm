@@ -125,6 +125,8 @@ struct HStmt {
     Display, // rule (114)
     Read,    // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
     Write,   // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
+    Wait,    // rule (82) WAIT(ev,...)[(count)] (QR2.8)
+    Delay,   // rule (83) DELAY(expr) (QR2.8)
   } kind = Null;
 
   SourceLoc loc{};
@@ -175,6 +177,15 @@ struct HStmt {
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
 
   std::vector<HExprP> args; // CALL arguments
+
+  // CALL task options (rule (79), QR2.8): mirrors the AST fields.
+  bool hasTaskOpt = false;
+  HExprP taskRef;
+  HExprP eventRef;
+  HExprP priorityExpr;
+  // WAIT (rule (82)): event list + optional count.
+  std::vector<HExprP> waitEvents;
+  HExprP waitCount;
 
   // ON statement (rule 91); REVERT/SIGNAL use condName/condKey only.
   std::string condName;

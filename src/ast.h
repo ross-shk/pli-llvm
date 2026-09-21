@@ -108,7 +108,7 @@ struct DeclItem {
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
-  bool optional = false; // OPTIONAL parameter (extension); valid only on parameters
+  bool optional = false;               // OPTIONAL parameter (extension); valid only on parameters
   // A dynamic (runtime-extent) array that is a structure member (rule 13): its
   // field path (the indices memberAddr walks) and its bound expressions. The
   // member's DeclItem still owns dynBounds/dynLbBounds; these reference them.
@@ -157,6 +157,8 @@ struct Stmt {
     Display,     // rule (114) DISPLAY (expression) — one scalar value
     Read,        // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
     Write,       // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
+    Wait,        // rule (82) WAIT(ev,...)[(count)] — suspend until events complete (QR2.8)
+    Delay,       // rule (83) DELAY(expr) — suspend for N milliseconds (QR2.8)
     DefineAlias, // extension (ADR-114): DEFINE ALIAS name attrs (no HIR twin;
                  // dropped in lowering after sema registers the type)
   } kind = Null;
@@ -213,6 +215,18 @@ struct Stmt {
                            // file; READ/WRITE transfer fixed-size binary records
 
   std::vector<ExprP> args; // CALL arguments
+
+  // CALL task options (rule (79), QR2.8): TASK[(ref)], EVENT(ref),
+  // PRIORITY(expr) in any order. taskRef/eventRef are VarRef to a TASK/EVENT
+  // variable (taskRef null = bare TASK with no name); priority is evaluated
+  // and ignored in this stage (best-effort, ADR-016).
+  bool hasTaskOpt = false; // bare TASK present (named or not)
+  ExprP taskRef;           // TASK(name) — null when bare TASK
+  ExprP eventRef;          // EVENT(name)
+  ExprP priorityExpr;      // PRIORITY(expr)
+  // WAIT (rule (82)): the event list and the optional count expression.
+  std::vector<ExprP> waitEvents;
+  ExprP waitCount;
 
   // ON statement (rule 91): the established condition, whether SNAP was
   // given, whether the unit is SYSTEM, and the unit body (null for SYSTEM).

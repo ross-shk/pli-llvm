@@ -18,6 +18,8 @@ enum class TK {
   Struct,   // structure with level-numbered members (rule 11)
   Pointer,  // POINTER: an address value (rules (15),(25))
   Complex,  // COMPLEX: a pair of FLOAT real/imaginary parts (QR2.2/CM5)
+  Task,     // TASK: a task name for async CALL (rules (15),(79), QR2.8)
+  Event,    // EVENT: an event name for CALL/WAIT sync (rules (15),(79),(82), QR2.8)
   Void,
 };
 
@@ -133,6 +135,18 @@ struct Type {
     t.prec = 6;
     return t;
   }
+  // A task name (QR2.8): an opaque handle set by CALL TASK, read by PRIORITY.
+  static Type taskTy() {
+    Type t;
+    t.k = TK::Task;
+    return t;
+  }
+  // An event name (QR2.8): a completion flag (0 incomplete, 1 complete).
+  static Type eventTy() {
+    Type t;
+    t.k = TK::Event;
+    return t;
+  }
   // Build a structure type from its level-numbered members (rule 11).
   static Type structTy(std::vector<Member> m);
 
@@ -143,6 +157,8 @@ struct Type {
   bool isPointer() const { return k == TK::Pointer; }
   bool isVoid() const { return k == TK::Void; }
   bool isComplex() const { return k == TK::Complex; }
+  bool isTask() const { return k == TK::Task; }
+  bool isEvent() const { return k == TK::Event; }
 
   // Integer width chosen for FIXED values (M0 keeps FIXED scale 0 only).
   int intBits() const {
@@ -172,6 +188,10 @@ struct Type {
       return "POINTER";
     case TK::Complex:
       return "COMPLEX";
+    case TK::Task:
+      return "TASK";
+    case TK::Event:
+      return "EVENT";
     case TK::Void:
       return "VOID";
     }
