@@ -85,6 +85,7 @@ PLI_FN(pli_verify, I64, (CPTR, I64, CPTR, I64))       /* VERIFY */
 PLI_FN(pli_translate, VOID, (PTR, I64, CPTR, I64, CPTR, I64, CPTR, I64)) /* TRANSLATE */
 PLI_FN(pli_trim, VOID, (PTR, I64, CPTR, I64, CPTR, I64))   /* TRIM (extension) */
 PLI_FN(pli_tally, I64, (CPTR, I64, CPTR, I64))             /* TALLY (extension) */
+PLI_FN(pli_uppercase, VOID, (PTR, I64, CPTR, I64))       /* UPPERCASE (Bridge B4) */
 PLI_FN(pli_high, VOID, (PTR, I64))                    /* HIGH(n) */
 PLI_FN(pli_low, VOID, (PTR, I64))                     /* LOW(n) */
 PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */
@@ -154,3 +155,15 @@ PLI_FN(pli_record_read_fixed, I64, (I64))
 PLI_FN(pli_record_read_float, DOUBLE, (I64))
 PLI_FN(pli_record_read_char, VOID, (I64, PTR, I64))
 PLI_FN(pli_record_read_bit, I8, (I64))
+
+/* Multitasking (rules (79),(82),(83), QR2.8): EVENT completion flags are i32
+ * words (0 incomplete, 1 complete) owned by PL/I variables; the runtime
+ * serialises them behind one mutex+cond. TASK handles are opaque ids. */
+PLI_FN(pli_event_reset, VOID, (PTR))        /* CALL: mark the event incomplete */
+PLI_FN(pli_event_complete, VOID, (PTR))     /* task end: mark complete + wake */
+PLI_FN(pli_event_wait, VOID, (PTR))         /* WAIT(ev): until complete */
+PLI_FN(pli_wait_n, VOID, (PTR, I64, I64))   /* WAIT(evs)(k): array of addrs */
+PLI_FN(pli_event_status, I8, (PTR))         /* EVENT(ev) poll: 0/1 */
+PLI_FN(pli_delay, VOID, (I64))              /* DELAY(n): sleep n milliseconds */
+PLI_FN(pli_task_spawn, VOID, (PTR, PTR))    /* spawn wrapper(ctx), detached */
+PLI_FN(pli_task_note, VOID, (PTR))          /* CALL TASK: assign a handle id */

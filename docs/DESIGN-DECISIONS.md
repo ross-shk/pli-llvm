@@ -3058,7 +3058,31 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
    unchanged (null flows through). ENTRY-descriptor OPTIONAL stays
    out (rule 36 is its own slice).
 
-  ## ADR-120 — Qualified LIKE templates narrow to a minor structure
+  ## ADR-120 — Pthread tasking slice: EVENT as i32, per-site wrappers
+
+  Context. QR2.8 tasking (rules (15),(79),(82),(83)) needs async CALL
+  without freezing the backend: pthread types cannot live in LLVM IR,
+  and a fast task must not complete before the caller resets its event.
+
+  Decision. EVENT/TASK are i32 words (flag/handle id); one runtime
+  mutex+cond serialises all events. Each async CALL site gets an
+  internal `ptr(ptr)` wrapper that unpacks a `pli_alloc` context
+  (event addr, callee args, extents, static links), calls the
+  procedure, completes the event, frees the context. The call site
+  resets the event before `pli_task_spawn` (no lost wakeup); a fresh
+  EVENT starts complete (1). PRIORITY evaluates then ignored;
+  shared-variable races are the programmer's (WAIT before block
+  exit). ON stacks and ONCODE are `_Thread_local`.
+
+  Consequences. `task.pli`/`task_count.pli`/`delay.pli` run;
+  `bad_task.pli` pins WAIT-on-non-EVENT. Out: EVENT/TASK arrays and
+  members, external/function async, I/O EVENT, manual EVENT()
+  assignment, PRIORITY/COMPLETION, output interleaving order.
+
+  ## ADR-121 — Qualified LIKE templates narrow to a minor structure
+
+  (Renumbered from ADR-120 at the builtins merge: the tasking slice
+  already carried that number.)
 
   Context. Rule (43) reads `LIKE unsubscripted-reference`, and the
   corpus (B2) narrows templates to a minor structure (`1 T LIKE S.G`).

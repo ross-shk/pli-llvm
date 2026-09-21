@@ -343,6 +343,9 @@ int main(int argc, char** argv) {
 #else
     cmd += " -Wl,--gc-sections";
 #endif
+    // Multitasking (QR2.8) runs on pthreads; the flag is a no-op where the
+    // threading library lives in the system library (e.g. macOS).
+    cmd += " -pthread";
     if (!runtimeLib.empty())
       cmd += " " + shellQuote(runtimeLib);
     for (const std::string& la : linkArgs)

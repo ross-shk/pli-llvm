@@ -130,6 +130,12 @@ private:
   // target-addressing as an assignment's left-hand side).
   void storeGetTarget(HExpr* t, const Val& v, SourceLoc loc);
   void emitCall(HStmt* s);
+  // Asynchronous CALL (rule (79), QR2.8): pack the callee arguments into a
+  // heap context, spawn a detached thread running a per-site wrapper, and
+  // return at once. Shared by emitCall when a task option is present.
+  void emitAsyncCall(HStmt* s);
+  void emitWait(HStmt* s);        // WAIT (rule (82), QR2.8)
+  void emitDelay(HStmt* s);       // DELAY (rule (83), QR2.8)
   void emitAllocate(HStmt* s);    // ALLOCATE (rule 87)
   void emitFree(HStmt* s);        // FREE (rule 90)
   void emitOpen(HStmt* s);        // OPEN (rules 100,101)

@@ -522,6 +522,15 @@ void Sema::collectStmtCallees(const Stmt* s, std::vector<Proc*>& out) {
     collectExprCallees(t.get(), out);
   for (auto& a : s->args)
     collectExprCallees(a.get(), out);
+  // Task options, WAIT/DELAY operands (rules (79),(82),(83)): may contain
+  // function references in PRIORITY/DELAY/count expressions.
+  collectExprCallees(s->taskRef.get(), out);
+  collectExprCallees(s->eventRef.get(), out);
+  collectExprCallees(s->priorityExpr.get(), out);
+  collectExprCallees(s->value.get(), out);
+  for (auto& e : s->waitEvents)
+    collectExprCallees(e.get(), out);
+  collectExprCallees(s->waitCount.get(), out);
   for (auto& f : s->formats) {
     collectExprCallees(f.w.get(), out);
     collectExprCallees(f.d.get(), out);
@@ -808,6 +817,25 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           item.sym->fileAttr = true;
           item.sym->fileSlot = nextFileSlot_++;
           storage_.pop_back();
+        }
+        // TASK/EVENT names (rules (15),(79),(82), QR2.8): scalar handles only
+        // in this stage; arrays, INITIAL/VALUE, LIKE/DEFINED/BASED stay diagnosed.
+        if (item.ty.isTask() || item.ty.isEvent()) {
+          const char* what = item.ty.isTask() ? "TASK" : "EVENT";
+          if (item.ty.isArray())
+            d_.error(item.loc,
+                     std::string("array ") + what + " variables are not implemented in this stage",
+                     "(15)");
+          if (item.init || !item.initItems.empty() || item.initCall || item.valueInit)
+            d_.error(item.loc,
+                     std::string("INITIAL/VALUE on a ") + what +
+                         " variable is not implemented in this stage",
+                     "(26)");
+          if (!item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty())
+            d_.error(item.loc,
+                     std::string("LIKE/DEFINED/BASED on a ") + what +
+                         " variable is not implemented in this stage",
+                     "(15)");
         }
         // DEFINED (rule 24): the item overlays the storage of an already-
         // declared variable of identical type in this scope, so it needs no
@@ -1252,6 +1280,12 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     return false;
   }
   if (dst.isNumeric() && (src.isNumeric() || src.isBit()))
+    return true;
+  // TASK/EVENT assignment (rules (15),(79),(82), QR2.8): same-type copies
+  // (e.g. passing a TASK/EVENT by reference) are plain handle copies.
+  if (dst.isTask() && src.isTask())
+    return true;
+  if (dst.isEvent() && src.isEvent())
     return true;
   // POINTER assignment (rule 15): copy the address; a pointer target takes a
   // pointer source (NULL, ADDR, or another pointer) unchanged.
@@ -1885,8 +1919,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         for (; i < s->args.size(); ++i) {
           if (s->args[i]->kind == Expr::Star) {
             if (i >= calleeParams.size() || !calleeParams[i]->isOptional)
-              d_.error(s->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)",
-                       "");
+              d_.error(s->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)", "");
           } else if (i < calleeParams.size())
             checkAssignable(calleeParams[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
         }
@@ -1909,8 +1942,80 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // '*' argument cannot be validated and stays diagnosed (rule (38)).
       for (auto& a : s->args)
         if (a->kind == Expr::Star)
-          d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)",
-                   "");
+          d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)", "");
+    }
+    // Task options (rule (79), QR2.8): any option makes the CALL asynchronous.
+    // TASK takes a TASK variable (or nothing), EVENT an EVENT variable,
+    // PRIORITY a numeric expression (evaluated, best-effort ignored).
+    if (s->hasTaskOpt || s->eventRef || s->priorityExpr) {
+      if (!callee && !en)
+        d_.error(s->loc, "CALL with TASK/EVENT/PRIORITY on an external entry is not implemented",
+                 "(79)");
+      if ((callee && callee->isFunction) || (en && en->entryIsFunction))
+        d_.error(s->loc, "CALL with TASK/EVENT/PRIORITY on a function procedure is not implemented",
+                 "(79)");
+      if (s->taskRef) {
+        typeExpr(s->taskRef.get(), sc, p);
+        Expr* t = s->taskRef.get();
+        if (t->kind != Expr::VarRef || !t->sym || t->sym->kind == Symbol::ProcName ||
+            !t->sym->ty.isTask())
+          d_.error(t->loc, "TASK option requires a TASK variable", "(79)");
+        else if (!t->path.empty() || !t->memberPath.empty())
+          d_.error(t->loc, "TASK of a structure member is not implemented in this stage", "(79)");
+        else if (t->sym->ty.isArray())
+          d_.error(t->loc, "TASK of an array element is not implemented in this stage", "(79)");
+      }
+      if (s->eventRef) {
+        typeExpr(s->eventRef.get(), sc, p);
+        Expr* e = s->eventRef.get();
+        if (e->kind != Expr::VarRef || !e->sym || e->sym->kind == Symbol::ProcName ||
+            !e->sym->ty.isEvent())
+          d_.error(e->loc, "EVENT option requires an EVENT variable", "(79)");
+        else if (!e->path.empty() || !e->memberPath.empty())
+          d_.error(e->loc, "EVENT of a structure member is not implemented in this stage", "(79)");
+        else if (e->sym->ty.isArray())
+          d_.error(e->loc, "EVENT of an array element is not implemented in this stage", "(79)");
+      }
+      if (s->priorityExpr) {
+        typeExpr(s->priorityExpr.get(), sc, p);
+        if (!s->priorityExpr->ty.isNumeric() && !s->priorityExpr->ty.isVoid())
+          d_.error(s->priorityExpr->loc, "PRIORITY expression must be numeric", "(79)");
+      }
+    }
+    break;
+  }
+  case Stmt::Wait: {
+    // WAIT (rule (82), QR2.8): every event must be an EVENT variable; the
+    // optional count is a numeric expression (how many must complete).
+    if (s->waitEvents.empty())
+      d_.error(s->loc, "WAIT requires at least one event", "(82)");
+    for (auto& e : s->waitEvents) {
+      typeExpr(e.get(), sc, p);
+      if (e->kind != Expr::VarRef || !e->sym || e->sym->kind == Symbol::ProcName ||
+          !e->sym->ty.isEvent()) {
+        d_.error(e->loc, "WAIT requires an EVENT variable", "(82)");
+        continue;
+      }
+      if (!e->path.empty() || !e->memberPath.empty())
+        d_.error(e->loc, "WAIT of a structure member is not implemented in this stage", "(82)");
+      else if (e->sym->ty.isArray())
+        d_.error(e->loc, "WAIT of an array element is not implemented in this stage", "(82)");
+    }
+    if (s->waitCount) {
+      typeExpr(s->waitCount.get(), sc, p);
+      if (!s->waitCount->ty.isNumeric() && !s->waitCount->ty.isVoid())
+        d_.error(s->waitCount->loc, "WAIT count must be numeric", "(82)");
+    }
+    break;
+  }
+  case Stmt::Delay: {
+    // DELAY (rule (83), QR2.8): suspend for N milliseconds; N is numeric.
+    if (!s->value)
+      d_.error(s->loc, "DELAY requires an expression", "(83)");
+    else {
+      typeExpr(s->value.get(), sc, p);
+      if (!s->value->ty.isNumeric() && !s->value->ty.isVoid())
+        d_.error(s->value->loc, "DELAY expression must be numeric", "(83)");
     }
     break;
   }
@@ -2484,8 +2589,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       for (; i < e->args.size(); ++i) {
         if (e->args[i]->kind == Expr::Star) {
           if (i >= calleeParams.size() || !calleeParams[i]->isOptional)
-            d_.error(e->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)",
-                     "");
+            d_.error(e->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)", "");
         } else if (i < calleeParams.size())
           checkAssignable(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
       }
@@ -2509,8 +2613,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       for (auto& a : e->args)
         if (a->kind == Expr::Star)
-          d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)",
-                   "");
+          d_.error(a->loc, "'*' arguments to an external entry are not implemented (ADR-119)", "");
     }
     e->ty =
         en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
@@ -3027,6 +3130,22 @@ bool Sema::typeBuiltin(Expr* e) {
     e->ty = Type::fixedBin(31, 0);
     return true;
   }
+  // UPPERCASE built-in (Bridge B4, rule 123): uppercase(s) — s with
+  // a-z folded to A-Z, other characters unchanged; same length as s.
+  if (e->name == "UPPERCASE") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "UPPERCASE expects 1 argument (string)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isChar()) {
+      d_.error(e->args[0]->loc, "UPPERCASE argument must be a character string", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::chr(e->args[0]->ty.len);
+    return true;
+  }
   // HIGH/LOW built-ins (M2): high(n)/low(n) — n copies of the top/bottom
   // collating character; n must be constant to size the result.
   if (e->name == "HIGH" || e->name == "LOW") {
@@ -3068,6 +3187,31 @@ bool Sema::typeBuiltin(Expr* e) {
       return true;
     }
     e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // EVENT built-in (rules (79),(82), QR2.8): EVENT(ev) polls an event's
+  // completion status as BIT(1) ('1'B complete, '0'B incomplete).
+  if (e->name == "EVENT") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "EVENT expects 1 argument (an EVENT variable)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    Expr* a = e->args[0].get();
+    if (a->kind != Expr::VarRef || !a->sym || a->sym->kind == Symbol::ProcName ||
+        !a->sym->ty.isEvent()) {
+      d_.error(a->loc, "EVENT argument must be an EVENT variable", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::bit(1);
+    return true;
+  }
+  // PRIORITY built-in/pseudo-variable (rule (79), QR2.8): task priorities
+  // are best-effort ignored in this stage; diagnose uses, never accept.
+  if (e->name == "PRIORITY") {
+    d_.error(e->loc, "PRIORITY is not implemented in this stage", "(79)");
+    e->ty = Type::voidTy();
     return true;
   }
   // MULTIPLY built-in (M2): multiply(a, b) — product of two numerics; for
