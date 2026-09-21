@@ -1,0 +1,12 @@
+ /* LIKE with a qualified template (rule 43): the path must resolve
+    to a minor structure; a scalar final, a scalar intermediate, and
+    an unknown member are rejected. */
+ bad_like_qualified: procedure options(main);
+    declare 1 s,
+           2 a fixed bin(31),
+           2 g,
+            3 x fixed bin(31);
+    declare 1 t like s.a;
+    declare 1 u like s.zzz;
+    declare 1 v like s.a.x;
+ end bad_like_qualified;

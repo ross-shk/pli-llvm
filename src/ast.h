@@ -103,7 +103,7 @@ struct DeclItem {
   ExprP valueInit; // VALUE(const) — a named-constant value (extension, ADR-108)
   ExprP initCall;  // INITIAL(CALL f(...)) — a function call initializer (rule 27)
   std::vector<InitItem> initItems;     // INITIAL(...) itemlist (arrays, rule 26-31)
-  std::string like;                    // LIKE <unsubscripted-reference> template (rule 43)
+  std::string like;                    // LIKE template (rule 43): plain name or S.A.B path
   std::string typeRef;                 // TYPE <alias> (extension, ADR-114); empty = none
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base

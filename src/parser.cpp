@@ -1328,13 +1328,22 @@ void Parser::parseDeclTail(DeclItem& item) {
       if (w == "LIKE") {
         // like-attribute ::= LIKE unsubscripted-reference (rule 43): the
         // declared item takes the structure shape of the referenced structure.
+        // A qualified template LIKE S.A.B narrows to a minor structure; the
+        // dotted path is resolved in sema.
         advance();
         if (at(Tok::Word)) {
           item.like = cur().text;
           advance();
-          if (at(Tok::Dot)) // LIKE S.A.B: qualified template, diagnosed in sema
-            d_.error(cur().loc, "LIKE with a qualified reference is not implemented in this stage",
-                     "(43)");
+          while (at(Tok::Dot)) {
+            advance();
+            if (at(Tok::Word)) {
+              item.like += "." + cur().text;
+              advance();
+            } else {
+              d_.error(cur().loc, "expected a member name after '.' in LIKE reference", "(43)");
+              break;
+            }
+          }
         } else {
           d_.error(cur().loc, "expected a reference after LIKE", "(43)");
         }
