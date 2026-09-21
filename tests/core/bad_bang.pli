@@ -1,0 +1,7 @@
+ /* A single ! is not an operator: only the !! pair aliases
+    concatenation (rule (119)). */
+ bad_bang: procedure options(main);
+    declare s char(8);
+    s = 'a' ! 'b';
+    put skip list(s);
+ end bad_bang;

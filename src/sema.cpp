@@ -358,6 +358,9 @@ void Sema::processProc(Proc* p) {
     checkStmt(s.get(), sc, p);
   }
   curEntry_ = nullptr;
+  // Reductions over array expressions only expand in direct assignment;
+  // anything left pending was never expanded and stays diagnosed (123).
+  drainPendingReduces(p);
   // rule (91): unwinding handlers on a non-local exit is not implemented, so
   // GO TO in a procedure that establishes an ON-unit is diagnosed.
   if (stmtsHaveKind(p->body, Stmt::On) && stmtsHaveKind(p->body, Stmt::Goto))
@@ -1644,7 +1647,10 @@ bool Sema::rewriteWholeArrayRefs(ExprP& e, const std::vector<std::string>& idx, 
   if (e->kind == Expr::VarRef && e->ty.isArray()) {
     if (underCall)
       return true;
-    if (!(e->ty == shape)) {
+    // Only the shape (bounds per axis) must match: element types convert on
+    // the per-element store, as in a scalar assignment. Bounds must match
+    // exactly since every side shares the target's indices.
+    if (e->ty.dims != shape.dims) {
       d_.error(e->loc, "whole-array assignment requires identical array shapes in this stage",
                "(86)");
       return false;
@@ -1825,6 +1831,36 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   return true;
 }
 
+// Deep-copy an expression tree (fixed cross-section indices fan out to one
+// copy per transmitted element).
+static ExprP cloneExpr(const Expr* e) {
+  if (!e)
+    return nullptr;
+  auto c = std::make_unique<Expr>();
+  c->kind = e->kind;
+  c->loc = e->loc;
+  c->ty = e->ty;
+  c->ival = e->ival;
+  c->fval = e->fval;
+  c->decScale = e->decScale;
+  c->decPrec = e->decPrec;
+  c->sval = e->sval;
+  c->name = e->name;
+  c->path = e->path;
+  c->memberPath = e->memberPath;
+  c->sym = e->sym;
+  if (e->locPtr)
+    c->locPtr = cloneExpr(e->locPtr.get());
+  c->op = e->op;
+  if (e->a)
+    c->a = cloneExpr(e->a.get());
+  if (e->b)
+    c->b = cloneExpr(e->b.get());
+  for (auto& a : e->args)
+    c->args.push_back(cloneExpr(a.get()));
+  return c;
+}
+
 void Sema::checkDoIter(Stmt* s, Scope* sc, Proc* p) {
   Symbol* sym = lookup(sc, s->name);
   if (!sym) {
@@ -1858,6 +1894,115 @@ void Sema::checkDoIter(Stmt* s, Scope* sc, Proc* p) {
   }
   loopStack_.pop_back();
   curEntry_ = save;
+}
+
+// Expand whole-array and cross-section PUT/GET items into element subscript
+// calls in row-major order (rules (104)-(110)). Only static plain-storage
+// shapes expand (cross-sections need static star axes); the statement itself
+// is retained, so SKIP/PAGE positioning and EDIT format pairing apply to the
+// expanded list unchanged. New nodes are typed here. Returns false after a
+// diagnostic, in which case the caller skips further item checks.
+bool Sema::expandAggregateItems(Stmt* s, Scope* sc, Proc* p, bool isGet) {
+  const char* rule = s->edit ? "(108)" : "(110)";
+  const char* what = isGet ? "GET" : "PUT";
+  std::vector<ExprP> out;
+  for (auto& item : s->items) {
+    Expr* it = item.get();
+    bool whole = it->kind == Expr::VarRef && it->ty.isArray();
+    bool cross = it->kind == Expr::Subscript && it->ty.isArray();
+    if (!whole && !cross) {
+      out.push_back(std::move(item));
+      continue;
+    }
+    Symbol* sym = it->sym;
+    if (!sym || sym->kind != Symbol::Var || sym->definedBase || sym->basedBase) {
+      d_.error(it->loc,
+               std::string(what) + " of a parameter, DEFINED overlay, or BASED array is not "
+                                   "implemented in this stage",
+               rule);
+      return false;
+    }
+    // The full array type behind the item (through any member path).
+    Type full;
+    if (it->memberPath.empty()) {
+      full = sym->ty;
+    } else {
+      const Type* cur = &sym->ty;
+      for (unsigned f : it->memberPath) {
+        if (!cur->isStruct() || f >= cur->members.size()) {
+          d_.error(it->loc, std::string(what) + " of this item is not implemented in this stage",
+                   rule);
+          return false;
+        }
+        cur = &cur->members[f]->ty;
+      }
+      full = *cur;
+    }
+    // Axes to enumerate: every axis for a whole array, the star axes of a
+    // cross-section. Enumerated axes must be static; anything else (dynamic
+    // extents, dynamic members) stays diagnosed.
+    std::vector<size_t> axes;
+    if (whole) {
+      for (size_t k = 0; k < full.dims.size(); ++k)
+        axes.push_back(k);
+    } else {
+      for (size_t k = 0; k < it->args.size(); ++k)
+        if (it->args[k]->kind == Expr::Star)
+          axes.push_back(k);
+      if (axes.empty()) {
+        d_.error(it->loc, "a cross-section needs a '*' axis in this stage", "(126)");
+        return false;
+      }
+    }
+    for (size_t k : axes) {
+      if (full.dims[k].dyn || full.dims[k].lbDyn) {
+        d_.error(it->loc,
+                 std::string(what) + " of a dynamic-extent array is not implemented in this stage",
+                 rule);
+        return false;
+      }
+    }
+    if (isGet)
+      checkValueTarget(it); // VALUE arrays cannot receive values (ADR-108)
+    // Row-major odometer over the enumerated extents; the fixed axes of a
+    // cross-section reuse a clone of the original index per element.
+    std::vector<long long> ext;
+    for (size_t k : axes)
+      ext.push_back((long long)full.dims[k].ub - full.dims[k].lb + 1);
+    std::vector<long long> coord(axes.size(), 0);
+    bool done = axes.empty();
+    while (!done) {
+      auto el = std::make_unique<Expr>();
+      el->kind = Expr::Call;
+      el->name = it->name;
+      el->path = it->path;
+      el->loc = it->loc;
+      for (size_t k = 0; k < full.dims.size(); ++k) {
+        auto pos = std::find(axes.begin(), axes.end(), k);
+        if (pos != axes.end()) {
+          auto idx = std::make_unique<Expr>();
+          idx->kind = Expr::IntLit;
+          idx->ival = full.dims[k].lb + coord[pos - axes.begin()];
+          idx->loc = it->loc;
+          el->args.push_back(std::move(idx));
+        } else if (cross) {
+          el->args.push_back(cloneExpr(it->args[k].get()));
+        }
+      }
+      typeExpr(el.get(), sc, p);
+      out.push_back(std::move(el));
+      done = true;
+      for (size_t j = axes.size(); j-- > 0;) {
+        if (++coord[j] < ext[j]) {
+          done = false;
+          break;
+        }
+        coord[j] = 0;
+      }
+    }
+  }
+  s->items = std::move(out);
+  return true;
 }
 
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
@@ -1978,6 +2123,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       break;
     }
     checkValueTarget(s->target.get()); // VALUE constants cannot receive values (ADR-108)
+    // Reductions over array expressions (rule (123); QR2.1): expand pending
+    // SUM/PROD/ANY/ALL calls in the value into static temps first, so the
+    // whole-array path below sees bare reductions.
+    if (s->target->kind == Expr::VarRef && expandReductionTemps(s, sc, p))
+      break;
     // Cross-section assignment (rule 126): B = A(i, *) — the right-hand side is
     // a reduced-dim array value produced by a '*' subscript. Only a subscript
     // carries Star axes; a call's '*' arguments omit OPTIONALs (extension).
@@ -2089,8 +2239,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       break;
     }
-    for (auto& it : s->items) {
+    for (auto& it : s->items)
       typeExpr(it.get(), sc, p);
+    // Aggregate items transmit element-wise (rules (104),(105)).
+    if (!expandAggregateItems(s, sc, p, false))
+      break;
+    for (auto& it : s->items) {
       if (it->ty.isVoid())
         d_.error(it->loc, "invalid data list item", "(110)");
     }
@@ -2126,8 +2280,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       break;
     }
-    for (auto& it : s->items) {
+    for (auto& it : s->items)
       typeExpr(it.get(), sc, p);
+    // Aggregate items read element-wise (rules (109),(110)).
+    if (!expandAggregateItems(s, sc, p, true))
+      break;
+    for (auto& it : s->items) {
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
                  it->kind == Expr::Subscript;
       if (!ref) {
@@ -2529,6 +2687,10 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     typeExpr(f.w.get(), sc, p);
     typeExpr(f.d.get(), sc, p);
   }
+  // Aggregate items transmit element-wise; expansion runs before format
+  // pairing so EDIT counts line up.
+  if (!expandAggregateItems(s, sc, p, isGet))
+    return;
   size_t dataIdx = 0;
   for (auto& f : s->formats) {
     if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
@@ -2814,7 +2976,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     }
     // Built-ins are typed in typeBuiltin; a non-builtin call (a user
     // function procedure) falls through to the general path below.
-    if (typeBuiltin(e))
+    if (typeBuiltin(e, p))
       break;
     Symbol* sym = lookup(sc, e->name);
     if (!sym || sym->kind != Symbol::ProcName) {
@@ -3013,10 +3175,172 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
   }
   }
 }
+// Validate a reduction argument as an element-wise expression (rule (123)):
+// every whole reference outside calls resolves to an identical static
+// plain-storage shape (set in shapeOut). Silent: false simply keeps the
+// existing diagnostic at the caller.
+bool Sema::reduceArgShapeOk(Expr* e, Type& shape) {
+  std::vector<Expr*> refs;
+  std::function<bool(Expr*, bool)> walk = [&](Expr* x, bool underCall) -> bool {
+    if (!x || x->ty.isVoid())
+      return false;
+    if (x->kind == Expr::VarRef && x->ty.isArray()) {
+      if (!underCall)
+        refs.push_back(x);
+      return true;
+    }
+    if (x->kind == Expr::Subscript && x->ty.isArray())
+      return false;
+    if (x->kind == Expr::Call) {
+      for (auto& a : x->args)
+        if (!walk(a.get(), true))
+          return false;
+      return true;
+    }
+    if (x->kind == Expr::Binary)
+      return walk(x->a.get(), underCall) && walk(x->b.get(), underCall);
+    if (x->kind == Expr::Unary)
+      return walk(x->a.get(), underCall);
+    if (x->kind == Expr::Subscript) {
+      for (auto& a : x->args)
+        if (!walk(a.get(), underCall))
+          return false;
+      return true;
+    }
+    return true;
+  };
+  if (!walk(e, false) || refs.empty())
+    return false;
+  // Shapes must match per axis (bounds included — every side shares the
+  // target's indices); element types convert per element and may differ.
+  shape = refs[0]->ty;
+  for (Expr* r : refs)
+    if (r->ty.dims != shape.dims)
+      return false;
+  if (shape.isDynamic())
+    return false;
+  for (Expr* r : refs)
+    if (!wholeArrayStorageOk(r))
+      return false;
+  return true;
+}
+
+// Drop a consumed or diagnosed reduction from the pending list.
+void Sema::dropPendingReduce(Expr* call) {
+  auto same = [&](const PendingReduce& pr) { return pr.call == call; };
+  pendingReduces_.erase(std::remove_if(pendingReduces_.begin(), pendingReduces_.end(), same),
+                        pendingReduces_.end());
+}
+
+// Expand pending reductions in an assignment value: one static temp per
+// call holding the expression values, then the original with bare-temp
+// arguments. The statement becomes a Group of the fills plus the original
+// and is re-checked as one (each fill desugars through the whole-array
+// path). Returns true when expanded.
+bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
+  std::vector<Expr*> found;
+  std::function<void(Expr*)> scan = [&](Expr* e) {
+    if (!e)
+      return;
+    if ((e->kind == Expr::Call) &&
+        (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL")) {
+      for (auto& pr : pendingReduces_)
+        if (pr.call == e && pr.owner == p) {
+          found.push_back(e);
+          break;
+        }
+    }
+    if (e->kind == Expr::Binary) {
+      scan(e->a.get());
+      scan(e->b.get());
+    } else if (e->kind == Expr::Unary) {
+      scan(e->a.get());
+    } else if (e->kind == Expr::Call || e->kind == Expr::Subscript) {
+      for (auto& a : e->args)
+        scan(a.get());
+    } else if (e->kind == Expr::VarRef && e->locPtr) {
+      scan(e->locPtr.get());
+    }
+  };
+  scan(s->value.get());
+  if (found.empty())
+    return false;
+  std::vector<StmtP> fills;
+  for (Expr* call : found) {
+    Expr* arg = call->args[0].get();
+    Type shape;
+    if (!reduceArgShapeOk(arg, shape)) {
+      d_.error(call->loc, "SUM over an array expression is not implemented in this stage", "(123)");
+      dropPendingReduce(call);
+      continue;
+    }
+    // The temp holds expression values: the argument's scalar type on the
+    // resolved shape. Its assignment desugars through the whole-array path
+    // when the Group below is checked.
+    Type tty = arg->ty;
+    tty.dims = shape.dims;
+    std::string base = "PLI$WS";
+    while (lookup(sc, base))
+      base += "X";
+    Symbol* ts = declare(sc, base, tty, call->loc, Symbol::Var, false);
+    ts->owner = p;
+    p->localSyms.push_back(ts);
+    auto fill = std::make_unique<Stmt>();
+    fill->kind = Stmt::Assign;
+    fill->loc = call->loc;
+    auto tgt = std::make_unique<Expr>();
+    tgt->kind = Expr::VarRef;
+    tgt->name = base;
+    tgt->loc = call->loc;
+    fill->target = std::move(tgt);
+    fill->value = std::move(call->args[0]);
+    auto tref = std::make_unique<Expr>();
+    tref->kind = Expr::VarRef;
+    tref->name = base;
+    tref->loc = call->loc;
+    call->args[0] = std::move(tref);
+    dropPendingReduce(call);
+    fills.push_back(std::move(fill));
+  }
+  // The statement becomes a Group of the fills plus the original assignment
+  // (Assign fields only — every other field is default on an Assign node).
+  auto inner = std::make_unique<Stmt>();
+  inner->kind = Stmt::Assign;
+  inner->loc = s->loc;
+  inner->labels = std::move(s->labels);
+  inner->target = std::move(s->target);
+  inner->value = std::move(s->value);
+  inner->extraTargets = std::move(s->extraTargets);
+  inner->byName = s->byName;
+  inner->noSize = s->noSize;
+  inner->noSub = s->noSub;
+  inner->noZdiv = s->noZdiv;
+  s->kind = Stmt::Group;
+  s->byName = false;
+  for (auto& f : fills)
+    s->body.push_back(std::move(f));
+  s->body.push_back(std::move(inner));
+  checkStmt(s, sc, p);
+  return true;
+}
+
+// Backstop (rule (123)): reductions over array expressions only expand in
+// direct assignment; diagnose anything left pending for this procedure.
+void Sema::drainPendingReduces(Proc* p) {
+  for (auto& pr : pendingReduces_)
+    if (pr.owner == p)
+      d_.error(pr.call->loc,
+               pr.call->name + " over an array expression is not implemented in this position in "
+                               "this stage",
+               "(123)");
+  pendingReduces_.erase(std::remove_if(pendingReduces_.begin(), pendingReduces_.end(),
+                                       [&](const PendingReduce& pr) { return pr.owner == p; }),
+                        pendingReduces_.end());
+}
 // Type a built-in function call; return true if `e` is one of the
 // recognised built-ins (typed or diagnosed here). Extracted from the
 // typeExpr Call case so each built-in is a self-contained block.
-bool Sema::typeBuiltin(Expr* e) {
+bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // Names matching none of these are user function procedures and are
   // handled in typeExpr's general function-call path.
   // NULL built-in (rule 123, Appendix 1): yields the null POINTER value.
@@ -3551,27 +3875,46 @@ bool Sema::typeBuiltin(Expr* e) {
     // An unsubscripted array reference, including a qualified structure member
     // array (S.V); a->ty is the resolved array reference type.
     bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
-    if (!isArr) {
-      d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
-      e->ty = Type::voidTy();
+    if (isArr) {
+      const Type& el = a->ty.elementType();
+      if (e->name == "ANY" || e->name == "ALL") {
+        if (!el.isBit()) {
+          d_.error(a->loc, e->name + " requires a BIT array in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = Type::bit(1);
+      } else {
+        if (el.isChar() || !el.isNumeric()) {
+          d_.error(a->loc, e->name + " requires a numeric array in this stage", "(123)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+        e->ty = el;
+      }
       return true;
     }
-    const Type& el = a->ty.elementType();
-    if (e->name == "ANY" || e->name == "ALL") {
-      if (!el.isBit()) {
-        d_.error(a->loc, e->name + " requires a BIT array in this stage", "(123)");
+    // An element-wise expression over whole arrays of one static shape
+    // (rule (123); QR2.1): validated here, expanded to a static temp in
+    // direct assignment, diagnosed at the backstop anywhere else.
+    Type shape;
+    if (reduceArgShapeOk(a, shape)) {
+      if ((e->name == "ANY" || e->name == "ALL") && !a->ty.isBit()) {
+        d_.error(a->loc, e->name + " requires a BIT expression in this stage", "(123)");
         e->ty = Type::voidTy();
         return true;
       }
-      e->ty = Type::bit(1);
-    } else {
-      if (el.isChar() || !el.isNumeric()) {
-        d_.error(a->loc, e->name + " requires a numeric array in this stage", "(123)");
+      if ((e->name == "SUM" || e->name == "PROD") && (a->ty.isChar() || !a->ty.isNumeric())) {
+        d_.error(a->loc, e->name + " requires a numeric expression in this stage", "(123)");
         e->ty = Type::voidTy();
         return true;
       }
-      e->ty = el;
+      pendingReduces_.push_back({e, p});
+      e->ty = (e->name == "ANY" || e->name == "ALL") ? Type::bit(1) : a->ty;
+      return true;
     }
+    d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
+    e->ty = Type::voidTy();
     return true;
   }
   return false;

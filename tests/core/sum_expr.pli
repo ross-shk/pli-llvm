@@ -1,0 +1,43 @@
+ /* Reductions over array expressions (rule (123); QR2.1): SUM and
+    PROD accept an element-wise expression over whole arrays of one
+    static shape; ANY/ALL accept BIT expressions. Each reduction runs
+    over the expression values, as the written loop would. */
+ sum_expr: procedure options(main);
+    declare a(3) fixed bin(31);
+    declare b(3) fixed bin(31);
+    declare f(3) bit(1);
+    declare g(3) bit(1);
+    declare 1 s, 2 v(3) fixed bin(31);
+    declare ssum fixed bin(31);
+    declare sprod fixed bin(31);
+    declare dok bit(1);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    a(1) = 1; a(2) = 2; a(3) = 3;
+    b(1) = 4; b(2) = 5; b(3) = 6;
+    /* the plan form: sum of squares */
+    ssum = sum(a ** 2);
+    if ssum ^= 14 then fails = fails + 1;
+    /* dot-product form, plus nesting in a larger expression */
+    ssum = sum(a * b);
+    if ssum ^= 32 then fails = fails + 1;
+    ssum = sum(a + b) * 2;
+    if ssum ^= 42 then fails = fails + 1;
+    sprod = prod(a + 1);
+    if sprod ^= 24 then fails = fails + 1;
+    /* BIT reductions over BIT expressions */
+    f(1) = '1'b; f(2) = '0'b; f(3) = '1'b;
+    g(1) = '1'b; g(2) = '1'b; g(3) = '0'b;
+    dok = any(f & g);
+    if dok ^= '1'b then fails = fails + 1;
+    dok = all(f & g);
+    if dok ^= '0'b then fails = fails + 1;
+    /* member arrays narrow the same way */
+    s.v(1) = 4; s.v(2) = 5; s.v(3) = 6;
+    ssum = sum(s.v / 2);
+    if ssum ^= 7 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS sum expr');
+    else put skip list('FAIL sum expr: fails =', fails);
+ end sum_expr;

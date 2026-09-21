@@ -383,6 +383,17 @@ std::vector<Token> Lexer::lexAll() {
         t.kind = Tok::Bar;
       }
       break;
+    case '!':
+      // Modern PL/I spells concatenation '||' or '!!' (rule (119)); a lone
+      // '!' is not an operator and keeps the invalid-character diagnostic.
+      bump();
+      if (cur() == '!') {
+        bump();
+        t.kind = Tok::Concat;
+        break;
+      }
+      d_.error(loc, "invalid character '!' in source");
+      continue;
     case '-':
       bump();
       if (cur() == '>') {

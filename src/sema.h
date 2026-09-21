@@ -165,8 +165,36 @@ private:
   const Type* resolveMemberPath(Expr* e, const Type& base);
   // Type a built-in function call (SUBSTR, INDEX, ABS, …). Returns true if
   // `e` is a known built-in (result typed or diagnosed); false otherwise, so
-  // typeExpr can fall through to the general function-call path.
-  bool typeBuiltin(Expr* e);
+  // typeExpr can fall through to the general function-call path. Reductions
+  // over array expressions defer to Assign expansion via pendingReduces_.
+  bool typeBuiltin(Expr* e, Proc* p);
+  // A SUM/PROD/ANY/ALL call over an array expression awaiting expansion in
+  // direct assignment (rule (123)); anything left at processProc end was
+  // never expanded and is diagnosed there.
+  struct PendingReduce {
+    Expr* call = nullptr;
+    Proc* owner = nullptr;
+  };
+  std::vector<PendingReduce> pendingReduces_;
+  // Drop a consumed or diagnosed reduction from the pending list.
+  void dropPendingReduce(Expr* call);
+  // Validate a reduction argument as an element-wise expression: every whole
+  // reference outside calls has an identical static plain-storage shape
+  // (set in shapeOut). Silent: false simply keeps the existing diagnostic.
+  bool reduceArgShapeOk(Expr* e, Type& shape);
+  // Expand pending reductions in an assignment value into a static temp per
+  // call, then check the statement as a Group of the fills plus the original
+  // (whose calls now take the bare temps). Returns true when expanded.
+  bool expandReductionTemps(Stmt* s, Scope* sc, Proc* p);
+  // Backstop (rule (123)): reductions over array expressions only expand in
+  // direct assignment; diagnose anything left pending for this procedure.
+  void drainPendingReduces(Proc* p);
+  // Expand whole-array and cross-section PUT/GET items into element subscript
+  // calls in row-major order (rules (104)-(110)). Static plain-storage
+  // shapes only; anything else is diagnosed with the position's rule.
+  // New nodes are typed here; the caller re-validates. Returns false after
+  // a diagnostic.
+  bool expandAggregateItems(Stmt* s, Scope* sc, Proc* p, bool isGet);
   bool checkAssignable(const Type& dst, const Type& src, SourceLoc loc, const char* what);
   // Struct leaf type of a whole-structure reference (VarRef, top-level or
   // qualified path to a minor structure), or nullptr if it is not a structure.
