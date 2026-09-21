@@ -1,0 +1,12 @@
+ /* Whole-array assignment (rules 86, 127): mismatched shapes, a
+    scalar target for an array value, and array values in multiple
+    assignment stay diagnosed in this stage. */
+ bad_array_expr: procedure options(main);
+    declare a(3) fixed bin(31);
+    declare c(4) fixed bin(31);
+    declare x fixed bin(31);
+    declare y fixed bin(31);
+    c = a;
+    x = a;
+    x, y = a;
+ end bad_array_expr;
