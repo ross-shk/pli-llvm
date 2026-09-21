@@ -9,7 +9,7 @@ guarded by the AGENTS.md builtins silo (other work stays out).
 
 `sema typeBuiltin` (typing + arity/shape checks) → HIR passthrough
 (no per-builtin lowering) → `irgen emitBuiltin` (codegen; inline
-where trivial, else a `pli_*` runtime call) → `runtime/pli_rt.c`
+where trivial, else a `pli_*` runtime call) → `runtime/rt_*.c`
 via `runtime/pli_rt_abi.def`, the single source of truth for the
 `pli_*` ABI. New builtins follow the extension vehicle: ADR +
 test-first (`tests/builtins/`) + diagnostics for unserved forms.

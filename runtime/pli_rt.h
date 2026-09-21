@@ -22,6 +22,8 @@ extern "C" {
 #define CPTR    const char *
 #define PLI_FN(name, ret, args) ret name args;
 
+#include "pli_rt_state.h"
+
 #include "pli_rt_abi.def"
 
 #undef PLI_FN

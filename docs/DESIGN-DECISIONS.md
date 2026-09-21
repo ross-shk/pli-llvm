@@ -3369,3 +3369,34 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   (`fixed(9.9)` is 10), so the test pins 10 rather than C-trunc
   9. `FLOAT`/`DECIMAL`/`BINARY` precision forms and the
   conversion lattice stay later slices.
+
+  ## ADR-132 — Runtime split into category files
+
+  Context. `runtime/pli_rt.c` held the whole libpli (~1350
+  lines, ~134 entry points) in one translation unit: every
+  change touched the same file, and blame/category ownership
+  was by comment only. ADR-079 had rejected a split as churn
+  against active feature work; with the libnet slices landing
+  (BYVALUE, CHAR/FIXED) the file was growing again.
+
+  Decision. Partition the sources by category, mirroring the
+  `examples/builtins` layout: `rt_core` (lifecycle),
+  `rt_stream` (PUT LIST/DATA, DISPLAY), `rt_string`
+  (assign/concat/substr + helpers), `rt_math` (MOD/ROUND +
+  libm wrappers), `rt_cond` (signal, ON stack/ONCODE, traps),
+  `rt_storage` (ALLOCATE/FREE), `rt_get` (list/data input),
+  `rt_file` (named files + RECORD), `rt_edit` (edit-directed
+  I/O), `rt_task` (EVENT/WAIT/DELAY/TASK). `pli_rt.h` +
+  `pli_rt_abi.def` stay the single ABI source; a new
+  `pli_rt_state.h` (included via `pli_rt.h`) owns the shared
+  TU state (SYSPRINT/STRING/FILE statics as `rt_*` with macro
+  aliases) and the intra-runtime helpers, so split sources
+  keep their original identifiers with zero logic changes.
+  Pure code motion: no signature, semantic, or output change.
+
+  Consequences. `Makefile RT_SRCS` lists the ten files (the
+  existing `rt_%.o` pattern rule covers them); `pli_rt.c` is
+  deleted. ADR-079's section/strip machinery is untouched, so
+  binary sizes are unchanged. Verified by full suite green
+  plus byte-identical golden outputs (`edit_col`,
+  `put_array`) and live runs (`conv_cf`, `cbyvalue`).
