@@ -79,7 +79,11 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   case TK::Float:
     return b_.getDoubleTy();
   case TK::Bit:
-    return b_.getInt8Ty();
+    // BIT(1) is a single i8 in storage (`i1` in registers); wider strings
+    // pack big-endian, ceil(n/8) bytes (rule (18), QR2.2).
+    if (t.len == 1)
+      return b_.getInt8Ty();
+    return llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)bitBytes(t.len));
   case TK::Char: {
     if (t.varying) {
       llvm::Type* data = llvm::ArrayType::get(b_.getInt8Ty(), t.len);
@@ -116,6 +120,73 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
     return b_.getVoidTy();
   }
   return b_.getInt32Ty();
+}
+
+std::vector<unsigned char> IRGen::packBitLiteral(const std::string& sval, int nbits) {
+  std::vector<unsigned char> bytes((nbits + 7) / 8, 0);
+  for (int i = 0; i < nbits; ++i) {
+    char c = i < (int)sval.size() ? sval[i] : '0';
+    if (c == '1')
+      bytes[i / 8] |= (unsigned char)(0x80 >> (i % 8));
+  }
+  return bytes;
+}
+
+llvm::Value* IRGen::packBitValue(llvm::Value* agg, int nbits, SourceLoc loc) {
+  if (nbits > 64) {
+    d_.error(loc,
+             "conversion of a BIT string longer than 64 bits to a number is not implemented in "
+             "this stage",
+             "(86)");
+    return i64(0);
+  }
+  int B = bitBytes(nbits);
+  llvm::Value* acc = i64(0);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* byte = b_.CreateExtractValue(agg, (unsigned)k, "pkx");
+    llvm::Value* wide = b_.CreateZExt(byte, b_.getInt64Ty(), "pkw");
+    acc = b_.CreateOr(b_.CreateShl(acc, 8, "pks"), wide, "pka");
+  }
+  // Aggregates are left-justified; the integer value is right-justified.
+  if (int extra = 8 * B - nbits)
+    acc = b_.CreateLShr(acc, (uint64_t)extra, "pkj");
+  return acc;
+}
+
+llvm::Value* IRGen::unpackBitValue(llvm::Value* intval, int nbits, SourceLoc loc) {
+  int B = bitBytes(nbits);
+  llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+  if (nbits > 64) {
+    d_.error(loc,
+             "conversion of a number to a BIT string longer than 64 bits is not implemented in "
+             "this stage",
+             "(86)");
+    return llvm::UndefValue::get(arrTy);
+  }
+  // Left-justify the low nbits before splitting into bytes.
+  if (int extra = 8 * B - nbits)
+    intval = b_.CreateShl(intval, (uint64_t)extra, "upj");
+  llvm::Value* agg = llvm::UndefValue::get(arrTy);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* shifted = b_.CreateLShr(intval, (uint64_t)(8 * (B - 1 - k)), "upsh");
+    llvm::Value* byte = b_.CreateTrunc(shifted, b_.getInt8Ty(), "upb");
+    agg = b_.CreateInsertValue(agg, byte, (unsigned)k, "upi");
+  }
+  return agg;
+}
+
+std::vector<unsigned char> IRGen::packBitInit(const Expr* ini, int nbits) {
+  if (ini && ini->kind == Expr::BitLit)
+    return packBitLiteral(ini->sval, nbits);
+  std::vector<unsigned char> bytes(bitBytes(nbits), 0);
+  if (!ini)
+    return bytes;
+  unsigned long long v = (unsigned long long)(ini->ival != 0 ? ini->ival : (long long)ini->fval);
+  for (int k = (int)bytes.size(); k-- > 0;) {
+    bytes[k] = (unsigned char)(v & 0xFF);
+    v >>= 8;
+  }
+  return bytes;
 }
 
 llvm::Value* IRGen::i32(int v) { return b_.getInt32(v); }
@@ -552,11 +623,15 @@ llvm::Constant* IRGen::scalarInitConstant(const Type& t, const Expr* ini) {
     return llvm::ConstantFP::get(b_.getDoubleTy(), iniNumeric(ini));
   }
   case TK::Bit: {
-    int v = 0;
-    if (ini)
-      v = ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
-                                    : (ini->ival != 0 || ini->fval != 0);
-    return llvm::ConstantInt::get(b_.getInt8Ty(), v);
+    if (t.len == 1) {
+      int v = 0;
+      if (ini)
+        v = ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
+                                      : (ini->ival != 0 || ini->fval != 0);
+      return llvm::ConstantInt::get(b_.getInt8Ty(), v);
+    }
+    std::vector<unsigned char> bytes = packBitInit(ini, t.len);
+    return llvm::ConstantDataArray::get(ctx_, bytes);
   }
   case TK::Task:
     return llvm::ConstantInt::get(b_.getInt32Ty(), 0, true);
@@ -592,10 +667,16 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
   case TK::Float:
     v.reg = flt(iniNumeric(e));
     break;
-  case TK::Bit:
-    v.reg = b_.getInt1(e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
-                                               : (e->ival != 0 || e->fval != 0));
+  case TK::Bit: {
+    if (t.len == 1) {
+      v.reg = b_.getInt1(e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
+                                                 : (e->ival != 0 || e->fval != 0));
+      break;
+    }
+    std::vector<unsigned char> bytes = packBitInit(e, t.len);
+    v.reg = llvm::ConstantDataArray::get(ctx_, bytes);
     break;
+  }
   default: { // Fixed
     long long iv = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
     if (e->kind == Expr::DecLit) {
@@ -852,9 +933,15 @@ void IRGen::emitInitials(HProc* p) {
         break;
       }
       case TK::Bit: {
-        bool one = e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
-                                           : (e->ival != 0 || e->fval != 0);
-        v.reg = b_.getInt1(one);
+        if (item.sym->ty.len == 1) {
+          bool one = e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
+                                             : (e->ival != 0 || e->fval != 0);
+          v.reg = b_.getInt1(one);
+          break;
+        }
+        std::vector<unsigned char> bytes = packBitInit(e, item.sym->ty.len);
+        v.reg = llvm::ConstantDataArray::get(
+            ctx_, llvm::ArrayRef<unsigned char>(bytes.data(), bytes.size()));
         break;
       }
       case TK::Char: {
@@ -3190,7 +3277,9 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     // A complex value (QR2.2/CM5) is the {double,double} struct itself.
     v.cpx = r;
   } else if (ty.isBit()) {
-    v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
+    // BIT(1) travels as i1 in registers; wider strings ride whole as the
+    // packed byte aggregate.
+    v.reg = ty.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
   } else {
     v.reg = r;
   }
@@ -3205,7 +3294,10 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v) {
   }
   llvm::Value* val = v.reg;
   if (ty.isBit()) {
-    val = b_.CreateZExt(val, b_.getInt8Ty(), "z8");
+    if (ty.len == 1)
+      val = b_.CreateZExt(val, b_.getInt8Ty(), "z8");
+    // Wider strings store whole; differing lengths convert before this
+    // (hir emits Convert whenever the bit lengths differ).
   }
   b_.CreateStore(val, addr);
 }
@@ -3256,7 +3348,7 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
                                        dynUb_.count(sym) ? dynUb_[sym] : nullptr,
                                        dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
-  if (el.isBit())
+  if (el.isBit() && el.len == 1)
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
   else
     v.reg = r;
@@ -3378,7 +3470,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   Val sv;
   sv.ty = el;
   llvm::Value* lr = b_.CreateLoad(llvmTy(el), saddr, "csl");
-  sv.reg = el.isBit() ? b_.CreateTrunc(lr, b_.getInt1Ty(), "csb") : lr;
+  sv.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(lr, b_.getInt1Ty(), "csb") : lr;
   llvm::Value* taddr = b_.CreateInBoundsGEP(tgtArrTy, tgtBase, {i64(0), ti}, "cdst");
   storeScalarTo(taddr, el, convert(sv, el, loc));
   branch(stepL);
@@ -3505,15 +3597,57 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   const bool dstBit = dst.isBit();
 
   if (dstBit) {
-    out.reg = toI1(v, loc);
+    if (dst.len == 1) {
+      // BIT(1) keeps truthiness semantics, including numeric sources.
+      out.reg = toI1(v, loc);
+      return out;
+    }
+    if (v.ty.isBit()) {
+      if (v.ty.len == dst.len) {
+        out = v;
+        return out;
+      }
+      // Bit-to-bit copies bytes directly (pad/truncate on the right); an
+      // integer round-trip would destroy string positions.
+      int SB = bitBytes(v.ty.len), DB = bitBytes(dst.len);
+      llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)DB);
+      llvm::Value* agg = llvm::Constant::getNullValue(arrTy);
+      for (int k = 0; k < SB && k < DB; ++k) {
+        llvm::Value* byte = b_.CreateExtractValue(v.reg, (unsigned)k, "bcx");
+        agg = b_.CreateInsertValue(agg, byte, (unsigned)k, "bci");
+      }
+      int keep = dst.len - 8 * (DB - 1);
+      if (keep < 8) {
+        llvm::Value* last = b_.CreateExtractValue(agg, (unsigned)(DB - 1), "bcl");
+        last = b_.CreateAnd(last, b_.getInt8((int8_t)(0xFF << (8 - keep))), "bcm");
+        agg = b_.CreateInsertValue(agg, last, (unsigned)(DB - 1), "bcw");
+      }
+      out.reg = agg;
+      return out;
+    }
+    // An integer source contributes its low bits; a float truncates toward
+    // zero first (range-checked like other float conversions).
+    llvm::Value* iv = nullptr;
+    if (v.ty.k == TK::Float) {
+      floatRangeTrap(v.reg, -9223372036854775808.0, true, 9223372036854775808.0);
+      iv = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "biv");
+    } else if (v.ty.intBits() == 64) {
+      iv = v.reg;
+    } else {
+      iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
+    }
+    out.reg = unpackBitValue(iv, dst.len, loc);
     return out;
   }
-  if (srcBit) { // BIT -> arithmetic
+  if (srcBit) { // BIT -> arithmetic takes the binary value, big-endian
+    llvm::Value* iv = v.ty.len == 1 ? b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv")
+                                    : packBitValue(v.reg, v.ty.len, loc);
     if (dstFloat) {
-      llvm::Value* z = b_.CreateZExt(v.reg, b_.getInt32Ty(), "z");
-      out.reg = b_.CreateSIToFP(z, b_.getDoubleTy(), "cvt");
+      out.reg = b_.CreateSIToFP(iv, b_.getDoubleTy(), "cvt");
+    } else if (llvmTy(dst)->getIntegerBitWidth() == 64) {
+      out.reg = iv;
     } else {
-      out.reg = b_.CreateZExt(v.reg, llvmTy(dst), "cvt");
+      out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
     }
     return out;
   }
@@ -3609,8 +3743,18 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
 }
 
 llvm::Value* IRGen::toI1(const Val& v, SourceLoc loc) {
-  if (v.ty.isBit())
-    return v.reg;
+  if (v.ty.isBit()) {
+    if (v.ty.len == 1)
+      return v.reg;
+    // A wider string is true when any byte is nonzero.
+    llvm::Value* acc = b_.getInt1(false);
+    for (int k = 0, B = bitBytes(v.ty.len); k < B; ++k) {
+      llvm::Value* byte = b_.CreateExtractValue(v.reg, (unsigned)k, "tstx");
+      llvm::Value* nz = b_.CreateICmpNE(byte, b_.getInt8(0), "tstnz");
+      acc = b_.CreateOr(acc, nz, "tstor");
+    }
+    return acc;
+  }
   if (v.ty.k == TK::Float)
     return b_.CreateFCmpUNE(v.reg, flt(0.0), "tst");
   if (v.ty.isNumeric())
@@ -3619,11 +3763,12 @@ llvm::Value* IRGen::toI1(const Val& v, SourceLoc loc) {
   return b_.getInt1(false);
 }
 
-llvm::Value* IRGen::toI64(const Val& v) {
+llvm::Value* IRGen::toI64(const Val& v, SourceLoc loc) {
   if (v.ty.k == TK::Float)
     return b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "i64");
   if (v.ty.isBit())
-    return b_.CreateZExt(v.reg, b_.getInt64Ty(), "i64");
+    return v.ty.len == 1 ? b_.CreateZExt(v.reg, b_.getInt64Ty(), "i64")
+                         : packBitValue(v.reg, v.ty.len, loc);
   if (v.ty.intBits() == 64)
     return v.reg;
   return b_.CreateSExt(v.reg, b_.getInt64Ty(), "i64");
@@ -3675,10 +3820,18 @@ Val IRGen::emitExpr(HExpr* e) {
     v.len = i64(e->sval.size());
     return v;
   }
-  case HExpr::BitLit:
-    v.ty = Type::bit(1);
-    v.reg = b_.getInt1(!e->sval.empty() && e->sval[0] == '1');
+  case HExpr::BitLit: {
+    int n = e->ty.isBit() && e->ty.len > 0 ? e->ty.len : 1;
+    if (n == 1) {
+      v.ty = Type::bit(1);
+      v.reg = b_.getInt1(!e->sval.empty() && e->sval[0] == '1');
+      return v;
+    }
+    std::vector<unsigned char> bytes = packBitLiteral(e->sval, n);
+    v.ty = Type::bit(n);
+    v.reg = llvm::ConstantDataArray::get(ctx_, bytes);
     return v;
+  }
   case HExpr::Star:
     // A '*' is a cross-section axis marker (rule 126); outside a subscript it
     // is not a value. Sema only reaches here through a misused cross-section.
@@ -3713,7 +3866,7 @@ Val IRGen::emitExpr(HExpr* e) {
         const Type& el = e->ty;
         llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "aosld");
         v.ty = el;
-        v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+        v.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
         return v;
       }
       // A subscripted member array S.A(i) (rules 124,126): the member array
@@ -3733,7 +3886,7 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc, ub, lb);
       llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
       v.ty = el;
-      v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+      v.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
     // An iSUB-DEFINED array Y (rule 134) has no storage of its own: Y(k) is a
@@ -3743,7 +3896,7 @@ Val IRGen::emitExpr(HExpr* e) {
       const Type& el = e->ty;
       llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "defl");
       v.ty = el;
-      v.reg = el.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+      v.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
     return loadArrayElement(e->sym, e->args, e->loc);
@@ -3774,7 +3927,7 @@ Val IRGen::emitExpr(HExpr* e) {
         return v;
       }
       llvm::Value* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
-      v.reg = leaf.isBit() ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
+      v.reg = leaf.isBit() && leaf.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
     if (e->ty.isStruct()) {
@@ -3911,6 +4064,26 @@ Val IRGen::emitExpr(HExpr* e) {
   case HExpr::Unary: {
     Val a = emitExpr(e->a.get());
     if (e->op == Tok::Not) {
+      if (a.ty.isBit() && a.ty.len > 1) {
+        // Bitwise NOT over the packed bytes, masking the unused low bits
+        // of the last byte back to zero.
+        int B = bitBytes(a.ty.len);
+        llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+        llvm::Value* out = llvm::UndefValue::get(arrTy);
+        for (int k = 0; k < B; ++k) {
+          llvm::Value* byte = b_.CreateExtractValue(a.reg, (unsigned)k, "notx");
+          llvm::Value* nb = b_.CreateXor(byte, b_.getInt8(-1), "notb");
+          if (k == B - 1) {
+            int keep = a.ty.len - 8 * (B - 1);
+            if (keep < 8)
+              nb = b_.CreateAnd(nb, b_.getInt8((int8_t)(0xFF << (8 - keep))), "notm");
+          }
+          out = b_.CreateInsertValue(out, nb, (unsigned)k, "noti");
+        }
+        v.ty = a.ty;
+        v.reg = out;
+        return v;
+      }
       llvm::Value* bb = toI1(a, e->loc);
       v.ty = Type::bit(1);
       v.reg = b_.CreateXor(bb, b_.getInt1(true), "not");
@@ -3967,8 +4140,29 @@ Val IRGen::emitExpr(HExpr* e) {
 
   if (op == Tok::Amp || op == Tok::Bar) { // rules (116),(115)
     Val a = emitExpr(e->a.get());
-    llvm::Value* ab = toI1(a, e->loc);
     Val b = emitExpr(e->b.get());
+    if (a.ty.isBit() && b.ty.isBit() && (a.ty.len > 1 || b.ty.len > 1)) {
+      // Bitwise logic over packed bytes; sema requires identical lengths.
+      if (a.ty.len != b.ty.len) {
+        d_.error(e->loc, "logical BIT operands must share one length in this stage", "(116)");
+        v.ty = Type::bit(a.ty.len);
+        v.reg = llvm::UndefValue::get(llvm::ArrayType::get(b_.getInt8Ty(), 1));
+        return v;
+      }
+      int B = bitBytes(a.ty.len);
+      llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+      llvm::Value* out = llvm::UndefValue::get(arrTy);
+      for (int k = 0; k < B; ++k) {
+        llvm::Value* x = b_.CreateExtractValue(a.reg, (unsigned)k, "andx");
+        llvm::Value* y = b_.CreateExtractValue(b.reg, (unsigned)k, "andy");
+        llvm::Value* r = op == Tok::Amp ? b_.CreateAnd(x, y, "and") : b_.CreateOr(x, y, "or");
+        out = b_.CreateInsertValue(out, r, (unsigned)k, "andi");
+      }
+      v.ty = a.ty;
+      v.reg = out;
+      return v;
+    }
+    llvm::Value* ab = toI1(a, e->loc);
     llvm::Value* bb = toI1(b, e->loc);
     llvm::Value* r = op == Tok::Amp ? b_.CreateAnd(ab, bb, "and") : b_.CreateOr(ab, bb, "or");
     v.ty = Type::bit(1);

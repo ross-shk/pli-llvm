@@ -1,0 +1,93 @@
+ /* BIT(n>1) string operations (rules (18),(116),(117); QR2.2):
+    packed big-endian bytes; literals pack fully; assignment pads
+    and truncates on the right; logic is byte-wise; conversion to
+    a number takes the binary value. */
+ bitn: procedure options(main);
+    declare b8 bit(8);
+    declare c8 bit(8);
+    declare f16 bit(16);
+    declare e12 bit(12);
+    declare i8 bit(8) init('11001100'b);
+    declare 1 s, 2 v bit(8);
+    declare x fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    /* literals pack all bits, MSB first */
+    b8 = '10101010'b;
+    x = b8;
+    if x ^= 170 then fails = fails + 1;
+    /* same-length copy */
+    c8 = b8;
+    x = c8;
+    if x ^= 170 then fails = fails + 1;
+    /* short literals pad on the right */
+    b8 = '101'b;
+    x = b8;
+    if x ^= 160 then fails = fails + 1;
+    /* long literals truncate on the right */
+    b8 = '111111111'b;
+    x = b8;
+    if x ^= 255 then fails = fails + 1;
+    /* integers convert by value, low bits kept */
+    b8 = 5;
+    x = b8;
+    if x ^= 5 then fails = fails + 1;
+    /* equality and inequality */
+    b8 = '10101010'b;
+    c8 = '10101011'b;
+    if b8 = c8 then fails = fails + 1;
+    if ^(b8 ^= c8) then fails = fails + 1;
+    c8 = b8;
+    if ^(b8 = c8) then fails = fails + 1;
+    /* byte-wise logic */
+    c8 = b8 & '10101011'b;
+    x = c8;
+    if x ^= 170 then fails = fails + 1;
+    c8 = b8 | '10101011'b;
+    x = c8;
+    if x ^= 171 then fails = fails + 1;
+    c8 = ^b8;
+    x = c8;
+    if x ^= 85 then fails = fails + 1;
+    /* multi-byte values pack big-endian */
+    f16 = '1111111111111111'b;
+    x = f16;
+    if x ^= 65535 then fails = fails + 1;
+    b8 = f16;
+    x = b8;
+    if x ^= 255 then fails = fails + 1;
+    /* NOT masks the unused low bits of the last byte */
+    e12 = '111111111111'b;
+    e12 = ^e12;
+    x = e12;
+    if x ^= 0 then fails = fails + 1;
+    /* nonzero bit strings are true conditions */
+    b8 = '00000001'b;
+    if b8 then x = 1;
+    else x = 0;
+    if x ^= 1 then fails = fails + 1;
+    b8 = '00000000'b;
+    if b8 then x = 1;
+    else x = 0;
+    if x ^= 0 then fails = fails + 1;
+    /* INITIAL packs the literal, members address normally */
+    x = i8;
+    if x ^= 204 then fails = fails + 1;
+    s.v = '10101010'b;
+    x = s.v;
+    if x ^= 170 then fails = fails + 1;
+    /* by-reference parameters pass the packed address through */
+    b8 = '11110000'b;
+    x = idb(b8);
+    if x ^= 240 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS bitn');
+    else put skip list('FAIL bitn: fails =', fails);
+ end bitn;
+ idb: procedure(v) returns(fixed bin(31));
+    declare v bit(8);
+    declare y fixed bin(31);
+    y = v;
+    return(y);
+ end idb;

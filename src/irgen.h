@@ -252,7 +252,22 @@ private:
 
   Val convert(const Val& v, const Type& dst, SourceLoc loc);
   llvm::Value* toI1(const Val& v, SourceLoc loc);
-  llvm::Value* toI64(const Val& v);
+  llvm::Value* toI64(const Val& v, SourceLoc loc = SourceLoc{});
+  // Packed BIT(n) layout (rule (18), QR2.2): big-endian bytes, the first
+  // character in the top bit of byte 0, unused low bits of the last byte
+  // zero. Bytes of a BIT(1); [ceil(n/8) x i8] above.
+  static int bitBytes(int nbits) { return (nbits + 7) / 8; }
+  // Pack a [B x i8] aggregate (nbits <= 64) big-endian into an i64; anything
+  // wider is diagnosed, never silently truncated.
+  llvm::Value* packBitValue(llvm::Value* agg, int nbits, SourceLoc loc);
+  // Unpack an integer's low nbits big-endian into a [B x i8] aggregate.
+  llvm::Value* unpackBitValue(llvm::Value* intval, int nbits, SourceLoc loc);
+  // Pack a bit-string literal (characters '0'/'1') into bytes, padding and
+  // truncating on the right to nbits.
+  static std::vector<unsigned char> packBitLiteral(const std::string& sval, int nbits);
+  // Bytes for an INITIAL value: a bit literal packs directly, anything else
+  // contributes its integer value low-bits-first big-endian (zero when absent).
+  static std::vector<unsigned char> packBitInit(const Expr* ini, int nbits);
   Val charTemp(int len); // alloca [len x i8]
   Val charOf(HExpr* e);  // materialise a character value
   // FIXED BINARY checked +,-,* (QR1.2): overflow traps to the SIZE path

@@ -1,8 +1,0 @@
- /* Diagnostic test: BIT(n) with n > 1 is not implemented in this stage;
-    only BIT(1) is served. It must be rejected with a citation of rule (18),
-    never silently miscompiled (invariant 2). */
- BADBITLEN: PROCEDURE OPTIONS(MAIN);
-    DECLARE X BIT(8);
-    X = '10101010'B;
-    PUT SKIP LIST('unreachable');
- END BADBITLEN;

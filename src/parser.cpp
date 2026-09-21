@@ -436,6 +436,13 @@ void Parser::parseProcOptions(Proc* p) {
           advance();
         } else {
           parseDescriptorType(p->retTy); // result type from the attribute words
+          if (p->retTy.isBit() && p->retTy.len > 1) {
+            // Function results ride in i8 registers below; never declare a
+            // wide bit result that codegen would mistarget (invariant 2).
+            d_.error(p->loc, "RETURNS of a BIT(n>1) value is not implemented in this stage",
+                     "(34)");
+            p->retTy = Type::bit(1);
+          }
         }
         expect(Tok::RParen, "(34)");
       }
@@ -1602,14 +1609,6 @@ void Parser::parseDeclTail(DeclItem& item) {
     item.ty = Type::bit(n);
     if (bag.starLen)
       d_.error(item.loc, "a '*' string length is not implemented in this stage", "(18)");
-    if (n != 1) {
-      // Only BIT(1) is served; arbitrary-length bit strings are M2. Never
-      // silently miscompile a wider bit value as a single bit (invariant 2).
-      d_.error(item.loc,
-               "BIT(" + std::to_string(n) + ") is not implemented in this stage; only BIT(1)",
-               "(18)");
-      item.ty = Type::bit(1);
-    }
   } else if (bag.floating) {
     item.ty = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
   } else {
@@ -1621,6 +1620,11 @@ void Parser::parseDeclTail(DeclItem& item) {
       item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   }
   item.ty.dims = arrDims;
+  if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
+    // Element access assumes single-bit storage below; never lay out a wide
+    // bit array that codegen would mistarget (invariant 2).
+    d_.error(item.loc, "arrays of BIT(n>1) are not implemented in this stage", "(12)");
+  }
   item.dynBounds = std::move(arrDyn);
   item.dynLbBounds = std::move(arrDynLb);
   item.init = std::move(init);

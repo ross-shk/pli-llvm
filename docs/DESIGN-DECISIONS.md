@@ -3205,3 +3205,34 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   Consequences. `concat_bang.pli` runs (single and chained `!!`);
   `bad_bang.pli` pins the lone-`!` rejection. Quad `1.0q0`
   literals and `BIT(n>1)` storage stay later slices.
+
+  ## ADR-126 — Packed BIT(n) strings, big-endian bytes
+
+  Context. Only `BIT(1)` was served (held as `i8`, `i1` in
+  registers); wider strings were rejected at declaration, and the
+  literal, conversion, logic, and `INITIAL` paths read just the
+  first character. The corpus (B4) needs `BIT(8/16/32)`.
+
+  Decision. A `BIT(n)` stores `[ceil(n/8) x i8]` (BIT(1) keeps its
+  exact layout), big-endian bits: the first character in the top
+  bit of byte 0, unused low bits of the last byte zero. Literals
+  pack fully; assignment pads and truncates on the right (string
+  semantics); `&`/`|`/`¬` map over bytes with last-byte masking;
+  `=`/`^=` and ordering ride the existing integer comparison
+  through a big-endian pack; numeric conversion takes the binary
+  value (low bits into `BIT`, pack out of it); conditions
+  OR-reduce bytes. `BIT(1)` keeps legacy truthiness conversions
+  rather than risking its served paths; conversions beyond 64
+  bits are diagnosed. Only HIR's `convIf` rule needed a length
+  clause — differing bit lengths now emit `Convert`.
+
+  Consequences. `bitn.pli` runs (literals, copy, pad/truncate,
+  conversions, logic, comparisons, multi-byte, masking,
+  `INITIAL`, members, by-reference parameters);
+  `bad_bitn.pli`/`bad_bitn_array.pli` pin mixed-length logic,
+  stream items, and wide arrays; `bad_bitlen.pli` is deleted,
+  superseded. Two latent crashes fixed along the way: HIR
+  converted member stores to the base struct type (now the leaf),
+  and member/element/cross loads assumed single-bit storage.
+  Wide arrays, stream items, wide reductions, function results,
+  and descriptors stay later slices.

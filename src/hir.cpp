@@ -19,6 +19,10 @@ namespace {
 bool convRequired(const Type& src, const Type& dst) {
   if (src.isBit() != dst.isBit())
     return true;
+  // Bit strings of differing lengths convert (pad/truncate on the right);
+  // identical layouts ride through unchanged.
+  if (src.isBit() && dst.isBit() && src.len != dst.len)
+    return true;
   if ((src.k == TK::Float) != (dst.k == TK::Float))
     return true;
   if (src.isNumeric() && dst.isNumeric() && src.k != TK::Float && dst.k != TK::Float)
@@ -281,9 +285,13 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   // Statement-level conversions that IRGen applies inline, made explicit.
   switch (h->kind) {
   case HStmt::Assign:
-    if (s->target && s->target->kind == Expr::VarRef && s->target->sym)
-      h->value = convIf(lowerExpr(s->value.get()), s->target->sym->ty);
-    else if (s->target && s->target->kind == Expr::Subscript && s->target->sym)
+    if (s->target && s->target->kind == Expr::VarRef && s->target->sym) {
+      // A qualified member target converts to the leaf member type (rule
+      // 124), not the base structure type (which misdirected bit and float
+      // values into a struct conversion).
+      const Type& dst = s->target->memberPath.empty() ? s->target->sym->ty : s->target->ty;
+      h->value = convIf(lowerExpr(s->value.get()), dst);
+    } else if (s->target && s->target->kind == Expr::Subscript && s->target->sym)
       // Array element target: convert to the element type (rule 126).
       h->value = convIf(lowerExpr(s->value.get()), s->target->ty);
     else

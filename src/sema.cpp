@@ -2247,6 +2247,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     for (auto& it : s->items) {
       if (it->ty.isVoid())
         d_.error(it->loc, "invalid data list item", "(110)");
+      else if (it->ty.isBit() && it->ty.len > 1)
+        d_.error(it->loc, "PUT LIST of a BIT(n>1) value is not implemented in this stage", "(110)");
     }
     break;
   }
@@ -2295,6 +2297,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       checkValueTarget(it.get()); // VALUE constants cannot receive values (ADR-108)
       if (it->ty.isVoid()) {
         d_.error(it->loc, "invalid data list item", "(110)");
+        continue;
+      }
+      if (it->ty.isBit() && it->ty.len > 1) {
+        d_.error(it->loc, "GET LIST of a BIT(n>1) value is not implemented in this stage", "(110)");
         continue;
       }
       if (it->ty.isStruct()) {
@@ -2517,6 +2523,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     typeExpr(s->value.get(), sc, p);
     if (s->value && (s->value->ty.isArray() || s->value->ty.isStruct()))
       d_.error(s->loc, "DISPLAY takes a scalar value", "(114)");
+    else if (s->value && s->value->ty.isBit() && s->value->ty.len > 1)
+      d_.error(s->loc, "DISPLAY of a BIT(n>1) value is not implemented in this stage", "(114)");
     break;
   }
   case Stmt::Read: {
@@ -3058,7 +3066,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     if (e->op == Tok::Not) {
       if (!t.isBit() && !t.isNumeric())
         d_.error(e->loc, "operand of NOT must be a bit or arithmetic value", "(122)");
-      e->ty = Type::bit(1);
+      // NOT of a bit string is the string itself complemented (rule (122)).
+      e->ty = t.isBit() ? Type::bit(t.len) : Type::bit(1);
     } else {
       if (!t.isNumeric()) {
         d_.error(e->loc, "operand of unary '-' must be arithmetic, found " + t.desc(), "(122)");
@@ -3132,9 +3141,19 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       break;
     case Tok::Amp:
     case Tok::Bar:
-      if ((!A.isBit() && !A.isNumeric()) || (!B.isBit() && !B.isNumeric()))
+      if ((!A.isBit() && !A.isNumeric()) || (!B.isBit() && !B.isNumeric())) {
         d_.error(e->loc, "logical operator requires bit operands", "(116)");
-      e->ty = Type::bit(1);
+        e->ty = Type::bit(1);
+      } else if ((A.isBit() && A.len > 1) || (B.isBit() && B.len > 1)) {
+        // Wide strings operate byte-wise (rule (116)); mixing lengths or
+        // kinds stays diagnosed while padding rules are out of scope.
+        if (!(A.isBit() && B.isBit()) || A.len != B.len)
+          d_.error(e->loc, "logical operators require identical BIT lengths in this stage",
+                   "(116)");
+        e->ty = Type::bit(A.isBit() ? A.len : B.len);
+      } else {
+        e->ty = Type::bit(1);
+      }
       break;
     case Tok::Eq:
     case Tok::Ne:
@@ -3877,6 +3896,13 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
     if (isArr) {
       const Type& el = a->ty.elementType();
+      // Reduction accumulators hold single bits; wider elements stay out.
+      if (el.isBit() && el.len > 1) {
+        d_.error(a->loc, e->name + " over a BIT(n>1) array is not implemented in this stage",
+                 "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
       if (e->name == "ANY" || e->name == "ALL") {
         if (!el.isBit()) {
           d_.error(a->loc, e->name + " requires a BIT array in this stage", "(123)");
