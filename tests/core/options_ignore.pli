@@ -1,0 +1,6 @@
+ /* rules (5): OPTIONS() carries implementation-defined
+    external-options; REORDER/REENTRANT/NOEXECOPS are
+    accepted and ignored, MAIN still takes effect. */
+ optignore: procedure options(main, reorder, reentrant, noexecops);
+   put skip list('PASS');
+ end optignore;
