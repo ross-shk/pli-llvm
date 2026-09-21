@@ -175,6 +175,27 @@ private:
   // same-named, assignable member in `src` (recursively); names absent from
   // either side are skipped, so the layouts need not match.
   void checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc);
+  // Check an iterative DO group (rule 71): resolve the control variable,
+  // type the bounds, then check the body with loop bookkeeping.
+  void checkDoIter(Stmt* s, Scope* sc, Proc* p);
+  // Plain whole-array storage a DO desugar can address (rule 86): a variable
+  // with its own storage (static or dynamic bounds); parameters, DEFINED
+  // overlays, BASED storage, and dynamic members are excluded.
+  bool wholeArrayStorageOk(Expr* e);
+  // True when an expression tree contains a whole-array reference that
+  // element-wise rewriting would expand (references under a Call keep their
+  // whole form and do not count); cross-section values always count.
+  bool valueHasWholeArrayRef(Expr* e, bool underCall);
+  // Rewrite whole-array VarRef uses to subscript calls over `idx` (all must
+  // match `shape`); references under a Call keep their whole form, and a
+  // nested cross-section is diagnosed. Returns false after a diagnostic.
+  bool rewriteWholeArrayRefs(ExprP& e, const std::vector<std::string>& idx, const Type& shape,
+                             bool underCall);
+  // Whole-array expressions (rules 86, 127; QR2.1): rewrite `T = <array
+  // expression>` into explicit DO loops over the target's axes. Returns
+  // true when rewritten (the caller then checks it as a DO group), false
+  // after diagnosing an unsupported shape or storage combination.
+  bool expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p);
   // Fold an INITIAL constant expression (rule 26) to a literal, negating a
   // leading unary minus; returns the folded literal, or nullptr after a
   // diagnostic when it is not a literal or not assignable to `ty`.

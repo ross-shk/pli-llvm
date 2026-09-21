@@ -3103,3 +3103,34 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   same minor structure); `bad_like_qualified.pli` pins the three
   diagnostics. `LIKE` with a dimension on the item and the extend
   form stay out as before.
+
+  ## ADR-122 — Whole-array expressions desugar to DO loops
+
+  Context. Sema accepted whole-array assignment through the scalar
+  `isNumeric` hole (dims ignored), but codegen only lowered the first
+  element: `a = 5` printed `5 2 3`, dynamic `d = e` printed `5 0 0`,
+  and `b = a / 2` aborted the compiler. Rules (86),(127) want
+  element-wise semantics (the Plasma `QG = QG / 2` form).
+
+  Decision. Sema rewrites `T = <array expression>` into explicit
+  `DO` loops over the target's axes with fresh `PLI$WAk` indices
+  (pre-declared `FIXED BIN(31,0)` so no implicit warning fires).
+  Bounds are constants for static axes and live `LBOUND`/`HBOUND`
+  for a dynamic first axis (the only dynamic axis in this stage), so
+  a source/target extent mismatch traps through the ordinary
+  per-element `SUBSCRIPTRANGE` checks. Whole references outside
+  calls become subscripts typed by the existing `Call`
+  reclassification; reductions (`SUM`) and array-parameter calls
+  keep their whole form and evaluate per iteration, exactly as the
+  written loop would. Identical static plain copies and scalar
+  broadcasts keep riding the existing paths. Shape mismatches, a
+  scalar target for an array value, array involvement in multiple
+  assignment, and parameters/`DEFINED`/`BASED`/dynamic-member
+  storage are diagnosed with (86) (nested cross-sections with
+  (126)).
+
+  Consequences. `array_expr.pli` runs (scalar/array/unary/in-place/
+  multi-axis/`**`/reduction/member-dynamism-free/dynamic forms);
+  `bad_array_expr.pli` pins the three diagnostics. Array-valued
+  `SUM(expr)` reductions, whole-row `PUT EDIT`, adjustable autos,
+  and multi-dim `CONTROLLED` allocation stay later slices.

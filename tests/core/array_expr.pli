@@ -1,0 +1,60 @@
+ /* Whole-array expressions (rules 86, 127; QR2.1): an assignment
+    whose value combines whole arrays evaluates element-wise, as the
+    written DO loop would; reductions keep their whole form inside.
+    Dynamic extents loop over live bounds, so copies own storage. */
+ array_expr: procedure options(main);
+    declare a(3) fixed bin(31);
+    declare b(3) fixed bin(31);
+    declare c(3) fixed bin(31);
+    declare m(2, 2) fixed bin(31);
+    declare n(2, 2) fixed bin(31);
+    declare 1 s, 2 v(3) fixed bin(31);
+    declare 1 u, 2 w(3) fixed bin(31);
+    declare q fixed bin(31) init(3);
+    declare d(q) fixed bin(31);
+    declare e(q) fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    a(1) = 4; a(2) = 6; a(3) = 8;
+    b(1) = 1; b(2) = 2; b(3) = 3;
+    /* the Plasma form: array scaled by a scalar */
+    c = a / 2;
+    if c(1) ^= 2 or c(2) ^= 3 or c(3) ^= 4 then fails = fails + 1;
+    /* scalar and array operands in any order, plus unary */
+    c = a + 10;
+    if c(1) ^= 14 or c(2) ^= 16 or c(3) ^= 18 then fails = fails + 1;
+    c = 100 - b;
+    if c(1) ^= 99 or c(2) ^= 98 or c(3) ^= 97 then fails = fails + 1;
+    c = a + b;
+    if c(1) ^= 5 or c(2) ^= 8 or c(3) ^= 11 then fails = fails + 1;
+    c = -b;
+    if c(1) ^= -1 or c(2) ^= -2 or c(3) ^= -3 then fails = fails + 1;
+    /* in-place update reads each element before writing it */
+    a = a / 2;
+    if a(1) ^= 2 or a(2) ^= 3 or a(3) ^= 4 then fails = fails + 1;
+    /* multi-axis */
+    m(1, 1) = 1; m(1, 2) = 2; m(2, 1) = 3; m(2, 2) = 4;
+    n = m * 2;
+    if n(1, 1) ^= 2 or n(1, 2) ^= 4 then fails = fails + 1;
+    if n(2, 1) ^= 6 or n(2, 2) ^= 8 then fails = fails + 1;
+    /* any scalar lowering works per element, reductions stay whole */
+    a(1) = 2; a(2) = 3; a(3) = 4;
+    c = a ** 2;
+    if c(1) ^= 4 or c(2) ^= 9 or c(3) ^= 16 then fails = fails + 1;
+    c = sum(a) + b;
+    if c(1) ^= 10 or c(2) ^= 11 or c(3) ^= 12 then fails = fails + 1;
+    /* member arrays narrow the same way */
+    s.v(1) = 4; s.v(2) = 5; s.v(3) = 6;
+    u.w = s.v + 1;
+    if u.w(1) ^= 5 or u.w(2) ^= 6 or u.w(3) ^= 7 then fails = fails + 1;
+    /* dynamic extents loop over live bounds, copies included */
+    e(1) = 5; e(2) = 6; e(3) = 7;
+    d = e * 2;
+    if d(1) ^= 10 or d(2) ^= 12 or d(3) ^= 14 then fails = fails + 1;
+    d = e;
+    if d(1) ^= 5 or d(2) ^= 6 or d(3) ^= 7 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS array expr');
+    else put skip list('FAIL array expr: fails =', fails);
+ end array_expr;

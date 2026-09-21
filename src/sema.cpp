@@ -1589,6 +1589,277 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   return key;
 }
 
+// Whole-array expressions (rules 86, 127; QR2.1): storage a DO desugar can
+// address — a variable with its own storage. Parameters (hidden extents),
+// DEFINED overlays, BASED storage, and dynamic structure members stay
+// diagnosed in this stage.
+bool Sema::wholeArrayStorageOk(Expr* e) {
+  Symbol* s = e->sym;
+  if (!s || s->kind != Symbol::Var || s->definedBase || s->basedBase)
+    return false;
+  if (!e->memberPath.empty() && e->ty.isDynamic())
+    return false;
+  return true;
+}
+
+// Pure predicate matching what rewriteWholeArrayRefs would expand: a
+// whole-array VarRef outside any Call, or a cross-section value anywhere.
+// Served reductions and array-parameter calls keep their whole form.
+bool Sema::valueHasWholeArrayRef(Expr* e, bool underCall) {
+  if (!e)
+    return false;
+  if (e->kind == Expr::VarRef && e->ty.isArray())
+    return !underCall;
+  if (e->kind == Expr::Subscript && e->ty.isArray())
+    return true;
+  if (e->kind == Expr::Call) {
+    for (auto& a : e->args)
+      if (valueHasWholeArrayRef(a.get(), true))
+        return true;
+    return false;
+  }
+  if (e->kind == Expr::Binary)
+    return valueHasWholeArrayRef(e->a.get(), underCall) ||
+           valueHasWholeArrayRef(e->b.get(), underCall);
+  if (e->kind == Expr::Unary)
+    return valueHasWholeArrayRef(e->a.get(), underCall);
+  if (e->kind == Expr::Subscript) {
+    for (auto& a : e->args)
+      if (valueHasWholeArrayRef(a.get(), underCall))
+        return true;
+    return false;
+  }
+  return false;
+}
+
+// Rewrite whole-array VarRef uses to subscript calls over the index names.
+// References under a Call keep their whole form (served reductions and
+// array-parameter calls consume whole arrays); a nested cross-section value
+// has no element-wise form here and is diagnosed. Returns false after a
+// diagnostic.
+bool Sema::rewriteWholeArrayRefs(ExprP& e, const std::vector<std::string>& idx, const Type& shape,
+                                 bool underCall) {
+  if (!e)
+    return true;
+  if (e->kind == Expr::VarRef && e->ty.isArray()) {
+    if (underCall)
+      return true;
+    if (!(e->ty == shape)) {
+      d_.error(e->loc, "whole-array assignment requires identical array shapes in this stage",
+               "(86)");
+      return false;
+    }
+    if (!wholeArrayStorageOk(e.get())) {
+      d_.error(e->loc,
+               "whole-array assignment of parameters, DEFINED overlays, BASED storage, or "
+               "dynamic members is not implemented in this stage",
+               "(86)");
+      return false;
+    }
+    auto sub = std::make_unique<Expr>();
+    sub->kind = Expr::Call;
+    sub->name = e->name;
+    sub->path = e->path;
+    sub->loc = e->loc;
+    for (const std::string& in : idx) {
+      auto a = std::make_unique<Expr>();
+      a->kind = Expr::VarRef;
+      a->name = in;
+      a->loc = e->loc;
+      sub->args.push_back(std::move(a));
+    }
+    e = std::move(sub);
+    return true;
+  }
+  if (e->kind == Expr::Subscript && e->ty.isArray()) {
+    d_.error(e->loc, "a cross-section inside an array expression is not implemented in this stage",
+             "(126)");
+    return false;
+  }
+  if (e->kind == Expr::Call) {
+    for (auto& a : e->args)
+      if (!rewriteWholeArrayRefs(a, idx, shape, true))
+        return false;
+    return true;
+  }
+  if (e->kind == Expr::Binary)
+    return rewriteWholeArrayRefs(e->a, idx, shape, underCall) &&
+           rewriteWholeArrayRefs(e->b, idx, shape, underCall);
+  if (e->kind == Expr::Unary)
+    return rewriteWholeArrayRefs(e->a, idx, shape, underCall);
+  if (e->kind == Expr::Subscript) {
+    for (auto& a : e->args)
+      if (!rewriteWholeArrayRefs(a, idx, shape, underCall))
+        return false;
+    return true;
+  }
+  return true;
+}
+
+// Expand `T = <array expression>` into explicit DO loops over the target's
+// axes (rules 86, 127). The loops carry live bounds, so dynamic extents work
+// and a source/target extent mismatch traps through the per-element
+// SUBSCRIPTRANGE checks; scalar subexpressions evaluate per iteration, as the
+// written loop would. Returns true when rewritten (the caller then checks the
+// statement as a DO group), false otherwise: identical static plain shapes
+// and scalar broadcasts ride the existing paths, anything unsupported is
+// diagnosed here.
+bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
+  Expr* t = s->target.get();
+  Expr* v = s->value.get();
+  // A scalar target for an array-valued source mixes ranks (rule 86).
+  // The gate only routes here when the value carries a whole-array
+  // reference, so this always diagnoses.
+  if (!t->ty.isArray()) {
+    d_.error(s->loc, "cannot assign an array value to a scalar variable in this stage", "(86)");
+    return false;
+  }
+  // Identical static plain shapes ride the aggregate-copy path below.
+  if (v->kind == Expr::VarRef && v->ty.isArray() && v->ty == t->ty && t->memberPath.empty() &&
+      v->memberPath.empty() && !t->ty.isDynamic() && wholeArrayStorageOk(t) &&
+      wholeArrayStorageOk(v))
+    return false;
+  const size_t n = t->ty.dims.size();
+  // Axes past the first are always static in this stage; guard anyway since a
+  // live-bound loop over one would read the wrong axis.
+  for (size_t k = 1; k < n; ++k)
+    if (t->ty.dims[k].dyn || t->ty.dims[k].lbDyn) {
+      d_.error(s->loc,
+               "whole-array assignment over a dynamic non-first axis is not implemented in this "
+               "stage",
+               "(13)");
+      return false;
+    }
+  if (!wholeArrayStorageOk(t)) {
+    d_.error(s->loc,
+             "whole-array assignment of parameters, DEFINED overlays, BASED storage, or dynamic "
+             "members is not implemented in this stage",
+             "(86)");
+    return false;
+  }
+  // Fresh index per axis, pre-declared so no implicit-declaration warning fires.
+  std::vector<std::string> idx(n);
+  for (size_t k = 0; k < n; ++k) {
+    std::string base = "PLI$WA" + std::to_string(k);
+    while (lookup(sc, base))
+      base += "X";
+    idx[k] = base;
+    Symbol* is = declare(sc, base, Type::fixedBin(31, 0), s->loc, Symbol::Var, false);
+    is->owner = p;
+    p->localSyms.push_back(is);
+  }
+  // Rewrite the value tree first: every whole reference becomes a subscript
+  // over the fresh indices (mismatches diagnosed inside).
+  if (!rewriteWholeArrayRefs(s->value, idx, t->ty, false))
+    return false;
+  // One bound expression per axis: constants for static axes, live
+  // LBOUND/HBOUND for a dynamic first axis.
+  auto boundExpr = [&](size_t k, bool upper) -> ExprP {
+    const Dim& d = t->ty.dims[k];
+    if (!d.dyn && !d.lbDyn) {
+      auto e = std::make_unique<Expr>();
+      e->kind = Expr::IntLit;
+      e->ival = upper ? d.ub : d.lb;
+      e->loc = s->loc;
+      return e;
+    }
+    auto e = std::make_unique<Expr>();
+    e->kind = Expr::Call;
+    e->name = upper ? "HBOUND" : "LBOUND";
+    e->loc = s->loc;
+    auto a = std::make_unique<Expr>();
+    a->kind = Expr::VarRef;
+    a->name = t->name;
+    a->path = t->path;
+    a->loc = s->loc;
+    e->args.push_back(std::move(a));
+    return e;
+  };
+  // The inner assignment assigns one element from the rewritten value.
+  auto inner = std::make_unique<Stmt>();
+  inner->kind = Stmt::Assign;
+  inner->loc = s->loc;
+  inner->noSize = s->noSize;
+  inner->noSub = s->noSub;
+  inner->noZdiv = s->noZdiv;
+  {
+    auto tgt = std::make_unique<Expr>();
+    tgt->kind = Expr::Call;
+    tgt->name = t->name;
+    tgt->path = t->path;
+    tgt->loc = t->loc;
+    for (const std::string& in : idx) {
+      auto a = std::make_unique<Expr>();
+      a->kind = Expr::VarRef;
+      a->name = in;
+      a->loc = t->loc;
+      tgt->args.push_back(std::move(a));
+    }
+    inner->target = std::move(tgt);
+  }
+  inner->value = std::move(s->value);
+  // Nest one DO loop per axis around it, outermost first.
+  StmtP body = std::move(inner);
+  for (size_t k = n; k-- > 0;) {
+    auto loop = std::make_unique<Stmt>();
+    loop->kind = Stmt::DoIter;
+    loop->loc = s->loc;
+    loop->name = idx[k];
+    loop->from = boundExpr(k, false);
+    loop->to = boundExpr(k, true);
+    loop->body.push_back(std::move(body));
+    body = std::move(loop);
+  }
+  // The statement becomes its outermost loop; the caller checks it as one.
+  StmtP outer = std::move(body);
+  s->kind = Stmt::DoIter;
+  s->name = std::move(outer->name);
+  s->from = std::move(outer->from);
+  s->to = std::move(outer->to);
+  s->by = std::move(outer->by);
+  s->cond = std::move(outer->cond);
+  s->body = std::move(outer->body);
+  s->target.reset();
+  s->value.reset();
+  s->byName = false;
+  return true;
+}
+
+void Sema::checkDoIter(Stmt* s, Scope* sc, Proc* p) {
+  Symbol* sym = lookup(sc, s->name);
+  if (!sym) {
+    sym = implicitDeclare(sc, s->name, s->loc, false);
+    sym->owner = p;
+    p->localSyms.push_back(sym); // implicit vars are AUTOMATIC storage
+  }
+  s->sym = sym;
+  if (sym->isValue)
+    d_.error(s->loc,
+             "cannot assign to the VALUE constant '" + sym->name +
+                 "' as a DO control variable (ADR-108)",
+             "");
+  if (!sym->ty.isNumeric())
+    d_.error(s->loc, "DO control variable must be arithmetic, found " + sym->ty.desc(), "(72)");
+  // A scaled FIXED control variable would miscompile the loop step and
+  // comparison at the scaled representation (invariant 2).
+  if (sym->ty.isFixed() && sym->ty.scale != 0)
+    d_.error(s->loc, "a scaled FIXED DO control variable is not implemented in this stage",
+             "(16)");
+  typeExpr(s->from.get(), sc, p);
+  typeExpr(s->to.get(), sc, p);
+  typeExpr(s->by.get(), sc, p);
+  typeExpr(s->cond.get(), sc, p);
+  Stmt* save = curEntry_;
+  loopStack_.push_back(s->labels);
+  for (auto& b : s->body) {
+    if (b && b->kind == Stmt::Entry)
+      curEntry_ = b.get();
+    checkStmt(b.get(), sc, p);
+  }
+  loopStack_.pop_back();
+  curEntry_ = save;
+}
+
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   if (!s)
     return;
@@ -1650,6 +1921,25 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       bool ok = checkOne(s->target.get());
       for (auto& t : s->extraTargets)
         ok = checkOne(t.get()) && ok;
+      // Whole arrays in a multiple-assignment list stay diagnosed (rule 86):
+      // neither an array target nor an array-valued source has an element-wise
+      // form here.
+      if (s->value->ty.isArray() || valueHasWholeArrayRef(s->value.get(), false)) {
+        ok = false;
+        d_.error(s->value->loc,
+                 "multiple assignment of an array value is not implemented in this stage", "(86)");
+      }
+      if (s->target->ty.isArray()) {
+        ok = false;
+        d_.error(s->target->loc,
+                 "multiple assignment to a whole array is not implemented in this stage", "(86)");
+      }
+      for (auto& t : s->extraTargets)
+        if (t->ty.isArray()) {
+          ok = false;
+          d_.error(t->loc, "multiple assignment to a whole array is not implemented in this stage",
+                   "(86)");
+        }
       if (ok && !s->target->ty.isVoid()) {
         for (auto& t : s->extraTargets)
           if (!(t->ty == s->target->ty))
@@ -1709,6 +1999,17 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         break;
       }
     }
+    // Whole-array assignment (rules 86, 127; QR2.1): a whole-array target or
+    // an array-valued source expands to explicit DO loops. Identical static
+    // plain copies and scalar broadcasts ride the path below; anything
+    // unsupported is diagnosed inside. Root cross-sections were claimed by
+    // the block above, so they never reach the expander.
+    if (s->target->kind == Expr::VarRef &&
+        (s->target->ty.isArray() || valueHasWholeArrayRef(s->value.get(), false))) {
+      if (expandWholeArrayAssign(s, sc, p))
+        checkDoIter(s, sc, p);
+      break;
+    }
     if (!s->value->ty.isVoid() && !s->target->ty.isVoid())
       checkAssignable(s->target->ty, s->value->ty, s->loc, "assignment");
     break;
@@ -1759,38 +2060,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   }
   case Stmt::DoIter: {
-    Symbol* sym = lookup(sc, s->name);
-    if (!sym) {
-      sym = implicitDeclare(sc, s->name, s->loc, false);
-      sym->owner = p;
-      p->localSyms.push_back(sym); // implicit vars are AUTOMATIC storage
-    }
-    s->sym = sym;
-    if (sym->isValue)
-      d_.error(s->loc,
-               "cannot assign to the VALUE constant '" + sym->name +
-                   "' as a DO control variable (ADR-108)",
-               "");
-    if (!sym->ty.isNumeric())
-      d_.error(s->loc, "DO control variable must be arithmetic, found " + sym->ty.desc(), "(72)");
-    // A scaled FIXED control variable would miscompile the loop step and
-    // comparison at the scaled representation (invariant 2).
-    if (sym->ty.isFixed() && sym->ty.scale != 0)
-      d_.error(s->loc, "a scaled FIXED DO control variable is not implemented in this stage",
-               "(16)");
-    typeExpr(s->from.get(), sc, p);
-    typeExpr(s->to.get(), sc, p);
-    typeExpr(s->by.get(), sc, p);
-    typeExpr(s->cond.get(), sc, p);
-    Stmt* save = curEntry_;
-    loopStack_.push_back(s->labels);
-    for (auto& b : s->body) {
-      if (b && b->kind == Stmt::Entry)
-        curEntry_ = b.get();
-      checkStmt(b.get(), sc, p);
-    }
-    loopStack_.pop_back();
-    curEntry_ = save;
+    checkDoIter(s, sc, p);
     break;
   }
   case Stmt::Put: {
