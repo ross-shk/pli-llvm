@@ -3285,3 +3285,25 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   negative counts. Dynamic counts, `R()` remote formats, a
   standalone `FORMAT` statement, and iterative data lists stay
   later slices.
+
+  ## ADR-129 — SIGNAL stores SET ONCODE before dispatch
+
+  Context. libnet signals every error path as `SIGNAL
+  CONDITION(neterror) SET ONCODE(c_get_errno())`, but `SIGNAL`
+  took no code expression: only `SIGNAL ERROR` touched `ONCODE`
+  (fixed 1/0), so errno-style codes never reached handlers.
+
+  Decision. Parse an optional `SET ONCODE(expr)` on `SIGNAL`
+  (carried as a statement field through HIR, printed by
+  `--print-hir`); sema requires a numeric code; irgen evaluates
+  it and calls `pli_set_oncode` (via the usual `FIXED BIN(31)`
+  conversion) before handler lookup, so the unit observes it
+  through `ONCODE()` whether or not a handler is established.
+  The errno pattern needs nothing special — any numeric
+  expression, including a call result, flows the same way.
+
+  Consequences. `signal_oncode.pli` golden covers a variable
+  code and a call-result code; `bad_signal_oncode.pli` pins the
+  non-numeric diagnosis. The test uses output-only observation
+  because ON-units cannot yet reach automatic variables (rule
+  (91), separate listed item).

@@ -983,6 +983,26 @@ StmtP Parser::parseSignal() {
     resync();
     return nullptr;
   }
+  // SIGNAL ... SET ONCODE(expr) (rule (93)): the expression value is stored
+  // as ONCODE before the unit runs.
+  if (atWord("SET")) {
+    advance();
+    if (!atWord("ONCODE")) {
+      d_.error(cur().loc, "expected ONCODE after SET in a SIGNAL statement", "(93)");
+      resync();
+      return nullptr;
+    }
+    advance();
+    if (!expect(Tok::LParen, "(93)")) {
+      resync();
+      return nullptr;
+    }
+    st->oncodeExpr = parseExpr();
+    if (!expect(Tok::RParen, "(93)")) {
+      resync();
+      return nullptr;
+    }
+  }
   expect(Tok::Semi, "(93)");
   return st;
 }

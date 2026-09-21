@@ -193,6 +193,8 @@ struct HStmt {
   bool snap = false;
   bool isSystem = false;
   HStmtP unit;
+  // SIGNAL ... SET ONCODE(expr) (rule (93)): lowered code expression.
+  HExprP oncodeExpr;
   int onIndex = -1; // dense handler id assigned by irgen before emission
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
   // and its SET(...) pointer target (rule 88).

@@ -245,6 +245,9 @@ struct Stmt {
   bool isSystem = false;
   StmtP unit;
   int onIndex = -1; // dense handler id assigned during lowering (rule 91)
+  // SIGNAL ... SET ONCODE(expr) (rule (93)): the code stored as ONCODE
+  // before the unit runs; null when absent.
+  ExprP oncodeExpr;
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
   // (a VarRef to a based structure) and its SET(...) pointer target (rule 88;
   // allocSet[i] is a VarRef to a POINTER).

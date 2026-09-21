@@ -1435,8 +1435,14 @@ void IRGen::emitOn(HStmt* s) {
 
 // Raise a condition: without an established handler take the system action
 // (abort); otherwise run the topmost handler for that condition, then resume
-// after the SIGNAL. Only ERROR touches ONCODE.
+// after the SIGNAL. ERROR resets ONCODE around its handlers; a SIGNAL ...
+// SET ONCODE(expr) stores its code first so the unit observes it.
 void IRGen::emitSignal(HStmt* s) {
+  if (s->oncodeExpr) {
+    Val code = emitExpr(s->oncodeExpr.get());
+    Val c = convert(code, Type::fixedBin(31, 0), s->loc);
+    b_.CreateCall(runtimeFn("pli_set_oncode"), {c.reg});
+  }
   const std::vector<llvm::Function*>& handlers = onHandlers_[s->condKey];
   llvm::Value* top = s->condKey == 0
                          ? b_.CreateCall(runtimeFn("pli_on_top_error"), {}, "ontop")
