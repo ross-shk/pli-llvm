@@ -674,6 +674,22 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
   case TK::Float:
     v.reg = flt(iniNumeric(e));
     break;
+  case TK::Char: {
+    // A character INITIAL (rule (26)): materialise the blank-padded bytes
+    // into a global so the value has a pointer form like any char value.
+    std::string text(t.len, ' ');
+    if (e && e->kind == Expr::CharLit)
+      for (int i = 0; i < t.len && i < (int)e->sval.size(); ++i)
+        text[i] = e->sval[i];
+    llvm::Constant* data = llvm::ConstantDataArray::getString(ctx_, text, false);
+    llvm::GlobalVariable* g =
+        new llvm::GlobalVariable(mod_, data->getType(), true, llvm::GlobalValue::PrivateLinkage,
+                                 data, ".initchar");
+    g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+    v.ptr = b_.CreateConstGEP2_32(data->getType(), g, 0, 0, "initcp");
+    v.len = i64(t.len);
+    break;
+  }
   case TK::Bit: {
     if (t.len == 1) {
       v.reg = b_.getInt1(e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
@@ -1813,15 +1829,14 @@ void IRGen::emitAssign(HStmt* s) {
       // the member array field, bounds-checked like any array element.
       const Type& arr = memberType(t->sym, t->memberPath);
       const Type& el = t->ty;
-      if (el.isChar()) {
-        d_.error(s->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
-        return;
-      }
       llvm::Value *ub = nullptr, *lb = nullptr;
       llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
                                           : memberAddr(t->sym, t->memberPath, s->loc);
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
-      storeScalarTo(addr, el, convert(v, el, s->loc));
+      if (el.isChar())
+        storeCharTo(addr, el, v, s->loc);
+      else
+        storeScalarTo(addr, el, convert(v, el, s->loc));
       return;
     }
     // An iSUB-DEFINED array target Y(k) (rule 134) has no storage of its own:
@@ -1945,13 +1960,12 @@ void IRGen::emitAssign(HStmt* s) {
   if (s->target->kind == HExpr::VarRef && s->target->sym && !s->target->memberPath.empty()) {
     HExpr* t = s->target.get();
     const Type& leaf = t->ty;
-    if (leaf.isChar()) {
-      d_.error(s->loc, "CHARACTER structure members are not implemented in this stage", "(11)");
-      return;
-    }
     Val v = emitExpr(s->value.get());
     llvm::Value* addr = memberAddr(t->sym, t->memberPath, s->loc);
-    storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
+    if (leaf.isChar())
+      storeCharTo(addr, leaf, v, s->loc);
+    else
+      storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
     return;
   }
   if (s->target->kind != HExpr::VarRef || !s->target->sym)
@@ -3300,7 +3314,7 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
       if (!ve)
         continue;
       if (m.ty.isChar())
-        d_.error(loc, "CHARACTER structure members are not implemented in this stage", "(11)");
+        storeCharTo(mem, m.ty, initValue(m.ty, ve), loc);
       else
         storeScalarTo(mem, m.ty, initValue(m.ty, ve));
     }
@@ -3926,18 +3940,25 @@ Val IRGen::emitExpr(HExpr* e) {
       // a dynamic member), so GEP into it as a normal array and load the leaf.
       const Type& arr = memberType(e->sym, e->memberPath);
       const Type& el = e->ty;
-      if (el.isChar()) {
-        d_.error(e->loc, "arrays of CHARACTER members are not implemented in this stage", "(12)");
-        v.ty = el;
-        v.reg = i64(0);
-        return v;
-      }
       llvm::Value *ub = nullptr, *lb = nullptr;
       llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
                                           : memberAddr(e->sym, e->memberPath, e->loc);
       llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc, ub, lb);
-      llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
       v.ty = el;
+      if (el.isChar()) {
+        if (el.varying) {
+          llvm::Value* dp = b_.CreateStructGEP(llvmTy(el), addr, 1, "mvdata");
+          llvm::Value* lp = b_.CreateStructGEP(llvmTy(el), addr, 0, "mvlenp");
+          llvm::Value* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "ml32");
+          v.ptr = dp;
+          v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "ml64");
+        } else {
+          v.ptr = addr;
+          v.len = i64(el.len);
+        }
+        return v;
+      }
+      llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
       v.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
@@ -3961,17 +3982,25 @@ Val IRGen::emitExpr(HExpr* e) {
     if (!e->memberPath.empty()) {
       // Qualified member S.A.B (rule 124): load the leaf member.
       const Type& leaf = e->ty;
-      if (leaf.isChar()) {
-        d_.error(e->loc, "CHARACTER structure members are not implemented in this stage", "(11)");
-        v.ty = leaf;
-        v.reg = i64(0);
-        return v;
-      }
       // A locator-qualified member P->X.FIELD (rule 124) GEPs off the loaded
       // pointer value; otherwise off the based/symbol member address.
       llvm::Value* addr =
           e->locPtr ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
                     : memberAddr(e->sym, e->memberPath, e->loc);
+      v.ty = leaf;
+      if (leaf.isChar()) {
+        if (leaf.varying) {
+          llvm::Value* dp = b_.CreateStructGEP(llvmTy(leaf), addr, 1, "mvdata");
+          llvm::Value* lp = b_.CreateStructGEP(llvmTy(leaf), addr, 0, "mvlenp");
+          llvm::Value* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "ml32");
+          v.ptr = dp;
+          v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "ml64");
+        } else {
+          v.ptr = addr;
+          v.len = i64(leaf.len);
+        }
+        return v;
+      }
       v.ty = leaf;
       if (leaf.isStruct()) {
         // A whole minor structure member (rule 127): its value is its address.
