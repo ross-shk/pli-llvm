@@ -1,0 +1,9 @@
+ /* BIT(n>1) limits (rules (110),(116)): stream items and mixed-length
+    or mixed-kind logic stay diagnosed in this stage. */
+ bad_bitn: procedure options(main);
+    declare b8 bit(8);
+    declare f16 bit(16);
+    b8 = f16 & b8;
+    b8 = b8 & 1;
+    put list(b8);
+ end bad_bitn;

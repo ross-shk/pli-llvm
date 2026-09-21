@@ -1,0 +1,7 @@
+ /* BIT(n>1) limits (rule (12)): arrays of wide bit strings stay
+    diagnosed in this stage (element access assumes single-bit
+    storage below). */
+ bad_bitn_array: procedure options(main);
+    declare arr(3) bit(8);
+    put skip list('unreachable');
+ end bad_bitn_array;
