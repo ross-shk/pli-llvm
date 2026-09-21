@@ -271,3 +271,12 @@ void pli_collate(char *dst, long long dstcap, long long n) {
   for (long long i = 1; i < dstcap; ++i)
     dst[i] = ' ';
 }
+
+/* REVERSE(s): mirror the string (libnet hostname check); blank-pad dst. */
+void pli_reverse(char *dst, long long dstcap, const char *s, long long slen) {
+  long long n = slen < dstcap ? slen : dstcap;
+  for (long long i = 0; i < n; ++i)
+    dst[i] = s[slen - 1 - i];
+  while (n < dstcap)
+    dst[n++] = ' ';
+}

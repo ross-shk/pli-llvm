@@ -3425,3 +3425,26 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   bridge rows (INLIST/BETWEEN/IFTHENELSE-char, bits, dates,
   random, numeric, storage, conversions, arithmetic) merge in
   later slices per the boot order.
+
+  ## ADR-134 — REVERSE plus constant-folded MAXLENGTH
+
+  Context. libnet's two heap-guard forms needed builtins the
+  compiler could not name: `verify(reverse(host), letters)`
+  and `length(heap) + n > maxlength(heap)`. Neither was in the
+  bridge sources (REVERSE/MAXLENGTH are libnet's own gaps G5/G6),
+  so both are implemented natively.
+
+  Decision. `REVERSE(s)` lowers to a new `pli_reverse` mirror
+  helper in `rt_string.c` (blank-padded, same length as the
+  argument). `MAXLENGTH(v)` takes no runtime at all: sema
+  requires a VARYING argument and irgen emits its declared
+  maximum as a constant — the same fold class as `DIM`'s axis
+  count. Non-character REVERSE, non-VARYING MAXLENGTH, and bad
+  arities are diagnosed with (123).
+
+  Consequences. `tests/builtins/revmax.pli` runs (mirroring
+  incl. single-char, both guard directions);
+  `bad_revmax.pli` pins the four diagnostics. Test lesson:
+  comparing a `CHAR(5)` result against a longer literal pads
+  the comparison, so single-char cases assert via `SUBSTR`
+  instead of `TRIM`.
