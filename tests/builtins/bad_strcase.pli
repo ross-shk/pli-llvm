@@ -1,0 +1,9 @@
+ /* String-search builtin limits (rule (123)): character
+    operands, arities, and constant widths stay diagnosed. */
+ bad_strcase: procedure options(main);
+    declare n fixed bin(31);
+    n = lowercase(1);
+    n = center('AB', 'x');
+    n = search('abc', 1, 1);
+    n = rank(1);
+ end bad_strcase;

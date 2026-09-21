@@ -4767,7 +4767,13 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "VERIFY") {
     Val s = emitExpr(e->args[0].get());
     Val t = emitExpr(e->args[1].get());
-    llvm::Value* r = b_.CreateCall(runtimeFn("pli_verify"), {s.ptr, s.len, t.ptr, t.len});
+    llvm::Value* r;
+    if (e->args.size() == 3) {
+      Val st = emitExpr(e->args[2].get());
+      r = b_.CreateCall(runtimeFn("pli_verify_from"), {s.ptr, s.len, t.ptr, t.len, toI64(st)});
+    } else {
+      r = b_.CreateCall(runtimeFn("pli_verify"), {s.ptr, s.len, t.ptr, t.len});
+    }
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
     result = v;
@@ -4823,6 +4829,67 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     b_.CreateCall(runtimeFn(fn), {out.ptr, toI64(n)});
     out.len = i64(e->ty.len);
     result = out;
+    return true;
+  }
+  // LOWERCASE/CENTER/SEARCH/VERIFY/RANK/COLLATE (rule (123)): merged from
+  // the builtins bridge; char builders follow the UPPERCASE pattern.
+  if (e->name == "LOWERCASE") {
+    Val s = emitExpr(e->args[0].get());
+    Val dst = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_lowercase"), {dst.ptr, dst.len, s.ptr, s.len});
+    dst.len = i64(e->ty.len);
+    result = dst;
+    return true;
+  }
+  if (e->name == "CENTER") {
+    Val s = emitExpr(e->args[0].get());
+    Val w = emitExpr(e->args[1].get());
+    Val dst = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_center"), {dst.ptr, dst.len, s.ptr, s.len, toI64(w)});
+    dst.len = i64(e->ty.len);
+    result = dst;
+    return true;
+  }
+  if (e->name == "SEARCH") {
+    Val s = emitExpr(e->args[0].get());
+    Val t = emitExpr(e->args[1].get());
+    Val st = emitExpr(e->args[2].get());
+    llvm::Value* r =
+        b_.CreateCall(runtimeFn("pli_search"), {s.ptr, s.len, t.ptr, t.len, toI64(st)});
+    v.ty = e->ty;
+    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "srch32");
+    result = v;
+    return true;
+  }
+  if (e->name == "VERIFY") {
+    Val s = emitExpr(e->args[0].get());
+    Val t = emitExpr(e->args[1].get());
+    llvm::Value* r;
+    if (e->args.size() == 3) {
+      Val st = emitExpr(e->args[2].get());
+      r = b_.CreateCall(runtimeFn("pli_verify_from"), {s.ptr, s.len, t.ptr, t.len, toI64(st)});
+    } else {
+      r = b_.CreateCall(runtimeFn("pli_verify"), {s.ptr, s.len, t.ptr, t.len});
+    }
+    v.ty = e->ty;
+    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
+    result = v;
+    return true;
+  }
+  if (e->name == "RANK") {
+    Val s = emitExpr(e->args[0].get());
+    llvm::Value* r = b_.CreateCall(runtimeFn("pli_rank"), {s.ptr, s.len});
+    v.ty = e->ty;
+    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "rnk32");
+    result = v;
+    return true;
+  }
+  if (e->name == "COLLATE") {
+    Val n = emitExpr(e->args[0].get());
+    Val dst = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_collate"), {dst.ptr, dst.len, toI64(n)});
+    dst.len = i64(e->ty.len);
+    result = dst;
     return true;
   }
   if (e->name == "DATE" || e->name == "TIME") {
