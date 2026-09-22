@@ -72,15 +72,15 @@ so LLVM can do them. §7 documents what we deliberately refuse to optimize.
     ┌─────┐   PL/I-aware, still structured: aggregate assignment, string
     │ HIR │   ops, ON-units, DO semantics, descriptors implicit
     └──┬──┘
-       ▼   ── HIR passes (see OPTIMIZATION.md §3)
+       ▼   ── HIR passes (see OPTIMIZATION.md §4)
     ┌─────┐   scalarised, explicit descriptors/temporaries, explicit
     │ MIR │   bounds checks, CFG with EH regions, no implicit conversions
     └──┬──┘
-       ▼   ── MIR passes (see OPTIMIZATION.md §4)
+       ▼   ── MIR passes (see OPTIMIZATION.md §5)
 ┌──────────────┐
 │ LLVM IR      │   llvm::Module via IRBuilder
 └──────┬───────┘
-       ▼   ── LLVM pass pipeline + our custom passes (OPTIMIZATION.md §5)
+       ▼   ── LLVM pass pipeline + justified custom passes (OPTIMIZATION.md §6)
    object file ──► link with libpli ──► executable
 ```
 

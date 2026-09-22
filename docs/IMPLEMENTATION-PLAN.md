@@ -182,9 +182,10 @@ update array- and structure-backed records correctly.
 
 ## M7 - Optimization and debug info (8w)
 
-**Scope** MIR; the HIR/MIR and custom LLVM passes in OPTIMIZATION.md; alias
-metadata; ThinLTO; DWARF descriptions for structures, varying strings, arrays,
-and dope vectors; optimization remarks; and the benchmark suite.
+**Scope** MIR; the HIR/MIR pipeline and measured custom-pass candidates in
+OPTIMIZATION.md; alias metadata; explicit ThinLTO; DWARF descriptions for
+structures, varying strings, arrays, and dope vectors; optimization remarks;
+and the benchmark suite.
 
 **Exit criterion.** Scalar and array benchmarks are within 1.2x of equivalent C
 at `-O2`; check-heavy code is within 1.5x of check-free code; common data types

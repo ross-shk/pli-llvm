@@ -1,172 +1,234 @@
-# Optimization
+# Compiler optimization plan
 
-## 1. Principle
+## 1. Goals and principles
 
-> Optimizations that depend on PL/I semantics happen in HIR/MIR.
-> Classical optimizations are LLVM's job, and our output is shaped so LLVM can
-> do them.
+The backend objective is fast generated code without weakening PL/I semantics.
+Correctness, diagnostics, and debuggability are constraints on optimization,
+not separate modes that may silently change the language.
 
-The historical PL/I optimizers (the IBM Optimizing Compiler's common
-subexpression elimination, loop-invariant motion, subscript strength
-reduction) are subsumed by LLVM. What LLVM *cannot* do is anything that
-requires knowing PL/I's rules: that a `VARYING` string's bytes beyond its
-current length are dead, that two `DEFINED` names overlay each other, that a
-`SUBSCRIPTRANGE` check is disabled by a prefix, or that an aggregate assignment
-is a fusible loop nest.
+1. Optimize with PL/I knowledge in HIR/MIR; leave target-independent classical
+   optimization and target lowering to LLVM.
+2. Preserve facts until their last useful representation. Shapes, extents,
+   scales, condition enable-state, alias sets, and storage lifetimes must not be
+   erased before the pass that consumes them.
+3. Emit analyzable LLVM IR: canonical loops and address arithmetic, explicit
+   intrinsics, accurate attributes, and no opaque runtime call where a standard
+   LLVM operation expresses the same semantics.
+4. Add a custom pass only for a measured PL/I-specific gap that cannot be
+   represented for an existing LLVM pass. Every custom pass has a benchmark,
+   correctness tests, and an optimization remark.
+5. Make profitability target- and profile-aware. Semantic transformations are
+   target-independent; code growth, vectorization, unrolling, and inlining use
+   LLVM's target and profile models.
+6. Never emit a language check that is disabled by the resolved condition
+   prefix. Enabled checks may be removed only by proof, without changing which
+   condition is raised or the observable order of conditions and side effects.
 
-A second principle: **never emit a check the language does not require.**
-PL/I's condition prefixes (rules 60–63) are compile-time information; the
-enable-state is resolved in sema, so disabled checks are never generated rather
-than generated-and-deleted.
+## 2. Optimization contract
 
-## 2. Where each optimization lives
+HIR and MIR lowering are mandatory at every optimization level. `-O0` disables
+optional optimization passes, not the explicit conversions, checks, descriptor
+operations, and control flow required for correct lowering.
 
-| Optimization | Level | Why not LLVM |
+Each HIR/MIR operation records the properties needed to transform it safely:
+
+- type, precision, scale, shape, and extent;
+- memory effects, possible conditions, and whether an operation may resume;
+- alias class, storage identity, and escape/capture information;
+- source location and lexical condition enable-state;
+- integer overflow and conversion semantics.
+
+Passes use analyses with explicit invalidation rather than running every pass to
+a fixpoint. Small canonicalization groups may iterate to a bounded fixpoint.
+HIR and MIR verifiers run after construction and in assertion-enabled builds
+after each transforming pass.
+
+## 3. Ownership
+
+| Work | Level | Reason |
 |---|---|---|
-| Conversion-chain shortening | HIR | needs the PL/I conversion lattice |
-| Aggregate expression fusion | HIR | shape comes from declarations |
-| `BY NAME` resolution | HIR | name matching is a source-level rule |
-| Picture specialisation | HIR | picture is a compile-time program (ADR-017) |
-| Dead `ON`-unit elimination | HIR | dynamic scoping analysis |
-| Check-enable propagation | HIR | lexical prefix semantics |
-| Decimal scale propagation | HIR | scale is a type property |
-| Bounds-check elimination | MIR | needs dope-vector/extent facts |
-| Varying-string length propagation | MIR | length is a language invariant |
-| Concatenation tree flattening | MIR | avoids O(n²) temporaries |
-| Aggregate copy → `memcpy` | MIR | layout equality is a PL/I question |
-| Descriptor scalarisation | MIR/LLVM | pass descriptor fields as arguments |
-| CSE, LICM, GVN, SCCP, inlining | LLVM | classical, LLVM does it better |
-| Vectorisation, unrolling, scheduling | LLVM | ditto |
-| Register allocation, ISel | LLVM | ditto |
+| Constant evaluation and conversion simplification | HIR | PL/I precision, scale, rounding, and conditions |
+| Aggregate conformance, fusion, and `BY NAME` | HIR | source shape and name matching |
+| Condition enable-state and potential-condition analysis | HIR | lexical and dynamic PL/I semantics |
+| Picture specialization | HIR | picture field programs are compile-time objects |
+| Loop and address canonicalization | HIR/MIR | expose standard induction and affine forms |
+| Check insertion, elimination, and widening | MIR | dominance, ranges, and condition ordering |
+| String/aggregate operation selection | MIR | layout, overlap, padding, and length invariants |
+| Descriptor simplification | MIR/LLVM | escape and interprocedural argument information |
+| Alias, range, effect, and profile facts | MIR to LLVM | optimizer interface |
+| CSE, DCE, GVN, SCCP, LICM, SROA, inlining | LLVM | mature general-purpose implementations |
+| Vectorization, unrolling, scheduling, ISel, registers | LLVM | target cost model and machine information |
 
-## 3. HIR passes
+## 4. HIR pipeline
 
-Run in this order; each is a fixpoint over the procedure unless noted.
+1. **Canonicalization and constant evaluation.** Fold with exact PL/I result
+   precision and scale. Simplify conversions only when intermediate rounding,
+   truncation, padding, and enabled conditions are unchanged. Propagate an
+   `INITIAL` value only while the object is unmodified, unaliased, unescaped,
+   and not externally visible.
+2. **Shape and aggregate planning.** Resolve conformance and `BY NAME`, then
+   represent aggregate expressions as a loop plan. Fuse conformable producers
+   and consumers when dependence analysis proves legal; retain temporaries
+   where overlap, evaluation order, or condition timing requires them.
+3. **Iteration normalization.** Preserve once-only evaluation of `TO`, `BY`,
+   and `WHILE`; derive direction and trip counts when proven; produce canonical
+   induction and affine subscript expressions. Do not duplicate expressions
+   that can raise a condition or have effects.
+4. **String planning.** Flatten concatenation trees, propagate symbolic lengths
+   and maximum capacities, and select direct assignment/comparison forms.
+   Aliasing and overlap remain explicit for MIR operation selection.
+5. **Condition and effect analysis.** Attach resolved prefix state and compute
+   possible conditions and effects. Remove handler establishment only when no
+   reachable operation can raise or explicitly signal the handled condition
+   and no separately compiled call can do so.
+6. **Picture specialization.** Evaluate constant validation and specialize a
+   field program when code size and profile justify it; otherwise retain the
+   shared runtime interpreter.
+7. **Storage and overlay analysis.** Resolve `DEFINED`/`iSUB` address mappings,
+   build alias sets, and compute escapes and lifetimes. Refine a storage class
+   only when allocation identity, generation state, `ALLOCATION`, address
+   comparison, and condition behavior are unobservable.
 
-1. **Attribute/constant propagation.** Fold constant expressions with exact
-   PL/I precision rules (a folded `FIXED DECIMAL` keeps its scale). Propagate
-   `INITIAL` values of `STATIC` non-assigned variables.
-2. **Conversion folding.** Collapse chains: `CHAR→FIXED DEC→FIXED BIN` becomes
-   a single `CHAR→FIXED BIN` conversion; delete conversions to the same type;
-   push conversions towards constants (`X + 1` where `X` is `FIXED BIN(31)` and
-   `1` is `FIXED DEC(1)` converts the *constant*, not the variable).
-   This is the single highest-value PL/I-specific pass: naive conversion
-   insertion is what made old PL/I code slow.
-3. **Aggregate expression scalarisation and fusion.** `A = B + C * 2;` over
-   conformable arrays becomes one loop nest, not three with temporaries.
-   Structure expressions expand field-wise; `BY NAME` matches on names.
-   Emits `pli.aggregate.loop` HIR nodes that MIR lowers.
-4. **Iteration normalisation.** Canonicalise `DO` specifications: hoist `TO`/
-   `BY` evaluation (the spec evaluates them once), turn a constant-sign `BY`
-   into a known direction (removing the runtime sign test that M0 emits),
-   convert counted loops into a trip-count form for LLVM.
-5. **String length propagation.** Track current lengths of `VARYING` values
-   symbolically so that assignments, comparisons and `SUBSTR` can use constants
-   and so that `LENGTH(x)` folds.
-6. **Picture specialisation.** Replace generic `pli_pic_edit` calls with
-   specialised routines for monomorphic pictures; fold picture validation of
-   constants at compile time.
-7. **Condition analysis.**
-   - Propagate enable-state from prefixes to every operation.
-   - Delete `ON`-units for conditions that cannot be raised in their dynamic
-     scope (e.g. `ON ZERODIVIDE` around code with no division).
-   - Mark blocks that establish no handlers so codegen skips the handler stack.
-   - Where the only established handler is `SYSTEM`, lower `SIGNAL` directly to
-     the runtime default action.
-8. **Storage class refinement.** Promote `CONTROLLED` variables that are never
-   multiply allocated to `AUTOMATIC`; promote `BASED` references with a single
-   unambiguous locator to direct references; give `AREA`s with statically known
-   allocation patterns a stack-allocated backing.
-9. **`DEFINED`/`iSUB` resolution.** Rewrite defined references as base
-   references with index transformations; build the alias-set graph (ADR-018).
+## 5. MIR pipeline
 
-## 4. MIR passes
+1. **CFG construction and simplification.** Build explicit normal and condition
+   edges, split critical edges as needed, and remove unreachable blocks.
+2. **Check insertion.** Materialize only enabled checks. Keep the source
+   condition and resume point attached to each check so later motion cannot
+   change observable handling behavior.
+3. **Range and check optimization.** Use dominance, scalar evolution, known
+   extents, and symbolic string lengths to eliminate redundant checks. Widen a
+   loop's checks into a preheader only if overflow-safe range arithmetic proves
+   every iteration and moving the condition is not observable.
+4. **Aggregate and string lowering.** Select `memcpy` only for equal layouts and
+   non-overlapping storage, `memmove` where overlap is possible, and `memset`
+   for legal repeated-byte fills. Preserve padding semantics. Lower flattened
+   concatenations into one capacity check, one length update, and direct copies
+   when failure and alias behavior permit it.
+5. **Temporary and descriptor simplification.** Narrow temporary lifetimes and
+   scalarize internal descriptors only when fields do not escape and callee
+   mutation through the by-reference PL/I interface remains observable. Let
+   ordinary LLVM SROA finish the scalar replacement.
+6. **Lowering preparation.** Canonicalize affine addresses and loops, outline
+   cold condition paths, and assign branch weights from profiles or conservative
+   static estimates.
+7. **LLVM fact export.** Attach only facts proved for the exact operation:
+   TBAA consistent with PL/I overlays and character access, alias scopes only
+   between proven-disjoint sets, parameter attributes only across their valid
+   lifetime, and range information in forms LLVM accepts. Emit `nuw`/`nsw`,
+   `inbounds`, `nonnull`, or `dereferenceable` only where violating the fact is
+   impossible on every defined path; otherwise use explicit checked arithmetic
+   and ordinary pointers.
 
-1. **Bounds/range check insertion** — only where enabled. Checks are pure
-   comparisons plus a call to `pli_signal`, so they are optimizable code.
-2. **Check elimination and merging.** Use extent facts and dominance:
-   - a check dominated by an equal-or-stronger check is removed;
-   - checks on an induction variable with known trip count hoist to the
-     preheader as a single range check ("check widening");
-   - `STRINGRANGE` checks fold when the current length is known.
-3. **Concatenation flattening.** `A || B || C || D` becomes a single result
-   buffer with N `memcpy`s and one length computation, instead of a left-leaning
-   tree of temporaries. (M0 already computes the result length as a sum; the
-   pass removes the intermediate buffers.)
-4. **In-place assignment.** `S = S || T;` and `SUBSTR(S,i,n) = T;` write into
-   the target without a temporary once aliasing is proven.
-5. **Aggregate copy idiom.** Whole-aggregate assignment with identical layout
-   becomes `llvm.memcpy`; padding-preserving copies keep struct semantics.
-6. **Descriptor scalarisation.** Split descriptors into their fields at call
-   boundaries where the callee is internal and not address-taken, so LLVM sees
-   plain integers (this is what makes `CHARACTER(*)` parameters cheap).
-7. **Temporary lifetime narrowing.** Emit `llvm.lifetime.start/end` for
-   compiler temporaries and `AUTOMATIC` aggregates to enable stack colouring.
-8. **Metadata attachment** (the interface to LLVM's optimizer):
-   - `!tbaa` type trees for PL/I types, so `FIXED BIN` and `CHARACTER` stores
-     do not alias;
-   - `!alias.scope`/`!noalias` for `DEFINED` overlays and for parameters that
-     PL/I guarantees distinct;
-   - `noalias`, `nonnull`, `dereferenceable`, `align` on descriptor pointers;
-   - `!range` on subscript values proven in range;
-   - `nsw` on arithmetic *only* where `FIXEDOVERFLOW` is enabled and therefore
-     checked (otherwise wrapping is observable and `nsw` would be a lie);
-   - `!llvm.loop` hints from `DO` structure (trip count, no-alias).
+The `DEFINED` alias graph prevents false disambiguation within an overlay set;
+`!noalias` is used only between sets proved disjoint. Character, `BASED`, and
+external accesses remain conservative unless storage provenance proves more.
 
-## 5. LLVM pipeline
+## 6. LLVM pipeline
 
-Standard `-O2`/`-O3` pipeline via `PassBuilder`, plus our additions:
+Use the new pass manager's standard `PassBuilder` pipeline for the selected
+optimization level. Prefer IR shape, standard intrinsics, function attributes,
+and LLVM's `FunctionAttrs`, Attributor, SROA, IPSCCP, inliner, loop, and
+vectorization passes over local replacements.
 
-| Position | Pass | Purpose |
+Runtime declarations are generated from one ABI table and carry tested memory,
+capture, unwind, return, and allocation attributes. Typed runtime entry points
+are selected before LLVM lowering when operand types are known. Known copies,
+fills, checked arithmetic, and lifetime markers are emitted as LLVM intrinsics
+rather than recognized later from compiler-generated call sequences.
+
+Candidate custom passes are deliberately limited:
+
+| Candidate | Placement | Admission criterion |
 |---|---|---|
-| early, pre-inline | `PLIRuntimeSpecialize` | replace generic runtime calls with typed variants (`pli_put_list_fixed` for a known `FIXED BIN(31)`), mark them `readnone`/`willreturn` where true |
-| early | `PLIDescriptorSROA` | promote `{ptr,len}` descriptors and `{len,data}` varying strings into scalars ahead of ordinary SROA |
-| after inlining | `PLIStringIdiom` | recognise `pli_assign_char`/`pli_concat` with constant lengths and expand to `memcpy`/`memset` so LLVM's store-to-load forwarding applies |
-| after inlining | `PLIOnUnitInline` | inline small on-units into their establishing block when the handler set is statically known |
-| loop opts | `PLICheckHoist` | cooperate with LICM to hoist merged range checks (facts LLVM lacks) |
-| late | `PLIEHSimplify` | merge adjacent EH regions, drop empty cleanups from blocks whose handlers were eliminated |
-| LTO | descriptor/parameter propagation across procedures | cross-procedure extent constants |
+| PL/I check combining | before loop optimization | MIR cannot legally express a profitable cross-block check fact for standard LLVM analyses |
+| Descriptor specialization | ThinLTO pre-link/post-link | a stable descriptor ABI blocks measured interprocedural constant propagation |
+| Condition-region cleanup | after inlining | LLVM leaves measured EH/cleanup overhead after ordinary CFG and EH simplification |
 
-Also enabled: ThinLTO by default at `-O2` for multi-file programs (PL/I
-external procedures are separately compiled, so cross-procedure information is
-otherwise lost), and PGO (`-fprofile-generate/use`) which pays off well on
-condition-heavy code because on-unit paths are cold.
+A candidate is not implemented until representative IR demonstrates the missed
+optimization and benchmarks show end-to-end benefit. Passes use stable LLVM
+analysis APIs and are tested against the oldest and newest supported LLVM
+versions.
 
-## 6. Optimization levels
+ThinLTO is available with `-flto=thin`, full LTO with `-flto=full`, and neither
+is silently enabled by `-O2`. Profile-guided optimization supports
+instrumentation generation/use; profile data supplies branch weights, indirect
+call targets, hot/cold splitting, and inlining guidance. Profile mismatches are
+diagnosed. Post-link optimization may be added only with a supported toolchain
+and reproducible benchmark evidence.
 
-| Flag | Front-end behaviour | LLVM | Checks |
-|---|---|---|---|
-| `-O0` | no HIR/MIR passes; direct lowering | `-O0` | all enabled prefixes checked; full debug info |
-| `-O1` | conversion folding, check-enable propagation | `-O1` | as written |
-| `-O2` (default) | all HIR/MIR passes | `-O2` + ThinLTO | as written, merged/hoisted |
-| `-O3` | + aggressive aggregate fusion, on-unit inlining | `-O3` | as written |
-| `-Ofast-decimal` | permits `FIXED DECIMAL` in `i64` without overflow checks when provably in range | `-O3` | `FIXEDOVERFLOW` assumed disabled |
-| `-fcheck=all` | forces every computational condition enabled regardless of prefixes | any | maximum |
+## 7. User controls
 
-`-fcheck=all` exists because the most common real-world PL/I bug class
-(subscript and string-range errors in code compiled with checks off) is exactly
-what a modern toolchain should be able to find on demand; it is the PL/I
-analogue of a sanitizer.
+| Flag | HIR/MIR policy | LLVM policy |
+|---|---|---|
+| `-O0` | mandatory lowering only; preserve debug locations and variables | `O0` |
+| `-Og` | cheap canonicalization, folding, and proven check elimination | debug-oriented pipeline |
+| `-O1` | local simplification without material code growth | `O1` |
+| `-O2` (default) | all generally profitable semantics-preserving passes | `O2` |
+| `-O3` | profile/cost-guided fusion and specialization with more code growth | `O3` |
+| `-Os` / `-Oz` | avoid or reverse transformations that grow code | `Os` / `Oz` |
 
-## 7. What we deliberately do not optimize
+Optimization levels never change decimal results, enabled conditions, aliasing,
+or I/O behavior. Any future relaxed semantic mode is a separate, explicit flag
+and is not implied by `-O3`.
 
-- **`ABNORMAL` data** (Y33-6003 optimization attributes): values must be
-  re-fetched on every reference. These become `volatile` loads; no CSE, no
-  hoisting. `NORMAL` is the default and is freely optimizable.
-- **`IRREDUCIBLE` entries**: not treated as pure. `REDUCIBLE` entries are
-  marked `readnone`/`speculatable` so calls can be CSEd — a rare case of a 1968
-  language having an explicit purity annotation, and we honour it.
-- **I/O ordering**: stream and record I/O calls are never reordered or merged
-  across each other; only the *formatting* is specialised.
+Condition prefixes determine language checks at every level. A diagnostic mode
+may instrument additional subscript, string-range, conversion, and arithmetic
+failures, but it must be documented as instrumentation because it can make a
+previously disabled condition observable. It must not masquerade as an
+optimization setting.
 
-## 8. Measuring
+## 8. Semantic limits
 
-- `-Rpass=...`/`-Rpass-missed=...` remarks are forwarded from LLVM, plus our
-  own remarks (`-Rpli-check-elim`, `-Rpli-conversion`) so a user can see which
-  checks were removed and which conversions remained.
-- `--print-hir`/`--print-mir` dump the intermediate forms; `-emit-llvm` shows
-  the IR (M0 already supports this).
-- Benchmarks: a PL/I port of scalar loops (subscript-heavy), a decimal
-  arithmetic workload (payroll-style), a string workload, and condition-heavy
-  code with and without prefixes. The tracked figure is time relative to
-  equivalent C compiled by clang at the same `-O` level.
+- `ABNORMAL` objects and synchronization-visible state use the conservative
+  accesses and barriers required by their language semantics. `volatile` is
+  used only where its LLVM contract is sufficient.
+- `REDUCIBLE` permits call optimization only when the complete procedure effect
+  analysis supports the corresponding LLVM attributes. It does not by itself
+  justify `readnone`, `speculatable`, or removal of a potentially trapping call.
+- Stream and record I/O operations retain program order. Formatting work may be
+  specialized internally but is not moved across observable I/O or conditions.
+- Calls through unknown entries, separately compiled procedures, runtime
+  handlers, `BASED` storage, and escaped addresses are assumed to read or write
+  all reachable storage unless an ABI summary proves otherwise.
+- Optimization must preserve the selected PL/I evaluation order wherever
+  conditions, volatile/abnormal data, I/O, allocation, or aliasing make it
+  observable.
+
+## 9. Measurement and validation
+
+Optimization work starts from a reproducible baseline and an inspected IR
+miss, not from a proposed pass.
+
+- Benchmark scalar and affine array loops, dynamic descriptors, aggregate
+  expressions, decimal arithmetic, fixed and varying strings, conditions,
+  procedure calls, and representative mixed applications.
+- Compare equivalent semantics and safety checks against clang at the same
+  optimization, LTO, and profile settings. Track runtime distributions, code
+  size, compile/link time, and peak compiler memory; use hardware counters when
+  they explain a regression.
+- Keep correctness suites for each transformation, including aliasing,
+  overflow, zero-trip and negative-step loops, resumable conditions, and
+  separately compiled calls. Differential and sanitizer runs cover optimized
+  builds.
+- Provide LLVM optimization records plus PL/I remarks for missed fusion,
+  retained conversions, descriptor escapes, and check elimination. Remarks
+  explain the blocking fact and source location.
+- Gate changes with statistically stable benchmark thresholds. Keep benchmark
+  results and compiler/toolchain versions, not generated LLVM IR snapshots, as
+  the long-term performance record.
+
+## 10. Implementation order
+
+1. Establish the benchmark harness, correctness corpus, optimization records,
+   and `-O0`/`-O2` baselines.
+2. Centralize runtime attributes and improve emitted IR shape so the standard
+   LLVM pipeline reaches the baseline target without custom passes.
+3. Add MIR CFG, range, effect, escape, and alias analyses; implement check
+   elimination with condition-order tests.
+4. Implement HIR aggregate/string planning and MIR lowering, then validate
+   vectorization and allocation removal in LLVM's optimization records.
+5. Add PGO and explicit ThinLTO, including multi-file correctness and profile
+   mismatch tests.
+6. Admit custom LLVM passes only for measured residual gaps, one pass at a
+   time, with an owner and maintenance budget.
