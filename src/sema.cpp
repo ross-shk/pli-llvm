@@ -985,6 +985,29 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           else
             item.sym->basedBase = base;
         }
+        // CONTROLLED (rule (15), ADR-140): storage managed by an explicit
+        // generation stack. This slice accepts the attribute and diagnoses
+        // invalid combinations; allocation itself stays out (rules 87-90).
+        if (item.controlled) {
+          item.sym->controlled = true;
+          auto ctlErr = [&](const std::string& what, const char* rule) {
+            d_.error(item.loc, what + " on a CONTROLLED variable is not implemented", rule);
+          };
+          if (item.init || !item.initItems.empty() || item.initCall)
+            ctlErr("INITIAL", "(26)");
+          if (item.valueInit)
+            ctlErr("VALUE", "(ADR-108)");
+          if (!item.like.empty())
+            ctlErr("LIKE", "(15)");
+          if (!item.definedBase.empty())
+            ctlErr("DEFINED", "(24)");
+          if (!item.basedBase.empty())
+            ctlErr("BASED", "(25)");
+          if (item.ty.isDynamic())
+            d_.error(item.loc,
+                     "a CONTROLLED array with dynamic extent is not implemented in this stage",
+                     "(13)");
+        }
         // OPTIONAL (extension, ADR-119): only valid on a procedure parameter;
         // the flag rides the symbol into call checking. ENTRY-statement
         // parameters resolve by name as well (rule 56).
@@ -2694,11 +2717,18 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     for (size_t i = 0; i < s->allocBase.size(); ++i) {
       typeExpr(s->allocBase[i].get(), sc, p);
       Symbol* bsym = s->allocBase[i]->sym;
-      if (!bsym || !bsym->basedBase) {
+      if (!bsym || (!bsym->basedBase && !bsym->controlled)) {
         d_.error(s->allocBase[i]->loc,
                  "'" + s->allocBase[i]->name +
                      "' is not a BASED variable; ALLOCATE requires based storage",
                  "(88)");
+        continue;
+      }
+      if (bsym->controlled) {
+        // CONTROLLED allocation generations (rules 87-90, ADR-140): wired
+        // in a later slice; diagnosed here so no generation is silently lost.
+        d_.error(s->allocBase[i]->loc,
+                 "ALLOCATE of CONTROLLED storage is not implemented in this stage", "(87)");
         continue;
       }
       if (bsym->ty.isArray() && bsym->ty.isDynamic())
@@ -2719,6 +2749,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     for (auto& f : s->freeBase) {
       typeExpr(f.get(), sc, p);
       Symbol* bsym = f->sym;
+      if (bsym && bsym->controlled) {
+        d_.error(f->loc, "FREE of CONTROLLED storage is not implemented in this stage", "(90)");
+        continue;
+      }
       if (!bsym || !bsym->basedBase)
         d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
                  "(90)");

@@ -1,0 +1,7 @@
+ /* CONTROLLED + AREA (rule (15)): AREA stays a parse-level
+    rejection; CONTROLLED parses first so both attributes are
+    visited. Kept separate because a parse error masks all sema
+    diagnostics in the same file. */
+ bad_controlled_area: procedure options(main);
+    declare c5 controlled area;
+ end bad_controlled_area;

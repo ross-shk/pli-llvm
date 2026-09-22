@@ -3521,3 +3521,26 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   store/load, member-array elements, member INIT).
   VARYING members, DEFINED/BASED member overlays, and
   whole-struct char assignment stay later slices.
+
+## ADR-138 — CONTROLLED attribute parses; allocation stays out
+
+Context. `CONTROLLED` was rejected at parse with the other M3
+storage classes, so no declaration using it compiled. libnet
+needs generation-stack storage, but that is a multi-slice
+backend project (Iron Spring `ctlvar.inc` model: static control
+block per variable, LIFO generations).
+
+Decision. Accept `CONTROLLED`/`CTL` as a storage-class
+attribute (orthogonal to data attributes, so no conflict
+checks) and flag the symbol. Diagnose invalid combinations
+with rule cites — INITIAL (26), VALUE (ADR-108), LIKE (15),
+DEFINED (24), BASED (25), dynamic extents (13) — plus
+ALLOCATE (87) and FREE (90) of CONTROLLED storage as the seam
+for the generation-stack slice. Plain declarations (even
+fixed arrays) pass sema; codegen for them rides with B3.
+
+Consequences. `bad_controlled.pli` pins seven sema
+diagnostics; `bad_controlled_area.pli` pins the AREA parse
+diagnostic separately (a parse error anywhere masks all sema
+diagnostics in the same file, so the two levels cannot share
+a test). Runtime generation stack (B2/B3) stays out.

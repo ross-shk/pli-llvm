@@ -134,6 +134,7 @@ private:
     bool pointer = false;
     bool complex = false; // COMPLEX (QR2.2/CM5): a real+imaginary pair
     bool file = false;    // FILE (rules 39,40): a named file variable
+    bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
     bool task = false;    // TASK (rules (15),(79), QR2.8): a task name
     bool event = false;   // EVENT (rules (15),(79),(82), QR2.8): an event name
     int prec = -1, scale = 0, slen = -1;
