@@ -1,0 +1,9 @@
+ /* SUBSTR operand rules (rule (123)): the source stays
+    character and the bounds numeric, runtime lengths or not. */
+ bad_subvar: procedure options(main);
+    declare x fixed bin(31);
+    declare n fixed bin(31);
+    declare s char(8);
+    x = substr(1, 1, n);
+    s = substr(s, 'a', n);
+ end bad_subvar;

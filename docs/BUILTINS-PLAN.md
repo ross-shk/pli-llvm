@@ -18,7 +18,7 @@ test-first (`tests/builtins/`) + diagnostics for unserved forms.
 
 | Builtin | Test |
 |---|---|
-| `SUBSTR` (+ assignment target) | `substr.pli`, `substr_assign.pli`, `bad_substr.pli`, `bad_substr_assign.pli` |
+| `SUBSTR` (+ assignment target, incl. runtime lengths) | `substr.pli`, `substr_assign.pli`, `bad_substr_assign.pli`, `substr_var.pli`, `bad_substr_var.pli` |
 | `INDEX`, `LENGTH` | `index.pli`, `length.pli`, `bad_index.pli`, `bad_length.pli` |
 | `REPEAT`, `VERIFY`, `TRANSLATE` | `repeat.pli`, `verify.pli`, `translate.pli`, `bad_repeat.pli`, `bad_verify.pli`, `bad_translate.pli` |
 | `TRIM`, `TALLY` (ADR-107) | `trim.pli`, `tally.pli`, `bad_trim.pli`, `bad_tally.pli` |

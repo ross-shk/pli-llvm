@@ -3606,3 +3606,27 @@ member intact, default-copy contrast pinned);
 forwarding (`f(byaddr(p))` through a struct param) works by
 construction. Structs in by-value C entries and async calls
 ride the same choke point unchanged.
+
+## ADR-141 — Variable-length SUBSTR via VARYING results
+
+Context. libnet slices receive buffers with `SUBSTR(buf,1,n)`
+where `n` is the runtime byte count, but the length had to be
+a constant: the result type carried a static length. The
+runtime already transmitted arbitrary start/length safely
+(truncate/pad, never overrun), and `Val` already flows
+runtime lengths — only static typing stood in the way.
+
+Decision. A non-constant length yields `CHAR(M)` VARYING
+where M is the source's static maximum; the constant path is
+byte-identical. Emission sizes the temp at M, clamps the live
+length at zero and M (`select` pair, no runtime change), and
+stores it as the result length — start keeps the shared
+blank-fill semantics so both paths agree. The pseudo-variable
+form needed no work: it already forwarded runtime lengths to
+`pli_substr_assign`. `bad_substr.pli` is deleted, superseded
+(the `bad_bitlen.pli` precedent).
+
+Consequences. `substr_var.pli` runs (live lengths 5/0/64
+through VARYING receivers, fixed blank-padded receivers,
+varying source, pseudo-variable write-through);
+`bad_substr_var.pli` pins the surviving operand rules.
