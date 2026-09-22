@@ -1,0 +1,22 @@
+ /* CONTROLLED attribute limits (rules (15),(26),(87),(90)): the
+    attribute itself parses, but INITIAL/VALUE/LIKE/DEFINED/BASED
+    and dynamic extents on CONTROLLED stay diagnosed, as does
+    ALLOCATE/FREE of CONTROLLED storage. All cases here are
+    sema-level: a parse error anywhere would mask them, so the
+    AREA case lives in bad_controlled_area.pli. */
+ bad_controlled: procedure options(main);
+    declare p pointer;
+    declare c1 controlled;
+    declare c2 fixed bin(31) controlled initial(1);
+    declare c3 fixed bin(31) controlled value(2);
+    declare 1 c4 controlled based(p),
+           2 a fixed bin(31);
+    declare c6(3) fixed bin(31) controlled;
+    declare t fixed bin(31);
+    declare 1 st, 2 a fixed bin(31);
+    declare n fixed bin(31);
+    declare c7 fixed bin(31) controlled like st;
+    declare c8(n) fixed bin(31) controlled;
+    allocate c1 set(p);
+    free c1;
+ end bad_controlled;

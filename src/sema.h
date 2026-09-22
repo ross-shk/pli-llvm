@@ -38,6 +38,7 @@ struct Symbol {
   // BASED (rule 25): the POINTER variable that addresses this based structure's
   // storage; a based symbol has no own storage, its address is the pointer value.
   Symbol* basedBase = nullptr;
+  bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
   // For a DEFINED base that is a subscripted reference (rule 126):
   //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)
   //   definedIsubAxis >= 0  -> this X axis holds the iSUB dummy (rule 134)

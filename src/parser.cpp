@@ -1055,6 +1055,7 @@ StmtP Parser::parseDeclare() {
         item.extName = base.extName;
         item.entryParams = base.entryParams;
         item.entryByValue = base.entryByValue;
+        item.controlled = base.controlled;
         item.like = base.like;
         st->decls.push_back(std::move(item));
       }
@@ -1567,8 +1568,15 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.complex = true;
         continue;
       }
-      if (w == "PICTURE" || w == "PIC" || w == "AREA" || w == "OFFSET" || w == "CONTROLLED" ||
-          w == "CTL" || w == "LABEL" || w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
+      if (w == "CONTROLLED" || w == "CTL") {
+        // controlled-attribute (rule (15), ADR-140): storage managed by an
+        // explicit generation stack; consumed like the other storage classes.
+        advance();
+        bag.controlled = true;
+        continue;
+      }
+      if (w == "PICTURE" || w == "PIC" || w == "AREA" || w == "OFFSET" || w == "LABEL" ||
+          w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -1678,6 +1686,7 @@ void Parser::parseDeclTail(DeclItem& item) {
       item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
   }
   item.ty.dims = arrDims;
+  item.controlled = bag.controlled;
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
     // Element access assumes single-bit storage below; never lay out a wide
     // bit array that codegen would mistarget (invariant 2).
