@@ -1088,6 +1088,36 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               item.sym->initElems = std::move(elems);
           }
         }
+        // Adjustable CHARACTER length (rule (18)): `CHAR(*)` or `CHAR(expr)` on
+        // a scalar character variable. The length is caller-supplied at call
+        // time, so it is a parameter-only form in this stage; VARYING and
+        // non-parameter uses are diagnosed, never silently fixed-length.
+        if (item.ty.isChar() && (item.ty.starLen || item.slenExpr)) {
+          bool isParam =
+              std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+          if (!isParam)
+            for (auto& st : p->body)
+              if (st && st->kind == Stmt::Entry &&
+                  std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
+                isParam = true;
+          if (!isParam)
+            d_.error(item.loc, "an adjustable CHARACTER length is only valid on a parameter",
+                     "(18)");
+          else if (item.ty.varying)
+            d_.error(item.loc,
+                     "CHARACTER(*) VARYING parameters are not implemented in this stage", "(18)");
+          else if (item.ty.isArray())
+            d_.error(item.loc,
+                     "an adjustable CHARACTER length on an array is not implemented in this stage",
+                     "(12)");
+          else if (item.slenExpr) {
+            // CHAR(expr): type the runtime length expression (it usually names a
+            // caller parameter read at entry, mirroring a dynamic array bound).
+            typeExpr(item.slenExpr.get(), sc, p);
+            if (!item.slenExpr->ty.isNumeric())
+              d_.error(item.slenExpr->loc, "CHARACTER length must be numeric", "(18)");
+          }
+        }
         if (item.ty.isStruct() &&
             (!item.initItems.empty() || structHasMemberInit(items, children, idx))) {
           // INITIAL on a structure (rule (26)): flatten the itemlist (iteration

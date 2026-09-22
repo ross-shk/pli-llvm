@@ -1,0 +1,46 @@
+ /* Adjustable-length CHARACTER parameters (rules (18),(34)-(38)): a parameter
+    declared `char(*)` (or `char(expr)`) takes its length from the caller's
+    actual character argument at call time, passed as a hidden length argument.
+    The callee writes through the caller's buffer (by reference) up to the live
+    length, and reads report that length. Different caller buffer sizes work. */
+ starchar_test: procedure options(main);
+    declare big char(10);
+    declare small char(4);
+    declare fails fixed bin(31);
+
+    fails = 0;
+    /* by-reference write through a char(*) param reflects in the caller */
+    call fill(big);
+    if big ^= 'hi' then fails = fails + 1;
+    if length(big) ^= 10 then fails = fails + 1;
+    /* a smaller caller buffer keeps its own length */
+    call fill(small);
+    if small ^= 'hi' then fails = fails + 1;
+    if length(small) ^= 4 then fails = fails + 1;
+    /* reads of a char(*) param report the live length */
+    if fill2(big) ^= 10 then fails = fails + 1;
+    if fill2(small) ^= 4 then fails = fails + 1;
+    /* a char(n) adjustable-length param: the caller's buffer capacity rules */
+    call filln(big, 3);
+    if substr(big, 1, 3) ^= 'abc' then fails = fails + 1;
+    if length(big) ^= 10 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS starchar');
+    else put skip list('FAIL starchar: fails =', fails);
+
+ fill: procedure(b);
+    declare b char(*);
+    b = 'hi';
+ end fill;
+
+ fill2: procedure(b) returns(fixed bin(31));
+    declare b char(*);
+    return(length(b));
+ end fill2;
+
+ filln: procedure(b, n);
+    declare n fixed bin(31);
+    declare b char(n);
+    b = 'abc';
+ end filln;
+ end starchar_test;

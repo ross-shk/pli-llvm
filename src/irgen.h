@@ -59,6 +59,10 @@ private:
   // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
   // bound value of its dynamic axis, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynUb_;
+  // For an adjustable-length `CHAR(*)` parameter (rule (18)): the live length,
+  // read from the caller-supplied hidden i64 length argument once at entry.
+  // The mirror of `dynUb_` for character parameters.
+  std::unordered_map<Symbol*, llvm::Value*> dynLen_;
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynLb_;
@@ -157,11 +161,16 @@ private:
   // Append the callee's static-link arguments (its enclosing automatic
   // variables, rule 8). Shared by emitCall and emitExpr.
   void appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args);
-  // True when a parameter is a `*`-adjustable-extent array (rule (13)); such a
-  // parameter carries a hidden i64 extent argument from the caller.
+  // True when a parameter is a `*`-adjustable-extent array (rule (13)) or an
+  // adjustable-length `CHAR(*)` (rule (18)); such a parameter carries a hidden
+  // i64 extent/length argument from the caller.
   bool isAdjustable(Symbol* s) {
-    return s->ty.isArray() && !s->ty.dims.empty() && s->ty.dims[0].adj;
+    return (s->ty.isArray() && !s->ty.dims.empty() && s->ty.dims[0].adj) ||
+           (s->ty.isChar() && s->ty.starLen);
   }
+  // True when a parameter is an adjustable-length `CHAR(*)` (rule (18)); its
+  // hidden argument is a character length, not an array extent.
+  static bool isStarLen(const Type& t) { return t.isChar() && t.starLen; }
   // Number of `*`-adjustable-extent parameters in `params` (each contributes a
   // hidden i64 extent argument after the by-reference pointers).
   size_t nAdjustable(const std::vector<Symbol*>& params) {
@@ -174,6 +183,10 @@ private:
   // Element count of a call argument passed to a `*`-extent parameter: constant
   // for a fixed array, the recorded live bound for a dynamic-bound array.
   llvm::Value* argExtent(HExpr* a);
+  // Buffer capacity of a call argument passed to an adjustable-length `CHAR(*)`
+  // parameter (rule (18)): a fixed char variable's declared length, a forwarded
+  // `CHAR(*)` parameter's live length, or the emitted value's length.
+  llvm::Value* argLen(HExpr* a);
 
   Val emitExpr(HExpr* e);
   // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).

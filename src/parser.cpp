@@ -1153,9 +1153,25 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
       bag.starLen = true;
       expect(Tok::RParen, rule);
     } else if (at(Tok::LParen)) {
-      parenNums(a, b);
-      if (a > 0)
-        bag.slen = a;
+      // A constant length `CHAR(n)` folds to the number; a runtime length
+      // `CHAR(expr)` is an adjustable extent whose value the caller supplies
+      // at call time (rule (18)), valid only on a parameter (checked in sema).
+      advance();
+      if (at(Tok::Number) && !cur().isFloat) {
+        a = boundedNonNeg(cur().text, cur().loc, d_, "precision", rule);
+        advance();
+        expect(Tok::RParen, rule);
+        if (a > 0)
+          bag.slen = a;
+      } else {
+        // A runtime length `CHAR(expr)` (rule (18)): an adjustable length whose
+        // value the caller supplies at call time, like `CHAR(*)`; the expr is
+        // typed for validation in sema.
+        ExprP len = parseExpr();
+        expect(Tok::RParen, rule);
+        bag.slenExpr = std::move(len);
+        bag.starLen = true;
+      }
     }
     return true;
   }
@@ -1667,9 +1683,13 @@ void Parser::parseDeclTail(DeclItem& item) {
   } else if (bag.complex) {
     item.ty = Type::complexTy();
   } else if (bag.character) {
-    if (bag.starLen)
-      d_.error(item.loc, "a '*' string length is not implemented in this stage", "(18)");
+    // A `CHAR(*)` or `CHAR(expr)` adjustable length (rule (18)): recorded on the
+    // type for sema to validate as a parameter-only form and for codegen to
+    // size at call time. VARYING stays diagnosed there (deferred).
     item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+    if (bag.starLen)
+      item.ty.starLen = true;
+    item.slenExpr = std::move(bag.slenExpr);
   } else if (bag.bit) {
     int n = bag.slen > 0 ? bag.slen : 1;
     item.ty = Type::bit(n);

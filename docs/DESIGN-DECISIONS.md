@@ -3630,3 +3630,47 @@ Consequences. `substr_var.pli` runs (live lengths 5/0/64
 through VARYING receivers, fixed blank-padded receivers,
 varying source, pseudo-variable write-through);
 `bad_substr_var.pli` pins the surviving operand rules.
+
+---
+
+## ADR-142 — Adjustable-length `CHAR(*)` procedure parameters
+
+**Context.** A network bridge (`net_read(handle, buffer)`) needs to pass a
+caller-sized buffer to a procedure rather than force a fixed `CHAR(n)` plus a
+separate `buflen` argument. Rule (18) marks a `*` string length as an adjustable
+extent; previously the parser diagnosed `CHAR(*)` as "not implemented in this
+stage" and a runtime `CHAR(n)` declaration length also failed.
+
+**Decision.** `CHAR(*)` (and `CHAR(expr)` with a non-constant length) is served
+on a non-VARYING scalar parameter by the same hidden-argument discipline as the
+`*` adjustable-extent array parameter (ADR-055): a `Type::starLen` flag marks
+the adjustable length, the caller passes the actual character argument's buffer
+capacity as a hidden i64 length argument (after the by-reference pointers,
+before the static links), and the callee reads it into a `dynLen_` dope slot at
+entry. The parameter storage is the caller's buffer itself (no local alloca):
+`argAddr` passes a character variable by reference so callee writes reach the
+caller, `loadSym` reports `dynLen_` as the live length (so `LENGTH` and reads see
+the actual capacity), and `storeTo` blank-pads/truncates to that live length.
+The hidden-length argument is threaded through `declareProc` (plain impl,
+multi-entry impl, and each entry thunk), `emitPlainProc`/`emitMultiEntryProc`,
+and every call site (`emitCall`, `emitAsyncCall`, the expression-call path) via
+an `argLen` helper; forwarding a `CHAR(*)` parameter to another `CHAR(*)`
+parameter passes the live length along. `CHAR(expr)`'s expression is typed for
+validation in sema but the live length always comes from the hidden argument
+(the caller's actual capacity), never from evaluating `expr`.
+
+**Consequences.** `tests/core/starchar.pli` covers by-reference writes visible in
+the caller, `LENGTH` reporting each caller buffer's actual size, different buffer
+sizes, `CHAR(n)` with `n` a parameter, a function returning `LENGTH(b)`, and
+forwarding. `bad_starchar.pli` rejects a non-parameter `CHAR(*)`;
+`bad_starchar_varying.pli` rejects `CHAR(*) VARYING`; a non-variable character
+argument (literal/expression) to a `CHAR(*)` parameter is diagnosed. GRAMMAR-
+COVERAGE rule (18) lists the served form.
+
+**Rejected.** VARYING `CHAR(*)` parameters (the live length prefix would have to
+live inside the caller's buffer, changing its layout); adjustable-length
+parameters on external C `ENTRY` descriptors (a separate interop surface);
+adjustable-length characters in `RETURNS`; a non-parameter (local) adjustable
+character (no caller to supply the length); and array-of-adjustable-char. A
+runtime-length local `CHAR(n)` (not a parameter) stays diagnosed.
+

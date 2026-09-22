@@ -1046,7 +1046,7 @@ void IRGen::declareProc(HProc* p) {
       pt.push_back(b_.getPtrTy());
     for (Symbol* s : p->paramSyms)
       if (isAdjustable(s))
-        pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
+        pt.push_back(b_.getInt64Ty()); // hidden `*` extent / CHAR(*) length args
     for (size_t i = 0; i < p->env.size(); ++i)
       pt.push_back(b_.getPtrTy()); // links
     llvm::FunctionType* ft = llvm::FunctionType::get(implRet, pt, false);
@@ -1078,7 +1078,7 @@ void IRGen::declareProc(HProc* p) {
     pt.push_back(b_.getPtrTy());
   for (Symbol* s : uni)
     if (isAdjustable(s))
-      pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
+      pt.push_back(b_.getInt64Ty()); // hidden `*` extent / CHAR(*) length args
   for (size_t i = 0; i < p->env.size(); ++i)
     pt.push_back(b_.getPtrTy());
   pt.push_back(b_.getInt64Ty()); // the entry selector
@@ -1101,7 +1101,7 @@ void IRGen::declareProc(HProc* p) {
       sig.push_back(b_.getPtrTy());
     for (Symbol* s : mine)
       if (isAdjustable(s))
-        sig.push_back(b_.getInt64Ty()); // hidden `*` extent args
+        sig.push_back(b_.getInt64Ty()); // hidden `*` extent / CHAR(*) length args
     for (size_t i = 0; i < p->env.size(); ++i)
       sig.push_back(b_.getPtrTy()); // links
     llvm::FunctionType* tft = llvm::FunctionType::get(trty, sig, false);
@@ -1206,8 +1206,15 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   for (Symbol* s : p->paramSyms)
     symAddr_[s] = fn->getArg(ai++);
   for (Symbol* s : p->paramSyms)
-    if (isAdjustable(s))
-      dynUb_[s] = fn->getArg(ai++);
+    if (isAdjustable(s)) {
+      // A `*`-extent array reads its hidden extent into dynUb_; a `CHAR(*)`
+      // parameter reads its hidden length into dynLen_ (rules (13),(18)).
+      llvm::Value* hv = fn->getArg(ai++);
+      if (isStarLen(s->ty))
+        dynLen_[s] = hv;
+      else
+        dynUb_[s] = hv;
+    }
   for (size_t i = 0; i < p->env.size(); ++i)
     symAddr_[p->env[i]] = fn->getArg(ai++);
 
@@ -1271,8 +1278,13 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   for (Symbol* s : uni)
     symAddr_[s] = impl->getArg(ai++);
   for (Symbol* s : uni)
-    if (isAdjustable(s))
-      dynUb_[s] = impl->getArg(ai++);
+    if (isAdjustable(s)) {
+      llvm::Value* hv = impl->getArg(ai++);
+      if (isStarLen(s->ty))
+        dynLen_[s] = hv;
+      else
+        dynUb_[s] = hv;
+    }
   for (size_t i = 0; i < p->env.size(); ++i)
     symAddr_[p->env[i]] = impl->getArg(ai++);
   llvm::Value* sel = impl->getArg(ai++);
@@ -2705,6 +2717,20 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
                 a->sym->ty.k == pty.k && a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
                 a->sym->ty.varying == pty.varying;
+  if (pty.isChar() && pty.starLen) {
+    // An adjustable-length `CHAR(*)` parameter (rule (18)) takes the caller's
+    // character variable directly by reference (no copy): the callee's length
+    // comes from the hidden argument and its writes reach the caller's buffer.
+    if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
+        a->sym->ty.varying == pty.varying && a->memberPath.empty())
+      return addressOf(a->sym);
+    // A non-variable character argument (literal/expression) has no storage for
+    // the callee to write through; diagnosed rather than copied into a dummy.
+    d_.error(a->loc,
+             "an adjustable-length CHARACTER parameter takes a character variable in this stage",
+             "(18)");
+    return llvm::Constant::getNullValue(b_.getPtrTy());
+  }
   if (direct)
     return addressOf(a->sym);
   llvm::Value* addr = entryAlloca(llvmTy(pty), "dummy");
@@ -2795,6 +2821,28 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
   return i64(d.ub - d.lb + 1);
 }
 
+// Buffer capacity of a call argument passed to an adjustable-length `CHAR(*)`
+// parameter (rule (18)): a fixed char variable's declared length, a forwarded
+// `CHAR(*)` parameter's live length, or the emitted value's length.
+llvm::Value* IRGen::argLen(HExpr* a) {
+  if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar()) {
+    // Forwarding a `CHAR(*)` parameter (rule (18)): pass the live length this
+    // frame received for it.
+    if (a->sym->ty.starLen) {
+      auto it = dynLen_.find(a->sym);
+      if (it != dynLen_.end())
+        return it->second;
+      return i64(0);
+    }
+    // A fixed char variable's declared length is the caller buffer's capacity.
+    return i64(a->sym->ty.len);
+  }
+  Val av = emitExpr(a);
+  if (av.ty.isChar())
+    return av.len ? av.len : i64(av.ty.len);
+  return i64(0);
+}
+
 // Append the callee's static-link arguments (its enclosing automatic
 // variables, rule 8). Shared by emitCall and emitExpr.
 void IRGen::appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args) {
@@ -2879,15 +2927,18 @@ void IRGen::emitCall(HStmt* s) {
   if (en || callee)
     for (size_t i = s->args.size(); i < calleeParams.size(); ++i)
       args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
-  // Hidden extent args for `*`-extent parameters (rule 13): the caller passes
-  // the actual element count of each matching array argument.
+  // Hidden extent/length args for `*`-extent array and `CHAR(*)` parameters
+  // (rules (13),(18)): the caller passes the actual extent of each matching
+  // array argument, or the actual buffer length of each character argument.
   for (size_t i = 0; i < calleeParams.size(); ++i) {
     if (isAdjustable(calleeParams[i])) {
       // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent
       // alongside its null address (extension, ADR-119).
       llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
                              ? i64(0)
-                             : argExtent(s->args[i].get());
+                             : (isStarLen(calleeParams[i]->ty)
+                                    ? argLen(s->args[i].get())
+                                    : argExtent(s->args[i].get()));
       if (!ext) {
         d_.error(s->args[i]->loc,
                  "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -2942,7 +2993,9 @@ void IRGen::emitAsyncCall(HStmt* s) {
     if (isAdjustable(calleeParams[i])) {
       llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
                              ? i64(0)
-                             : argExtent(s->args[i].get());
+                             : (isStarLen(calleeParams[i]->ty)
+                                    ? argLen(s->args[i].get())
+                                    : argExtent(s->args[i].get()));
       if (!ext)
         ext = i64(0); // diagnosed by sema through the sync path (13)
       callArgs.push_back(ext);
@@ -3366,6 +3419,11 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
       llvm::Value* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "l32");
       v.ptr = dp;
       v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "l64");
+    } else if (ty.starLen) {
+      // An adjustable-length `CHAR(*)` parameter (rule (18)): its live length
+      // is the hidden argument the caller supplied (read once at entry).
+      v.ptr = addr;
+      v.len = dynLen_.count(sym) ? dynLen_[sym] : i64(ty.len);
     } else {
       v.ptr = addr;
       v.len = i64(ty.len);
@@ -3425,6 +3483,13 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
   const Type& dt = sym->ty;
   llvm::Value* addr = addressOf(sym);
   if (dt.isChar()) {
+    if (dt.starLen) {
+      // An adjustable-length `CHAR(*)` parameter (rule (18)): write into the
+      // caller's buffer, blank-padding/truncating to the live capacity.
+      llvm::Value* live = dynLen_.count(sym) ? dynLen_[sym] : i64(dt.len);
+      b_.CreateCall(runtimeFn("pli_assign_char"), {addr, live, v.ptr, v.len});
+      return;
+    }
     storeCharTo(addr, dt, v, loc);
     return;
   }
@@ -4145,7 +4210,9 @@ Val IRGen::emitExpr(HExpr* e) {
         // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent.
         llvm::Value* ext = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
                                ? i64(0)
-                               : argExtent(e->args[i].get());
+                               : (isStarLen(calleeParams[i]->ty)
+                                      ? argLen(e->args[i].get())
+                                      : argExtent(e->args[i].get()));
         if (!ext) {
           d_.error(e->args[i]->loc,
                    "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",

@@ -52,6 +52,10 @@ struct Type {
   int scale = 0;        // FIXED scale factor q
   int len = 1;          // CHARACTER/BIT length
   bool varying = false; // VARYING (rule 15)
+  // Adjustable CHARACTER length (rule (18)): `CHAR(*)` on a parameter whose
+  // length comes from the caller's actual argument at call time, passed as a
+  // hidden i64 length argument (mirrors the `*` adjustable array extent).
+  bool starLen = false;
   // Array dimension bounds per axis — rules (12),(13). Empty for a scalar.
   // `len`/`prec`/... describe the element type.
   std::vector<Dim> dims;
@@ -216,6 +220,7 @@ inline Type& Type::operator=(const Type& o) {
   scale = o.scale;
   len = o.len;
   varying = o.varying;
+  starLen = o.starLen;
   dims = o.dims;
   members.clear();
   members.reserve(o.members.size());
@@ -229,7 +234,7 @@ inline Type& Type::operator=(Type&& o) noexcept = default;
 
 inline bool Type::operator==(const Type& o) const {
   if (k != o.k || prec != o.prec || scale != o.scale || len != o.len || varying != o.varying ||
-      dims != o.dims)
+      starLen != o.starLen || dims != o.dims)
     return false;
   if (members.size() != o.members.size())
     return false;
