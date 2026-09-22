@@ -139,6 +139,7 @@ private:
     bool event = false;   // EVENT (rules (15),(79),(82), QR2.8): an event name
     int prec = -1, scale = 0, slen = -1;
     bool starLen = false; // '*' string length (rule (18)): adjustable extent
+    ExprP slenExpr;       // CHAR(n) runtime length expression (rule (18)); null = constant
   };
   // Consume one attribute word (FIXED, FLOAT, BINARY, DECIMAL, CHARACTER,
   // BIT, VARYING, REAL) with its optional precision into `bag`. Returns true

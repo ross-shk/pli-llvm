@@ -1,0 +1,6 @@
+ /* Rule (18): an adjustable CHARACTER length is a parameter-only form whose
+    length is supplied by the caller at call time. A non-parameter use, a
+    VARYING form, and an array form are diagnosed, never silently fixed-length. */
+ bad_starchar: procedure options(main);
+    declare s char(*);
+ end bad_starchar;
