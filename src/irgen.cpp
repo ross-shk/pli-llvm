@@ -758,6 +758,10 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
       return definedConstAddr(sym);
     return addressOf(sym->definedBase);
   }
+  // A CONTROLLED variable (rules (15),(87)-(90), ADR-140) has no frame
+  // storage: its address is the latest generation on its runtime stack.
+  if (sym->controlled)
+    return b_.CreateCall(runtimeFn("pli_ctl_addr"), {i64(sym->ctlSlot)}, "ctladdr");
   // rule (8): an enclosing variable is reached through this frame's static
   // link; otherwise it is this frame's own storage (globals / allocas /
   // parameters). Both are recorded in symAddr_.
@@ -1975,12 +1979,17 @@ void IRGen::emitAssign(HStmt* s) {
 }
 
 // ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
-// store its address in the pointer target.
+// store its address in the pointer target; or push a CONTROLLED generation,
+// sized the same way from the compile-time descriptor.
 void IRGen::emitAllocate(HStmt* s) {
   for (size_t i = 0; i < s->allocBase.size(); ++i) {
     Symbol* bsym = s->allocBase[i]->sym;
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
+    if (bsym->controlled) {
+      b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(bsym->ctlSlot), sz});
+      continue;
+    }
     llvm::Value* p = b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
     HExpr* set = s->allocSet[i].get();
     storeTo(set->sym, Val{set->ty, p}, set->loc);
@@ -1988,10 +1997,15 @@ void IRGen::emitAllocate(HStmt* s) {
 }
 
 // FREE (rule 90): release the heap storage addressed by a based pointer — the
-// explicit locator when given, else the based variable's own BASED pointer.
+// explicit locator when given, else the based variable's own BASED pointer —
+// or pop a CONTROLLED generation.
 void IRGen::emitFree(HStmt* s) {
   for (auto& f : s->freeBase) {
     Symbol* bsym = f->sym;
+    if (bsym && bsym->controlled) {
+      b_.CreateCall(runtimeFn("pli_ctl_free"), {i64(bsym->ctlSlot)});
+      continue;
+    }
     llvm::Value* addr = f->locPtr ? emitExpr(f->locPtr.get()).reg : addressOf(bsym);
     b_.CreateCall(runtimeFn("pli_free"), {addr});
   }

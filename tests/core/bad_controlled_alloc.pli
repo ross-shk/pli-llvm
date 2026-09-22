@@ -1,0 +1,11 @@
+ /* CONTROLLED allocation limits (rules (87),(88),(90)): BASED keeps
+    its SET requirement (moved parser to sema), and a locator FREE of
+    CONTROLLED storage stays diagnosed. */
+ bad_controlled_alloc: procedure options(main);
+    declare p pointer;
+    declare 1 rec based(p),
+           2 a fixed bin(31);
+    declare c fixed bin(31) controlled;
+    allocate rec;
+    free p -> c;
+ end bad_controlled_alloc;

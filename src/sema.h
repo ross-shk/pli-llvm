@@ -39,6 +39,7 @@ struct Symbol {
   // storage; a based symbol has no own storage, its address is the pointer value.
   Symbol* basedBase = nullptr;
   bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
+  int ctlSlot = -1;        // runtime generation-stack slot index (87-90)
   // For a DEFINED base that is a subscripted reference (rule 126):
   //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)
   //   definedIsubAxis >= 0  -> this X axis holds the iSUB dummy (rule 134)
@@ -264,6 +265,7 @@ private:
   std::vector<Symbol*> storage_;
   std::vector<Symbol*> entries_;     // external C entries, in declaration order
   int nextFileSlot_ = 0;             // next FILE variable slot index (100-103)
+  int nextCtlSlot_ = 0;              // next CONTROLLED variable slot index (87-90)
   std::set<std::string> procLabels_; // GO TO targets in the current proc (rule 77)
   Stmt* curEntry_ = nullptr;         // the ENTRY segment currently being checked
                                      // (rule 56): enables RETURN(value) in its body
