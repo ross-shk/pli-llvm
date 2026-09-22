@@ -3625,8 +3625,9 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     }
     int n = e->args[2]->kind == Expr::IntLit ? (int)e->args[2]->ival : -1;
     if (n < 0) {
-      d_.error(e->args[2]->loc, "SUBSTR length must be a constant in this stage", "(123)");
-      e->ty = Type::voidTy();
+      // A runtime length (rule (123)): the result is VARYING over the
+      // source's static maximum, with the live length fixed at emission.
+      e->ty = Type::chr(e->args[0]->ty.len, true);
       return true;
     }
     e->ty = Type::chr(n);

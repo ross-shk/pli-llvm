@@ -4582,6 +4582,21 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val start = emitExpr(e->args[1].get());
     Val len = emitExpr(e->args[2].get());
     Val out = charTemp(e->ty.len);
+    if (e->ty.varying) {
+      // A runtime length (rule (123)): clamp the live length at zero and
+      // the source maximum, and transmit exactly that (start keeps the
+      // blank-fill semantics of the constant path).
+      llvm::Value* ln = toI64(len);
+      llvm::Value* nonneg =
+          b_.CreateSelect(b_.CreateICmpSLT(ln, i64(0), "svneg"), i64(0), ln, "sv0");
+      llvm::Value* live = b_.CreateSelect(
+          b_.CreateICmpSGT(nonneg, i64(e->ty.len), "svbig"), i64(e->ty.len), nonneg, "svlive");
+      b_.CreateCall(runtimeFn("pli_substr"),
+                    {out.ptr, out.len, s.ptr, s.len, toI64(start), live});
+      out.len = live;
+      result = out;
+      return true;
+    }
     b_.CreateCall(runtimeFn("pli_substr"),
                   {out.ptr, out.len, s.ptr, s.len, toI64(start), toI64(len)});
     out.len = i64(e->ty.len);
