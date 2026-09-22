@@ -720,8 +720,11 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     for (size_t i = 0; i < s->allocBase.size(); ++i) {
       os << (i ? "," : " ");
       printExpr(os, s->allocBase[i].get(), ind);
-      os << " set=";
-      printExpr(os, s->allocSet[i].get(), ind);
+      // Bare ALLOCATE X (rule 87) carries no SET target.
+      if (i < s->allocSet.size() && s->allocSet[i]) {
+        os << " set=";
+        printExpr(os, s->allocSet[i].get(), ind);
+      }
     }
     break;
   case HStmt::Free:

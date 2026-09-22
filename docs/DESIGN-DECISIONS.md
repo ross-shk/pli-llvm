@@ -3544,3 +3544,33 @@ diagnostics; `bad_controlled_area.pli` pins the AREA parse
 diagnostic separately (a parse error anywhere masks all sema
 diagnostics in the same file, so the two levels cannot share
 a test). Runtime generation stack (B2/B3) stays out.
+
+## ADR-139 — CONTROLLED generation stack and wiring
+
+Context. ADR-138 accepted the attribute and left allocation
+diagnosed. libnet needs live generations with LIFO pop
+semantics (Iron Spring `ctlvar.inc` model: static control
+block per variable).
+
+Decision. Runtime owns a per-slot LIFO stack in
+`rt_storage.c` (`pli_ctl_alloc/free/addr`, indexed by the
+compile-time slot sema assigns on the `nextFileSlot_`
+pattern); empty-stack FREE and allocation failure route to
+`pli_signal_error`, and references before ALLOCATE read NULL
+(the BASED-before-allocation exposure, documented not fixed).
+Sema accepts bare `ALLOCATE X;` at parse and moves the
+BASED-requires-SET diagnostic from parser to sema so the
+cite stays attached to the storage kind; SET on CONTROLLED
+warns and is ignored. Codegen routes every CONTROLLED
+reference through `pli_ctl_addr` at the single `addressOf`
+choke point, sizes generations from the compile-time
+descriptor exactly like BASED, and excludes CONTROLLED from
+frame allocation. Struct params, wide-bit/char descriptor
+conversions beyond `convert`, and `AREA`/`OFFSET`/dynamic
+extents stay later slices.
+
+Consequences. `controlled.pli` runs the full lifecycle
+(alloc→11, alloc→22, free→11, free); `bad_controlled_alloc.pli`
+pins the moved BASED-SET diagnostic and the locator FREE.
+A C-level unit check (`/tmp`, uncommitted) pins push/shadow/
+pop/NULL/sparse-slot behavior including the exit-8 empty pop.

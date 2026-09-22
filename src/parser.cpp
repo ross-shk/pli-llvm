@@ -2820,6 +2820,11 @@ StmtP Parser::parseAllocate() {
           expect(Tok::RParen, "(88)");
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(std::move(set));
+      } else if (!paren) {
+        // Bare ALLOCATE X (rule 87): only CONTROLLED storage is served
+        // without SET in this stage; BASED without SET is diagnosed in sema
+        // so the rule cite stays attached to the storage kind.
+        st->allocBase.push_back(std::move(base));
       } else {
         d_.error(cur().loc, "ALLOCATE requires the SET ( reference ) option in this stage", "(88)");
         resync();

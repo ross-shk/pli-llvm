@@ -990,8 +990,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // invalid combinations; allocation itself stays out (rules 87-90).
         if (item.controlled) {
           item.sym->controlled = true;
-          auto ctlErr = [&](const std::string& what, const char* rule) {
-            d_.error(item.loc, what + " on a CONTROLLED variable is not implemented", rule);
+          item.sym->ctlSlot = nextCtlSlot_++;
+          auto ctlErr = [&](const char* what, const char* rule) {
+            d_.error(item.loc, std::string("CONTROLLED+") + what + " is not implemented", rule);
           };
           if (item.init || !item.initItems.empty() || item.initCall)
             ctlErr("INITIAL", "(26)");
@@ -1242,9 +1243,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // Record AUTOMATIC variables so codegen allocates them (STATIC ones
         // become LLVM globals via emitGlobals). This must cover variables of
         // BEGIN blocks too, hence the Proc* here. A DEFINED or BASED variable
-        // has no storage of its own, so it is never allocated.
+        // has no storage of its own, so it is never allocated; neither is a
+        // CONTROLLED variable, whose generations live on the runtime stack.
         if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase &&
-            !item.sym->basedBase && !item.sym->fileAttr)
+            !item.sym->basedBase && !item.sym->fileAttr && !item.sym->controlled)
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
@@ -2725,17 +2727,25 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         continue;
       }
       if (bsym->controlled) {
-        // CONTROLLED allocation generations (rules 87-90, ADR-140): wired
-        // in a later slice; diagnosed here so no generation is silently lost.
-        d_.error(s->allocBase[i]->loc,
-                 "ALLOCATE of CONTROLLED storage is not implemented in this stage", "(87)");
+        // CONTROLLED allocation (rules 87-90, ADR-140): bare ALLOCATE pushes
+        // a generation; a SET option is stack-managed anyway, so it warns
+        // and is ignored rather than failing the call.
+        if (i < s->allocSet.size() && s->allocSet[i])
+          d_.warn(s->allocSet[i]->loc,
+                  "SET on CONTROLLED ALLOCATE is ignored; generations are stack-managed", "(88)");
         continue;
       }
       if (bsym->ty.isArray() && bsym->ty.isDynamic())
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE of a dynamic-extent based array is not implemented in this stage",
                  "(89)");
-      if (i < s->allocSet.size()) {
+      // BASED without SET was a parse error before bare ALLOCATE (rule 87)
+      // opened the paren-less form for CONTROLLED; keep the cite attached
+      // to the storage kind here.
+      if (i >= s->allocSet.size() || !s->allocSet[i])
+        d_.error(s->allocBase[i]->loc,
+                 "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
+      else {
         typeExpr(s->allocSet[i].get(), sc, p);
         if (s->allocSet[i]->kind != Expr::VarRef || !s->allocSet[i]->ty.isPointer())
           d_.error(s->allocSet[i]->loc, "the SET target of ALLOCATE must be a POINTER variable",
@@ -2750,7 +2760,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       typeExpr(f.get(), sc, p);
       Symbol* bsym = f->sym;
       if (bsym && bsym->controlled) {
-        d_.error(f->loc, "FREE of CONTROLLED storage is not implemented in this stage", "(90)");
+        // CONTROLLED FREE (rule 90, ADR-140): the plain form pops a
+        // generation; a locator has no stack meaning and stays diagnosed.
+        if (f->locPtr)
+          d_.error(f->loc, "a locator FREE of CONTROLLED storage is not implemented", "(90)");
         continue;
       }
       if (!bsym || !bsym->basedBase)
