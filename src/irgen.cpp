@@ -2686,6 +2686,15 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   // A whole-structure argument is passed BY VALUE (rule 127): the source's
   // storage is copied into a fresh buffer, so the callee's writes do not reach
   // the caller's structure. Scalars and arrays remain by reference.
+  // BYADDR(s) opts a single call out of the copy (rule (38)): the caller's
+  // own address rides through, so callee writes are visible. Sema validated
+  // the shape; anything else here falls through to the safe copy path.
+  if (a->kind == HExpr::Call && a->name == "BYADDR" && a->args.size() == 1) {
+    HExpr* inner = a->args[0].get();
+    if (inner->kind == HExpr::VarRef && inner->sym && inner->ty.isStruct())
+      return inner->memberPath.empty() ? addressOf(inner->sym)
+                                       : memberAddr(inner->sym, inner->memberPath, a->loc);
+  }
   if (pty.isStruct()) {
     llvm::Value* dst = entryAlloca(llvmTy(pty), "sv");
     Val av = emitExpr(a);
@@ -4537,6 +4546,15 @@ Val IRGen::emitExpr(HExpr* e) {
 bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // Names matching none of these are user function procedures.
   Val v;
+  if (e->name == "BYADDR") {
+    // BYADDR only has meaning as a direct call argument (handled in
+    // argAddr); anywhere else it is diagnosed, never silently zeroed.
+    d_.error(e->loc, "BYADDR is only valid as a direct call argument", "(38)");
+    v.ty = e->ty;
+    v.reg = i64(0);
+    result = v;
+    return true;
+  }
   if (e->name == "NULL") {
     // NULL (rule 123, Appendix 1): the null POINTER value.
     v.ty = e->ty;

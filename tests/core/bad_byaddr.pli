@@ -1,0 +1,14 @@
+ /* BYADDR limits (rule (123)): one structure argument, and only
+    as a direct call argument. */
+ bad_byaddr: procedure options(main);
+    declare x fixed bin(31);
+    declare 1 s,
+           2 a fixed bin(31);
+    call bump(byaddr(x));
+    call bump(byaddr());
+    x = byaddr(s);
+ end bad_byaddr;
+ bump: procedure(s);
+    declare 1 s,
+           2 a fixed bin(31);
+ end bump;
