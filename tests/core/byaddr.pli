@@ -1,0 +1,34 @@
+ /* BYADDR struct arguments (rule (38)): byaddr(s) passes the
+    caller's structure address so callee writes are visible;
+    without it the callee gets an isolated copy (rule 127). */
+ byaddr_test: procedure options(main);
+    declare fails fixed bin(31);
+    declare 1 rec,
+           2 a fixed bin(31),
+           2 b fixed bin(31);
+    fails = 0;
+    rec.a = 1;
+    rec.b = 2;
+    call bump(byaddr(rec));
+    if rec.a ^= 11 then do;
+       fails = fails + 1;
+       put skip list('FAIL byaddr writeback');
+    end;
+    if rec.b ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL byaddr untouched');
+    end;
+    rec.a = 1;
+    call bump(rec);
+    if rec.a ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL byvalue copy');
+    end;
+    if fails = 0 then put skip list('PASS byaddr');
+ end byaddr_test;
+ bump: procedure(s);
+    declare 1 s,
+           2 a fixed bin(31),
+           2 b fixed bin(31);
+    s.a = s.a + 10;
+ end bump;

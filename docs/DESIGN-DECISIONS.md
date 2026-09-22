@@ -3574,3 +3574,35 @@ Consequences. `controlled.pli` runs the full lifecycle
 pins the moved BASED-SET diagnostic and the locator FREE.
 A C-level unit check (`/tmp`, uncommitted) pins push/shadow/
 pop/NULL/sparse-slot behavior including the exit-8 empty pop.
+
+## ADR-140 — BYADDR opts a call out of the struct copy
+
+Context. Whole-structure arguments pass BY VALUE into a fresh
+copy (rule 127), so callee writes never reach the caller.
+libnet needs the opposite for out-structures (socket address
+blocks, stat buffers): pass the caller's address. Changing
+the default would silently alter every served program, so the
+plan allows an explicit marker instead.
+
+Decision. Call-site `BYADDR(s)` (rule (38); exactly one
+structure argument, typed transparently so ordinary
+call-argument checking still applies) rides the existing
+`Call` nodes through HIR untouched and is honored at the
+single `argAddr` choke point: whole-struct variables pass
+`addressOf`, qualified members `memberAddr` — no copy, no
+conversions, no descriptor or ABI change, since the callee
+already binds the incoming pointer directly as param storage
+(`irgen.cpp:1206`). Anything but a direct call argument hits
+an irgen backstop diagnostic (sema's transparent typing
+routes every such misuse into existing diagnostics first, so
+the backstop is pure insurance). A callee-side parameter
+attribute was rejected: it would need descriptor threading
+and callee-decl lookup at every call site, fragile under
+separate compilation, for zero additional expressiveness.
+
+Consequences. `byaddr.pli` runs (writeback visible, untouched
+member intact, default-copy contrast pinned);
+`bad_byaddr.pli` pins arity/shape diagnostics. Param
+forwarding (`f(byaddr(p))` through a struct param) works by
+construction. Structs in by-value C entries and async calls
+ride the same choke point unchanged.

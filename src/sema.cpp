@@ -3586,6 +3586,25 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::ptr();
     return true;
   }
+  // BYADDR marker (rule (38)): byaddr(s) passes a structure's own address so
+  // callee writes are visible, opting out of the rule-127 by-value copy for
+  // that call. Exactly one structure argument; the type rides through so
+  // ordinary call-argument checking still applies. Anything but a direct
+  // call argument is diagnosed at emission.
+  if (e->name == "BYADDR") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "BYADDR takes one argument (a structure)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isStruct()) {
+      d_.error(e->args[0]->loc, "BYADDR argument must be a structure", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = e->args[0]->ty;
+    return true;
+  }
   // SUBSTR built-in (M2): substr(s, i, n) yields a character string of
   // length n; the length must be a constant so the result type is sized.
   if (e->name == "SUBSTR") {
