@@ -228,6 +228,17 @@ bool Sema::run(Program& prog, bool compileOnly) {
     }
   }
 
+  // Extension (ADR-109): collect package-level data BEFORE member proc processing
+  // so LIKE references to module-level structures (e.g. CONN_REC) resolve from
+  // member procedures. Package-level symbols are registered in rootScope_ as
+  // static storage (module-scope globals).
+  for (auto& p : prog.procs) {
+    if (!p->isPackage) continue;
+    beginScopes_.clear();
+    collectDecls(p->body, rootScope_, p.get(), true);
+    resolvePendingBased(p.get());
+  }
+
   // Pass 1b: collect every procedure's declarations into its own scope before
   // typing any body, so that a structure-valued function's RETURNS name (rule
   // 127) resolves against an already-declared enclosing template. Runs after
@@ -244,16 +255,6 @@ bool Sema::run(Program& prog, bool compileOnly) {
     // POINTER parameter (rule 25), not an implicit arithmetic parameter.
     resolvePendingBased(p.get());
     resolveProcParams(p.get());
-  }
-  
-  // Extension (ADR-109): collect package-level data BEFORE member proc processing
-  // so variable lookup succeeds from member procedures. Package-level symbols are
-  // registered in rootScope_ as static storage (module-scope globals).
-  for (auto& p : prog.procs) {
-    if (!p->isPackage) continue;
-    beginScopes_.clear();
-    collectDecls(p->body, rootScope_, p.get(), true);
-    resolvePendingBased(p.get());
   }
   flushPendingBased();
   declsCollected_ = true;
