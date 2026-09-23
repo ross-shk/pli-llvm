@@ -1,0 +1,52 @@
+ /* rule (38): external entry descriptors may use adjustable CHARACTER length
+    `char(*)`.  The hidden length argument is passed alongside the buffer
+    pointer so the callee can size its operations.  Both by-reference calls
+    and return-value functions are covered. */
+ starchar_entry: procedure options(main);
+    declare s1 char(8);
+    declare s2 char(5);
+    declare small char(2);
+    declare large char(10);
+    declare len fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* call-based COPY with different-size buffers */
+    call fill_two(s1);
+    if s1 ^= 'ab' then fails = fails + 1;
+    if length(s1) ^= 8 then fails = fails + 1;
+
+    call fill_two(s2);
+    if s2 ^= 'ab' then fails = fails + 1;
+    if length(s2) ^= 5 then fails = fails + 1;
+
+    /* function-returning LENGTH of char(*) arg */
+    small = 'xy';
+    len = upper_len(small);
+    if len ^= 2 then fails = fails + 1;
+
+    large = 'hello worl';
+    len = upper_len(large);
+    if len ^= 10 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS starchar_entry');
+    else put skip list('FAIL starchar_entry: fails =', fails);
+
+ end starchar_entry;
+
+/* External ENTRY that fills first N chars of buffer (rule 38). */
+ fill_two: procedure(buf)
+    options(LINKAGE(C));
+    declare buf char(*);
+
+    buf = 'ab';
+ end fill_two;
+
+/* External ENTRY returning fixed: takes char(*) param (rule 34, 38). */
+ upper_len: procedure(str) returns(fixed bin(31))
+    options(LINKAGE(C));
+    declare str char(*);
+
+    return(length(str));
+ end upper_len;

@@ -442,6 +442,10 @@ void Parser::parseProcOptions(Proc* p) {
             d_.error(p->loc, "RETURNS of a BIT(n>1) value is not implemented in this stage",
                      "(34)");
             p->retTy = Type::bit(1);
+          } else if (p->retTy.starLen) {
+            // RETURNS of adjustable length CHARACTER is not served (rule (18)/(34)).
+            d_.error(p->loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
+            p->retTy = Type::chr(1);
           }
         }
         expect(Tok::RParen, "(34)");
@@ -1409,6 +1413,10 @@ void Parser::parseDeclTail(DeclItem& item) {
         if (expect(Tok::LParen, "(34)")) {
           item.entryIsFunction = true;
           parseDescriptorType(item.entryRetTy);
+          if (item.entryRetTy.starLen) {
+            d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
+            item.entryRetTy = Type::chr(1);
+          }
           expect(Tok::RParen, "(34)");
         }
         continue;
@@ -1838,7 +1846,6 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
 // Parse a single ENTRY parameter type, using the same scalar-attribute
 // accumulator as parseDeclItem, restricted to the scalar computational types.
 bool Parser::parseDescriptorType(Type& out) {
-  SourceLoc l = cur().loc;
   // A POINTER descriptor (rule (38)): C `void*` parameters ride as the
   // pointer value itself under LINKAGE(SYSTEM)/BYVALUE.
   if (atWord("POINTER") || atWord("PTR")) {
@@ -1849,11 +1856,11 @@ bool Parser::parseDescriptorType(Type& out) {
   AttrBag bag;
   while (parseScalarAttr(bag, "(38)")) {
   }
-  if (bag.starLen)
-    d_.error(l, "a '*' string length is not implemented in this stage", "(38)");
-  if (bag.character)
+  if (bag.character) {
     out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
-  else if (bag.bit)
+    if (bag.starLen)
+      out.starLen = true;
+  } else if (bag.bit)
     out = Type::bit(bag.slen > 0 ? bag.slen : 1);
   else if (bag.floating)
     out = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
