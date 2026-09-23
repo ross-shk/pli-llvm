@@ -1,0 +1,50 @@
+/* Procedure call benchmark - recursive and iterative */
+test_procedures: PROCEDURE OPTIONS(MAIN);
+  DECLARE (i, result) FIXED BINARY(31);
+  DECLARE test_arr(20) FIXED BINARY(31);
+
+  /* Recursive factorial */
+  factorial: PROCEDURE(n) RECURSIVE RETURNS(FIXED BINARY(31));
+    DECLARE n FIXED BINARY(31);
+    IF n <= 1 THEN RETURN(1);
+    RETURN(n * factorial(n - 1));
+  END factorial;
+
+  /* Iterative fibonacci */
+  fibonacci: PROCEDURE(n) RETURNS(FIXED BINARY(31));
+    DECLARE n FIXED BINARY(31);
+    DECLARE (a, b, c, i) FIXED BINARY(31);
+    a = 0; b = 1;
+    DO i = 2 TO n;
+      c = a + b;
+      a = b;
+      b = c;
+    END;
+    RETURN(b);
+  END fibonacci;
+
+  /* Sum array elements */
+  sum_array: PROCEDURE(n, arr) RETURNS(FIXED BINARY(31));
+    DECLARE n FIXED BINARY(31);
+    DECLARE arr(100) FIXED BINARY(31);
+    DECLARE (i, sum) FIXED BINARY(31);
+    sum = 0;
+    DO i = 1 TO n;
+      sum = sum + arr(i);
+    END;
+    RETURN(sum);
+  END sum_array;
+
+  DO i = 1 TO 20;
+    test_arr(i) = i;
+  END;
+
+  result = 0;
+  DO i = 1 TO 12;
+    result = result + factorial(i) + fibonacci(i);
+  END;
+
+  result = result + sum_array(20, test_arr);
+
+  PUT SKIP LIST(result);
+END test_procedures;

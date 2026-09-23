@@ -1,0 +1,25 @@
+/* String operations benchmark - concatenation and substring */
+test_string: PROCEDURE OPTIONS(MAIN);
+  DECLARE (i, j, len) FIXED BINARY(31);
+  DECLARE base CHARACTER(1000) VARYING;
+  DECLARE temp CHARACTER(100) VARYING;
+  DECLARE result CHARACTER(10000) VARYING;
+  DECLARE substr_result CHARACTER(10) VARYING;
+
+  base = 'Hello, PL/I! ';
+  result = '';
+
+  /* Repeated concatenation */
+  DO i = 1 TO 500;
+    temp = base || '[' || 'item' || '] ';
+    result = result || temp;
+  END;
+
+  /* Substring operations */
+  len = LENGTH(result);
+  DO i = 1 TO 100;
+    substr_result = SUBSTR(result, i * 10, 5);
+  END;
+
+  PUT SKIP LIST(LENGTH(result));
+END test_string;

@@ -1,0 +1,19 @@
+/* Fixed decimal arithmetic benchmark */
+test_decimal: PROCEDURE OPTIONS(MAIN);
+  DECLARE (i, j) FIXED BINARY(31);
+  DECLARE (price, qty, total, tax, grand) FIXED DECIMAL(12,2);
+  DECLARE rate FIXED DECIMAL(5,4);
+
+  rate = 0.0875;  /* 8.75% tax rate */
+  grand = 0;
+
+  DO i = 1 TO 5000;
+    price = i * 1.99;
+    qty = i / 10 + 1;
+    total = price * qty;
+    tax = total * rate;
+    grand = grand + total + tax;
+  END;
+
+  PUT SKIP LIST(grand);
+END test_decimal;

@@ -1,0 +1,40 @@
+/* Array operations benchmark - matrix multiply */
+test_array: PROCEDURE OPTIONS(MAIN);
+  DECLARE (i, j, k, n) FIXED BINARY(31);
+  DECLARE a(100,100) FIXED BINARY(31);
+  DECLARE b(100,100) FIXED BINARY(31);
+  DECLARE c(100,100) FIXED BINARY(31);
+  DECLARE sum FIXED BINARY(31);
+
+  n = 100;
+  
+  /* Initialize matrices */
+  DO i = 1 TO n;
+    DO j = 1 TO n;
+      a(i,j) = i + j;
+      b(i,j) = i - j;
+      c(i,j) = 0;
+    END;
+  END;
+
+  /* Matrix multiply */
+  DO i = 1 TO n;
+    DO j = 1 TO n;
+      sum = 0;
+      DO k = 1 TO n;
+        sum = sum + a(i,k) * b(k,j);
+      END;
+      c(i,j) = sum;
+    END;
+  END;
+
+  /* Verify with checksum */
+  sum = 0;
+  DO i = 1 TO n;
+    DO j = 1 TO n;
+      sum = sum + c(i,j);
+    END;
+  END;
+
+  PUT SKIP LIST(sum);
+END test_array;
