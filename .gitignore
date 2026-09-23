@@ -13,3 +13,4 @@ examples/
 !tests/*/expected/*.out
 .DS_Store
 docs/archive/
+benchmarks/results/

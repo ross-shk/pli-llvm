@@ -1,0 +1,33 @@
+/* Condition handling benchmark - SUBSCRIPTRANGE and SIZE */
+test_conditions: PROCEDURE OPTIONS(MAIN);
+  DECLARE (i, j, n, sum) FIXED BINARY(31);
+  DECLARE a(100) FIXED BINARY(31);
+  DECLARE (x, y) FIXED BINARY(31);
+
+  ON SUBSCRIPTRANGE
+    BEGIN;
+      PUT SKIP LIST('Subscript range error');
+    END;
+
+  ON SIZE
+    BEGIN;
+      PUT SKIP LIST('Size error');
+    END;
+
+  n = 100;
+  sum = 0;
+  DO i = 1 TO n;
+    a(i) = i * i;
+    sum = sum + a(i);
+  END;
+
+  /* Test overflow - use smaller values to avoid immediate overflow */
+  x = 1000;
+  y = 1000;
+  DO i = 1 TO 50;
+    x = x + y;
+    y = y + 1;
+  END;
+
+  PUT SKIP LIST(sum, x, y);
+END test_conditions;
