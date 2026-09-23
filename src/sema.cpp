@@ -449,6 +449,19 @@ void Sema::addEnv(std::vector<Symbol*>& env, Symbol* s) {
     env.push_back(s);
 }
 
+// Rule (8): a BASED/DEFINED reference needs its base storage too.
+void Sema::noteStaticUse(Proc* p, Symbol* s) {
+  if (!s || !p)
+    return;
+  if ((s->kind == Symbol::Var || s->kind == Symbol::Param) && s->owner && s->owner != p &&
+      isDescendantOf(p, s->owner))
+    addEnv(p->directUses, s);
+  if (s->basedBase)
+    noteStaticUse(p, s->basedBase);
+  if (s->definedBase)
+    noteStaticUse(p, s->definedBase);
+}
+
 // Bottom-up over the procedure tree. `p->env` is the ordered list of variables
 // owned by a strict ancestor of `p` that `p` or any of its internal procedures
 // accesses; codegen makes each a static-link parameter. A variable owned by
@@ -3064,8 +3077,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     }
     // rule (8)/(42) static link: a reference to a variable of an enclosing
     // procedure is served through this procedure's static link.
-    if (sym->kind == Symbol::Var && sym->owner && sym->owner != p && isDescendantOf(p, sym->owner))
-      addEnv(p->directUses, sym);
+    if (sym->kind == Symbol::Var)
+      noteStaticUse(p, sym);
     break;
   }
   case Expr::Subscript:
@@ -3108,8 +3121,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
                    "stage",
                    "(124)");
         e->ty = *leaf;
-        if (bs->owner && bs->owner != p && isDescendantOf(p, bs->owner))
-          addEnv(p->directUses, bs);
+        // Rule (8): thread outer storage plus any BASED/DEFINED base.
+        noteStaticUse(p, bs);
         break;
       }
       if (!bs || bs->kind != Symbol::Var || !bs->ty.isStruct()) {
@@ -3154,8 +3167,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       checkSubscriptBoundsDims(e, leaf->dims, mname);
       // rule (8)/(42): a structure of an enclosing procedure is reached
       // through this procedure's static link.
-      if (bs->owner && bs->owner != p && isDescendantOf(p, bs->owner))
-        addEnv(p->directUses, bs);
+      noteStaticUse(p, bs);
       break;
     }
     // A subscripted reference (rule (126)): the callee name resolves to a
@@ -3186,8 +3198,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       // rule (8)/(42): an array of an enclosing procedure is reached through
       // this procedure's static link.
-      if (arr->owner && arr->owner != p && isDescendantOf(p, arr->owner))
-        addEnv(p->directUses, arr);
+      noteStaticUse(p, arr);
       checkSubscriptBounds(e, arr);
       break;
     }

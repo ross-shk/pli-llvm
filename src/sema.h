@@ -105,6 +105,8 @@ private:
   // accesses, so codegen can thread a static link (M1, removes ADR-010 dev).
   void computeEnv(Proc* p);
   void addEnv(std::vector<Symbol*>& env, Symbol* s);
+  // Rule (8): record a static-link use of `s` and its BASED/DEFINED bases.
+  void noteStaticUse(Proc* p, Symbol* s);
   // Rule (5): every procedure in a static call cycle must carry RECURSIVE.
   // Runs after all bodies are typed so CALL and function-reference callees
   // are resolved; reports one error at each non-recursive cycle member.

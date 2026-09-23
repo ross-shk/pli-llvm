@@ -1,0 +1,28 @@
+  /* BASED member in RETURN (rules (25),(81),(124)): an accessor
+     returns a based member of an enclosing procedure through the
+     static link, and the locator form returns through its own
+     pointer parameter. */
+  based_return: procedure options(main);
+     declare fails fixed bin(31);
+     declare p pointer;
+     declare 1 y, 2 fd fixed bin(31);
+     declare 1 c based(p), 2 fd fixed bin(31);
+     declare r fixed bin(31);
+     fails = 0;
+     y.fd = 21;
+     p = addr(y);
+     r = get_fd();
+     if r ^= 21 then fails = fails + 1;
+     r = get_loc(p);
+     if r ^= 21 then fails = fails + 1;
+     if fails = 0 then put skip list('PASS based_return');
+     else put skip list('FAIL based_return: fails =', fails);
+     get_fd: procedure returns(fixed bin(31));
+        return(c.fd);
+        end get_fd;
+     get_loc: procedure(h) returns(fixed bin(31));
+        declare h pointer;
+        declare 1 c based(p), 2 fd fixed bin(31);
+        return(h -> c.fd);
+        end get_loc;
+     end based_return;
