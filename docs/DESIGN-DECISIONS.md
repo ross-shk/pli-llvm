@@ -2815,8 +2815,10 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   plus `nm` visibility (`T _PUB`, no `T _PRIV`);
   `bad_package.pli` pins bad EXPORTS diagnostic;
   `bad_package_nest.pli` structural ones; `package_data.pli` verifies
-  shared counter via member procedures. Known limits: struct/array
-  initializers still diagnosed, MX8 is untouched.
+  shared counter via member procedures; `cousin_call.pli` verifies that
+  sibling procs with different signatures can reach the same package-level
+  data through global addresses (no static-link parameter mismatch).
+  Known limits: struct/array initializers still diagnosed, MX8 untouched.
 
  ## ADR-110 — Condition-prefix enablement framework with NOSIZE
 
