@@ -122,6 +122,7 @@ struct DeclItem {
   std::vector<DynMemberInfo> dynMembers;
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
+  bool isCondition = false;      // DECLARE name CONDITION; (rule 9)
   bool fileAttr = false;         // DECLARE name FILE (rules 39,40): a named file
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value

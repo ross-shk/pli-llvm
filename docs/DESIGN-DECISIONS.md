@@ -3730,8 +3730,44 @@ in both CALL statements and function-returning expressions, exercising the hidde
 length argument at call time through different-size caller buffers. All existing
 tests remain green; `bad_char_func_star.pli` still diagnoses `RETURNS(char(*))`.
 
-**Rejected.** Making `RETURNS(char(*))` work on external entries (no mechanism to
+ **Rejected.** Making `RETURNS(char(*))` work on external entries (no mechanism to
 supply a result buffer to a foreign caller); handling `*`-extent chars via dope
 vectors (overkill — a single i64 length suffices); deferring until M2 (blocks
 practical C interop with string-handling functions).
+
+## ADR-145 — `DECLARE name CONDITION;` programmer-named condition declaration
+
+**Context.** TR 25.084 rule (9) allows `DECLARE name CONDITION;` to explicitly
+declare a programmer-named condition, and rule (99) defines how condition names
+are resolved. The compiler already supports implicit (use-declared) conditions
+via SIGNAL/ON `CONDITION(name)` — the name is looked up in every scope, and if
+not found it is registered on first use (`prog_->condNames`). The existing test
+`tests/core/on_cond.pli` exercises this path. However, `DECLARE name CONDITION;`
+is not parsed: the word `CONDITION` after a declare name falls through to the
+attribute bag parser where it is not recognized as an attribute, so the parser
+either misinterprets it or produces a parse error.
+
+**Decision.** In `parseDeclTail()` (parser.cpp), add `CONDITION` as a recognized
+attribute keyword that sets `item.isCondition = true` on the current `DeclItem`.
+In sema's item processing pass, when `isCondition` is set, push the name into
+`prog_->condNames` (matching the use-declared registration) and create a `ProcName`
+symbol with a new `Symbol::isCond` flag — this same-flag check suppresses the
+collision diagnosis at signal sites while still rejecting collisions against
+ordinary variables/procedures. Copy `isCondition` to `HDeclItem` during AST→HIR
+lowering (the HIR side is currently unused by codegen but preserves round-trip
+completeness). No IRGen changes are needed: condition dispatch uses only the
+name-to-key mapping in `prog_->condNames`, which is already populated.
+
+**Consequences.** `tests/core/decl_cond.pli` verifies that `DECLARE name CONDITION;`
+enables subsequent SIGNAL/ON REVERT usage with keyed dispatch. `on_cond.pli` still
+works (use-declared path unchanged). `bad_on_cond_decl.pli` still diagnoses a name
+collision between a declared variable and a condition use. All existing tests remain
+green.
+
+**Rejected.** Storing a Symbol kind change from ProcName → CondName — the existing
+ProcName + `isCond` flag covers the collision semantics cleanly without adding a
+new symbol category to sema's type system. Deferring until M2 — the feature is a
+small parser+Sema change with no runtime cost beyond what use-declaration already
+pays.
+
 

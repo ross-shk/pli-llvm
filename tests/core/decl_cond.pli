@@ -1,0 +1,34 @@
+/* rules (9),(99): DECLARE name CONDITION; — programmer-named conditions
+   must be explicitly declared before use via SIGNAL CONDITION(name) /
+   ON CONDITION(name) / REVERT CONDITION(name).  Use-declared names (never
+   explicitly declared) still work per the implicit declaration rule.  A
+   collision with a declared variable is diagnosed (rule 99). */
+decl_cond_test: procedure options(main);
+   declare neterror condition;
+   declare other condition;
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   /* explicit condition declarations enable signal/on usage below */
+   on condition(neterror) begin;
+      put skip list('caught neterror');
+   end;
+   signal condition(neterror);
+   put skip list('resumed after neterror');
+
+   on condition(other)
+      put skip list('caught other');
+   signal condition(other);
+   revert condition(other);
+
+   /* built-in condition without DECLARE works too */
+   on error put skip list('caught error');
+   signal error;
+   revert error;
+   put skip list('resumed');
+
+   if fails = 0 then put skip list('PASS decl_cond');
+   else put skip list('FAIL decl_cond: fails =', fails);
+
+end decl_cond_test;
