@@ -1,0 +1,15 @@
+ /* extension (ADR-109): package-level data — DECLARE in a PACKAGE body
+    creates static storage visible to all member procedures. */
+ mathlib: package exports(adder);
+     declare counter fixed bin(31) init(0);
+     adder: procedure(x) returns(fixed bin(31));
+        declare x fixed bin(31);
+        counter = counter + x;
+        return(counter);
+     end adder;
+  end mathlib;
+  main: procedure options(main);
+     declare adder entry(fixed bin(31)) returns(fixed bin(31)) external;
+     put skip list(adder(5));
+     put skip list(adder(3));
+  end main;

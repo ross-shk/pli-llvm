@@ -2796,26 +2796,27 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  (MX7) has no TR production and enters through the Extensions
  vehicle with a contextual keyword.
 
- Decision. `name: PACKAGE [EXPORTS (a, ...)] ... END [name]`
- creates a real scope level reusing the nesting machinery
- (lazy scopes, static links, HIR parents all work unchanged):
- members resolve in the package scope, so same-named members of
- different packages coexist. EXPORTS is resolved against hoisted
- members before pass 1 assigns linkage; listed members link
- externally, the rest stay module-private, and the MAIN
- procedure is never exported. The package node itself emits
- nothing. Package-level data, bad EXPORTS names, nested and
- multi-name packages, and non-member body statements are
- diagnosed; a packages-only unit needs `-c`, else it has no
- entry point. Diagnostics cite ADR-109.
+  Decision. `name: PACKAGE [EXPORTS (a, ...)] ... END [name]`
+  creates a real scope level reusing the nesting machinery
+  (lazy scopes, static links, HIR parents all work unchanged):
+  members resolve in the package scope, so same-named members of
+  different packages coexist. EXPORTS is resolved against hoisted
+  members before pass 1 assigns linkage; listed members link
+  externally, the rest stay module-private, and the MAIN
+  procedure is never exported. Package-level DECLARE statements
+  collect into rootScope_ as module-scope globals (static storage),
+  accessible by member procedures; bad EXPORTS names, nested and
+  multi-name packages, and non-member body statements are
+  diagnosed; a packages-only unit needs `-c`, else it has no
+  entry point. Diagnostics cite ADR-109.
 
- Consequences. `package.pli` covers member calls, isolation, and
- in-file ENTRY references; `driver/package` proves the cross-link
- plus `nm` visibility (`T _PUB`, no `T _PRIV`);
- `bad_package.pli` pins data/export diagnostics and
- `bad_package_nest.pli` structural ones. Known limits: shared
- package data needs static storage promotion (same bucket as
- shared EXTERNAL variables); MX8 is untouched.
+  Consequences. `package.pli` covers member calls, isolation, and
+  in-file ENTRY references; `driver/package` proves the cross-link
+  plus `nm` visibility (`T _PUB`, no `T _PRIV`);
+  `bad_package.pli` pins bad EXPORTS diagnostic;
+  `bad_package_nest.pli` structural ones; `package_data.pli` verifies
+  shared counter via member procedures. Known limits: struct/array
+  initializers still diagnosed, MX8 is untouched.
 
  ## ADR-110 — Condition-prefix enablement framework with NOSIZE
 
