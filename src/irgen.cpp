@@ -485,12 +485,23 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     else
       pt.push_back(b_.getPtrTy());
   }
-  for (const Type& t : sym->entryParams) {
-    if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
-      pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
-    if (t.isChar() && t.starLen)
-      pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
-  }
+   // External ENTRY symbols (no PL/I body): don't append hidden extent/length
+   // args here; the declared signature already captures all parameters. Hidden
+   // args are a PL/I inter-procedure convention (caller pushes them, callee
+   // reads them from the tail of its parameter list). Externals use their
+   // declared params verbatim — any char(*) lengths must be explicit scalar
+   // fixed-bin(31) params on the ENTRY declaration (c_bridge.inc pattern).
+   if (!sym->proc && !en) {
+     llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy();
+     llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
+     return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+   }
+   for (const Type& t : sym->entryParams) {
+     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+       pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+     if (t.isChar() && t.starLen)
+       pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+   }
   // An external character-valued function (rule (34)) has no PL/I caller to
   // supply the hidden result buffer; diagnosed, and given a void stub so
   // emission continues toward the final diagnostic check.
@@ -2966,21 +2977,8 @@ void IRGen::emitCall(HStmt* s) {
       args.push_back(ext);
     }
   }
-  // Hidden length args for `CHAR(*)` parameters of an external entry symbol
-  // (no callee body): the caller supplies the buffer length alongside the
-  // pointer (rule (18)).
-  if (!en && !callee && s->args.size() > 0) {
-    std::vector<Type>& eparams = calleeSym->entryParams;
-    for (size_t i = 0; i < eparams.size(); ++i)
-      if (eparams[i].isChar() && eparams[i].starLen) {
-        llvm::Value* ln = (i >= s->args.size()) ? i64(0) : argLen(s->args[i].get());
-        if (!ln)
-          ln = i64(0);
-        args.push_back(ln);
-      }
-  }
-  appendStaticLinks(callee, args);
-  b_.CreateCall(calleeF, args);
+   appendStaticLinks(callee, args);
+   b_.CreateCall(calleeF, args);
 }
 
 // Asynchronous CALL (rule (79), QR2.8): marshal the callee arguments as for a
@@ -4186,14 +4184,6 @@ Val IRGen::emitExpr(HExpr* e) {
           args.push_back(marshalArg(a, pty, e->loc));
         else
           args.push_back(argAddr(a, pty));
-        if (pty.isArray() && !pty.dims.empty() && pty.dims[0].adj) {
-          llvm::Value* ext = argExtent(a);
-          args.push_back(ext ? ext : i64(0)); // hidden `*` extent arg (rule (13))
-        }
-        if (pty.isChar() && pty.starLen) {
-          llvm::Value* ln = argLen(a);
-          args.push_back(ln ? ln : i64(0)); // hidden length arg (rule (18))
-        }
       }
       if (!e->sym->entryIsFunction) {
         b_.CreateCall(extFn, args);

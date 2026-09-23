@@ -3770,4 +3770,48 @@ new symbol category to sema's type system. Deferring until M2 — the feature is
 small parser+Sema change with no runtime cost beyond what use-declaration already
 pays.
 
+## ADR-146 — Package-level data symbols visible from member-proc LIKE references
+
+**Context.** ADR-109 established `PACKAGE`/`EXPORTS` with package-level data as
+module-scope globals registered in `rootScope_`. Member procedures use their own
+scope whose parent chain traverses up through `rootScope_`, so name lookup works
+for variable references in expressions. However, a `LIKE` reference inside a
+member procedure's DECLARE block failed: `dcl 1 c based(h) like conn_rec;` where
+`conn_rec` is declared at package level. Sema's pass 1b collected every member
+procedure's declarations into its own scope **before** collecting package-level
+data, so `lookup(sc, "conn_rec")` found nothing — the template variable had not yet
+been registered in `rootScope_`. Because LIKE returned voidTy, every subsequent
+field access on the derived variable (`c.fd`, `c.is_connected`) cascaded into a
+second error class ("X is not a structure").
+
+Separately, `MAXLENGTH(v)` required `v` to be a VARYING string but rejected
+adjustable-length `CHAR(*)` parameters declared with the same intent (query buffer
+capacity). And external entry calls (`calleeFn`, `emitCall`, `emitFunctionValue`)
+appended hidden length/extent arguments for externals despite those functions using
+their declared signatures verbatim — the hidden-arg convention is a PL/I inter-procedure
+mechanism, not a C ABI convention, so externals received two sets of these args. The
+result was LLVM verification failures when compiled modules called external C entries
+with `char(*)` params.
+
+**Decision.** Move the package-level data collection loop in `Sema::run` to execute
+**before** pass 1b (member-proc declaration collection). Order is now: pass 1a
+(procedure names), package-level data (ADR-109), pass 1b (member proc decls), pass
+2 (body processing). In `MAXLENGTH` built-in handling (sema), accept both
+`VARYING` and adjustable-length `CHAR(*)` character strings. In codegen, remove the
+hidden-length/extent argument append paths for external entry calls because externals
+use their declared signatures verbatim — any `char(*)` lengths must be explicit scalar
+params on the ENTRY declaration (the `c_bridge.inc` pattern), passed positionally by
+the caller.
+
+**Consequences.** Sibling member procedures can reference package-level structures via
+LIKE with zero errors, enabling compiled library modules like `libnet` that use
+`based(h) like conn_rec` throughout. `MAXLENGTH` accepts `CHAR(*)` arguments, enabling
+buffer-capacity queries on adjustable-length parameters. Three codegen call sites stop
+appending hidden args for externals, so function signatures match their declared types
+exactly and LLVM module verification passes. All existing tests remain green.
+
+**Rejected.** Changing `lookup` to search a separate "package" table separately from
+the scope chain (breaks the unified chain semantics); adding a special case in LIKE
+resolution for module-level names (would diverge from the general lookup path).
+
 

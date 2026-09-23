@@ -3828,8 +3828,13 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
-    if (!e->args[0]->ty.isChar() || !e->args[0]->ty.varying) {
-      d_.error(e->args[0]->loc, "MAXLENGTH argument must be a VARYING string", "(123)");
+    if (!e->args[0]->ty.isChar()) {
+      d_.error(e->args[0]->loc, "MAXLENGTH argument must be a character string", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.varying && !e->args[0]->ty.starLen) {
+      d_.error(e->args[0]->loc, "MAXLENGTH argument must be an adjustable-length or VARYING string", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
