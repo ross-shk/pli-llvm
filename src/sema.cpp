@@ -164,16 +164,14 @@ void Sema::resolvePackageExports() {
   }
 }
 
-// Extension (ADR-109): a package contributes scope and linkage only; member
-// procedures were hoisted and are processed in their own iterations.
+// Extension (ADR-109): a package contributes scope and linkage only; DECLARE
+// statements inside a PACKAGE body are collected into rootScope_ during pass
+// 1b so they become module-scope globals accessible by member procedures.
 void Sema::processPackage(Proc* p) {
   for (auto& b : p->body) {
-    if (!b || b->kind == Stmt::Null)
-      continue;
-    if (b->kind == Stmt::Declare)
-      d_.error(b->loc, "package-level data is not implemented in this stage (ADR-109)", "");
-    else
-      d_.error(b->loc, "only DECLARE and PROCEDURE may appear in a PACKAGE body (ADR-109)", "");
+    if (!b || b->kind == Stmt::Null || b->kind == Stmt::Declare)
+      continue; // DECLAREs handled in pass 1b; procedure bodies already hoisted
+    d_.error(b->loc, "only DECLARE and PROCEDURE may appear in a PACKAGE body (ADR-109)", "");
   }
 }
 
@@ -239,14 +237,23 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // (78)) see every callee's descriptors regardless of procedure order
   // (ADR-094); processProc skips re-resolving them.
   for (auto& p : prog.procs) {
-    if (p->isPackage)
-      continue; // package-level data is diagnosed in processPackage
+    if (p->isPackage) continue;
     beginScopes_.clear();
     collectDecls(p->body, scopeFor(p.get()), p.get(), false);
     // BASED bases resolve before params so a bare parameter base becomes a
     // POINTER parameter (rule 25), not an implicit arithmetic parameter.
     resolvePendingBased(p.get());
     resolveProcParams(p.get());
+  }
+  
+  // Extension (ADR-109): collect package-level data BEFORE member proc processing
+  // so variable lookup succeeds from member procedures. Package-level symbols are
+  // registered in rootScope_ as static storage (module-scope globals).
+  for (auto& p : prog.procs) {
+    if (!p->isPackage) continue;
+    beginScopes_.clear();
+    collectDecls(p->body, rootScope_, p.get(), true);
+    resolvePendingBased(p.get());
   }
   flushPendingBased();
   declsCollected_ = true;
@@ -527,8 +534,10 @@ void Sema::addEnv(std::vector<Symbol*>& env, Symbol* s) {
 void Sema::noteStaticUse(Proc* p, Symbol* s) {
   if (!s || !p)
     return;
+  // Package-level variables live in module scope and are addressed as globals;
+  // they do not require static-link parameters even when accessed by members.
   if ((s->kind == Symbol::Var || s->kind == Symbol::Param) && s->owner && s->owner != p &&
-      isDescendantOf(p, s->owner))
+      isDescendantOf(p, s->owner) && !s->owner->isPackage)
     addEnv(p->directUses, s);
   if (s->basedBase)
     noteStaticUse(p, s->basedBase);
