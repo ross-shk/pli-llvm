@@ -2727,8 +2727,23 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
         a->sym->ty.varying == pty.varying && a->memberPath.empty())
       return addressOf(a->sym);
-    // A non-variable character argument (literal/expression) has no storage for
-    // the callee to write through; diagnosed rather than copied into a dummy.
+    // Non-variable character argument (expression/literal): evaluate the
+    // expression into a temp buffer of the result's declared capacity, then
+    // pass the buffer pointer and its live length via argLen().
+    Val av = emitExpr(a);
+    if (av.ty.isChar()) {
+      llvm::ConstantInt* capConst =
+          llvm::dyn_cast<llvm::ConstantInt>(av.len);
+      int cap;
+      if (capConst)
+        cap = static_cast<int>(capConst->getZExtValue());
+      else
+        cap = 256; // fallback for dynamic-length expressions
+      llvm::AllocaInst* buf =
+          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
+      b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
+      return buf;
+    }
     d_.error(a->loc,
              "an adjustable-length CHARACTER parameter takes a character variable in this stage",
              "(18)");
