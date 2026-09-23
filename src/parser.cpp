@@ -1599,6 +1599,14 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.controlled = true;
         continue;
       }
+      if (w == "CONDITION") {
+        // condition-attribute (rules (9),(99)): DECLARE name CONDITION; — the
+        // condition name is use-declared here, registered in prog_.condNames so
+        // subsequent SIGNAL CONDITION(name) / ON CONDITION(name) resolve it.
+        advance();
+        item.isCondition = true;
+        continue;
+      }
       if (w == "PICTURE" || w == "PIC" || w == "AREA" || w == "OFFSET" || w == "LABEL" ||
           w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");

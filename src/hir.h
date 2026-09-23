@@ -82,6 +82,7 @@ struct HDeclItem {
   HExprP initCall; // INITIAL(CALL f(...)) — a function-call initializer (rule 27)
   Symbol* sym = nullptr;
   bool isEntry = false;          // DECLARE name ENTRY(...) (rule 38)
+  bool isCondition = false;      // DECLARE name CONDITION; (rule 9)
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration

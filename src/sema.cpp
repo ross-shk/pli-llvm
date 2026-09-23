@@ -755,6 +755,17 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                    "(34)");
           item.entryByValue = false;
         }
+        if (item.isCondition) {
+          // DECLARE name CONDITION; (rule 9): register the programmer-named
+          // condition so subsequent SIGNAL/ON CONDITION(name) resolve it. Use
+          // a ProcName kind symbol so lookup rejects it as a variable later,
+          // mirroring how built-in conditions are checked at signal sites.
+          prog_->condNames.push_back(item.name);
+          Symbol* sym = declare(sc, item.name, Type::voidTy(), item.loc, Symbol::ProcName, false);
+          sym->isCond = true;
+          item.sym = sym;
+          continue;
+        }
         if (item.isEntry) {
           if (item.valueInit)
             d_.error(item.loc,
@@ -1857,12 +1868,15 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   int key = it == names.end() ? (int)names.size() + 1 : (int)(it - names.begin()) + 1;
   if (it == names.end())
     names.push_back(s->condName);
-  // A use-declared name must not collide with a declared entity.
+  // A use-declared name must not collide with a declared entity, except for an
+  // explicit DECLARE ... CONDITION which created it as a ProcName.
   if (Symbol* sym = lookup(sc, s->condName)) {
-    if (sym->kind == Symbol::ProcName)
-      d_.error(s->loc, "'" + s->condName + "' is a procedure, not a condition name", "(99)");
-    else
-      d_.error(s->loc, "'" + s->condName + "' is a variable, not a condition name", "(99)");
+    if (!sym->isCond) {
+      if (sym->kind == Symbol::ProcName)
+        d_.error(s->loc, "'" + s->condName + "' is a procedure, not a condition name", "(99)");
+      else
+        d_.error(s->loc, "'" + s->condName + "' is a variable, not a condition name", "(99)");
+    }
   }
   return key;
 }

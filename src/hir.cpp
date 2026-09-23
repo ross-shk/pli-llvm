@@ -168,6 +168,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     hd.init = lowerExpr(d.init.get());
     hd.sym = d.sym;
     hd.isEntry = d.isEntry;
+    hd.isCondition = d.isCondition;
     hd.entryParams = d.entryParams;
     hd.entryIsFunction = d.entryIsFunction;
     hd.entryRetTy = d.entryRetTy;
