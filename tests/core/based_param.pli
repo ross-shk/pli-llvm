@@ -1,0 +1,35 @@
+  /* BASED on a procedure POINTER parameter (rule (25)): a
+     based view may name its procedure parameter directly,
+     with no separate pointer declare, or name a pointer
+     declared later in the same procedure. writes through
+     the based reference land in the caller's storage. */
+  based_param: procedure options(main);
+     declare fails fixed bin(31);
+     declare p pointer;
+     declare 1 y, 2 x fixed bin(31);
+     fails = 0;
+     y.x = 0;
+     p = addr(y);
+     call set_bare(p);
+     if y.x ^= 42 then do;
+        fails = fails + 1;
+        put skip list('FAIL bare');
+     end;
+     y.x = 0;
+     call set_fwd(p);
+     if y.x ^= 7 then do;
+        fails = fails + 1;
+        put skip list('FAIL fwd');
+     end;
+     if fails = 0 then put skip list('PASS based_param');
+     else put skip list('FAIL based_param: fails =', fails);
+     set_bare: procedure(cp);
+        declare 1 c based(cp), 2 x fixed bin(31);
+        c.x = 42;
+        end set_bare;
+     set_fwd: procedure(cp);
+        declare 1 c based(cp), 2 x fixed bin(31);
+        declare cp pointer;
+        c.x = 7;
+        end set_fwd;
+     end based_param;

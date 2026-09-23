@@ -3674,3 +3674,26 @@ adjustable-length characters in `RETURNS`; a non-parameter (local) adjustable
 character (no caller to supply the length); and array-of-adjustable-char. A
 runtime-length local `CHAR(n)` (not a parameter) stays diagnosed.
 
+## ADR-143 — BASED directly on a procedure POINTER parameter
+
+**Context.** Every library method takes a POINTER handle, but
+`declare 1 c based(cp)` failed when `cp` was a procedure parameter:
+sema resolved the base during `collectDecls`, so a POINTER declared
+later in the procedure was not yet visible, and a bare parameter with
+no DECLARE became implicit FLOAT instead of POINTER.
+
+**Decision.** BASED bases resolve after all DECLAREs are collected
+(`pendingBased_`, resolved before params so a bare parameter base is
+declared POINTER, with a final `flushPendingBased` for enclosing
+scopes). A based item is excluded from `localSyms` by its syntactic
+attribute, so deferred resolution allocates no storage.
+
+**Consequences.** `tests/core/based_param.pli` covers a bare parameter
+base and a forward-declared POINTER parameter; writes through the
+based reference land in the caller's storage. Non-pointer and
+undeclared non-parameter bases still error under (25).
+
+**Rejected.** Keeping immediate single-pass lookup (order-dependent);
+inferring POINTER for any undeclared base (only procedure/ENTRY
+parameter names get POINTER; other undeclared bases stay diagnosed).
+

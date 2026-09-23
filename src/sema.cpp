@@ -243,8 +243,12 @@ bool Sema::run(Program& prog, bool compileOnly) {
       continue; // package-level data is diagnosed in processPackage
     beginScopes_.clear();
     collectDecls(p->body, scopeFor(p.get()), p.get(), false);
+    // BASED bases resolve before params so a bare parameter base becomes a
+    // POINTER parameter (rule 25), not an implicit arithmetic parameter.
+    resolvePendingBased(p.get());
     resolveProcParams(p.get());
   }
+  flushPendingBased();
   declsCollected_ = true;
   for (auto& p : prog.procs)
     resolveStructReturn(p.get());
@@ -328,12 +332,15 @@ void Sema::processProc(Proc* p) {
   if (!declsCollected_) {
     beginScopes_.clear();
     collectDecls(p->body, sc, p, isStatic);
+    resolvePendingBased(p);
   }
 
   // Parameters: a DECLARE inside the procedure supplies their attributes;
   // otherwise the implicit rule applies. Parameters are always by reference.
   // Already resolved in pass 1b when coming through run() (ADR-094).
   resolveProcParams(p);
+  if (!declsCollected_)
+    flushPendingBased();
 
   // Every function-valued entry point (the procedure's own RETURNS and each
   // ENTRY's RETURNS, rule (34)) must share one result type, which the shared
@@ -434,6 +441,73 @@ void Sema::resolveParams(Scope* sc, Proc* p, const std::vector<std::string>& nam
     }
     s->owner = p;
     out.push_back(s);
+  }
+}
+
+// A name is a procedure-pointer-parameter base when it names the procedure's
+// own parameter or one of its ENTRY statements' parameters (rules (34),(56)).
+static bool isProcParamName(Proc* p, const std::string& n) {
+  if (std::find(p->params.begin(), p->params.end(), n) != p->params.end())
+    return true;
+  for (auto& st : p->body)
+    if (st && st->kind == Stmt::Entry &&
+        std::find(st->params.begin(), st->params.end(), n) != st->params.end())
+      return true;
+  return false;
+}
+
+bool Sema::tryResolveBased(PendingBased& pb) {
+  DeclItem* item = pb.item;
+  if (!item || item->basedBase.empty() || item->sym->basedBase)
+    return true; // nothing to do (already resolved)
+  Symbol* base = lookup(pb.sc, item->basedBase);
+  if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) &&
+      base->ty.isPointer()) {
+    item->sym->basedBase = base;
+    return true;
+  }
+  if (!base && isProcParamName(pb.proc, item->basedBase)) {
+    // BASED(P) directly on a procedure POINTER parameter (rule 25): the
+    // parameter needs no separate DECLARE; it becomes a POINTER parameter.
+    // Declared in the procedure scope (not the use-site BEGIN scope) so a
+    // later explicit DECLARE and param resolution share one symbol.
+    Scope* psc = scopeFor(pb.proc);
+    Symbol* s = declare(psc, item->basedBase, Type::ptr(), item->loc, Symbol::Var, false);
+    s->owner = pb.proc;
+    item->sym->basedBase = s;
+    return true;
+  }
+  return false;
+}
+
+void Sema::resolvePendingBased(Proc* p) {
+  for (auto& pb : pendingBased_) {
+    if (pb.proc != p)
+      continue;
+    tryResolveBased(pb);
+  }
+}
+
+void Sema::flushPendingBased() {
+  for (auto& pb : pendingBased_) {
+    if (pb.item->sym->basedBase)
+      continue;
+    if (tryResolveBased(pb))
+      continue;
+    // A second lookup catches a POINTER declared in an enclosing procedure
+    // whose DECLAREs were collected after this procedure's own pass.
+    Symbol* base = lookup(pb.sc, pb.item->basedBase);
+    if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) &&
+        base->ty.isPointer()) {
+      pb.item->sym->basedBase = base;
+      continue;
+    }
+    d_.error(pb.item->loc,
+             "BASED base '" + pb.item->basedBase + "' is not a POINTER variable in this scope",
+             "(25)");
+    // Mark as resolved (null stays) so one diagnostic is emitted even if
+    // flush runs again from processProc's fallback path.
+    pb.item->basedBase.clear();
   }
 }
 
@@ -987,16 +1061,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // BASED (rule 25): the declared item overlays the storage addressed by
         // a POINTER variable, so it has no storage of its own. The base must be
         // a POINTER variable/parameter in scope; a based structure member is
-        // addressed through the pointer value at every reference.
+        // addressed through the pointer value at every reference. Resolution
+        // defers to after all DECLAREs are collected, so a POINTER declared
+        // later in the same procedure (or a bare POINTER parameter) resolves.
         if (!item.basedBase.empty()) {
           Symbol* base = lookup(sc, item.basedBase);
-          if (!base || (base->kind != Symbol::Var && base->kind != Symbol::Param) ||
-              !base->ty.isPointer())
-            d_.error(item.loc,
-                     "BASED base '" + item.basedBase + "' is not a POINTER variable in this scope",
-                     "(25)");
-          else
+          if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) &&
+              base->ty.isPointer())
             item.sym->basedBase = base;
+          else
+            pendingBased_.push_back({&item, sc, p});
         }
         // CONTROLLED (rule (15), ADR-140): storage managed by an explicit
         // generation stack. This slice accepts the attribute and diagnoses
@@ -1288,8 +1362,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // BEGIN blocks too, hence the Proc* here. A DEFINED or BASED variable
         // has no storage of its own, so it is never allocated; neither is a
         // CONTROLLED variable, whose generations live on the runtime stack.
+        // A BASED item is excluded by its syntactic attribute: its base
+        // resolves after all DECLAREs are collected (deferred, rule 25).
         if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase &&
-            !item.sym->basedBase && !item.sym->fileAttr && !item.sym->controlled)
+            item.basedBase.empty() && !item.sym->basedBase && !item.sym->fileAttr &&
+            !item.sym->controlled)
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.

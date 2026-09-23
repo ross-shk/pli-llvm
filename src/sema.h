@@ -181,6 +181,24 @@ private:
     Proc* owner = nullptr;
   };
   std::vector<PendingReduce> pendingReduces_;
+  // BASED base deferred to after all DECLAREs are collected (rule 25): a
+  // BASED(P) may name a POINTER declared later in the same procedure, or a
+  // procedure POINTER parameter with no DECLARE yet (which becomes POINTER).
+  struct PendingBased {
+    DeclItem* item = nullptr;
+    Scope* sc = nullptr;
+    Proc* proc = nullptr;
+  };
+  std::vector<PendingBased> pendingBased_;
+  // Try to resolve one deferred BASED base; create a POINTER Var for a
+  // parameter base with no DECLARE yet. Returns true when resolved.
+  bool tryResolveBased(PendingBased& pb);
+  // Resolve deferred BASED bases for one procedure (before its params
+  // resolve, so a bare param base becomes POINTER, not implicit FLOAT).
+  void resolvePendingBased(Proc* p);
+  // Final retry for all procedures after every DECLARE is collected; errors
+  // on anything still unresolvable.
+  void flushPendingBased();
   // Drop a consumed or diagnosed reduction from the pending list.
   void dropPendingReduce(Expr* call);
   // Validate a reduction argument as an element-wise expression: every whole
