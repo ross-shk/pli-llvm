@@ -485,9 +485,12 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     else
       pt.push_back(b_.getPtrTy());
   }
-  for (const Type& t : sym->entryParams)
+  for (const Type& t : sym->entryParams) {
     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
-      pt.push_back(b_.getInt64Ty()); // hidden `*` extent args
+      pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+    if (t.isChar() && t.starLen)
+      pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+  }
   // An external character-valued function (rule (34)) has no PL/I caller to
   // supply the hidden result buffer; diagnosed, and given a void stub so
   // emission continues toward the final diagnostic check.
@@ -2948,6 +2951,19 @@ void IRGen::emitCall(HStmt* s) {
       args.push_back(ext);
     }
   }
+  // Hidden length args for `CHAR(*)` parameters of an external entry symbol
+  // (no callee body): the caller supplies the buffer length alongside the
+  // pointer (rule (18)).
+  if (!en && !callee && s->args.size() > 0) {
+    std::vector<Type>& eparams = calleeSym->entryParams;
+    for (size_t i = 0; i < eparams.size(); ++i)
+      if (eparams[i].isChar() && eparams[i].starLen) {
+        llvm::Value* ln = (i >= s->args.size()) ? i64(0) : argLen(s->args[i].get());
+        if (!ln)
+          ln = i64(0);
+        args.push_back(ln);
+      }
+  }
   appendStaticLinks(callee, args);
   b_.CreateCall(calleeF, args);
 }
@@ -4158,6 +4174,10 @@ Val IRGen::emitExpr(HExpr* e) {
         if (pty.isArray() && !pty.dims.empty() && pty.dims[0].adj) {
           llvm::Value* ext = argExtent(a);
           args.push_back(ext ? ext : i64(0)); // hidden `*` extent arg (rule (13))
+        }
+        if (pty.isChar() && pty.starLen) {
+          llvm::Value* ln = argLen(a);
+          args.push_back(ln ? ln : i64(0)); // hidden length arg (rule (18))
         }
       }
       if (!e->sym->entryIsFunction) {

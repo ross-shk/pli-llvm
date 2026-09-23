@@ -3697,3 +3697,38 @@ undeclared non-parameter bases still error under (25).
 inferring POINTER for any undeclared base (only procedure/ENTRY
 parameter names get POINTER; other undeclared bases stay diagnosed).
 
+## ADR-144 — `CHAR(*)` in ENTRY descriptor lists
+
+**Context.** ADR-142 serves adjustable-length `CHAR(*)` on regular procedure
+parameters: the hidden i64 length arg is appended at each CALL site and read at
+callee entry, while the char data pointer itself is passed by reference (the
+existing PL/I default). External C entries (`DECLARE name ENTRY(...)`) also pass
+params by reference, but `CHAR(*)` was diagnosed as unimplemented in descriptor
+types (rule (38), `parseDescriptorType`). The external entry path uses
+`entryFn()` to emit a forward LLVM `declare`, then calls that symbol directly at
+CALL/function-expression sites — no PL/I body to walk, so the hidden-length
+mechanism must be added there independently of the callee-body codegen.
+
+**Decision.** Remove the `d_.error` rejection for `starLen` in
+`parseDescriptorType` and set `out.starLen = true` instead (same flag used by
+regular procedure params). Keep `RETURNS(char(*))` diagnosed at both RETURNS
+call-sites — returning an adjustable-length character value from an external
+entry has no result buffer. In `entryFn()`, extend the hidden-arg loop to push
+an `i64` parameter for every `CHAR(*)` entry param alongside existing `*`-extent
+array extent args. In `emitCall` (statement CALL) and `emitExpr(Kind::Call)`
+(function expression), add blocks that push `argLen(actual)` alongside the by-
+reference pointer when calling an external entry with `CHAR(*)` params — mirroring
+what ADR-055 already does for arrays and what ADR-142 does for callee-body
+parameters. This means external entry declarations now carry the same signature
+as their callee-body counterparts.
+
+**Consequences.** `tests/core/starchar_entry.pli` covers `char(*)` ENTRY params
+in both CALL statements and function-returning expressions, exercising the hidden
+length argument at call time through different-size caller buffers. All existing
+tests remain green; `bad_char_func_star.pli` still diagnoses `RETURNS(char(*))`.
+
+**Rejected.** Making `RETURNS(char(*))` work on external entries (no mechanism to
+supply a result buffer to a foreign caller); handling `*`-extent chars via dope
+vectors (overkill — a single i64 length suffices); deferring until M2 (blocks
+practical C interop with string-handling functions).
+
