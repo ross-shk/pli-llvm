@@ -1,0 +1,35 @@
+ /* SYSPARM built-in (rule (123)): returns the SYSPARM compiler-option
+    string as CHARACTER. This self-check holds for any option value
+    (including the default empty string): the length is non-negative,
+    the value equals itself, and it assigns into a character variable. */
+ sysparm_test: procedure options(main);
+    declare n fixed bin(31);
+    declare t char(64) varying;
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    n = length(sysparm());
+    if n < 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL length(sysparm()) < 0');
+    end;
+
+    if sysparm() ^= sysparm() then do;
+       fails = fails + 1;
+       put skip list('FAIL sysparm() ^= sysparm()');
+    end;
+
+    t = sysparm();
+    if t ^= sysparm() then do;
+       fails = fails + 1;
+       put skip list('FAIL round-trip through t');
+    end;
+    if length(t) ^= n then do;
+       fails = fails + 1;
+       put skip list('FAIL length(t) =', length(t), 'expected', n);
+    end;
+
+    if fails = 0 then put skip list('PASS sysparm');
+    else put skip list('FAIL sysparm: fails =', fails);
+ end sysparm_test;

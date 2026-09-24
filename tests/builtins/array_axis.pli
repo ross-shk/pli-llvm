@@ -1,0 +1,119 @@
+ /* Array attribute built-ins with an axis argument (rule (123)):
+    lbound/hbound/dim/dimension of a fixed multi-axis array. A second
+    integer-constant argument selects the axis (1-based); without it lbound
+    and hbound report the first axis and dim reports the total count. */
+ array_axis: procedure options(main);
+    declare a(2,3) fixed bin(31);
+    declare b(0:1,2:4,5:7) fixed bin(31);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* single-argument form is unchanged */
+    if lbound(a) ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL lbound(a) =', lbound(a));
+    end;
+    if hbound(a) ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL hbound(a) =', hbound(a));
+    end;
+    if dim(a) ^= 6 then do;
+       fails = fails + 1;
+       put skip list('FAIL dim(a) =', dim(a));
+    end;
+
+    /* first axis explicitly */
+    if lbound(a,1) ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL lbound(a,1) =', lbound(a,1));
+    end;
+    if hbound(a,1) ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL hbound(a,1) =', hbound(a,1));
+    end;
+    if dim(a,1) ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL dim(a,1) =', dim(a,1));
+    end;
+    if dimension(a,1) ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL dimension(a,1) =', dimension(a,1));
+    end;
+
+    /* second axis */
+    if lbound(a,2) ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL lbound(a,2) =', lbound(a,2));
+    end;
+    if hbound(a,2) ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL hbound(a,2) =', hbound(a,2));
+    end;
+    if dim(a,2) ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL dim(a,2) =', dim(a,2));
+    end;
+    if dimension(a,2) ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL dimension(a,2) =', dimension(a,2));
+    end;
+
+    /* three axes with non-1 lower bounds */
+    if lbound(b,1) ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL lbound(b,1) =', lbound(b,1));
+    end;
+    if hbound(b,1) ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL hbound(b,1) =', hbound(b,1));
+    end;
+    if dim(b,1) ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL dim(b,1) =', dim(b,1));
+    end;
+    if lbound(b,2) ^= 2 then do;
+       fails = fails + 1;
+       put skip list('FAIL lbound(b,2) =', lbound(b,2));
+    end;
+    if hbound(b,2) ^= 4 then do;
+       fails = fails + 1;
+       put skip list('FAIL hbound(b,2) =', hbound(b,2));
+    end;
+    if dim(b,2) ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL dim(b,2) =', dim(b,2));
+    end;
+    if lbound(b,3) ^= 5 then do;
+       fails = fails + 1;
+       put skip list('FAIL lbound(b,3) =', lbound(b,3));
+    end;
+    if hbound(b,3) ^= 7 then do;
+       fails = fails + 1;
+       put skip list('FAIL hbound(b,3) =', hbound(b,3));
+    end;
+    if dimension(b,3) ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL dimension(b,3) =', dimension(b,3));
+    end;
+    if dim(b) ^= 18 then do;
+       fails = fails + 1;
+       put skip list('FAIL dim(b) =', dim(b));
+    end;
+
+    /* bounds-driven loops over each axis */
+    do i = lbound(a,1) to hbound(a,1);
+       do j = lbound(a,2) to hbound(a,2);
+          a(i,j) = i * 10 + j;
+       end;
+    end;
+    if a(hbound(a,1),hbound(a,2)) ^= 23 then do;
+       fails = fails + 1;
+       put skip list('FAIL a(2,3) =', a(2,3));
+    end;
+
+    if fails = 0 then put skip list('PASS array_axis');
+    else put skip list('FAIL array_axis: fails =', fails);
+ end array_axis;

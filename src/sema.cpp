@@ -4282,6 +4282,17 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::chr(e->name == "DATE" ? 8 : 6);
     return true;
   }
+  // SYSPARM built-in (rule (123)): sysparm() -> CHARACTER(n) holding the
+  // SYSPARM compiler-option value verbatim (empty when none was given).
+  if (e->name == "SYSPARM") {
+    if (!e->args.empty()) {
+      d_.error(e->loc, "SYSPARM takes no arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::chr((int)sysparm_.size());
+    return true;
+  }
   // ONCODE built-in (rules (91)-(94)): ONCODE() yields the current ERROR
   // code as FIXED BINARY(31): 1 inside an ERROR unit raised by SIGNAL,
   // 0 elsewhere. Takes no arguments.
@@ -4393,11 +4404,14 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     return true;
   }
   // Array attribute built-ins (M2, rules (12),(13),(123)): LBOUND/HBOUND/
-  // DIM of a fixed-size single-axis array. With constant bounds these fold
-  // to compile-time values; the argument must be an unsubscripted array.
-  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
-    if (e->args.size() != 1) {
-      d_.error(e->loc, e->name + " takes one array argument in this stage", "(123)");
+  // DIM/DIMENSION of an array. With constant bounds these fold to
+  // compile-time values; the first argument must be an unsubscripted array.
+  // An optional second integer-constant argument selects the axis (1-based);
+  // without it LBOUND/HBOUND report the first axis and DIM the total count.
+  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM" ||
+      e->name == "DIMENSION") {
+    if (e->args.size() != 1 && e->args.size() != 2) {
+      d_.error(e->loc, e->name + " takes an array and an optional axis in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
@@ -4410,6 +4424,23 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
+    }
+    if (e->args.size() == 2) {
+      Expr* n = e->args[1].get();
+      if (n->kind != Expr::IntLit) {
+        d_.error(n->loc, e->name + " axis must be an integer constant in this stage", "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      long long rank = (long long)a->ty.dims.size();
+      if (n->ival < 1 || n->ival > rank) {
+        d_.error(n->loc,
+                 e->name + " axis " + std::to_string(n->ival) + " out of range (1.." +
+                     std::to_string(rank) + ")",
+                 "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
     }
     e->ty = Type::fixedBin(31, 0);
     return true;
