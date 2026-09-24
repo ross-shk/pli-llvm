@@ -2896,6 +2896,12 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
           b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(pty.len), cv.ptr, cv.len});
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(pty), addr, 0, "vlenp");
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
+      // A varying-char variable of a different declared length is copied into
+      // the dummy above; remember to copy the callee's result back so a
+      // "growing" string (appends inside the callee) reaches the caller.
+      if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
+          a->sym->ty.varying && a->memberPath.empty())
+        pendingVarWrites_.push_back({addr, a->sym, pty});
     } else {
       b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(pty.len), cv.ptr, cv.len});
     }
@@ -2904,6 +2910,25 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     storeScalarTo(addr, pty, cv);
   }
   return addr;
+}
+
+// Emit the copy-back for every varying-char argument marshalled through a
+// parameter-sized dummy (see argAddr), clamped to the caller's capacity.
+void IRGen::flushVarWrites() {
+  for (const PendingVarWrite& w : pendingVarWrites_) {
+    const Type& cty = w.sym->ty;
+    llvm::Value* callerAddr = addressOf(w.sym);
+    llvm::Value* dlp = b_.CreateStructGEP(llvmTy(w.pty), w.dummy, 0, "dlenp");
+    llvm::Value* dlen =
+        b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), dlp, "dlen"), b_.getInt64Ty(), "dlen64");
+    llvm::Value* ddata = b_.CreateStructGEP(llvmTy(w.pty), w.dummy, 1, "ddata");
+    llvm::Value* cdata = b_.CreateStructGEP(llvmTy(cty), callerAddr, 1, "cdata");
+    llvm::Value* ln =
+        b_.CreateCall(runtimeFn("pli_assign_varying"), {cdata, i64(cty.len), ddata, dlen});
+    llvm::Value* clp = b_.CreateStructGEP(llvmTy(cty), callerAddr, 0, "clenp");
+    b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "clen"), clp);
+  }
+  pendingVarWrites_.clear();
 }
 
 // Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
@@ -3138,6 +3163,7 @@ void IRGen::emitCall(HStmt* s) {
     }
    appendStaticLinks(callee, args);
    b_.CreateCall(calleeF, args);
+   flushVarWrites();
 }
 
 // Asynchronous CALL (rule (79), QR2.8): marshal the callee arguments as for a
@@ -3248,6 +3274,7 @@ void IRGen::emitAsyncCall(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_task_note"), {taskAddr});
   llvm::Value* fnPtr = b_.CreateBitCast(wrap, b_.getPtrTy(), "twrap");
   b_.CreateCall(runtimeFn("pli_task_spawn"), {fnPtr, ctxRaw});
+  pendingVarWrites_.clear(); // no sync point to copy a varying arg back
 }
 
 void IRGen::emitWait(HStmt* s) {
@@ -4406,6 +4433,7 @@ Val IRGen::emitExpr(HExpr* e) {
         }
       if (!e->sym->entryIsFunction) {
         b_.CreateCall(extFn, args);
+        flushVarWrites();
         v.ty = e->ty;
         v.reg = i64(0);
         return v;
@@ -4414,12 +4442,14 @@ Val IRGen::emitExpr(HExpr* e) {
         // The character result lives in the caller's buffer (the sret); the
         // callee returns void, so the call carries no result value name.
         b_.CreateCall(extFn, args);
+        flushVarWrites();
         v.ty = rty;
         v.ptr = sretPtr;
         v.len = rty.varying ? i64(0) : i64(rty.len);
         return v;
       }
       llvm::CallInst* call = b_.CreateCall(extFn, args, "fres");
+      flushVarWrites();
       v.ty = rty;
       v.reg = rty.isBit() ? b_.CreateTrunc(call, b_.getInt1Ty(), "fb") : call;
       return v;
@@ -4479,6 +4509,7 @@ Val IRGen::emitExpr(HExpr* e) {
     // buffer), so the call cannot carry a value name.
     llvm::CallInst* call = (rty.isStruct() || rty.isChar()) ? b_.CreateCall(calleeFn, args)
                                                             : b_.CreateCall(calleeFn, args, "fres");
+    flushVarWrites();
     v.ty = rty;
     if (rty.isStruct()) {
       v.ptr = sretPtr; // the result lives in the caller's buffer

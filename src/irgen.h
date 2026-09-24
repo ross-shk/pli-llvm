@@ -153,6 +153,18 @@ private:
   // copied into a fresh dummy argument. Shared by emitCall and emitExpr so the
   // marshalling logic has a single home.
   llvm::Value* argAddr(HExpr* a, const Type& pty);
+  // A CHARACTER VARYING argument of a different declared length than the
+  // parameter is marshalled into a parameter-sized dummy (see argAddr); after
+  // the call the callee's result is copied back into the caller's variable,
+  // clamped to the caller's own capacity. Each entry records what to copy
+  // back; flushVarWrites emits the copies right after a synchronous call.
+  struct PendingVarWrite {
+    llvm::Value* dummy = nullptr; // the parameter-typed dummy alloca
+    Symbol* sym = nullptr;        // the caller's varying-char variable
+    Type pty;                     // the parameter (dummy) type, for layout
+  };
+  std::vector<PendingVarWrite> pendingVarWrites_;
+  void flushVarWrites();
   // Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
   // FLOAT scalars convert to the parameter type and ride as values, POINTERs
   // ride as the pointer itself; anything else keeps the argAddr form. A
