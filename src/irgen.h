@@ -187,6 +187,11 @@ private:
   // parameter (rule (18)): a fixed char variable's declared length, a forwarded
   // `CHAR(*)` parameter's live length, or the emitted value's length.
   llvm::Value* argLen(HExpr* a);
+  // Live capacity of an adjustable-length `CHAR(*)` value (rule (18)): the
+  // hidden length for a parameter, the current generation size for a
+  // CONTROLLED variable (rule (15)). Returns nullptr when the type is not an
+  // adjustable character (fixed/VARYING keep their static lengths).
+  llvm::Value* adjustLen(Symbol* sym, const Type& ty);
 
   Val emitExpr(HExpr* e);
   // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).

@@ -154,6 +154,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->snap = s->snap;
   h->isSystem = s->isSystem;
   h->onIndex = s->onIndex;
+  h->onCaps = s->onCaps;
   h->unit = lowerStmt(s->unit.get(), owner);
   // SIGNAL ... SET ONCODE(expr) (rule (93)): lower the code expression.
   if (s->kind == Stmt::Signal && s->oncodeExpr)
@@ -184,6 +185,13 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
       hd.sym->dynUb = hd.dynBounds[0].get();
     if (hd.sym && !hd.dynLbBounds.empty())
       hd.sym->dynLb = hd.dynLbBounds[0].get();
+    // The lowered adjustable-length expression rides on the symbol so irgen
+    // can size CONTROLLED generations at each ALLOCATE (rules (15),(18)).
+    // Same ownership shape as the dynamic bounds above.
+    if (hd.sym && d.slenExpr) {
+      hd.dynLenBound = lowerExpr(d.slenExpr.get());
+      hd.sym->dynLenExpr = hd.dynLenBound.get();
+    }
     // Dynamic array members (rule 13): lower each member's bound exprs onto the
     // symbol so irgen can size and address the member buffer at entry. The raw
     // ub/lb pointers reference hd.dynMemberBounds, which owns the exprs.

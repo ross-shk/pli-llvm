@@ -1,5 +1,4 @@
 /* rt_storage.c — PL/I runtime library (libpli): heap: ALLOCATE/FREE. */
-/* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
 #include <stdlib.h>
 
@@ -10,67 +9,76 @@ char *pli_alloc(long long n) {
   return p;
 }
 
-/* FREE (rule 90): release the heap block addressed by a based pointer. */
 void pli_free(char *p) { free(p); }
 
-/* CONTROLLED generation stack (rules 87-90, ADR-140): LIFO generations per
- * variable, indexed by the compile-time slot sema assigns (fileSlot
- * precedent). References always address generation depth-1; generations
- * outlive blocks and only explicit FREE pops. */
 typedef struct {
+  long long key; /* the variable's deterministic name hash; -1 = empty entry */
   char **gens;
+  long long *lens;
   long long depth, cap;
 } CtlVar;
 static CtlVar *ctlVars = NULL;
 static long long ctlCount = 0;
 
-static CtlVar *ctlEnsure(long long slot) {
-  if (slot < 0)
-    pli_signal_error("CONTROLLED slot out of range");
-  if (slot >= ctlCount) {
-    long long ncap = slot + 16;
-    CtlVar *nv = (CtlVar *)realloc(ctlVars, (size_t)ncap * sizeof(CtlVar));
-    if (!nv)
-      pli_signal_error("CONTROLLED table out of memory");
-    for (long long i = ctlCount; i < ncap; ++i) {
-      nv[i].gens = NULL;
-      nv[i].depth = 0;
-      nv[i].cap = 0;
-    }
-    ctlVars = nv;
-    ctlCount = ncap;
-  }
-  return &ctlVars[slot];
+/* Find (or, when create is set, append) the generation stack for a variable.
+ * Keys are the sema-assigned FNV-1a name hashes, so unrelated CONTROLLED
+ * variables in different object files never share a slot. The variable count
+ * is tiny, so a linear scan beats a hash table. */
+static CtlVar *ctlFind(long long key, int create) {
+  for (long long i = 0; i < ctlCount; ++i)
+    if (ctlVars[i].key == key)
+      return &ctlVars[i];
+  if (!create)
+    return NULL;
+  CtlVar *nv = (CtlVar *)realloc(ctlVars, (size_t)(ctlCount + 1) * sizeof(CtlVar));
+  if (!nv)
+    pli_signal_error("CONTROLLED table out of memory");
+  ctlVars = nv;
+  CtlVar *v = &ctlVars[ctlCount++];
+  v->key = key;
+  v->gens = NULL;
+  v->lens = NULL;
+  v->depth = 0;
+  v->cap = 0;
+  return v;
 }
 
-/* ALLOCATE a CONTROLLED generation (rule 87): push a fresh block sized by
- * the caller from the compile-time descriptor. */
-void pli_ctl_alloc(long long slot, long long n) {
-  CtlVar *v = ctlEnsure(slot);
+void pli_ctl_alloc(long long key, long long n) {
+  CtlVar *v = ctlFind(key, 1);
   if (v->depth >= v->cap) {
     long long ncap = v->cap ? v->cap * 2 : 4;
     char **ng = (char **)realloc(v->gens, (size_t)ncap * sizeof(char *));
     if (!ng)
       pli_signal_error("CONTROLLED generation stack out of memory");
+    long long *nl = (long long *)realloc(v->lens, (size_t)ncap * sizeof(long long));
+    if (!nl)
+      pli_signal_error("CONTROLLED generation stack out of memory");
     v->gens = ng;
+    v->lens = nl;
     v->cap = ncap;
   }
-  v->gens[v->depth++] = pli_alloc(n);
+  v->gens[v->depth] = pli_alloc(n);
+  v->lens[v->depth] = n;
+  ++v->depth;
 }
 
-/* FREE a CONTROLLED generation (rule 90): pop; empty stack is diagnosed,
- * never silently ignored (invariant 2). */
-void pli_ctl_free(long long slot) {
-  if (slot < 0 || slot >= ctlCount || ctlVars[slot].depth <= 0)
+void pli_ctl_free(long long key) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v || v->depth <= 0)
     pli_signal_error("FREE of empty CONTROLLED stack");
-  CtlVar *v = &ctlVars[slot];
   free(v->gens[--v->depth]);
 }
 
-/* Latest CONTROLLED generation address, or NULL when none is allocated. */
-char *pli_ctl_addr(long long slot) {
-  if (slot < 0 || slot >= ctlCount || ctlVars[slot].depth <= 0)
+char *pli_ctl_addr(long long key) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v || v->depth <= 0)
     return NULL;
-  return ctlVars[slot].gens[ctlVars[slot].depth - 1];
+  return v->gens[v->depth - 1];
 }
 
+long long pli_ctl_len(long long key) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v || v->depth <= 0)
+    return 0;
+  return v->lens[v->depth - 1];
+}

@@ -78,6 +78,11 @@ struct HDeclItem {
   // which Symbol::DynMemberH.ub/lb point into; kept in HIR so IRGen can size the
   // member buffers at entry. Mirrors dynBounds ownership.
   std::vector<HExprP> dynMemberBounds;
+  // Owns the lowered runtime length expression of an adjustable `CHAR(expr)`
+  // declaration (rule (18)); null when the declaration named no length
+  // expression. Symbol::dynLenExpr points into it; kept in HIR so IRGen can
+  // size CONTROLLED generations at each ALLOCATE.
+  HExprP dynLenBound;
   HExprP init;     // INITIAL(...) — scalar constant only in M0
   HExprP initCall; // INITIAL(CALL f(...)) — a function-call initializer (rule 27)
   Symbol* sym = nullptr;
@@ -197,6 +202,10 @@ struct HStmt {
   // SIGNAL ... SET ONCODE(expr) (rule (93)): lowered code expression.
   HExprP oncodeExpr;
   int onIndex = -1; // dense handler id assigned by irgen before emission
+  // Establishing-frame automatics the ON-unit touches (rule 91), collected by
+  // sema; codegen captures their addresses at establishment for the handler's
+  // capture context. Symbols are shared with sema, so a copy suffices.
+  std::vector<Symbol*> onCaps;
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
   // and its SET(...) pointer target (rule 88).
   std::vector<HExprP> allocBase;

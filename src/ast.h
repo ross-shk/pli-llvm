@@ -250,6 +250,10 @@ struct Stmt {
   bool isSystem = false;
   StmtP unit;
   int onIndex = -1; // dense handler id assigned during lowering (rule 91)
+  // Establishing-frame automatics the ON-unit touches (rule 91): collected by
+  // sema, captured by address at establishment, read through the handler's
+  // capture context. Empty when the unit touches none.
+  std::vector<Symbol*> onCaps;
   // SIGNAL ... SET ONCODE(expr) (rule (93)): the code stored as ONCODE
   // before the unit runs; null when absent.
   ExprP oncodeExpr;

@@ -41,8 +41,13 @@ void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
  * src is shorter than n. Positions past the end of dst clip (SUBSCRIPTRANGE
  * is M3). */
 void pli_substr_assign(char *dst, long long dstcap, long long start, long long len,
-                       const char *src, long long srclen) {
+                        const char *src, long long srclen) {
   if (start < 1) return;
+  /* Sanity: ensure dstcap isn't bogus and write region fits inside it. */
+  if (dstcap <= 0 || dstcap > 100 * 1024 * 1024)
+    pli_signal_error("substr_assign: corrupt dstcap");
+  if ((long long)((size_t)dst + (size_t)dstcap) < (size_t)dst)
+    pli_signal_error("substr_assign: wraparound in dstcap");
   long long n = len;
   long long space = dstcap - (start - 1);
   if (space <= 0) return;

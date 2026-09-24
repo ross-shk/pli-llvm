@@ -335,6 +335,8 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
   const std::vector<llvm::Function*>& handlers = it->second;
   llvm::Value* top =
       b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64((long long)key)}, tag + "top");
+  llvm::Value* topCtx =
+      b_.CreateCall(runtimeFn("pli_on_top_ctx"), {i64((long long)key)}, tag + "ctx");
   llvm::Value* none = b_.CreateICmpEQ(top, i64(0), tag + "none");
   llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, tag + ".abort", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, tag + ".dispatch", curFn_);
@@ -349,7 +351,7 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
         llvm::BasicBlock::Create(ctx_, tag + ".handle." + std::to_string(i + 1), curFn_);
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
     b_.SetInsertPoint(hbb);
-    b_.CreateCall(handlers[i], {});
+    b_.CreateCall(handlers[i], {topCtx});
     b_.CreateBr(okBB);
   }
 }
@@ -485,13 +487,31 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     else
       pt.push_back(b_.getPtrTy());
   }
-   // External ENTRY symbols (no PL/I body): don't append hidden extent/length
-   // args here; the declared signature already captures all parameters. Hidden
-   // args are a PL/I inter-procedure convention (caller pushes them, callee
-   // reads them from the tail of its parameter list). Externals use their
-   // declared params verbatim — any char(*) lengths must be explicit scalar
-   // fixed-bin(31) params on the ENTRY declaration (c_bridge.inc pattern).
+   // External ENTRY symbols (no PL/I body): by-value C entries (rules
+   // (34),(38)) use their declared params verbatim — any char(*) lengths
+   // must be explicit scalar fixed-bin(31) params (c_bridge.inc pattern).
+   // A plain-EXTERNAL PL/I entry is a procedure in another object file and
+   // follows the PL/I inter-procedure convention: hidden extent/length args
+   // for `*`-extent arrays (rule (13)) and CHAR(*) params (rule (18)),
+   // exactly as if the procedure were defined in this compilation.
    if (!sym->proc && !en) {
+     if (!sym->entryByValue)
+       for (const Type& t : sym->entryParams) {
+         if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+           pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+         if (t.isChar() && t.starLen)
+           pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+       }
+     // An external character-valued function (rules (34),(37)) returns through
+     // a hidden result buffer like structures do: the caller allocates it and
+     // passes its address as the first argument, so the declaration is
+     // `void @NAME(ptr sret, ...)`.
+     if (sym->entryIsFunction && sym->entryRetTy.isChar()) {
+       std::vector<llvm::Type*> pt2 = pt;
+       pt2.insert(pt2.begin(), b_.getPtrTy());
+       llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
+       return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+     }
      llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy();
      llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
      return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
@@ -502,17 +522,23 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
      if (t.isChar() && t.starLen)
        pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
    }
-  // An external character-valued function (rule (34)) has no PL/I caller to
-  // supply the hidden result buffer; diagnosed, and given a void stub so
-  // emission continues toward the final diagnostic check.
-  bool extChar = sym->entryIsFunction && sym->entryRetTy.isChar();
-  if (extChar)
-    d_.error(sym->loc, "external character-valued functions are not implemented in this stage",
-             "(34)");
-  llvm::Type* rty =
-      sym->entryIsFunction && !extChar ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34)
-  llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
-  return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+   // An external character-valued function (rules (34),(37)) returns through a
+   // hidden result buffer like structures do; for PL/I callers outside this
+   // TU we cannot generate the buffer allocation site here, but the external
+   // declaration must match the callee's inter-procedure signature (ptr-first).
+   bool extChar = sym->entryIsFunction && sym->entryRetTy.isChar();
+   std::vector<llvm::Type*> pt2 = pt;
+   if (extChar) {
+     // Emit the declaration with hidden-result-pointer semantics: the external
+     // entry returns void and accepts a ptr as first argument (the sret).
+     pt2.insert(pt2.begin(), b_.getPtrTy());
+     llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
+     return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+   }
+   llvm::Type* rty =
+       sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34)
+   llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
+   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1425,7 +1451,10 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       lastKey = keyId.first;
       first = false;
     }
-    llvm::FunctionType* ft = llvm::FunctionType::get(b_.getVoidTy(), false);
+    // Every handler takes its capture context (rule 91): the establishing-frame
+    // addresses of automatics the unit touches, or NULL when it touches none.
+    llvm::FunctionType* ft =
+        llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
     std::string name;
     if (keyId.first == 0)
       name = "PLI_ON_" + std::to_string(keyId.second);
@@ -1443,8 +1472,9 @@ void IRGen::declareOnHandlers(HProgram& prog) {
 }
 
 // Fill every handler function body. A handler runs without the establishing
-// frame (sema rejected automatic-variable access), so only globals are seeded;
-// labels inside the unit get their own blocks.
+// frame; automatics the unit touches (collected by sema) arrive through the
+// capture-context argument, so only globals are seeded directly; labels
+// inside the unit get their own blocks.
 void IRGen::emitOnHandlers(HProgram& prog) {
   for (auto& p : prog.procs) {
     std::map<std::pair<int, int>, HStmt*> byId;
@@ -1465,6 +1495,17 @@ void IRGen::emitOnHandlers(HProgram& prog) {
           symAddr_[gs] = mod_.getGlobalVariable(gs->irName.substr(1), true);
       llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
       b_.SetInsertPoint(entry);
+      // Bind the capture context: the i-th slot holds the address of the i-th
+      // collected automatic, in the same order establishment stored them.
+      if (!s->onCaps.empty()) {
+        llvm::Value* ctxArg = fn->getArg(0);
+        std::vector<llvm::Type*> fields(s->onCaps.size(), b_.getPtrTy());
+        llvm::StructType* capTy = llvm::StructType::get(ctx_, fields);
+        for (size_t i = 0; i < s->onCaps.size(); ++i) {
+          llvm::Value* fp = b_.CreateStructGEP(capTy, ctxArg, (unsigned)i, "capf");
+          symAddr_[s->onCaps[i]] = b_.CreateLoad(b_.getPtrTy(), fp, "capv");
+        }
+      }
       collectGotoBlocks(s->unit.get());
       emitStmt(s->unit.get());
       if (!blockTerminated(b_.GetInsertBlock()))
@@ -1477,18 +1518,40 @@ void IRGen::emitOnHandlers(HProgram& prog) {
   }
 }
 
-// Establish a handler: push its id, or 0 for the system action.
+// Establish a handler: push its id (0 for the system action) plus the handler
+// address and the capture context for automatics the unit touches (rule 91).
+// The address/context pair is what lets a SIGNAL raised anywhere — including
+// another object file — run this module's handler against this frame.
 void IRGen::emitOn(HStmt* s) {
   long long id = s->isSystem ? 0 : s->onIndex;
+  llvm::Value* fnv = llvm::Constant::getNullValue(b_.getPtrTy());
+  llvm::Value* ctx = llvm::Constant::getNullValue(b_.getPtrTy());
+  if (!s->isSystem) {
+    llvm::Function* fn = onHandlers_[s->condKey][(size_t)s->onIndex - 1];
+    fnv = b_.CreateBitCast(fn, b_.getPtrTy(), "onfn");
+    if (!s->onCaps.empty()) {
+      std::vector<llvm::Type*> fields(s->onCaps.size(), b_.getPtrTy());
+      llvm::StructType* capTy = llvm::StructType::get(ctx_, fields);
+      llvm::Value* cap = entryAlloca(capTy, "oncap");
+      for (size_t i = 0; i < s->onCaps.size(); ++i) {
+        llvm::Value* fp = b_.CreateStructGEP(capTy, cap, (unsigned)i, "capf");
+        b_.CreateStore(addressOf(s->onCaps[i]), fp);
+      }
+      ctx = cap;
+    }
+  }
   if (s->condKey == 0)
-    b_.CreateCall(runtimeFn("pli_on_push_error"), {i64(id)});
+    b_.CreateCall(runtimeFn("pli_on_push_error"), {i64(id), fnv, ctx});
   else
-    b_.CreateCall(runtimeFn("pli_on_push_cond"), {i64(s->condKey), i64(id)});
+    b_.CreateCall(runtimeFn("pli_on_push_cond"), {i64(s->condKey), i64(id), fnv, ctx});
 }
 
 // Raise a condition: without an established handler take the system action
 // (abort); otherwise run the topmost handler for that condition, then resume
-// after the SIGNAL. ERROR resets ONCODE around its handlers; a SIGNAL ...
+// after the SIGNAL. The handler address and its capture context come from the
+// runtime stack — not from this module's handler list — so a SIGNAL raised
+// here runs a unit established anywhere, including another object file
+// (rules (91)-(94)). ERROR resets ONCODE around its handlers; a SIGNAL ...
 // SET ONCODE(expr) stores its code first so the unit observes it.
 void IRGen::emitSignal(HStmt* s) {
   if (s->oncodeExpr) {
@@ -1496,11 +1559,12 @@ void IRGen::emitSignal(HStmt* s) {
     Val c = convert(code, Type::fixedBin(31, 0), s->loc);
     b_.CreateCall(runtimeFn("pli_set_oncode"), {c.reg});
   }
-  const std::vector<llvm::Function*>& handlers = onHandlers_[s->condKey];
-  llvm::Value* top = s->condKey == 0
-                         ? b_.CreateCall(runtimeFn("pli_on_top_error"), {}, "ontop")
-                         : b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64(s->condKey)}, "ontop");
-  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "onnosystem");
+  llvm::Value* fn =
+      b_.CreateCall(runtimeFn("pli_on_top_fn"), {i64(s->condKey)}, "ontopfn");
+  llvm::Value* ctx =
+      b_.CreateCall(runtimeFn("pli_on_top_ctx"), {i64(s->condKey)}, "ontopctx");
+  llvm::Value* none =
+      b_.CreateICmpEQ(fn, llvm::Constant::getNullValue(b_.getPtrTy()), "onnosystem");
   llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", curFn_);
   llvm::BasicBlock* resBB = llvm::BasicBlock::Create(ctx_, "on.resume", curFn_);
@@ -1520,19 +1584,14 @@ void IRGen::emitSignal(HStmt* s) {
   b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
   b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
-  llvm::SwitchInst* sw = b_.CreateSwitch(top, resBB, handlers.size());
-  for (size_t i = 0; i < handlers.size(); ++i) {
-    llvm::BasicBlock* hbb =
-        llvm::BasicBlock::Create(ctx_, "on.handle." + std::to_string(i + 1), curFn_);
-    sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
-    b_.SetInsertPoint(hbb);
-    if (s->condKey == 0)
-      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
-    b_.CreateCall(handlers[i], {});
-    if (s->condKey == 0)
-      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
-    b_.CreateBr(resBB);
-  }
+  if (s->condKey == 0)
+    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
+  llvm::FunctionType* hft =
+      llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
+  b_.CreateCall(hft, fn, {ctx});
+  if (s->condKey == 0)
+    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+  b_.CreateBr(resBB);
   b_.SetInsertPoint(resBB);
 }
 
@@ -1814,8 +1873,18 @@ void IRGen::emitAssign(HStmt* s) {
     Val start = emitExpr(t->args[1].get());
     Val len = emitExpr(t->args[2].get());
     Val rhs = emitExpr(s->value.get());
+    // The write region clips to the base capacity: static for fixed and
+    // VARYING strings, live for adjustable `CHAR(*)` (rule (18)) and
+    // CONTROLLED generations (rule (15)).
+    llvm::Value* cap = sv.len;
+    if (sym && sym->ty.isChar()) {
+      if (llvm::Value* live = adjustLen(sym, sym->ty))
+        cap = live;
+      else
+        cap = i64(sym->ty.len);
+    }
     b_.CreateCall(runtimeFn("pli_substr_assign"),
-                  {sv.ptr, i64(sym->ty.len), toI64(start), toI64(len), rhs.ptr, rhs.len});
+                  {sv.ptr, cap, toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;
   }
   // Cross-section assignment (rule 126): B = A(i, *, ...) — the right-hand side
@@ -2008,13 +2077,17 @@ void IRGen::emitAssign(HStmt* s) {
 
 // ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
 // store its address in the pointer target; or push a CONTROLLED generation,
-// sized the same way from the compile-time descriptor.
+// sized the same way from the compile-time descriptor — except for an
+// adjustable `CHAR(expr)` (rules (15),(18)), whose size is the runtime length
+// expression evaluated here and recorded per generation by the runtime.
 void IRGen::emitAllocate(HStmt* s) {
   for (size_t i = 0; i < s->allocBase.size(); ++i) {
     Symbol* bsym = s->allocBase[i]->sym;
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
     if (bsym->controlled) {
+      if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr)
+        sz = toI64(emitExpr(bsym->dynLenExpr), s->loc);
       b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(bsym->ctlSlot), sz});
       continue;
     }
@@ -2858,11 +2931,11 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
 llvm::Value* IRGen::argLen(HExpr* a) {
   if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar()) {
     // Forwarding a `CHAR(*)` parameter (rule (18)): pass the live length this
-    // frame received for it.
+    // frame received for it. A CONTROLLED adjustable passes its current
+    // generation size (rule (15)).
     if (a->sym->ty.starLen) {
-      auto it = dynLen_.find(a->sym);
-      if (it != dynLen_.end())
-        return it->second;
+      if (llvm::Value* live = adjustLen(a->sym, a->sym->ty))
+        return live;
       return i64(0);
     }
     // A fixed char variable's declared length is the caller buffer's capacity.
@@ -2872,6 +2945,20 @@ llvm::Value* IRGen::argLen(HExpr* a) {
   if (av.ty.isChar())
     return av.len ? av.len : i64(av.ty.len);
   return i64(0);
+}
+
+// Live capacity of an adjustable-length `CHAR(*)` value (rule (18)): the
+// hidden length for a parameter, the current generation size for a CONTROLLED
+// variable (rule (15)). Returns nullptr when the value is not an adjustable
+// character (fixed/VARYING keep their static lengths).
+llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
+  if (!ty.isChar() || !ty.starLen || ty.varying)
+    return nullptr;
+  if (sym && sym->controlled)
+    return b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "ctllen");
+  if (sym && dynLen_.count(sym))
+    return dynLen_[sym];
+  return nullptr;
 }
 
 // Append the callee's static-link arguments (its enclosing automatic
@@ -2979,6 +3066,27 @@ void IRGen::emitCall(HStmt* s) {
       args.push_back(ext);
     }
   }
+  // The same hidden args when CALLing a plain-EXTERNAL PL/I entry (no local
+  // Proc/ENTRY statement): driven by the ENTRY declaration's parameter
+  // types. By-value C entries carry none (lengths are explicit there).
+  if (!en && !callee && !calleeSym->entryByValue)
+    for (size_t i = 0; i < calleeSym->entryParams.size(); ++i) {
+      const Type& t = calleeSym->entryParams[i];
+      if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) ||
+            (t.isChar() && t.starLen)))
+        continue;
+      llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
+                             ? i64(0)
+                             : (isStarLen(t) ? argLen(s->args[i].get())
+                                             : argExtent(s->args[i].get()));
+      if (!ext) {
+        d_.error(s->args[i]->loc,
+                 "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                 "(13)");
+        ext = i64(0);
+      }
+      args.push_back(ext);
+    }
    appendStaticLinks(callee, args);
    b_.CreateCall(calleeF, args);
 }
@@ -3451,10 +3559,14 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
       v.ptr = dp;
       v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "l64");
     } else if (ty.starLen) {
-      // An adjustable-length `CHAR(*)` parameter (rule (18)): its live length
-      // is the hidden argument the caller supplied (read once at entry).
+      // An adjustable-length `CHAR(*)` (rule (18)): a parameter's live length
+      // is the hidden argument the caller supplied (read once at entry); a
+      // CONTROLLED variable's is its current generation size (rule (15)).
       v.ptr = addr;
-      v.len = dynLen_.count(sym) ? dynLen_[sym] : i64(ty.len);
+      if (llvm::Value* live = adjustLen(sym, ty))
+        v.len = live;
+      else
+        v.len = i64(ty.len);
     } else {
       v.ptr = addr;
       v.len = i64(ty.len);
@@ -3515,9 +3627,42 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
   llvm::Value* addr = addressOf(sym);
   if (dt.isChar()) {
     if (dt.starLen) {
-      // An adjustable-length `CHAR(*)` parameter (rule (18)): write into the
-      // caller's buffer, blank-padding/truncating to the live capacity.
-      llvm::Value* live = dynLen_.count(sym) ? dynLen_[sym] : i64(dt.len);
+      // An adjustable-length `CHAR(*)` target (rule (18)): write into the
+      // buffer, blank-padding/truncating to the live capacity — the hidden
+      // length for a parameter, the current generation size for CONTROLLED
+      // (rule (15)).
+      llvm::Value* live = adjustLen(sym, dt);
+      if (!live)
+        live = i64(dt.len);
+      // For adjustable CHAR(*) on CONTROLLED variables (rule (18)): if the
+      // current generation is too small for the source content, free it and
+      // allocate a replacement sized to the source. Then always reload fresh
+      // addr+len for assign_char so we never write past the live region.
+      if (sym && sym->controlled && !v.ty.varying && v.len) {
+        llvm::Value* srclen = v.len;
+        if (srclen->getType()->getIntegerBitWidth() != 64)
+          srclen = b_.CreateSExt(srclen, b_.getInt64Ty(), "srcl");
+        llvm::Value* needs = b_.CreateICmpUGT(srclen, live, "needexp");
+        llvm::BasicBlock* expBB = llvm::BasicBlock::Create(ctx_, "expan", curFn_);
+        llvm::BasicBlock* copyBB = llvm::BasicBlock::Create(ctx_, "copyif", curFn_);
+        llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx_, "expend", curFn_);
+        b_.CreateCondBr(needs, expBB, copyBB);
+        b_.SetInsertPoint(expBB);
+        b_.CreateCall(runtimeFn("pli_ctl_free"), {i64(sym->ctlSlot)});
+        b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(sym->ctlSlot), srclen});
+        b_.CreateBr(mergeBB);
+        b_.SetInsertPoint(copyBB);
+        b_.CreateBr(mergeBB);
+        b_.SetInsertPoint(mergeBB);
+        // Always reload fresh addr+len — may have changed in expBB
+        llvm::Value* faddr = b_.CreateCall(
+            runtimeFn("pli_ctl_addr"), {i64(sym->ctlSlot)}, "fraddr");
+        llvm::Value* flen = b_.CreateCall(
+            runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "flen");
+        b_.CreateCall(runtimeFn("pli_assign_char"),
+                      {faddr, flen, v.ptr, v.len});
+        return;
+      }
       b_.CreateCall(runtimeFn("pli_assign_char"), {addr, live, v.ptr, v.len});
       return;
     }
@@ -4169,15 +4314,16 @@ Val IRGen::emitExpr(HExpr* e) {
       }
       Type rty = e->sym->entryIsFunction ? e->sym->entryRetTy : Type::voidTy();
       llvm::Function* extFn = calleeFn(e->sym);
-      if (rty.isChar()) {
-        // External character-valued function: diagnosed in calleeFn (rule
-        // (34)); yield a dummy buffer so emission continues safely.
-        v.ty = rty;
-        v.ptr = entryAlloca(llvmTy(rty), "sret");
-        v.len = rty.varying ? i64(0) : i64(rty.len);
-        return v;
-      }
+      // An external character-valued function (rules (34),(37)) returns
+      // through a hidden result buffer, exactly like a locally-defined
+      // function procedure: allocate the buffer, pass it as the first
+      // argument, and return its address/length to the caller.
       std::vector<llvm::Value*> args;
+      llvm::Value* sretPtr = nullptr;
+      if (rty.isChar()) {
+        sretPtr = entryAlloca(llvmTy(rty), "sret");
+        args.push_back(sretPtr);
+      }
       for (size_t i = 0; i < e->args.size() && i < e->sym->entryParams.size(); ++i) {
         HExpr* a = e->args[i].get();
         Type pty = e->sym->entryParams[i];
@@ -4187,10 +4333,41 @@ Val IRGen::emitExpr(HExpr* e) {
         else
           args.push_back(argAddr(a, pty));
       }
+      // Hidden extent/length args for the `*`-extent array and CHAR(*)
+      // params of a plain-EXTERNAL PL/I entry (rules (13),(18)): the same
+      // convention as for a locally-defined procedure. By-value C entries
+      // carry none (lengths are explicit params there).
+      if (!e->sym->entryByValue)
+        for (size_t i = 0; i < e->sym->entryParams.size(); ++i) {
+          const Type& t = e->sym->entryParams[i];
+          if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) ||
+                (t.isChar() && t.starLen)))
+            continue;
+          llvm::Value* ext = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
+                                 ? i64(0)
+                                 : (isStarLen(t) ? argLen(e->args[i].get())
+                                                 : argExtent(e->args[i].get()));
+          if (!ext) {
+            d_.error(e->args[i]->loc,
+                     "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                     "(13)");
+            ext = i64(0);
+          }
+          args.push_back(ext);
+        }
       if (!e->sym->entryIsFunction) {
         b_.CreateCall(extFn, args);
         v.ty = e->ty;
         v.reg = i64(0);
+        return v;
+      }
+      if (rty.isChar()) {
+        // The character result lives in the caller's buffer (the sret); the
+        // callee returns void, so the call carries no result value name.
+        b_.CreateCall(extFn, args);
+        v.ty = rty;
+        v.ptr = sretPtr;
+        v.len = rty.varying ? i64(0) : i64(rty.len);
         return v;
       }
       llvm::CallInst* call = b_.CreateCall(extFn, args, "fres");
@@ -4675,16 +4852,32 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val start = emitExpr(e->args[1].get());
     Val len = emitExpr(e->args[2].get());
+    // Source capacity for clipping: static, except for adjustable `CHAR(*)`
+    // (rule (18)) / CONTROLLED (rule (15)) sources, where it is live.
+    Symbol* ssysm = e->args[0]->sym;
+    llvm::Value* capV =
+        (ssysm && ssysm->ty.isChar()) ? adjustLen(ssysm, ssysm->ty) : nullptr;
     Val out = charTemp(e->ty.len);
     if (e->ty.varying) {
       // A runtime length (rule (123)): clamp the live length at zero and
       // the source maximum, and transmit exactly that (start keeps the
-      // blank-fill semantics of the constant path).
+      // blank-fill semantics of the constant path). The result buffer is
+      // sized by the same maximum, so an adjustable source gets a
+      // runtime-sized buffer evaluated here (its capacity can change between
+      // evaluations, e.g. across CONTROLLED reallocations).
       llvm::Value* ln = toI64(len);
       llvm::Value* nonneg =
           b_.CreateSelect(b_.CreateICmpSLT(ln, i64(0), "svneg"), i64(0), ln, "sv0");
+      llvm::Value* cap = capV ? capV : i64(e->ty.len);
       llvm::Value* live = b_.CreateSelect(
-          b_.CreateICmpSGT(nonneg, i64(e->ty.len), "svbig"), i64(e->ty.len), nonneg, "svlive");
+          b_.CreateICmpSGT(nonneg, cap, "svbig"), cap, nonneg, "svlive");
+      if (capV) {
+        // Adjustable source: replace the static placeholder buffer with a
+        // runtime-sized one evaluated here.
+        out.ty = e->ty;
+        out.ptr = b_.CreateAlloca(b_.getInt8Ty(), cap, "svbuf");
+        out.len = cap;
+      }
       b_.CreateCall(runtimeFn("pli_substr"),
                     {out.ptr, out.len, s.ptr, s.len, toI64(start), live});
       out.len = live;
@@ -4837,11 +5030,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = dst;
     return true;
   }
-  // MAXLENGTH (rule (123)): the declared VARYING maximum — a constant fold,
-  // no runtime call.
+  // MAXLENGTH (rule (123)): capacity — the declared maximum for FIXED and
+  // VARYING strings (a constant fold, no runtime call), the live length for
+  // adjustable `CHAR(*)` (rule (18)) and adjustable CONTROLLED (rule (15)).
   if (e->name == "MAXLENGTH") {
     v.ty = e->ty;
-    v.reg = llvm::ConstantInt::get(llvmTy(e->ty), (uint64_t)e->args[0]->ty.len, false);
+    HExpr* a = e->args[0].get();
+    if (a->sym && a->sym->ty.isChar()) {
+      if (llvm::Value* live = adjustLen(a->sym, a->sym->ty))
+        v.reg = b_.CreateTrunc(live, llvmTy(e->ty), "maxlen");
+      else
+        v.reg = llvm::ConstantInt::get(llvmTy(e->ty), (uint64_t)a->sym->ty.len, false);
+    } else {
+      v.reg = llvm::ConstantInt::get(llvmTy(e->ty), (uint64_t)e->args[0]->ty.len, false);
+    }
     result = v;
     return true;
   }
