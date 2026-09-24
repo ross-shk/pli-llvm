@@ -1204,6 +1204,11 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     return true;
   }
+  if (w == "CONTROLLED" || w == "CTL") {
+    bag.controlled = true;
+    advance();
+    return true;
+  }
   return false;
 }
 
