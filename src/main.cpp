@@ -58,7 +58,8 @@ static void usage() {
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
-         "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
+          "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
+          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
@@ -112,6 +113,8 @@ static fs::path executablePath(const char* arg0) {
 int main(int argc, char** argv) {
   std::string input, output, runtimeLib = PLIC_RUNTIME_LIB, triple;
   std::string clangPath = PLIC_CLANG;
+  std::string sysparm;
+  bool sysparmExplicit = false;
   std::string optLevel = "-O2";
   std::vector<std::string> linkArgs;    // extra args appended to the link step
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)

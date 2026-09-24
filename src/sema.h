@@ -82,6 +82,8 @@ struct Scope {
 class Sema {
 public:
   explicit Sema(Diags& d) : d_(d) {}
+  void setSysparm(std::string v) { sysparm_ = std::move(v); }
+  const std::string& sysparm() const { return sysparm_; }
   bool run(Program& prog, bool compileOnly = false);
 
   // Symbols that require storage, in declaration order.
@@ -279,6 +281,7 @@ private:
 
   Diags& d_;
   Program* prog_ = nullptr;
+  std::string sysparm_; // SYSPARM option value (rule (123)): SYSPARM() returns it
   std::vector<std::unique_ptr<Symbol>> owned_;
   std::vector<std::unique_ptr<Scope>> scopes_;
   std::unordered_map<Proc*, Scope*> procScopes_;

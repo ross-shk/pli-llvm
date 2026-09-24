@@ -1,0 +1,6 @@
+ /* Diagnostic test: SYSPARM takes no arguments. */
+ bad_sysparm: procedure options(main);
+    declare t char(8);
+
+    t = sysparm('x');
+ end bad_sysparm;

@@ -5103,6 +5103,16 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = out;
     return true;
   }
+  // SYSPARM (rule (123)): the SYSPARM option value baked in at compile time;
+  // a constant string with the option's exact length (possibly zero).
+  if (e->name == "SYSPARM") {
+    const std::string& s = sema_.sysparm();
+    v.ty = e->ty;
+    v.ptr = globalString(s);
+    v.len = i64((long long)s.size());
+    result = v;
+    return true;
+  }
   // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
   // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
   if (e->name == "FIXED") {
@@ -5166,9 +5176,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // Array attribute built-ins (M2, rule (123)): constant bounds fold to a
   // compile-time value. The argument is the unsubscripted array reference;
   // read its bounds from the symbol rather than emitting the array value.
-  // LBOUND/HBOUND report the first dimension; DIM reports the total element
-  // count (the product over all axes).
-  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM") {
+  // LBOUND/HBOUND report the first dimension; DIM/DIMENSION report the total
+  // element count (the product over all axes). With a second integer-constant
+  // axis argument (1-based) each reports that axis: the bound or the extent.
+  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM" ||
+      e->name == "DIMENSION") {
     HExpr* a = e->args[0].get();
     // The argument is an unsubscripted array reference, either a plain array
     // (a->sym) or a qualified structure member array S.V (a->sym + memberPath).
@@ -5176,6 +5188,45 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                           ? memberType(a->sym, a->memberPath)
                           : (a->sym ? a->sym->ty : Type::fixedBin(31, 0));
     v.ty = e->ty;
+    const bool isDim = e->name == "DIM" || e->name == "DIMENSION";
+    // A selected axis (0-based), or -1 for the default single-argument form.
+    long long sel = e->args.size() == 2 ? e->args[1]->ival - 1 : -1;
+    // A per-axis request against a dynamic first axis uses the live bounds;
+    // later axes are always constant in this stage.
+    if (sel >= 0 && arr.isArray() && arr.isDynamic() && sel == 0) {
+      const Dim& d0 = arr.dims[0];
+      llvm::Value* lb = nullptr;
+      llvm::Value* ub = nullptr;
+      if (!a->memberPath.empty()) {
+        auto it = memberDyn_.find(MemberDyn{a->sym, a->memberPath});
+        llvm::Value* mulb = it != memberDyn_.end() ? it->second.lb : nullptr;
+        llvm::Value* muub = it != memberDyn_.end() ? it->second.ub : nullptr;
+        lb = d0.lbDyn ? (mulb ? mulb : i64(d0.lb)) : i64(d0.lb);
+        ub = muub ? muub : i64(d0.ub);
+      } else {
+        lb = d0.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d0.lb)) : i64(d0.lb);
+        ub = dynUb_.count(a->sym) ? dynUb_[a->sym] : i64(d0.ub);
+      }
+      llvm::Value* raw = e->name == "LBOUND" ? lb
+                         : e->name == "HBOUND"
+                             ? ub
+                             : b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+      Val src;
+      src.ty = Type::fixedBin(63, 0);
+      src.reg = raw;
+      v.reg = convert(src, e->ty, e->loc).reg;
+      result = v;
+      return true;
+    }
+    // A per-axis request against a constant axis folds directly.
+    if (sel >= 0 && arr.isArray() && sel < (long long)arr.dims.size()) {
+      const Dim& d = arr.dims[(size_t)sel];
+      long long val = e->name == "LBOUND" ? d.lb : e->name == "HBOUND" ? d.ub : (d.ub - d.lb + 1);
+      (void)isDim;
+      v.reg = llvm::ConstantInt::get(llvmTy(e->ty), val, true);
+      result = v;
+      return true;
+    }
     // A dynamic (runtime-extent) array reports the live lower/upper bounds (a
     // constant lower bound stays constant), read from the recorded dope slot
     // (the member slot for a dynamic member, the symbol slot for a plain array).

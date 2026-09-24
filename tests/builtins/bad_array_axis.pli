@@ -1,0 +1,6 @@
+ /* Diagnostic test: an axis argument outside 1..rank is rejected. */
+ bad_array_axis: procedure options(main);
+    declare a(2,3) fixed bin(31);
+
+    if hbound(a,0) ^= 1 then put skip list('nope');
+ end bad_array_axis;
