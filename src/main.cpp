@@ -58,7 +58,7 @@ static void usage() {
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
-          "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
+                    "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
           "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
@@ -154,7 +154,13 @@ int main(int argc, char** argv) {
       clangPath = next("--clang");
     else if (a == "--triple")
       triple = next("--triple");
-    else if (a == "-L")
+    else if (a == "--sysparm") {
+      sysparm = next("--sysparm");
+      sysparmExplicit = true;
+    } else if (a.rfind("--sysparm=", 0) == 0) {
+      sysparm = a.substr(10);
+      sysparmExplicit = true;
+    } else if (a == "-L")
       linkArgs.push_back("-L" + next("-L"));
     else if (a == "-I")
       includeDirs.push_back(next("-I"));
@@ -272,6 +278,11 @@ int main(int argc, char** argv) {
     return 1;
 
   Sema sema(diags);
+  if (!sysparmExplicit) {
+    if (const char* env = std::getenv("PLIC_SYSPARM"))
+      sysparm = env;
+  }
+  sema.setSysparm(sysparm);
   sema.run(*prog, compileOnly);
   if (!diags.ok())
     return 1;

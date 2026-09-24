@@ -3844,3 +3844,33 @@ persists like any established handler.
 **Rejected.** Saving handler-entry depth and restoring on unit exit: it
 would pop a directly-nested handler when the outer unit returns, breaking
 the establish-then-raise-later shape that direct nesting serves.
+
+
+## ADR-148 — Array attribute axis argument and SYSPARM builtin
+
+**Context.** Rules (12),(13),(123): `LBOUND`/`HBOUND`/`DIM` took one array
+argument (ADR-034 kept the no-axis form); libnet calls the two-argument
+Enterprise form `HBOUND(A,n)` and the zero-argument `SYSPARM()`, so both
+failed to compile. Enterprise: `LBOUND(x[,n])`/`HBOUND(x[,n])`/`DIMENSION(x[,n])`
+select axis `n` (1-based, default 1); `SYSPARM()` returns the `CHARACTER`
+value of the `SYSPARM` compiler option.
+
+**Decision.** Accept an optional second integer-constant axis on
+`LBOUND`/`HBOUND`/`DIM` plus `DIMENSION` as an alias of `DIM`: sema checks
+1–2 args, `IntLit` axis in `1..rank`, else diagnoses with (123). Single-arg
+`DIM` keeps the total count (ADR-036 compat); `DIM(A,n)` is that axis's
+extent. Dynamic first-axis requests read the live dope slot; later axes
+fold constant. `SYSPARM()` takes no args and returns `CHARACTER(n)` baked
+from `--sysparm <s>` (`--sysparm=<s>` too), else `$PLIC_SYSPARM`, else
+empty; irgen emits it as a constant string (zero length allowed).
+
+**Consequences.** `tests/builtins/array_axis.pli`, `bad_array_axis.pli`,
+`sysparm.pli`, `bad_sysparm.pli`, `driver/sysparm.sh` cover per-axis bounds
+on 2-D/3-D arrays, out-of-range/non-constant axes, empty/default and
+`--sysparm HELLO` values, and arity misuse. `bad_array_builtin.pli` keeps
+failing (3 args; axis 2 on rank-1 is now out-of-range).
+
+**Rejected.** Runtime axis expressions (constant-only keeps codegen a fold;
+diagnosed, never miscompiled); `DIM(A)` switching to first-axis extent
+(would break `array2d.pli`'s total-count pin); a `SYSPARM` runtime call
+(nothing to call — the value is a compile-time constant).

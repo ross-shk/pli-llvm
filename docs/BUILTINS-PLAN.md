@@ -38,9 +38,10 @@ test-first (`tests/builtins/`) + diagnostics for unserved forms.
 
 | Builtin | Test |
 |---|---|
-| `LBOUND`/`HBOUND`/`DIM`, `SUM`/`PROD`/`ANY`/`ALL` | `array_bounds.pli`, `array_reduce.pli`, `array_param.pli`, `bad_array_builtin.pli`, `bad_array_reduce.pli` |
+| `LBOUND`/`HBOUND`/`DIM`/`DIMENSION` (axis form, ADR-148), `SUM`/`PROD`/`ANY`/`ALL` | `array_bounds.pli`, `array_axis.pli`, `array_reduce.pli`, `array_param.pli`, `bad_array_builtin.pli`, `bad_array_axis.pli`, `bad_array_reduce.pli` |
 | `NULL`, `ADDR` (ADR-063) | `pointer.pli` |
 | `DATE`, `TIME` | `datetime.pli`, `bad_datetime.pli` |
+| `SYSPARM` (ADR-148) | `sysparm.pli`, `bad_sysparm.pli`, `driver/sysparm.sh` |
 | `OMITTED`, `PRESENT` (ADR-119) | `optional.pli`, `bad_omitted.pli` (stay in `core`: an OPTIONAL-feature test, same judgment as `array_param.pli`) |
 | `ONCODE` | exercised via `on_error.pli` (stays in `core`: a condition test, not a builtins test) |
 
