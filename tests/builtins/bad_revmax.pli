@@ -1,10 +1,7 @@
- /* REVERSE/MAXLENGTH limits (rule (123)): character operands
-    and arities stay diagnosed; MAXLENGTH needs a VARYING. */
+ /* REVERSE limits (rule (123)): character operands and arity
+    stay diagnosed. */
  bad_revmax: procedure options(main);
     declare n fixed bin(31);
-    declare f char(8);
     n = reverse(1);
     n = reverse('a', 'b');
-    n = maxlength(f);
-    n = maxlength(1);
  end bad_revmax;

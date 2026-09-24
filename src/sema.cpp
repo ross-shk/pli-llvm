@@ -3859,9 +3859,7 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = e->args[0]->ty;
     return true;
   }
-  // REVERSE/MAXLENGTH (rule (123), libnet heap-guard forms): reverse(s)
-  // mirrors a string; maxlength(v) folds from the declared VARYING maximum
-  // with no runtime (like DIM's axis fold).
+  // REVERSE (rule (123)): mirrors a string; returns same-length CHAR.
   if (e->name == "REVERSE") {
     if (e->args.size() != 1) {
       d_.error(e->loc, "REVERSE expects 1 argument (string)", "(123)");
@@ -3874,23 +3872,6 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::chr(e->args[0]->ty.len);
-    return true;
-  }
-  if (e->name == "MAXLENGTH") {
-    if (e->args.size() != 1) {
-      d_.error(e->loc, "MAXLENGTH expects 1 argument", "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
-    if (!e->args[0]->ty.isChar()) {
-      d_.error(e->args[0]->loc, "MAXLENGTH argument must be a character string", "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
-    // Capacity: the declared maximum for FIXED and VARYING strings, the live
-    // length for adjustable CHAR(*) (rule (18)) and adjustable CONTROLLED
-    // (rule (15)); codegen folds or reads it accordingly.
-    e->ty = Type::fixedBin(31, 0);
     return true;
   }
   // LENGTH built-in (M2): length(s) yields a FIXED BINARY length.
