@@ -5,7 +5,8 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 
 ## Rules
 
-- do not duplicate info from the specs into REAMDE and the docs unless actually necessary
+- make and refine a detailed plan for a task first, then implement
+- do not duplicate info from the specs into README and the docs unless actually necessary
 - keep docs clear and concise, avoid lengthy explanations
 - do not commit without my approval, make sure changes are atomic with clear commit messages
 - do not quietly change/revert existing code unless required by the current task
@@ -20,15 +21,15 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 
 ## Layout
 
-| Path                          | Contents                                                                                                  |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `src/`                        | `lexer` → `parser` → `sema` → `irgen` (+ `diag`, `types`, `ast`, `main`)                                  |
-| `runtime/`                    | `libpli`: list-directed I/O, string semantics, conditions (C11)                                           |
+| Path                          | Contents                                                                                                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/`                        | `lexer` → `parser` → `sema` → `irgen` (+ `diag`, `types`, `ast`, `main`)                                                                                   |
+| `runtime/`                    | `libpli`: list-directed I/O, string semantics, conditions (C11)                                                                                            |
 | `tests/`                      | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`): golden (`expected/*.out` diff) or self-checking (prints PASS), `bad_*` must fail |
-| `tests/builtins/`             | built-in function tests — `typeBuiltin`/`emitBuiltin` + `pli_*` helpers (track: `docs/BUILTINS-PLAN.md`); touch only on builtin work |
-| `docs/`                       | ARCHITECTURE, DESIGN-DECISIONS (ADRs), OPTIMIZATION, IMPLEMENTATION-PLAN, GRAMMAR-COVERAGE                |
-| `examples/`                   | scratch programs, git-ignored                                                                             |
-| `TR25.084-concrete-syntax.md` | the spec: rules (1)–(151), with ⚠ notes where the scan was damaged                                        |
+| `tests/builtins/`             | built-in function tests — `typeBuiltin`/`emitBuiltin` + `pli_*` helpers (track: `docs/BUILTINS-PLAN.md`); touch only on builtin work                       |
+| `docs/`                       | ARCHITECTURE, DESIGN-DECISIONS (ADRs), OPTIMIZATION, IMPLEMENTATION-PLAN, GRAMMAR-COVERAGE                                                                 |
+| `examples/`                   | scratch programs, git-ignored                                                                                                                              |
+| `TR25.084-concrete-syntax.md` | the spec: rules (1)–(151), with ⚠ notes where the scan was damaged                                                                                         |
 
 ## Build
 
@@ -75,8 +76,8 @@ copy features from it into this compiler
 - silo `tests/`: don't list, glob, or read the tree during source work — open  
 only the specific test you are writing/fixing or running; `tests/*/out/` is  
 gitignored scratch, never worth reading
-- silo `tests/builtins/`, `typeBuiltin`/`emitBuiltin`: don't list,
-glob, or read unless working on built-in functions — open only the specific
+- silo `tests/builtins/`, `typeBuiltin`/`emitBuiltin`: don't list,  
+glob, or read unless working on built-in functions — open only the specific  
 test or builtin under work
 - silo `runtime/`: don't list, glob, or read unless extending or changing the runtime
 - `docs/DESIGN-DECISIONS.md` contains the historical track of design decisions, don't read unless you need to check or modify already implemented features
