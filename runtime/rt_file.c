@@ -2,7 +2,6 @@
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
 #include <stdio.h>
-#include <string.h>
 
 void pli_string_put_open(char *buf, long long cap) {
   rt_out_buf = buf;
@@ -15,7 +14,7 @@ void pli_string_put_open(char *buf, long long cap) {
 void pli_string_put_close(char *buf, long long cap) {
   (void)buf;
   if (rt_out_buf && rt_out_len < (size_t)cap)
-    memset(rt_out_buf + rt_out_len, ' ', (size_t)cap - rt_out_len);
+    pli_memset(rt_out_buf + rt_out_len, ' ', (size_t)cap - rt_out_len);
   rt_out_buf = NULL;
   rt_out_cap = rt_out_len = 0;
 }
@@ -42,7 +41,7 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
     return;
   char buf[256];
   size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
-  memcpy(buf, name, n);
+  pli_memcpy(buf, name, n);
   buf[n] = '\0';
   if (rt_pli_files[slot])
     fclose(rt_pli_files[slot]);
@@ -92,7 +91,7 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
     return;
   char buf[256];
   size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
-  memcpy(buf, name, n);
+  pli_memcpy(buf, name, n);
   buf[n] = '\0';
   if (rt_pli_files[slot])
     fclose(rt_pli_files[slot]);

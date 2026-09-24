@@ -2,12 +2,18 @@
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
 #include <stdio.h>
-#include <stdlib.h>
 
 void pli_signal_error(const char *msg) {
   pli_rt_fini();
   fprintf(stderr, "ERROR condition raised: %s\n", msg ? msg : "(unspecified)");
-  exit(8);
+  pli_exit(8);
+}
+
+/* Centralised abort path (Phase 6): flush runtime output, print msg, exit 8. */
+void pli_abort(const char *msg) {
+  pli_rt_fini();
+  fprintf(stderr, "%s\n", msg ? msg : "(unspecified)");
+  pli_exit(8);
 }
 
 /* ERROR handler stack (rules (91)-(94)): ON ERROR pushes a handler id,
@@ -29,8 +35,7 @@ void rt_pli_on_push(long long key, long long id) {
     pli_err_stack[pli_err_sp].id = id;
     ++pli_err_sp;
   } else {
-    fprintf(stderr, "ON ERROR stack overflow\n");
-    exit(8);
+    pli_abort("ON ERROR stack overflow");
   }
 }
 /* Topmost id for a key, or 0 when none (or SYSTEM) is established for it. */
@@ -86,18 +91,14 @@ void pli_set_oncode(int c) {
  * Reached when no SUBSCRIPTRANGE handler is established; otherwise IRGen
  * routes the trap to the handler and resumes with the index clamped. */
 void pli_subscript_oob(void) {
-  pli_rt_fini();
-  fprintf(stderr, "SUBSCRIPTRANGE: array subscript out of bounds\n");
-  exit(8);
+  pli_abort("SUBSCRIPTRANGE: array subscript out of bounds");
 }
 
 /* ZERODIVIDE abort (no handler): division or modulo by zero. Reached when no
  * ZERODIVIDE handler is established; otherwise IRGen routes the trap to the
  * handler and resumes with 0. */
 void pli_zerodivide(void) {
-  pli_rt_fini();
-  fprintf(stderr, "ZERODIVIDE: division by zero\n");
-  exit(8);
+  pli_abort("ZERODIVIDE: division by zero");
 }
 
 /* FIXED overflow (QR1.2: binary arithmetic, decimal precision, float to

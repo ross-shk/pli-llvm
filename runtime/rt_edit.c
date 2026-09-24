@@ -2,8 +2,6 @@
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 static void put_field(const char *p, size_t n, long long w) {
   if (w > (long long)n)
@@ -39,14 +37,14 @@ void pli_put_edit_fixed(long long v, long long scale, long long w, long long d) 
     while (t--) f *= 10;
     long long ip = v / f, fr = v % f;
     if (fr < 0) fr = -fr;
-    int n = snprintf(p, (size_t)(buf + sizeof buf - p), "%lld", ip);
+    int n = pli_snprintf(p, (size_t)(buf + sizeof buf - p), "%lld", ip);
     p += n;
     *p++ = '.';
     char frac[64];
-    int fn = snprintf(frac, sizeof frac, "%0*lld", (int)d, fr);
+    int fn = pli_snprintf(frac, sizeof frac, "%0*lld", (int)d, fr);
     for (int i = 0; i < fn; ++i) *p++ = frac[i];
   } else {
-    int n = snprintf(p, (size_t)(buf + sizeof buf - p), "%lld", v);
+    int n = pli_snprintf(p, (size_t)(buf + sizeof buf - p), "%lld", v);
     p += n;
   }
   put_field(buf, (size_t)(p - buf), w);
@@ -57,7 +55,7 @@ void pli_put_edit_float(double v, long long w, long long d) {
   if (d < 0) d = 0;
   if (d > 60) d = 60;
   char buf[128];
-  int n = snprintf(buf, sizeof buf, "%.*f", (int)d, v);
+  int n = pli_snprintf(buf, sizeof buf, "%.*f", (int)d, v);
   put_field(buf, (size_t)n, w);
 }
 
@@ -69,23 +67,23 @@ void pli_put_edit_float_e(double v, long long w, long long d) {
   if (d < 0) d = 0;
   if (d > 60) d = 60;
   char tmp[128];
-  snprintf(tmp, sizeof tmp, "%.*e", (int)d, v);
+  pli_snprintf(tmp, sizeof tmp, "%.*e", (int)d, v);
   char buf[128];
   char *p = buf;
   const char *q = tmp;
   if (*q == '-') { *p++ = *q++; }        /* sign */
-  const char *dot = strchr(q, 'e');
-  size_t mant = (size_t)(dot ? dot - q : strlen(q));
-  memcpy(p, q, mant); p += mant;          /* d.dddd mantissa */
+  const char *dot = pli_strchr(q, 'e');
+  size_t mant = (size_t)(dot ? dot - q : pli_strlen(q));
+  pli_memcpy(p, q, mant); p += mant;          /* d.dddd mantissa */
   if (!dot) { *p = '\0'; put_field(buf, (size_t)(p - buf), w); return; }
   const char *e = dot + 1;                /* e.g. "+04" or "-12" */
-  int ex = atoi(e);
+  int ex = (int)pli_strtoll(e, NULL, 10);
   int neg = ex < 0;
   if (neg) ex = -ex;
   *p++ = 'E';
   *p++ = neg ? '-' : '+';
   if (ex < 10) *p++ = '0';
-  p += snprintf(p, (size_t)(buf + sizeof buf - p), "%d", ex);
+  p += pli_snprintf(p, (size_t)(buf + sizeof buf - p), "%d", ex);
   put_field(buf, (size_t)(p - buf), w);
 }
 
@@ -147,7 +145,7 @@ double pli_get_edit_num(long long w) {
     field[i] = (char)c;
   }
   field[i] = '\0';
-  return strtod(field, NULL);
+  return pli_strtod(field, NULL);
 }
 
 /* A(w): read w characters left-justified into dst, blank-padded to cap; a field

@@ -1,10 +1,7 @@
 /* rt_get.c — PL/I runtime library (libpli): list/data-directed input. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /* List-directed input (rule 109): read the next whitespace/comma-delimited
  * token from SYSIN (stdin) into buf (nul-terminated). A ';' also terminates
@@ -33,14 +30,14 @@ long long pli_get_list_fixed(void) {
   char tok[64];
   if (!get_token(tok, sizeof tok))
     return 0;
-  return strtoll(tok, NULL, 10);
+  return pli_strtoll(tok, NULL, 10);
 }
 
 double pli_get_list_float(void) {
   char tok[64];
   if (!get_token(tok, sizeof tok))
     return 0.0;
-  return strtod(tok, NULL);
+  return pli_strtod(tok, NULL);
 }
 
 void pli_get_list_char(char *dst, long long cap) {
@@ -102,24 +99,24 @@ void pli_get_list_complex(char *re_ptr, char *im_ptr) {
     *im = 0.0;
     return;
   }
-  size_t n = strlen(tok);
+  size_t n = pli_strlen(tok);
   if (n > 0 && (tok[n - 1] == 'I' || tok[n - 1] == 'i')) {
     tok[n - 1] = '\0';
     // Split at the last interior sign that is not an exponent marker.
-    size_t k = strlen(tok);
+    size_t k = pli_strlen(tok);
     size_t split = 0;
     for (size_t j = 1; j < k; ++j)
       if ((tok[j] == '+' || tok[j] == '-') && tok[j - 1] != 'e' && tok[j - 1] != 'E')
         split = j;
     if (split == 0) {
       *re = 0.0;
-      *im = strtod(tok, NULL);
+      *im = pli_strtod(tok, NULL);
     } else {
-      *re = strtod(tok, NULL);
-      *im = strtod(tok + split, NULL);
+      *re = pli_strtod(tok, NULL);
+      *im = pli_strtod(tok + split, NULL);
     }
   } else {
-    *re = strtod(tok, NULL);
+    *re = pli_strtod(tok, NULL);
     *im = 0.0;
   }
 }
@@ -137,7 +134,7 @@ unsigned char pli_get_list_bit(void) {
  * for the typed list-directed reader (get_token stops at ';', raising
  * rt_tok_semi for the following call). Lenient like the other readers. */
 int rt_data_namechar(int c) {
-  return isalnum(c) || c == '_' || c == '$' || c == '#';
+  return pli_isalnum(c) || c == '_' || c == '$' || c == '#';
 }
 
 long long pli_get_data_next(char *buf, long long cap) {
@@ -155,7 +152,7 @@ long long pli_get_data_next(char *buf, long long cap) {
     size_t n = 0;
     while (c != EOF && data_namechar(c)) {
       if (n + 1 < (size_t)cap)
-        buf[n++] = (char)toupper(c);
+        buf[n++] = (char)pli_toupper(c);
       c = rt_next_char();
     }
     buf[n] = '\0';
@@ -188,7 +185,98 @@ void pli_get_data_skip(void) {
 
 /* Compare an input NAME against an expected variable name. */
 int pli_data_name_is(const char *p, long long n, const char *q, long long m) {
-  return n == m && memcmp(p, q, (size_t)n) == 0;
+  return n == m && pli_memcmp(p, q, (size_t)n) == 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Ported number parsing (runtime-reduction plan, Phase 2).
+ *
+ * Base-10-only, ASCII-only, no hex/octal/inf/nan, no locale. Clamp on
+ * overflow for the integer form (matches the original strtoll callers, which
+ * passed base 10 and NULL endptr). These are internal helpers, not ABI.
+ * ------------------------------------------------------------------------- */
+
+long long pli_strtoll(const char *nptr, char **endptr, int base) {
+  (void)base; /* base-10 only */
+  const char *s = nptr;
+  while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')
+    ++s;
+  int neg = 0;
+  if (*s == '+' || *s == '-') {
+    neg = *s == '-';
+    ++s;
+  }
+  unsigned long long acc = 0;
+  int any = 0;
+  while (*s >= '0' && *s <= '9') {
+    unsigned d = (unsigned)(*s++ - '0');
+    if (acc > (0xFFFFFFFFFFFFFFFFULL - d) / 10) {
+      acc = neg ? 0x8000000000000000ULL : 0xFFFFFFFFFFFFFFFFULL;
+      any = 1;
+      break;
+    }
+    acc = acc * 10 + d;
+    any = 1;
+  }
+  if (endptr)
+    *endptr = (char *)(any ? s : nptr);
+  if (!any)
+    return 0;
+  return neg ? -(long long)acc : (long long)acc;
+}
+
+double pli_strtod(const char *nptr, char **endptr) {
+  const char *s = nptr;
+  while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')
+    ++s;
+  int neg = 0;
+  if (*s == '+' || *s == '-') {
+    neg = *s == '-';
+    ++s;
+  }
+  double val = 0.0;
+  int seen = 0;
+  while (*s >= '0' && *s <= '9') {
+    val = val * 10.0 + (double)(*s++ - '0');
+    seen = 1;
+  }
+  if (*s == '.') {
+    ++s;
+    double scale = 1.0;
+    while (*s >= '0' && *s <= '9') {
+      val = val * 10.0 + (double)(*s++ - '0');
+      scale *= 10.0;
+      seen = 1;
+    }
+    val /= scale;
+  }
+  if (seen && (*s == 'e' || *s == 'E')) {
+    const char *t = s + 1;
+    int eneg = 0;
+    if (*t == '+' || *t == '-') {
+      eneg = *t == '-';
+      ++t;
+    }
+    if (*t >= '0' && *t <= '9') {
+      long long e10 = 0;
+      while (*t >= '0' && *t <= '9')
+        e10 = e10 * 10 + (*t++ - '0');
+      if (eneg)
+        e10 = -e10;
+      s = t;
+      while (e10 > 0) {
+        val *= 10.0;
+        --e10;
+      }
+      while (e10 < 0) {
+        val /= 10.0;
+        ++e10;
+      }
+    }
+  }
+  if (endptr)
+    *endptr = (char *)(seen ? s : nptr);
+  return neg ? -val : val;
 }
 
 /* STRING (rule 105) PUT: route list-directed output into buf (cap bytes). */

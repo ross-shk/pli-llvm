@@ -48,9 +48,9 @@ RULES_CPP := $(BUILD)/rules.cpp
 RULES_OBJ := $(BUILD)/rules.o
 
 RT_SRCS  := runtime/rt_core.c runtime/rt_stream.c runtime/rt_string.c \
-            runtime/rt_math.c runtime/rt_cond.c runtime/rt_storage.c \
-            runtime/rt_get.c runtime/rt_file.c runtime/rt_edit.c \
-            runtime/rt_task.c
+            runtime/rt_math.c runtime/rt_mathport.c runtime/rt_cond.c \
+            runtime/rt_storage.c runtime/rt_get.c runtime/rt_file.c \
+            runtime/rt_edit.c runtime/rt_task.c
 RT_OBJS  := $(patsubst runtime/%.c,$(BUILD)/rt_%.o,$(RT_SRCS))
 # One function/data item per section, so the linker's dead-code strip keeps
 # only the runtime pieces a program references (ADR-079).
