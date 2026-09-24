@@ -1575,13 +1575,15 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Begin: {
     // A BEGIN block scopes ON establishments (rule (91)): restore the entry
     // depth when the block exits. Skipped when the module establishes no
-    // handlers, so the common path stays free.
+    // handlers, so the common path stays free. When the body ends with a
+    // terminator (e.g. a bare RETURN ending an ON-unit, rule 91) there is
+    // no fall-through to scope: skip the restore, mirroring procedure exit.
     llvm::Value* blkDepth = nullptr;
     if (!onHandlers_.empty())
       blkDepth = b_.CreateCall(runtimeFn("pli_on_depth_error"), {}, "onblkdepth");
     for (auto& b : s->body)
       emitStmt(b.get());
-    if (blkDepth)
+    if (blkDepth && !blockTerminated(b_.GetInsertBlock()))
       b_.CreateCall(runtimeFn("pli_on_reset_error"), {blkDepth});
     break;
   }

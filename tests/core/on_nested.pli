@@ -1,0 +1,21 @@
+  /* rules (91)-(94): nested ON units; an
+     ON-unit may establish another handler
+     and SIGNAL it before resuming. */
+  on_nested: procedure options(main);
+     on error begin;
+        put skip list('outer');
+        on zerodivide begin;
+           put skip list('inner');
+           return;
+        end;
+        signal zerodivide;
+        put skip list('outer-after');
+     end;
+     signal error;
+     put skip list('mid');
+     on error on zerodivide
+        put skip list('direct');
+     signal error;
+     signal zerodivide;
+     put skip list('done');
+  end on_nested;
