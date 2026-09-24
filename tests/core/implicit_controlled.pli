@@ -1,0 +1,29 @@
+/* Implicit ALLOCATE/FREE for CONTROLLED variables (IBM Enterprise PL/I):
+    declaring `X controlled` automatically pushes a default-sized generation
+    on proc entry, so first-use references work without an explicit ALLOCATE,
+    and proc exit pops that implicit generation. Explicit ALLOCATE/FREE pairs
+    inside the body stay balanced on top of the implicit generation. */
+ implicit_ctl: procedure options(main);
+    declare fails fixed bin(31);
+    fails = 0;
+    declare c fixed bin(31) controlled;
+    /* Implicit generation is live: write then read back. */
+    c = 42;
+    if c ^= 42 then do;
+       fails = fails + 1;
+       put skip list('FAIL scalar write/read');
+    end;
+    /* Explicit ALLOCATE pushes gen-1; FREE pops back to the implicit gen. */
+    allocate c;
+    c = 99;
+    if c ^= 99 then do;
+       fails = fails + 1;
+       put skip list('FAIL gen1 write');
+    end;
+    free c;
+    if c ^= 42 then do;
+       fails = fails + 1;
+       put skip list('FAIL pop back to implicit gen');
+    end;
+    if fails = 0 then put skip list('PASS implicit_ctl');
+ end implicit_ctl;

@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "llvm/IR/IRBuilder.h"
@@ -336,6 +337,14 @@ private:
   // Resolve a call target's LLVM function; for an external C entry (rule 38),
   // get-or-create its external declaration (no PL/I body).
   llvm::Function* calleeFn(Symbol* sym);
+  // Implicit ALLOCATE for CONTROLLED variables (IBM Enterprise PL/I): push a
+  // generation sized to the compile-time descriptor if none exists yet. Skips
+  // CHAR(*) entirely — those require an explicit ALLOCATE with a known size.
+  void ensureCtlAlloc(Symbol* sym, SourceLoc loc = SourceLoc{});
+  // Implicit FREE for CONTROLLED variables at procedure exit: pop exactly one
+  // generation for each symbol this proc implicitly allocated, leaving any
+  // explicitly-ALLOCATEd generations above/below untouched.
+  void emitCtlEpilogue();
 
   Diags& d_;
   Sema& sema_;
@@ -389,4 +398,7 @@ private:
   // True while filling an ON-unit handler: calls needing static links are
   // diagnosed (the handler has no establishing frame).
   bool inHandler_ = false;
+  // Per-procedure tracking for implicit ALLOCATE of CONTROLLED variables
+  // (IBM Enterprise PL/I): one bit per symbol prevents duplicate pushes.
+  std::unordered_set<Symbol*> ctlImplicitAlloc_;
 };

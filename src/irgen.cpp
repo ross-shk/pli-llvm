@@ -1202,6 +1202,7 @@ void IRGen::emitProc(HProc* p) {
   labelBlocks_.clear();
   symAddr_.clear();
   structRetPtr_ = nullptr;
+  ctlImplicitAlloc_.clear();
   // Re-seed globals: static storage resolves the same in every procedure.
   for (Symbol* s : sema_.storage())
     if (s->isStatic && s->kind == Symbol::Var)
@@ -1264,6 +1265,15 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   emitInitials(p); // INITIAL attribute on AUTOMATIC variables (rule 26)
   recordDynParamUbs(p->paramSyms);
 
+  // Implicit ALLOCATE for every CONTROLLED variable declared in this proc:
+  // each gets a default-sized generation so first-use references work without
+  // an explicit ALLOCATE statement (IBM Enterprise PL/I). CONTROLLED vars are
+  // excluded from localSyms (no own frame storage), so they are found by
+  // scanning all storage and filtering to this proc's declarations.
+  for (Symbol* sym : sema_.storage())
+    if (sym->controlled && !sym->isStatic && sym->owner == p->src)
+      ensureCtlAlloc(sym);
+
   // Rule (91): save the ERROR handler depth so procedure exit restores the
   // caller's establishment state. Skipped when nothing establishes handlers.
   curOnDepth_ = nullptr;
@@ -1276,6 +1286,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     emitStmt(st.get());
 
   if (!blockTerminated(b_.GetInsertBlock())) {
+    emitCtlEpilogue();
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
@@ -1335,6 +1346,11 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   emitInitials(p);
   recordDynParamUbs(uni);
 
+  // Implicit ALLOCATE for every CONTROLLED variable declared in this proc.
+  for (Symbol* sym : sema_.storage())
+    if (sym->controlled && !sym->isStatic && sym->owner == p->src)
+      ensureCtlAlloc(sym);
+
   // Rule (91): save the ERROR handler depth for exit restore (see retPads).
   curOnDepth_ = nullptr;
   if (!onHandlers_.empty()) {
@@ -1381,6 +1397,7 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
     b_.CreateBr(retPads[seg]);
   for (size_t i = 0; i < retPads.size(); ++i) {
     b_.SetInsertPoint(retPads[i]);
+    emitCtlEpilogue();
     // Rule (91): segment exit is procedure exit for handler scoping.
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
@@ -1490,6 +1507,7 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       curOnDepth_ = nullptr;
       labelBlocks_.clear();
       symAddr_.clear();
+      ctlImplicitAlloc_.clear(); // a handler allocates/frees nothing implicitly
       for (Symbol* gs : sema_.storage())
         if (gs->isStatic && gs->kind == Symbol::Var)
           symAddr_[gs] = mod_.getGlobalVariable(gs->irName.substr(1), true);
@@ -1729,6 +1747,7 @@ void IRGen::emitStmt(HStmt* s) {
       // A bare RETURN ends an ON-unit and resumes after the SIGNAL (rule
       // 91); sema rejects it in procedure bodies, so a handler (whose
       // hidden result pointers are null) is the only path that gets here.
+      emitCtlEpilogue();
       b_.CreateRetVoid();
     } else if (curProc_->isFunction && curProc_->retTy.isStruct()) {
       // Structure-valued function (rule 127): copy the returned structure's
@@ -1736,12 +1755,14 @@ void IRGen::emitStmt(HStmt* s) {
       Val v = emitExpr(s->value.get());
       llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curProc_->retTy)));
       b_.CreateMemCpy(structRetPtr_, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+      emitCtlEpilogue();
       b_.CreateRetVoid();
     } else if (curProc_->isFunction && curProc_->retTy.isChar()) {
       // Character-valued function (rules (34),(37)): copy the value into the
       // caller's hidden buffer, blank-padding or truncating (rule (86)).
       Val v = emitExpr(s->value.get());
       storeCharTo(structRetPtr_, curProc_->retTy, v, s->loc);
+      emitCtlEpilogue();
       b_.CreateRetVoid();
     } else if (!curRetTy_.isVoid()) {
       // Valued return: the impl's common entry type (rule (56)) may be valued
@@ -1752,8 +1773,10 @@ void IRGen::emitStmt(HStmt* s) {
       if (curRetTy_.isBit()) { // BIT returns are held in i8
         reg = b_.CreateZExt(reg, b_.getInt8Ty(), "retz");
       }
+      emitCtlEpilogue();
       b_.CreateRet(reg);
     } else {
+      emitCtlEpilogue();
       b_.CreateRetVoid();
     }
     break;
@@ -2073,6 +2096,32 @@ void IRGen::emitAssign(HStmt* s) {
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
+}
+
+// Implicit ALLOCATE for CONTROLLED variables (IBM Enterprise PL/I): push a
+// generation sized to the compile-time descriptor if this symbol has not been
+// implicitly allocated in the current procedure yet. CHAR(*) is skipped — its
+// runtime length cannot be known without an explicit ALLOCATE statement.
+void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
+  // Only skip CHAR(*) adjustable-length types; everything else gets default-
+  // sized implicit allocation.
+  if (sym->ty.isChar() && sym->ty.starLen && !sym->dynLenExpr)
+    return;
+  if (ctlImplicitAlloc_.count(sym))
+    return;
+  ctlImplicitAlloc_.insert(sym);
+  llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(sym->ty)).getFixedValue());
+  if (sym->ty.isChar() && sym->ty.starLen && sym->dynLenExpr)
+    sz = toI64(emitExpr(sym->dynLenExpr), loc);
+  b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(sym->ctlSlot), sz});
+}
+
+// Implicit FREE for CONTROLLED variables at procedure exit: pop one generation
+// for each symbol this proc implicitly allocated, so explicit ALLOCATE/FREE
+// pairs inside the body stay balanced on top of the implicit generation.
+void IRGen::emitCtlEpilogue() {
+  for (Symbol* sym : ctlImplicitAlloc_)
+    b_.CreateCall(runtimeFn("pli_ctl_free"), {i64(sym->ctlSlot)});
 }
 
 // ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
