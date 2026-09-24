@@ -3900,3 +3900,34 @@ entry.
 builtin with no remaining consumer violates the no-extensions bar); replacing
 it with a runtime `pli_maxlength` helper (there is nothing to compute — the
 value was always a constant fold).
+
+## ADR-150 — Implicit ALLOCATE/FREE for CONTROLLED variables
+
+**Context.** ADR-139 routed every CONTROLLED reference through the runtime
+generation stack but left the stack empty until an explicit `ALLOCATE`. Any
+reference before allocation reads NULL, so the Iron Spring `ctlvar.inc` idiom
+of declaring a CONTROLLED work variable and using it at once (relying on the
+default generation) segfaults on first use.
+
+**Decision.** A CONTROLLED declaration pushes a default-sized generation at
+procedure entry (sized from the compile-time descriptor, exactly like an
+explicit `ALLOCATE`) and pops that one generation at every procedure exit —
+the plain fall-through return, each multi-entry return pad, and each explicit
+`RETURN`. Only symbols owned by the current procedure are allocated (filtered
+by `sym->owner == p->src`, since CONTROLLED variables are excluded from
+`localSyms`); a per-procedure `ctlImplicitAlloc_` set records what was pushed
+so the epilogue pops exactly one generation per symbol, leaving explicit
+`ALLOCATE`/`FREE` pairs inside the body balanced on top of the implicit
+generation. `CHAR(*)` is skipped — its runtime length cannot be known without
+an explicit `ALLOCATE` — and ON-unit handlers allocate and free nothing.
+
+**Consequences.** `implicit_controlled.pli` pins the implicit-generation
+lifecycle (write/read before any ALLOCATE, explicit ALLOCATE/FREE balanced on
+top, pop back to the implicit generation); `controlled.pli` and the existing
+suite still pass. References before allocation no longer read NULL, so a
+first-use read returns the default value of the type.
+
+**Rejected.** Implicit FREE only at the primary entry (multi-entry and
+explicit RETURN would leak generations); allocating across all procedures
+without the owner filter (a nested procedure's CONTROLLED variable would be
+pushed by every enclosing procedure).
