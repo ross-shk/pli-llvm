@@ -3931,3 +3931,42 @@ first-use read returns the default value of the type.
 explicit RETURN would leak generations); allocating across all procedures
 without the owner filter (a nested procedure's CONTROLLED variable would be
 pushed by every enclosing procedure).
+
+---
+
+## ADR-151 — Growing a `CHARACTER VARYING` argument through a mismatched-length parameter
+
+**Context.** A network bridge (`net_read_all(handle, body)`) must grow a caller's
+`CHARACTER VARYING` buffer as it receives data. `argAddr` already passed a
+varying-char argument by reference when its declared length matched the
+parameter's, but a differing length (e.g. caller `char(128) varying` against a
+parameter declared `char(4096) varying`, the libnet `NET_BUF_CAP` surface) fell
+through to the dummy-copy path: the caller's value was copied into a
+parameter-sized alloca that was discarded on return, so every append the callee
+performed silently vanished and the caller read an empty string.
+
+**Decision.** A varying-char *variable* argument whose declared length differs
+from the parameter's is still marshalled into a parameter-sized dummy (so the
+callee's writes stay bounded by its own declared capacity), but the copy is now
+round-tripped: `argAddr` records a `PendingVarWrite` and `flushVarWrites` runs
+immediately after the synchronous call, copying the callee's result back into
+the caller's variable through `pli_assign_varying` — clamped to the caller's
+own capacity, mirroring how a PL/I descriptor carries the actual maximum
+length. The write-back is emitted from every synchronous call site
+(`emitCall` and both function-reference paths); the asynchronous call path
+clears the pending writes, since its copy-back cannot be a synchronous
+statement. Only plain varying-char variables round-trip — an expression or a
+non-varying argument keeps the dump-and-discard behaviour, which is
+unobservable for a value without a name.
+
+**Consequences.** `varying_param.pli` pins both directions: a `char(8)` buffer
+sees the grown string truncated to 8 (and `LENGTH` reports 8), and a `char(32)`
+buffer sees the full 11 characters. The libnet `fetch` example, rebuilt with
+this compiler, prints the HTTP response instead of a blank line.
+
+**Rejected.** Passing by reference unconditionally for mismatched lengths: the
+callee compiles against its declared `char(n)`, so it would write up to `n`
+bytes into the caller's smaller buffer. Adjustable-length `CHARACTER VARYING`
+(`*`) as the direct fix remains rejected for the same reason as ADR-142 (the
+live-length prefix would have to live inside the caller's buffer, changing its
+layout).

@@ -1,0 +1,29 @@
+/* A CHARACTER VARYING argument passed to a VARYING parameter of a
+    different declared length is marshalled through a copy, but the
+    callee's writes (growth inside the procedure) copy back to the
+    caller, clamped to the caller's own capacity. */
+  varg: procedure options(main);
+    declare body char(8) varying;
+    declare wide char(32) varying;
+    declare fails fixed bin(31);
+    fails = 0;
+
+    body = '';
+    call grow(body);
+    if length(body) ^= 8 then fails = fails + 1;
+    if substr(body, 1, 8) ^= 'hello wo' then fails = fails + 1;
+
+    wide = '';
+    call grow(wide);
+    if length(wide) ^= 11 then fails = fails + 1;
+    if wide ^= 'hello world' then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS varying_param');
+    else put skip list('FAIL varying_param: fails =', fails);
+  end varg;
+
+  grow: procedure(buf);
+    declare buf char(4096) varying;
+    buf = buf || 'hello';
+    buf = buf || ' world';
+  end grow;
