@@ -23,7 +23,7 @@ test-first (`tests/builtins/`) + diagnostics for unserved forms.
 | `REPEAT`, `VERIFY`, `TRANSLATE` | `repeat.pli`, `verify.pli`, `translate.pli`, `bad_repeat.pli`, `bad_verify.pli`, `bad_translate.pli` |
 | `TRIM`, `TALLY` (ADR-107) | `trim.pli`, `tally.pli`, `bad_trim.pli`, `bad_tally.pli` |
 | `LOWERCASE`, `CENTER`, `SEARCH`, `VERIFY` (2- and 3-arg), `RANK`, `COLLATE` (ADR-133) | `strcase.pli`, `bad_strcase.pli` |
-| `REVERSE`, `MAXLENGTH` (ADR-134) | `revmax.pli`, `bad_revmax.pli` |
+| `REVERSE` (ADR-134) | `revmax.pli`, `bad_revmax.pli` |
 | `HIGH`, `LOW` | `highlow.pli`, `bad_highlow.pli` |
 
 ## Status: math (rule 123, Appendix 1)

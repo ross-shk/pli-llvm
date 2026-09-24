@@ -3874,3 +3874,29 @@ failing (3 args; axis 2 on rank-1 is now out-of-range).
 diagnosed, never miscompiled); `DIM(A)` switching to first-axis extent
 (would break `array2d.pli`'s total-count pin); a `SYSPARM` runtime call
 (nothing to call — the value is a compile-time constant).
+
+## ADR-149 — MAXLENGTH removed as a non-standard builtin
+
+**Context.** ADR-134 added `MAXLENGTH(v)` to serve libnet's heap-guard form
+`length(heap) + n > maxlength(heap)`. It is not a standard PL/I builtin: it
+appears in neither TR 25.084 nor the IBM Enterprise / Iron Spring function
+sets, so it is a compiler-specific extension. libnet reworked that guard to a
+plain length comparison (`prevlen = length(buffer); …; if length(buffer) =
+prevlen …`), leaving `MAXLENGTH` without any caller.
+
+**Decision.** Remove `MAXLENGTH` from `sema` (`typeBuiltin`) and `irgen`
+(`emitBuiltin`) entirely. `REVERSE` stays — it is an Enterprise builtin and
+unrelated to the capacity query. A future `maxlength(…)` reference is no
+longer special-cased, so it resolves as an ordinary (and therefore
+unrecognised) function reference and is diagnosed.
+
+**Consequences.** `tests/builtins/revmax.pli` keeps its `REVERSE` cases and
+drops the `MAXLENGTH` assertions; `bad_revmax.pli` pins only the `REVERSE`
+diagnostics (non-character argument, arity). No other test used `MAXLENGTH`.
+`docs/GRAMMAR-COVERAGE.md` and `docs/BUILTINS-PLAN.md` drop the `MAXLENGTH`
+entry.
+
+**Rejected.** Keeping `MAXLENGTH` as a documented extension (a non-standard
+builtin with no remaining consumer violates the no-extensions bar); replacing
+it with a runtime `pli_maxlength` helper (there is nothing to compute — the
+value was always a constant fold).

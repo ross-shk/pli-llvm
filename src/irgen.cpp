@@ -5030,23 +5030,6 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = dst;
     return true;
   }
-  // MAXLENGTH (rule (123)): capacity — the declared maximum for FIXED and
-  // VARYING strings (a constant fold, no runtime call), the live length for
-  // adjustable `CHAR(*)` (rule (18)) and adjustable CONTROLLED (rule (15)).
-  if (e->name == "MAXLENGTH") {
-    v.ty = e->ty;
-    HExpr* a = e->args[0].get();
-    if (a->sym && a->sym->ty.isChar()) {
-      if (llvm::Value* live = adjustLen(a->sym, a->sym->ty))
-        v.reg = b_.CreateTrunc(live, llvmTy(e->ty), "maxlen");
-      else
-        v.reg = llvm::ConstantInt::get(llvmTy(e->ty), (uint64_t)a->sym->ty.len, false);
-    } else {
-      v.reg = llvm::ConstantInt::get(llvmTy(e->ty), (uint64_t)e->args[0]->ty.len, false);
-    }
-    result = v;
-    return true;
-  }
   if (e->name == "TRUNC") {
     Val a = emitExpr(e->args[0].get());
     if (a.ty.k == TK::Float) {
