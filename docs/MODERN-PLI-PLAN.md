@@ -11,20 +11,24 @@ TR production follows the TR; genuinely new syntax is contextual only —
 the lexer still classifies no keywords (ADR-004 pattern), so existing
 uses of `SELECT`, `LEAVE`, etc. as identifiers keep working.
 
-Prior art: `%REPLACE` (ADR-077), `%INCLUDE` paths (ADR-078),
-`Stmt::Leave` as a rejected placeholder. Out of scope by prior
-decision: program arguments (no argv story) and anything already
+Prior art: `%REPLACE` (ADR-077) and `%INCLUDE` paths (ADR-078). `LEAVE` began
+as a rejected parser placeholder and was later implemented in MX2. Out of
+scope by prior decision: program arguments (no argv story) and anything already
 tracked (non-local `GO TO`, `OPTIONS(BYVALUE)`, `PICTURE`, areas,
 tasking, keyed files).
 
 ## Phase MX-A — control flow (3.5 engineer-weeks)
+
+These effort figures are the original estimates. The approved MX items are
+implemented; the tables document their scope, while the status at the end of
+this page records the remaining work.
 
 | Order | Slice | Effort | Deliverable |
 |---|---|---:|---|
 | MX1 | `SELECT` / `WHEN` / `OTHERWISE` | 1.5w | `SELECT [(expr)]; {WHEN (pred) ...} [OTHERWISE ...] END;` lowering to the `IF`-chain in HIR; fall-through and empty-`WHEN` diagnosed, never silent |
 | MX2 | `LEAVE` / `ITERATE` [label] | 1w | loop exit/continue reusing the `Leave` AST kind (new `Iterate` beside it); Innermost-loop default, labeled form resolved in sema; use outside a loop diagnosed |
 | MX3 | `DO UNTIL (expr)` | 0.5w | post-test loop beside `DO WHILE`; combined `WHILE`+`UNTIL` diagnosed as a follow-up, not invented |
-| MX4 | Condition-prefix enablement (rules 60–63) | 0.5w | `(NOSUBSCRIPTRANGE)` et al. elide the matching inline checks per ARCHITECTURE §5 instead of warning |
+| MX4 | Condition-prefix enablement (rules 60–63) | 0.5w | Supported prefixes such as `(NOSIZE)`, `(NOSUBSCRIPTRANGE)`, and `(NOZERODIVIDE)` omit their matching checks; other condition prefixes remain unsupported. |
 
 ## Phase MX-B — data and built-ins (3 engineer-weeks)
 
@@ -62,7 +66,7 @@ output; the Extensions ledger lists every admitted nicety with its ADR;
 `SELECT`/`LEAVE` as plain identifiers still compile (no-reserved-words
 guard test).
 
-Status: met by `tests/core/modern.pli` (+ `modern.inc`) — all
-approved track items (MX1–MX7, MX4a/b, `%ACTIVATE` substitution, MX9)
-compose in one checked program. Remaining: `%DO` and the
-explicitly unapproved stretch list.
+Status: the approved language items are implemented and exercised together by
+`tests/core/modern.pli` and `modern.inc`. The preprocessor still does not
+implement `%DO`; the stretch items remain unapproved. MX4 condition handling
+is partial, as described in its table row.

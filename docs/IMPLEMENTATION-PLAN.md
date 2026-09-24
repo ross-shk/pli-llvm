@@ -1,19 +1,15 @@
 # Implementation plan
 
-M0, M1, and M2 are complete. Remaining 1966 language coverage is scheduled by
-`QUICK-RELEASE-IMPLEMENTATION-PLAN.md`: `QR1` is the Pareto release and `QR2`
-is the complete conformance pass. The milestone descriptions below remain as
-subsystem context, not as a second scheduling queue. Optimization, debug
-information, and non-1966 interoperability remain scheduled here.
-Completed features mentioned in the subsystem descriptions are context only and
-are excluded from quick release deliverables and estimates. The quick-release
-supplements live alongside this plan (coverage tracked in `GRAMMAR-COVERAGE.md`
-and `archive/C28-COVERAGE.md`), and
-non-1966 extension work is scheduled by `MODERN-PLI-PLAN.md`; milestone rows
-below marked "moved to QR1/QR2" refer to that live matrix.
+M0–M2 are completed historical milestones. The milestone descriptions below
+provide subsystem context; they are not a second feature schedule. The
+quick-release plan owns remaining 1966 language work, and
+`GRAMMAR-COVERAGE.md` is the single current rule ledger. Extension work is
+tracked in `MODERN-PLI-PLAN.md`; optimization, debug information, and
+interoperability work remain in this plan.
 
-Effort is in engineer-weeks for one experienced compiler engineer; parallelism
-notes say what can proceed concurrently.
+The effort figures below are estimates from the original milestone plan, not
+estimates of today's remaining work. They are retained only as historical
+context and must not be added to the quick-release scope.
 
 | # | Milestone | Effort | Exit criterion |
 |---|---|---|---|
@@ -25,15 +21,15 @@ notes say what can proceed concurrently.
 | M5 | Practical stream and file I/O (**moved to QR1/QR2**) | 7w | common input, output, formatting, and files work |
 | M6 | Record I/O (**moved to QR2**) | 6w | sequential, direct, and keyed record programs run |
 | M7 | Optimization and debug info | 8w | useful `-O2` performance and DWARF support |
-| M8 | Preprocessor and 1966 source compatibility (**moved to QR1/QR2**); FFI remains | 4w | common existing sources and C interfaces compile |
+| M8 | Preprocessor and 1966 source compatibility (**moved to QR1/QR2**); remaining FFI work | 4w | common existing sources and supported C interfaces compile |
 | M9 | Tasking (**moved to QR2**) | 4w | `TASK`/`EVENT`/`WAIT` work with conditions and storage |
 | D1 | Specialized scalar conformance (**moved to QR1/QR2**) | 10w+ | decimal, complex, `PICTURE`, and full conversion lattice |
 | - | Conformance hardening | ongoing | rule matrix green for completed milestones |
 
-The transferred estimates are retained only to show subsystem size and must not
-be added to the quick release estimates. The remaining general-plan release work
-is M7 plus the non-1966 FFI portion of M8; ongoing compiler hardening supports
-both plans.
+Transferred language features are removed from the milestone estimates. Basic
+scalar `OPTIONS(BYVALUE)`/`LINKAGE(SYSTEM)` support is implemented; M8's
+remaining scope is broader FFI and compatibility work. Ongoing compiler
+hardening supports both plans.
 
 ## Prioritization policy
 
@@ -64,7 +60,7 @@ than the next planned item.
 **Delivered**
 
 - `llvm::IRBuilder` behind the existing `IRGen` interface (ADR-002), with
-  `--emit-textual-ir` retained for tests.
+  textual LLVM IR emitted for the driver and `-emit-llvm` option.
 - HIR (ADR-005) between sema and codegen, initially as a thin AST mirror, plus
   `--print-hir`.
 - `RETURNS`, function references, `RECURSIVE`, multiple entry points, and
@@ -198,8 +194,8 @@ are inspectable at `-O0` and usefully inspectable at `-O2`.
 **Transferred scope.** The 1966 `%` processor, source character-set
 compatibility, and keyword abbreviations are scheduled by QR1/QR2.
 
-**Remaining scope.** Dialect switches, `OPTIONS(BYVALUE)`, and C
-interoperability attributes.
+**Remaining scope.** Dialect switches and C-interoperability cases beyond the
+implemented scalar `OPTIONS(BYVALUE)`/`LINKAGE(SYSTEM)` forms.
 
 Prioritize compatibility features by measured corpus impact. Do not copy
 later-dialect syntax from the reference corpus into the TR 25.084 language.
@@ -243,11 +239,10 @@ pass.
 
 ## Cross-cutting workstreams
 
-**Conformance.** GRAMMAR-COVERAGE.md remains the rule ledger. Definition of
-done for a milestone includes moving its rules to implemented and tested.
-Rules keep their current milestone labels until their quick release slice lands;
-the QR1/QR2 matrix schedules new work alongside GRAMMAR-COVERAGE.md
-and archive/C28-COVERAGE.md. Unsupported rules must continue to
+**Conformance.** `GRAMMAR-COVERAGE.md` is the current rule ledger. Definition
+of done for a feature includes updating its supported cases and tests there.
+Milestone labels in that ledger are historical groupings; the QR1/QR2 plan
+tracks remaining 1966 language work. Unsupported rules must continue to
 cite a TR rule number or, for unique 1966 scope, the C28-6571-3 chapter and
 named subsection.
 

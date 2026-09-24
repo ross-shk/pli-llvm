@@ -5,9 +5,11 @@ A modern PL/I compiler built to the formal specification of the language:
 for syntax, and **Y33-6003** for semantics. The extracted, OCR-repaired grammar  
 lives in [`TR25.084-concrete-syntax.md`](TR25.084-concrete-syntax.md).
 
-Milestones M0 (wireframe), M1 (procedures and control flow), and M2 (arrays  
-and structures) are complete; remaining 1966 coverage lands slice by slice via  
-the quick-release plan. IR is generated through the LLVM C++ API (ADR-002).
+The original M0–M2 milestones are complete. The compiler has since gained
+additional language support; the live feature matrix is
+[`docs/GRAMMAR-COVERAGE.md`](docs/GRAMMAR-COVERAGE.md), and remaining 1966
+language work is scheduled in the quick-release plan. LLVM IR is generated
+through the LLVM C++ API (ADR-002).
 
 ```
 $ make -j8
@@ -28,12 +30,12 @@ make install
 | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | [CONTRIBUTING.md](CONTRIBUTING.md)                                                     | how to add a feature: layer map, workflow, invariants, test conventions                                           |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                           | pipeline, IR levels, data representation, ABI, condition model, runtime interface                                 |
-| [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)                                   | 148 ADRs: why no reserved words forces a hand-written parser, why decimal is scaled binary, why four IR levels, … |
-| [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md)                                           | HIR/MIR passes, custom LLVM passes, metadata, `-O` levels, what we deliberately do not optimize                   |
-| [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md)                             | milestones M0–M9 plus D1; M0–M2 done, language remainder moved to QR1/QR2                                         |
-| [docs/QUICK-RELEASE-IMPLEMENTATION-PLAN.md](docs/QUICK-RELEASE-IMPLEMENTATION-PLAN.md) | live schedule for the remaining 1966 language coverage (QR1 Pareto + QR2 conformance)                             |
-| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)                                   | every rule (1)–(151) mapped to a component, test and milestone                                                    |
-| [docs/BUILTINS-PLAN.md](docs/BUILTINS-PLAN.md)                                         | implementation track for every built-in function (`tests/builtins/`)                                              |
+| [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)                                   | design history: keyword handling, numeric representation, IR choices, and other decisions                       |
+| [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md)                                           | optimization roadmap, proposed HIR/MIR passes, LLVM integration, and measurement plan                            |
+| [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md)                             | compiler engineering roadmap; historical milestones and work outside language coverage                         |
+| [docs/QUICK-RELEASE-IMPLEMENTATION-PLAN.md](docs/QUICK-RELEASE-IMPLEMENTATION-PLAN.md) | remaining 1966 language work, organized into practical and conformance phases                                    |
+| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)                                   | rule-by-rule implementation notes, supported cases, diagnostics, and test references                            |
+| [docs/BUILTINS-PLAN.md](docs/BUILTINS-PLAN.md)                                         | built-in support, tests, and remaining work                                                                       |
 | [docs/MODERN-PLI-PLAN.md](docs/MODERN-PLI-PLAN.md)                                     | small set of post-1966 niceties (`SELECT`, loop exits, …) as a separate extension track                           |
 | [docs/POSIX-SURFACE.md](docs/POSIX-SURFACE.md)                                         | POSIX functions the `libpli` runtime relies on                                                                    |
 | [docs/CROSS-PLATFORM-PLAN.md](docs/CROSS-PLATFORM-PLAN.md)                             | plan for building on other platforms (MSVC support)                                                               |
@@ -106,8 +108,8 @@ fixed-size binary records (`driver/record`, rules (112),(113))
 words (`AND`, `GT`, `CAT`, …)
 - built-ins per [docs/BUILTINS-PLAN.md](docs/BUILTINS-PLAN.md): string  
 (`SUBSTR` incl. pseudo-variable assignment, `INDEX`, `LENGTH`, `REPEAT`,  
-`VERIFY`, `TRANSLATE`, `TRIM`, `TALLY`, case/center/search/rank/collate,  
-`REVERSE`, `MAXLENGTH`, `HIGH`, `LOW`), math (incl. degree trig,  
+  `VERIFY`, `TRANSLATE`, `TRIM`, `TALLY`, case/center/search/rank/collate,
+  `REVERSE`, `HIGH`, `LOW`), math (incl. degree trig,
 `ASIN`/`ACOS`/`ATAN2`/`CBRT`), array/pointer/misc (`LBOUND`/`HBOUND`/  
 `DIM` with axis forms, `NULL`, `ADDR`, `DATE`, `TIME`, `SYSPARM`)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`,  
@@ -183,9 +185,9 @@ plic [options] file.pli
   -emit-llvm       write LLVM IR and stop
   --print-hir      lower to HIR and print it, then stop
   -fsyntax-only    parse and analyse only
-  -O0 … -O3        optimization level passed to the LLVM pipeline (default -O2)
+  -O0 … -O3, -Os   optimization level passed to the LLVM pipeline (default -O2)
   --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE))
-  --release        maximum optimization + stripped binary (minimal size)
+  --release        -O3 plus linker dead-stripping (also strips symbols on macOS)
   --debug          no optimization + debug info (-O0 -g)
   --keep-ll        keep the intermediate .ll next to the output
   --runtime <lib>  path to libpli.a (default: baked in at build time)
@@ -231,16 +233,16 @@ make clean
 Run tests in specific groups with:
 
 ```
-`./tests/run_tests.py usecases`
+./tests/run_tests.py usecases
 ```
 
 or a specific test with:
 
 ```
-`./tests/run_tests.py usecases/control.pli`
+./tests/run_tests.py usecases/control.pli
 ```
 
-Current suite: 317 tests, all passing.
+Run `make test` for the current suite; test counts change as coverage grows.
 
 ## Known deviations
 

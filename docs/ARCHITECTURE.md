@@ -5,15 +5,18 @@ A modern PL/I compiler with an LLVM backend, specified against
 semantics from the **Y33-6003** language specifications. Both are in
 `references/`; the extracted grammar is `TR25.084-concrete-syntax.md`.
 
+This page describes the implementation that exists today. The target language
+is broader than current support; use `GRAMMAR-COVERAGE.md` for implemented and
+diagnosed forms. In particular, the planned machine-independent IR (MIR) in
+`OPTIMIZATION.md` does not exist yet: the current HIR lowers directly to LLVM
+IR.
+
 ## 1. Goals and non-goals
 
-**Overarching design goal: emitted code is as fast and efficient as
-possible.** This is the objective that governs the whole backend — the front end
-must never foreclose a downstream optimization, and codegen is judged on the
-speed of what actually runs. It is realised by the pipeline in §2 and the pass
-sets in OPTIMIZATION.md: PL/I-specific optimizations run in HIR/MIR (where the
-language rules are known), classical ones are LLVM's job, and HIR/MIR are shaped
-so LLVM can do them. §7 documents what we deliberately refuse to optimize.
+**Design goal: generate efficient native code without changing PL/I behavior.**
+The current backend emits LLVM IR and delegates optimization and machine-code
+generation to clang. The more detailed HIR/MIR optimization strategy in
+`OPTIMIZATION.md` is planned work, not a description of passes already present.
 
 **Goals**
 
@@ -42,101 +45,73 @@ so LLVM can do them. §7 documents what we deliberately refuse to optimize.
 ## 2. Pipeline
 
 ```
-   file.pli
-      │
-      ▼
-┌──────────────┐   margins, 48/60-char set, EBCDIC→UTF-8
-│ SourceMgr    │   line map for diagnostics
-└──────┬───────┘
-       ▼
-┌──────────────┐   recursive %INCLUDE; other directives diagnosed
-│ Preprocessor │   comment/string-aware source scan
-└──────┬───────┘
-       ▼
-┌──────────────┐   words are never classified as keywords here (ADR-004)
-│ Lexer        │   rules (130)-(151)
-└──────┬───────┘
-       ▼
-┌──────────────┐   recursive descent + precedence climbing
-│ Parser       │   positional keyword recognition, multiple closure
-└──────┬───────┘   rules (1)-(129)
-       ▼
-    ┌─────┐
-    │ AST │   faithful syntax; one node per production
-    └──┬──┘
-       ▼
-┌──────────────┐   scopes; explicit/contextual/implicit declarations;
-│ Sema         │   attribute defaults; conversions; aggregate typing;
-└──────┬───────┘   condition enable-state; PICTURE compilation
-       ▼
-    ┌─────┐   PL/I-aware, still structured: aggregate assignment, string
-    │ HIR │   ops, ON-units, DO semantics, descriptors implicit
-    └──┬──┘
-       ▼   ── HIR passes (see OPTIMIZATION.md §4)
-    ┌─────┐   scalarised, explicit descriptors/temporaries, explicit
-    │ MIR │   bounds checks, CFG with EH regions, no implicit conversions
-    └──┬──┘
-       ▼   ── MIR passes (see OPTIMIZATION.md §5)
-┌──────────────┐
-│ LLVM IR      │   llvm::Module via IRBuilder
-└──────┬───────┘
-       ▼   ── LLVM pass pipeline + justified custom passes (OPTIMIZATION.md §6)
-   object file ──► link with libpli ──► executable
+file.pli
+   │
+   ▼
+Preprocessor       expands supported directives and `%INCLUDE`
+   │
+   ▼
+Lexer              creates tokens; words are not classified as keywords
+   │
+   ▼
+Parser             builds the AST and recognizes keywords by context
+   │
+   ▼
+Semantic analysis  resolves names, types, attributes, and conversions
+   │
+   ▼
+HIR                typed representation with explicit conversions
+   │
+   ▼
+IRGen              builds an LLVM module with `llvm::IRBuilder`
+   │
+   ├── `-emit-llvm` ──► textual `.ll` file
+   │
+   └── clang ──► object file ──► link with `libpli` ──► executable
 ```
 
-### Why four levels
+### Why separate AST, HIR, and LLVM IR
 
-*AST → LLVM IR directly* (what M0 does) stops scaling as soon as the
-PL/I-specific semantics arrive:
+The AST records source syntax. HIR is a typed, lower-level representation that
+makes implicit conversions explicit before code generation. This separation
+keeps parsing and semantic analysis independent of LLVM.
 
-- An aggregate assignment `A = B + C;` over arrays/structures is a loop nest
-  whose shape depends on matching declarations, `BY NAME`, and `UNALIGNED`
-  packing. Expressing that at AST level duplicates it in every consumer;
-  expressing it in LLVM IR loses the information needed to fuse the loops.
-- `ON`-units and enable/disable prefixes are a control-flow *state* that must
-  be reasoned about before it becomes landing pads.
-- PL/I conversions form a lattice; inserting them as explicit HIR nodes makes
-  them foldable by a single pass instead of being smeared through codegen.
-
-HIR is therefore "PL/I with all implicit things made explicit"; MIR is "machine
-independent PL/I-free code". MIR keeps us honest about what LLVM cannot know
-(descriptor invariants, condition enable-state, string aliasing).
+The original design planned a fourth, machine-independent IR (MIR) between HIR
+and LLVM. It would lower PL/I-specific aggregates, checks, and control flow
+before LLVM code generation. That layer is still future work; do not assume
+that passes described for MIR are present in the current compiler.
 
 ## 3. Components
 
-| Component | Files (M0) | Responsibility |
+| Component | Files | Responsibility |
 |---|---|---|
 | Driver | `src/main.cpp` | option parsing, phase sequencing, sub-process invocation |
 | Diagnostics | `src/diag.{h,cpp}` | locations, severity, rule citations, caret output |
-| Preprocessor | `src/preprocessor.{h,cpp}` | recursive `%INCLUDE`; directive dispatch and stubs |
+| Preprocessor | `src/preprocessor.{h,cpp}` | `%INCLUDE` and supported preprocessor directives; diagnostics for unsupported forms |
 | Lexer | `src/lexer.{h,cpp}`, `src/token.h` | rules (130)–(151); comments; composite operators; not-symbol spellings |
 | Parser | `src/parser.{h,cpp}` | rules (1)–(129); keyword recognition; multiple closure; recovery |
 | AST | `src/ast.h` | syntax tree |
 | Types | `src/types.h` | attribute → type mapping |
 | Sema | `src/sema.{h,cpp}` | scopes, declarations, defaults, typing, conversions |
-| HIR | `src/hir.{h,cpp}` | PL/I-aware IR with explicit conversions (ADR-005, ADR-029); `--print-hir` |
+| HIR | `src/hir.{h,cpp}` | typed AST lowering with explicit conversions (ADR-005); `--print-hir` |
 | IR generation | `src/irgen.{h,cpp}` | LLVM IR via `llvm::IRBuilder<>` (ADR-002); consumes HIR |
-| Runtime | `runtime/pli_rt.{h,c}` | I/O, string semantics, conditions |
+| Runtime | `runtime/` | C support routines for I/O, strings, conditions, storage, and other implemented features |
 
-### 3.1 Source manager
+### 3.1 Source input
 
-Handles what PL/I inherited from punched cards and what modern users expect:
-
-- Input encodings: UTF-8 (default), ISO-8859-1, EBCDIC (`--source-encoding`)
-  with `¬ | ¢` mapped from their EBCDIC code points.
-- Margins: free-form by default; `--margins=2,72` for card-image source, with
-  the sequence-number field ignored.
-- Character-set mode: 60-character (default) or 48-character
-  (`--charset=48`), which enables the operator words `NOT AND OR GT LT GE LE
-  NG NL NE CAT PT` as *reserved* words and the `..`/`:` substitutions of
-  TR §2.3.3.
+The driver passes the source file to the preprocessor; there is no separate
+source-manager phase or CLI option for source encoding or card margins. The
+lexer handles the source spellings supported by the implementation, including
+the three not-symbol spellings.
 ### 3.2 Preprocessor
 
 Expands `%INCLUDE member;` recursively before lexing. Members resolve relative
 to the containing source file; a name without an extension falls back to
-`.inc`. Quoted paths are also accepted. Directives inside comments and strings
-are ignored, include cycles and missing members are diagnosed, and handler
-stubs diagnose every other Chapter 9 directive until implemented.
+`.inc`. Quoted paths are also accepted. Include paths can be supplied with
+`-I` or `PLIC_INCLUDE_PATH`. Directives inside comments and strings are ignored;
+include cycles and missing members are diagnosed. The preprocessor also
+supports the directives listed in the grammar-coverage ledger; other Chapter 9
+forms are diagnosed rather than silently passed through.
 
 ### 3.3 Lexer
 
@@ -161,8 +136,8 @@ for expressions with the exact precedence of rules (115)–(122):
 
 Two features drive the design:
 
-- **Positional keyword recognition** with bounded lookahead, then (M1)
-  speculative parse plus symbol-table consultation — ADR-004.
+- **Positional keyword recognition** with bounded lookahead and speculative
+  parsing plus symbol-table consultation — ADR-004.
 - **Multiple closure** (TR §2.3.2.2): `END L;` closes every open block up to
   the one labelled `L`. Implemented by returning an `EndInfo` outward through
   the block-parsing functions until the owning block claims it.
@@ -173,113 +148,92 @@ statements are unambiguously `;`-terminated.
 
 ### 3.5 Semantic analysis
 
-Ordered sub-phases, because PL/I declarations are order-independent within a
-block but attribute defaults depend on the complete attribute set:
+Semantic analysis is organized into ordered passes. Declarations are collected
+before uses are checked because attribute defaults and procedure signatures can
+depend on declarations that appear later in the block:
 
 1. **Block structure**: build the scope tree (external procedure, internal
    procedures, `BEGIN` blocks, `DO` groups do *not* introduce a scope).
 2. **Declaration collection**: `DECLARE` (rule 9) including factored lists and
    level-numbered structures; `ENTRY`/`FILE`/label declarations; `LIKE`
    expansion; `DEFINED`/`iSUB` base resolution.
-3. **Contextual declarations**: names that acquire attributes from context
-   (a `BASED` locator, a `SET` target, an `OFFSET` reference) per Y33-6003.
+3. **Contextual declarations**: resolve names whose attributes come from
+   context, such as `BASED` locators and `SET` targets.
 4. **Implicit declarations**: undeclared identifiers get `FIXED BINARY` for
-   initials I–N, otherwise `FLOAT DECIMAL` — implemented in M0, warned about,
-   and suppressible with `--strict-declare`.
+   initials I–N, otherwise `FLOAT DECIMAL`; implicit declarations produce a
+   warning.
 5. **Attribute defaults and conflict checking**: rules (14)–(43).
-6. **Structure layout**: offsets per `ALIGNED`/`UNALIGNED`, with the mapping
-   rules for structures containing varying strings and areas.
+6. **Structure layout**: offsets and alignment for supported member types.
 7. **Expression typing and conversion insertion**: the target-type algorithm
    for arithmetic (base/scale/mode/precision), string, and bit operands.
-8. **Condition enable-state**: propagate prefixes (rules 60–63) down the
-   statement tree so codegen knows which checks to emit.
-9. **PICTURE compilation**: parse the picture string (rules 146–148) into a
-   field program used by both edit-directed I/O and conversions.
+8. **Condition prefixes**: preserve supported enable/disable prefixes so
+   code generation can emit or omit the corresponding checks.
+
+This is a conceptual summary, not a promise that every rule is implemented.
+The coverage ledger identifies unsupported declaration forms and conditions.
 
 ### 3.6 Runtime interface (libpli)
 
-The ABI is the set of `pli_*` symbols. M0 implements the shaded subset:
+The compiler's LLVM module calls C runtime routines for operations that are not
+emitted inline. These routines form the internal `pli_*` ABI. The specific
+entry points and supported data types evolve with the feature set; consult the
+runtime declarations and `GRAMMAR-COVERAGE.md` rather than treating this page
+as an exhaustive ABI reference.
 
-| Area | Entry points | Status |
-|---|---|---|
-| program start/stop | `pli_rt_init`, `pli_rt_fini`, `pli_stop` | M0 |
-| list-directed output | `pli_put_skip`, `pli_put_page`, `pli_put_list_*` | M0 |
-| string semantics | `pli_assign_char`, `pli_assign_varying`, `pli_concat`, `pli_cmp_char` | M0 |
-| conversions | `pli_cvt_<from>_<to>` | M2 |
-| decimal arithmetic | `pli_dec_add/sub/mul/div/cmp` | M2 |
-| PICTURE | `pli_pic_edit`, `pli_pic_validate` | M2 |
-| storage | `pli_area_alloc/free`, `pli_ctl_push/pop` | M4 |
-| conditions | `pli_on_push/pop`, `pli_signal`, `pli_goto_nonlocal` | M5 |
-| stream I/O | `pli_get_*`, `pli_put_edit_*`, `pli_open/close` | M6 |
-| record I/O | `pli_read/write/rewrite/delete/locate` | M7 |
-| tasking | `pli_task_create/wait/priority` | M9 |
+Common runtime responsibilities include list-directed and edit-directed I/O,
+character operations, condition dispatch, dynamic storage, and task/event
+support. Some language forms that would use these services are still diagnosed.
 
 ## 4. Data representation and ABI
 
 | PL/I data | Representation | Notes |
 |---|---|---|
-| `FIXED BINARY(p,0)`, p≤31 | `i32` | |
-| `FIXED BINARY(p,0)`, p≤63 | `i64` | |
-| `FIXED BINARY(p,q)` | integer scaled by 2^-q, scale static | |
-| `FIXED DECIMAL(p,q)`, p≤18 | `i64` scaled by 10^-q | scale is a compile-time property (ADR-006) |
-| `FIXED DECIMAL(p,q)`, p>18 | `i128`, else packed BCD in memory + runtime | |
-| `FLOAT DECIMAL(p)` | `float` (p≤6), `double` (p≤16), `fp128` | `FLOAT BINARY` analogous on bits |
-| `CHARACTER(n)` | `[n x i8]`, blank padded | |
-| `CHARACTER(n) VARYING` | `{ i32 len, [n x i8] }` | current length prefix |
-| `CHARACTER(*)` parameter | descriptor `{ ptr, i32 }` | |
-| `BIT(n)` | packed, `[ceil(n/8) x i8]`; `BIT(1)` as `i8` (`i1` in registers) | |
-| `PICTURE '…'` | `[n x i8]` + compiled field program | |
-| `POINTER` | `ptr` | |
-| `OFFSET(area)` | `i32` relative to the area's data | |
-| `AREA(n)` | `{ i32 size, i32 free, [n x i8] }` + runtime allocator | |
-| `LABEL` variable | `{ ptr code, ptr frame }` | frame enables non-local `GO TO` |
-| `ENTRY` variable | `{ ptr code, ptr static_link }` | |
-| `FILE` | `ptr` to runtime control block | |
-| structure | LLVM struct; layout from the mapping rules | `UNALIGNED` packs bit/char |
-| array | contiguous, row-major; dope vector when extents are dynamic | |
-| `TASK`, `EVENT` | runtime handles | M9 |
+| `FIXED BINARY` | `i32` or `i64`, based on precision | Scaled forms use an integer representation; see the coverage ledger for supported precision and scale cases. |
+| `FIXED DECIMAL` | Scaled integer for supported precision | Scale is a compile-time property (ADR-006); this is not full decimal conformance. |
+| `FLOAT` | `float`, `double`, or LLVM extended precision | Exact precision mappings depend on the declared type. |
+| `CHARACTER(n)` | Byte buffer, blank padded | |
+| `CHARACTER(n) VARYING` | Length plus byte buffer | Stores the current length as well as the maximum capacity. |
+| Adjustable `CHARACTER` parameter | Caller buffer plus hidden length argument | Passed by reference. |
+| `BIT(n)` | Packed bytes; `BIT(1)` uses a scalar representation in expressions | Supported operations vary by context. |
+| `COMPLEX` | Pair of floating-point values | The pair stores the real and imaginary components. |
+| `POINTER` | LLVM pointer | |
+| structure | LLVM struct | Layout follows the supported structure mapping rules. |
+| array | Contiguous, row-major storage | Dynamic bounds and parameter extents use runtime values. |
 
-**Parameter passing.** By reference, as PL/I requires: the callee receives
-addresses. When an argument needs conversion, is an expression, or is a
-constant, the caller materialises a **dummy argument** and passes its address
-(M0 already implements this — `tests/core/procs.pli`). Aggregates with `*` extents
-and `CHARACTER(*)` pass a descriptor. Internal procedures additionally receive
-a static link (ADR-027) for access to the enclosing block's automatic storage.
-All procedure variables are `AUTOMATIC` (`alloca`), so each activation owns its
-own copy and external procedures are reentrant; a static link is one `ptr`
-parameter per enclosing variable an internal procedure accesses.
+This table describes representation choices for supported forms, not a claim
+that every listed PL/I type or attribute is complete. `PICTURE`, `AREA`,
+`OFFSET`, label variables, and full entry descriptors remain limited or
+unimplemented; see the coverage ledger.
 
-**Name mangling.** `EXTERNAL` procedures and variables keep their upper-cased
-PL/I name so that classic linkage and C interop work. Internal procedures are
-`PLI_<outer>$<name>`; internal static variables are module-private
-(`@pli_g_<name>` in M0).
+**Parameter passing.** PL/I arguments are generally passed by reference: the
+callee receives addresses. If an argument needs conversion, is an expression,
+or is a constant, the caller materializes a **dummy argument** and passes its
+address (`tests/core/procs.pli`). Adjustable arrays and character parameters
+use additional hidden extent or length arguments. Internal procedures use a
+static link to access enclosing automatic storage. Storage classes and
+aggregate descriptors have restrictions documented in the coverage ledger.
 
-**Entry point.** The `OPTIONS(MAIN)` procedure gets a C `main` shim that
-initialises the runtime, calls the procedure, and runs normal termination
-(which is where `FINISH` is raised, M5).
+**Linkage.** External procedures use their upper-cased PL/I name for linkage.
+Package exports and other naming restrictions are described in the coverage
+ledger.
+
+**Entry point.** An `OPTIONS(MAIN)` procedure is exposed through a C `main`
+entry that initializes and shuts down the runtime around the PL/I procedure.
 
 ## 5. Condition handling (`ON` units)
 
-PL/I conditions are dynamically scoped, re-entrant, and can be exited with a
-non-local `GO TO` — the hardest part of the language to compile well.
+PL/I conditions have dynamic scope and can resume after a handler runs. The
+compiler implements a subset of the condition rules; non-local `GO TO` and
+many condition kinds are still diagnosed.
 
-- **Established handlers** live in a thread-local stack in libpli. Entering a
-  block that contains `ON` statements pushes handler records; block exit pops
-  them (`REVERT` pops a specific one). The stack is only touched by blocks that
-  actually contain `ON`/`REVERT`, so the common path is free.
-- **`ON`-units compile to functions** taking the establishing frame's pointer,
-  so an on-unit can reference the variables of its block.
-- **Computational conditions** (`FIXEDOVERFLOW`, `SIZE`, `ZERODIVIDE`,
-  `CONVERSION`, `SUBSCRIPTRANGE`, `STRINGRANGE`) are *checks emitted inline
-  only where the enable-state says they are enabled* (rules 60–63). Disabled
-  checks cost nothing; enabled ones are ordinary branches that LLVM can hoist
-  and merge.
-- **`GO TO` out of an on-unit or block** unwinds to the target frame. We use
-  LLVM's `invoke`/`landingpad` for cleanups and a runtime `pli_goto_nonlocal`
-  that unwinds to the recorded frame; `LABEL` variables therefore carry a frame
-  pointer.
-- **Enable-state is compile-time knowledge**, so `(NOSUBSCRIPTRANGE): DO ...`
-  is not a runtime flag test but the absence of code.
+- The implemented `ON`/`SIGNAL`/`REVERT` paths include `ERROR`, `SIZE`,
+  `SUBSCRIPTRANGE`, `ZERODIVIDE`, and programmer-named conditions. Check the
+  coverage ledger for each condition's behavior and unsupported cases.
+- Condition prefixes are resolved during compilation. Supported prefixes such
+  as `(NOSIZE)` omit the matching runtime check; they are not runtime switches.
+- On-unit control flow and recovery are implemented only for the supported
+  condition subset. Do not assume general non-local `GO TO` or all standard
+  condition actions are available.
 
 ## 6. Diagnostics
 
@@ -304,30 +258,19 @@ missing `THEN` under the offending token — for the unambiguous recovery cases
 
 | Layer | Mechanism | Status |
 |---|---|---|
-| Lexer/parser units | golden token/AST dumps | M1 |
-| IR golden tests | `tests/ir/*.pli` + FileCheck-style `*.check`, `plic -emit-llvm` matched in order (ADR-031) | M1 |
-| Execution tests | compile, run; diff (`expected/`) or PASS-grep (`tests/usecases/`) | M0 (13) |
-| Diagnostic tests | `tests/*/bad_*.pli` must be rejected with the right rule | M0 |
-| Conformance matrix | every rule (1)–(151) mapped to a test (GRAMMAR-COVERAGE.md) | M0 skeleton |
-| Corpus compilation | compile `references/code/**` (Iron Spring, MULTICS, RosettaCode samples) | M2+ |
-| Differential testing | run corpus outputs against another PL/I implementation | M3+ |
-| Fuzzing | grammar-directed fuzzer over rules (1)–(151); parser must not crash | M2+ |
+| IR checks | `tests/ir/*.pli` and ordered `*.check` patterns against `-emit-llvm` output | Implemented |
+| Execution tests | Compile and run; compare `expected/` output or check self-reported `PASS` | Implemented |
+| Diagnostic tests | `bad_*.pli` cases must fail as expected | Implemented |
+| Coverage ledger | `GRAMMAR-COVERAGE.md` maps each rule to implementation notes and tests | Maintained with feature work |
+| Corpus compilation, differential tests, grammar fuzzing | Proposed broader conformance tools | Roadmap; see implementation plans |
 
-## 8. Current status (M0 wireframe)
+## 8. Current implementation snapshot
 
-Implemented end to end: `PROCEDURE`/`END` with multiple closure, internal
-procedures with by-reference parameters and dummy arguments, `DECLARE` with
-the arithmetic/string attribute defaults, implicit declarations, assignment,
-`IF`/`THEN`/`ELSE`, `DO` groups (`DO;`, `DO WHILE`, iterative with `TO`/`BY`/
-`WHILE`), `BEGIN` blocks, `CALL`, `RETURN`, `STOP`, `PUT [SKIP] [PAGE] LIST`,
-the full operator set with spec precedence, 48-character-set operator words,
-`CHARACTER` fixed/`VARYING` with concatenation and padded comparison, `BIT(1)`,
-`FLOAT`, `FIXED BINARY/DECIMAL` with scale 0. M1 adds static links so internal
-procedures reach enclosing automatic storage and external procedures are
-reentrant (ADR-027), `ENTRY` statements (ADR-026), and diagnostic fix-its
-(ADR-030) suggesting the missing token for the unambiguous recovery cases.
-The M1 exit criterion is met: a recursive function and a two-entry-point
-procedure run, and IR golden tests (`tests/ir/`, ADR-031) pin the emitted IR.
-
-Everything else is diagnosed as unimplemented with its rule number, which is
-also the project's to-do list: see IMPLEMENTATION-PLAN.md.
+The compiler supports procedures, control flow, arrays and structures, storage
+and pointer features, conditions, input/output, selected built-ins, and
+preprocessor forms. Support is deliberately partial: a construct may be
+accepted only for some types or contexts, while unsupported forms produce
+diagnostics. Read the matching rule row in `GRAMMAR-COVERAGE.md` before relying
+on a feature. That ledger is the current source for detailed behavior; the
+milestone names in older planning documents describe when work was grouped,
+not the current implementation boundary.

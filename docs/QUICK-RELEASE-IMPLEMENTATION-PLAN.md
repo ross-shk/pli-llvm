@@ -1,18 +1,15 @@
 # PL/I 1966 quick release plan
 
-**Status (18 Sep 2026): active — revived on `main`.**
-Live scheduling vehicle for 1966 language coverage; `GRAMMAR-COVERAGE.md`
-and `C28-COVERAGE.md` remain the coverage ledgers. Several QR1 slices have
-landed since the freeze (conditions, stream I/O, pointers, built-ins,
-preprocessor conditionals) — re-baseline each slice against the ledgers
-before estimating.
+**Status (24 Sep 2026): active.** This plan schedules remaining 1966 language
+coverage. `GRAMMAR-COVERAGE.md` is the current implementation ledger; there is
+no separate active `C28-COVERAGE.md` file. Recent commits have delivered parts
+of several QR1 slices, so the phase rows below describe the remaining scope,
+not untouched features.
 
-This supplement schedules coverage of IBM C28-6571-3, *PL/I Language
-Specifications* (July 1966). `IMPLEMENTATION-PLAN.md` remains the plan for
-compiler engineering work that is not part of language coverage. The current
-implemented-and-tested entries in `GRAMMAR-COVERAGE.md`, including work completed
-after M1, are the baseline. Transferred language work is owned here and is
-marked `QR1` or `QR2` in the general plan.
+This plan covers IBM C28-6571-3, *PL/I Language Specifications* (July 1966).
+`IMPLEMENTATION-PLAN.md` covers compiler engineering outside language
+conformance. Use the tested cases in `GRAMMAR-COVERAGE.md` as the baseline;
+don't schedule or estimate work that has already landed.
 
 The source text is
 `/Users/yarro/Development/PLI/references/text/C28-6571-3_PL_I_Language_Specifications_Jul66.txt`.
@@ -23,11 +20,10 @@ infer text from the damaged scan.
 
 ## Release policy
 
-The Pareto split is by independently useful feature slices, not by pages or
-grammar productions. Phase 1 deliberately implements about 20% of the remaining
-feature surface that enables the broadest class of batch, business, scientific,
-and text-processing programs. Phase 2 is the conformance pass for everything
-else in the 1966 publication.
+The two phases separate broadly useful features from less common conformance
+cases. Phase 1 prioritizes features that unblock ordinary batch, business,
+scientific, and text-processing programs. Phase 2 covers the remaining 1966
+specification.
 
 Every slice follows the normal test-first AST/parser/sema/IRGen/runtime workflow.
 Unsupported subcases remain diagnosed. A phase is complete only when its source
@@ -36,30 +32,33 @@ as applicable.
 
 Implemented behavior is a dependency, not a quick release deliverable: it
 receives no effort here and must not be reimplemented. Before starting a slice,
-remove any gaps that have since moved to implemented-and-tested in
-`GRAMMAR-COVERAGE.md` and reduce the estimate accordingly.
+check `GRAMMAR-COVERAGE.md` and remove behavior that is already implemented from
+the slice's remaining work.
 
-`archive/C-MIRROR-QUICK-RELEASE-SUBPLAN.md` provides a smaller optional path through
-the remaining features that have close standard C analogues.
+Effort estimates from the original schedule are omitted: the delivered work
+has changed the remaining scope, and the remaining effort has not been
+re-estimated.
 
-## Phase 1 - Pareto release (16 engineer-weeks)
+## Phase 1 - Practical release
 
-Implement these slices in dependency order. Work on decimal arithmetic and the
-stream runtime may proceed in parallel after aggregate descriptors stabilize.
+Implement remaining work in dependency order. Numeric and I/O cases may proceed
+in parallel when their prerequisites are met; descriptor-based cases depend on
+the aggregate parameter representation.
 
-| Order | Slice | Effort | Deliverable |
-|---|---|---:|---|
-| QR1.1 | Remaining practical aggregate gaps | 3w | dynamic lower and multi-axis bounds, dynamic structure members and lengths, general dope-vector descriptors beyond current extent passing, whole aggregate expression values, and `INITIAL` for dynamic arrays and structures |
-| QR1.2 | Remaining commercial fixed-decimal gaps | 3w | full precision conformance, overflow checks, remaining conversion boundaries, and decimal `GET`/`PUT`; existing fixed-decimal storage, constants, scaled arithmetic, comparison, assignment conversion, and rounding are excluded |
-| QR1.3 | Practical dynamic records | 2w | `POINTER`, based structures, `->`, `ADDR`, `NULL`, and common `ALLOCATE`/`FREE` forms for linked records |
-| QR1.4 | Recoverable conditions | 3w | enforce already-parsed condition prefixes and add `ON`, `REVERT`, and `SIGNAL` for `ERROR`, arithmetic, conversion, subscript, allocation, and common I/O conditions |
-| QR1.5 | Remaining practical stream and file I/O | 4w | `OPEN`/`CLOSE`; input; `FILE`, `STRING`, `LINE`, and `COPY` options; data-directed transmission; and common edit-directed numeric, character, spacing, line, and page items beyond existing `PUT SKIP/PAGE LIST` |
-| QR1.6 | Remaining high-impact source compatibility | 1w | 1966 keyword abbreviations and 48-character forms not already accepted; safe recursive `%INCLUDE` is implemented |
+| Order | Slice | Remaining work |
+|---|---|---|
+| QR1.1 | Aggregate parameters and expressions | Remaining descriptor and whole-aggregate cases in rules (12), (34)–(38), and (127); dynamic bounds, dynamic members, `INITIAL`, and whole-array assignment expressions already have tested support. |
+| QR1.2 | Fixed-decimal conformance | Resolve precision, scale, and conversion edge cases. Scaled arithmetic, overflow checks, and decimal input/output already have tested support; see rules (16), (17), and (135)–(139). |
+| QR1.3 | Dynamic storage and locators | Common `POINTER`, `BASED`, `ALLOCATE`/`FREE`, and `CONTROLLED` cases are implemented. Remaining area allocation, allocation options, dynamic based arrays, and unsupported CONTROLLED shapes are tracked under QR2.3 and rules (23), (25), (87)–(90). |
+| QR1.4 | Recoverable conditions | `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, and programmer-named conditions have partial support. Implement and test remaining condition kinds and actions; see rules (60)–(63), (91)–(99). |
+| QR1.5 | Stream and file I/O | List, data, and common edit-directed I/O, `FILE`/`STRING`, open/close, and sequential record I/O are implemented. Remaining options and format cases are listed under rules (100)–(113). |
+| QR1.6 | Source compatibility | Complete the remaining abbreviations and 48-character-set forms. Recursive `%INCLUDE` and selected preprocessor directives already work; see the auxiliary-coverage section in `GRAMMAR-COVERAGE.md`. |
 
-**Phase 1 boundaries.** Decimal floating point, `COMPLEX`, `PICTURE`, record
-I/O, keyed files, tasking, areas, controlled-generation stacks, full compile-time
-replacement, and rare attributes stay diagnosed for QR2. QR1 formatting covers
-ordinary reports but not pictured or sterling data.
+**Phase 1 boundaries.** Decimal floating point, `PICTURE`, keyed/direct record
+files, `AREA`, uncommon condition behavior, full compile-time replacement, and
+rare attributes remain later conformance work. Some record I/O, tasking, and
+`CONTROLLED` behavior already exists; consult the coverage ledger before
+assuming a whole feature family is unsupported.
 
 **Exit criterion.** Representative 1960s-style payroll, inventory, matrix,
 linked-record, text-file, and report programs compile without source rewriting,
@@ -67,22 +66,22 @@ produce checked reference output, and recover from their expected data and I/O
 conditions. The corpus report identifies no QR1 feature among the ten most
 frequent remaining blockers.
 
-## Phase 2 - Complete 1966 coverage (45+ engineer-weeks)
+## Phase 2 - Remaining 1966 conformance
 
 QR2 closes every remaining language family in C28-6571-3. The order below keeps
 dependencies ahead of consumers; independent rows may proceed concurrently.
 
 | Order | Remaining 1966 scope | Source | Exit criterion |
 |---|---|---|---|
-| QR2.1 | general aggregate expression use and operators, non-assignment cross-sections, self-defining based members, correspondence, remaining `DEFINED`/`POSITION` and multidimensional iSUB forms, qualified `LIKE`, `SECONDARY`, `CELL`, packed layout, and descriptor cases not closed by QR1 | Chapters 2-4, 10 | generated aggregate shape/alias matrix passes |
-| QR2.2 | precision and representation cases beyond practical binary and QR1 fixed decimal: decimal and binary floating point, complex and imaginary data, bit strings longer than one bit, remaining conversions, `PICTURE`, sterling data, and pictured transmission | Chapters 2-4; Appendix 2 | numeric and conversion cross-product tests match reference results |
-| QR2.3 | `CONTROLLED` generation stacks, `AREA`, allocation in areas, `ALLOCATE`/`FREE` options beyond QR1, remaining pointer compatibility, and list-processing edge cases | Chapters 4, 6, 8, 10 | allocation, alias, lifetime, and self-defining-list tests pass under ASan |
+| QR2.1 | remaining aggregate expression forms and operators, non-assignment cross-sections, self-defining based members, correspondence, remaining `DEFINED`/`POSITION` and multidimensional iSUB forms, `SECONDARY`, `CELL`, packed layout, and full descriptor cases | Chapters 2-4, 10 | generated aggregate shape/alias matrix passes |
+| QR2.2 | precision and representation cases beyond practical binary and fixed decimal: decimal and binary floating point, remaining complex/imaginary cases, conversions, `PICTURE`, sterling data, and pictured transmission | Chapters 2-4; Appendix 2 | numeric and conversion cross-product tests match reference results |
+| QR2.3 | remaining `CONTROLLED` combinations and shapes, `AREA`, allocation in areas, `ALLOCATE`/`FREE` options beyond current support, remaining pointer compatibility, and list-processing edge cases | Chapters 4, 6, 8, 10 | allocation, alias, lifetime, and self-defining-list tests pass under ASan |
 | QR2.4 | computational, I/O, checkout, list-processing, programmer-named, and system-action condition cases not in QR1; non-local `GO TO`; label variables; condition built-ins | Chapters 1, 2, 6; Appendix 3 | each condition's establish, raise, resume, revert, and default-action cases pass |
-| QR2.5 | stream format and remote-format cases beyond QR1; sequential, direct, and keyed record I/O; buffering, access, print, backwards, exclusive, environment, and file-status behavior | Chapters 4, 7, 8 | stream and record round trips cover every file organization and option family |
-| QR2.6 | contextual and implicit declarations, defaults, `GENERIC`/`BUILTIN`, `USES`/`SETS`, `ABNORMAL`/`NORMAL`, `REDUCIBLE`/`IRREDUCIBLE`, remaining parameter correspondence and descriptors, and mixed-return alternate entries | Chapters 4, 5, 10 | declaration/default and call-interface matrices pass |
+| QR2.5 | stream format and remote-format cases beyond current support; remaining sequential features plus direct and keyed record I/O; buffering, access, print, backwards, exclusive, environment, and file-status behavior | Chapters 4, 7, 8 | stream and record round trips cover every file organization and option family |
+| QR2.6 | remaining contextual declarations and defaults, `GENERIC`/`BUILTIN`, `USES`/`SETS`, `ABNORMAL`/`NORMAL`, `REDUCIBLE`/`IRREDUCIBLE`, parameter correspondence and descriptors, and mixed-return alternate entries | Chapters 4, 5, 10 | declaration/default and call-interface matrices pass |
 | QR2.7 | Appendix 1 functions and signatures not already implemented, their missing domain and precision semantics, and elemental aggregate application where absent | Appendix 1 | generated signature, type, domain-error, and aggregate tests pass |
-| QR2.8 | `TASK`, `EVENT`, `PRIORITY`, `WAIT`, `DELAY`, asynchronous calls, task allocation, and task-local condition state | Chapters 2, 4, 6, 8, 10 | synchronization, lifetime, condition, and race-detector tests pass |
-| QR2.9 | compile-time declarations, expressions, activation, replacement and rescanning, `%IF`, `%DO`, `%GO TO`, full `%INCLUDE` rescanning and control-transfer semantics beyond QR1, and compile-time procedures | Chapter 9 | processor examples and nested replacement/include tests reproduce expected program text |
+| QR2.8 | remaining `TASK`/`EVENT`/`PRIORITY`/`WAIT`/`DELAY` semantics, task allocation, and task-local condition state; basic asynchronous `CALL`, `WAIT`, and `DELAY` are implemented | Chapters 2, 4, 6, 8, 10 | synchronization, lifetime, condition, and race-detector tests pass |
+| QR2.9 | compile-time procedures, `%DO`, `%GO TO`, replacement/include rescanning, and processor control-transfer semantics beyond the supported `%DECLARE`, `%IF`, `%ACTIVATE`, `%DEACTIVATE`, `%REPLACE`, and `%INCLUDE` forms | Chapter 9 | processor examples and nested replacement/include tests reproduce expected program text |
 | QR2.10 | remaining character-set, collation, abbreviation, statement, pseudo-variable, initialization, file, and semantic edge cases not closed above | Chapters 1-10; Appendices 4-6 | chapter checklist has no unsupported entry |
 
 **Exit criterion.** A chapter-and-subsection coverage ledger for C28-6571-3 has

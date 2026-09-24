@@ -1,4 +1,12 @@
-# Compiler optimization plan
+# Compiler optimization roadmap
+
+This document describes proposed optimization work, not a list of features
+already implemented. Today, semantic analysis lowers the typed program to a
+thin HIR, `IRGen` emits LLVM IR, and the driver invokes clang to optimize and
+assemble it. The driver currently accepts `-O0`, `-O1`, `-O2`, `-O3`, and
+`-Os`; its default is `-O2`. The planned MIR, custom compiler passes, debug
+metadata work, and optimization controls below remain roadmap items unless
+noted otherwise in the feature matrix.
 
 ## 1. Goals and principles
 
@@ -26,11 +34,13 @@ not separate modes that may silently change the language.
 
 ## 2. Optimization contract
 
-HIR and MIR lowering are mandatory at every optimization level. `-O0` disables
-optional optimization passes, not the explicit conversions, checks, descriptor
-operations, and control flow required for correct lowering.
+The intended contract is that required semantic lowering remains active at every
+optimization level. If a MIR layer is added, `-O0` will disable optional passes,
+not the conversions, checks, and control flow needed for correct code. At
+present, the typed AST is lowered to HIR and then directly to LLVM IR.
 
-Each HIR/MIR operation records the properties needed to transform it safely:
+The proposed HIR/MIR operations should record the properties needed to transform
+them safely:
 
 - type, precision, scale, shape, and extent;
 - memory effects, possible conditions, and whether an operation may resume;
@@ -38,10 +48,10 @@ Each HIR/MIR operation records the properties needed to transform it safely:
 - source location and lexical condition enable-state;
 - integer overflow and conversion semantics.
 
-Passes use analyses with explicit invalidation rather than running every pass to
-a fixpoint. Small canonicalization groups may iterate to a bounded fixpoint.
-HIR and MIR verifiers run after construction and in assertion-enabled builds
-after each transforming pass.
+Planned passes should use analyses with explicit invalidation rather than
+re-running every pass to a fixpoint. Small canonicalization groups may iterate
+to a bounded fixpoint. HIR and MIR verifiers should run after construction and,
+in assertion-enabled builds, after each transforming pass.
 
 ## 3. Ownership
 
@@ -126,16 +136,16 @@ external accesses remain conservative unless storage provenance proves more.
 
 ## 6. LLVM pipeline
 
-Use the new pass manager's standard `PassBuilder` pipeline for the selected
-optimization level. Prefer IR shape, standard intrinsics, function attributes,
-and LLVM's `FunctionAttrs`, Attributor, SROA, IPSCCP, inliner, loop, and
-vectorization passes over local replacements.
+The intended LLVM integration uses the new pass manager's standard `PassBuilder`
+pipeline for the selected optimization level. Prefer IR shape, standard
+intrinsics, function attributes, and LLVM's `FunctionAttrs`, Attributor, SROA,
+IPSCCP, inliner, loop, and vectorization passes over local replacements.
 
-Runtime declarations are generated from one ABI table and carry tested memory,
-capture, unwind, return, and allocation attributes. Typed runtime entry points
-are selected before LLVM lowering when operand types are known. Known copies,
-fills, checked arithmetic, and lifetime markers are emitted as LLVM intrinsics
-rather than recognized later from compiler-generated call sequences.
+The planned runtime interface uses one ABI table for declarations and their
+memory, capture, unwind, return, and allocation attributes. Typed runtime entry
+points should be selected before LLVM lowering when operand types are known.
+Copies, fills, checked arithmetic, and lifetime markers should use LLVM
+intrinsics when those operations have matching semantics.
 
 Candidate custom passes are deliberately limited:
 
@@ -150,14 +160,17 @@ optimization and benchmarks show end-to-end benefit. Passes use stable LLVM
 analysis APIs and are tested against the oldest and newest supported LLVM
 versions.
 
-ThinLTO is available with `-flto=thin`, full LTO with `-flto=full`, and neither
-is silently enabled by `-O2`. Profile-guided optimization supports
-instrumentation generation/use; profile data supplies branch weights, indirect
-call targets, hot/cold splitting, and inlining guidance. Profile mismatches are
-diagnosed. Post-link optimization may be added only with a supported toolchain
-and reproducible benchmark evidence.
+ThinLTO (`-flto=thin`), full LTO (`-flto=full`), and profile-guided
+optimization are possible future integrations; the compiler does not currently
+manage LTO or profile data as dedicated features. None should be enabled by
+default. Profile data could guide branch weights, indirect-call promotion,
+hot/cold splitting, and inlining. Post-link optimization requires a supported
+toolchain and reproducible benchmark evidence.
 
 ## 7. User controls
+
+Only `-O0`, `-O1`, `-O2`, `-O3`, and `-Os` are accepted by the current driver.
+`-Og` and `-Oz` are proposed controls, not current command-line options.
 
 | Flag | HIR/MIR policy | LLVM policy |
 |---|---|---|

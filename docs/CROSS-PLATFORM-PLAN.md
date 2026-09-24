@@ -6,6 +6,11 @@ Makefile builds on Linux/macOS. Pure MSVC — no MinGW, Cygwin, WSL, or
 cross-compilation shims. CMake is the Windows build; the Makefile stays
 POSIX-only.
 
+**Status:** proposed work, not an implemented build path. The code samples in
+this document show the intended changes; they are not APIs already present in
+the repository. Recheck each inventory item against current source before
+implementing it.
+
 ---
 
 ## Inventory (all verified against source)

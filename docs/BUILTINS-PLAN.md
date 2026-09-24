@@ -1,9 +1,12 @@
 # Built-in functions plan (implementation track)
 
-Every PL/I built-in lives on this track — not scattered across
-MODERN-PLI-PLAN (MX5) or the QR milestones. Each builtin is served
-by the same four-layer chain, tested in `tests/builtins/`, and
-guarded by the AGENTS.md builtins silo (other work stays out).
+Built-in implementation and follow-up work is tracked here, rather than mixed
+into the language-feature schedules. Most built-ins are tested in
+`tests/builtins/`; built-ins that are best tested as part of another feature
+(such as `ONCODE` and `OMITTED`) stay with those feature tests in `tests/core/`.
+The implementation path is semantic checking, HIR passthrough, then IRGen
+(inline code or a runtime call). Runtime declarations are listed in
+`runtime/pli_rt_abi.def`.
 
 ## Pipeline
 
@@ -23,7 +26,7 @@ test-first (`tests/builtins/`) + diagnostics for unserved forms.
 | `REPEAT`, `VERIFY`, `TRANSLATE` | `repeat.pli`, `verify.pli`, `translate.pli`, `bad_repeat.pli`, `bad_verify.pli`, `bad_translate.pli` |
 | `TRIM`, `TALLY` (ADR-107) | `trim.pli`, `tally.pli`, `bad_trim.pli`, `bad_tally.pli` |
 | `LOWERCASE`, `CENTER`, `SEARCH`, `VERIFY` (2- and 3-arg), `RANK`, `COLLATE` (ADR-133) | `strcase.pli`, `bad_strcase.pli` |
-| `REVERSE` (ADR-134) | `revmax.pli`, `bad_revmax.pli` |
+| `REVERSE` (ADR-134) | `revmax.pli`, `bad_revmax.pli` (legacy filenames; these tests cover `REVERSE` only) |
 | `HIGH`, `LOW` | `highlow.pli`, `bad_highlow.pli` |
 
 ## Status: math (rule 123, Appendix 1)
@@ -49,7 +52,7 @@ test-first (`tests/builtins/`) + diagnostics for unserved forms.
 
 | Slice | Scope |
 |---|---|
-| BX-STRING | `COMPARE`, `MEMCONVERT`, `CENTER`/`LEFT`/`RIGHT` if admitted — each needs its Enterprise-semantics note first |
+| BX-STRING | `COMPARE`, `MEMCONVERT`, `LEFT`, `RIGHT` if admitted — each needs its Enterprise-semantics note first |
 | BX-MATH | Remaining Appendix-1 gaps; precision establishment beyond current coverage |
 | BX-ARRAY | `POLY`, `PROD` overflows, `ALL`/`ANY` on non-BIT; cross-section builtins with rule-126 values |
 
@@ -58,5 +61,5 @@ Each slice: verify Enterprise semantics, ADR, `tests/builtins/` first, diagnosti
 ## Exit criterion
 
 Every served builtin above has a row, an ADR where it decided
-something, and a `tests/builtins/` test; `make test` is green; the
+something, and a test in the appropriate group; `make test` is green; the
 Extensions ledger points here for builtin extensions.
