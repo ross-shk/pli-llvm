@@ -3815,3 +3815,32 @@ the scope chain (breaks the unified chain semantics); adding a special case in L
 resolution for module-level names (would diverge from the general lookup path).
 
 
+
+## ADR-147 — Nested ON units establish handlers when the outer unit runs
+
+**Context.** Rule (91) reads `ON condition [SNAP] {unconditional-statement |
+SYSTEM ;}`, and an unconditional statement (rules (57)-(59),(66)) includes
+`ON` itself and a `BEGIN` block containing `ON`. Nested establishment is
+therefore in scope, but sema diagnosed every nested `ON` with (91).
+
+**Decision.** Serve nested `ON`: drop the diagnostic; the inner `ON` is
+type-checked by the normal `checkStmt` path, so the outer `checkOnUnit`
+walk skips a nested `ON`'s unit to avoid duplicate diagnostics while still
+rejecting automatic-variable access, valued `RETURN`, `DECLARE`/`ENTRY`,
+and `LEAVE`/`ITERATE` inside the inner unit. No runtime change: the handler
+stack already supports pushes from inside a handler, ids are assigned by
+traversing `unit` recursively, and `SIGNAL` dispatch works inside a handler
+function. `BEGIN` exit skips its depth restore when the body ends with a
+terminator (a bare `RETURN` ending a nested unit), mirroring procedure exit,
+so a `RETURN`-last nested unit verifies.
+
+**Consequences.** `tests/core/on_nested.pli` covers a `BEGIN` unit that
+establishes, signals, and `RETURN`s from a nested unit plus direct
+`ON ERROR ON ZERODIVIDE ...` establishment. Frame access and the remaining
+unit restrictions stay diagnosed; a nested `ON` inside a `BEGIN` unit is
+scoped to that block (popped on block exit), while a direct nested `ON`
+persists like any established handler.
+
+**Rejected.** Saving handler-entry depth and restoring on unit exit: it
+would pop a directly-nested handler when the outer unit returns, breaking
+the establish-then-raise-later shape that direct nesting serves.

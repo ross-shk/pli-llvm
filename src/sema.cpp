@@ -1688,7 +1688,8 @@ long long Sema::elementCount(const Type& ty) {
 
 // Rule (91): an ON-unit compiles to a handler function without the
 // establishing frame, so constructs needing that frame are diagnosed:
-// automatic-variable access, RETURN, nested ON, DECLARE and ENTRY.
+// automatic-variable access, RETURN with a value, DECLARE and ENTRY.
+// A nested ON is allowed: it establishes a handler when the outer unit runs.
 void Sema::checkOnUnit(Stmt* u, Proc* p) {
   if (!u)
     return;
@@ -1712,8 +1713,10 @@ void Sema::checkOnUnit(Stmt* u, Proc* p) {
       return;
     switch (s->kind) {
     case Stmt::On:
-      d_.error(s->loc, "nested ON units are not implemented in this stage", "(91)");
-      break;
+      // A nested ON establishes a new handler when the outer unit runs
+      // (rule 91). Its own unit was already type-checked and validated
+      // by checkStmt, so skip it here to avoid duplicate diagnostics.
+      return;
     case Stmt::Return:
       // A bare RETURN ends the unit and resumes after the SIGNAL (rule 91);
       // RETURN with a value has no function to return from here.
