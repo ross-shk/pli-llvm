@@ -74,6 +74,7 @@ PLI_FN(pli_cbrt, DOUBLE, (DOUBLE))   /* CBRT (CM5) */
 PLI_FN(pli_sinh, DOUBLE, (DOUBLE))
 PLI_FN(pli_cosh, DOUBLE, (DOUBLE))
 PLI_FN(pli_tanh, DOUBLE, (DOUBLE))
+PLI_FN(pli_asinh, DOUBLE, (DOUBLE))
 PLI_FN(pli_atanh, DOUBLE, (DOUBLE))
 PLI_FN(pli_erf, DOUBLE, (DOUBLE))
 PLI_FN(pli_erfc, DOUBLE, (DOUBLE))

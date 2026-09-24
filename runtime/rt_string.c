@@ -1,29 +1,26 @@
 /* rt_string.c — PL/I runtime library (libpli): string semantics + helpers. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <time.h>
 
 void pli_assign_char(char *dst, long long dstlen, const char *src, long long srclen) {
   long long n = srclen < dstlen ? srclen : dstlen;
-  if (n > 0) memmove(dst, src, (size_t)n);
-  if (dstlen > n) memset(dst + n, ' ', (size_t)(dstlen - n));
+  if (n > 0) pli_memmove(dst, src, (size_t)n);
+  if (dstlen > n) pli_memset(dst + n, ' ', (size_t)(dstlen - n));
 }
 
 /* Assignment to CHARACTER(n) VARYING: truncate to the maximum length; the
  * caller stores the returned current length. */
 long long pli_assign_varying(char *dstdata, long long cap, const char *src, long long srclen) {
   long long n = srclen < cap ? srclen : cap;
-  if (n > 0) memmove(dstdata, src, (size_t)n);
+  if (n > 0) pli_memmove(dstdata, src, (size_t)n);
   return n;
 }
 
 void pli_concat(char *dst, const char *a, long long alen, const char *b, long long blen) {
-  if (alen > 0) memmove(dst, a, (size_t)alen);
-  if (blen > 0) memmove(dst + alen, b, (size_t)blen);
+  if (alen > 0) pli_memmove(dst, a, (size_t)alen);
+  if (blen > 0) pli_memmove(dst + alen, b, (size_t)blen);
 }
 
 /* SUBSTR(s, i, n): copy up to n characters of s starting at the 1-based
@@ -35,8 +32,8 @@ void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
   long long avail = srclen - (start - 1);
   if (avail < 0) avail = 0;
   long long take = avail < n ? avail : n;
-  if (take > 0 && start >= 1) memmove(dst, src + (start - 1), (size_t)take);
-  if (n > take) memset(dst + take, ' ', (size_t)(n - take));
+  if (take > 0 && start >= 1) pli_memmove(dst, src + (start - 1), (size_t)take);
+  if (n > take) pli_memset(dst + take, ' ', (size_t)(n - take));
 }
 
 /* SUBSTR(s, i, n) = v: overwrite n characters of dst starting at the 1-based
@@ -51,8 +48,8 @@ void pli_substr_assign(char *dst, long long dstcap, long long start, long long l
   if (space <= 0) return;
   if (n > space) n = space;
   long long take = srclen < n ? srclen : n;
-  if (take > 0) memmove(dst + (start - 1), src, (size_t)take);
-  if (n > take) memset(dst + (start - 1) + take, ' ', (size_t)(n - take));
+  if (take > 0) pli_memmove(dst + (start - 1), src, (size_t)take);
+  if (n > take) pli_memset(dst + (start - 1) + take, ' ', (size_t)(n - take));
 }
 
 void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
@@ -99,9 +96,9 @@ void pli_trim(char *dst, long long dstcap, const char *s, long long slen,
     while (hi > lo && s[hi - 1] == ' ')
       --hi;
   } else {
-    while (lo < hi && memchr(pad, s[lo], (size_t)padlen))
+    while (lo < hi && pli_memchr(pad, s[lo], (size_t)padlen))
       ++lo;
-    while (hi > lo && memchr(pad, s[hi - 1], (size_t)padlen))
+    while (hi > lo && pli_memchr(pad, s[hi - 1], (size_t)padlen))
       --hi;
   }
   long long out = 0;
@@ -118,7 +115,7 @@ long long pli_tally(const char *x, long long xlen, const char *y, long long ylen
     return 0;
   long long n = 0;
   for (long long i = 0; i + ylen <= xlen;) {
-    if (memcmp(x + i, y, (size_t)ylen) == 0) {
+    if (pli_memcmp(x + i, y, (size_t)ylen) == 0) {
       ++n;
       i += ylen;
     } else {
@@ -142,10 +139,10 @@ void pli_uppercase(char *dst, long long dstcap, const char *s, long long slen) {
 }
 
 /* HIGH(n): n copies of the highest collating character (0xFF). */
-void pli_high(char *dst, long long n) { memset(dst, 0xFF, (size_t)n); }
+void pli_high(char *dst, long long n) { pli_memset(dst, 0xFF, (size_t)n); }
 
 /* LOW(n): n copies of the lowest collating character (0x00). */
-void pli_low(char *dst, long long n) { memset(dst, 0x00, (size_t)n); }
+void pli_low(char *dst, long long n) { pli_memset(dst, 0x00, (size_t)n); }
 
 /* DATE(): write the current local date as 'YYYYMMDD'. */
 void pli_date(char *buf, long long cap) {
@@ -153,7 +150,7 @@ void pli_date(char *buf, long long cap) {
   struct tm tmv;
   localtime_r(&now, &tmv);
   char tmp[16];
-  int n = snprintf(tmp, sizeof tmp, "%04d%02d%02d",
+  int n = pli_snprintf(tmp, sizeof tmp, "%04d%02d%02d",
                    tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
   long long i = 0;
   for (; i < cap && i < n; ++i) buf[i] = tmp[i];
@@ -166,7 +163,7 @@ void pli_time(char *buf, long long cap) {
   struct tm tmv;
   localtime_r(&now, &tmv);
   char tmp[16];
-  int n = snprintf(tmp, sizeof tmp, "%02d%02d%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+  int n = pli_snprintf(tmp, sizeof tmp, "%02d%02d%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
   long long i = 0;
   for (; i < cap && i < n; ++i) buf[i] = tmp[i];
   for (; i < cap; ++i) buf[i] = ' ';

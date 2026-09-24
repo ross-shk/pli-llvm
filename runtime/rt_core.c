@@ -3,7 +3,6 @@
 #include "pli_rt.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 void pli_rt_init(void) {
   col = 0;
@@ -21,7 +20,10 @@ void pli_rt_fini(void) {
   fflush(stdout);
 }
 
+/* Centralised process exit (Phase 6). */
+void pli_exit(int code) { exit(code); }
+
 void pli_stop(void) {
   pli_rt_fini();
-  exit(0);
+  pli_exit(0);
 }

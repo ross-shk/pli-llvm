@@ -12,6 +12,106 @@
 #include <stddef.h>
 #include <stdio.h>
 
+/* ---------------------------------------------------------------------------
+ * Ported libc primitives (runtime-reduction plan, Phases 1 & 4).
+ *
+ * Byte-oriented string/memory helpers and ASCII-only character
+ * classification, ported from musl semantics so the runtime no longer needs
+ * <string.h> / <ctype.h>. Each is `static inline` so every TU gets its own
+ * copy and no symbol is exported (no ABI surface, no clash with user code).
+ * Names are prefixed `pli_` to avoid colliding with libc.
+ * ------------------------------------------------------------------------- */
+
+static inline size_t pli_strlen(const char *s) {
+  const char *a = s;
+  for (; *a; ++a)
+    ;
+  return (size_t)(a - s);
+}
+
+static inline int pli_strncmp(const char *a, const char *b, size_t n) {
+  for (; n && *a && *a == *b; ++a, ++b, --n)
+    ;
+  return n ? (int)(unsigned char)*a - (int)(unsigned char)*b : 0;
+}
+
+static inline char *pli_strchr(const char *s, int c) {
+  char ch = (char)c;
+  for (; *s && *s != ch; ++s)
+    ;
+  return *s == ch ? (char *)s : NULL;
+}
+
+static inline void *pli_memcpy(void *d, const void *s, size_t n) {
+  char *a = (char *)d;
+  const char *b = (const char *)s;
+  for (; n; --n)
+    *a++ = *b++;
+  return d;
+}
+
+static inline void *pli_memmove(void *d, const void *s, size_t n) {
+  char *a = (char *)d;
+  const char *b = (const char *)s;
+  if (a == b)
+    return d;
+  if (a < b) {
+    for (; n; --n)
+      *a++ = *b++;
+  } else {
+    char *e = a + n;
+    b += n;
+    for (; n; --n)
+      *--e = *--b;
+  }
+  return d;
+}
+
+static inline void *pli_memset(void *d, int c, size_t n) {
+  unsigned char *a = (unsigned char *)d;
+  unsigned char ch = (unsigned char)c;
+  for (; n; --n)
+    *a++ = ch;
+  return d;
+}
+
+static inline int pli_memcmp(const void *a, const void *b, size_t n) {
+  const unsigned char *x = (const unsigned char *)a;
+  const unsigned char *y = (const unsigned char *)b;
+  for (; n; --n, ++x, ++y)
+    if (*x != *y)
+      return *x < *y ? -1 : 1;
+  return 0;
+}
+
+static inline void *pli_memchr(const void *s, int c, size_t n) {
+  const unsigned char *a = (const unsigned char *)s;
+  unsigned char ch = (unsigned char)c;
+  for (; n; --n, ++a)
+    if (*a == ch)
+      return (void *)a;
+  return NULL;
+}
+
+/* ASCII-only character classification (no locale; PL/I fixed collation). */
+static inline int pli_isdigit(int c) { return c >= '0' && c <= '9'; }
+static inline int pli_isalpha(int c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+static inline int pli_isalnum(int c) {
+  return pli_isdigit(c) || pli_isalpha(c);
+}
+static inline int pli_toupper(int c) {
+  return (c >= 'a' && c <= 'z') ? c - 'a' + 'A' : c;
+}
+
+/* Forward declarations for internal numeric helpers (defined in rt_get.c). */
+long long pli_strtoll(const char *nptr, char **endptr, int base);
+double pli_strtod(const char *nptr, char **endptr);
+
+/* Forward declarations for the internal minimal formatter (rt_stream.c). */
+int pli_snprintf(char *buf, size_t cap, const char *fmt, ...);
+
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
 extern int rt_col;
@@ -74,6 +174,11 @@ int rt_data_namechar(int c);
 void rt_pli_on_push(long long key, long long id);
 long long rt_pli_on_top(long long key);
 void rt_pli_on_pop(long long key);
+
+/* Centralised abort/exit helpers (Phase 6): pli_abort flushes the runtime
+ * output, prints msg to stderr and exits 8; pli_exit exits with a code. */
+void pli_abort(const char *msg);
+void pli_exit(int code);
 
 #define separate rt_separate
 #define display_begin rt_display_begin

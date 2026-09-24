@@ -3,8 +3,6 @@
 #include "pli_rt.h"
 #include <errno.h>
 #include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <time.h>
 
 /* Multitasking (rules (79),(82),(83), QR2.8): EVENT flags are i32 words owned
@@ -90,10 +88,8 @@ void pli_delay(long long ms) {
 void pli_task_spawn(char *fn, char *ctx) {
   void *(*body)(void *) = (void *(*)(void *))(void *)fn;
   pthread_t th;
-  if (pthread_create(&th, NULL, body, ctx) != 0) {
-    fprintf(stderr, "TASK: could not create a thread\n");
-    exit(8);
-  }
+  if (pthread_create(&th, NULL, body, ctx) != 0)
+    pli_abort("TASK: could not create a thread");
   pthread_detach(th);
 }
 
