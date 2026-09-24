@@ -12,5 +12,6 @@ examples/
 # test baselines are source of truth, not build output
 !tests/*/expected/*.out
 .DS_Store
+zapp.yaml
 docs/archive/
 benchmarks/results/
