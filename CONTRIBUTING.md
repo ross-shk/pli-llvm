@@ -5,7 +5,9 @@ agents: the workflow is the same, the invariants are non-negotiable.
 
 Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md`
 (what exists), `docs/DESIGN-DECISIONS.md` (why). Feature scope comes from
-`TR25.084-concrete-syntax.md` — the specification, not from other dialects.
+`TR25.084-concrete-syntax.md`, not from another dialect. Approved extensions
+are tracked separately in `docs/MODERN-PLI-PLAN.md` and
+`docs/BUILTINS-PLAN.md`.
 
 ## Build and test
 
@@ -36,9 +38,11 @@ test. Keep them in one change.
 
 ## Workflow
 
-1. **Pick the rule.** Find the feature in `docs/GRAMMAR-COVERAGE.md` and note
-   its rule number, e.g. `(104)-(109)` for stream I/O. If it is not in
-   TR 25.084, it is out of scope — say so instead of implementing it.
+1. **Pick the rule or approved extension.** For standard PL/I, find the feature
+   in `docs/GRAMMAR-COVERAGE.md` and note its rule number, e.g. `(104)-(109)`
+   for stream I/O. For an extension, confirm it is listed in the relevant plan
+   and follow its ADR and test requirements. Do not infer scope from another
+   dialect.
 2. **Write the test first.** `tests/core/<feature>.pli`, lowercase PL/I, with
    a header comment naming the rules exercised. Add
    `tests/core/bad_<feature>.pli` if the feature has error cases.
@@ -75,8 +79,7 @@ Break these and the design breaks:
 4. **`tests/` is the source of truth.** Change the compiler to satisfy tests,
    not the reverse. Changing an `expected/*.out` file requires justification.
 5. **`IRGen` is the only place that knows about LLVM.** Parser and sema must
-   stay backend-agnostic; M1 swaps textual IR for the LLVM C++ API behind that
-   interface (ADR-002).
+   stay backend-agnostic; `IRGen` uses the LLVM C++ API (ADR-002).
 6. **Layer separation**: lexing knows no grammar, parsing knows no types,
    sema knows no LLVM, codegen adds no diagnostics that sema could have made.
 7. **Deviations get written down** — ADR or an explicit note in the docs, plus
