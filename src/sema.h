@@ -59,6 +59,11 @@ struct Symbol {
   // The lowered runtime lower-bound expression of a dynamic array (rule (13)),
   // the mirror of `dynUb`; null when the lower bound is constant.
   HExpr* dynLb = nullptr;
+  // The lowered runtime length expression of an adjustable `CHAR(expr)`
+  // declaration (rule (18)); null unless the declaration named an explicit
+  // length expression. Used by irgen to size CONTROLLED generations at each
+  // ALLOCATE. Lowered from DeclItem::slenExpr during AST->HIR lowering.
+  HExpr* dynLenExpr = nullptr;
   // A dynamic (runtime-extent) array that is a structure member (rule 13), with
   // its field path (the indices memberAddr walks) and its lowered bound exprs.
   // Lowered from DeclItem::dynMembers during AST->HIR lowering.
@@ -289,12 +294,12 @@ private:
   std::vector<Symbol*> storage_;
   std::vector<Symbol*> entries_;     // external C entries, in declaration order
   int nextFileSlot_ = 0;             // next FILE variable slot index (100-103)
-  int nextCtlSlot_ = 0;              // next CONTROLLED variable slot index (87-90)
   std::set<std::string> procLabels_; // GO TO targets in the current proc (rule 77)
   Stmt* curEntry_ = nullptr;         // the ENTRY segment currently being checked
                                      // (rule 56): enables RETURN(value) in its body
-  bool inUnit_ = false;              // true while checking an ON-unit body (rule 91):
-                                     // a bare RETURN there ends the unit, never the function
+  int inUnit_ = 0;                   // ON-unit nesting depth while checking (rule 91):
+                                     // nonzero inside a unit body, where a bare
+                                     // RETURN ends the unit, never the function
   std::vector<std::vector<std::string>> loopStack_; // labels of enclosing iterative
                                                     // DO-groups, innermost last (ADR-105)
   std::set<std::string> irNames_;                   // irNames in use, to disambiguate shadowing

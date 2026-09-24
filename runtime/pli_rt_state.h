@@ -171,8 +171,10 @@ void rt_display_end(void);
 void rt_format_decfixed(char *buf, size_t cap, long long v, long long q);
 int rt_get_token(char *buf, size_t cap);
 int rt_data_namechar(int c);
-void rt_pli_on_push(long long key, long long id);
+void rt_pli_on_push(long long key, long long id, void *fn, void *ctx);
 long long rt_pli_on_top(long long key);
+void *rt_pli_on_top_fn(long long key);
+void *rt_pli_on_top_ctx(long long key);
 void rt_pli_on_pop(long long key);
 
 /* Centralised abort/exit helpers (Phase 6): pli_abort flushes the runtime

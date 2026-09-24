@@ -110,16 +110,18 @@ PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE abort (n
 PLI_FN(pli_zerodivide, VOID, (VOID))                  /* ZERODIVIDE abort (no handler) */
 PLI_FN(pli_fixed_overflow, VOID, (VOID))            /* FIXED overflow interim (QR1.2) */
 
-PLI_FN(pli_on_push_error, VOID, (I64))  /* ON ERROR: establish handler id (0 = SYSTEM) */
+PLI_FN(pli_on_push_error, VOID, (I64, PTR, PTR))  /* ON ERROR: id (0 = SYSTEM), handler fn, capture ctx */
 PLI_FN(pli_on_pop_error, VOID, (VOID))  /* REVERT ERROR */
-PLI_FN(pli_on_top_error, I64, (VOID))   /* SIGNAL dispatch: top id, 0 = none/SYSTEM */
+PLI_FN(pli_on_top_error, I64, (VOID))   /* top id, 0 = none/SYSTEM */
+PLI_FN(pli_on_top_fn, PTR, (I64))       /* SIGNAL dispatch: top handler address, NULL = none/SYSTEM */
+PLI_FN(pli_on_top_ctx, PTR, (I64))      /* SIGNAL dispatch: top handler capture context */
 PLI_FN(pli_on_depth_error, I64, (VOID)) /* block-entry save */
 PLI_FN(pli_on_reset_error, VOID, (I64)) /* block/procedure-exit restore */
 PLI_FN(pli_oncode, I32, (VOID))         /* ONCODE() */
 PLI_FN(pli_set_oncode, VOID, (I32))
 /* Programmer-named conditions (rules (94),(99)): same stack, tagged entries.
  * Key 0 is ERROR; the ERROR functions above address key 0 only. */
-PLI_FN(pli_on_push_cond, VOID, (I64, I64)) /* ON CONDITION: key, handler id */
+PLI_FN(pli_on_push_cond, VOID, (I64, I64, PTR, PTR)) /* ON CONDITION: key, id, handler fn, capture ctx */
 PLI_FN(pli_on_pop_cond, VOID, (I64))       /* REVERT CONDITION: drop topmost key */
 PLI_FN(pli_on_top_cond, I64, (I64))        /* SIGNAL dispatch: topmost key id */
 
@@ -128,6 +130,7 @@ PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */
 PLI_FN(pli_ctl_alloc, VOID, (I64, I64))               /* CONTROLLED ALLOCATE (87) */
 PLI_FN(pli_ctl_free, VOID, (I64))                     /* CONTROLLED FREE (90) */
 PLI_FN(pli_ctl_addr, PTR, (I64))                      /* CONTROLLED latest generation */
+PLI_FN(pli_ctl_len, I64, (I64))                       /* CONTROLLED latest generation byte size (18) */
 
 PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))

@@ -9,6 +9,11 @@
 // LIKE/assignment (rules 43,127) both use it.
 static bool hasDynamicMember(const Type& ty);
 
+// FNV-1a 32-bit hash — deterministic per-name so all compilation units agree
+// on the integer key for a given name (cross-object SIGNAL and CONTROLLED slot
+// assignment). Defined below; forward-declared for the earlier DECLARE pass.
+static unsigned fnv1a(const char* s, size_t len);
+
 // FIXED op FIXED -> FIXED with the wider precision and the larger scale;
 // anything involving FLOAT is FLOAT. This is the *common* result type for
 // +,-,comparison (and MIN/MAX/MOD), where a mixed-scale operand is rescaled
@@ -1098,7 +1103,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // invalid combinations; allocation itself stays out (rules 87-90).
         if (item.controlled) {
           item.sym->controlled = true;
-          item.sym->ctlSlot = nextCtlSlot_++;
+          // Cross-object CONTROLLED storage: a per-module counter would reuse
+          // the same slot index for unrelated variables in separate object
+          // files (e.g. net's conn_rec and a program's body). Assign a
+          // deterministic key from the variable's qualified name instead, so
+          // every compilation unit agrees and slots never collide.
+          std::string qname = (p->parent ? p->parent->name + "$" : "") + p->name + "$" +
+                              item.name;
+          item.sym->ctlSlot = (int)(fnv1a(qname.data(), qname.size()) & 0x7FFFFFFF);
           auto ctlErr = [&](const char* what, const char* rule) {
             d_.error(item.loc, std::string("CONTROLLED+") + what + " is not implemented", rule);
           };
@@ -1196,10 +1208,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               item.sym->initElems = std::move(elems);
           }
         }
-        // Adjustable CHARACTER length (rule (18)): `CHAR(*)` or `CHAR(expr)` on
-        // a scalar character variable. The length is caller-supplied at call
-        // time, so it is a parameter-only form in this stage; VARYING and
-        // non-parameter uses are diagnosed, never silently fixed-length.
+        // Adjustable CHARACTER length (rule (18)): `CHAR(*)` or `CHAR(expr)`
+        // on a scalar character variable. On a parameter the length is
+        // caller-supplied at call time; on a CONTROLLED variable it is the
+        // runtime `CHAR(expr)` value read at each ALLOCATE (rule (15)).
+        // VARYING and other non-parameter, non-CONTROLLED uses are
+        // diagnosed, never silently fixed-length.
         if (item.ty.isChar() && (item.ty.starLen || item.slenExpr)) {
           bool isParam =
               std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
@@ -1208,8 +1222,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               if (st && st->kind == Stmt::Entry &&
                   std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
                 isParam = true;
-          if (!isParam)
-            d_.error(item.loc, "an adjustable CHARACTER length is only valid on a parameter",
+          bool isControlled = item.controlled;
+          if (!isParam && !isControlled)
+            d_.error(item.loc,
+                     "an adjustable CHARACTER length is only valid on a parameter or CONTROLLED "
+                     "variable",
                      "(18)");
           else if (item.ty.varying)
             d_.error(item.loc,
@@ -1218,9 +1235,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc,
                      "an adjustable CHARACTER length on an array is not implemented in this stage",
                      "(12)");
+          else if (isControlled && !isParam && !item.slenExpr)
+            d_.error(item.loc,
+                     "a CONTROLLED adjustable CHARACTER length needs CHAR(expr) for the ALLOCATE "
+                     "size",
+                     "(18)");
           else if (item.slenExpr) {
-            // CHAR(expr): type the runtime length expression (it usually names a
-            // caller parameter read at entry, mirroring a dynamic array bound).
+            // CHAR(expr): type the runtime length expression (on a parameter
+            // it usually names a caller parameter read at entry, mirroring a
+            // dynamic array bound; on CONTROLLED it is evaluated at each
+            // ALLOCATE).
             typeExpr(item.slenExpr.get(), sc, p);
             if (!item.slenExpr->ty.isNumeric())
               d_.error(item.slenExpr->loc, "CHARACTER length must be numeric", "(18)");
@@ -1687,19 +1711,38 @@ long long Sema::elementCount(const Type& ty) {
 }
 
 // Rule (91): an ON-unit compiles to a handler function without the
-// establishing frame, so constructs needing that frame are diagnosed:
-// automatic-variable access, RETURN with a value, DECLARE and ENTRY.
+// establishing frame. A top-level unit may still touch establishing-frame
+// automatics: sema collects the capturable ones (whole plain-scalar automatic
+// variables of the establishing procedure) onto the ON statement, so codegen
+// captures their addresses at establishment and threads them through the
+// handler's capture context. Anything else needing the frame — subscripts,
+// qualified or locator-based references, parameters, BASED/DEFINED storage,
+// FILE variables, or any automatic reached from a nested unit (which runs
+// inside a handler with no frame) — stays diagnosed, as do RETURN with a
+// value, DECLARE and ENTRY.
 // A nested ON is allowed: it establishes a handler when the outer unit runs.
-void Sema::checkOnUnit(Stmt* u, Proc* p) {
+void Sema::checkOnUnit(Stmt* on, Proc* p) {
+  Stmt* u = on ? on->unit.get() : nullptr;
   if (!u)
     return;
+  bool nested = inUnit_ > 1;
+  std::vector<Symbol*> caps;
+  auto noteCap = [&](Symbol* sym, bool whole, SourceLoc loc) {
+    if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic &&
+        !sym->basedBase && !sym->definedBase && !sym->fileAttr && sym->owner == p) {
+      if (std::find(caps.begin(), caps.end(), sym) == caps.end())
+        caps.push_back(sym);
+      return;
+    }
+    d_.error(loc, "an ON-unit reaching an automatic variable is not implemented in this stage",
+             "(91)");
+  };
   std::function<void(Expr*)> checkExpr = [&](Expr* e) {
     if (!e)
       return;
     if ((e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->sym &&
         e->sym->kind != Symbol::ProcName && e->sym->owner) {
-      d_.error(e->loc, "an ON-unit reaching an automatic variable is not implemented in this stage",
-               "(91)");
+      noteCap(e->sym, e->kind == Expr::VarRef && e->path.empty() && !e->locPtr, e->loc);
     }
     if (e->a)
       checkExpr(e->a.get());
@@ -1772,6 +1815,7 @@ void Sema::checkOnUnit(Stmt* u, Proc* p) {
       check(b.get());
   };
   check(u);
+  on->onCaps = std::move(caps);
 }
 
 long long Sema::structureLeafCount(const Type& ty) {
@@ -1858,6 +1902,17 @@ void Sema::foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t
 // Rules (94),(99): resolve a condition to its dispatch key (0 = ERROR, the
 // negative Stmt::k*CondKey constants are the fixed conditions, else a
 // programmer-named condition index + 1).
+// FNV-1a 32-bit hash — deterministic per-name so all compilation units agree
+// on the integer key for a given condition name (cross-object SIGNAL).
+static unsigned fnv1a(const char* s, size_t len) {
+  unsigned h = 2166136261u;
+  for (size_t i = 0; i < len; ++i) {
+    h ^= static_cast<unsigned>(static_cast<unsigned char>(s[i]));
+    h *= 16777619u;
+  }
+  return h;
+}
+
 int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   if (s->condName == "ERROR")
     return 0;
@@ -1867,13 +1922,10 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kSubscriptrangeCondKey;
   if (s->condName == "ZERODIVIDE")
     return Stmt::kZerodivideCondKey;
-  auto& names = prog_->condNames;
-  auto it = std::find(names.begin(), names.end(), s->condName);
-  int key = it == names.end() ? (int)names.size() + 1 : (int)(it - names.begin()) + 1;
-  if (it == names.end())
-    names.push_back(s->condName);
-  // A use-declared name must not collide with a declared entity, except for an
-  // explicit DECLARE ... CONDITION which created it as a ProcName.
+  // Programmer-named conditions: deterministic hash ensures every
+  // compilation unit assigns the same key to the same name, enabling
+  // cross-object signal dispatch.
+  // Diagnose if the name collides with a non-condition entity.
   if (Symbol* sym = lookup(sc, s->condName)) {
     if (!sym->isCond) {
       if (sym->kind == Symbol::ProcName)
@@ -1882,7 +1934,7 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
         d_.error(s->loc, "'" + s->condName + "' is a variable, not a condition name", "(99)");
     }
   }
-  return key;
+  return (unsigned int)(fnv1a(s->condName.data(), s->condName.size())) + 1;
 }
 
 // Whole-array expressions (rules 86, 127; QR2.1): storage a DO desugar can
@@ -2935,11 +2987,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // the unit body only needs typing plus the establishing-frame checks.
     s->condKey = resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
-      bool savedUnit = inUnit_;
-      inUnit_ = true;
+      ++inUnit_;
       checkStmt(s->unit.get(), sc, p);
-      checkOnUnit(s->unit.get(), p);
-      inUnit_ = savedUnit;
+      checkOnUnit(s, p);
+      --inUnit_;
     }
     break;
   case Stmt::Revert:
@@ -3827,7 +3878,7 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   }
   if (e->name == "MAXLENGTH") {
     if (e->args.size() != 1) {
-      d_.error(e->loc, "MAXLENGTH expects 1 argument (varying string)", "(123)");
+      d_.error(e->loc, "MAXLENGTH expects 1 argument", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
@@ -3836,11 +3887,9 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
-    if (!e->args[0]->ty.varying && !e->args[0]->ty.starLen) {
-      d_.error(e->args[0]->loc, "MAXLENGTH argument must be an adjustable-length or VARYING string", "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
+    // Capacity: the declared maximum for FIXED and VARYING strings, the live
+    // length for adjustable CHAR(*) (rule (18)) and adjustable CONTROLLED
+    // (rule (15)); codegen folds or reads it accordingly.
     e->ty = Type::fixedBin(31, 0);
     return true;
   }
