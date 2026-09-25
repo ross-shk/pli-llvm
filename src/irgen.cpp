@@ -1761,9 +1761,23 @@ void IRGen::emitStmt(HStmt* s) {
       b_.CreateRetVoid();
     } else if (curProc_->isFunction && curProc_->retTy.isChar()) {
       // Character-valued function (rules (34),(37)): copy the value into the
-      // caller's hidden buffer, blank-padding or truncating (rule (86)).
+      // caller's hidden buffer, blank-padding or truncating (rule (86)). A
+      // `CHAR(*) VARYING` result uses the caller-sized max, never the static
+      // placeholder length.
       Val v = emitExpr(s->value.get());
-      storeCharTo(structRetPtr_, curProc_->retTy, v, s->loc);
+      const Type& rty = curProc_->retTy;
+      if (rty.starLen && rty.varying) {
+        llvm::Value* dp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 1, "rdata");
+        llvm::Value* ln = b_.CreateCall(runtimeFn("pli_assign_varying"),
+                                        {dp, i64(kStarRetMax), v.ptr, v.len});
+        llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 0, "rlenp");
+        b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "rl32"), lp);
+      } else if (rty.starLen) {
+        b_.CreateCall(runtimeFn("pli_assign_char"),
+                      {structRetPtr_, i64(kStarRetMax), v.ptr, v.len});
+      } else {
+        storeCharTo(structRetPtr_, rty, v, s->loc);
+      }
       emitCtlEpilogue();
       b_.CreateRetVoid();
     } else if (!curRetTy_.isVoid()) {
@@ -2127,19 +2141,37 @@ void IRGen::emitCtlEpilogue() {
 }
 
 // ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
-// store its address in the pointer target; or push a CONTROLLED generation,
-// sized the same way from the compile-time descriptor — except for an
-// adjustable `CHAR(expr)` (rules (15),(18)), whose size is the runtime length
-// expression evaluated here and recorded per generation by the runtime.
+// store its address in the pointer target; or push a CONTROLLED generation.
+// A CHARACTER item (rule 89) sizes from its dimension `(expr)` and/or
+// `CHAR(expr)` when present, else the `CHAR(expr)` descriptor, else the
+// compile-time descriptor. A VARYING generation holds `{i32 cur, [max x i8]}`
+// so its byte size is `4 + max`; its current length starts at 0.
 void IRGen::emitAllocate(HStmt* s) {
   for (size_t i = 0; i < s->allocBase.size(); ++i) {
     Symbol* bsym = s->allocBase[i]->sym;
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
     if (bsym->controlled) {
-      if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr)
+      HExpr* dimE = (i < s->allocDim.size()) ? s->allocDim[i].get() : nullptr;
+      HExpr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
+      if (bsym->ty.isChar() && (dimE || clE)) {
+        HExpr* se = dimE ? dimE : clE;
+        llvm::Value* max = toI64(emitExpr(se), s->loc);
+        if (bsym->ty.varying)
+          sz = b_.CreateAdd(max, i64(4), "vmaxsz");
+        else
+          sz = max;
+      } else if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr) {
         sz = toI64(emitExpr(bsym->dynLenExpr), s->loc);
+      }
       b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(bsym->ctlSlot), sz});
+      if (bsym->ty.isChar() && bsym->ty.varying) {
+        // A fresh VARYING generation starts empty (cur = 0).
+        llvm::Value* addr =
+            b_.CreateCall(runtimeFn("pli_ctl_addr"), {i64(bsym->ctlSlot)}, "vaddr");
+        llvm::Value* lp = b_.CreateStructGEP(llvmTy(bsym->ty), addr, 0, "vlenp");
+        b_.CreateStore(b_.getInt32(0), lp);
+      }
       continue;
     }
     llvm::Value* p = b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
@@ -3025,11 +3057,24 @@ llvm::Value* IRGen::argLen(HExpr* a) {
 
 // Live capacity of an adjustable-length `CHAR(*)` value (rule (18)): the
 // hidden length for a parameter, the current generation size for a CONTROLLED
-// variable (rule (15)). Returns nullptr when the value is not an adjustable
-// character (fixed/VARYING keep their static lengths).
+// variable (rule (15)). For `CHAR(*) VARYING CONTROLLED` the generation holds
+// a `{i32 cur, [max x i8]}` struct, so the live max is `pli_ctl_len - 4`.
+// Returns nullptr when the value is not an adjustable character.
 llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
-  if (!ty.isChar() || !ty.starLen || ty.varying)
+  if (!ty.isChar() || !ty.starLen)
     return nullptr;
+  if (ty.varying) {
+    // Only CONTROLLED VARYING STAR is served deferred (rule (89)); VARYING
+    // STAR parameters stay diagnosed in sema.
+    if (sym && sym->controlled) {
+      llvm::Value* total =
+          b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "ctllen");
+      return b_.CreateSub(total, i64(4), "ctlmax");
+    }
+    if (sym && dynLen_.count(sym))
+      return dynLen_[sym];
+    return nullptr;
+  }
   if (sym && sym->controlled)
     return b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "ctllen");
   if (sym && dynLen_.count(sym))
@@ -3088,7 +3133,7 @@ void IRGen::emitCall(HStmt* s) {
   Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
                 : (callee ? callee->retTy : Type::voidTy());
   if (rty.isStruct() || rty.isChar())
-    args.push_back(entryAlloca(llvmTy(rty), "sret"));
+    args.push_back(rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret"));
   for (size_t i = 0; i < s->args.size(); ++i) {
     HExpr* a = s->args[i].get();
     Type pty;
@@ -3188,7 +3233,7 @@ void IRGen::emitAsyncCall(HStmt* s) {
   Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
                 : (callee ? callee->retTy : Type::voidTy());
   if (rty.isStruct() || rty.isChar())
-    callArgs.push_back(entryAlloca(llvmTy(rty), "sret"));
+    callArgs.push_back(rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret"));
   for (size_t i = 0; i < s->args.size(); ++i) {
     HExpr* a = s->args[i].get();
     Type pty;
@@ -3704,6 +3749,20 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
   const Type& dt = sym->ty;
   llvm::Value* addr = addressOf(sym);
   if (dt.isChar()) {
+    if (dt.starLen && dt.varying) {
+      // `CHAR(*) VARYING CONTROLLED` (rules (18),(89)): the generation is a
+      // `{i32 cur, [max x i8]}` struct with runtime max; truncate the source
+      // to max via pli_assign_varying (VARYING semantics, no expansion).
+      llvm::Value* max = adjustLen(sym, dt);
+      if (!max)
+        max = i64(dt.len);
+      llvm::Value* dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
+      llvm::Value* ln =
+          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, v.ptr, v.len});
+      llvm::Value* lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
+      b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
+      return;
+    }
     if (dt.starLen) {
       // An adjustable-length `CHAR(*)` target (rule (18)): write into the
       // buffer, blank-padding/truncating to the live capacity — the hidden
@@ -4201,6 +4260,31 @@ Val IRGen::charTemp(int len) {
   return v;
 }
 
+// Hidden result buffer for a character function (rules (34),(37)): a
+// `CHAR(*) VARYING` result rides a caller-sized max so short static
+// descriptors (len 1) never truncate the returned value.
+llvm::Type* IRGen::sretBufTy(const Type& rty) {
+  if (rty.isChar() && rty.starLen) {
+    if (rty.varying) {
+      llvm::Type* data =
+          llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)kStarRetMax);
+      return llvm::StructType::get(b_.getInt32Ty(), data);
+    }
+    return llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)kStarRetMax);
+  }
+  return llvmTy(rty);
+}
+
+llvm::Value* IRGen::sretAlloc(const Type& rty, const char* name) {
+  llvm::Value* buf = entryAlloca(sretBufTy(rty), name);
+  if (rty.isChar() && rty.starLen && rty.varying) {
+    // A fresh VARYING result starts empty; the callee sets the live length.
+    llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), buf, 0, "slenp");
+    b_.CreateStore(b_.getInt32(0), lp);
+  }
+  return buf;
+}
+
 // ---------------------------------------------------------------------------
 // expressions
 // ---------------------------------------------------------------------------
@@ -4399,7 +4483,7 @@ Val IRGen::emitExpr(HExpr* e) {
       std::vector<llvm::Value*> args;
       llvm::Value* sretPtr = nullptr;
       if (rty.isChar()) {
-        sretPtr = entryAlloca(llvmTy(rty), "sret");
+        sretPtr = sretAlloc(rty);
         args.push_back(sretPtr);
       }
       for (size_t i = 0; i < e->args.size() && i < e->sym->entryParams.size(); ++i) {
@@ -4446,8 +4530,18 @@ Val IRGen::emitExpr(HExpr* e) {
         b_.CreateCall(extFn, args);
         flushVarWrites();
         v.ty = rty;
-        v.ptr = sretPtr;
-        v.len = rty.varying ? i64(0) : i64(rty.len);
+        if (rty.varying) {
+          llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 0, "clenp");
+          v.ptr = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 1, "cdata");
+          v.len = b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"),
+                                b_.getInt64Ty(), "cl64");
+        } else if (rty.starLen) {
+          v.ptr = sretPtr;
+          v.len = i64(kStarRetMax);
+        } else {
+          v.ptr = sretPtr;
+          v.len = i64(rty.len);
+        }
         return v;
       }
       llvm::CallInst* call = b_.CreateCall(extFn, args, "fres");
@@ -4470,7 +4564,7 @@ Val IRGen::emitExpr(HExpr* e) {
     if (rty.isStruct() || rty.isChar()) {
       // Hidden-buffer result (rules 127 and (34),(37)): the caller allocates
       // the result buffer and passes its address as the first argument.
-      sretPtr = entryAlloca(llvmTy(rty), "sret");
+      sretPtr = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
       args.push_back(sretPtr);
     }
     for (size_t i = 0; i < e->args.size(); ++i) {
@@ -4517,11 +4611,15 @@ Val IRGen::emitExpr(HExpr* e) {
       v.ptr = sretPtr; // the result lives in the caller's buffer
     } else if (rty.isChar()) {
       // The character result lives in the caller's buffer: data pointer plus
-      // live length (reloaded for VARYING, declared for fixed length).
+      // live length (reloaded for VARYING, caller max for STAR, declared
+      // otherwise).
       if (rty.varying) {
-        llvm::Value* lp = b_.CreateStructGEP(llvmTy(rty), sretPtr, 0, "clenp");
-        v.ptr = b_.CreateStructGEP(llvmTy(rty), sretPtr, 1, "cdata");
+        llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 0, "clenp");
+        v.ptr = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 1, "cdata");
         v.len = b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
+      } else if (rty.starLen) {
+        v.ptr = sretPtr;
+        v.len = i64(kStarRetMax);
       } else {
         v.ptr = sretPtr;
         v.len = i64(rty.len);
@@ -4604,9 +4702,15 @@ Val IRGen::emitExpr(HExpr* e) {
       v.reg = i64(0);
       return v;
     }
-    Val out = charTemp(e->ty.len);
+    // Runtime-sized buffer: either side may be an adjustable `CHAR(*)`
+    // (rule (18)) / CONTROLLED generation (rule (15)) whose live length
+    // exceeds its static descriptor, so size from the live sum.
+    Val out;
+    out.ty = e->ty;
+    llvm::Value* total = b_.CreateAdd(a.len, b.len, "clen");
+    out.ptr = b_.CreateAlloca(b_.getInt8Ty(), total, "cbuf");
+    out.len = total;
     b_.CreateCall(runtimeFn("pli_concat"), {out.ptr, a.ptr, a.len, b.ptr, b.len});
-    out.len = b_.CreateAdd(a.len, b.len, "clen");
     return out;
   }
 

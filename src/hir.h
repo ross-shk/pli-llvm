@@ -209,9 +209,15 @@ struct HStmt {
   // capture context. Symbols are shared with sema, so a copy suffices.
   std::vector<Symbol*> onCaps;
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
-  // and its SET(...) pointer target (rule 88).
+  // and its SET(...) pointer target (rule 88). A CONTROLLED item (rule 89)
+  // may carry a dimension length (allocDim[i]) and/or a CHAR length
+  // (allocCharLen[i]); allocVarying[i]/allocHasChar[i] mirror the AST flags.
   std::vector<HExprP> allocBase;
   std::vector<HExprP> allocSet;
+  std::vector<HExprP> allocDim;
+  std::vector<HExprP> allocCharLen;
+  std::vector<char> allocVarying;
+  std::vector<char> allocHasChar;
   // FREE (rule 90): per item, the based variable reference (locPtr carries an
   // explicit locator, null = the BASED base).
   std::vector<HExprP> freeBase;

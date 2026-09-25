@@ -1213,9 +1213,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // Adjustable CHARACTER length (rule (18)): `CHAR(*)` or `CHAR(expr)`
         // on a scalar character variable. On a parameter the length is
         // caller-supplied at call time; on a CONTROLLED variable it is the
-        // runtime `CHAR(expr)` value read at each ALLOCATE (rule (15)).
-        // VARYING and other non-parameter, non-CONTROLLED uses are
-        // diagnosed, never silently fixed-length.
+        // ALLOCATE size (rule (15)): either the `CHAR(expr)` descriptor or,
+        // for `CHAR(*)`, the dimension-attribute `(expr)` / `CHAR(expr)` at
+        // each ALLOCATE (rule (89)). VARYING STAR on CONTROLLED is served
+        // deferred; other VARYING STAR uses stay diagnosed.
         if (item.ty.isChar() && (item.ty.starLen || item.slenExpr)) {
           bool isParam =
               std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
@@ -1225,19 +1226,21 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
                 isParam = true;
           bool isControlled = item.controlled;
+          if (item.slenExpr && item.sym)
+            item.sym->declHasLen = true;
           if (!isParam && !isControlled)
             d_.error(item.loc,
                      "an adjustable CHARACTER length is only valid on a parameter or CONTROLLED "
                      "variable",
                      "(18)");
-          else if (item.ty.varying)
-            d_.error(item.loc,
-                     "CHARACTER(*) VARYING parameters are not implemented in this stage", "(18)");
           else if (item.ty.isArray())
             d_.error(item.loc,
                      "an adjustable CHARACTER length on an array is not implemented in this stage",
                      "(12)");
-          else if (isControlled && !isParam && !item.slenExpr)
+          else if (item.ty.varying && !(isControlled && !isParam))
+            d_.error(item.loc,
+                     "CHARACTER(*) VARYING parameters are not implemented in this stage", "(18)");
+          else if (isControlled && !isParam && !item.slenExpr && !item.ty.starLen)
             d_.error(item.loc,
                      "a CONTROLLED adjustable CHARACTER length needs CHAR(expr) for the ALLOCATE "
                      "size",
@@ -2930,16 +2933,67 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (bsym->controlled) {
         // CONTROLLED allocation (rules 87-90, ADR-140): bare ALLOCATE pushes
         // a generation; a SET option is stack-managed anyway, so it warns
-        // and is ignored rather than failing the call.
+        // and is ignored rather than failing the call. A CHARACTER item
+        // (rule 89) may carry a dimension `(expr)` and/or `CHAR(expr)` size;
+        // for `CHAR(*)` the size is required unless the descriptor has
+        // `CHAR(expr)`.
         if (i < s->allocSet.size() && s->allocSet[i])
           d_.warn(s->allocSet[i]->loc,
                   "SET on CONTROLLED ALLOCATE is ignored; generations are stack-managed", "(88)");
+        Expr* dimE = (i < s->allocDim.size()) ? s->allocDim[i].get() : nullptr;
+        Expr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
+        if (dimE) {
+          typeExpr(dimE, sc, p);
+          if (!dimE->ty.isNumeric())
+            d_.error(dimE->loc, "ALLOCATE length must be numeric", "(89)");
+        }
+        if (clE) {
+          typeExpr(clE, sc, p);
+          if (!clE->ty.isNumeric())
+            d_.error(clE->loc, "ALLOCATE length must be numeric", "(89)");
+        }
+        if (dimE && clE)
+          d_.error(clE->loc, "duplicate CHARACTER length in ALLOCATE", "(89)");
+        if (!bsym->ty.isChar()) {
+          if (dimE || clE)
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
+        } else if (bsym->ty.isArray()) {
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE of arrays is not implemented in this stage", "(89)");
+        } else if (bsym->ty.starLen) {
+          bool hasDeclSize = bsym->declHasLen;
+          if (!dimE && !clE && !hasDeclSize)
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE of CHAR(*) needs a length: ALLOCATE x (n) or CHAR(n)", "(89)");
+        } else if (bsym->declHasLen) {
+          // CHAR(expr) descriptor: no per-ALLOCATE size served; the descriptor
+          // expression sizes every generation.
+          if (dimE || clE)
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE length on CHAR(expr) CONTROLLED storage is not implemented",
+                     "(89)");
+        } else {
+          // Fixed-length CHARACTER: a per-ALLOCATE size is not served.
+          if (dimE || clE)
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE length on fixed-length CHARACTER is not implemented", "(89)");
+        }
         continue;
       }
       if (bsym->ty.isArray() && bsym->ty.isDynamic())
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE of a dynamic-extent based array is not implemented in this stage",
                  "(89)");
+      if ((i < s->allocDim.size() && s->allocDim[i]) ||
+          (i < s->allocCharLen.size() && s->allocCharLen[i])) {
+        if (s->allocDim[i])
+          typeExpr(s->allocDim[i].get(), sc, p);
+        if (s->allocCharLen[i])
+          typeExpr(s->allocCharLen[i].get(), sc, p);
+        d_.error(s->allocBase[i]->loc,
+                 "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
+      }
       // BASED without SET was a parse error before bare ALLOCATE (rule 87)
       // opened the paren-less form for CONTROLLED; keep the cite attached
       // to the storage kind here.

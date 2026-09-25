@@ -66,6 +66,11 @@ struct Symbol {
   // length expression. Used by irgen to size CONTROLLED generations at each
   // ALLOCATE. Lowered from DeclItem::slenExpr during AST->HIR lowering.
   HExpr* dynLenExpr = nullptr;
+  // True when the declaration named `CHAR(expr)` (rule (18)): the descriptor
+  // sizes CONTROLLED generations when an ALLOCATE names no size (rule (89)).
+  // Set by sema; lets ALLOCATE checking distinguish `CHAR(*)` (needs a size)
+  // from `CHAR(expr)` (bare ALLOCATE is complete).
+  bool declHasLen = false;
   // A dynamic (runtime-extent) array that is a structure member (rule 13), with
   // its field path (the indices memberAddr walks) and its lowered bound exprs.
   // Lowered from DeclItem::dynMembers during AST->HIR lowering.

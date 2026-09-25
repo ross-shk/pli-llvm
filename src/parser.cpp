@@ -444,8 +444,9 @@ void Parser::parseProcOptions(Proc* p) {
             d_.error(p->loc, "RETURNS of a BIT(n>1) value is not implemented in this stage",
                      "(34)");
             p->retTy = Type::bit(1);
-          } else if (p->retTy.starLen) {
-            // RETURNS of adjustable length CHARACTER is not served (rule (18)/(34)).
+          } else if (p->retTy.starLen && !p->retTy.varying) {
+            // RETURNS of adjustable non-VARYING CHARACTER stays out (rule
+            // (18)/(34)); CHAR(*) VARYING is served with a caller-sized max.
             d_.error(p->loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
             p->retTy = Type::chr(1);
           }
@@ -1420,7 +1421,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         if (expect(Tok::LParen, "(34)")) {
           item.entryIsFunction = true;
           parseDescriptorType(item.entryRetTy);
-          if (item.entryRetTy.starLen) {
+          if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
             d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
             item.entryRetTy = Type::chr(1);
           }
@@ -2831,25 +2832,43 @@ StmtP Parser::parseAssignment() {
   return st;
 }
 
-// ALLOCATE based-allocate-item{,...};  rule (87)
+// ALLOCATE {based-allocate-item|controlled-allocate-item},...;  rules (87)-(89)
 // based-allocate-item ::= identifier ( SET ( reference ) [ IN ( reference ) ]
 //                                     | IN ( reference ) [ SET ( reference ) ] )  rule (88)
+// controlled-allocate-item ::= [integer] identifier dimension-attribute
+//                              [ {string-attribute|...} ]  rule (89)
 // CM2 serves the SET option: heap-allocate the based structure's storage and
 // store the address in the pointer reference. The IN (AREA) option stays QR2.3.
+// Rule (89) serves a scalar CHARACTER length at ALLOCATE: either a dimension
+// `(expr)` giving the maximum or a string-attribute `CHAR(expr)`, with an
+// optional trailing VARYING/CHARACTER confirmation.
 StmtP Parser::parseAllocate() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Allocate;
   st->loc = cur().loc;
   advance(); // ALLOCATE
   for (;;) {
+    // Rule (89) level number: an integer before the identifier (structures).
+    if (at(Tok::Number) && !cur().isFloat && peek().kind == Tok::Word) {
+      boundedNonNeg(cur().text, cur().loc, d_, "level number", "(89)");
+      advance();
+    }
     if (at(Tok::Word)) {
       auto base = std::make_unique<Expr>();
       base->kind = Expr::VarRef;
       base->name = cur().text;
       base->loc = cur().loc;
       advance();
-      bool paren = eat(Tok::LParen); // optional: identifier ( SET ( ref ) )
-      if (atWord("SET")) {
+      bool paren = eat(Tok::LParen); // optional: identifier [(] SET ( ref ) [)]
+      // A SET/IN option always carries `(...)`, so a bare variable named
+      // `set`/`in` as a dimension length (e.g. `ALLOCATE x (set)`) must not
+      // take this path: require `(` after the keyword.
+      bool isSetOpt = atWord("SET") && peek().kind == Tok::LParen;
+      bool isInOpt = !isSetOpt && atWord("IN") && peek().kind == Tok::LParen;
+      if (isSetOpt) {
+        // BASED SET option (rule (88)): served both bare (`ALLOCATE rec SET(p)`)
+        // and parenthesised (`ALLOCATE rec (SET(p))`); the closing paren is
+        // only expected when an opening paren was present.
         advance();
         expect(Tok::LParen, "(88)");
         ExprP set = parsePrimary();
@@ -2862,15 +2881,141 @@ StmtP Parser::parseAllocate() {
           expect(Tok::RParen, "(88)");
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(std::move(set));
-      } else if (!paren) {
-        // Bare ALLOCATE X (rule 87): only CONTROLLED storage is served
-        // without SET in this stage; BASED without SET is diagnosed in sema
-        // so the rule cite stays attached to the storage kind.
-        st->allocBase.push_back(std::move(base));
-      } else {
-        d_.error(cur().loc, "ALLOCATE requires the SET ( reference ) option in this stage", "(88)");
+        st->allocDim.push_back(nullptr);
+        st->allocCharLen.push_back(nullptr);
+        st->allocVarying.push_back(0);
+        st->allocHasChar.push_back(0);
+      } else if (isInOpt) {
+        d_.error(cur().loc, "ALLOCATE ... IN ( AREA ) is not implemented in this stage", "(88)");
         resync();
         return nullptr;
+      } else if (paren) {
+        // A dimension-attribute (rule 89): a single length expression for a
+        // CHARACTER generation. Array bound-pairs (lb:ub, multiple axes) stay
+        // diagnosed, never silently taken as a length.
+        ExprP dim;
+        if (at(Tok::Star)) {
+          advance();
+        } else {
+          dim = parseExpr();
+          if (!dim) {
+            resync();
+            return nullptr;
+          }
+        }
+        if (at(Tok::Colon) || at(Tok::Comma)) {
+          d_.error(cur().loc, "ALLOCATE of arrays is not implemented in this stage", "(89)");
+          resync();
+          return nullptr;
+        }
+        expect(Tok::RParen, "(89)");
+        // Trailing string-attributes (rule 89): [CHAR[(expr|*)]] [VARYING].
+        ExprP charLen;
+        char hasChar = 0;
+        char varying = 0;
+        for (;;) {
+          if (atWord("CHARACTER") || atWord("CHAR")) {
+            hasChar = 1;
+            advance();
+            if (at(Tok::LParen)) {
+              advance();
+              if (at(Tok::Star)) {
+                advance();
+              } else {
+                ExprP cl = parseExpr();
+                if (!cl) {
+                  resync();
+                  return nullptr;
+                }
+                if (charLen)
+                  d_.error(cur().loc, "duplicate CHARACTER length in ALLOCATE", "(89)");
+                else
+                  charLen = std::move(cl);
+              }
+              expect(Tok::RParen, "(89)");
+            }
+            continue;
+          }
+          if (atWord("VARYING") || atWord("VAR")) {
+            varying = 1;
+            advance();
+            continue;
+          }
+          if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") ||
+              atWord("INIT")) {
+            d_.error(cur().loc,
+                    std::string("ALLOCATE ") + cur().text +
+                        " is not implemented in this stage",
+                    "(89)");
+            resync();
+            return nullptr;
+          }
+          break;
+        }
+        st->allocBase.push_back(std::move(base));
+        st->allocSet.push_back(nullptr);
+        st->allocDim.push_back(std::move(dim));
+        st->allocCharLen.push_back(std::move(charLen));
+        st->allocVarying.push_back(varying);
+        st->allocHasChar.push_back(hasChar);
+      } else {
+        // No dimension: bare ALLOCATE X or ALLOCATE X with trailing
+        // CHAR[(expr|*)] / VARYING in either order (rule 89).
+        ExprP charLen;
+        char hasChar = 0;
+        char varying = 0;
+        bool sawAttr = false;
+        for (;;) {
+          if (atWord("CHARACTER") || atWord("CHAR")) {
+            hasChar = 1;
+            sawAttr = true;
+            advance();
+            if (at(Tok::LParen)) {
+              advance();
+              if (at(Tok::Star)) {
+                advance();
+              } else {
+                ExprP cl = parseExpr();
+                if (!cl) {
+                  resync();
+                  return nullptr;
+                }
+                if (charLen)
+                  d_.error(cur().loc, "duplicate CHARACTER length in ALLOCATE", "(89)");
+                else
+                  charLen = std::move(cl);
+              }
+              expect(Tok::RParen, "(89)");
+            }
+            continue;
+          }
+          if (atWord("VARYING") || atWord("VAR")) {
+            varying = 1;
+            sawAttr = true;
+            advance();
+            continue;
+          }
+          if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") ||
+              atWord("INIT")) {
+            d_.error(cur().loc,
+                    std::string("ALLOCATE ") + cur().text +
+                        " is not implemented in this stage",
+                    "(89)");
+            resync();
+            return nullptr;
+          }
+          break;
+        }
+        // Bare ALLOCATE X (rule 87) when no trailing attribute appeared:
+        // only CONTROLLED storage is served without SET; BASED without SET
+        // is diagnosed in sema so the cite stays attached to the storage kind.
+        (void)sawAttr;
+        st->allocBase.push_back(std::move(base));
+        st->allocSet.push_back(nullptr);
+        st->allocDim.push_back(nullptr);
+        st->allocCharLen.push_back(std::move(charLen));
+        st->allocVarying.push_back(varying);
+        st->allocHasChar.push_back(hasChar);
       }
     } else {
       d_.error(cur().loc, "expected an identifier after ALLOCATE", "(87)");
