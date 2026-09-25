@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A subscript on a structure member that is not an array is an error
     (rule (126)): only array members may be subscripted. */
  bad_struct_array_scalar: procedure options(main);

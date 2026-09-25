@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* SYSPARM built-in (rule (123)): returns the SYSPARM compiler-option
     string as CHARACTER. This self-check holds for any option value
     (including the default empty string): the length is non-negative,

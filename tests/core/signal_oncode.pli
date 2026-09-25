@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* SIGNAL with SET ONCODE (rule (93)): the expression value is
     stored as ONCODE before the unit runs, so handlers observe
     the signalled code (a variable, then an errno-style call).

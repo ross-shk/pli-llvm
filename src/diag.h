@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // diag.h — diagnostics with source locations and spec rule references.
 //
 // Diagnostics cite TR 25.084 production numbers where a rule is implicated,

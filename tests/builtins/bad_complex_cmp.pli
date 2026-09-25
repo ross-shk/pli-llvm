@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* CM5: ordered comparison of complex
      values stays diagnosed. */
   badcomplexcmp: procedure options(main);

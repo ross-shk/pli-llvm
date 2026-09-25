@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* SUBSTR pseudo-variable: substr(v, i, n) = x overwrites part of a character
     variable in place. rule (86) allows a reference on the left of '='; M2
     implements the SUBSTR form. */

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A constant subscript out of the declared bounds is a compile-time
     SUBSCRIPTRANGE error (rule (126)); runtime indices are range-checked by
     the generated bounds check instead. */

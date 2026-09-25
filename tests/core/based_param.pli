@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* BASED on a procedure POINTER parameter (rule (25)): a
      based view may name its procedure parameter directly,
      with no separate pointer declare, or name a pointer

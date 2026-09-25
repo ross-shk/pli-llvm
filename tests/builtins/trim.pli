@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-107): TRIM(s[, pad]) strips
     leading/trailing blanks (or pad-set chars),
     left-justified and blank-padded to the

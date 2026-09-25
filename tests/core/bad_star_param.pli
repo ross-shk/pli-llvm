@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* '*' adjustable-extent array errors (rule (13)): a '*' extent is only valid
     on a parameter (a block-scope '*' is rejected), and a '*' extent parameter
     must be single-axis in this stage. */

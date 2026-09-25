@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* rule (99): SIZE is not a valid
      programmer-named condition. */
    badoncondsize: procedure options(main);

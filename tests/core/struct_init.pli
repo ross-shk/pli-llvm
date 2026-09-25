@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Per-member structure INIT (rule (26)): each member's own
     INITIAL value fills its field; replication on a member fans
     out within that member. */

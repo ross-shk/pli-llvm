@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* The STRING stream option (rule (105)) needs a NONVARYING CHARACTER variable
     as its source/sink; a numeric variable is diagnosed rather than misused. */
  bad_string: procedure options(main);

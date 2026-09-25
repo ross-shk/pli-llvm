@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* C FFI by value (rules (34),(38)): an ENTRY with
     OPTIONS(LINKAGE(SYSTEM)) or OPTIONS(BYVALUE) marshals FIXED
     and FLOAT scalars plus POINTERs as C values, and takes C

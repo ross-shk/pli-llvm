@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* BY NAME assignment with a dynamic member (rules
     (13),(86)): a same-named dynamic member copies
     buffer contents, not the pointer; other members

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* Chapter 9 (ADR-083): %IF selects directives; %DECLARE variables
      drive the condition; untaken arms vanish (nested %IF included). */
   %declare debug, level;

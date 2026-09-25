@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Format iteration (rules (45)-(54)): a literal repetition count
     (n) unrolls its group inline; nesting composes; control items
     inside groups expand in place. */

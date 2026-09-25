@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* Multiple assignment (rule 86): every target must share the first target's
      type, because the RHS is converted once and stored to each. */
   bad_multiassign_type: procedure options(main);

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/sysparm.sh — SYSPARM builtin (rule (123)): sysparm()
 # returns the --sysparm option value baked in at compile time (empty when
 # none is given). Compiles one program with --sysparm HELLO and one without.

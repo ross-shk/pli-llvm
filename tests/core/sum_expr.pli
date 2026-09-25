@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Reductions over array expressions (rule (123); QR2.1): SUM and
     PROD accept an element-wise expression over whole arrays of one
     static shape; ANY/ALL accept BIT expressions. Each reduction runs

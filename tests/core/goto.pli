@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* GO TO within a procedure (rule (77)): forward and backward branches to
     labelled statements. TR 25.084 rules (64) labels, (77) GO TO. */
  goto_test: procedure options(main);

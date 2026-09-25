@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* CHAR/FIXED conversions (rule (123)): FIXED parses character
     text with truncation, CHAR renders numerics as text, and the
     trim(char(...)) || char(...) corpus chains resolve. */

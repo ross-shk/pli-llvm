@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/record.sh — SEQUENTIAL RECORD files (112),(113):
 # WRITE FILE(f) FROM(v) appends one fixed-size binary record and
 # READ FILE(f) INTO(v) reads one back; the program round-trips

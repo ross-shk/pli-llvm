@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* INDEX built-in function: index(s1, s2) returns the 1-based position of the
     first occurrence of s2 within s1, or 0 if s2 is not present. M2 string
     built-in (Y33-6003 INDEX). */

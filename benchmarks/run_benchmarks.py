@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 """
 PL/I Compiler Benchmark Harness
 Compiles and runs benchmarks with different optimization levels, comparing against C baselines.

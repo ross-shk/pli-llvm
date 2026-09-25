@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* SUBSTR operand rules (rule (123)): the source stays
     character and the bounds numeric, runtime lengths or not. */
  bad_subvar: procedure options(main);

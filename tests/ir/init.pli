@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* INITIAL reaches the emitted IR as a store. Regression guard: an accepted
    but codegen-ignored INITIAL silently drops the value (see CONTRIBUTING
    worked example). Rule (26). */

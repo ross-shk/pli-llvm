@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // hir.h — high-level IR (ADR-005).
 //
 // HIR is PL/I with everything implicit made explicit, still structured. It

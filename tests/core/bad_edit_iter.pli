@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Format iteration limits (rule (48)): only an integer literal
     repeats a group; anything else stays diagnosed. */
  bad_iter: procedure options(main);

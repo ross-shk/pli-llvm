@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A whole structure cannot be used as a scalar value (rule (127)); it must
     be qualified by a member. */
  bad_struct_value: procedure options(main);

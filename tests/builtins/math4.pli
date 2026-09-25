@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Scalar math built-ins (CM5, C <math.h>
     analogues): ASIN, ACOS, ATAN2(y, x),
     CBRT. Each yields a FLOAT value,

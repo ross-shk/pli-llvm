@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* REPEAT built-in function: repeat(s, n) returns the character string s
     repeated n times. M2 string built-in (Y33-6003 REPEAT). */
  repeat_test: procedure options(main);

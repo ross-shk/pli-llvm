@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/get_array.sh — aggregate GET LIST items (rules (104)-(110)):
 # whole arrays and cross-sections read element-wise in row-major order.
 # The program verifies the read values itself and prints PASS.

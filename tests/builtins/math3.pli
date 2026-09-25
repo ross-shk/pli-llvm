@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Scalar math built-ins (QR2.7, Appendix 1): degree trig variants SIND,
     COSD, TAND, ATAND. Each takes one numeric argument and yields a FLOAT
     value in degrees (unlike the radian SIN/COS/TAN/ATAN). Results are

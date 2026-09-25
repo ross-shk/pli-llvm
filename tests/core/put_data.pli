@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* rules (104)-(106),(109),(110): PUT
      DATA writes each variable as
      NAME=value, terminated by a

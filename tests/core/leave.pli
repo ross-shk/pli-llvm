@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-105): LEAVE exits the innermost
     iterative group, ITERATE continues it; labeled
     forms target the named group; leave and iterate

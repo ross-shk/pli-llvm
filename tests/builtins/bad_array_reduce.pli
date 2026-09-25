@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Array reduction built-ins (rule (123)) are misused: a non-array argument,
     an unsupported element type, and a wrong argument count must be diagnosed. */
  bad_array_reduce: procedure options(main);

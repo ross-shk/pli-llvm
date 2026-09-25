@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Variable-length SUBSTR (rules (86),(123)): substr(buf,1,n)
     with a runtime n slices exactly n bytes (clamped at zero);
     the live length rides a VARYING receiver, fixed receivers

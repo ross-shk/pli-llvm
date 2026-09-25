@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* BY NAME assignment (rule 86) requires a single structure target and a
      structure value; it is rejected otherwise. */
   bad_struct_byname: procedure options(main);

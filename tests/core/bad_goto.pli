@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: GO TO to a label that is not defined in this procedure
     must be rejected with a citation of rule (77). */
  BADGOTO: PROCEDURE OPTIONS(MAIN);

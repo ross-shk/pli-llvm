@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // irgen.h — LLVM IR generation.
 //
 // M1 generates IR with llvm::IRBuilder<> (ADR-002); `run` prints the built

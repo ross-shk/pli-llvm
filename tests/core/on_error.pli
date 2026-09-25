@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* rules (91)-(94): ON ERROR establishes a
      handler; SIGNAL ERROR raises it; the
      unit runs, then control resumes after

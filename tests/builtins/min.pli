@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* MIN built-in function: min(a, b) returns the smaller of two numeric
     values, computed in their common arithmetic type. M2 arithmetic built-in
     (Y33-6003 MIN). */

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* LIKE attribute (rule 43): a declaration item takes the structure shape of
      an already-declared structure variable, so its members are qualified like
      the template's. Covers a top-level copy and a nested (member) copy. */

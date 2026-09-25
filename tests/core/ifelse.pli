@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* IF ... THEN ... ELSE, including nested statements and a DO group as
    the then-branch.  TR 25.084 rules (74) if-statement, (75) if-clause,
    (76) balanced-statement, (115)-(118) expressions. */

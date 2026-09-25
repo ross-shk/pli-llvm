@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: VERIFY with a non-character argument is rejected. */
  BADVERIFY: PROCEDURE OPTIONS(MAIN);
     DECLARE N FIXED BINARY(31);

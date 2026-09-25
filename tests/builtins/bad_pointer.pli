@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A POINTER is an address value, not a number (rules (15),(117)): mixing a
     pointer with an arithmetic value is diagnosed rather than miscompiled. */
  bad_pointer: procedure options(main);

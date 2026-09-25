@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* String-search builtin limits (rule (123)): character
     operands, arities, and constant widths stay diagnosed. */
  bad_strcase: procedure options(main);

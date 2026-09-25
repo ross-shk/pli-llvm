@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* Edit-directed I/O (rules (108),(44)-(54)): PUT EDIT writes data items
       through the paired format list and GET EDIT reads them back, so a STRING
       round-trip recovers the original values. Covers the common numeric (F),

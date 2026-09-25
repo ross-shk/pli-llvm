@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* rule (34): RETURNS is an entry-name
      attribute; on a storage item it is
      rejected, never silently accepted. */

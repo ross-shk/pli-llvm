@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* Multiple assignment (rule 86): a, b, c = expr; evaluates the RHS once and
      stores it to every target in the comma-separated list. Scalar variables
      and array elements share the value; the RHS is computed a single time. */

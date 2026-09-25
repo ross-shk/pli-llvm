@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* BIT(n>1) string operations (rules (18),(116),(117); QR2.2):
     packed big-endian bytes; literals pack fully; assignment pads
     and truncates on the right; logic is byte-wise; conversion to

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* Cross-section (rule 126) with more than one '*': a sub-block copy. The
       '*' axes, in axis order, select a lower-rank sub-block of the source and
       assign it to a whole array of matching shape. Covers a full 2-D block,

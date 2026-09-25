@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Dynamic (runtime-extent) array procedure parameters (rules (12),(13),(126),
     (34)-(38)): a fixed-size array passed to a procedure whose parameter is a
     dynamic array `x(k)` is reached by reference, so the callee sizes the view

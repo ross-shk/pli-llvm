@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/multimod.sh — multi-module PL/I programs (rules
 # (2),(38),(42)): a library module provides external procedures,
 # the MAIN module calls them across the link. Each unit compiles

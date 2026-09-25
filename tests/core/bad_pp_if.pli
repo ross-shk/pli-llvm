@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* Chapter 9 (ADR-083): an undeclared name in %IF is diagnosed. */
   badppif: procedure options(main);
      %if missing = 1 %then %include 'pp_yes.inc';

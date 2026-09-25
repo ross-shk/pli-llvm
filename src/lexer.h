@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // lexer.h — PL/I lexical analysis (TR 25.084 §3.2.1, §3.2.3).
 #pragma once
 #include "token.h"

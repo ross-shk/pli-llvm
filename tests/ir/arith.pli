@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Scalar arithmetic lowers to LLVM integer ops (ADR-006 tiering). Rules
    (115)-(117), (16). */
  main: procedure options(main);

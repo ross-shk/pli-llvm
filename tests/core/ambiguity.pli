@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Statement keywords are recognised by position, not spelling (TR 25.084
     §2.3; ADR-004). A leading word followed by '( ... ) =' is ambiguous:
     `IF (X) = 1 THEN` is an IF statement whose condition is (X) = 1, not an

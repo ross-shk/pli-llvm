@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/nosize_flag.sh — --no-size-checks disables the SIZE
 # traps program-wide: an overflowing computation with no (NOSIZE)
 # prefix wraps instead of aborting.

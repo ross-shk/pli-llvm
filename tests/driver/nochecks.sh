@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/nochecks.sh — (NOSUBSCRIPTRANGE) and (NOZERODIVIDE)
 # elide their traps (rules (60)-(63), ADR-112): the checks vanish
 # from the IR, and formerly-aborting programs complete.

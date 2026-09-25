@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: COMPLEX combined with another data attribute is rejected. */
  BADCOMPLEXVAR: PROCEDURE OPTIONS(MAIN);
     DECLARE Z COMPLEX FLOAT;

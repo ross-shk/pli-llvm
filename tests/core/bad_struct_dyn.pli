@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Whole-structure values with a dynamic member outside
     plain assignment stay rejected (rules (13),(127)):
     `t = s` is served (see struct_dyn_copy.pli), but

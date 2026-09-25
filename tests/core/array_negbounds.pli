@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Negative lower bounds (rules (12),(13)): arrays may
     span negative subscripts; lbound/hbound plus reads
     and writes follow the declared range (P4 audit). */

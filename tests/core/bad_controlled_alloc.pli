@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* CONTROLLED allocation limits (rules (87),(88),(90)): BASED keeps
     its SET requirement (moved parser to sema), and a locator FREE of
     CONTROLLED storage stays diagnosed. */

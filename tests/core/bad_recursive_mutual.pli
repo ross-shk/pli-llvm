@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rule (5): each procedure in a call cycle needs
     RECURSIVE; neither even nor odd has it. */
  badrecm: procedure options(main);

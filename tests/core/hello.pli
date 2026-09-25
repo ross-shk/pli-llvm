@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Hello world — the canonical PL/I program.
     TR 25.084 rules exercised: (1) program, (2) procedure, (5) OPTIONS,
     (7) end-clause, (104)/(105)/(109) PUT LIST with the SKIP option. */

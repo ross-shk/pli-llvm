@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* Structures by value (CM1, rule 127): a whole structure is a value that
       can be returned by a function (RETURNS names an enclosing structure whose
       shape the function takes) and passed to a procedure BY VALUE (the callee

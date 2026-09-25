@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* A CHARACTER VARYING argument passed to a VARYING parameter of a
     different declared length is marshalled through a copy, but the
     callee's writes (growth inside the procedure) copy back to the

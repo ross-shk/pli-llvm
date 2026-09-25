@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: PRECISION with a character argument is rejected. */
  BADPRECISION: PROCEDURE OPTIONS(MAIN);
     DECLARE S CHARACTER(4);

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Replicated string constants (rule (129)): (n)'str' repeats the string
     n times to form a character-string constant. */
  repl_test: procedure options(main);

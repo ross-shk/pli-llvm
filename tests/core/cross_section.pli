@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* Cross-section (rule 126): A(i, *) / A(*, j) selects every index along the
       '*' axis, producing a 1-D array value assigned to a same-shape array.
       Covers a row, a column, and a cross-section of an array member. */

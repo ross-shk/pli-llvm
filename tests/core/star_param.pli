@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* '*' adjustable-extent array parameters (rules (12),(13),(34)): a procedure
     parameter declared `x(*)` takes its extent from the caller's actual array at
     call time, so the callee bounds-checks and reduces against the live extent.

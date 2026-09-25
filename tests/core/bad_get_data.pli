@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* rule (110): a GET DATA item must be a
      variable so a NAME=value pair has a
      target; a constant is diagnosed. */

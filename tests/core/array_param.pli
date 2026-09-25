@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Array procedure parameters (rules (126),(123)): a fixed-size array passed to
     a procedure is reached by reference, so a parameter array is subscriptable
     on both sides of an assignment, and the array built-ins (DIM/LBOUND/HBOUND/

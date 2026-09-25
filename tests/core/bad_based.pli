@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* The right side of '->' must be a BASED variable (rule 124); qualifying a
     non-based structure through a locator is diagnosed, never silently treated
     as based storage. */

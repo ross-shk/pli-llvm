@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Factored declarations (rule 11): DECLARE (A, B, C) FIXED BIN(31) gives every
     name in the parenthesised list the shared attribute (and dimension) set.
     Factored arrays use a factored dimension: (X, Y) (5) FIXED BIN(31). */

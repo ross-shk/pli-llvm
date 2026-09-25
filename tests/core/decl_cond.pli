@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* rules (9),(99): DECLARE name CONDITION; — programmer-named conditions
    must be explicitly declared before use via SIGNAL CONDITION(name) /
    ON CONDITION(name) / REVERT CONDITION(name).  Use-declared names (never

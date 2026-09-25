@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Scalar math built-ins (QR2.7, direct C <math.h> counterparts): LOG2,
     LOG10, ATAN, SINH, COSH, TANH, ATANH, ERF, ERFC. Each takes one numeric
     argument and yields a FLOAT value. Results are checked against expected

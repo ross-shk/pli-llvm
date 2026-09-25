@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* MOD built-in function: mod(a, b) = a - b * floor(a/b); the result takes the
     sign of the divisor b. M2 arithmetic built-in (Y33-6003 MOD). */
  mod_test: procedure options(main);

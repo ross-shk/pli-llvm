@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Array operations benchmark - matrix multiply */
 test_array: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j, k, n) FIXED BINARY(31);

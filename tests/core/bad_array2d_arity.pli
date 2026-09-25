@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A subscripted reference must supply one subscript per declared axis
     (rules (12),(126)); a 2-D array takes two subscripts. */
  bad_array2d_arity: procedure options(main);

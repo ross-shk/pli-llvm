@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/get_decimal.sh — GET LIST into FIXED DECIMAL (QR1.2):
 # "12.5" reads 1250 into a dec(4,2); the program verifies itself.
 set -u

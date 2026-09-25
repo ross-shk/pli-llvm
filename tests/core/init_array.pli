@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* INITIAL iteration factors on arrays (rules (26)-(31)): an itemlist of
      constants, with iteration factors (n), '*' repeat-last, and flat lists,
      fills a fixed-size array element by element on both STATIC and AUTOMATIC

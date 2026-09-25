@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1): COMPLEX(a,b)
     builds a complex value from a real and imaginary part; REAL(z) and IMAG(z)
     extract the real and imaginary parts; CONJG(z) returns the conjugate.

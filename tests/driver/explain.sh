@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/explain.sh — `--explain <rule>` prints the TR 25.084 production.
 # Exercises rule (16), a multi-line wrapped rule (128), and the error paths.
 set -u

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* extension (ADR-082): double quotes are
      only valid as a %REPLACE operand. */
   baddqstring: procedure options(main);

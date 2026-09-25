@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* DO groups: iterative with TO/BY, DO WHILE, and multiple closure of
    nested groups by a single labelled END (TR §2.3.2.2, rules (69)-
    (73), (7)). */

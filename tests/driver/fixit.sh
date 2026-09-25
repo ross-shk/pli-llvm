@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/fixit.sh — diagnostics carry a fix-it: the suggested insertion
 # is rendered at the caret column. Exercises missing THEN, '=', PROCEDURE and
 # END. Rules (75),(86),(2),(7).

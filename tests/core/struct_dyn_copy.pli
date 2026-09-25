@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Whole-structure copy with a dynamic member (rules
     (13),(127)): `t = s` copies scalars and each
     dynamic buffer's contents, so later writes through

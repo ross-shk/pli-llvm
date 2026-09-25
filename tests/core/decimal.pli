@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* FIXED DECIMAL(p,q) values are stored scaled by 10^q (ADR-006). A value is
     entered from a FLOAT literal and its scale is honoured in conversion and
     in + - * and comparison, which rescale operands to a common scale. */

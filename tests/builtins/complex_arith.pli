@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* CM5: complex arithmetic (plus, minus,
      times, divide) over the pair layout;
      mixed real operands convert with a

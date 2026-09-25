@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rules (91)-(94): ON ZERODIVIDE establishes a
     handler; SIGNAL ZERODIVIDE raises it; division and
     modulo by zero trap route to the handler when one is

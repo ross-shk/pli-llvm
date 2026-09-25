@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* TRUNC built-in function: trunc(x) removes the fractional part of a numeric
     value toward zero, preserving its type (FLOAT stays FLOAT, FIXED is already
     integral). M2 arithmetic built-in (Y33-6003 TRUNC). */

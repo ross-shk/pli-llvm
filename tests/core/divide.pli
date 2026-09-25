@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* DIVIDE built-in function: divide(a, b) yields the quotient of two numeric
     values, computed in floating point (ADR-014; exact decimal division is M2).
     M2 arithmetic built-in (Y33-6003 DIVIDE). */

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* pli_rt_state.h — shared TU state for the split libpli sources.
  *
  * Each rt_*.c includes this header (via pli_rt.h) so the cross-file users

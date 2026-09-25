@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Whole-array expressions (rules 86, 127; QR2.1): an assignment
     whose value combines whole arrays evaluates element-wise, as the
     written DO loop would; reductions keep their whole form inside.

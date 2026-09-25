@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rule (56): entries in one implementation need compatible results. */
  badentrytype: procedure options(main);
     declare x fixed bin(63);

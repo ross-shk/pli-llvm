@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* Runtime aggregate lengths on a dynamic-array structure member (rules
      (11),(12),(13),(123)): the member v(n) is a single-axis AUTOMATIC array
      whose extent comes from a runtime expression. LBOUND/HBOUND/DIM report the

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Dynamic (runtime-extent) array restrictions (rule (13)): this stage serves
     a single-axis AUTOMATIC array with a constant lower bound (INITIAL on a
     dynamic array is now served). A multi-axis dynamic array is rejected. */

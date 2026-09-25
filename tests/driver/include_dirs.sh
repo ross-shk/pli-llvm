@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/include_dirs.sh — %INCLUDE search paths (ADR-078):
 # the including file's directory, repeatable -I (first wins),
 # PLIC_INCLUDE_PATH, and the executable-relative default dir; a missing

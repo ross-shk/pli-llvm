@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* DEFINED (rule 24): a declaration overlays the storage of an already-
       declared same-type variable, so the two names share the same memory.
       Covers a scalar overlay and an array overlay (ADR-018 address rule). */

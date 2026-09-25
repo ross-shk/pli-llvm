@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* The number of subscripts on a member array must match its dimensionality
     (rule (126)). */
  bad_struct_array_arity: procedure options(main);

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* ALLOCATE/FREE (rules (87)-(90)): heap-allocate a based structure, store
      the address in a POINTER via SET, address its members through the locator,
      and release the block with FREE. Two allocations of the same based

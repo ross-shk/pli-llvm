@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* iSUB / DEFINED subscript restrictions (rules 134,24): the iSUB dummy may
       appear only once, and an iSUB base requires a matching 1-D array item. */
    bad_isub_defined: procedure options(main);

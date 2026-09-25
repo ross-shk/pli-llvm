@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 """Generate src/rules.cpp from TR25.084-concrete-syntax.md.
 
 `--explain <rule>` needs the TR 25.084 productions available at runtime. This

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Extension track capstone (MODERN-PLI-PLAN exit
     criterion): SELECT with loop exits, a
     parameterized include, VALUE constants,

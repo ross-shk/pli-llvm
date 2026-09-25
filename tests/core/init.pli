@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* INITIAL attribute (rule 26) on both storage classes.
    Regression test: init values on external-procedure variables (which
    get static storage in M0) were silently dropped before. */

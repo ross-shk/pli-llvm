@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Array attribute built-ins with an axis argument (rule (123)):
     lbound/hbound/dim/dimension of a fixed multi-axis array. A second
     integer-constant argument selects the axis (1-based); without it lbound

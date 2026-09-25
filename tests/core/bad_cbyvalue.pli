@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* C FFI by-value limits (rules (34),(38)): OPTIONS(BYVALUE)
     marks ENTRY declarations only, and a POINTER parameter takes
     a pointer argument. */

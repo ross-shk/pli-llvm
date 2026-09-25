@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* BYADDR limits (rule (123)): one structure argument, and only
     as a direct call argument. */
  bad_byaddr: procedure options(main);

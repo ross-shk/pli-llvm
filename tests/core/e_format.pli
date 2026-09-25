@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* E(w,d) edit-directed format (rules (108),(48)-(54)): a FLOAT value is
       written in scientific notation (mantissa with d fractional digits,
       exponent), right-justified in a width-w field, and read back. A STRING

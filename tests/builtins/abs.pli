@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* ABS built-in function: abs(x) returns the absolute value of a numeric
     argument, preserving its type (FIXED or FLOAT). M2 arithmetic built-in
     (Y33-6003 ABS). */

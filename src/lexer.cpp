@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 #include "lexer.h"
 #include <cctype>
 #include <cstdio>

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* TRANSLATE built-in function: translate(s, out, in) maps each character of
     s that appears in `in` to the corresponding character of `out`; characters
     not in `in` are left unchanged. M2 string built-in (Y33-6003 TRANSLATE). */

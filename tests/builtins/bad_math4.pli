@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* CM5: ATAN2 needs two numeric arguments;
      ASIN needs a numeric one. */
   badmath4: procedure options(main);

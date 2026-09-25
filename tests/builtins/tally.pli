@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-107): TALLY(x, y) counts
     non-overlapping occurrences of y in x,
     case-sensitive, zero when absent. */

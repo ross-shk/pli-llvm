@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // explain.h — `--explain <rule>`: print a TR 25.084 production.
 //
 // The production table (kRules) is generated from the spec by

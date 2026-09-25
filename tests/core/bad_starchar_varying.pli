@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Rule (18): CHARACTER(*) VARYING parameters are not implemented in this
     stage; diagnosed, never silently treated as fixed-length. */
  bad_starchar_varying: procedure options(main);

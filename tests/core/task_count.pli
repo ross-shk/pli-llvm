@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rules (79),(82): WAIT(e1,e2)(1) resumes
     after any one event; a plain WAIT
     resumes after all of them. */

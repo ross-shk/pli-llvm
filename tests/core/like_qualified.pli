@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* LIKE with a qualified template (rule 43): the declared item takes
     the shape of a minor structure of an already-declared structure,
     narrowing to any depth; the copy owns independent storage. */
