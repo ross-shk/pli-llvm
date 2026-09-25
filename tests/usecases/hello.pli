@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  HELLO: PROCEDURE OPTIONS(MAIN);
    PUT SKIP LIST('Hello, world!');
    PUT SKIP LIST('PASS');

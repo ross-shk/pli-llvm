@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* Based data (rules (25),(124)): a BASED(P) structure has no storage of its
      own; its members are addressed through the POINTER P. The based reference
      REC.A writes through P, and the locator-qualified form P -> REC.A does the

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* A recursive function procedure: the recursion (self-call), the signed
    comparison and branch, and the multiply lower to real LLVM IR. M1 exit
    criterion (ADR-022). Rules (5),(81),(115). */

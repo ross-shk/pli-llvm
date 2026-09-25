@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Array of structures (rules (11),(124),(126)): a level-1 dimensioned
     structure `1 arr(3), 2 x, 2 y` is an array whose elements are structures.
     A member of one element is reached by subscript-then-qualify `arr(i).x`,

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: ROUND with a non-numeric argument is rejected. */
  BADROUND: PROCEDURE OPTIONS(MAIN);
     DECLARE S CHAR(4);

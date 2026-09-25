@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Concatenation with the !! alias (rule (119)): 'a' !! 'b'
     concatenates exactly like ||, including chained uses. */
  bang: procedure options(main);

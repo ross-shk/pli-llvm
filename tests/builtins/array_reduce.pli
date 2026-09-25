@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Array reduction built-ins (rule (123)): SUM and PROD reduce a numeric
     array, ANY and ALL reduce a BIT array, over the whole single-axis extent. */
  array_reduce: procedure options(main);

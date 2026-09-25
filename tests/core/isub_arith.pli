@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* General iSUB index arithmetic (rule 134): the iSUB dummy may appear in an
     affine base subscript `m * 1SUB + c`. Y(i) is then a live overlay of
     X(m*i + c) — a strided or offset 1-D view of one axis of X. Writes through

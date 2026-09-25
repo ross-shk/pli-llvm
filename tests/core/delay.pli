@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rule (83): DELAY(n) suspends for n
     milliseconds; 0 is a no-op. */
  delay: procedure options(main);

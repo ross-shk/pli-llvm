@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // parser.h — recursive-descent parser for the M0 subset of TR 25.084.
 #pragma once
 #include "ast.h"

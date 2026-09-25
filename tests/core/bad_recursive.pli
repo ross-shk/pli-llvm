@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rule (5): direct recursion without RECURSIVE
     is rejected; add RECURSIVE to the procedure. */
  badrec: procedure options(main);

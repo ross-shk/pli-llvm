@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* '*' extent forwarding (rules (12),
     (13),(34)): a '*' parameter passed to
     another '*' parameter carries the

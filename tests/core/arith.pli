@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Expression evaluation: operator precedence exactly as rules (115)-(122),
     truncation on assignment to a FIXED target, and the 48-character-set
     operator words of TR §2.3.3. */

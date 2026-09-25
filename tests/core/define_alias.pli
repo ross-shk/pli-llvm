@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-114): DEFINE ALIAS names a
     scalar attribute set; DECLARE ... TYPE
     uses it; define and type stay usable as

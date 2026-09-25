@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* A dynamic (runtime) extent on an axis beyond the first stays rejected:
      only the first axis of a dynamic array may be dynamic in this stage
      (rules (12),(13)). */

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A constant subscript out of the declared bounds on any axis is a
     compile-time SUBSCRIPTRANGE error (rule (126)); here the second subscript
     exceeds the second axis extent. */

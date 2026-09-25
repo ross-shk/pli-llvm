@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A dynamic lower bound beyond the first axis stays
     rejected (rules (12),(13)); single-axis `x(l:u)` is
     served (see dyn_param_lower.pli). */

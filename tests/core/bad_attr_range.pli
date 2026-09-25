@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: out-of-range precisions, scales, lengths, and
     levels are diagnosed, never wrapped silently (static-analysis P2). */
  badattrrange: procedure options(main);

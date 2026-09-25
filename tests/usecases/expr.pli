@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Self-contained, complements tests/core: expression ground that
     arith.pli and strings.pli do not pin. Prints FAIL per violated
     check, PASS only if all hold.

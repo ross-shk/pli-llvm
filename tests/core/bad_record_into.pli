@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rule (112): READ INTO needs a plain scalar
     variable to receive the record. */
  badrecordin: procedure options(main);

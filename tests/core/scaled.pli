@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Scaled FIXED BINARY(p,q): the stored integer holds the value scaled by
     2^-q (ADR-006). Exercises + and - on same-scale operands, * whose result
     scale is the sum of the operand scales, assignment rescaling from a scale-0

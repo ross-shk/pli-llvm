@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-104): SELECT with boolean
     WHENs and SELECT(expr) with value lists
     lower to an IF-chain; OTHERWISE is

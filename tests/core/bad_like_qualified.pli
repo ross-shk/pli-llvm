@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* LIKE with a qualified template (rule 43): the path must resolve
     to a minor structure; a scalar final, a scalar intermediate, and
     an unknown member are rejected. */

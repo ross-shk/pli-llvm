@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-108): VALUE declares a named
     constant usable in expressions and bounds;
     reassignment is diagnosed. */

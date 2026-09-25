@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* COMPLEX variable type (QR2.2/CM5 slice 5): DECLARE a complex variable,
     assign a complex value (COMPLEX(a,b)) or a real value (imag part 0),
     read it back with REAL/IMAG, and assign complex to a real variable (real

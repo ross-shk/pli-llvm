@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Adjustable-length CHARACTER parameters (rules (18),(34)-(38)): a parameter
     declared `char(*)` (or `char(expr)`) takes its length from the caller's
     actual character argument at call time, passed as a hidden length argument.

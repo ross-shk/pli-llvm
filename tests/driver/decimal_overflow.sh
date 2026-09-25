@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/decimal_overflow.sh — QR1.2 FIXED DECIMAL precision overflow:
 # add/mul and narrowing conversions trap with an ERROR (hard error until a
 # SIZE condition can route them); subtraction shares the add path

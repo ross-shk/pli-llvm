@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: HIGH/LOW with a non-constant length is rejected. */
  BADHIGHLOW: PROCEDURE OPTIONS(MAIN);
     DECLARE N FIXED BINARY(31);

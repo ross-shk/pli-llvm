@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Level-numbered structures (rules (11),(124),(125)): DECLARE 1 S, 2 A ..., 2 B ...
     declares a structure; S.A / S.B are qualified references to its scalar
     members, usable on both sides of an assignment. Minor (nested) structures

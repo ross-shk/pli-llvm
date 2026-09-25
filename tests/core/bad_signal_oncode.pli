@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* SIGNAL SET ONCODE limits (rule (93)): the code expression
     must be numeric. */
  bad_sigcode: procedure options(main);

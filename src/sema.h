@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // sema.h — declaration processing, name resolution and expression typing.
 #pragma once
 #include "ast.h"

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* BY NAME array members must match in type (rule
     (86)): a dynamic member against a fixed member of
     the same name is rejected; same-shaped dynamic

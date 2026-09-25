@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* PRECISION built-in function: precision(x, p) yields x with p digits (or
     bits) of precision, keeping the base type of x. M2 arithmetic built-in
     (Y33-6003 PRECISION); exact FIXED precision/scale rules are M2 (ADR-006),

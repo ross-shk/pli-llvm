@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Whole-structure assignment is not served in this stage (rule (127)); only
     qualified member assignment is. */
  bad_struct_assign: procedure options(main);

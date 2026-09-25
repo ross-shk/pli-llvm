@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* CONTROLLED + AREA (rule (15)): AREA stays a parse-level
     rejection; CONTROLLED parses first so both attributes are
     visited. Kept separate because a parse error masks all sema

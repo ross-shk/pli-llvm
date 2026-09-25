@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/file.sh — OPEN/CLOSE + FILE ( f ) (rules (100)-(103),(105)):
 # PUT FILE(f) writes list-directed output into a named file and GET FILE(f)
 # reads it back; the program verifies the values and prints PASS. It runs from

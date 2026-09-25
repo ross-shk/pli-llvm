@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic tests: complex built-ins with bad arguments are rejected. */
  BADCOMPLEX: PROCEDURE OPTIONS(MAIN);
     DECLARE Y FLOAT DECIMAL(6);

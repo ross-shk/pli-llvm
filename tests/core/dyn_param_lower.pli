@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Dynamic lower-bound array params (rules (12),(13),
     (34)): a param `x(l:u)` sizes its view from the bound
     args at entry, so subscripting and LBOUND/HBOUND/

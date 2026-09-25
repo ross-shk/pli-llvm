@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Function procedures via RETURNS, and function references in
     expressions. A recursive function (the M1 exit criterion) compiles
     and runs. TR 25.084 rules (5) RETURNS, (34)-(38) function

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* String-search builtins (rule (123)): LOWERCASE/CENTER copy
     with case-folding and centering, SEARCH/VERIFY locate by
     set membership, RANK/COLLATE convert codes. */

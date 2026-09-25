@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* INITIAL CALL (rule (27)) error: the called identifier must be a function
     procedure (one that returns a value); calling a plain procedure that does
     not RETURNS a value as the initializer is rejected. */

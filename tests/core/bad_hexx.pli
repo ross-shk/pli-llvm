@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Hex X literal limits (rule (143)): an odd digit count or a
     non-hex digit stays diagnosed. */
  bad_hexx: procedure options(main);

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Two entry points to one procedure body, via the entry-namelist
     `a, b: PROCEDURE` (rule (3), M1 exit criterion). Either name calls the
     same body; a recursive function is reachable through both. */

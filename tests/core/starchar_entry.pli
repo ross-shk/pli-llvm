@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rule (38): external entry descriptors may use adjustable CHARACTER length
     `char(*)`.  The hidden length argument is passed alongside the buffer
     pointer so the callee can size its operations.  Both by-reference calls

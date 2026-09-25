@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Scalar math built-ins (QR2.7, C <math.h> analogues): FLOOR, CEIL, SQRT,
     EXP, LOG, SIN, COS, TAN. Each takes one numeric argument and yields a
     FLOAT value. Results are compared against expected values within a small

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Structure members that are arrays (rules (11),(124),(126)): 2 A(10) declares
     an array member of a structure, referenced as S.A(i). Array members may be
     nested inside minor structures (S.X.Y(i,j)) and used on both sides of an

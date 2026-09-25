@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* QR1.2: list-directed and DISPLAY output
      of FIXED DECIMAL prints the 10^q point;
      scale 0 prints plain. */

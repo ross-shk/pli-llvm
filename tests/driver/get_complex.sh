@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/get_complex.sh — GET LIST of complex (CM5): a `re+imI`
 # token reads both parts, a bare number reads with zero imaginary part.
 # The program verifies the values itself and prints PASS.

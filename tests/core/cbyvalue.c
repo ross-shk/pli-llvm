@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Provides C callees taking scalars by value (rule (34), C ABI): the
    PL/I side declares matching ENTRYs with OPTIONS(LINKAGE(SYSTEM)) or
    OPTIONS(BYVALUE) and EXTERNAL names. */

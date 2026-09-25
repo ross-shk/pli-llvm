@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* IF/THEN/ELSE lowers to a signed compare and a conditional branch (rules
    (74),(75),(115)-(118)). */
  main: procedure options(main);

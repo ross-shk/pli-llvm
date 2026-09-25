@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* COLUMN positioning (rules (48),(108)): COL(n) starts the next
     item at 1-based column n, padding blanks, opening a fresh line
     first when already past n. */

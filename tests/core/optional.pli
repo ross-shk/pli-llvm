@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* OPTIONAL parameters (extension): a
     trailing parameter declared OPTIONAL
     may be passed '*', forwarded, or left

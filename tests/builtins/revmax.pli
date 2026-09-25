@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* REVERSE (rule (123)): mirrors a string; same-length CHARACTER result. */
  revmax: procedure options(main);
     declare s char(5);

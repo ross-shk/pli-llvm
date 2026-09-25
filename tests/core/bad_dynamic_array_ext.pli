@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Dynamic (runtime-extent) array bound restrictions (rule (13)): a dynamic
     lower bound (n:5) is not implemented in this stage and is rejected at parse
     time; a block-scope '*' adjustable extent is rejected because '*' is a

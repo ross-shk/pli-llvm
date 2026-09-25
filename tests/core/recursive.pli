@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rules (5) RECURSIVE, (78) CALL, (81) RETURN,
     (123) function reference: direct, mutual and
     CALL recursion each need RECURSIVE; each

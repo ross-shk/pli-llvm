@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Whole-array assignment (rules 86, 127): mismatched shapes, a
     scalar target for an array value, and array values in multiple
     assignment stay diagnosed in this stage. */

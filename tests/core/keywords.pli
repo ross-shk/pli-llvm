@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* PL/I HAS NO RESERVED WORDS (TR 25.084 §2.3, and the keyword 
    recognition discussion in docs/DESIGN-DECISIONS.md ADR-004). Every
    word below is used both as an ordinary variable and as a statement

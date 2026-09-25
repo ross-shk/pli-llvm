@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* iSUB (rule 134) and subscripted DEFINED base (rule 24): DECLARE Y DEFINED
       X(1SUB) overlays one axis of X as a live 1-D view; DECLARE Z DEFINED X(c, c)
       overlays a single element. Reads/writes through the overlay are visible in

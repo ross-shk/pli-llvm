@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* C28-6571-3 Chapter 9: missing include diagnostic. */
  %include missing_include.inc;
  main: procedure options(main);

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/link.sh — the driver's link-step flags (-c, -L/-l, -Wl,
 # --linker, -shared, --extra) and a cross-unit link against a C unit + libpli.
 set -u

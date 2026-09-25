@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rules (5): OPTIONS() carries implementation-defined
     external-options; REORDER/REENTRANT/NOEXECOPS are
     accepted and ignored, MAIN still takes effect. */

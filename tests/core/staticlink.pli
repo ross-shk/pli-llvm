@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rule (8): an internal procedure reaches a variable of an enclosing
     procedure through a static link (ADR-027). Each activation of the enclosing
     procedure owns its own copy of the variable, so an internal procedure sees

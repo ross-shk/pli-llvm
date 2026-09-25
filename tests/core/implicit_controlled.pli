@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Implicit ALLOCATE/FREE for CONTROLLED variables (IBM Enterprise PL/I):
     declaring `X controlled` automatically pushes a default-sized generation
     on proc entry, so first-use references work without an explicit ALLOCATE,

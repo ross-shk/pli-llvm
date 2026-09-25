@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Diagnostic test: a math built-in with a non-numeric argument is rejected. */
  BADMATH2: PROCEDURE OPTIONS(MAIN);
     DECLARE S CHAR(4);

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/overflow.sh — QR1.2 FIXED BINARY overflow checks: +-*
 # and unary minus abort with an ERROR (hard error until a SIZE condition
 # can route them); in-range edge values run clean.

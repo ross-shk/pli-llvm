@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-114): TYPE combined with
     explicit data attributes is diagnosed. */
  define alias count fixed bin(31);

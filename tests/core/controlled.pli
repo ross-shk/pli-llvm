@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* CONTROLLED generations (rules 87-90, ADR-140): ALLOCATE pushes
     a fresh generation, references address the latest, FREE pops LIFO.
     A SET option on ALLOCATE warns and is ignored (stack-managed). */

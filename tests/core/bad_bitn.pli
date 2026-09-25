@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* BIT(n>1) limits (rules (110),(116)): stream items and mixed-length
     or mixed-kind logic stay diagnosed in this stage. */
  bad_bitn: procedure options(main);

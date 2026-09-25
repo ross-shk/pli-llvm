@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* C28-6571-3 Chapter 9: unsupported directive diagnostic. */
  %if 1 %then;
  main: procedure options(main);

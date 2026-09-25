@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* REVERSE limits (rule (123)): character operands and arity
     stay diagnosed. */
  bad_revmax: procedure options(main);

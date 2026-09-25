@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Condition handling benchmark - SUBSCRIPTRANGE and SIZE */
 test_conditions: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j, n, sum) FIXED BINARY(31);

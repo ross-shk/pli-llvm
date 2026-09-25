@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-109): cousin calls — sibling procs share package-level data
     and call each other across different signatures; tests multi-var init, indirect
     access, and flag-driven branches through deep call chains. */

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Array attribute built-ins (rule (123)) are misused: a scalar argument, a
     wrong argument count, and an out-of-range axis must each be diagnosed. */
  bad_array_builtin: procedure options(main);

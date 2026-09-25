@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* CHARACTER data: fixed and VARYING, concatenation, blank-padded 
    comparison. TR 25.084 rules (18) string-attribute, (119)
    concatenation, (117) comparison, (143) character-string constants. */

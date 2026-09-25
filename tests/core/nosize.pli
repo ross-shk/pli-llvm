@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-110): (NOSIZE) elides the
     overflow trap so arithmetic wraps; (SIZE)
     is accepted and behaves normally. */

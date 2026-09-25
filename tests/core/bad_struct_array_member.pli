@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A subscripted reference to a member that does not exist in the structure is
     a compile-time error (rules (124)). */
  bad_struct_array_member: procedure options(main);

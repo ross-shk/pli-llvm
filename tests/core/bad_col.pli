@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* COLUMN limits (rule (48)): bare COL and the long-form COLUMN
     stay diagnosed in this stage. */
  bad_col: procedure options(main);

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-109): package-level data — DECLARE in a PACKAGE body
     creates static storage visible to all member procedures. */
  mathlib: package exports(adder);

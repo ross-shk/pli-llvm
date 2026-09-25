@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* LIKE (rule 43) requires an already-declared structure variable as its
      template; a scalar or an undeclared reference is rejected. */
   bad_like: procedure options(main);

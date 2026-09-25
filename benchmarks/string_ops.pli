@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* String operations benchmark - concatenation and substring */
 test_string: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j, len) FIXED BINARY(31);

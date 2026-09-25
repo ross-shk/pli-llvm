@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Procedure call benchmark - recursive and iterative */
 test_procedures: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, result) FIXED BINARY(31);

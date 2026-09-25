@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* Edit-directed I/O diagnostics (rules (48)-(54),(108),(110)): an
       unimplemented format item (B binary), and a GET EDIT data item that
       is not a variable reference, must each be diagnosed. */

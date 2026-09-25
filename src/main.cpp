@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 // main.cpp — plic driver.
 //
 // Pipeline: source -> preprocessor -> lexer -> parser -> sema -> LLVM IR ->

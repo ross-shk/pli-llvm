@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Array attribute built-ins (rule (123)): LBOUND/HBOUND/DIM on a fixed-size
     single-axis array. LBOUND is 1 by default and honours a declared lower
     bound; HBOUND is the declared upper bound; DIM is the extent ub-lb+1. */

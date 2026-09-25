@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
    /* Cross-section (rule 126) restrictions: a cross-section assigned to a
       scalar target, or to a whole array of the wrong shape, is rejected. */
    bad_cross_section: procedure options(main);

@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* Whole-structure assignment (rule 127): S = T copies one structure's storage
     into another of identical shape, including array members; S.X = T.X copies a
     nested (minor) structure member. */

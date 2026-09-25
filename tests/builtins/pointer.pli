@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* POINTER foundation (rules (15),(123)): a POINTER variable holds an
      address. null() yields the null pointer, addr(x) the address of a variable,
      pointers assign between each other, and pointer equality/inequality is

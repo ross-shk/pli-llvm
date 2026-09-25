@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* GET LIST items must be assignable scalar references (rules (109),(110)):
     reading into a constant is diagnosed rather than miscompiled. */
  bad_get: procedure options(main);

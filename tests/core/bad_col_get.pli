@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* COLUMN limits (rule (108)): input positioning stays diagnosed
     in this stage (kept parse-clean so sema runs). */
  bad_col_get: procedure options(main);

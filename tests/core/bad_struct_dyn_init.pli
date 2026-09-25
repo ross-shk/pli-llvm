@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* INITIAL covering a dynamic member is served only
     for a trailing top-level dynamic array (see
     struct_dyn_init.pli); a dynamic member followed by

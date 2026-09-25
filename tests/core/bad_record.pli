@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rules (112),(113): REWRITE and DELETE stay
     diagnosed; only sequential READ/WRITE
     are served in this stage. */

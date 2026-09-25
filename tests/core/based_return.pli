@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* BASED member in RETURN (rules (25),(81),(124)): an accessor
      returns a based member of an enclosing procedure through the
      static link, and the locator form returns through its own

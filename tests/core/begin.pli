@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* BEGIN as a real scope (rule (68)): a block declares names of its own,
     enclosing names stay visible inside, and an inner declaration shadows an
     outer one without disturbing it after the block ends. */

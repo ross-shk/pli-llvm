@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* The SET target of ALLOCATE must be a POINTER variable (rule (88)): storing
     the allocated address into a numeric variable is diagnosed. */
  bad_alloc_set: procedure options(main);

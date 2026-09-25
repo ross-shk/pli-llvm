@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* extension (ADR-109): PACKAGE groups procedures
     under one scope; EXPORTS controls linkage;
     external callers use ENTRY references. */

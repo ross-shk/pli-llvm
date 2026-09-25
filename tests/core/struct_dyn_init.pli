@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* INITIAL on a structure with a trailing dynamic
     member (rules (13),(26)): the flat itemlist fills
     scalar leaves first, then one buffer element per

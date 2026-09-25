@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
   /* rules (94),(99): programmer-named
      conditions dispatch per condition;
      ERROR handlers are unaffected. State

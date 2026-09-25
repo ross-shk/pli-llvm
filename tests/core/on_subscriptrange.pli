@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* rules (91)-(94): ON SUBSCRIPTRANGE establishes
     a handler; SIGNAL SUBSCRIPTRANGE raises it; a
     runtime subscript slip traps route to the handler

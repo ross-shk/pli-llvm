@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* A single ! is not an operator: only the !! pair aliases
     concatenation (rule (119)). */
  bad_bang: procedure options(main);

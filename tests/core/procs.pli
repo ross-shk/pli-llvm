@@ -1,3 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Internal procedures and CALL. Parameters are passed by reference, 
    which is the PL/I default; an argument that is not a matching
    variable is passed as a dummy, so the caller cannot see the update.
