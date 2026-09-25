@@ -3100,7 +3100,8 @@ llvm::Value* IRGen::argLen(HExpr* a) {
 }
 
 // Live capacity of an adjustable-length `CHAR(*)` value (rule (18)): the
-// hidden length for a parameter, the current generation size for a CONTROLLED
+// hidden argument for a parameter (current length for FIXED CHAR(*), max
+// capacity for VARYING), or the current generation size for a CONTROLLED
 // variable (rule (15)). For `CHAR(*) VARYING CONTROLLED` the generation holds
 // a `{i32 cur, [max x i8]}` struct, so the live max is `pli_ctl_len - 4`.
 // Returns nullptr when the value is not an adjustable character.
@@ -3108,13 +3109,12 @@ llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
   if (!ty.isChar() || !ty.starLen)
     return nullptr;
   if (ty.varying) {
-    // Only CONTROLLED VARYING STAR is served deferred (rule (89)); VARYING
-    // STAR parameters stay diagnosed in sema.
     if (sym && sym->controlled) {
       llvm::Value* total =
           b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "ctllen");
       return b_.CreateSub(total, i64(4), "ctlmax");
     }
+    // Non-controlled VARYING STAR parameter: max capacity from hidden arg.
     if (sym && dynLen_.count(sym))
       return dynLen_[sym];
     return nullptr;
@@ -3794,9 +3794,10 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
   llvm::Value* addr = addressOf(sym);
   if (dt.isChar()) {
     if (dt.starLen && dt.varying) {
-      // `CHAR(*) VARYING CONTROLLED` (rules (18),(89)): the generation is a
-      // `{i32 cur, [max x i8]}` struct with runtime max; truncate the source
-      // to max via pli_assign_varying (VARYING semantics, no expansion).
+      // `CHAR(*) VARYING` target (rules (18),(89)): either CONTROLLED with a
+      // heap generation that may grow, or a parameter whose max capacity is the
+      // hidden i64 arg the caller supplied. Truncate source to max via
+      // pli_assign_varying (VARYING semantics, no expansion).
       llvm::Value* max = adjustLen(sym, dt);
       if (!max)
         max = i64(dt.len);

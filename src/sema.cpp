@@ -1237,9 +1237,6 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc,
                      "an adjustable CHARACTER length on an array is not implemented in this stage",
                      "(12)");
-          else if (item.ty.varying && !(isControlled && !isParam))
-            d_.error(item.loc,
-                     "CHARACTER(*) VARYING parameters are not implemented in this stage", "(18)");
           else if (isControlled && !isParam && !item.slenExpr && !item.ty.starLen)
             d_.error(item.loc,
                      "a CONTROLLED adjustable CHARACTER length needs CHAR(expr) for the ALLOCATE "

@@ -1,0 +1,30 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Rule (18): CHARACTER(*) VARYING parameters — caller's max capacity from hidden i64 arg. */
+  starchar_var: procedure options(main);
+     declare fails fixed bin(31);
+     declare buf char(20) varying;
+     declare len fixed bin(31);
+     fails = 0;
+     buf = 'hello';
+     call show_len(buf);
+     if fails ^= 0 then goto fail;
+     call grow_buf(buf);
+     if length(buf) ^= 7 then fails = fails + 1;
+     if buf ^= 'hello!!' then fails = fails + 1;
+     if fails = 0 then put skip list('PASS starchar_varying_param');
+     else put skip list('FAIL starchar_varying_param: fails=', fails);
+     return;
+  fail:
+     put skip list('FAIL starchar_varying_param: length mismatch');
+  end starchar_var;
+  show_len: procedure(s);
+     declare s char(*) varying;
+     declare n fixed bin(31);
+     n = length(s);
+     /* Just verify the param works — no assertion needed here */
+  end show_len;
+  grow_buf: procedure(s);
+     declare s char(*) varying;
+     s = s || '!!';
+  end grow_buf;
