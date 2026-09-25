@@ -2960,19 +2960,51 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
 
 // Emit the copy-back for every varying-char argument marshalled through a
 // parameter-sized dummy (see argAddr), clamped to the caller's capacity.
+// For CONTROLLED variables the generation stack can change during the call —
+// a callee or a transitive call may free / allocate on this variable's slot,
+// invalidating the data pointer cached by `addressOf` at call-site time.
+// Reload the latest-generation pointer so the write-back hits live memory.
 void IRGen::flushVarWrites() {
   for (const PendingVarWrite& w : pendingVarWrites_) {
     const Type& cty = w.sym->ty;
-    llvm::Value* callerAddr = addressOf(w.sym);
+    // Controls where we store back into: either the alloca'd descriptor (for
+    // non-controlled char varying args) or the runtime generation itself (for
+    // CONTROLLED variables, whose addr comes from pli_ctl_addr(slot)).
+    llvm::Value* target = addressOf(w.sym);
+    if (w.sym->controlled) {
+      // Reload generation-pointer; non-controlled stays as-is (already points
+      // to its frame-allocated descriptor struct).
+      target = b_.CreateCall(runtimeFn("pli_ctl_addr"), {i64(w.sym->ctlSlot)}, "ctlfresh");
+    }
+    // Load length and data pointer from the parameter-sized dummy created by
+    // argAddr.  Layout: {i32 cur_len, [N x i8] data}.
     llvm::Value* dlp = b_.CreateStructGEP(llvmTy(w.pty), w.dummy, 0, "dlenp");
     llvm::Value* dlen =
         b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), dlp, "dlen"), b_.getInt64Ty(), "dlen64");
     llvm::Value* ddata = b_.CreateStructGEP(llvmTy(w.pty), w.dummy, 1, "ddata");
-    llvm::Value* cdata = b_.CreateStructGEP(llvmTy(cty), callerAddr, 1, "cdata");
-    llvm::Value* ln =
-        b_.CreateCall(runtimeFn("pli_assign_varying"), {cdata, i64(cty.len), ddata, dlen});
-    llvm::Value* clp = b_.CreateStructGEP(llvmTy(cty), callerAddr, 0, "clenp");
-    b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "clen"), clp);
+    if (w.sym->controlled && cty.starLen) {
+      // CHAR(*) VARYING CONTROLLED: the heap generation is {i32 cur_len, [max
+      // x i8] data} with no outer descriptor.  Offset 0 → length field, offset
+      // 4 → start of character data.  Get the live max via pli_ctl_len.
+      llvm::Value* ctllen = b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(w.sym->ctlSlot)},
+                                          "ctllen");
+      llvm::Value* max = b_.CreateSub(ctllen, i64(4), "ctlmax");
+      // Data lives at offset 4 (skip the i32 length field).
+      llvm::Value* dp = b_.CreateGEP(b_.getInt8Ty(), target, {b_.getInt64(4)}, "data_ptr");
+      // Write data from the dummy into the generation buffer; store the
+      // (clamped) result length back to offset 0.
+      llvm::Value* ln =
+          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, ddata, dlen});
+      b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty()), target);
+    } else {
+      // Fixed-size or non-controlled CHAR varying: write into the alloca'd
+      // descriptor struct using StructGEP offsets 0 (length) and 1 (data).
+      llvm::Value* cdata = b_.CreateStructGEP(llvmTy(cty), target, 1, "cdata");
+      llvm::Value* ln =
+          b_.CreateCall(runtimeFn("pli_assign_varying"), {cdata, i64(cty.len), ddata, dlen});
+      llvm::Value* clp = b_.CreateStructGEP(llvmTy(cty), target, 0, "clenp");
+      b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "clen"), clp);
+    }
   }
   pendingVarWrites_.clear();
 }
