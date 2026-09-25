@@ -4027,3 +4027,23 @@ response.
 **Rejected.** Growing the length in IRGen inline (gap blank-fill still
 needs runtime help; one helper keeps the semantics in a single place);
 growing non-variable targets such as function results (unobservable).
+
+---
+
+## ADR-154 — flushVarWrites reloaded pointer for CONTROLLED CHAR(*) VARYING write-back
+
+**Context.** Rule (86) assignment into a `CHAR(*) VARYING CONTROLLED` parameter requires copying data back from a callee's marshalling dummy to the caller's live generation buffer. The IRGen pass `flushVarWrites()` did two things wrong:
+
+1. **Wrong capacity:** it used `cty.len = 1` (the STAR sentinel in the static descriptor) as the destination max, so `pli_assign_varying(..., 1, ...)` truncated every write to one byte.
+2. **Wrong offset:** it used `CreateStructGEP(llvmTy(cty), target, 1)` where `ty = {i32, [1 x i8]}`, computing +5 bytes instead of the correct +4 (skip only the i32 length field).
+
+Together these produced silent corruption of the caller's variable whenever an indirect argument path triggered `pendingVarWrites`.
+
+**Decision.** For `w.sym->controlled && cty.starLen` the function now:
+- Calls `pli_ctl_len(slot)` and subtracts 4 to get the real allocation capacity;
+- Uses `CreateGEP(i8*, target, {4})` for the data pointer;
+- Stores the returned clamped length at byte-offset 0 of the generation header.
+
+**Consequences.** The pattern in ADR-152 (`spare = buf; FREE buf; buf = spare || chunk`) survives when its caller passes a `CHAR(*) VARYING CONTROLLED` through mismatched-length parameters (indirect path → `flushVarWrites`). Test `controlled_libproc.pli` exercises this full cycle across module-like boundaries. Updated GRAMMAR-COVERAGE rule (86) to note the write-back invariant.
+
+**Rejected.** Keeping the pre-fix StructGEP arithmetic (would require casting away the type system); passing the whole-generation size rather than stripping 4 (runtime functions expect usable char capacity).

@@ -1,0 +1,70 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* CONTROLLED variable descriptor operations inside a library-like
+     internal procedure.  Tests that the spare=buf / free buf /
+     buf=spare||... cycle works correctly both for locals and when
+     passed through a CALL across module-like boundaries (ADR-152). */
+ ctlmod: procedure options(main);
+    declare fails fixed bin(31);
+    declare n fixed bin(31);
+    declare text char(*) varying controlled;
+    declare result char(64) varying;
+    fails = 0;
+    n = 8;
+    allocate text (n) character varying;
+
+    /* Test 1: pass CONTROLLED varying var to proc that reallocates its
+       own controlled vars, then write-back must hit live buffer.
+       The indirect path (mismatched length) means flushVarWrites runs. */
+    text = 'hello';
+    result = grow_body(text);
+    if length(result) ^= 11 then do;
+       fails = fails + 1;
+       put skip list('FAIL grow_body len');
+    end;
+    if substr(result, 1, 11) ^= 'hello world' then do;
+       fails = fails + 1;
+       put skip list('FAIL grow_body val');
+    end;
+
+    /* Test 2: our caller's own CONTROLLED variable should survive the
+       call intact after implicit generation restore. */
+    n = 16;
+    allocate text (n) character varying;
+    text = 'abcdefghijkl';
+    result = grow_body(text);
+    /* text must still read back its original value. */
+    if length(text) ^= 12 then do;
+       fails = fails + 1;
+       put skip list('FAIL surviving text len');
+    end;
+    if text ^= 'abcdefghijkl' then do;
+       fails = fails + 1;
+       put skip list('FAIL surviving text val');
+    end;
+
+    free text;
+    if fails = 0 then put skip list('PASS ctlmod');
+    else put skip list('FAIL ctlmod: fails=', fails);
+
+ /* grow_body mimics the libnet net_read_all pattern:
+      DCL buf  CHAR(*) VARYING CONTROLLED;  -- our LOCAL controlled
+      DCL spare CHAR(*) VARYING CONTROLLED; -- our LOCAL controlled
+      spare = buf;
+      FREE buf;
+      buf = spare || appended_chunk;
+    The parameter here receives a varying-char of mismatched length,
+    so argAddr uses INDIRECT path -> pendingVarWrite. */
+ grow_body: procedure(buf) returns(char(64) varying);
+    declare buf char(32) varying;           /* params mismatched lengths */
+    declare body char(*) varying controlled;/* the pattern's LOCAL buf */
+    declare spare char(*) varying controlled;/* the pattern's LOCAL spare */
+
+    allocate spare (32) character varying;   /* initial space for spare */
+    spare = buf;                            /* save current gen to spare */
+    allocate body char(64) varying;         /* fresh allocation */
+    body = spare || ' world';               /* restore + extend */
+
+    return(body);
+ end grow_body;
+ end ctlmod;
