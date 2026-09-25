@@ -59,6 +59,30 @@ void pli_substr_assign(char *dst, long long dstcap, long long start, long long l
   if (n > take) pli_memset(dst + (start - 1) + take, ' ', (size_t)(n - take));
 }
 
+/* SUBSTR(s, i, n) = v on a VARYING target: the same overwrite as above, plus
+ * the live length grows when the overlay reaches past it (a gap between the
+ * old length and the overlay blank-fills), clipped to the maximum. lenptr
+ * points at the i32 length prefix. */
+void pli_substr_assign_varying(char *dst, long long dstcap, char *lenptr,
+                               long long start, long long len,
+                               const char *src, long long srclen) {
+  long long old = *(int *)lenptr;
+  pli_substr_assign(dst, dstcap, start, len, src, srclen);
+  if (start < 1) return;
+  if (old < 0) old = 0;
+  if (old > dstcap) old = dstcap;
+  long long n = len;
+  long long space = dstcap - (start - 1);
+  if (space <= 0) return;
+  if (n > space) n = space;
+  if (start - 1 > old) {
+    long long fill = start - 1 - old;
+    if (fill > 0) pli_memset(dst + old, ' ', (size_t)fill);
+  }
+  long long end = start - 1 + n;
+  if (end > old) *(int *)lenptr = (int)end;
+}
+
 void pli_repeat(char *dst, long long dstcap, const char *src, long long srclen,
                 long long n) {
   long long out = 0;

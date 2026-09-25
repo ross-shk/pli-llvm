@@ -3999,3 +3999,31 @@ and a `ReadString`-style varying STAR return. GRAMMAR-COVERAGE rules
 **Rejected.** Growing a VARYING generation on overlong assign (VARYING
 semantics truncate to max); sizing STAR returns from the static
 placeholder length (always truncates to 1).
+
+---
+
+## ADR-153 — SUBSTR pseudo-variable assignment grows VARYING targets
+
+**Context.** Rule (86) serves the SUBSTR pseudo-variable, but only fixed
+targets were pinned (`substr_var.pli` wrote through `buf CHAR(64)`). A
+VARYING target kept its old live length: appending past the end with
+`SUBSTR(B, total + 1, n) = ...` wrote bytes past `cur` that stayed
+invisible, so `LENGTH` reported 0 and the libnet `fetch_dyn` example
+printed a blank body.
+
+**Decision.** A SUBSTR-assign whose target is a plain VARYING variable
+calls a new `pli_substr_assign_varying` helper (same overwrite as
+`pli_substr_assign`, clipped to the maximum) that then grows the i32
+length prefix to the overlay end when it reaches past the old length,
+blank-filling any gap. Other targets (fixed strings, members, array
+elements) keep the in-place overwrite.
+
+**Consequences.** `substr_var.pli` pins growth from empty, gap
+blank-fill (`'ab'` + overlay at 4 → `'ab cd'`), in-place overwrite
+without shrink, and clipping at the maximum; `fetch_dyn` appends chunks
+into a `CHAR(*) VARYING CONTROLLED` generation and prints the fetched
+response.
+
+**Rejected.** Growing the length in IRGen inline (gap blank-fill still
+needs runtime help; one helper keeps the semantics in a single place);
+growing non-variable targets such as function results (unobservable).
