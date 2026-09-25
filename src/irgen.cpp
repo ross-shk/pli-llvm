@@ -1922,6 +1922,18 @@ void IRGen::emitAssign(HStmt* s) {
       else
         cap = i64(sym->ty.len);
     }
+    // A VARYING target grows its live length when the overlay reaches past
+    // it (rule (86)); fixed targets keep the in-place overwrite below.
+    HExpr* base = t->args[0].get();
+    if (base->kind == HExpr::VarRef && sym && sym->ty.isChar() && sym->ty.varying &&
+        base->memberPath.empty()) {
+      llvm::Value* stor = addressOf(sym);
+      llvm::Value* lp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 0, "vlenp");
+      llvm::Value* dp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 1, "vdata");
+      b_.CreateCall(runtimeFn("pli_substr_assign_varying"),
+                    {dp, cap, lp, toI64(start), toI64(len), rhs.ptr, rhs.len});
+      return;
+    }
     b_.CreateCall(runtimeFn("pli_substr_assign"),
                   {sv.ptr, cap, toI64(start), toI64(len), rhs.ptr, rhs.len});
     return;

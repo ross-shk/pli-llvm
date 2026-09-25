@@ -52,6 +52,7 @@ PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))
 PLI_FN(pli_concat, VOID, (PTR, CPTR, I64, CPTR, I64))
 PLI_FN(pli_substr, VOID, (PTR, I64, CPTR, I64, I64, I64))    /* SUBSTR */
 PLI_FN(pli_substr_assign, VOID, (PTR, I64, I64, I64, CPTR, I64)) /* SUBSTR pseudo-var */
+PLI_FN(pli_substr_assign_varying, VOID, (PTR, I64, PTR, I64, I64, CPTR, I64)) /* SUBSTR pseudo-var on VARYING */
 PLI_FN(pli_index, I64, (CPTR, I64, CPTR, I64))        /* INDEX */
 PLI_FN(pli_mod_ll, I64, (I64, I64))                   /* MOD */
 PLI_FN(pli_mod_dd, DOUBLE, (DOUBLE, DOUBLE))
