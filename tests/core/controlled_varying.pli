@@ -1,0 +1,39 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Adjustable CONTROLLED varying strings (rules (13),(18),(89)):
+    DCL TEXT CHAR(*) VARYING CONTROLLED sizes each generation
+    from ALLOCATE (n) CHARACTER VARYING or CHAR(n) VARYING;
+    RETURNS(CHAR(*) VARYING) carries a caller-sized max. */
+ ctlvary: procedure options(main);
+    declare fails fixed bin(31);
+    declare n fixed bin(31);
+    declare text char(*) varying controlled;
+    declare s char(20) varying;
+    fails = 0;
+    n = 20;
+    allocate text (n) character varying;
+    text = 'hello';
+    if length(text) ^= 5 then fails = fails + 1;
+    if text ^= 'hello' then fails = fails + 1;
+    text = 'hello' || ' ' || 'world';
+    if text ^= 'hello world' then fails = fails + 1;
+    if length(text) ^= 11 then fails = fails + 1;
+    if substr(text, 1, 5) ^= 'hello' then fails = fails + 1;
+    free text;
+    allocate text char(10) varying;
+    text = 'abcdef';
+    if length(text) ^= 6 then fails = fails + 1;
+    free text;
+    s = ReadString(6);
+    if s ^= 'hello!' then fails = fails + 1;
+    if length(s) ^= 6 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS ctlvary');
+    else put skip list('FAIL ctlvary: fails =', fails);
+ ReadString: procedure(m) returns(char(*) varying);
+    declare m fixed bin(31);
+    declare buf char(*) varying controlled;
+    allocate buf (m) character varying;
+    buf = 'hello!';
+    return(buf);
+ end ReadString;
+ end ctlvary;

@@ -288,11 +288,18 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->waitCount = lowerExpr(s->waitCount.get());
 
   // ALLOCATE (rule 87) / FREE (rule 90): mirror the based variable references
-  // and their SET pointer targets / locators.
+  // and their SET pointer targets / locators. CONTROLLED items (rule 89) also
+  // carry a dimension length and/or CHAR length plus VARYING/CHARACTER flags.
   for (const auto& b : s->allocBase)
     h->allocBase.push_back(lowerExpr(b.get()));
   for (const auto& t : s->allocSet)
     h->allocSet.push_back(lowerExpr(t.get()));
+  for (const auto& d : s->allocDim)
+    h->allocDim.push_back(lowerExpr(d.get()));
+  for (const auto& c : s->allocCharLen)
+    h->allocCharLen.push_back(lowerExpr(c.get()));
+  h->allocVarying = s->allocVarying;
+  h->allocHasChar = s->allocHasChar;
   for (const auto& b : s->freeBase)
     h->freeBase.push_back(lowerExpr(b.get()));
 
@@ -736,6 +743,16 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
         os << " set=";
         printExpr(os, s->allocSet[i].get(), ind);
       }
+      if (i < s->allocDim.size() && s->allocDim[i]) {
+        os << " dim=";
+        printExpr(os, s->allocDim[i].get(), ind);
+      }
+      if (i < s->allocCharLen.size() && s->allocCharLen[i]) {
+        os << " charlen=";
+        printExpr(os, s->allocCharLen[i].get(), ind);
+      }
+      if (i < s->allocVarying.size() && s->allocVarying[i])
+        os << " varying";
     }
     break;
   case HStmt::Free:

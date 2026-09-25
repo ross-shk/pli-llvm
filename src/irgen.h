@@ -309,6 +309,13 @@ private:
   static std::vector<unsigned char> packBitInit(const Expr* ini, int nbits);
   Val charTemp(int len); // alloca [len x i8]
   Val charOf(HExpr* e);  // materialise a character value
+  // Hidden result buffer for a character function (rules (34),(37)): a
+  // `CHAR(*) VARYING` result (rule (18)) gets a caller-sized max
+  // (kStarRetMax) so the callee never writes past the buffer; other results
+  // use their static descriptor size.
+  static constexpr long long kStarRetMax = 32767;
+  llvm::Type* sretBufTy(const Type& rty);
+  llvm::Value* sretAlloc(const Type& rty, const char* name = "sret");
   // FIXED BINARY checked +,-,* (QR1.2): overflow traps to the SIZE path
   // (hard ERROR when no SIZE handler is established, QR1.4).
   llvm::Value* checkedArith(Tok op, llvm::Value* a, llvm::Value* b);

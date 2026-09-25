@@ -3970,3 +3970,32 @@ bytes into the caller's smaller buffer. Adjustable-length `CHARACTER VARYING`
 (`*`) as the direct fix remains rejected for the same reason as ADR-142 (the
 live-length prefix would have to live inside the caller's buffer, changing its
 layout).
+
+---
+
+## ADR-152 — Deferred `CHAR(*) VARYING CONTROLLED` generations and caller-sized varying returns
+
+**Context.** Rules (13),(18),(89) allow `DCL text CHAR(*) VARYING
+CONTROLLED` with the maximum supplied per generation by `ALLOCATE text
+(n) CHARACTER VARYING` (or `CHAR(n) VARYING`), and rule (34) allows
+`PROC RETURNS(CHAR(*) VARYING)`. The static descriptor (`len` 1) cannot
+size either: a VARYING generation is `{i32 cur, [max x i8]}`, and a STAR
+return has no caller-declared max.
+
+**Decision.** A VARYING STAR generation allocates `4+max` bytes (`max`
+from the ALLOCATE dimension or `CHAR` length, else the `CHAR(expr)`
+descriptor), starts with `cur = 0`, and stores truncate to the live max
+(`pli_assign_varying`); `LENGTH`/concat/`SUBSTR` use the live max
+(`pli_ctl_len - 4`). Non-VARYING `CHAR(*)` keeps the existing
+auto-expand on overlong assign. A `RETURNS(CHAR(*) VARYING)` result
+rides a caller-sized max (`kStarRetMax` 32767) through the hidden result
+buffer; concat temporaries are runtime-sized from the live operand sum.
+
+**Consequences.** `controlled_varying.pli` pins ALLOCATE `(n)` and
+`CHAR(n)` forms, assign/`LENGTH`/concat/`SUBSTR`, truncation to max,
+and a `ReadString`-style varying STAR return. GRAMMAR-COVERAGE rules
+(18),(34)–(38),(87)–(90) list the served forms.
+
+**Rejected.** Growing a VARYING generation on overlong assign (VARYING
+semantics truncate to max); sizing STAR returns from the static
+placeholder length (always truncates to 1).

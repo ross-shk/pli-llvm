@@ -261,9 +261,16 @@ struct Stmt {
   ExprP oncodeExpr;
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
   // (a VarRef to a based structure) and its SET(...) pointer target (rule 88;
-  // allocSet[i] is a VarRef to a POINTER).
+  // allocSet[i] is a VarRef to a POINTER). A CONTROLLED item (rule 89) may
+  // carry a dimension-attribute length (allocDim[i]) and/or a CHAR length
+  // (allocCharLen[i]); allocVarying[i]/allocHasChar[i] record the trailing
+  // CHARACTER/VARYING keywords. Null = absent.
   std::vector<ExprP> allocBase;
   std::vector<ExprP> allocSet;
+  std::vector<ExprP> allocDim;
+  std::vector<ExprP> allocCharLen;
+  std::vector<char> allocVarying;
+  std::vector<char> allocHasChar;
   // FREE (rule 90): per item, the based variable reference. An explicit locator
   // is carried on freeBase[i]->locPtr; null means the BASED base pointer.
   std::vector<ExprP> freeBase;
