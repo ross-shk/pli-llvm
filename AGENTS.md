@@ -16,7 +16,7 @@ Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 - never roll back already implemented features or remove them from tests unless they don't conform to TR25.084 or IBM Enterprise PL/I
 - make and refine a detailed plan for a task first, then implement
 - do not duplicate info from the specs into README and the docs unless actually necessary
-- keep the docs and explanations clear and concise, assume the reader is a junior+ level programmer
+- keep the docs and explanations humamized, clear and concise, assume the reader is a junior+ level programmer
 - do not commit without my approval, make sure changes are atomic with clear commit messages
 - do not quietly change/revert existing code unless required by the current task
 - KISS: smallest change that works; keep implementations lean
