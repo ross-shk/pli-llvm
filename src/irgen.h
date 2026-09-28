@@ -66,6 +66,11 @@ private:
   // read from the caller-supplied hidden i64 length argument once at entry.
   // The mirror of `dynUb_` for character parameters.
   std::unordered_map<Symbol*, llvm::Value*> dynLen_;
+  // For a CONTROLLED `CHAR(*)` dummy (rules (15),(18)): the effective
+  // generation-stack key, selected from the hidden i64 slot-key argument at
+  // entry (-1 = fresh stack, else the actual's key). The mirror of `dynLen_`
+  // for CONTROLLED parameters; every pli_ctl_* call uses it via ctlKeyOf.
+  std::unordered_map<Symbol*, llvm::Value*> ctlKey_;
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynLb_;
@@ -201,12 +206,25 @@ private:
   // Buffer capacity of a call argument passed to an adjustable-length `CHAR(*)`
   // parameter (rule (18)): a fixed char variable's declared length, a forwarded
   // `CHAR(*)` parameter's live length, or the emitted value's length.
-  llvm::Value* argLen(HExpr* a);
+  llvm::Value* argLen(HExpr* a, bool ptyVarying);
   // Live capacity of an adjustable-length `CHAR(*)` value (rule (18)): the
   // hidden length for a parameter, the current generation size for a
   // CONTROLLED variable (rule (15)). Returns nullptr when the type is not an
   // adjustable character (fixed/VARYING keep their static lengths).
   llvm::Value* adjustLen(Symbol* sym, const Type& ty);
+  // Effective generation-stack key of a CONTROLLED variable (rules (15),(87)):
+  // the key bound at entry for a controlled `CHAR(*)` dummy (an alias of the
+  // actual's stack), else the symbol's own deterministic slot.
+  llvm::Value* ctlKeyOf(Symbol* sym);
+  // Hidden i64 for a controlled `CHAR(*)` dummy (rules (15),(18)): the
+  // actual's generation-stack key, or -1 when the actual is not controlled
+  // (the dummy then gets a stack of its own).
+  llvm::Value* ctlKeyArg(HExpr* a);
+  // The hidden i64 one adjustable parameter receives at a call site (rules
+  // (13),(15),(18)): the actual's slot key for a CONTROLLED `CHAR(*)` dummy,
+  // zero for an omitted `*`/trailing OPTIONAL, else the actual's array extent
+  // or character buffer length. `a` is null for an omitted argument.
+  llvm::Value* hiddenAdjustArg(HExpr* a, const Type& ty, bool ctl);
 
   Val emitExpr(HExpr* e);
   // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).

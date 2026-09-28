@@ -1876,6 +1876,8 @@ bool Parser::parseDescriptorType(Type& out) {
     out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
     if (bag.starLen)
       out.starLen = true;
+    // CONTROLLED dummy association visible to cross-module callers (15).
+    out.controlled = bag.controlled;
   } else if (bag.bit)
     out = Type::bit(bag.slen > 0 ? bag.slen : 1);
   else if (bag.floating)

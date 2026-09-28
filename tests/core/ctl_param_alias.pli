@@ -1,0 +1,104 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (15),(18),(87)-(90): a CHAR(*) VARYING CONTROLLED parameter
+    associates with the caller's generation stack: the callee's
+    ALLOCATE/FREE push and pop the ACTUAL's stack, so the string it
+    grows and trims is readable (and freeable) by the caller. */
+ ctlalias: procedure options(main);
+   dcl body        char(*) varying controlled;
+   dcl buf         char(20) varying;
+   dcl cap         fixed bin(31);
+   dcl got         fixed bin(31);
+   dcl fails       fixed bin(31) init(0);
+
+   /* 1: the callee allocates, grows by doubling and trims the
+      caller's stack; the final generation carries all 100 bytes. */
+   cap = 16;
+   got = fill_x(body, cap);
+   if got ^= 100 then fails = fails + 1;
+   if cap ^= 128 then fails = fails + 1;  /* doubling, by reference */
+   if length(body) ^= 100 then fails = fails + 1;
+   if substr(body, 1, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+   if substr(body, 46, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+   if substr(body, 93, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+
+   /* 2: a nested callee (formal forwarded as actual) pushes a fresh
+      generation onto the same caller stack; FREE pops it in main. */
+   call relay(body, 8);
+   if length(body) ^= 8 then fails = fails + 1;
+   if substr(body, 1, 8) ^= 'yyyyyyyy' then fails = fails + 1;
+   free body;
+   if length(body) ^= 100 then fails = fails + 1; /* the fill_x gen */
+   if substr(body, 1, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+   free body;
+
+   /* 3: a non-controlled actual leaves the dummy a fresh stack of its
+      own (rule (15)); the caller's variable is untouched. */
+   buf = 'keepme';
+   call local_only(buf);
+   if length(buf) ^= 6 then fails = fails + 1;
+   if buf ^= 'keepme' then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS ctl_param_alias');
+   else put skip list('FAIL ctl_param_alias: fails=', fails);
+
+ /* fill_x - the libnet read_all pattern: grow by doubling through a
+    spare copy, append with SUBSTR, trim the last generation. */
+ fill_x: procedure(buff, cap) returns(fixed bin(31));
+   dcl buff        char(*) varying controlled;
+   dcl cap         fixed bin(31);
+   dcl spare       char(*) varying controlled;
+   dcl chunk       char(30) varying;
+   dcl total       fixed bin(31) init(0);
+   dcl n           fixed bin(31);
+
+   chunk = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+   allocate buff (cap) character varying;
+   do while (total < 100);
+     n = min(30, 100 - total);
+     do while (total + n > cap);
+       cap = cap * 2;
+       allocate spare (cap) character varying;
+       spare = buff;
+       free buff;
+       allocate buff (cap) character varying;
+       buff = spare;
+       free spare;
+     end;
+     substr(buff, total + 1, n) = substr(chunk, 1, n);
+     total = total + n;
+   end;
+   if total < cap then do;
+     allocate spare (total) character varying;
+     spare = buff;
+     free buff;
+     allocate buff (total) character varying;
+     buff = spare;
+     free spare;
+   end;
+   return(total);
+ end fill_x;
+
+ /* relay - forwards its controlled dummy as the controlled actual
+    of another call: the hidden key rides through both frames. */
+ relay: procedure(buff, m);
+   dcl buff        char(*) varying controlled;
+   dcl m           fixed bin(31);
+   call push_y(buff, m);
+ end relay;
+
+ push_y: procedure(buff, m);
+   dcl buff        char(*) varying controlled;
+   dcl m           fixed bin(31);
+   allocate buff (m) character varying;
+   buff = 'yyyyyyyy';
+ end push_y;
+
+ local_only: procedure(s);
+   dcl s           char(*) varying controlled;
+   allocate s (5) character varying;
+   s = 'zzzzz';
+   free s;
+ end local_only;
+
+ end ctlalias;

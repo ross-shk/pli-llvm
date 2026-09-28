@@ -1,0 +1,37 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (15),(18),(87)-(90): a CHAR(*) VARYING CONTROLLED dummy of a
+    procedure compiled in a different module (ctl_xfer_lib.pli) grows,
+    trims and tops up the caller's generation stack through the hidden
+    slot-key argument. Build: two -c units linked together. */
+ ctlxfer: procedure options(main);
+   dcl body        char(*) varying controlled;
+   dcl cap         fixed bin(31);
+   dcl got         fixed bin(31);
+   dcl fails       fixed bin(31) init(0);
+   dcl grow        entry (char(*) varying controlled, fixed bin(31),
+                  fixed bin(31)) returns (fixed bin(31)) external;
+   dcl topup       entry (char(*) varying controlled, fixed bin(31))
+                  external;
+
+   /* grow allocates, doubles past 16, appends 100 bytes, trims. */
+   cap = 16;
+   got = grow(body, cap, 100);
+   if got ^= 100 then fails = fails + 1;
+   if cap ^= 128 then fails = fails + 1;   /* by-reference doubling */
+   if length(body) ^= 100 then fails = fails + 1;
+   if substr(body, 1, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+   if substr(body, 46, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+   if substr(body, 93, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+
+   /* topup pushed a second generation onto the caller's stack. */
+   call topup(body, 8);
+   if length(body) ^= 8 then fails = fails + 1;
+   if substr(body, 1, 8) ^= 'yyyyyyyy' then fails = fails + 1;
+   free body;
+   if length(body) ^= 100 then fails = fails + 1;
+   free body;
+
+   if fails = 0 then put skip list('PASS ctl_xfer');
+   else put skip list('FAIL ctl_xfer: fails=', fails);
+ end ctlxfer;

@@ -123,18 +123,26 @@ class Runner:
 
     def exec_test(self):
         src = self.dir / f"{self.name}.pli"
+        libsrc = self.dir / f"{self.name}_lib.pli"
         compilefile = self.out / f"{self.name}.compile"
         with open(compilefile, "w") as cfh:
-            if (self.dir / f"{self.name}.c").exists():
+            if libsrc.exists() or (self.dir / f"{self.name}.c").exists():
                 # Cross-unit test: compile each unit and link with the runtime.
-                steps = [
-                    [CLANG, "-c", str(self.dir / f"{self.name}.c"),
-                     "-o", str(self.out / f"{self.name}.c.o")],
-                    [PLIC, str(src), "-c", "-o", str(self.out / f"{self.name}.pli.o")],
-                    [CLANG, str(self.out / f"{self.name}.pli.o"),
-                     str(self.out / f"{self.name}.c.o"), RTLIB,
-                     "-o", str(self.out / self.name)],
-                ]
+                # A `_lib.pli` companion is a PL/I module (multimodule group);
+                # a `.c` companion is a C translation unit.
+                objs = []
+                steps = []
+                if libsrc.exists():
+                    objs.append(self.out / f"{self.name}_lib.pli.o")
+                    steps.append([PLIC, str(libsrc), "-c", "-o", str(objs[-1])])
+                if (self.dir / f"{self.name}.c").exists():
+                    objs.append(self.out / f"{self.name}.c.o")
+                    steps.append([CLANG, "-c", str(self.dir / f"{self.name}.c"),
+                                  "-o", str(objs[-1])])
+                objs.append(self.out / f"{self.name}.pli.o")
+                steps.append([PLIC, str(src), "-c", "-o", str(objs[-1])])
+                steps.append([CLANG] + [str(o) for o in objs] + [RTLIB,
+                              "-o", str(self.out / self.name)])
                 failed = None
                 for step in steps:
                     if subprocess.run(step, stdout=cfh, stderr=subprocess.STDOUT).returncode != 0:
@@ -232,6 +240,10 @@ def enumerate_jobs(args):
         for f in sorted(dir_path.glob("*.sh")):
             add(f.stem, "driver")
         for f in sorted(dir_path.glob("*.pli")):
+            # A `_lib.pli` file is a companion unit of a multimodule test,
+            # not a test of its own.
+            if f.name.endswith("_lib.pli"):
+                continue
             if not f.name.startswith("bad_"):
                 # tests/ir/*.pli are IR golden tests (FileCheck against .check).
                 kind = "ir" if dir_path.name == "ir" else "exec"

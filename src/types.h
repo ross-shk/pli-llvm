@@ -58,6 +58,11 @@ struct Type {
   // length comes from the caller's actual argument at call time, passed as a
   // hidden i64 length argument (mirrors the `*` adjustable array extent).
   bool starLen = false;
+  // CONTROLLED dummy association (rule (15)): an ENTRY descriptor parameter
+  // marked CONTROLLED; a controlled actual shares its generation stack with
+  // the dummy through the hidden i64 slot-key argument (rules (18),(89)).
+  // Deliberately not part of type equivalence.
+  bool controlled = false;
   // Array dimension bounds per axis — rules (12),(13). Empty for a scalar.
   // `len`/`prec`/... describe the element type.
   std::vector<Dim> dims;
@@ -223,6 +228,7 @@ inline Type& Type::operator=(const Type& o) {
   len = o.len;
   varying = o.varying;
   starLen = o.starLen;
+  controlled = o.controlled;
   dims = o.dims;
   members.clear();
   members.reserve(o.members.size());

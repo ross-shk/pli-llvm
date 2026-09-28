@@ -1,0 +1,57 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (15),(18),(87)-(90): libnet-style compiled module: exported
+    procedures take a CHAR(*) VARYING CONTROLLED dummy and grow, trim
+    and push generations on the CALLER's stack across the object-file
+    boundary (the hidden i64 carries the actual's slot key). Companion
+    unit of ctl_xfer.pli. */
+ ctlx: package exports(grow, topup);
+
+ /* grow - fill the caller's controlled string with `want` bytes,
+    doubling through a spare copy, then trim the last generation. */
+ grow: procedure(buff, cap, want) returns(fixed bin(31));
+   dcl buff        char(*) varying controlled;
+   dcl cap         fixed bin(31);
+   dcl want        fixed bin(31);
+   dcl spare       char(*) varying controlled;
+   dcl chunk       char(30) varying;
+   dcl total       fixed bin(31) init(0);
+   dcl n           fixed bin(31);
+
+   chunk = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+   allocate buff (cap) character varying;
+   do while (total < want);
+     n = min(30, want - total);
+     do while (total + n > cap);
+       cap = cap * 2;
+       allocate spare (cap) character varying;
+       spare = buff;
+       free buff;
+       allocate buff (cap) character varying;
+       buff = spare;
+       free spare;
+     end;
+     substr(buff, total + 1, n) = substr(chunk, 1, n);
+     total = total + n;
+   end;
+   if total < cap then do;
+     allocate spare (total) character varying;
+     spare = buff;
+     free buff;
+     allocate buff (total) character varying;
+     buff = spare;
+     free spare;
+   end;
+   return(total);
+ end grow;
+
+ /* topup - push a fresh 'yyyyyyyy' generation onto the stack the
+    caller passed in; the caller pops it. */
+ topup: procedure(buff, m);
+   dcl buff        char(*) varying controlled;
+   dcl m           fixed bin(31);
+   allocate buff (m) character varying;
+   buff = 'yyyyyyyy';
+ end topup;
+
+ end ctlx;

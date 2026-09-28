@@ -803,7 +803,7 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
   // A CONTROLLED variable (rules (15),(87)-(90), ADR-140) has no frame
   // storage: its address is the latest generation on its runtime stack.
   if (sym->controlled)
-    return b_.CreateCall(runtimeFn("pli_ctl_addr"), {i64(sym->ctlSlot)}, "ctladdr");
+    return b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctladdr");
   // rule (8): an enclosing variable is reached through this frame's static
   // link; otherwise it is this frame's own storage (globals / allocas /
   // parameters). Both are recorded in symAddr_.
@@ -1248,12 +1248,17 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     structRetPtr_ = fn->getArg(ai++); // hidden result pointer (rules 127, (34))
   for (Symbol* s : p->paramSyms)
     symAddr_[s] = fn->getArg(ai++);
+  std::vector<std::pair<Symbol*, llvm::Value*>> ctlHid;
   for (Symbol* s : p->paramSyms)
     if (isAdjustable(s)) {
       // A `*`-extent array reads its hidden extent into dynUb_; a `CHAR(*)`
       // parameter reads its hidden length into dynLen_ (rules (13),(18)).
+      // A CONTROLLED `CHAR(*)` dummy takes the actual's slot key instead
+      // (rules (15),(18)); its alias binds once the entry block is live.
       llvm::Value* hv = fn->getArg(ai++);
-      if (isStarLen(s->ty))
+      if (s->controlled && isStarLen(s->ty))
+        ctlHid.push_back({s, hv});
+      else if (isStarLen(s->ty))
         dynLen_[s] = hv;
       else
         dynUb_[s] = hv;
@@ -1262,6 +1267,12 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     symAddr_[p->env[i]] = fn->getArg(ai++);
 
   b_.SetInsertPoint(entry);
+
+  // CONTROLLED dummy association (rule (15)): -1 (non-controlled actual)
+  // keeps the dummy's own slot; any other value is the caller's key.
+  for (auto& [s, hv] : ctlHid)
+    ctlKey_[s] = b_.CreateSelect(b_.CreateICmpEQ(hv, i64(-1), "ctlmine"),
+                                 i64((long long)s->ctlSlot), hv, "ctlkey");
 
   allocaLocals(p);
   emitInitials(p); // INITIAL attribute on AUTOMATIC variables (rule 26)
@@ -1330,10 +1341,15 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   size_t ai = 0;
   for (Symbol* s : uni)
     symAddr_[s] = impl->getArg(ai++);
+  std::vector<std::pair<Symbol*, llvm::Value*>> ctlHid;
   for (Symbol* s : uni)
     if (isAdjustable(s)) {
+      // Hidden args as in emitProc: extent, `CHAR(*)` length, or the
+      // CONTROLLED `CHAR(*)` dummy's slot key (rules (13),(15),(18)).
       llvm::Value* hv = impl->getArg(ai++);
-      if (isStarLen(s->ty))
+      if (s->controlled && isStarLen(s->ty))
+        ctlHid.push_back({s, hv});
+      else if (isStarLen(s->ty))
         dynLen_[s] = hv;
       else
         dynUb_[s] = hv;
@@ -1343,6 +1359,11 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   llvm::Value* sel = impl->getArg(ai++);
 
   b_.SetInsertPoint(entry);
+
+  // CONTROLLED dummy association (rule (15)), as in emitProc.
+  for (auto& [s, hv] : ctlHid)
+    ctlKey_[s] = b_.CreateSelect(b_.CreateICmpEQ(hv, i64(-1), "ctlmine"),
+                                 i64((long long)s->ctlSlot), hv, "ctlkey");
 
   allocaLocals(p);
   emitInitials(p);
@@ -2141,7 +2162,7 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(sym->ty)).getFixedValue());
   if (sym->ty.isChar() && sym->ty.starLen && sym->dynLenExpr)
     sz = toI64(emitExpr(sym->dynLenExpr), loc);
-  b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(sym->ctlSlot), sz});
+  b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
 }
 
 // Implicit FREE for CONTROLLED variables at procedure exit: pop one generation
@@ -2149,7 +2170,7 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
 // pairs inside the body stay balanced on top of the implicit generation.
 void IRGen::emitCtlEpilogue() {
   for (Symbol* sym : ctlImplicitAlloc_)
-    b_.CreateCall(runtimeFn("pli_ctl_free"), {i64(sym->ctlSlot)});
+    b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(sym)});
 }
 
 // ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
@@ -2176,11 +2197,11 @@ void IRGen::emitAllocate(HStmt* s) {
       } else if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr) {
         sz = toI64(emitExpr(bsym->dynLenExpr), s->loc);
       }
-      b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(bsym->ctlSlot), sz});
+      b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
       if (bsym->ty.isChar() && bsym->ty.varying) {
         // A fresh VARYING generation starts empty (cur = 0).
         llvm::Value* addr =
-            b_.CreateCall(runtimeFn("pli_ctl_addr"), {i64(bsym->ctlSlot)}, "vaddr");
+            b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(bsym)}, "vaddr");
         llvm::Value* lp = b_.CreateStructGEP(llvmTy(bsym->ty), addr, 0, "vlenp");
         b_.CreateStore(b_.getInt32(0), lp);
       }
@@ -2199,7 +2220,7 @@ void IRGen::emitFree(HStmt* s) {
   for (auto& f : s->freeBase) {
     Symbol* bsym = f->sym;
     if (bsym && bsym->controlled) {
-      b_.CreateCall(runtimeFn("pli_ctl_free"), {i64(bsym->ctlSlot)});
+      b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(bsym)});
       continue;
     }
     llvm::Value* addr = f->locPtr ? emitExpr(f->locPtr.get()).reg : addressOf(bsym);
@@ -2908,6 +2929,12 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
         a->sym->ty.varying == pty.varying && a->memberPath.empty())
       return addressOf(a->sym);
+    // A VARYING variable into a fixed `CHAR(*)` dummy (rule (18)): overlay the
+    // string's data area by reference — the hidden argument carries its live
+    // length (argLen); a copy would expose the uninitialized tail.
+    if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
+        a->sym->ty.varying && !pty.varying && a->memberPath.empty())
+      return b_.CreateStructGEP(llvmTy(a->sym->ty), addressOf(a->sym), 1, "vdata");
     // Non-variable character argument (expression/literal): evaluate the
     // expression into a temp buffer of the result's declared capacity, then
     // pass the buffer pointer and its live length via argLen().
@@ -2974,7 +3001,7 @@ void IRGen::flushVarWrites() {
     if (w.sym->controlled) {
       // Reload generation-pointer; non-controlled stays as-is (already points
       // to its frame-allocated descriptor struct).
-      target = b_.CreateCall(runtimeFn("pli_ctl_addr"), {i64(w.sym->ctlSlot)}, "ctlfresh");
+      target = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(w.sym)}, "ctlfresh");
     }
     // Load length and data pointer from the parameter-sized dummy created by
     // argAddr.  Layout: {i32 cur_len, [N x i8] data}.
@@ -2986,7 +3013,7 @@ void IRGen::flushVarWrites() {
       // CHAR(*) VARYING CONTROLLED: the heap generation is {i32 cur_len, [max
       // x i8] data} with no outer descriptor.  Offset 0 → length field, offset
       // 4 → start of character data.  Get the live max via pli_ctl_len.
-      llvm::Value* ctllen = b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(w.sym->ctlSlot)},
+      llvm::Value* ctllen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(w.sym)},
                                           "ctllen");
       llvm::Value* max = b_.CreateSub(ctllen, i64(4), "ctlmax");
       // Data lives at offset 4 (skip the i32 length field).
@@ -3079,8 +3106,12 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
 
 // Buffer capacity of a call argument passed to an adjustable-length `CHAR(*)`
 // parameter (rule (18)): a fixed char variable's declared length, a forwarded
-// `CHAR(*)` parameter's live length, or the emitted value's length.
-llvm::Value* IRGen::argLen(HExpr* a) {
+// `CHAR(*)` parameter's live length, or the emitted value's length. A
+// `CHAR(n) VARYING` actual associated with a non-VARYING dummy takes its
+// CURRENT length (the buffer past the length is uninitialized); with a
+// VARYING dummy it takes the declared max (the capacity the dummy may grow
+// into). `ptyVarying` is the parameter's VARYING attribute.
+llvm::Value* IRGen::argLen(HExpr* a, bool ptyVarying) {
   if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar()) {
     // Forwarding a `CHAR(*)` parameter (rule (18)): pass the live length this
     // frame received for it. A CONTROLLED adjustable passes its current
@@ -3090,6 +3121,12 @@ llvm::Value* IRGen::argLen(HExpr* a) {
         return live;
       return i64(0);
     }
+    if (a->sym->ty.varying && !ptyVarying) {
+      llvm::Value* lp = b_.CreateStructGEP(llvmTy(a->sym->ty), addressOf(a->sym),
+                                           0, "al.vlenp");
+      return b_.CreateZExt(b_.CreateLoad(b_.getInt32Ty(), lp, "al.vlen"),
+                           b_.getInt64Ty(), "al.vlive");
+    }
     // A fixed char variable's declared length is the caller buffer's capacity.
     return i64(a->sym->ty.len);
   }
@@ -3097,6 +3134,36 @@ llvm::Value* IRGen::argLen(HExpr* a) {
   if (av.ty.isChar())
     return av.len ? av.len : i64(av.ty.len);
   return i64(0);
+}
+
+// Effective generation-stack key of a CONTROLLED variable (rules (15),(87)):
+// the alias key bound at entry for a controlled `CHAR(*)` dummy, else the
+// symbol's own deterministic slot (sema's qualified-name hash).
+llvm::Value* IRGen::ctlKeyOf(Symbol* sym) {
+  auto it = ctlKey_.find(sym);
+  return it != ctlKey_.end() ? it->second : i64((long long)sym->ctlSlot);
+}
+
+// Hidden i64 for a CONTROLLED `CHAR(*)` dummy at a call site (rules (15),
+// (18)): the actual variable's generation-stack key so callee ALLOCATE/FREE
+// act on the caller's stack; -1 when the actual is not controlled (the dummy
+// then gets a fresh stack of its own).
+llvm::Value* IRGen::ctlKeyArg(HExpr* a) {
+  if (a->kind == HExpr::VarRef && a->sym && a->sym->controlled &&
+      a->memberPath.empty())
+    return ctlKeyOf(a->sym);
+  return i64(-1);
+}
+
+// The hidden i64 an adjustable parameter takes at a call site (rules (13),
+// (15),(18)): a CONTROLLED `CHAR(*)` dummy gets the actual's slot key (the
+// stack it will allocate and free on), an omitted `*` or left-out trailing
+// OPTIONAL gets zero (non-controlled) or -1 (controlled: fresh stack), and
+// everything else keeps the extent/length convention.
+llvm::Value* IRGen::hiddenAdjustArg(HExpr* a, const Type& ty, bool ctl) {
+  if (ctl && isStarLen(ty))
+    return a ? ctlKeyArg(a) : i64(-1);
+  return a ? (isStarLen(ty) ? argLen(a, ty.varying) : argExtent(a)) : i64(0);
 }
 
 // Live capacity of an adjustable-length `CHAR(*)` value (rule (18)): the
@@ -3111,7 +3178,7 @@ llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
   if (ty.varying) {
     if (sym && sym->controlled) {
       llvm::Value* total =
-          b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "ctllen");
+          b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
       return b_.CreateSub(total, i64(4), "ctlmax");
     }
     // Non-controlled VARYING STAR parameter: max capacity from hidden arg.
@@ -3120,7 +3187,7 @@ llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
     return nullptr;
   }
   if (sym && sym->controlled)
-    return b_.CreateCall(runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "ctllen");
+    return b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
   if (sym && dynLen_.count(sym))
     return dynLen_[sym];
   return nullptr;
@@ -3216,12 +3283,13 @@ void IRGen::emitCall(HStmt* s) {
   for (size_t i = 0; i < calleeParams.size(); ++i) {
     if (isAdjustable(calleeParams[i])) {
       // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent
-      // alongside its null address (extension, ADR-119).
-      llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
-                             ? i64(0)
-                             : (isStarLen(calleeParams[i]->ty)
-                                    ? argLen(s->args[i].get())
-                                    : argExtent(s->args[i].get()));
+      // (or the -1 fresh-stack key for a CONTROLLED dummy) alongside its
+      // null address (extension, ADR-119).
+      HExpr* a = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
+                     ? nullptr
+                     : s->args[i].get();
+      llvm::Value* ext =
+          hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
       if (!ext) {
         d_.error(s->args[i]->loc,
                  "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -3240,10 +3308,10 @@ void IRGen::emitCall(HStmt* s) {
       if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) ||
             (t.isChar() && t.starLen)))
         continue;
-      llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
-                             ? i64(0)
-                             : (isStarLen(t) ? argLen(s->args[i].get())
-                                             : argExtent(s->args[i].get()));
+      HExpr* a = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
+                     ? nullptr
+                     : s->args[i].get();
+      llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
       if (!ext) {
         d_.error(s->args[i]->loc,
                  "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -3296,11 +3364,11 @@ void IRGen::emitAsyncCall(HStmt* s) {
       callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
   for (size_t i = 0; i < calleeParams.size(); ++i) {
     if (isAdjustable(calleeParams[i])) {
-      llvm::Value* ext = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
-                             ? i64(0)
-                             : (isStarLen(calleeParams[i]->ty)
-                                    ? argLen(s->args[i].get())
-                                    : argExtent(s->args[i].get()));
+      HExpr* a = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
+                     ? nullptr
+                     : s->args[i].get();
+      llvm::Value* ext =
+          hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
       if (!ext)
         ext = i64(0); // diagnosed by sema through the sync path (13)
       callArgs.push_back(ext);
@@ -3830,17 +3898,17 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
         llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx_, "expend", curFn_);
         b_.CreateCondBr(needs, expBB, copyBB);
         b_.SetInsertPoint(expBB);
-        b_.CreateCall(runtimeFn("pli_ctl_free"), {i64(sym->ctlSlot)});
-        b_.CreateCall(runtimeFn("pli_ctl_alloc"), {i64(sym->ctlSlot), srclen});
+        b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(sym)});
+        b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), srclen});
         b_.CreateBr(mergeBB);
         b_.SetInsertPoint(copyBB);
         b_.CreateBr(mergeBB);
         b_.SetInsertPoint(mergeBB);
         // Always reload fresh addr+len — may have changed in expBB
         llvm::Value* faddr = b_.CreateCall(
-            runtimeFn("pli_ctl_addr"), {i64(sym->ctlSlot)}, "fraddr");
+            runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "fraddr");
         llvm::Value* flen = b_.CreateCall(
-            runtimeFn("pli_ctl_len"), {i64(sym->ctlSlot)}, "flen");
+            runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "flen");
         b_.CreateCall(runtimeFn("pli_assign_char"),
                       {faddr, flen, v.ptr, v.len});
         return;
@@ -4550,10 +4618,10 @@ Val IRGen::emitExpr(HExpr* e) {
           if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) ||
                 (t.isChar() && t.starLen)))
             continue;
-          llvm::Value* ext = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
-                                 ? i64(0)
-                                 : (isStarLen(t) ? argLen(e->args[i].get())
-                                                 : argExtent(e->args[i].get()));
+          HExpr* a = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
+                         ? nullptr
+                         : e->args[i].get();
+          llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
           if (!ext) {
             d_.error(e->args[i]->loc,
                      "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -4631,12 +4699,13 @@ Val IRGen::emitExpr(HExpr* e) {
       args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
     for (size_t i = 0; i < calleeParams.size(); ++i)
       if (isAdjustable(calleeParams[i])) {
-        // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent.
-        llvm::Value* ext = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
-                               ? i64(0)
-                               : (isStarLen(calleeParams[i]->ty)
-                                      ? argLen(e->args[i].get())
-                                      : argExtent(e->args[i].get()));
+        // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent
+        // (or the -1 fresh-stack key for a CONTROLLED dummy).
+        HExpr* a = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
+                       ? nullptr
+                       : e->args[i].get();
+        llvm::Value* ext =
+            hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
         if (!ext) {
           d_.error(e->args[i]->loc,
                    "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
