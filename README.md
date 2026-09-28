@@ -17,19 +17,12 @@ make install
 
 ## Documentation
 
-| Document                                                                               | Contents                                                                                  |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                                                     | how to add a feature: layer map, workflow, invariants, test conventions                   |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                           | pipeline, IR levels, data representation, ABI, condition model, runtime interface         |
-| [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)                                   | design history: keyword handling, numeric representation, IR choices, and other decisions |
-| [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md)                                           | optimization roadmap, proposed HIR/MIR passes, LLVM integration, and measurement plan     |
-| [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md)                             | compiler engineering roadmap; historical milestones and work outside language coverage    |
-| [docs/QUICK-RELEASE-IMPLEMENTATION-PLAN.md](docs/QUICK-RELEASE-IMPLEMENTATION-PLAN.md) | remaining 1966 language work, organized into practical and conformance phases             |
-| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)                                   | rule-by-rule implementation notes, supported cases, diagnostics, and test references      |
-| [docs/BUILTINS-PLAN.md](docs/BUILTINS-PLAN.md)                                         | built-in support, tests, and remaining work                                               |
-| [docs/MODERN-PLI-PLAN.md](docs/MODERN-PLI-PLAN.md)                                     | small set of post-1966 niceties (`SELECT`, loop exits, …) as a separate extension track   |
-| [docs/POSIX-SURFACE.md](docs/POSIX-SURFACE.md)                                         | POSIX functions the `libpli` runtime relies on                                            |
-| [docs/CROSS-PLATFORM-PLAN.md](docs/CROSS-PLATFORM-PLAN.md)                             | plan for building on other platforms (MSVC support)                                       |
+| Document                                                               | Contents                                                                      |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                                     | how to add a feature: layer map, workflow, invariants, test conventions       |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                           | pipeline, IR levels, data representation, ABI, condition model, runtime interface |
+| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)                   | rule-by-rule implementation notes, supported cases, diagnostics, and test references |
+| [docs/SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md)       | TR 25.084 / Y33-6003 compliance audit: GAP-ANALYSIS, CONFORMANCE-MATRIX, REMEDIATION-PLAN |
 
 ## What the compiler handles today
 
@@ -62,7 +55,7 @@ make install
 - SEQUENTIAL RECORD files: `WRITE FILE(f) FROM(v)` / `READ FILE(f) INTO(v) `fixed-size binary records (`driver/record`, rules (112),(113))
 - preprocessor: recursive `%INCLUDE`/`%XINCLUDE`, `%DECLARE`, `%IF … %THEN … [%ELSE]`, `%ACTIVATE`/`%DEACTIVATE`-gated substitution
 - full operator set at spec precedence, including `**` right-associativity, `¬`/`^`/`~`, `!!` for concatenation, and the 48-character-set operator words (`AND`, `GT`, `CAT`, …)
-- built-ins per [docs/BUILTINS-PLAN.md](docs/BUILTINS-PLAN.md): string (`SUBSTR` incl. pseudo-variable assignment, `INDEX`, `LENGTH`, `REPEAT`, `VERIFY`, `TRANSLATE`, `TRIM`, `TALLY`, case/center/search/rank/collate, `REVERSE`, `HIGH`, `LOW`), math (incl. degree trig, `ASIN`/`ACOS`/`ATAN2`/`CBRT`), array/pointer/misc (`LBOUND`/`HBOUND`/`DIM` with axis forms, `NULL`, `ADDR`, `DATE`, `TIME`, `SYSPARM`)
+- built-ins per [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md): string (`SUBSTR` incl. pseudo-variable assignment, `INDEX`, `LENGTH`, `REPEAT`, `VERIFY`, `TRANSLATE`, `TRIM`, `TALLY`, case/center/search/rank/collate, `REVERSE`, `HIGH`, `LOW`), math (incl. degree trig, `ASIN`/`ACOS`/`ATAN2`/`CBRT`), array/pointer/misc (`LBOUND`/`HBOUND`/`DIM` with axis forms, `NULL`, `ADDR`, `DATE`, `TIME`, `SYSPARM`)
 - **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`, `END` and `PUT` as ordinary variables
 
 Everything else is reported as unimplemented *with its specification rule number*, which doubles as the to-do list; the full matrix is `docs/GRAMMAR-COVERAGE.md`.
