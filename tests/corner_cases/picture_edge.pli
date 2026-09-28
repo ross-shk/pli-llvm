@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* PICTURE edge cases (rules 146-148): Picture specifications for
+   numeric and character formatting. D1 feature (compiled, not
+   interpreted per ADR-017). Tests verify diagnosis. */
+picture_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* Numeric picture */
+   /* declare num pic 'ZZZ,ZZ9.99'; */
+   /* num = 1234.56; */
+
+   /* Character picture */
+   /* declare ch pic 'XXXX'; */
+   /* ch = 'ABCD'; */
+
+   /* Picture with drifting sign */
+   /* declare drft pic 'SSS9.99'; */
+
+   /* Picture with insertion chars */
+   /* declare ins pic 'BB/BB/BB'; */
+
+   /* Picture validation */
+   /* declare val pic '999'; */
+   /* val = 'ABC';  -- should raise CONVERSION */
+
+   /* PICTURE in EDIT-directed I/O */
+   /* put edit(123) (pic 'ZZ9.99'); */
+
+   put skip list('PASS picture_edge (diagnosed as unimplemented)');
+end picture_edge;

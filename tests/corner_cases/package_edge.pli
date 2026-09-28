@@ -1,0 +1,99 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* PACKAGE/EXPORTS edge cases (ADR-109): PACKAGE groups procedures under
+   one scope. EXPORTS lists externally visible members. Package-level data
+   (static, controlled, based, LIKE) supported as module-scope globals.
+   Sibling procedures reach shared package vars via global address. */
+
+/* Package definition - in separate file normally, but here inline for test */
+my_pkg: package exports(pkg_init, pkg_work, pkg_cleanup,
+                        pkg_set_global, pkg_get_global, pkg_use_like);
+
+   /* Package-level static data */
+   declare pkg_counter fixed bin(31) static initial(0);
+   declare pkg_name char(20) static initial('TestPackage');
+
+   /* Package-level structure for LIKE */
+   declare 1 pkg_template,
+          2 id fixed bin(31),
+          2 name char(20),
+          2 data(10) fixed bin(31);
+
+   pkg_init: proc options(bypass);
+      pkg_counter = 0;
+      put skip list('Package initialized');
+      return;
+   end pkg_init;
+
+   pkg_work: proc(val) options(bypass);
+      dcl val fixed bin(31);
+      pkg_counter = pkg_counter + val;
+      put skip list('Work done, counter =', pkg_counter);
+      return;
+   end pkg_work;
+
+   pkg_cleanup: proc options(bypass);
+      put skip list('Package cleaned up, final counter =', pkg_counter);
+      return;
+   end pkg_cleanup;
+
+   pkg_set_global: proc(v) options(bypass);
+      dcl v fixed bin(31);
+      pkg_counter = v;
+      return;
+   end pkg_set_global;
+
+   pkg_get_global: proc returns(fixed bin(31)) options(bypass);
+      return(pkg_counter);
+   end pkg_get_global;
+
+   pkg_use_like: proc options(bypass);
+      declare 1 local_copy like pkg_template;
+      local_copy.id = 999;
+      local_copy.name = 'Local';
+      put skip list('LIKE copy:', local_copy.id, local_copy.name);
+      return;
+   end pkg_use_like;
+
+   /* Internal procedure - not exported */
+   pkg_internal: proc options(bypass);
+      put skip list('Internal - should not be visible outside');
+      return;
+   end pkg_internal;
+
+end my_pkg;
+
+/* Main procedure - calls package exports */
+pkg_main: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* Declare exported procedures as external entries */
+   declare pkg_init entry() options(bypass) external;
+   declare pkg_work entry(fixed bin(31)) options(bypass) external;
+   declare pkg_cleanup entry() options(bypass) external;
+   declare pkg_set_global entry(fixed bin(31)) options(bypass) external;
+   declare pkg_get_global entry() returns(fixed bin(31)) options(bypass) external;
+   declare pkg_use_like entry() options(bypass) external;
+
+   /* Call exported procedures from package */
+   call pkg_init();
+   call pkg_work(42);
+   call pkg_cleanup();
+
+   /* Package-level data accessed by sibling procedures */
+   call pkg_set_global(100);
+   declare val fixed bin(31);
+   val = pkg_get_global();
+   if val ^= 100 then fails = fails + 1;
+
+   /* Package-level structure used in LIKE template */
+   call pkg_use_like();
+
+   /* Non-exported procedure should not be callable from outside */
+   /* call pkg_internal(); -- would fail to link */
+
+   if fails = 0 then put skip list('PASS package_edge');
+   else put skip list('FAIL package_edge: fails =', fails);
+
+end pkg_main;

@@ -1,0 +1,66 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Record I/O edge cases (rules 112,113): Sequential RECORD I/O.
+   WRITE FROM, READ INTO with fixed-size binary records. */
+record_io_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+/* Declare file variable */
+    declare rec_file file;
+
+    /* Open for output */
+    open file(rec_file) record sequential output title('test_rec.dat');
+
+   /* Write records */
+   declare rec1 fixed bin(31);
+   declare rec2 float dec(6);
+   declare rec3 char(20);
+   declare rec4 bit(1);
+
+   rec1 = 42;
+   write file(rec_file) from(rec1);
+
+   rec2 = 3.14159;
+   write file(rec_file) from(rec2);
+
+   rec3 = 'hello record';
+   write file(rec_file) from(rec3);
+
+   rec4 = '1'b;
+   write file(rec_file) from(rec4);
+
+   close file(rec_file);
+
+   /* Open for input */
+   open file(rec_file) record sequential input title('test_rec.dat');
+
+   /* Read back */
+   declare r1 fixed bin(31);
+   declare r2 float dec(6);
+   declare r3 char(20);
+   declare r4 bit(1);
+
+   read file(rec_file) into(r1);
+   if r1 ^= 42 then fails = fails + 1;
+
+   read file(rec_file) into(r2);
+   if abs(r2 - 3.14159) > 0.001 then fails = fails + 1;
+
+   read file(rec_file) into(r3);
+   if r3 ^= 'hello record' then fails = fails + 1;
+
+   read file(rec_file) into(r4);
+   if r4 ^= '1'b then fails = fails + 1;
+
+   /* Short read raises ERROR */
+   /* read file(rec_file) into(r1); -- would raise ERROR */
+
+   close file(rec_file);
+
+   /* Clean up */
+   /* system('rm test_rec.dat'); */
+
+   if fails = 0 then put skip list('PASS record_io_edge');
+   else put skip list('FAIL record_io_edge: fails =', fails);
+end record_io_edge;

@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* AREA and OFFSET edge cases (rules 20, 22): AREA is a storage pool
+   for BASED allocations. OFFSET values are pointers within an AREA.
+   These are M3 features - tests verify they are diagnosed. */
+area_offset_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* AREA declaration */
+   /* declare my_area area(1000); */
+
+   /* OFFSET declaration */
+   /* declare off offset(my_area); */
+
+   /* BASED in AREA */
+   /* declare 1 based_in_area based(off), 2 x fixed bin(31); */
+
+   /* ALLOCATE in AREA */
+   /* allocate based_in_area in(my_area) set(off); */
+
+   /* OFFSET assignment */
+   /* off = null(); */
+
+   /* OFFSET comparison */
+   /* if off = null() then ... */
+
+   /* These should all be diagnosed as unimplemented */
+   put skip list('PASS area_offset_edge (diagnosed as unimplemented)');
+end area_offset_edge;

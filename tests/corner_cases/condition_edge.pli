@@ -1,0 +1,124 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Condition handling edge cases (ADR-009, TR 25.084 rules 91-99):
+   ON unit establishment, SIGNAL, REVERT, handler stack, ONCODE,
+   nested ON units, RETURN from ON unit, condition prefixes. */
+condition_edge: procedure options(main);
+    declare passes fixed bin(31);
+    passes = 0;
+
+    /* Basic ON ERROR */
+    on error begin;
+       put skip list('ERROR handler');
+       passes = passes + 1;
+    end;
+
+    /* ON SIZE */
+    on size begin;
+       put skip list('SIZE handler');
+       passes = passes + 10;
+    end;
+
+    /* ON SUBSCRIPTRANGE */
+    on subscriptrange begin;
+       put skip list('SUBSCRIPTRANGE handler');
+       passes = passes + 100;
+    end;
+
+    /* ON ZERODIVIDE */
+    on zerodivide begin;
+       put skip list('ZERODIVIDE handler');
+       passes = passes + 1000;
+    end;
+
+    /* Test SIZE condition */
+    declare x fixed bin(31);
+    x = 2147483647;  /* MAX FIXED BIN(31) */
+    x = x + 1;       /* should raise SIZE */
+
+    /* Test ZERODIVIDE */
+    declare y fixed bin(31);
+    y = 10 / 0;      /* should raise ZERODIVIDE, resume with 0 */
+
+    /* Test ONCODE */
+    on error begin;
+       if oncode() = 1 then passes = passes + 10000;
+    end;
+    signal error;
+
+    /* Nested ON units */
+    on error begin;
+       put skip list('outer ERROR');
+       on error begin;
+          put skip list('inner ERROR');
+       end;
+       signal error;  /* should run inner handler */
+    end;
+    signal error;  /* should run outer handler */
+
+    /* REVERT */
+    on error begin;
+       put skip list('ERROR after revert?');
+    end;
+    revert error;
+    signal error;  /* should not run handler, system action */
+
+    /* RETURN from ON unit resumes after SIGNAL */
+    on error begin;
+       put skip list('in ERROR handler');
+       return;  /* resumes after signal */
+    end;
+    put skip list('before signal');
+    signal error;
+    put skip list('after signal');  /* should reach here */
+
+    /* Multiple conditions - separate ON statements */
+    on size begin;
+       put skip list('SIZE handler 2');
+    end;
+    on zerodivide begin;
+       put skip list('ZERODIVIDE handler 2');
+    end;
+
+    /* Condition prefixes */
+    (nosize): do;
+       x = 2147483647;
+       x = x + 1;  /* should wrap, no SIZE */
+    end;
+
+    (nosubscriptrange): do;
+       declare a(10) fixed bin(31);
+       declare idx fixed bin(31);
+       idx = 15;
+       a(idx) = 99;  /* no check */
+    end;
+
+    (nozerodivide): do;
+       y = 10 / 0;  /* no handler, resumes with 0 */
+    end;
+
+    /* Programmer-named conditions */
+    declare mycond condition;
+    on condition(mycond) begin;
+       put skip list('mycond handler');
+       passes = passes + 100000;
+    end;
+    signal condition(mycond);
+
+    /* Condition in nested block */
+    begin;
+       on error begin;
+          put skip list('block ERROR');
+       end;
+       signal error;
+    end;
+
+    /* ON unit with SNAP (warned, no effect) */
+    on error snap begin;
+       put skip list('SNAP handler');
+    end;
+    signal error;
+
+    if passes > 0 then put skip list('PASS condition_edge');
+    else put skip list('FAIL condition_edge: passes =', passes);
+end condition_edge;

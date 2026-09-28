@@ -1,0 +1,112 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Entry point and multiple ENTRY edge cases (ADR-026, TR 25.084 rule 56):
+   ENTRY statement declares alternate entry with own params/returns.
+   Shared impl with segment switching, thunks for each entry.
+   Tests cover multiple entries, different params, mixed return types. */
+entry_edge: procedure options(main);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    /* Multiple entry points in one procedure */
+    call entry_main(10, 20);
+    call entry_alt1(30);
+    call entry_alt2(40, 50, 60);
+
+    /* Entry with RETURNS (function procedure) */
+    declare result fixed bin(31);
+    result = entry_func(5, 6);
+    if result ^= 30 then fails = fails + 1;  /* 5 * 6 */
+
+    result = entry_func_alt(7);
+    if result ^= 49 then fails = fails + 1;  /* 7 * 7 */
+
+    /* Different entry names with different params */
+    call entry_multi1(1);
+    call entry_multi2(1, 2);
+    call entry_multi3(1, 2, 3);
+    call entry_multi4(1, 2, 3, 4);
+
+    /* Multiple entry names */
+    call name_a(100);
+    call name_b(200);
+
+    if fails = 0 then put skip list('PASS entry_edge');
+    else put skip list('FAIL entry_edge: fails =', fails);
+
+/* Procedure with multiple ENTRY statements - different param names */
+entry_main: proc(a, b) options(bypass);
+    dcl a fixed bin(31);
+    dcl b fixed bin(31);
+    put skip list('entry_main:', a, b);
+    return;
+
+entry_alt1: entry(c);
+    dcl c fixed bin(31);
+    put skip list('entry_alt1:', c);
+    return;
+
+entry_alt2: entry(d, e, f);
+    dcl d fixed bin(31);
+    dcl e fixed bin(31);
+    dcl f fixed bin(31);
+    put skip list('entry_alt2:', d, e, f);
+    return;
+
+end entry_main;
+
+/* Function with multiple ENTRY statements */
+entry_func: proc(x, y) returns(fixed bin(31)) options(bypass);
+    dcl x fixed bin(31);
+    dcl y fixed bin(31);
+    return(x * y);
+
+entry_func_alt: entry(z) returns(fixed bin(31));
+    dcl z fixed bin(31);
+    return(z * z);
+
+end entry_func;
+
+/* Different parameter counts at each entry - separate param names */
+entry_multi1: proc(p1) options(bypass);
+    dcl p1 fixed bin(31);
+    put skip list('entry_multi 1:', p1);
+    return;
+
+entry_multi2: entry(p2, p3);
+    dcl p2 fixed bin(31);
+    dcl p3 fixed bin(31);
+    put skip list('entry_multi 2:', p2, p3);
+    return;
+
+entry_multi3: entry(p4, p5, p6);
+    dcl p4 fixed bin(31);
+    dcl p5 fixed bin(31);
+    dcl p6 fixed bin(31);
+    put skip list('entry_multi 3:', p4, p5, p6);
+    return;
+
+entry_multi4: entry(p7, p8, p9, p10);
+    dcl p7 fixed bin(31);
+    dcl p8 fixed bin(31);
+    dcl p9 fixed bin(31);
+    dcl p10 fixed bin(31);
+    put skip list('entry_multi 4:', p7, p8, p9, p10);
+    return;
+
+end entry_multi1;
+
+/* Multiple entry names - separate procedures */
+name_a: proc(val) options(bypass);
+    dcl val fixed bin(31);
+    put skip list('entry namelist:', val);
+    return;
+end name_a;
+
+name_b: proc(val) options(bypass);
+    dcl val fixed bin(31);
+    put skip list('entry namelist:', val);
+    return;
+end name_b;
+
+end entry_edge;

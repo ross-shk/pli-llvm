@@ -1,0 +1,97 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Multiple closure edge cases (ADR-012, TR 25.084 §2.3.2.2, rule 7):
+   END label closes all blocks up to and including the labelled one.
+   Unlabelled END closes innermost. Tests deeply nested cases. */
+multi_closure_edge: procedure options(main);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    /* Basic multiple closure: one END closes two DO groups */
+    declare total fixed bin(31);
+    total = 0;
+    outer: do i = 1 to 3;
+       inner: do j = 1 to 3;
+          total = total + 1;
+       end outer;  /* closes both inner and outer */
+    if total ^= 9 then fails = fails + 1;
+
+    /* Three levels closed by one END */
+    total = 0;
+    l1: do i = 1 to 2;
+       l2: do j = 1 to 2;
+          l3: do k = 1 to 2;
+             total = total + 1;
+          end l1;  /* closes l3, l2, l1 */
+    if total ^= 8 then fails = fails + 1;
+
+    /* Multiple closure with BEGIN blocks */
+    total = 0;
+    b1: begin;
+       b2: begin;
+          b3: begin;
+             total = total + 1;
+          end b1;  /* closes b3, b2, b1 */
+       if total ^= 1 then fails = fails + 1;
+
+    /* Mixed DO and BEGIN */
+    total = 0;
+    md1: do i = 1 to 2;
+       mb1: begin;
+          md2: do j = 1 to 2;
+             total = total + 1;
+          end md1;  /* closes md2, mb1, md1 */
+       if total ^= 4 then fails = fails + 1;
+
+    /* END without label closes only innermost */
+    total = 0;
+    do i = 1 to 3;
+       do j = 1 to 3;
+          total = total + 1;
+       end;  /* closes only inner */
+       total = total + 10;
+    end;  /* closes outer */
+    if total ^= 9 + 30 then fails = fails + 1;  /* 9 inner + 3*10 outer = 39 */
+
+    /* Label on END that doesn't match any open block - should be diagnosed */
+    /* end nomatch;  -- compile error */
+
+    /* ON units don't affect DO nesting */
+    total = 0;
+    on1: on error begin;
+       total = total + 100;
+    end;
+    on2: on size begin;
+       total = total + 200;
+    end;
+    do i = 1 to 2;
+       on3: on zerodivide begin;
+          total = total + 300;
+       end;
+       /* ON units don't affect DO nesting */
+    end;
+    if total ^= 0 then fails = fails + 1;  /* no signals sent */
+
+    /* Multiple closure skipping a level */
+    total = 0;
+    skip1: do i = 1 to 2;
+       skip2: do j = 1 to 2;
+          total = total + 1;
+       end;
+       skip3: do k = 1 to 2;
+          total = total + 10;
+       end skip1;  /* closes skip3 and skip1, skip2 already closed */
+    if total ^= 4 + 40 then fails = fails + 1;  /* 2*2 + 2*2*10 = 44 */
+
+    if fails = 0 then put skip list('PASS multi_closure_edge');
+    else put skip list('FAIL multi_closure_edge: fails =', fails);
+end multi_closure_edge;
+
+/* Separate nested procedure test - can't use multiple closure on PROCEDURE */
+proc_outer: proc;
+    dcl total fixed bin(31) external;
+    proc_inner: proc;
+       total = total + 1;
+    end proc_inner;
+    call proc_inner();
+end proc_outer;

@@ -1,0 +1,142 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* VARYING string edge cases (ADR-007, ADR-024): CHARACTER(n) VARYING has
+   inline length prefix + data. SUBSTR pseudo-variable (rule 86) overwrites
+   in place. Tests cover length changes, boundary conditions, VARYING target
+   growing, and SUBSTR assignment edge cases. */
+varying_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+/* Basic VARYING operations */
+    declare v1 char(20) varying;
+    declare v2 char(20) varying;
+    declare v3 char(10) varying;
+
+    v1 = 'hello';
+    put skip list('v1=', v1, 'len=', length(v1));
+    if length(v1) ^= 5 then do; fails = fails + 1; put skip list('FAIL 1: len'); end;
+    if v1 ^= 'hello' then do; fails = fails + 1; put skip list('FAIL 2: val'); end;
+
+    /* Assignment grows length */
+    v1 = 'hello world';
+    put skip list('v1=', v1, 'len=', length(v1));
+    if length(v1) ^= 11 then do; fails = fails + 1; put skip list('FAIL 3: grow len'); end;
+
+    /* Assignment truncates at max length */
+    v1 = 'this is a very long string that exceeds max';
+    put skip list('v1=', v1, 'len=', length(v1));
+    if length(v1) ^= 20 then do; fails = fails + 1; put skip list('FAIL 4: truncate len'); end;
+    if v1 ^= 'this is a very long ' then do; fails = fails + 1; put skip list('FAIL 5: truncate val'); end;
+
+    /* Empty string */
+    v1 = '';
+    put skip list('v1=', v1, 'len=', length(v1));
+    if length(v1) ^= 0 then do; fails = fails + 1; put skip list('FAIL 6: empty'); end;
+
+    /* Concatenation */
+    v1 = 'abc';
+    v2 = 'def';
+    v3 = v1 || v2;
+    put skip list('v3=', v3, 'len=', length(v3));
+    if v3 ^= 'abcdef' then do; fails = fails + 1; put skip list('FAIL 7: concat'); end;
+    if length(v3) ^= 6 then do; fails = fails + 1; put skip list('FAIL 8: concat len'); end;
+
+    /* SUBSTR as pseudo-variable (left side) - fixed target */
+    declare f1 char(20);
+    f1 = 'abcdefghij';
+    substr(f1, 3, 4) = 'XXXX';  /* abXXXXghij */
+    put skip list('f1=', f1);
+    if f1 ^= 'abXXXXghij' then do; fails = fails + 1; put skip list('FAIL 9: substr fixed'); end;
+
+    /* SUBSTR pseudo-variable - VARYING target grows */
+    declare v4 char(20) varying;
+    v4 = 'abcdef';
+    substr(v4, 3, 2) = 'XX';    /* abXXef */
+    put skip list('v4=', v4, 'len=', length(v4));
+    if v4 ^= 'abXXef' then do; fails = fails + 1; put skip list('FAIL 10: substr var'); end;
+    if length(v4) ^= 6 then do; fails = fails + 1; put skip list('FAIL 11: substr var len'); end;
+
+    /* SUBSTR pseudo-variable - VARYING target grows past current length */
+    v4 = 'abc';
+    substr(v4, 5, 3) = 'XYZ';   /* abc XYZ - inserts blank when start > current length */
+    put skip list('v4=', v4, 'len=', length(v4));
+    if v4 ^= 'abc XYZ' then do; fails = fails + 1; put skip list('FAIL 12: substr grow'); end;
+    if length(v4) ^= 7 then do; fails = fails + 1; put skip list('FAIL 13: substr grow len'); end;
+
+    /* SUBSTR pseudo-variable - VARYING target clipped at max */
+    declare v5 char(10) varying;
+    v5 = '1234567890';
+    substr(v5, 5, 10) = 'ABCDEFGHIJ';  /* only 6 chars fit */
+    put skip list('v5=', v5, 'len=', length(v5));
+    if length(v5) ^= 10 then do; fails = fails + 1; put skip list('FAIL 14: substr clip'); end;
+
+    /* SUBSTR with start beyond length - pads with blanks */
+    v5 = 'hi';
+    substr(v5, 10, 3) = 'ABC';  /* hi        ABC -> but clipped to max 10 */
+    put skip list('v5=', v5, 'len=', length(v5));
+    if length(v5) ^= 10 then do; fails = fails + 1; put skip list('FAIL 15: substr beyond'); end;
+
+    /* SUBSTR on right side (built-in) */
+    declare src char(20);
+    src = '0123456789';
+    declare sub char(10);
+    sub = substr(src, 3, 4);   /* 2345 */
+    put skip list('sub=', sub);
+    if sub ^= '2345' then do; fails = fails + 1; put skip list('FAIL 16: substr rhs'); end;
+
+    /* SUBSTR with VARYING source */
+    declare vsrc char(20) varying;
+    vsrc = 'ABCDEFGH';
+    sub = substr(vsrc, 2, 3);  /* BCD */
+    put skip list('sub=', sub);
+    if sub ^= 'BCD' then do; fails = fails + 1; put skip list('FAIL 17: substr var src'); end;
+
+    /* SUBSTR with start = 1 */
+    sub = substr(vsrc, 1, 3);  /* ABC */
+    put skip list('sub=', sub);
+    if sub ^= 'ABC' then do; fails = fails + 1; put skip list('FAIL 18: substr start1'); end;
+
+    /* SUBSTR with length specified */
+    sub = substr(vsrc, 5, 4);     /* EFGH */
+    put skip list('sub=', sub);
+    if sub ^= 'EFGH' then do; fails = fails + 1; put skip list('FAIL 19: substr len'); end;
+
+    /* SUBSTR in expressions */
+    if substr('ABCDEF', 2, 2) = 'BC' then put skip list('substr expr ok');
+
+    /* Nested SUBSTR */
+    v4 = '123456';
+    substr(v4, 2, 2) = substr('abcd', 1, 2);  /* 1ab456 */
+    put skip list('v4=', v4);
+    if v4 ^= '1ab456' then do; fails = fails + 1; put skip list('FAIL 20: nested substr'); end;
+
+    /* Multiple SUBSTR assignments */
+    v4 = 'abcdefgh';
+    substr(v4, 1, 2) = 'XY';
+    substr(v4, 5, 2) = 'ZW';
+    put skip list('v4=', v4);
+    if v4 ^= 'XYcdZWgh' then do; fails = fails + 1; put skip list('FAIL 21: multi substr'); end;
+
+    /* SUBSTR with variable start/length */
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    i = 2; j = 3;
+    v4 = 'abcdefgh';
+    substr(v4, i, j) = 'XXX';  /* aXXXefgh */
+    put skip list('v4=', v4);
+    if v4 ^= 'aXXXefgh' then do; fails = fails + 1; put skip list('FAIL 22: var substr'); end;
+
+    /* VARYING parameter passing */
+    call vary_proc(v4);
+
+    if fails = 0 then put skip list('PASS varying_edge');
+    else put skip list('FAIL varying_edge: fails =', fails);
+
+vary_proc: proc(s) options(bypass);
+   dcl s char(*) varying;
+   s = 'modified';
+   return;
+end vary_proc;
+
+end varying_edge;

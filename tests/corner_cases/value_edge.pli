@@ -1,0 +1,62 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* VALUE named constant edge cases (ADR-108): DECLARE x ... VALUE(const)
+   keeps AUTOMATIC storage initialized once. VALUE variables cannot be
+   targets of assignment, SUBSTR pseudo-variable, GET, READ INTO, DO
+   control, or PUT STRING. Tests cover valid use and restrictions. */
+value_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* VALUE constant - initialized once at first block entry */
+   declare max_size fixed bin(31) value(100);
+   declare pi float dec(6) value(3.14159);
+   declare name char(20) value('CONSTANT');
+
+   /* VALUE can be used in expressions */
+   declare x fixed bin(31);
+   x = max_size + 10;
+   if x ^= 110 then fails = fails + 1;
+
+   if pi ^= 3.14159 then fails = fails + 1;
+   if name ^= 'CONSTANT' then fails = fails + 1;
+
+   /* VALUE in array bounds */
+   declare arr(max_size) fixed bin(31);
+   if hbound(arr) ^= 100 then fails = fails + 1;
+
+   /* VALUE in structure */
+   declare 1 config,
+          2 version fixed bin(31) value(1),
+          2 max_conns fixed bin(31) value(10);
+   if config.version ^= 1 then fails = fails + 1;
+   if config.max_conns ^= 10 then fails = fails + 1;
+
+   /* VALUE in nested block - initialized once per activation of containing block */
+   begin;
+      declare block_val fixed bin(31) value(999);
+      if block_val ^= 999 then fails = fails + 1;
+   end;
+
+/* VALUE with constant (no expressions in this stage) */
+    declare computed fixed bin(31) value(53);
+    if computed ^= 53 then fails = fails + 1;
+
+   /* Multiple VALUE declarations */
+   declare v1 fixed bin(31) value(1);
+   declare v2 fixed bin(31) value(2);
+   declare v3 fixed bin(31) value(3);
+   if v1 + v2 + v3 ^= 6 then fails = fails + 1;
+
+   /* VALUE parameter (should be diagnosed or treated as constant) */
+   /* call proc_with_value_param(v1); */
+
+   if fails = 0 then put skip list('PASS value_edge');
+   else put skip list('FAIL value_edge: fails =', fails);
+
+/* proc_with_value_param: proc(p) options(bypass);
+   dcl p fixed bin(31) value(99);  -- not valid on parameter
+   return;
+end; */
+
+end value_edge;

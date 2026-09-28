@@ -1,0 +1,101 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* BASED/POINTER edge cases (ADR-064, ADR-143, rule 25):
+   BASED variables addressed through POINTER. Locator-qualified form
+   P -> X. POINTER can hold NULL, ADDR(x), or another pointer.
+   Tests cover based structures, locator qualification, pointer params. */
+based_ptr_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* Basic BASED with explicit pointer */
+   declare p pointer;
+   declare 1 based_rec based(p),
+          2 a fixed bin(31),
+          2 b fixed bin(31);
+
+   allocate based_rec set(p);
+   based_rec.a = 11;
+   based_rec.b = 22;
+   if based_rec.a ^= 11 then fails = fails + 1;
+   if based_rec.b ^= 22 then fails = fails + 1;
+
+   /* Locator-qualified reference */
+   p -> based_rec.a = 33;
+   if based_rec.a ^= 33 then fails = fails + 1;
+   if p -> based_rec.b ^= 22 then fails = fails + 1;
+
+   /* Multiple based variables on same pointer */
+   declare 1 based_rec2 based(p),
+          2 x fixed bin(31),
+          2 y fixed bin(31);
+   p -> based_rec2.x = 99;
+   if based_rec2.x ^= 99 then fails = fails + 1;
+
+/* BASED with pointer parameter - must use explicit pointer */
+    declare 1 param_rec based(p),
+           2 val fixed bin(31);
+    p -> param_rec.val = 888;
+    if param_rec.val ^= 888 then fails = fails + 1;
+    call based_param(p);
+
+   /* POINTER arithmetic not supported, but ADDR() is */
+   declare x fixed bin(31);
+   declare px pointer;
+   px = addr(x);
+   /* Based on address of existing variable */
+   declare 1 based_on_x based(px),
+          2 val fixed bin(31);
+   based_on_x.val = 777;
+   if x ^= 777 then fails = fails + 1;
+
+   /* NULL pointer */
+   declare null_ptr pointer;
+   null_ptr = null();
+   if null_ptr = null() then put skip list('null ptr ok');
+
+   /* Pointer assignment */
+   declare p2 pointer;
+   p2 = p;
+   if p2 = p then put skip list('pointer assign ok');
+
+   /* Pointer equality */
+   if p ^= p2 then fails = fails + 1;
+
+/* BASED in structure - use separate based variable with pointer from struct */
+    declare 1 container,
+           2 ptr pointer;
+    declare cp pointer;
+    cp = container.ptr;
+    declare based_val fixed bin(31) based(cp);
+    allocate based_val set(cp);
+    based_val = 42;
+    if based_val ^= 42 then fails = fails + 1;
+
+    /* BASED parameter with explicit pointer */
+    call bare_based_param(p);
+
+   if fails = 0 then put skip list('PASS based_ptr_edge');
+   else put skip list('FAIL based_ptr_edge: fails =', fails);
+
+based_param: proc(ptr_arg) options(bypass);
+   dcl ptr_arg pointer;
+   dcl 1 rec based(ptr_arg),
+        2 a fixed bin(31),
+        2 b fixed bin(31);
+   rec.a = 100;
+   rec.b = 200;
+   return;
+end based_param;
+
+bare_based_param: proc(ptr_arg) options(bypass);
+    dcl ptr_arg pointer;
+    dcl 1 bare_rec based(ptr_arg),
+         2 val fixed bin(31);
+    allocate bare_rec set(ptr_arg);
+    bare_rec.val = 999;
+    free bare_rec;
+    return;
+end bare_based_param;
+
+end based_ptr_edge;

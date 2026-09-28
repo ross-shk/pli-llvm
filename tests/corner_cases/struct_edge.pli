@@ -1,0 +1,147 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Structure BY NAME and assignment edge cases (ADR-037, ADR-038, TR 25.084
+   rules 11,86,124,125,127): BY NAME copies same-named members recursively,
+   skipping absent names. Whole-structure assignment requires identical shape.
+   Tests cover matching/mismatching members, nested structures, arrays in
+   structures, and BY NAME with dynamic members. */
+struct_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* Identical structures - whole assignment */
+   declare 1 s1,
+          2 a fixed bin(31),
+          2 b fixed bin(31),
+          2 c,
+            3 x fixed bin(31),
+            3 y fixed bin(31);
+   declare 1 s2 like s1;
+
+   s1.a = 1; s1.b = 2; s1.c.x = 3; s1.c.y = 4;
+   s2 = s1;  /* whole structure copy */
+   if s2.a ^= 1 then fails = fails + 1;
+   if s2.b ^= 2 then fails = fails + 1;
+   if s2.c.x ^= 3 then fails = fails + 1;
+   if s2.c.y ^= 4 then fails = fails + 1;
+
+   /* BY NAME with identical members */
+   declare 1 t1,
+          2 a fixed bin(31),
+          2 b fixed bin(31),
+          2 d fixed bin(31);
+   declare 1 t2,
+          2 b fixed bin(31),
+          2 a fixed bin(31),  /* different order */
+          2 c fixed bin(31);  /* extra member in t2 */
+
+   t1.a = 10; t1.b = 20; t1.d = 30;
+   t2 = t1, by name;  /* copies a and b, ignores d and c */
+   if t2.a ^= 10 then fails = fails + 1;
+   if t2.b ^= 20 then fails = fails + 1;
+   if t2.c ^= 0 then fails = fails + 1;  /* c not in t1, stays 0 */
+
+   /* BY NAME with nested structures */
+   declare 1 n1,
+          2 a fixed bin(31),
+          2 s,
+            3 x fixed bin(31),
+            3 y fixed bin(31);
+   declare 1 n2,
+          2 s,
+            3 y fixed bin(31),
+            3 x fixed bin(31),  /* swapped order in minor struct */
+            3 z fixed bin(31),  /* extra */
+          2 a fixed bin(31);
+
+   n1.a = 100; n1.s.x = 200; n1.s.y = 300;
+   n2 = n1, by name;  /* recurses into s, copies x and y by name */
+   if n2.a ^= 100 then fails = fails + 1;
+   if n2.s.x ^= 200 then fails = fails + 1;
+   if n2.s.y ^= 300 then fails = fails + 1;
+   if n2.s.z ^= 0 then fails = fails + 1;
+
+   /* BY NAME with array members */
+   declare 1 arr_s1,
+          2 vals(3) fixed bin(31),
+          2 name char(10);
+   declare 1 arr_s2,
+          2 name char(10),
+          2 vals(3) fixed bin(31);
+
+   arr_s1.vals(1) = 1; arr_s1.vals(2) = 2; arr_s1.vals(3) = 3;
+   arr_s1.name = 'original';
+   arr_s2 = arr_s1, by name;  /* copies vals array element-wise and name */
+   if arr_s2.vals(1) ^= 1 then fails = fails + 1;
+   if arr_s2.vals(3) ^= 3 then fails = fails + 1;
+   if arr_s2.name ^= 'original' then fails = fails + 1;
+
+   /* Structure with array member - subscripted access */
+   declare 1 rec,
+          2 id fixed bin(31),
+          2 scores(5) fixed bin(31);
+   rec.id = 42;
+   do i = 1 to 5;
+      rec.scores(i) = i * 10;
+   end;
+   if rec.scores(3) ^= 30 then fails = fails + 1;
+
+   /* Array of structures */
+   declare 1 employees(3),
+          2 id fixed bin(31),
+          2 salary fixed bin(31);
+   employees(1).id = 1; employees(1).salary = 50000;
+   employees(2).id = 2; employees(2).salary = 60000;
+   employees(3).id = 3; employees(3).salary = 70000;
+   if employees(2).salary ^= 60000 then fails = fails + 1;
+
+   /* Whole array of structures assignment */
+   declare 1 emp_copy(3) like employees;
+   emp_copy = employees;
+   if emp_copy(2).salary ^= 60000 then fails = fails + 1;
+
+   /* BY NAME on array of structures */
+   declare 1 other_emps(3),
+          2 salary fixed bin(31),
+          2 id fixed bin(31);
+   other_emps = employees, by name;
+   if other_emps(2).salary ^= 60000 then fails = fails + 1;
+
+   /* Structure as function argument (by reference) */
+   call struct_proc(s1);
+
+   /* Structure-valued function (ADR-070) */
+   declare 1 ret_struct like s1;
+   ret_struct = struct_func();
+   if ret_struct.a ^= 99 then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS struct_edge');
+   else put skip list('FAIL struct_edge: fails =', fails);
+
+struct_proc: proc(s) options(bypass);
+   dcl 1 s,
+        2 a fixed bin(31),
+        2 b fixed bin(31),
+        2 c,
+          3 x fixed bin(31),
+          3 y fixed bin(31);
+   s.a = s.a + 100;  /* modifies caller's copy */
+   return;
+end struct_proc;
+
+struct_func: proc returns(s1) options(bypass);
+   dcl 1 s1,
+        2 a fixed bin(31),
+        2 b fixed bin(31),
+        2 c,
+          3 x fixed bin(31),
+          3 y fixed bin(31);
+   dcl 1 retval like s1;
+   retval.a = 99;
+   retval.b = 88;
+   retval.c.x = 77;
+   retval.c.y = 66;
+   return(retval);
+end struct_func;
+
+end struct_edge;

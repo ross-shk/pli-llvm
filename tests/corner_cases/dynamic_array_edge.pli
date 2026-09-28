@@ -1,0 +1,113 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Dynamic array edge cases (ADR-050, ADR-058, ADR-059, ADR-054, ADR-055):
+   AUTOMATIC arrays with runtime bounds, dynamic lower bounds, dynamic
+   multi-axis, dynamic array parameters, * adjustable-extent parameters. */
+dynamic_array_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* Single-axis dynamic upper bound */
+   declare n fixed bin(31);
+   n = 10;
+   declare dyn1(n) fixed bin(31);
+   do i = 1 to n;
+      dyn1(i) = i * 2;
+   end;
+   if hbound(dyn1) ^= 10 then fails = fails + 1;
+   if lbound(dyn1) ^= 1 then fails = fails + 1;
+   if dim(dyn1) ^= 10 then fails = fails + 1;
+
+   /* Dynamic lower and upper bound */
+   declare lb fixed bin(31), ub fixed bin(31);
+   lb = -5; ub = 5;
+   declare dyn2(lb:ub) fixed bin(31);
+   do i = lb to ub;
+      dyn2(i) = i * 10;
+   end;
+   if lbound(dyn2) ^= -5 then fails = fails + 1;
+   if hbound(dyn2) ^= 5 then fails = fails + 1;
+   if dim(dyn2) ^= 11 then fails = fails + 1;
+
+   /* Dynamic multi-axis: first axis dynamic, rest fixed */
+   declare rows fixed bin(31);
+   rows = 3;
+   declare dyn3(rows, 4) fixed bin(31);
+   do i = 1 to rows;
+      do j = 1 to 4;
+         dyn3(i,j) = i * 10 + j;
+      end;
+   end;
+   if dyn3(2,3) ^= 23 then fails = fails + 1;
+   if dim(dyn3) ^= 12 then fails = fails + 1;
+
+   /* Dynamic multi-axis with dynamic lower bound on first axis */
+   declare row_lb fixed bin(31), row_ub fixed bin(31);
+   row_lb = 0; row_ub = 2;
+   declare dyn4(row_lb:row_ub, 3) fixed bin(31);
+   do i = row_lb to row_ub;
+      do j = 1 to 3;
+         dyn4(i,j) = i * 100 + j;
+      end;
+   end;
+   if lbound(dyn4) ^= 0 then fails = fails + 1;
+   if dyn4(1,2) ^= 102 then fails = fails + 1;
+
+   /* Dynamic array parameter */
+   call dyn_param_proc(dyn1);
+
+   /* Dynamic array parameter with dynamic bounds */
+   call dyn_param_bounds(dyn2);
+
+   /* * adjustable-extent parameter */
+   declare fixed_arr(20) fixed bin(31);
+   do i = 1 to 20; fixed_arr(i) = i; end;
+   call star_param_proc(fixed_arr);
+   call star_param_proc(dyn1);
+
+   /* Forward * parameter */
+   call forward_star(dyn1);
+
+   /* Array reductions on dynamic arrays */
+   declare sum_val fixed bin(31);
+   sum_val = sum(dyn1);  /* 2+4+...+20 = 110 */
+   if sum_val ^= 110 then fails = fails + 1;
+
+   sum_val = sum(dyn2);  /* -50+-40+...+50 = 0 */
+   if sum_val ^= 0 then fails = fails + 1;
+
+   /* ANY/ALL on BIT dynamic array */
+   declare bit_dyn(n) bit(1);
+   do i = 1 to n; bit_dyn(i) = '0'b; end;
+   bit_dyn(5) = '1'b;
+   if any(bit_dyn) ^= '1'b then fails = fails + 1;
+   if all(bit_dyn) ^= '0'b then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS dynamic_array_edge');
+   else put skip list('FAIL dynamic_array_edge: fails =', fails);
+
+dyn_param_proc: proc(arr) options(bypass);
+   dcl arr(*) fixed bin(31);
+   put skip list('dyn_param_proc: dim =', dim(arr));
+   return;
+end dyn_param_proc;
+
+dyn_param_bounds: proc(arr) options(bypass);
+   dcl arr(*) fixed bin(31);
+   put skip list('dyn_param_bounds: lb =', lbound(arr), 'ub =', hbound(arr));
+   return;
+end dyn_param_bounds;
+
+star_param_proc: proc(arr) options(bypass);
+   dcl arr(*) fixed bin(31);
+   put skip list('star_param_proc: dim =', dim(arr));
+   return;
+end star_param_proc;
+
+forward_star: proc(arr) options(bypass);
+   dcl arr(*) fixed bin(31);
+   call star_param_proc(arr);  /* forward the * extent */
+   return;
+end forward_star;
+
+end dynamic_array_edge;

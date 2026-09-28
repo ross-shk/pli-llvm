@@ -1,0 +1,94 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Keyword ambiguity tests (ADR-004, TR 25.084 §2.3): PL/I has no reserved
+   words. Keywords are recognized by position (statement-initial after labels
+   and condition prefixes) and bounded lookahead. Tests cover the IF(3)=5 vs
+   IF (X)=1 THEN ambiguity and other keyword-as-variable cases. */
+keyword_ambiguity: procedure options(main);
+   declare if fixed bin(31);
+   declare then fixed bin(31);
+   declare else fixed bin(31);
+   declare do fixed bin(31);
+   declare end fixed bin(31);
+   declare goto fixed bin(31);
+   declare call fixed bin(31);
+   declare return fixed bin(31);
+   declare declare fixed bin(31);
+   declare procedure fixed bin(31);
+   declare put fixed bin(31);
+   declare get fixed bin(31);
+   declare skip fixed bin(31);
+   declare list fixed bin(31);
+
+   if = 1;
+   then = 2;
+   else = 3;
+   do = 4;
+   end = 5;
+   goto = 6;
+   call = 7;
+   return = 8;
+   declare = 9;
+   procedure = 10;
+   put = 11;
+   get = 12;
+   skip = 13;
+   list = 14;
+
+   /* Assignment to keyword-named variables */
+   if if = 1 then put skip list('if assignment ok');
+   if then > if then put skip list('then > if ok');
+
+   /* IF with parenthesized expression - must be parsed as IF statement */
+   if (if = 1) then put skip list('if (expr) ok');
+
+/* DO as variable vs DO statement */
+    declare i fixed bin(31);
+    do = 10;
+    do i = 1 to do;
+       put skip list('do loop with do var:', i);
+    end;
+
+/* GOTO as variable vs GOTO statement - LABEL not implemented
+    declare l label;
+    goto = l;
+    goto goto;
+
+l:  put skip list('goto to label in variable ok');
+*/
+
+/* CALL as variable vs CALL statement */
+    declare call_var entry fixed bin(31) external('c_set');
+    call = 100;  /* call is a FIXED BINARY variable, can assign to it */
+    put skip list('call var =', call);
+    /* call call_var(99); -- call external proc */
+
+   /* RETURN as variable vs RETURN statement */
+   return = 42;
+   if return = 42 then put skip list('return var ok');
+
+   /* DECLARE as variable - only valid in non-declaration context */
+   declare = 100;
+   if declare = 100 then put skip list('declare var ok');
+
+   /* PROCEDURE as variable */
+   procedure = 200;
+   if procedure = 200 then put skip list('procedure var ok');
+
+   /* PUT as variable vs PUT statement */
+   put = 300;
+   put skip list('put var =', put);
+
+   /* GET as variable vs GET statement */
+   get = 400;
+
+   /* SKIP as variable vs SKIP option */
+   skip = 5;
+   put skip(skip) list('skip var used as option');
+
+   /* LIST as variable vs LIST option */
+   list = 1;
+   put list(list);
+
+   put skip list('PASS keyword_ambiguity');
+end keyword_ambiguity;

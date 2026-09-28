@@ -1,0 +1,149 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Complex expression edge cases (rules 115-122, 118, 119):
+   Operator precedence, complex arithmetic, concatenation, comparison
+   operators, prefix operators, built-in functions. */
+expr_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* Operator precedence: ** binds tighter than unary - */
+   declare x fixed bin(31);
+   x = -3**2;  /* = -(3**2) = -9, not (-3)**2 = 9 */
+   if x ^= -9 then fails = fails + 1;
+
+   /* ** is right-associative */
+   x = 2**3**2;  /* = 2**(3**2) = 2**9 = 512 */
+   if x ^= 512 then fails = fails + 1;
+
+   /* Prefix operators + - ¬ */
+   declare b bit(1);
+   b = '1'b;
+   if ¬b = '0'b then put skip list('not ok');
+   b = ¬b;
+   if b = '0'b then put skip list('not assign ok');
+
+   /* Concatenation || and !! */
+   declare s1 char(20), s2 char(20);
+   s1 = 'hello';
+   s2 = 'world';
+   if s1 || ' ' || s2 = 'hello world' then put skip list('concat || ok');
+   if s1 !! ' ' !! s2 = 'hello world' then put skip list('concat !! ok');
+
+   /* Comparison operators including ¬= ¬> ¬< */
+   declare a fixed bin(31), b fixed bin(31);
+   a = 5; b = 10;
+   if a < b then put skip list('< ok');
+   if a ¬> b then put skip list('¬> ok');
+   if a ¬= b then put skip list('¬= ok');
+   if a <= b then put skip list('<= ok');
+   if a >= b then put skip list('>= ok');
+
+   /* Complex arithmetic (ADR-084) */
+   declare c1 complex float dec(6);
+   declare c2 complex float dec(6);
+   declare c3 complex float dec(6);
+   c1 = complex(3.0, 4.0);
+   c2 = complex(1.0, 2.0);
+   c3 = c1 + c2;
+   if real(c3) ^= 4.0 then fails = fails + 1;
+   if imag(c3) ^= 6.0 then fails = fails + 1;
+
+   c3 = c1 - c2;
+   if real(c3) ^= 2.0 then fails = fails + 1;
+   if imag(c3) ^= 2.0 then fails = fails + 1;
+
+   c3 = c1 * c2;
+   /* (3+4i)*(1+2i) = 3+6i+4i+8i^2 = -5+10i */
+   if real(c3) ^= -5.0 then fails = fails + 1;
+   if imag(c3) ^= 10.0 then fails = fails + 1;
+
+   c3 = c1 / c2;
+   /* (3+4i)/(1+2i) = (3+4i)*(1-2i)/5 = (11-2i)/5 = 2.2 - 0.4i */
+   if abs(real(c3) - 2.2) > 0.01 then fails = fails + 1;
+   if abs(imag(c3) - (-0.4)) > 0.01 then fails = fails + 1;
+
+   /* Complex conjugate */
+   c3 = conjg(c1);
+   if real(c3) ^= 3.0 then fails = fails + 1;
+   if imag(c3) ^= -4.0 then fails = fails + 1;
+
+   /* Complex equality (exact part-wise) */
+   declare c4 complex float dec(6);
+   c4 = complex(3.0, 4.0);
+   if c1 = c4 then put skip list('complex = ok');
+   if c1 ^= c4 then fails = fails + 1;
+   c4 = complex(3.0, 4.0001);
+   if c1 ^= c4 then put skip list('complex ^= ok');
+
+   /* Ordered complex comparison - diagnosed */
+   /* if c1 > c2 then ... */
+
+   /* Built-in functions */
+   /* ABS */
+   if abs(-5) ^= 5 then fails = fails + 1;
+   if abs(complex(3.0, 4.0)) ^= 5.0 then fails = fails + 1;
+
+   /* MIN/MAX */
+   if min(1, 2, 3) ^= 1 then fails = fails + 1;
+   if max(1, 2, 3) ^= 3 then fails = fails + 1;
+
+   /* MOD */
+   if mod(10, 3) ^= 1 then fails = fails + 1;
+
+   /* MULTIPLY, DIVIDE, PRECISION */
+   if multiply(5, 3) ^= 15 then fails = fails + 1;
+   if divide(10, 3) ^= 3.333333 then fails = fails + 1;  /* approximate */
+
+   /* ROUND */
+   if round(3.14159, 2) ^= 3.14 then fails = fails + 1;
+   if round(3.145, 2) ^= 3.15 then fails = fails + 1;
+
+   /* TRUNC */
+   if trunc(3.9) ^= 3 then fails = fails + 1;
+   if trunc(-3.9) ^= -3 then fails = fails + 1;
+
+   /* FLOOR/CEIL */
+   if floor(3.2) ^= 3 then fails = fails + 1;
+   if floor(-3.2) ^= -4 then fails = fails + 1;
+   if ceil(3.2) ^= 4 then fails = fails + 1;
+   if ceil(-3.2) ^= -3 then fails = fails + 1;
+
+   /* SQRT/EXP/LOG */
+   if sqrt(4.0) ^= 2.0 then fails = fails + 1;
+   if abs(exp(1.0) - 2.71828) < 0.001 then put skip list('exp ok');
+   if abs(log(2.71828) - 1.0) < 0.001 then put skip list('log ok');
+
+   /* Trig functions */
+   if abs(sin(0.0)) < 0.001 then put skip list('sin ok');
+   if abs(cos(0.0) - 1.0) < 0.001 then put skip list('cos ok');
+   if abs(tan(0.0)) < 0.001 then put skip list('tan ok');
+
+   /* Degree variants */
+   if abs(sind(90.0) - 1.0) < 0.001 then put skip list('sind ok');
+   if abs(cosd(0.0) - 1.0) < 0.001 then put skip list('cosd ok');
+
+   /* String built-ins */
+   if length('hello') ^= 5 then fails = fails + 1;
+   if index('hello world', 'world') ^= 7 then fails = fails + 1;
+   if substr('hello', 2, 3) ^= 'ell' then fails = fails + 1;
+
+   /* TRANSLATE */
+   if translate('abc', 'ABC', 'abc') ^= 'ABC' then fails = fails + 1;
+
+   /* VERIFY */
+   if verify('abc123', 'abc') ^= 4 then fails = fails + 1;
+
+   /* REPEAT */
+   if repeat('ab', 3) ^= 'ababab' then fails = fails + 1;
+
+   /* HIGH/LOW */
+   if high(5) ^= '99999'b then fails = fails + 1;  /* bit string of 1s */
+   /* LOW is implementation dependent */
+
+   /* DATE/TIME */
+   /* date() returns YYMMDD, time() returns HHMMSSTTT */
+
+   if fails = 0 then put skip list('PASS expr_edge');
+   else put skip list('FAIL expr_edge: fails =', fails);
+end expr_edge;

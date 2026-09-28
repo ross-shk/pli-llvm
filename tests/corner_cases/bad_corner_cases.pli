@@ -1,0 +1,214 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Diagnostic tests for bad corner cases: these should be rejected with
+   proper rule citations. Tests cover various invalid constructs. */
+bad_corner_cases: package;
+   /* Bad: multiple iSUB in DEFINED */
+   bad_multi_isub: proc;
+      declare base(10,10) fixed bin(31);
+      declare bad(10) fixed bin(31) defined base(1sub, 2sub);
+   end;
+
+   /* Bad: non-affine iSUB */
+   bad_nonaffine_isub: proc;
+      declare base(10) fixed bin(31);
+      declare bad(10) fixed bin(31) defined base(1sub*1sub);
+   end;
+
+   /* Bad: iSUB out of bounds (constant) */
+   bad_oob_isub: proc;
+      declare base(5) fixed bin(31);
+      declare bad(10) fixed bin(31) defined base(1sub + 10);
+   end;
+
+   /* Bad: DEFINED with different type */
+   bad_defined_type: proc;
+      declare base fixed bin(31);
+      declare bad float dec(6) defined base;
+   end;
+
+   /* Bad: DEFINED with undeclared base */
+   bad_defined_undecl: proc;
+      declare bad fixed bin(31) defined nonexistent;
+   end;
+
+   /* Bad: DEFINED with structure base */
+   bad_defined_struct: proc;
+      declare 1 s, 2 a fixed bin(31);
+      declare bad fixed bin(31) defined s;
+   end;
+
+   /* Bad: INITIAL on VARYING string with wrong count */
+   bad_init_varying: proc;
+      declare v char(10) varying initial(('a', 'b', 'c'));
+   end;
+
+   /* Bad: SUBSTR pseudo-variable on non-modifiable */
+   bad_substr_const: proc;
+      substr('constant', 1, 3) = 'xxx';
+   end;
+
+   /* Bad: SUBSTR pseudo-variable on expression */
+   bad_substr_expr: proc;
+      declare v1 char(10), v2 char(10);
+      substr(v1 || v2, 1, 3) = 'xxx';
+   end;
+
+   /* Bad: BY NAME with non-structure */
+   bad_byname_scalar: proc;
+      declare x fixed bin(31), y fixed bin(31);
+      x = y, by name;
+   end;
+
+   /* Bad: BY NAME with multiple targets */
+   bad_byname_multi: proc;
+      declare 1 s1, 2 a fixed bin(31);
+      declare 1 s2, 2 a fixed bin(31);
+      declare 1 s3, 2 a fixed bin(31);
+      s1, s2 = s3, by name;
+   end;
+
+   /* Bad: whole structure assignment shape mismatch */
+   bad_struct_assign: proc;
+      declare 1 s1, 2 a fixed bin(31);
+      declare 1 s2, 2 a fixed bin(31), 2 b fixed bin(31);
+      s1 = s2;
+   end;
+
+   /* Bad: array expression to scalar target */
+   bad_array_to_scalar: proc;
+      declare a(10) fixed bin(31);
+      declare x fixed bin(31);
+      x = a + a;
+   end;
+
+   /* Bad: array expression in multiple assignment */
+   bad_array_multiassign: proc;
+      declare a(10) fixed bin(31), b(10) fixed bin(31), c(10) fixed bin(31);
+      a, b = c + c;
+   end;
+
+   /* Bad: RECURSIVE missing on recursive procedure */
+   bad_recursive: proc;
+      call bad_recursive();
+   end;
+
+   /* Bad: RECURSIVE on non-recursive (warned but allowed) */
+   bad_recursive_unused: proc recursive;
+      put skip list('not recursive but marked');
+   end;
+
+   /* Bad: GO TO non-local label (M4) */
+   bad_goto_nonlocal: proc;
+      go to outer_label;
+   end;
+
+   /* Bad: RETURN(value) in non-function procedure */
+   bad_return_val: proc;
+      return(42);
+   end;
+
+   /* Bad: function without RETURN(value) */
+   bad_func_no_return: proc returns(fixed bin(31));
+      return;
+   end;
+
+   /* Bad: ENTRY with mixed return types */
+   bad_entry_mixed: proc returns(fixed bin(31));
+   bad_entry_mixed_alt: entry returns(float dec(6));
+   end;
+
+   /* Bad: ENTRY segment fallthrough */
+   bad_entry_fallthrough: proc;
+      put skip list('first');
+   bad_entry_fallthrough_alt: entry;
+      put skip list('second');
+      /* missing RETURN, would fall through to end of proc */
+   end;
+
+   /* Bad: multiple END labels not matching */
+   bad_end_label: proc;
+      do;
+      end nomatch;
+   end;
+
+   /* Bad: %IF without %THEN */
+   bad_pp_if: proc;
+      %if 1 = 1 %include 'x.inc';
+   end;
+
+   /* Bad: %THEN without %IF */
+   bad_pp_then: proc;
+      %then %include 'x.inc';
+   end;
+
+   /* Bad: %ELSE without %IF */
+   bad_pp_else: proc;
+      %else %include 'x.inc';
+   end;
+
+   /* Bad: %DO/%GOTO stubs */
+   bad_pp_do: proc;
+      %do;
+   end;
+
+   /* Bad: SELECT without WHEN */
+   bad_select_nowhen: proc;
+      select; end;
+   end;
+
+   /* Bad: WHEN after OTHERWISE */
+   bad_select_when_after: proc;
+      select;
+         otherwise put skip list('oops');
+         when(1) put skip list('one');
+      end;
+   end;
+
+   /* Bad: multiple OTHERWISE */
+   bad_select_multi_otherwise: proc;
+      select;
+         otherwise put skip list('1');
+         otherwise put skip list('2');
+      end;
+   end;
+
+   /* Bad: VALUE on parameter */
+   bad_value_param: proc(p) options(bypass);
+      dcl p fixed bin(31) value(10);
+   end;
+
+   /* Bad: VALUE target of assignment */
+   bad_value_assign: proc;
+      declare v fixed bin(31) value(10);
+      v = 20;
+   end;
+
+   /* Bad: OPTIONAL on non-parameter */
+   bad_optional_decl: proc;
+      declare x fixed bin(31) optional;
+   end;
+
+   /* Bad: * for non-OPTIONAL */
+   bad_star_nonopt: proc;
+      call requires_all(*, 2);
+   end;
+
+requires_all: proc(a, b) options(bypass);
+   dcl a fixed bin(31);
+   dcl b fixed bin(31);
+   return;
+end;
+
+   /* Bad: OMITTED of non-OPTIONAL */
+   bad_omitted_nonopt: proc;
+      call check_omit(1);
+   end;
+
+check_omit: proc(x) options(bypass);
+   dcl x fixed bin(31);
+   if omitted(x) then put skip list('oops');
+   return;
+end;
+
+end bad_corner_cases;

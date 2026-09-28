@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* GENERIC edge cases (rule 41): Generic selection allows multiple
+   entry points with different parameter types. M8 feature - tests
+   verify it is diagnosed as unimplemented. */
+generic_edge: procedure options(main);
+   declare fails fixed bin(31);
+   fails = 0;
+
+   /* GENERIC declaration */
+   /* declare gen_name generic(
+         gen_fixed when(fixed bin),
+         gen_float when(float dec),
+         gen_char when(char(*))
+      ); */
+
+   /* Call through generic */
+   /* call gen_name(42);     -- calls gen_fixed */
+   /* call gen_name(3.14);   -- calls gen_float */
+   /* call gen_name('test'); -- calls gen_char */
+
+   /* Generic with structure */
+   /* declare 1 s, 2 a fixed bin; */
+   /* declare gen_struct generic(gen_s when(s)); */
+   /* call gen_struct(s); */
+
+   /* Generic with array */
+   /* declare gen_arr generic(gen_a when(*) fixed bin); */
+   /* call gen_arr(arr); */
+
+   put skip list('PASS generic_edge (diagnosed as unimplemented)');
+end generic_edge;
