@@ -25,9 +25,12 @@ static long long pliPow10(int k) {
 }
 
 // Compile-time scale reduction of a FIXED DECIMAL stored integer v by 10^k,
-// rounding half away from zero (matches the runtime rescale in convert).
-static long long pliRescaleDown(long long v, int k) {
+// matching convert(): DECIMAL targets round half away from zero, BINARY
+// targets truncate toward zero.
+static long long pliRescaleDown(long long v, int k, bool decTarget) {
   long long p = pliPow10(k);
+  if (!decTarget)
+    return v / p; // C++ division truncates toward zero
   long long sign = v < 0 ? -1 : 1;
   return (v + pliPow10(k - 1) * 5 * sign) / p;
 }
@@ -659,7 +662,7 @@ llvm::Constant* IRGen::scalarInitConstant(const Type& t, const Expr* ini) {
       if (ini->kind == Expr::DecLit) {
         v = ini->ival;
         int dq = t.scale - ini->decScale; // rescale to the target type's scale
-        v = dq > 0 ? v * pliPow10(dq) : dq < 0 ? pliRescaleDown(v, -dq) : v;
+        v = dq > 0 ? v * pliPow10(dq) : dq < 0 ? pliRescaleDown(v, -dq, t.k == TK::FixedDec) : v;
       } else {
         v = ini->kind == Expr::FltLit   ? (long long)ini->fval
             : ini->kind == Expr::BitLit ? (!ini->sval.empty() && ini->sval[0] == '1')
@@ -746,7 +749,7 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
     long long iv = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
     if (e->kind == Expr::DecLit) {
       int dq = t.scale - e->decScale; // rescale to the target type's scale
-      iv = dq > 0 ? iv * pliPow10(dq) : dq < 0 ? pliRescaleDown(iv, -dq) : iv;
+      iv = dq > 0 ? iv * pliPow10(dq) : dq < 0 ? pliRescaleDown(iv, -dq, t.k == TK::FixedDec) : iv;
     }
     v.reg = llvm::ConstantInt::get(llvmTy(t), iv, true);
     break;
@@ -1030,7 +1033,7 @@ void IRGen::emitInitials(HProc* p) {
         long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
         if (e->kind == Expr::DecLit) {
           int dq = item.sym->ty.scale - e->decScale; // rescale to the target scale
-          val = dq > 0 ? val * pliPow10(dq) : dq < 0 ? pliRescaleDown(val, -dq) : val;
+          val = dq > 0 ? val * pliPow10(dq) : dq < 0 ? pliRescaleDown(val, -dq, item.sym->ty.k == TK::FixedDec) : val;
         }
         v.reg = llvm::ConstantInt::get(llvmTy(item.sym->ty), val, true);
         break;
@@ -4340,13 +4343,16 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       // A scale-up that wraps already exceeds any target: trap, so the
       // magnitude check below never reads a wrapped value.
       r = checkedArith(Tok::Star, r, i64(pliPow10(dq)));
-    } else {
+    } else if (dst.k == TK::FixedDec) {
+      // DECIMAL->DECIMAL assignment rounds half away from zero (Y33-6003).
       int k = -dq;
       llvm::Value* div = i64(pliPow10(k));
-      // round half away from zero: r + 5*10^(k-1)*sign
       llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i64(0), "sgn"), i64(-1), i64(1));
       llvm::Value* adj = b_.CreateMul(i64(pliPow10(k - 1) * 5), sign, "adj");
       r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+    } else {
+      // DECIMAL->BINARY assignment truncates the fraction toward zero.
+      r = b_.CreateSDiv(r, i64(pliPow10(-dq)), "res");
     }
     if (needDec || needBin)
       magTrap(r, limit);

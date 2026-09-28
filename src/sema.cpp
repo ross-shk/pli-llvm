@@ -3290,8 +3290,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       e->ty = Type::voidTy();
     }
     // rule (8)/(42) static link: a reference to a variable of an enclosing
-    // procedure is served through this procedure's static link.
-    if (sym->kind == Symbol::Var)
+    // procedure is served through this procedure's static link. Parameters are
+    // frame-addressable too (inc referencing outer's dummy).
+    if (sym->kind == Symbol::Var || sym->kind == Symbol::Param)
       noteStaticUse(p, sym);
     break;
   }

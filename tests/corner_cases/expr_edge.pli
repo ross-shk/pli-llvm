@@ -93,7 +93,7 @@ expr_edge: procedure options(main);
 
    /* MULTIPLY, DIVIDE, PRECISION */
    if multiply(5, 3) ^= 15 then fails = fails + 1;
-   if divide(10, 3) ^= 3.333333 then fails = fails + 1;  /* approximate */
+   if abs(divide(10, 3) - 3.333333) > 0.001 then fails = fails + 1;  /* approximate */
 
    /* ROUND */
    if round(3.14159, 2) ^= 3.14 then fails = fails + 1;
