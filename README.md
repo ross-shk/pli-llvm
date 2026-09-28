@@ -9,10 +9,47 @@ $ ./hello
 Hello, world!
 ```
 
-Install with:
+## Quick Start
 
+### Prerequisites
+
+- C++20 compiler (clang++ or g++)
+- LLVM ≥ 18 with `clang` (for assembling/linking the generated IR)
+
+### Build
+
+```bash
+make -j8              
 ```
-make install
+
+### Compile and run a PL/I program
+
+See [tests/core/hello.pli](tests/core/hello.pli):
+
+```pli
+ hello: procedure options(main);
+    put skip list('Hello, world!');
+ end hello;
+```
+
+Compile to executable:
+
+```bash
+./build/plic tests/core/hello.pli -o hello
+./hello
+```
+
+### Run tests
+
+```bash
+make test             # full test suite (320 tests)
+./tests/run_tests.py usecases   # run specific test group
+```
+
+### Install
+
+```bash
+make install          # installs to /usr/local by default
 ```
 
 ## Documentation
@@ -26,12 +63,6 @@ make install
 | [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)             | design history: keyword handling, numeric representation, IR choices, and other decisions |
 
 ## What the compiler handles today
-
-```pli
- hello: procedure options(main);
-    put skip list('Hello, world!');
- end hello;
-```
 
 - procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
 - **function procedures** via `RETURNS(...)` and `RETURN(value)` — scalar, `CHAR(n) [VARYING]`, and structure results; recursive functions run with `RECURSIVE`, enforced across static call cycles (rules (5),(34))
