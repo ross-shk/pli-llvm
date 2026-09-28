@@ -1364,8 +1364,11 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "EXTERNAL" || w == "EXT") {
-        // Extended external-name form: EXTERNAL('symbol') gives the exact,
-        // case-sensitive C symbol for interlanguage calls (see z/OS ILC).
+        // EXTERNAL (rule (42)): the variable is a module-wide (linkage) name,
+        // shared with other object files. The extended external-name form
+        // EXTERNAL('symbol') gives the exact, case-sensitive C symbol for
+        // interlanguage calls (see z/OS ILC).
+        item.external = true;
         advance();
         if (at(Tok::LParen) && peek().kind == Tok::CharLit) {
           advance(); // (

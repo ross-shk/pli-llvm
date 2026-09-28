@@ -2236,6 +2236,10 @@ void IRGen::emitAllocate(HStmt* s) {
     llvm::Value* p = b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
     HExpr* set = s->allocSet[i].get();
     storeTo(set->sym, Val{set->ty, p}, set->loc);
+    // ALLOCATE of a BASED variable also sets the variable's own BASED pointer
+    // (rule (88)), so references through the based name address the new cell.
+    if (bsym->basedBase && bsym->basedBase != set->sym)
+      b_.CreateStore(p, addressOf(bsym->basedBase));
   }
 }
 
@@ -3892,6 +3896,16 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
       // heap generation that may grow, or a parameter whose max capacity is the
       // hidden i64 arg the caller supplied. Truncate source to max via
       // pli_assign_varying (VARYING semantics, no expansion).
+      // A CONTROLLED variable with no current generation gets one implicitly,
+      // sized to the source (Y33-6003 CONTROLLED first-store).
+      if (sym && sym->controlled) {
+        llvm::Value* want = v.len;
+        if (want && want->getType()->getIntegerBitWidth() != 64 && !llvm::isa<llvm::Constant>(want))
+          want = b_.CreateSExt(want, b_.getInt64Ty(), "vsrc");
+        llvm::Value* need = want ? b_.CreateAdd(want, i64(4), "vneed") : i64(64);
+        b_.CreateCall(runtimeFn("pli_ctl_ensure"), {ctlKeyOf(sym), need});
+        addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "caddr");
+      }
       llvm::Value* max = adjustLen(sym, dt);
       if (!max)
         max = i64(dt.len);
@@ -3924,7 +3938,16 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
         llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx_, "expend", curFn_);
         b_.CreateCondBr(needs, expBB, copyBB);
         b_.SetInsertPoint(expBB);
+        // Free the too-small generation only when one exists (first store
+        // into an empty stack just allocates).
+        llvm::Value* had = b_.CreateICmpUGT(live, i64(0), "hadgen");
+        llvm::BasicBlock* frL = llvm::BasicBlock::Create(ctx_, "expfree", curFn_);
+        llvm::BasicBlock* alL = llvm::BasicBlock::Create(ctx_, "expalloc", curFn_);
+        b_.CreateCondBr(had, frL, alL);
+        b_.SetInsertPoint(frL);
         b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(sym)});
+        b_.CreateBr(alL);
+        b_.SetInsertPoint(alL);
         b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), srclen});
         b_.CreateBr(mergeBB);
         b_.SetInsertPoint(copyBB);

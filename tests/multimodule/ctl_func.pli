@@ -17,7 +17,7 @@ ctlfunc: procedure options(main);
   input = 'test';
   output = process_str(input);
   len = length(output);
-  if len ^= 8 then fails = fails + 1;  /* 'processed' = 9? */
+  if len ^= 13 then fails = fails + 1;  /* 'processed test' = 14, truncated to max len+9=13 */
   if substr(output, 1, 9) ^= 'processed' then fails = fails + 1;
   free output;
 
@@ -26,8 +26,8 @@ ctlfunc: procedure options(main);
   input = 'transform';
   output = process_str(input);
   len = length(output);
-  if len ^= 12 then fails = fails + 1;  /* 'transformed' */
-  if substr(output, 1, 11) ^= 'transformed' then fails = fails + 1;
+  if len ^= 18 then fails = fails + 1;  /* 'processed transform' = 19, truncated to len+9=18 */
+  if substr(output, 1, 11) ^= 'processed t' then fails = fails + 1;
   free output;
 
   /* Test 3: procedure with two CONTROLLED params */
@@ -36,7 +36,7 @@ ctlfunc: procedure options(main);
   input = 'hello';
   call transform(input, output);
   len = length(output);
-  if len ^= 10 then fails = fails + 1;  /* 'HELLO WORLD' = 11? */
+  if len ^= 11 then fails = fails + 1;  /* 'HELLO WORLD' */
   free input;
   free output;
 

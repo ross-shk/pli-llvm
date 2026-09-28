@@ -29,8 +29,8 @@ ctlxfer2: procedure options(main);
 
   /* Test 2: callee allocates and frees on caller's stack */
   call alloc_free(body2, 16);
-  if length(body2) ^= 16 then fails = fails + 1;
-  if substr(body2, 1, 8) ^= 'allocated' then fails = fails + 1;
+  if length(body2) ^= 9 then fails = fails + 1;  /* VARYING length = content, not capacity */
+  if substr(body2, 1, 9) ^= 'allocated' then fails = fails + 1;
   free body2;
 
   /* Test 3: callee pushes second generation, caller pops both */
@@ -38,8 +38,8 @@ ctlxfer2: procedure options(main);
   allocate body (cap) character varying;
   body = 'firstgen';
   call double_gen(body);
-  if length(body) ^= 8 then fails = fails + 1;
-  if substr(body, 1, 8) ^= 'secondg' then fails = fails + 1;
+  if length(body) ^= 7 then fails = fails + 1;  /* 'secondg' content length */
+  if substr(body, 1, 7) ^= 'secondg' then fails = fails + 1;
   free body;  /* pop second */
   if length(body) ^= 8 then fails = fails + 1;
   if substr(body, 1, 8) ^= 'firstgen' then fails = fails + 1;

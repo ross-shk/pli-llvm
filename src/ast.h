@@ -130,6 +130,7 @@ struct DeclItem {
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
+  bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
                                  // scalar/pointer params marshal by value (C ABI)
 };

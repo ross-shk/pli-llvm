@@ -78,6 +78,14 @@ char *pli_ctl_addr(long long key) {
   return v->gens[v->depth - 1];
 }
 
+/* Ensure a current generation exists (rules (15),(87)): the first store to a
+ * CHAR(*) CONTROLLED variable implicitly allocates one of the needed size. */
+void pli_ctl_ensure(long long key, long long n) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v || v->depth <= 0)
+    pli_ctl_alloc(key, n);
+}
+
 long long pli_ctl_len(long long key) {
   CtlVar *v = ctlFind(key, 0);
   if (!v || v->depth <= 0)
