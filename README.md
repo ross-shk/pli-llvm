@@ -101,7 +101,7 @@ iteration groups, `DATA`-directed transmission, `STRING` and `FILE`
 routing, `OPEN`/`CLOSE` with `TITLE`
 - SEQUENTIAL RECORD files: `WRITE FILE(f) FROM(v)` / `READ FILE(f) INTO(v)`  
 fixed-size binary records (`driver/record`, rules (112),(113))
-- preprocessor: recursive `%INCLUDE`, `%DECLARE`, `%IF … %THEN … [%ELSE]`,  
+- preprocessor: recursive `%INCLUDE`/`%XINCLUDE`, `%DECLARE`, `%IF … %THEN … [%ELSE]`,  
 `%ACTIVATE`/`%DEACTIVATE`-gated substitution
 - full operator set at spec precedence, including `**` right-associativity,  
 `¬`/`^`/`~`, `!!` for concatenation, and the 48-character-set operator  

@@ -36,6 +36,7 @@ fs::path normalized(const fs::path& path) {
 
 bool Preprocessor::run(const fs::path& input, std::string& output) {
   active_.clear();
+  included_.clear();
   ppVars_.clear();
   output.clear();
   return expand(input, output);
@@ -304,6 +305,12 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     if (active)
       ok = handleInclude(path, source.substr(wordEnd, end - wordEnd), directiveLine, directiveCol,
                          output);
+    else
+      ok = true;
+  } else if (name == "XINCLUDE") {
+    if (active)
+      ok = handleXInclude(path, source.substr(wordEnd, end - wordEnd), directiveLine, directiveCol,
+                          output);
     else
       ok = true;
   } else if (name == "DECLARE" || name == "DCL") {
@@ -597,10 +604,75 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
 bool Preprocessor::handleInclude(const fs::path& input, const std::string& operand, int line,
                                  int col, std::string& output) {
   std::string name = trim(operand);
+  if (name.empty())
+    return error(input, line, col, "%INCLUDE requires one file or member name");
+  return expandOneInclude(input, name, line, col, output, false);
+}
+
+// IBM Enterprise %XINCLUDE (ADR-157): like %INCLUDE, but each file is
+// expanded only the first time it is requested. The operand is a
+// comma-separated list; each item is a quoted string, a bare member name,
+// or a parenthesized name. Items resolve with the same search order as
+// %INCLUDE (including file's directory, -I, PLIC_INCLUDE_PATH, default).
+bool Preprocessor::handleXInclude(const fs::path& input, const std::string& operand, int line,
+                                  int col, std::string& output) {
+  // Split on commas outside quotes and parens ('' is an escaped quote).
+  std::vector<std::string> items;
+  std::string cur;
+  bool quoted = false;
+  int depth = 0;
+  for (size_t k = 0; k < operand.size(); ++k) {
+    char c = operand[k];
+    if (c == '\'') {
+      if (quoted && k + 1 < operand.size() && operand[k + 1] == '\'') {
+        cur += "''";
+        ++k;
+        continue;
+      }
+      quoted = !quoted;
+      cur += c;
+      continue;
+    }
+    if (!quoted) {
+      if (c == '(')
+        ++depth;
+      else if (c == ')' && depth > 0)
+        --depth;
+      else if (c == ',' && depth == 0) {
+        items.push_back(cur);
+        cur.clear();
+        continue;
+      }
+    }
+    cur += c;
+  }
+  items.push_back(cur);
+  bool any = false;
+  for (const std::string& item : items) {
+    if (trim(item).empty())
+      return error(input, line, col, "%XINCLUDE requires file or member names");
+    any = true;
+  }
+  if (!any)
+    return error(input, line, col, "%XINCLUDE requires file or member names");
+  for (const std::string& item : items)
+    if (!expandOneInclude(input, item, line, col, output, true))
+      return false;
+  return true;
+}
+
+bool Preprocessor::expandOneInclude(const fs::path& input, const std::string& rawName, int line,
+                                    int col, std::string& output, bool once) {
+  std::string name = trim(rawName);
+  // IBM parenthesized form: (MEMBER) names the same member as MEMBER.
+  if (name.size() >= 2 && name.front() == '(' && name.back() == ')')
+    name = trim(name.substr(1, name.size() - 2));
   if (name.size() >= 2 && name.front() == '\'' && name.back() == '\'')
     name = name.substr(1, name.size() - 2);
   if (name.empty() || name.find_first_of(" \t\r\n,()") != std::string::npos)
-    return error(input, line, col, "%INCLUDE requires one file or member name");
+    return error(input, line, col,
+                 once ? "%XINCLUDE requires file or member names"
+                      : "%INCLUDE requires one file or member name");
 
   fs::path include = input.parent_path() / name;
   if (!fs::exists(include) && include.extension().empty())
@@ -617,6 +689,18 @@ bool Preprocessor::handleInclude(const fs::path& input, const std::string& opera
         break;
       }
     }
+  }
+  if (fs::exists(include)) {
+    fs::path canon = normalized(include);
+    if (once) {
+      // Include-once: skip files already pulled in or currently being
+      // expanded (the latter also makes self-referential %XINCLUDE
+      // cycle-safe, unlike %INCLUDE which diagnoses cycles).
+      if (included_.count(canon) ||
+          std::find(active_.begin(), active_.end(), canon) != active_.end())
+        return true;
+    }
+    included_.insert(canon);
   }
   return expand(include, output);
 }

@@ -1,0 +1,7 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* IBM Enterprise %XINCLUDE (ADR-157):
+     missing member is diagnosed. */
+  %xinclude 'no_such_xinc.inc';
+ badx: procedure options(main);
+ end badx;

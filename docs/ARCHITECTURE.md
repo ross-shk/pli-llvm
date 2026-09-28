@@ -87,7 +87,7 @@ that passes described for MIR are present in the current compiler.
 |---|---|---|
 | Driver | `src/main.cpp` | option parsing, phase sequencing, sub-process invocation |
 | Diagnostics | `src/diag.{h,cpp}` | locations, severity, rule citations, caret output |
-| Preprocessor | `src/preprocessor.{h,cpp}` | `%INCLUDE` and supported preprocessor directives; diagnostics for unsupported forms |
+| Preprocessor | `src/preprocessor.{h,cpp}` | `%INCLUDE`/`%XINCLUDE` and supported preprocessor directives; diagnostics for unsupported forms |
 | Lexer | `src/lexer.{h,cpp}`, `src/token.h` | rules (130)–(151); comments; composite operators; not-symbol spellings |
 | Parser | `src/parser.{h,cpp}` | rules (1)–(129); keyword recognition; multiple closure; recovery |
 | AST | `src/ast.h` | syntax tree |
@@ -105,7 +105,9 @@ lexer handles the source spellings supported by the implementation, including
 the three not-symbol spellings.
 ### 3.2 Preprocessor
 
-Expands `%INCLUDE member;` recursively before lexing. Members resolve relative
+Expands `%INCLUDE member;` recursively before lexing, plus the
+include-once `%XINCLUDE a[, b...];` list form (quoted, bare, or
+parenthesized names; repeats skip). Members resolve relative
 to the containing source file; a name without an extension falls back to
 `.inc`. Quoted paths are also accepted. Include paths can be supplied with
 `-I` or `PLIC_INCLUDE_PATH`. Directives inside comments and strings are ignored;
