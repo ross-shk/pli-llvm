@@ -832,6 +832,11 @@ void IRGen::allocaLocals(HProc* p) {
     else if (s->ty.isEvent())
       // A fresh EVENT is complete (1); CALL resets it (rule (79), QR2.8).
       b_.CreateStore(i32(1), a);
+    // A structure starts zero-filled (rules (11),(26)): INITIAL itemlists may
+    // skip members, and BY NAME leaves unmatched members alone, so an
+    // uninitialized read of a member would be LLVM poison; zero-fill at entry.
+    else if (s->ty.isStruct())
+      b_.CreateStore(llvm::ConstantAggregateZero::get(llvmTy(s->ty)), a);
     if (s->ty.isChar() && !s->ty.isArray()) { // blank fill (scalar char only)
       std::string blanks(s->ty.len, ' ');
       llvm::Value* g = globalString(blanks);
@@ -1911,6 +1916,7 @@ void IRGen::emitAssign(HStmt* s) {
   }
   // BY NAME assignment (rule 86): S = T BY NAME copies each same-named member
   // of the target structure from the source structure, regardless of layout.
+  // An arrayed structure target matches its elements pairwise (rule 86).
   if (s->byName) {
     HExpr* t = s->target.get();
     HExpr* v = s->value.get();
@@ -1923,6 +1929,23 @@ void IRGen::emitAssign(HStmt* s) {
         t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
     llvm::Value* src =
         v->memberPath.empty() ? addressOf(v->sym) : memberAddr(v->sym, v->memberPath, s->loc);
+    if (t->ty.isArray() || v->ty.isArray()) {
+      if (!t->ty.isArray() || !v->ty.isArray() || arrayExtent(t->ty) != arrayExtent(v->ty)) {
+        d_.error(s->loc, "BY NAME assignment between arrayed structures needs matching extents",
+                 "(86)");
+        return;
+      }
+      llvm::Type* dat = llvmTy(t->ty);
+      llvm::Type* sat = llvmTy(v->ty);
+      const Type& elD = t->ty.elementType();
+      const Type& elS = v->ty.elementType();
+      for (long long e = 0; e < arrayExtent(t->ty); ++e) {
+        llvm::Value* dEl = b_.CreateInBoundsGEP(dat, dst, {i64(0), i64(e)}, "bnm.dae");
+        llvm::Value* sEl = b_.CreateInBoundsGEP(sat, src, {i64(0), i64(e)}, "bnm.sae");
+        emitByNameCopy(dEl, sEl, elD, elS, s->loc, nullptr, {}, nullptr, {});
+      }
+      return;
+    }
     emitByNameCopy(dst, src, t->ty, v->ty, s->loc, t->sym, t->memberPath, v->sym, v->memberPath);
     return;
   }
@@ -4932,7 +4955,7 @@ Val IRGen::emitExpr(HExpr* e) {
   Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
                                         b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
                       : e->ty;
-  if (!isCmp && (op == Tok::Slash || op == Tok::Power))
+  if (!isCmp && (op == Tok::Slash || op == Tok::Power) && !common.isComplex())
     common = Type::flt(e->ty.prec);
   Val av, bv;
   if (op == Tok::Star && common.isFixed()) {
@@ -5203,7 +5226,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val a = emitExpr(e->args[0].get());
     const Type& at = a.ty;
     llvm::Value* r;
-    if (at.k == TK::Float) {
+    if (at.isComplex()) {
+      // |x + iy| = sqrt(x*x + y*y) over the FLOAT pair (rule (123)).
+      llvm::Value* re = b_.CreateExtractValue(a.cpx, 0, "abre");
+      llvm::Value* im = b_.CreateExtractValue(a.cpx, 1, "abim");
+      llvm::Value* m = b_.CreateFAdd(b_.CreateFMul(re, re, "abq1"),
+                                     b_.CreateFMul(im, im, "abq2"), "abq");
+      r = b_.CreateCall(runtimeFn("pli_sqrt"), {m}, "abss");
+    } else if (at.k == TK::Float) {
       r = b_.CreateCall(intrinsicFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}), {a.reg},
                         "abs");
     } else {
@@ -5355,18 +5385,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // MIN/MAX (rule (123)): fold the arguments left to right with a select per
+  // pair in the common arithmetic type.
   if (e->name == "MIN" || e->name == "MAX") {
-    Val a = emitExpr(e->args[0].get());
-    Val b = emitExpr(e->args[1].get());
     const Type& common = e->ty;
-    Val av = convert(a, common, e->loc);
-    Val bv = convert(b, common, e->loc);
-    llvm::Value* cmp = common.k == TK::Float ? b_.CreateFCmpOLT(av.reg, bv.reg, "mincmp")
-                                             : b_.CreateICmpSLT(av.reg, bv.reg, "mincmp");
-    llvm::Value* r = e->name == "MIN" ? b_.CreateSelect(cmp, av.reg, bv.reg, "min")
-                                      : b_.CreateSelect(cmp, bv.reg, av.reg, "max");
+    llvm::Value* acc = convert(emitExpr(e->args[0].get()), common, e->loc).reg;
+    for (size_t i = 1; i < e->args.size(); ++i) {
+      llvm::Value* nx = convert(emitExpr(e->args[i].get()), common, e->loc).reg;
+      llvm::Value* cmp = common.k == TK::Float ? b_.CreateFCmpOLT(acc, nx, "mincmp")
+                                               : b_.CreateICmpSLT(acc, nx, "mincmp");
+      acc = e->name == "MIN" ? b_.CreateSelect(cmp, acc, nx, "min")
+                             : b_.CreateSelect(cmp, nx, acc, "max");
+    }
     v.ty = common;
-    v.reg = r;
+    v.reg = acc;
     result = v;
     return true;
   }
@@ -5388,7 +5420,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* bi = toI64(bv);
       llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
       llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_ll"), {toI64(av), bi});
-      v.reg = b_.CreateTrunc(zerodivideResume(dz, m, i64(0)), b_.getInt32Ty(), "mod32");
+      llvm::Value* m64 = b_.CreateTrunc(zerodivideResume(dz, m, i64(0)), b_.getInt32Ty(), "mod32");
+      // Keep the value's LLVM width in sync with e->ty for later compares.
+      v.reg = common.intBits() == 32 ? m64 : b_.CreateSExt(m64, llvmTy(common), "modw");
     }
     result = v;
     return true;

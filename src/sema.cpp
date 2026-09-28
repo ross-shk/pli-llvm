@@ -1625,7 +1625,15 @@ const Type* Sema::structLeafType(Expr* e) {
 void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
   // BY NAME (rule 86): walk the target structure's members; a member is copied
   // from the same-named member of the source when both are present. Nested
-  // structures recurse by name, so the two layouts need not match.
+  // structures recurse by name, so the two layouts need not match. An arrayed
+  // structure matches element-wise, so both sides must have the same extents.
+  if (dst.isArray() || src.isArray()) {
+    if (!dst.isArray() || !src.isArray() || dst.dims != src.dims) {
+      d_.error(loc, "BY NAME assignment between arrayed structures needs matching extents",
+               "(86)");
+      return;
+    }
+  }
   for (const auto& dm : dst.members) {
     const Member* sm = nullptr;
     for (const auto& m : src.members)
@@ -1647,8 +1655,6 @@ void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
         d_.error(loc,
                  "BY NAME array member '" + dm->name + "' must have the same type on both sides",
                  "(86)");
-    } else if (dm->ty.isChar() || sm->ty.isChar()) {
-      d_.error(loc, "CHARACTER structure members are not implemented in this stage", "(11)");
     } else {
       checkAssignable(dm->ty, sm->ty, loc, "BY NAME assignment");
     }
@@ -3904,6 +3910,11 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
+    // ABS of a complex is its magnitude, a real FLOAT; numeric args keep type.
+    if (e->args[0]->ty.isComplex()) {
+      e->ty = Type::flt(6);
+      return true;
+    }
     if (!e->args[0]->ty.isNumeric()) {
       d_.error(e->args[0]->loc, "ABS argument must be numeric", "(123)");
       e->ty = Type::voidTy();
@@ -4084,36 +4095,25 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = t;
     return true;
   }
-  // MIN built-in (M2): min(a, b) — the smaller of two numerics, in their
-  // common arithmetic type (two-argument form in this stage).
-  if (e->name == "MIN") {
-    if (e->args.size() != 2) {
-      d_.error(e->loc, "MIN takes 2 arguments in this stage", "(123)");
+  // MIN built-in (rule (123)): min(a, b, ...) — the smallest of the numerics,
+  // in their common arithmetic type (folded left to right).
+  if (e->name == "MIN" || e->name == "MAX") {
+    const char* nm = e->name.c_str();
+    if (e->args.size() < 2) {
+      d_.error(e->loc, std::string(nm) + " expects at least 2 arguments", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
-    if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-      d_.error(e->loc, "MIN arguments must be numeric", "(123)");
-      e->ty = Type::voidTy();
-      return true;
+    Type common = e->args[0]->ty;
+    for (auto& a : e->args) {
+      if (!a->ty.isNumeric()) {
+        d_.error(a->loc, std::string(nm) + " arguments must be numeric", "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      common = arithResultType(common, a->ty);
     }
-    e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
-    return true;
-  }
-  // MAX built-in (M2): max(a, b) — the larger of two numerics, in their
-  // common arithmetic type (two-argument form in this stage).
-  if (e->name == "MAX") {
-    if (e->args.size() != 2) {
-      d_.error(e->loc, "MAX takes 2 arguments in this stage", "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
-    if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-      d_.error(e->loc, "MAX arguments must be numeric", "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
-    e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+    e->ty = common;
     return true;
   }
   // MOD built-in (M2): mod(a, b) — remainder with the divisor's sign, in

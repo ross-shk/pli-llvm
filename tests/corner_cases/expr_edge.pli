@@ -31,13 +31,13 @@ expr_edge: procedure options(main);
    if s1 !! ' ' !! s2 = 'hello world' then put skip list('concat !! ok');
 
    /* Comparison operators including ¬= ¬> ¬< */
-   declare a fixed bin(31), b fixed bin(31);
-   a = 5; b = 10;
-   if a < b then put skip list('< ok');
-   if a ¬> b then put skip list('¬> ok');
-   if a ¬= b then put skip list('¬= ok');
-   if a <= b then put skip list('<= ok');
-   if a >= b then put skip list('>= ok');
+   declare a fixed bin(31), q fixed bin(31);
+   a = 5; q = 10;
+   if a < q then put skip list('< ok');
+   if a ¬> q then put skip list('¬> ok');
+   if a ¬= q then put skip list('¬= ok');
+   if a <= q then put skip list('<= ok');
+   if a >= q then put skip list('>= ok');
 
    /* Complex arithmetic (ADR-084) */
    declare c1 complex float dec(6);
@@ -137,8 +137,10 @@ expr_edge: procedure options(main);
    /* REPEAT */
    if repeat('ab', 3) ^= 'ababab' then fails = fails + 1;
 
-   /* HIGH/LOW */
-   if high(5) ^= '99999'b then fails = fails + 1;  /* bit string of 1s */
+   /* HIGH/LOW (M2): character strings of the highest/lowest collating char;
+      a BIT constant may only hold 0/1 digits, so compare the result shape. */
+   if length(high(5)) ^= 5 then fails = fails + 1;
+   if high(3) = low(3) then fails = fails + 1;
    /* LOW is implementation dependent */
 
    /* DATE/TIME */

@@ -1686,9 +1686,11 @@ void Parser::parseDeclTail(DeclItem& item) {
   if (bag.file && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
                    bag.decimal || bag.pointer))
     d_.error(item.loc, "FILE cannot be combined with a data attribute", "(15)");
-  if (bag.complex && (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary ||
-                      bag.decimal || bag.pointer || bag.file))
-    d_.error(item.loc, "COMPLEX cannot be combined with another data attribute", "(15)");
+  // COMPLEX is an arithmetic modifier (rule (16)): it combines with the
+  // FLOAT/FIXED and DECIMAL/BINARY base attributes; string, POINTER and FILE
+  // remain incompatible.
+  if (bag.complex && (bag.character || bag.bit || bag.pointer || bag.file))
+    d_.error(item.loc, "COMPLEX cannot be combined with a non-arithmetic data attribute", "(15)");
   if ((bag.task || bag.event) &&
       (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal ||
        bag.pointer || bag.complex || bag.file || bag.varying))
