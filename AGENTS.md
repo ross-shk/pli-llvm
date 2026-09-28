@@ -3,6 +3,14 @@
 PL/I → LLVM compiler, built to `TR25.084-concrete-syntax.md` (syntax) and  
 Y33-6003 (semantics). Full workflow: `CONTRIBUTING.md`.
 
+## Roles
+
+- **frontend-engineer** — lexer, parser, semantic analysis (sema), AST, diagnostics; owns TR 25.084 rules 1–151 coverage
+- **irgen-engineer** — HIR → LLVM IR lowering, target-independent codegen, ABI conformance; only LLVM-aware component
+- **runtime-engineer** — libpli: list-directed I/O, string/aggregate semantics, condition handling, threading abstraction
+- **test-engineer** — golden/self-checking tests, builtins test infrastructure, test runner maintenance
+- **spec-engineer** — GRAMMAR-COVERAGE.md tracking, ADR authoring, TR 25.084 / Y33-6003 conformance audit
+
 ## Rules
 
 - never roll back already implemented features or remove them from tests unless they don't conform to TR25.084 or IBM Enterprise PL/I
