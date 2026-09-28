@@ -17,12 +17,13 @@ make install
 
 ## Documentation
 
-| Document                                                               | Contents                                                                      |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                                     | how to add a feature: layer map, workflow, invariants, test conventions       |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                           | pipeline, IR levels, data representation, ABI, condition model, runtime interface |
-| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)                   | rule-by-rule implementation notes, supported cases, diagnostics, and test references |
-| [docs/SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md)       | TR 25.084 / Y33-6003 compliance audit: GAP-ANALYSIS, CONFORMANCE-MATRIX, REMEDIATION-PLAN |
+| Document                                                         | Contents                                                                                  |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                               | how to add a feature: layer map, workflow, invariants, test conventions                   |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                     | pipeline, IR levels, data representation, ABI, condition model, runtime interface         |
+| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)             | rule-by-rule implementation notes, supported cases, diagnostics, and test references      |
+| [docs/SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md) | TR 25.084 / Y33-6003 compliance audit: GAP-ANALYSIS, CONFORMANCE-MATRIX, REMEDIATION-PLAN |
+| [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)             | design history: keyword handling, numeric representation, IR choices, and other decisions |
 
 ## What the compiler handles today
 
