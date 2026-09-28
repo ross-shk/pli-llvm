@@ -1351,7 +1351,12 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.optional = true;
         continue;
       }
-      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" ||
+      if (w == "ALIGNED") {
+        // ALIGNED (rule (15)) is the default LLVM struct layout, so accept silently.
+        advance();
+        continue;
+      }
+      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "UNALIGNED" ||
           w == "INTERNAL" || w == "INT") {
         d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
                 "(15)");
