@@ -1,0 +1,18 @@
+ /* line comments (ADR-156, MODERN-PLI-PLAN MX10). */
+ line_comment: procedure options(main);
+    declare x fixed bin(31);
+    declare y fixed bin(31);
+    declare s char(4);
+    // whole-line comment
+    x = 6; // trailing comment
+    y = x / 2; // division still works
+    if y ^= 3 then put skip list('FAIL div');
+    else if x ^= 6 then put skip list('FAIL val');
+    else do;
+       s = '//'; // string is not a comment
+       if s ^= '//' then put skip list('FAIL str');
+       // /* block opener inside line comment is text
+       // %include 'missing_in_line_comment.inc';
+       else put skip list('PASS');
+    end;
+ end line_comment;

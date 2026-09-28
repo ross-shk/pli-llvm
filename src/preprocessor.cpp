@@ -382,7 +382,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
   // Find %THEN: the first %word in the expression span (expressions hold
   // no directives). Comments cannot hide one: the main loop strips them
   // before directives are ever scanned... except inside this raw span, so
-  // skip /* */ here too.
+  // skip comments and strings here too (ADR-156 covers //).
   size_t t = wordEnd;
   size_t thenAt = npos;
   while (t < source.size()) {
@@ -391,6 +391,27 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
       while (t + 1 < source.size() && !(source[t] == '*' && source[t + 1] == '/'))
         ++t;
       t += 2;
+      continue;
+    }
+    if (source[t] == '/' && t + 1 < source.size() && source[t + 1] == '/') {
+      // Line comment (ADR-156): hides %THEN and ';' to end of line.
+      while (t < source.size() && source[t] != '\n')
+        ++t;
+      continue;
+    }
+    if (source[t] == '\'') {
+      // Quoted text hides %THEN and ';' ('' is an escaped quote).
+      ++t;
+      while (t < source.size()) {
+        if (source[t] == '\'' && t + 1 < source.size() && source[t + 1] == '\'') {
+          t += 2;
+          continue;
+        }
+        if (source[t] == '\'')
+          break;
+        ++t;
+      }
+      ++t;
       continue;
     }
     if (source[t] == '%') {
@@ -489,9 +510,16 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
   int col = 1;
   bool inString = false;
   bool inComment = false;
+  bool inLineComment = false;
   for (size_t i = 0; i < source.size();) {
     char c = source[i];
-    if (inComment) {
+    if (inLineComment) {
+      // Line comment (ADR-156): copy verbatim to EOL so the lexer
+      // strips it; directives inside stay inert, newlines preserved.
+      output += c;
+      if (c == '\n')
+        inLineComment = false;
+    } else if (inComment) {
       output += c;
       if (c == '*' && i + 1 < source.size() && source[i + 1] == '/') {
         output += '/';
@@ -515,6 +543,14 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
       i += 2;
       col += 2;
       inComment = true;
+      continue;
+    } else if (c == '/' && i + 1 < source.size() && source[i + 1] == '/') {
+      // Line comment start (ADR-156): adjacent slashes only, so
+      // `a / / b` stays two divisions while `a // b` comments.
+      output += "//";
+      i += 2;
+      col += 2;
+      inLineComment = true;
       continue;
     } else if (c == '\'') {
       output += c;

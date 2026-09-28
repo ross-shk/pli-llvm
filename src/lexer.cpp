@@ -132,6 +132,11 @@ void Lexer::skipSpaceAndComments() {
       }
       continue;
     }
+    if (cur() == '/' && peek() == '/') { // ADR-156
+      while (cur() && cur() != '\n')
+        bump();
+      continue;
+    }
     return;
   }
 }
