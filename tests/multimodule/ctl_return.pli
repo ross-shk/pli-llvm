@@ -1,0 +1,42 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (18),(23),(87)-(90): Cross-module function returning CONTROLLED.
+   Build: two -c units linked together. */
+ctlreturn: procedure options(main);
+  dcl fails fixed bin(31) init(0);
+  dcl result char(*) varying controlled;
+  dcl result2 char(*) varying controlled;
+  dcl len fixed bin(31);
+
+  dcl create_str  entry returns(char(*) varying controlled) external;
+  dcl create_fixed entry (fixed bin(31)) returns(char(*) varying controlled) external;
+  dcl append_str  entry (char(*) varying controlled, char(*)) returns(char(*) varying controlled) external;
+
+  /* Test 1: function creates and returns CONTROLLED string */
+  result = create_str();
+  len = length(result);
+  if len ^= 11 then fails = fails + 1;
+  if substr(result, 1, 11) ^= 'hello world' then fails = fails + 1;
+  free result;
+
+  /* Test 2: function creates fixed-size CONTROLLED string */
+  result = create_fixed(20);
+  len = length(result);
+  if len ^= 20 then fails = fails + 1;
+  if substr(result, 1, 8) ^= 'fixedstr' then fails = fails + 1;
+  free result;
+
+  /* Test 3: function appends to caller's CONTROLLED and returns it */
+  allocate result (10) character varying;
+  result = 'start';
+  result2 = append_str(result, ' appended');
+  len = length(result2);
+  if len ^= 18 then fails = fails + 1;  /* 'start appended' = 14 */
+  if substr(result2, 1, 5) ^= 'start' then fails = fails + 1;
+  if substr(result2, 6, 9) ^= ' appended' then fails = fails + 1;
+  /* result and result2 should be the same generation */
+  free result2;
+
+  if fails = 0 then put skip list('PASS ctl_return');
+  else put skip list('FAIL ctl_return: fails=', fails);
+end ctlreturn;

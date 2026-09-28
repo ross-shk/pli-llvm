@@ -1,0 +1,46 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rule (42): Multiple external procedures in one module - testing linkage.
+   Build: two -c units linked together. */
+extlink: procedure options(main);
+  dcl fails fixed bin(31) init(0);
+  dcl result fixed bin(31);
+
+  /* External procedures from lib */
+  dcl func_a entry (fixed bin(31)) returns(fixed bin(31)) external;
+  dcl func_b entry (fixed bin(31)) returns(fixed bin(31)) external;
+  dcl func_c entry (fixed bin(31), fixed bin(31)) returns(fixed bin(31)) external;
+  dcl init_all entry external;
+  dcl get_a entry returns(fixed bin(31)) external;
+  dcl get_b entry returns(fixed bin(31)) external;
+  dcl get_c entry returns(fixed bin(31)) external;
+
+  call init_all();
+
+  /* Test each function */
+  result = func_a(10);
+  if result ^= 20 then fails = fails + 1;  /* x * 2 */
+
+  result = func_b(10);
+  if result ^= 30 then fails = fails + 1;  /* x * 3 */
+
+  result = func_c(4, 5);
+  if result ^= 20 then fails = fails + 1;  /* x * y */
+
+  /* Verify internal state */
+  result = get_a();
+  if result ^= 20 then fails = fails + 1;
+
+  result = get_b();
+  if result ^= 30 then fails = fails + 1;
+
+  result = get_c();
+  if result ^= 20 then fails = fails + 1;
+
+  /* Call again */
+  result = func_a(7);
+  if result ^= 14 then fails = fails + 1;
+
+  if fails = 0 then put skip list('PASS ext_link');
+  else put skip list('FAIL ext_link: fails=', fails);
+end extlink;

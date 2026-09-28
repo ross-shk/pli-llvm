@@ -1,0 +1,42 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rule (42): EXTERNAL scope - shared variables across modules.
+   Companion to ext_var.pli. */
+extlib: package exports(init_shared, read_shared, write_shared,
+                        get_buffer, set_buffer);
+
+dcl shared_counter fixed bin(31) external;
+dcl shared_flag    fixed bin(31) external init(0);
+dcl shared_buffer  char(64) varying external;
+
+/* Initialize shared variables */
+init_shared: procedure;
+  shared_counter = 42;
+  shared_flag = 0;
+  shared_buffer = 'initial';
+end init_shared;
+
+/* Read shared counter */
+read_shared: procedure returns(fixed bin(31));
+  return(shared_counter);
+end read_shared;
+
+/* Write shared counter, optionally using flag */
+write_shared: procedure(val);
+  dcl val fixed bin(31);
+  if shared_flag = 1 then shared_counter = val;
+  else shared_counter = val * 2;
+end write_shared;
+
+/* Get shared buffer */
+get_buffer: procedure returns(char(64) varying);
+  return(shared_buffer);
+end get_buffer;
+
+/* Set shared buffer */
+set_buffer: procedure(buf);
+  dcl buf char(*) varying;
+  shared_buffer = buf;
+end set_buffer;
+
+end extlib;

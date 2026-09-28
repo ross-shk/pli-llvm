@@ -1,0 +1,76 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (15),(18),(23),(87)-(90): lib module for ctl_xfer2.pli -
+   cross-module CONTROLLED operations on caller's generation stack. */
+ctlx2: package exports(grow, trim_free, alloc_free, double_gen);
+
+/* grow - fill caller's controlled string with `want` bytes, trim if needed */
+grow: procedure(buff, cap, want) returns(fixed bin(31));
+  dcl buff        char(*) varying controlled;
+  dcl cap         fixed bin(31);
+  dcl want        fixed bin(31);
+  dcl spare       char(*) varying controlled;
+  dcl chunk       char(30) varying;
+  dcl total       fixed bin(31) init(0);
+  dcl n           fixed bin(31);
+
+  chunk = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+  /* buff already allocated by caller */
+  do while (total < want);
+    n = min(30, want - total);
+    do while (total + n > cap);
+      cap = cap * 2;
+      allocate spare (cap) character varying;
+      spare = buff;
+      free buff;
+      allocate buff (cap) character varying;
+      buff = spare;
+      free spare;
+    end;
+    substr(buff, total + 1, n) = substr(chunk, 1, n);
+    total = total + n;
+  end;
+  if total < cap then do;
+    allocate spare (total) character varying;
+    spare = buff;
+    free buff;
+    allocate buff (total) character varying;
+    buff = spare;
+    free spare;
+  end;
+  return(total);
+end grow;
+
+/* trim_free - trim the caller's controlled string to its content, don't free */
+trim_free: procedure(buff);
+  dcl buff char(*) varying controlled;
+  dcl cur_len fixed bin(31);
+  cur_len = length(buff);
+  if cur_len < cap then do;
+    allocate spare (cur_len) character varying;
+    spare = buff;
+    free buff;
+    allocate buff (cur_len) character varying;
+    buff = spare;
+    free spare;
+  end;
+  dcl spare char(*) varying controlled;
+  dcl cap fixed bin(31);
+end trim_free;
+
+/* alloc_free - callee allocates on caller's stack, fills, caller frees */
+alloc_free: procedure(buff, sz);
+  dcl buff char(*) varying controlled;
+  dcl sz   fixed bin(31);
+  allocate buff (sz) character varying;
+  buff = 'allocated';
+end alloc_free;
+
+/* double_gen - push a second generation onto caller's stack */
+double_gen: procedure(buff);
+  dcl buff char(*) varying controlled;
+  allocate buff (8) character varying;
+  buff = 'secondg';
+end double_gen;
+
+end ctlx2;

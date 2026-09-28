@@ -1,0 +1,50 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (15),(18),(23),(87)-(90): cross-module CONTROLLED with
+   ALLOCATE in caller, FREE in callee, and vice versa.
+   Build: two -c units linked together. */
+ctlxfer2: procedure options(main);
+  dcl body        char(*) varying controlled;
+  dcl body2       char(*) varying controlled;
+  dcl cap         fixed bin(31);
+  dcl got         fixed bin(31);
+  dcl fails       fixed bin(31) init(0);
+
+  dcl grow        entry (char(*) varying controlled, fixed bin(31),
+                   fixed bin(31)) returns (fixed bin(31)) external;
+  dcl trim_free   entry (char(*) varying controlled) external;
+  dcl alloc_free  entry (char(*) varying controlled, fixed bin(31))
+                   external;
+  dcl double_gen  entry (char(*) varying controlled) external;
+
+  /* Test 1: caller allocates, callee fills and trims, caller frees */
+  cap = 32;
+  allocate body (cap) character varying;
+  got = grow(body, cap, 20);
+  if got ^= 20 then fails = fails + 1;
+  if length(body) ^= 20 then fails = fails + 1;
+  call trim_free(body);
+  if length(body) ^= 20 then fails = fails + 1;  /* trim_free doesn't free */
+  free body;
+
+  /* Test 2: callee allocates and frees on caller's stack */
+  call alloc_free(body2, 16);
+  if length(body2) ^= 16 then fails = fails + 1;
+  if substr(body2, 1, 8) ^= 'allocated' then fails = fails + 1;
+  free body2;
+
+  /* Test 3: callee pushes second generation, caller pops both */
+  cap = 8;
+  allocate body (cap) character varying;
+  body = 'firstgen';
+  call double_gen(body);
+  if length(body) ^= 8 then fails = fails + 1;
+  if substr(body, 1, 8) ^= 'secondg' then fails = fails + 1;
+  free body;  /* pop second */
+  if length(body) ^= 8 then fails = fails + 1;
+  if substr(body, 1, 8) ^= 'firstgen' then fails = fails + 1;
+  free body;  /* pop first */
+
+  if fails = 0 then put skip list('PASS ctl_xfer2');
+  else put skip list('FAIL ctl_xfer2: fails=', fails);
+end ctlxfer2;

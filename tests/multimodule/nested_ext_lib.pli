@@ -1,0 +1,26 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rule (42): External procedure callback across modules.
+   Companion to nested_ext.pli. */
+nestedlib: package exports(lib_call_cb, lib_set_cb, lib_invoke_cb);
+
+dcl cb_value fixed bin(31) static;
+
+/* Call with value directly (simulating callback) */
+lib_call_cb: procedure(x) returns(fixed bin(31));
+  dcl x fixed bin(31);
+  return(x * 2 + 1);
+end lib_call_cb;
+
+/* Store value for later callback */
+lib_set_cb: procedure(x);
+  dcl x fixed bin(31);
+  cb_value = x;
+end lib_set_cb;
+
+/* Invoke stored callback logic */
+lib_invoke_cb: procedure returns(fixed bin(31));
+  return(cb_value * 2 + 1);
+end lib_invoke_cb;
+
+end nestedlib;

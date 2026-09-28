@@ -1,0 +1,45 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (18),(34)-(38): CHAR(*) VARYING CONTROLLED as function parameter
+   and return value across modules.
+   Build: two -c units linked together. */
+ctlfunc: procedure options(main);
+  dcl fails fixed bin(31) init(0);
+  dcl input  char(*) varying controlled;
+  dcl output char(*) varying controlled;
+  dcl len    fixed bin(31);
+
+  dcl process_str entry (char(*) varying controlled) returns(char(*) varying controlled) external;
+  dcl transform   entry (char(*) varying controlled, char(*) varying controlled) external;
+
+  /* Test 1: function takes CONTROLLED param and returns CONTROLLED */
+  allocate input (10) character varying;
+  input = 'test';
+  output = process_str(input);
+  len = length(output);
+  if len ^= 8 then fails = fails + 1;  /* 'processed' = 9? */
+  if substr(output, 1, 9) ^= 'processed' then fails = fails + 1;
+  free output;
+
+  /* Test 2: function transforms input in-place, returns same generation */
+  allocate input (20) character varying;
+  input = 'transform';
+  output = process_str(input);
+  len = length(output);
+  if len ^= 12 then fails = fails + 1;  /* 'transformed' */
+  if substr(output, 1, 11) ^= 'transformed' then fails = fails + 1;
+  free output;
+
+  /* Test 3: procedure with two CONTROLLED params */
+  allocate input (15) character varying;
+  allocate output (15) character varying;
+  input = 'hello';
+  call transform(input, output);
+  len = length(output);
+  if len ^= 10 then fails = fails + 1;  /* 'HELLO WORLD' = 11? */
+  free input;
+  free output;
+
+  if fails = 0 then put skip list('PASS ctl_func');
+  else put skip list('FAIL ctl_func: fails=', fails);
+end ctlfunc;

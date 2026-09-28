@@ -1,0 +1,57 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rule (25): BASED/POINTER cross-module scenarios.
+   Companion to based_xfer.pli. */
+basedlib: package exports(create_rec, read_rec, write_rec, free_rec, create_two);
+
+dcl based_ptr pointer;
+dcl 1 based_rec based(based_ptr),
+     2 id   fixed bin(31),
+     2 data fixed bin(31);
+
+/* Allocate and initialize a based record */
+create_rec: procedure returns(pointer);
+  dcl p pointer;
+  allocate based_rec set(p);
+  based_rec.id = 1;
+  based_rec.data = 123;
+  return(p);
+end create_rec;
+
+/* Read data from based record */
+read_rec: procedure(p) returns(fixed bin(31));
+  dcl p pointer;
+  based_ptr = p;
+  return(based_rec.data);
+end read_rec;
+
+/* Write data to based record */
+write_rec: procedure(p, val);
+  dcl p   pointer;
+  dcl val fixed bin(31);
+  based_ptr = p;
+  based_rec.data = val;
+end write_rec;
+
+/* Free based record */
+free_rec: procedure(p);
+  dcl p pointer;
+  based_ptr = p;
+  free based_rec;
+end free_rec;
+
+/* Create two based records */
+create_two: procedure(p1, p2);
+  dcl p1 pointer;
+  dcl p2 pointer;
+  allocate based_rec set(p1);
+  based_ptr = p1;
+  based_rec.id = 1;
+  based_rec.data = 100;
+  allocate based_rec set(p2);
+  based_ptr = p2;
+  based_rec.id = 2;
+  based_rec.data = 200;
+end create_two;
+
+end basedlib;

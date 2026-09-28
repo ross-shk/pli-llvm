@@ -1,0 +1,56 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* PACKAGE / EXPORTS (ADR-109): cross-module package with shared data.
+   Companion to pkg_xfer.pli. */
+pkgx: package exports(pkg_init, pkg_add, pkg_get, pkg_mul, pkg_reset, pkg_get_arr);
+
+/* Package-level static data */
+dcl pkg_counter fixed bin(31) static initial(10);
+dcl pkg_arr   (10) fixed bin(31) static;
+dcl pkg_arr_n fixed bin(31) static initial(0);
+
+/* Initialize package state */
+pkg_init: procedure;
+  pkg_counter = 10;
+  pkg_arr_n = 0;
+  do i = 1 to 10; pkg_arr(i) = 0; end;
+end pkg_init;
+
+/* Add to counter */
+pkg_add: procedure(val);
+  dcl val fixed bin(31);
+  pkg_counter = pkg_counter + val;
+  if pkg_arr_n < 10 then do;
+    pkg_arr_n = pkg_arr_n + 1;
+    pkg_arr(pkg_arr_n) = val;
+  end;
+end pkg_add;
+
+/* Get counter */
+pkg_get: procedure returns(fixed bin(31));
+  return(pkg_counter);
+end pkg_get;
+
+/* Multiply counter */
+pkg_mul: procedure(val) returns(fixed bin(31));
+  dcl val fixed bin(31);
+  pkg_counter = pkg_counter * val;
+  return(pkg_counter);
+end pkg_mul;
+
+/* Reset counter */
+pkg_reset: procedure;
+  pkg_counter = 10;
+end pkg_reset;
+
+/* Get sum of array elements */
+pkg_get_arr: procedure returns(fixed bin(31));
+  dcl sum fixed bin(31) init(0);
+  dcl i   fixed bin(31);
+  do i = 1 to pkg_arr_n;
+    sum = sum + pkg_arr(i);
+  end;
+  return(sum);
+end pkg_get_arr;
+
+end pkgx;

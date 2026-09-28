@@ -1,0 +1,40 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (3),(56): Multiple entry names and ENTRY statement cross-module.
+   Companion to multi_entry.pli. */
+multient: package exports(lib_main, lib_entry_a, lib_entry_b, lib_reset, lib_get_cnt);
+
+dcl counter fixed bin(31) static initial(0);
+
+/* Main entry point */
+lib_main: procedure returns(fixed bin(31));
+  counter = 100;
+  return(counter);
+end lib_main;
+
+/* Alternate entry A - add single value */
+lib_entry_a: procedure(val) returns(fixed bin(31));
+  dcl val fixed bin(31);
+  counter = counter + val;
+  return(counter);
+end lib_entry_a;
+
+/* Alternate entry B - add two values */
+lib_entry_b: procedure(val1, val2) returns(fixed bin(31));
+  dcl val1 fixed bin(31);
+  dcl val2 fixed bin(31);
+  counter = counter + val1 + val2;
+  return(counter);
+end lib_entry_b;
+
+/* Reset counter */
+lib_reset: procedure;
+  counter = 0;
+end lib_reset;
+
+/* Get counter */
+lib_get_cnt: procedure returns(fixed bin(31));
+  return(counter);
+end lib_get_cnt;
+
+end multient;

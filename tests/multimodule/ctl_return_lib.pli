@@ -1,0 +1,49 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (18),(23),(87)-(90): Cross-module function returning CONTROLLED.
+   Companion to ctl_return.pli. */
+ctlret: package exports(create_str, create_fixed, append_str);
+
+dcl temp char(*) varying controlled;
+
+/* Create and return a CONTROLLED string */
+create_str: procedure returns(char(*) varying controlled);
+  allocate temp (11) character varying;
+  temp = 'hello world';
+  return(temp);
+end create_str;
+
+/* Create fixed-size CONTROLLED string */
+create_fixed: procedure(sz) returns(char(*) varying controlled);
+  dcl sz fixed bin(31);
+  allocate temp (sz) character varying;
+  temp = 'fixedstr';
+  return(temp);
+end create_fixed;
+
+/* Append to caller's CONTROLLED string and return it */
+append_str: procedure(buff, suffix) returns(char(*) varying controlled);
+  dcl buff   char(*) varying controlled;
+  dcl suffix char(*);
+  dcl len1   fixed bin(31);
+  dcl len2   fixed bin(31);
+  dcl newsz  fixed bin(31);
+  dcl spare  char(*) varying controlled;
+
+  len1 = length(buff);
+  len2 = length(suffix);
+  newsz = len1 + len2;
+
+  /* Resize buff to fit both */
+  allocate spare (newsz) character varying;
+  spare = buff;
+  substr(spare, len1 + 1, len2) = suffix;
+  free buff;
+  allocate buff (newsz) character varying;
+  buff = spare;
+  free spare;
+
+  return(buff);
+end append_str;
+
+end ctlret;

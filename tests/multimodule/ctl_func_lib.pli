@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (18),(34)-(38): CHAR(*) VARYING CONTROLLED as function parameter
+   and return value across modules.
+   Companion to ctl_func.pli. */
+ctlfn: package exports(process_str, transform);
+
+dcl temp char(*) varying controlled;
+
+/* Process string and return new CONTROLLED string */
+process_str: procedure(buff) returns(char(*) varying controlled);
+  dcl buff char(*) varying controlled;
+  dcl result char(*) varying controlled;
+  dcl len fixed bin(31);
+
+  len = length(buff);
+  allocate result (len + 9) character varying;  /* 'processed ' prefix */
+  result = 'processed ';
+  result = result || buff;
+  return(result);
+end process_str;
+
+/* Transform input to output */
+transform: procedure(input, output);
+  dcl input  char(*) varying controlled;
+  dcl output char(*) varying controlled;
+  dcl i fixed bin(31);
+  dcl c char(1);
+
+  allocate output (length(input) + 6) character varying;
+  output = '';
+  do i = 1 to length(input);
+    c = substr(input, i, 1);
+    if c >= 'a' & c <= 'z' then
+      c = substr('ABCDEFGHIJKLMNOPQRSTUVWXYZ', rank(c) - rank('a') + 1, 1);
+    output = output || c;
+  end;
+  output = output || ' WORLD';
+end transform;
+
+end ctlfn;

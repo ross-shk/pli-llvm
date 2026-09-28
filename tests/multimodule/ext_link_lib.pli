@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rule (42): Multiple external procedures in one module - testing linkage.
+   Companion to ext_link.pli. */
+extlib: package exports(func_a, func_b, func_c, init_all, get_a, get_b, get_c);
+
+dcl state_a fixed bin(31) static initial(0);
+dcl state_b fixed bin(31) static initial(0);
+dcl state_c fixed bin(31) static initial(0);
+
+init_all: procedure;
+  state_a = 0;
+  state_b = 0;
+  state_c = 0;
+end init_all;
+
+func_a: procedure(x) returns(fixed bin(31));
+  dcl x fixed bin(31);
+  state_a = x * 2;
+  return(state_a);
+end func_a;
+
+func_b: procedure(x) returns(fixed bin(31));
+  dcl x fixed bin(31);
+  state_b = x * 3;
+  return(state_b);
+end func_b;
+
+func_c: procedure(x, y) returns(fixed bin(31));
+  dcl x fixed bin(31);
+  dcl y fixed bin(31);
+  state_c = x * y;
+  return(state_c);
+end func_c;
+
+get_a: procedure returns(fixed bin(31));
+  return(state_a);
+end get_a;
+
+get_b: procedure returns(fixed bin(31));
+  return(state_b);
+end get_b;
+
+get_c: procedure returns(fixed bin(31));
+  return(state_c);
+end get_c;
+
+end extlib;

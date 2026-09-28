@@ -1,0 +1,66 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rule (18): adjustable CHAR(*) parameters cross-module.
+   Companion to star_param.pli. */
+starlib: package exports(fill_buf, get_len, concat_buf, uppercase, get_content);
+
+/* Fill buffer with 'x' up to n characters */
+fill_buf: procedure(buf, n);
+  dcl buf char(*);
+  dcl n   fixed bin(31);
+  dcl i   fixed bin(31);
+  do i = 1 to n;
+    substr(buf, i, 1) = 'x';
+  end;
+end fill_buf;
+
+/* Get length of buffer content (up to first blank or end) */
+get_len: procedure(buf) returns(fixed bin(31));
+  dcl buf char(*);
+  dcl len fixed bin(31) init(0);
+  dcl i   fixed bin(31);
+  do i = 1 to length(buf);
+    if substr(buf, i, 1) = ' ' then leave;
+    len = len + 1;
+  end;
+  return(len);
+end get_len;
+
+/* Concatenate buf2 to end of buf1 */
+concat_buf: procedure(buf1, buf2);
+  dcl buf1 char(*);
+  dcl buf2 char(*);
+  dcl len1 fixed bin(31);
+  dcl i    fixed bin(31);
+  len1 = get_len(buf1);
+  do i = 1 to length(buf2);
+    if substr(buf2, i, 1) = ' ' then leave;
+    len1 = len1 + 1;
+    if len1 > length(buf1) then leave;
+    substr(buf1, len1, 1) = substr(buf2, i, 1);
+  end;
+end concat_buf;
+
+/* Convert buffer to uppercase */
+uppercase: procedure(buf);
+  dcl buf char(*);
+  dcl i fixed bin(31);
+  dcl c char(1);
+  do i = 1 to length(buf);
+    c = substr(buf, i, 1);
+    if c >= 'a' & c <= 'z' then
+      substr(buf, i, 1) = substr('ABCDEFGHIJKLMNOPQRSTUVWXYZ', rank(c) - rank('a') + 1, 1);
+  end;
+end uppercase;
+
+/* Get buffer content as VARYING string */
+get_content: procedure(buf) returns(char(64) varying);
+  dcl buf char(*);
+  dcl result char(64) varying;
+  dcl len fixed bin(31);
+  len = get_len(buf);
+  result = substr(buf, 1, len);
+  return(result);
+end get_content;
+
+end starlib;
