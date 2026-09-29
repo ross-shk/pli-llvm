@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (123),(126): bad ADDR on array elements. ADDR needs a */
+ /* variable or element address, not a general expression. */
+ bad_addr_elem: procedure options(main);
+   dcl buf(4) fixed bin(31);
+   dcl p pointer;
+   buf(1) = 1;
+   p = addr(buf(1) + 1);
+   put skip list('unreached');
+ end bad_addr_elem;

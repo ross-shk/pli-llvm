@@ -1,0 +1,30 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (25),(123),(126): library side of addr_elem.pli. Each */
+ /* entry takes a caller element address (addr(buf(i))) and */
+ /* reaches it through a scalar BASED cell or a runtime-(n) */
+ /* overlay, the same shape as netc_poll_multi(fds, ev, rev). */
+ addrelemlib: package exports(poke, peek, view_sum);
+ poke: procedure(p, val);
+   dcl p pointer;
+   dcl val fixed bin(31);
+   dcl cell fixed bin(31) based(p);
+   cell = val;
+ end poke;
+ peek: procedure(p) returns(fixed bin(31));
+   dcl p pointer;
+   dcl cell fixed bin(31) based(p);
+   return(cell);
+ end peek;
+ view_sum: procedure(p, n) returns(fixed bin(31));
+   dcl p pointer;
+   dcl n fixed bin(31);
+   dcl v(n) fixed bin(31) based(p);
+   dcl i fixed bin(31);
+   dcl s fixed bin(31) init(0);
+   do i = 1 to n;
+     s = s + v(i);
+   end;
+   return(s);
+ end view_sum;
+ end addrelemlib;

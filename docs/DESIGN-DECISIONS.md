@@ -4357,3 +4357,41 @@ caller-buffer views through caller-supplied locators across the
 object boundary. `bad_based_locator_sub.pli` pins the three
 diagnostics (non-POINTER locator, non-BASED target, arity).
 
+## ADR-165 — ADDR on array elements shares the subscript address path
+
+**Context.** libnet's `net_poll_multi` passes C pointers to the
+first element of fd/event arrays: `addr(fds(1))` (rule 123, wishlist
+#4). The compiler diagnosed every subscripted ADDR as
+unsubscripted-only, blocking the bridge even though fixed,
+CONTROLLED dynamic (ADR-161), and BASED overlays (ADR-163/164)
+already subscript correctly.
+
+**Decision.** Sema accepts `ADDR(X(i))` where `X(i)` is a typed
+subscript (rules 123,126); cross-sections are diagnosed with rule
+(126), other non-variables with rule (123).
+IRGen computes the same address the load/store path uses:
+`arrayElementAddr` off the symbol (or locator) base for
+fixed/dynamic/BASED arrays, `ctlDynElementAddr` off the live
+CONTROLLED top, `definedSubElementAddr` for iSUB, plus member
+(`S.A(i)`, `arr(i).x`) and locator (`P -> X(i)`) variants —
+keeping runtime SUBSCRIPTRANGE on every axis. Qualified `ADDR(S.A)`
+now GEPs through the member path instead of returning the base.
+
+Spec conformance (Y33-6003 BASED builtin; IBM storage-control):
+whole-aggregate `ADDR(A)` is the base (= first element, verified
+`addr(buf) = addr(buf(1))`); components take subscripting and
+qualification into account (scaled GEP); BASED returns the
+qualifying pointer (own base or explicit locator); CONTROLLED
+reads the live top via `pli_ctl_addr` (null when the stack is
+empty); VARYING returns the struct base (length prefix).
+Cross-sections stay diagnosed (ours are RHS gathers, not views);
+AREA cannot occur (undeclared); all supported storage is
+connected and BIT is effectively aligned (no UNALIGNED), so the
+IBM BIT/connected exclusions do not trigger.
+
+**Consequences.** `addr_elem.pli` pins fixed, CONTROLLED dyn,
+BASED fixed/`(n)`, locator, 2-D, and pointer-arg cases via
+scalar BASED write-through; `multimodule/addr_elem.pli` pins
+cross-object poke/peek and `(n)` views through element
+addresses. `bad_addr_elem.pli` pins the non-variable diagnostic.
+

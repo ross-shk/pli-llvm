@@ -5294,17 +5294,93 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "ADDR") {
-    // ADDR (rule 123, Appendix 1): the address of a variable as a POINTER.
+    // ADDR (rule 123, Appendix 1; Y33-6003 BASED builtin; IBM storage-
+    // control): the address of a variable as a POINTER. A subscripted
+    // element (rules 123,126, wishlist #4) addresses the same storage
+    // load/store use, so SUBSCRIPTRANGE still applies.
     HExpr* a = e->args[0].get();
-    if (a->kind != HExpr::VarRef || !a->sym) {
-      d_.error(a->loc, "ADDR requires an unsubscripted variable in this stage", "(123)");
+    if (a->kind == HExpr::VarRef && a->sym) {
       v.ty = e->ty;
-      v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+      // A qualified member S.A.B GEPs off the base; a locator P->X
+      // addresses off the locator value instead of the own base.
+      if (a->locPtr) {
+        llvm::Value* base = emitExpr(a->locPtr.get()).reg;
+        v.reg = a->memberPath.empty()
+                    ? base
+                    : locatorMemberAddr(a->sym, a->memberPath, base);
+      } else {
+        v.reg = a->memberPath.empty() ? addressOf(a->sym)
+                                      : memberAddr(a->sym, a->memberPath, a->loc);
+      }
       result = v;
       return true;
     }
+    if (a->kind == HExpr::Subscript && a->sym) {
+      for (const auto& ix : a->args)
+        if (ix->kind == HExpr::Star) {
+          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage",
+                   "(126)");
+          v.ty = e->ty;
+          v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+          result = v;
+          return true;
+        }
+      v.ty = e->ty;
+      // An array of structures arr(i).x: index to the element struct,
+      // then GEP through the member path from that element address.
+      if (!a->memberPath.empty() && a->sym->ty.isArray()) {
+        llvm::Value* base = a->locPtr ? emitExpr(a->locPtr.get()).reg : addressOf(a->sym);
+        llvm::Value* elem = arrayElementAddr(a->sym->ty, base, a->args, a->loc,
+                                             dynUb_.count(a->sym) ? dynUb_[a->sym] : nullptr,
+                                             dynLb_.count(a->sym) ? dynLb_[a->sym] : nullptr);
+        v.reg = elementMemberAddr(a->sym, a->memberPath, elem);
+        result = v;
+        return true;
+      }
+      // A subscripted member array S.A(i): the member holds the array.
+      if (!a->memberPath.empty()) {
+        if (a->locPtr) {
+          d_.error(a->loc,
+                   "ADDR of a locator-qualified member array is not implemented in this stage",
+                   "(124)");
+          v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+          result = v;
+          return true;
+        }
+        const Type& arr = memberType(a->sym, a->memberPath);
+        llvm::Value *ub = nullptr, *lb = nullptr;
+        llvm::Value* base = arr.isDynamic()
+                                ? dynamicMemberBase(a->sym, a->memberPath, a->loc, ub, lb)
+                                : memberAddr(a->sym, a->memberPath, a->loc);
+        v.reg = arrayElementAddr(arr, base, a->args, a->loc, ub, lb);
+        result = v;
+        return true;
+      }
+      // A CONTROLLED dynamic element sizes from the live generation.
+      if (isCtlDynArray(a->sym)) {
+        v.reg = ctlDynElementAddr(a->sym, a->args, a->loc);
+        result = v;
+        return true;
+      }
+      // An iSUB-DEFINED element overlays its base (rule 134).
+      if (a->sym->definedBase && a->sym->definedIsubAxis >= 0) {
+        v.reg = definedSubElementAddr(a->sym, a->args, a->loc);
+        result = v;
+        return true;
+      }
+      // Plain fixed/dynamic and BASED overlays share the load path's
+      // base: the locator value for P->X(i), else the symbol base
+      // (a BASED base loads its POINTER, a CONTROLLED base its top).
+      llvm::Value* base = a->locPtr ? emitExpr(a->locPtr.get()).reg : addressOf(a->sym);
+      v.reg = arrayElementAddr(a->sym->ty, base, a->args, a->loc,
+                               dynUb_.count(a->sym) ? dynUb_[a->sym] : nullptr,
+                               dynLb_.count(a->sym) ? dynLb_[a->sym] : nullptr);
+      result = v;
+      return true;
+    }
+    d_.error(a->loc, "ADDR requires a variable or array element in this stage", "(123)");
     v.ty = e->ty;
-    v.reg = addressOf(a->sym);
+    v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
     result = v;
     return true;
   }

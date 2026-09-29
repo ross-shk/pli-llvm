@@ -1,0 +1,123 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (123),(126): ADDR on array elements. Each addr(a(i)) is */
+ /* a scaled POINTER into the array, for fixed, CONTROLLED dyn, */
+ /* BASED fixed and runtime-(n) overlays, locator form, 2-D. A */
+ /* scalar BASED overlay proves the address by write-through. */
+ addr_elem: procedure options(main);
+   dcl fails fixed bin(31) init(0);
+   dcl p pointer;
+   dcl q pointer;
+   dcl buf(4) fixed bin(31);
+   dcl grid(2, 2) fixed bin(31);
+   dcl fds fixed bin(31) controlled;
+   dcl n fixed bin(31);
+   dcl i fixed bin(31);
+   dcl cell fixed bin(31) based(p);
+   dcl spot fixed bin(31) based(q);
+   buf(1) = 11; buf(2) = 22; buf(3) = 33; buf(4) = 44;
+   /* fixed element: addr(buf(2)) hits the 2nd cell only */
+   p = addr(buf(2));
+   if cell ^= 22 then fails = fails + 1;
+   cell = 27;
+   if buf(2) ^= 27 then fails = fails + 1;
+   if buf(1) ^= 11 then fails = fails + 1;
+   if buf(3) ^= 33 then fails = fails + 1;
+   buf(2) = 22;
+   /* first element: addr(buf(1)) is the base address */
+   p = addr(buf(1));
+   if cell ^= 11 then fails = fails + 1;
+   /* CONTROLLED dyn (wishlist #1 idiom): allocate then addr */
+   n = 4;
+   allocate fds(n);
+   do i = 1 to n;
+     fds(i) = i * 10;
+   end;
+   p = addr(fds(1));
+   if cell ^= 10 then fails = fails + 1;
+   cell = 15;
+   if fds(1) ^= 15 then fails = fails + 1;
+   if fds(2) ^= 20 then fails = fails + 1;
+   fds(1) = 10;
+   p = addr(fds(3));
+   if cell ^= 30 then fails = fails + 1;
+   cell = 37;
+   if fds(3) ^= 37 then fails = fails + 1;
+   if fds(2) ^= 20 then fails = fails + 1;
+   free fds;
+   /* BASED fixed overlay: addr(e(2)) views caller storage */
+   call check_based(buf);
+   /* runtime-(n) overlay in a callee over the same buffer */
+   call check_dyn_view(buf, n);
+   /* locator form: q holds addr off a differing locator */
+   call check_locator(buf);
+   /* 2-D scaling: addr(grid(1,2)) is the 2nd row-major cell */
+   grid(1, 1) = 1; grid(1, 2) = 2;
+   grid(2, 1) = 3; grid(2, 2) = 4;
+   q = addr(grid(1, 2));
+   if spot ^= 2 then fails = fails + 1;
+   spot = 9;
+   if grid(1, 2) ^= 9 then fails = fails + 1;
+   if grid(2, 1) ^= 3 then fails = fails + 1;
+   /* pointer args carry element addresses (poll_multi idiom) */
+   call poke(addr(buf(4)), 48);
+   if buf(4) ^= 48 then fails = fails + 1;
+   if peek(addr(buf(4))) ^= 48 then fails = fails + 1;
+   if peek(addr(buf(1))) ^= 11 then fails = fails + 1;
+   if fails = 0 then put skip list('PASS addr_elem');
+   else put skip list('FAIL addr_elem: fails =', fails);
+ end addr_elem;
+ /* BASED fixed overlay probe: addr(e(2)) must hit buf(2). */
+ check_based: procedure(b);
+   dcl b(4) fixed bin(31);
+   dcl bp pointer;
+   dcl q pointer;
+   dcl e(4) fixed bin(31) based(bp);
+   dcl spot fixed bin(31) based(q);
+   bp = addr(b);
+   q = addr(e(2));
+   if spot ^= b(2) then put skip list('FAIL based view');
+   spot = b(2) + 100;
+   if b(2) ^= spot then put skip list('FAIL based w');
+ end check_based;
+ /* Runtime-(n) overlay probe: addr(v(3)) scales by elem size. */
+ check_dyn_view: procedure(b, n);
+   dcl b(4) fixed bin(31);
+   dcl n fixed bin(31);
+   dcl bp pointer;
+   dcl q pointer;
+   dcl v(n) fixed bin(31) based(bp);
+   dcl spot fixed bin(31) based(q);
+   bp = addr(b);
+   q = addr(v(3));
+   if spot ^= b(3) then put skip list('FAIL dyn view');
+   spot = 77;
+   if b(3) ^= 77 then put skip list('FAIL dyn view w');
+   b(3) = 33;
+ end check_dyn_view;
+ /* Locator probe: addr(bp -> e(2)) addresses off the locator. */
+ check_locator: procedure(b);
+   dcl b(4) fixed bin(31);
+   dcl bp pointer;
+   dcl q pointer;
+   dcl e(4) fixed bin(31) based(bp);
+   dcl spot fixed bin(31) based(q);
+   bp = addr(b);
+   q = addr(bp -> e(2));
+   if spot ^= b(2) then put skip list('FAIL locator');
+   spot = b(2) + 1;
+   if b(2) ^= spot then put skip list('FAIL locator w');
+   b(2) = 22;
+ end check_locator;
+ /* Scalar poke/peek through an element address (C bridge idiom). */
+ poke: procedure(p, val);
+   dcl p pointer;
+   dcl val fixed bin(31);
+   dcl cell fixed bin(31) based(p);
+   cell = val;
+ end poke;
+ peek: procedure(p) returns(fixed bin(31));
+   dcl p pointer;
+   dcl cell fixed bin(31) based(p);
+   return(cell);
+ end peek;

@@ -3937,11 +3937,33 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::ptr();
     return true;
   }
-  // ADDR built-in (rule 123, Appendix 1): yields the address of a variable as
-  // a POINTER value.
+  // ADDR built-in (rule 123, Appendix 1; Y33-6003 BASED storage builtin;
+  // IBM ADDR storage-control): yields the address of a variable as a
+  // POINTER value. An array element (rules 123,126, wishlist #4) is a
+  // variable too: ADDR(A(i)) addresses the scaled element storage.
   if (e->name == "ADDR") {
     if (e->args.size() != 1) {
       d_.error(e->loc, "ADDR takes one argument (a variable)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    Expr* a = e->args[0].get();
+    // A cross-section has no single address in this stage (rule 126):
+    // cross-sections are assignment-RHS gathers, not addressable views.
+    if (a->kind == Expr::Subscript) {
+      for (const auto& ix : a->args)
+        if (ix->kind == Expr::Star) {
+          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage",
+                   "(126)");
+          e->ty = Type::voidTy();
+          return true;
+        }
+    }
+    bool ok = a->kind == Expr::VarRef || a->kind == Expr::Subscript;
+    if (ok && a->sym && a->sym->kind == Symbol::ProcName)
+      ok = false;
+    if (!ok) {
+      d_.error(a->loc, "ADDR requires a variable or array element in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
