@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Bad (*) ENTRY descriptors (rules (13),(36)): only a single-axis
+    '*' is served; fixed bounds and multi-axis extents stay
+    diagnosed, never silently accepted. */
+ bad_star_array_entry: procedure options(main);
+   dcl e1 entry ((6) fixed bin(31)) external;
+   dcl e2 entry ((*, *) fixed bin(31)) external;
+ end bad_star_array_entry;

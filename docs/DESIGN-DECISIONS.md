@@ -4395,3 +4395,45 @@ scalar BASED write-through; `multimodule/addr_elem.pli` pins
 cross-object poke/peek and `(n)` views through element
 addresses. `bad_addr_elem.pli` pins the non-variable diagnostic.
 
+## ADR-166 — `(*)` adjustable-extent array descriptors in ENTRY lists
+
+**Context.** libnet's `net_poll_multi` takes caller fd/event
+arrays without copying (wishlist #5). The workaround declares
+them `CONTROLLED` in the ENTRY descriptor, forcing the caller
+into a single-generation pattern. The compiler already serves
+`*` adjustable-extent procedure parameters (ADR-055): the hidden
+i64 extent rides each call, and IRGen's external-entry path
+(`calleeFn`, `emitCall`, `emitExpr` Call) already pushed that
+hidden arg for an `adj` descriptor type — but
+`parseDescriptorType` (rule 38) never parsed a dimension, so no
+descriptor could ever carry one: both `(*) FIXED ...` and
+`FIXED ...(*)` failed with cascading parse errors.
+
+**Decision.** Parse one single-axis `(*)` dimension in
+`parseDescriptorType` (rules (36),(12),(13)) in either position:
+the spec/IBM order `(*) FIXED BIN(31)` (rule (36) lists the
+dimension before the attributes; IBM requires it first) and the
+wishlist order `FIXED BIN(31)(*)`, plus `(*) POINTER` /
+`POINTER(*)` for handle pools. Elements are numeric, `BIT(1)`,
+or `POINTER`; CHARACTER arrays, VARYING, and fixed-bound or
+multi-axis dimensions stay diagnosed with rule (36)/(12). No
+sema or IRGen change: the descriptor `Type` carries
+`dims[0].adj`, and the existing hidden-extent machinery
+(`argExtent` for fixed, dynamic-bound, and forwarded actuals;
+callee-side live bounds) applies unchanged to CALL and
+function-call sites, cross-module.
+
+**Consequences.** `multimodule/star_array_entry.pli` (+ lib)
+pins both descriptor orders, CALL and function returns,
+differing caller extents, dynamic-bound actuals, write-through,
+a libnet-shaped pointer+arrays+scalar mix, POINTER pools in both
+orders, and forwarding of a local `(*)` param into an ENTRY
+descriptor. `bad_star_array_entry.pli` pins the fixed-bound and
+multi-axis diagnostics.
+
+**Rejected.** Fixed-bound descriptors `(6) FIXED ...` in this
+slice (by-reference only, no hidden arg — a separate slice);
+multi-axis `(*, *)` (needs dope vectors, ADR-008); accepting
+only the spec order (the wishlist order is what libnet
+declares, so both ride one code path).
+

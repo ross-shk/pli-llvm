@@ -1872,34 +1872,163 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   return false;
 }
 
-// descriptor-param ::= attribute•••                                rule (38)
+// descriptor-param ::= [ dimension ] attribute••• [ dimension ]   rules (36),(12),(13)
 // Parse a single ENTRY parameter type, using the same scalar-attribute
 // accumulator as parseDeclItem, restricted to the scalar computational types.
+// A single-axis '*' dimension is an adjustable extent whose bound the caller
+// supplies at call time, passed as a hidden i64 extent argument (rule (13)).
+// TR 25.084 rule (36) and IBM Enterprise PL/I put the dimension first
+// (`(*) FIXED BIN(31)`); the wishlist order (`FIXED BIN(31)(*)`) is accepted
+// too so existing libnet declarations compile unchanged.
 bool Parser::parseDescriptorType(Type& out) {
+  // One leading/trailing '*' dimension group in either position.
+  bool hasStar = false;
+  auto isSingleStar = [&]() {
+    return at(Tok::LParen) && peek().kind == Tok::Star && peek(2).kind == Tok::RParen;
+  };
+  auto consumeSingleStar = [&]() {
+    advance();
+    advance();
+    advance();
+  };
+  // Leading dimension (spec order, rule (36)): `(*) FIXED ...`.
+  if (isSingleStar()) {
+    consumeSingleStar();
+    hasStar = true;
+  } else if (at(Tok::LParen)) {
+    // Any other leading group is a non-'*' dimension in this stage.
+    SourceLoc l = cur().loc;
+    int depth = 0;
+    do {
+      if (at(Tok::LParen))
+        ++depth;
+      else if (at(Tok::RParen))
+        --depth;
+      advance();
+    } while (depth > 0 && !at(Tok::Eof));
+    d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
+             "(36)");
+  }
   // A POINTER descriptor (rule (38)): C `void*` parameters ride as the
   // pointer value itself under LINKAGE(SYSTEM)/BYVALUE.
   if (atWord("POINTER") || atWord("PTR")) {
     advance();
+    if (isSingleStar()) {
+      if (hasStar)
+        d_.error(cur().loc, "duplicate '*' dimension in an ENTRY descriptor", "(36)");
+      else {
+        consumeSingleStar();
+        hasStar = true;
+      }
+    } else if (at(Tok::LParen)) {
+      SourceLoc l = cur().loc;
+      int depth = 0;
+      do {
+        if (at(Tok::LParen))
+          ++depth;
+        else if (at(Tok::RParen))
+          --depth;
+        advance();
+      } while (depth > 0 && !at(Tok::Eof));
+      d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
+               "(36)");
+    }
+    if (hasStar) {
+      // Array of POINTER with caller-supplied extent (rules (13),(36)).
+      out = Type::ptr();
+      Dim d;
+      d.dyn = true;
+      d.adj = true;
+      out.dims.push_back(d);
+      return true;
+    }
     out = Type::ptr();
     return true;
   }
   AttrBag bag;
   while (parseScalarAttr(bag, "(38)")) {
   }
+  // Trailing dimension (wishlist order): `FIXED BIN(31)(*)`.
+  if (isSingleStar()) {
+    if (hasStar)
+      d_.error(cur().loc, "duplicate '*' dimension in an ENTRY descriptor", "(36)");
+    else {
+      consumeSingleStar();
+      hasStar = true;
+    }
+  } else if (at(Tok::LParen)) {
+    SourceLoc l = cur().loc;
+    int depth = 0;
+    do {
+      if (at(Tok::LParen))
+        ++depth;
+      else if (at(Tok::RParen))
+        --depth;
+      advance();
+    } while (depth > 0 && !at(Tok::Eof));
+    d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
+             "(36)");
+  }
   if (bag.character) {
+    if (hasStar) {
+      d_.error(cur().loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
+      out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+      if (bag.starLen)
+        out.starLen = true;
+      out.controlled = bag.controlled;
+      return true;
+    }
     out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
     if (bag.starLen)
       out.starLen = true;
     // CONTROLLED dummy association visible to cross-module callers (15).
     out.controlled = bag.controlled;
-  } else if (bag.bit)
+  } else if (bag.bit) {
     out = Type::bit(bag.slen > 0 ? bag.slen : 1);
-  else if (bag.floating)
+    if (hasStar && bag.slen > 1) {
+      d_.error(cur().loc, "arrays of BIT(n>1) are not implemented in this stage", "(12)");
+      return true;
+    }
+    if (bag.starLen)
+      d_.error(cur().loc, "a '*' string length is not implemented in this stage", "(18)");
+    if (hasStar) {
+      Dim d;
+      d.dyn = true;
+      d.adj = true;
+      out.dims.push_back(d);
+    }
+    out.controlled = bag.controlled;
+  } else if (bag.floating) {
     out = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
-  else if (bag.binary)
+    if (hasStar) {
+      Dim d;
+      d.dyn = true;
+      d.adj = true;
+      out.dims.push_back(d);
+    }
+    out.controlled = bag.controlled;
+  } else if (bag.binary) {
     out = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
-  else
+    if (hasStar) {
+      Dim d;
+      d.dyn = true;
+      d.adj = true;
+      out.dims.push_back(d);
+    }
+    out.controlled = bag.controlled;
+  } else {
     out = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
+    if (hasStar) {
+      Dim d;
+      d.dyn = true;
+      d.adj = true;
+      out.dims.push_back(d);
+    }
+    out.controlled = bag.controlled;
+  }
+  if (hasStar && bag.varying) {
+    d_.error(cur().loc, "VARYING arrays are not implemented in this stage", "(12)");
+  }
   return true;
 }
 

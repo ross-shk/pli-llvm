@@ -1,0 +1,74 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (12),(13),(36): numeric (*) ENTRY descriptors cross-module.
+    The caller declares callee (*) arrays in the descriptor list;
+    the hidden extent rides each call. Both the spec order
+    `(*) FIXED BIN(31)` and the wishlist order `FIXED BIN(31)(*)`
+    are exercised, for CALL and function calls, fixed and dynamic
+    actuals, write-through, and forwarding. Companion lib file. */
+ stararrayentry: procedure options(main);
+   dcl sum_vals entry ((*) fixed bin(31))
+     returns(fixed bin(31)) external;
+   dcl bump_vals entry (fixed bin(31)(*)) external;
+   dcl poll_two entry (pointer, fixed bin(31)(*),
+     fixed bin(31)(*), fixed bin(31))
+     returns(fixed bin(31)) external;
+   dcl count_a entry ((*) pointer)
+     returns(fixed bin(31)) external;
+   dcl count_b entry (pointer(*))
+     returns(fixed bin(31)) external;
+   dcl a(6) fixed bin(31);
+   dcl d(4) fixed bin(31);
+   dcl ev(3) fixed bin(31);
+   dcl rev(3) fixed bin(31);
+   dcl h(3) pointer;
+   dcl i fixed bin(31);
+   dcl s fixed bin(31);
+   dcl fails fixed bin(31) init(0);
+   /* Fixed-size actuals of different extents. */
+   do i = 1 to 6;
+     a(i) = i * 2;
+   end;
+   if sum_vals(a) ^= 42 then fails = fails + 1;
+   do i = 1 to 4;
+     d(i) = i;
+   end;
+   if sum_vals(d) ^= 10 then fails = fails + 1;
+   /* Write-through reaches the caller. */
+   call bump_vals(a);
+   if a(1) ^= 3 then fails = fails + 1;
+   if a(6) ^= 13 then fails = fails + 1;
+   /* Dynamic-bound actual carries its live extent. */
+   call dyn_check(5);
+   /* Libnet-shaped mix: pointer plus two arrays plus scalar. */
+   ev(1) = 10;
+   ev(2) = 20;
+   ev(3) = 30;
+   s = poll_two(null(), ev, rev, 100);
+   if s ^= 60 then fails = fails + 1;
+   if rev(1) ^= 11 then fails = fails + 1;
+   if rev(3) ^= 31 then fails = fails + 1;
+   /* Pointer-handle pool in both descriptor orders. */
+   h(1) = null();
+   h(2) = addr(h(1));
+   h(3) = null();
+   if count_a(h) ^= 1 then fails = fails + 1;
+   if count_b(h) ^= 1 then fails = fails + 1;
+   /* Forwarding a local (*) param into an ENTRY descriptor. */
+   if fwd(a) ^= 48 then fails = fails + 1;
+   if fails = 0 then put skip list('PASS star_array_entry');
+   else put skip list('FAIL star_array_entry: fails =', fails);
+ fwd: procedure(xs) returns(fixed bin(31));
+   dcl xs(*) fixed bin(31);
+   return(sum_vals(xs));
+ end fwd;
+ dyn_check: procedure(k);
+   dcl k fixed bin(31);
+   dcl b(k) fixed bin(31);
+   dcl j fixed bin(31);
+   do j = 1 to k;
+     b(j) = j;
+   end;
+   if sum_vals(b) ^= 15 then fails = fails + 1;
+ end dyn_check;
+ end stararrayentry;

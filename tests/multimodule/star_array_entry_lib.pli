@@ -1,0 +1,65 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (12),(13),(36): numeric (*) ENTRY descriptors cross-module.
+    Library side of star_array_entry.pli. Each procedure takes
+    caller-sized (*) arrays so the hidden extent rides the call. */
+ stararraylib: package exports(sum_vals, bump_vals, poll_two,
+   count_a, count_b);
+ sum_vals: procedure(xs) returns(fixed bin(31));
+   dcl xs(*) fixed bin(31);
+   dcl i fixed bin(31);
+   dcl t fixed bin(31);
+   t = 0;
+   do i = 1 to hbound(xs);
+     t = t + xs(i);
+   end;
+   if lbound(xs) ^= 1 then t = t + 1000000;
+   if dim(xs) ^= hbound(xs) then t = t + 1000000;
+   if sum(xs) ^= t then t = t + 1000000;
+   return(t);
+ end sum_vals;
+ bump_vals: procedure(xs);
+   dcl xs(*) fixed bin(31);
+   dcl i fixed bin(31);
+   do i = 1 to hbound(xs);
+     xs(i) = xs(i) + 1;
+   end;
+ end bump_vals;
+ /* Libnet-shaped poll: two caller arrays plus a scalar timeout. */
+ poll_two: procedure(srv, ev, rev, ms)
+   returns(fixed bin(31));
+   dcl srv pointer;
+   dcl ev(*) fixed bin(31);
+   dcl rev(*) fixed bin(31);
+   dcl ms fixed bin(31);
+   dcl i fixed bin(31);
+   dcl t fixed bin(31);
+   t = 0;
+   do i = 1 to hbound(ev);
+     t = t + ev(i);
+     rev(i) = ev(i) + 1;
+   end;
+   return(t);
+ end poll_two;
+ /* Pointer-handle pool: count the non-null handles. */
+ count_a: procedure(hs) returns(fixed bin(31));
+   dcl hs(*) pointer;
+   dcl i fixed bin(31);
+   dcl t fixed bin(31);
+   t = 0;
+   do i = 1 to hbound(hs);
+     if hs(i) ^= null() then t = t + 1;
+   end;
+   return(t);
+ end count_a;
+ count_b: procedure(hs) returns(fixed bin(31));
+   dcl hs(*) pointer;
+   dcl i fixed bin(31);
+   dcl t fixed bin(31);
+   t = 0;
+   do i = 1 to hbound(hs);
+     if hs(i) ^= null() then t = t + 1;
+   end;
+   return(t);
+ end count_b;
+ end stararraylib;
