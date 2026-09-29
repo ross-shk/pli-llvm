@@ -46,7 +46,7 @@ static bool isScalarTypeWord(const std::string& w) {
   return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
          w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
          w == "VARYINGZ" || w == "VAR" || w == "VARZ" || w == "ALIGNED" || w == "UNALIGNED" ||
-         w == "POINTER";
+         w == "POINTER" || w == "AREA" || w == "OFFSET";
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +191,6 @@ bool Parser::looksLikeAssignment() const {
             return false;
         }
         j = k;
-        moved = true;
         continue;
       }
       if (!moved)
@@ -1653,8 +1652,40 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.isCondition = true;
         continue;
       }
-      if (w == "PICTURE" || w == "PIC" || w == "AREA" || w == "OFFSET" || w == "LABEL" ||
-          w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
+      if (w == "AREA") {
+        // area-attribute ::= AREA [ ( expression | * ) ]  rule (20): a region
+        // from which BASED storage is allocated and freed out of order.
+        advance();
+        bag.area = true;
+        if (eat(Tok::LParen)) {
+          if (at(Tok::Star)) {
+            d_.error(cur().loc, "AREA(*) adjustable size is not implemented in this stage", "(20)");
+            advance();
+          } else {
+            bag.areaSize = parseExpr();
+          }
+          expect(Tok::RParen, "(20)");
+        }
+        continue;
+      }
+      if (w == "OFFSET") {
+        // offset-attribute ::= OFFSET [ ( reference ) ]  rule (22): a locator
+        // into an AREA. The optional reference names the associated AREA.
+        advance();
+        bag.offset = true;
+        if (eat(Tok::LParen)) {
+          if (at(Tok::Word)) {
+            bag.offsetRef = cur().text;
+            advance();
+          } else {
+            d_.error(cur().loc, "expected an AREA name after OFFSET(", "(22)");
+          }
+          expect(Tok::RParen, "(22)");
+        }
+        continue;
+      }
+      if (w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "CELL" || w == "GENERIC" ||
+          w == "BUILTIN") {
         d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -1701,7 +1732,8 @@ void Parser::parseDeclTail(DeclItem& item) {
   // Conflicting attributes are diagnosed first.
   if (!item.typeRef.empty() &&
       (bag.fixed || bag.floating || bag.binary || bag.decimal || bag.character || bag.bit ||
-       bag.varying || bag.pointer || bag.complex || bag.file || bag.task || bag.event))
+       bag.varying || bag.pointer || bag.complex || bag.file || bag.task || bag.event || bag.area ||
+       bag.offset))
     d_.error(item.loc, "TYPE cannot be combined with explicit data attributes (ADR-114)", "");
   if (bag.fixed && bag.floating)
     d_.error(item.loc, "FIXED and FLOAT are conflicting attributes", "(16)");
@@ -1734,6 +1766,14 @@ void Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "TASK and EVENT are conflicting attributes", "(15)");
   if (bag.aligned && bag.unaligned)
     d_.error(item.loc, "ALIGNED and UNALIGNED are conflicting attributes", "(15)");
+  // AREA/OFFSET are locator/storage attributes (rules (15),(20),(22)): they do
+  // not combine with a computational or string attribute, nor with each other.
+  if ((bag.area || bag.offset) &&
+      (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal ||
+       bag.pointer || bag.complex || bag.file || bag.varying || bag.task || bag.event))
+    d_.error(item.loc, "AREA/OFFSET cannot be combined with another data attribute", "(15)");
+  if (bag.area && bag.offset)
+    d_.error(item.loc, "AREA and OFFSET are conflicting attributes", "(15)");
 
   if (bag.task) {
     // A TASK name (rules (15),(79), QR2.8): an opaque handle for CALL TASK.
@@ -1746,6 +1786,12 @@ void Parser::parseDeclTail(DeclItem& item) {
     // records the flag and sema assigns it a runtime slot at OPEN/CLOSE.
     item.fileAttr = true;
     item.ty = Type::voidTy();
+  } else if (bag.area) {
+    // An AREA variable (rule (20)): a runtime region for BASED allocation.
+    item.ty = Type::areaTy();
+  } else if (bag.offset) {
+    // An OFFSET variable (rule (22)): an opaque locator into an AREA.
+    item.ty = Type::offsetTy();
   } else if (bag.pointer) {
     item.ty = Type::ptr();
   } else if (bag.complex) {
@@ -1778,6 +1824,10 @@ void Parser::parseDeclTail(DeclItem& item) {
   item.controlled = bag.controlled;
   item.aligned = bag.aligned;
   item.unaligned = bag.unaligned;
+  item.area = bag.area;
+  item.areaSize = std::move(bag.areaSize);
+  item.offset = bag.offset;
+  item.offsetRef = std::move(bag.offsetRef);
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
     // Element access assumes single-bit storage below; never lay out a wide
     // bit array that codegen would mistarget (invariant 2).
@@ -1888,7 +1938,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" ||
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
-           w == "CTL";
+           w == "CTL" || w == "AREA" || w == "OFFSET";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -1979,6 +2029,45 @@ bool Parser::parseDescriptorType(Type& out) {
       return true;
     }
     out = Type::ptr();
+    return true;
+  }
+  // An AREA parameter (rule (20)): the runtime region pointer, passed like any
+  // other variable. A parameter carries no size (the actual owns the region).
+  if (atWord("AREA")) {
+    advance();
+    if (at(Tok::LParen)) {
+      int depth = 0;
+      do {
+        if (at(Tok::LParen))
+          ++depth;
+        else if (at(Tok::RParen))
+          --depth;
+        advance();
+      } while (depth > 0 && !at(Tok::Eof));
+      d_.error(cur().loc, "AREA size on an ENTRY descriptor parameter is not implemented", "(20)");
+    }
+    out = Type::areaTy();
+    return true;
+  }
+  // An OFFSET parameter (rule (22)): an opaque locator, passed by reference.
+  if (atWord("OFFSET")) {
+    advance();
+    if (at(Tok::LParen) && peek().kind == Tok::Word) {
+      advance();
+      advance();
+      if (at(Tok::RParen))
+        advance();
+    } else if (at(Tok::LParen)) {
+      int depth = 0;
+      do {
+        if (at(Tok::LParen))
+          ++depth;
+        else if (at(Tok::RParen))
+          --depth;
+        advance();
+      } while (depth > 0 && !at(Tok::Eof));
+    }
+    out = Type::offsetTy();
     return true;
   }
   AttrBag bag;
@@ -3021,9 +3110,10 @@ StmtP Parser::parseAssignment() {
 //                                     | IN ( reference ) [ SET ( reference ) ] )  rule (88)
 // controlled-allocate-item ::= [integer] identifier dimension-attribute
 //                              [ {string-attribute|...} ]  rule (89)
-// CM2 serves the SET option: heap-allocate the based structure's storage and
-// store the address in the pointer reference. The IN (AREA) option stays QR2.3.
-// Rule (89) serves a scalar CHARACTER length at ALLOCATE: either a dimension
+// Serves the SET option (heap-allocate the based structure's storage and store
+// the address in the locator) and the IN (AREA) option (rules (20),(88):
+// allocate the block from the named region). Rule (89) serves a scalar
+// CHARACTER length at ALLOCATE: either a dimension
 // `(expr)` giving the maximum or a string-attribute `CHAR(expr)`, with an
 // optional trailing VARYING/CHARACTER confirmation.
 StmtP Parser::parseAllocate() {
@@ -3043,36 +3133,56 @@ StmtP Parser::parseAllocate() {
       base->name = cur().text;
       base->loc = cur().loc;
       advance();
-      bool paren = eat(Tok::LParen); // optional: identifier [(] SET ( ref ) [)]
+      bool paren = eat(Tok::LParen); // optional: identifier [(] SET/IN ( ref ) [)]
       // A SET/IN option always carries `(...)`, so a bare variable named
       // `set`/`in` as a dimension length (e.g. `ALLOCATE x (set)`) must not
-      // take this path: require `(` after the keyword.
-      bool isSetOpt = atWord("SET") && peek().kind == Tok::LParen;
-      bool isInOpt = !isSetOpt && atWord("IN") && peek().kind == Tok::LParen;
-      if (isSetOpt) {
-        // BASED SET option (rule (88)): served both bare (`ALLOCATE rec SET(p)`)
-        // and parenthesised (`ALLOCATE rec (SET(p))`); the closing paren is
-        // only expected when an opening paren was present.
-        advance();
-        expect(Tok::LParen, "(88)");
-        ExprP set = parsePrimary();
-        if (!set) {
-          resync();
-          return nullptr;
+      // take this path: require `(` after the keyword. The two options may
+      // appear in either order (rule (88)); the closing paren is only expected
+      // when an opening paren was present.
+      auto atOpt = [&](const char* kw) { return atWord(kw) && peek().kind == Tok::LParen; };
+      if (atOpt("SET") || atOpt("IN")) {
+        ExprP set;
+        ExprP areaRef;
+        for (;;) {
+          if (atOpt("SET")) {
+            // SET ( reference ): store the block address in the locator.
+            if (set)
+              d_.error(cur().loc, "duplicate SET option in ALLOCATE", "(88)");
+            advance();
+            expect(Tok::LParen, "(88)");
+            set = parsePrimary();
+            if (!set) {
+              resync();
+              return nullptr;
+            }
+            expect(Tok::RParen, "(88)");
+            continue;
+          }
+          if (atOpt("IN")) {
+            // IN ( area ): allocate the block from the named AREA (rule (88)).
+            if (areaRef)
+              d_.error(cur().loc, "duplicate IN option in ALLOCATE", "(88)");
+            advance();
+            expect(Tok::LParen, "(88)");
+            areaRef = parsePrimary();
+            if (!areaRef) {
+              resync();
+              return nullptr;
+            }
+            expect(Tok::RParen, "(88)");
+            continue;
+          }
+          break;
         }
-        expect(Tok::RParen, "(88)");
         if (paren)
           expect(Tok::RParen, "(88)");
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(std::move(set));
+        st->allocArea.push_back(std::move(areaRef));
         st->allocDim.push_back(nullptr);
         st->allocCharLen.push_back(nullptr);
         st->allocVarying.push_back(0);
         st->allocHasChar.push_back(0);
-      } else if (isInOpt) {
-        d_.error(cur().loc, "ALLOCATE ... IN ( AREA ) is not implemented in this stage", "(88)");
-        resync();
-        return nullptr;
       } else if (paren) {
         // A dimension-attribute (rule 89): a single length expression for a
         // CHARACTER generation. Array bound-pairs (lb:ub, multiple axes) stay
@@ -3137,6 +3247,7 @@ StmtP Parser::parseAllocate() {
         }
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(nullptr);
+        st->allocArea.push_back(nullptr);
         st->allocDim.push_back(std::move(dim));
         st->allocCharLen.push_back(std::move(charLen));
         st->allocVarying.push_back(varying);
@@ -3194,6 +3305,7 @@ StmtP Parser::parseAllocate() {
         (void)sawAttr;
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(nullptr);
+        st->allocArea.push_back(nullptr);
         st->allocDim.push_back(nullptr);
         st->allocCharLen.push_back(std::move(charLen));
         st->allocVarying.push_back(varying);
@@ -3212,8 +3324,8 @@ StmtP Parser::parseAllocate() {
 }
 
 // FREE ( [reference ->] identifier [ IN ( reference ) ] ){,...};  rule (90)
-// CM2 serves the plain based-variable form and the locator-qualified form. The
-// IN (AREA) option stays QR2.3.
+// Serves the plain based-variable form, the locator-qualified form, and the
+// IN (AREA) option (returning the block to its region).
 StmtP Parser::parseFree() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Free;
@@ -3221,6 +3333,7 @@ StmtP Parser::parseFree() {
   advance(); // FREE
   for (;;) {
     bool paren = eat(Tok::LParen);
+    ExprP areaRef;
     if (at(Tok::Word)) {
       auto base = std::make_unique<Expr>();
       base->kind = Expr::VarRef;
@@ -3250,11 +3363,18 @@ StmtP Parser::parseFree() {
       resync();
       return nullptr;
     }
-    if (atWord("IN")) {
-      d_.error(cur().loc, "FREE ... IN ( AREA ) is not implemented in this stage", "(90)");
-      resync();
-      return nullptr;
+    if (atWord("IN") && peek().kind == Tok::LParen) {
+      // IN ( area ) (rule (90)): return the block to the named AREA.
+      advance();
+      expect(Tok::LParen, "(90)");
+      areaRef = parsePrimary();
+      if (!areaRef) {
+        resync();
+        return nullptr;
+      }
+      expect(Tok::RParen, "(90)");
     }
+    st->freeArea.push_back(std::move(areaRef));
     if (paren)
       expect(Tok::RParen, "(90)");
     if (!eat(Tok::Comma))

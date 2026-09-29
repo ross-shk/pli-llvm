@@ -1,0 +1,60 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* AREA/OFFSET region allocation (rules (20),(22),(88),(90)): BASED
+    records are allocated IN an area, freed out of order, and the
+    region's storage is reused. An offset is a locator into the area. */
+ area_offset: procedure options(main);
+   dcl region  area(4096);
+   dcl region2 area(256);
+   dcl 1 a based(pa),
+       2 v fixed bin(31);
+   dcl 1 b based(pb),
+       2 v fixed bin(31);
+   dcl 1 c based(pc),
+       2 v fixed bin(31);
+   dcl 1 d based(pd),
+       2 v fixed bin(31);
+   dcl pa offset(region);
+   dcl pb offset(region);
+   dcl pc offset(region);
+   dcl pd offset(region2);
+   dcl fails fixed bin(31) init(0);
+
+   /* allocate three blocks from the region */
+   allocate a in(region) set(pa);
+   allocate b in(region) set(pb);
+   allocate c in(region) set(pc);
+   a.v = 11;
+   b.v = 22;
+   c.v = 33;
+   if a.v ^= 11 then fails = fails + 1;
+   if b.v ^= 22 then fails = fails + 1;
+   if c.v ^= 33 then fails = fails + 1;
+
+   /* free the middle block first (out of order); the others survive */
+   free b in(region);
+   if a.v ^= 11 then fails = fails + 1;
+   if c.v ^= 33 then fails = fails + 1;
+   free a in(region);
+   if c.v ^= 33 then fails = fails + 1;
+   free c in(region);
+
+   /* NULL offset assignment and comparison */
+   pa = null();
+   if pa ^= null() then fails = fails + 1;
+
+   /* a second region is independent of the first */
+   allocate d in(region2) set(pd);
+   d.v = 77;
+   if d.v ^= 77 then fails = fails + 1;
+   free d in(region2);
+
+   /* reusing the region after a full free cycle works */
+   allocate a in(region) set(pa);
+   a.v = 88;
+   if a.v ^= 88 then fails = fails + 1;
+   free a in(region);
+
+   if fails = 0 then put skip list('PASS area_offset');
+   else put skip list('FAIL area_offset:', fails);
+ end area_offset;

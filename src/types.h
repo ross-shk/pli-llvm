@@ -4,7 +4,8 @@
 //
 // The full attribute lattice of TR 25.084 rules (14)-(43) is much larger than
 // this; M0 models the scalar computational types only. Aggregates, PICTURE,
-// AREA/OFFSET, ENTRY/FILE/LABEL variables are M2-M4 (see IMPLEMENTATION-PLAN).
+// ENTRY/FILE/LABEL variables are M2-M4 (see IMPLEMENTATION-PLAN). AREA/OFFSET
+// (rules (20),(22)) serve automatic regions and their locators (ADR-170).
 #pragma once
 #include <memory>
 #include <string>
@@ -19,6 +20,8 @@ enum class TK {
   Bit,      // BIT(n)
   Struct,   // structure with level-numbered members (rule 11)
   Pointer,  // POINTER: an address value (rules (15),(25))
+  Area,     // AREA: a region from which BASED storage is allocated (rule (20))
+  Offset,   // OFFSET: a locator into an AREA (rule (22))
   Complex,  // COMPLEX: a pair of FLOAT real/imaginary parts (QR2.2/CM5)
   Task,     // TASK: a task name for async CALL (rules (15),(79), QR2.8)
   Event,    // EVENT: an event name for CALL/WAIT sync (rules (15),(79),(82), QR2.8)
@@ -157,6 +160,21 @@ struct Type {
     t.prec = 6;
     return t;
   }
+  // An AREA (rule (20)): a region of storage from which BASED allocations are
+  // made and to which they are freed. Lowered to a pointer to a runtime region.
+  static Type areaTy() {
+    Type t;
+    t.k = TK::Area;
+    return t;
+  }
+  // An OFFSET (rule (22)): a locator into an AREA. Lowered internally to an
+  // opaque address (the same LLVM representation as POINTER); the type stays
+  // distinct so the area options of ALLOCATE/FREE and BASED are checked.
+  static Type offsetTy() {
+    Type t;
+    t.k = TK::Offset;
+    return t;
+  }
   // A task name (QR2.8): an opaque handle set by CALL TASK, read by PRIORITY.
   static Type taskTy() {
     Type t;
@@ -177,6 +195,11 @@ struct Type {
   bool isChar() const { return k == TK::Char; }
   bool isBit() const { return k == TK::Bit; }
   bool isPointer() const { return k == TK::Pointer; }
+  bool isArea() const { return k == TK::Area; }
+  bool isOffset() const { return k == TK::Offset; }
+  // A locator value: POINTER or OFFSET (rules (15),(22)). Both are opaque
+  // addresses at run time; the distinction is enforced in sema.
+  bool isLocator() const { return k == TK::Pointer || k == TK::Offset; }
   bool isVoid() const { return k == TK::Void; }
   bool isComplex() const { return k == TK::Complex; }
   bool isTask() const { return k == TK::Task; }
@@ -211,6 +234,10 @@ struct Type {
       return "STRUCT";
     case TK::Pointer:
       return "POINTER";
+    case TK::Area:
+      return "AREA";
+    case TK::Offset:
+      return "OFFSET";
     case TK::Complex:
       return "COMPLEX";
     case TK::Task:

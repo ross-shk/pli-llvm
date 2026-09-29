@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* AREA/OFFSET errors (rules (20),(22),(88)): OFFSET must name an
+    AREA, the IN target of ALLOCATE must be an AREA, and a STATIC
+    AREA is not served. All are sema diagnostics, so they coexist. */
+ bad_area_offset: procedure options(main);
+   dcl x fixed bin(31);
+   dcl p offset(x);            /* x is not an AREA (22) */
+   dcl 1 rec based(p),
+       2 v fixed bin(31);
+   allocate rec in(x);         /* x is not an AREA (88) */
+   dcl s static area;          /* a STATIC AREA is not served (20) */
+ end bad_area_offset;

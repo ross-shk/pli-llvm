@@ -463,4 +463,7 @@ private:
   // Per-procedure tracking for implicit ALLOCATE of CONTROLLED variables
   // (IBM Enterprise PL/I): one bit per symbol prevents duplicate pushes.
   std::unordered_set<Symbol*> ctlImplicitAlloc_;
+  // AUTOMATIC AREA variables of the procedure being emitted (rule (20)): the
+  // runtime region is created at entry and destroyed on every exit path.
+  std::vector<Symbol*> areaLocals_;
 };

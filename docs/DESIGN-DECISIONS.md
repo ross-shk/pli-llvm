@@ -4577,3 +4577,60 @@ keeping LLVM's inferred alignment honest); rejecting `UNALIGNED`
 on non-structures (a standalone scalar has no observable
 misalignment in this compiler, so it is accepted like `ALIGNED`).
 
+## ADR-170 — AREA/OFFSET region allocation reuses the BASED locator path
+
+**Context.** libnet wishlist #9 needs random-access, out-of-order
+free of per-client records. CONTROLLED storage is strictly LIFO
+(ADR-139/161), so freeing an arbitrary closed client while others
+stay live is impossible without a hand-rolled freelist. TR 25.084
+rules (20) `AREA [( expression | * )]` and (22)
+`OFFSET [( reference )]` provide regions and their locators, and
+rules (88)/(90) add the `IN ( reference )` option to
+`ALLOCATE`/`FREE`.
+
+**Decision.** Model an OFFSET as a distinct `TK::Offset` that
+lowers to the *same* opaque LLVM address as POINTER: the existing
+BASED dereference path (`addressOf` loads the based base value)
+then works unchanged, and the type stays distinct so the AREA
+options are checked. An AREA is a `TK::Area` lowered to a `ptr`
+to a runtime `PliArea`; an AUTOMATIC area is created at procedure
+entry (`pli_area_create(size)`, default 1000 bytes, IBM's default)
+and destroyed on every exit path (`pli_area_destroy`) via the
+existing `emitCtlEpilogue` hook. `DCL rec BASED(p)` accepts a
+pointer *or* offset base; `ALLOCATE rec IN(a) SET(p)` and
+`FREE rec IN(a)` route through `pli_area_alloc`/`pli_area_free`;
+the `IN` target must be an AREA, and when the offset names an
+area (`OFFSET(a)`) it must match. `IN` without `SET` stores the
+block address in the based variable's own locator (rule (88)).
+
+**Runtime.** `rt_storage.c` keeps a `{size, used, blocks}` region
+and hands each block out of a 16-byte-aligned `malloc` block whose
+header stores the payload size and links the region's live
+blocks, so `FREE` returns the exact amount and *any* block may be
+freed in *any* order; the region's `used` counter is decremented
+on free, making the bytes reusable, and `pli_area_destroy`
+releases whatever is still allocated. An allocation past the
+declared size calls `pli_signal_error`
+(the runtime AREA condition; `ON AREA` stays diagnosed under rule
+(94)). This is observationally equivalent to a fixed in-region
+freelist for PL/I programs, with far less code.
+
+**Relaxation.** POINTER and OFFSET are interchangeable in
+assignment and `=`/`^=` (`isLocator()`), because both are opaque
+addresses at run time and `NULL()` must fit both; ordered
+comparison and mixing with arithmetic stay diagnosed. This is a
+deliberate, documented relaxation of the stricter IBM type rules.
+
+**Diagnosed.** STATIC/EXTERNAL AREA, an array of AREA or OFFSET,
+`AREA(*)`, `OFFSET` of a non-AREA, `ALLOCATE/FREE ... IN` of a
+non-AREA, and `FREE ... IN (AREA)` of CONTROLLED storage.
+
+**Consequences.** `core/area_offset.pli` pins allocate/dereference,
+out-of-order free, region reuse, a second independent region, and
+`NULL()`; `corner_cases/area_offset_edge.pli` pins the default
+size, an unassociated OFFSET, multiple items in one `ALLOCATE`,
+and `SET`/`IN` in either order; `multimodule/area_offset.pli`
+(+ `_lib`) allocates in the caller's region from a library and
+returns the offset; `bad_area_offset.pli`/`bad_area_attr.pli` pin
+the diagnostics.
+

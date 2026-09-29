@@ -138,6 +138,10 @@ private:
     bool complex = false;    // COMPLEX (QR2.2/CM5): a real+imaginary pair
     bool file = false;       // FILE (rules 39,40): a named file variable
     bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
+    bool area = false;       // AREA (rule (20)): a region for BASED allocation
+    ExprP areaSize;          // AREA( expression ): region size in bytes; null = default
+    bool offset = false;     // OFFSET (rule (22)): a locator into an AREA
+    std::string offsetRef;   // OFFSET( area ): the associated AREA; empty = unassociated
     bool task = false;       // TASK (rules (15),(79), QR2.8): a task name
     bool event = false;      // EVENT (rules (15),(79),(82), QR2.8): an event name
     bool aligned = false;    // ALIGNED (rule (15)): natural layout (the default)

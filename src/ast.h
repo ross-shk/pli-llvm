@@ -112,9 +112,13 @@ struct DeclItem {
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
   bool controlled = false;             // CONTROLLED generation-stack storage (rule (15), ADR-140)
-  bool aligned = false;                // ALIGNED (rule (15)): natural layout (the default)
-  bool unaligned = false;              // UNALIGNED packed layout (ADR-169)
-  bool optional = false;               // OPTIONAL parameter (extension); valid only on parameters
+  bool area = false;                   // AREA attribute (rule (20)); areaSize = size expr
+  ExprP areaSize;                      // AREA( expression ) region size; null = default 1000
+  bool offset = false;                 // OFFSET attribute (rule (22)); offsetRef = OFFSET(area)
+  std::string offsetRef;  // OFFSET( <area-name> ) association (rule (22)); empty = none
+  bool aligned = false;   // ALIGNED (rule (15)): natural layout (the default)
+  bool unaligned = false; // UNALIGNED packed layout (ADR-169)
+  bool optional = false;  // OPTIONAL parameter (extension); valid only on parameters
   // A dynamic (runtime-extent) array that is a structure member (rule 13): its
   // field path (the indices memberAddr walks) and its bound expressions. The
   // member's DeclItem still owns dynBounds/dynLbBounds; these reference them.
@@ -274,9 +278,15 @@ struct Stmt {
   std::vector<ExprP> allocCharLen;
   std::vector<char> allocVarying;
   std::vector<char> allocHasChar;
+  // ALLOCATE ... IN ( area ) (rule (88)): the AREA variable the block is
+  // allocated from; null = the default heap (pli_alloc).
+  std::vector<ExprP> allocArea;
   // FREE (rule 90): per item, the based variable reference. An explicit locator
   // is carried on freeBase[i]->locPtr; null means the BASED base pointer.
   std::vector<ExprP> freeBase;
+  // FREE ... IN ( area ) (rule (90)): the AREA the block is returned to;
+  // null = the default heap (pli_free).
+  std::vector<ExprP> freeArea;
 };
 
 struct Proc {

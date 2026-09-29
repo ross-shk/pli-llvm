@@ -214,6 +214,8 @@ struct HStmt {
   // (allocCharLen[i]); allocVarying[i]/allocHasChar[i] mirror the AST flags.
   std::vector<HExprP> allocBase;
   std::vector<HExprP> allocSet;
+  // ALLOCATE ... IN ( area ) (rule (88)): the AREA the block comes from.
+  std::vector<HExprP> allocArea;
   std::vector<HExprP> allocDim;
   std::vector<HExprP> allocCharLen;
   std::vector<char> allocVarying;
@@ -221,6 +223,8 @@ struct HStmt {
   // FREE (rule 90): per item, the based variable reference (locPtr carries an
   // explicit locator, null = the BASED base).
   std::vector<HExprP> freeBase;
+  // FREE ... IN ( area ) (rule (90)): the AREA the block returns to.
+  std::vector<HExprP> freeArea;
 };
 
 struct HProc {

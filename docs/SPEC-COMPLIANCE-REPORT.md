@@ -4,7 +4,7 @@ Generated: 2026-09-25 | Compiler: plic (PL/I → LLVM)
 
 ## Executive Summary
 
-The plic compiler implements a substantial subset of TR 25.084 concrete syntax along with all approved IBM Enterprise PL/I extensions (MX1–MX9). All 14 Enterprise extensions are fully implemented with tests. Approximately **73%** of the core TR 25.084 rules have some level of implementation, with remaining rules being deferred features (PICTURE, AREA, LABEL, OFFSET), optional capabilities, or features not yet reached by the current development milestones.
+The plic compiler implements a substantial subset of TR 25.084 concrete syntax along with all approved IBM Enterprise PL/I extensions (MX1–MX9). All 14 Enterprise extensions are fully implemented with tests. Approximately **73%** of the core TR 25.084 rules have some level of implementation, with remaining rules being deferred features (PICTURE, LABEL), optional capabilities, or features not yet reached by the current development milestones.
 
 ### Headline Coverage (from GRAMMAR-COVERAGE.md)
 
@@ -13,7 +13,7 @@ The plic compiler implements a substantial subset of TR 25.084 concrete syntax a
 | Fully Implemented + Tested | 40 | Complete grammar + semantics + IRGen |
 | Partially Implemented | 18 | Cases served; unsupported cases diagnosed |
 | Diagnosed (rejected w/ rule cite) | 21 | Recognized and rejected per spec |
-| Not Started / Deferred | ~72 | PICTURE, AREA, LABEL, OFFSET, KEYED DIO, etc. |
+| Not Started / Deferred | ~72 | PICTURE, LABEL, KEYED DIO, etc. |
 | Enterprise Extensions | 14/14 | All MX1–MX9 implemented |
 
 **Rules with tests**: ~99 (40 + parts of 18 partial = ~58 tested; additional partial rules covered by good/bad golden tests)  
@@ -46,13 +46,14 @@ The plic compiler implements a substantial subset of TR 25.084 concrete syntax a
 ### 4. CONTROLLED Generation Stack Completeness (Rule 23, 87–90) — **QR2.3 remainder**
 - Basic push/pop on LIFO, generation sizing from compile-time descriptor
 - Missing: multi-dimensional CONTROLLED arrays, STRUCTured CONTROLS
-- IN(AREA) ALLOCATE option not implemented
 - Dynamic-extent based arrays not implemented
 - **Impact**: Low for most programs; important for memory-managed applications
 
-### 5. AREA/OFFSET Attributes (Rules 20, 22) — **M3 — Not Implemented**
-- USER-defined storage area management
-- LABEL attribute (Rule 21) also not implemented (M4)
+### 5. AREA/OFFSET Attributes (Rules 20, 22) — **M3 — Served (ADR-170)**
+- Automatic `AREA` regions and `OFFSET` locators; `ALLOCATE/FREE ... IN(area)`
+  with out-of-order free; a `BASED` variable may be based on an `OFFSET`
+- Not served: static/external areas, `AREA(*)`, arrays of AREA/OFFSET, offset arithmetic
+- LABEL attribute (Rule 21) still not implemented (M4)
 - **Impact**: Low—advanced memory management use case
 
 ---
@@ -94,7 +95,7 @@ Based on QUICK-RELEASE-IMPLEMENTATION-PLAN.md QR phases:
 
 1. **Complete QR2 Decimal Overflow** — FULL decimal overflow routing (not just binary/float→fixed) to SIZE condition handler
    
-2. **Complete QR2.3 STORAGE GAPS** — Implement IN(AREA) for ALLOCATE, finalize CONTROLLED generation stack for struct/array forms
+2. **Complete QR2.3 STORAGE GAPS** — finalize CONTROLLED generation stack for struct/array forms (the `IN(AREA)` ALLOCATE option landed with ADR-170)
 
 3. **Complete QR2.8 TASK/EVENT ASYNC** — Improve async handling robustness, event array support
 
@@ -141,7 +142,7 @@ Per Invariant 3: all diagnostics follow `d_.error(loc, msg, "(nn)")` format citi
 
 ### Coverage Gaps in Testing
 
-- Rules ~20–22 (AREA/LABEL/OFFSET, PICTURE 19): no tests since not started
+- Rules 21/19 (LABEL, PICTURE): no tests since not started (`AREA`/`OFFSET` 20/22 are covered by `area_offset.pli`, `area_offset_edge.pli`, `multimodule/area_offset.pli`, ADR-170)
 - GENERIC (rule 41): no tests
 - FORMAT standalone statement (rules 44–55 stubs): no tests for diagnosed forms
 - USES sections (rules 36–37): no tests

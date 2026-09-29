@@ -92,3 +92,76 @@ long long pli_ctl_len(long long key) {
     return 0;
   return v->lens[v->depth - 1];
 }
+
+/* AREA (rule (20)): a region for out-of-order BASED allocation. The region
+ * tracks the bytes currently handed out and refuses to exceed its declared
+ * size (the AREA condition). Each block carries a 16-byte header holding its
+ * payload size and the next live block, so FREE returns the right amount in
+ * any order and destroying the region releases whatever is still allocated;
+ * the payload stays aligned for any PL/I value. */
+typedef struct PliBlock {
+  long long size; /* payload bytes */
+  struct PliBlock *next;
+} PliBlock;
+
+typedef struct {
+  long long size;   /* region capacity in bytes */
+  long long used;   /* bytes currently allocated from the region */
+  PliBlock *blocks; /* live blocks, newest first */
+} PliArea;
+
+char *pli_area_create(long long n) {
+  PliArea *a = (PliArea *)malloc(sizeof(PliArea));
+  if (!a)
+    pli_abort("AREA: out of memory");
+  a->size = n > 0 ? n : 0;
+  a->used = 0;
+  a->blocks = NULL;
+  return (char *)a;
+}
+
+void pli_area_destroy(char *ap) {
+  PliArea *a = (PliArea *)ap;
+  if (!a)
+    return;
+  for (PliBlock *b = a->blocks; b;) {
+    PliBlock *next = b->next;
+    free(b);
+    b = next;
+  }
+  free(a);
+}
+
+char *pli_area_alloc(char *ap, long long n) {
+  PliArea *a = (PliArea *)ap;
+  if (!a)
+    pli_signal_error("AREA: allocation from a null area");
+  long long need = n < 0 ? 0 : n;
+  if (a->used + need > a->size)
+    pli_signal_error("AREA: area overflow");
+  PliBlock *b = (PliBlock *)malloc((size_t)need + sizeof(PliBlock));
+  if (!b)
+    pli_abort("AREA: out of memory");
+  b->size = need;
+  b->next = a->blocks;
+  a->blocks = b;
+  a->used += need;
+  return (char *)(b + 1);
+}
+
+void pli_area_free(char *ap, char *p) {
+  if (!p)
+    return;
+  PliArea *a = (PliArea *)ap;
+  PliBlock *b = (PliBlock *)p - 1;
+  if (a) {
+    /* Unlink the block from the region's live list. */
+    PliBlock **link = &a->blocks;
+    while (*link && *link != b)
+      link = &(*link)->next;
+    if (*link)
+      *link = b->next;
+    a->used -= b->size;
+  }
+  free(b);
+}

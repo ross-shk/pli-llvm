@@ -478,7 +478,8 @@ bool Sema::tryResolveBased(PendingBased& pb) {
   if (!item || item->basedBase.empty() || item->sym->basedBase)
     return true; // nothing to do (already resolved)
   Symbol* base = lookup(pb.sc, item->basedBase);
-  if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) && base->ty.isPointer()) {
+  // A BASED base is a locator: a POINTER or an OFFSET (rules (22),(25)).
+  if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) && base->ty.isLocator()) {
     item->sym->basedBase = base;
     return true;
   }
@@ -514,12 +515,13 @@ void Sema::flushPendingBased() {
     // whose DECLAREs were collected after this procedure's own pass.
     Symbol* base = lookup(pb.sc, pb.item->basedBase);
     if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) &&
-        base->ty.isPointer()) {
+        base->ty.isLocator()) {
       pb.item->sym->basedBase = base;
       continue;
     }
     d_.error(pb.item->loc,
-             "BASED base '" + pb.item->basedBase + "' is not a POINTER variable in this scope",
+             "BASED base '" + pb.item->basedBase +
+                 "' is not a POINTER or OFFSET variable in this scope",
              "(25)");
     // Mark as resolved (null stays) so one diagnostic is emitted even if
     // flush runs again from processProc's fallback path.
@@ -1167,6 +1169,54 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                        "(13)");
           }
         }
+        // AREA (rule (20)): a region for out-of-order BASED allocation. The
+        // optional size is a compile-time constant in bytes (default 1000, the
+        // IBM default); the region is created at procedure entry.
+        if (item.area) {
+          if (item.ty.isArray())
+            d_.error(item.loc, "an array of AREA is not implemented in this stage", "(20)");
+          if (item.sym->isStatic)
+            d_.error(item.loc, "a STATIC or EXTERNAL AREA is not implemented in this stage",
+                     "(20)");
+          auto areaErr = [&](const char* what, const char* rule) {
+            d_.error(item.loc, std::string("AREA+") + what + " is not implemented", rule);
+          };
+          if (item.init || !item.initItems.empty() || item.initCall)
+            areaErr("INITIAL", "(26)");
+          if (item.valueInit)
+            areaErr("VALUE", "(ADR-108)");
+          if (!item.like.empty())
+            areaErr("LIKE", "(15)");
+          if (!item.definedBase.empty())
+            areaErr("DEFINED", "(24)");
+          if (!item.basedBase.empty())
+            areaErr("BASED", "(25)");
+          if (item.controlled)
+            areaErr("CONTROLLED", "(15)");
+          if (item.areaSize) {
+            typeExpr(item.areaSize.get(), sc, p);
+            if (item.areaSize->kind == Expr::IntLit && item.areaSize->ival > 0)
+              item.sym->areaSize = item.areaSize->ival;
+            else
+              d_.error(item.areaSize->loc, "an AREA size must be a positive constant in this stage",
+                       "(20)");
+          }
+        }
+        // OFFSET (rule (22)): an opaque locator into an AREA. The optional
+        // reference names the associated AREA; it is validated here and used to
+        // check the ALLOCATE/FREE ... IN(area) option.
+        if (item.offset) {
+          if (item.ty.isArray())
+            d_.error(item.loc, "an array of OFFSET is not implemented in this stage", "(22)");
+          if (!item.offsetRef.empty()) {
+            Symbol* ar = lookup(sc, item.offsetRef);
+            if (ar && ar->ty.isArea())
+              item.sym->offsetArea = ar;
+            else
+              d_.error(item.loc, "OFFSET(" + item.offsetRef + ") requires an AREA variable",
+                       "(22)");
+          }
+        }
         // OPTIONAL (extension, ADR-119): only valid on a procedure parameter;
         // the flag rides the symbol into call checking. ENTRY-statement
         // parameters resolve by name as well (rule 56).
@@ -1631,9 +1681,11 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     return true;
   if (dst.isEvent() && src.isEvent())
     return true;
-  // POINTER assignment (rule 15): copy the address; a pointer target takes a
-  // pointer source (NULL, ADDR, or another pointer) unchanged.
-  if (dst.isPointer() && src.isPointer())
+  // Locator assignment (rules (15),(22)): copy the address; a POINTER/OFFSET
+  // target takes a POINTER/OFFSET source (NULL, ADDR, another locator). The
+  // two locator kinds are interchangeable at run time (both are opaque
+  // addresses); sema keeps them distinct enough to check the AREA options.
+  if (dst.isLocator() && src.isLocator())
     return true;
   if (dst.isBit() && (src.isBit() || src.isNumeric()))
     return true;
@@ -3056,38 +3108,62 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
       }
-      // BASED without SET was a parse error before bare ALLOCATE (rule 87)
-      // opened the paren-less form for CONTROLLED; keep the cite attached
-      // to the storage kind here.
-      if (i >= s->allocSet.size() || !s->allocSet[i])
-        d_.error(s->allocBase[i]->loc,
-                 "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
-      else {
+      // The IN ( area ) option (rule (88)): the block is allocated from the
+      // named AREA region; the reference must name an AREA variable.
+      Expr* areaE = (i < s->allocArea.size()) ? s->allocArea[i].get() : nullptr;
+      if (areaE) {
+        typeExpr(areaE, sc, p);
+        if (areaE->kind != Expr::VarRef || !areaE->ty.isArea())
+          d_.error(areaE->loc, "the IN target of ALLOCATE must be an AREA variable", "(88)");
+        else if (bsym->basedBase && bsym->basedBase->ty.isOffset() && bsym->basedBase->offsetArea &&
+                 bsym->basedBase->offsetArea != areaE->sym)
+          d_.error(areaE->loc, "the IN area does not match the OFFSET association", "(22)");
+      }
+      // BASED without SET is served only with the IN ( area ) option (rule (88)):
+      // the block address lands in the based variable's own locator. A plain
+      // heap ALLOCATE of BASED storage still requires SET.
+      if (i >= s->allocSet.size() || !s->allocSet[i]) {
+        if (!areaE)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
+      } else {
         typeExpr(s->allocSet[i].get(), sc, p);
-        if (s->allocSet[i]->kind != Expr::VarRef || !s->allocSet[i]->ty.isPointer())
-          d_.error(s->allocSet[i]->loc, "the SET target of ALLOCATE must be a POINTER variable",
-                   "(88)");
+        if (s->allocSet[i]->kind != Expr::VarRef || !s->allocSet[i]->ty.isLocator())
+          d_.error(s->allocSet[i]->loc,
+                   "the SET target of ALLOCATE must be a POINTER or OFFSET variable", "(88)");
       }
     }
     break;
   case Stmt::Free:
     // FREE (rule 90): free the storage of each based variable, addressed either
-    // by an explicit locator pointer or by the variable's own BASED pointer.
-    for (auto& f : s->freeBase) {
-      typeExpr(f.get(), sc, p);
+    // by an explicit locator pointer or by the variable's own BASED pointer,
+    // optionally returning the block to an AREA ( IN ( area ) ).
+    for (size_t i = 0; i < s->freeBase.size(); ++i) {
+      Expr* f = s->freeBase[i].get();
+      typeExpr(f, sc, p);
       Symbol* bsym = f->sym;
       if (bsym && bsym->controlled) {
         // CONTROLLED FREE (rule 90, ADR-140): the plain form pops a
         // generation; a locator has no stack meaning and stays diagnosed.
         if (f->locPtr)
           d_.error(f->loc, "a locator FREE of CONTROLLED storage is not implemented", "(90)");
+        if (i < s->freeArea.size() && s->freeArea[i])
+          d_.error(s->freeArea[i]->loc,
+                   "FREE ... IN ( AREA ) of CONTROLLED storage is not "
+                   "implemented in this stage",
+                   "(90)");
         continue;
       }
       if (!bsym || !bsym->basedBase)
         d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
                  "(90)");
-      if (f->locPtr && !f->locPtr->ty.isPointer())
-        d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER", "(90)");
+      if (f->locPtr && !f->locPtr->ty.isLocator())
+        d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER or OFFSET", "(90)");
+      if (i < s->freeArea.size() && s->freeArea[i]) {
+        typeExpr(s->freeArea[i].get(), sc, p);
+        if (s->freeArea[i]->kind != Expr::VarRef || !s->freeArea[i]->ty.isArea())
+          d_.error(s->freeArea[i]->loc, "the IN target of FREE must be an AREA variable", "(90)");
+      }
     }
     break;
   case Stmt::Open:
@@ -3721,11 +3797,11 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       break;
     case Tok::Eq:
     case Tok::Ne:
-      // Equality/inequality of a POINTER is allowed only against another
-      // POINTER (rules (15),(117)); mixed pointer/arithmetic comparison is
-      // diagnosed rather than silently comparing an address as a number.
-      if ((A.isPointer() || B.isPointer()) && !(A.isPointer() && B.isPointer()))
-        d_.error(e->loc, "a POINTER can only be compared with a POINTER", "(117)");
+      // Equality/inequality of a POINTER or OFFSET is allowed only against
+      // another locator (rules (15),(22),(117)); mixed locator/arithmetic
+      // comparison is diagnosed rather than silently comparing an address.
+      if ((A.isLocator() || B.isLocator()) && !(A.isLocator() && B.isLocator()))
+        d_.error(e->loc, "a POINTER or OFFSET can only be compared with another locator", "(117)");
       else if (A.isComplex() || B.isComplex()) {
         // Exact part-wise equality (CM5); a complex side against anything
         // but complex-or-numeric is diagnosed.
@@ -3744,8 +3820,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // Ordered comparisons are not meaningful on addresses (rule (117)).
       if (A.isComplex() || B.isComplex())
         d_.error(e->loc, "ordered comparison of a COMPLEX value is not allowed", "(117)");
-      else if (A.isPointer() || B.isPointer())
-        d_.error(e->loc, "ordered comparison of a POINTER is not allowed", "(117)");
+      else if (A.isLocator() || B.isLocator())
+        d_.error(e->loc, "ordered comparison of a POINTER or OFFSET is not allowed", "(117)");
       else if (A.isChar() != B.isChar())
         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
       e->ty = Type::bit(1);

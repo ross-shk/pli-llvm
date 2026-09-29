@@ -294,6 +294,8 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     h->allocBase.push_back(lowerExpr(b.get()));
   for (const auto& t : s->allocSet)
     h->allocSet.push_back(lowerExpr(t.get()));
+  for (const auto& a : s->allocArea)
+    h->allocArea.push_back(lowerExpr(a.get()));
   for (const auto& d : s->allocDim)
     h->allocDim.push_back(lowerExpr(d.get()));
   for (const auto& c : s->allocCharLen)
@@ -302,6 +304,8 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->allocHasChar = s->allocHasChar;
   for (const auto& b : s->freeBase)
     h->freeBase.push_back(lowerExpr(b.get()));
+  for (const auto& a : s->freeArea)
+    h->freeArea.push_back(lowerExpr(a.get()));
 
   // Statement-level conversions that IRGen applies inline, made explicit.
   switch (h->kind) {
@@ -743,6 +747,10 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
         os << " set=";
         printExpr(os, s->allocSet[i].get(), ind);
       }
+      if (i < s->allocArea.size() && s->allocArea[i]) {
+        os << " in=";
+        printExpr(os, s->allocArea[i].get(), ind);
+      }
       if (i < s->allocDim.size() && s->allocDim[i]) {
         os << " dim=";
         printExpr(os, s->allocDim[i].get(), ind);
@@ -759,6 +767,10 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     for (size_t i = 0; i < s->freeBase.size(); ++i) {
       os << (i ? "," : " ");
       printExpr(os, s->freeBase[i].get(), ind);
+      if (i < s->freeArea.size() && s->freeArea[i]) {
+        os << " in=";
+        printExpr(os, s->freeArea[i].get(), ind);
+      }
     }
     break;
   case HStmt::Open:

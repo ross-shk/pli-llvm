@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (20),(22),(88),(90): library side of area_offset.pli. The
+    library allocates a BASED record in the caller-supplied AREA and
+    returns its OFFSET; the caller dereferences the same region. */
+ area_off_lib: package exports(mk_alloc, mk_free);
+ mk_alloc: procedure(ar) returns(offset);
+   dcl ar area;
+   dcl 1 rec based(off),
+       2 v fixed bin(31);
+   dcl off offset;
+   allocate rec in(ar) set(off);
+   rec.v = 1234;
+   return(off);
+ end mk_alloc;
+ mk_free: procedure(ar, off);
+   dcl ar area;
+   dcl off offset;
+   dcl 1 rec based(off),
+       2 v fixed bin(31);
+   free rec in(ar);
+ end mk_free;
+ end area_off_lib;

@@ -133,6 +133,10 @@ PLI_FN(pli_ctl_ensure, VOID, (I64, I64))              /* CONTROLLED implicit fir
 PLI_FN(pli_ctl_free, VOID, (I64))                     /* CONTROLLED FREE (90) */
 PLI_FN(pli_ctl_addr, PTR, (I64))                      /* CONTROLLED latest generation */
 PLI_FN(pli_ctl_len, I64, (I64))                       /* CONTROLLED latest generation byte size (18) */
+PLI_FN(pli_area_create, PTR, (I64))                   /* AREA region create (20) */
+PLI_FN(pli_area_destroy, VOID, (PTR))                 /* AREA region destroy (20) */
+PLI_FN(pli_area_alloc, PTR, (PTR, I64))               /* ALLOCATE ... IN(area) (88) */
+PLI_FN(pli_area_free, VOID, (PTR, PTR))               /* FREE ... IN(area) (90) */
 
 PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))

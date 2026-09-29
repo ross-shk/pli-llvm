@@ -44,6 +44,12 @@ struct Symbol {
   Symbol* basedBase = nullptr;
   bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
   int ctlSlot = -1;        // runtime generation-stack slot index (87-90)
+  // AREA (rule (20)): the region's byte size, a compile-time constant (default
+  // 1000, the IBM default). The runtime region is created at procedure entry.
+  long long areaSize = 1000;
+  // OFFSET (rule (22)): the associated AREA named by OFFSET(area); null when
+  // the offset is unassociated. Used to validate ALLOCATE/FREE ... IN(area).
+  Symbol* offsetArea = nullptr;
   // For a DEFINED base that is a subscripted reference (rule 126):
   //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)
   //   definedIsubAxis >= 0  -> this X axis holds the iSUB dummy (rule 134)

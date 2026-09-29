@@ -128,6 +128,8 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
     return llvm::StructType::get(ctx_, mts, t.unaligned);
   }
   case TK::Pointer:
+  case TK::Offset: // an OFFSET is an opaque locator (rule (22))
+  case TK::Area:   // an AREA is a pointer to the runtime region (rule (20))
     return b_.getPtrTy();
   case TK::Task:
   case TK::Event:
@@ -836,6 +838,7 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
 }
 
 void IRGen::allocaLocals(HProc* p) {
+  areaLocals_.clear();
   // Pass 1: fixed-size storage (scalars and constant-bounds arrays). Dynamic
   // arrays are deferred so that any variables their bounds reference are
   // already addressable.
@@ -852,7 +855,14 @@ void IRGen::allocaLocals(HProc* p) {
       a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
     }
     symAddr_[s] = a;
-    if (s->ty.isTask())
+    if (s->ty.isArea()) {
+      // An AUTOMATIC AREA (rule (20)): create the runtime region at entry and
+      // destroy it on exit (emitCtlEpilogue). Allocation from it supports
+      // out-of-order FREE via the region's size accounting.
+      llvm::Value* region = b_.CreateCall(runtimeFn("pli_area_create"), {i64(s->areaSize)}, "area");
+      b_.CreateStore(region, a);
+      areaLocals_.push_back(s);
+    } else if (s->ty.isTask())
       b_.CreateStore(i32(0), a);
     else if (s->ty.isEvent())
       // A fresh EVENT is complete (1); CALL resets it (rule (79), QR2.8).
@@ -1584,6 +1594,7 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       labelBlocks_.clear();
       symAddr_.clear();
       ctlImplicitAlloc_.clear(); // a handler allocates/frees nothing implicitly
+      areaLocals_.clear();       // ... and owns no AREA regions
       for (Symbol* gs : sema_.storage())
         if (gs->isStatic && gs->kind == Symbol::Var)
           symAddr_[gs] = mod_.getGlobalVariable(gs->irName.substr(1), true);
@@ -2270,6 +2281,10 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
 void IRGen::emitCtlEpilogue() {
   for (Symbol* sym : ctlImplicitAlloc_)
     b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(sym)});
+  // Destroy the procedure's AUTOMATIC AREA regions (rule (20)). Any blocks
+  // still allocated in them are released with the region.
+  for (Symbol* sym : areaLocals_)
+    b_.CreateCall(runtimeFn("pli_area_destroy"), {b_.CreateLoad(b_.getPtrTy(), addressOf(sym))});
 }
 
 // ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and
@@ -2314,12 +2329,18 @@ void IRGen::emitAllocate(HStmt* s) {
       }
       continue;
     }
-    llvm::Value* p = b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
-    HExpr* set = s->allocSet[i].get();
-    storeTo(set->sym, Val{set->ty, p}, set->loc);
-    // ALLOCATE of a BASED variable also sets the variable's own BASED pointer
+    // IN ( area ) (rule (88)): take the block from the AREA region instead of
+    // the default heap; the address is still an opaque locator either way.
+    HExpr* areaE = (i < s->allocArea.size()) ? s->allocArea[i].get() : nullptr;
+    llvm::Value* p =
+        areaE ? b_.CreateCall(runtimeFn("pli_area_alloc"), {emitExpr(areaE).reg, sz}, "aheap")
+              : b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
+    HExpr* set = (i < s->allocSet.size()) ? s->allocSet[i].get() : nullptr;
+    if (set)
+      storeTo(set->sym, Val{set->ty, p}, set->loc);
+    // ALLOCATE of a BASED variable also sets the variable's own BASED locator
     // (rule (88)), so references through the based name address the new cell.
-    if (bsym->basedBase && bsym->basedBase != set->sym)
+    if (bsym->basedBase && (!set || bsym->basedBase != set->sym))
       b_.CreateStore(p, addressOf(bsym->basedBase));
   }
 }
@@ -2328,14 +2349,20 @@ void IRGen::emitAllocate(HStmt* s) {
 // explicit locator when given, else the based variable's own BASED pointer —
 // or pop a CONTROLLED generation.
 void IRGen::emitFree(HStmt* s) {
-  for (auto& f : s->freeBase) {
-    Symbol* bsym = f->sym;
+  for (size_t i = 0; i < s->freeBase.size(); ++i) {
+    Symbol* bsym = s->freeBase[i]->sym;
     if (bsym && bsym->controlled) {
       b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(bsym)});
       continue;
     }
-    llvm::Value* addr = f->locPtr ? emitExpr(f->locPtr.get()).reg : addressOf(bsym);
-    b_.CreateCall(runtimeFn("pli_free"), {addr});
+    llvm::Value* addr =
+        s->freeBase[i]->locPtr ? emitExpr(s->freeBase[i]->locPtr.get()).reg : addressOf(bsym);
+    // IN ( area ) (rule (90)): return the block to its AREA region.
+    HExpr* areaE = (i < s->freeArea.size()) ? s->freeArea[i].get() : nullptr;
+    if (areaE)
+      b_.CreateCall(runtimeFn("pli_area_free"), {emitExpr(areaE).reg, addr});
+    else
+      b_.CreateCall(runtimeFn("pli_free"), {addr});
   }
 }
 
@@ -2667,7 +2694,11 @@ void IRGen::emitPut(HStmt* s) {
         // structure never reaches list-directed output as a value.
         break;
       case TK::Pointer:
-        d_.error(s->loc, "a POINTER value cannot be written with PUT LIST in this stage", "(110)");
+      case TK::Offset:
+      case TK::Area:
+        d_.error(s->loc,
+                 "a POINTER/OFFSET/AREA value cannot be written with PUT LIST in this stage",
+                 "(110)");
         break;
       case TK::Complex:
         // Complex output (CM5): real, sign, imaginary magnitude, I.
@@ -4416,9 +4447,9 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     return out;
   }
 
-  // A pointer value is passed through unchanged between POINTER targets
-  // (rule 15): pointer assignment copies the address, no numeric conversion.
-  if (v.ty.isPointer() && dst.isPointer())
+  // A locator value is passed through unchanged between POINTER/OFFSET targets
+  // (rules (15),(22)): assignment copies the address, no numeric conversion.
+  if (v.ty.isLocator() && dst.isLocator())
     return v;
 
   // TASK/EVENT handles (rules (15),(79),(82), QR2.8): same-type copies pass
@@ -5180,9 +5211,9 @@ Val IRGen::emitExpr(HExpr* e) {
     return v;
   }
 
-  if (isCmp && a.ty.isPointer() && b.ty.isPointer()) {
-    // POINTER equality/inequality (rule (117)): compare the two addresses
-    // directly; ordered comparisons were rejected in sema.
+  if (isCmp && a.ty.isLocator() && b.ty.isLocator()) {
+    // POINTER/OFFSET equality/inequality (rules (22),(117)): compare the two
+    // addresses directly; ordered comparisons were rejected in sema.
     llvm::CmpInst::Predicate pred = op == Tok::Eq ? llvm::CmpInst::ICMP_EQ : llvm::CmpInst::ICMP_NE;
     v.ty = Type::bit(1);
     v.reg = b_.CreateICmp(pred, a.reg, b.reg, "pcmp");
