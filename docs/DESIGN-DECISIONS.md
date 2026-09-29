@@ -4327,3 +4327,33 @@ overlays, live bounds, and heap cells;
 `bad_based_array.pli` / `bad_based_alloc_dim.pli` pin the
 remaining diagnostics.
 
+## ADR-164 — Locator-qualified BASED array subscripts address off the locator
+
+**Context.** libnet handle/event views are addressed through
+caller-supplied locators that differ from the declared BASED base
+(`Q -> E(i)` where `E BASED(P)`). ADR-163 diagnosed this form
+because codegen resolved the own BASED pointer and would silently
+use the wrong base.
+
+**Decision.** Sema now types `P -> X(i)` (rules 124,126) while
+keeping the locator on the expression: the locator must be a
+POINTER (124), the target must be BASED (124), and the arity must
+match (126); bounds reuse `checkSubscriptBounds`, and
+locator-qualified cross-sections plus `P -> S.A(i)` member forms
+stay diagnosed rather than silently using the own base. IRGen
+threads the locator through `loadArrayElement` /
+`storeArrayElement` (optional base, defaulting to the declared
+pointer): the element address comes from the existing
+`arrayElementAddr` off the locator value, keeping runtime
+SUBSCRIPTRANGE on every axis. The form composes with expression,
+single/multi-assignment, and GET-target paths; CONTROLLED dynamic
+arrays never carry a locator (sema rejects non-BASED targets).
+
+**Consequences.** `based_locator_sub.pli` pins fixed,
+POINTER-element, multi-axis, runtime-`(n)`, heap-alias, and
+runtime-index reads/writes through a differing locator;
+`multimodule/based_loc_arr.pli` pins library heap round-trips and
+caller-buffer views through caller-supplied locators across the
+object boundary. `bad_based_locator_sub.pli` pins the three
+diagnostics (non-POINTER locator, non-BASED target, arity).
+

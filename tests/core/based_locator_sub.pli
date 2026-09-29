@@ -1,0 +1,105 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (25),(124),(126): locator-qualified BASED array
+    subscripts. Q -> E(i) reads and writes through the
+    locator Q, not the declared BASED pointer, in fixed,
+    POINTER-element, multi-axis, and runtime-(n) forms. */
+ basedlocsub: procedure options(main);
+   dcl p pointer;
+   dcl q pointer;
+   dcl r pointer;
+   dcl i fixed bin(31);
+   dcl k fixed bin(31);
+   dcl n fixed bin(31);
+   dcl fails fixed bin(31) init(0);
+   dcl bufa(4) fixed bin(31);
+   dcl bufb(4) fixed bin(31);
+   dcl ga(2, 2) fixed bin(31);
+   dcl gb(2, 2) fixed bin(31);
+   dcl slots(4) pointer;
+   dcl e(4) fixed bin(31) based(p);
+   dcl h(4) pointer based(p);
+   dcl g(2, 2) fixed bin(31) based(p);
+   bufa(1) = 1; bufa(2) = 2; bufa(3) = 3; bufa(4) = 4;
+   bufb(1) = 101; bufb(2) = 102; bufb(3) = 103;
+   bufb(4) = 104;
+   p = addr(bufa);
+   q = addr(bufb);
+   /* reads ride the locator, not the declared base */
+   if q -> e(1) ^= 101 then fails = fails + 1;
+   if q -> e(4) ^= 104 then fails = fails + 1;
+   if p -> e(1) ^= 1 then fails = fails + 1;
+   /* writes land in the locator storage only */
+   q -> e(2) = 202;
+   if bufb(2) ^= 202 then fails = fails + 1;
+   if bufa(2) ^= 2 then fails = fails + 1;
+   if q -> e(2) ^= 202 then fails = fails + 1;
+   p -> e(3) = 303;
+   if bufa(3) ^= 303 then fails = fails + 1;
+   if bufb(3) ^= 103 then fails = fails + 1;
+   /* a runtime index rides the same path */
+   k = 4;
+   if q -> e(k) ^= 104 then fails = fails + 1;
+   q -> e(k) = 404;
+   if bufb(4) ^= 404 then fails = fails + 1;
+   /* POINTER elements: the handle-pool view by locator */
+   q = addr(slots);
+   r = addr(bufa);
+   q -> h(1) = r;
+   q -> h(4) = r;
+   if q -> h(1) ^= r then fails = fails + 1;
+   if slots(4) ^= r then fails = fails + 1;
+   /* multi-axis overlay by locator */
+   ga(2, 1) = 0; gb(2, 1) = 0;
+   p = addr(ga);
+   q = addr(gb);
+   q -> g(2, 1) = 7;
+   if gb(2, 1) ^= 7 then fails = fails + 1;
+   if ga(2, 1) ^= 0 then fails = fails + 1;
+   if q -> g(2, 1) ^= 7 then fails = fails + 1;
+   /* runtime-(n) overlay in a callee, driven by locator */
+   n = 4;
+   q = addr(bufb);
+   call loc_fill(q, n, 9);
+   do i = 1 to n;
+     if bufb(i) ^= 9 then fails = fails + 1;
+   end;
+   if loc_sum(q, n) ^= 36 then fails = fails + 1;
+   /* heap block behind a fixed BASED array via alias */
+   dcl cells(2) fixed bin(31) based(r);
+   allocate cells set(r);
+   q = r;
+   q -> cells(1) = 51;
+   q -> cells(2) = 52;
+   if r -> cells(2) ^= 52 then fails = fails + 1;
+   if cells(1) ^= 51 then fails = fails + 1;
+   free cells;
+   if fails = 0 then put skip list('PASS based_locator_sub');
+   else put skip list('FAIL based_locator_sub: fails =',
+     fails);
+ end basedlocsub;
+ /* Runtime-bound overlay (rules (13),(25)): the locator
+    supplies the base; the bound (n) names the length. */
+ loc_fill: procedure(loc, n, val);
+   dcl loc pointer;
+   dcl n fixed bin(31);
+   dcl val fixed bin(31);
+   dcl dead pointer;
+   dcl v(n) fixed bin(31) based(dead);
+   dcl i fixed bin(31);
+   do i = 1 to n;
+     loc -> v(i) = val;
+   end;
+ end loc_fill;
+ loc_sum: procedure(loc, n) returns(fixed bin(31));
+   dcl loc pointer;
+   dcl n fixed bin(31);
+   dcl dead pointer;
+   dcl v(n) fixed bin(31) based(dead);
+   dcl i fixed bin(31);
+   dcl s fixed bin(31) init(0);
+   do i = 1 to n;
+     s = s + (loc -> v(i));
+   end;
+   return(s);
+ end loc_sum;

@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (124),(126): locator-qualified subscripts stay
+    diagnosed when the locator is not a POINTER, when the
+    target is not BASED, or when the arity is wrong. Each
+    bad statement below must fail with its rule cite. */
+ badbasedloc: procedure options(main);
+   dcl p pointer;
+   dcl n fixed bin(31);
+   dcl buf(4) fixed bin(31);
+   dcl e(4) fixed bin(31) based(p);
+   p = addr(buf);
+   n = n -> e(1);
+   n = p -> buf(1);
+   n = p -> e(1, 2);
+ end badbasedloc;

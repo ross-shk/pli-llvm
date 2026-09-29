@@ -293,9 +293,14 @@ private:
   // into an AUTOMATIC array element.
   Val initValue(const Type& ty, const Expr* e);
   // Load / store one array element (rule 126), with the SUBSCRIPTRANGE check.
-  Val loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
+  // A locator-qualified subscript P->X(i) (rules 124,126) addresses off the
+  // locator value instead of the declared BASED pointer; null means the own
+  // base. CONTROLLED dynamic arrays never carry a locator (rule 124 rejects
+  // non-BASED targets in sema).
+  Val loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc,
+                       HExpr* locPtr = nullptr);
   void storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, const Val& src,
-                         SourceLoc loc);
+                         SourceLoc loc, HExpr* locPtr = nullptr);
   // A CONTROLLED dynamic numeric array (rules (13),(89)): a scalar
   // `DCL FDS FIXED CONTROLLED` or a 1-D `(*)` array whose extent is the top
   // generation size. True for the scalar form and for a dynamic array form.

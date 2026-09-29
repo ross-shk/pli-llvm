@@ -1,0 +1,51 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (25),(124),(126): library side of based_loc_arr.pli.
+    Heap cells live behind a fixed BASED array; caller
+    buffers are reached through runtime-(n) overlays. All
+    element traffic rides the locator argument. */
+ basedloclib: package exports(make_block, loc_fill, loc_at,
+   loc_sum, drop_block);
+ dcl own pointer;
+ dcl blk(8) fixed bin(31) based(own);
+ make_block: procedure(n) returns(pointer);
+   dcl n fixed bin(31);
+   dcl p pointer;
+   allocate blk set(p);
+   own = p;
+   return(p);
+ end make_block;
+ loc_fill: procedure(loc, n, val);
+   dcl loc pointer;
+   dcl n fixed bin(31);
+   dcl val fixed bin(31);
+   dcl v(n) fixed bin(31) based(own);
+   dcl i fixed bin(31);
+   do i = 1 to n;
+     loc -> v(i) = val;
+   end;
+ end loc_fill;
+ loc_at: procedure(loc, n, i) returns(fixed bin(31));
+   dcl loc pointer;
+   dcl n fixed bin(31);
+   dcl i fixed bin(31);
+   dcl v(n) fixed bin(31) based(own);
+   return(loc -> v(i));
+ end loc_at;
+ loc_sum: procedure(loc, n) returns(fixed bin(31));
+   dcl loc pointer;
+   dcl n fixed bin(31);
+   dcl v(n) fixed bin(31) based(own);
+   dcl i fixed bin(31);
+   dcl s fixed bin(31) init(0);
+   do i = 1 to n;
+     s = s + (loc -> v(i));
+   end;
+   return(s);
+ end loc_sum;
+ drop_block: procedure(p);
+   dcl p pointer;
+   own = p;
+   free blk;
+ end drop_block;
+ end basedloclib;

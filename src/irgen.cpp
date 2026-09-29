@@ -1914,7 +1914,7 @@ void IRGen::emitAssign(HStmt* s) {
           storeScalarTo(addr, el, convert(v, el, s->loc));
           return;
         }
-        storeArrayElement(t->sym, t->args, v, s->loc);
+        storeArrayElement(t->sym, t->args, v, s->loc, t->locPtr.get());
         return;
       }
       if (t->kind == HExpr::VarRef && t->sym) {
@@ -2067,7 +2067,7 @@ void IRGen::emitAssign(HStmt* s) {
       storeScalarTo(addr, t->ty, convert(v, t->ty, s->loc));
       return;
     }
-    storeArrayElement(t->sym, t->args, v, s->loc);
+    storeArrayElement(t->sym, t->args, v, s->loc, t->locPtr.get());
     return;
   }
   // Whole-structure assignment S = T (rule 127): copy the source structure's
@@ -2818,7 +2818,7 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       storeScalarTo(addr, ty, convert(v, ty, loc));
       return;
     }
-    storeArrayElement(t->sym, t->args, v, loc);
+    storeArrayElement(t->sym, t->args, v, loc, t->locPtr.get());
     return;
   }
   if (t->kind == HExpr::VarRef && t->sym) {
@@ -4066,7 +4066,8 @@ llvm::Value* IRGen::ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& id
 // Load one array element (rule 126): a bounds-checked address, then a load of
 // the element's scalar value. Character element arrays are diagnosed, not
 // silently miscompiled (invariant 2).
-Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc) {
+Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc,
+                            HExpr* locPtr) {
   Val v;
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   v.ty = el;
@@ -4084,7 +4085,10 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
       v.reg = r;
     return v;
   }
-  llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
+  // A locator-qualified subscript P->X(i) (rules 124,126) addresses off the
+  // locator value, not the declared BASED pointer.
+  llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
+  llvm::Value* addr = arrayElementAddr(sym->ty, base, idxs, loc,
                                        dynUb_.count(sym) ? dynUb_[sym] : nullptr,
                                        dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
@@ -4098,7 +4102,7 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
 // Store one array element (rule 126): convert to the element type, then store
 // through the bounds-checked element address.
 void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, const Val& src,
-                              SourceLoc loc) {
+                              SourceLoc loc, HExpr* locPtr) {
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   if (el.isChar()) {
     d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
@@ -4110,7 +4114,10 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
     storeScalarTo(addr, el, cv);
     return;
   }
-  llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
+  // A locator-qualified target P->X(i) = e (rules 124,126) stores off the
+  // locator value, not the declared BASED pointer.
+  llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
+  llvm::Value* addr = arrayElementAddr(sym->ty, base, idxs, loc,
                                        dynUb_.count(sym) ? dynUb_[sym] : nullptr,
                                        dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   Val cv = convert(src, el, loc);
@@ -4679,7 +4686,7 @@ Val IRGen::emitExpr(HExpr* e) {
       v.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
-    return loadArrayElement(e->sym, e->args, e->loc);
+    return loadArrayElement(e->sym, e->args, e->loc, e->locPtr.get());
   case HExpr::VarRef:
     if (!e->sym) {
       v.ty = e->ty;

@@ -3344,6 +3344,18 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // Reclassify as a Subscript of the member's element type, carrying the
     // base structure symbol and the resolved field path.
     if (!e->path.empty()) {
+      // A locator-qualified member subscript P->S.A(i) (rules 124,126)
+      // would address through P, but the member paths below resolve
+      // the symbol's own base; diagnose it rather than silently
+      // using the wrong base.
+      if (e->locPtr) {
+        typeExpr(e->locPtr.get(), sc, p);
+        d_.error(e->loc,
+                 "a locator-qualified member array subscript is not implemented in this stage",
+                 "(124)");
+        e->ty = Type::voidTy();
+        break;
+      }
       Symbol* bs = lookup(sc, e->name);
       // An array of structures arr(i).x (rules 124,126): the subscripts index
       // the array to select one structure element, then the path resolves a
@@ -3428,13 +3440,46 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // procedure parameter array (rule (126)) is subscriptable the same way.
     if (Symbol* arr = lookup(sc, e->name);
         arr && (arr->kind == Symbol::Var || arr->kind == Symbol::Param) && arr->ty.isArray()) {
-      // A locator-qualified array subscript P->X(i) (rules 124,126) would
-      // address through P, but codegen resolves the own BASED pointer;
-      // diagnose it rather than silently using the wrong base.
+      // A locator-qualified array subscript P->X(i) (rules 124,126): the
+      // locator supplies the base address instead of the declared BASED
+      // pointer. The locator is typed first so a non-POINTER locator or
+      // a non-BASED target is diagnosed with its rule cite, never
+      // silently given the own base.
       if (e->locPtr) {
-        d_.error(e->loc, "a locator-qualified array subscript is not implemented in this stage",
-                 "(124)");
-        e->ty = Type::voidTy();
+        typeExpr(e->locPtr.get(), sc, p);
+        if (!e->locPtr->ty.isPointer())
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+        if (!arr->basedBase) {
+          d_.error(e->loc,
+                   "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
+                   "(124)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (e->args.size() != arr->ty.dims.size()) {
+          d_.error(e->loc,
+                   "array '" + e->name + "' has " + std::to_string(arr->ty.dims.size()) +
+                       " dimension(s) and takes " + std::to_string(arr->ty.dims.size()) +
+                       " subscript(s)",
+                   "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->kind = Expr::Subscript;
+        e->sym = arr;
+        int nStar = 0;
+        Type reduced;
+        if (crossSectionType(e, arr->ty, reduced, nStar)) {
+          d_.error(e->loc,
+                   "a locator-qualified cross-section is not implemented in this stage", "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->ty = arr->ty.elementType();
+        // rule (8)/(42): an array of an enclosing procedure is reached through
+        // this procedure's static link.
+        noteStaticUse(p, arr);
+        checkSubscriptBounds(e, arr);
         break;
       }
       if (e->args.size() != arr->ty.dims.size()) {
