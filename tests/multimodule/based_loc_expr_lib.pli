@@ -1,0 +1,38 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Rules (25),(124): library side of
+    based_loc_expr.pli. Heap conns live
+    behind a BASED view; pool traffic rides
+    an element locator supplied by callers. */
+ bloclib: package exports(mkconn, load_thru,
+   store_thru, drop_conn);
+ dcl dead pointer;
+ dcl 1 tmpl aligned,
+   2 fd fixed bin(31),
+   2 tag fixed bin(31);
+ dcl 1 view based(dead) like tmpl;
+ mkconn: procedure(val) returns(pointer);
+   dcl val fixed bin(31);
+   dcl h pointer;
+   allocate view set(h);
+   h -> view.fd = val;
+   h -> view.tag = val + 100;
+   return(h);
+ end mkconn;
+ load_thru: procedure(pool, i)
+   returns(fixed bin(31));
+   dcl pool(*) pointer;
+   dcl i fixed bin(31);
+   return(pool(i) -> view.fd);
+ end load_thru;
+ store_thru: procedure(pool, i, val);
+   dcl pool(*) pointer;
+   dcl i fixed bin(31);
+   dcl val fixed bin(31);
+   pool(i) -> view.fd = val;
+ end store_thru;
+ drop_conn: procedure(h);
+   dcl h pointer;
+   dead = h;
+   free view;
+ end drop_conn;
+ end bloclib;

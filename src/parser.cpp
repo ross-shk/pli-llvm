@@ -163,36 +163,47 @@ bool Parser::looksLikeAssignment() const {
   size_t j = i_ + 1;
   if (j >= t_.size())
     return false;
-  // Qualified / locator-qualified targets: A.B = , P->A =
-  while (j + 1 < t_.size() && (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
-         t_[j + 1].kind == Tok::Word)
-    j += 2;
-  // Multiple assignment targets: A, B, C = (rule 86) — skip further
-  // references separated by commas (each possibly qualified).
-  while (j + 1 < t_.size() && t_[j].kind == Tok::Comma && t_[j + 1].kind == Tok::Word) {
-    j += 2;
-    while (j + 1 < t_.size() && (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
-           t_[j + 1].kind == Tok::Word)
-      j += 2;
-  }
-  if (t_[j].kind == Tok::Eq)
-    return true;
-  if (t_[j].kind == Tok::LParen) {
-    int depth = 0;
-    for (; j < t_.size(); ++j) {
-      if (t_[j].kind == Tok::LParen)
-        ++depth;
-      else if (t_[j].kind == Tok::RParen) {
-        if (--depth == 0) {
-          ++j;
-          break;
+  // Skip one general reference tail: (.|-> Word)* and
+  // balanced (...) groups interleaved (rules 124,126).
+  // A locator may itself be subscripted, e.g.
+  // s.handles(i) -> view.fd = (rule 124 left recursion).
+  for (;;) {
+    for (;;) {
+      bool moved = false;
+      while (j + 1 < t_.size() && (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
+             t_[j + 1].kind == Tok::Word) {
+        j += 2;
+        moved = true;
+      }
+      if (j < t_.size() && t_[j].kind == Tok::LParen) {
+        int depth = 0;
+        size_t k = j;
+        for (; k < t_.size(); ++k) {
+          if (t_[k].kind == Tok::LParen)
+            ++depth;
+          else if (t_[k].kind == Tok::RParen) {
+            if (--depth == 0) {
+              ++k;
+              break;
+            }
+          } else if (t_[k].kind == Tok::Semi || t_[k].kind == Tok::Eof)
+            return false;
         }
-      } else if (t_[j].kind == Tok::Semi || t_[j].kind == Tok::Eof)
-        return false;
+        j = k;
+        moved = true;
+        continue;
+      }
+      if (!moved)
+        break;
     }
-    return j < t_.size() && t_[j].kind == Tok::Eq;
+    // Multiple assignment targets: A, B, C = (rule 86).
+    if (j + 1 < t_.size() && t_[j].kind == Tok::Comma && t_[j + 1].kind == Tok::Word) {
+      j += 2;
+      continue;
+    }
+    break;
   }
-  return false;
+  return j < t_.size() && t_[j].kind == Tok::Eq;
 }
 
 // The words keywordStatement() dispatches on. Only a word with a keyword
@@ -1906,8 +1917,7 @@ bool Parser::parseDescriptorType(Type& out) {
         --depth;
       advance();
     } while (depth > 0 && !at(Tok::Eof));
-    d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
-             "(36)");
+    d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage", "(36)");
   }
   // A POINTER descriptor (rule (38)): C `void*` parameters ride as the
   // pointer value itself under LINKAGE(SYSTEM)/BYVALUE.
@@ -1930,8 +1940,7 @@ bool Parser::parseDescriptorType(Type& out) {
           --depth;
         advance();
       } while (depth > 0 && !at(Tok::Eof));
-      d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
-               "(36)");
+      d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage", "(36)");
     }
     if (hasStar) {
       // Array of POINTER with caller-supplied extent (rules (13),(36)).
@@ -1966,8 +1975,7 @@ bool Parser::parseDescriptorType(Type& out) {
         --depth;
       advance();
     } while (depth > 0 && !at(Tok::Eof));
-    d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
-             "(36)");
+    d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage", "(36)");
   }
   if (bag.character) {
     if (hasStar) {
@@ -3603,75 +3611,73 @@ ExprP Parser::parsePrimary() {
     return e;
   }
   if (at(Tok::Word)) {
-    e->kind = Expr::VarRef;
-    e->name = cur().text;
-    advance();
-    if (at(Tok::Arrow)) {
-      // Locator-qualified reference P -> X (rule 124): the left reference is a
-      // POINTER, the right a based variable X (or X.FIELD). e currently holds
-      // the left P — move it into the locator, then parse the right-hand name.
-      auto ptr = std::make_unique<Expr>();
-      ptr->kind = Expr::VarRef;
-      ptr->name = e->name;
-      ptr->loc = e->loc;
-      advance(); // ->
-      if (at(Tok::Word)) {
-        e->name = cur().text;
-        e->loc = cur().loc;
-        e->locPtr = std::move(ptr);
-        advance();
-      } else {
-        d_.error(cur().loc, "expected a based variable after '->'", "(124)");
-      }
-      // fall through: the X.FIELD member path is collected below
-    }
-    // A qualified name S.A.B (rule 124): collect the member qualifiers after
-    // the base name; sema resolves them against the structure type.
-    while (eat(Tok::Dot)) {
-      if (at(Tok::Word)) {
-        e->path.push_back(cur().text);
-        advance();
-      } else {
-        d_.error(cur().loc, "expected a member name after '.'", "(124)");
-        break;
-      }
-    }
-    if (at(Tok::LParen)) { // subscripts or function reference
-      e->kind = Expr::Call;
+    // One basic reference: WORD (.WORD)* [(args)] (.WORD)*
+    // rules (124)-(126). The pre-subscript dots are member
+    // qualifiers (S.A), the parens are subscripts or a call,
+    // the post-subscript dots reach into an array element
+    // (arr(i).x). Sema resolves the path and reclassifies.
+    auto parseBasic = [this]() -> ExprP {
+      auto b = std::make_unique<Expr>();
+      b->kind = Expr::VarRef;
+      b->loc = cur().loc;
+      b->name = cur().text;
       advance();
-      if (!at(Tok::RParen)) {
-        for (;;) {
-          // A '*' subscript is a cross-section axis marker (rule 126) — the
-          // reference selects every index along that axis. It is not an
-          // expression; it is recorded as a Star node in the argument list.
-          if (at(Tok::Star)) {
-            auto star = std::make_unique<Expr>();
-            star->kind = Expr::Star;
-            star->loc = cur().loc;
-            e->args.push_back(std::move(star));
-            advance();
-          } else {
-            e->args.push_back(parseExpr());
-          }
-          if (!eat(Tok::Comma))
-            break;
+      while (eat(Tok::Dot)) {
+        if (at(Tok::Word)) {
+          b->path.push_back(cur().text);
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a member name after '.'", "(124)");
+          break;
         }
       }
-      expect(Tok::RParen, "(126)");
-    }
-    // A qualified member after a subscript/call group: `arr(i).x` (rule 124) —
-    // the base is an array of structures, so the member qualifiers follow the
-    // subscript. Sema resolves the path against the element structure type.
-    while (eat(Tok::Dot)) {
-      if (at(Tok::Word)) {
-        e->path.push_back(cur().text);
+      if (at(Tok::LParen)) {
+        b->kind = Expr::Call;
         advance();
-      } else {
-        d_.error(cur().loc, "expected a member name after '.'", "(124)");
+        if (!at(Tok::RParen)) {
+          for (;;) {
+            if (at(Tok::Star)) {
+              auto star = std::make_unique<Expr>();
+              star->kind = Expr::Star;
+              star->loc = cur().loc;
+              b->args.push_back(std::move(star));
+              advance();
+            } else {
+              b->args.push_back(parseExpr());
+            }
+            if (!eat(Tok::Comma))
+              break;
+          }
+        }
+        expect(Tok::RParen, "(126)");
+      }
+      while (eat(Tok::Dot)) {
+        if (at(Tok::Word)) {
+          b->path.push_back(cur().text);
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a member name after '.'", "(124)");
+          break;
+        }
+      }
+      return b;
+    };
+    ExprP lhs = parseBasic();
+    // Locator qualification [reference ->] basic-reference
+    // rule (124, left-recursive): the locator is any
+    // pointer-valued reference (e.g. s.handles(i)), not
+    // only a plain pointer variable. Chain for a -> b -> c.
+    while (at(Tok::Arrow)) {
+      advance(); // ->
+      if (!at(Tok::Word)) {
+        d_.error(cur().loc, "expected a based variable after '->'", "(124)");
         break;
       }
+      ExprP rhs = parseBasic();
+      rhs->locPtr = std::move(lhs);
+      lhs = std::move(rhs);
     }
-    return e;
+    return lhs;
   }
 
   // Double quotes are only a %REPLACE replacement operand (ADR-082).

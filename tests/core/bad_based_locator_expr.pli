@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Rules (25),(124): bad locator expressions are
+    diagnosed, never silently accepted. */
+ badlocexpr: procedure options(main);
+   dcl dead pointer;
+   dcl n fixed bin(31) init(1);
+   dcl 1 tmpl aligned,
+     2 fd fixed bin(31);
+   dcl 1 view based(dead) like tmpl;
+   dcl slots(4) pointer;
+   dcl nums(4) fixed bin(31);
+   nums(1) = 5;
+   /* a non-pointer locator is rejected */
+   n = nums(1) -> view.fd;
+   /* a non-based target is rejected */
+   n = slots(1) -> tmpl.fd;
+   put skip list(n);
+ end badlocexpr;

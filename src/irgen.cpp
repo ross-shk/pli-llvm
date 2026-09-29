@@ -2084,8 +2084,15 @@ void IRGen::emitAssign(HStmt* s) {
                "(127)");
       return;
     }
-    llvm::Value* dst =
-        t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
+    // A locator-qualified whole-structure target P->X stores
+    // through the locator value, mirroring the member load path.
+    llvm::Value* dst;
+    if (t->locPtr)
+      dst = t->memberPath.empty()
+                ? emitExpr(t->locPtr.get()).reg
+                : locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg);
+    else
+      dst = t->memberPath.empty() ? addressOf(t->sym) : memberAddr(t->sym, t->memberPath, s->loc);
     llvm::Type* sty = llvmTy(t->ty);
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(sty));
     // Deep copy when a dynamic member is present (rule (13), ADR-091): the
@@ -2182,7 +2189,11 @@ void IRGen::emitAssign(HStmt* s) {
     HExpr* t = s->target.get();
     const Type& leaf = t->ty;
     Val v = emitExpr(s->value.get());
-    llvm::Value* addr = memberAddr(t->sym, t->memberPath, s->loc);
+    // A locator-qualified target P->X.FIELD stores off the loaded
+    // locator value; otherwise off the based/symbol member address.
+    llvm::Value* addr =
+        t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                  : memberAddr(t->sym, t->memberPath, s->loc);
     if (leaf.isChar())
       storeCharTo(addr, leaf, v, s->loc);
     else
@@ -4088,9 +4099,9 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   // A locator-qualified subscript P->X(i) (rules 124,126) addresses off the
   // locator value, not the declared BASED pointer.
   llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-  llvm::Value* addr = arrayElementAddr(sym->ty, base, idxs, loc,
-                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr,
-                                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
+  llvm::Value* addr =
+      arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
   if (el.isBit() && el.len == 1)
     v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
@@ -4117,9 +4128,9 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
   // A locator-qualified target P->X(i) = e (rules 124,126) stores off the
   // locator value, not the declared BASED pointer.
   llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-  llvm::Value* addr = arrayElementAddr(sym->ty, base, idxs, loc,
-                                       dynUb_.count(sym) ? dynUb_[sym] : nullptr,
-                                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
+  llvm::Value* addr =
+      arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                       dynLb_.count(sym) ? dynLb_[sym] : nullptr);
   Val cv = convert(src, el, loc);
   storeScalarTo(addr, el, cv);
 }
@@ -5305,12 +5316,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       // addresses off the locator value instead of the own base.
       if (a->locPtr) {
         llvm::Value* base = emitExpr(a->locPtr.get()).reg;
-        v.reg = a->memberPath.empty()
-                    ? base
-                    : locatorMemberAddr(a->sym, a->memberPath, base);
+        v.reg = a->memberPath.empty() ? base : locatorMemberAddr(a->sym, a->memberPath, base);
       } else {
-        v.reg = a->memberPath.empty() ? addressOf(a->sym)
-                                      : memberAddr(a->sym, a->memberPath, a->loc);
+        v.reg =
+            a->memberPath.empty() ? addressOf(a->sym) : memberAddr(a->sym, a->memberPath, a->loc);
       }
       result = v;
       return true;
@@ -5318,8 +5327,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     if (a->kind == HExpr::Subscript && a->sym) {
       for (const auto& ix : a->args)
         if (ix->kind == HExpr::Star) {
-          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage",
-                   "(126)");
+          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage", "(126)");
           v.ty = e->ty;
           v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
           result = v;

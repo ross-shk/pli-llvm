@@ -1,0 +1,51 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Rules (25),(124): locator-qualified BASED
+    member access cross-module. The main pool
+    holds lib heap handles; every element
+    access rides pool(i) -> view.fd with no
+    temp copy. Companion of lib file. */
+ blocxfer: procedure options(main);
+   dcl mkconn entry(fixed bin(31))
+     returns(pointer) external;
+   dcl load_thru entry(pointer(*), fixed bin(31))
+     returns(fixed bin(31)) external;
+   dcl store_thru entry(pointer(*), fixed bin(31),
+     fixed bin(31)) external;
+   dcl drop_conn entry(pointer) external;
+   dcl dead pointer;
+   dcl pool(4) pointer;
+   dcl fails fixed bin(31) init(0);
+   dcl 1 tmpl aligned,
+     2 fd fixed bin(31),
+     2 tag fixed bin(31);
+   dcl 1 view based(dead) like tmpl;
+   dcl 1 srv aligned,
+     2 n fixed bin(31),
+     2 handles(4) pointer;
+   pool(1) = mkconn(11);
+   pool(2) = mkconn(22);
+   srv.handles(1) = pool(1);
+   srv.handles(2) = pool(2);
+   /* lib reads through an element locator */
+   if load_thru(pool, 1) ^= 11 then
+     fails = fails + 1;
+   /* lib writes through an element locator */
+   call store_thru(pool, 2, 33);
+   if load_thru(pool, 2) ^= 33 then
+     fails = fails + 1;
+   /* main reads through a member locator */
+   if srv.handles(1) -> view.fd ^= 11 then
+     fails = fails + 1;
+   if srv.handles(2) -> view.fd ^= 33 then
+     fails = fails + 1;
+   /* main writes through a member locator */
+   srv.handles(1) -> view.fd = 44;
+   if load_thru(pool, 1) ^= 44 then
+     fails = fails + 1;
+   call drop_conn(pool(1));
+   call drop_conn(pool(2));
+   if fails = 0 then
+     put skip list('PASS based_loc_expr');
+   else put skip list('FAIL based_loc_expr:'
+     , fails);
+ end blocxfer;

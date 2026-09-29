@@ -4437,3 +4437,44 @@ multi-axis `(*, *)` (needs dope vectors, ADR-008); accepting
 only the spec order (the wishlist order is what libnet
 declares, so both ride one code path).
 
+## ADR-167 — General locator expressions address the BASED view
+
+**Context.** libnet wishlist #6 wants handle-pool member
+access with no temp copy (`s.handles(i) -> view.fd`).
+TR25.084 rule (124) is left-recursive
+(`reference ::= [reference ->] basic-reference`), so the
+locator is any reference — but the parser accepted only a
+plain `Word -> Word`, and `looksLikeAssignment` stopped at
+the first parens, so every element locator failed to parse.
+A latent codegen bug also hid here: the single-assignment
+member store ignored `locPtr` (only the multi-assign and
+load paths used `locatorMemberAddr`), so a differing locator
+would silently store to the declared base.
+
+**Decision.** Parse one basic reference
+(`Word (.Word)* [(args)] (.Word)*`, rules 124-126) then loop
+`while (->)` chaining `rhs->locPtr = lhs` (left-recursive,
+`a -> b -> c` nests). Sema is unchanged in kind: the locator
+is typed by recursion and must be POINTER (124), the target
+must be BASED (124) — so the wishlist spelling with a
+CONTROLLED template stays diagnosed and the compliant form
+is a `BASED(...) LIKE` view plus an element locator.
+IRGen fixes the single-assign member and whole-structure
+stores to GEP off the loaded locator (`locatorMemberAddr`,
+locator value for a whole struct), mirroring the load and
+multi-assign paths; ON-unit capture and reduction scans now
+recurse into `locPtr`. Locator-qualified member arrays
+`P -> S.A(i)` stay diagnosed (124), as do FREE locators.
+
+**Consequences.** `core/based_locator_expr.pli` pins
+member-array and plain-array locators, read/write, runtime
+index, expression context, and loop reads;
+`multimodule/based_loc_expr.pli` (+ lib) pins `pool(i) ->
+view.fd` write-through across the object boundary via `(*)`
+POINTER params. `core/bad_based_locator_expr.pli` pins the
+non-POINTER locator and non-BASED target diagnostics (124).
+
+**Rejected.** Accepting `ptr -> CONTROLLED.member` directly
+(not IBM: the right side must be BASED; use a LIKE view);
+extending FREE locators or `P -> S.A(i)` in this slice.
+

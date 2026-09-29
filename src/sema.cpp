@@ -1774,6 +1774,10 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
         e->sym->kind != Symbol::ProcName && e->sym->owner) {
       noteCap(e->sym, e->kind == Expr::VarRef && e->path.empty() && !e->locPtr, e->loc);
     }
+    // A locator may itself be a general reference (rule 124):
+    // its automatics reach the establishing frame too.
+    if (e->locPtr)
+      checkExpr(e->locPtr.get());
     if (e->a)
       checkExpr(e->a.get());
     if (e->b)
@@ -3470,8 +3474,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         int nStar = 0;
         Type reduced;
         if (crossSectionType(e, arr->ty, reduced, nStar)) {
-          d_.error(e->loc,
-                   "a locator-qualified cross-section is not implemented in this stage", "(126)");
+          d_.error(e->loc, "a locator-qualified cross-section is not implemented in this stage",
+                   "(126)");
           e->ty = Type::voidTy();
           break;
         }
@@ -3817,6 +3821,10 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
     } else if (e->kind == Expr::Unary) {
       scan(e->a.get());
     } else if (e->kind == Expr::Call || e->kind == Expr::Subscript) {
+      // A locator may be a general reference (rule 124);
+      // reductions inside it belong to the same statement.
+      if (e->locPtr)
+        scan(e->locPtr.get());
       for (auto& a : e->args)
         scan(a.get());
     } else if (e->kind == Expr::VarRef && e->locPtr) {
@@ -3953,8 +3961,7 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     if (a->kind == Expr::Subscript) {
       for (const auto& ix : a->args)
         if (ix->kind == Expr::Star) {
-          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage",
-                   "(126)");
+          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage", "(126)");
           e->ty = Type::voidTy();
           return true;
         }

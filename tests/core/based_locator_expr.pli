@@ -1,0 +1,67 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Rules (25),(124): locator is any pointer-valued
+    reference, not only a plain pointer variable.
+    A handle-pool element s.handles(i) addresses
+    a BASED view directly, with no temp copy. */
+ blocxpr: procedure options(main);
+   dcl fails fixed bin(31) init(0);
+   dcl i fixed bin(31);
+   dcl k fixed bin(31);
+   dcl dead pointer;
+   dcl 1 tmpl aligned,
+     2 fd fixed bin(31),
+     2 tag fixed bin(31);
+   dcl 1 view based(dead) like tmpl;
+   dcl 1 srv aligned,
+     2 n fixed bin(31),
+     2 handles(4) pointer;
+   dcl slots(4) pointer;
+   dcl 1 r1 aligned,
+     2 fd fixed bin(31),
+     2 tag fixed bin(31);
+   dcl 1 r2 aligned,
+     2 fd fixed bin(31),
+     2 tag fixed bin(31);
+   r1.fd = 11; r1.tag = 111;
+   r2.fd = 22; r2.tag = 222;
+   srv.handles(1) = addr(r1);
+   srv.handles(2) = addr(r2);
+   slots(1) = addr(r1);
+   slots(2) = addr(r2);
+   /* read through a member-array locator */
+   if srv.handles(1) -> view.fd ^= 11 then
+     fails = fails + 1;
+   if srv.handles(2) -> view.tag ^= 222 then
+     fails = fails + 1;
+   /* read through a plain-array locator */
+   if slots(1) -> view.fd ^= 11 then
+     fails = fails + 1;
+   /* write through a member-array locator */
+   srv.handles(1) -> view.fd = 33;
+   if r1.fd ^= 33 then fails = fails + 1;
+   if srv.handles(1) -> view.fd ^= 33 then
+     fails = fails + 1;
+   /* a runtime index rides the same path */
+   k = 2;
+   slots(k) -> view.tag = 444;
+   if r2.tag ^= 444 then fails = fails + 1;
+   if slots(k) -> view.tag ^= 444 then
+     fails = fails + 1;
+   /* locator in a wider expression */
+   if (srv.handles(2) -> view.fd) + 1 ^= 23
+     then fails = fails + 1;
+   /* loop over the pool with a variable index */
+   r1.fd = 10; r2.fd = 20;
+   do i = 1 to 2;
+     if srv.handles(i) -> view.fd <= 0 then
+       fails = fails + 1;
+   end;
+   if srv.handles(1) -> view.fd ^= 10 then
+     fails = fails + 1;
+   if srv.handles(2) -> view.fd ^= 20 then
+     fails = fails + 1;
+   if fails = 0 then
+     put skip list('PASS based_locator_expr');
+   else put skip list('FAIL based_locator_expr:'
+     , fails);
+ end blocxpr;
