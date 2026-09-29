@@ -79,7 +79,7 @@ make install          # installs to /usr/local by default
 - `FIXED BINARY(p,q)`, scaled `FIXED DECIMAL(p,q)`, `FLOAT`, `COMPLEX `(with `COMPLEX`/`REAL`/`IMAG`/`CONJG` and complex I/O), `BIT(1)` and packed  
 `BIT(n)`, `CHARACTER(n)` / `VARYING` / `VARYINGZ` (NUL-terminated C strings, ADR-168), adjustable-length `CHAR(*) `parameters, concatenation, blank-padded comparison, replicated string constants, hex `X` literals
 - fixed-size arrays (multi-axis, `lb:ub`, negative bounds, row-major) and single-axis dynamic AUTOMATIC arrays plus dynamic/` *` parameters with runtime `SUBSCRIPTRANGE`/`LBOUND`/`HBOUND`/`DIM`; cross-sections (`A(i, *)`, `A(*, *)`) and whole-array expressions; array reductions `SUM`/`PROD`/`ANY`/`ALL`
-- level-numbered structures with factoring, `LIKE` (incl. qualified templates), arrays of structures, whole-structure and `BY NAME` assignment, multiple assignment `a, b, c = e`
+- level-numbered structures with factoring, `LIKE` (incl. qualified templates), arrays of structures, whole-structure and `BY NAME` assignment, multiple assignment `a, b, c = e`; `UNALIGNED` packs members to match a C packed record (ADR-169)
 - `DEFINED` overlays with `iSUB` (incl. affine index arithmetic), `POINTER`/`ADDR`/`NULL`, `BASED(P)` structures with `P -> X` locators, `ALLOCATE … SET(P)`/`FREE`, and `CONTROLLED` generation stacks
 - conditions: `ON`/`SIGNAL`/`REVERT` for `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, and programmer-named `CONDITION(name)`; `ONCODE()`; `(NOSIZE)`/`(NOSUBSCRIPTRANGE)`/`(NOZERODIVIDE)` prefixes elide checks
 - `TASK`/`EVENT`/`PRIORITY` async `CALL` with `WAIT`/`DELAY` synchronization

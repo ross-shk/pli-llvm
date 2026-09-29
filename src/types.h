@@ -68,6 +68,12 @@ struct Type {
   // the dummy through the hidden i64 slot-key argument (rules (18),(89)).
   // Deliberately not part of type equivalence.
   bool controlled = false;
+  // UNALIGNED structure (IBM Enterprise PL/I extension, ADR-169): members are
+  // packed with no inter-member padding, matching a C `__attribute__((packed))`
+  // struct. Only meaningful when k == TK::Struct; nested members inherit it
+  // unless they carry an explicit ALIGNED. Part of type equivalence because a
+  // packed and an aligned structure with the same members have different layout.
+  bool unaligned = false;
   // Array dimension bounds per axis — rules (12),(13). Empty for a scalar.
   // `len`/`prec`/... describe the element type.
   std::vector<Dim> dims;
@@ -238,6 +244,7 @@ inline Type& Type::operator=(const Type& o) {
   varyingz = o.varyingz;
   starLen = o.starLen;
   controlled = o.controlled;
+  unaligned = o.unaligned;
   dims = o.dims;
   members.clear();
   members.reserve(o.members.size());
@@ -251,7 +258,7 @@ inline Type& Type::operator=(Type&& o) noexcept = default;
 
 inline bool Type::operator==(const Type& o) const {
   if (k != o.k || prec != o.prec || scale != o.scale || len != o.len || varying != o.varying ||
-      starLen != o.starLen || dims != o.dims)
+      starLen != o.starLen || unaligned != o.unaligned || dims != o.dims)
     return false;
   if (members.size() != o.members.size())
     return false;

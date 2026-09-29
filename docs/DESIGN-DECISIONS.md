@@ -4521,3 +4521,57 @@ length (would fork every VARYING operation for no observable
 gain inside PL/I); C write-back through a VARYINGZ argument
 (input strings only in this slice).
 
+## ADR-169 — `UNALIGNED` packed structures for C-interop records
+
+**Context.** libnet wishlist #8 wants `conn_rec`/`server_rec`
+to share a byte-for-byte layout with the equivalent C struct.
+With the default `ALIGNED` layout, LLVM pads after a `FIXED
+BIN(31)`/`BIT(1)` mix, so the C bridge and PL/I disagree on
+member offsets. IBM Enterprise PL/I serves this with the
+`UNALIGNED` attribute, which packs a structure's members with
+no inter-member padding. `UNALIGNED` is absent from TR 25.084
+rule (15) and the §3.3 word list (which list only `ALIGNED`),
+so it is a documented extension.
+
+**Decision.** Parse `UNALIGNED` as a structure attribute and
+record it as `Type::unaligned`; `ALIGNED` is recorded too so an
+explicit `ALIGNED` can re-align a member inside an unaligned
+structure. A structure is packed when it is explicitly
+`UNALIGNED`, or when it is nested inside an unaligned structure
+and says no `ALIGNED` itself. `irgen` emits a packed LLVM
+struct (`StructType::get(ctx, members, /*isPacked=*/true)`,
+printed `<{ ... }>`) for such a type, and `LIKE` copies the
+template's layout. `ALIGNED`+`UNALIGNED` on one item is
+diagnosed under rule (15). Including the flag in `Type::operator==`
+keeps a packed and an aligned structure with identical members
+distinct, so whole-structure assignment never `memcpy`s across
+mismatched layouts. Arrays of unaligned structures and nested
+unaligned structures lay out recursively.
+
+**Consequences.** `core/unaligned.pli` pins member read/write,
+whole-structure assignment, nesting, arrays of unaligned
+structures, a `LIKE` copy and an explicit `ALIGNED` override;
+`ir/unaligned.pli` pins the packed (`<{ i32, i8, i32 }>`) versus
+aligned (`{ i32, i8, i32 }`) IR types; `multimodule/unaligned.pli`
+(+ C) proves the byte layout against a C
+`__attribute__((packed))` struct (`sizeof` 9, `offsetof(code)` 5,
+versus 12/8 for the ordinary C struct) and cross-language field
+read/write; `bad_unaligned.pli` pins the conflicting-attribute
+diagnostic.
+
+**Deviation.** A scalar member load/store of a packed structure
+still carries the member type's ABI alignment (e.g. `align 4` on
+an `i32` at offset 5) rather than `align 1`, because alignment is
+not tracked through `memberAddr`. This is technically
+under-specified IR, but is well-defined on the AArch64 and x86-64
+targets plic supports, which permit unaligned scalar access.
+Whole-structure copies use `memcpy` with the packed type's `align
+1`, so they are exact. A future slice can thread `align 1`
+through packed member access sites.
+
+**Rejected.** Emitting an aligned struct with explicit padding
+bytes (cannot place a member at a non-natural offset while
+keeping LLVM's inferred alignment honest); rejecting `UNALIGNED`
+on non-structures (a standalone scalar has no observable
+misalignment in this compiler, so it is accepted like `ALIGNED`).
+

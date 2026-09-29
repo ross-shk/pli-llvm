@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-169: ALIGNED and UNALIGNED are conflicting structure attributes
+    (rule (15)) and must be diagnosed, never silently resolved. */
+ bad_unaligned: procedure options(main);
+   dcl 1 rec aligned unaligned,
+      2 x fixed bin(31);
+   rec.x = 1;
+   put skip list(rec.x);
+ end bad_unaligned;

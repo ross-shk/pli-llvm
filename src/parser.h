@@ -140,6 +140,8 @@ private:
     bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
     bool task = false;       // TASK (rules (15),(79), QR2.8): a task name
     bool event = false;      // EVENT (rules (15),(79),(82), QR2.8): an event name
+    bool aligned = false;    // ALIGNED (rule (15)): natural layout (the default)
+    bool unaligned = false;  // UNALIGNED (ADR-169): packed layout for C interop
     int prec = -1, scale = 0, slen = -1;
     bool starLen = false; // '*' string length (rule (18)): adjustable extent
     ExprP slenExpr;       // CHAR(n) runtime length expression (rule (18)); null = constant

@@ -823,10 +823,15 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       // children; a leaf keeps its parsed scalar/array type. A dynamic array
       // member (rule 13) has its runtime bound exprs type-checked and captured
       // (with its field path) so codegen can size and address it.
-      std::function<Type(int, std::vector<unsigned>, std::vector<DeclItem::DynMemberInfo>&)>
+      std::function<Type(int, std::vector<unsigned>, std::vector<DeclItem::DynMemberInfo>&, bool)>
           buildType = [&](int idx, std::vector<unsigned> path,
-                          std::vector<DeclItem::DynMemberInfo>& dynMs) -> Type {
+                          std::vector<DeclItem::DynMemberInfo>& dynMs,
+                          bool inheritUnaligned) -> Type {
         const DeclItem& it = *items[idx];
+        // UNALIGNED packs the members of this structure with no inter-member
+        // padding (ADR-169). A member inherits an enclosing UNALIGNED unless it
+        // carries an explicit ALIGNED; an explicit UNALIGNED always wins.
+        bool unaligned = it.unaligned || (inheritUnaligned && !it.aligned);
         // LIKE template (rule 43): the item takes the structure shape of an
         // already-declared structure variable (a deep copy of its type). A LIKE
         // item combined with its own members (the extend form) or a dimension
@@ -897,7 +902,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (hasDynamicMember(*tplTy))
             d_.error(it.loc, "LIKE of a structure with a dynamic member is not implemented",
                      "(13)");
-          return *tplTy; // deep copy via Type's copy constructor
+          // A LIKE copy keeps the template's layout; an explicit ALIGNED or
+          // UNALIGNED on the item wins, and an enclosing UNALIGNED packs it.
+          Type t = *tplTy; // deep copy via Type's copy constructor
+          t.unaligned = it.unaligned || (!it.aligned && (inheritUnaligned || t.unaligned));
+          return t;
         }
         if (children[idx].empty())
           return it.ty;
@@ -906,7 +915,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         for (int c : children[idx]) {
           std::vector<unsigned> cp = path;
           cp.push_back(fi);
-          Type ct = buildType(c, cp, dynMs);
+          Type ct = buildType(c, cp, dynMs, unaligned);
           if (ct.isArray() && ct.isDynamic()) {
             // A dynamic array member (rule 13): resolve its bound expressions so
             // codegen can evaluate them at entry to size the member buffer.
@@ -926,6 +935,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           ++fi;
         }
         Type st = Type::structTy(std::move(ms));
+        st.unaligned = unaligned;
         st.dims = it.ty.dims; // an array of structures: keep the level item's dimension
         return st;
       };
@@ -936,7 +946,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           continue;
         DeclItem& item = *items[idx];
         std::vector<DeclItem::DynMemberInfo> dynMs;
-        item.ty = buildType(idx, {}, dynMs);
+        item.ty = buildType(idx, {}, dynMs, false);
         if (!item.typeRef.empty()) {
           // TYPE <alias> (extension, ADR-114): the element type comes from
           // the alias, dimensions (if any) from this declaration.

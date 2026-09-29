@@ -1374,12 +1374,20 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "ALIGNED") {
-        // ALIGNED (rule (15)) is the default LLVM struct layout, so accept silently.
+        // ALIGNED (rule (15)) is the default LLVM struct layout; an explicit
+        // ALIGNED re-aligns a member inside an UNALIGNED structure (ADR-169).
+        bag.aligned = true;
         advance();
         continue;
       }
-      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "UNALIGNED" || w == "INTERNAL" ||
-          w == "INT") {
+      if (w == "UNALIGNED") {
+        // UNALIGNED (IBM Enterprise PL/I extension, ADR-169): pack a structure's
+        // members with no inter-member padding to match a C packed struct.
+        bag.unaligned = true;
+        advance();
+        continue;
+      }
+      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
         d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
                 "(15)");
         advance();
@@ -1724,6 +1732,8 @@ void Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "TASK/EVENT cannot be combined with a data attribute", "(15)");
   if (bag.task && bag.event)
     d_.error(item.loc, "TASK and EVENT are conflicting attributes", "(15)");
+  if (bag.aligned && bag.unaligned)
+    d_.error(item.loc, "ALIGNED and UNALIGNED are conflicting attributes", "(15)");
 
   if (bag.task) {
     // A TASK name (rules (15),(79), QR2.8): an opaque handle for CALL TASK.
@@ -1766,6 +1776,8 @@ void Parser::parseDeclTail(DeclItem& item) {
   }
   item.ty.dims = arrDims;
   item.controlled = bag.controlled;
+  item.aligned = bag.aligned;
+  item.unaligned = bag.unaligned;
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
     // Element access assumes single-bit storage below; never lay out a wide
     // bit array that codegen would mistarget (invariant 2).

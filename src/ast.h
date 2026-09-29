@@ -112,6 +112,8 @@ struct DeclItem {
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
   bool controlled = false;             // CONTROLLED generation-stack storage (rule (15), ADR-140)
+  bool aligned = false;                // ALIGNED (rule (15)): natural layout (the default)
+  bool unaligned = false;              // UNALIGNED packed layout (ADR-169)
   bool optional = false;               // OPTIONAL parameter (extension); valid only on parameters
   // A dynamic (runtime-extent) array that is a structure member (rule 13): its
   // field path (the indices memberAddr walks) and its bound expressions. The

@@ -107,7 +107,9 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
         mts.push_back(llvm::PointerType::get(ctx_, 0));
       else
         mts.push_back(llvmTy(m->ty));
-    return llvm::StructType::get(ctx_, mts);
+    // UNALIGNED structures are packed: no inter-member padding, matching a C
+    // `__attribute__((packed))` record (ADR-169).
+    return llvm::StructType::get(ctx_, mts, t.unaligned);
   }
   case TK::Pointer:
     return b_.getPtrTy();
