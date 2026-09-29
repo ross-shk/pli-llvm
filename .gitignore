@@ -15,3 +15,5 @@ examples/
 zapp.yaml
 docs/archive/
 benchmarks/results/
+
+AGENTS.md
