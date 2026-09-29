@@ -13,10 +13,13 @@ void pli_assign_char(char *dst, long long dstlen, const char *src, long long src
 }
 
 /* Assignment to CHARACTER(n) VARYING: truncate to the maximum length; the
- * caller stores the returned current length. */
+ * caller stores the returned current length. The tail past the live length
+ * is blank-filled so a non-VARYING `CHAR(*)` overlay scanning for blanks
+ * sees a clean terminator (rule (18)). */
 long long pli_assign_varying(char *dstdata, long long cap, const char *src, long long srclen) {
   long long n = srclen < cap ? srclen : cap;
   if (n > 0) pli_memmove(dstdata, src, (size_t)n);
+  if (cap > n) pli_memset(dstdata + n, ' ', (size_t)(cap - n));
   return n;
 }
 

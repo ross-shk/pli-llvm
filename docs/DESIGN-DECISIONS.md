@@ -4169,3 +4169,66 @@ coupling cost before any measured gap — ADR-002 stands); a separate
 `COMPILER-OPTIMIZATION-PLAN.md` (one plan, this merge, instead);
 fast-math-style flag inside `-O3` (silently changes decimal results
 and enabled conditions).
+
+---
+
+## ADR-159 — Shared `EXTERNAL` variables via common linkage
+
+**Context.** Rule (42) shares variables across translation units, but the
+parser's `item.external` flag was never consumed: the main module allocated
+`EXTERNAL` names as frame locals while the library emitted `internal`
+globals under the same spelling, so no storage was shared and `ext_var`
+died with a trap (exit 133).
+
+**Decision.** Add `Symbol.external`; in `collectDecls`, an `EXTERNAL` item
+forces static storage with the shared name `@pli_g_<NAME>` (or the exact
+`EXTERNAL('sym')` spelling for C interop). `emitGlobals` gives external
+symbols `CommonLinkage` with a zero initializer so every object file
+contributes one merged definition; `STATIC` stays `InternalLinkage`.
+Zero-fill is equivalent for varying (length 0, data ignored), which the
+verifier requires of commons.
+
+**Consequences.** `multimodule/ext_var.pli` shares counter, flag, and
+buffer across modules (counter/flag writes read back directly and through
+entries; `set_buffer`/`get_buffer` round-trip). GRAMMAR-COVERAGE (42)
+lists the form.
+
+**Rejected.** `ExternalLinkage` duplicates in every unit (link-time
+duplicate-symbol error); keeping a varying's blank-fill initializer
+under `CommonLinkage` (LLVM verifier rejects non-zero commons).
+
+---
+
+## ADR-160 — Cross-module `CHAR(*)` varying ABI: max-passing, struct wrap, blank tails
+
+**Context.** Rule (18) adjustable parameters broke across modules three
+ways: a `VARYING` actual into a fixed `CHAR(*)` dummy passed its live
+length (0 for an empty buffer → `substr_assign: corrupt dstcap` on the
+first write in `star_param`); a non-varying actual into a `CHAR(*)
+VARYING` dummy passed a bare data pointer while the callee reads the
+struct path (length prefix), so `ext_var`'s `set_buffer('hello from
+main')` arrived with length 64 and garbage; and varying assignments
+left stale tails, so blank-scanning callees (`get_len`, `concat_buf`)
+over-counted after `buf1 = 'hello'`.
+
+**Decision.** Three small changes: (1) a `VARYING` actual into a fixed
+`CHAR(*)` dummy passes its declared max — the capacity the callee may
+read or write (this supersedes ADR-155's "live length" line for this
+direction); (2) a non-varying actual into a `CHAR(*) VARYING` dummy is
+wrapped at the call site into a temp varying struct (length prefix +
+data) so the callee's struct read works; (3) varying storage is
+blank-filled — the data area at allocation and the tail past the live
+length in `pli_assign_varying` — so scans past the live length see
+blanks, not stale bytes.
+
+**Consequences.** `star_param`'s crash is gone and fill/concat round-trip
+(`helloworld`); `ext_var`'s `set_buffer` arrives with length 15 intact.
+Remaining `star_param`/`ctl_return`/`pkg_xfer`/`ext_var` deltas were
+wrong author-guess expectations, corrected in the tests (first-blank
+`get_len`, overwrite `fill_buf`, live-length `LENGTH`, uncleared
+package array, flag-doubling write). GRAMMAR-COVERAGE (18) lists the
+directions.
+
+**Rejected.** Live-length passing for writes (an empty buffer can never
+grow); data-pointer passing to a varying dummy (callee reads garbage
+length); leaving tails uninitialized (scans read stale bytes).

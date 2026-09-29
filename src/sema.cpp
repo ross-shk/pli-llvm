@@ -943,6 +943,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         item.dynMembers = std::move(dynMs);
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
         item.sym->owner = p; // which procedure's frame holds this variable
+        if (item.external) {
+          // EXTERNAL (rule (42)): shared across translation units via a
+          // common global, so every module resolves the same symbol.
+          item.sym->external = true;
+          item.sym->isStatic = true;
+          item.sym->irName = "@" + (item.extName.empty() ? "pli_g_" + item.name : item.extName);
+        }
         if (item.fileAttr) {
           // A FILE variable carries no runtime storage of its own: its identity
           // is the compile-time slot that OPEN/CLOSE/FILE( f ) pass to libpli.

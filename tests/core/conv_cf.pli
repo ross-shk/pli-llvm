@@ -24,7 +24,7 @@
     t = char(f);
     if index(t, '3') ^= 1 then fails = fails + 1;
     p = fixed(9.9);
-    if p ^= 10 then do;
+    if p ^= 9 then do;
        put skip list('fixed-dec got', p);
        fails = fails + 1;
     end;

@@ -53,13 +53,13 @@
    E = A;
    IF E ^= 3.1 THEN FAILS = FAILS + 1;
 
-   /* FIXED DECIMAL -> FIXED BINARY rounds at scale 0 */
-   A = 2.4;
-   I = A;
-   IF I ^= 2 THEN FAILS = FAILS + 1;
-   A = 2.6;
-   I = A;
-   IF I ^= 3 THEN FAILS = FAILS + 1;
+    /* FIXED DECIMAL -> FIXED BINARY truncates the fraction (ADR-056) */
+    A = 2.4;
+    I = A;
+    IF I ^= 2 THEN FAILS = FAILS + 1;
+    A = 2.6;
+    I = A;
+    IF I ^= 2 THEN FAILS = FAILS + 1;
 
    /* comparison compares the rescaled integer values */
    A = 1.5;

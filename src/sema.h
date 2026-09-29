@@ -18,6 +18,7 @@ struct Symbol {
   SourceLoc loc{};
   enum Kind { Var, Param, ProcName } kind = Var;
   bool isStatic = false;   // STATIC storage: an LLVM global
+  bool external = false;   // EXTERNAL (rule (42)): shared across translation units
   bool implicit = false;   // created by the implicit-declaration rule
   bool isEntry = false;    // external C entry (DECLARE ... ENTRY): no body
   bool isValue = false;    // VALUE named constant (extension, ADR-108): reassignment diagnosed

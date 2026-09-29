@@ -784,8 +784,14 @@ void IRGen::emitGlobals() {
       if (!ginit)
         ginit = llvm::ConstantAggregateZero::get(gt); // STRUCT (rule 11)
     }
-    auto* g = new llvm::GlobalVariable(mod_, gt, false, llvm::GlobalValue::InternalLinkage, ginit,
-                                       s->irName.substr(1));
+    // EXTERNAL (rule (42)) uses common linkage so every translation unit
+    // shares one definition at link time; STATIC stays module-private.
+    // Common linkage requires a zero initializer (a varying's blank fill
+    // is non-zero but its length is 0, so zero-fill is equivalent).
+    auto link = s->external ? llvm::GlobalValue::CommonLinkage : llvm::GlobalValue::InternalLinkage;
+    if (s->external)
+      ginit = llvm::ConstantAggregateZero::get(gt);
+    auto* g = new llvm::GlobalVariable(mod_, gt, false, link, ginit, s->irName.substr(1));
     symAddr_[s] = g;
   }
 }
@@ -846,6 +852,11 @@ void IRGen::allocaLocals(HProc* p) {
       if (s->ty.varying) {
         llvm::Value* lenp = b_.CreateStructGEP(llvmTy(s->ty), a, 0, "lenp");
         b_.CreateStore(i32(0), lenp);
+        // Blank-fill the data area too (rule (18)): a VARYING actual passed
+        // to a non-VARYING `CHAR(*)` dummy overlays data by reference, and
+        // scans past the live length must see blanks, not uninitialized bytes.
+        llvm::Value* dp = b_.CreateStructGEP(llvmTy(s->ty), a, 1, "vdat");
+        b_.CreateMemCpy(dp, llvm::MaybeAlign(), g, llvm::MaybeAlign(), i64(s->ty.len));
       } else {
         b_.CreateCall(runtimeFn("pli_assign_char"), {a, i64(s->ty.len), g, i64(0)});
       }
@@ -2960,11 +2971,33 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
         a->sym->ty.varying == pty.varying && a->memberPath.empty())
       return addressOf(a->sym);
     // A VARYING variable into a fixed `CHAR(*)` dummy (rule (18)): overlay the
-    // string's data area by reference — the hidden argument carries its live
-    // length (argLen); a copy would expose the uninitialized tail.
+    // string's data area by reference — the hidden argument carries its max
+    // (argLen); a copy would expose the uninitialized tail.
     if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
         a->sym->ty.varying && !pty.varying && a->memberPath.empty())
       return b_.CreateStructGEP(llvmTy(a->sym->ty), addressOf(a->sym), 1, "vdata");
+    // A non-VARYING actual into a `CHAR(*) VARYING` dummy (rule (18)): wrap
+    // into a temp varying struct so the callee's struct-path read sees a
+    // length prefix; the hidden argument carries the same live length as max.
+    if (pty.varying && pty.starLen) {
+      Val av0 = emitExpr(a);
+      if (av0.ty.isChar()) {
+        llvm::ConstantInt* capC = llvm::dyn_cast<llvm::ConstantInt>(
+            av0.len ? av0.len : i64(av0.ty.len));
+        int cap = capC ? static_cast<int>(capC->getZExtValue()) : 256;
+        if (cap <= 0)
+          cap = 1;
+        llvm::Type* st = llvm::StructType::get(
+            ctx_, {b_.getInt32Ty(), llvm::ArrayType::get(b_.getInt8Ty(), cap)});
+        llvm::AllocaInst* tmp = entryAlloca(st, "vstar");
+        llvm::Value* lp = b_.CreateStructGEP(st, tmp, 0, "vlp");
+        llvm::Value* srcLen = av0.len ? av0.len : i64(av0.ty.len);
+        b_.CreateStore(b_.CreateTrunc(srcLen, b_.getInt32Ty(), "vl32"), lp);
+        llvm::Value* dp = b_.CreateStructGEP(st, tmp, 1, "vdp");
+        b_.CreateMemCpy(dp, llvm::MaybeAlign(), av0.ptr, llvm::MaybeAlign(), srcLen);
+        return tmp;
+      }
+    }
     // Non-variable character argument (expression/literal): evaluate the
     // expression into a temp buffer of the result's declared capacity, then
     // pass the buffer pointer and its live length via argLen().
@@ -3137,10 +3170,10 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
 // Buffer capacity of a call argument passed to an adjustable-length `CHAR(*)`
 // parameter (rule (18)): a fixed char variable's declared length, a forwarded
 // `CHAR(*)` parameter's live length, or the emitted value's length. A
-// `CHAR(n) VARYING` actual associated with a non-VARYING dummy takes its
-// CURRENT length (the buffer past the length is uninitialized); with a
-// VARYING dummy it takes the declared max (the capacity the dummy may grow
-// into). `ptyVarying` is the parameter's VARYING attribute.
+// `CHAR(n) VARYING` actual takes its declared max in both cases (the capacity
+// the callee may read or write; the data area is blank-filled at allocation
+// so scans past the live length see blanks). `ptyVarying` is the parameter's
+// VARYING attribute.
 llvm::Value* IRGen::argLen(HExpr* a, bool ptyVarying) {
   if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar()) {
     // Forwarding a `CHAR(*)` parameter (rule (18)): pass the live length this
@@ -3151,11 +3184,12 @@ llvm::Value* IRGen::argLen(HExpr* a, bool ptyVarying) {
         return live;
       return i64(0);
     }
+    // A `CHAR(n) VARYING` actual with a non-VARYING dummy takes its declared
+    // max (rule (18)): the callee overlays the data area by reference and
+    // needs the full capacity for writes (fill_buf) and scans (get_len);
+    // the live length rides in the prefix for varying-aware callees.
     if (a->sym->ty.varying && !ptyVarying) {
-      llvm::Value* lp = b_.CreateStructGEP(llvmTy(a->sym->ty), addressOf(a->sym),
-                                           0, "al.vlenp");
-      return b_.CreateZExt(b_.CreateLoad(b_.getInt32Ty(), lp, "al.vlen"),
-                           b_.getInt64Ty(), "al.vlive");
+      return i64(a->sym->ty.len);
     }
     // A fixed char variable's declared length is the caller buffer's capacity.
     return i64(a->sym->ty.len);

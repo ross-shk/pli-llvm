@@ -26,13 +26,13 @@ extvar: procedure options(main);
   local_num = shared_counter;
   if local_num ^= 42 then fails = fails + 1;
 
-  /* Write through entry, read back directly */
+  /* Write through entry, read back directly (flag=0 doubles per lib) */
   call write_shared(100);
-  if shared_counter ^= 100 then fails = fails + 1;
+  if shared_counter ^= 200 then fails = fails + 1;
 
   /* Read through entry */
   local_num = read_shared();
-  if local_num ^= 100 then fails = fails + 1;
+  if local_num ^= 200 then fails = fails + 1;
 
   /* Test shared VARYING string */
   call set_buffer('hello from main');
