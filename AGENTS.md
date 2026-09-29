@@ -72,8 +72,8 @@ runs its compile+run jobs concurrently (`JOBS` overrides the worker count).
 
 - new code: modern lowercase, `.pli` (`.inc` for includes), one leading space
 - not sign: write `^` (or `~`); the UTF-8 glyph lexes too, but doubly-encoded bytes (mojibake) are diagnosed, never repaired
-- `references/code/` is a *later-dialect* corpus (`select`, `do until`) — do not  
-copy features from it into this compiler
+- `references/code/` is a *later-dialect* corpus (`select`, `do until`) — do not infer or copy features from it into this compiler. A later-dialect feature may only be served as a *documented extension*: add an ADR + a row in GRAMMAR-COVERAGE's "Extensions (not in TR 25.084)" table (e.g. `select` ADR-104,  
+`!!` ADR-125), never as if it were TR 25.084 scope.
 
 ## Token economy
 

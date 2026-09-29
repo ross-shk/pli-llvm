@@ -105,7 +105,7 @@ Existing uppercase tests stay as they are — follow the style of the file you  
 
 ## Notes for coding agents
 
-- Start with `docs/GRAMMAR-COVERAGE.md` to choose work and to know what is already there; do not infer features from other PL/I dialects found in `references/code/` — that corpus is later dialects (`select`, `do until`, `%process`) which this compiler deliberately rejects.
+- Start with `docs/GRAMMAR-COVERAGE.md` to choose work and to know what is already there; do not infer features from other PL/I dialects found in `references/code/` — that corpus is later dialects (`select`, `do until`, `%process`) which this compiler deliberately rejects. A later-dialect feature may only be served as a *documented extension* (ADR + a row in GRAMMAR-COVERAGE's "Extensions (not in TR 25.084)" table, e.g. `select` ADR-104, `!!` ADR-125) — never as if it were TR 25.084 scope.
 - Reproduce before fixing: compile the failing program, read the diagnostic or the IR, state the root cause in one sentence, then change code.
 - Prefer `grep` for a symbol, then `read` with `offset`/`limit`; the large files are `src/parser.cpp`, `src/irgen.cpp`, `TR25.084-concrete-syntax.md`.
 - Report: what changed, which rules moved, test counts before/after, and any deviation introduced. Leave the tree building and tests green, staged not committed.
