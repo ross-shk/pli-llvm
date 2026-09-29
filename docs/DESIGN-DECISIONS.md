@@ -4755,3 +4755,51 @@ supporting non-local `GO TO` from an ON-unit in this slice (needs
 `invoke`/`landingpad` or `setjmp`-style frame unwinding, ADR-009's
 deferred non-local-exit work).
 
+---
+
+## ADR-173 — Cross-section assignment targets write reduced-rank slices
+
+**Context.** libnet wishlist #12 needs a 2-D member array with slice
+reference for write buffering, e.g. `outq(j, *) = outq(i, *)` on a
+`2 outq(NET_MAX_CLIENTS, NET_BUF_CAP) char(1)` member. TR 25.084
+rule (126) allows `*` in a subscript list and Y33-6003 explicitly
+defines cross-sections (`A(3,*)`, `X(1,*,3)`), so a cross-section is
+an assignable reduced-rank view. The compiler already gathered a
+cross-section *right-hand side* into a same-shape whole array
+(ADR-046, ADR-049); a cross-section on the *left* was rejected in
+`irgen` ("cross-section assignment requires a whole-array target")
+and its `*` subscript then reached `emitExpr` ("a cross-section '*' is
+only valid within a subscript"). Two/three-dimensional member arrays
+themselves already worked (`cross_section2.pli`).
+
+**Decision.** Generalize `emitCrossSectionAssign` from "copy a
+cross-section RHS into a whole array" to a slice-to-slice copy.
+Each side is lowered to a view over its full array: base address, the
+positions of the `*` axes, the flat offset accumulated from the fixed
+axes (evaluated and bounds-checked once, honouring
+`(NOSUBSCRIPTRANGE)` and a handled slip), and the full row-major
+strides. A whole array is the all-`*` case, so the two sides may
+differ in rank. A single linear index over the reduced rank is
+decomposed into star-axis coordinates and mapped to each view's flat
+offset; the element is loaded and stored. A scalar value broadcasts
+over the target slice. `sema` validates the target cross-section: the
+value must be a same-shape array variable or cross-section, or a
+scalar assignable to the element type; a shape mismatch is diagnosed
+with rule (126).
+
+**Consequences.** `core/slice_assign.pli` covers numeric rows,
+columns, a 3-D sub-block with a runtime fixed axis, whole-array into a
+slice, scalar broadcast, and a `CHARACTER(1)` member slice;
+`multimodule/slice_xfer.pli` (+ `_lib`) drives the same writes through
+a caller-owned structure reached by a BASED view across the object
+boundary; `bad_slice_assign.pli` pins the rank/extent mismatch. The
+rule (126) row moves in `GRAMMAR-COVERAGE.md`.
+
+**Rejected.** A first-class slice/pseudo-variable descriptor
+(offset + per-axis stride) — more machinery for no gain over the
+existing affine gather until general array sections are needed;
+requiring equal ranks on both sides (a whole-array source into a slice
+is natural and falls out of the all-`*` view); accepting array
+expressions or reductions as the slice value (kept diagnosed, as
+elsewhere).
+

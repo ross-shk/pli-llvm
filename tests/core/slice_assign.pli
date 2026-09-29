@@ -1,0 +1,91 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* Slice assignment (rule 126): a cross-section A(i, *) on the
+      left of '=' denotes a reduced-rank view that is written
+      element-wise. Covers a numeric row and column, a 3-D
+      sub-block, a whole array into a slice, a scalar broadcast,
+      and a CHARACTER(1) array member. */
+   slice_assign_test: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare b(3, 4) fixed bin(31);
+      declare m(3, 4) fixed bin(31);
+      declare r(4) fixed bin(31);
+      declare c(3) fixed bin(31);
+      declare d(2, 3, 4) fixed bin(31);
+      declare 1 s,
+             2 q(2, 3) char(1);
+      declare i fixed bin(31), j fixed bin(31);
+      declare k fixed bin(31), fails fixed bin(31);
+
+      do i = 1 to 3;
+         do j = 1 to 4;
+            a(i, j) = 10 * i + j;
+            b(i, j) = 10 * i + j;
+         end;
+      end;
+      do j = 1 to 4;
+         r(j) = 100 + j;
+      end;
+      do i = 1 to 3;
+         c(i) = 200 + i;
+      end;
+
+      fails = 0;
+
+      /* row slice to row slice: a(3, *) = a(1, *) -> {11,12,13,14} */
+      a(3, *) = a(1, *);
+      do j = 1 to 4;
+         if a(3, j) ^= 10 + j then fails = fails + 1;
+      end;
+
+      /* column slice to column slice: b(*, 4) = b(*, 2) */
+      b(*, 4) = b(*, 2);
+      do i = 1 to 3;
+         if b(i, 4) ^= 10 * i + 2 then fails = fails + 1;
+      end;
+
+      /* whole array into a row slice, then a scalar broadcast */
+      m(2, *) = r;
+      do j = 1 to 4;
+         if m(2, j) ^= 100 + j then fails = fails + 1;
+      end;
+      m(3, *) = 0;
+      do j = 1 to 4;
+         if m(3, j) ^= 0 then fails = fails + 1;
+      end;
+
+      /* whole array into a column slice: m(*, 1) = c */
+      m(*, 1) = c;
+      do i = 1 to 3;
+         if m(i, 1) ^= 200 + i then fails = fails + 1;
+      end;
+
+      /* 3-D sub-block with a runtime first axis */
+      do i = 1 to 2;
+         do j = 1 to 3;
+            do k = 1 to 4;
+               d(i, j, k) = 100 * i + 10 * j + k;
+            end;
+         end;
+      end;
+      i = 2;
+      d(i, *, *) = d(1, *, *);
+      do j = 1 to 3;
+         do k = 1 to 4;
+            if d(2, j, k) ^= 100 + 10 * j + k then fails = fails + 1;
+         end;
+      end;
+
+      /* CHARACTER(1) array member slice: s.q(2, *) = s.q(1, *) */
+      do j = 1 to 3;
+         s.q(1, j) = 'x';
+         s.q(2, j) = 'y';
+      end;
+      s.q(2, *) = s.q(1, *);
+      do j = 1 to 3;
+         if s.q(2, j) ^= 'x' then fails = fails + 1;
+      end;
+
+      if fails = 0 then put skip list('PASS slice_assign');
+      else put skip list('FAIL slice_assign: fails =', fails);
+   end slice_assign_test;

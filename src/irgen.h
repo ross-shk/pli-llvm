@@ -319,10 +319,11 @@ private:
   // Address of one CONTROLLED dynamic array element (rule 126) with the
   // SUBSCRIPTRANGE check against the live bound.
   llvm::Value* ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
-  // Copy an N-star cross-section A(i, *, ...) (rule 126) into a whole array
-  // target: iterate the target's linear index, mapping each star-axis
-  // coordinate back to a source element and gathering it into the target.
-  void emitCrossSectionAssign(HExpr* target, HExpr* cross, SourceLoc loc);
+  // Copy a slice (rule 126) between two array views; either side may be a
+  // cross-section A(i, *, ...), a whole array being the all-'*' case. Walks the
+  // reduced rank's linear index and maps each star-axis coordinate to both
+  // views; a scalar value broadcasts over the target slice.
+  void emitCrossSectionAssign(HExpr* target, HExpr* value, SourceLoc loc);
   // Address of a DEFINED scalar element overlay (rule 24): the base element at
   // the constant subscripts, computed once (sema bounds-checked them).
   llvm::Value* definedConstAddr(Symbol* sym);

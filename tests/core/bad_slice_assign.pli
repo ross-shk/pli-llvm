@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* Slice assignment (rule 126) restrictions: a cross-section target
+      requires a same-shape array value. A rank or extent mismatch is
+      rejected. */
+   bad_slice_assign: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare b(5) fixed bin(31);
+      declare c(2, 4) fixed bin(31);
+
+      a(2, *) = b;     /* (4,) target vs (5,) value */
+      a(*, *) = c;     /* (3,4) target vs (2,4) value */
+   end bad_slice_assign;

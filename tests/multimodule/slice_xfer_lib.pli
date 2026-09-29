@@ -1,0 +1,49 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rule (126): library side of slice_xfer.pli. The caller's
+    structure is reached through a BASED view over the
+    supplied POINTER; every slice write goes straight into
+    caller storage. Companion of slice_xfer.pli. */
+ slicexferlib: package exports(fill, copyrow, copycol, setrow,
+   getel);
+ dcl own pointer;
+ dcl 1 view based(own),
+    2 m(3, 4) fixed bin(31);
+ fill: procedure(p);
+   dcl p pointer;
+   dcl i fixed bin(31), j fixed bin(31);
+   own = p;
+   do i = 1 to 3;
+     do j = 1 to 4;
+       view.m(i, j) = 10 * i + j;
+     end;
+   end;
+ end fill;
+ copyrow: procedure(p, src, dst);
+   dcl p pointer;
+   dcl src fixed bin(31);
+   dcl dst fixed bin(31);
+   own = p;
+   view.m(dst, *) = view.m(src, *);
+ end copyrow;
+ copycol: procedure(p, src, dst);
+   dcl p pointer;
+   dcl src fixed bin(31);
+   dcl dst fixed bin(31);
+   own = p;
+   view.m(*, dst) = view.m(*, src);
+ end copycol;
+ setrow: procedure(p, dst, v);
+   dcl p pointer;
+   dcl dst fixed bin(31);
+   dcl v fixed bin(31);
+   own = p;
+   view.m(dst, *) = v;
+ end setrow;
+ getel: procedure(p, i, j) returns(fixed bin(31));
+   dcl p pointer;
+   dcl i fixed bin(31), j fixed bin(31);
+   own = p;
+   return(view.m(i, j));
+ end getel;
+ end slicexferlib;

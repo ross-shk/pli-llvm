@@ -2593,6 +2593,33 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
       break;
     }
+    // A cross-section assignment target A(i, *) = value (rule 126): the target
+    // denotes a reduced-rank slice (its type was set to the star-axis shape by
+    // typeExpr). The value must be a same-shape array variable or cross-section,
+    // or a scalar broadcast over the slice's element type.
+    {
+      bool tgtCross = false;
+      if (s->target->kind == Expr::Subscript)
+        for (auto& a : s->target->args)
+          if (a->kind == Expr::Star) {
+            tgtCross = true;
+            break;
+          }
+      if (tgtCross) {
+        const Type& t = s->target->ty;
+        if (s->value->ty.isArray()) {
+          if ((s->value->kind == Expr::VarRef || s->value->kind == Expr::Subscript) &&
+              s->value->ty == t)
+            break;
+          d_.error(s->loc, "cross-section assignment target and value must have the same shape",
+                   "(126)");
+          break;
+        }
+        if (!s->value->ty.isVoid() && !t.isVoid())
+          checkAssignable(t.elementType(), s->value->ty, s->loc, "assignment");
+        break;
+      }
+    }
     // Array element assignment: A(i) = e — a modifiable subscripted target.
     if (s->target->kind == Expr::Subscript) {
       if (!s->value->ty.isVoid() && !s->target->ty.isVoid())
