@@ -1,0 +1,34 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (15),(23),(87)-(90),(126): cross-module CONTROLLED dynamic
+    arrays (non-CHARACTER). The library sums its own private
+    generation; the caller keeps its own generation on a different
+    slot key, so the two stacks never collide. Companion of
+    ctl_dyn_array_lib.pli. */
+ ctldynarray: procedure options(main);
+   dcl mk_sum entry (fixed bin(31)) returns (fixed bin(31)) external;
+   dcl mk_star entry (fixed bin(31)) returns (fixed bin(31)) external;
+   dcl a fixed bin(31) controlled;
+   dcl i fixed bin(31);
+   dcl s fixed bin(31);
+   dcl fails fixed bin(31) init(0);
+   /* library generations sum 1..n without touching our stack */
+   if mk_sum(5) ^= 15 then fails = fails + 1;
+    if mk_star(4) ^= 100 then fails = fails + 1;
+   /* our own scalar CONTROLLED dynamic array lives on our key */
+   allocate a (4);
+   do i = 1 to 4;
+     a(i) = i * 2;
+   end;
+   s = 0;
+   do i = 1 to 4;
+     s = s + a(i);
+   end;
+   if s ^= 20 then fails = fails + 1;
+   if hbound(a) ^= 4 then fails = fails + 1;
+   free a;
+   /* library stack still intact after our push/pop */
+   if mk_sum(3) ^= 6 then fails = fails + 1;
+   if fails = 0 then put skip list('PASS ctl_dyn_array');
+   else put skip list('FAIL ctl_dyn_array: fails =', fails);
+ end ctldynarray;

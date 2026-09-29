@@ -492,58 +492,57 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     else
       pt.push_back(b_.getPtrTy());
   }
-   // External ENTRY symbols (no PL/I body): by-value C entries (rules
-   // (34),(38)) use their declared params verbatim — any char(*) lengths
-   // must be explicit scalar fixed-bin(31) params (c_bridge.inc pattern).
-   // A plain-EXTERNAL PL/I entry is a procedure in another object file and
-   // follows the PL/I inter-procedure convention: hidden extent/length args
-   // for `*`-extent arrays (rule (13)) and CHAR(*) params (rule (18)),
-   // exactly as if the procedure were defined in this compilation.
-   if (!sym->proc && !en) {
-     if (!sym->entryByValue)
-       for (const Type& t : sym->entryParams) {
-         if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
-           pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
-         if (t.isChar() && t.starLen)
-           pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
-       }
-     // An external character-valued function (rules (34),(37)) returns through
-     // a hidden result buffer like structures do: the caller allocates it and
-     // passes its address as the first argument, so the declaration is
-     // `void @NAME(ptr sret, ...)`.
-     if (sym->entryIsFunction && sym->entryRetTy.isChar()) {
-       std::vector<llvm::Type*> pt2 = pt;
-       pt2.insert(pt2.begin(), b_.getPtrTy());
-       llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
-       return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
-     }
-     llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy();
-     llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
-     return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
-   }
-   for (const Type& t : sym->entryParams) {
-     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
-       pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
-     if (t.isChar() && t.starLen)
-       pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
-   }
-   // An external character-valued function (rules (34),(37)) returns through a
-   // hidden result buffer like structures do; for PL/I callers outside this
-   // TU we cannot generate the buffer allocation site here, but the external
-   // declaration must match the callee's inter-procedure signature (ptr-first).
-   bool extChar = sym->entryIsFunction && sym->entryRetTy.isChar();
-   std::vector<llvm::Type*> pt2 = pt;
-   if (extChar) {
-     // Emit the declaration with hidden-result-pointer semantics: the external
-     // entry returns void and accepts a ptr as first argument (the sret).
-     pt2.insert(pt2.begin(), b_.getPtrTy());
-     llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
-     return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
-   }
-   llvm::Type* rty =
-       sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34)
-   llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
-   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+  // External ENTRY symbols (no PL/I body): by-value C entries (rules
+  // (34),(38)) use their declared params verbatim — any char(*) lengths
+  // must be explicit scalar fixed-bin(31) params (c_bridge.inc pattern).
+  // A plain-EXTERNAL PL/I entry is a procedure in another object file and
+  // follows the PL/I inter-procedure convention: hidden extent/length args
+  // for `*`-extent arrays (rule (13)) and CHAR(*) params (rule (18)),
+  // exactly as if the procedure were defined in this compilation.
+  if (!sym->proc && !en) {
+    if (!sym->entryByValue)
+      for (const Type& t : sym->entryParams) {
+        if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+          pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+        if (t.isChar() && t.starLen)
+          pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+      }
+    // An external character-valued function (rules (34),(37)) returns through
+    // a hidden result buffer like structures do: the caller allocates it and
+    // passes its address as the first argument, so the declaration is
+    // `void @NAME(ptr sret, ...)`.
+    if (sym->entryIsFunction && sym->entryRetTy.isChar()) {
+      std::vector<llvm::Type*> pt2 = pt;
+      pt2.insert(pt2.begin(), b_.getPtrTy());
+      llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
+      return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+    }
+    llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy();
+    llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
+    return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+  }
+  for (const Type& t : sym->entryParams) {
+    if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+      pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+    if (t.isChar() && t.starLen)
+      pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+  }
+  // An external character-valued function (rules (34),(37)) returns through a
+  // hidden result buffer like structures do; for PL/I callers outside this
+  // TU we cannot generate the buffer allocation site here, but the external
+  // declaration must match the callee's inter-procedure signature (ptr-first).
+  bool extChar = sym->entryIsFunction && sym->entryRetTy.isChar();
+  std::vector<llvm::Type*> pt2 = pt;
+  if (extChar) {
+    // Emit the declaration with hidden-result-pointer semantics: the external
+    // entry returns void and accepts a ptr as first argument (the sret).
+    pt2.insert(pt2.begin(), b_.getPtrTy());
+    llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
+    return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+  }
+  llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34)
+  llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
+  return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
 }
 
 // ---------------------------------------------------------------------------
@@ -727,9 +726,8 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
       for (int i = 0; i < t.len && i < (int)e->sval.size(); ++i)
         text[i] = e->sval[i];
     llvm::Constant* data = llvm::ConstantDataArray::getString(ctx_, text, false);
-    llvm::GlobalVariable* g =
-        new llvm::GlobalVariable(mod_, data->getType(), true, llvm::GlobalValue::PrivateLinkage,
-                                 data, ".initchar");
+    llvm::GlobalVariable* g = new llvm::GlobalVariable(
+        mod_, data->getType(), true, llvm::GlobalValue::PrivateLinkage, data, ".initchar");
     g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
     v.ptr = b_.CreateConstGEP2_32(data->getType(), g, 0, 0, "initcp");
     v.len = i64(t.len);
@@ -1044,7 +1042,9 @@ void IRGen::emitInitials(HProc* p) {
         long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
         if (e->kind == Expr::DecLit) {
           int dq = item.sym->ty.scale - e->decScale; // rescale to the target scale
-          val = dq > 0 ? val * pliPow10(dq) : dq < 0 ? pliRescaleDown(val, -dq, item.sym->ty.k == TK::FixedDec) : val;
+          val = dq > 0   ? val * pliPow10(dq)
+                : dq < 0 ? pliRescaleDown(val, -dq, item.sym->ty.k == TK::FixedDec)
+                         : val;
         }
         v.reg = llvm::ConstantInt::get(llvmTy(item.sym->ty), val, true);
         break;
@@ -1512,8 +1512,7 @@ void IRGen::declareOnHandlers(HProgram& prog) {
     }
     // Every handler takes its capture context (rule 91): the establishing-frame
     // addresses of automatics the unit touches, or NULL when it touches none.
-    llvm::FunctionType* ft =
-        llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
+    llvm::FunctionType* ft = llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
     std::string name;
     if (keyId.first == 0)
       name = "PLI_ON_" + std::to_string(keyId.second);
@@ -1619,10 +1618,8 @@ void IRGen::emitSignal(HStmt* s) {
     Val c = convert(code, Type::fixedBin(31, 0), s->loc);
     b_.CreateCall(runtimeFn("pli_set_oncode"), {c.reg});
   }
-  llvm::Value* fn =
-      b_.CreateCall(runtimeFn("pli_on_top_fn"), {i64(s->condKey)}, "ontopfn");
-  llvm::Value* ctx =
-      b_.CreateCall(runtimeFn("pli_on_top_ctx"), {i64(s->condKey)}, "ontopctx");
+  llvm::Value* fn = b_.CreateCall(runtimeFn("pli_on_top_fn"), {i64(s->condKey)}, "ontopfn");
+  llvm::Value* ctx = b_.CreateCall(runtimeFn("pli_on_top_ctx"), {i64(s->condKey)}, "ontopctx");
   llvm::Value* none =
       b_.CreateICmpEQ(fn, llvm::Constant::getNullValue(b_.getPtrTy()), "onnosystem");
   llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
@@ -1646,8 +1643,7 @@ void IRGen::emitSignal(HStmt* s) {
   b_.SetInsertPoint(dspBB);
   if (s->condKey == 0)
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
-  llvm::FunctionType* hft =
-      llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
+  llvm::FunctionType* hft = llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
   b_.CreateCall(hft, fn, {ctx});
   if (s->condKey == 0)
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
@@ -1808,8 +1804,8 @@ void IRGen::emitStmt(HStmt* s) {
       const Type& rty = curProc_->retTy;
       if (rty.starLen && rty.varying) {
         llvm::Value* dp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 1, "rdata");
-        llvm::Value* ln = b_.CreateCall(runtimeFn("pli_assign_varying"),
-                                        {dp, i64(kStarRetMax), v.ptr, v.len});
+        llvm::Value* ln =
+            b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(kStarRetMax), v.ptr, v.len});
         llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 0, "rlenp");
         b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "rl32"), lp);
       } else if (rty.starLen) {
@@ -2187,11 +2183,15 @@ void IRGen::emitAssign(HStmt* s) {
 // Implicit ALLOCATE for CONTROLLED variables (IBM Enterprise PL/I): push a
 // generation sized to the compile-time descriptor if this symbol has not been
 // implicitly allocated in the current procedure yet. CHAR(*) is skipped — its
-// runtime length cannot be known without an explicit ALLOCATE statement.
+// runtime length cannot be known without an explicit ALLOCATE statement. A
+// 1-D (*) CONTROLLED numeric array is skipped the same way — its extent comes
+// from each ALLOCATE (n) (rules (13),(89)).
 void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
-  // Only skip CHAR(*) adjustable-length types; everything else gets default-
-  // sized implicit allocation.
+  // Only skip CHAR(*) adjustable-length types and (*) CONTROLLED dynamic
+  // arrays; everything else gets default-sized implicit allocation.
   if (sym->ty.isChar() && sym->ty.starLen && !sym->dynLenExpr)
+    return;
+  if (sym->controlled && sym->ty.isArray() && sym->ty.isDynamic())
     return;
   if (ctlImplicitAlloc_.count(sym))
     return;
@@ -2231,14 +2231,22 @@ void IRGen::emitAllocate(HStmt* s) {
           sz = b_.CreateAdd(max, i64(4), "vmaxsz");
         else
           sz = max;
+      } else if (!bsym->ty.isChar() && dimE && !clE) {
+        // CONTROLLED dynamic numeric array, 1-D only (rules (13),(89)): a
+        // scalar `DCL FDS FIXED CONTROLLED` or a `DCL G(*)` array sized by
+        // `ALLOCATE x (n)` holds n elements; the generation is n * elemSize.
+        const Type& el = bsym->ty.isArray() ? bsym->ty.elementType() : bsym->ty;
+        long long elemSz =
+            (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+        llvm::Value* n = toI64(emitExpr(dimE), s->loc);
+        sz = b_.CreateMul(n, i64(elemSz), "ctln");
       } else if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr) {
         sz = toI64(emitExpr(bsym->dynLenExpr), s->loc);
       }
       b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
       if (bsym->ty.isChar() && bsym->ty.varying) {
         // A fresh VARYING generation starts empty (cur = 0).
-        llvm::Value* addr =
-            b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(bsym)}, "vaddr");
+        llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(bsym)}, "vaddr");
         llvm::Value* lp = b_.CreateStructGEP(llvmTy(bsym->ty), addr, 0, "vlenp");
         b_.CreateStore(b_.getInt32(0), lp);
       }
@@ -2973,8 +2981,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     // A VARYING variable into a fixed `CHAR(*)` dummy (rule (18)): overlay the
     // string's data area by reference — the hidden argument carries its max
     // (argLen); a copy would expose the uninitialized tail.
-    if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
-        a->sym->ty.varying && !pty.varying && a->memberPath.empty())
+    if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() && a->sym->ty.varying &&
+        !pty.varying && a->memberPath.empty())
       return b_.CreateStructGEP(llvmTy(a->sym->ty), addressOf(a->sym), 1, "vdata");
     // A non-VARYING actual into a `CHAR(*) VARYING` dummy (rule (18)): wrap
     // into a temp varying struct so the callee's struct-path read sees a
@@ -2982,8 +2990,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     if (pty.varying && pty.starLen) {
       Val av0 = emitExpr(a);
       if (av0.ty.isChar()) {
-        llvm::ConstantInt* capC = llvm::dyn_cast<llvm::ConstantInt>(
-            av0.len ? av0.len : i64(av0.ty.len));
+        llvm::ConstantInt* capC =
+            llvm::dyn_cast<llvm::ConstantInt>(av0.len ? av0.len : i64(av0.ty.len));
         int cap = capC ? static_cast<int>(capC->getZExtValue()) : 256;
         if (cap <= 0)
           cap = 1;
@@ -3003,15 +3011,13 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     // pass the buffer pointer and its live length via argLen().
     Val av = emitExpr(a);
     if (av.ty.isChar()) {
-      llvm::ConstantInt* capConst =
-          llvm::dyn_cast<llvm::ConstantInt>(av.len);
+      llvm::ConstantInt* capConst = llvm::dyn_cast<llvm::ConstantInt>(av.len);
       int cap;
       if (capConst)
         cap = static_cast<int>(capConst->getZExtValue());
       else
         cap = 256; // fallback for dynamic-length expressions
-      llvm::AllocaInst* buf =
-          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
+      llvm::AllocaInst* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
       b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
       return buf;
     }
@@ -3035,8 +3041,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
       // A varying-char variable of a different declared length is copied into
       // the dummy above; remember to copy the callee's result back so a
       // "growing" string (appends inside the callee) reaches the caller.
-      if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() &&
-          a->sym->ty.varying && a->memberPath.empty())
+      if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar() && a->sym->ty.varying &&
+          a->memberPath.empty())
         pendingVarWrites_.push_back({addr, a->sym, pty});
     } else {
       b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(pty.len), cv.ptr, cv.len});
@@ -3076,15 +3082,13 @@ void IRGen::flushVarWrites() {
       // CHAR(*) VARYING CONTROLLED: the heap generation is {i32 cur_len, [max
       // x i8] data} with no outer descriptor.  Offset 0 → length field, offset
       // 4 → start of character data.  Get the live max via pli_ctl_len.
-      llvm::Value* ctllen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(w.sym)},
-                                          "ctllen");
+      llvm::Value* ctllen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(w.sym)}, "ctllen");
       llvm::Value* max = b_.CreateSub(ctllen, i64(4), "ctlmax");
       // Data lives at offset 4 (skip the i32 length field).
       llvm::Value* dp = b_.CreateGEP(b_.getInt8Ty(), target, {b_.getInt64(4)}, "data_ptr");
       // Write data from the dummy into the generation buffer; store the
       // (clamped) result length back to offset 0.
-      llvm::Value* ln =
-          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, ddata, dlen});
+      llvm::Value* ln = b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, ddata, dlen});
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty()), target);
     } else {
       // Fixed-size or non-controlled CHAR varying: write into the alloca'd
@@ -3213,8 +3217,7 @@ llvm::Value* IRGen::ctlKeyOf(Symbol* sym) {
 // act on the caller's stack; -1 when the actual is not controlled (the dummy
 // then gets a fresh stack of its own).
 llvm::Value* IRGen::ctlKeyArg(HExpr* a) {
-  if (a->kind == HExpr::VarRef && a->sym && a->sym->controlled &&
-      a->memberPath.empty())
+  if (a->kind == HExpr::VarRef && a->sym && a->sym->controlled && a->memberPath.empty())
     return ctlKeyOf(a->sym);
   return i64(-1);
 }
@@ -3241,8 +3244,7 @@ llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
     return nullptr;
   if (ty.varying) {
     if (sym && sym->controlled) {
-      llvm::Value* total =
-          b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
+      llvm::Value* total = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
       return b_.CreateSub(total, i64(4), "ctlmax");
     }
     // Non-controlled VARYING STAR parameter: max capacity from hidden arg.
@@ -3349,11 +3351,9 @@ void IRGen::emitCall(HStmt* s) {
       // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent
       // (or the -1 fresh-stack key for a CONTROLLED dummy) alongside its
       // null address (extension, ADR-119).
-      HExpr* a = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
-                     ? nullptr
-                     : s->args[i].get();
-      llvm::Value* ext =
-          hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
+      HExpr* a =
+          (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
+      llvm::Value* ext = hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
       if (!ext) {
         d_.error(s->args[i]->loc,
                  "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -3369,12 +3369,10 @@ void IRGen::emitCall(HStmt* s) {
   if (!en && !callee && !calleeSym->entryByValue)
     for (size_t i = 0; i < calleeSym->entryParams.size(); ++i) {
       const Type& t = calleeSym->entryParams[i];
-      if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) ||
-            (t.isChar() && t.starLen)))
+      if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
         continue;
-      HExpr* a = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
-                     ? nullptr
-                     : s->args[i].get();
+      HExpr* a =
+          (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
       llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
       if (!ext) {
         d_.error(s->args[i]->loc,
@@ -3384,9 +3382,9 @@ void IRGen::emitCall(HStmt* s) {
       }
       args.push_back(ext);
     }
-   appendStaticLinks(callee, args);
-   b_.CreateCall(calleeF, args);
-   flushVarWrites();
+  appendStaticLinks(callee, args);
+  b_.CreateCall(calleeF, args);
+  flushVarWrites();
 }
 
 // Asynchronous CALL (rule (79), QR2.8): marshal the callee arguments as for a
@@ -3428,11 +3426,9 @@ void IRGen::emitAsyncCall(HStmt* s) {
       callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
   for (size_t i = 0; i < calleeParams.size(); ++i) {
     if (isAdjustable(calleeParams[i])) {
-      HExpr* a = (i >= s->args.size() || s->args[i]->kind == HExpr::Star)
-                     ? nullptr
-                     : s->args[i].get();
-      llvm::Value* ext =
-          hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
+      HExpr* a =
+          (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
+      llvm::Value* ext = hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
       if (!ext)
         ext = i64(0); // diagnosed by sema through the sync path (13)
       callArgs.push_back(ext);
@@ -3944,8 +3940,7 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
       if (!max)
         max = i64(dt.len);
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
-      llvm::Value* ln =
-          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, v.ptr, v.len});
+      llvm::Value* ln = b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, v.ptr, v.len});
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
       return;
@@ -3988,12 +3983,9 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
         b_.CreateBr(mergeBB);
         b_.SetInsertPoint(mergeBB);
         // Always reload fresh addr+len — may have changed in expBB
-        llvm::Value* faddr = b_.CreateCall(
-            runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "fraddr");
-        llvm::Value* flen = b_.CreateCall(
-            runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "flen");
-        b_.CreateCall(runtimeFn("pli_assign_char"),
-                      {faddr, flen, v.ptr, v.len});
+        llvm::Value* faddr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "fraddr");
+        llvm::Value* flen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "flen");
+        b_.CreateCall(runtimeFn("pli_assign_char"), {faddr, flen, v.ptr, v.len});
         return;
       }
       b_.CreateCall(runtimeFn("pli_assign_char"), {addr, live, v.ptr, v.len});
@@ -4006,16 +3998,75 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
   storeScalarTo(addr, dt, cv);
 }
 
+// A CONTROLLED dynamic numeric array (rules (13),(89)): a scalar CONTROLLED
+// numeric variable used with one subscript, or a 1-D (*) CONTROLLED array.
+// The live extent is per-generation, so it cannot ride a static dope slot.
+bool IRGen::isCtlDynArray(Symbol* sym) {
+  if (!sym || !sym->controlled)
+    return false;
+  if (!sym->ty.isArray())
+    return !sym->ty.isChar() && !sym->ty.isStruct() && !sym->ty.isPointer() && !sym->ty.isVoid() &&
+           (sym->ty.isNumeric() || sym->ty.isBit());
+  return sym->ty.isDynamic() && sym->ty.dims.size() == 1;
+}
+
+// Live upper bound of a CONTROLLED dynamic array (rule (126)): lb is 1, ub is
+// `pli_ctl_len(key) / elemSize`. An empty stack reports 0, so every subscript
+// is out of bounds until the first ALLOCATE (n).
+llvm::Value* IRGen::ctlDynBound(Symbol* sym) {
+  const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
+  long long elemSz = (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+  if (elemSz <= 0)
+    elemSz = 1;
+  llvm::Value* total = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
+  return b_.CreateUDiv(total, i64(elemSz), "ctlub");
+}
+
+// Address of one CONTROLLED dynamic array element (rule 126): a runtime
+// SUBSCRIPTRANGE check against the live bound, then a GEP off the top
+// generation base as a bare element pointer (mirrors the dynamic-array path).
+llvm::Value* IRGen::ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc) {
+  const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
+  llvm::Value* base = addressOf(sym);
+  llvm::Value* ub = ctlDynBound(sym);
+  llvm::Value* lb = i64(1);
+  llvm::Value* i = toI64(emitExpr(idxs[0].get()));
+  llvm::Value* oob =
+      b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi"), "oob");
+  llvm::Value* idx = subChecks() ? clampIndex(i, lb, ub) : i;
+  llvm::Value* flat = b_.CreateSub(idx, lb, "off");
+  if (subChecks()) {
+    std::string id = std::to_string(n_++);
+    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
+    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
+    b_.CreateCondBr(oob, failL, okL);
+    startBlock(failL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    startBlock(okL);
+  }
+  (void)loc;
+  return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "ctlelem");
+}
+
 // Load one array element (rule 126): a bounds-checked address, then a load of
 // the element's scalar value. Character element arrays are diagnosed, not
 // silently miscompiled (invariant 2).
 Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc) {
   Val v;
-  const Type& el = sym->ty.elementType();
+  const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   v.ty = el;
   if (el.isChar()) {
     d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
     v.reg = i64(0);
+    return v;
+  }
+  if (isCtlDynArray(sym)) {
+    llvm::Value* addr = ctlDynElementAddr(sym, idxs, loc);
+    llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
+    if (el.isBit() && el.len == 1)
+      v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
+    else
+      v.reg = r;
     return v;
   }
   llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
@@ -4033,9 +4084,15 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
 // through the bounds-checked element address.
 void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, const Val& src,
                               SourceLoc loc) {
-  const Type& el = sym->ty.elementType();
+  const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   if (el.isChar()) {
     d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
+    return;
+  }
+  if (isCtlDynArray(sym)) {
+    llvm::Value* addr = ctlDynElementAddr(sym, idxs, loc);
+    Val cv = convert(src, el, loc);
+    storeScalarTo(addr, el, cv);
     return;
   }
   llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc,
@@ -4465,8 +4522,7 @@ Val IRGen::charTemp(int len) {
 llvm::Type* IRGen::sretBufTy(const Type& rty) {
   if (rty.isChar() && rty.starLen) {
     if (rty.varying) {
-      llvm::Type* data =
-          llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)kStarRetMax);
+      llvm::Type* data = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)kStarRetMax);
       return llvm::StructType::get(b_.getInt32Ty(), data);
     }
     return llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)kStarRetMax);
@@ -4701,12 +4757,10 @@ Val IRGen::emitExpr(HExpr* e) {
       if (!e->sym->entryByValue)
         for (size_t i = 0; i < e->sym->entryParams.size(); ++i) {
           const Type& t = e->sym->entryParams[i];
-          if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) ||
-                (t.isChar() && t.starLen)))
+          if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
             continue;
-          HExpr* a = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
-                         ? nullptr
-                         : e->args[i].get();
+          HExpr* a =
+              (i >= e->args.size() || e->args[i]->kind == HExpr::Star) ? nullptr : e->args[i].get();
           llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
           if (!ext) {
             d_.error(e->args[i]->loc,
@@ -4732,8 +4786,8 @@ Val IRGen::emitExpr(HExpr* e) {
         if (rty.varying) {
           llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 0, "clenp");
           v.ptr = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 1, "cdata");
-          v.len = b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"),
-                                b_.getInt64Ty(), "cl64");
+          v.len =
+              b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
         } else if (rty.starLen) {
           v.ptr = sretPtr;
           v.len = i64(kStarRetMax);
@@ -4787,11 +4841,9 @@ Val IRGen::emitExpr(HExpr* e) {
       if (isAdjustable(calleeParams[i])) {
         // An omitted '*' (or left-out trailing OPTIONAL) takes a zero extent
         // (or the -1 fresh-stack key for a CONTROLLED dummy).
-        HExpr* a = (i >= e->args.size() || e->args[i]->kind == HExpr::Star)
-                       ? nullptr
-                       : e->args[i].get();
-        llvm::Value* ext =
-            hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
+        HExpr* a =
+            (i >= e->args.size() || e->args[i]->kind == HExpr::Star) ? nullptr : e->args[i].get();
+        llvm::Value* ext = hiddenAdjustArg(a, calleeParams[i]->ty, calleeParams[i]->controlled);
         if (!ext) {
           d_.error(e->args[i]->loc,
                    "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -5241,8 +5293,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // Source capacity for clipping: static, except for adjustable `CHAR(*)`
     // (rule (18)) / CONTROLLED (rule (15)) sources, where it is live.
     Symbol* ssysm = e->args[0]->sym;
-    llvm::Value* capV =
-        (ssysm && ssysm->ty.isChar()) ? adjustLen(ssysm, ssysm->ty) : nullptr;
+    llvm::Value* capV = (ssysm && ssysm->ty.isChar()) ? adjustLen(ssysm, ssysm->ty) : nullptr;
     Val out = charTemp(e->ty.len);
     if (e->ty.varying) {
       // A runtime length (rule (123)): clamp the live length at zero and
@@ -5255,8 +5306,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* nonneg =
           b_.CreateSelect(b_.CreateICmpSLT(ln, i64(0), "svneg"), i64(0), ln, "sv0");
       llvm::Value* cap = capV ? capV : i64(e->ty.len);
-      llvm::Value* live = b_.CreateSelect(
-          b_.CreateICmpSGT(nonneg, cap, "svbig"), cap, nonneg, "svlive");
+      llvm::Value* live =
+          b_.CreateSelect(b_.CreateICmpSGT(nonneg, cap, "svbig"), cap, nonneg, "svlive");
       if (capV) {
         // Adjustable source: replace the static placeholder buffer with a
         // runtime-sized one evaluated here.
@@ -5264,8 +5315,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         out.ptr = b_.CreateAlloca(b_.getInt8Ty(), cap, "svbuf");
         out.len = cap;
       }
-      b_.CreateCall(runtimeFn("pli_substr"),
-                    {out.ptr, out.len, s.ptr, s.len, toI64(start), live});
+      b_.CreateCall(runtimeFn("pli_substr"), {out.ptr, out.len, s.ptr, s.len, toI64(start), live});
       out.len = live;
       result = out;
       return true;
@@ -5293,8 +5343,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       // |x + iy| = sqrt(x*x + y*y) over the FLOAT pair (rule (123)).
       llvm::Value* re = b_.CreateExtractValue(a.cpx, 0, "abre");
       llvm::Value* im = b_.CreateExtractValue(a.cpx, 1, "abim");
-      llvm::Value* m = b_.CreateFAdd(b_.CreateFMul(re, re, "abq1"),
-                                     b_.CreateFMul(im, im, "abq2"), "abq");
+      llvm::Value* m =
+          b_.CreateFAdd(b_.CreateFMul(re, re, "abq1"), b_.CreateFMul(im, im, "abq2"), "abq");
       r = b_.CreateCall(runtimeFn("pli_sqrt"), {m}, "abss");
     } else if (at.k == TK::Float) {
       r = b_.CreateCall(intrinsicFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}), {a.reg},
@@ -5761,8 +5811,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // LBOUND/HBOUND report the first dimension; DIM/DIMENSION report the total
   // element count (the product over all axes). With a second integer-constant
   // axis argument (1-based) each reports that axis: the bound or the extent.
-  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM" ||
-      e->name == "DIMENSION") {
+  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM" || e->name == "DIMENSION") {
     HExpr* a = e->args[0].get();
     // The argument is an unsubscripted array reference, either a plain array
     // (a->sym) or a qualified structure member array S.V (a->sym + memberPath).
@@ -5773,6 +5822,19 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     const bool isDim = e->name == "DIM" || e->name == "DIMENSION";
     // A selected axis (0-based), or -1 for the default single-argument form.
     long long sel = e->args.size() == 2 ? e->args[1]->ival - 1 : -1;
+    // A CONTROLLED dynamic numeric array (rules (13),(89)): lb is 1, ub/extent
+    // is the top generation size; covers the scalar form and the (*) form.
+    if (a->sym && a->memberPath.empty() && isCtlDynArray(a->sym) && (sel < 0 || sel == 0)) {
+      llvm::Value* ub = ctlDynBound(a->sym);
+      llvm::Value* raw = e->name == "LBOUND" ? i64(1) : ub;
+      (void)isDim;
+      Val src;
+      src.ty = Type::fixedBin(63, 0);
+      src.reg = raw;
+      v.reg = convert(src, e->ty, e->loc).reg;
+      result = v;
+      return true;
+    }
     // A per-axis request against a dynamic first axis uses the live bounds;
     // later axes are always constant in this stage.
     if (sel >= 0 && arr.isArray() && arr.isDynamic() && sel == 0) {

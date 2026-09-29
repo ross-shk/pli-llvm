@@ -1356,8 +1356,8 @@ void Parser::parseDeclTail(DeclItem& item) {
         advance();
         continue;
       }
-      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "UNALIGNED" ||
-          w == "INTERNAL" || w == "INT") {
+      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "UNALIGNED" || w == "INTERNAL" ||
+          w == "INT") {
         d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
                 "(15)");
         advance();
@@ -2623,7 +2623,7 @@ bool Parser::parseSingleFormatItem(FormatItem& fi) {
     d_.error(cur().loc, "'" + w + "' is not a format item", "(48)");
     return false;
   }
-  advance();              // the format descriptor word
+  advance(); // the format descriptor word
   if (fi.kind == FormatItem::Column && cur().kind != Tok::LParen) {
     d_.error(cur().loc, "COL requires a column number in parentheses", "(48)");
     return false;
@@ -2956,9 +2956,8 @@ StmtP Parser::parseAllocate() {
           if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") ||
               atWord("INIT")) {
             d_.error(cur().loc,
-                    std::string("ALLOCATE ") + cur().text +
-                        " is not implemented in this stage",
-                    "(89)");
+                     std::string("ALLOCATE ") + cur().text + " is not implemented in this stage",
+                     "(89)");
             resync();
             return nullptr;
           }
@@ -3010,9 +3009,8 @@ StmtP Parser::parseAllocate() {
           if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") ||
               atWord("INIT")) {
             d_.error(cur().loc,
-                    std::string("ALLOCATE ") + cur().text +
-                        " is not implemented in this stage",
-                    "(89)");
+                     std::string("ALLOCATE ") + cur().text + " is not implemented in this stage",
+                     "(89)");
             resync();
             return nullptr;
           }
@@ -3578,7 +3576,8 @@ std::vector<InitItem> Parser::parseInitialList() {
 InitItem Parser::parseInitialItem() {
   auto valueStart = [](Tok k) {
     return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::HexLit ||
-           k == Tok::Word || k == Tok::Minus || k == Tok::Plus || k == Tok::Star || k == Tok::LParen;
+           k == Tok::Word || k == Tok::Minus || k == Tok::Plus || k == Tok::Star ||
+           k == Tok::LParen;
   };
   if (at(Tok::Star)) {
     advance();
@@ -3590,10 +3589,9 @@ InitItem Parser::parseInitialItem() {
     // otherwise it is a group '( item, ... )'. Decide without consuming.
     // A replicated literal '( n )'X (rule (129)+(143)) is an iteration
     // factor over the hex constant, not a parenthesised number.
-    bool iterHex = peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
-                   peek(3).kind == Tok::HexLit;
-    bool iter = iterHex ||
-                (peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+    bool iterHex =
+        peek().kind == Tok::Number && peek(2).kind == Tok::RParen && peek(3).kind == Tok::HexLit;
+    bool iter = iterHex || (peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                             (peek(3).kind == Tok::LParen || valueStart(peek(3).kind)));
     bool parenConst = !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                       (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);

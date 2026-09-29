@@ -1,0 +1,39 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (15),(23),(87)-(90),(126): library side of ctl_dyn_array.pli.
+    Each procedure owns a private CONTROLLED dynamic generation on its
+    own slot key: scalar and (*) forms. No CONTROLLED dummy sharing. */
+ ctldynlib: package exports(mk_sum, mk_star);
+ mk_sum: procedure(n) returns(fixed bin(31));
+   dcl n fixed bin(31);
+   dcl a fixed bin(31) controlled;
+   dcl i fixed bin(31);
+   dcl s fixed bin(31);
+   allocate a (n);
+   do i = 1 to n;
+     a(i) = i;
+   end;
+   s = 0;
+   do i = 1 to n;
+     s = s + a(i);
+   end;
+   free a;
+   return(s);
+ end mk_sum;
+ mk_star: procedure(n) returns(fixed bin(31));
+   dcl n fixed bin(31);
+   dcl b(*) fixed bin(31) controlled;
+   dcl i fixed bin(31);
+   dcl s fixed bin(31);
+   allocate b (n);
+   do i = 1 to n;
+     b(i) = i * 10;
+   end;
+   s = 0;
+   do i = 1 to n;
+     s = s + b(i);
+   end;
+   free b;
+   return(s);
+ end mk_star;
+ end ctldynlib;

@@ -296,6 +296,16 @@ private:
   Val loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
   void storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, const Val& src,
                          SourceLoc loc);
+  // A CONTROLLED dynamic numeric array (rules (13),(89)): a scalar
+  // `DCL FDS FIXED CONTROLLED` or a 1-D `(*)` array whose extent is the top
+  // generation size. True for the scalar form and for a dynamic array form.
+  static bool isCtlDynArray(Symbol* sym);
+  // Live upper bound of a CONTROLLED dynamic array (rule (126)): lb is 1, ub
+  // is `pli_ctl_len(key) / elemSize` so LIFO generations report their own size.
+  llvm::Value* ctlDynBound(Symbol* sym);
+  // Address of one CONTROLLED dynamic array element (rule 126) with the
+  // SUBSCRIPTRANGE check against the live bound.
+  llvm::Value* ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
   // Copy an N-star cross-section A(i, *, ...) (rule 126) into a whole array
   // target: iterate the target's linear index, mapping each star-axis
   // coordinate back to a source element and gathering it into the target.

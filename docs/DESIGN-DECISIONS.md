@@ -4232,3 +4232,30 @@ directions.
 **Rejected.** Live-length passing for writes (an empty buffer can never
 grow); data-pointer passing to a varying dummy (callee reads garbage
 length); leaving tails uninitialized (scans read stale bytes).
+
+## ADR-161 — CONTROLLED dynamic numeric arrays size from ALLOCATE, bound from the live generation
+
+**Context.** libnet needs `DCL FDS FIXED BIN(31) CONTROLLED` plus
+`ALLOCATE FDS(n)` (rules (13),(89)): a runtime-length fd array. The
+compiler only served a per-ALLOCATE size for CHARACTER. A scalar
+CONTROLLED has no array type for rule (126) subscripting, and a `(*)`
+CONTROLLED array had no bound source: declaration bounds are absent and
+a static dope slot cannot track LIFO generations.
+
+**Decision.** Serve the 1-D numeric/BIT case only: a scalar CONTROLLED
+numeric variable subscripted once, or a single-axis `(*)` CONTROLLED
+numeric array, takes its extent from `ALLOCATE x (n)` with the
+generation sized `n * elemSize`. Subscripting, `LBOUND`/`HBOUND`/`DIM`
+derive the live bound at each use as `pli_ctl_len(key) / elemSize`
+(lb 1, empty stack 0), so push/pop automatically restore the prior
+bound. `(*)` CONTROLLED skips the implicit entry generation like
+`CHAR(*)`; scalar keeps its 1-element implicit generation underneath.
+Multi-axis, `DCL X(n) CONTROLLED`, structures, pointers, whole-array
+assignment/PUT of a dynamic generation, and `CHAR` lengths on numeric
+storage stay diagnosed.
+
+**Consequences.** `controlled_dyn.pli` pins scalar + `(*)` fill/read,
+live `HBOUND`/`DIM`/`LBOUND`, and LIFO restore;
+`multimodule/ctl_dyn_array.pli` pins private per-module stacks across
+the object boundary. `bad_controlled.pli` still rejects `DCL C8(n)
+CONTROLLED`.

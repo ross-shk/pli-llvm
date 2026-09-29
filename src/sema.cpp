@@ -240,7 +240,8 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // member procedures. Package-level symbols are registered in rootScope_ as
   // static storage (module-scope globals).
   for (auto& p : prog.procs) {
-    if (!p->isPackage) continue;
+    if (!p->isPackage)
+      continue;
     beginScopes_.clear();
     collectDecls(p->body, rootScope_, p.get(), true);
     resolvePendingBased(p.get());
@@ -255,7 +256,8 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // (78)) see every callee's descriptors regardless of procedure order
   // (ADR-094); processProc skips re-resolving them.
   for (auto& p : prog.procs) {
-    if (p->isPackage) continue;
+    if (p->isPackage)
+      continue;
     beginScopes_.clear();
     collectDecls(p->body, scopeFor(p.get()), p.get(), false);
     // BASED bases resolve before params so a bare parameter base becomes a
@@ -476,8 +478,7 @@ bool Sema::tryResolveBased(PendingBased& pb) {
   if (!item || item->basedBase.empty() || item->sym->basedBase)
     return true; // nothing to do (already resolved)
   Symbol* base = lookup(pb.sc, item->basedBase);
-  if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) &&
-      base->ty.isPointer()) {
+  if (base && (base->kind == Symbol::Var || base->kind == Symbol::Param) && base->ty.isPointer()) {
     item->sym->basedBase = base;
     return true;
   }
@@ -1117,8 +1118,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // files (e.g. net's conn_rec and a program's body). Assign a
           // deterministic key from the variable's qualified name instead, so
           // every compilation unit agrees and slots never collide.
-          std::string qname = (p->parent ? p->parent->name + "$" : "") + p->name + "$" +
-                              item.name;
+          std::string qname = (p->parent ? p->parent->name + "$" : "") + p->name + "$" + item.name;
           item.sym->ctlSlot = (int)(fnv1a(qname.data(), qname.size()) & 0x7FFFFFFF);
           auto ctlErr = [&](const char* what, const char* rule) {
             d_.error(item.loc, std::string("CONTROLLED+") + what + " is not implemented", rule);
@@ -1133,10 +1133,21 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             ctlErr("DEFINED", "(24)");
           if (!item.basedBase.empty())
             ctlErr("BASED", "(25)");
-          if (item.ty.isDynamic())
-            d_.error(item.loc,
-                     "a CONTROLLED array with dynamic extent is not implemented in this stage",
-                     "(13)");
+          // CONTROLLED dynamic arrays, 1-D numeric only (rules (13),(89)):
+          // `DCL G(*) FIXED CONTROLLED` takes its extent from each
+          // `ALLOCATE G(n)`; other dynamic CONTROLLED forms stay diagnosed.
+          // A scalar `DCL FDS FIXED CONTROLLED` with `ALLOCATE FDS(n)` is
+          // the same idiom with the dimension deferred to ALLOCATE.
+          if (item.ty.isDynamic()) {
+            const Type& el = item.ty.elementType();
+            bool star1D = item.ty.dims.size() == 1 && item.ty.dims[0].adj &&
+                          !item.ty.dims[0].lbDyn && !el.isChar() && !el.isStruct() &&
+                          (el.isNumeric() || el.isBit());
+            if (!star1D)
+              d_.error(item.loc,
+                       "a CONTROLLED array with dynamic extent is not implemented in this stage",
+                       "(13)");
+          }
         }
         // OPTIONAL (extension, ADR-119): only valid on a procedure parameter;
         // the flag rides the symbol into call checking. ENTRY-statement
@@ -1174,7 +1185,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 hasStar = true;
             bool isParam =
                 std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
-            if (hasStar && !isParam)
+            // A 1-D `(*)` CONTROLLED array is not a parameter adjustable: its
+            // extent comes from each ALLOCATE (rules (13),(89)), like CHAR(*).
+            bool ctlStar = item.controlled && hasStar && item.ty.dims.size() == 1 &&
+                           !item.ty.elementType().isChar() &&
+                           (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
+            if (hasStar && !isParam && !ctlStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
             if (hasStar && isParam && item.ty.dims.size() != 1)
               d_.error(item.loc, "a '*' extent parameter must be single-axis in this stage",
@@ -1636,8 +1652,7 @@ void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
   // structure matches element-wise, so both sides must have the same extents.
   if (dst.isArray() || src.isArray()) {
     if (!dst.isArray() || !src.isArray() || dst.dims != src.dims) {
-      d_.error(loc, "BY NAME assignment between arrayed structures needs matching extents",
-               "(86)");
+      d_.error(loc, "BY NAME assignment between arrayed structures needs matching extents", "(86)");
       return;
     }
   }
@@ -1743,8 +1758,8 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
   bool nested = inUnit_ > 1;
   std::vector<Symbol*> caps;
   auto noteCap = [&](Symbol* sym, bool whole, SourceLoc loc) {
-    if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic &&
-        !sym->basedBase && !sym->definedBase && !sym->fileAttr && sym->owner == p) {
+    if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic && !sym->basedBase &&
+        !sym->definedBase && !sym->fileAttr && sym->owner == p) {
       if (std::find(caps.begin(), caps.end(), sym) == caps.end())
         caps.push_back(sym);
       return;
@@ -1955,12 +1970,15 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
 // Whole-array expressions (rules 86, 127; QR2.1): storage a DO desugar can
 // address — a variable with its own storage. Parameters (hidden extents),
 // DEFINED overlays, BASED storage, and dynamic structure members stay
-// diagnosed in this stage.
+// diagnosed in this stage. A CONTROLLED dynamic array (rules (13),(89))
+// also stays out: its live bound is per-generation in the runtime stack.
 bool Sema::wholeArrayStorageOk(Expr* e) {
   Symbol* s = e->sym;
   if (!s || s->kind != Symbol::Var || s->definedBase || s->basedBase)
     return false;
   if (!e->memberPath.empty() && e->ty.isDynamic())
+    return false;
+  if (s->controlled && s->ty.isArray() && s->ty.isDynamic())
     return false;
   return true;
 }
@@ -2239,8 +2257,7 @@ void Sema::checkDoIter(Stmt* s, Scope* sc, Proc* p) {
   // A scaled FIXED control variable would miscompile the loop step and
   // comparison at the scaled representation (invariant 2).
   if (sym->ty.isFixed() && sym->ty.scale != 0)
-    d_.error(s->loc, "a scaled FIXED DO control variable is not implemented in this stage",
-             "(16)");
+    d_.error(s->loc, "a scaled FIXED DO control variable is not implemented in this stage", "(16)");
   typeExpr(s->from.get(), sc, p);
   typeExpr(s->to.get(), sc, p);
   typeExpr(s->by.get(), sc, p);
@@ -2965,12 +2982,26 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         if (dimE && clE)
           d_.error(clE->loc, "duplicate CHARACTER length in ALLOCATE", "(89)");
         if (!bsym->ty.isChar()) {
-          if (dimE || clE)
+          // CONTROLLED dynamic numeric arrays, 1-D only (rules (13),(89)):
+          // a scalar `DCL FDS FIXED CONTROLLED` or a `DCL G(*)` array takes
+          // its extent from `ALLOCATE x (n)`; the generation holds n elements.
+          const Type& el = bsym->ty.isArray() ? bsym->ty.elementType() : bsym->ty;
+          bool numEl = !el.isChar() && !el.isStruct() && !el.isPointer() && !el.isVoid() &&
+                       (el.isNumeric() || el.isBit());
+          bool scalarDyn = !bsym->ty.isArray() && numEl;
+          bool starDyn =
+              bsym->ty.isArray() && bsym->ty.dims.size() == 1 && bsym->ty.dims[0].adj && numEl;
+          if (clE)
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
+          else if (dimE && (scalarDyn || starDyn)) {
+            // Served: sizing happens in IRGen from n * element size.
+          } else if (dimE || clE)
             d_.error(s->allocBase[i]->loc,
                      "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
         } else if (bsym->ty.isArray()) {
-          d_.error(s->allocBase[i]->loc,
-                   "ALLOCATE of arrays is not implemented in this stage", "(89)");
+          d_.error(s->allocBase[i]->loc, "ALLOCATE of arrays is not implemented in this stage",
+                   "(89)");
         } else if (bsym->ty.starLen) {
           bool hasDeclSize = bsym->declHasLen;
           if (!dimE && !clE && !hasDeclSize)
@@ -2981,8 +3012,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           // expression sizes every generation.
           if (dimE || clE)
             d_.error(s->allocBase[i]->loc,
-                     "ALLOCATE length on CHAR(expr) CONTROLLED storage is not implemented",
-                     "(89)");
+                     "ALLOCATE length on CHAR(expr) CONTROLLED storage is not implemented", "(89)");
         } else {
           // Fixed-length CHARACTER: a per-ALLOCATE size is not served.
           if (dimE || clE)
@@ -3422,6 +3452,21 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // this procedure's static link.
       noteStaticUse(p, arr);
       checkSubscriptBounds(e, arr);
+      break;
+    }
+    // A scalar CONTROLLED numeric variable subscripted once (rules (13),(126)):
+    // `DCL FDS FIXED CONTROLLED` with `ALLOCATE FDS(n)` is a 1-D dynamic
+    // array whose live bound is the top generation size. Type as a Subscript
+    // of the scalar type; bounds are checked at run time in IRGen.
+    if (Symbol* ctl = lookup(sc, e->name);
+        ctl && (ctl->kind == Symbol::Var || ctl->kind == Symbol::Param) && ctl->controlled &&
+        !ctl->ty.isArray() && !ctl->ty.isChar() && !ctl->ty.isStruct() && !ctl->ty.isPointer() &&
+        !ctl->ty.isVoid() && (ctl->ty.isNumeric() || ctl->ty.isBit()) && e->args.size() == 1 &&
+        e->path.empty()) {
+      e->kind = Expr::Subscript;
+      e->sym = ctl;
+      e->ty = ctl->ty;
+      noteStaticUse(p, ctl);
       break;
     }
     // Built-ins are typed in typeBuiltin; a non-builtin call (a user
@@ -4499,8 +4544,7 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // compile-time values; the first argument must be an unsubscripted array.
   // An optional second integer-constant argument selects the axis (1-based);
   // without it LBOUND/HBOUND report the first axis and DIM the total count.
-  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM" ||
-      e->name == "DIMENSION") {
+  if (e->name == "LBOUND" || e->name == "HBOUND" || e->name == "DIM" || e->name == "DIMENSION") {
     if (e->args.size() != 1 && e->args.size() != 2) {
       d_.error(e->loc, e->name + " takes an array and an optional axis in this stage", "(123)");
       e->ty = Type::voidTy();
@@ -4510,8 +4554,13 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     // An unsubscripted array reference: a plain array variable/parameter
     // (A or x(k)) or a qualified structure member array (S.V). a->ty is the
     // resolved reference type, which is the array for an unsubscripted VarRef.
+    // A scalar CONTROLLED numeric variable is a 1-D dynamic array whose bound
+    // comes from ALLOCATE (rules (13),(89)), so it counts as an array here.
     bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
-    if (!isArr) {
+    bool isCtlDyn = a->kind == Expr::VarRef && a->sym && a->sym->controlled && !a->ty.isArray() &&
+                    !a->ty.isChar() && !a->ty.isStruct() && !a->ty.isPointer() && !a->ty.isVoid() &&
+                    (a->ty.isNumeric() || a->ty.isBit()) && a->memberPath.empty();
+    if (!isArr && !isCtlDyn) {
       d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
@@ -4523,7 +4572,7 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
         e->ty = Type::voidTy();
         return true;
       }
-      long long rank = (long long)a->ty.dims.size();
+      long long rank = isCtlDyn ? 1 : (long long)a->ty.dims.size();
       if (n->ival < 1 || n->ival > rank) {
         d_.error(n->loc,
                  e->name + " axis " + std::to_string(n->ival) + " out of range (1.." +

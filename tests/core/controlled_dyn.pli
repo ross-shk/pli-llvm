@@ -1,0 +1,54 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (13),(23),(87)-(90),(126): CONTROLLED arrays with dynamic
+    bounds (non-CHARACTER). A scalar FIXED CONTROLLED variable takes
+    its 1-D extent from ALLOCATE (n); a (*) CONTROLLED array does
+    the same. Generations are LIFO with live bounds from the top
+    generation size. */
+ controlled_dyn_test: procedure options(main);
+   dcl fails fixed bin(31);
+   dcl n fixed bin(31);
+   dcl i fixed bin(31);
+   dcl s fixed bin(31);
+   dcl fds fixed bin(31) controlled;
+   dcl g(*) fixed bin(31) controlled;
+   fails = 0;
+   /* scalar CONTROLLED + ALLOCATE (n): wishlist #1 idiom */
+   n = 4;
+   allocate fds (n);
+   fds(1) = 11;
+   fds(2) = 22;
+   fds(3) = 33;
+   fds(4) = 44;
+   if fds(1) ^= 11 then fails = fails + 1;
+   if fds(4) ^= 44 then fails = fails + 1;
+   if hbound(fds) ^= 4 then fails = fails + 1;
+   if dim(fds) ^= 4 then fails = fails + 1;
+   if lbound(fds) ^= 1 then fails = fails + 1;
+   s = 0;
+   do i = 1 to n;
+     s = s + fds(i);
+   end;
+   if s ^= 110 then fails = fails + 1;
+   /* LIFO: push a smaller generation, pop back to n=4 */
+   allocate fds (2);
+   if hbound(fds) ^= 2 then fails = fails + 1;
+   fds(1) = 7;
+   fds(2) = 8;
+   if fds(2) ^= 8 then fails = fails + 1;
+   free fds;
+   if hbound(fds) ^= 4 then fails = fails + 1;
+   if fds(3) ^= 33 then fails = fails + 1;
+   free fds;
+   /* (*) CONTROLLED array + ALLOCATE (n): same storage, array decl */
+   n = 3;
+   allocate g (n);
+   do i = 1 to n;
+     g(i) = i * 5;
+   end;
+   if g(3) ^= 15 then fails = fails + 1;
+   if hbound(g) ^= 3 then fails = fails + 1;
+   free g;
+   if fails = 0 then put skip list('PASS controlled_dyn');
+   else put skip list('FAIL controlled_dyn: fails =', fails);
+ end controlled_dyn_test;
