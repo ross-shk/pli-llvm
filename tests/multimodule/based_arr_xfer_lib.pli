@@ -1,0 +1,50 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (25),(126): library side of based_arr_xfer.pli. Heap
+    cells live behind fixed BASED arrays; caller buffers are
+    reached through runtime-(n) overlays naming the length. */
+ basedarrlib: package exports(create_block, fill_block,
+   at_block, free_block, view_sum);
+ dcl blk_ptr pointer;
+ dcl blk(64) fixed bin(31) based(blk_ptr);
+ create_block: procedure(n) returns(pointer);
+   dcl n fixed bin(31);
+   dcl p pointer;
+   allocate blk set(p);
+   blk_ptr = p;
+   return(p);
+ end create_block;
+ fill_block: procedure(p, n, val);
+   dcl p pointer;
+   dcl n fixed bin(31);
+   dcl val fixed bin(31);
+   dcl v(n) fixed bin(31) based(p);
+   dcl i fixed bin(31);
+   do i = 1 to n;
+     v(i) = val;
+   end;
+ end fill_block;
+ at_block: procedure(p, n, i) returns(fixed bin(31));
+   dcl p pointer;
+   dcl n fixed bin(31);
+   dcl i fixed bin(31);
+   dcl v(n) fixed bin(31) based(p);
+   return(v(i));
+ end at_block;
+ free_block: procedure(p);
+   dcl p pointer;
+   blk_ptr = p;
+   free blk;
+ end free_block;
+ view_sum: procedure(p, n) returns(fixed bin(31));
+   dcl p pointer;
+   dcl n fixed bin(31);
+   dcl v(n) fixed bin(31) based(p);
+   dcl i fixed bin(31);
+   dcl s fixed bin(31) init(0);
+   do i = 1 to n;
+     s = s + v(i);
+   end;
+   return(s);
+ end view_sum;
+ end basedarrlib;

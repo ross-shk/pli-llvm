@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (12),(13),(25): dimensioned BASED stays numeric or
+    POINTER. Each DECLARE below must fail with its rule cite. */
+ bad_based_array: procedure options(main);
+   dcl p pointer;
+   dcl c(4) char(1) based(p);
+   dcl s(*) fixed bin(31) based(p);
+ end bad_based_array;

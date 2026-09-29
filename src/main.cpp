@@ -124,14 +124,13 @@ static fs::path executablePath(const char* arg0) {
 // Per-file terminal modes (-emit-llvm, --print-hir, -fsyntax-only) apply to
 // this unit and return without linking. In link mode `outObj` receives the
 // object path for the caller to link. Returns false on any failure.
-static bool compileOne(Preprocessor& preprocessor, const std::string& input,
-                       std::string& output, std::string& triple,
-                       const std::string& clangPath, const std::string& sysparm,
-                       bool sysparmExplicit, bool compileOnly, bool semaCompileOnly,
-                       bool emitLLVM, bool syntaxOnly, bool print_hir, bool keepLL,
-                       bool verbose, bool noSizeChecks, const std::string& optLevel,
-                       const std::string& backendFlags, const fs::path& keepLLDir,
-                       int fileIndex, std::string* outObj) {
+static bool compileOne(Preprocessor& preprocessor, const std::string& input, std::string& output,
+                       std::string& triple, const std::string& clangPath,
+                       const std::string& sysparm, bool sysparmExplicit, bool compileOnly,
+                       bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
+                       bool keepLL, bool verbose, bool noSizeChecks, const std::string& optLevel,
+                       const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
+                       std::string* outObj) {
   std::string src;
   if (!preprocessor.run(input, src))
     return false;
@@ -207,13 +206,12 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input,
   else if (compileOnly)
     objPath = fs::path(base) += ".o";
   else
-    objPath = fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) +
-                                           "-" + std::to_string(fileIndex) + ".o");
+    objPath = fs::temp_directory_path() /
+              (base + "-" + std::to_string(getpid()) + "-" + std::to_string(fileIndex) + ".o");
 
-  fs::path llPath =
-      keepLL ? keepLLDir / (base + ".ll")
-             : fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) +
-                                            "-" + std::to_string(fileIndex) + ".ll");
+  fs::path llPath = keepLL ? keepLLDir / (base + ".ll")
+                           : fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) +
+                                                          "-" + std::to_string(fileIndex) + ".ll");
   {
     std::ofstream os(llPath, std::ios::binary);
     if (!os) {
@@ -223,9 +221,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input,
     os << ir;
   }
 
-  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel +
-                    backendFlags + " " + shellQuote(llPath.string()) + " -c -o " +
-                    shellQuote(objPath.string());
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags +
+                    " " + shellQuote(llPath.string()) + " -c -o " + shellQuote(objPath.string());
   if (verbose)
     std::cerr << "+ " << cmd << "\n";
   int rc = system(cmd.c_str());
@@ -426,10 +423,9 @@ int main(int argc, char** argv) {
   std::vector<std::string> objs;
   for (size_t i = 0; i < inputs.size(); ++i) {
     std::string outObj;
-    if (!compileOne(preprocessor, inputs[i], output, triple, clangPath, sysparm,
-                    sysparmExplicit, compileOnly, semaCompileOnly, emitLLVM,
-                    syntaxOnly, print_hir, keepLL, verbose, noSizeChecks, optLevel,
-                    backendFlags, keepLLDir, (int)i, &outObj))
+    if (!compileOne(preprocessor, inputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
+                    compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
+                    noSizeChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -442,8 +438,7 @@ int main(int argc, char** argv) {
   // (the archive is sectioned, ADR-079); multitasking (QR2.8) runs on pthreads.
   if (output.empty())
     output = "a.out";
-  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel +
-                    backendFlags;
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags;
 #ifdef __APPLE__
   cmd += " -Wl,-dead_strip";
 #else

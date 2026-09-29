@@ -894,6 +894,21 @@ void IRGen::allocaLocals(HProc* p) {
     if (s->dynLb)
       dynLb_[s] = lb;
   }
+  // Pass 2b: BASED overlays with runtime bounds (rules (13),(25)). The
+  // bound expressions are evaluated at entry into the dope slots, exactly
+  // like pass 2 — but nothing is allocated, since a BASED symbol has no
+  // storage of its own (it stays out of localSyms). Subscripting and the
+  // array built-ins then check against the live extent.
+  for (Symbol* s : sema_.storage()) {
+    if (s->kind != Symbol::Var || !s->ty.isDynamic() || !s->basedBase)
+      continue;
+    if (s->owner != p->src)
+      continue;
+    if (s->dynUb && !dynUb_.count(s))
+      dynUb_[s] = toI64(emitExpr(s->dynUb));
+    if (s->dynLb && !dynLb_.count(s))
+      dynLb_[s] = toI64(emitExpr(s->dynLb));
+  }
   // Pass 3: dynamic array structure members (rule 13). Each member is a bare
   // runtime-sized element buffer; evaluate its bounds at entry, allocate it, and
   // store the buffer pointer into the struct field (the struct itself was

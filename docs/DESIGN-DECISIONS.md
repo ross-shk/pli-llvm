@@ -4292,3 +4292,38 @@ manual `-c` path and `tests/multimodule/*` are unchanged. Mixing `.c`
 inputs into the driver and intra-call parallel compilation remain
 follow-ups.
 
+## ADR-163 — Dimensioned BASED arrays overlay pointer storage, bounds from the declaration
+
+**Context.** libnet needs BASED views over caller storage:
+`DCL H_ARRAY POINTER BASED(HANDLES)` for the handle pool and
+`DCL E_ARRAY FIXED BIN(31) BASED(EVENTS)` for fd/event arrays
+(rule 25). Two gaps blocked this: the parser's dimension lookahead
+did not count `POINTER`/`BASED`/`CONTROLLED` as attribute followers,
+so `DCL H(4) POINTER` silently became a precision-4 scalar; and a
+runtime-bound `(n)` BASED overlay recorded no live bound, since
+BASED symbols own no frame storage and never pass through the
+dynamic-alloca path.
+
+**Decision.** Three small changes: (1) `tryParseDimension` accepts
+`POINTER`/`PTR`/`BASED`/`CONTROLLED`/`CTL` as dimension followers,
+so the bare-extent form composes with those attributes; (2) a new
+`allocaLocals` pass 2b evaluates a BASED dynamic overlay's bound
+expressions at entry into the existing dope slots (`dynUb_/dynLb_`)
+without allocating anything; (3) a locator-qualified array
+subscript `P->X(i)` is diagnosed — codegen would otherwise resolve
+the own BASED pointer and silently use the wrong base. Served:
+fixed 1-D and multi-axis numeric/POINTER-element BASED arrays with
+element read/write, runtime-`(n)` overlays naming an entry-visible
+length, `LBOUND`/`HBOUND`/`DIM` on both, and bare heap
+`ALLOCATE X SET(p)` from the descriptor. Stay diagnosed: `CHAR`/
+structure elements, `(*)` non-parameter extents, dimensioned heap
+`ALLOCATE X(n) SET(p)` (no per-pointer bound store exists), and
+whole-array assignment of based storage (pre-existing).
+
+**Consequences.** `based_array.pli` pins fixed/POINTER/`(n)`/2-D
+overlays, live bounds, and heap cells;
+`multimodule/based_arr_xfer.pli` pins heap round-trips and callee
+`(n)` views of caller buffers across the object boundary.
+`bad_based_array.pli` / `bad_based_alloc_dim.pli` pin the
+remaining diagnostics.
+

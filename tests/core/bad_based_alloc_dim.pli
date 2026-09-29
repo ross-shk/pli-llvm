@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rule (89): a BASED heap cell cannot take a per-ALLOCATE
+    dimension; the dimension lives on the DECLARE overlay. */
+ bad_based_alloc_dim: procedure options(main);
+   dcl p pointer;
+   dcl w(4) fixed bin(31) based(p);
+   allocate w(4) set(p);
+ end bad_based_alloc_dim;

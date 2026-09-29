@@ -3428,6 +3428,15 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // procedure parameter array (rule (126)) is subscriptable the same way.
     if (Symbol* arr = lookup(sc, e->name);
         arr && (arr->kind == Symbol::Var || arr->kind == Symbol::Param) && arr->ty.isArray()) {
+      // A locator-qualified array subscript P->X(i) (rules 124,126) would
+      // address through P, but codegen resolves the own BASED pointer;
+      // diagnose it rather than silently using the wrong base.
+      if (e->locPtr) {
+        d_.error(e->loc, "a locator-qualified array subscript is not implemented in this stage",
+                 "(124)");
+        e->ty = Type::voidTy();
+        break;
+      }
       if (e->args.size() != arr->ty.dims.size()) {
         d_.error(e->loc,
                  "array '" + e->name + "' has " + std::to_string(arr->ty.dims.size()) +
