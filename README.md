@@ -127,26 +127,39 @@ cc caller.o c_set.o build/libpli.a -o caller
 
 ## Multi-module PL/I programs
 
-A top-level (non-`MAIN`, non-nested) procedure is externally linked under its upper-cased name (rule 42; ADR-103), so another unit's `ENTRY...EXTERNAL` declaration resolves at link time. Compile each unit with `-c` and link the objects with the runtime:
+A top-level (non-`MAIN`, non-nested) procedure is externally linked under its upper-cased name (rule 42; ADR-103), so another unit's `ENTRY...EXTERNAL` declaration resolves at link time. Give all the units to a single `plic` invocation and it compiles each to an object and links them with the runtime (cc-style, ADR-162):
 
 ```
-./build/plic main.pli -c -o main.o
-./build/plic lib.pli -c -o lib.o
-cc main.o lib.o build/libpli.a -o prog
+./build/plic lib.pli main.pli -o prog
 ```
 
 Scalar parameters are passed by reference and function returns work across the link, exactly as in the C-interop form above (array and structure parameters need full entry descriptors, QR1.1; shared `EXTERNAL` variables are a follow-up).
 
+Each unit is an independent relocatable object, so you can also compile them separately and link by hand:
+
+```
+./build/plic -c main.pli          # writes main.o (or -o main.o)
+./build/plic -c lib.pli           # writes lib.o
+cc main.o lib.o build/libpli.a -o prog
+```
+
+Only a unit that declares `OPTIONS(MAIN)` emits a `main` shim, so a library module with no entry point compiles cleanly either way.
+
 ## Usage
 
 ```
-plic [options] file.pli
+plic [options] file.pli...
+
+Multiple inputs compile like cc: each file becomes an independent object and
+they are linked together with libpli into one output. Per-file modes apply to
+each input (-c writes <base>.o, -emit-llvm writes <base>.ll per file); a
+single -o cannot name several outputs, so -o is single-input only in those modes.
 
   -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)
-  -c               compile to a relocatable object (no linking)
-  -emit-llvm       write LLVM IR and stop
-  --print-hir      lower to HIR and print it, then stop
-  -fsyntax-only    parse and analyse only
+  -c               compile each input to a relocatable object (no linking)
+  -emit-llvm       write LLVM IR per input and stop
+  --print-hir      lower to HIR and print it per input, then stop
+  -fsyntax-only    parse and analyse each input only
   -O0 … -O3, -Os   optimization level passed to the LLVM pipeline (default -O2)
   --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE))
   --release        -O3 plus linker dead-stripping (also strips symbols on macOS)

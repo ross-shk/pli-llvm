@@ -45,14 +45,20 @@ static void usage() {
   std::cout
       << "plic — PL/I compiler (LLVM backend)\n"
          "\n"
-         "usage: plic [options] file.pli\n"
+         "usage: plic [options] file.pli...\n"
+         "\n"
+         "Multiple inputs compile like cc: each file becomes an independent\n"
+         "relocatable object and they are linked together with libpli into one\n"
+         "output (-o names it). -c writes <base>.o per input and does not link.\n"
          "\n"
          "options:\n"
          "  -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)\n"
-         "  -c               compile to a relocatable object (no linking)\n"
-         "  -emit-llvm       write LLVM IR and stop\n"
-         "  --print-hir      lower to HIR and print it, then stop\n"
-         "  -fsyntax-only    parse and analyse only\n"
+         "                   (single input only with -emit-llvm/--print-hir/-fsyntax-only,\n"
+         "                   and with -c when more than one input is given)\n"
+         "  -c               compile each input to a relocatable object (no linking)\n"
+         "  -emit-llvm       write LLVM IR per input and stop\n"
+         "  --print-hir      lower to HIR and print it per input, then stop\n"
+         "  -fsyntax-only    parse and analyse each input only\n"
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
          "  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE), ADR-111)\n"
          "  --release        maximum optimization + stripped binary (minimal size)\n"
@@ -112,8 +118,134 @@ static fs::path executablePath(const char* arg0) {
   return p;
 }
 
+// Compile one translation unit through the full pipeline (preprocessor ->
+// lexer -> parser -> sema -> HIR -> IRGen) and assemble it to a relocatable
+// object with the backend clang. Multi-input drivers call this once per file.
+// Per-file terminal modes (-emit-llvm, --print-hir, -fsyntax-only) apply to
+// this unit and return without linking. In link mode `outObj` receives the
+// object path for the caller to link. Returns false on any failure.
+static bool compileOne(Preprocessor& preprocessor, const std::string& input,
+                       std::string& output, std::string& triple,
+                       const std::string& clangPath, const std::string& sysparm,
+                       bool sysparmExplicit, bool compileOnly, bool semaCompileOnly,
+                       bool emitLLVM, bool syntaxOnly, bool print_hir, bool keepLL,
+                       bool verbose, bool noSizeChecks, const std::string& optLevel,
+                       const std::string& backendFlags, const fs::path& keepLLDir,
+                       int fileIndex, std::string* outObj) {
+  std::string src;
+  if (!preprocessor.run(input, src))
+    return false;
+
+  Diags diags(input);
+  diags.setSource(&src);
+
+  // --- front end ---------------------------------------------------------
+  Lexer lexer(src, diags);
+  std::vector<Token> toks = lexer.run();
+  if (!diags.ok())
+    return false;
+
+  Parser parser(std::move(toks), diags);
+  std::unique_ptr<Program> prog = parser.parse();
+  if (!diags.ok())
+    return false;
+
+  Sema sema(diags);
+  // SYSPARM: explicit --sysparm wins over $PLIC_SYSPARM (rule (123)).
+  std::string effSysparm = sysparm;
+  if (!sysparmExplicit)
+    if (const char* env = std::getenv("PLIC_SYSPARM"))
+      effSysparm = env;
+  sema.setSysparm(effSysparm);
+  // In multi-input link mode every unit is a relocatable object like `-c`:
+  // no MAIN fallback promotion, so a library module with no OPTIONS(MAIN)
+  // compiles cleanly and only its external procedures are emitted.
+  sema.run(*prog, semaCompileOnly);
+  if (!diags.ok())
+    return false;
+
+  if (syntaxOnly)
+    return true;
+
+  // Lower the typed AST to HIR (ADR-005). `--print-hir` shows it and stops.
+  HProgram hir = lower(*prog);
+  if (print_hir) {
+    printHIR(hir, std::cout);
+    return true;
+  }
+
+  // --- code generation ---------------------------------------------------
+  if (triple.empty())
+    triple = runCapture((shellQuote(clangPath) + " -dumpmachine 2>/dev/null").c_str());
+  IRGen irgen(diags, sema, triple, noSizeChecks);
+  std::string ir = irgen.run(hir);
+  if (!diags.ok())
+    return false;
+
+  fs::path inPath(input);
+  std::string base = inPath.stem().string();
+
+  if (emitLLVM) {
+    // -o is restricted to a single input (checked in main); otherwise each
+    // input writes its own <base>.ll.
+    std::string dest = output.empty() ? base + ".ll" : output;
+    std::ofstream os(dest, std::ios::binary);
+    if (!os) {
+      std::cerr << "plic: cannot write " << dest << "\n";
+      return false;
+    }
+    os << ir;
+    return true;
+  }
+
+  // Object destination, mirroring cc: -c single with -o names the object, -c
+  // without -o writes <base>.o in the cwd; link mode uses a per-input temp
+  // object (the index keeps distinct stems apart across directories).
+  fs::path objPath;
+  if (compileOnly && !output.empty())
+    objPath = output;
+  else if (compileOnly)
+    objPath = fs::path(base) += ".o";
+  else
+    objPath = fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) +
+                                           "-" + std::to_string(fileIndex) + ".o");
+
+  fs::path llPath =
+      keepLL ? keepLLDir / (base + ".ll")
+             : fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) +
+                                            "-" + std::to_string(fileIndex) + ".ll");
+  {
+    std::ofstream os(llPath, std::ios::binary);
+    if (!os) {
+      std::cerr << "plic: cannot write " << llPath << "\n";
+      return false;
+    }
+    os << ir;
+  }
+
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel +
+                    backendFlags + " " + shellQuote(llPath.string()) + " -c -o " +
+                    shellQuote(objPath.string());
+  if (verbose)
+    std::cerr << "+ " << cmd << "\n";
+  int rc = system(cmd.c_str());
+  if (!keepLL) {
+    std::error_code ec;
+    fs::remove(llPath, ec);
+  }
+  if (rc != 0) {
+    std::cerr << "plic: backend failed\n";
+    return false;
+  }
+
+  if (!compileOnly)
+    *outObj = objPath.string();
+  return true;
+}
+
 int main(int argc, char** argv) {
-  std::string input, output, runtimeLib = PLIC_RUNTIME_LIB, triple;
+  std::vector<std::string> inputs;
+  std::string output, runtimeLib = PLIC_RUNTIME_LIB, triple;
   std::string clangPath = PLIC_CLANG;
   std::string sysparm;
   bool sysparmExplicit = false;
@@ -205,12 +337,8 @@ int main(int argc, char** argv) {
     else if (!a.empty() && a[0] == '-') {
       std::cerr << "plic: unknown option " << a << "\n";
       return 2;
-    } else if (input.empty())
-      input = a;
-    else {
-      std::cerr << "plic: more than one input file given\n";
-      return 2;
-    }
+    } else
+      inputs.push_back(a);
   }
 
   // `--explain` needs no input file: print the production and exit.
@@ -222,7 +350,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  if (input.empty()) {
+  if (inputs.empty()) {
     usage();
     return 2;
   }
@@ -235,7 +363,6 @@ int main(int argc, char** argv) {
       runtimeLib = installed.string();
   }
 
-  std::string src;
   Preprocessor preprocessor;
   for (const std::string& d : includeDirs)
     preprocessor.addIncludeDir(d);
@@ -262,81 +389,18 @@ int main(int argc, char** argv) {
       std::cerr << "plic:   $PLIC_INCLUDE_PATH\n";
     std::cerr << "plic:   " << defaultInc << "\n";
   }
-  if (!preprocessor.run(input, src))
-    return 1;
 
-  Diags diags(input);
-  diags.setSource(&src);
-
-  // --- front end ---------------------------------------------------------
-  Lexer lexer(src, diags);
-  std::vector<Token> toks = lexer.run();
-  if (!diags.ok())
-    return 1;
-
-  Parser parser(std::move(toks), diags);
-  std::unique_ptr<Program> prog = parser.parse();
-  if (!diags.ok())
-    return 1;
-
-  Sema sema(diags);
-  if (!sysparmExplicit) {
-    if (const char* env = std::getenv("PLIC_SYSPARM"))
-      sysparm = env;
+  // clang-matching guards: a single -o cannot name more than one output.
+  const bool multi = inputs.size() > 1;
+  if (compileOnly && multi && !output.empty()) {
+    std::cerr << "plic: cannot specify -o when generating multiple output files\n";
+    return 2;
   }
-  sema.setSysparm(sysparm);
-  sema.run(*prog, compileOnly);
-  if (!diags.ok())
-    return 1;
-
-  if (syntaxOnly)
-    return 0;
-
-  // Lower the typed AST to HIR (ADR-005). `--print-hir` shows it and stops.
-  HProgram hir = lower(*prog);
-  if (print_hir) {
-    printHIR(hir, std::cout);
-    return 0;
+  if (multi && !output.empty() && (emitLLVM || syntaxOnly || print_hir)) {
+    std::cerr << "plic: -o is ambiguous with a per-file mode and multiple inputs\n";
+    return 2;
   }
 
-  // --- code generation ---------------------------------------------------
-  if (triple.empty())
-    triple = runCapture((shellQuote(clangPath) + " -dumpmachine 2>/dev/null").c_str());
-  IRGen irgen(diags, sema, triple, noSizeChecks);
-  std::string ir = irgen.run(hir);
-  if (!diags.ok())
-    return 1;
-
-  fs::path inPath(input);
-  std::string base = inPath.stem().string();
-
-  if (emitLLVM) {
-    std::string dest = output.empty() ? base + ".ll" : output;
-    std::ofstream os(dest, std::ios::binary);
-    if (!os) {
-      std::cerr << "plic: cannot write " << dest << "\n";
-      return 1;
-    }
-    os << ir;
-    return 0;
-  }
-
-  if (output.empty())
-    output = compileOnly ? base + ".o" : "a.out";
-
-  fs::path llPath =
-      keepLL ? fs::path(output).parent_path() / (base + ".ll")
-             : fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) + ".ll");
-  {
-    std::ofstream os(llPath, std::ios::binary);
-    if (!os) {
-      std::cerr << "plic: cannot write " << llPath << "\n";
-      return 1;
-    }
-    os << ir;
-  }
-
-  // --- assemble, optimize, link -----------------------------------------
   // --release / --debug are overarching presets that select the underlying
   // optimization and debug-info knobs: release = -O3 + minimal size
   // (dead-strip + strip symbol table); debug = -O0 + DWARF debug info.
@@ -348,32 +412,58 @@ int main(int argc, char** argv) {
     optLevel = "-O0";
     backendFlags = " -g";
   }
-  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags +
-                    " " + shellQuote(llPath.string());
-  if (compileOnly) {
-    cmd += " -c"; // relocatable object: the caller performs the link step
-  } else {
-    // Drop unreferenced runtime sections (the archive is sectioned, ADR-079).
-#ifdef __APPLE__
-    cmd += " -Wl,-dead_strip";
-#else
-    cmd += " -Wl,--gc-sections";
-#endif
-    // Multitasking (QR2.8) runs on pthreads; the flag is a no-op where the
-    // threading library lives in the system library (e.g. macOS).
-    cmd += " -pthread";
-    if (!runtimeLib.empty())
-      cmd += " " + shellQuote(runtimeLib);
-    for (const std::string& la : linkArgs)
-      cmd += " " + la; // link flags
+
+  // Compile each input to its own object; per-file modes (-c, -emit-llvm,
+  // --print-hir, -fsyntax-only) stop after all inputs are handled.
+  const bool terminalMode = compileOnly || emitLLVM || syntaxOnly || print_hir;
+  // Every unit of a multi-input link is a relocatable object (like -c): only
+  // units that actually declare OPTIONS(MAIN) emit a `main` shim.
+  const bool semaCompileOnly = compileOnly || multi;
+  // --keep-ll places each .ll next to the output (or the cwd with no -o).
+  fs::path keepLLDir = output.empty() ? fs::path(".") : fs::path(output).parent_path();
+  if (keepLLDir.empty())
+    keepLLDir = ".";
+  std::vector<std::string> objs;
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    std::string outObj;
+    if (!compileOne(preprocessor, inputs[i], output, triple, clangPath, sysparm,
+                    sysparmExplicit, compileOnly, semaCompileOnly, emitLLVM,
+                    syntaxOnly, print_hir, keepLL, verbose, noSizeChecks, optLevel,
+                    backendFlags, keepLLDir, (int)i, &outObj))
+      return 1;
+    if (!compileOnly)
+      objs.push_back(outObj);
   }
+  if (terminalMode)
+    return 0;
+
+  // --- link step ----------------------------------------------------------
+  // Link the per-file objects with libpli. Drop unreferenced runtime sections
+  // (the archive is sectioned, ADR-079); multitasking (QR2.8) runs on pthreads.
+  if (output.empty())
+    output = "a.out";
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel +
+                    backendFlags;
+#ifdef __APPLE__
+  cmd += " -Wl,-dead_strip";
+#else
+  cmd += " -Wl,--gc-sections";
+#endif
+  cmd += " -pthread";
+  for (const std::string& o : objs)
+    cmd += " " + shellQuote(o);
+  if (!runtimeLib.empty())
+    cmd += " " + shellQuote(runtimeLib);
+  for (const std::string& la : linkArgs)
+    cmd += " " + la; // link flags
   cmd += " -o " + shellQuote(output);
   if (verbose)
     std::cerr << "+ " << cmd << "\n";
   int rc = system(cmd.c_str());
-  if (!keepLL) {
+  // Remove the temp objects produced for this link.
+  for (const std::string& o : objs) {
     std::error_code ec;
-    fs::remove(llPath, ec);
+    fs::remove(o, ec);
   }
   if (rc != 0) {
     std::cerr << "plic: backend failed\n";

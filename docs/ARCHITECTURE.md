@@ -70,6 +70,13 @@ IRGen              builds an LLVM module with `llvm::IRBuilder`
    └── clang ──► object file ──► link with `libpli` ──► executable
 ```
 
+Given several input files, plic runs the pipeline once per file to an
+independent relocatable object and links them all with `libpli` into one
+executable (cc-style separate compilation, ADR-162). `-c` stops after the
+objects; `-emit-llvm` writes a `.ll` per input. External procedures and
+variables (rule (42)) resolve at the object link, so no cross-file semantic
+analysis is needed.
+
 ### Why separate AST, HIR, and LLVM IR
 
 The AST records source syntax. HIR is a typed, lower-level representation that

@@ -4259,3 +4259,36 @@ live `HBOUND`/`DIM`/`LBOUND`, and LIFO restore;
 `multimodule/ctl_dyn_array.pli` pins private per-module stacks across
 the object boundary. `bad_controlled.pli` still rejects `DCL C8(n)
 CONTROLLED`.
+
+## ADR-162 — Multi-file driver arguments (separate compilation, cc-style)
+
+**Context.** Cross-module PL/I works only through manual `-c` per unit
+plus a `cc` link (ADR-103): `driver/multimod.sh` and
+`tests/multimodule/*` compile each `_lib.pli` companion and the MAIN
+unit separately, then link the objects with libpli. The driver
+(`src/main.cpp`) accepted exactly one input and its consequences noted
+"multi-file driver arguments stay a follow-up".
+
+**Decision.** The driver now accepts several `.pli` inputs like `cc`:
+each compiles through the full independent pipeline to a relocatable
+object, and by default all are linked together with libpli into one
+output (`-o`, default `a.out`). Every unit of a multi-input link is
+treated as a relocatable object (sema `compileOnly`): only a unit that
+actually declares `OPTIONS(MAIN)` emits a `main` shim, so a library
+module with no entry point compiles cleanly. Per-file modes apply to
+each input: `-c` writes `<base>.o` per file (no link), `-emit-llvm`
+writes `<base>.ll` per file, `--print-hir` prints each, and
+`-fsyntax-only` checks each (rc 0 only if all are clean). Matching
+clang, a single `-o` cannot name multiple outputs: `-c`/`-emit-llvm`/
+`--print-hir`/`-fsyntax-only` with several inputs and `-o` is rejected.
+`--keep-ll` places each `.ll` next to the output. No cross-TU semantic
+analysis: external procedures/variables resolve at the object link.
+
+**Consequences.** `driver/multimod_onedriver.sh` links a MAIN unit
+against a library unit in one invocation (previously two `-c` steps +
+`cc`); `driver/multic.sh` pins `-c` multi-input `.o` naming and the
+`-o` rejection; `driver/multiemit.sh` pins per-input `-emit-llvm`. The
+manual `-c` path and `tests/multimodule/*` are unchanged. Mixing `.c`
+inputs into the driver and intra-call parallel compilation remain
+follow-ups.
+
