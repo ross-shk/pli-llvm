@@ -4803,3 +4803,50 @@ is natural and falls out of the all-`*` view); accepting array
 expressions or reductions as the slice value (kept diagnosed, as
 elsewhere).
 
+## ADR-174 — Bare `BASED` declares an unconnected variable
+
+**Context.** libnet's `net_poll_multi` walks a caller handle pool
+with a reusable view: `dcl 1 c based;` then, per client,
+`c = based(s.client_handles(i)) like conn_rec;` and `c.fd`. TR
+25.084 rule (25) is `based-attribute ::= BASED [ ( reference ) ]`,
+so the bare declaration is in scope, but the parser diagnosed it
+("BASED without an explicit pointer is not implemented"). The
+assignment spelling is *not* PL/I: rule (86) takes an expression on
+the right, and SC26-3114 §8.4.1.3 states that when a based variable
+is declared without a locator-reference "any reference to the based
+variable must always be explicitly locator-qualified" (the
+left-recursive `reference -> basic-reference`, rule (124)). The
+compliant form of the libnet loop is
+`s.client_handles(i) -> c.fd`.
+
+**Decision.** Parse bare `BASED` and mark the symbol unconnected
+(`Symbol::basedNoPtr`, with `isBased()` covering both spellings).
+An unconnected based variable keeps no storage and declares no
+implicit locator: sema requires every reference to carry an explicit
+locator (`P -> X`, rules (25),(124)), including member reads/writes,
+array subscripts, and `FREE (P -> X)`. `ALLOCATE` always requires
+`SET` (rules (87),(88)) because there is no own locator to receive
+the block. The only reference allowed to omit the locator is the
+named operand of an `ALLOCATE` item (`Expr::allocBaseRef`). IRGen is
+unchanged: the existing locator paths (`addressOf` for connected
+bases, `locatorMemberAddr`/`loadArrayElement` for explicit ones)
+already address through the locator value. The non-spec
+`c = based(p) like T;` pseudo-variable is left diagnosed rather than
+silently accepted.
+
+**Consequences.** `core/based_noptr.pli` pins locator-qualified member
+read/write, a `LIKE` template, `ALLOCATE ... SET`, a bare-based array
+subscript, and `FREE (P -> X)`; `multimodule/based_noptr_xfer.pli`
+(+ `_lib`) pins a bare view addressing a caller structure across the
+object boundary; `bad_based_noptr.pli`, `bad_based_alloc_noset.pli`,
+and `bad_based_free_noloc.pli` pin the three diagnostics. The rule
+(25) row moves in `GRAMMAR-COVERAGE.md`.
+
+**Rejected.** Implementing the `c = based(p) like T;` assignment as a
+compiler extension — it is absent from TR 25.084, the §3.3 word list,
+and every reference text in `references/text/` (GC33-0009,
+SC26-3114), and it contradicts the explicit-locator rule; libnet
+should be refactored to `p -> c.fd`. Declaring an implicit hidden
+locator for bare `BASED` (would silently make an unqualified
+reference dereference a null locator instead of being diagnosed).
+

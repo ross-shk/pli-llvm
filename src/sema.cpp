@@ -797,8 +797,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           else if (item.init || item.initCall || !item.initItems.empty() || item.valueInit)
             d_.error(item.loc, "INITIAL/VALUE on an ENTRY variable is not implemented (ADR-171)",
                      "");
-          else if (!item.definedBase.empty() || !item.basedBase.empty() || !item.like.empty() ||
-                   item.controlled || item.area || item.offset)
+          else if (!item.definedBase.empty() || !item.basedBase.empty() || item.basedNoPtr ||
+                   !item.like.empty() || item.controlled || item.area || item.offset)
             d_.error(item.loc,
                      "DEFINED/BASED/LIKE/CONTROLLED/AREA/OFFSET on an ENTRY variable is not "
                      "implemented (ADR-171)",
@@ -1030,7 +1030,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      std::string("INITIAL/VALUE on a ") + what +
                          " variable is not implemented in this stage",
                      "(26)");
-          if (!item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty())
+          if (!item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty() ||
+              item.basedNoPtr)
             d_.error(item.loc,
                      std::string("LIKE/DEFINED/BASED on a ") + what +
                          " variable is not implemented in this stage",
@@ -1166,6 +1167,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             item.sym->basedBase = base;
           else
             pendingBased_.push_back({&item, sc, p});
+        } else if (item.basedNoPtr) {
+          // Bare BASED (rule 25): unconnected storage; references must carry an
+          // explicit locator (rule (124)). No implicit locator is declared.
+          item.sym->basedNoPtr = true;
         }
         // CONTROLLED (rule (15), ADR-140): storage managed by an explicit
         // generation stack. This slice accepts the attribute and diagnoses
@@ -1190,7 +1195,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             ctlErr("LIKE", "(15)");
           if (!item.definedBase.empty())
             ctlErr("DEFINED", "(24)");
-          if (!item.basedBase.empty())
+          if (!item.basedBase.empty() || item.basedNoPtr)
             ctlErr("BASED", "(25)");
           // CONTROLLED dynamic arrays, 1-D numeric only (rules (13),(89)):
           // `DCL G(*) FIXED CONTROLLED` takes its extent from each
@@ -1228,7 +1233,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             areaErr("LIKE", "(15)");
           if (!item.definedBase.empty())
             areaErr("DEFINED", "(24)");
-          if (!item.basedBase.empty())
+          if (!item.basedBase.empty() || item.basedNoPtr)
             areaErr("BASED", "(25)");
           if (item.controlled)
             areaErr("CONTROLLED", "(15)");
@@ -1542,7 +1547,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // A BASED item is excluded by its syntactic attribute: its base
         // resolves after all DECLAREs are collected (deferred, rule 25).
         if (item.sym->kind == Symbol::Var && !item.sym->isStatic && !item.sym->definedBase &&
-            item.basedBase.empty() && !item.sym->basedBase && !item.sym->fileAttr &&
+            item.basedBase.empty() && !item.sym->isBased() && !item.sym->fileAttr &&
             !item.sym->controlled)
           p->localSyms.push_back(item.sym);
         if (item.init) {
@@ -1566,7 +1571,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (item.sym->fileAttr)
             d_.error(item.loc,
                      "VALUE on a FILE variable is not implemented in this stage (ADR-108)", "");
-          else if (!item.definedBase.empty() || !item.basedBase.empty())
+          else if (!item.definedBase.empty() || !item.basedBase.empty() || item.basedNoPtr)
             d_.error(item.loc,
                      "VALUE on a DEFINED/BASED variable is not implemented in this stage "
                      "(ADR-108)",
@@ -1857,7 +1862,7 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
   bool nested = inUnit_ > 1;
   std::vector<Symbol*> caps;
   auto noteCap = [&](Symbol* sym, bool whole, SourceLoc loc) {
-    if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic && !sym->basedBase &&
+    if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
         !sym->definedBase && !sym->fileAttr && sym->owner == p) {
       if (std::find(caps.begin(), caps.end(), sym) == caps.end())
         caps.push_back(sym);
@@ -2083,7 +2088,7 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
 // also stays out: its live bound is per-generation in the runtime stack.
 bool Sema::wholeArrayStorageOk(Expr* e) {
   Symbol* s = e->sym;
-  if (!s || s->kind != Symbol::Var || s->definedBase || s->basedBase)
+  if (!s || s->kind != Symbol::Var || s->definedBase || s->isBased())
     return false;
   if (!e->memberPath.empty() && e->ty.isDynamic())
     return false;
@@ -2401,7 +2406,7 @@ bool Sema::expandAggregateItems(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       continue;
     }
     Symbol* sym = it->sym;
-    if (!sym || sym->kind != Symbol::Var || sym->definedBase || sym->basedBase) {
+    if (!sym || sym->kind != Symbol::Var || sym->definedBase || sym->isBased()) {
       d_.error(it->loc,
                std::string(what) + " of a parameter, DEFINED overlay, or BASED array is not "
                                    "implemented in this stage",
@@ -3090,7 +3095,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     for (size_t i = 0; i < s->allocBase.size(); ++i) {
       typeExpr(s->allocBase[i].get(), sc, p);
       Symbol* bsym = s->allocBase[i]->sym;
-      if (!bsym || (!bsym->basedBase && !bsym->controlled)) {
+      if (!bsym || (!bsym->isBased() && !bsym->controlled)) {
         d_.error(s->allocBase[i]->loc,
                  "'" + s->allocBase[i]->name +
                      "' is not a BASED variable; ALLOCATE requires based storage",
@@ -3187,9 +3192,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       // BASED without SET is served only with the IN ( area ) option (rule (88)):
       // the block address lands in the based variable's own locator. A plain
-      // heap ALLOCATE of BASED storage still requires SET.
+      // heap ALLOCATE of BASED storage still requires SET, and an unconnected
+      // bare-BASED variable has no own locator, so it always requires SET.
       if (i >= s->allocSet.size() || !s->allocSet[i]) {
-        if (!areaE)
+        if (!areaE || bsym->basedNoPtr)
           d_.error(s->allocBase[i]->loc,
                    "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
       } else {
@@ -3220,7 +3226,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                    "(90)");
         continue;
       }
-      if (!bsym || !bsym->basedBase)
+      if (!bsym || !bsym->isBased())
         d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
                  "(90)");
       if (f->locPtr && !f->locPtr->ty.isLocator())
@@ -3486,11 +3492,19 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       typeExpr(e->locPtr.get(), sc, p);
       if (!e->locPtr->ty.isPointer())
         d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
-      if (!sym->basedBase)
+      if (!sym->isBased())
         d_.error(e->loc,
                  "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
                  "(124)");
     }
+    // Bare BASED (rule 25) declares no locator, so every reference must carry
+    // an explicit locator qualifier (rule (124)); the named operand of an
+    // ALLOCATE item is the one context that may omit it.
+    if (sym->basedNoPtr && !e->locPtr && !e->allocBaseRef)
+      d_.error(e->loc,
+               "'" + e->name +
+                   "' is declared BASED without a pointer; references must be locator-qualified",
+               "(124)");
     // A qualified reference S.A.B (rule 124): resolve each member against
     // the structure type, recording the LLVM field index along the path.
     if (!e->path.empty()) {
@@ -3628,7 +3642,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         typeExpr(e->locPtr.get(), sc, p);
         if (!e->locPtr->ty.isPointer())
           d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
-        if (!arr->basedBase) {
+        if (!arr->isBased()) {
           d_.error(e->loc,
                    "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
                    "(124)");

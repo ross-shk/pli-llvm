@@ -276,8 +276,8 @@ StmtP Parser::parseDefineAlias() {
     return nullptr;
   }
   if (item.level != 0 || item.init || item.initCall || !item.initItems.empty() || item.valueInit ||
-      !item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty() || item.isEntry ||
-      item.fileAttr || !item.entryParams.empty()) {
+      !item.like.empty() || !item.definedBase.empty() || !item.basedBase.empty() ||
+      item.basedNoPtr || item.isEntry || item.fileAttr || !item.entryParams.empty()) {
     d_.error(item.loc, "only scalar data attributes are implemented in DEFINE ALIAS (ADR-114)", "");
     resync();
     return nullptr;
@@ -1621,8 +1621,9 @@ void Parser::parseDeclTail(DeclItem& item) {
       }
       if (w == "BASED") {
         // based-attribute ::= BASED [ ( reference ) ]  rule (25): the declared
-        // item overlays the storage addressed by a POINTER variable, so it has
-        // no storage of its own. This stage requires the explicit BASED(P).
+        // item overlays storage addressed by a locator, so it has no storage of
+        // its own. Bare BASED declares an unconnected based variable whose
+        // references must be explicitly locator-qualified (rules (25),(124)).
         advance();
         if (at(Tok::LParen)) {
           advance();
@@ -1634,8 +1635,7 @@ void Parser::parseDeclTail(DeclItem& item) {
           }
           expect(Tok::RParen, "(25)");
         } else {
-          d_.error(cur().loc, "BASED without an explicit POINTER is not implemented in this stage",
-                   "(25)");
+          item.basedNoPtr = true;
         }
         continue;
       }
@@ -3166,6 +3166,7 @@ StmtP Parser::parseAllocate() {
       base->kind = Expr::VarRef;
       base->name = cur().text;
       base->loc = cur().loc;
+      base->allocBaseRef = true; // named based variable of the ALLOCATE item (rule (88))
       advance();
       bool paren = eat(Tok::LParen); // optional: identifier [(] SET/IN ( ref ) [)]
       // A SET/IN option always carries `(...)`, so a bare variable named

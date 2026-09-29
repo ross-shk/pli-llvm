@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* A bare BASED variable has no own locator, so FREE must name one
+    with a locator qualifier (rules (90),(124)); the bare form is
+    diagnosed. */
+ bad_based_free_noloc: procedure options(main);
+   dcl 1 rec based,
+       2 a fixed bin(31);
+   free rec;
+ end bad_based_free_noloc;

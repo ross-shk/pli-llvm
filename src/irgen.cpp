@@ -2350,8 +2350,10 @@ void IRGen::emitAssign(HStmt* s) {
     }
     return;
   }
-  // Qualified member assignment: S.A = e (rule 124).
-  if (s->target->kind == HExpr::VarRef && s->target->sym && !s->target->memberPath.empty()) {
+  // Qualified member assignment: S.A = e (rule 124). A locator-qualified
+  // whole reference P->X (empty member path) stores through the locator too.
+  if (s->target->kind == HExpr::VarRef && s->target->sym &&
+      (!s->target->memberPath.empty() || s->target->locPtr)) {
     HExpr* t = s->target.get();
     const Type& leaf = t->ty;
     Val v = emitExpr(s->value.get());
@@ -5017,8 +5019,10 @@ Val IRGen::emitExpr(HExpr* e) {
       v.reg = f ? (llvm::Value*)f : llvm::Constant::getNullValue(b_.getPtrTy());
       return v;
     }
-    if (!e->memberPath.empty()) {
-      // Qualified member S.A.B (rule 124): load the leaf member.
+    if (!e->memberPath.empty() || e->locPtr) {
+      // Qualified member S.A.B (rule 124): load the leaf member. A
+      // locator-qualified whole reference P->X (empty member path) loads
+      // through the locator value as well.
       const Type& leaf = e->ty;
       // A locator-qualified member P->X.FIELD (rule 124) GEPs off the loaded
       // pointer value; otherwise off the based/symbol member address.

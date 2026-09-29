@@ -1,0 +1,24 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rule (25): a bare BASED view in one module addresses caller
+    storage through a POINTER parameter. Companion to
+    based_noptr_xfer_lib.pli. */
+ basednoptr: procedure options(main);
+   dcl fails fixed bin(31) init(0);
+   dcl 1 local_rec,
+       2 id   fixed bin(31),
+       2 data fixed bin(31);
+   dcl p pointer;
+
+   dcl read_field  entry(pointer) returns(fixed bin(31)) external;
+   dcl write_field entry(pointer, fixed bin(31)) external;
+
+   p = addr(local_rec);
+   call write_field(p, 314);
+   if local_rec.data ^= 314 then fails = fails + 1;
+   local_rec.data = 271;
+   if read_field(p) ^= 271 then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS based_noptr_xfer');
+   else put skip list('FAIL based_noptr_xfer:', fails);
+ end basednoptr;

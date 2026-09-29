@@ -44,6 +44,10 @@ struct Symbol {
   // BASED (rule 25): the POINTER variable that addresses this based structure's
   // storage; a based symbol has no own storage, its address is the pointer value.
   Symbol* basedBase = nullptr;
+  // Bare BASED (rule 25): no locator is declared, so every reference to this
+  // based variable must be explicitly locator-qualified (rule (124)).
+  bool basedNoPtr = false;
+  bool isBased() const { return basedBase != nullptr || basedNoPtr; }
   bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
   int ctlSlot = -1;        // runtime generation-stack slot index (87-90)
   // AREA (rule (20)): the region's byte size, a compile-time constant (default

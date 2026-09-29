@@ -48,6 +48,9 @@ struct Expr {
   std::vector<unsigned> memberPath; // VarRef: resolved LLVM struct field indices (set by sema)
   Symbol* sym = nullptr;            // resolved by sema
   ExprP locPtr;      // VarRef: the locator pointer of a P->X reference (rule 124); null = none
+  // VarRef: this is the based-variable operand of an ALLOCATE item (rule (88)).
+  // An unconnected BASED variable may be named there without a locator.
+  bool allocBaseRef = false;
   Tok op = Tok::Eof; // Binary / Unary operator
   ExprP a, b;
   std::vector<ExprP> args; // Call
@@ -111,6 +114,7 @@ struct DeclItem {
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
+  bool basedNoPtr = false;             // bare BASED (rule 25): no locator, refs must qualify
   bool controlled = false;             // CONTROLLED generation-stack storage (rule (15), ADR-140)
   bool area = false;                   // AREA attribute (rule (20)); areaSize = size expr
   ExprP areaSize;                      // AREA( expression ) region size; null = default 1000
