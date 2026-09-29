@@ -45,7 +45,8 @@ static void parseDecConstant(const std::string& text, Expr& e) {
 static bool isScalarTypeWord(const std::string& w) {
   return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
          w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
-         w == "VAR" || w == "ALIGNED" || w == "UNALIGNED" || w == "POINTER";
+         w == "VARYINGZ" || w == "VAR" || w == "VARZ" || w == "ALIGNED" || w == "UNALIGNED" ||
+         w == "POINTER";
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,6 +1210,16 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     }
     return true;
   }
+  if (w == "VARYINGZ" || w == "VARZ") {
+    // VARYINGZ (IBM Enterprise PL/I extension, ADR-168): a NUL-terminated
+    // varying CHARACTER string. Reuse VARYING storage/operations and mark the
+    // extra flag; the by-value C ABI boundary NUL-terminates. `VARZ` is the
+    // IBM abbreviation, mirroring VARYING/VAR.
+    bag.varying = true;
+    bag.varyingz = true;
+    advance();
+    return true;
+  }
   if (w == "VARYING" || w == "VAR") {
     bag.varying = true;
     advance();
@@ -1694,6 +1705,8 @@ void Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "string and arithmetic attributes cannot be combined", "(15)");
   if (bag.varying && !bag.character && !bag.bit)
     d_.error(item.loc, "VARYING requires CHARACTER or BIT", "(15)");
+  if (bag.varyingz && !bag.character)
+    d_.error(item.loc, "VARYINGZ requires CHARACTER", "(15)");
   if (bag.pointer &&
       (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal))
     d_.error(item.loc, "POINTER cannot be combined with a data attribute", "(15)");
@@ -1732,6 +1745,7 @@ void Parser::parseDeclTail(DeclItem& item) {
     // type for sema to validate as a parameter-only form and for codegen to
     // size at call time. VARYING stays diagnosed there (deferred).
     item.ty = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+    item.ty.varyingz = bag.varyingz;
     if (bag.starLen)
       item.ty.starLen = true;
     item.slenExpr = std::move(bag.slenExpr);
@@ -1858,10 +1872,11 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   auto isAttrWord = [&](const std::string& w) {
     return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
-           w == "VAR" || w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "ALIGNED" ||
-           w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" || w == "INIT" || w == "VALUE" ||
-           w == "TYPE" || w == "EXTERNAL" || w == "EXT" || w == "OPTIONAL" || w == "POINTER" ||
-           w == "PTR" || w == "BASED" || w == "CONTROLLED" || w == "CTL";
+           w == "VARYINGZ" || w == "VAR" || w == "VARZ" || w == "STATIC" || w == "AUTOMATIC" ||
+           w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" ||
+           w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
+           w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
+           w == "CTL";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -1981,17 +1996,21 @@ bool Parser::parseDescriptorType(Type& out) {
     if (hasStar) {
       d_.error(cur().loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
       out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+      out.varyingz = bag.varyingz;
       if (bag.starLen)
         out.starLen = true;
       out.controlled = bag.controlled;
       return true;
     }
     out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
+    out.varyingz = bag.varyingz;
     if (bag.starLen)
       out.starLen = true;
     // CONTROLLED dummy association visible to cross-module callers (15).
     out.controlled = bag.controlled;
   } else if (bag.bit) {
+    if (bag.varyingz)
+      d_.error(cur().loc, "VARYINGZ requires CHARACTER", "(15)");
     out = Type::bit(bag.slen > 0 ? bag.slen : 1);
     if (hasStar && bag.slen > 1) {
       d_.error(cur().loc, "arrays of BIT(n>1) are not implemented in this stage", "(12)");

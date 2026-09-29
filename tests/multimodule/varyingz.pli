@@ -1,0 +1,41 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-168 / rule (18): VARYINGZ is a NUL-terminated varying
+    CHARACTER string (IBM Enterprise PL/I extension). A by-value C
+    entry receives it as a bare `char *` with no explicit length
+    argument, so the C side can use ordinary string functions.
+    Companion: varyingz.c. */
+ varyingz: procedure options(main);
+   dcl fails      fixed bin(31) init(0);
+   dcl host       char(32) varying;
+   dcl fixed_host char(8);
+   dcl n          fixed bin(31);
+
+   dcl vzt_len entry (char(*) varyingz) returns(fixed bin(31))
+       options(linkage(system)) external('vzt_len');
+   dcl vzt_at entry (char(*) varyingz, fixed bin(31))
+       returns(fixed bin(31))
+       options(linkage(system)) external('vzt_at');
+
+   /* a VARYING actual keeps its live length, NUL-terminated */
+   host = 'example.com';
+   n = vzt_len(host);
+   if n ^= 11 then fails = fails + 1;
+   if vzt_at(host, 11) ^= 0 then fails = fails + 1;
+
+   /* an empty string is a lone NUL */
+   host = '';
+   if vzt_len(host) ^= 0 then fails = fails + 1;
+
+   /* embedded blanks are content, not terminators */
+   host = 'a b';
+   if vzt_len(host) ^= 3 then fails = fails + 1;
+
+   /* a fixed CHAR actual keeps its full blank-padded length */
+   fixed_host = 'abc';
+   if vzt_len(fixed_host) ^= 8 then fails = fails + 1;
+   if vzt_at(fixed_host, 8) ^= 0 then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS varyingz');
+   else put skip list('FAIL varyingz: fails =', fails);
+ end varyingz;

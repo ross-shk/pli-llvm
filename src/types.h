@@ -54,6 +54,11 @@ struct Type {
   int scale = 0;        // FIXED scale factor q
   int len = 1;          // CHARACTER/BIT length
   bool varying = false; // VARYING (rule 15)
+  // VARYINGZ (IBM Enterprise PL/I extension, ADR-168): a varying-length
+  // character string whose C-ABI form is NUL-terminated. Internally it reuses
+  // the VARYING storage/operations; only the by-value C-entry boundary
+  // NUL-terminates. Deliberately not part of type equivalence.
+  bool varyingz = false;
   // Adjustable CHARACTER length (rule (18)): `CHAR(*)` on a parameter whose
   // length comes from the caller's actual argument at call time, passed as a
   // hidden i64 length argument (mirrors the `*` adjustable array extent).
@@ -190,7 +195,10 @@ struct Type {
     case TK::Float:
       return "FLOAT DECIMAL(" + std::to_string(prec) + ")";
     case TK::Char:
-      return "CHARACTER(" + std::to_string(len) + ")" + (varying ? " VARYING" : "");
+      return "CHARACTER(" + std::to_string(len) + ")" +
+             (varyingz  ? " VARYINGZ"
+              : varying ? " VARYING"
+                        : "");
     case TK::Bit:
       return "BIT(" + std::to_string(len) + ")";
     case TK::Struct:
@@ -227,6 +235,7 @@ inline Type& Type::operator=(const Type& o) {
   scale = o.scale;
   len = o.len;
   varying = o.varying;
+  varyingz = o.varyingz;
   starLen = o.starLen;
   controlled = o.controlled;
   dims = o.dims;

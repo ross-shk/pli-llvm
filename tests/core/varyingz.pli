@@ -1,0 +1,36 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-168 / rule (18): VARYINGZ is a NUL-terminated varying
+    CHARACTER string (IBM Enterprise PL/I extension). Inside PL/I
+    it behaves like VARYING (live length, blank-padded truncation);
+    the NUL is added only at the by-value C ABI boundary. `VARZ`
+    is the IBM abbreviation. */
+ varyingz: procedure options(main);
+   dcl fails fixed bin(31) init(0);
+   dcl z     char(8) varyingz;
+   dcl a     char(4) varz;
+   dcl v     char(8) varying;
+
+   z = 'abc';
+   if length(z) ^= 3 then fails = fails + 1;
+   if z ^= 'abc' then fails = fails + 1;
+
+   /* VARYINGZ and VARYING assign interchangeably */
+   v = z;
+   if v ^= 'abc' then fails = fails + 1;
+   z = v;
+   if z ^= 'abc' then fails = fails + 1;
+
+   /* an overlong assignment truncates to the declared maximum */
+   z = 'abcdefghij';
+   if length(z) ^= 8 then fails = fails + 1;
+   if z ^= 'abcdefgh' then fails = fails + 1;
+
+   /* the VARZ abbreviation */
+   a = 'xy';
+   if length(a) ^= 2 then fails = fails + 1;
+   if a ^= 'xy' then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS varyingz');
+   else put skip list('FAIL varyingz: fails =', fails);
+ end varyingz;

@@ -1,0 +1,26 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-168: VARYINGZ parameters in an exported package. The
+    dummy reuses the VARYING descriptor ABI, so an exported
+    procedure reads and writes the caller's string by reference.
+    Companion to varyingz_xfer.pli. */
+ varyingz_xfer_lib: package exports(vz_getlen, vz_setlen, vz_first);
+
+ vz_getlen: procedure(buf) returns(fixed bin(31));
+   dcl buf char(*) varyingz;
+   return(length(buf));
+ end vz_getlen;
+
+ vz_setlen: procedure(buf, n);
+   dcl buf char(*) varyingz;
+   dcl n   fixed bin(31);
+   buf = substr('abcdefghij', 1, n);
+ end vz_setlen;
+
+ vz_first: procedure(buf) returns(char(1));
+   dcl buf char(*) varyingz;
+   if length(buf) = 0 then return('');
+   return(substr(buf, 1, 1));
+ end vz_first;
+
+ end varyingz_xfer_lib;

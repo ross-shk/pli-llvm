@@ -77,7 +77,7 @@ make install          # installs to /usr/local by default
 - **local `GO TO**` / `GOTO` to a labelled statement in the same procedure (`goto.pli`); non-local `GO TO` is diagnosed (M4/QR2.4)
 - **multiple closure**: one `END L;` closes every open block up to `L`
 - `FIXED BINARY(p,q)`, scaled `FIXED DECIMAL(p,q)`, `FLOAT`, `COMPLEX `(with `COMPLEX`/`REAL`/`IMAG`/`CONJG` and complex I/O), `BIT(1)` and packed  
-`BIT(n)`, `CHARACTER(n)` / `VARYING`, adjustable-length `CHAR(*) `parameters, concatenation, blank-padded comparison, replicated string constants, hex `X` literals
+`BIT(n)`, `CHARACTER(n)` / `VARYING` / `VARYINGZ` (NUL-terminated C strings, ADR-168), adjustable-length `CHAR(*) `parameters, concatenation, blank-padded comparison, replicated string constants, hex `X` literals
 - fixed-size arrays (multi-axis, `lb:ub`, negative bounds, row-major) and single-axis dynamic AUTOMATIC arrays plus dynamic/` *` parameters with runtime `SUBSCRIPTRANGE`/`LBOUND`/`HBOUND`/`DIM`; cross-sections (`A(i, *)`, `A(*, *)`) and whole-array expressions; array reductions `SUM`/`PROD`/`ANY`/`ALL`
 - level-numbered structures with factoring, `LIKE` (incl. qualified templates), arrays of structures, whole-structure and `BY NAME` assignment, multiple assignment `a, b, c = e`
 - `DEFINED` overlays with `iSUB` (incl. affine index arithmetic), `POINTER`/`ADDR`/`NULL`, `BASED(P)` structures with `P -> X` locators, `ALLOCATE … SET(P)`/`FREE`, and `CONTROLLED` generation stacks

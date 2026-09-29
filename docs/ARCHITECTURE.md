@@ -202,6 +202,7 @@ support. Some language forms that would use these services are still diagnosed.
 | `FLOAT` | `float`, `double`, or LLVM extended precision | Exact precision mappings depend on the declared type. |
 | `CHARACTER(n)` | Byte buffer, blank padded | |
 | `CHARACTER(n) VARYING` | Length plus byte buffer | Stores the current length as well as the maximum capacity. |
+| `CHARACTER(n) VARYINGZ` | Length plus byte buffer (IBM extension, ADR-168) | Reuses the VARYING layout inside PL/I; a by-value C entry receives a NUL-terminated `char *`. |
 | Adjustable `CHARACTER` parameter | Caller buffer plus hidden length argument | Passed by reference. |
 | `BIT(n)` | Packed bytes; `BIT(1)` uses a scalar representation in expressions | Supported operations vary by context. |
 | `COMPLEX` | Pair of floating-point values | The pair stores the real and imaginary components. |

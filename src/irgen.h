@@ -178,6 +178,10 @@ private:
   // POINTER parameter given a non-pointer is diagnosed (sema pins the common
   // case; this is the backstop).
   llvm::Value* marshalArg(HExpr* a, const Type& pty, SourceLoc loc);
+  // VARYINGZ argument for a by-value C entry (ADR-168): materialise the
+  // actual's current value into a fresh NUL-terminated buffer and return its
+  // address, so the C callee sees a `char *` with no explicit length.
+  llvm::Value* cstrArg(HExpr* a, const Type& pty, SourceLoc loc);
   // Append the callee's static-link arguments (its enclosing automatic
   // variables, rule 8). Shared by emitCall and emitExpr.
   void appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args);

@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-168 / rule (34): a VARYINGZ return value would ride the hidden
+    varying result buffer instead of a C `char *`. Stay diagnosed rather
+    than emit a mismatched ABI. */
+ bad_varyingz_ret: procedure options(main);
+   dcl f entry (char(8) varyingz) returns(char(8) varyingz)
+       options(linkage(system)) external('vzt_id');
+   dcl s char(8) varyingz;
+   s = f('abc');
+   put skip list(length(s));
+ end bad_varyingz_ret;

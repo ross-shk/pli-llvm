@@ -3129,6 +3129,39 @@ void IRGen::flushVarWrites() {
   pendingVarWrites_.clear();
 }
 
+// VARYINGZ argument for a by-value C entry (ADR-168): copy the actual's
+// current value into a fresh buffer and append a NUL, so the C callee sees a
+// `char *` whose length is found by scanning. The buffer capacity is the
+// actual variable's declared maximum; a runtime-capacity adjustable actual has
+// no compile-time buffer size and is diagnosed.
+llvm::Value* IRGen::cstrArg(HExpr* a, const Type& pty, SourceLoc loc) {
+  (void)pty;
+  Val av = emitExpr(a);
+  if (!av.ty.isChar()) {
+    d_.error(loc, "a VARYINGZ parameter takes a character argument (ADR-168)", "(18)");
+    return llvm::ConstantPointerNull::get(b_.getPtrTy());
+  }
+  int cap = av.ty.len;
+  if (a->kind == HExpr::VarRef && a->sym && a->sym->ty.isChar()) {
+    if (a->sym->ty.starLen || a->sym->ty.isArray()) {
+      d_.error(loc,
+               "a VARYINGZ parameter takes a fixed-length or explicitly sized character "
+               "variable in this stage (ADR-168)",
+               "(18)");
+      return llvm::ConstantPointerNull::get(b_.getPtrTy());
+    }
+    cap = a->sym->ty.len;
+  }
+  if (cap < 0)
+    cap = 0;
+  llvm::AllocaInst* buf =
+      entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)cap + 1), "zstr");
+  b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
+  llvm::Value* z = b_.CreateGEP(b_.getInt8Ty(), buf, {av.len}, "zterm");
+  b_.CreateStore(b_.getInt8(0), z);
+  return buf;
+}
+
 // Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
 // FLOAT scalars convert to the parameter type and ride as values, POINTERs
 // ride as the pointer itself; anything else keeps the argAddr form.
@@ -3146,6 +3179,10 @@ llvm::Value* IRGen::marshalArg(HExpr* a, const Type& pty, SourceLoc loc) {
     }
     return av.reg;
   }
+  // VARYINGZ (ADR-168) rides as a NUL-terminated C string, not a varying
+  // descriptor pointer.
+  if (pty.isChar() && pty.varyingz)
+    return cstrArg(a, pty, loc);
   return argAddr(a, pty);
 }
 

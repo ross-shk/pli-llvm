@@ -4478,3 +4478,46 @@ non-POINTER locator and non-BASED target diagnostics (124).
 (not IBM: the right side must be BASED; use a LIKE view);
 extending FREE locators or `P -> S.A(i)` in this slice.
 
+## ADR-168 — `VARYINGZ`: NUL-terminated strings for the C ABI
+
+**Context.** libnet wishlist #7 wants to drop the C helper
+`pli_to_cstr`, which trims trailing blanks and NUL-terminates
+before calling `connect`/`resolve`. IBM Enterprise PL/I serves
+this with `VARYINGZ`: a varying-length CHARACTER string whose
+storage is one byte longer than its declared maximum and whose
+current length is the bytes before the first `'00'x`; it is
+passed to a C entry as a bare `char *`. `VARYINGZ` is not in
+TR 25.084 (rule (18) lists only `BIT | CHARACTER`), so it is a
+documented extension.
+
+**Decision.** Parse `VARYINGZ` (and its `VARZ` abbreviation) as
+a CHARACTER string attribute in both declarations and ENTRY
+descriptors, and record it as `Type::varyingz`. Internally it
+reuses the VARYING layout and every VARYING operation (live
+length, blank-padded truncation, comparison, interchange with
+VARYING); `varyingz` is deliberately not part of type
+equivalence. The one ABI-specific path is a by-value C entry
+(`OPTIONS(LINKAGE(SYSTEM))`): `irgen`'s `cstrArg` copies the
+actual's current value into a fresh `n+1` buffer, writes a NUL
+after the live length, and passes that pointer, so the callee
+sees an ordinary C `char *` with no hidden length argument.
+A VARYINGZ actual into a PL/I procedure reuses the varying
+descriptor ABI (pointer plus hidden maximum). `BIT ... VARYINGZ`
+and `RETURNS(... VARYINGZ)` are diagnosed rather than silently
+mismatched.
+
+**Consequences.** `core/varyingz.pli` pins internal VARYINGZ
+semantics and the `VARZ` abbreviation;
+`multimodule/varyingz.pli` (+ C) pins the NUL-terminated
+`char *` boundary (live length, empty string, embedded blanks,
+blank-padded fixed CHAR); `multimodule/varyingz_xfer.pli`
+(+ lib) pins cross-module PL/I parameters. `bad_varyingz.pli`
+and `bad_varyingz_ret.pli` pin the rejected forms.
+`libnet`'s `netc_connect`/`netc_resolve` can now take
+`char(*) varyingz` and drop the manual trim/NUL helper.
+
+**Rejected.** IBM's `n+1` in-memory layout with a scan-for-NUL
+length (would fork every VARYING operation for no observable
+gain inside PL/I); C write-back through a VARYINGZ argument
+(input strings only in this slice).
+

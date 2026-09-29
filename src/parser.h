@@ -133,6 +133,7 @@ private:
   struct AttrBag {
     bool fixed = false, floating = false, binary = false, decimal = false;
     bool character = false, bit = false, varying = false;
+    bool varyingz = false; // VARYINGZ (IBM extension, ADR-168); implies VARYING
     bool pointer = false;
     bool complex = false;    // COMPLEX (QR2.2/CM5): a real+imaginary pair
     bool file = false;       // FILE (rules 39,40): a named file variable

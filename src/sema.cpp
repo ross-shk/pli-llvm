@@ -756,6 +756,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           d_.error(item.loc, "RETURNS is only valid on an ENTRY declaration", "(34)");
           item.entryIsFunction = false;
         }
+        if (item.entryIsFunction && item.entryRetTy.varyingz) {
+          // VARYINGZ return values (ADR-168) would ride the hidden varying
+          // result buffer, not a C `char*`; stay diagnosed rather than emit a
+          // mismatched ABI.
+          d_.error(item.loc, "RETURNS of VARYINGZ is not implemented in this stage (ADR-168)",
+                   "(34)");
+          item.entryRetTy.varyingz = false;
+        }
         if (item.entryByValue && !item.isEntry) {
           // OPTIONS(BYVALUE/LINKAGE) selects C-ABI marshalling on an ENTRY
           // declaration only; elsewhere it has no meaning. Never silently
