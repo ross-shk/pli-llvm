@@ -123,11 +123,18 @@ cc -c c_set.c -o c_set.o
 cc caller.o c_set.o build/libpli.a -o caller
 ```
 
+If the C code is already built into a library archive, plic links it directly in one step (ADR-162), so no `cc` is needed:
+
+```
+cc -c c_set.c -o c_set.o && ar rcs libcset.a c_set.o
+./build/plic caller.pli -o caller -L . -lcset
+```
+
 `OPTIONS(BYVALUE)`/`LINKAGE(SYSTEM)` entries pass `FIXED`/`FLOAT` scalars and pointers as C values instead. Full dope-vector entry descriptors, `USES`/`SETS`, and character-valued C results are not yet implemented (QR1/QR2).
 
 ## Multi-module PL/I programs
 
-A top-level (non-`MAIN`, non-nested) procedure is externally linked under its upper-cased name (rule 42; ADR-103), so another unit's `ENTRY...EXTERNAL` declaration resolves at link time. Give all the units to a single `plic` invocation and it compiles each to an object and links them with the runtime (cc-style, ADR-162):
+A top-level (non-`MAIN`, non-nested) procedure is externally linked under its upper-cased name (rule 42; ADR-103), so another unit's `ENTRY...EXTERNAL` declaration resolves at link time. Give all the units to a single `plic` invocation and it compiles each to an object and links them with the runtime:
 
 ```
 ./build/plic lib.pli main.pli -o prog
