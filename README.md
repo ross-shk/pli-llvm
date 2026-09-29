@@ -195,8 +195,9 @@ src/         compiler: diag, lexer, parser, sema, hir, irgen, preprocessor,
              explain, driver
 runtime/     libpli: core, stream, string, math, conditions, storage,
              get, file, edit, task
-tests/       groups (core, builtins, usecases, driver, ir): golden
-             (expected/*.out) or self-checking (prints PASS) + out/
+tests/       groups (core, builtins, usecases, driver, ir, preprocessor,
+             multimodule, corner_cases): golden (expected/*.out) or
+             self-checking (prints PASS) + out/
 docs/        architecture, decisions, optimization, plans, coverage
 ```
 

@@ -3,7 +3,9 @@
  /* ADR-169: UNALIGNED packs a structure's members (emitted as an LLVM
     packed struct `<{ ... }>`), while the default ALIGNED keeps natural
     padding (emitted as `{ ... }`). Nested structures inherit the
-    enclosing UNALIGNED. */
+    enclosing UNALIGNED. Member loads/stores of a packed record carry
+    align 1 (never the member type's natural alignment), so the emitted
+    IR never promises an alignment the packed layout cannot keep. */
  unaligned_ir: procedure options(main);
    dcl 1 a_rec aligned,
       2 fd   fixed bin(31),
@@ -18,8 +20,15 @@
       2 inner,
         3 y fixed bin(31),
         3 z bit(1);
+   dcl 1 pa(2) unaligned,
+      2 m fixed bin(31);
+   dcl 1 pm unaligned,
+      2 arr(2) fixed bin(31);
    a_rec.code = 1;
    p_rec.code = 2;
    outer.inner.y = 3;
-   put skip list(a_rec.code + p_rec.code + outer.inner.y);
+   pa(2).m = 4;
+   pm.arr(1) = 5;
+   put skip list(a_rec.code + p_rec.code + outer.inner.y
+     + pa(2).m + pm.arr(1));
  end unaligned_ir;

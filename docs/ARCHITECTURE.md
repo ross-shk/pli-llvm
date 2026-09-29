@@ -207,7 +207,7 @@ support. Some language forms that would use these services are still diagnosed.
 | `BIT(n)` | Packed bytes; `BIT(1)` uses a scalar representation in expressions | Supported operations vary by context. |
 | `COMPLEX` | Pair of floating-point values | The pair stores the real and imaginary components. |
 | `POINTER` | LLVM pointer | |
-| structure | LLVM struct | Members in declaration order; `ALIGNED` (the default) uses natural padding, `UNALIGNED` emits a packed struct for C interop (ADR-169). |
+| structure | LLVM struct | Members in declaration order; `ALIGNED` (the default) uses natural padding, `UNALIGNED` emits a packed struct for C interop and its member loads/stores use `align 1` (ADR-169). |
 | array | Contiguous, row-major storage | Dynamic bounds and parameter extents use runtime values. |
 
 This table describes representation choices for supported forms, not a claim

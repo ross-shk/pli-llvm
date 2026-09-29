@@ -286,10 +286,14 @@ private:
   bool emitBuiltin(HExpr* e, Val& out);
   Val loadSym(Symbol* sym, const Type& ty);
   void storeTo(Symbol* sym, const Val& v, SourceLoc loc);
-  void storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v);
+  // `packed` marks a destination inside an UNALIGNED structure: the store then
+  // uses align 1 rather than the value type's natural alignment (ADR-169).
+  void storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool packed = false);
   // Copy a character value into a buffer (rules (34),(37),(86)): blank-pad or
   // truncate to the destination length, setting the live length for VARYING.
-  void storeCharTo(llvm::Value* addr, const Type& dst, const Val& v, SourceLoc loc);
+  // `packed` as for storeScalarTo (the VARYING length word is the aligned part).
+  void storeCharTo(llvm::Value* addr, const Type& dst, const Val& v, SourceLoc loc,
+                   bool packed = false);
   // An LLVM scalar constant for an INITIAL element value (rule 26), or null for
   // types without a constant form (e.g. STRUCT).
   llvm::Constant* scalarInitConstant(const Type& ty, const Expr* ini);

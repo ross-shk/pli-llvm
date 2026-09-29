@@ -72,6 +72,22 @@ static const Type& structPathType(const Type& root, const std::vector<unsigned>&
   return *cur;
 }
 
+// True when the member at `path` from structure type `root` lands in a packed
+// (UNALIGNED) structure: such an address is not guaranteed the member type's
+// natural alignment, so its loads/stores must use align 1 (ADR-169). Checks
+// every enclosing structure along the path, including the leaf itself.
+static bool packedMemberPath(const Type& root, const std::vector<unsigned>& path) {
+  const Type* cur = &root;
+  for (unsigned f : path) {
+    if (cur->unaligned)
+      return true;
+    if (f >= cur->members.size())
+      return false;
+    cur = &cur->members[f]->ty;
+  }
+  return cur->unaligned;
+}
+
 llvm::Type* IRGen::llvmTy(const Type& t) {
   // An array is a [N x elemTy] aggregate (rules (12),(13)); handled here so a
   // struct member that is itself an array (2 A(10) ...) lays out correctly.
@@ -938,7 +954,9 @@ void IRGen::allocaLocals(HProc* p) {
       if (!s->initElems.empty())
         extent = b_.CreateAdd(extent, i64((long long)s->initElems.size()), "mextinit");
       llvm::Value* buf = b_.CreateAlloca(llvmTy(el), extent, s->irName.substr(1) + ".mdyn");
-      b_.CreateStore(buf, memberAddr(s, mh.path, s->loc));
+      llvm::StoreInst* sp = b_.CreateStore(buf, memberAddr(s, mh.path, s->loc));
+      if (packedMemberPath(s->ty, mh.path))
+        sp->setAlignment(llvm::Align(1));
       memberDyn_[MemberDyn{s, mh.path}] = MemberBounds{ub, lb};
     }
   }
@@ -1913,7 +1931,8 @@ void IRGen::emitAssign(HStmt* s) {
                                   ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
                                   : memberAddr(t->sym, t->memberPath, s->loc);
           llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
-          storeScalarTo(addr, el, convert(v, el, s->loc));
+          storeScalarTo(addr, el, convert(v, el, s->loc),
+                        packedMemberPath(t->sym->ty, t->memberPath));
           return;
         }
         storeArrayElement(t->sym, t->args, v, s->loc, t->locPtr.get());
@@ -1926,10 +1945,11 @@ void IRGen::emitAssign(HStmt* s) {
           llvm::Value* addr =
               t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
                         : memberAddr(t->sym, t->memberPath, s->loc);
+          bool packed = packedMemberPath(t->sym->ty, t->memberPath);
           if (leaf.isChar())
-            storeCharTo(addr, leaf, v, s->loc);
+            storeCharTo(addr, leaf, v, s->loc, packed);
           else
-            storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
+            storeScalarTo(addr, leaf, convert(v, leaf, s->loc), packed);
           return;
         }
         storeTo(t->sym, v, s->loc);
@@ -2042,10 +2062,11 @@ void IRGen::emitAssign(HStmt* s) {
         llvm::Value* elem = arrayElementAddr(t->sym->ty, addressOf(t->sym), t->args, s->loc);
         llvm::Value* addr = elementMemberAddr(t->sym, t->memberPath, elem);
         const Type& el = t->ty;
+        bool packed = packedMemberPath(t->sym->ty.elementType(), t->memberPath);
         if (el.isChar())
-          storeCharTo(addr, el, v, s->loc);
+          storeCharTo(addr, el, v, s->loc, packed);
         else
-          storeScalarTo(addr, el, convert(v, el, s->loc));
+          storeScalarTo(addr, el, convert(v, el, s->loc), packed);
         return;
       }
       // A subscripted member array S.A(i) = e (rules 124,126): store through
@@ -2056,10 +2077,11 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
                                           : memberAddr(t->sym, t->memberPath, s->loc);
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
+      bool packed = packedMemberPath(t->sym->ty, t->memberPath);
       if (el.isChar())
-        storeCharTo(addr, el, v, s->loc);
+        storeCharTo(addr, el, v, s->loc, packed);
       else
-        storeScalarTo(addr, el, convert(v, el, s->loc));
+        storeScalarTo(addr, el, convert(v, el, s->loc), packed);
       return;
     }
     // An iSUB-DEFINED array target Y(k) (rule 134) has no storage of its own:
@@ -2127,11 +2149,18 @@ void IRGen::emitAssign(HStmt* s) {
     };
     std::vector<llvm::Value*> savedPtrs;
     savedPtrs.reserve(dynPaths.size());
-    for (const auto& rel : dynPaths)
-      savedPtrs.push_back(b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.sv"));
+    for (const auto& rel : dynPaths) {
+      llvm::LoadInst* lp = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.sv");
+      if (packedMemberPath(t->ty, rel))
+        lp->setAlignment(llvm::Align(1));
+      savedPtrs.push_back(lp);
+    }
     b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
-    for (size_t i = 0; i < dynPaths.size(); ++i)
-      b_.CreateStore(savedPtrs[i], fieldAddr(dst, t->ty, dynPaths[i]));
+    for (size_t i = 0; i < dynPaths.size(); ++i) {
+      llvm::StoreInst* sp = b_.CreateStore(savedPtrs[i], fieldAddr(dst, t->ty, dynPaths[i]));
+      if (packedMemberPath(t->ty, dynPaths[i]))
+        sp->setAlignment(llvm::Align(1));
+    }
     for (const auto& rel : dynPaths) {
       const Type& arr = structPathType(t->ty, rel);
       const Type& el = arr.elementType();
@@ -2178,8 +2207,12 @@ void IRGen::emitAssign(HStmt* s) {
       b_.SetInsertPoint(abL);
       b_.CreateUnreachable();
       startBlock(okL);
-      llvm::Value* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.dp");
-      llvm::Value* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "dcp.sp");
+      llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.dp");
+      llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "dcp.sp");
+      if (packedMemberPath(t->ty, rel))
+        dbuf->setAlignment(llvm::Align(1));
+      if (packedMemberPath(sv->ty, rel))
+        sbuf->setAlignment(llvm::Align(1));
       llvm::Value* nbytes =
           b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "dcp.n");
       b_.CreateMemCpy(dbuf, llvm::MaybeAlign(), sbuf, llvm::MaybeAlign(), nbytes);
@@ -2196,10 +2229,11 @@ void IRGen::emitAssign(HStmt* s) {
     llvm::Value* addr =
         t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
                   : memberAddr(t->sym, t->memberPath, s->loc);
+    bool packed = packedMemberPath(t->sym->ty, t->memberPath);
     if (leaf.isChar())
-      storeCharTo(addr, leaf, v, s->loc);
+      storeCharTo(addr, leaf, v, s->loc, packed);
     else
-      storeScalarTo(addr, leaf, convert(v, leaf, s->loc));
+      storeScalarTo(addr, leaf, convert(v, leaf, s->loc), packed);
     return;
   }
   if (s->target->kind != HExpr::VarRef || !s->target->sym)
@@ -2823,7 +2857,7 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
                                           : memberAddr(t->sym, t->memberPath, loc);
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, loc, ub, lb);
-      storeScalarTo(addr, ty, convert(v, ty, loc));
+      storeScalarTo(addr, ty, convert(v, ty, loc), packedMemberPath(t->sym->ty, t->memberPath));
       return;
     }
     if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
@@ -2839,7 +2873,7 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       llvm::Value* addr =
           t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
                     : memberAddr(t->sym, t->memberPath, loc);
-      storeScalarTo(addr, ty, convert(v, ty, loc));
+      storeScalarTo(addr, ty, convert(v, ty, loc), packedMemberPath(t->sym->ty, t->memberPath));
       return;
     }
     storeTo(t->sym, v, loc);
@@ -3747,7 +3781,10 @@ llvm::Value* IRGen::dynamicMemberBase(Symbol* base, const std::vector<unsigned>&
   auto it = memberDyn_.find(MemberDyn{base, path});
   ub = it != memberDyn_.end() ? it->second.ub : nullptr;
   lb = it != memberDyn_.end() ? it->second.lb : nullptr;
-  return b_.CreateLoad(b_.getPtrTy(), memberAddr(base, path, loc), "mdynp");
+  llvm::LoadInst* p = b_.CreateLoad(b_.getPtrTy(), memberAddr(base, path, loc), "mdynp");
+  if (packedMemberPath(base->ty, path))
+    p->setAlignment(llvm::Align(1));
+  return p;
 }
 
 // BY NAME assignment (rule 86): copy each member of `dst` (at dstBase) from the
@@ -3825,8 +3862,12 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
         b_.CreateUnreachable();
         startBlock(okL);
         const Type& el = dm.ty.elementType();
-        llvm::Value* dbuf = b_.CreateLoad(b_.getPtrTy(), d, "bnm.dp");
-        llvm::Value* sbuf = b_.CreateLoad(b_.getPtrTy(), s, "bnm.sp");
+        llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), d, "bnm.dp");
+        llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), s, "bnm.sp");
+        if (dst.unaligned)
+          dbuf->setAlignment(llvm::Align(1));
+        if (src.unaligned)
+          sbuf->setAlignment(llvm::Align(1));
         llvm::Value* nbytes =
             b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "bnm.n");
         b_.CreateMemCpy(dbuf, llvm::MaybeAlign(), sbuf, llvm::MaybeAlign(), nbytes);
@@ -3837,10 +3878,13 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
     } else {
       Val sv;
       sv.ty = sm.ty;
-      sv.reg = b_.CreateLoad(llvmTy(sm.ty), s, "bnm.ld");
+      llvm::LoadInst* lv = b_.CreateLoad(llvmTy(sm.ty), s, "bnm.ld");
+      if (src.unaligned)
+        lv->setAlignment(llvm::Align(1));
+      sv.reg = lv;
       if (sm.ty.isBit())
         sv.reg = b_.CreateTrunc(sv.reg, b_.getInt1Ty(), "bnm.b1");
-      storeScalarTo(d, dm.ty, convert(sv, dm.ty, loc));
+      storeScalarTo(d, dm.ty, convert(sv, dm.ty, loc), dst.unaligned);
     }
   }
 }
@@ -3863,7 +3907,9 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
         // holds a runtime-sized buffer pointer (pass 3, pre-sized for the
         // itemlist), so store each remaining value straight-line like a
         // dynamic array. Sema restricted this to scalar elements.
-        llvm::Value* buf = b_.CreateLoad(b_.getPtrTy(), mem, "init.mdyn");
+        llvm::LoadInst* buf = b_.CreateLoad(b_.getPtrTy(), mem, "init.mdyn");
+        if (ty.unaligned)
+          buf->setAlignment(llvm::Align(1));
         long long k = 0;
         while (idx < vals.size()) {
           llvm::Value* ep = b_.CreateGEP(llvmTy(el), buf, {i64(k++)}, "init.el");
@@ -3884,9 +3930,9 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
             if (!ve)
               continue;
             if (el.isChar())
-              storeCharTo(ep, el, initValue(el, ve), loc);
+              storeCharTo(ep, el, initValue(el, ve), loc, ty.unaligned);
             else
-              storeScalarTo(ep, el, initValue(el, ve));
+              storeScalarTo(ep, el, initValue(el, ve), ty.unaligned);
           }
         }
       }
@@ -3900,9 +3946,9 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
       if (!ve)
         continue;
       if (m.ty.isChar())
-        storeCharTo(mem, m.ty, initValue(m.ty, ve), loc);
+        storeCharTo(mem, m.ty, initValue(m.ty, ve), loc, ty.unaligned);
       else
-        storeScalarTo(mem, m.ty, initValue(m.ty, ve));
+        storeScalarTo(mem, m.ty, initValue(m.ty, ve), ty.unaligned);
     }
   }
 }
@@ -3947,10 +3993,12 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   return v;
 }
 
-void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v) {
+void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool packed) {
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is stored as the {double,double} struct.
-    b_.CreateStore(v.cpx, addr);
+    llvm::StoreInst* si = b_.CreateStore(v.cpx, addr);
+    if (packed)
+      si->setAlignment(llvm::Align(1));
     return;
   }
   llvm::Value* val = v.reg;
@@ -3960,10 +4008,13 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v) {
     // Wider strings store whole; differing lengths convert before this
     // (hir emits Convert whenever the bit lengths differ).
   }
-  b_.CreateStore(val, addr);
+  llvm::StoreInst* si = b_.CreateStore(val, addr);
+  if (packed)
+    si->setAlignment(llvm::Align(1));
 }
 
-void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceLoc loc) {
+void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceLoc loc,
+                        bool packed) {
   if (!v.ty.isChar()) {
     d_.error(loc,
              "conversion from " + v.ty.desc() + " to " + dt.desc() +
@@ -3976,7 +4027,9 @@ void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceL
     llvm::Value* ln =
         b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(dt.len), v.ptr, v.len});
     llvm::Value* lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
-    b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
+    llvm::StoreInst* si = b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
+    if (packed)
+      si->setAlignment(llvm::Align(1));
   } else {
     b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(dt.len), v.ptr, v.len});
   }
@@ -4272,10 +4325,13 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   llvm::Value* saddr = b_.CreateInBoundsGEP(srcArrTy, srcBase, {i64(0), srcFlat}, "csrc");
   Val sv;
   sv.ty = el;
-  llvm::Value* lr = b_.CreateLoad(llvmTy(el), saddr, "csl");
+  llvm::LoadInst* lr = b_.CreateLoad(llvmTy(el), saddr, "csl");
+  if (!x->memberPath.empty() && packedMemberPath(x->sym->ty, x->memberPath))
+    lr->setAlignment(llvm::Align(1));
   sv.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(lr, b_.getInt1Ty(), "csb") : lr;
   llvm::Value* taddr = b_.CreateInBoundsGEP(tgtArrTy, tgtBase, {i64(0), ti}, "cdst");
-  storeScalarTo(taddr, el, convert(sv, el, loc));
+  storeScalarTo(taddr, el, convert(sv, el, loc),
+                !t->memberPath.empty() && packedMemberPath(t->sym->ty, t->memberPath));
   branch(stepL);
   startBlock(stepL);
   b_.CreateStore(b_.CreateAdd(ti, i64(1), "csinc"), ctr);
@@ -4694,7 +4750,9 @@ Val IRGen::emitExpr(HExpr* e) {
         llvm::Value* elem = arrayElementAddr(e->sym->ty, addressOf(e->sym), e->args, e->loc);
         llvm::Value* addr = elementMemberAddr(e->sym, e->memberPath, elem);
         const Type& el = e->ty;
-        llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "aosld");
+        llvm::LoadInst* r = b_.CreateLoad(llvmTy(el), addr, "aosld");
+        if (packedMemberPath(e->sym->ty.elementType(), e->memberPath))
+          r->setAlignment(llvm::Align(1));
         v.ty = el;
         v.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
         return v;
@@ -4708,12 +4766,15 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
                                           : memberAddr(e->sym, e->memberPath, e->loc);
       llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc, ub, lb);
+      bool packed = packedMemberPath(e->sym->ty, e->memberPath);
       v.ty = el;
       if (el.isChar()) {
         if (el.varying) {
           llvm::Value* dp = b_.CreateStructGEP(llvmTy(el), addr, 1, "mvdata");
           llvm::Value* lp = b_.CreateStructGEP(llvmTy(el), addr, 0, "mvlenp");
-          llvm::Value* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "ml32");
+          llvm::LoadInst* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "ml32");
+          if (packed)
+            l32->setAlignment(llvm::Align(1));
           v.ptr = dp;
           v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "ml64");
         } else {
@@ -4722,7 +4783,9 @@ Val IRGen::emitExpr(HExpr* e) {
         }
         return v;
       }
-      llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "mald");
+      llvm::LoadInst* r = b_.CreateLoad(llvmTy(el), addr, "mald");
+      if (packed)
+        r->setAlignment(llvm::Align(1));
       v.reg = el.isBit() && el.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
@@ -4751,12 +4814,15 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::Value* addr =
           e->locPtr ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
                     : memberAddr(e->sym, e->memberPath, e->loc);
+      bool packed = packedMemberPath(e->sym->ty, e->memberPath);
       v.ty = leaf;
       if (leaf.isChar()) {
         if (leaf.varying) {
           llvm::Value* dp = b_.CreateStructGEP(llvmTy(leaf), addr, 1, "mvdata");
           llvm::Value* lp = b_.CreateStructGEP(llvmTy(leaf), addr, 0, "mvlenp");
-          llvm::Value* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "ml32");
+          llvm::LoadInst* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "ml32");
+          if (packed)
+            l32->setAlignment(llvm::Align(1));
           v.ptr = dp;
           v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "ml64");
         } else {
@@ -4771,7 +4837,9 @@ Val IRGen::emitExpr(HExpr* e) {
         v.ptr = addr;
         return v;
       }
-      llvm::Value* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
+      llvm::LoadInst* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
+      if (packed)
+        r->setAlignment(llvm::Align(1));
       v.reg = leaf.isBit() && leaf.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
@@ -6092,6 +6160,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // live bound; a fixed array is [N x elem]. Drive the loop by the element
     // count and address elements accordingly (rules (12),(13),(123)).
     const bool dyn = arr.isArray() && arr.isDynamic();
+    // A fixed member array in an UNALIGNED structure is not naturally aligned;
+    // a dynamic member's buffer is separately allocated, so it is (ADR-169).
+    const bool packed = isMember && !dyn && packedMemberPath(a->sym->ty, a->memberPath);
     llvm::Value* n;
     llvm::Type* arrTy = nullptr;
     if (dyn) {
@@ -6148,10 +6219,13 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                           : b_.CreateInBoundsGEP(arrTy, base, {i64(0), c}, "rdp");
     Val ev;
     ev.ty = el;
+    llvm::LoadInst* rl = b_.CreateLoad(llvmTy(el), ep, isBit ? "rdb" : "rdl");
+    if (packed)
+      rl->setAlignment(llvm::Align(1));
     if (isBit)
-      ev.reg = b_.CreateTrunc(b_.CreateLoad(llvmTy(el), ep, "rdb"), b_.getInt1Ty(), "rdb1");
+      ev.reg = b_.CreateTrunc(rl, b_.getInt1Ty(), "rdb1");
     else
-      ev.reg = b_.CreateLoad(llvmTy(el), ep, "rdl");
+      ev.reg = rl;
     llvm::Value* av = b_.CreateLoad(isBit ? b_.getInt1Ty() : llvmTy(e->ty), acc, "rdacc");
     llvm::Value* nv;
     if (e->name == "SUM")

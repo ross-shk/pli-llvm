@@ -1,3 +1,15 @@
+CHECK: alloca <{ \[2 x i32\] }>
+CHECK: alloca \[2 x <{ i32 }>\]
 CHECK: alloca <{ i32, <{ i32, i8 }> }>
 CHECK: alloca <{ i32, i8, i32 }>
 CHECK: alloca { i32, i8, i32 }
+CHECK: store i32 1, ptr {{.*}}, align 4
+CHECK: store i32 2, ptr {{.*}}, align 1
+CHECK: store i32 3, ptr {{.*}}, align 1
+CHECK: store i32 4, ptr {{.*}}, align 1
+CHECK: store i32 5, ptr {{.*}}, align 1
+CHECK: load i32, ptr {{.*}}, align 4
+CHECK: load i32, ptr {{.*}}, align 1
+CHECK: load i32, ptr {{.*}}, align 1
+CHECK: load i32, ptr {{.*}}, align 1
+CHECK: load i32, ptr {{.*}}, align 1
