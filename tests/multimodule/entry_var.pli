@@ -1,0 +1,32 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-171: ENTRY variables cross the module boundary. The caller
+    declares a library ENTRY whose parameter is itself an ENTRY
+    descriptor and passes a callback either as a procedure name or
+    through an entry variable; the library calls back through the
+    function pointer. Companion lib file. */
+ entry_var: procedure options(main);
+   dcl dispatch entry (entry (fixed bin(31)) returns (fixed bin(31))
+       variable) returns (fixed bin(31)) external;
+   dcl apply2 entry (entry (fixed bin(31)) returns (fixed bin(31))
+       variable, fixed bin(31)) returns (fixed bin(31)) external;
+   dcl fails  fixed bin(31) init(0);
+   dcl on_get entry (fixed bin(31)) returns (fixed bin(31)) variable;
+
+   on_get = add1;
+   /* pass the entry variable ... */
+   if dispatch(on_get) ^= 42 then fails = fails + 1;
+   /* ... and a bare procedure name */
+   if dispatch(add1) ^= 42 then fails = fails + 1;
+   /* an extra by-reference scalar alongside the callback */
+   if apply2(on_get, 10) ^= 11 then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS entry_var');
+   else put skip list('FAIL entry_var: fails =', fails);
+ end entry_var;
+
+ /* Top-level so the callback needs no static link. */
+ add1: procedure (n) returns (fixed bin(31));
+   dcl n fixed bin(31);
+   return (n + 1);
+ end add1;

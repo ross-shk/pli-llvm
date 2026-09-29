@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-171: a CHARACTER- or STRUCTURE-returning ENTRY variable is
+    not implemented (the hidden result-buffer ABI is not threaded
+    through a stored function pointer in this slice). */
+ bad_entry_var_ret: procedure options(main);
+   dcl cb entry returns (char(8)) variable;
+ end bad_entry_var_ret;

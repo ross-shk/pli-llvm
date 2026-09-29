@@ -785,6 +785,47 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           item.sym = sym;
           continue;
         }
+        if (item.entryVariable) {
+          // ENTRY ... VARIABLE (IBM Enterprise PL/I extension, ADR-171): an
+          // assignable procedure value. Storage holds a function pointer; the
+          // parameter descriptor and result type live on the symbol. Only the
+          // scalar, non-EXTERNAL, no-INITIAL form is served in this slice.
+          if (!item.isEntry)
+            d_.error(item.loc, "VARIABLE is only valid on an ENTRY declaration (ADR-171)", "");
+          else if (item.level != 0 || !item.ty.dims.empty())
+            d_.error(item.loc,
+                     "an ENTRY variable must be a scalar, not an array or structure member (ADR-171)",
+                     "");
+          else if (item.init || item.initCall || !item.initItems.empty() || item.valueInit)
+            d_.error(item.loc, "INITIAL/VALUE on an ENTRY variable is not implemented (ADR-171)",
+                     "");
+          else if (!item.definedBase.empty() || !item.basedBase.empty() || !item.like.empty() ||
+                   item.controlled || item.area || item.offset)
+            d_.error(item.loc,
+                     "DEFINED/BASED/LIKE/CONTROLLED/AREA/OFFSET on an ENTRY variable is not "
+                     "implemented (ADR-171)",
+                     "");
+          else if (item.external)
+            d_.error(item.loc, "an EXTERNAL ENTRY variable is not implemented (ADR-171)", "");
+          else if (item.entryIsFunction && (item.entryRetTy.isStruct() || item.entryRetTy.isChar()))
+            d_.error(item.loc,
+                     "an ENTRY variable returning a STRUCTURE or CHARACTER is not implemented "
+                     "(ADR-171)",
+                     "");
+          else {
+            Symbol* sym = declare(sc, item.name, Type::entryTy(), item.loc, Symbol::Var, isStatic);
+            sym->owner = p;
+            sym->isEntryVar = true;
+            sym->entryParams = item.entryParams;
+            sym->entryIsFunction = item.entryIsFunction;
+            sym->entryRetTy = item.entryRetTy;
+            sym->entryByValue = item.entryByValue;
+            if (!isStatic)
+              p->localSyms.push_back(sym);
+            item.sym = sym;
+          }
+          continue;
+        }
         if (item.isEntry) {
           if (item.valueInit)
             d_.error(item.loc,
@@ -1686,6 +1727,11 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
   // two locator kinds are interchangeable at run time (both are opaque
   // addresses); sema keeps them distinct enough to check the AREA options.
   if (dst.isLocator() && src.isLocator())
+    return true;
+  // ENTRY value assignment (IBM extension, ADR-171): a procedure name, an
+  // external entry, or another entry variable may be stored into an entry
+  // variable. Signature compatibility is the programmer's contract here.
+  if (dst.isEntry() && src.isEntry())
     return true;
   if (dst.isBit() && (src.isBit() || src.isNumeric()))
     return true;
@@ -2773,7 +2819,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   }
   case Stmt::CallS: {
     Symbol* sym = lookup(sc, s->name);
-    if (!sym || sym->kind != Symbol::ProcName) {
+    // A procedure name, an external ENTRY, or an entry variable (IBM
+    // extension, ADR-171) is a valid CALL target.
+    if (!sym || (sym->kind != Symbol::ProcName && !sym->isEntryVar)) {
       d_.error(s->loc, "'" + s->name + "' is not a known internal procedure", "(78)");
       break;
     }
@@ -3421,8 +3469,10 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         e->ty = Type::voidTy();
     }
     if (sym->kind == Symbol::ProcName) {
-      d_.error(e->loc, "'" + e->name + "' is a procedure and cannot be used as a value", "(123)");
-      e->ty = Type::voidTy();
+      // A procedure name is an entry value (IBM ENTRY VARIABLE extension,
+      // ADR-171): it may be stored into an entry variable or passed as an
+      // argument. Non-entry contexts reject it through checkAssignable.
+      e->ty = Type::entryTy();
     }
     // rule (8)/(42) static link: a reference to a variable of an enclosing
     // procedure is served through this procedure's static link. Parameters are
@@ -3626,14 +3676,16 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     if (typeBuiltin(e, p))
       break;
     Symbol* sym = lookup(sc, e->name);
-    if (!sym || sym->kind != Symbol::ProcName) {
+    if (!sym || (sym->kind != Symbol::ProcName && !sym->isEntryVar)) {
       d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
       e->ty = Type::voidTy();
       break;
     }
-    const bool isFunc = sym->proc
-                            ? (sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))
-                            : (sym->isEntry && sym->entryIsFunction); // rule (34) external entry
+    // A procedure name, an external ENTRY (rule (34)), or an entry variable
+    // (IBM extension, ADR-171): the descriptor lives on the symbol.
+    const bool isFunc =
+        sym->proc ? (sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))
+                  : sym->entryIsFunction;
     if (!isFunc) {
       d_.error(e->loc, "'" + e->name + "' is a procedure and returns no value", "(123)");
       e->ty = Type::voidTy();

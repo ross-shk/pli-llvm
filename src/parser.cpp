@@ -1372,6 +1372,15 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.optional = true;
         continue;
       }
+      if (w == "VARIABLE") {
+        // ENTRY ... VARIABLE (IBM Enterprise PL/I extension, ADR-171): the
+        // declared name is an assignable procedure value (an entry variable)
+        // rather than a procedure constant. Validity (ENTRY only, scalar,
+        // no INITIAL) is checked in sema.
+        advance();
+        item.entryVariable = true;
+        continue;
+      }
       if (w == "ALIGNED") {
         // ALIGNED (rule (15)) is the default LLVM struct layout; an explicit
         // ALIGNED re-aligns a member inside an UNALIGNED structure (ADR-169).
@@ -1938,7 +1947,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" ||
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
-           w == "CTL" || w == "AREA" || w == "OFFSET";
+           w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -2068,6 +2077,31 @@ bool Parser::parseDescriptorType(Type& out) {
       } while (depth > 0 && !at(Tok::Eof));
     }
     out = Type::offsetTy();
+    return true;
+  }
+  // An ENTRY parameter (IBM ENTRY VARIABLE extension, ADR-171): a procedure
+  // value passed as a function pointer. The nested descriptor and result type
+  // are parsed for syntax and discarded; the Type only marks the value as a
+  // procedure value so argument checks and the ABI agree across modules.
+  if (atWord("ENTRY") || atWord("ENT")) {
+    advance();
+    if (at(Tok::LParen)) {
+      std::vector<Type> nested;
+      parseEntryParams(nested);
+    }
+    if (atWord("RETURNS")) {
+      advance();
+      if (expect(Tok::LParen, "(38)")) {
+        Type rt;
+        parseDescriptorType(rt);
+        expect(Tok::RParen, "(38)");
+      }
+    }
+    // An entry parameter may carry VARIABLE (ADR-171); it does not change the
+    // by-reference ABI, so it is accepted and ignored here.
+    if (atWord("VARIABLE"))
+      advance();
+    out = Type::entryTy();
     return true;
   }
   AttrBag bag;

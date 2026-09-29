@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ADR-171: library side of entry_var.pli. Each procedure takes a
+    caller-supplied ENTRY variable and invokes it indirectly. */
+ dispatch: procedure (cb) returns (fixed bin(31));
+   dcl cb entry (fixed bin(31)) returns (fixed bin(31)) variable;
+   return (cb(41));
+ end dispatch;
+
+ apply2: procedure (cb, v) returns (fixed bin(31));
+   dcl cb entry (fixed bin(31)) returns (fixed bin(31)) variable;
+   dcl v fixed bin(31);
+   return (cb(v));
+ end apply2;

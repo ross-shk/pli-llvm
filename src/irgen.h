@@ -399,6 +399,17 @@ private:
   // Resolve a call target's LLVM function; for an external C entry (rule 38),
   // get-or-create its external declaration (no PL/I body).
   llvm::Function* calleeFn(Symbol* sym);
+  // LLVM function type of a call through an entry variable/parameter (IBM
+  // ENTRY VARIABLE extension, ADR-171), built from its declared descriptor.
+  // No static-link arguments: a captured procedure is diagnosed at assignment.
+  llvm::FunctionType* entryFnType(Symbol* sym);
+  // An indirect call through an entry variable (ADR-171): load the stored
+  // function pointer and call it with the declared signature. Shared by the
+  // CALL statement (result discarded) and a function reference; `sretPtr`
+  // receives the hidden result buffer when the entry returns a structure or
+  // character (diagnosed in sema in this slice).
+  llvm::CallInst* emitEntryCall(Symbol* sym, std::vector<HExprP>& args, SourceLoc loc,
+                                llvm::Value** sretPtr);
   // Implicit ALLOCATE for CONTROLLED variables (IBM Enterprise PL/I): push a
   // generation sized to the compile-time descriptor if none exists yet. Skips
   // CHAR(*) entirely — those require an explicit ALLOCATE with a known size.

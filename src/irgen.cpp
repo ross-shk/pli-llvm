@@ -130,6 +130,7 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   case TK::Pointer:
   case TK::Offset: // an OFFSET is an opaque locator (rule (22))
   case TK::Area:   // an AREA is a pointer to the runtime region (rule (20))
+  case TK::Entry:  // an ENTRY value is a procedure pointer (ADR-171)
     return b_.getPtrTy();
   case TK::Task:
   case TK::Event:
@@ -563,6 +564,87 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
   llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy(); // rule (34)
   llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
   return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+}
+
+// LLVM function type of a call through an entry variable/parameter (IBM ENTRY
+// VARIABLE extension, ADR-171), built from its declared descriptor. PL/I
+// passes every argument by reference (ptr) plus a hidden i64 for each
+// `*`-extent / CHAR(*) parameter; a by-value C entry marshals FIXED/FLOAT
+// scalars and POINTERs as values. No static-link arguments are threaded: a
+// procedure that captures enclosing state is diagnosed at assignment.
+llvm::FunctionType* IRGen::entryFnType(Symbol* sym) {
+  std::vector<llvm::Type*> pt;
+  bool sret = sym->entryIsFunction && (sym->entryRetTy.isStruct() || sym->entryRetTy.isChar());
+  if (sret)
+    pt.push_back(b_.getPtrTy());
+  for (const Type& t : sym->entryParams) {
+    if (sym->entryByValue && (t.isFixed() || t.k == TK::Float || t.isPointer()))
+      pt.push_back(llvmTy(t));
+    else
+      pt.push_back(b_.getPtrTy());
+  }
+  if (!sym->entryByValue)
+    for (const Type& t : sym->entryParams) {
+      if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+        pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+      if (t.isChar() && t.starLen)
+        pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+    }
+  llvm::Type* rt = sret ? b_.getVoidTy()
+                        : (sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy());
+  return llvm::FunctionType::get(rt, pt, false);
+}
+
+llvm::CallInst* IRGen::emitEntryCall(Symbol* sym, std::vector<HExprP>& args, SourceLoc loc,
+                                     llvm::Value** sretPtr) {
+  if (sretPtr)
+    *sretPtr = nullptr;
+  Type rty = sym->entryIsFunction ? sym->entryRetTy : Type::voidTy();
+  bool sret = rty.isStruct() || rty.isChar();
+  llvm::FunctionType* ft = entryFnType(sym);
+  std::vector<llvm::Value*> callArgs;
+  if (sret) {
+    llvm::Value* buf = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
+    if (sretPtr)
+      *sretPtr = buf;
+    callArgs.push_back(buf);
+  }
+  for (size_t i = 0; i < args.size() && i < sym->entryParams.size(); ++i) {
+    HExpr* a = args[i].get();
+    const Type& pty = sym->entryParams[i];
+    if (a->kind == HExpr::Star) {
+      // Omitted OPTIONAL (extension, ADR-119): a null pointer.
+      callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+      continue;
+    }
+    if (sym->entryByValue)
+      callArgs.push_back(marshalArg(a, pty, loc));
+    else
+      callArgs.push_back(argAddr(a, pty));
+  }
+  // Trailing omitted OPTIONALs pad with nulls to the full declared signature.
+  for (size_t i = args.size(); i < sym->entryParams.size(); ++i)
+    callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+  if (!sym->entryByValue)
+    for (size_t i = 0; i < sym->entryParams.size(); ++i) {
+      const Type& t = sym->entryParams[i];
+      if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
+        continue;
+      HExpr* a = (i >= args.size() || args[i]->kind == HExpr::Star) ? nullptr : args[i].get();
+      llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
+      if (!ext) {
+        d_.error(loc, "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                 "(13)");
+        ext = i64(0);
+      }
+      callArgs.push_back(ext);
+    }
+  llvm::Value* fp = loadSym(sym, sym->ty).reg;
+  // A void-returning entry (or a hidden-buffer result) cannot name the call.
+  llvm::CallInst* call = (sret || rty.isVoid()) ? b_.CreateCall(ft, fp, callArgs)
+                                                : b_.CreateCall(ft, fp, callArgs, "fres");
+  flushVarWrites();
+  return call;
 }
 
 // ---------------------------------------------------------------------------
@@ -2696,8 +2778,9 @@ void IRGen::emitPut(HStmt* s) {
       case TK::Pointer:
       case TK::Offset:
       case TK::Area:
+      case TK::Entry:
         d_.error(s->loc,
-                 "a POINTER/OFFSET/AREA value cannot be written with PUT LIST in this stage",
+                 "a POINTER/OFFSET/AREA/ENTRY value cannot be written with PUT LIST in this stage",
                  "(110)");
         break;
       case TK::Complex:
@@ -3421,6 +3504,13 @@ void IRGen::appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args) {
 void IRGen::emitCall(HStmt* s) {
   if (!s->sym)
     return;
+  // An indirect CALL through an entry variable (IBM extension, ADR-171): load
+  // the stored procedure pointer and call it with its declared signature. The
+  // result, if any, is discarded.
+  if (s->sym->isEntryVar) {
+    emitEntryCall(s->sym, s->args, s->loc, nullptr);
+    return;
+  }
   // Any task option makes the CALL asynchronous (rule (79), QR2.8).
   if (s->hasTaskOpt || s->eventRef || s->priorityExpr) {
     emitAsyncCall(s);
@@ -4452,6 +4542,10 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (v.ty.isLocator() && dst.isLocator())
     return v;
 
+  // ENTRY values (IBM extension, ADR-171): a procedure pointer copies through.
+  if (v.ty.isEntry() && dst.isEntry())
+    return v;
+
   // TASK/EVENT handles (rules (15),(79),(82), QR2.8): same-type copies pass
   // through; mixing them with anything else stays diagnosed by sema.
   if (v.ty.isTask() && dst.isTask())
@@ -4837,6 +4931,24 @@ Val IRGen::emitExpr(HExpr* e) {
       v.reg = i64(0);
       return v;
     }
+    if (e->sym->kind == Symbol::ProcName) {
+      // A procedure name used as a procedure value (IBM ENTRY VARIABLE
+      // extension, ADR-171): its address. A procedure that captures enclosing
+      // state needs a static link a raw function pointer cannot carry, so it is
+      // diagnosed rather than silently mis-called.
+      v.ty = Type::entryTy();
+      if (e->sym->proc && !e->sym->proc->env.empty()) {
+        d_.error(e->loc,
+                 "assigning a procedure that captures enclosing state to an ENTRY value is not "
+                 "implemented (ADR-171)",
+                 "(8)");
+        v.reg = llvm::Constant::getNullValue(b_.getPtrTy());
+        return v;
+      }
+      llvm::Function* f = calleeFn(e->sym);
+      v.reg = f ? (llvm::Value*)f : llvm::Constant::getNullValue(b_.getPtrTy());
+      return v;
+    }
     if (!e->memberPath.empty()) {
       // Qualified member S.A.B (rule 124): load the leaf member.
       const Type& leaf = e->ty;
@@ -4889,6 +5001,32 @@ Val IRGen::emitExpr(HExpr* e) {
     if (!e->sym) {
       v.ty = e->ty;
       v.reg = i64(0);
+      return v;
+    }
+    if (e->sym->isEntryVar) {
+      // An indirect function reference through an entry variable (IBM
+      // extension, ADR-171): load the stored pointer and call it.
+      llvm::Value* sretPtr = nullptr;
+      llvm::CallInst* call = emitEntryCall(e->sym, e->args, e->loc, &sretPtr);
+      Type rty = e->sym->entryIsFunction ? e->sym->entryRetTy : Type::voidTy();
+      v.ty = rty;
+      if (rty.isStruct()) {
+        v.ptr = sretPtr;
+      } else if (rty.isChar()) {
+        // Struct/char returns stay diagnosed in sema; handled defensively.
+        if (rty.varying) {
+          llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 0, "clenp");
+          v.ptr = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 1, "cdata");
+          v.len = b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
+        } else {
+          v.ptr = sretPtr;
+          v.len = i64(rty.len);
+        }
+      } else if (!rty.isVoid()) {
+        v.reg = rty.isBit() ? b_.CreateTrunc(call, b_.getInt1Ty(), "fb") : call;
+      } else {
+        v.reg = i64(0);
+      }
       return v;
     }
     if (!e->sym->proc) {

@@ -21,6 +21,7 @@ struct Symbol {
   bool external = false;   // EXTERNAL (rule (42)): shared across translation units
   bool implicit = false;   // created by the implicit-declaration rule
   bool isEntry = false;    // external C entry (DECLARE ... ENTRY): no body
+  bool isEntryVar = false; // ENTRY ... VARIABLE (IBM extension, ADR-171): procedure value
   bool isValue = false;    // VALUE named constant (extension, ADR-108): reassignment diagnosed
   bool isOptional = false; // OPTIONAL parameter (extension): may be omitted at a call
   bool isCond = false;     // DECLARE name CONDITION; (rule 9) programmer-named condition

@@ -20,6 +20,7 @@ enum class TK {
   Bit,      // BIT(n)
   Struct,   // structure with level-numbered members (rule 11)
   Pointer,  // POINTER: an address value (rules (15),(25))
+  Entry,    // ENTRY: a procedure value — a function pointer (ADR-171)
   Area,     // AREA: a region from which BASED storage is allocated (rule (20))
   Offset,   // OFFSET: a locator into an AREA (rule (22))
   Complex,  // COMPLEX: a pair of FLOAT real/imaginary parts (QR2.2/CM5)
@@ -153,6 +154,14 @@ struct Type {
     t.k = TK::Pointer;
     return t;
   }
+  // An ENTRY value (IBM Enterprise PL/I ENTRY VARIABLE extension, ADR-171): a
+  // procedure pointer. The parameter descriptor and result type live on the
+  // Symbol; the Type only marks the value as callable/assignable.
+  static Type entryTy() {
+    Type t;
+    t.k = TK::Entry;
+    return t;
+  }
   // A complex value (QR2.2/CM5): a pair of FLOAT real/imaginary parts.
   static Type complexTy() {
     Type t;
@@ -195,6 +204,7 @@ struct Type {
   bool isChar() const { return k == TK::Char; }
   bool isBit() const { return k == TK::Bit; }
   bool isPointer() const { return k == TK::Pointer; }
+  bool isEntry() const { return k == TK::Entry; }
   bool isArea() const { return k == TK::Area; }
   bool isOffset() const { return k == TK::Offset; }
   // A locator value: POINTER or OFFSET (rules (15),(22)). Both are opaque
@@ -234,6 +244,8 @@ struct Type {
       return "STRUCT";
     case TK::Pointer:
       return "POINTER";
+    case TK::Entry:
+      return "ENTRY";
     case TK::Area:
       return "AREA";
     case TK::Offset:

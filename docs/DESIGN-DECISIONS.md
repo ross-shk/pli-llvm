@@ -4634,3 +4634,69 @@ and `SET`/`IN` in either order; `multimodule/area_offset.pli`
 returns the offset; `bad_area_offset.pli`/`bad_area_attr.pli` pin
 the diagnostics.
 
+## ADR-171 — `ENTRY ... VARIABLE`: first-class procedure values
+
+**Context.** libnet wishlist #10 wants per-connection callbacks: a
+procedure stores a handler in a variable and a dispatcher invokes
+it later (an epoll/IOCP loop, or the echo example). Without entry
+variables the only callable name is a compile-time procedure
+constant, so callbacks cannot be selected at run time. IBM
+Enterprise PL/I serves this with the `VARIABLE` attribute on an
+`ENTRY` declaration: `DCL p ENTRY(...) VARIABLE;` makes `p` an
+assignable procedure value. `VARIABLE` is absent from TR 25.084
+(rule (34) lists only `ENTRY`/`RETURNS`/`USES`/`SETS`/`REDUCIBLE`;
+the §3.3 word list has no `VARIABLE`), so it is a documented
+extension, like `VARYINGZ` (ADR-168) and `UNALIGNED` (ADR-169).
+
+**Decision.** Parse `VARIABLE` as a modifier of an `ENTRY`
+declaration and record `DeclItem::entryVariable`. Sema then declares
+a storage `Symbol::Var` of the new `TK::Entry` type (lowered to an
+opaque LLVM `ptr`) instead of a `ProcName` constant, copying the
+declared descriptor (`entryParams`, `entryIsFunction`,
+`entryRetTy`, `entryByValue`) onto the symbol. A bare procedure name
+used as a value types as `TK::Entry`; `checkAssignable` admits
+entry-to-entry copies, so a procedure name, an external `ENTRY`, or
+another entry variable may be stored into one. `irgen` emits the
+procedure's address for a procedure-name value and loads the stored
+pointer for an entry variable. `CALL p(...)` and the function
+reference `p(...)` build an LLVM function type from the declared
+descriptor and emit an indirect call. A parameter declared
+`ENTRY(...) VARIABLE` is an entry variable like any other (it is
+resolved to a by-reference `Param`), and an `ENTRY(...)` nested in
+a descriptor list declares a callback parameter for an external
+procedure, so callbacks cross the module boundary.
+
+**ABI.** An entry value is an opaque `ptr`. The descriptor drives
+the generated signature exactly as for an external entry: every
+argument rides by reference (`ptr`) with a hidden `i64` for each
+`*`-extent / `CHAR(*)` parameter, unless the entry is a by-value C
+entry (`OPTIONS(LINKAGE(SYSTEM)/BYVALUE)`), in which case
+FIXED/FLOAT/POINTER scalars marshal by value. No static-link
+arguments are threaded through a stored pointer, so assigning a
+procedure that captures enclosing state (rule (8)) is diagnosed
+rather than silently mis-called.
+
+**Diagnosed.** `VARIABLE` without `ENTRY`; an array or
+structure-member ENTRY variable; `INITIAL`/`VALUE`,
+`DEFINED`/`BASED`/`LIKE`/`CONTROLLED`/`AREA`/`OFFSET`, and
+`EXTERNAL` on an ENTRY variable; a `STRUCTURE`/`CHARACTER`
+return type; and assigning a procedure that captures enclosing
+state. A `PUT LIST` of an entry value is rejected like a
+POINTER/OFFSET/AREA.
+
+**Consequences.** `core/entry_var.pli` pins assignment from a
+procedure name, reassignment, indirect `CALL`, indirect function
+reference, passing an entry variable or a bare procedure name to a
+dispatcher, and a varying-CHARACTER callback with write-back;
+`multimodule/entry_var.pli` (+ `_lib`) pins a callback passed to a
+library `ENTRY` whose parameter is itself an `ENTRY` descriptor;
+`bad_entry_var.pli`, `bad_entry_var_ret.pli`, and
+`bad_entry_var_init.pli` pin the rejected forms. libnet can now
+carry per-connection read/write/close handlers.
+
+**Rejected.** Closures over enclosing automatic storage (a raw
+function pointer cannot carry a static link); arrayed ENTRY and
+ENTRY structure members; and `STRUCTURE`/`CHARACTER` entry returns
+(they would need to thread the hidden result buffer through the
+stored pointer).
+
