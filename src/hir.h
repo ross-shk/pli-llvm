@@ -204,6 +204,10 @@ struct HStmt {
   // SIGNAL ... SET ONCODE(expr) (rule (93)): lowered code expression.
   HExprP oncodeExpr;
   int onIndex = -1; // dense handler id assigned by irgen before emission
+  // BEGIN-block scope id (irgen-assigned): a GO TO that leaves the block
+  // restores the handler depth saved at its entry (rule (91), Y33 block
+  // termination). -1 outside a BEGIN.
+  int onScope = -1;
   // Establishing-frame automatics the ON-unit touches (rule 91), collected by
   // sema; codegen captures their addresses at establishment for the handler's
   // capture context. Symbols are shared with sema, so a copy suffices.

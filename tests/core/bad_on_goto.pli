@@ -1,0 +1,15 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* rule (91): an ON-unit runs off the establishing frame's
+    call chain, so a GO TO inside it cannot reach a procedure
+    label; non-local transfer stays diagnosed. */
+ bad_on_goto: procedure options(main);
+    declare i fixed bin(31) init(0);
+    on zerodivide begin;
+       i = 1;
+       goto outside;
+    end;
+    signal zerodivide;
+ outside: ;
+    put skip list('i=', i);
+ end bad_on_goto;

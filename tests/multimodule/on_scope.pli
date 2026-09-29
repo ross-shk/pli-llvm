@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (91)-(94): a BEGIN block inside an iterative DO scopes an
+    ON-unit established on every iteration; each iteration arms a fresh
+    handler and the block exit disarms it. The condition is raised
+    across the object boundary by on_scope_lib.pli. */
+ on_scope: procedure options(main);
+   dcl evt  condition;
+   dcl fire entry (fixed bin(31)) external;
+   dcl i    fixed bin(31);
+   dcl hits fixed bin(31) init(0);
+
+   do i = 1 to 3;
+     begin;
+       on condition(evt) hits = hits + i;
+       call fire(i);
+     end;
+   end;
+
+   put skip list('hits=', hits);
+   if hits = 6 then put skip list('PASS on_scope');
+   else put skip list('FAIL on_scope');
+ end on_scope;

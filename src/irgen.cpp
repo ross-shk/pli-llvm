@@ -1184,21 +1184,48 @@ void IRGen::emitInitials(HProc* p) {
 
 // Assign an LLVM block to every labelled statement (rule (64)) so a GO TO
 // (rule (77)) can branch to it. Multiple labels on one statement alias one block.
-void IRGen::collectGotoBlocks(HStmt* s) {
+void IRGen::collectGotoBlocks(HStmt* s, std::vector<int>& chain) {
   if (!s)
     return;
   if (!s->labels.empty() && s->kind != HStmt::Entry) {
     std::string blk = "L" + std::to_string(n_++);
     llvm::BasicBlock* bb = llvm::BasicBlock::Create(ctx_, blk, curFn_);
-    for (const std::string& l : s->labels)
+    for (const std::string& l : s->labels) {
       labelBlocks_[l] = bb;
+      labelBeginChain_[l] = chain; // enclosing BEGIN scopes (rule 91)
+    }
+  }
+  bool isBegin = s->kind == HStmt::Begin;
+  if (isBegin) {
+    s->onScope = ++nextOnScope_;
+    chain.push_back(s->onScope);
   }
   if (s->thenS)
-    collectGotoBlocks(s->thenS.get());
+    collectGotoBlocks(s->thenS.get(), chain);
   if (s->elseS)
-    collectGotoBlocks(s->elseS.get());
+    collectGotoBlocks(s->elseS.get(), chain);
   for (auto& b : s->body)
-    collectGotoBlocks(b.get());
+    collectGotoBlocks(b.get(), chain);
+  if (isBegin)
+    chain.pop_back();
+}
+
+// Handler depth to restore when a GO TO leaves enclosing BEGIN blocks (rule
+// (91); Y33 block termination): the depth saved at the entry of the outermost
+// exited block. The target's scope chain must be a prefix of the active chain
+// (a GO TO may not enter an inactive block); a target in the same scope leaves
+// no block and needs no restore.
+llvm::Value* IRGen::onExitDepth(const std::string& label) {
+  auto it = labelBeginChain_.find(label);
+  if (it == labelBeginChain_.end())
+    return nullptr;
+  const std::vector<int>& target = it->second;
+  if (target.size() >= onScopes_.size())
+    return nullptr; // same scope, or an (illegal) jump into a block
+  for (size_t i = 0; i < target.size(); ++i)
+    if (onScopes_[i].id != target[i])
+      return nullptr; // target in a sibling/inactive block
+  return onScopes_[target.size()].entryDepth;
 }
 
 // Pre-create a procedure's functions and aliases so a call site resolves
@@ -1348,6 +1375,8 @@ void IRGen::emitProc(HProc* p) {
     return; // packages emit no function (extension, ADR-109)
   curProc_ = p;
   labelBlocks_.clear();
+  labelBeginChain_.clear();
+  onScopes_.clear();
   symAddr_.clear();
   structRetPtr_ = nullptr;
   ctlImplicitAlloc_.clear();
@@ -1383,8 +1412,9 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // The entry block must be the function's first block (so it is the real
   // entry, and the allocas it holds dominate every reachable block).
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
+  std::vector<int> beginChain;
   for (auto& st : p->body)
-    collectGotoBlocks(st.get());
+    collectGotoBlocks(st.get(), beginChain);
 
   // Parameter arguments become their symbols' addresses (PL/I by reference);
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
@@ -1470,8 +1500,9 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   // The entry block must be the function's first block (so it is the real
   // entry and its allocas dominate every reachable segment block).
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", impl);
+  std::vector<int> beginChain;
   for (auto& st : p->body)
-    collectGotoBlocks(st.get());
+    collectGotoBlocks(st.get(), beginChain);
 
   std::vector<Symbol*> uni;
   auto push = [&](Symbol* s) {
@@ -1674,6 +1705,8 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       llvm::AllocaInst* savedDepth = curOnDepth_;
       curOnDepth_ = nullptr;
       labelBlocks_.clear();
+      labelBeginChain_.clear();
+      onScopes_.clear();
       symAddr_.clear();
       ctlImplicitAlloc_.clear(); // a handler allocates/frees nothing implicitly
       areaLocals_.clear();       // ... and owns no AREA regions
@@ -1693,7 +1726,8 @@ void IRGen::emitOnHandlers(HProgram& prog) {
           symAddr_[s->onCaps[i]] = b_.CreateLoad(b_.getPtrTy(), fp, "capv");
         }
       }
-      collectGotoBlocks(s->unit.get());
+      std::vector<int> beginChain;
+      collectGotoBlocks(s->unit.get(), beginChain);
       emitStmt(s->unit.get());
       if (!blockTerminated(b_.GetInsertBlock()))
         b_.CreateRetVoid();
@@ -1821,11 +1855,14 @@ void IRGen::emitStmt(HStmt* s) {
     // handlers, so the common path stays free. When the body ends with a
     // terminator (e.g. a bare RETURN ending an ON-unit, rule 91) there is
     // no fall-through to scope: skip the restore, mirroring procedure exit.
+    // The entry depth is also what a GO TO leaving this block restores.
     llvm::Value* blkDepth = nullptr;
     if (!onHandlers_.empty())
       blkDepth = b_.CreateCall(runtimeFn("pli_on_depth_error"), {}, "onblkdepth");
+    onScopes_.push_back({s->onScope, blkDepth});
     for (auto& b : s->body)
       emitStmt(b.get());
+    onScopes_.pop_back();
     if (blkDepth && !blockTerminated(b_.GetInsertBlock()))
       b_.CreateCall(runtimeFn("pli_on_reset_error"), {blkDepth});
     break;
@@ -1995,6 +2032,11 @@ void IRGen::emitStmt(HStmt* s) {
     emitSignal(s);
     break;
   case HStmt::Goto:
+    // Rule (91) / Y33 block termination: a GO TO that leaves enclosing BEGIN
+    // blocks reverts the handlers those blocks established, restoring the
+    // depth saved at the outermost exited block's entry.
+    if (llvm::Value* depth = onExitDepth(s->name))
+      b_.CreateCall(runtimeFn("pli_on_reset_error"), {depth});
     b_.CreateBr(labelBlocks_[s->name]);
     break;
   }

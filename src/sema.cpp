@@ -319,8 +319,6 @@ bool Sema::run(Program& prog, bool compileOnly) {
   return d_.ok();
 }
 
-// True when any statement in `body` contains kind `k` (defined below).
-static bool stmtsHaveKind(const std::vector<StmtP>& body, Stmt::Kind k);
 // True when a declaration subtree carries a per-member INITIAL (rule (26)):
 // any descendant with its own init/initItems/initCall/valueInit.
 static bool structHasMemberInit(const std::vector<DeclItem*>& items,
@@ -377,9 +375,14 @@ void Sema::processProc(Proc* p) {
   p->commonRetTy = common;
 
   procLabels_.clear();
+  labelBeginChains_.clear();
+  curBeginChain_.clear();
   curEntry_ = nullptr;
-  for (auto& s : p->body)
-    collectLabels(s.get());
+  {
+    std::vector<const Stmt*> beginChain;
+    for (auto& s : p->body)
+      collectLabels(s.get(), beginChain);
+  }
   for (auto& s : p->body) {
     if (s && s->kind == Stmt::Entry)
       curEntry_ = s.get(); // later statements belong to this segment
@@ -389,11 +392,6 @@ void Sema::processProc(Proc* p) {
   // Reductions over array expressions only expand in direct assignment;
   // anything left pending was never expanded and stays diagnosed (123).
   drainPendingReduces(p);
-  // rule (91): unwinding handlers on a non-local exit is not implemented, so
-  // GO TO in a procedure that establishes an ON-unit is diagnosed.
-  if (stmtsHaveKind(p->body, Stmt::On) && stmtsHaveKind(p->body, Stmt::Goto))
-    d_.error(p->loc, "GO TO in a procedure that establishes ON is not implemented in this stage",
-             "(91)");
 }
 
 // Resolve a structure-valued function's RETURNS name (rule 127). The parser
@@ -1634,41 +1632,26 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
 // Gather the labels (rule (64)) defined anywhere in this procedure so that a
 // GO TO target (rule (77)) can be resolved. M1 treats every label of the
 // procedure body as visible; non-local GO TO to an enclosing procedure is M5.
-void Sema::collectLabels(Stmt* s) {
+// `chain` is the stack of enclosing BEGIN blocks, recorded per label so a GO TO
+// into an inactive block can be rejected (Y33 block activation).
+void Sema::collectLabels(Stmt* s, std::vector<const Stmt*>& chain) {
   if (!s)
     return;
-  for (const std::string& l : s->labels)
+  for (const std::string& l : s->labels) {
     procLabels_.insert(l);
+    labelBeginChains_[l] = chain;
+  }
+  bool isBegin = s->kind == Stmt::Begin;
+  if (isBegin)
+    chain.push_back(s);
   if (s->thenS)
-    collectLabels(s->thenS.get());
+    collectLabels(s->thenS.get(), chain);
   if (s->elseS)
-    collectLabels(s->elseS.get());
+    collectLabels(s->elseS.get(), chain);
   for (auto& b : s->body)
-    collectLabels(b.get());
-}
-
-// True when the statement subtree rooted at `s` contains kind `k` (through
-// branches, blocks and ON-units).
-static bool stmtHasKind(const Stmt* s, Stmt::Kind k) {
-  if (!s)
-    return false;
-  if (s->kind == k)
-    return true;
-  if (stmtHasKind(s->thenS.get(), k) || stmtHasKind(s->elseS.get(), k) ||
-      stmtHasKind(s->unit.get(), k))
-    return true;
-  for (auto& b : s->body)
-    if (stmtHasKind(b.get(), k))
-      return true;
-  return false;
-}
-
-// True when any statement in `body` contains kind `k`.
-static bool stmtsHaveKind(const std::vector<StmtP>& body, Stmt::Kind k) {
-  for (auto& s : body)
-    if (stmtHasKind(s.get(), k))
-      return true;
-  return false;
+    collectLabels(b.get(), chain);
+  if (isBegin)
+    chain.pop_back();
 }
 
 // True when a declaration subtree carries a per-member INITIAL (rule (26)):
@@ -1931,6 +1914,12 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
       break;
     case Stmt::Entry:
       d_.error(s->loc, "ENTRY inside an ON-unit is not implemented in this stage", "(91)");
+      break;
+    case Stmt::Goto:
+      // The unit runs as a frameless handler, off the establishing frame's
+      // call chain, so a GO TO cannot reach a procedure label (rule 77); a
+      // non-local transfer is not implemented in this stage.
+      d_.error(s->loc, "GO TO inside an ON-unit is not implemented in this stage", "(91)");
       break;
     case Stmt::DoIter:
       // The control variable lives in the establishing frame.
@@ -2685,11 +2674,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     auto it = beginScopes_.find(s);
     Scope* bsc = it != beginScopes_.end() ? it->second : sc;
     Stmt* save = curEntry_;
+    curBeginChain_.push_back(s); // active block for a GO TO's target check
     for (auto& b : s->body) {
       if (b && b->kind == Stmt::Entry)
         curEntry_ = b.get();
       checkStmt(b.get(), bsc, p);
     }
+    curBeginChain_.pop_back();
     curEntry_ = save;
     break;
   }
@@ -3221,8 +3212,21 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   case Stmt::Goto:
     // GO TO target must be a label defined in this procedure (rules (64),(77)).
-    if (procLabels_.find(s->name) == procLabels_.end())
+    if (procLabels_.find(s->name) == procLabels_.end()) {
       d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
+      break;
+    }
+    // A GO TO may not enter an inactive block (Y33 block activation): the
+    // target's enclosing BEGIN chain must be a prefix of the current one.
+    {
+      auto lc = labelBeginChains_.find(s->name);
+      if (lc != labelBeginChains_.end()) {
+        const std::vector<const Stmt*>& target = lc->second;
+        if (target.size() > curBeginChain_.size() ||
+            !std::equal(target.begin(), target.end(), curBeginChain_.begin()))
+          d_.error(s->loc, "GO TO into an inactive block is not allowed", "(77)");
+      }
+    }
     break;
   case Stmt::On:
     // Rules (91),(94),(99): ERROR, SIZE, or a programmer-named condition;

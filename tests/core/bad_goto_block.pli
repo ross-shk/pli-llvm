@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* rule (77): a GO TO may not pass control into an inactive
+    block (Y33 "Activation and Termination of Blocks"); the
+    label's BEGIN block is not active at the GO TO site. */
+ bad_goto_block: procedure options(main);
+    declare i fixed bin(31) init(0);
+    on zerodivide i = i + 1;
+    goto inside;
+    begin;
+       on zerodivide i = i + 10;
+    inside: ;
+       put skip list('inside');
+    end;
+    put skip list('i=', i);
+ end bad_goto_block;

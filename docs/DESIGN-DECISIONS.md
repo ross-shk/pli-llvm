@@ -4700,3 +4700,58 @@ ENTRY structure members; and `STRUCTURE`/`CHARACTER` entry returns
 (they would need to thread the hidden result buffer through the
 stored pointer).
 
+## ADR-172 — GO TO terminates BEGIN blocks, reverting their ON-units
+
+**Context.** libnet wishlist #11 wants a per-connection ON-unit
+armed inside a loop and torn down so the next iteration starts
+clean. A scoped `BEGIN`/`END` already disarms on fall-through
+(ADR-076, ADR-147), but a local `GO TO` out of the block was
+rejected outright: sema diagnosed any procedure containing both
+`ON` and `GO TO` ("GO TO in a procedure that establishes ON is
+not implemented"), because the runtime handler stack was never
+unwound on a non-sequential exit. Y33-6003 "Activation and
+Termination of Blocks" rule 3 says a block is terminated on
+execution of a `GO TO` that transfers control to a point not
+contained in the block, and rule 6 terminates its dynamic
+descendants; "Use of the ON Statement" scopes the unit to the
+establishing block, so leaving the block reverts the unit. Blocks
+are BEGIN blocks and procedures (rule "BLOCKS"); a `GO TO` may not
+pass control to an inactive block.
+
+**Decision.** `irgen` gives every BEGIN block a unique scope id
+during `collectGotoBlocks` and records the chain of enclosing BEGIN
+ids for each label. Emission keeps `onScopes_`, the active chain
+paired with the handler depth saved at each block's entry
+(`pli_on_depth_error`). On a local `GO TO`, `onExitDepth` finds the
+target's chain as a prefix of the active chain and returns the depth
+saved at the entry of the outermost exited block; `irgen` calls
+`pli_on_reset_error` with it before branching, reverting exactly the
+handlers the exited blocks established. A target in the same scope
+leaves no block and needs no restore. `sema` no longer rejects
+`ON`+`GO TO`; instead it records each label's enclosing BEGIN chain
+and diagnoses a `GO TO` whose target chain is not a prefix of the
+current one ("GO TO into an inactive block", rule (77)), which also
+keeps the emitted depth value dominated. A `GO TO` *inside* an
+ON-unit stays diagnosed (rule (91)): the unit runs off the
+establishing frame's call chain, so a non-local transfer is a
+separate, unserved slice.
+
+**Consequences.** `core/on_scope_goto.pli` covers leaving two nested
+blocks and leaving only the inner block, checking the exposed
+enclosing handler each time; `multimodule/on_scope_goto.pli`
+(+ `_lib`) raises the condition across the object boundary so the
+unwind is observed through the shared runtime stack;
+`multimodule/on_scope.pli` (+ `_lib`) pins the fall-through
+per-iteration re-arm. `bad_on_goto.pli` and `bad_goto_block.pli`
+pin the two diagnostics. TR 25.084 rule (77) and the
+conditions row move in `GRAMMAR-COVERAGE.md`.
+
+**Rejected.** Unwinding at runtime with block markers on the
+handler stack (more state for no observable gain over the
+compile-time chain, since a `GO TO` cannot enter a block);
+restoring to the *target block's* entry depth (wrong for a backward
+`GO TO` that keeps handlers established earlier in the same block);
+supporting non-local `GO TO` from an ON-unit in this slice (needs
+`invoke`/`landingpad` or `setjmp`-style frame unwinding, ADR-009's
+deferred non-local-exit work).
+

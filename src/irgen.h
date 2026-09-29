@@ -106,7 +106,7 @@ private:
   // a by-reference pointer with no own storage, so its extent must be read from
   // the bound argument (itself by-ref) once, mirroring allocaLocals' locals.
   void recordDynParamUbs(const std::vector<Symbol*>& params);
-  void collectGotoBlocks(HStmt* s); // assign an LLVM block to each labelled stmt
+  void collectGotoBlocks(HStmt* s, std::vector<int>& chain); // assign an LLVM block to each labelled stmt
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
   static std::string entryIrName(const std::string& proc, const std::string& parent,
                                  const std::string& entry);
@@ -436,6 +436,22 @@ private:
   // copies into before returning void.
   llvm::Value* structRetPtr_ = nullptr;
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
+  // ON-unit scope on block termination (rule (91); Y33 "Activation and
+  // Termination of Blocks"): a GO TO that leaves one or more BEGIN blocks
+  // reverts the handlers those blocks established. Each BEGIN carries a unique
+  // scope id; `onScopes_` is the emission-time chain of active blocks with the
+  // handler depth saved at their entry, and `labelBeginChain_` records the
+  // chain enclosing each label. `onExitDepth` returns the depth to restore at
+  // a GO TO (the outermost exited block's entry depth), or null when no block
+  // is left.
+  struct OnScope {
+    int id = 0;
+    llvm::Value* entryDepth = nullptr;
+  };
+  std::vector<OnScope> onScopes_;
+  std::map<std::string, std::vector<int>> labelBeginChain_;
+  int nextOnScope_ = 0;
+  llvm::Value* onExitDepth(const std::string& label);
   // Enclosing iterative groups for LEAVE/ITERATE (extension, ADR-105):
   // labels with the break (end) and continue (re-entry) blocks, innermost last.
   struct LoopTargets {

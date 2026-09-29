@@ -4,6 +4,7 @@
 #pragma once
 #include "ast.h"
 #include "diag.h"
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -148,7 +149,7 @@ private:
   // (rules (34),(56)); safe to call twice, the second call is a no-op.
   void resolveProcParams(Proc* p);
   void collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isStatic);
-  void collectLabels(Stmt* s); // gather GO TO targets defined in this proc
+  void collectLabels(Stmt* s, std::vector<const Stmt*>& chain); // gather GO TO targets defined in this proc
   void checkStmt(Stmt* s, Scope* sc, Proc* p);
   // Rule (91): reject ON-unit constructs that need the establishing frame
   // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
@@ -310,6 +311,11 @@ private:
   std::vector<Symbol*> entries_;     // external C entries, in declaration order
   int nextFileSlot_ = 0;             // next FILE variable slot index (100-103)
   std::set<std::string> procLabels_; // GO TO targets in the current proc (rule 77)
+  // Enclosing BEGIN blocks of each label and of the statement being checked:
+  // a GO TO may not enter an inactive block (Y33 "Activation and Termination
+  // of Blocks"), so the target's chain must be a prefix of the current one.
+  std::map<std::string, std::vector<const Stmt*>> labelBeginChains_;
+  std::vector<const Stmt*> curBeginChain_;
   Stmt* curEntry_ = nullptr;         // the ENTRY segment currently being checked
                                      // (rule 56): enables RETURN(value) in its body
   int inUnit_ = 0;                   // ON-unit nesting depth while checking (rule 91):

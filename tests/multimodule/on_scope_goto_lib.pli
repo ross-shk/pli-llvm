@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Library side of on_scope_goto.pli: raises the programmer-named
+    condition `evt`, so the caller's per-iteration ON-unit observes
+    which handler was on top when the condition crossed the object
+    boundary. */
+ on_scope_goto_lib: package exports(fire);
+ fire: procedure (k);
+   dcl k fixed bin(31);
+   dcl evt condition;
+   signal condition(evt) set oncode(k);
+ end fire;
+ end on_scope_goto_lib;
