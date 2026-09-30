@@ -145,7 +145,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        std::string* outObj, bool linkRuntimeIn = false) {
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
   if (triple.empty())
-    triple = "arm64-apple-macosx15.0";
+    triple = llvm::sys::getDefaultTargetTriple();
   std::string src;
   if (!preprocessor.run(input, src))
     return false;
@@ -234,24 +234,22 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       // Single-module fast path: runtime linked at BC level (never `-c`).
       if (linkRuntimeIn && !compileOnly) {
         std::string rtErr;
-        rtOk = plic::linkEmbeddedLibPLI(*om->mod, rtErr);
+        llvm::Triple targetTriple(triple);
+        rtOk = plic::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr);
         if (!rtOk)
           std::cerr << "plic: " << rtErr << "\n";
       }
 #endif
       if (rtOk) {
-        // Create TargetMachine using darwin triple (macOS 15 = darwin 24)
-        // to avoid SME features (zcm/zcz) which are enabled by default for
-        // macosx15 in LLVM 23 but not actually supported.
+        // Create TargetMachine using the provided target triple.
         std::string tmErr;
-        std::string tmTriple = "arm64-apple-darwin24.0";
-        if (auto tm = plic::createTargetMachine(tmTriple, optLevel, tmErr)) {
+        if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr)) {
           // The IRGen layout is approximate; the TargetMachine owns the truth
           // (llc behaviour — the clang fallback used -Wno-override-module).
           om->mod->setDataLayout(tm->createDataLayout());
-          // Also set module target triple to darwin24 to ensure consistent
+          // Also set module target triple to ensure consistent
           // feature handling during codegen (module triple affects some defaults).
-          om->mod->setTargetTriple(llvm::Triple("arm64-apple-darwin24.0"));
+          om->mod->setTargetTriple(llvm::Triple(triple));
           // Mirror the clang backend: optimize the (runtime-linked) IR at the
           // requested -O level before codegen.
           plic::optimizeModule(*om->mod, optLevel);
@@ -571,7 +569,7 @@ int main(int argc, char** argv) {
         std::error_code ec;
         llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
         std::string rtErr;
-        haveRtObj = !ec && plic::emitRuntimeObject(*tm, os, rtErr);
+        haveRtObj = !ec && plic::emitRuntimeObject(*tm, llt, os, rtErr);
         if (!haveRtObj && verbose)
           std::cerr << "plic: runtime object failed (" << rtErr << "), using clang\n";
       }

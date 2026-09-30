@@ -9,6 +9,7 @@
 #include <string>
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/TargetParser/Triple.h"
 
 namespace llvm {
 class Module;
@@ -27,11 +28,11 @@ bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_strea
                 std::string& err);
 // Single-module fast path only: link the embedded runtime into `M` at BC
 // level (LinkOnlyNeeded). Never for `-c`, never per-module of multi-input.
-bool linkEmbeddedLibPLI(llvm::Module& M, std::string& err);
+bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::string& err);
 // Multi-input path: parse the embedded bundle into its own module.
-std::unique_ptr<llvm::Module> parseEmbeddedRuntime(llvm::LLVMContext& ctx, std::string& err);
+std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTriple, llvm::LLVMContext& ctx, std::string& err);
 // Emit the embedded runtime as its own object (one lld input among others).
-bool emitRuntimeObject(llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out, std::string& err);
+bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple, llvm::raw_pwrite_stream& out, std::string& err);
 // Link object files + system libs into an executable in-process (needs lld).
 bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err);
 } // namespace plic

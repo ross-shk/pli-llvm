@@ -23,9 +23,11 @@ struct TargetDesc {
   std::vector<std::string> systemLibs;  // -l... / .lib names
   std::vector<std::string> linkerFlags; // entry, platform_version, /subsystem
 };
-// Host defaults today; cross rows added later (target != host is follow-up).
+// Per-target descriptor (dispatches on triple's object format).
 const TargetDesc& getTargetDesc(const llvm::Triple& t);
-// TargetMachine for the host triple; null on failure with `err` set.
+// Initialize all LLVM targets (not just native) for cross-compilation.
+void initializeAllTargets();
+// TargetMachine for the given triple; null on failure with `err` set.
 std::unique_ptr<llvm::TargetMachine>
 createTargetMachine(const std::string& triple, const std::string& optLevel, std::string& err);
 } // namespace plic

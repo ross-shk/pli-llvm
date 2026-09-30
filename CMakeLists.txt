@@ -67,12 +67,14 @@ message(STATUS "lld headers found: ${LLD_INCLUDE_DIR}")
 
 # Find lld library directory (Homebrew puts dylibs in /opt/homebrew/opt/lld/lib)
 # Link directly against the dynamic libraries using full paths
-set(LLD_LIB_DIR /opt/homebrew/opt/lld/lib)
-set(LLD_ELF_LIB ${LLD_LIB_DIR}/liblldELF.dylib)
-set(LLD_MACHO_LIB ${LLD_LIB_DIR}/liblldMachO.dylib)
-set(LLD_COFF_LIB ${LLD_LIB_DIR}/liblldCOFF.dylib)
-set(LLD_COMMON_LIB ${LLD_LIB_DIR}/liblldCommon.dylib)
-
+set(LLD_ROOT "" CACHE PATH "Path to lld installation root")
+if(LLD_ROOT)
+  list(APPEND CMAKE_PREFIX_PATH ${LLD_ROOT})
+endif()
+find_library(LLD_ELF_LIB NAMES lldELF)
+find_library(LLD_MACHO_LIB NAMES lldMachO)
+find_library(LLD_COFF_LIB NAMES lldCOFF)
+find_library(LLD_COMMON_LIB NAMES lldCommon)
 set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_COMMON_LIB})
 message(STATUS "lld libraries: ${LLD_LIBRARIES}")
 
@@ -88,6 +90,21 @@ endif()
 
 add_executable(plic ${PLIC_SOURCES})
 target_include_directories(plic PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
+
+# Get the default target triple from LLVM for consistent bitcode generation
+# Use macosx14.0: macOS 15+ emits SME features (zcm/zcz) in function
+# attributes that LLVM 23 does not support at codegen time ("Unsupported
+# stack probing method"). macOS 14 and earlier do not emit them.
+set(PLIC_TARGET_TRIPLE "" CACHE STRING "Target triple for runtime bitcode generation")
+if(NOT PLIC_TARGET_TRIPLE)
+  execute_process(
+    COMMAND ${CMAKE_C_COMPILER} -print-effective-triple
+    OUTPUT_VARIABLE PLIC_HOST_TRIPLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(PLIC_TARGET_TRIPLE ${PLIC_HOST_TRIPLE})
+endif()
+message(STATUS "Target triple for bitcode: ${PLIC_TARGET_TRIPLE}")
+
 target_compile_definitions(plic PRIVATE
   PLIC_RUNTIME_LIB="$<TARGET_FILE:libpli>"
   PLIC_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/libpli.a"
@@ -95,7 +112,12 @@ target_compile_definitions(plic PRIVATE
   PLIC_VERSION="${PLIC_VERSION}"
   PLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
   PLIC_HAVE_LLD=${PLIC_HAVE_LLD}
-  PLIC_TARGETS_TO_BUILD="host")
+  PLIC_TARGETS_TO_BUILD="host"
+  PLIC_TARGET_TRIPLE="${PLIC_TARGET_TRIPLE}"
+  PLIC_HAVE_LINUX_X86_64_RUNTIME=1
+  PLIC_HAVE_LINUX_AARCH64_RUNTIME=1
+  PLIC_HAVE_WINDOWS_X86_64_RUNTIME=1
+  PLIC_HAVE_WINDOWS_AARCH64_RUNTIME=1)
 
 # Link LLVM components needed for in-process codegen + linking.
 # Core/IR
@@ -148,46 +170,98 @@ if(NOT APPLE)
   target_link_options(plic PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
-# Get the default target triple from LLVM for consistent bitcode generation
-# Use macosx14.0: macOS 15+ emits SME features (zcm/zcz) in function
-# attributes that LLVM 23 does not support at codegen time ("Unsupported
-# stack probing method"). macOS 14 and earlier do not emit them.
-set(PLIC_TARGET_TRIPLE "arm64-apple-macosx14.0")
-message(STATUS "Target triple for bitcode: ${PLIC_TARGET_TRIPLE}")
+# Cross-compilation bitcode generation (Phase 2+): requires sysroots.
+option(PLIC_CROSS_BITCODE "Generate bitcode for cross-targets (needs sysroots)" OFF)
 
 # libpli runtime (C11).
 add_library(libpli STATIC ${RT_SRCS})
 set_target_properties(libpli PROPERTIES OUTPUT_NAME pli)
 
-# Embedded runtime (Phase 2): per-unit bitcode, linked bundle, byte array.
-set(RT_BCS "")
+# Multi-target embedded runtime: generate bitcode for all supported targets.
+if(PLIC_CROSS_BITCODE)
+  set(PLIC_TARGETS "x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;x86_64-pc-windows-gnu;aarch64-pc-windows-gnu")
+
+  # Per-target bitcode generation and embedding.
+  foreach(target ${PLIC_TARGETS})
+    string(REPLACE "-" "_" target_suffix "_${target}")
+    set(TARGET_BC_DIR ${CMAKE_BINARY_DIR}/bc/${target})
+    set(TARGET_RT_BCS "")
+    foreach(src ${RT_SRCS})
+      get_filename_component(base ${src} NAME_WE)
+      add_custom_command(
+        OUTPUT ${TARGET_BC_DIR}/${base}.bc
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
+        COMMAND ${CMAKE_C_COMPILER} -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+                -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
+                -O2
+                -ffunction-sections -fdata-sections
+                -target ${target}
+                -o ${TARGET_BC_DIR}/${base}.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/${src}
+        COMMENT "bitcode: ${base} for ${target}")
+      list(APPEND TARGET_RT_BCS ${TARGET_BC_DIR}/${base}.bc)
+    endforeach()
+    add_custom_command(
+      OUTPUT ${TARGET_BC_DIR}/libpli.bc
+      COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_RT_BCS} -o ${TARGET_BC_DIR}/libpli.bc
+      DEPENDS ${TARGET_RT_BCS})
+    add_custom_command(
+      OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+              ${TARGET_BC_DIR}/libpli.bc ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
+              ${target_suffix}
+      DEPENDS ${TARGET_BC_DIR}/libpli.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+      COMMENT "embedding libpli.bc for ${target}")
+    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc)
+    add_dependencies(plic embedded_runtime_inc${target_suffix})
+  endforeach()
+else()
+  # Define empty per-target blobs for non-cross builds (compiler still works)
+  # Target suffixes must match PLIC_TARGETS naming convention (full triple)
+  foreach(target IN ITEMS x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu aarch64-pc-windows-gnu)
+    string(REPLACE "-" "_" target_suffix "_${target}")
+    add_custom_command(
+      OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+              /dev/null ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
+              ${target_suffix}
+      DEPENDS ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+      COMMENT "stub embedding for ${target}")
+    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc)
+    add_dependencies(plic embedded_runtime_inc${target_suffix})
+  endforeach()
+endif()
+
+# Default target (host) bitcode for backward compatibility.
+set(DEFAULT_BC_DIR ${CMAKE_BINARY_DIR}/bc/${PLIC_TARGET_TRIPLE})
+set(DEFAULT_RT_BCS "")
 foreach(src ${RT_SRCS})
   get_filename_component(base ${src} NAME_WE)
   add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bc/${base}.bc
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bc
+    OUTPUT ${DEFAULT_BC_DIR}/${base}.bc
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${DEFAULT_BC_DIR}
     COMMAND ${CMAKE_C_COMPILER} -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
             -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
             -O2
             -ffunction-sections -fdata-sections
             -target ${PLIC_TARGET_TRIPLE}
-            -o ${CMAKE_BINARY_DIR}/bc/${base}.bc
+            -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src}
-    COMMENT "bitcode: ${base}")
-  list(APPEND RT_BCS ${CMAKE_BINARY_DIR}/bc/${base}.bc)
+    COMMENT "bitcode: ${base} for ${PLIC_TARGET_TRIPLE}")
+  list(APPEND DEFAULT_RT_BCS ${DEFAULT_BC_DIR}/${base}.bc)
 endforeach()
 add_custom_command(
-  OUTPUT ${CMAKE_BINARY_DIR}/libpli.bc
-  COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${RT_BCS} -o ${CMAKE_BINARY_DIR}/libpli.bc
-  DEPENDS ${RT_BCS})
+  OUTPUT ${DEFAULT_BC_DIR}/libpli.bc
+  COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${DEFAULT_RT_BCS} -o ${DEFAULT_BC_DIR}/libpli.bc
+  DEPENDS ${DEFAULT_RT_BCS})
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime.inc
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-          ${CMAKE_BINARY_DIR}/libpli.bc ${CMAKE_BINARY_DIR}/embedded_runtime.inc
-  DEPENDS ${CMAKE_BINARY_DIR}/libpli.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-  COMMENT "embedding libpli.bc")
-add_custom_target(embedded_runtime_inc DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc)
-add_dependencies(plic embedded_runtime_inc)
+          ${DEFAULT_BC_DIR}/libpli.bc ${CMAKE_BINARY_DIR}/embedded_runtime.inc
+  DEPENDS ${DEFAULT_BC_DIR}/libpli.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+  COMMENT "embedding libpli.bc for default target ${PLIC_TARGET_TRIPLE}")
+add_custom_target(embedded_runtime_inc_default DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc)
+add_dependencies(plic embedded_runtime_inc_default)
 
 # Generated rules table for --explain (see scripts/gen_rules.py); the spec and
 # the generator are the source of truth, so regenerate on every build.

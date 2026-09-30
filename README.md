@@ -152,6 +152,65 @@ cc main.o lib.o build/libpli.a -o prog
 
 Only a unit that declares `OPTIONS(MAIN)` emits a `main` shim, so a library module with no entry point compiles cleanly either way.
 
+## Cross-compilation
+
+`plic` can compile PL/I programs for other platforms (Linux x86_64, Linux ARM64, Windows x86_64, Windows ARM64) from any supported host, provided the LLVM toolchain is built with the required targets and lld is installed.
+
+### Building the compiler with cross-target support
+
+By default, `plic` embeds the runtime bitcode for the host platform only. To generate per-target runtime bitcode bundles at build time (requires `clang` supporting the target triples and the lld linker), rebuild:
+
+```bash
+cmake -S . -B build/cmake -DLLVM_DIR=$(llvm-config --cmakedir) -DClang_DIR=$(llvm-config --cmakedir) -DPLIC_CROSS_BITCODE=ON
+cmake --build build/cmake -j8
+```
+
+With `PLIC_CROSS_BITCODE=ON`, the build generates `libpli.bc` for all four supported cross-targets and embeds each as a separate byte array. This requires clang cross-target sysroot headers.
+
+### Compiling for a target
+
+Use `--triple` (or `-target`) to select the target platform:
+
+```bash
+./build/plic --triple x86_64-unknown-linux-gnu program.pli -o program
+./build/plic -target aarch64-pc-windows-gnu program.pli -o program.exe
+```
+
+To cross-compile the compiler itself for another platform (e.g., produce a Linux x86_64 binary on macOS):
+
+```bash
+cd /path/to/llvm-project
+cmake -G Ninja \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_TARGETS_TO_BUILD="X86;AArch64" \
+  -DCMAKE_CROSSCOMPILING=ON \
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_SYSTEM_NAME=Linux \
+  -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
+  -DCMAKE_FIND_ROOT_PATH="<path-to-sysroot>" \
+  -B build-cross
+ninja
+```
+
+### Toolchain files
+
+Sample CMake toolchain files for cross-compilation are provided in `cmake/toolchains/`:
+
+| File                                       | Target                      |
+| ------------------------------------------ | --------------------------- |
+| `cmake/toolchains/linux-x86_64.cmake`      | `x86_64-unknown-linux-gnu`  |
+| `cmake/toolchains/linux-aarch64.cmake`     | `aarch64-unknown-linux-gnu` |
+| `cmake/toolchains/windows-x86_64.cmake`    | `x86_64-pc-windows-gnu`     |
+| `cmake/toolchains/windows-aarch64.cmake`   | `aarch64-pc-windows-gnu`    |
+
+Use a toolchain file with:
+
+```bash
+cmake -S . -B build-cross -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/linux-x86_64.cmake
+```
+
 ## Usage
 
 ```

@@ -61,9 +61,14 @@ bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_strea
   return true;
 }
 
-bool linkEmbeddedLibPLI(llvm::Module& M, std::string& err) {
-  auto buf = getEmbeddedLibPLI();
+bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::string& err) {
+  const RuntimeBlob* blob = selectRuntimeForTarget(targetTriple);
+  if (!blob) {
+    err = "no embedded runtime for target: " + targetTriple.getTriple();
+    return false;
+  }
   // Parse against M's own context so Linker can merge directly.
+  llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "libpli.bc");
   llvm::Expected<std::unique_ptr<llvm::Module>> parsed =
       llvm::parseBitcodeFile(buf, M.getContext());
   if (!parsed) {
@@ -95,8 +100,13 @@ bool linkEmbeddedLibPLI(llvm::Module& M, std::string& err) {
   return true;
 }
 
-std::unique_ptr<llvm::Module> parseEmbeddedRuntime(llvm::LLVMContext& ctx, std::string& err) {
-  auto buf = getEmbeddedLibPLI();
+std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTriple, llvm::LLVMContext& ctx, std::string& err) {
+  const RuntimeBlob* blob = selectRuntimeForTarget(targetTriple);
+  if (!blob) {
+    err = "no embedded runtime for target: " + targetTriple.getTriple();
+    return nullptr;
+  }
+  llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "libpli.bc");
   auto modOrErr = llvm::parseBitcodeFile(buf, ctx);
   if (!modOrErr) {
     err = "cannot parse embedded libpli.bc";
@@ -106,9 +116,9 @@ std::unique_ptr<llvm::Module> parseEmbeddedRuntime(llvm::LLVMContext& ctx, std::
   return std::move(*modOrErr);
 }
 
-bool emitRuntimeObject(llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out, std::string& err) {
+bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple, llvm::raw_pwrite_stream& out, std::string& err) {
   llvm::LLVMContext ctx;
-  auto rt = parseEmbeddedRuntime(ctx, err);
+  auto rt = parseEmbeddedRuntime(targetTriple, ctx, err);
   if (!rt)
     return false;
   // Strip the same per-function attributes that break LLVM 23 codegen
