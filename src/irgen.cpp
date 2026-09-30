@@ -326,73 +326,73 @@ struct RtAttr {
 };
 static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
   static const std::map<std::string, RtAttr> table = {
-    // Abort paths: fini + exit(), never return.
-    {"pli_signal_error", {.noReturn = true}},
-    {"pli_subscript_oob", {.noReturn = true}},
-    {"pli_zerodivide", {.noReturn = true}},
-    {"pli_fixed_overflow", {.noReturn = true}},
-    {"pli_stop", {.noReturn = true}},
-    // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
-    {"pli_alloc", {.allocMalloc = true, .allocSize = true, .nonNullRet = true}},
-    {"pli_free", {.willReturn = true, .allocFree = true}},
-    // Pure math: arithmetic over args and constant tables only.
-    {"pli_mod_ll", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_mod_dd", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_round", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_floor", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_ceil", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_sqrt", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_exp", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_log", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_sin", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_cos", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_tan", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_log2", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_log10", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_atan", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_asin", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_acos", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_atan2", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_cbrt", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_sinh", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_cosh", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_tanh", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_asinh", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_atanh", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_erf", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_erfc", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_sind", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_cosd", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_tand", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_atand", {.willReturn = true, .mem = RtMemNone}},
-    {"pli_fixed_of_float", {.willReturn = true, .mem = RtMemNone}},
-    // String readers: arg-pointed memory only, no error paths.
-    {"pli_verify", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_tally", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_cmp_char", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_index", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_search", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_verify_from", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_rank", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgRead}},
-    {"pli_data_name_is", {.willReturn = true, .mem = RtMemArgRead}},
-    // String writers: arg-pointed memory only, no error paths.
-    {"pli_assign_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_assign_varying", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_concat", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_substr", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_repeat", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_translate", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_trim", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_uppercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_lowercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_center", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_collate", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_reverse", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_high", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_low", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
-    {"pli_char_of_float", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      // Abort paths: fini + exit(), never return.
+      {"pli_signal_error", {.noReturn = true}},
+      {"pli_subscript_oob", {.noReturn = true}},
+      {"pli_zerodivide", {.noReturn = true}},
+      {"pli_fixed_overflow", {.noReturn = true}},
+      {"pli_stop", {.noReturn = true}},
+      // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
+      {"pli_alloc", {.allocMalloc = true, .allocSize = true, .nonNullRet = true}},
+      {"pli_free", {.willReturn = true, .allocFree = true}},
+      // Pure math: arithmetic over args and constant tables only.
+      {"pli_mod_ll", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_mod_dd", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_round", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_floor", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_ceil", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_sqrt", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_exp", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_log", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_sin", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_cos", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_tan", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_log2", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_log10", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_atan", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_asin", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_acos", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_atan2", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_cbrt", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_sinh", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_cosh", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_tanh", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_asinh", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_atanh", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_erf", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_erfc", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_sind", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_cosd", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_tand", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_atand", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_fixed_of_float", {.willReturn = true, .mem = RtMemNone}},
+      // String readers: arg-pointed memory only, no error paths.
+      {"pli_verify", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_tally", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_cmp_char", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_index", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_search", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_verify_from", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_rank", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_data_name_is", {.willReturn = true, .mem = RtMemArgRead}},
+      // String writers: arg-pointed memory only, no error paths.
+      {"pli_assign_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_assign_varying", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_concat", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_substr", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_repeat", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_translate", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_trim", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_uppercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_lowercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_center", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_collate", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_reverse", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_high", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_low", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_char_of_float", {.willReturn = true, .mem = RtMemArgReadWrite}},
   };
   return table;
 }
@@ -427,8 +427,8 @@ static void applyRuntimeAttrs(llvm::Function* f) {
     break;
   }
   if (a.allocMalloc) {
-    f->addFnAttr(llvm::Attribute::getWithAllocKind(
-        ctx, llvm::AllocFnKind::Alloc | llvm::AllocFnKind::Uninitialized));
+    f->addFnAttr(llvm::Attribute::getWithAllocKind(ctx, llvm::AllocFnKind::Alloc |
+                                                            llvm::AllocFnKind::Uninitialized));
     if (a.allocSize)
       f->addFnAttr(llvm::Attribute::getWithAllocSizeArgs(ctx, 0, std::nullopt));
     if (a.nonNullRet)
@@ -441,7 +441,8 @@ static void applyRuntimeAttrs(llvm::Function* f) {
 // Get (or create) a declaration for a runtime `pli_*` function. The signature
 // comes from runtime/pli_rt_abi.def, not from the caller, so the emitted IR
 // cannot drift from the C ABI.
-llvm::Function* IRGen::runtimeFn(const std::string& name) {  auto& sigs = kRuntimeSigs();
+llvm::Function* IRGen::runtimeFn(const std::string& name) {
+  auto& sigs = kRuntimeSigs();
   auto it = sigs.find(name);
   if (it == sigs.end())
     return nullptr; // not a pli_* ABI function
@@ -732,8 +733,8 @@ llvm::FunctionType* IRGen::entryFnType(Symbol* sym) {
       if (t.isChar() && t.starLen)
         pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
     }
-  llvm::Type* rt = sret ? b_.getVoidTy()
-                        : (sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy());
+  llvm::Type* rt =
+      sret ? b_.getVoidTy() : (sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy());
   return llvm::FunctionType::get(rt, pt, false);
 }
 
@@ -916,8 +917,9 @@ bool IRGen::linkRuntimeBitcode() {
   llvm::SMDiagnostic err;
   std::unique_ptr<llvm::Module> rt = llvm::parseIRFile(runtimeBc_, err, ctx_);
   if (!rt) {
-    d_.error({}, "internal error: cannot load the runtime bitcode '" + runtimeBc_ + "': " +
-                     err.getMessage().str(),
+    d_.error({},
+             "internal error: cannot load the runtime bitcode '" + runtimeBc_ +
+                 "': " + err.getMessage().str(),
              "");
     return false;
   }
@@ -929,9 +931,10 @@ bool IRGen::linkRuntimeBitcode() {
       if (llvm::ConstantDataArray* s = llvm::dyn_cast<llvm::ConstantDataArray>(init))
         stamp = s->getAsCString().str(); // strips the trailing NUL
   if (stamp != PLIC_LLVM_VERSION) {
-    d_.error({}, "runtime bitcode '" + runtimeBc_ + "' was built with LLVM " + stamp +
-                     " but plic with LLVM " PLIC_LLVM_VERSION +
-                     " — rebuild it or pass --no-bitcode-runtime",
+    d_.error({},
+             "runtime bitcode '" + runtimeBc_ + "' was built with LLVM " + stamp +
+                 " but plic with LLVM " PLIC_LLVM_VERSION +
+                 " — rebuild it or pass --no-bitcode-runtime",
              "");
     return false;
   }
@@ -944,14 +947,14 @@ bool IRGen::linkRuntimeBitcode() {
   // LLVM 23 splits the Darwin family into Darwin and MacOSX OSType values;
   // both are the same ABI family, so fold them onto one key.
   auto osKey = [](llvm::Triple::OSType os) -> int {
-    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX)
-               ? (int)llvm::Triple::Darwin
-               : (int)os;
+    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
+                                                                      : (int)os;
   };
   if (rtTriple.getArch() != tgtTriple.getArch() ||
       osKey(rtTriple.getOS()) != osKey(tgtTriple.getOS())) {
-    d_.error({}, "runtime bitcode target '" + rtTriple.str() + "' does not match '" + triple_ +
-                     "' — rebuild it or pass --no-bitcode-runtime",
+    d_.error({},
+             "runtime bitcode target '" + rtTriple.str() + "' does not match '" + triple_ +
+                 "' — rebuild it or pass --no-bitcode-runtime",
              "");
     return false;
   }
@@ -2688,13 +2691,7 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   bool ndDims = isCtlNDynArray(sym) && !sym->ty.isDynamic();
   if (ndDims) {
     size_t rank = sym->ty.dims.size();
-    const Type& el = sym->ty.elementType();
-    long long elemSz =
-        (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
-    if (elemSz <= 0)
-      elemSz = 1;
-    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
-                   {ctlKeyOf(sym), sz, i64((long long)rank)});
+    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), sz, i64((long long)rank)});
     emitCtlNDDescDims(sym);
   } else {
     b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
@@ -2790,10 +2787,9 @@ void IRGen::emitPackageCtlEnsure() {
       continue;
     if (sym->ty.isArray() && sym->ty.isDynamic())
       continue;
-    llvm::Value* addr =
-        b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "pkgctl");
-    llvm::Value* isnull = b_.CreateICmpEQ(
-        addr, llvm::Constant::getNullValue(addr->getType()), "pkgctlnull");
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "pkgctl");
+    llvm::Value* isnull =
+        b_.CreateICmpEQ(addr, llvm::Constant::getNullValue(addr->getType()), "pkgctlnull");
     llvm::BasicBlock* needBB = llvm::BasicBlock::Create(ctx_, "pkgctl.need", curFn_);
     llvm::BasicBlock* haveBB = llvm::BasicBlock::Create(ctx_, "pkgctl.have", curFn_);
     b_.CreateCondBr(isnull, needBB, haveBB);
@@ -2805,8 +2801,7 @@ void IRGen::emitPackageCtlEnsure() {
     // descriptor extents for the program-lifetime generation (rules (13),(89)).
     if (isCtlNDynArray(sym) && !sym->ty.isDynamic()) {
       size_t rank = sym->ty.dims.size();
-      b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
-                     {ctlKeyOf(sym), sz, i64((long long)rank)});
+      b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), sz, i64((long long)rank)});
       emitCtlNDDescDims(sym);
     } else {
       b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
@@ -2871,13 +2866,11 @@ void IRGen::emitAllocate(HStmt* s) {
         llvm::Value* n = toI64(emitExpr(dimE), s->loc);
         sz = b_.CreateMul(n, i64(elemSz), "ctln");
       } else if (!bsym->ty.isChar() && singleStar && !clE &&
-                 (isCtlDynArray(bsym) ||
-                  (!bsym->ty.isArray() && bsym->controlled))) {
+                 (isCtlDynArray(bsym) || (!bsym->ty.isArray() && bsym->controlled))) {
         // `ALLOCATE x (*)` reuses the previous generation's extent (IBM (89)).
         // With no previous generation a fixed/scalar DECLARE falls back to
         // the descriptor size; a `(*)` DECLARE with an empty stack traps.
-        llvm::Value* prevLen =
-            b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(bsym)}, "ctlprev");
+        llvm::Value* prevLen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(bsym)}, "ctlprev");
         if (bsym->ty.isDynamic()) {
           llvm::Value* depth =
               b_.CreateCall(runtimeFn("pli_ctl_depth"), {ctlKeyOf(bsym)}, "ctldepth");
@@ -2887,9 +2880,9 @@ void IRGen::emitAllocate(HStmt* s) {
           llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "ctlstar.ok." + id, curFn_);
           b_.CreateCondBr(empty, trapL, okL);
           startBlock(trapL);
-          b_.CreateCall(runtimeFn("pli_signal_error"),
-                        {globalString("ALLOCATE (*) of '" + bsym->name +
-                                      "' with no previous generation")});
+          b_.CreateCall(
+              runtimeFn("pli_signal_error"),
+              {globalString("ALLOCATE (*) of '" + bsym->name + "' with no previous generation")});
           b_.CreateUnreachable();
           startBlock(okL);
           sz = prevLen;
@@ -2928,9 +2921,9 @@ void IRGen::emitAllocate(HStmt* s) {
           llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "ctlstar.ok." + id, curFn_);
           b_.CreateCondBr(empty, trapL, okL);
           startBlock(trapL);
-          b_.CreateCall(runtimeFn("pli_signal_error"),
-                        {globalString("ALLOCATE (*) of '" + bsym->name +
-                                      "' with no previous generation")});
+          b_.CreateCall(
+              runtimeFn("pli_signal_error"),
+              {globalString("ALLOCATE (*) of '" + bsym->name + "' with no previous generation")});
           b_.CreateUnreachable();
           startBlock(okL);
         } else if (bounds.empty() == false) {
@@ -2944,8 +2937,8 @@ void IRGen::emitAllocate(HStmt* s) {
         std::vector<llvm::Value*> exts(rank);
         for (size_t k = 0; k < rank; ++k) {
           if (bounds[k].star) {
-            llvm::Value* prev = b_.CreateCall(
-                runtimeFn("pli_ctl_extent"), {ctlKeyOf(bsym), i64((long long)k)}, "ctlprev");
+            llvm::Value* prev = b_.CreateCall(runtimeFn("pli_ctl_extent"),
+                                              {ctlKeyOf(bsym), i64((long long)k)}, "ctlprev");
             const Dim& d = bsym->ty.dims[k];
             if (!d.adj && !d.dyn && !d.lbDyn) {
               // Fixed axis: fall back to the DECLARE extent when the stack
@@ -2968,8 +2961,7 @@ void IRGen::emitAllocate(HStmt* s) {
         b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
                       {ctlKeyOf(bsym), total, i64((long long)rank)});
         for (size_t k = 0; k < rank; ++k)
-          b_.CreateCall(runtimeFn("pli_ctl_set_dim"),
-                        {ctlKeyOf(bsym), i64((long long)k), exts[k]});
+          b_.CreateCall(runtimeFn("pli_ctl_set_dim"), {ctlKeyOf(bsym), i64((long long)k), exts[k]});
         // INITIAL assigns with each allocation (rules (15),(26), SC26-3114).
         emitCtlInit(bsym, s->loc);
         continue;
@@ -4915,8 +4907,8 @@ long long IRGen::ctlNDLb(Symbol* sym, size_t axis) {
 }
 
 llvm::Value* IRGen::ctlNDExtent(Symbol* sym, size_t axis) {
-  return b_.CreateCall(runtimeFn("pli_ctl_extent"),
-                       {ctlKeyOf(sym), i64((long long)axis)}, "ctlext");
+  return b_.CreateCall(runtimeFn("pli_ctl_extent"), {ctlKeyOf(sym), i64((long long)axis)},
+                       "ctlext");
 }
 
 llvm::Value* IRGen::ctlNDElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc) {
@@ -4935,10 +4927,8 @@ llvm::Value* IRGen::ctlNDElementAddr(Symbol* sym, const std::vector<HExprP>& idx
   std::vector<llvm::Value*> idxs64(rank);
   for (size_t k = 0; k < rank; ++k) {
     idxs64[k] = toI64(emitExpr(idxs[k].get()));
-    llvm::Value* lo =
-        b_.CreateICmpSLT(idxs64[k], lbs[k], "lo");
-    llvm::Value* hi =
-        b_.CreateICmpSGT(idxs64[k], ubs[k], "hi");
+    llvm::Value* lo = b_.CreateICmpSLT(idxs64[k], lbs[k], "lo");
+    llvm::Value* hi = b_.CreateICmpSGT(idxs64[k], ubs[k], "hi");
     oob = b_.CreateOr(oob, b_.CreateOr(lo, hi, "oobk"), "oob");
   }
   // Clamp each axis into range when checks apply, then flatten row-major.
@@ -4973,8 +4963,7 @@ void IRGen::emitCtlNDDescDims(Symbol* sym) {
     long long ext = (long long)d.ub - (long long)d.lb + 1;
     if (d.adj || d.dyn || d.lbDyn)
       ext = 0; // `(*)` axes have no descriptor extent; explicit ALLOCATE fills them
-    b_.CreateCall(runtimeFn("pli_ctl_set_dim"),
-                   {ctlKeyOf(sym), i64((long long)k), i64(ext)});
+    b_.CreateCall(runtimeFn("pli_ctl_set_dim"), {ctlKeyOf(sym), i64((long long)k), i64(ext)});
   }
 }
 
@@ -5755,7 +5744,8 @@ Val IRGen::emitExpr(HExpr* e) {
         if (rty.varying) {
           llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 0, "clenp");
           v.ptr = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 1, "cdata");
-          v.len = b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
+          v.len =
+              b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
         } else {
           v.ptr = sretPtr;
           v.len = i64(rty.len);

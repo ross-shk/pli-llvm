@@ -217,8 +217,8 @@ struct HStmt {
   // may carry per-axis dimension bounds (allocBounds[i]) and/or a CHAR length
   // (allocCharLen[i]); allocVarying[i]/allocHasChar[i] mirror the AST flags.
   struct HAllocBound {
-    HExprP lb; // lower bound of an lb:ub pair; null = single extent
-    HExprP ub; // extent expression, or upper bound of an lb:ub pair
+    HExprP lb;         // lower bound of an lb:ub pair; null = single extent
+    HExprP ub;         // extent expression, or upper bound of an lb:ub pair
     bool star = false; // '*' : extent copied from the previous generation
   };
   std::vector<HExprP> allocBase;

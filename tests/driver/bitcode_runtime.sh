@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 # tests/driver/bitcode_runtime.sh — OPTIMIZATION.md §10 (P3): the bitcode
-# runtime. IRGen links the needed pli_* definitions from runtime.bc into the
-# MAIN unit (LinkOnlyNeeded; the archive stays on the link line, never pulled
-# once the symbols are defined); --no-bitcode-runtime compiles every unit
-# against the sectioned archive; a runtime.bc not built by this LLVM is
-# diagnosed at load time; a missing explicitly named runtime.bc is an error.
+# runtime. IRGen merges the pli_* definitions from runtime.bc into the MAIN
+# unit (full merge, ADR-179 — library units reference symbols the MAIN unit
+# never calls, so a LinkOnlyNeeded pull would drag the archive back in and
+# duplicate them); the archive stays on the link line, never pulled once the
+# symbols are defined; --no-bitcode-runtime compiles every unit against the
+# sectioned archive; a runtime.bc not built by this LLVM is diagnosed at load
+# time; a missing explicitly named runtime.bc is an error.
 set -u
 PLIC=./build/plic
 OUT=tests/driver/out/bitcode_runtime

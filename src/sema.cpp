@@ -795,9 +795,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (!item.isEntry)
             d_.error(item.loc, "VARIABLE is only valid on an ENTRY declaration (ADR-171)", "");
           else if (item.level != 0 || !item.ty.dims.empty())
-            d_.error(item.loc,
-                     "an ENTRY variable must be a scalar, not an array or structure member (ADR-171)",
-                     "");
+            d_.error(
+                item.loc,
+                "an ENTRY variable must be a scalar, not an array or structure member (ADR-171)",
+                "");
           else if (item.init || item.initCall || !item.initItems.empty() || item.valueInit)
             d_.error(item.loc, "INITIAL/VALUE on an ENTRY variable is not implemented (ADR-171)",
                      "");
@@ -1320,8 +1321,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             // extents come from each ALLOCATE (rules (13),(89)), like CHAR(*).
             // Any rank is served (fixed axes keep DECLARE bounds unless an
             // ALLOCATE bound overrides them); the element must be numeric/BIT.
-            bool ctlStar = item.controlled && hasStar &&
-                           !item.ty.elementType().isChar() &&
+            bool ctlStar = item.controlled && hasStar && !item.ty.elementType().isChar() &&
                            (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
             if (hasStar && !isParam && !ctlStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
@@ -3143,8 +3143,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           d_.warn(s->allocSet[i]->loc,
                   "SET on CONTROLLED ALLOCATE is ignored; generations are stack-managed", "(88)");
         Expr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
-        const auto& bounds = (i < s->allocBounds.size()) ? s->allocBounds[i]
-                                                              : emptyAllocBounds;
+        const auto& bounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
         for (const auto& b : bounds) {
           if (b.lb) {
             typeExpr(b.lb.get(), sc, p);
@@ -3165,9 +3164,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         // Legacy single-extent view for CHARACTER sizing below: a lone `(n)`.
         // A lone `*`, an `lb:ub` pair, or multiple axes never sized CHARACTER
         // generations (diagnosed in their own paths, as before).
-        Expr* dimE = (bounds.size() == 1 && !bounds[0].star && !bounds[0].lb)
-                         ? bounds[0].ub.get()
-                         : nullptr;
+        Expr* dimE =
+            (bounds.size() == 1 && !bounds[0].star && !bounds[0].lb) ? bounds[0].ub.get() : nullptr;
         if (dimE && clE)
           d_.error(clE->loc, "duplicate CHARACTER length in ALLOCATE", "(89)");
         if (!bsym->ty.isChar()) {
@@ -3260,8 +3258,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE of a dynamic-extent based array is not implemented in this stage",
                  "(89)");
-      const auto& bbounds =
-          (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
+      const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
       if (!bbounds.empty() || (i < s->allocCharLen.size() && s->allocCharLen[i])) {
         for (const auto& b : bbounds) {
           if (b.lb)
@@ -3830,9 +3827,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     }
     // A procedure name, an external ENTRY (rule (34)), or an entry variable
     // (IBM extension, ADR-171): the descriptor lives on the symbol.
-    const bool isFunc =
-        sym->proc ? (sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))
-                  : sym->entryIsFunction;
+    const bool isFunc = sym->proc
+                            ? (sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))
+                            : sym->entryIsFunction;
     if (!isFunc) {
       d_.error(e->loc, "'" + e->name + "' is a procedure and returns no value", "(123)");
       e->ty = Type::voidTy();

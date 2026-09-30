@@ -47,7 +47,7 @@ struct Expr {
       path; // VarRef: member qualifiers after the base name (S.A.B -> {"A","B"})
   std::vector<unsigned> memberPath; // VarRef: resolved LLVM struct field indices (set by sema)
   Symbol* sym = nullptr;            // resolved by sema
-  ExprP locPtr;      // VarRef: the locator pointer of a P->X reference (rule 124); null = none
+  ExprP locPtr; // VarRef: the locator pointer of a P->X reference (rule 124); null = none
   // VarRef: this is the based-variable operand of an ALLOCATE item (rule (88)).
   // An unconnected BASED variable may be named there without a locator.
   bool allocBaseRef = false;
@@ -280,8 +280,8 @@ struct Stmt {
   // allocHasChar[i] record the trailing CHARACTER/VARYING keywords. An empty
   // bound list = bare ALLOCATE with no dimension.
   struct AllocBound {
-    ExprP lb;    // lower bound of an lb:ub pair; null = single extent (lb static)
-    ExprP ub;    // extent expression, or upper bound of an lb:ub pair
+    ExprP lb;          // lower bound of an lb:ub pair; null = single extent (lb static)
+    ExprP ub;          // extent expression, or upper bound of an lb:ub pair
     bool star = false; // '*' : extent copied from the previous generation (89)
   };
   std::vector<ExprP> allocBase;

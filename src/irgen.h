@@ -39,8 +39,7 @@ public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false,
         std::string runtimeBc = "", bool linkBitcode = false)
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
-        noSizeChecks_(noSizeChecks), runtimeBc_(std::move(runtimeBc)),
-        linkBitcode_(linkBitcode) {}
+        noSizeChecks_(noSizeChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
 
   std::string run(HProgram& prog);
 
@@ -108,7 +107,8 @@ private:
   // a by-reference pointer with no own storage, so its extent must be read from
   // the bound argument (itself by-ref) once, mirroring allocaLocals' locals.
   void recordDynParamUbs(const std::vector<Symbol*>& params);
-  void collectGotoBlocks(HStmt* s, std::vector<int>& chain); // assign an LLVM block to each labelled stmt
+  void collectGotoBlocks(HStmt* s,
+                         std::vector<int>& chain); // assign an LLVM block to each labelled stmt
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
   static std::string entryIrName(const std::string& proc, const std::string& parent,
                                  const std::string& entry);
