@@ -38,7 +38,7 @@ BUILD    := build
 BIN      := $(BUILD)/plic
 RTLIB    := $(BUILD)/libpli.a
 
-SRCS     := src/main.cpp src/diag.cpp src/explain.cpp src/hir.cpp src/lexer.cpp src/parser.cpp src/preprocessor.cpp src/sema.cpp src/irgen.cpp
+SRCS     := src/main.cpp src/diag.cpp src/explain.cpp src/hir.cpp src/lexer.cpp src/parser.cpp src/preprocessor.cpp src/sema.cpp src/irgen.cpp src/target.cpp src/codegen.cpp src/embedded_runtime.cpp
 OBJS     := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRCS))
 DEPS     := $(OBJS:.o=.d)
 
@@ -63,6 +63,21 @@ RTPATH   := $(abspath $(RTLIB))
 # emits IR in the syntax of the LLVM it links against, so the matching clang
 # from that same LLVM install must be used (see main.cpp PLIC_CLANG).
 CLANGPATH := $(shell $(LLVM_CONFIG) --bindir)/clang
+LLVM_LINK := $(shell $(LLVM_CONFIG) --bindir)/llvm-link
+LLVM_INCDIR := $(shell $(LLVM_CONFIG) --includedir 2>/dev/null)
+
+# lld detection (review S1): stock brew llvm ships no lld; the in-process
+# link step gates on this (codegen.cpp PLIC_HAVE_LLD). Install with
+# `brew install lld` for the full self-contained link.
+LLD_HDR := $(shell test -f "$(LLVM_INCDIR)/lld/Common/Driver.h" && echo yes)
+ifeq ($(LLD_HDR),yes)
+  HAVE_LLD := 1
+else
+  HAVE_LLD := 0
+endif
+
+# Embedded version for `plic version` (Go/Zig style build info).
+PLIC_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
 
 # Static-analysis tooling from the same LLVM install (no system copies are
 # assumed on PATH). Used by `make check` / its individual targets.
@@ -81,9 +96,10 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
-	$(CXX) $(PLIC_CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
+	$(CXX) $(PLIC_CXXFLAGS) -I$(BUILD) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
 		-DPLIC_INSTALL_RUNTIME_LIB='"$(LIBDIR)/libpli.a"' \
-		-DPLIC_CLANG='"$(CLANGPATH)"' -MMD -MP -c $< -o $@
+		-DPLIC_CLANG='"$(CLANGPATH)"' -DPLIC_VERSION='"$(PLIC_VERSION)"' \
+		-DPLIC_HAVE_LLD=$(HAVE_LLD) -MMD -MP -c $< -o $@
 
 $(RULES_CPP): TR25.084-concrete-syntax.md scripts/gen_rules.py | $(BUILD)
 	python3 scripts/gen_rules.py $< $@
@@ -94,11 +110,33 @@ $(RULES_OBJ): $(RULES_CPP) src/explain.h | $(BUILD)
 $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
 	$(CC) $(RTCFLAGS) -MMD -MP -c $< -o $@
 
-$(BIN): $(OBJS) $(RULES_OBJ)
+$(BIN): $(OBJS) $(RULES_OBJ) $(EMBED_INC)
 	$(CXX) $(PLIC_CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) $(LLVM_SYSTEM_LIBS) -o $@
 
 $(RTLIB): $(RT_OBJS)
 	ar rcs $@ $(RT_OBJS)
+
+# --- embedded runtime (Phase 2) -------------------------------------------
+# libpli.bc bundles the runtime as bitcode; gen_embed.py turns it into a C++
+# byte array compiled into plic (no binutils, no install tree at runtime).
+RT_BCS    := $(patsubst runtime/%.c,$(BUILD)/bc/%.bc,$(RT_SRCS))
+LIBPLIBC  := $(BUILD)/libpli.bc
+EMBED_INC := $(BUILD)/embedded_runtime.inc
+
+$(BUILD)/bc:
+	@mkdir -p $(BUILD)/bc
+
+$(BUILD)/bc/%.bc: runtime/%.c | $(BUILD)/bc
+	$(CLANGPATH) -emit-llvm -c $< -Iruntime -O2 -ffunction-sections -fdata-sections -o $@
+
+$(LIBPLIBC): $(RT_BCS)
+	$(LLVM_LINK) $(RT_BCS) -o $@
+
+$(EMBED_INC): $(LIBPLIBC) scripts/gen_embed.py | $(BUILD)
+	python3 scripts/gen_embed.py $(LIBPLIBC) $@
+
+# The embedding TU includes the generated inc; ensure it exists first.
+$(BUILD)/embedded_runtime.o: $(EMBED_INC)
 
 # The object rules above are independent, so `make -j` parallelises the build;
 # the test runner (tests/run_tests.py) parallelises its compile+run jobs
@@ -149,6 +187,12 @@ scan:
 	@test -n "$(SCAN_BUILD)" || { echo "scan-build not found"; exit 1; }
 	@rm -f $(OBJS) $(RULES_OBJ)
 	@$(SCAN_BUILD) --status-bugs $(MAKE) $(OBJS) $(RULES_OBJ)
+
+# Stripped size of the driver (Phase 6 gate: target < 100 MB, cap 150 MB).
+size-report: $(BIN)
+	@echo "stripped size:" && strip -o /tmp/plic.strip $(BIN) && \
+	  (stat -f%z /tmp/plic.strip 2>/dev/null || stat -c%s /tmp/plic.strip)
+	@echo "target: < 100 MB (hard cap 150 MB)"
 
 clean:
 	rm -rf $(BUILD) tests/*/out

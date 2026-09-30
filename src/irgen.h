@@ -8,6 +8,7 @@
 // interface below; parser and sema are untouched.
 #pragma once
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -41,6 +42,15 @@ public:
         noSizeChecks_(noSizeChecks) {}
 
   std::string run(HProgram& prog);
+
+  // Module ownership for the in-process backend (review §4): reuses run()
+  // (so `-emit-llvm` stays byte-identical) then re-parses the IR into a fresh
+  // context the caller owns. Null on any diagnostic failure.
+  struct OwnedModule {
+    std::unique_ptr<llvm::LLVMContext> ctx;
+    std::unique_ptr<llvm::Module> mod;
+  };
+  std::unique_ptr<OwnedModule> takeModule(HProgram& prog);
 
 private:
   // --- emission primitives -------------------------------------------

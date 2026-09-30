@@ -9,7 +9,10 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/TargetParser/Triple.h"
 
 // ---------------------------------------------------------------------------
@@ -749,6 +752,25 @@ std::string IRGen::run(HProgram& prog) {
     mod_.setTargetTriple(llvm::Triple(triple_));
   mod_.print(os, nullptr);
   return ir;
+}
+
+// In-process backend ownership (review §4): build via the tested textual
+// path, then re-parse into a caller-owned context (triple/DataLayout ride in
+// the IR, so the module is emission-ready). Null when diagnostics failed.
+std::unique_ptr<IRGen::OwnedModule> IRGen::takeModule(HProgram& prog) {
+  std::string ir = run(prog);
+  if (!d_.ok())
+    return nullptr;
+  auto om = std::make_unique<OwnedModule>();
+  om->ctx = std::make_unique<llvm::LLVMContext>();
+  llvm::SMDiagnostic smErr;
+  auto mem = llvm::MemoryBuffer::getMemBuffer(ir, "plic");
+  om->mod = llvm::parseAssembly(mem->getMemBufferRef(), smErr, *om->ctx);
+  if (!om->mod) {
+    d_.error({}, "internal error: could not re-parse generated IR", "");
+    return nullptr;
+  }
+  return om;
 }
 
 // An LLVM scalar constant for an INITIAL element value (rule 26). Null is

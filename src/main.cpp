@@ -22,6 +22,16 @@
 #include "parser.h"
 #include "preprocessor.h"
 #include "sema.h"
+#include "llvm/Config/llvm-config.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
+
+#include "codegen.h"
+#include "embedded_runtime.h"
+#include "target.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
 
 #ifndef PLIC_RUNTIME_LIB
 #define PLIC_RUNTIME_LIB ""
@@ -37,6 +47,14 @@
 // with --clang. Falls back to `clang` on PATH.
 #ifndef PLIC_CLANG
 #define PLIC_CLANG "clang"
+#endif
+
+#ifndef PLIC_VERSION
+#define PLIC_VERSION "unknown"
+#endif
+
+#ifndef PLIC_LLVM_VERSION
+#define PLIC_LLVM_VERSION LLVM_VERSION_STRING
 #endif
 
 namespace fs = std::filesystem;
@@ -66,7 +84,7 @@ static void usage() {
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
-         "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
+         "  --triple <t>     target triple (default: host triple)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
@@ -75,23 +93,17 @@ static void usage() {
          "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
          "  -shared -static  produce a shared / static binary\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
-         "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-         "  -v               show the sub-commands being run\n"
-         "  -h, --help       this message\n";
+          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
+          "  --version        print plic + LLVM + host triple and exit\n"
+          "  -v               show the sub-commands being run\n"
+          "  -h, --help       this message\n";
 }
 
-static std::string runCapture(const char* cmd) {
-  std::string out;
-  FILE* f = popen(cmd, "r");
-  if (!f)
-    return out;
-  char buf[256];
-  while (fgets(buf, sizeof buf, f))
-    out += buf;
-  pclose(f);
-  while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
-    out.pop_back();
-  return out;
+static void printVersion() {
+  // Version/build info embedded at build time (Go/Zig style).
+  std::cout << "plic " << PLIC_VERSION << " (llvm " << PLIC_LLVM_VERSION << ", "
+            << llvm::sys::getDefaultTargetTriple() << ", runtime " << plic::embeddedLibPLISize()
+            << " bytes)\n";
 }
 
 static std::string shellQuote(const std::string& s) {
@@ -129,8 +141,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        const std::string& sysparm, bool sysparmExplicit, bool compileOnly,
                        bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
                        bool keepLL, bool verbose, bool noSizeChecks, const std::string& optLevel,
-                       const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
-                       std::string* outObj) {
+                        const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
+                        std::string* outObj, bool linkRuntimeIn = false) {
   std::string src;
   if (!preprocessor.run(input, src))
     return false;
@@ -175,16 +187,16 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   // --- code generation ---------------------------------------------------
   if (triple.empty())
-    triple = runCapture((shellQuote(clangPath) + " -dumpmachine 2>/dev/null").c_str());
-  IRGen irgen(diags, sema, triple, noSizeChecks);
-  std::string ir = irgen.run(hir);
-  if (!diags.ok())
-    return false;
+    triple = llvm::sys::getDefaultTargetTriple();
 
   fs::path inPath(input);
   std::string base = inPath.stem().string();
 
   if (emitLLVM) {
+    IRGen irgen(diags, sema, triple, noSizeChecks);
+    std::string ir = irgen.run(hir);
+    if (!diags.ok())
+      return false;
     // -o is restricted to a single input (checked in main); otherwise each
     // input writes its own <base>.ll.
     std::string dest = output.empty() ? base + ".ll" : output;
@@ -208,6 +220,63 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   else
     objPath = fs::temp_directory_path() /
               (base + "-" + std::to_string(getpid()) + "-" + std::to_string(fileIndex) + ".o");
+
+  // In-process codegen first (no subprocess): owned module -> TargetMachine
+  // -> relocatable object. Falls back to the .ll + clang pipeline below.
+  {
+    IRGen ipg(diags, sema, triple, noSizeChecks);
+    if (auto om = ipg.takeModule(hir)) {
+      std::string tmErr;
+      if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr)) {
+        // The IRGen layout is approximate; the TargetMachine owns the truth
+        // (llc behaviour — the clang fallback used -Wno-override-module).
+        om->mod->setDataLayout(tm->createDataLayout());
+        bool rtOk = true;
+#if PLIC_HAVE_LLD
+        // Single-module fast path: runtime linked at BC level (never `-c`).
+        if (linkRuntimeIn && !compileOnly) {
+          std::string rtErr;
+          rtOk = plic::linkEmbeddedLibPLI(*om->mod, rtErr);
+          if (!rtOk)
+            std::cerr << "plic: " << rtErr << "\n";
+        }
+#endif
+        if (rtOk) {
+          std::error_code ec;
+          llvm::raw_fd_ostream os(objPath.string(), ec, llvm::sys::fs::OF_None);
+          std::string emErr;
+          if (!ec && plic::emitObject(*om->mod, *tm, os, emErr)) {
+            os.close();
+            if (keepLL) {
+              llvm::raw_fd_ostream llOs((keepLLDir / (base + ".ll")).string(), ec,
+                                        llvm::sys::fs::OF_None);
+              if (!ec) {
+                llOs << "; Generated by plic (PL/I -> LLVM)\n";
+                om->mod->print(llOs, nullptr);
+              }
+            }
+            if (verbose)
+              std::cerr << "plic: emitted " << objPath.string() << " in-process\n";
+            if (!compileOnly)
+              *outObj = objPath.string();
+            return true;
+          }
+          if (verbose)
+            std::cerr << "plic: in-process emit failed (" << emErr << "), using clang\n";
+        }
+      } else if (verbose) {
+        std::cerr << "plic: no target (" << tmErr << "), using clang\n";
+      }
+    } else if (!diags.ok()) {
+      return false;
+    }
+  }
+
+  // Fallback: textual IR assembled by the backend clang.
+  IRGen irgen(diags, sema, triple, noSizeChecks);
+  std::string ir = irgen.run(hir);
+  if (!diags.ok())
+    return false;
 
   fs::path llPath = keepLL ? keepLLDir / (base + ".ll")
                            : fs::temp_directory_path() / (base + "-" + std::to_string(getpid()) +
@@ -251,7 +320,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
-  bool noSizeChecks = false;
+  bool noSizeChecks = false, wantVersion = false;
   int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -331,6 +400,8 @@ int main(int argc, char** argv) {
       noSizeChecks = true;
     else if (a == "--debug")
       debug = true;
+    else if (a == "--version" || a == "-V")
+      wantVersion = true;
     else if (!a.empty() && a[0] == '-') {
       std::cerr << "plic: unknown option " << a << "\n";
       return 2;
@@ -347,10 +418,31 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+  // `plic version` / `--version`: no input file needed.
+  if (wantVersion || (inputs.size() == 1 && inputs[0] == "version")) {
+    printVersion();
+    return 0;
+  }
+
   if (inputs.empty()) {
     usage();
     return 2;
   }
+
+  // Foreign object/archive inputs (C-interop): passed straight to the link
+  // step, never preprocessed. Only .pli/.inc are PL/I sources.
+  auto isPLISource = [](const std::string& f) {
+    return (f.size() >= 4 &&
+            (f.compare(f.size() - 4, 4, ".pli") == 0 || f.compare(f.size() - 4, 4, ".inc") == 0));
+  };
+  std::vector<std::string> pliInputs, foreignObjs;
+  for (const std::string& in : inputs)
+    (isPLISource(in) ? pliInputs : foreignObjs).push_back(in);
+  if (!foreignObjs.empty() && (compileOnly || emitLLVM || syntaxOnly || print_hir)) {
+    std::cerr << "plic: object inputs cannot be used with -c/-emit-llvm/-fsyntax-only/--print-hir\n";
+    return 2;
+  }
+  const bool linkOnly = pliInputs.empty();
 
   if (!runtimeExplicit && !runtimeLib.empty() && !fs::exists(runtimeLib)) {
     fs::path installed = PLIC_INSTALL_RUNTIME_LIB;
@@ -388,7 +480,7 @@ int main(int argc, char** argv) {
   }
 
   // clang-matching guards: a single -o cannot name more than one output.
-  const bool multi = inputs.size() > 1;
+  const bool multi = pliInputs.size() > 1;
   if (compileOnly && multi && !output.empty()) {
     std::cerr << "plic: cannot specify -o when generating multiple output files\n";
     return 2;
@@ -415,29 +507,152 @@ int main(int argc, char** argv) {
   const bool terminalMode = compileOnly || emitLLVM || syntaxOnly || print_hir;
   // Every unit of a multi-input link is a relocatable object (like -c): only
   // units that actually declare OPTIONS(MAIN) emit a `main` shim.
-  const bool semaCompileOnly = compileOnly || multi;
+  const bool semaCompileOnly = compileOnly || (pliInputs.size() + foreignObjs.size() > 1);
   // --keep-ll places each .ll next to the output (or the cwd with no -o).
   fs::path keepLLDir = output.empty() ? fs::path(".") : fs::path(output).parent_path();
   if (keepLLDir.empty())
     keepLLDir = ".";
-  std::vector<std::string> objs;
-  for (size_t i = 0; i < inputs.size(); ++i) {
+  // Runtime-once fast path: one PL/I input becoming the executable directly.
+  const bool singleModuleFinalLink = !compileOnly && !terminalMode && pliInputs.size() == 1 &&
+                                     foreignObjs.empty();
+  std::vector<std::string> objs = foreignObjs;
+  for (size_t i = 0; i < pliInputs.size(); ++i) {
     std::string outObj;
-    if (!compileOne(preprocessor, inputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
+    if (!compileOne(preprocessor, pliInputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
                     compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
-                    noSizeChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj))
+                    noSizeChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj,
+                    singleModuleFinalLink))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
   }
   if (terminalMode)
     return 0;
+  if (linkOnly && objs.empty()) {
+    std::cerr << "plic: no input objects to link\n";
+    return 2;
+  }
 
   // --- link step ----------------------------------------------------------
-  // Link the per-file objects with libpli. Drop unreferenced runtime sections
-  // (the archive is sectioned, ADR-079); multitasking (QR2.8) runs on pthreads.
+  // In-process link first (no subprocess); the clang pipeline below is the
+  // fallback until lld ships everywhere (review §1: brew llvm has no lld).
   if (output.empty())
     output = "a.out";
+  if (triple.empty())
+    triple = llvm::sys::getDefaultTargetTriple();
+
+#if PLIC_HAVE_LLD
+  {
+    llvm::Triple llt(triple);
+    const plic::TargetDesc& desc = plic::getTargetDesc(llt);
+    std::string tmErr;
+    if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr)) {
+      // Multi-input: runtime as its own object (runtime-once). Single-module
+      // links already carry it at BC level (singleModuleFinalLink above).
+      std::string rtObj;
+      bool haveRtObj = false;
+      if (!singleModuleFinalLink) {
+        rtObj = (fs::temp_directory_path() /
+                 ("libpli-" + std::to_string(getpid()) + ".o"))
+                    .string();
+        std::error_code ec;
+        llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
+        std::string rtErr;
+        haveRtObj = !ec && plic::emitRuntimeObject(*tm, os, rtErr);
+        if (!haveRtObj && verbose)
+          std::cerr << "plic: runtime object failed (" << rtErr << "), using clang\n";
+      }
+      if (singleModuleFinalLink || haveRtObj) {
+        // Host startup/sysroot bridge (transitional; bundling is follow-up).
+        auto runCap = [](const std::string& cmd) {
+          std::string out;
+          if (FILE* f = popen(cmd.c_str(), "r")) {
+            char buf[256];
+            while (fgets(buf, sizeof buf, f))
+              out += buf;
+            pclose(f);
+          }
+          while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
+            out.pop_back();
+          return out;
+        };
+        std::vector<std::string> argStore = {"ld.lld"};
+        if (llt.getObjectFormat() == llvm::Triple::MachO) {
+          if (const char* sdk = nullptr; true) {
+            std::string sdkPath = runCap("xcrun --show-sdk-path 2>/dev/null");
+            argStore.push_back("-arch");
+            argStore.push_back(std::string(llt.getArchName()));
+            if (!sdkPath.empty()) {
+              argStore.push_back("-syslibroot");
+              argStore.push_back(sdkPath);
+            }
+            (void)sdk;
+          }
+        } else if (llt.getObjectFormat() == llvm::Triple::ELF) {
+          for (const char* crt : {"crt1.o", "crti.o"}) {
+            std::string p = runCap(shellQuote(clangPath) + " -print-file-name=" + crt +
+                                   " 2>/dev/null");
+            if (!p.empty() && p != crt)
+              argStore.push_back(p);
+          }
+        }
+        for (const std::string& o : objs)
+          argStore.push_back(o);
+        if (haveRtObj)
+          argStore.push_back(rtObj);
+        if (llt.getObjectFormat() == llvm::Triple::ELF)
+          argStore.push_back("crtn.o");
+        for (const std::string& s : desc.systemLibs)
+          argStore.push_back(s);
+        for (const std::string& f : desc.linkerFlags)
+          argStore.push_back(f);
+        for (const std::string& la : linkArgs) {
+          if (la.rfind("-Wl,", 0) == 0)
+            argStore.push_back(la.substr(4)); // lld takes the flag directly
+          else if (la.rfind("-fuse-ld=", 0) == 0)
+            continue; // clang-driver-only
+          else
+            argStore.push_back(la);
+        }
+        argStore.push_back("-o");
+        argStore.push_back(output);
+        std::vector<const char*> argv;
+        for (const std::string& a : argStore)
+          argv.push_back(a.c_str());
+        std::string linkErr;
+        if (verbose) {
+          std::cerr << "+";
+          for (const std::string& a : argStore)
+            std::cerr << " " << a;
+          std::cerr << "\n";
+        }
+        if (plic::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr)) {
+          for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
+            std::error_code ec;
+            fs::remove(objs[i], ec);
+          }
+          if (haveRtObj) {
+            std::error_code ec;
+            fs::remove(rtObj, ec);
+          }
+          return 0;
+        }
+        if (verbose)
+          std::cerr << "plic: in-process link failed (" << linkErr << "), using clang\n";
+        if (haveRtObj) {
+          std::error_code ec;
+          fs::remove(rtObj, ec);
+        }
+      }
+    } else if (verbose) {
+      std::cerr << "plic: no target (" << tmErr << "), using clang\n";
+    }
+  }
+#endif
+
+  // Fallback: link the per-file objects with libpli via the backend clang.
+  // Drop unreferenced runtime sections (the archive is sectioned, ADR-079);
+  // multitasking (QR2.8) runs on pthreads.
   std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags;
 #ifdef __APPLE__
   cmd += " -Wl,-dead_strip";
@@ -455,10 +670,10 @@ int main(int argc, char** argv) {
   if (verbose)
     std::cerr << "+ " << cmd << "\n";
   int rc = system(cmd.c_str());
-  // Remove the temp objects produced for this link.
-  for (const std::string& o : objs) {
+  // Remove the temp objects produced for this link (never foreign inputs).
+  for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
     std::error_code ec;
-    fs::remove(o, ec);
+    fs::remove(objs[i], ec);
   }
   if (rc != 0) {
     std::cerr << "plic: backend failed\n";

@@ -34,6 +34,7 @@ TIMEOUT = 10  # seconds per exec run step
 DRIVER_TIMEOUT = 60  # seconds per driver test
 ROOT = Path(__file__).resolve().parent.parent
 PLIC = os.environ.get("PLIC", str(ROOT / "build" / "plic"))
+# RTLIB is legacy (kept for env compat): the driver links its embedded libpli.
 RTLIB = os.environ.get("RTLIB", str(ROOT / "build" / "libpli.a"))
 CLANG = os.environ.get("CLANG", "clang")
 TYPES = ("driver", "exec", "diag", "ir")
@@ -141,8 +142,10 @@ class Runner:
                                   "-o", str(objs[-1])])
                 objs.append(self.out / f"{self.name}.pli.o")
                 steps.append([PLIC, str(src), "-c", "-o", str(objs[-1])])
-                steps.append([CLANG] + [str(o) for o in objs] + [RTLIB,
-                              "-o", str(self.out / self.name)])
+                # Link through the plic driver (embedded libpli): clang is
+                # only the `.c` compiler above, never the linker here.
+                steps.append([PLIC] + [str(o) for o in objs] +
+                               ["-o", str(self.out / self.name)])
                 failed = None
                 for step in steps:
                     if subprocess.run(step, stdout=cfh, stderr=subprocess.STDOUT).returncode != 0:
