@@ -1,0 +1,36 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* rules (91)-(94): the ERROR handler stack is saved at procedure
+    entry and restored on exit only for procedures that actually
+    establish a handler (procedure-precise, OPTIMIZATION.md §8.1). A
+    callee with no ON must not disturb the caller's established
+    handler, and a callee that establishes one must pop it on return
+    so the caller's is re-exposed. */
+ on_proc_precise: procedure options(main);
+    declare caught char(20) static;
+    on error begin;
+       caught = 'A';
+    end;
+    call q();
+    signal error;
+    put skip list('p-after-q', caught);
+    call r();
+    signal error;
+    put skip list('p-after-r', caught);
+    if caught = 'A' then put skip list('PASS');
+    else put skip list('FAIL');
+ end on_proc_precise;
+
+ q: procedure;
+    declare local fixed bin(31);
+    local = 42;
+ end q;
+
+ r: procedure;
+    declare caught2 char(20) static;
+    on error begin;
+       caught2 = 'B';
+    end;
+    signal error;
+    put skip list('r', caught2);
+ end r;

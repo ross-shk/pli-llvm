@@ -1511,6 +1511,42 @@ void IRGen::declareProc(HProc* p) {
   }
 }
 
+// Does `s` establish any handler (rule 91) at the current block level? A
+// nested BEGIN scopes its own handler depth (it restores on exit), so it is
+// not descended; ON-unit bodies are, because a nested ON inside a handler runs
+// within this block's dynamic extent and must be undone here. The runtime's
+// handler depth spans every condition (one shared stack), so any `ON` — not
+// just `ON ERROR` — forces the save/restore. Procedure-precise skip: only
+// blocks that can push a handler pay the entry/exit depth save/restore
+// (OPTIMIZATION.md §8.1).
+static bool hasOnAtLevel(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::Begin)
+    return false; // a nested BEGIN restores its own entry depth
+  if (s->kind == HStmt::On && !s->isSystem)
+    return true;
+  if (hasOnAtLevel(s->thenS.get()))
+    return true;
+  if (hasOnAtLevel(s->elseS.get()))
+    return true;
+  if (hasOnAtLevel(s->unit.get()))
+    return true; // an ON in this unit runs within this block
+  for (auto& b : s->body)
+    if (hasOnAtLevel(b.get()))
+      return true;
+  return false;
+}
+
+// True if any top-level statement of `p` establishes a handler, so the
+// procedure must save/restore the handler depth at entry/exit.
+static bool procEstablishesOn(HProc* p) {
+  for (auto& st : p->body)
+    if (hasOnAtLevel(st.get()))
+      return true;
+  return false;
+}
+
 void IRGen::emitProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
@@ -1610,10 +1646,13 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // without ever popping per proc (extension, ADR-109).
   emitPackageCtlEnsure();
 
-  // Rule (91): save the ERROR handler depth so procedure exit restores the
-  // caller's establishment state. Skipped when nothing establishes handlers.
+  // Rule (91): save the handler depth so procedure exit restores the
+  // caller's establishment state (the runtime depth spans all conditions).
+  // Skipped when this procedure establishes no handler (procedure-precise,
+  // OPTIMIZATION.md §8.1): a procedure that cannot push onto the handler
+  // stack needs no restore.
   curOnDepth_ = nullptr;
-  if (!onHandlers_.empty()) {
+  if (procEstablishesOn(p)) {
     curOnDepth_ = entryAlloca(b_.getInt64Ty(), "ondepth");
     b_.CreateStore(b_.CreateCall(runtimeFn("pli_on_depth_error"), {}), curOnDepth_);
   }
@@ -1703,9 +1742,9 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   // Package CONTROLLED generations are program-lifetime (ADR-109).
   emitPackageCtlEnsure();
 
-  // Rule (91): save the ERROR handler depth for exit restore (see retPads).
+  // Rule (91): save the handler depth for exit restore (see retPads).
   curOnDepth_ = nullptr;
-  if (!onHandlers_.empty()) {
+  if (procEstablishesOn(p)) {
     curOnDepth_ = entryAlloca(b_.getInt64Ty(), "ondepth");
     b_.CreateStore(b_.CreateCall(runtimeFn("pli_on_depth_error"), {}), curOnDepth_);
   }
@@ -2003,14 +2042,18 @@ void IRGen::emitStmt(HStmt* s) {
     break;
   case HStmt::Begin: {
     // A BEGIN block scopes ON establishments (rule (91)): restore the entry
-    // depth when the block exits. Skipped when the module establishes no
-    // handlers, so the common path stays free. When the body ends with a
-    // terminator (e.g. a bare RETURN ending an ON-unit, rule 91) there is
-    // no fall-through to scope: skip the restore, mirroring procedure exit.
-    // The entry depth is also what a GO TO leaving this block restores.
+    // depth when the block exits. Skipped when the block itself establishes
+    // no handler (procedure-precise, OPTIMIZATION.md §8.1), so a block
+    // that cannot push onto the handler stack stays free. When the body ends
+    // with a terminator (e.g. a bare RETURN ending an ON-unit, rule 91) there
+    // is no fall-through to scope: skip the restore, mirroring procedure
+    // exit. The entry depth is also what a GO TO leaving this block restores.
     llvm::Value* blkDepth = nullptr;
-    if (!onHandlers_.empty())
-      blkDepth = b_.CreateCall(runtimeFn("pli_on_depth_error"), {}, "onblkdepth");
+    for (auto& b : s->body)
+      if (hasOnAtLevel(b.get())) {
+        blkDepth = b_.CreateCall(runtimeFn("pli_on_depth_error"), {}, "onblkdepth");
+        break;
+      }
     onScopes_.push_back({s->onScope, blkDepth});
     for (auto& b : s->body)
       emitStmt(b.get());

@@ -4957,4 +4957,53 @@ per-generation in the runtime stack, unlike AUTOMATIC); a non-`*`
 runtime DECLARE extent on a CONTROLLED axis (the DECLARE cannot size a
 generation — declare `*` and size it at each ALLOCATE).
 
+---
+
+## ADR-177 — Procedure-precise condition-handler depth tracking
+
+**Context.** ON-unit establishment is a runtime stack (ADR-009, ADR-076):
+`ON` pushes a tagged entry, `REVERT`/procedure/block exit pop, `SIGNAL`
+runs the top entry for its condition. The runtime's `pli_on_depth_error`
+returns the *total* stack depth (`pli_err_sp`) and `pli_on_reset_error`
+restores it, so a single shared depth spans every condition — ERROR,
+SIZE, SUBSCRIPTRANGE, ZERODIVIDE, and programmer-named. IRGen saved this
+depth at every procedure entry and every BEGIN-block entry, gated only by
+the module-wide `if (!onHandlers_.empty())`. That made a lone `ON` in one
+procedure force *every* procedure and BEGIN block in the module to pay a
+`pli_on_depth_error`/`pli_on_reset_error` call pair, even when none of
+them could push a handler — the "zero-cost absence" gap of OPTIMIZATION.md
+§8.1 (P1).
+
+**Decision.** Make the skip procedure- and block-precise. A procedure
+saves/restores the handler depth iff its body establishes any `ON` at its
+own block level — not just `ON ERROR`, because the shared stack means any
+push must be undone, and not inside a nested BEGIN, because that BEGIN
+restores its own entry depth on every exit (fall-through, `GO TO` via
+`onExitDepth`, and a bare `RETURN` ending an ON-unit). The predicate
+descends statement bodies and ON-unit bodies (a nested `ON` inside a
+handler runs within the enclosing block's dynamic extent) but stops at
+nested `BEGIN`s. Two tiny helpers, `hasOnAtLevel` / `procEstablishesOn`,
+gate the three existing sites; the `onScopes_` push is kept so `GO TO`
+scope-chain index alignment is preserved even when a block saves no depth.
+No runtime change: `pli_on_depth_error`/`pli_on_reset_error` keep their
+ABI.
+
+**Consequences.** A module whose `ON`-bearing procedure sits beside
+handler-free procedures now emits depth tracking only in the ones that can
+push a handler; handler-free procedures and BEGIN blocks stay free of the
+two calls. `ir/on_zero_cost.pli`/`.check` pins this at the IR level and
+`core/on_proc_precise.pli` pins the runtime contract (a caller's handler
+survives a handler-free callee; a callee that establishes its own pops it
+on return so the caller's is re-exposed). `core/on_scope_goto.pli` keeps
+guarding `GO TO`-driven reversion of ZERODIVIDE handlers across nested
+BEGINs. GRAMMAR-COVERAGE needs no row (no syntax or rule changed); this is
+an IRGen optimization only.
+
+**Rejected.** Restricting the predicate to `ON ERROR` (wrong: the runtime
+depth covers all conditions, so a ZERODIVIDE-only block would leak its
+handler on a `GO TO` — the original `on_scope_goto.pli` regression);
+computing the flag once per module (the very waste §8.1 removes);
+threading a live depth through a block that establishes nothing (needed
+only when a push is possible).
+
 

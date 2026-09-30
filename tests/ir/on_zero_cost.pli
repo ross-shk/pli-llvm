@@ -1,0 +1,21 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* ON-block zero-cost work (OPTIMIZATION.md P1, §8.1): the ERROR
+    handler depth is saved/restored only in procedures that actually
+    establish an ON ERROR unit, not in every procedure of a module
+    that happens to contain one. PLI_P establishes an ERROR handler so
+    it must track depth; F establishes nothing so it must not. */
+ on_zero_cost: procedure options(main);
+    declare x fixed bin(31);
+    declare a fixed bin(31);
+    on error begin; a = a + 1; end;
+    x = 5;
+    a = f(x);
+    put skip list(a);
+ end on_zero_cost;
+ f: procedure(n) returns(fixed bin(31));
+    declare n fixed bin(31);
+    declare q fixed bin(31);
+    q = n + 1;
+    return (q);
+ end f;

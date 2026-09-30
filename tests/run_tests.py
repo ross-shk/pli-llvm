@@ -65,30 +65,54 @@ def indented(text):
 
 
 def ir_match(ir, checkfile):
-    """FileCheck-style ordered match. Each `CHECK: <regex>` line in `checkfile`
-    must match, in order, somewhere after the previous match in `ir`. A
-    FileCheck regex block `{{...}}` becomes a Python group `(?:...)`; the rest
-    of the line is a Python regex (so a literal parenthesis is backslash
-    escaped in the check file). Returns (ok, reason). Minimal and
-    dependency-free (no FileCheck binary)."""
+    """FileCheck-style ordered match. Each `CHECK:`/`CHECK-LABEL:` regex line
+    must match, in order, somewhere after the previous positive match in `ir`;
+    `CHECK-NOT:` lines assert their pattern does not appear in the window
+    between the surrounding positive matches. A FileCheck regex block
+    `{{...}}` becomes a Python group `(?:...)`; the rest of the line is a
+    Python regex (so a literal parenthesis is backslash escaped in the check
+    file). Returns (ok, reason). Minimal and dependency-free (no FileCheck
+    binary)."""
     import re
-    pos = 0
+    dirs = []
     for lineno, line in enumerate(checkfile.splitlines(), 1):
-        if not line.strip():
+        s = line.strip()
+        if not s:
             continue
-        if not line.startswith("CHECK:"):
+        kind = None
+        for k in ("CHECK-LABEL:", "CHECK-NOT:", "CHECK:"):
+            if line.startswith(k):
+                kind = k
+                break
+        if kind is None:
             return False, f".check line {lineno}: expected 'CHECK:' directive"
-        pat = line[len("CHECK:"):].strip()
+        pat = line[len(kind):].strip()
         if not pat:
             return False, f".check line {lineno}: empty CHECK pattern"
         pat = re.sub(r"\{\{(.*?)\}\}", r"(?:\1)", pat)
         try:
-            m = re.search(pat, ir[pos:], re.MULTILINE)
+            re.compile(pat)
         except re.error as e:
             return False, f".check line {lineno}: bad pattern '{pat}': {e}"
-        if not m:
-            return False, f".check line {lineno}: pattern not found: {pat}"
-        pos += m.end()
+        dirs.append((kind, pat, lineno))
+
+    # Walk positive matches, enforcing each CHECK-NOT against the window from
+    # the previous positive match to the current one.
+    pos = 0
+    pending_not = []  # (pattern, lineno) of CHECK-NOT lines seen since last positive
+    for kind, pat, lineno in dirs:
+        if kind in ("CHECK:", "CHECK-LABEL:"):
+            m = re.search(pat, ir[pos:], re.MULTILINE)
+            if not m:
+                return False, f".check line {lineno}: pattern not found: {pat}"
+            end = pos + m.end()
+            for npat, nline in pending_not:
+                if re.search(npat, ir[pos:end], re.MULTILINE):
+                    return False, f".check line {nline}: pattern should not appear: {npat}"
+            pending_not = []
+            pos = end
+        else:  # CHECK-NOT
+            pending_not.append((pat, lineno))
     return True, ""
 
 

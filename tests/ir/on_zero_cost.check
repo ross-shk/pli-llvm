@@ -1,0 +1,8 @@
+CHECK-LABEL: define internal void @PLI_ON_ZERO_COST
+CHECK: call i64 @pli_on_depth_error
+CHECK: call void @pli_on_push_error
+CHECK: call void @pli_on_reset_error
+CHECK-LABEL: define i32 @F
+CHECK-NOT: call i64 @pli_on_depth_error
+CHECK-NOT: call void @pli_on_reset_error
+CHECK-LABEL: define i32 @main
