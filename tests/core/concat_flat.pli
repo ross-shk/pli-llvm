@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Concatenation chains flatten into one buffer (P2, OPTIMIZATION §7.4);
+   behaviour is unchanged from left-leaning lowering. Rule (119). */
+ concat_flat: procedure options(main);
+   declare (a, b, c, r) char(8) varying;
+   declare s char(32) varying;
+   a = 'red';
+   b = 'green';
+   c = 'blue';
+   r = a || b || c;
+   put skip list(r);
+   /* a longer chain mixing variables and literals */
+   s = a || '-' || b || '-' || c;
+   put skip list(s);
+ end concat_flat;

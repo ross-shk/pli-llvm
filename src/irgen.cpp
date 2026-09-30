@@ -5900,23 +5900,43 @@ Val IRGen::emitExpr(HExpr* e) {
   const Tok op = e->op;
 
   if (op == Tok::Concat) { // rule (119)
-    Val a = emitExpr(e->a.get());
-    Val b = emitExpr(e->b.get());
-    if (!a.ty.isChar() || !b.ty.isChar()) {
-      v.ty = e->ty;
-      v.reg = i64(0);
-      return v;
+    // Flatten a concat chain A || B || C into one buffer with a single length
+    // computation and sequential byte copies (P2, OPTIMIZATION §7.4) instead of
+    // left-leaning temporaries. Leaves are evaluated in source order; the flat
+    // result buffer is fresh, so no leaf storage can alias it. Any side may be
+    // an adjustable `CHAR(*)` (rule (18)) / CONTROLLED generation (rule (15))
+    // whose live length exceeds its static descriptor, so size from the live sum.
+    std::vector<Val> leaves;
+    std::vector<HExpr*> stack{e};
+    while (!stack.empty()) {
+      HExpr* ex = stack.back();
+      stack.pop_back();
+      if (ex->kind == HExpr::Binary && ex->op == Tok::Concat) {
+        stack.push_back(ex->b.get());
+        stack.push_back(ex->a.get());
+        continue;
+      }
+      leaves.push_back(emitExpr(ex));
     }
-    // Runtime-sized buffer: either side may be an adjustable `CHAR(*)`
-    // (rule (18)) / CONTROLLED generation (rule (15)) whose live length
-    // exceeds its static descriptor, so size from the live sum.
-    Val out;
-    out.ty = e->ty;
-    llvm::Value* total = b_.CreateAdd(a.len, b.len, "clen");
-    out.ptr = b_.CreateAlloca(b_.getInt8Ty(), total, "cbuf");
-    out.len = total;
-    b_.CreateCall(runtimeFn("pli_concat"), {out.ptr, a.ptr, a.len, b.ptr, b.len});
-    return out;
+    for (auto& leaf : leaves)
+      if (!leaf.ty.isChar()) {
+        v.ty = e->ty;
+        v.reg = i64(0);
+        return v;
+      }
+    v.ty = e->ty;
+    llvm::Value* total = leaves[0].len;
+    for (size_t i = 1; i < leaves.size(); ++i)
+      total = b_.CreateAdd(total, leaves[i].len, "clen");
+    v.ptr = b_.CreateAlloca(b_.getInt8Ty(), total, "cbuf");
+    v.len = total;
+    llvm::Value* off = i64(0);
+    for (auto& leaf : leaves) {
+      llvm::Value* dst = b_.CreateGEP(b_.getInt8Ty(), v.ptr, off, "cblk");
+      b_.CreateMemCpy(dst, llvm::MaybeAlign(), leaf.ptr, llvm::MaybeAlign(), leaf.len);
+      off = b_.CreateAdd(off, leaf.len, "coff");
+    }
+    return v;
   }
 
   if (op == Tok::Amp || op == Tok::Bar) { // rules (116),(115)

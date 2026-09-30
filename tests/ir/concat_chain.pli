@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* A three-operand concat chain A || B || C flattens into one buffer with a
+   single length computation and sequential memcpy (P2, OPTIMIZATION §7.4),
+   instead of left-leaning pli_concat temporaries. Rule (119). */
+ main: procedure options(main);
+   declare (a, b, c, r) char(10) varying;
+   a = 'one';
+   b = '-';
+   c = 'two';
+   r = a || b || c;
+   put skip list(r);
+ end main;

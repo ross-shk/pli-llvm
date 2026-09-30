@@ -5006,4 +5006,44 @@ computing the flag once per module (the very waste §8.1 removes);
 threading a live depth through a block that establishes nothing (needed
 only when a push is possible).
 
+---
+
+## ADR-178 — Concat chains flatten into one buffer with sequential `memcpy`
+
+**Context.** OPTIMIZATION §7.4 (P2, aggregate/string lowering) calls for
+flattening `A || B || C` chains into a single buffer with one length
+computation instead of left-leaning temporaries. IRGen's `Concat` case
+(rule (119)) lowered every concatenation as a binary `pli_concat` runtime
+call into a freshly-allocated temp buffer, so a three-operand chain
+allocated two buffers, emitted two `pli_concat` calls, and recomputed the
+running length twice. The chain shape is common in string-building code
+and the temporaries are pure overhead: each intermediate is consumed
+immediately and never escapes.
+
+**Decision.** In `emitExpr`, a `Concat` node now decomposes into its leaf
+char operands (walking nested `Concat` operands depth-first, left to
+right), evaluates each leaf once, allocates **one** runtime-sized buffer,
+and copies each leaf's bytes into it with `llvm.memcpy` at a running
+offset. The result `Val` keeps the same shape as before (fresh buffer +
+total live length), so callers are unchanged. The flat buffer is fresh
+storage, so no leaf can alias it; leaves that are themselves char-valued
+expressions with their own temporaries (calls, `SUBSTR`) are copied in
+source order, preserving evaluation order. The `pli_concat` runtime
+helper and its attribute row stay for ABI/back-compat but are no longer
+emitted by this path.
+
+**Consequences.** `A || B || C` emits one buffer, one length
+computation, and `n` `memcpy` intrinsics (vectorizable by LLVM) instead
+of `n-1` temp buffers and `n-1` runtime calls. `ir/concat_chain.pli`/
+`.check` pins the shape at the IR level (`CHECK-NOT: pli_concat`);
+`core/concat_flat.pli` pins the runtime bytes, including a VARYING
+target whose capacity truncates a too-long result. GRAMMAR-COVERAGE needs
+no row (rule (119) is unchanged; this is an IRGen lowering only).
+
+**Rejected.** Emitting `memmove` (no overlap is possible: the target
+buffer is fresh); in-place `S = S || T` (needs aliasing proof and a
+store-to-target shape this expression path does not yet carry — a later
+§7.4 refinement); keeping the left-leaning `pli_concat` form (the exact
+waste §7.4 removes).
+
 
