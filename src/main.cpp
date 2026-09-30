@@ -39,6 +39,19 @@
 #define PLIC_INSTALL_RUNTIME_LIB ""
 #endif
 
+// Path to the bitcode runtime (OPTIMIZATION.md §10, P3): build/runtime.bc,
+// baked in at build time like PLIC_RUNTIME_LIB. IRGen merges the pli_*
+// definitions from it into the MAIN unit so clang sees real bodies;
+// --no-bitcode-runtime restores the sectioned-archive path and --runtime-bc
+// overrides the location.
+#ifndef PLIC_RUNTIME_BC
+#define PLIC_RUNTIME_BC ""
+#endif
+
+#ifndef PLIC_INSTALL_RUNTIME_BC
+#define PLIC_INSTALL_RUNTIME_BC ""
+#endif
+
 // Version and LLVM identity baked in at build time (self-contained milestone:
 // `plic version` reports the toolchain without invoking sub-tools).
 #ifndef PLIC_VERSION
@@ -83,9 +96,16 @@ static void usage() {
          "  --debug          no optimization + debug info (-O0 -g)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
+         "  --no-bitcode-runtime\n"
+         "                   link the sectioned libpli.a instead of merging the\n"
+         "                   pli_* definitions from runtime.bc into the MAIN unit\n"
+         "  --runtime-bc <f> path to runtime.bc (default: baked in at build time)\n"
+         "  --flto=thin|full explicit ThinLTO / full LTO on the compile+link steps\n"
+         "  --fprofile-generate  instrument the build for PGO (writes a profile)\n"
+         "  --fprofile-use=<d>   rebuild using a merged profile (llvm-profdata out)\n"
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
-          "  --triple <t>     target triple (default: host triple, in-process)\n"
-          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
+         "  --triple <t>     target triple (default: host triple, in-process)\n"
+         "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
@@ -93,12 +113,12 @@ static void usage() {
          "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
          "  -shared -static  produce a shared / static binary\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
-          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-          "  --version        print plic + LLVM versions and the host triple, then exit\n"
-          "  -v               show the sub-commands being run\n"
-          "  -h, --help       this message\n"
-          "\n"
-          "  plic version     same as --version (Go/Zig style)\n";
+         "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
+         "  --version        print plic + LLVM versions and the host triple, then exit\n"
+         "  -v               show the sub-commands being run\n"
+         "  -h, --help       this message\n"
+         "\n"
+         "  plic version     same as --version (Go/Zig style)\n";
 }
 
 // Go/Zig-style toolchain report: no subprocess, all baked in or in-process.
@@ -143,7 +163,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
                        bool keepLL, bool verbose, bool noSizeChecks, const std::string& optLevel,
                        const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
-                       std::string* outObj) {
+                       std::string* outObj, const std::string& runtimeBc, bool linkBitcode) {
   std::string src;
   if (!preprocessor.run(input, src))
     return false;
@@ -191,7 +211,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // subprocess since the self-contained milestone).
   if (triple.empty())
     triple = llvm::sys::getDefaultTargetTriple();
-  IRGen irgen(diags, sema, triple, noSizeChecks);
+  IRGen irgen(diags, sema, triple, noSizeChecks, runtimeBc, linkBitcode);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return false;
@@ -257,7 +277,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
 int main(int argc, char** argv) {
   std::vector<std::string> inputs;
-  std::string output, runtimeLib = PLIC_RUNTIME_LIB, triple;
+  std::string output, runtimeLib = PLIC_RUNTIME_LIB, runtimeBc = PLIC_RUNTIME_BC, triple;
   std::string clangPath = PLIC_CLANG;
   std::string sysparm;
   bool sysparmExplicit = false;
@@ -267,6 +287,8 @@ int main(int argc, char** argv) {
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
   bool noSizeChecks = false, wantVersion = false;
+  bool runtimeBcExplicit = false, useBitcode = true, pgoGenerate = false;
+  std::string ltoKind, pgoUse;
   int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -296,7 +318,20 @@ int main(int argc, char** argv) {
     else if (a == "--runtime") {
       runtimeLib = next("--runtime");
       runtimeExplicit = true;
-    } else if (a == "--clang")
+    } else if (a == "--no-bitcode-runtime")
+      useBitcode = false;
+    else if (a == "--runtime-bc") {
+      runtimeBc = next("--runtime-bc");
+      runtimeBcExplicit = true;
+    } else if (a == "--flto=thin" || a == "--flto=full")
+      ltoKind = a.substr(7);
+    else if (a == "--fprofile-generate")
+      pgoGenerate = true;
+    else if (a.rfind("--fprofile-use=", 0) == 0)
+      pgoUse = a.substr(15);
+    else if (a == "--fprofile-use")
+      pgoUse = next("--fprofile-use");
+    else if (a == "--clang")
       clangPath = next("--clang");
     else if (a == "--triple")
       triple = next("--triple");
@@ -382,6 +417,29 @@ int main(int argc, char** argv) {
     if (fs::exists(installed))
       runtimeLib = installed.string();
   }
+  // Bitcode runtime (OPTIMIZATION.md §10, P3): by default IRGen merges the
+  // pli_* definitions out of runtime.bc into the MAIN unit (lib units keep
+  // external references resolved by that one shared copy). An explicitly
+  // named runtime.bc must exist (a typo is a user error); the baked-in
+  // default falls back to the sectioned archive when missing (e.g. an older
+  // build tree). --no-bitcode-runtime always selects the archive path.
+  if (!runtimeBcExplicit && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
+    fs::path installed = PLIC_INSTALL_RUNTIME_BC;
+    if (installed.empty() || !fs::exists(installed))
+      installed = executablePath(argv[0]).parent_path().parent_path() / "lib/runtime.bc";
+    if (fs::exists(installed))
+      runtimeBc = installed.string();
+  }
+  if (useBitcode && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
+    if (runtimeBcExplicit) {
+      std::cerr << "plic: no such runtime bitcode: " << runtimeBc << "\n";
+      return 2;
+    }
+    if (verbose)
+      std::cerr << "plic: runtime.bc not found at " << runtimeBc
+                << "; linking the sectioned archive instead\n";
+    useBitcode = false;
+  }
 
   Preprocessor preprocessor;
   for (const std::string& d : includeDirs)
@@ -432,6 +490,15 @@ int main(int argc, char** argv) {
     optLevel = "-O0";
     backendFlags = " -g";
   }
+  // Explicit opt-in PGO/LTO (OPTIMIZATION.md §10, P3): the flags reach both
+  // the per-file compile and the final link, so instrumented objects link
+  // their profiling runtime and -flto objects meet a -flto link step.
+  if (!ltoKind.empty())
+    backendFlags += " -flto=" + ltoKind;
+  if (pgoGenerate)
+    backendFlags += " -fprofile-generate";
+  if (!pgoUse.empty())
+    backendFlags += " -fprofile-use=" + shellQuote(pgoUse);
 
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
@@ -444,11 +511,16 @@ int main(int argc, char** argv) {
   if (keepLLDir.empty())
     keepLLDir = ".";
   std::vector<std::string> objs;
+  // Bitcode runtime: the MAIN unit embeds the pli_* definitions; the archive
+  // always stays on the link line, where it is never pulled once the symbols
+  // are defined by that embedded copy (runtime globals must stay shared).
+  const bool linkBitcode = useBitcode && !emitLLVM;
   for (size_t i = 0; i < inputs.size(); ++i) {
     std::string outObj;
     if (!compileOne(preprocessor, inputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
                     compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
-                    noSizeChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj))
+                    noSizeChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj, runtimeBc,
+                    linkBitcode))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -457,7 +529,10 @@ int main(int argc, char** argv) {
     return 0;
 
   // --- link step ----------------------------------------------------------
-  // Link the per-file objects with libpli. Drop unreferenced runtime sections
+  // Link the per-file objects with libpli. With the bitcode runtime the MAIN
+  // object already defines the pli_* symbols, so the archive's members are
+  // simply never pulled (no duplicates); --no-bitcode-runtime compiles every
+  // unit against the archive as before. Drop unreferenced runtime sections
   // (the archive is sectioned, ADR-079); multitasking (QR2.8) runs on pthreads.
   if (output.empty())
     output = "a.out";

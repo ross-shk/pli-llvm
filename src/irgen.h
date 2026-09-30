@@ -36,9 +36,11 @@ struct Val {
 
 class IRGen {
 public:
-  IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false)
+  IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false,
+        std::string runtimeBc = "", bool linkBitcode = false)
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
-        noSizeChecks_(noSizeChecks) {}
+        noSizeChecks_(noSizeChecks), runtimeBc_(std::move(runtimeBc)),
+        linkBitcode_(linkBitcode) {}
 
   std::string run(HProgram& prog);
 
@@ -521,4 +523,18 @@ private:
   // AUTOMATIC AREA variables of the procedure being emitted (rule (20)): the
   // runtime region is created at entry and destroyed on every exit path.
   std::vector<Symbol*> areaLocals_;
+  // Bitcode runtime (OPTIMIZATION.md §10, P3): runtimeBc_ is the path to the
+  // build-tree runtime.bc; linkBitcode_ requests linking its pli_* definitions
+  // into the module. Only the MAIN unit embeds (runtime globals must stay
+  // shared across units), so the archive stays on the final link line where
+  // its members are simply never pulled once the symbols are defined.
+  std::string runtimeBc_;
+  bool linkBitcode_ = false;
+  // Parse runtime.bc, check its LLVM stamp and target triple, merge the whole
+  // runtime into the module, and re-apply the P0 side-table facts to the real
+  // bodies. The embedded definitions keep their external linkage so every
+  // unit's pli_* references resolve to this one shared copy (runtime globals
+  // stay shared); the archive stays on the link line but is never pulled.
+  // Returns false after diagnosing.
+  bool linkRuntimeBitcode();
 };

@@ -3,12 +3,19 @@
 #include "irgen.h"
 #include <algorithm>
 
+#ifndef PLIC_LLVM_VERSION
+#define PLIC_LLVM_VERSION "unknown"
+#endif
+
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Linker/Linker.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -869,6 +876,18 @@ std::string IRGen::run(HProgram& prog) {
     b_.CreateRet(i32(0));
   }
 
+  // Bitcode runtime (OPTIMIZATION.md §10, P3): link the pli_* definitions the
+  // module references in from runtime.bc, so clang compiles real bodies and
+  // can inline/specialize them instead of resolving external archive calls.
+  // Only the MAIN unit embeds: runtime globals (CONTROLLED and ON stacks,
+  // I/O state) must be shared across units, so every other unit keeps
+  // external pli_* references that the embedded copy or libpli.a satisfies.
+  // -emit-llvm keeps the raw module (its IR goldens pin compiler output, not
+  // the runtime); the driver passes linkBitcode_ = false there.
+  if (linkBitcode_ && !runtimeBc_.empty() && prog.mainProc)
+    if (!linkRuntimeBitcode())
+      return "";
+
   // Verify the module before serializing; a malformed IR will trip an
   // assertion here rather than causing an opaque clang assembler crash.
   if (llvm::verifyModule(mod_, &llvm::errs())) {
@@ -884,6 +903,81 @@ std::string IRGen::run(HProgram& prog) {
     mod_.setTargetTriple(llvm::Triple(triple_));
   mod_.print(os, nullptr);
   return ir;
+}
+
+// Bitcode runtime (OPTIMIZATION.md §10, P3): pull the pli_* definitions the
+// module references out of runtime.bc so clang compiles real bodies and can
+// inline/specialize them. The LLVM version stamp (rt_core.c plic_llvm_version)
+// is checked first: runtime.bc is built by the same LLVM as plic, and a stale
+// bitcode would mis-compile silently. The whole runtime is merged into the
+// MAIN unit with external linkage, so every unit's pli_* references resolve
+// to this one shared copy and the runtime's global state stays shared.
+bool IRGen::linkRuntimeBitcode() {
+  llvm::SMDiagnostic err;
+  std::unique_ptr<llvm::Module> rt = llvm::parseIRFile(runtimeBc_, err, ctx_);
+  if (!rt) {
+    d_.error({}, "internal error: cannot load the runtime bitcode '" + runtimeBc_ + "': " +
+                     err.getMessage().str(),
+             "");
+    return false;
+  }
+  // A missing or mismatched stamp means a foreign or stale runtime.bc: the
+  // emitted IR syntax is tied to the LLVM plic was built against.
+  std::string stamp = "unknown";
+  if (llvm::GlobalVariable* gv = rt->getNamedGlobal("plic_llvm_version"))
+    if (llvm::Constant* init = gv->getInitializer())
+      if (llvm::ConstantDataArray* s = llvm::dyn_cast<llvm::ConstantDataArray>(init))
+        stamp = s->getAsCString().str(); // strips the trailing NUL
+  if (stamp != PLIC_LLVM_VERSION) {
+    d_.error({}, "runtime bitcode '" + runtimeBc_ + "' was built with LLVM " + stamp +
+                     " but plic with LLVM " PLIC_LLVM_VERSION +
+                     " — rebuild it or pass --no-bitcode-runtime",
+             "");
+    return false;
+  }
+  // A runtime built for another target must not be merged into this module.
+  // Compare arch + OS family, not the version-qualified triple string: Apple's
+  // darwin/macosx naming and the OS version differ between LLVM builds (e.g.
+  // arm64-apple-darwin25.6.0 vs arm64-apple-macosx26.0.0) yet are the same ABI.
+  llvm::Triple rtTriple = rt->getTargetTriple();
+  llvm::Triple tgtTriple(triple_);
+  // LLVM 23 splits the Darwin family into Darwin and MacOSX OSType values;
+  // both are the same ABI family, so fold them onto one key.
+  auto osKey = [](llvm::Triple::OSType os) -> int {
+    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX)
+               ? (int)llvm::Triple::Darwin
+               : (int)os;
+  };
+  if (rtTriple.getArch() != tgtTriple.getArch() ||
+      osKey(rtTriple.getOS()) != osKey(tgtTriple.getOS())) {
+    d_.error({}, "runtime bitcode target '" + rtTriple.str() + "' does not match '" + triple_ +
+                     "' — rebuild it or pass --no-bitcode-runtime",
+             "");
+    return false;
+  }
+  // The whole runtime is merged (no LinkOnlyNeeded) because library units
+  // reference pli_* symbols this module does not call itself: only a full
+  // merge guarantees every unit's reference resolves to this one embedded
+  // copy and the archive is never pulled (its members would duplicate the
+  // symbols otherwise). Dead-stripping at the final link removes whatever the
+  // program does not use. The definitions keep their external linkage so the
+  // runtime's global state (CONTROLLED/ON stacks, I/O) stays shared across
+  // units; the P0 side-table facts are re-applied so the optimizer keeps the
+  // audited memory/alloc effects on the real bodies.
+  // Align the data layout with ours first: both describe the same ABI, but
+  // clang's darwin layout carries extra address-space pointee specs that the
+  // runtime C never uses, and the linker warns on any textual difference.
+  if (!mod_.getDataLayoutStr().empty())
+    rt->setDataLayout(mod_.getDataLayoutStr());
+  if (llvm::Linker::linkModules(mod_, std::move(rt), llvm::Linker::None)) {
+    d_.error({}, "internal error: linking the runtime bitcode into the module failed", "");
+    return false;
+  }
+  auto& sigs = kRuntimeSigs();
+  for (llvm::Function& f : mod_.functions())
+    if (!f.isDeclaration() && sigs.count(f.getName().str()))
+      applyRuntimeAttrs(&f);
+  return true;
 }
 
 // An LLVM scalar constant for an INITIAL element value (rule 26). Null is

@@ -11,7 +11,7 @@ ifeq ($(LLVM_CONFIG),)
 endif
 LLVM_CXXFLAGS := $(shell $(LLVM_CONFIG) --cxxflags 2>/dev/null)
 LLVM_LDFLAGS  := $(shell $(LLVM_CONFIG) --ldflags 2>/dev/null)
-LLVM_LIBS     := $(shell $(LLVM_CONFIG) --libs core irreader support 2>/dev/null)
+LLVM_LIBS     := $(shell $(LLVM_CONFIG) --libs core irreader support linker 2>/dev/null)
 LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) --system-libs 2>/dev/null)
 ifeq ($(LLVM_CXXFLAGS),)
   $(error llvm-config not found — install LLVM >= 18 via Homebrew (brew install llvm) or set LLVM_CONFIG=)
@@ -61,6 +61,17 @@ RT_OBJS  := $(patsubst runtime/%.c,$(BUILD)/rt_%.o,$(RT_SRCS))
 # only the runtime pieces a program references (ADR-079).
 RTCFLAGS := $(CFLAGS) -ffunction-sections -fdata-sections
 
+# Bitcode runtime (OPTIMIZATION.md §10, P3): each runtime C file is also
+# compiled to LLVM IR with the same clang plic emits for, then merged with
+# llvm-link into one runtime.bc. IRGen merges the runtime into the MAIN unit
+# so clang sees the runtime bodies and can inline/specialize them; libpli.a
+# stays for --no-bitcode-runtime. The build-time LLVM version is baked in as
+# a data stamp (rt_core.c) and checked at load time, so a stale runtime.bc
+# cannot mis-compile silently.
+RUNTIME_BC := $(BUILD)/runtime.bc
+RTCBCOBJS  := $(patsubst runtime/%.c,$(BUILD)/rt_%.bc,$(RT_SRCS))
+RTCBCFLAGS := $(CFLAGS) -DPLIC_LLVM_VERSION='"$(PLIC_LLVM_VERSION)"'
+
 # Baked-in default path to the runtime archive, so `plic hello.pli` just works.
 RTPATH   := $(abspath $(RTLIB))
 
@@ -80,7 +91,7 @@ SCAN_BUILD := $(shell command -v $(LLVM_BINDIR)/scan-build 2>/dev/null || comman
 SRCS_TXT := $(SRCS) src/*.h
 
 .PHONY: all clean test install check tidy fmt fmt-check scan werror
-all: $(BIN) $(RTLIB)
+all: $(BIN) $(RTLIB) $(RUNTIME_BC)
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -88,6 +99,7 @@ $(BUILD):
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(PLIC_CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
 		-DPLIC_INSTALL_RUNTIME_LIB='"$(LIBDIR)/libpli.a"' \
+		-DPLIC_RUNTIME_BC='"$(abspath $(RUNTIME_BC))"' \
 		-DPLIC_CLANG='"$(CLANGPATH)"' \
 		-DPLIC_VERSION='"$(PLIC_VERSION)"' \
 		-DPLIC_LLVM_VERSION='"$(PLIC_LLVM_VERSION)"' -MMD -MP -c $< -o $@
@@ -100,6 +112,12 @@ $(RULES_OBJ): $(RULES_CPP) src/explain.h | $(BUILD)
 
 $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
 	$(CC) $(RTCFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/rt_%.bc: runtime/%.c | $(BUILD)
+	$(CLANGPATH) -emit-llvm -c $(RTCBCFLAGS) -MMD -MP $< -o $@
+
+$(RUNTIME_BC): $(RTCBCOBJS)
+	$(LLVM_BINDIR)/llvm-link $^ -o $@
 
 $(BIN): $(OBJS) $(RULES_OBJ)
 	$(CXX) $(PLIC_CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) $(LLVM_SYSTEM_LIBS) -o $@
@@ -174,6 +192,7 @@ install: all
 	strip $(BUILD)/plic.install
 	install -m 755 $(BUILD)/plic.install $(DESTDIR)$(BINDIR)/plic
 	install -m 644 $(RTLIB) $(DESTDIR)$(LIBDIR)/libpli.a
+	install -m 644 $(RUNTIME_BC) $(DESTDIR)$(LIBDIR)/runtime.bc
 	rm -f $(BUILD)/plic.install
 
--include $(DEPS)
+-include $(DEPS) $(RTCBCOBJS:.bc=.d)

@@ -5046,4 +5046,64 @@ store-to-target shape this expression path does not yet carry — a later
 §7.4 refinement); keeping the left-leaning `pli_concat` form (the exact
 waste §7.4 removes).
 
+---
+
+## ADR-179 — Bitcode runtime and explicit opt-in PGO/LTO (OPTIMIZATION.md §10, P3)
+
+**Context.** The final P3 tier of the merged optimization plan asks for
+"explicit opt-in PGO/ThinLTO" and a bitcode runtime: build `runtime.bc`
+alongside `libpli.a`, link runtime definitions into the module in
+`IRGen::run()`, keep the archive with a `--no-bitcode-runtime` fallback,
+and bake the LLVM version into the bitcode so a stale `runtime.bc` is
+diagnosed at load time instead of silently mis-linking. Before this ADR
+every `pli_*` call went through a bare declaration to an external archive
+member, so clang could never inline or specialize the runtime.
+
+**Decision.** The Makefile and CMake builds compile each `runtime/rt_*.c`
+to LLVM IR with the same clang plic emits for and merge the results with
+`llvm-link` into `build/runtime.bc`, stamped with the build-time LLVM
+version (`rt_core.c` exports `plic_llvm_version[]`). `IRGen::run()`, in a
+normal (non-`-emit-llvm`) build of the unit that declares `OPTIONS(MAIN)`,
+parses `runtime.bc`, rejects a missing/mismatched version stamp or a
+foreign arch/OS family (Apple's `darwin`/`macosx` split folds onto one
+key), aligns the data layout, merges the **whole** runtime module, and
+re-applies the P0 side-table facts to the now-real bodies. The archive
+stays on the link line — its members are never pulled once the embedded
+copy defines every `pli_*` symbol, and dead-stripping removes whatever the
+program does not use. Library units keep external `pli_*` references
+resolved by the embedded copy, so the runtime's global state (CONTROLLED
+and ON stacks, I/O state) stays shared across units. Driver flags:
+`--runtime-bc <path>` overrides the baked-in location (an explicitly named
+missing file is an error; the baked default falls back to the archive),
+`--no-bitcode-runtime` restores the pure-archive path, and `--flto=thin` /
+`--flto=full` / `--fprofile-generate` / `--fprofile-use=<dir>` are
+forwarded to both the per-file compile and the final link.
+
+**Consequences.** Every executable now embeds a full runtime copy its
+compiler can inline and specialize; `-emit-llvm` still shows the raw
+module so the IR goldens (`tests/ir/*.check`) keep pinning compiler
+output. `driver/bitcode_runtime.sh` pins the embed (kept `.ll` carries
+`pli_*` bodies, not declarations), the archive fallback, multi-unit
+linking without duplicates, and the version-stamp/missing-path
+diagnostics; `driver/flto.sh` and `driver/pgo.sh` pin ThinLTO/full LTO and
+the two-phase PGO round-trip plus a stale-profile (mismatch) rebuild. The
+P0 attribute table's rows stay correct against the merged bodies because
+they were audited against the same `runtime/*.c`. GRAMMAR-COVERAGE needs
+no row (no syntax or rule changed). A fresh `runtime.bc` is rebuilt from
+`make`/`make install`; older build trees silently use the archive (the
+`--no-bitcode-runtime` fallback). The CMake `libpli` target source list
+was corrected to the real `rt_*.c` files (it referenced a never-existing
+`runtime/pli_rt.c`).
+
+**Rejected.** Internalizing the runtime per unit (CONTROLLED/ON stack
+state diverges across units — the `ctl_*`/`on_scope*` regressions);
+embedding with `LinkOnlyNeeded` (library units reference `pli_*` symbols
+the MAIN unit never calls, so the archive would be pulled for them and
+duplicate the embedded set); embedding into every unit with external
+linkage (duplicate `pli_*` definitions at the final link); dropping the
+archive from the link line (a mixed archive/embedded link is a duplicate
+risk, and keeping it costs nothing); comparing target triples as strings
+(two LLVM builds spell the same Darwin ABI differently, e.g.
+`arm64-apple-darwin25.6.0` vs `arm64-apple-macosx26.0.0`).
+
 

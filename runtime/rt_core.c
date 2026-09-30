@@ -6,6 +6,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* Version stamp for the bitcode runtime (OPTIMIZATION.md §10, P3): runtime.bc
+ * is compiled by the same LLVM as plic, and IRGen checks this global before
+ * linking it into a module. A stale bitcode would silently mis-compile, so a
+ * missing or mismatched stamp is diagnosed instead. */
+#ifndef PLIC_LLVM_VERSION
+#define PLIC_LLVM_VERSION "unknown"
+#endif
+const char plic_llvm_version[] = PLIC_LLVM_VERSION;
+
 void pli_rt_init(void) {
   col = 0;
   items_on_line = 0;

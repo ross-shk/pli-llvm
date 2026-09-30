@@ -49,16 +49,63 @@ endif()
 target_compile_definitions(plic PRIVATE
   PLIC_RUNTIME_LIB="$<TARGET_FILE:libpli>"
   PLIC_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/libpli.a"
+  PLIC_RUNTIME_BC="${CMAKE_BINARY_DIR}/runtime.bc"
+  PLIC_INSTALL_RUNTIME_BC="${CMAKE_INSTALL_FULL_LIBDIR}/runtime.bc"
   PLIC_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
   PLIC_VERSION="${PLIC_VERSION}"
   PLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}")
 target_link_libraries(plic PRIVATE plic_rules)
-llvm_map_components_to_libnames(llvm_libs core irreader support)
+llvm_map_components_to_libnames(llvm_libs core irreader support linker)
 target_link_libraries(plic PRIVATE ${llvm_libs})
 
-# libpli runtime (C11).
-add_library(libpli STATIC runtime/pli_rt.c)
+# libpli runtime (C11). One source per section so the archive strips unused
+# pieces (ADR-079); the same sources feed the bitcode runtime
+# (OPTIMIZATION.md §10, P3): each is compiled to LLVM IR with the matching
+# clang and merged into runtime.bc with llvm-link. IRGen merges the runtime
+# into the MAIN unit so clang sees real bodies; the archive stays for
+# --no-bitcode-runtime. rt_core.c stamps runtime.bc with the LLVM version,
+# checked at load time so a stale bitcode is diagnosed, not mis-linked.
+set(PLI_RUNTIME_SOURCES
+  runtime/rt_core.c
+  runtime/rt_stream.c
+  runtime/rt_string.c
+  runtime/rt_math.c
+  runtime/rt_mathport.c
+  runtime/rt_cond.c
+  runtime/rt_storage.c
+  runtime/rt_get.c
+  runtime/rt_file.c
+  runtime/rt_edit.c
+  runtime/rt_task.c
+)
+add_library(libpli STATIC ${PLI_RUNTIME_SOURCES})
 set_target_properties(libpli PROPERTIES OUTPUT_NAME pli)
+
+set(PLIC_RUNTIME_BC ${CMAKE_BINARY_DIR}/runtime.bc)
+set(PLI_RUNTIME_BCS)
+foreach(rt_src ${PLI_RUNTIME_SOURCES})
+  get_filename_component(rt_base ${rt_src} NAME_WE)
+  set(rt_bc ${CMAKE_BINARY_DIR}/${rt_base}.bc)
+  add_custom_command(
+    OUTPUT ${rt_bc}
+    COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c
+            -DPLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
+            ${rt_src} -o ${rt_bc}
+    DEPENDS ${rt_src}
+    COMMENT "Compiling ${rt_base}.c to bitcode"
+    VERBATIM
+  )
+  list(APPEND PLI_RUNTIME_BCS ${rt_bc})
+endforeach()
+add_custom_command(
+  OUTPUT ${PLIC_RUNTIME_BC}
+  COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${PLI_RUNTIME_BCS}
+          -o ${PLIC_RUNTIME_BC}
+  DEPENDS ${PLI_RUNTIME_BCS}
+  COMMENT "Merging the runtime bitcode (runtime.bc)"
+  VERBATIM
+)
+add_custom_target(runtime_bc ALL DEPENDS ${PLIC_RUNTIME_BC})
 
 # Generated rules table for --explain (see scripts/gen_rules.py); the spec and
 # the generator are the source of truth, so regenerate on every build.
@@ -82,3 +129,4 @@ set_tests_properties(plic-tests PROPERTIES
 install(TARGETS plic libpli
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES ${PLIC_RUNTIME_BC} DESTINATION ${CMAKE_INSTALL_LIBDIR})
