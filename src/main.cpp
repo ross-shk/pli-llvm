@@ -143,6 +143,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool keepLL, bool verbose, bool noSizeChecks, const std::string& optLevel,
                        const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
                        std::string* outObj, bool linkRuntimeIn = false) {
+  // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
+  if (triple.empty())
+    triple = "arm64-apple-macosx15.0";
   std::string src;
   if (!preprocessor.run(input, src))
     return false;
@@ -226,22 +229,29 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   {
     IRGen ipg(diags, sema, triple, noSizeChecks);
     if (auto om = ipg.takeModule(hir)) {
-      std::string tmErr;
-      if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr)) {
-        // The IRGen layout is approximate; the TargetMachine owns the truth
-        // (llc behaviour — the clang fallback used -Wno-override-module).
-        om->mod->setDataLayout(tm->createDataLayout());
-        bool rtOk = true;
+      bool rtOk = true;
 #if PLIC_HAVE_LLD
-        // Single-module fast path: runtime linked at BC level (never `-c`).
-        if (linkRuntimeIn && !compileOnly) {
-          std::string rtErr;
-          rtOk = plic::linkEmbeddedLibPLI(*om->mod, rtErr);
-          if (!rtOk)
-            std::cerr << "plic: " << rtErr << "\n";
-        }
+      // Single-module fast path: runtime linked at BC level (never `-c`).
+      if (linkRuntimeIn && !compileOnly) {
+        std::string rtErr;
+        rtOk = plic::linkEmbeddedLibPLI(*om->mod, rtErr);
+        if (!rtOk)
+          std::cerr << "plic: " << rtErr << "\n";
+      }
 #endif
-        if (rtOk) {
+      if (rtOk) {
+        // Create TargetMachine using darwin triple (macOS 15 = darwin 24)
+        // to avoid SME features (zcm/zcz) which are enabled by default for
+        // macosx15 in LLVM 23 but not actually supported.
+        std::string tmErr;
+        std::string tmTriple = "arm64-apple-darwin24.0";
+        if (auto tm = plic::createTargetMachine(tmTriple, optLevel, tmErr)) {
+          // The IRGen layout is approximate; the TargetMachine owns the truth
+          // (llc behaviour — the clang fallback used -Wno-override-module).
+          om->mod->setDataLayout(tm->createDataLayout());
+          // Also set module target triple to darwin24 to ensure consistent
+          // feature handling during codegen (module triple affects some defaults).
+          om->mod->setTargetTriple(llvm::Triple("arm64-apple-darwin24.0"));
           // Mirror the clang backend: optimize the (runtime-linked) IR at the
           // requested -O level before codegen.
           plic::optimizeModule(*om->mod, optLevel);
@@ -266,9 +276,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
           }
           if (verbose)
             std::cerr << "plic: in-process emit failed (" << emErr << "), using clang\n";
+        } else if (verbose) {
+          std::cerr << "plic: no target (" << tmErr << "), using clang\n";
         }
-      } else if (verbose) {
-        std::cerr << "plic: no target (" << tmErr << "), using clang\n";
       }
     } else if (!diags.ok()) {
       return false;

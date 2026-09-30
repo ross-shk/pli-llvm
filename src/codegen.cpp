@@ -71,6 +71,22 @@ bool linkEmbeddedLibPLI(llvm::Module& M, std::string& err) {
     llvm::consumeError(parsed.takeError());
     return false;
   }
+  // Strip per-function target attributes from the runtime functions before
+  // linking. The bitcode is compiled for apple-m1 with probe-stack=__chkstk_darwin;
+  // LLVM 23's AArch64 backend mis-handles these when a function has a large
+  // stack frame ("Unsupported stack probing method"). Removing target-cpu,
+  // target-features, and probe-stack forces codegen to use only the
+  // TargetMachine's defaults. Mark them noinline so they stay as distinct,
+  // linkable runtime symbols (the dead-strip driver test relies on this).
+  for (auto& F : **parsed) {
+    if (F.hasFnAttribute("target-cpu"))
+      F.removeFnAttr("target-cpu");
+    if (F.hasFnAttribute("target-features"))
+      F.removeFnAttr("target-features");
+    if (F.hasFnAttribute("probe-stack"))
+      F.removeFnAttr("probe-stack");
+    F.addFnAttr(llvm::Attribute::NoInline);
+  }
   // Pull in only referenced runtime functions (replaces ADR-079 dead-strip).
   if (llvm::Linker::linkModules(M, std::move(*parsed), llvm::Linker::LinkOnlyNeeded)) {
     err = "cannot link embedded libpli.bc";
@@ -95,6 +111,18 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out, st
   auto rt = parseEmbeddedRuntime(ctx, err);
   if (!rt)
     return false;
+  // Strip the same per-function attributes that break LLVM 23 codegen
+  // (see linkEmbeddedLibPLI): target-cpu/target-features/probe-stack from
+  // the apple-m1-compiled runtime trigger "Unsupported stack probing method".
+  for (auto& F : *rt) {
+    if (F.hasFnAttribute("target-cpu"))
+      F.removeFnAttr("target-cpu");
+    if (F.hasFnAttribute("target-features"))
+      F.removeFnAttr("target-features");
+    if (F.hasFnAttribute("probe-stack"))
+      F.removeFnAttr("probe-stack");
+    F.addFnAttr(llvm::Attribute::NoInline);
+  }
   rt->setDataLayout(TM.createDataLayout());
   return emitObject(*rt, TM, out, err);
 }

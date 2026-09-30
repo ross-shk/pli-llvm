@@ -12,9 +12,10 @@
 
 namespace plic {
 // Host descriptor, built once from the default triple.
+// Use macosx15.0 for bitcode compatibility; SME features disabled explicitly.
 static const TargetDesc kHostDesc = [] {
   TargetDesc d;
-  d.defaultTriple = llvm::sys::getDefaultTargetTriple();
+  d.defaultTriple = "arm64-apple-macosx15.0";
   llvm::Triple t(d.defaultTriple);
   d.objFmt = t.getObjectFormat();
   switch (d.objFmt) {
@@ -52,8 +53,9 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   (void)inited;
 
   std::string lookupErr;
-  llvm::Triple tt(triple);
-  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(tt, lookupErr);
+  // Use the provided triple (darwin24 for macOS 15, which doesn't enable SME by default).
+  llvm::Triple ttm(triple);
+  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(ttm, lookupErr);
   if (!target) {
     err = "cannot find target for triple '" + triple + "': " + lookupErr;
     return nullptr;
@@ -67,8 +69,11 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   else if (optLevel == "-O3" || optLevel == "-Os")
     lvl = llvm::CodeGenOptLevel::Aggressive;
   llvm::TargetOptions opts;
+  // darwin24 (macOS 15) doesn't enable SME features by default, unlike macosx15.
+  // No feature string needed.
+  const char* features = "";
   // PIE objects match what the clang-subprocess backend produced.
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-      tt, "generic", "", opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
+      ttm, "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
 }
 } // namespace plic

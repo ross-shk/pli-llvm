@@ -18,10 +18,12 @@ find_package(LLVM REQUIRED CONFIG)
 if(LLVM_PACKAGE_VERSION VERSION_LESS 18)
   message(FATAL_ERROR "plic requires LLVM 18 or newer")
 endif()
+find_package(Clang REQUIRED CONFIG)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS})
+include_directories(${CLANG_INCLUDE_DIRS})
 
 set(PLIC_SOURCES
   src/main.cpp
@@ -30,6 +32,7 @@ set(PLIC_SOURCES
   src/hir.cpp
   src/lexer.cpp
   src/parser.cpp
+  src/preprocessor.cpp
   src/sema.cpp
   src/irgen.cpp
   src/target.cpp
@@ -44,14 +47,34 @@ set(RT_SRCS
   runtime/rt_edit.c runtime/rt_task.c)
 
 # lld detection (review S1): in-process link gates on PLIC_HAVE_LLD.
-find_path(LLD_INCLUDE_DIR lld/Common/Driver.h PATHS ${LLVM_INCLUDE_DIRS} NO_DEFAULT_PATH)
-if(LLD_INCLUDE_DIR)
-  set(PLIC_HAVE_LLD 1)
-  message(STATUS "lld headers found: in-process link enabled")
-else()
-  set(PLIC_HAVE_LLD 0)
-  message(STATUS "lld headers NOT found (brew install lld): clang-link fallback")
+# Prerequisite: stock brew `llvm` ships no lld; fail configure with install hint.
+# Check both the LLVM prefix and the separate lld formula (brew install lld).
+find_path(LLD_INCLUDE_DIR lld/Common/Driver.h
+  PATHS ${LLVM_INCLUDE_DIRS} /opt/homebrew/opt/lld/include
+  NO_DEFAULT_PATH)
+if(NOT LLD_INCLUDE_DIR)
+  # Try to find lld cmake config to get its include dir
+  find_package(lld QUIET)
+  if(lld_INCLUDE_DIRS)
+    set(LLD_INCLUDE_DIR ${lld_INCLUDE_DIRS})
+  endif()
 endif()
+if(NOT LLD_INCLUDE_DIR)
+  message(FATAL_ERROR "lld headers not found. Install lld (e.g., 'brew install lld') and ensure LLVM_DIR points to an LLVM with lld.")
+endif()
+set(PLIC_HAVE_LLD 1)
+message(STATUS "lld headers found: ${LLD_INCLUDE_DIR}")
+
+# Find lld library directory (Homebrew puts dylibs in /opt/homebrew/opt/lld/lib)
+# Link directly against the dynamic libraries using full paths
+set(LLD_LIB_DIR /opt/homebrew/opt/lld/lib)
+set(LLD_ELF_LIB ${LLD_LIB_DIR}/liblldELF.dylib)
+set(LLD_MACHO_LIB ${LLD_LIB_DIR}/liblldMachO.dylib)
+set(LLD_COFF_LIB ${LLD_LIB_DIR}/liblldCOFF.dylib)
+set(LLD_COMMON_LIB ${LLD_LIB_DIR}/liblldCommon.dylib)
+
+set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_COMMON_LIB})
+message(STATUS "lld libraries: ${LLD_LIBRARIES}")
 
 add_library(plic_rules STATIC ${CMAKE_BINARY_DIR}/rules.cpp)
 target_include_directories(plic_rules PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -73,9 +96,64 @@ target_compile_definitions(plic PRIVATE
   PLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
   PLIC_HAVE_LLD=${PLIC_HAVE_LLD}
   PLIC_TARGETS_TO_BUILD="host")
-target_link_libraries(plic PRIVATE plic_rules)
-llvm_map_components_to_libnames(llvm_libs core irreader support)
-target_link_libraries(plic PRIVATE ${llvm_libs})
+
+# Link LLVM components needed for in-process codegen + linking.
+# Core/IR
+llvm_map_components_to_libnames(llvm_libs_core
+  Core IRReader Support BitReader BitWriter)
+# MC/Target (host arch only for milestone)
+llvm_map_components_to_libnames(llvm_libs_mc
+  MC MCParser Object BinaryFormat TargetParser AsmParser AsmPrinter
+  CodeGen SelectionDAG GlobalISel
+  X86CodeGen X86AsmParser X86Desc X86Info
+  AArch64CodeGen AArch64AsmParser AArch64Desc AArch64Info
+  Passes LTO)
+# lld
+llvm_map_components_to_libnames(llvm_libs_lld
+  lldELF lldMachO lldCOFF lldCommon)
+
+# Use dynamically found lld libraries if available
+if(LLD_LIBRARIES AND NOT "${LLD_LIBRARIES}" STREQUAL "lldELF lldMachO lldCOFF lldCommon lldDriver")
+  set(llvm_libs_lld ${LLD_LIBRARIES})
+endif()
+
+# Use Clang imported targets directly
+target_link_libraries(plic PRIVATE plic_rules
+  ${llvm_libs_lld} ${llvm_libs_mc} ${llvm_libs_core}
+  clangFrontend clangParse clangLex clangBasic clangAST)
+
+# Force-include lld + host target so their symbols survive static dead-stripping.
+# Homebrew lld only provides dynamic libraries, so use those directly.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  target_link_options(plic PRIVATE
+    -Wl,-force_load,${LLD_ELF_LIB}
+    -Wl,-force_load,${LLD_MACHO_LIB}
+    -Wl,-force_load,${LLD_COFF_LIB})
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  target_link_options(plic PRIVATE
+    /WHOLEARCHIVE:${LLD_ELF_LIB}
+    /WHOLEARCHIVE:${LLD_MACHO_LIB}
+    /WHOLEARCHIVE:${LLD_COFF_LIB})
+else()
+  target_link_options(plic PRIVATE
+    -Wl,--whole-archive
+    ${LLD_ELF_LIB}
+    ${LLD_MACHO_LIB}
+    ${LLD_COFF_LIB}
+    -Wl,--no-whole-archive)
+endif()
+
+# Static C++ runtime for portability.
+if(NOT APPLE)
+  target_link_options(plic PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+
+# Get the default target triple from LLVM for consistent bitcode generation
+# Use macosx14.0: macOS 15+ emits SME features (zcm/zcz) in function
+# attributes that LLVM 23 does not support at codegen time ("Unsupported
+# stack probing method"). macOS 14 and earlier do not emit them.
+set(PLIC_TARGET_TRIPLE "arm64-apple-macosx14.0")
+message(STATUS "Target triple for bitcode: ${PLIC_TARGET_TRIPLE}")
 
 # libpli runtime (C11).
 add_library(libpli STATIC ${RT_SRCS})
@@ -87,9 +165,12 @@ foreach(src ${RT_SRCS})
   get_filename_component(base ${src} NAME_WE)
   add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/bc/${base}.bc
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bc
     COMMAND ${CMAKE_C_COMPILER} -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
-            -I${CMAKE_SOURCE_DIR}/runtime -O2
+            -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
+            -O2
             -ffunction-sections -fdata-sections
+            -target ${PLIC_TARGET_TRIPLE}
             -o ${CMAKE_BINARY_DIR}/bc/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src}
     COMMENT "bitcode: ${base}")
