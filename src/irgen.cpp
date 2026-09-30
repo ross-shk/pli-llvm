@@ -296,11 +296,145 @@ static const std::map<std::string, RtSig>& kRuntimeSigs() {
   return table;
 }
 
+// LLVM-only facts about pli_* entries, audited against runtime/*.c.
+// The shared runtime/pli_rt_abi.def stays signature-only; this parallel
+// table is consumed solely by runtimeFn. A wrong row is a miscompile, so
+// each tier below names what was checked: abort paths end in exit(),
+// alloc wraps malloc/free, pure math touches no memory (constant tables
+// only), readers/writers touch only their pointer arguments and never
+// signal. Entries with latent abort paths (substr_assign*), clock reads
+// (date/time), or global state (ON stack, I/O, CONTROLLED, tasks) take
+// the default: nounwind only. Universal nounwind holds because the
+// runtime is C without EH and no entry unwinds its caller back into
+// generated code (task spawn hands the pointer to pthread_create).
+enum RtMem { RtMemDefault, RtMemNone, RtMemArgRead, RtMemArgReadWrite };
+struct RtAttr {
+  bool noReturn = false;
+  bool willReturn = false;
+  RtMem mem = RtMemDefault;
+  bool allocMalloc = false; // malloc-family: fresh, arg-0-sized object
+  bool allocFree = false;   // free-family: releases a prior allocation
+  bool allocSize = false;   // allocsize: result points at arg-0 bytes
+  bool nonNullRet = false;
+};
+static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
+  static const std::map<std::string, RtAttr> table = {
+    // Abort paths: fini + exit(), never return.
+    {"pli_signal_error", {.noReturn = true}},
+    {"pli_subscript_oob", {.noReturn = true}},
+    {"pli_zerodivide", {.noReturn = true}},
+    {"pli_fixed_overflow", {.noReturn = true}},
+    {"pli_stop", {.noReturn = true}},
+    // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
+    {"pli_alloc", {.allocMalloc = true, .allocSize = true, .nonNullRet = true}},
+    {"pli_free", {.willReturn = true, .allocFree = true}},
+    // Pure math: arithmetic over args and constant tables only.
+    {"pli_mod_ll", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_mod_dd", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_round", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_floor", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_ceil", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_sqrt", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_exp", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_log", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_sin", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_cos", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_tan", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_log2", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_log10", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_atan", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_asin", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_acos", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_atan2", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_cbrt", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_sinh", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_cosh", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_tanh", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_asinh", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_atanh", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_erf", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_erfc", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_sind", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_cosd", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_tand", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_atand", {.willReturn = true, .mem = RtMemNone}},
+    {"pli_fixed_of_float", {.willReturn = true, .mem = RtMemNone}},
+    // String readers: arg-pointed memory only, no error paths.
+    {"pli_verify", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_tally", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_cmp_char", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_index", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_search", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_verify_from", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_rank", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgRead}},
+    {"pli_data_name_is", {.willReturn = true, .mem = RtMemArgRead}},
+    // String writers: arg-pointed memory only, no error paths.
+    {"pli_assign_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_assign_varying", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_concat", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_substr", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_repeat", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_translate", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_trim", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_uppercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_lowercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_center", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_collate", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_reverse", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_high", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_low", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
+    {"pli_char_of_float", {.willReturn = true, .mem = RtMemArgReadWrite}},
+  };
+  return table;
+}
+
+// Stamp one declaration with its side-table facts. Idempotent: the same
+// values apply whether the declaration is fresh or cached.
+static void applyRuntimeAttrs(llvm::Function* f) {
+  llvm::LLVMContext& ctx = f->getContext();
+  f->addFnAttr(llvm::Attribute::NoUnwind);
+  auto& attrs = kRuntimeAttrs();
+  auto it = attrs.find(f->getName().str());
+  if (it == attrs.end())
+    return;
+  const RtAttr& a = it->second;
+  if (a.noReturn) {
+    f->addFnAttr(llvm::Attribute::NoReturn);
+    f->addFnAttr(llvm::Attribute::Cold);
+  }
+  if (a.willReturn)
+    f->addFnAttr(llvm::Attribute::WillReturn);
+  switch (a.mem) {
+  case RtMemNone:
+    f->setMemoryEffects(llvm::MemoryEffects::none());
+    break;
+  case RtMemArgRead:
+    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref));
+    break;
+  case RtMemArgReadWrite:
+    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef));
+    break;
+  default:
+    break;
+  }
+  if (a.allocMalloc) {
+    f->addFnAttr(llvm::Attribute::getWithAllocKind(
+        ctx, llvm::AllocFnKind::Alloc | llvm::AllocFnKind::Uninitialized));
+    if (a.allocSize)
+      f->addFnAttr(llvm::Attribute::getWithAllocSizeArgs(ctx, 0, std::nullopt));
+    if (a.nonNullRet)
+      f->addRetAttr(llvm::Attribute::get(ctx, llvm::Attribute::NonNull));
+  } else if (a.allocFree) {
+    f->addFnAttr(llvm::Attribute::getWithAllocKind(ctx, llvm::AllocFnKind::Free));
+  }
+}
+
 // Get (or create) a declaration for a runtime `pli_*` function. The signature
 // comes from runtime/pli_rt_abi.def, not from the caller, so the emitted IR
 // cannot drift from the C ABI.
-llvm::Function* IRGen::runtimeFn(const std::string& name) {
-  auto& sigs = kRuntimeSigs();
+llvm::Function* IRGen::runtimeFn(const std::string& name) {  auto& sigs = kRuntimeSigs();
   auto it = sigs.find(name);
   if (it == sigs.end())
     return nullptr; // not a pli_* ABI function
@@ -328,9 +462,10 @@ llvm::Function* IRGen::runtimeFn(const std::string& name) {
       args.push_back(tokTy(a)); // RtVoid here means "no args"
   llvm::FunctionType* ft = llvm::FunctionType::get(tokTy(s.ret), args, false);
   llvm::Function* f = mod_.getFunction(name);
-  if (f)
-    return f;
-  return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+  if (!f)
+    f = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+  applyRuntimeAttrs(f);
+  return f;
 }
 
 // Get (or create) an LLVM intrinsic with an explicit signature. Only used for

@@ -39,10 +39,19 @@ target_include_directories(plic_rules PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(plic ${PLIC_SOURCES})
 target_include_directories(plic PRIVATE ${CMAKE_SOURCE_DIR}/src)
+# Version identity for `plic version` (self-contained milestone).
+execute_process(COMMAND git describe --tags --always --dirty
+  OUTPUT_VARIABLE PLIC_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+if(NOT PLIC_VERSION)
+  set(PLIC_VERSION "unknown")
+endif()
 target_compile_definitions(plic PRIVATE
   PLIC_RUNTIME_LIB="$<TARGET_FILE:libpli>"
   PLIC_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/libpli.a"
-  PLIC_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang")
+  PLIC_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
+  PLIC_VERSION="${PLIC_VERSION}"
+  PLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}")
 target_link_libraries(plic PRIVATE plic_rules)
 llvm_map_components_to_libnames(llvm_libs core irreader support)
 target_link_libraries(plic PRIVATE ${llvm_libs})

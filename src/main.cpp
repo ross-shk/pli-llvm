@@ -23,12 +23,30 @@
 #include "preprocessor.h"
 #include "sema.h"
 
+#include "llvm/Config/llvm-config.h"
+// Host.h moved from Support to TargetParser in LLVM 19; support both.
+#if __has_include("llvm/TargetParser/Host.h")
+#include "llvm/TargetParser/Host.h"
+#else
+#include "llvm/Support/Host.h"
+#endif
+
 #ifndef PLIC_RUNTIME_LIB
 #define PLIC_RUNTIME_LIB ""
 #endif
 
 #ifndef PLIC_INSTALL_RUNTIME_LIB
 #define PLIC_INSTALL_RUNTIME_LIB ""
+#endif
+
+// Version and LLVM identity baked in at build time (self-contained milestone:
+// `plic version` reports the toolchain without invoking sub-tools).
+#ifndef PLIC_VERSION
+#define PLIC_VERSION "unknown"
+#endif
+
+#ifndef PLIC_LLVM_VERSION
+#define PLIC_LLVM_VERSION LLVM_VERSION_STRING
 #endif
 
 // The clang used to assemble/optimize/link the emitted IR. plic emits IR in the
@@ -66,8 +84,8 @@ static void usage() {
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
-         "  --triple <t>     target triple (default: `clang -dumpmachine`)\n"
-         "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
+          "  --triple <t>     target triple (default: host triple, in-process)\n"
+          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
@@ -75,23 +93,18 @@ static void usage() {
          "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
          "  -shared -static  produce a shared / static binary\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
-         "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-         "  -v               show the sub-commands being run\n"
-         "  -h, --help       this message\n";
+          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
+          "  --version        print plic + LLVM versions and the host triple, then exit\n"
+          "  -v               show the sub-commands being run\n"
+          "  -h, --help       this message\n"
+          "\n"
+          "  plic version     same as --version (Go/Zig style)\n";
 }
 
-static std::string runCapture(const char* cmd) {
-  std::string out;
-  FILE* f = popen(cmd, "r");
-  if (!f)
-    return out;
-  char buf[256];
-  while (fgets(buf, sizeof buf, f))
-    out += buf;
-  pclose(f);
-  while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
-    out.pop_back();
-  return out;
+// Go/Zig-style toolchain report: no subprocess, all baked in or in-process.
+static void printVersion() {
+  std::cout << "plic " << PLIC_VERSION << " (LLVM " << PLIC_LLVM_VERSION << ", "
+            << llvm::sys::getDefaultTargetTriple() << ")\n";
 }
 
 static std::string shellQuote(const std::string& s) {
@@ -174,8 +187,10 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
 
   // --- code generation ---------------------------------------------------
+  // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
+  // subprocess since the self-contained milestone).
   if (triple.empty())
-    triple = runCapture((shellQuote(clangPath) + " -dumpmachine 2>/dev/null").c_str());
+    triple = llvm::sys::getDefaultTargetTriple();
   IRGen irgen(diags, sema, triple, noSizeChecks);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
@@ -251,7 +266,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
-  bool noSizeChecks = false;
+  bool noSizeChecks = false, wantVersion = false;
   int explain = 0;
 
   for (int i = 1; i < argc; ++i) {
@@ -323,6 +338,8 @@ int main(int argc, char** argv) {
       explain = (int)v;
     } else if (a == "-v")
       verbose = true;
+    else if (a == "--version")
+      wantVersion = true;
     else if (a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os")
       optLevel = a;
     else if (a == "--release")
@@ -344,6 +361,12 @@ int main(int argc, char** argv) {
       std::cerr << "plic: no TR 25.084 rule (" << explain << ")\n";
       return 1;
     }
+    return 0;
+  }
+
+  // `plic version` / `plic --version`: no input file needed.
+  if (wantVersion || (inputs.size() == 1 && inputs[0] == "version")) {
+    printVersion();
     return 0;
   }
 

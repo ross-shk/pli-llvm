@@ -34,6 +34,11 @@ PLIC_CXXFLAGS := $(CXXFLAGS) $(filter-out -std=%,$(LLVM_CXXFLAGS)) -std=c++20
 CC       ?= cc
 CFLAGS   ?= -O3 -Wall -Wextra
 
+# Version identity baked into the driver (`plic version`, self-contained
+# milestone). Falls back to "unknown" outside a git checkout.
+PLIC_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+PLIC_LLVM_VERSION := $(shell $(LLVM_CONFIG) --version 2>/dev/null || echo unknown)
+
 BUILD    := build
 BIN      := $(BUILD)/plic
 RTLIB    := $(BUILD)/libpli.a
@@ -83,7 +88,9 @@ $(BUILD):
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(PLIC_CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
 		-DPLIC_INSTALL_RUNTIME_LIB='"$(LIBDIR)/libpli.a"' \
-		-DPLIC_CLANG='"$(CLANGPATH)"' -MMD -MP -c $< -o $@
+		-DPLIC_CLANG='"$(CLANGPATH)"' \
+		-DPLIC_VERSION='"$(PLIC_VERSION)"' \
+		-DPLIC_LLVM_VERSION='"$(PLIC_LLVM_VERSION)"' -MMD -MP -c $< -o $@
 
 $(RULES_CPP): TR25.084-concrete-syntax.md scripts/gen_rules.py | $(BUILD)
 	python3 scripts/gen_rules.py $< $@
