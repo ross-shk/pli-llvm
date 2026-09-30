@@ -3214,28 +3214,42 @@ StmtP Parser::parseAllocate() {
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(std::move(set));
         st->allocArea.push_back(std::move(areaRef));
-        st->allocDim.push_back(nullptr);
+        st->allocBounds.emplace_back();
         st->allocCharLen.push_back(nullptr);
         st->allocVarying.push_back(0);
         st->allocHasChar.push_back(0);
       } else if (paren) {
-        // A dimension-attribute (rule 89): a single length expression for a
-        // CHARACTER generation. Array bound-pairs (lb:ub, multiple axes) stay
-        // diagnosed, never silently taken as a length.
-        ExprP dim;
-        if (at(Tok::Star)) {
-          advance();
-        } else {
-          dim = parseExpr();
-          if (!dim) {
-            resync();
-            return nullptr;
+        // A dimension-attribute (rule 89): one bound-pair per axis —
+        // a single extent `(n)`, an explicit `lb:ub` pair, or `*`
+        // (reuse the previous generation's extent for that axis).
+        // Multi-axis `(m,n,...)` sizes N-D CONTROLLED generations.
+        std::vector<Stmt::AllocBound> bounds;
+        for (;;) {
+          Stmt::AllocBound b;
+          if (at(Tok::Star)) {
+            advance();
+            b.star = true;
+          } else {
+            ExprP first = parseExpr();
+            if (!first) {
+              resync();
+              return nullptr;
+            }
+            if (eat(Tok::Colon)) {
+              ExprP second = parseExpr();
+              if (!second) {
+                resync();
+                return nullptr;
+              }
+              b.lb = std::move(first);
+              b.ub = std::move(second);
+            } else {
+              b.ub = std::move(first);
+            }
           }
-        }
-        if (at(Tok::Colon) || at(Tok::Comma)) {
-          d_.error(cur().loc, "ALLOCATE of arrays is not implemented in this stage", "(89)");
-          resync();
-          return nullptr;
+          bounds.push_back(std::move(b));
+          if (!eat(Tok::Comma))
+            break;
         }
         expect(Tok::RParen, "(89)");
         // Trailing string-attributes (rule 89): [CHAR[(expr|*)]] [VARYING].
@@ -3283,7 +3297,7 @@ StmtP Parser::parseAllocate() {
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(nullptr);
         st->allocArea.push_back(nullptr);
-        st->allocDim.push_back(std::move(dim));
+        st->allocBounds.push_back(std::move(bounds));
         st->allocCharLen.push_back(std::move(charLen));
         st->allocVarying.push_back(varying);
         st->allocHasChar.push_back(hasChar);
@@ -3341,7 +3355,7 @@ StmtP Parser::parseAllocate() {
         st->allocBase.push_back(std::move(base));
         st->allocSet.push_back(nullptr);
         st->allocArea.push_back(nullptr);
-        st->allocDim.push_back(nullptr);
+        st->allocBounds.emplace_back();
         st->allocCharLen.push_back(std::move(charLen));
         st->allocVarying.push_back(varying);
         st->allocHasChar.push_back(hasChar);

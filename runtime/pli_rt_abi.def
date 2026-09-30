@@ -129,6 +129,11 @@ PLI_FN(pli_on_top_cond, I64, (I64))        /* SIGNAL dispatch: topmost key id */
 PLI_FN(pli_alloc, PTR, (I64))                         /* ALLOCATE (87) */
 PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */
 PLI_FN(pli_ctl_alloc, VOID, (I64, I64))               /* CONTROLLED ALLOCATE (87) */
+PLI_FN(pli_ctl_alloc_dims, VOID, (I64, I64, I64))    /* CONTROLLED N-D ALLOCATE (13),(89) */
+PLI_FN(pli_ctl_set_dim, VOID, (I64, I64, I64))       /* record one N-D axis extent (13),(89) */
+PLI_FN(pli_ctl_rank, I64, (I64))                     /* latest generation axis count (13),(89) */
+PLI_FN(pli_ctl_extent, I64, (I64, I64))              /* latest generation axis extent (13),(89) */
+PLI_FN(pli_ctl_depth, I64, (I64))                    /* live generation count (89) */
 PLI_FN(pli_ctl_ensure, VOID, (I64, I64))              /* CONTROLLED implicit first generation (87) */
 PLI_FN(pli_ctl_free, VOID, (I64))                     /* CONTROLLED FREE (90) */
 PLI_FN(pli_ctl_addr, PTR, (I64))                      /* CONTROLLED latest generation */

@@ -296,8 +296,17 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     h->allocSet.push_back(lowerExpr(t.get()));
   for (const auto& a : s->allocArea)
     h->allocArea.push_back(lowerExpr(a.get()));
-  for (const auto& d : s->allocDim)
-    h->allocDim.push_back(lowerExpr(d.get()));
+  for (const auto& bs : s->allocBounds) {
+    std::vector<HStmt::HAllocBound> hb;
+    for (const auto& b : bs) {
+      HStmt::HAllocBound hbb;
+      hbb.lb = lowerExpr(b.lb.get());
+      hbb.ub = lowerExpr(b.ub.get());
+      hbb.star = b.star;
+      hb.push_back(std::move(hbb));
+    }
+    h->allocBounds.push_back(std::move(hb));
+  }
   for (const auto& c : s->allocCharLen)
     h->allocCharLen.push_back(lowerExpr(c.get()));
   h->allocVarying = s->allocVarying;
@@ -751,9 +760,21 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
         os << " in=";
         printExpr(os, s->allocArea[i].get(), ind);
       }
-      if (i < s->allocDim.size() && s->allocDim[i]) {
-        os << " dim=";
-        printExpr(os, s->allocDim[i].get(), ind);
+      if (i < s->allocBounds.size() && !s->allocBounds[i].empty()) {
+        os << " dims=(";
+        bool first = true;
+        for (const auto& b : s->allocBounds[i]) {
+          if (!first)
+            os << ",";
+          first = false;
+          if (b.star)
+            os << "*";
+          else if (b.lb)
+            printExpr(os, b.lb.get(), ind), os << ":", printExpr(os, b.ub.get(), ind);
+          else if (b.ub)
+            printExpr(os, b.ub.get(), ind);
+        }
+        os << ")";
       }
       if (i < s->allocCharLen.size() && s->allocCharLen[i]) {
         os << " charlen=";

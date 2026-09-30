@@ -214,13 +214,18 @@ struct HStmt {
   std::vector<Symbol*> onCaps;
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
   // and its SET(...) pointer target (rule 88). A CONTROLLED item (rule 89)
-  // may carry a dimension length (allocDim[i]) and/or a CHAR length
+  // may carry per-axis dimension bounds (allocBounds[i]) and/or a CHAR length
   // (allocCharLen[i]); allocVarying[i]/allocHasChar[i] mirror the AST flags.
+  struct HAllocBound {
+    HExprP lb; // lower bound of an lb:ub pair; null = single extent
+    HExprP ub; // extent expression, or upper bound of an lb:ub pair
+    bool star = false; // '*' : extent copied from the previous generation
+  };
   std::vector<HExprP> allocBase;
   std::vector<HExprP> allocSet;
   // ALLOCATE ... IN ( area ) (rule (88)): the AREA the block comes from.
   std::vector<HExprP> allocArea;
-  std::vector<HExprP> allocDim;
+  std::vector<std::vector<HAllocBound>> allocBounds;
   std::vector<HExprP> allocCharLen;
   std::vector<char> allocVarying;
   std::vector<char> allocHasChar;

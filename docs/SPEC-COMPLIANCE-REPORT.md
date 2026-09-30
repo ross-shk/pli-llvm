@@ -45,7 +45,8 @@ The plic compiler implements a substantial subset of TR 25.084 concrete syntax a
 
 ### 4. CONTROLLED Generation Stack Completeness (Rule 23, 87–90) — **QR2.3 remainder**
 - Basic push/pop on LIFO, generation sizing from compile-time descriptor
-- Missing: multi-dimensional CONTROLLED arrays, STRUCTured CONTROLS
+- Served: 1-D and N-D numeric/BIT CONTROLLED arrays with per-axis live extents; `ALLOCATE` bounds override the DECLARE (ADR-176)
+- Missing: STRUCTured CONTROLS; non-`*` runtime DECLARE extents on CONTROLLED
 - Dynamic-extent based arrays not implemented
 - **Impact**: Low for most programs; important for memory-managed applications
 

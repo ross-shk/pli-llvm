@@ -316,9 +316,28 @@ private:
   // Live upper bound of a CONTROLLED dynamic array (rule (126)): lb is 1, ub
   // is `pli_ctl_len(key) / elemSize` so LIFO generations report their own size.
   llvm::Value* ctlDynBound(Symbol* sym);
+  // Live lower bound: the DECLARE lb for a fixed 1-D array, else 1.
+  static long long ctlDynLb(Symbol* sym);
   // Address of one CONTROLLED dynamic array element (rule 126) with the
   // SUBSCRIPTRANGE check against the live bound.
   llvm::Value* ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
+  // An N-D CONTROLLED numeric array (rules (13),(89), IBM asterisk notation):
+  // rank >= 2 with numeric/BIT elements. Every generation carries per-axis
+  // live extents (pli_ctl_rank/pli_ctl_extent); lower bounds are static (the
+  // DECLARE lb, else 1). True for fixed N-D and `(*)`/mixed N-D forms alike,
+  // so bare and overriding ALLOCATEs share one live-bounds path.
+  static bool isCtlNDynArray(Symbol* sym);
+  // Static lower bound of one N-D axis: the DECLARE lb for a fixed axis,
+  // else 1 for a `(*)` axis.
+  static long long ctlNDLb(Symbol* sym, size_t axis);
+  // Live extent of one N-D axis (rule (126)): pli_ctl_extent(key, axis).
+  llvm::Value* ctlNDExtent(Symbol* sym, size_t axis);
+  // Address of one N-D CONTROLLED element (rule 126): per-axis live
+  // SUBSCRIPTRANGE checks, then a row-major GEP off the top generation base.
+  llvm::Value* ctlNDElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc);
+  // Push the DECLARE extents of a fixed N-D CONTROLLED array as the new top
+  // generation's live extents (bare ALLOCATE and implicit allocation).
+  void emitCtlNDDescDims(Symbol* sym);
   // Copy a slice (rule 126) between two array views; either side may be a
   // cross-section A(i, *, ...), a whole array being the all-'*' case. Walks the
   // reduced rank's linear index and maps each star-axis coordinate to both

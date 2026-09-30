@@ -6,6 +6,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+// Empty ALLOCATE bound list for items beyond the vector (defensive; every
+// pushed item carries its own list, empty = bare ALLOCATE).
+static const std::vector<Stmt::AllocBound> emptyAllocBounds;
+
 // True when a structure type contains a dynamic (runtime-extent) array member
 // (rule 13); forward-declared here because resolveStructReturn (rule 127) and
 // LIKE/assignment (rules 43,127) both use it.
@@ -1203,17 +1207,26 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             ctlErr("DEFINED", "(24)");
           if (!item.basedBase.empty() || item.basedNoPtr)
             ctlErr("BASED", "(25)");
-          // CONTROLLED dynamic arrays, 1-D numeric only (rules (13),(89)):
-          // `DCL G(*) FIXED CONTROLLED` takes its extent from each
-          // `ALLOCATE G(n)`; other dynamic CONTROLLED forms stay diagnosed.
-          // A scalar `DCL FDS FIXED CONTROLLED` with `ALLOCATE FDS(n)` is
-          // the same idiom with the dimension deferred to ALLOCATE.
+          // CONTROLLED dynamic arrays (rules (13),(89), IBM asterisk notation):
+          // each dynamic axis must be `*` (an adjustable extent supplied by
+          // each ALLOCATE), of any rank: `DCL G(*)`, `DCL X(*,*)`,
+          // `DCL Y(10,*)`. A scalar `DCL FDS FIXED CONTROLLED` with
+          // `ALLOCATE FDS(n)` is the same idiom with the dimension deferred
+          // to ALLOCATE. Non-`*` runtime bounds stay diagnosed (declare the
+          // axis `*` and size it at each ALLOCATE instead).
           if (item.ty.isDynamic()) {
             const Type& el = item.ty.elementType();
-            bool star1D = item.ty.dims.size() == 1 && item.ty.dims[0].adj &&
-                          !item.ty.dims[0].lbDyn && !el.isChar() && !el.isStruct() &&
-                          (el.isNumeric() || el.isBit());
-            if (!star1D)
+            bool numEl = !el.isChar() && !el.isStruct() && !el.isPointer() && !el.isVoid() &&
+                         (el.isNumeric() || el.isBit());
+            // Every runtime axis must be `*` (adj): fixed axes keep their
+            // DECLARE bounds, `*` axes take each ALLOCATE's extent, so mixed
+            // `DCL Y(10,*)` is served while a runtime bound expression
+            // (dyn/lbDyn without adj) stays diagnosed.
+            bool allStar = numEl && !item.ty.dims.empty();
+            for (const auto& d : item.ty.dims)
+              if ((d.dyn || d.lbDyn) && (!d.adj || d.lbDyn))
+                allStar = false;
+            if (!allStar)
               d_.error(item.loc,
                        "a CONTROLLED array with dynamic extent is not implemented in this stage",
                        "(13)");
@@ -1303,9 +1316,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 hasStar = true;
             bool isParam =
                 std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
-            // A 1-D `(*)` CONTROLLED array is not a parameter adjustable: its
-            // extent comes from each ALLOCATE (rules (13),(89)), like CHAR(*).
-            bool ctlStar = item.controlled && hasStar && item.ty.dims.size() == 1 &&
+            // A `(*)` CONTROLLED array is not a parameter adjustable: its
+            // extents come from each ALLOCATE (rules (13),(89)), like CHAR(*).
+            // Any rank is served (fixed axes keep DECLARE bounds unless an
+            // ALLOCATE bound overrides them); the element must be numeric/BIT.
+            bool ctlStar = item.controlled && hasStar &&
                            !item.ty.elementType().isChar() &&
                            (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
             if (hasStar && !isParam && !ctlStar)
@@ -1321,8 +1336,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 typeExpr(b.get(), sc, p);
             // A dynamic array may be multi-axis, but only the first axis may
             // have a runtime extent; later axes must be constant in this stage.
+            // `*` CONTROLLED axes are exempt: their extents come from each
+            // ALLOCATE, not from block entry (rules (13),(89)).
             for (size_t k = 1; k < item.ty.dims.size(); ++k)
-              if (item.ty.dims[k].dyn || item.ty.dims[k].lbDyn)
+              if ((item.ty.dims[k].dyn || item.ty.dims[k].lbDyn) &&
+                  !(item.controlled && item.ty.dims[k].adj))
                 d_.error(item.loc,
                          "a dynamic array may only have a dynamic first axis in this stage",
                          "(13)");
@@ -2101,7 +2119,10 @@ bool Sema::wholeArrayStorageOk(Expr* e) {
     return false;
   if (!e->memberPath.empty() && e->ty.isDynamic())
     return false;
-  if (s->controlled && s->ty.isArray() && s->ty.isDynamic())
+  // A CONTROLLED array has per-generation live bounds (an ALLOCATE (n)
+  // override changes the extent), so whole-array element-wise ops stay out;
+  // element access and LBOUND/HBOUND/DIM read the live generation instead.
+  if (s->controlled && s->ty.isArray())
     return false;
   return true;
 }
@@ -3121,38 +3142,98 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         if (i < s->allocSet.size() && s->allocSet[i])
           d_.warn(s->allocSet[i]->loc,
                   "SET on CONTROLLED ALLOCATE is ignored; generations are stack-managed", "(88)");
-        Expr* dimE = (i < s->allocDim.size()) ? s->allocDim[i].get() : nullptr;
         Expr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
-        if (dimE) {
-          typeExpr(dimE, sc, p);
-          if (!dimE->ty.isNumeric())
-            d_.error(dimE->loc, "ALLOCATE length must be numeric", "(89)");
+        const auto& bounds = (i < s->allocBounds.size()) ? s->allocBounds[i]
+                                                              : emptyAllocBounds;
+        for (const auto& b : bounds) {
+          if (b.lb) {
+            typeExpr(b.lb.get(), sc, p);
+            if (!b.lb->ty.isNumeric())
+              d_.error(b.lb->loc, "ALLOCATE bound must be numeric", "(89)");
+          }
+          if (b.ub) {
+            typeExpr(b.ub.get(), sc, p);
+            if (!b.ub->ty.isNumeric())
+              d_.error(b.ub->loc, "ALLOCATE length must be numeric", "(89)");
+          }
         }
         if (clE) {
           typeExpr(clE, sc, p);
           if (!clE->ty.isNumeric())
             d_.error(clE->loc, "ALLOCATE length must be numeric", "(89)");
         }
+        // Legacy single-extent view for CHARACTER sizing below: a lone `(n)`.
+        // A lone `*`, an `lb:ub` pair, or multiple axes never sized CHARACTER
+        // generations (diagnosed in their own paths, as before).
+        Expr* dimE = (bounds.size() == 1 && !bounds[0].star && !bounds[0].lb)
+                         ? bounds[0].ub.get()
+                         : nullptr;
         if (dimE && clE)
           d_.error(clE->loc, "duplicate CHARACTER length in ALLOCATE", "(89)");
         if (!bsym->ty.isChar()) {
-          // CONTROLLED dynamic numeric arrays, 1-D only (rules (13),(89)):
-          // a scalar `DCL FDS FIXED CONTROLLED` or a `DCL G(*)` array takes
-          // its extent from `ALLOCATE x (n)`; the generation holds n elements.
+          // CONTROLLED numeric generations (rules (13),(89), IBM Enterprise
+          // PL/I asterisk notation): a scalar `DCL FDS FIXED CONTROLLED`, a
+          // 1-D `DCL G(*)` or fixed `DCL A(10)` array takes one extent from
+          // `ALLOCATE x (n)` (lb preserved from the DECLARE); an N-D array
+          // (`DCL M(3,4)`, `DCL X(*,*)`, mixed `DCL Y(10,*)`) takes one bound
+          // per axis from `ALLOCATE x (m,n,...)`. A `*` bound copies that
+          // axis from the previous generation. Per IBM, ALLOCATE bounds
+          // override the DECLARE bounds.
           const Type& el = bsym->ty.isArray() ? bsym->ty.elementType() : bsym->ty;
           bool numEl = !el.isChar() && !el.isStruct() && !el.isPointer() && !el.isVoid() &&
                        (el.isNumeric() || el.isBit());
+          size_t rank = bsym->ty.isArray() ? bsym->ty.dims.size() : 0;
           bool scalarDyn = !bsym->ty.isArray() && numEl;
-          bool starDyn =
-              bsym->ty.isArray() && bsym->ty.dims.size() == 1 && bsym->ty.dims[0].adj && numEl;
+          bool anyAdj = false;
+          if (bsym->ty.isArray())
+            for (const auto& d : bsym->ty.dims)
+              if (d.adj)
+                anyAdj = true;
+          bool rank1Ctl = bsym->ty.isArray() && rank == 1 && numEl &&
+                          (bsym->ty.dims[0].adj || !bsym->ty.isDynamic());
+          bool rankNDCtl = bsym->ty.isArray() && rank >= 2 && numEl;
           if (clE)
             d_.error(s->allocBase[i]->loc,
                      "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
-          else if (dimE && (scalarDyn || starDyn)) {
-            // Served: sizing happens in IRGen from n * element size.
-          } else if (dimE || clE)
+          else if (bounds.empty()) {
+            // Bare ALLOCATE: served from the descriptor, except a `(*)` axis
+            // has no descriptor extent — it needs an explicit bound.
+            if (anyAdj)
+              d_.error(s->allocBase[i]->loc,
+                       "ALLOCATE of (*) needs extent(s): ALLOCATE x (n[, ...])", "(89)");
+            // Served otherwise: sizing happens in IRGen.
+          } else if (!numEl) {
             d_.error(s->allocBase[i]->loc,
                      "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
+          } else {
+            // An lb:ub pair in ALLOCATE is parsed (rule 89) but not served:
+            // single extents (and `*`) cover the IBM override idiom.
+            bool hasPair = false;
+            for (const auto& b : bounds)
+              if (b.lb)
+                hasPair = true;
+            if (hasPair)
+              d_.error(s->allocBase[i]->loc,
+                       "ALLOCATE lb:ub bounds are not implemented in this stage", "(89)");
+            else if (scalarDyn && bounds.size() != 1)
+              d_.error(s->allocBase[i]->loc,
+                       "ALLOCATE of a scalar CONTROLLED variable takes a single extent", "(89)");
+            else if ((rank1Ctl || scalarDyn) && bounds.size() == 1) {
+              // Served: sizing happens in IRGen from n * element size
+              // (a `*` bound reuses the previous generation's extent).
+            } else if (rankNDCtl && bounds.size() == rank) {
+              // Served: N-D sizing happens in IRGen from the per-axis
+              // extents (`*` reuses that axis of the previous generation).
+            } else if (rankNDCtl || rank1Ctl || scalarDyn)
+              d_.error(s->allocBase[i]->loc,
+                       "ALLOCATE of '" + s->allocBase[i]->name + "' takes " +
+                           std::to_string(rank == 0 ? 1 : rank) + " bound(s), " +
+                           std::to_string(bounds.size()) + " given",
+                       "(89)");
+            else
+              d_.error(s->allocBase[i]->loc,
+                       "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
+          }
         } else if (bsym->ty.isArray()) {
           d_.error(s->allocBase[i]->loc, "ALLOCATE of arrays is not implemented in this stage",
                    "(89)");
@@ -3179,11 +3260,16 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE of a dynamic-extent based array is not implemented in this stage",
                  "(89)");
-      if ((i < s->allocDim.size() && s->allocDim[i]) ||
-          (i < s->allocCharLen.size() && s->allocCharLen[i])) {
-        if (s->allocDim[i])
-          typeExpr(s->allocDim[i].get(), sc, p);
-        if (s->allocCharLen[i])
+      const auto& bbounds =
+          (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
+      if (!bbounds.empty() || (i < s->allocCharLen.size() && s->allocCharLen[i])) {
+        for (const auto& b : bbounds) {
+          if (b.lb)
+            typeExpr(b.lb.get(), sc, p);
+          if (b.ub)
+            typeExpr(b.ub.get(), sc, p);
+        }
+        if (i < s->allocCharLen.size() && s->allocCharLen[i])
           typeExpr(s->allocCharLen[i].get(), sc, p);
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
@@ -3681,7 +3767,12 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         // rule (8)/(42): an array of an enclosing procedure is reached through
         // this procedure's static link.
         noteStaticUse(p, arr);
-        checkSubscriptBounds(e, arr);
+        // A CONTROLLED array subscript skips the static bounds check: an
+        // ALLOCATE (n) override changes the live extent per generation, so the
+        // DECLARE bounds may not match (rules (13),(89)); IRGen checks the
+        // live bounds at run time.
+        if (!arr->controlled)
+          checkSubscriptBounds(e, arr);
         break;
       }
       if (e->args.size() != arr->ty.dims.size()) {
@@ -3707,7 +3798,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // rule (8)/(42): an array of an enclosing procedure is reached through
       // this procedure's static link.
       noteStaticUse(p, arr);
-      checkSubscriptBounds(e, arr);
+      // CONTROLLED skips the static check (live per-generation bounds, above).
+      if (!arr->controlled)
+        checkSubscriptBounds(e, arr);
       break;
     }
     // A scalar CONTROLLED numeric variable subscripted once (rules (13),(126)):

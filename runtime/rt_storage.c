@@ -17,6 +17,12 @@ typedef struct {
   long long key; /* the variable's deterministic name hash; -1 = empty entry */
   char **gens;
   long long *lens;
+  /* Per-generation N-D extents (rules (13),(89)): rank[k] is the axis count of
+   * generation k and dimss[k] its extents (NULL when rank is 0, i.e. a 1-D
+   * generation sized via pli_ctl_len or a non-array generation). Lower bounds
+   * are static (the DECLARE lb, else 1), so only extents vary per generation. */
+  long long *ranks;
+  long long **dimss;
   long long depth, cap;
 } CtlVar;
 static CtlVar *ctlVars = NULL;
@@ -40,35 +46,119 @@ static CtlVar *ctlFind(long long key, int create) {
   v->key = key;
   v->gens = NULL;
   v->lens = NULL;
+  v->ranks = NULL;
+  v->dimss = NULL;
   v->depth = 0;
   v->cap = 0;
   return v;
 }
 
+/* Grow a generation stack's parallel arrays to hold one more generation. */
+static void ctlGrow(CtlVar *v) {
+  if (v->depth < v->cap)
+    return;
+  long long ncap = v->cap ? v->cap * 2 : 4;
+  char **ng = (char **)realloc(v->gens, (size_t)ncap * sizeof(char *));
+  if (!ng)
+    pli_signal_error("CONTROLLED generation stack out of memory");
+  long long *nl = (long long *)realloc(v->lens, (size_t)ncap * sizeof(long long));
+  if (!nl)
+    pli_signal_error("CONTROLLED generation stack out of memory");
+  long long *nr = (long long *)realloc(v->ranks, (size_t)ncap * sizeof(long long));
+  if (!nr)
+    pli_signal_error("CONTROLLED generation stack out of memory");
+  long long **nd = (long long **)realloc(v->dimss, (size_t)ncap * sizeof(long long *));
+  if (!nd)
+    pli_signal_error("CONTROLLED generation stack out of memory");
+  v->gens = ng;
+  v->lens = nl;
+  v->ranks = nr;
+  v->dimss = nd;
+  v->cap = ncap;
+}
+
 void pli_ctl_alloc(long long key, long long n) {
   CtlVar *v = ctlFind(key, 1);
-  if (v->depth >= v->cap) {
-    long long ncap = v->cap ? v->cap * 2 : 4;
-    char **ng = (char **)realloc(v->gens, (size_t)ncap * sizeof(char *));
-    if (!ng)
-      pli_signal_error("CONTROLLED generation stack out of memory");
-    long long *nl = (long long *)realloc(v->lens, (size_t)ncap * sizeof(long long));
-    if (!nl)
-      pli_signal_error("CONTROLLED generation stack out of memory");
-    v->gens = ng;
-    v->lens = nl;
-    v->cap = ncap;
-  }
+  ctlGrow(v);
   v->gens[v->depth] = pli_alloc(n);
   v->lens[v->depth] = n;
+  v->ranks[v->depth] = 0;
+  v->dimss[v->depth] = NULL;
   ++v->depth;
+}
+
+/* Push an N-D generation (rules (13),(89)): total payload bytes plus room for
+ * rank per-axis extents, filled by pli_ctl_set_dim after the call. */
+void pli_ctl_alloc_dims(long long key, long long n, long long rank) {
+  CtlVar *v = ctlFind(key, 1);
+  if (rank < 0)
+    rank = 0;
+  ctlGrow(v);
+  v->gens[v->depth] = pli_alloc(n);
+  v->lens[v->depth] = n;
+  v->ranks[v->depth] = rank;
+  v->dimss[v->depth] = rank ? (long long *)calloc((size_t)rank, sizeof(long long)) : NULL;
+  if (rank && !v->dimss[v->depth])
+    pli_signal_error("CONTROLLED generation stack out of memory");
+  ++v->depth;
+}
+
+/* Record one axis extent of the latest generation (0-based axis). The rank
+ * grows to cover the axis, so a plain pli_ctl_alloc generation can gain
+ * descriptor extents afterwards (bare ALLOCATE of a fixed N-D array). */
+void pli_ctl_set_dim(long long key, long long axis, long long extent) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v || v->depth <= 0 || axis < 0)
+    return;
+  if (axis >= v->ranks[v->depth - 1]) {
+    long long nrank = axis + 1;
+    long long *nd = (long long *)realloc(v->dimss[v->depth - 1], (size_t)nrank * sizeof(long long));
+    if (!nd)
+      pli_signal_error("CONTROLLED generation stack out of memory");
+    for (long long k = v->ranks[v->depth - 1]; k < nrank; ++k)
+      nd[k] = 0;
+    v->dimss[v->depth - 1] = nd;
+    v->ranks[v->depth - 1] = nrank;
+  }
+  v->dimss[v->depth - 1][(size_t)axis] = extent;
+}
+
+/* Axis count of the latest generation, 0 when the stack is empty or the top
+ * generation carries no per-axis extents (1-D/scalar/CHAR path). */
+long long pli_ctl_rank(long long key) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v || v->depth <= 0)
+    return 0;
+  return v->ranks[v->depth - 1];
+}
+
+/* Extent of one axis (0-based) of the latest generation, 0 when absent. */
+long long pli_ctl_extent(long long key, long long axis) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v || v->depth <= 0)
+    return 0;
+  if (axis < 0 || axis >= v->ranks[v->depth - 1])
+    return 0;
+  return v->dimss[v->depth - 1][(size_t)axis];
+}
+
+/* Generation-stack depth: the number of live generations (for ALLOCATE (*)
+ * reuse, which needs a previous generation to copy from). */
+long long pli_ctl_depth(long long key) {
+  CtlVar *v = ctlFind(key, 0);
+  if (!v)
+    return 0;
+  return v->depth;
 }
 
 void pli_ctl_free(long long key) {
   CtlVar *v = ctlFind(key, 0);
   if (!v || v->depth <= 0)
     pli_signal_error("FREE of empty CONTROLLED stack");
-  free(v->gens[--v->depth]);
+  --v->depth;
+  free(v->gens[v->depth]);
+  free(v->dimss[v->depth]);
+  v->dimss[v->depth] = NULL;
 }
 
 char *pli_ctl_addr(long long key) {

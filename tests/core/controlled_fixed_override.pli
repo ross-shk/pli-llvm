@@ -1,0 +1,59 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Rules (13),(23),(87)-(90),(123),(126): ALLOCATE bounds override
+     the DECLARE bounds of a fixed 1-D CONTROLLED array (IBM
+     Enterprise PL/I). Bare ALLOCATE uses the descriptor; ALLOCATE
+     (n) pushes an n-element generation with the DECLARE lb kept;
+     LIFO FREE restores the prior live bound. */
+ fixed_override_test: procedure options(main);
+   dcl fails fixed bin(31);
+   dcl i fixed bin(31);
+   dcl s fixed bin(31);
+   dcl fds(10) fixed bin(31) controlled;
+   dcl b(0:9) fixed bin(31) controlled;
+   fails = 0;
+   /* bare ALLOCATE keeps the descriptor bounds */
+   allocate fds;
+   if hbound(fds) ^= 10 then fails = fails + 1;
+   if lbound(fds) ^= 1 then fails = fails + 1;
+   if dim(fds) ^= 10 then fails = fails + 1;
+   fds(10) = 100;
+   if fds(10) ^= 100 then fails = fails + 1;
+   /* override smaller: live bound follows the ALLOCATE */
+   allocate fds (5);
+   if hbound(fds) ^= 5 then fails = fails + 1;
+   if dim(fds) ^= 5 then fails = fails + 1;
+   do i = 1 to 5;
+     fds(i) = i * 10;
+   end;
+   s = 0;
+   do i = 1 to 5;
+     s = s + fds(i);
+   end;
+   if s ^= 150 then fails = fails + 1;
+   free fds;
+   /* LIFO pops back to the descriptor-sized generation */
+   if hbound(fds) ^= 10 then fails = fails + 1;
+   if fds(10) ^= 100 then fails = fails + 1;
+   free fds;
+   /* override larger than declared: no static reject */
+   allocate fds (12);
+   fds(12) = 42;
+   if fds(12) ^= 42 then fails = fails + 1;
+   if hbound(fds) ^= 12 then fails = fails + 1;
+   free fds;
+   /* lb:ub DECLARE keeps its lb across the override */
+   allocate b;
+   if lbound(b) ^= 0 then fails = fails + 1;
+   if hbound(b) ^= 9 then fails = fails + 1;
+   b(0) = 7;
+   allocate b (5);
+   if lbound(b) ^= 0 then fails = fails + 1;
+   if hbound(b) ^= 4 then fails = fails + 1;
+   b(4) = 9;
+   if b(4) ^= 9 then fails = fails + 1;
+   free b;
+   free b;
+   if fails = 0 then put skip list('PASS fixed_override');
+   else put skip list('FAIL fixed_override: fails =', fails);
+ end fixed_override_test;

@@ -2531,8 +2531,8 @@ void IRGen::emitAssign(HStmt* s) {
 // generation sized to the compile-time descriptor if this symbol has not been
 // implicitly allocated in the current procedure yet. CHAR(*) is skipped — its
 // runtime length cannot be known without an explicit ALLOCATE statement. A
-// 1-D (*) CONTROLLED numeric array is skipped the same way — its extent comes
-// from each ALLOCATE (n) (rules (13),(89)).
+// `(*)` CONTROLLED numeric array is skipped the same way — its extents come
+// from each ALLOCATE (rules (13),(89)).
 void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   // Only skip CHAR(*) adjustable-length types and (*) CONTROLLED dynamic
   // arrays; everything else gets default-sized implicit allocation.
@@ -2546,7 +2546,22 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(sym->ty)).getFixedValue());
   if (sym->ty.isChar() && sym->ty.starLen && sym->dynLenExpr)
     sz = toI64(emitExpr(sym->dynLenExpr), loc);
-  b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+  // Fixed N-D numeric arrays keep per-generation live extents: record the
+  // descriptor extents for the implicit generation (rules (13),(89)).
+  bool ndDims = isCtlNDynArray(sym) && !sym->ty.isDynamic();
+  if (ndDims) {
+    size_t rank = sym->ty.dims.size();
+    const Type& el = sym->ty.elementType();
+    long long elemSz =
+        (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+    if (elemSz <= 0)
+      elemSz = 1;
+    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
+                   {ctlKeyOf(sym), sz, i64((long long)rank)});
+    emitCtlNDDescDims(sym);
+  } else {
+    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+  }
 }
 
 // INITIAL on a CONTROLLED generation (rules (15),(26), SC26-3114): assign the
@@ -2649,7 +2664,16 @@ void IRGen::emitPackageCtlEnsure() {
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(sym->ty)).getFixedValue());
     if (sym->ty.isChar() && sym->ty.starLen && sym->dynLenExpr)
       sz = toI64(emitExpr(sym->dynLenExpr), sym->loc);
-    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+    // Fixed N-D numeric arrays keep per-generation live extents: record the
+    // descriptor extents for the program-lifetime generation (rules (13),(89)).
+    if (isCtlNDynArray(sym) && !sym->ty.isDynamic()) {
+      size_t rank = sym->ty.dims.size();
+      b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
+                     {ctlKeyOf(sym), sz, i64((long long)rank)});
+      emitCtlNDDescDims(sym);
+    } else {
+      b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+    }
     if (sym->ty.isChar() && sym->ty.varying) {
       llvm::Value* vaddr =
           b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "pkgctl.vaddr");
@@ -2681,13 +2705,17 @@ void IRGen::emitCtlEpilogue() {
 // compile-time descriptor. A VARYING generation holds `{i32 cur, [max x i8]}`
 // so its byte size is `4 + max`; its current length starts at 0.
 void IRGen::emitAllocate(HStmt* s) {
+  static const std::vector<HStmt::HAllocBound> noBounds;
   for (size_t i = 0; i < s->allocBase.size(); ++i) {
     Symbol* bsym = s->allocBase[i]->sym;
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
     if (bsym->controlled) {
-      HExpr* dimE = (i < s->allocDim.size()) ? s->allocDim[i].get() : nullptr;
+      const auto& bounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : noBounds;
       HExpr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
+      bool singleDim = bounds.size() == 1 && bounds[0].ub && !bounds[0].lb && !bounds[0].star;
+      HExpr* dimE = singleDim ? bounds[0].ub.get() : nullptr;
+      bool singleStar = bounds.size() == 1 && bounds[0].star;
       if (bsym->ty.isChar() && (dimE || clE)) {
         HExpr* se = dimE ? dimE : clE;
         llvm::Value* max = toI64(emitExpr(se), s->loc);
@@ -2696,18 +2724,128 @@ void IRGen::emitAllocate(HStmt* s) {
         else
           sz = max;
       } else if (!bsym->ty.isChar() && dimE && !clE) {
-        // CONTROLLED dynamic numeric array, 1-D only (rules (13),(89)): a
-        // scalar `DCL FDS FIXED CONTROLLED` or a `DCL G(*)` array sized by
-        // `ALLOCATE x (n)` holds n elements; the generation is n * elemSize.
+        // CONTROLLED 1-D numeric generation (rules (13),(89)): a scalar
+        // `DCL FDS FIXED CONTROLLED`, a `DCL G(*)` array, or a fixed
+        // `DCL A(10)` array sized by `ALLOCATE x (n)` holds n elements;
+        // the generation is n * elemSize (lb preserved from the DECLARE).
         const Type& el = bsym->ty.isArray() ? bsym->ty.elementType() : bsym->ty;
         long long elemSz =
             (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
         llvm::Value* n = toI64(emitExpr(dimE), s->loc);
         sz = b_.CreateMul(n, i64(elemSz), "ctln");
+      } else if (!bsym->ty.isChar() && singleStar && !clE &&
+                 (isCtlDynArray(bsym) ||
+                  (!bsym->ty.isArray() && bsym->controlled))) {
+        // `ALLOCATE x (*)` reuses the previous generation's extent (IBM (89)).
+        // With no previous generation a fixed/scalar DECLARE falls back to
+        // the descriptor size; a `(*)` DECLARE with an empty stack traps.
+        llvm::Value* prevLen =
+            b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(bsym)}, "ctlprev");
+        if (bsym->ty.isDynamic()) {
+          llvm::Value* depth =
+              b_.CreateCall(runtimeFn("pli_ctl_depth"), {ctlKeyOf(bsym)}, "ctldepth");
+          llvm::Value* empty = b_.CreateICmpEQ(depth, i64(0), "ctlempty");
+          std::string id = std::to_string(n_++);
+          llvm::BasicBlock* trapL = llvm::BasicBlock::Create(ctx_, "ctlstar.trap." + id, curFn_);
+          llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "ctlstar.ok." + id, curFn_);
+          b_.CreateCondBr(empty, trapL, okL);
+          startBlock(trapL);
+          b_.CreateCall(runtimeFn("pli_signal_error"),
+                        {globalString("ALLOCATE (*) of '" + bsym->name +
+                                      "' with no previous generation")});
+          b_.CreateUnreachable();
+          startBlock(okL);
+          sz = prevLen;
+        } else {
+          llvm::Value* depth =
+              b_.CreateCall(runtimeFn("pli_ctl_depth"), {ctlKeyOf(bsym)}, "ctldepth");
+          llvm::Value* hasPrev = b_.CreateICmpNE(depth, i64(0), "ctlhasprev");
+          sz = b_.CreateSelect(hasPrev, prevLen, sz, "ctlstarsz");
+        }
+      } else if (!bsym->ty.isChar() && !bounds.empty() && !clE && isCtlNDynArray(bsym) &&
+                 bounds.size() == bsym->ty.dims.size()) {
+        // CONTROLLED N-D numeric generation (rules (13),(89)): one bound per
+        // axis; a `*` bound copies that axis from the previous generation
+        // (descriptor fallback for fixed axes, trap for `(*)` axes with an
+        // empty stack). The generation holds prod(extents) elements.
+        size_t rank = bsym->ty.dims.size();
+        const Type& el = bsym->ty.elementType();
+        long long elemSz =
+            (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+        if (elemSz <= 0)
+          elemSz = 1;
+        // Star extents read the previous top, so resolve them before pushing.
+        bool needPrevTrap = false;
+        for (size_t k = 0; k < rank; ++k)
+          if (bounds[k].star) {
+            const Dim& d = bsym->ty.dims[k];
+            if (d.adj || d.dyn || d.lbDyn)
+              needPrevTrap = true;
+          }
+        llvm::Value* depth = nullptr;
+        if (needPrevTrap) {
+          depth = b_.CreateCall(runtimeFn("pli_ctl_depth"), {ctlKeyOf(bsym)}, "ctldepth");
+          llvm::Value* empty = b_.CreateICmpEQ(depth, i64(0), "ctlempty");
+          std::string id = std::to_string(n_++);
+          llvm::BasicBlock* trapL = llvm::BasicBlock::Create(ctx_, "ctlstar.trap." + id, curFn_);
+          llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "ctlstar.ok." + id, curFn_);
+          b_.CreateCondBr(empty, trapL, okL);
+          startBlock(trapL);
+          b_.CreateCall(runtimeFn("pli_signal_error"),
+                        {globalString("ALLOCATE (*) of '" + bsym->name +
+                                      "' with no previous generation")});
+          b_.CreateUnreachable();
+          startBlock(okL);
+        } else if (bounds.empty() == false) {
+          bool anyStar = false;
+          for (const auto& b : bounds)
+            if (b.star)
+              anyStar = true;
+          if (anyStar)
+            depth = b_.CreateCall(runtimeFn("pli_ctl_depth"), {ctlKeyOf(bsym)}, "ctldepth");
+        }
+        std::vector<llvm::Value*> exts(rank);
+        for (size_t k = 0; k < rank; ++k) {
+          if (bounds[k].star) {
+            llvm::Value* prev = b_.CreateCall(
+                runtimeFn("pli_ctl_extent"), {ctlKeyOf(bsym), i64((long long)k)}, "ctlprev");
+            const Dim& d = bsym->ty.dims[k];
+            if (!d.adj && !d.dyn && !d.lbDyn) {
+              // Fixed axis: fall back to the DECLARE extent when the stack
+              // is empty (first explicit ALLOCATE over the implicit one).
+              long long descExt = (long long)d.ub - (long long)d.lb + 1;
+              llvm::Value* hasPrev = b_.CreateICmpNE(depth, i64(0), "ctlhasprev");
+              exts[k] = b_.CreateSelect(hasPrev, prev, i64(descExt), "ctlstarext");
+            } else {
+              exts[k] = prev; // trapped above when the stack is empty
+            }
+          } else if (bounds[k].ub) {
+            exts[k] = toI64(emitExpr(bounds[k].ub.get()), s->loc);
+          } else {
+            exts[k] = i64(0); // lb:ub pairs stay diagnosed in sema; never crash here
+          }
+        }
+        llvm::Value* total = i64(elemSz);
+        for (size_t k = 0; k < rank; ++k)
+          total = b_.CreateMul(total, exts[k], "ctltot");
+        b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
+                      {ctlKeyOf(bsym), total, i64((long long)rank)});
+        for (size_t k = 0; k < rank; ++k)
+          b_.CreateCall(runtimeFn("pli_ctl_set_dim"),
+                        {ctlKeyOf(bsym), i64((long long)k), exts[k]});
+        // INITIAL assigns with each allocation (rules (15),(26), SC26-3114).
+        emitCtlInit(bsym, s->loc);
+        continue;
       } else if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr) {
         sz = toI64(emitExpr(bsym->dynLenExpr), s->loc);
       }
       b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
+      if (isCtlNDynArray(bsym)) {
+        // A bare N-D ALLOCATE re-pushes the DECLARE extents so the new top
+        // generation's live bounds match the descriptor (an `(*)` axis never
+        // reaches here: sema requires explicit bounds for it).
+        emitCtlNDDescDims(bsym);
+      }
       if (bsym->ty.isChar() && bsym->ty.varying) {
         // A fresh VARYING generation starts empty (cur = 0); an INITIAL value
         // overwrites it next via emitCtlInit.
@@ -4545,21 +4683,34 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
   storeScalarTo(addr, dt, cv);
 }
 
-// A CONTROLLED dynamic numeric array (rules (13),(89)): a scalar CONTROLLED
-// numeric variable used with one subscript, or a 1-D (*) CONTROLLED array.
-// The live extent is per-generation, so it cannot ride a static dope slot.
+// A CONTROLLED numeric array with per-generation extents (rules (13),(89),
+// IBM Enterprise PL/I: ALLOCATE bounds override DECLARE bounds): a scalar
+// CONTROLLED numeric variable used with one subscript, a 1-D (*) CONTROLLED
+// array, or a fixed 1-D CONTROLLED numeric array (whose ALLOCATE (n) overrides
+// the DECLARE extent, lb preserved). The live extent is per-generation, so it
+// cannot ride a static dope slot.
 bool IRGen::isCtlDynArray(Symbol* sym) {
   if (!sym || !sym->controlled)
     return false;
   if (!sym->ty.isArray())
     return !sym->ty.isChar() && !sym->ty.isStruct() && !sym->ty.isPointer() && !sym->ty.isVoid() &&
            (sym->ty.isNumeric() || sym->ty.isBit());
-  return sym->ty.isDynamic() && sym->ty.dims.size() == 1;
+  if (sym->ty.dims.size() != 1)
+    return false;
+  const Type& el = sym->ty.elementType();
+  if (el.isChar() || el.isStruct() || el.isPointer() || el.isVoid())
+    return false;
+  if (!el.isNumeric() && !el.isBit())
+    return false;
+  // Dynamic (*) plus fixed 1-D: both size per-generation (bare = descriptor,
+  // ALLOCATE (n) = override). Multi-axis stays on the static path here;
+  // N-D overrides use the dims runtime (isCtlNDynArray).
+  return true;
 }
 
-// Live upper bound of a CONTROLLED dynamic array (rule (126)): lb is 1, ub is
-// `pli_ctl_len(key) / elemSize`. An empty stack reports 0, so every subscript
-// is out of bounds until the first ALLOCATE (n).
+// Live extent of a CONTROLLED dynamic array (rule (126)): `pli_ctl_len(key) /
+// elemSize`. An empty stack reports 0, so every subscript is out of bounds
+// until the first ALLOCATE (n).
 llvm::Value* IRGen::ctlDynBound(Symbol* sym) {
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   long long elemSz = (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
@@ -4569,14 +4720,27 @@ llvm::Value* IRGen::ctlDynBound(Symbol* sym) {
   return b_.CreateUDiv(total, i64(elemSz), "ctlub");
 }
 
+// Live lower bound of a CONTROLLED dynamic array: the DECLARE lb for a fixed
+// 1-D array (preserved across an ALLOCATE (n) override, so bare `ALLOCATE A`
+// keeps e.g. 0:9), else 1 for scalar/`(*)` generations.
+long long IRGen::ctlDynLb(Symbol* sym) {
+  if (sym && sym->ty.isArray() && sym->ty.dims.size() == 1 && !sym->ty.dims[0].adj &&
+      !sym->ty.isDynamic())
+    return sym->ty.dims[0].lb;
+  return 1;
+}
+
 // Address of one CONTROLLED dynamic array element (rule 126): a runtime
 // SUBSCRIPTRANGE check against the live bound, then a GEP off the top
 // generation base as a bare element pointer (mirrors the dynamic-array path).
 llvm::Value* IRGen::ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc) {
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   llvm::Value* base = addressOf(sym);
-  llvm::Value* ub = ctlDynBound(sym);
-  llvm::Value* lb = i64(1);
+  llvm::Value* ext = ctlDynBound(sym);
+  long long lbConst = ctlDynLb(sym);
+  llvm::Value* lb = i64(lbConst);
+  // ub = lb + extent - 1 (empty stack: extent 0 -> ub = lb - 1, all OOB).
+  llvm::Value* ub = b_.CreateSub(b_.CreateAdd(lb, ext, "ctlhi"), i64(1), "ctlub");
   llvm::Value* i = toI64(emitExpr(idxs[0].get()));
   llvm::Value* oob =
       b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi"), "oob");
@@ -4595,6 +4759,88 @@ llvm::Value* IRGen::ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& id
   return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "ctlelem");
 }
 
+bool IRGen::isCtlNDynArray(Symbol* sym) {
+  if (!sym || !sym->controlled || !sym->ty.isArray() || sym->ty.dims.size() < 2)
+    return false;
+  const Type& el = sym->ty.elementType();
+  if (el.isChar() || el.isStruct() || el.isPointer() || el.isVoid())
+    return false;
+  return el.isNumeric() || el.isBit();
+}
+
+long long IRGen::ctlNDLb(Symbol* sym, size_t axis) {
+  if (sym && sym->ty.isArray() && axis < sym->ty.dims.size()) {
+    const Dim& d = sym->ty.dims[axis];
+    if (!d.adj && !d.dyn && !d.lbDyn)
+      return d.lb;
+  }
+  return 1;
+}
+
+llvm::Value* IRGen::ctlNDExtent(Symbol* sym, size_t axis) {
+  return b_.CreateCall(runtimeFn("pli_ctl_extent"),
+                       {ctlKeyOf(sym), i64((long long)axis)}, "ctlext");
+}
+
+llvm::Value* IRGen::ctlNDElementAddr(Symbol* sym, const std::vector<HExprP>& idxs, SourceLoc loc) {
+  // N-D CONTROLLED element (rules (13),(126)): per-axis live bounds
+  // [lb, lb+ext-1] with static lb, row-major strides from the live extents.
+  const Type& el = sym->ty.elementType();
+  llvm::Value* base = addressOf(sym);
+  size_t rank = sym->ty.dims.size();
+  std::vector<llvm::Value*> exts(rank), lbs(rank), ubs(rank), offs(rank);
+  for (size_t k = 0; k < rank; ++k) {
+    exts[k] = ctlNDExtent(sym, k);
+    lbs[k] = i64(ctlNDLb(sym, k));
+    ubs[k] = b_.CreateSub(b_.CreateAdd(lbs[k], exts[k], "ctlhi"), i64(1), "ctlub");
+  }
+  llvm::Value* oob = b_.getInt1(false);
+  std::vector<llvm::Value*> idxs64(rank);
+  for (size_t k = 0; k < rank; ++k) {
+    idxs64[k] = toI64(emitExpr(idxs[k].get()));
+    llvm::Value* lo =
+        b_.CreateICmpSLT(idxs64[k], lbs[k], "lo");
+    llvm::Value* hi =
+        b_.CreateICmpSGT(idxs64[k], ubs[k], "hi");
+    oob = b_.CreateOr(oob, b_.CreateOr(lo, hi, "oobk"), "oob");
+  }
+  // Clamp each axis into range when checks apply, then flatten row-major.
+  llvm::Value* flat = i64(0);
+  for (size_t k = 0; k < rank; ++k) {
+    llvm::Value* idx = subChecks() ? clampIndex(idxs64[k], lbs[k], ubs[k]) : idxs64[k];
+    offs[k] = b_.CreateSub(idx, lbs[k], "off");
+  }
+  for (size_t k = 0; k < rank; ++k) {
+    llvm::Value* stride = i64(1);
+    for (size_t j = k + 1; j < rank; ++j)
+      stride = b_.CreateMul(stride, exts[j], "st");
+    flat = b_.CreateAdd(flat, b_.CreateMul(offs[k], stride, "sw"), "flat");
+  }
+  if (subChecks()) {
+    std::string id = std::to_string(n_++);
+    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "sub.fail." + id, curFn_);
+    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
+    b_.CreateCondBr(oob, failL, okL);
+    startBlock(failL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    startBlock(okL);
+  }
+  (void)loc;
+  return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "ctlelem");
+}
+
+void IRGen::emitCtlNDDescDims(Symbol* sym) {
+  size_t rank = sym->ty.dims.size();
+  for (size_t k = 0; k < rank; ++k) {
+    const Dim& d = sym->ty.dims[k];
+    long long ext = (long long)d.ub - (long long)d.lb + 1;
+    if (d.adj || d.dyn || d.lbDyn)
+      ext = 0; // `(*)` axes have no descriptor extent; explicit ALLOCATE fills them
+    b_.CreateCall(runtimeFn("pli_ctl_set_dim"),
+                   {ctlKeyOf(sym), i64((long long)k), i64(ext)});
+  }
+}
+
 // Load one array element (rule 126): a bounds-checked address, then a load of
 // the element's scalar value. Character element arrays are diagnosed, not
 // silently miscompiled (invariant 2).
@@ -4610,6 +4856,15 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   }
   if (isCtlDynArray(sym)) {
     llvm::Value* addr = ctlDynElementAddr(sym, idxs, loc);
+    llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
+    if (el.isBit() && el.len == 1)
+      v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
+    else
+      v.reg = r;
+    return v;
+  }
+  if (isCtlNDynArray(sym)) {
+    llvm::Value* addr = ctlNDElementAddr(sym, idxs, loc);
     llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
     if (el.isBit() && el.len == 1)
       v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
@@ -4642,6 +4897,12 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
   }
   if (isCtlDynArray(sym)) {
     llvm::Value* addr = ctlDynElementAddr(sym, idxs, loc);
+    Val cv = convert(src, el, loc);
+    storeScalarTo(addr, el, cv);
+    return;
+  }
+  if (isCtlNDynArray(sym)) {
+    llvm::Value* addr = ctlNDElementAddr(sym, idxs, loc);
     Val cv = convert(src, el, loc);
     storeScalarTo(addr, el, cv);
     return;
@@ -5986,6 +6247,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         result = v;
         return true;
       }
+      // An N-D CONTROLLED element addresses off the live per-axis extents.
+      if (isCtlNDynArray(a->sym)) {
+        v.reg = ctlNDElementAddr(a->sym, a->args, a->loc);
+        result = v;
+        return true;
+      }
       // An iSUB-DEFINED element overlays its base (rule 134).
       if (a->sym->definedBase && a->sym->definedIsubAxis >= 0) {
         v.reg = definedSubElementAddr(a->sym, a->args, a->loc);
@@ -6544,12 +6811,50 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     const bool isDim = e->name == "DIM" || e->name == "DIMENSION";
     // A selected axis (0-based), or -1 for the default single-argument form.
     long long sel = e->args.size() == 2 ? e->args[1]->ival - 1 : -1;
-    // A CONTROLLED dynamic numeric array (rules (13),(89)): lb is 1, ub/extent
-    // is the top generation size; covers the scalar form and the (*) form.
+    // A CONTROLLED dynamic numeric array (rules (13),(89)): lb is the DECLARE
+    // lb for a fixed 1-D array (else 1), ub is lb + live extent - 1, DIM is the
+    // live extent; covers scalar, (*) and fixed 1-D forms.
     if (a->sym && a->memberPath.empty() && isCtlDynArray(a->sym) && (sel < 0 || sel == 0)) {
-      llvm::Value* ub = ctlDynBound(a->sym);
-      llvm::Value* raw = e->name == "LBOUND" ? i64(1) : ub;
-      (void)isDim;
+      llvm::Value* ext = ctlDynBound(a->sym);
+      long long lbConst = ctlDynLb(a->sym);
+      llvm::Value* raw;
+      if (e->name == "LBOUND")
+        raw = i64(lbConst);
+      else if (isDim)
+        raw = ext;
+      else
+        raw = b_.CreateSub(b_.CreateAdd(i64(lbConst), ext, "ctlhi"), i64(1), "ctlub");
+      Val src;
+      src.ty = Type::fixedBin(63, 0);
+      src.reg = raw;
+      v.reg = convert(src, e->ty, e->loc).reg;
+      result = v;
+      return true;
+    }
+    // An N-D CONTROLLED numeric array (rules (13),(89)): lower bounds are
+    // static (the DECLARE lb, else 1) while extents are per-generation live.
+    // LBOUND/HBOUND report the selected axis (axis 0 when unselected); DIM
+    // reports the selected axis extent, or the total (product) when unselected.
+    if (a->sym && a->memberPath.empty() && isCtlNDynArray(a->sym)) {
+      size_t rank = a->sym->ty.dims.size();
+      llvm::Value* raw = nullptr;
+      if (isDim && sel < 0) {
+        raw = i64(1);
+        for (size_t k = 0; k < rank; ++k)
+          raw = b_.CreateMul(raw, ctlNDExtent(a->sym, k), "ctldimtot");
+      } else {
+        size_t k = sel < 0 ? 0 : (size_t)sel;
+        if (k >= rank)
+          k = 0;
+        long long lbConst = ctlNDLb(a->sym, k);
+        llvm::Value* ext = ctlNDExtent(a->sym, k);
+        if (e->name == "LBOUND")
+          raw = i64(lbConst);
+        else if (isDim)
+          raw = ext;
+        else
+          raw = b_.CreateSub(b_.CreateAdd(i64(lbConst), ext, "ctlhi"), i64(1), "ctlub");
+      }
       Val src;
       src.ty = Type::fixedBin(63, 0);
       src.reg = raw;

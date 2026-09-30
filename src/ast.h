@@ -274,12 +274,19 @@ struct Stmt {
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
   // (a VarRef to a based structure) and its SET(...) pointer target (rule 88;
   // allocSet[i] is a VarRef to a POINTER). A CONTROLLED item (rule 89) may
-  // carry a dimension-attribute length (allocDim[i]) and/or a CHAR length
-  // (allocCharLen[i]); allocVarying[i]/allocHasChar[i] record the trailing
-  // CHARACTER/VARYING keywords. Null = absent.
+  // carry a dimension-attribute bound list (allocBounds[i], one entry per
+  // axis: an extent expression `ub`, an explicit `*` reuse, or an `lb:ub`
+  // pair) and/or a CHAR length (allocCharLen[i]); allocVarying[i]/
+  // allocHasChar[i] record the trailing CHARACTER/VARYING keywords. An empty
+  // bound list = bare ALLOCATE with no dimension.
+  struct AllocBound {
+    ExprP lb;    // lower bound of an lb:ub pair; null = single extent (lb static)
+    ExprP ub;    // extent expression, or upper bound of an lb:ub pair
+    bool star = false; // '*' : extent copied from the previous generation (89)
+  };
   std::vector<ExprP> allocBase;
   std::vector<ExprP> allocSet;
-  std::vector<ExprP> allocDim;
+  std::vector<std::vector<AllocBound>> allocBounds;
   std::vector<ExprP> allocCharLen;
   std::vector<char> allocVarying;
   std::vector<char> allocHasChar;

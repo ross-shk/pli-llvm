@@ -1,0 +1,85 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Rules (13),(23),(87)-(90),(123),(126): N-D CONTROLLED numeric
+     arrays (IBM asterisk notation). Fixed, (*), and mixed DECLARE
+     forms take one bound per axis from each ALLOCATE; a * bound
+     copies that axis from the previous generation. Lower bounds
+     are static (DECLARE lb, else 1); extents are per-generation
+     live with LIFO restore. */
+ nd_ctl_test: procedure options(main);
+   dcl fails fixed bin(31);
+   dcl i fixed bin(31);
+   dcl j fixed bin(31);
+   dcl a(3,4) fixed bin(31) controlled;
+   dcl x(*,*) fixed bin(31) controlled;
+   dcl y(10,*) fixed bin(31) controlled;
+   dcl b(0:2, 1:3) fixed bin(31) controlled;
+   fails = 0;
+   /* fixed 2-D bare ALLOCATE: descriptor bounds, row-major */
+   allocate a;
+   do i = 1 to 3;
+     do j = 1 to 4;
+       a(i,j) = i * 10 + j;
+     end;
+   end;
+   if a(2,3) ^= 23 then fails = fails + 1;
+   if hbound(a,1) ^= 3 then fails = fails + 1;
+   if hbound(a,2) ^= 4 then fails = fails + 1;
+   if dim(a,1) ^= 3 then fails = fails + 1;
+   if dim(a,2) ^= 4 then fails = fails + 1;
+   if dim(a) ^= 12 then fails = fails + 1;
+   if lbound(a,1) ^= 1 then fails = fails + 1;
+   /* override + LIFO */
+   allocate a (2,2);
+   if hbound(a,1) ^= 2 then fails = fails + 1;
+   if dim(a) ^= 4 then fails = fails + 1;
+   a(2,2) = 22;
+   allocate a (5,1);
+   if hbound(a,1) ^= 5 then fails = fails + 1;
+   if hbound(a,2) ^= 1 then fails = fails + 1;
+   a(5,1) = 51;
+   if a(5,1) ^= 51 then fails = fails + 1;
+   free a;
+   if hbound(a,1) ^= 2 then fails = fails + 1;
+   if a(2,2) ^= 22 then fails = fails + 1;
+   free a;
+   free a;
+   /* (*,*) DECLARE sized by each ALLOCATE */
+   allocate x (2,3);
+   x(2,3) = 99;
+   if x(2,3) ^= 99 then fails = fails + 1;
+   if dim(x,1) ^= 2 then fails = fails + 1;
+   if dim(x,2) ^= 3 then fails = fails + 1;
+   /* (*,*) reuses the previous shape (fresh data) */
+   allocate x (*,*);
+   if dim(x,1) ^= 2 then fails = fails + 1;
+   if dim(x,2) ^= 3 then fails = fails + 1;
+   free x;
+   free x;
+   /* mixed DECLARE with partial reuse */
+   allocate y (2,3);
+   y(2,3) = 55;
+   if y(2,3) ^= 55 then fails = fails + 1;
+   allocate y (*,4);
+   if dim(y,1) ^= 2 then fails = fails + 1;
+   if dim(y,2) ^= 4 then fails = fails + 1;
+   free y;
+   free y;
+   /* lb:ub DECLARE keeps its lbs across the override */
+   allocate b;
+   if lbound(b,1) ^= 0 then fails = fails + 1;
+   if lbound(b,2) ^= 1 then fails = fails + 1;
+   if hbound(b,1) ^= 2 then fails = fails + 1;
+   if hbound(b,2) ^= 3 then fails = fails + 1;
+   b(2,3) = 23;
+   allocate b (2,2);
+   if lbound(b,1) ^= 0 then fails = fails + 1;
+   if hbound(b,1) ^= 1 then fails = fails + 1;
+   if hbound(b,2) ^= 2 then fails = fails + 1;
+   b(1,2) = 42;
+   if b(1,2) ^= 42 then fails = fails + 1;
+   free b;
+   free b;
+   if fails = 0 then put skip list('PASS controlled_nd');
+   else put skip list('FAIL controlled_nd: fails =', fails);
+ end nd_ctl_test;

@@ -4896,3 +4896,65 @@ constant initializer (loses ALLOCATE/FREE generations and contradicts
 SC26-3114); pushing/popping a fresh package generation per procedure
 entry (destroys sharing — each call would see a blank slate).
 
+## ADR-176 — ALLOCATE bounds override DECLARE bounds; N-D CONTROLLED arrays
+
+**Context.** libnet needs a fixed-size numeric CONTROLLED array whose
+extent is chosen at runtime: `DCL FDS(10) FIXED BIN(31) CONTROLLED`
+plus `ALLOCATE FDS(5)` (rules (13),(89)). TR 25.084 rule (89) is
+`controlled-allocate-item ::= [integer] identifier dimension-attribute
+[ {string-attribute | ...} ]` with `dimension-attribute ::= ( bound-pair,... )`,
+so per-axis bounds belong in ALLOCATE, and IBM Enterprise PL/I /
+MicroFocus state "any bound, length, size … specified in the ALLOCATE
+statement overrides the corresponding attribute specified in the
+declaration" and that asterisk notation copies a bound from the current
+generation. The compiler served only a 1-D extent for scalar / `(*)`
+CONTROLLED (ADR-161); a fixed `DCL A(10)` or any N-D form was
+diagnosed, and the parser aborted on the comma/colon of a multi-axis
+dimension.
+
+**Decision.** Generalize CONTROLLED generation sizing to per-axis live
+extents stored in the runtime (`pli_ctl_alloc_dims` / `pli_ctl_set_dim`
+/ `pli_ctl_rank` / `pli_ctl_extent`, with the 1-D path unchanged).
+Lower bounds are static — the DECLARE lb for a fixed axis, else 1 —
+while each generation records its own extents, so push/pop restores
+the prior shape and `ALLOCATE` overrides take effect per generation.
+
+Served, for numeric/BIT element CONTROLLED arrays:
+- a fixed 1-D `DCL A(10)` with bare `ALLOCATE A` (descriptor bounds,
+  lb kept) or `ALLOCATE A(n)` (extent n, lb kept) — overriding larger
+  or smaller than the DECLARE;
+- fixed N-D `DCL M(3,4)` with bare or per-axis `ALLOCATE M(m,n)`;
+- `(*)` DECLARE axes of any rank (`DCL X(*,*)`, mixed `DCL Y(10,*)`),
+  sized per ALLOCATE, with `*` at ALLOCATE reusing that axis from the
+  previous generation (ERROR trap when a `(*)` axis has no previous
+  generation; a fixed axis falls back to the descriptor);
+- `LBOUND`/`HBOUND`/`DIM` (per-axis and total) and element read/write
+  address the live per-generation extents, with runtime
+  SUBSCRIPTRANGE on every axis; implicit and package-scope CONTROLLED
+  ensure record the descriptor extents for fixed N-D.
+
+Still diagnosed (never silently mis-served): ALLOCATE `lb:ub` pairs
+(rule (89) allows them but the served idiom is single extents / `*`);
+bare `ALLOCATE` of a `(*)` array (no descriptor extent); arity
+mismatch between ALLOCATE bounds and the DECLARE rank; whole-array
+assignment/`PUT` of an overridden CONTROLLED array (element access and
+the bound builtins are the served path).
+
+**Consequences.** `core/controlled_fixed_override.pli` pins bare /
+override / larger-than-declared / lb:ub DECLARE / LIFO for fixed 1-D;
+`core/controlled_nd.pli` pins fixed / `(*,*)` / mixed / partial-reuse /
+lb-preservation for N-D; `core/bad_controlled_nd.pli` pins the four
+diagnostics; `core/package_ctl_array.pli` pins package-scope fixed N-D
+arrays plus per-allocation member INITIAL. `controlled_dyn.pli` and
+the multimodule CONTROLLED tests stay green. The rule (13)/(89)/(87)–
+(90) rows move in `GRAMMAR-COVERAGE.md`.
+
+**Rejected.** Supporting ALLOCATE `lb:ub` (adds per-axis live lower
+bounds and runtime LOWER-bound dope for no libnet need — single
+extents with static lb cover the override idiom); whole-array
+element-wise ops on overridden CONTROLLED (the live bound is
+per-generation in the runtime stack, unlike AUTOMATIC); a non-`*`
+runtime DECLARE extent on a CONTROLLED axis (the DECLARE cannot size a
+generation — declare `*` and size it at each ALLOCATE).
+
+
