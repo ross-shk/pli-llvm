@@ -47,7 +47,7 @@ struct Expr {
       path; // VarRef: member qualifiers after the base name (S.A.B -> {"A","B"})
   std::vector<unsigned> memberPath; // VarRef: resolved LLVM struct field indices (set by sema)
   Symbol* sym = nullptr;            // resolved by sema
-  ExprP locPtr;      // VarRef: the locator pointer of a P->X reference (rule 124); null = none
+  ExprP locPtr; // VarRef: the locator pointer of a P->X reference (rule 124); null = none
   // VarRef: this is the based-variable operand of an ALLOCATE item (rule (88)).
   // An unconnected BASED variable may be named there without a locator.
   bool allocBaseRef = false;

@@ -791,9 +791,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (!item.isEntry)
             d_.error(item.loc, "VARIABLE is only valid on an ENTRY declaration (ADR-171)", "");
           else if (item.level != 0 || !item.ty.dims.empty())
-            d_.error(item.loc,
-                     "an ENTRY variable must be a scalar, not an array or structure member (ADR-171)",
-                     "");
+            d_.error(
+                item.loc,
+                "an ENTRY variable must be a scalar, not an array or structure member (ADR-171)",
+                "");
           else if (item.init || item.initCall || !item.initItems.empty() || item.valueInit)
             d_.error(item.loc, "INITIAL/VALUE on an ENTRY variable is not implemented (ADR-171)",
                      "");
@@ -3737,9 +3738,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     }
     // A procedure name, an external ENTRY (rule (34)), or an entry variable
     // (IBM extension, ADR-171): the descriptor lives on the symbol.
-    const bool isFunc =
-        sym->proc ? (sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))
-                  : sym->entryIsFunction;
+    const bool isFunc = sym->proc
+                            ? (sym->proc->isFunction || (sym->entry && sym->entry->entryIsFunction))
+                            : sym->entryIsFunction;
     if (!isFunc) {
       d_.error(e->loc, "'" + e->name + "' is a procedure and returns no value", "(123)");
       e->ty = Type::voidTy();

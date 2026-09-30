@@ -153,7 +153,8 @@ private:
   // (rules (34),(56)); safe to call twice, the second call is a no-op.
   void resolveProcParams(Proc* p);
   void collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isStatic);
-  void collectLabels(Stmt* s, std::vector<const Stmt*>& chain); // gather GO TO targets defined in this proc
+  void collectLabels(Stmt* s,
+                     std::vector<const Stmt*>& chain); // gather GO TO targets defined in this proc
   void checkStmt(Stmt* s, Scope* sc, Proc* p);
   // Rule (91): reject ON-unit constructs that need the establishing frame
   // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
@@ -320,11 +321,11 @@ private:
   // of Blocks"), so the target's chain must be a prefix of the current one.
   std::map<std::string, std::vector<const Stmt*>> labelBeginChains_;
   std::vector<const Stmt*> curBeginChain_;
-  Stmt* curEntry_ = nullptr;         // the ENTRY segment currently being checked
-                                     // (rule 56): enables RETURN(value) in its body
-  int inUnit_ = 0;                   // ON-unit nesting depth while checking (rule 91):
-                                     // nonzero inside a unit body, where a bare
-                                     // RETURN ends the unit, never the function
+  Stmt* curEntry_ = nullptr; // the ENTRY segment currently being checked
+                             // (rule 56): enables RETURN(value) in its body
+  int inUnit_ = 0;           // ON-unit nesting depth while checking (rule 91):
+                             // nonzero inside a unit body, where a bare
+                             // RETURN ends the unit, never the function
   std::vector<std::vector<std::string>> loopStack_; // labels of enclosing iterative
                                                     // DO-groups, innermost last (ADR-105)
   std::set<std::string> irNames_;                   // irNames in use, to disambiguate shadowing

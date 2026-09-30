@@ -3,6 +3,7 @@
 #include "irgen.h"
 #include <algorithm>
 
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -12,7 +13,6 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/AsmParser/Parser.h"
 #include "llvm/TargetParser/Triple.h"
 
 // ---------------------------------------------------------------------------
@@ -593,8 +593,8 @@ llvm::FunctionType* IRGen::entryFnType(Symbol* sym) {
       if (t.isChar() && t.starLen)
         pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
     }
-  llvm::Type* rt = sret ? b_.getVoidTy()
-                        : (sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy());
+  llvm::Type* rt =
+      sret ? b_.getVoidTy() : (sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy());
   return llvm::FunctionType::get(rt, pt, false);
 }
 
@@ -2561,10 +2561,9 @@ void IRGen::emitPackageCtlEnsure() {
       continue;
     if (sym->ty.isArray() && sym->ty.isDynamic())
       continue;
-    llvm::Value* addr =
-        b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "pkgctl");
-    llvm::Value* isnull = b_.CreateICmpEQ(
-        addr, llvm::Constant::getNullValue(addr->getType()), "pkgctlnull");
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "pkgctl");
+    llvm::Value* isnull =
+        b_.CreateICmpEQ(addr, llvm::Constant::getNullValue(addr->getType()), "pkgctlnull");
     llvm::BasicBlock* needBB = llvm::BasicBlock::Create(ctx_, "pkgctl.need", curFn_);
     llvm::BasicBlock* haveBB = llvm::BasicBlock::Create(ctx_, "pkgctl.have", curFn_);
     b_.CreateCondBr(isnull, needBB, haveBB);
@@ -5280,7 +5279,8 @@ Val IRGen::emitExpr(HExpr* e) {
         if (rty.varying) {
           llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 0, "clenp");
           v.ptr = b_.CreateStructGEP(sretBufTy(rty), sretPtr, 1, "cdata");
-          v.len = b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
+          v.len =
+              b_.CreateSExt(b_.CreateLoad(b_.getInt32Ty(), lp, "cl32"), b_.getInt64Ty(), "cl64");
         } else {
           v.ptr = sretPtr;
           v.len = i64(rty.len);

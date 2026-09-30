@@ -93,10 +93,10 @@ static void usage() {
          "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
          "  -shared -static  produce a shared / static binary\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
-          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-          "  --version        print plic + LLVM + host triple and exit\n"
-          "  -v               show the sub-commands being run\n"
-          "  -h, --help       this message\n";
+         "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
+         "  --version        print plic + LLVM + host triple and exit\n"
+         "  -v               show the sub-commands being run\n"
+         "  -h, --help       this message\n";
 }
 
 static void printVersion() {
@@ -141,8 +141,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        const std::string& sysparm, bool sysparmExplicit, bool compileOnly,
                        bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
                        bool keepLL, bool verbose, bool noSizeChecks, const std::string& optLevel,
-                        const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
-                        std::string* outObj, bool linkRuntimeIn = false) {
+                       const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
+                       std::string* outObj, bool linkRuntimeIn = false) {
   std::string src;
   if (!preprocessor.run(input, src))
     return false;
@@ -442,7 +442,8 @@ int main(int argc, char** argv) {
   for (const std::string& in : inputs)
     (isPLISource(in) ? pliInputs : foreignObjs).push_back(in);
   if (!foreignObjs.empty() && (compileOnly || emitLLVM || syntaxOnly || print_hir)) {
-    std::cerr << "plic: object inputs cannot be used with -c/-emit-llvm/-fsyntax-only/--print-hir\n";
+    std::cerr
+        << "plic: object inputs cannot be used with -c/-emit-llvm/-fsyntax-only/--print-hir\n";
     return 2;
   }
   const bool linkOnly = pliInputs.empty();
@@ -516,8 +517,8 @@ int main(int argc, char** argv) {
   if (keepLLDir.empty())
     keepLLDir = ".";
   // Runtime-once fast path: one PL/I input becoming the executable directly.
-  const bool singleModuleFinalLink = !compileOnly && !terminalMode && pliInputs.size() == 1 &&
-                                     foreignObjs.empty();
+  const bool singleModuleFinalLink =
+      !compileOnly && !terminalMode && pliInputs.size() == 1 && foreignObjs.empty();
   std::vector<std::string> objs = foreignObjs;
   for (size_t i = 0; i < pliInputs.size(); ++i) {
     std::string outObj;
@@ -555,9 +556,8 @@ int main(int argc, char** argv) {
       std::string rtObj;
       bool haveRtObj = false;
       if (!singleModuleFinalLink) {
-        rtObj = (fs::temp_directory_path() /
-                 ("libpli-" + std::to_string(getpid()) + ".o"))
-                    .string();
+        rtObj =
+            (fs::temp_directory_path() / ("libpli-" + std::to_string(getpid()) + ".o")).string();
         std::error_code ec;
         llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
         std::string rtErr;
@@ -593,10 +593,15 @@ int main(int argc, char** argv) {
           }
         } else if (llt.getObjectFormat() == llvm::Triple::ELF) {
           for (const char* crt : {"crt1.o", "crti.o"}) {
-            std::string p = runCap(shellQuote(clangPath) + " -print-file-name=" + crt +
-                                   " 2>/dev/null");
+            std::string p =
+                runCap(shellQuote(clangPath) + " -print-file-name=" + crt + " 2>/dev/null");
             if (!p.empty() && p != crt)
               argStore.push_back(p);
+          }
+          std::string sysroot = runCap(shellQuote(clangPath) + " -print-sysroot 2>/dev/null");
+          if (!sysroot.empty() && sysroot != "/") {
+            argStore.push_back("-sysroot");
+            argStore.push_back(sysroot);
           }
         }
         for (const std::string& o : objs)

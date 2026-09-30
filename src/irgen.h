@@ -120,7 +120,8 @@ private:
   // a by-reference pointer with no own storage, so its extent must be read from
   // the bound argument (itself by-ref) once, mirroring allocaLocals' locals.
   void recordDynParamUbs(const std::vector<Symbol*>& params);
-  void collectGotoBlocks(HStmt* s, std::vector<int>& chain); // assign an LLVM block to each labelled stmt
+  void collectGotoBlocks(HStmt* s,
+                         std::vector<int>& chain); // assign an LLVM block to each labelled stmt
   // rule (56): LLVM function name for an ENTRY statement's alternate entry point.
   static std::string entryIrName(const std::string& proc, const std::string& parent,
                                  const std::string& entry);
