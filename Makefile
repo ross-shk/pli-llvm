@@ -10,6 +10,7 @@ ifeq ($(LLVM_CONFIG),)
   LLVM_CONFIG := $(shell which llvm-config 2>/dev/null)
 endif
 LLVM_CXXFLAGS := $(shell $(LLVM_CONFIG) --cxxflags 2>/dev/null)
+LLVM_VERSION  := $(shell $(LLVM_CONFIG) --version 2>/dev/null)
 LLVM_LDFLAGS  := $(shell $(LLVM_CONFIG) --ldflags 2>/dev/null)
 LLVM_LIBS     := $(shell $(LLVM_CONFIG) --libs core irreader support 2>/dev/null)
 LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) --system-libs 2>/dev/null)
@@ -65,15 +66,33 @@ RTPATH   := $(abspath $(RTLIB))
 CLANGPATH := $(shell $(LLVM_CONFIG) --bindir)/clang
 LLVM_LINK := $(shell $(LLVM_CONFIG) --bindir)/llvm-link
 LLVM_INCDIR := $(shell $(LLVM_CONFIG) --includedir 2>/dev/null)
+LLVM_LIBDIR := $(shell $(LLVM_CONFIG) --libdir 2>/dev/null)
 
-# lld detection (review S1): stock brew llvm ships no lld; the in-process
-# link step gates on this (codegen.cpp PLIC_HAVE_LLD). Install with
-# `brew install lld` for the full self-contained link.
-LLD_HDR := $(shell test -f "$(LLVM_INCDIR)/lld/Common/Driver.h" && echo yes)
-ifeq ($(LLD_HDR),yes)
-  HAVE_LLD := 1
+# lld detection (review S1): stock brew `llvm` ships no lld; the separate `lld`
+# formula installs headers/libs under its own prefix. Probe LLVM first (a static
+# LLVM bundles lld), then `brew --prefix lld`. The in-process link step gates on
+# this (codegen.cpp PLIC_HAVE_LLD); without it plic falls back to clang.
+LLD_PREFIX ?= $(shell brew --prefix lld 2>/dev/null)
+ifneq ($(wildcard $(LLVM_INCDIR)/lld/Common/Driver.h),)
+  LLD_INCDIR := $(LLVM_INCDIR)
+  LLD_LIBDIR := $(LLVM_LIBDIR)
 else
+  LLD_INCDIR := $(LLD_PREFIX)/include
+  LLD_LIBDIR := $(LLD_PREFIX)/lib
+endif
+ifeq ($(wildcard $(LLD_INCDIR)/lld/Common/Driver.h),)
   HAVE_LLD := 0
+else
+  HAVE_LLD := 1
+endif
+LLD_CXXFLAGS :=
+LLD_LDFLAGS  :=
+ifeq ($(HAVE_LLD),1)
+  # Plain assignment (not $(if)): the commas in -Wl,-rpath would split the
+  # function arguments and silently truncate this to just -Wl.
+  LLD_CXXFLAGS := -I$(LLD_INCDIR)
+  LLD_LDFLAGS  := -L$(LLD_LIBDIR) -Wl,-rpath,$(LLD_LIBDIR) \
+                  -llldELF -llldMachO -llldCOFF -llldCommon
 endif
 
 # Embedded version for `plic version` (Go/Zig style build info).
@@ -96,10 +115,11 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
-	$(CXX) $(PLIC_CXXFLAGS) -I$(BUILD) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
+	$(CXX) $(PLIC_CXXFLAGS) $(LLD_CXXFLAGS) -I$(BUILD) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
 		-DPLIC_INSTALL_RUNTIME_LIB='"$(LIBDIR)/libpli.a"' \
 		-DPLIC_CLANG='"$(CLANGPATH)"' -DPLIC_VERSION='"$(PLIC_VERSION)"' \
-		-DPLIC_HAVE_LLD=$(HAVE_LLD) -MMD -MP -c $< -o $@
+		-DPLIC_LLVM_VERSION='"$(LLVM_VERSION)"' -DPLIC_HAVE_LLD=$(HAVE_LLD) \
+		-MMD -MP -c $< -o $@
 
 $(RULES_CPP): TR25.084-concrete-syntax.md scripts/gen_rules.py | $(BUILD)
 	python3 scripts/gen_rules.py $< $@
@@ -111,7 +131,7 @@ $(BUILD)/rt_%.o: runtime/%.c | $(BUILD)
 	$(CC) $(RTCFLAGS) -MMD -MP -c $< -o $@
 
 $(BIN): $(OBJS) $(RULES_OBJ) $(EMBED_INC)
-	$(CXX) $(PLIC_CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLVM_LIBS) $(LLVM_SYSTEM_LIBS) -o $@
+	$(CXX) $(PLIC_CXXFLAGS) $(LLVM_LDFLAGS) $(OBJS) $(RULES_OBJ) $(LLD_LDFLAGS) $(LLVM_LIBS) $(LLVM_SYSTEM_LIBS) -o $@
 
 $(RTLIB): $(RT_OBJS)
 	ar rcs $@ $(RT_OBJS)
@@ -177,9 +197,9 @@ fmt-check:
 tidy:
 	@test -n "$(CLANG_TIDY)" || { echo "clang-tidy not found"; exit 1; }
 	@$(CLANG_TIDY) $(SRCS) --quiet -- \
-		$(PLIC_CXXFLAGS) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
+		$(PLIC_CXXFLAGS) $(LLD_CXXFLAGS) -I$(BUILD) -DPLIC_RUNTIME_LIB='"$(RTPATH)"' \
 		-DPLIC_INSTALL_RUNTIME_LIB='"$(LIBDIR)/libpli.a"' \
-		-DPLIC_CLANG='"$(CLANGPATH)"'
+		-DPLIC_CLANG='"$(CLANGPATH)"' -DPLIC_HAVE_LLD=$(HAVE_LLD)
 
 # The clang static analyzer; report only real bugs (--status-bugs). Drop the
 # objects first so every source is re-analyzed.

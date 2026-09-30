@@ -959,6 +959,11 @@ void IRGen::allocaLocals(HProc* p) {
       a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
     }
     symAddr_[s] = a;
+    // Constant scalar INITIAL/VALUE stores at once (rule 26): dynamic bound
+    // expressions below load locals, and the store must dominate those loads
+    // even without optimization. emitInitials skips these (same helper).
+    if (Val early; constScalarInit(s, early))
+      storeTo(s, early, s->loc);
     if (s->ty.isArea()) {
       // An AUTOMATIC AREA (rule (20)): create the runtime region at entry and
       // destroy it on exit (emitCtlEpilogue). Allocation from it supports
@@ -1109,6 +1114,34 @@ static void collectDeclStmts(HStmt* s, std::vector<HStmt*>& out) {
   }
 }
 
+// Folded constant INITIAL/VALUE on a Fixed/Float scalar: the store must
+// dominate later entry-block loads (dynamic bounds in allocaLocals pass 2),
+// which only optimization hid before (unoptimized loads read garbage).
+bool IRGen::constScalarInit(Symbol* s, Val& out) {
+  if (!s || s->controlled || s->initCallH || !s->initExpr)
+    return false;
+  if (s->ty.isArray() || s->ty.isStruct() || s->ty.isChar())
+    return false;
+  out.ty = s->ty;
+  Expr* e = s->initExpr;
+  if (s->ty.k == TK::Float) {
+    out.reg = flt(iniNumeric(e));
+    return true;
+  }
+  if (s->ty.k == TK::FixedBin || s->ty.k == TK::FixedDec) {
+    long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
+    if (e->kind == Expr::DecLit) {
+      int dq = s->ty.scale - e->decScale; // rescale to the target scale
+      val = dq > 0   ? val * pliPow10(dq)
+            : dq < 0 ? pliRescaleDown(val, -dq, s->ty.k == TK::FixedDec)
+                     : val;
+    }
+    out.reg = llvm::ConstantInt::get(llvmTy(s->ty), val, true);
+    return true;
+  }
+  return false;
+}
+
 void IRGen::emitInitials(HProc* p) {
   std::vector<HStmt*> decls;
   for (auto& st : p->body)
@@ -1165,6 +1198,9 @@ void IRGen::emitInitials(HProc* p) {
       }
       Expr* e = item.sym ? item.sym->initExpr : nullptr;
       if (!e)
+        continue;
+      // Stored at alloca time already (see allocaLocals); skip the repeat.
+      if (Val early; constScalarInit(item.sym, early))
         continue;
       Val v;
       v.ty = item.sym->ty;

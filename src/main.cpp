@@ -242,6 +242,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
         }
 #endif
         if (rtOk) {
+          // Mirror the clang backend: optimize the (runtime-linked) IR at the
+          // requested -O level before codegen.
+          plic::optimizeModule(*om->mod, optLevel);
           std::error_code ec;
           llvm::raw_fd_ostream os(objPath.string(), ec, llvm::sys::fs::OF_None);
           std::string emErr;

@@ -8,15 +8,47 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
 #if PLIC_HAVE_LLD
 #include "lld/Common/Driver.h"
+// brew's lld ships only Common headers, so declare each driver's `link` entry
+// point with the public macro (no lld/ELF/Driver.h in the install).
+LLD_HAS_DRIVER(elf)
+LLD_HAS_DRIVER(macho)
+LLD_HAS_DRIVER(coff)
 #endif
 
 namespace plic {
+// Map the driver `-O` flag onto the LLVM pass-builder level.
+static llvm::OptimizationLevel toOptLevel(const std::string& s) {
+  if (s == "-O0")
+    return llvm::OptimizationLevel::O0;
+  if (s == "-O1")
+    return llvm::OptimizationLevel::O1;
+  if (s == "-O3")
+    return llvm::OptimizationLevel::O3;
+  return llvm::OptimizationLevel::O2;
+}
+
+void optimizeModule(llvm::Module& M, const std::string& optLevel) {
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB;
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+  llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(toOptLevel(optLevel));
+  MPM.run(M, MAM);
+}
+
 bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,
                 std::string& err) {
   llvm::legacy::PassManager pm;
@@ -70,13 +102,15 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out, st
 bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err) {
 #if PLIC_HAVE_LLD
   // `args` are exactly the argv lld would receive (program name, then inputs).
+  // `exitEarly=false` keeps the driver alive after a failed link; diagnostics
+  // go to stderr (disableOutput=false).
   switch (static_cast<llvm::Triple::ObjectFormatType>(objFmt)) {
   case llvm::Triple::ELF:
-    return lld::elf::link(args, false, llvm::outs(), llvm::errs());
+    return lld::elf::link(args, llvm::outs(), llvm::errs(), false, false);
   case llvm::Triple::MachO:
-    return lld::mach_o::link(args, false, llvm::outs(), llvm::errs());
+    return lld::macho::link(args, llvm::outs(), llvm::errs(), false, false);
   case llvm::Triple::COFF:
-    return lld::coff::link(args, false, llvm::outs(), llvm::errs());
+    return lld::coff::link(args, llvm::outs(), llvm::errs(), false, false);
   default:
     err = "unsupported object format";
     return false;

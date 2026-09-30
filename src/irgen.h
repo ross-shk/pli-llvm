@@ -111,6 +111,10 @@ private:
   void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM);
   void allocaLocals(HProc* p);
   void emitInitials(HProc* p); // INITIAL stores on AUTOMATIC vars (rule 26)
+  // Folded constant INITIAL/VALUE on a Fixed/Float scalar (rules (26), ADR-108):
+  // true + `out` when `s` qualifies. Stored at alloca time so later entry code
+  // (dynamic bounds) loads the value even without optimization.
+  bool constScalarInit(Symbol* s, Val& out);
   // Record the runtime upper bound of each dynamic (runtime-extent) array
   // parameter at entry (rules (12),(13),(34)-(38)): a parameter like `x(k)` is
   // a by-reference pointer with no own storage, so its extent must be read from

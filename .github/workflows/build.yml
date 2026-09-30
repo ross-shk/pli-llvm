@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# CI: build the self-contained plic per host, run the suite, gate the size.
+name: build
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM + lld (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+      - name: Install LLVM + lld (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm lld && echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      - name: Build
+        run: make -j8
+      - name: Test
+        run: make test
+      - name: Size gate (stripped < 150 MB)
+        run: |
+          make size-report
+          bytes=$(strip -o /tmp/plic.strip build/plic && (stat -f%z /tmp/plic.strip 2>/dev/null || stat -c%s /tmp/plic.strip))
+          test "$bytes" -lt 157286400
+      - name: Smoke (pure PL/I end-to-end)
+        run: |
+          printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n end smoke;\n' > /tmp/smoke.pli
+          ./build/plic /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+          ./build/plic version
+      - name: Upload plic binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: plic-${{ matrix.os }}
+          path: build/plic

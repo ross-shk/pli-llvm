@@ -18,6 +18,10 @@ class raw_pwrite_stream;
 } // namespace llvm
 
 namespace plic {
+// Run the IR optimization pipeline for the driver `-O` level (`-O0`..`-O3`,
+// `-Os`). The clang backend this replaces optimized at the same level; without
+// this the in-process path would emit unoptimized IR (behaviour + perf drift).
+void optimizeModule(llvm::Module& M, const std::string& optLevel);
 // Emit a fully-relocatable object for `M` in memory (integrated assembler).
 bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,
                 std::string& err);
