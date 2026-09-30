@@ -4850,3 +4850,49 @@ should be refactored to `p -> c.fd`. Declaring an implicit hidden
 locator for bare `BASED` (would silently make an unqualified
 reference dereference a null locator instead of being diagnosed).
 
+## ADR-175 — INITIAL on a CONTROLLED structure member assigns per allocation, including package scope
+
+**Context.** `source/net.pli` declares `2 n_clients fixed bin(31)
+init(0)` inside package-scope `1 server_rec controlled`. SC26-3114
+(INITIAL): "for based and controlled variables … any specified
+initial value is assigned with each allocation". Procedure-scope
+member INITIAL was accepted (the top-level CONTROLLED+INITIAL check
+only sees the parent's own init), but package scope rejected the
+whole structure ("INITIAL on a static structure", rule (26)),
+because ADR-109 collects package data as static. Worse, the accepted
+procedure case segfaulted: `emitInitials` stored into `pli_ctl_addr`
+before any `pli_ctl_alloc`, and explicit `ALLOCATE` never stored
+inits at all. Package CONTROLLED without INITIAL segfaulted too:
+`emitGlobals` made a dead global while every reference used the
+(empty) generation stack, since implicit allocation only covered
+`owner == proc` symbols.
+
+**Decision.** CONTROLLED is never STATIC (rule (15)): sema clears
+`isStatic` for controlled items (unless `EXTERNAL`) so package
+CONTROLLED keeps generation-stack storage, and the static-structure
+INITIAL diagnostic exempts controlled symbols — member INITIAL then
+folds to `initElems` at package scope exactly as at procedure scope.
+Top-level scalar/array CONTROLLED INITIAL stays diagnosed
+(`bad_controlled.pli` unchanged). Codegen moves CONTROLLED INITIAL
+out of block-entry `emitInitials` (now skipped) into per-allocation
+`emitCtlInit`: zero-fill plus `emitStructInitValues` for structures
+(and array/scalar/call forms for completeness), called after every
+implicit entry push and every explicit `ALLOCATE`. Package
+CONTROLLED gets one program-lifetime generation: each procedure
+entry runs `emitPackageCtlEnsure`, which allocates plus inits only
+when `pli_ctl_addr` is NULL and never pops, so member procedures
+share state and `-c` libraries allocate on first exported call.
+
+**Consequences.** `core/package_ctl_init.pli` pins implicit-init
+values, cross-procedure sharing, explicit-`ALLOCATE` re-init, and
+`FREE` popping back to the implicit generation. `bad_controlled.pli`
+still rejects scalar CONTROLLED INITIAL; `core` (268),
+`multimodule`+`corner_cases` (51), and `usecases`/`builtins`/`driver`/`ir`
+(90) stay green. The rule (26) and PACKAGE rows move in
+`GRAMMAR-COVERAGE.md`.
+
+**Rejected.** Treating package CONTROLLED as a static global with a
+constant initializer (loses ALLOCATE/FREE generations and contradicts
+SC26-3114); pushing/popping a fresh package generation per procedure
+entry (destroys sharing — each call would see a blank slate).
+

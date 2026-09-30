@@ -1177,6 +1177,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // invalid combinations; allocation itself stays out (rules 87-90).
         if (item.controlled) {
           item.sym->controlled = true;
+          // CONTROLLED has generation-stack storage (rule (15), SC26-3114),
+          // never STATIC — even at package scope (ADR-109 collects package
+          // data as static). A package CONTROLLED keeps controlled storage
+          // so INITIAL assigns per allocation, not once as a global.
+          if (!item.external)
+            item.sym->isStatic = false;
           // Cross-object CONTROLLED storage: a per-module counter would reuse
           // the same slot index for unrelated variables in separate object
           // files (e.g. net's conn_rec and a program's body). Assign a
@@ -1392,7 +1398,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // INITIAL on a structure (rule (26)): flatten the itemlist (iteration
           // factors, '*' and groups) and fold each value against its member's
           // type in declaration order. The count must match the scalar leaves.
-          if (item.sym->isStatic) {
+          // CONTROLLED keeps generation-stack storage even at package scope,
+          // so its member INITIAL assigns per allocation (SC26-3114), never
+          // as a static global initializer.
+          if (item.sym->isStatic && !item.sym->controlled) {
             d_.error(item.loc, "INITIAL on a static structure is not implemented in this stage",
                      "(26)");
           } else if (hasDynamicMember(item.ty)) {

@@ -415,6 +415,14 @@ private:
   // generation sized to the compile-time descriptor if none exists yet. Skips
   // CHAR(*) entirely — those require an explicit ALLOCATE with a known size.
   void ensureCtlAlloc(Symbol* sym, SourceLoc loc = SourceLoc{});
+  // INITIAL on a CONTROLLED generation (rules (15),(26), SC26-3114): assign
+  // the declared initial value into the just-allocated generation. Assumes
+  // the generation exists (just pushed); no-INITIAL symbols are a no-op.
+  void emitCtlInit(Symbol* sym, SourceLoc loc = SourceLoc{});
+  // Package CONTROLLED generations (extension, ADR-109): program-lifetime
+  // storage shared by member procedures. Ensure one generation exists (alloc
+  // + INITIAL on first entry, reuse after) without ever popping per proc.
+  void emitPackageCtlEnsure();
   // Implicit FREE for CONTROLLED variables at procedure exit: pop exactly one
   // generation for each symbol this proc implicitly allocated, leaving any
   // explicitly-ALLOCATEd generations above/below untouched.

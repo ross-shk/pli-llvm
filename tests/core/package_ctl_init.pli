@@ -1,0 +1,45 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* extension (ADR-109) + rules (15),(26), SC26-3114: INITIAL on a
+    member of a package-scope CONTROLLED structure assigns with
+    each allocation, not once as a static. */
+ ctlpkg: package exports(bump, getclients, getport, alloccheck);
+    declare 1 server_rec controlled aligned,
+       2 n_clients fixed bin(31) init(0),
+       2 port fixed bin(31) init(8080);
+    bump: procedure();
+       server_rec.n_clients = server_rec.n_clients + 1;
+    end bump;
+    getclients: procedure() returns(fixed bin(31));
+       return(server_rec.n_clients);
+    end getclients;
+    getport: procedure() returns(fixed bin(31));
+       return(server_rec.port);
+    end getport;
+    alloccheck: procedure() returns(fixed bin(31));
+       declare fails fixed bin(31);
+       fails = 0;
+       allocate server_rec;
+       if server_rec.n_clients ^= 0 then fails = fails + 1;
+       if server_rec.port ^= 8080 then fails = fails + 1;
+       server_rec.n_clients = 5;
+       free server_rec;
+       return(fails);
+    end alloccheck;
+ end ctlpkg;
+ main: procedure options(main);
+    declare bump entry() external;
+    declare getclients entry() returns(fixed bin(31)) external;
+    declare getport entry() returns(fixed bin(31)) external;
+    declare alloccheck entry() returns(fixed bin(31)) external;
+    declare fails fixed bin(31);
+    fails = 0;
+    if getclients() ^= 0 then fails = fails + 1;
+    if getport() ^= 8080 then fails = fails + 1;
+    call bump();
+    if getclients() ^= 1 then fails = fails + 1;
+    fails = fails + alloccheck();
+    if getclients() ^= 1 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS pkg_ctl_init');
+    else put skip list('FAIL pkg_ctl_init: fails =', fails);
+ end main;

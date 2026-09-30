@@ -1094,6 +1094,12 @@ void IRGen::emitInitials(HProc* p) {
   for (HStmt* st : decls) {
     for (auto& item : st->decls) {
       Symbol* sym = item.sym;
+      // CONTROLLED INITIAL assigns per allocation (rules (15),(26),
+      // SC26-3114), not at block entry: implicit/explicit/package paths emit
+      // it after each pli_ctl_alloc via emitCtlInit. Skip here so the store
+      // never runs against an empty stack (NULL) before allocation.
+      if (sym && sym->controlled)
+        continue;
       // INITIAL on a dynamic array (rule 26): the element buffer is a bare
       // runtime-sized alloca (allocaLocals pass 2), pre-sized to hold the whole
       // itemlist, so store each value into its slot straight-line.
@@ -1458,10 +1464,16 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // each gets a default-sized generation so first-use references work without
   // an explicit ALLOCATE statement (IBM Enterprise PL/I). CONTROLLED vars are
   // excluded from localSyms (no own frame storage), so they are found by
-  // scanning all storage and filtering to this proc's declarations.
+  // scanning all storage and filtering to this proc's declarations. INITIAL
+  // assigns into the fresh generation per allocation (SC26-3114).
   for (Symbol* sym : sema_.storage())
-    if (sym->controlled && !sym->isStatic && sym->owner == p->src)
+    if (sym->controlled && !sym->isStatic && sym->owner == p->src) {
       ensureCtlAlloc(sym);
+      emitCtlInit(sym, sym->loc);
+    }
+  // Package CONTROLLED generations are program-lifetime: ensure one exists
+  // without ever popping per proc (extension, ADR-109).
+  emitPackageCtlEnsure();
 
   // Rule (91): save the ERROR handler depth so procedure exit restores the
   // caller's establishment state. Skipped when nothing establishes handlers.
@@ -1546,10 +1558,15 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   emitInitials(p);
   recordDynParamUbs(uni);
 
-  // Implicit ALLOCATE for every CONTROLLED variable declared in this proc.
+  // Implicit ALLOCATE for every CONTROLLED variable declared in this proc,
+  // with INITIAL assigned per allocation (SC26-3114).
   for (Symbol* sym : sema_.storage())
-    if (sym->controlled && !sym->isStatic && sym->owner == p->src)
+    if (sym->controlled && !sym->isStatic && sym->owner == p->src) {
       ensureCtlAlloc(sym);
+      emitCtlInit(sym, sym->loc);
+    }
+  // Package CONTROLLED generations are program-lifetime (ADR-109).
+  emitPackageCtlEnsure();
 
   // Rule (91): save the ERROR handler depth for exit restore (see retPads).
   curOnDepth_ = nullptr;
@@ -2397,6 +2414,119 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
 }
 
+// INITIAL on a CONTROLLED generation (rules (15),(26), SC26-3114): assign the
+// declared initial value into the just-allocated generation. A no-INITIAL
+// symbol is a no-op; a structure zeroes first so per-member INITIAL
+// zero-fill slots (nullptr) keep zero-initialised storage like AUTOMATIC.
+void IRGen::emitCtlInit(Symbol* sym, SourceLoc loc) {
+  if (!sym || !sym->controlled)
+    return;
+  if (!sym->initElems.empty() && sym->ty.isStruct()) {
+    llvm::Value* base = addressOf(sym);
+    b_.CreateStore(llvm::ConstantAggregateZero::get(llvmTy(sym->ty)), base);
+    size_t idx = 0;
+    emitStructInitValues(base, sym->ty, sym->initElems, idx, loc);
+    return;
+  }
+  if (!sym->initElems.empty() && sym->ty.isArray() && !sym->ty.isDynamic()) {
+    const Type& et = sym->ty.elementType();
+    llvm::Type* aty = llvm::ArrayType::get(llvmTy(et), (unsigned)arrayExtent(sym->ty));
+    llvm::Value* base = addressOf(sym);
+    int i = 0;
+    for (Expr* e : sym->initElems) {
+      llvm::Value* idx = i32(i++);
+      llvm::Value* p = b_.CreateGEP(aty, base, {i32(0), idx}, "ctl.init.el");
+      storeScalarTo(p, et, initValue(et, e));
+    }
+    return;
+  }
+  if (sym->initExpr) {
+    Expr* e = sym->initExpr;
+    Val v;
+    v.ty = sym->ty;
+    switch (sym->ty.k) {
+    case TK::Float:
+      v.reg = flt(iniNumeric(e));
+      break;
+    case TK::Bit: {
+      if (sym->ty.len == 1) {
+        bool one = e->kind == Expr::BitLit ? (!e->sval.empty() && e->sval[0] == '1')
+                                           : (e->ival != 0 || e->fval != 0);
+        v.reg = b_.getInt1(one);
+        break;
+      }
+      std::vector<unsigned char> bytes = packBitInit(e, sym->ty.len);
+      v.reg = llvm::ConstantDataArray::get(
+          ctx_, llvm::ArrayRef<unsigned char>(bytes.data(), bytes.size()));
+      break;
+    }
+    case TK::Char: {
+      Val cv;
+      cv.ty = sym->ty;
+      cv.ptr = globalString(e->sval);
+      cv.len = i64(e->sval.size());
+      storeTo(sym, cv, loc);
+      return;
+    }
+    default: {
+      long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
+      if (e->kind == Expr::DecLit) {
+        int dq = sym->ty.scale - e->decScale;
+        val = dq > 0   ? val * pliPow10(dq)
+              : dq < 0 ? pliRescaleDown(val, -dq, sym->ty.k == TK::FixedDec)
+                       : val;
+      }
+      v.reg = llvm::ConstantInt::get(llvmTy(sym->ty), val, true);
+      break;
+    }
+    }
+    storeTo(sym, v, loc);
+    return;
+  }
+  if (sym->initCallH) {
+    Val v = emitExpr(sym->initCallH);
+    storeTo(sym, v, loc);
+    return;
+  }
+}
+
+// Package CONTROLLED generations (extension, ADR-109): program-lifetime
+// storage shared by member procedures. Ensure one generation exists (alloc +
+// INITIAL on first entry, reuse after) without ever popping per proc.
+void IRGen::emitPackageCtlEnsure() {
+  for (Symbol* sym : sema_.storage()) {
+    if (!sym->controlled || sym->kind != Symbol::Var)
+      continue;
+    if (!sym->owner || !sym->owner->isPackage)
+      continue;
+    if (sym->ty.isChar() && sym->ty.starLen && !sym->dynLenExpr)
+      continue;
+    if (sym->ty.isArray() && sym->ty.isDynamic())
+      continue;
+    llvm::Value* addr =
+        b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "pkgctl");
+    llvm::Value* isnull = b_.CreateICmpEQ(
+        addr, llvm::Constant::getNullValue(addr->getType()), "pkgctlnull");
+    llvm::BasicBlock* needBB = llvm::BasicBlock::Create(ctx_, "pkgctl.need", curFn_);
+    llvm::BasicBlock* haveBB = llvm::BasicBlock::Create(ctx_, "pkgctl.have", curFn_);
+    b_.CreateCondBr(isnull, needBB, haveBB);
+    b_.SetInsertPoint(needBB);
+    llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(sym->ty)).getFixedValue());
+    if (sym->ty.isChar() && sym->ty.starLen && sym->dynLenExpr)
+      sz = toI64(emitExpr(sym->dynLenExpr), sym->loc);
+    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+    if (sym->ty.isChar() && sym->ty.varying) {
+      llvm::Value* vaddr =
+          b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "pkgctl.vaddr");
+      llvm::Value* lp = b_.CreateStructGEP(llvmTy(sym->ty), vaddr, 0, "pkgctl.vlenp");
+      b_.CreateStore(b_.getInt32(0), lp);
+    }
+    emitCtlInit(sym, sym->loc);
+    b_.CreateBr(haveBB);
+    b_.SetInsertPoint(haveBB);
+  }
+}
+
 // Implicit FREE for CONTROLLED variables at procedure exit: pop one generation
 // for each symbol this proc implicitly allocated, so explicit ALLOCATE/FREE
 // pairs inside the body stay balanced on top of the implicit generation.
@@ -2444,11 +2574,14 @@ void IRGen::emitAllocate(HStmt* s) {
       }
       b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
       if (bsym->ty.isChar() && bsym->ty.varying) {
-        // A fresh VARYING generation starts empty (cur = 0).
+        // A fresh VARYING generation starts empty (cur = 0); an INITIAL value
+        // overwrites it next via emitCtlInit.
         llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(bsym)}, "vaddr");
         llvm::Value* lp = b_.CreateStructGEP(llvmTy(bsym->ty), addr, 0, "vlenp");
         b_.CreateStore(b_.getInt32(0), lp);
       }
+      // INITIAL assigns with each allocation (rules (15),(26), SC26-3114).
+      emitCtlInit(bsym, s->loc);
       continue;
     }
     // IN ( area ) (rule (88)): take the block from the AREA region instead of
