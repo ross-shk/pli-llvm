@@ -1,321 +1,208 @@
 # plic — a PL/I compiler targeting LLVM
 
-A modern PL/I compiler built to the formal specification of the language: **TR 25.084, *Concrete Syntax of PL/I*** (IBM Laboratory Vienna, 28 June 1968) for syntax, and **Y33-6003** for semantics. The extracted, OCR-repaired grammar lives in `TR25.084-concrete-syntax.md`.
+A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). The extracted grammar lives in `TR25.084-concrete-syntax.md`.
 
-**Distribution**: Single binary (like Go/Zig) — the `plic` executable embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
+**Single-binary distribution** (like Go/Zig) — the `plic` executable embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
 
-```
+```bash
 $ make -j8
-$ ./build/plic tests/core/hello.pli -o hello 
+$ ./build/plic tests/core/hello.pli -o hello
 $ ./hello
 Hello, world!
 ```
 
 ### Platforms
+- **Linux** (x86_64, ARM64): clang or gcc
+- **macOS** (Intel, Apple Silicon): clang
+- **Windows** (x86_64, ARM64): **MSVC/nmake** (not MinGW); portable threading abstraction wraps POSIX pthreads and Win32 primitives
 
-- **Linux** (x86_64, ARM64): builds with clang or gcc
-- **macOS** (Intel, Apple Silicon): builds with clang
-- **Windows** (x86_64, ARM64): builds with **MSVC/nmake** (not MinGW/MSYS2); uses a platform abstraction layer for threading (`runtime/sync/plic_thread.h` wraps POSIX pthreads and Win32 `CRITICAL_SECTION`/`CONDITION_VARIABLE`/`_beginthreadex`/`Sleep`)
+---
 
 ## Quick Start
 
 ### Prerequisites
-
-- C++20 compiler (clang++ or g++; MSVC on Windows)
+- C++20 compiler (clang++/g++; MSVC on Windows)
 - CMake ≥ 3.20
-- LLVM ≥ 18 with `clang` and `lld` (for assembling/linking the generated IR)
+- LLVM ≥ 18 with `clang` and `lld`
 
 ### Build
-
-The canonical build is CMake (it links the LLVM C++ API per ADR-002 plus `lld` and embeds the runtime bitcode). The Makefile delegates to CMake, keeping the familiar `make -j8 && make test` workflow.
-
 ```bash
-make -j8               # builds build/plic and build/libpli.a via CMake (parallel)
-```
-
-Or use CMake directly:
-
-```bash
+make -j8              # builds via CMake (canonical)
+# or directly:
 cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir)
 cmake --build build/cmake -j8
 ```
 
-### Compile and run a PL/I program
-
-See [tests/core/hello.pli](tests/core/hello.pli):
-
-```pli
- hello: procedure options(main);
-    put skip list('Hello, world!');
- end hello;
-```
-
-Compile to executable:
-
-```bash
-./build/plic tests/core/hello.pli -o hello
-./hello
-```
-
-### Run tests
-
-```bash
-make test             # full test suite (451 tests)
-./tests/run_tests.py usecases   # run specific test group
-```
-
-### Install
-
-```bash
-make install          # installs to /usr/local by default
-```
-
-## Documentation
-
-| Document                                                         | Contents                                                                                  |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                               | how to add a feature: layer map, workflow, invariants, test conventions                   |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                     | pipeline, IR levels, data representation, ABI, condition model, runtime interface         |
-| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)             | rule-by-rule implementation notes, supported cases, diagnostics, and test references      |
-| [docs/SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md) | TR 25.084 / Y33-6003 compliance audit: GAP-ANALYSIS, CONFORMANCE-MATRIX, REMEDIATION-PLAN |
-| [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)             | design history: keyword handling, numeric representation, IR choices, and other decisions |
-
-## What the compiler handles today
-
-- procedures with `OPTIONS(MAIN)`, internal procedures, `CALL`, `RETURN`, `STOP`
-- **function procedures** via `RETURNS(...)` and `RETURN(value)` — scalar, `CHAR(n) [VARYING]`, and structure results; recursive functions run with `RECURSIVE`, enforced across static call cycles (rules (5),(34))
-- internal procedures reach enclosing automatic storage through a **static link**, so external procedures stay **reentrant** (rule (8), ADR-027)
-- **multiple entry points** via the entry-namelist `a, b: PROCEDURE `(`multientry.pli`); sibling external procedures call each other, and `PACKAGE`/`EXPORTS` shares package-level data between members
-- **`ENTRY` statements** (`label: ENTRY(params) RETURNS(...)`) — alternate entry points with their own parameters/result type (`entry.pli`, rule (56))
-- calling external C procedures via `DECLARE … ENTRY(...)` (by reference, ADR-021), plus `OPTIONS(BYVALUE)`/`LINKAGE(SYSTEM)` value-passing for `FIXED`/`FLOAT` scalars and pointers (`cbyvalue.pli`)
-- parameters **by reference**, with dummy arguments when conversion is needed; `OPTIONAL` parameters tested with `OMITTED`/`PRESENT`; `BYADDR(s)` opts a single structure argument out of the by-value copy
-- `DECLARE` with the attribute default rules and `INITIAL` constants — scalars, array itemlists (iteration factors, `*` repeat-last), structures, `INITIAL CALL`, and dynamic extents; implicit declarations (I–N → `FIXED BINARY`) with warnings
-- `IF`/`THEN`/`ELSE` (nested, `DO`-group branches); `BEGIN` blocks are real lexical scopes; `DISPLAY(scalar)`; `STOP`/`EXIT`
-- `DO;`, `DO WHILE(e);`, `DO I = a TO b BY c WHILE(d);`
-- **local `GO TO**` / `GOTO` to a labelled statement in the same procedure (`goto.pli`); non-local `GO TO` is diagnosed (M4/QR2.4)
-- **multiple closure**: one `END L;` closes every open block up to `L`
-- `FIXED BINARY(p,q)`, scaled `FIXED DECIMAL(p,q)`, `FLOAT`, `COMPLEX `(with `COMPLEX`/`REAL`/`IMAG`/`CONJG` and complex I/O), `BIT(1)` and packed  
-`BIT(n)`, `CHARACTER(n)` / `VARYING` / `VARYINGZ` (NUL-terminated C strings, ADR-168), adjustable-length `CHAR(*) `parameters, concatenation, blank-padded comparison, replicated string constants, hex `X` literals
-- fixed-size arrays (multi-axis, `lb:ub`, negative bounds, row-major) and single-axis dynamic AUTOMATIC arrays plus dynamic/` *` parameters with runtime `SUBSCRIPTRANGE`/`LBOUND`/`HBOUND`/`DIM`; cross-sections (`A(i, *)`, `A(*, *)`) and whole-array expressions; array reductions `SUM`/`PROD`/`ANY`/`ALL`
-- level-numbered structures with factoring, `LIKE` (incl. qualified templates), arrays of structures, whole-structure and `BY NAME` assignment, multiple assignment `a, b, c = e`; `UNALIGNED` packs members to match a C packed record (ADR-169)
-- `DEFINED` overlays with `iSUB` (incl. affine index arithmetic), `POINTER`/`ADDR`/`NULL`, `BASED(P)` structures with `P -> X` locators, `ALLOCATE … SET(P)`/`FREE`, and `CONTROLLED` generation stacks
-- conditions: `ON`/`SIGNAL`/`REVERT` for `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, and programmer-named `CONDITION(name)`; `ONCODE()`; `(NOSIZE)`/`(NOSUBSCRIPTRANGE)`/`(NOZERODIVIDE)` prefixes elide checks
-- `TASK`/`EVENT`/`PRIORITY` async `CALL` with `WAIT`/`DELAY` synchronization
-- stream I/O: `PUT`/`GET LIST` (incl. arrays, complex, decimal), `EDIT` with `F`/`E`/`A`/`X`/`SKIP`/`PAGE`/`LINE`/`COL` items and `(n)(…) `iteration groups, `DATA`-directed transmission, `STRING` and `FILE `routing, `OPEN`/`CLOSE` with `TITLE`
-- SEQUENTIAL RECORD files: `WRITE FILE(f) FROM(v)` / `READ FILE(f) INTO(v) `fixed-size binary records (`driver/record`, rules (112),(113))
-- preprocessor: recursive `%INCLUDE`/`%XINCLUDE`, `%DECLARE`, `%IF … %THEN … [%ELSE]`, `%ACTIVATE`/`%DEACTIVATE`-gated substitution
-- full operator set at spec precedence, including `**` right-associativity, `¬`/`^`/`~`, `!!` for concatenation, and the 48-character-set operator words (`AND`, `GT`, `CAT`, …)
-- built-ins per [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md): string (`SUBSTR` incl. pseudo-variable assignment, `INDEX`, `LENGTH`, `REPEAT`, `VERIFY`, `TRANSLATE`, `TRIM`, `TALLY`, case/center/search/rank/collate, `REVERSE`, `HIGH`, `LOW`), math (incl. degree trig, `ASIN`/`ACOS`/`ATAN2`/`CBRT`), array/pointer/misc (`LBOUND`/`HBOUND`/`DIM` with axis forms, `NULL`, `ADDR`, `DATE`, `TIME`, `SYSPARM`)
-- **no reserved words** — `tests/core/keywords.pli` uses `IF`, `THEN`, `ELSE`, `DO`, `END` and `PUT` as ordinary variables
-
-Everything else is reported as unimplemented *with its specification rule number*, which doubles as the to-do list; the full matrix is `docs/GRAMMAR-COVERAGE.md`.
-
-## Calling external C procedures
-
-PL/I can call procedures written in C (architecture goal 4; ADR-021). Declare an external entry with the `ENTRY` attribute (rule 38) and call it like any procedure; arguments are passed **by reference** — the PL/I default — so the C callee receives pointers.
-
-`caller.pli`:
-
-```pli
- caller: procedure options(main);
-    declare x fixed bin(31);
-    declare c_set entry (fixed bin(31))
-       external('c_set');
-    x = 0;
-    call c_set(x);            /* C function receives &x */
-    if x = 42 then put skip list('PASS');
- end caller;
-```
-
-`c_set.c`:
-
-```c
-void c_set(int *x) { *x = 42; }
-```
-
-Compile each unit to an object and link them together with the runtime:
-
-```
-./build/plic caller.pli -c -o caller.o
-cc -c c_set.c -o c_set.o
-cc caller.o c_set.o build/libpli.a -o caller
-```
-
-If the C code is already built into a library archive, plic links it directly in one step (ADR-162), so no `cc` is needed:
-
-```
-cc -c c_set.c -o c_set.o && ar rcs libcset.a c_set.o
-./build/plic caller.pli -o caller -L . -lcset
-```
-
-`OPTIONS(BYVALUE)`/`LINKAGE(SYSTEM)` entries pass `FIXED`/`FLOAT` scalars and pointers as C values instead. Full dope-vector entry descriptors, `USES`/`SETS`, and character-valued C results are not yet implemented (QR1/QR2).
-
-## Multi-module PL/I programs
-
-A top-level (non-`MAIN`, non-nested) procedure is externally linked under its upper-cased name (rule 42; ADR-103), so another unit's `ENTRY...EXTERNAL` declaration resolves at link time. Give all the units to a single `plic` invocation and it compiles each to an object and links them with the runtime:
-
-```
-./build/plic lib.pli main.pli -o prog
-```
-
-Scalar parameters are passed by reference and function returns work across the link, exactly as in the C-interop form above (array and structure parameters need full entry descriptors, QR1.1; shared `EXTERNAL` variables are a follow-up).
-
-Each unit is an independent relocatable object, so you can also compile them separately and link by hand:
-
-```
-./build/plic -c main.pli          # writes main.o (or -o main.o)
-./build/plic -c lib.pli           # writes lib.o
-cc main.o lib.o build/libpli.a -o prog
-```
-
-Only a unit that declares `OPTIONS(MAIN)` emits a `main` shim, so a library module with no entry point compiles cleanly either way.
-
-## Cross-compilation
-
-`plic` can compile PL/I programs for other platforms (Linux x86_64, Linux ARM64, Windows x86_64, Windows ARM64) from any supported host, provided the LLVM toolchain is built with the required targets and lld is installed.
-
-### Building the compiler with cross-target support
-
-By default, `plic` embeds the runtime bitcode for the host platform only. To generate per-target runtime bitcode bundles at build time (requires `clang` supporting the target triples and the lld linker), rebuild:
-
-```bash
-cmake -S . -B build/cmake -DLLVM_DIR=$(llvm-config --cmakedir) -DClang_DIR=$(llvm-config --cmakedir) -DPLIC_CROSS_BITCODE=ON
-cmake --build build/cmake -j8
-```
-
-With `PLIC_CROSS_BITCODE=ON`, the build generates `libpli.bc` for all four supported cross-targets and embeds each as a separate byte array. This requires clang cross-target sysroot headers.
-
-### Compiling for a target
-
-Use `--triple` (or `-target`) to select the target platform:
-
+### Cross-compile PL/I code
+Compile for another target with `--triple` (build `plic` with `PLIC_CROSS_BITCODE=ON` first):
 ```bash
 ./build/plic --triple x86_64-unknown-linux-gnu program.pli -o program
 ./build/plic -target aarch64-pc-windows-gnu program.pli -o program.exe
 ```
 
-To cross-compile the compiler itself for another platform (e.g., produce a Linux x86_64 binary on macOS):
+### Run a PL/I program
+```pli
+fib: procedure options(main);
+    declare (n, a, b, i) fixed bin(31);
+    put skip list('Fibonacci:');
+    get list(n);
+    a = 0; b = 1;
+    do i = 1 to n;
+        put skip list(a);
+        a = b; b = a + b;
+    end;
+end fib;
+```
 
 ```bash
-cd /path/to/llvm-project
-cmake -G Ninja \
-  -DLLVM_ENABLE_PROJECTS="clang;lld" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_TARGETS_TO_BUILD="X86;AArch64" \
-  -DCMAKE_CROSSCOMPILING=ON \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_SYSTEM_NAME=Linux \
-  -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
-  -DCMAKE_FIND_ROOT_PATH="<path-to-sysroot>" \
-  -B build-cross
-ninja
+./build/plic tests/core/fib.pli -o fib
+./fib
 ```
 
-### Toolchain files
-
-Sample CMake toolchain files for cross-compilation are provided in `cmake/toolchains/`:
-
-| File                                       | Target                      |
-| ------------------------------------------ | --------------------------- |
-| `cmake/toolchains/linux-x86_64.cmake`      | `x86_64-unknown-linux-gnu`  |
-| `cmake/toolchains/linux-aarch64.cmake`     | `aarch64-unknown-linux-gnu` |
-| `cmake/toolchains/windows-x86_64.cmake`    | `x86_64-pc-windows-gnu`     |
-| `cmake/toolchains/windows-aarch64.cmake`   | `aarch64-pc-windows-gnu`    |
-
-Use a toolchain file with:
-
+### Test
 ```bash
-cmake -S . -B build-cross -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/linux-x86_64.cmake
+make test             # 451 tests
+./tests/run_tests.py usecases   # specific group
 ```
 
-## Usage
+---
 
+## What Works Today
+
+| Feature | Examples |
+|---------|----------|
+| **Procedures & functions** | `OPTIONS(MAIN)`, internal, `RETURNS`, `RECURSIVE`, multiple entry points |
+| **Static link for nested scopes** | Internal procedures access enclosing automatics; externals stay reentrant |
+| **C interop** | `ENTRY ... EXTERNAL`, `BYVALUE`, `LINKAGE(SYSTEM)` for scalars/pointers |
+| **Data types** | `FIXED BIN/DEC(p,q)`, `FLOAT`, `COMPLEX`, `BIT`, `CHAR/VARYING/VARYINGZ`, `POINTER` |
+| **Arrays & structures** | Dynamic extents, cross-sections `A(i,*)`, reductions `SUM`/`PROD`/`ANY`/`ALL`, `LIKE`, `BY NAME` |
+| **Storage** | `BASED`/`ALLOCATE/FREE`, `CONTROLLED` stacks, `DEFINED` with `iSUB`, `ADDR`/`NULL` |
+| **Conditions** | `ON`/`SIGNAL`/`REVERT` for `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, named conditions |
+| **Concurrency** | `TASK`/`EVENT`/`PRIORITY` async `CALL` with `WAIT`/`DELAY` |
+| **Stream I/O** | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE` |
+| **Record I/O** | `WRITE`/`READ` fixed-size binary records |
+| **Preprocessor** | `%INCLUDE`, `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE` |
+| **Built-ins** | String, math, array/pointer/misc (see `GRAMMAR-COVERAGE.md`) |
+| **No reserved words** | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables |
+
+Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *is* the to-do list.
+
+---
+
+## Interesting Example: Concurrent Prime Sieve
+
+```pli
+sieve: procedure options(main);
+    declare (n, i, j, count) fixed bin(31);
+    declare primes(1000) fixed bin(31);
+    declare sieve(1000) bit(1);
+    declare done event;
+
+    put skip list('Limit:');
+    get list(n);
+    sieve = '1'b;
+    sieve(1) = '0'b;
+    count = 0;
+
+    do i = 2 to n;
+        if sieve(i) then do;
+            count = count + 1;
+            primes(count) = i;
+            call mark_multiples(i, n);
+        end;
+    end;
+
+    put skip list('Found ' || trim(count) || ' primes');
+    put skip list('First 10:');
+    do i = 1 to min(10, count);
+        put skip list(primes(i));
+    end;
+
+mark_multiples: procedure(p, limit) task priority(10);
+    declare (p, limit, k) fixed bin(31);
+    do k = p * p to limit by p;
+        sieve(k) = '0'b;
+    end;
+    signal done;
+end mark_multiples;
+
+end sieve;
 ```
-plic [options] file.pli...
 
-Multiple inputs compile like cc: each file becomes an independent object and
-they are linked together with libpli into one output. Per-file modes apply to
-each input (-c writes <base>.o, -emit-llvm writes <base>.ll per file); a
-single -o cannot name several outputs, so -o is single-input only in those modes.
+Shows: `TASK`/`EVENT` async calls, dynamic arrays, string handling, `BIT` arrays, `TRIM`, and condition handling.
 
-  -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)
-  -c               compile each input to a relocatable object (no linking)
-  -emit-llvm       write LLVM IR per input and stop
-  --print-hir      lower to HIR and print it per input, then stop
-  -fsyntax-only    parse and analyse each input only
-  -O0 … -O3, -Os   optimization level passed to the LLVM pipeline (default -O2)
-  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE))
-  --release        -O3 plus linker dead-stripping (also strips symbols on macOS)
-  --debug          no optimization + debug info (-O0 -g)
-  --keep-ll        keep the intermediate .ll next to the output
-  --runtime <lib>  path to libpli.a (default: baked in at build time)
-  --clang <path>   clang used to assemble/link the IR (default: LLVM's clang)
-  --triple <t>     target triple (default: `clang -dumpmachine`)
-  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))
-  -L <dir>         add a library search path to the link step
-  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)
-  -l<lib>          link a library (e.g. -lm) on the link step
-  -Wl,<flag>       pass a raw flag to the linker (repeatable)
-  --linker <ld>    select the linker via -fuse-ld=<ld>
-  -shared -static  produce a shared / static binary
-  --extra <a,b,c>  comma-separated extra backend args appended to the link
-  --explain <n>    print TR 25.084 rule (n)'s production and exit
-  -v               show the sub-commands being run
-  -h, --help       this message
-```
+---
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to add features: layer map, workflow, invariants |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Pipeline, IR levels, data representation, ABI, runtime |
+| [GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md) | Rule-by-rule implementation status |
+| [SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md) | TR 25.084 / Y33-6003 audit: GAP-ANALYSIS, CONFORMANCE-MATRIX, REMEDIATION-PLAN |
+| [DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) | Historical design decisions (ADRs) |
+
+---
 
 ## Layout
 
 ```
-src/         compiler: diag, lexer, parser, sema, hir, irgen, preprocessor,
-             explain, driver
-runtime/     libpli: core, stream, string, math, conditions, storage,
-             get, file, edit, task
-tests/       groups (core, builtins, usecases, driver, ir, preprocessor,
-             multimodule, corner_cases): golden (expected/*.out) or
-             self-checking (prints PASS) + out/
+src/         compiler: diag, lexer, parser, sema, hir, irgen, preprocessor, driver
+runtime/     libpli: core, stream, string, math, conditions, storage, task
+tests/       8 groups: core, builtins, usecases, driver, ir, preprocessor, multimodule, corner_cases
 docs/        architecture, decisions, optimization, plans, coverage
 ```
 
-## Building and testing
+---
 
-Requires a C++20 compiler and LLVM ≥ 18 with `clang` and `lld` (used to assemble/optimize/link the generated LLVM IR — see ADR-002). On Windows, MSVC is required (MinGW/MSYS2 is not supported).
+## Building & Testing
 
-The Makefile delegates to CMake for the actual build:
-
-```
-make -j8        # build build/plic and build/libpli.a via CMake (parallel)
-make test       # compile, run and check every test program (diff or PASS-grep)
-make check      # analysis gate: -Werror build + fmt-check + clang-tidy + scan-build
+```bash
+make -j8        # build via CMake (parallel)
+make test       # 451 tests (golden diff or PASS-grep)
+make check      # -Werror + fmt-check + clang-tidy + scan-build
 make clean
 ```
 
-Or use CMake directly:
-
+CMake directly:
 ```bash
 cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir)
 cmake --build build/cmake -j8
 ctest --test-dir build/cmake
 ```
 
-Run tests in specific groups with:
+Windows: use MSVC + CMake (no MinGW/MSYS2). The threading abstraction in `runtime/sync/plic_thread.h` wraps `pthread_once`/`pthread_mutex`/`pthread_cond` and `InitOnceExecuteOnce`/`CRITICAL_SECTION`/`CONDITION_VARIABLE`/`_beginthreadex`/`Sleep`.
 
+---
+
+## Cross-Compilation
+
+`plic` can target Linux x86_64, Linux ARM64, Windows x86_64, Windows ARM64 from any host (requires LLVM with the target backends and `lld`).
+
+**Build with multi-target runtime bitcode** (embeds all 4 targets):
+```bash
+cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir) -DPLIC_CROSS_BITCODE=ON
+cmake --build build/cmake -j8
 ```
-./tests/run_tests.py usecases
+
+**Compile for a target**:
+```bash
+./build/plic --triple x86_64-unknown-linux-gnu program.pli -o program
+./build/plic -target aarch64-pc-windows-gnu program.pli -o program.exe
 ```
 
-or a specific test with:
+Toolchain files in `cmake/toolchains/` for the 4 targets.
 
-```
-./tests/run_tests.py usecases/control.pli
-```
+---
 
-Run `make test` for the current suite; test counts change as coverage grows.
+## Known Deviations
 
-## Known deviations
+1. **`/` and `**` use floating-point** (ADR-014); exact `FIXED` division/scale is D1/QR2
+2. **Unimplemented = diagnosed** with rule number — see `GRAMMAR-COVERAGE.md`
 
-Documented in full in the ADRs; the load-bearing ones:
+---
 
-1. `/` and `**` are evaluated in floating point (ADR-014); exact `FIXED `division/scale semantics are a D1/QR2 item.
-2. Unimplemented sub-cases are diagnosed with their rule number rather than silently accepted — the diagnostic is the to-do list (see `docs/GRAMMAR-COVERAGE.md` for what is left).
+## License
+
+MIT — see `LICENSE`.
