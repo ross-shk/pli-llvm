@@ -4,12 +4,15 @@
    TR 25.084 rules: (1) program, (2) procedure, (5) OPTIONS, (7) end-clause,
    (28) DO with TO/BY, (31) arithmetic, (104)/(105)/(109) PUT LIST/GET LIST. */
 FIB: PROCEDURE OPTIONS(MAIN);
-  DECLARE (N, A, B, I) FIXED BIN(31);
+  DECLARE (N, A, B, I, TMP) FIXED BIN(31);
   PUT SKIP LIST('Fibonacci:');
   GET LIST(N);
   A = 0; B = 1;
   DO I = 1 TO N;
     PUT SKIP LIST(A);
-    A = B; B = A + B;
+    TMP = A + B;
+    A = B;
+    B = TMP;
   END;
+  PUT SKIP LIST('PASS');
 END FIB;

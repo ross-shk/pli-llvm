@@ -42,21 +42,14 @@ Compile for another target with `--triple` (build `plic` with `PLIC_CROSS_BITCOD
 
 ### Run a PL/I program
 ```pli
-fib: procedure options(main);
-    declare (n, a, b, i) fixed bin(31);
-    put skip list('Fibonacci:');
-    get list(n);
-    a = 0; b = 1;
-    do i = 1 to n;
-        put skip list(a);
-        a = b; b = a + b;
-    end;
-end fib;
+hello: procedure options(main);
+    put skip list('Hello, world!');
+end hello;
 ```
 
 ```bash
-./build/plic tests/core/fib.pli -o fib
-./fib
+./build/plic tests/core/hello.pli -o hello
+./hello
 ```
 
 ### Test
@@ -89,47 +82,45 @@ Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *
 
 ---
 
-## Interesting Example: Concurrent Prime Sieve
+## Interesting Example: Prime Sieve
 
 ```pli
 sieve: procedure options(main);
-    declare (n, i, j, count) fixed bin(31);
+    declare (n, i, k, count, limit) fixed bin(31);
     declare primes(1000) fixed bin(31);
     declare sieve(1000) bit(1);
-    declare done event;
 
     put skip list('Limit:');
     get list(n);
+    limit = min(n, 1000);
+
     sieve = '1'b;
     sieve(1) = '0'b;
     count = 0;
 
-    do i = 2 to n;
+    do i = 2 to limit;
         if sieve(i) then do;
             count = count + 1;
             primes(count) = i;
-            call mark_multiples(i, n);
+            do k = i * i to limit by i;
+                sieve(k) = '0'b;
+            end;
         end;
     end;
 
-    put skip list('Found ' || trim(count) || ' primes');
+    put skip list('Found ');
+    put skip list(count);
+    put skip list(' primes');
     put skip list('First 10:');
     do i = 1 to min(10, count);
         put skip list(primes(i));
     end;
 
-mark_multiples: procedure(p, limit) task priority(10);
-    declare (p, limit, k) fixed bin(31);
-    do k = p * p to limit by p;
-        sieve(k) = '0'b;
-    end;
-    signal done;
-end mark_multiples;
-
+    put skip list('PASS');
 end sieve;
 ```
 
-Shows: `TASK`/`EVENT` async calls, dynamic arrays, string handling, `BIT` arrays, `TRIM`, and condition handling.
+Shows: arrays, `BIT` arrays, dynamic extents, `DO` loops with `TO/BY`, arithmetic, `MIN`, string handling, and list-directed I/O.
 
 ---
 
