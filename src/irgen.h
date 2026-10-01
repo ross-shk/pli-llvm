@@ -163,6 +163,10 @@ private:
   // return at once. Shared by emitCall when a task option is present.
   void emitAsyncCall(HStmt* s);
   void emitWait(HStmt* s);        // WAIT (rule (82), QR2.8)
+  // Address of a task/event operand (rule (78),(81)): accepts a scalar,
+  // array-element (ev(i)) or member reference, covering CONTROLLED/dynamic
+  // storage for the latter two. Returns a pointer to the underlying flag.
+  llvm::Value* taskEventAddr(HExpr* e, SourceLoc loc);
   void emitDelay(HStmt* s);       // DELAY (rule (83), QR2.8)
   void emitAllocate(HStmt* s);    // ALLOCATE (rule 87)
   void emitFree(HStmt* s);        // FREE (rule 90)
