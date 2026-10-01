@@ -1,0 +1,38 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Prime sieve — exercises arrays, DO loops, arithmetic, string ops.
+   TR 25.084 rules: (1)(2)(5)(7) basic proc, (28) DO with TO/BY,
+   (31) arithmetic, (104)/(105)/(109) PUT LIST, BIT arrays, MIN built-in. */
+SIEVE: PROCEDURE OPTIONS(MAIN);
+  DECLARE (N, I, K, COUNT, LIMIT) FIXED BIN(31);
+  DECLARE PRIMES(1000) FIXED BIN(31);
+  DECLARE SIEVE(1000) BIT(1);
+
+  PUT SKIP LIST('Limit:');
+  GET LIST(N);
+  LIMIT = MIN(N, 1000);
+
+  SIEVE = '1'B;
+  SIEVE(1) = '0'B;
+  COUNT = 0;
+
+  DO I = 2 TO LIMIT;
+    IF SIEVE(I) THEN DO;
+      COUNT = COUNT + 1;
+      PRIMES(COUNT) = I;
+      DO K = I * I TO LIMIT BY I;
+        SIEVE(K) = '0'B;
+      END;
+    END;
+  END;
+
+  PUT SKIP LIST('Found ');
+  PUT SKIP LIST(COUNT);
+  PUT SKIP LIST(' primes');
+  PUT SKIP LIST('First 10:');
+  DO I = 1 TO MIN(10, COUNT);
+    PUT SKIP LIST(PRIMES(I));
+  END;
+
+  PUT SKIP LIST('PASS');
+END SIEVE;
