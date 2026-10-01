@@ -1,0 +1,14 @@
+# Headless runner for plic-produced Windows .exe files (console only, no X).
+# NOTE: on ARM Macs run this image with --platform linux/amd64 — ARM Wine
+# cannot execute x86_64 Windows binaries, emulation covers it.
+FROM debian:trixie-slim
+# Minimal Wine; WINEDEBUG silences fixme noise for clean agent logs.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      wine64 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/lib/wine/wine64 /usr/bin/wine64
+# arm64 Wine runs ARM64 Windows binaries; x86_64 .exe files need this image
+# rebuilt with --platform linux/amd64 (see run-cross-test.sh).
+ENV WINEDEBUG=-all
+WORKDIR /work
+CMD ["wine64", "--version"]
