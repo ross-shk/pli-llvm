@@ -8,6 +8,7 @@
 // interface below; parser and sema are untouched.
 #pragma once
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,6 +43,15 @@ public:
         noSizeChecks_(noSizeChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
 
   std::string run(HProgram& prog);
+
+  // Module ownership for the in-process backend (review §4): reuses run()
+  // (so `-emit-llvm` stays byte-identical) then re-parses the IR into a fresh
+  // context the caller owns. Null on any diagnostic failure.
+  struct OwnedModule {
+    std::unique_ptr<llvm::LLVMContext> ctx;
+    std::unique_ptr<llvm::Module> mod;
+  };
+  std::unique_ptr<OwnedModule> takeModule(HProgram& prog);
 
 private:
   // --- emission primitives -------------------------------------------
@@ -102,6 +112,10 @@ private:
   void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM);
   void allocaLocals(HProc* p);
   void emitInitials(HProc* p); // INITIAL stores on AUTOMATIC vars (rule 26)
+  // Folded constant INITIAL/VALUE on a Fixed/Float scalar (rules (26), ADR-108):
+  // true + `out` when `s` qualifies. Stored at alloca time so later entry code
+  // (dynamic bounds) loads the value even without optimization.
+  bool constScalarInit(Symbol* s, Val& out);
   // Record the runtime upper bound of each dynamic (runtime-extent) array
   // parameter at entry (rules (12),(13),(34)-(38)): a parameter like `x(k)` is
   // a by-reference pointer with no own storage, so its extent must be read from

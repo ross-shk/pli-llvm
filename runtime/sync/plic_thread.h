@@ -3,7 +3,8 @@
 /* runtime/sync/plic_thread.h — portable threading abstraction (Phase 0). */
 /* One identical C11 API over POSIX pthreads and MSVC primitives, so the
  * runtime compiles for ELF/Mach-O/COFF hosts without #ifdefs at use sites.
- * All functions are static inline; the header has no link-time footprint. */
+ * All functions are static inline; the header has no link-time footprint.
+ * Compilable as C11; no C++ in the runtime. */
 #ifndef PLIC_THREAD_H
 #define PLIC_THREAD_H
 
@@ -30,6 +31,7 @@ typedef pthread_t pli_thread;
 #define PLI_ONCE_INIT PTHREAD_ONCE_INIT
 #endif
 
+/* --- mutex -------------------------------------------------------------- */
 /* Mutual exclusion around one shared EVENT/task table. */
 static inline void pli_mutex_init(pli_mutex *m) {
 #if defined(_WIN32)
@@ -55,6 +57,7 @@ static inline void pli_mutex_unlock(pli_mutex *m) {
 #endif
 }
 
+/* --- condition variable -------------------------------------------------- */
 /* Condition broadcast/wait paired with the mutex above. */
 static inline void pli_cond_init(pli_cond *c) {
 #if defined(_WIN32)
@@ -72,6 +75,14 @@ static inline void pli_cond_wait(pli_cond *c, pli_mutex *m) {
 #endif
 }
 
+static inline void pli_cond_signal(pli_cond *c) {
+#if defined(_WIN32)
+  WakeConditionVariable(c);
+#else
+  pthread_cond_signal(c);
+#endif
+}
+
 static inline void pli_cond_broadcast(pli_cond *c) {
 #if defined(_WIN32)
   WakeAllConditionVariable(c);
@@ -80,16 +91,17 @@ static inline void pli_cond_broadcast(pli_cond *c) {
 #endif
 }
 
+/* --- once ---------------------------------------------------------------- */
 /* One-time initialisation for mutexes/conds that have no static initializer. */
 #if defined(_WIN32)
-/* Adapter from InitOnceExecuteOnce's signature to a plain void(void) fn. */
-struct pli_once_arg {
+/* Adapter carrying a `void(*)(void)` through InitOnceExecuteOnce. */
+struct pli_once_ctx {
   void (*fn)(void);
 };
-static BOOL CALLBACK pli_once_tramp(PINIT_ONCE o, PVOID p, PVOID *c) {
+static inline BOOL CALLBACK pli_once_trampoline(PINIT_ONCE o, PVOID p, PVOID *c) {
   (void)o;
   (void)c;
-  ((struct pli_once_arg *)p)->fn();
+  ((struct pli_once_ctx *)p)->fn();
   return TRUE;
 }
 #endif
@@ -97,55 +109,72 @@ static BOOL CALLBACK pli_once_tramp(PINIT_ONCE o, PVOID p, PVOID *c) {
 static inline void pli_call_once(pli_once *o, void (*fn)(void)) {
 #if defined(_WIN32)
   /* Synchronous: the stack argument outlives the call. */
-  struct pli_once_arg a;
-  a.fn = fn;
-  InitOnceExecuteOnce(o, pli_once_tramp, &a, NULL);
+  struct pli_once_ctx ctx;
+  ctx.fn = fn;
+  InitOnceExecuteOnce(o, pli_once_trampoline, &ctx, NULL);
 #else
   pthread_once(o, fn);
 #endif
 }
 
+/* --- threads -------------------------------------------------------------- */
 /* Spawn a detached thread running fn(arg); returns 0 on success. */
 #if defined(_WIN32)
+/* Heap pair carrying `void *(*)(void *)` through _beginthreadex. */
 /* _beginthreadex needs `unsigned __stdcall`; carry fn+arg on the heap. */
-struct pli_spawn_arg {
+struct pli_spawn_ctx {
   void *(*fn)(void *);
   void *arg;
 };
-static unsigned __stdcall pli_spawn_tramp(void *p) {
-  struct pli_spawn_arg *a = (struct pli_spawn_arg *)p;
-  void *(*fn)(void *) = a->fn;
-  void *arg = a->arg;
-  free(a);
+static inline unsigned __stdcall pli_spawn_trampoline(void *p) {
+  struct pli_spawn_ctx *c = (struct pli_spawn_ctx *)p;
+  void *(*fn)(void *) = c->fn;
+  void *arg = c->arg;
+  free(c);
   fn(arg);
+  _endthreadex(0);
   return 0;
 }
 #endif
 
-static inline int pli_spawn_detached(void *(*fn)(void *), void *arg) {
+/* Spawn a detached thread running fn(arg); returns 0 on success. */
+static inline int pli_spawn(pli_thread *th, void *(*fn)(void *), void *arg) {
 #if defined(_WIN32)
-  struct pli_spawn_arg *a = (struct pli_spawn_arg *)malloc(sizeof *a);
-  uintptr_t h;
-  if (!a)
+  struct pli_spawn_ctx *c = (struct pli_spawn_ctx *)malloc(sizeof(*c));
+  if (!c)
     return -1;
-  a->fn = fn;
-  a->arg = arg;
-  h = _beginthreadex(NULL, 0, pli_spawn_tramp, a, 0, NULL);
+  c->fn = fn;
+  c->arg = arg;
+  uintptr_t h =
+      _beginthreadex(NULL, 0, pli_spawn_trampoline, c, 0, NULL);
   if (h == 0) {
-    free(a);
+    free(c);
     return -1;
   }
-  CloseHandle((HANDLE)h);
+  *th = h;
   return 0;
 #else
-  pthread_t th;
-  if (pthread_create(&th, NULL, fn, arg) != 0)
-    return -1;
-  pthread_detach(th);
-  return 0;
+  return pthread_create(th, NULL, fn, arg);
 #endif
 }
 
+static inline void pli_thread_detach(pli_thread th) {
+#if defined(_WIN32)
+  CloseHandle((HANDLE)th);
+#else
+  pthread_detach(th);
+#endif
+}
+
+static inline int pli_spawn_detached(void *(*fn)(void *), void *arg) {
+  pli_thread th;
+  if (pli_spawn(&th, fn, arg) != 0)
+    return -1;
+  pli_thread_detach(th);
+  return 0;
+}
+
+/* --- sleep ----------------------------------------------------------------- */
 /* Sleep for whole milliseconds; ms <= 0 is a no-op. */
 static inline void pli_sleep_ms(long long ms) {
   if (ms <= 0)

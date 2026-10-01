@@ -11,25 +11,24 @@
  * is implementation-defined in this stage. */
 /* No static initializers: CRITICAL_SECTION/CONDITION_VARIABLE have none, so
  * both mutexes and the cond are created once via pli_once. */
+/* One-time init: MSVC has no static mutex/cond initializers. */
 static pli_mutex pli_ev_mu;
 static pli_cond pli_ev_cv;
-static pli_once pli_ev_once = PLI_ONCE_INIT;
 static pli_mutex pli_task_mu;
-static pli_once pli_task_once = PLI_ONCE_INIT;
+static pli_once pli_rt_once = PLI_ONCE_INIT;
 static long long pli_task_next = 1;
 
 /* One-time creation of the EVENT mutex+cond and the task-id mutex. */
-static void pli_ev_init(void) {
+static void pli_rt_init_sync(void) {
   pli_mutex_init(&pli_ev_mu);
   pli_cond_init(&pli_ev_cv);
+  pli_mutex_init(&pli_task_mu);
 }
-
-static void pli_task_init(void) { pli_mutex_init(&pli_task_mu); }
 
 void pli_event_reset(char *ev) {
   if (!ev)
     return;
-  pli_call_once(&pli_ev_once, pli_ev_init);
+  pli_call_once(&pli_rt_once, pli_rt_init_sync);
   pli_mutex_lock(&pli_ev_mu);
   *(int *)ev = 0;
   pli_mutex_unlock(&pli_ev_mu);
@@ -39,7 +38,7 @@ void pli_event_reset(char *ev) {
 void pli_event_complete(char *ev) {
   if (!ev)
     return;
-  pli_call_once(&pli_ev_once, pli_ev_init);
+  pli_call_once(&pli_rt_once, pli_rt_init_sync);
   pli_mutex_lock(&pli_ev_mu);
   *(int *)ev = 1;
   pli_cond_broadcast(&pli_ev_cv);
@@ -50,7 +49,7 @@ void pli_event_complete(char *ev) {
 void pli_event_wait(char *ev) {
   if (!ev)
     return;
-  pli_call_once(&pli_ev_once, pli_ev_init);
+  pli_call_once(&pli_rt_once, pli_rt_init_sync);
   pli_mutex_lock(&pli_ev_mu);
   while (*(int *)ev == 0)
     pli_cond_wait(&pli_ev_cv, &pli_ev_mu);
@@ -64,7 +63,7 @@ void pli_wait_n(char *evs, long long n, long long need) {
     return;
   if (need > n)
     need = n;
-  pli_call_once(&pli_ev_once, pli_ev_init);
+  pli_call_once(&pli_rt_once, pli_rt_init_sync);
   pli_mutex_lock(&pli_ev_mu);
   for (;;) {
     long long done = 0;
@@ -83,7 +82,7 @@ void pli_wait_n(char *evs, long long n, long long need) {
 unsigned char pli_event_status(char *ev) {
   if (!ev)
     return 1;
-  pli_call_once(&pli_ev_once, pli_ev_init);
+  pli_call_once(&pli_rt_once, pli_rt_init_sync);
   pli_mutex_lock(&pli_ev_mu);
   int done = *(int *)ev != 0;
   pli_mutex_unlock(&pli_ev_mu);
@@ -104,7 +103,7 @@ void pli_task_spawn(char *fn, char *ctx) {
 void pli_task_note(char *task) {
   if (!task)
     return;
-  pli_call_once(&pli_task_once, pli_task_init);
+  pli_call_once(&pli_rt_once, pli_rt_init_sync);
   pli_mutex_lock(&pli_task_mu);
   *(int *)task = (int)(pli_task_next++);
   pli_mutex_unlock(&pli_task_mu);
