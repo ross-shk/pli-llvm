@@ -2,6 +2,8 @@
 
 A modern PL/I compiler built to the formal specification of the language: **TR 25.084, *Concrete Syntax of PL/I*** (IBM Laboratory Vienna, 28 June 1968) for syntax, and **Y33-6003** for semantics. The extracted, OCR-repaired grammar lives in `TR25.084-concrete-syntax.md`.
 
+**Distribution**: Single binary (like Go/Zig) — the `plic` executable embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
+
 ```
 $ make -j8
 $ ./build/plic tests/core/hello.pli -o hello 
@@ -9,17 +11,33 @@ $ ./hello
 Hello, world!
 ```
 
+### Platforms
+
+- **Linux** (x86_64, ARM64): builds with clang or gcc
+- **macOS** (Intel, Apple Silicon): builds with clang
+- **Windows** (x86_64, ARM64): builds with **MSVC/nmake** (not MinGW/MSYS2); uses a platform abstraction layer for threading (`runtime/sync/plic_thread.h` wraps POSIX pthreads and Win32 `CRITICAL_SECTION`/`CONDITION_VARIABLE`/`_beginthreadex`/`Sleep`)
+
 ## Quick Start
 
 ### Prerequisites
 
-- C++20 compiler (clang++ or g++)
-- LLVM ≥ 18 with `clang` (for assembling/linking the generated IR)
+- C++20 compiler (clang++ or g++; MSVC on Windows)
+- CMake ≥ 3.20
+- LLVM ≥ 18 with `clang` and `lld` (for assembling/linking the generated IR)
 
 ### Build
 
+The canonical build is CMake (it links the LLVM C++ API per ADR-002 plus `lld` and embeds the runtime bitcode). The Makefile delegates to CMake, keeping the familiar `make -j8 && make test` workflow.
+
 ```bash
-make -j8              
+make -j8               # builds build/plic and build/libpli.a via CMake (parallel)
+```
+
+Or use CMake directly:
+
+```bash
+cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir)
+cmake --build build/cmake -j8
 ```
 
 ### Compile and run a PL/I program
@@ -42,7 +60,7 @@ Compile to executable:
 ### Run tests
 
 ```bash
-make test             # full test suite (320 tests)
+make test             # full test suite (451 tests)
 ./tests/run_tests.py usecases   # run specific test group
 ```
 
@@ -262,13 +280,23 @@ docs/        architecture, decisions, optimization, plans, coverage
 
 ## Building and testing
 
-Requires a C++20 compiler and LLVM ≥ 18 with `clang` (used to assemble/optimize/link the generated LLVM IR — see ADR-002).
+Requires a C++20 compiler and LLVM ≥ 18 with `clang` and `lld` (used to assemble/optimize/link the generated LLVM IR — see ADR-002). On Windows, MSVC is required (MinGW/MSYS2 is not supported).
+
+The Makefile delegates to CMake for the actual build:
 
 ```
-make -j8        # build build/plic and build/libpli.a (parallel)
+make -j8        # build build/plic and build/libpli.a via CMake (parallel)
 make test       # compile, run and check every test program (diff or PASS-grep)
 make check      # analysis gate: -Werror build + fmt-check + clang-tidy + scan-build
 make clean
+```
+
+Or use CMake directly:
+
+```bash
+cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir)
+cmake --build build/cmake -j8
+ctest --test-dir build/cmake
 ```
 
 Run tests in specific groups with:

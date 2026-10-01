@@ -8,6 +8,7 @@ tests/*/out/
 examples/
 .jspace/
 .kilo/
+__pycache__
 
 # test baselines are source of truth, not build output
 !tests/*/expected/*.out
