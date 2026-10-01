@@ -1,0 +1,79 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* Cross-section (rule 126) as a general value: a reduced-rank '*' view may
+      appear inside an element-wise expression and as a reduction argument, not
+      only as the whole right-hand side of an assignment. Covers a binary
+      expression over two cross-sections, a reduction over a cross-section
+      expression, a multi-'*' block expression, and a cross-section of an array
+      member. */
+   cross_section_expr_test: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare b(3, 4) fixed bin(31);
+      declare d(2, 3, 4) fixed bin(31);
+      declare block(3, 4) fixed bin(31);
+      declare r(4) fixed bin(31);
+      declare s fixed bin(31);
+      declare i fixed bin(31), j fixed bin(31), k fixed bin(31);
+      declare fails fixed bin(31);
+      declare 1 t,
+             2 m(2, 3) fixed bin(31);
+      declare mr(3) fixed bin(31);
+      declare p pointer;
+      declare 1 v based(p),
+             2 f fixed bin(31);
+
+      do i = 1 to 3;
+         do j = 1 to 4;
+            a(i, j) = i * 10 + j;
+            b(i, j) = i + j;
+         end;
+      end;
+
+      fails = 0;
+
+      /* binary expression over two 1-D cross-sections: a(2,*) + b(2,*) */
+      r = a(2, *) + b(2, *);
+      do j = 1 to 4;
+         if r(j) ^= (20 + j) + (2 + j) then fails = fails + 1;
+      end;
+
+      /* reduction over a cross-section expression: SUM(a(2,*) ** 2) */
+      s = sum(a(2, *) ** 2);
+      if s ^= 21 * 21 + 22 * 22 + 23 * 23 + 24 * 24 then fails = fails + 1;
+
+      /* multi-'*' block expression: d(2,*,*) + a(*,*) */
+      do i = 1 to 2;
+         do j = 1 to 3;
+            do k = 1 to 4;
+               d(i, j, k) = i * 100 + j * 10 + k;
+            end;
+         end;
+      end;
+      block = d(2, *, *) + a(*, *);
+      do j = 1 to 3;
+         do k = 1 to 4;
+            if block(j, k) ^= (200 + 10 * j + k) + (10 * j + k) then
+               fails = fails + 1;
+         end;
+      end;
+
+      /* cross-section of an array member in an expression: t.m(2,*) * 2 */
+      do i = 1 to 2;
+         do j = 1 to 3;
+            t.m(i, j) = i * 10 + j;
+         end;
+      end;
+      mr = t.m(2, *) * 2;
+      do j = 1 to 3;
+         if mr(j) ^= (20 + j) * 2 then fails = fails + 1;
+      end;
+
+      /* ADDR of a cross-section is the address of its first element. */
+      p = addr(a(2, *));
+      if v.f ^= 21 then fails = fails + 1;
+      p = addr(a(*, 3));
+      if v.f ^= 13 then fails = fails + 1;
+
+      if fails = 0 then put skip list('PASS cross_section_expr');
+      else put skip list('FAIL cross_section_expr: fails =', fails);
+   end cross_section_expr_test;

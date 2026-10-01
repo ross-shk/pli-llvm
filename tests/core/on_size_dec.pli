@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* rules (16),(17),(91)-(99): a FIXED DECIMAL overflow traps to the SIZE
+      condition handler when one is established, then resumes after the failing
+      operation with the wrapped value; an unhandled decimal overflow still
+      aborts (see driver/decimal_overflow). Covers addition and a narrowing
+      conversion. */
+   on_size_dec: procedure options(main);
+      declare a fixed decimal(5,2);
+      declare b fixed decimal(9,2);
+      declare c fixed decimal(5,2);
+      on size put skip list('caught add');
+      a = 999.99;
+      c = a + 0.01;
+      put skip list('after add', c);
+      revert size;
+      on size put skip list('caught conv');
+      b = 1000.00;
+      c = b;
+      put skip list('after conv', c);
+      revert size;
+      put skip list('done');
+   end on_size_dec;

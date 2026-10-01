@@ -5106,4 +5106,53 @@ risk, and keeping it costs nothing); comparing target triples as strings
 (two LLVM builds spell the same Darwin ABI differently, e.g.
 `arm64-apple-darwin25.6.0` vs `arm64-apple-macosx26.0.0`).
 
+## ADR-180 — Tier 1 completions: cross-section values by sema desugar, fixed CHARACTER arrays, CONTROLLED INITIAL and runtime extents
+
+**Context.** Four Tier 1 gaps shared one shape: the value was already typed
+(the reduced cross-section shape, the `[N x [len x i8]]` layout, the
+generation record) but the use position was diagnosed. Each fix below
+reuses an existing lowering instead of adding a new one, keeping codegen
+untouched.
+
+**Decision.** (1) A cross-section inside a whole-array expression or a
+reduction argument (rule 126) rewrites in sema to a full subscript over
+the target's loop indices — each `*` axis takes the next loop index, each
+fixed axis keeps its expression — and `SUM`/`PROD`/`ANY`/`ALL` accept the
+reduced shape as a whole reference; `ADDR` of a cross-section addresses
+its first element (star axes lowered to their lower bounds). Positions
+sema does not desugar (user-function arguments, locator-qualified
+cross-sections, dynamic star axes in `ADDR`) stay diagnosed. (2) Fixed
+`CHARACTER(n)` arrays lay out as `[N x [len x i8]]`; an element value is
+a view of its bytes (`v.ptr`/`v.len`) and a whole-array value spans every
+element, so `pli_assign_char` moves total bytes. VARYING, adjustable,
+CONTROLLED, and dynamic-extent CHARACTER arrays stay diagnosed. (3) A
+scalar `CONTROLLED ... INITIAL(v)` assigns `v` with every allocation
+(implicit entry generation and each explicit `ALLOCATE`) through the
+existing `emitCtlInit` path; top-level array itemlists and
+`INITIAL(CALL)` stay diagnosed. (4) A non-`*` runtime DECLARE extent
+`A(n)` on a CONTROLLED array sizes the implicit entry generation and
+each bare `ALLOCATE` from the declared bound evaluated at allocation
+time (`ctlAllocDeclared`), recorded as the generation's live per-axis
+extent; a dynamic lower bound stays diagnosed.
+
+**Consequences.** `cross_section_expr.pli`, `bad_cross_section_expr.pli`,
+`char_array.pli`, `bad_char_array.pli`, `on_size_dec.pli`,
+`controlled_struct.pli`, `controlled_dyn_decl.pli`,
+`controlled_init_scalar.pli`, `bad_controlled_struct.pli` pin the newly
+served forms and the remaining diagnoses. GRAMMAR-COVERAGE rows
+(12),(13),(16),(17),(23),(26)–(32),(87)–(90),(91)–(99),(126) move. The
+whole-array `CHAR` copy bug (one element's bytes moved) is fixed by the
+same total-bytes change. No runtime helper was added, so `pli_rt_abi.def`
+is untouched.
+
+**Rejected.** An IRGen `emitCrossSectionValue` gather (a second lowering
+for what the DO-desugar already expresses; kept the invariant that
+sema owns shape expansion); serving `ADDR` of a cross-section as a
+fat descriptor (no descriptor ABI exists — the first-element address
+matches `ADDR(A(i, lb))` exactly); per-element VARYING descriptors
+inside a generation (descriptor layout and copy semantics are D1 scope);
+treating a runtime-bound `A(n)` CONTROLLED array as `A(*)` with the bound
+supplied at each `ALLOCATE` (loses the implicit entry generation, so
+first-use references would need an explicit `ALLOCATE` like `(*)` does).
+
 

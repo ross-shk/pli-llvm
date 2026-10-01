@@ -450,6 +450,13 @@ private:
   // generation sized to the compile-time descriptor if none exists yet. Skips
   // CHAR(*) entirely — those require an explicit ALLOCATE with a known size.
   void ensureCtlAlloc(Symbol* sym, SourceLoc loc = SourceLoc{});
+  // Push a CONTROLLED generation sized from the DECLARE runtime bounds (rules
+  // (13),(89)): a non-`*` runtime upper bound `A(n)` is evaluated at the point
+  // of allocation and recorded as the generation's live per-axis extent.
+  void ctlAllocDeclared(Symbol* sym, SourceLoc loc);
+  // True when a CONTROLLED array has a non-`*` runtime DECLARE upper bound
+  // (sized per generation) rather than an ALLOCATE-supplied `*` axis.
+  static bool ctlDeclaredRuntimeBound(Symbol* sym);
   // INITIAL on a CONTROLLED generation (rules (15),(26), SC26-3114): assign
   // the declared initial value into the just-allocated generation. Assumes
   // the generation exists (just pushed); no-INITIAL symbols are a no-op.

@@ -1198,7 +1198,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           auto ctlErr = [&](const char* what, const char* rule) {
             d_.error(item.loc, std::string("CONTROLLED+") + what + " is not implemented", rule);
           };
-          if (item.init || !item.initItems.empty() || item.initCall)
+          // A scalar CONTROLLED initial value (rule (26)) is assigned with each
+          // allocation (implicit entry generation and every ALLOCATE), like a
+          // CONTROLLED structure's per-member INITIAL (ADR-175); a top-level
+          // array itemlist or INITIAL(CALL) stays diagnosed.
+          if (item.initCall ||
+              ((item.ty.isArray() || item.ty.isStruct()) &&
+               (item.init || !item.initItems.empty())))
             ctlErr("INITIAL", "(26)");
           if (item.valueInit)
             ctlErr("VALUE", "(ADR-108)");
@@ -1219,18 +1225,27 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             const Type& el = item.ty.elementType();
             bool numEl = !el.isChar() && !el.isStruct() && !el.isPointer() && !el.isVoid() &&
                          (el.isNumeric() || el.isBit());
-            // Every runtime axis must be `*` (adj): fixed axes keep their
-            // DECLARE bounds, `*` axes take each ALLOCATE's extent, so mixed
-            // `DCL Y(10,*)` is served while a runtime bound expression
-            // (dyn/lbDyn without adj) stays diagnosed.
-            bool allStar = numEl && !item.ty.dims.empty();
-            for (const auto& d : item.ty.dims)
-              if ((d.dyn || d.lbDyn) && (!d.adj || d.lbDyn))
-                allStar = false;
-            if (!allStar)
+            // Fixed axes keep their DECLARE bounds, `*` (adj) axes take each
+            // ALLOCATE's extent, and a non-`*` runtime upper bound `A(n)` is
+            // evaluated once at block entry to size the implicit generation
+            // (rules (13),(89)). A dynamic lower bound stays diagnosed: the
+            // controlled element path assumes a static lower bound.
+            if (!numEl)
               d_.error(item.loc,
-                       "a CONTROLLED array with dynamic extent is not implemented in this stage",
-                       "(13)");
+                       "a CONTROLLED array of CHARACTER, structures, or pointers is not "
+                       "implemented in this stage",
+                       "(12)");
+            else {
+              bool lbDyn = false;
+              for (const auto& d : item.ty.dims)
+                if (d.lbDyn)
+                  lbDyn = true;
+              if (lbDyn)
+                d_.error(item.loc,
+                         "a CONTROLLED array with a dynamic lower bound is not implemented in "
+                         "this stage",
+                         "(13)");
+            }
           }
         }
         // AREA (rule (20)): a region for out-of-order BASED allocation. The
@@ -1297,13 +1312,19 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           else
             item.sym->isOptional = true;
         }
-        // Only scalar (numeric/BIT) element arrays are served in this stage;
-        // character element arrays are diagnosed, never silently miscompiled
-        // (invariant 2). INITIAL on an array (rule 26) expands its itemlist
-        // (with iteration factors and '*') into one value per element.
+        // Fixed CHARACTER arrays (rule (12)) and numeric/BIT element arrays are
+        // served; a VARYING, adjustable-length, CONTROLLED, or dynamic-extent
+        // CHARACTER array stays diagnosed, never silently miscompiled
+        // (invariant 2). INITIAL on an array (rule 26) expands its
+        // itemlist (with iteration factors and '*') into one value per element.
         if (item.ty.isArray() && !isDefined) {
-          if (item.ty.elementType().isChar())
-            d_.error(item.loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
+          if (item.ty.elementType().isChar() &&
+              (item.ty.elementType().varying || item.ty.elementType().starLen ||
+               item.controlled || item.ty.isDynamic()))
+            d_.error(item.loc,
+                     "arrays of VARYING, adjustable, CONTROLLED, or dynamic-extent CHARACTER "
+                     "are not implemented in this stage",
+                     "(12)");
           if (item.ty.isDynamic()) {
             // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
             // serves only a single-axis AUTOMATIC array whose lower and upper
@@ -2200,9 +2221,45 @@ bool Sema::rewriteWholeArrayRefs(ExprP& e, const std::vector<std::string>& idx, 
     return true;
   }
   if (e->kind == Expr::Subscript && e->ty.isArray()) {
-    d_.error(e->loc, "a cross-section inside an array expression is not implemented in this stage",
-             "(126)");
-    return false;
+    // A cross-section A(i, *) (rule 126) inside a whole-array expression: it
+    // is a reduced-rank array value, so rewrite it to a full subscript over
+    // the loop indices — each '*' axis takes the next index, each fixed axis
+    // keeps its original expression. The reduced shape must match the target.
+    size_t nStar = 0;
+    for (auto& a : e->args)
+      if (a->kind == Expr::Star)
+        ++nStar;
+    if (nStar != idx.size() || e->ty.dims != shape.dims) {
+      d_.error(e->loc, "whole-array assignment requires identical array shapes in this stage",
+               "(86)");
+      return false;
+    }
+    if (!wholeArrayStorageOk(e.get())) {
+      d_.error(e->loc,
+               "whole-array assignment of parameters, DEFINED overlays, BASED storage, or "
+               "dynamic members is not implemented in this stage",
+               "(86)");
+      return false;
+    }
+    auto sub = std::make_unique<Expr>();
+    sub->kind = Expr::Call;
+    sub->name = e->name;
+    sub->path = e->path;
+    sub->loc = e->loc;
+    size_t si = 0;
+    for (auto& a : e->args) {
+      if (a->kind == Expr::Star) {
+        auto v = std::make_unique<Expr>();
+        v->kind = Expr::VarRef;
+        v->name = idx[si++];
+        v->loc = e->loc;
+        sub->args.push_back(std::move(v));
+      } else {
+        sub->args.push_back(std::move(a));
+      }
+    }
+    e = std::move(sub);
+    return true;
   }
   if (e->kind == Expr::Call) {
     for (auto& a : e->args)
@@ -4044,8 +4101,14 @@ bool Sema::reduceArgShapeOk(Expr* e, Type& shape) {
         refs.push_back(x);
       return true;
     }
-    if (x->kind == Expr::Subscript && x->ty.isArray())
-      return false;
+    if (x->kind == Expr::Subscript && x->ty.isArray()) {
+      // A cross-section A(i, *) (rule 126) is a reduced-rank array value: its
+      // type is already the star-axis shape, so it counts as a whole reference
+      // of that shape (expanded to element subscripts by the caller).
+      if (!underCall)
+        refs.push_back(x);
+      return true;
+    }
     if (x->kind == Expr::Call) {
       for (auto& a : x->args)
         if (!walk(a.get(), true))
@@ -4246,15 +4309,44 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     Expr* a = e->args[0].get();
-    // A cross-section has no single address in this stage (rule 126):
-    // cross-sections are assignment-RHS gathers, not addressable views.
+    // ADDR of a cross-section A(i, *) (rule 126): the address of the first
+    // element of the reduced view. Replace each '*' axis with its lower bound
+    // so the ordinary element-addressing path serves it; a dynamic star axis
+    // stays diagnosed rather than reading a stale bound.
     if (a->kind == Expr::Subscript) {
+      bool cross = false;
       for (const auto& ix : a->args)
         if (ix->kind == Expr::Star) {
-          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage", "(126)");
+          cross = true;
+          break;
+        }
+      if (cross) {
+        bool dyn = false;
+        size_t sj = 0;
+        for (auto& ix : a->args) {
+          if (ix->kind != Expr::Star)
+            continue;
+          long long lb = 1;
+          if (sj < a->ty.dims.size()) {
+            if (a->ty.dims[sj].dyn || a->ty.dims[sj].lbDyn)
+              dyn = true;
+            lb = a->ty.dims[sj].lb;
+          }
+          auto lit = std::make_unique<Expr>();
+          lit->kind = Expr::IntLit;
+          lit->ival = lb;
+          lit->loc = a->loc;
+          ix = std::move(lit);
+          ++sj;
+        }
+        if (dyn) {
+          d_.error(a->loc, "ADDR of a dynamic cross-section is not implemented in this stage",
+                   "(126)");
           e->ty = Type::voidTy();
           return true;
         }
+        a->ty = a->ty.elementType();
+      }
     }
     bool ok = a->kind == Expr::VarRef || a->kind == Expr::Subscript;
     if (ok && a->sym && a->sym->kind == Symbol::ProcName)

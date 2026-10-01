@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* Cross-section (rule 126) restrictions in value position: two views of
+      different shape cannot be combined element-wise, and a cross-section
+      expression has no scalar form. */
+   bad_cross_section_expr: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare r(4) fixed bin(31);
+      declare x fixed bin(31);
+
+      r = a(2, *) + a(*, 3);  /* (4,) combined with (3,) */
+      x = a(2, *) + 1;        /* array value to a scalar target */
+   end bad_cross_section_expr;

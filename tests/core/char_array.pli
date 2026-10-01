@@ -1,0 +1,57 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* Fixed CHARACTER arrays (rules (12),(18)): a fixed-length element array
+      reads/writes with blank-pad/truncate like a scalar, passes to a
+      procedure by reference, copies whole, and serves cross-section values;
+      covers a member array too. VARYING elements stay diagnosed. */
+   char_array_test: procedure options(main);
+      declare c(4) character(3);
+      declare d(4) character(3);
+      declare m(2, 2) character(2);
+      declare r(2) character(2);
+      declare i fixed bin(31), j fixed bin(31), fails fixed bin(31);
+      declare 1 s,
+              2 q(3) character(2);
+
+      fails = 0;
+      c(1) = 'aaa';
+      c(2) = 'b';
+      c(3) = 'ccccc';
+      c(4) = c(1);
+      if c(1) ^= 'aaa' then fails = fails + 1;
+      if c(2) ^= 'b  ' then fails = fails + 1;
+      if c(3) ^= 'ccc' then fails = fails + 1;
+      if c(4) ^= 'aaa' then fails = fails + 1;
+      if length(c(2)) ^= 3 then fails = fails + 1;
+
+      /* a member array element */
+      s.q(2) = 'xy';
+      if s.q(2) ^= 'xy' then fails = fails + 1;
+
+      /* by-reference writes inside the callee reflect outside */
+      call setc(c);
+      if c(1) ^= 'zzz' then fails = fails + 1;
+
+      /* a whole-array copy moves every element's bytes */
+      d = c;
+      do i = 1 to 4;
+         if d(i) ^= c(i) then fails = fails + 1;
+      end;
+
+      /* a 2-D array and a cross-section value of it */
+      do i = 1 to 2;
+         do j = 1 to 2;
+            m(i, j) = 'ab';
+         end;
+      end;
+      r = m(2, *);
+      if r(1) ^= 'ab' or r(2) ^= 'ab' then fails = fails + 1;
+
+      if fails = 0 then put skip list('PASS char_array');
+      else put skip list('FAIL char_array: fails =', fails);
+
+   setc: procedure(x);
+      declare x(4) character(3);
+      x(1) = 'zzz';
+   end setc;
+   end char_array_test;

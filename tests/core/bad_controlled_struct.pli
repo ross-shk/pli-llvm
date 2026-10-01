@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* rules (12),(13),(23),(26): CONTROLLED forms that stay diagnosed — an
+      array of structures with a runtime extent, a dynamic lower bound, and a
+      top-level array INITIAL itemlist. */
+   bad_controlled_struct: procedure options(main);
+      declare n fixed bin(31) init(2);
+      declare m fixed bin(31) init(1);
+      declare 1 rec(n) controlled,
+              2 x fixed bin(31);
+      declare a(m:5) fixed bin(31) controlled;
+      declare b(3) fixed bin(31) controlled initial(1, 2, 3);
+      rec(1).x = 1;
+      a(1) = 1;
+      b(1) = 1;
+   end bad_controlled_struct;

@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* Fixed CHARACTER arrays (rules (12),(18)) stay diagnosed where an
+      element needs a descriptor or a static layout: VARYING elements,
+      adjustable lengths, CONTROLLED storage, and dynamic extents. */
+   bad_char_array: procedure options(main);
+      declare n fixed bin(31) init(2);
+      declare v(4) character(3) varying;
+      declare s(4) character(*);
+      declare t(4) character(3) controlled;
+      declare d(n) character(3);
+      v(1) = 'a';
+      s(1) = 'a';
+      t(1) = 'a';
+      d(1) = 'a';
+   end bad_char_array;

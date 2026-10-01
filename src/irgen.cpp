@@ -2413,18 +2413,16 @@ void IRGen::emitAssign(HStmt* s) {
         if (!t->memberPath.empty()) {
           const Type& arr = memberType(t->sym, t->memberPath);
           const Type& el = t->ty;
-          if (el.isChar()) {
-            d_.error(s->loc, "arrays of CHARACTER members are not implemented in this stage",
-                     "(12)");
-            return;
-          }
           llvm::Value *ub = nullptr, *lb = nullptr;
           llvm::Value* base = arr.isDynamic()
                                   ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
                                   : memberAddr(t->sym, t->memberPath, s->loc);
           llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
-          storeScalarTo(addr, el, convert(v, el, s->loc),
-                        packedMemberPath(t->sym->ty, t->memberPath));
+          bool packed = packedMemberPath(t->sym->ty, t->memberPath);
+          if (el.isChar())
+            storeCharTo(addr, el, v, s->loc, packed);
+          else
+            storeScalarTo(addr, el, convert(v, el, s->loc), packed);
           return;
         }
         storeArrayElement(t->sym, t->args, v, s->loc, t->locPtr.get());
@@ -2738,13 +2736,67 @@ void IRGen::emitAssign(HStmt* s) {
 // runtime length cannot be known without an explicit ALLOCATE statement. A
 // `(*)` CONTROLLED numeric array is skipped the same way — its extents come
 // from each ALLOCATE (rules (13),(89)).
+// True when a CONTROLLED array declares a non-`*` runtime upper bound `A(n)`:
+// the extent is evaluated at allocation time and recorded per generation,
+// unlike a `(*)` axis that only an explicit ALLOCATE can size.
+bool IRGen::ctlDeclaredRuntimeBound(Symbol* sym) {
+  if (!sym || !sym->controlled || !sym->ty.isArray() || !sym->ty.isDynamic())
+    return false;
+  for (const auto& d : sym->ty.dims)
+    if ((d.dyn || d.lbDyn) && !d.adj)
+      return true;
+  return false;
+}
+
+// Push a CONTROLLED generation sized from the DECLARE bounds (rules (13),(89)):
+// a runtime first-axis upper bound is evaluated here; later axes are static.
+void IRGen::ctlAllocDeclared(Symbol* sym, SourceLoc loc) {
+  const Type& arr = sym->ty;
+  size_t rank = arr.dims.size();
+  const Type& el = arr.elementType();
+  long long elemSz = (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+  if (elemSz <= 0)
+    elemSz = 1;
+  std::vector<llvm::Value*> exts(rank);
+  for (size_t k = 0; k < rank; ++k) {
+    const Dim& d = arr.dims[k];
+    if (k == 0 && (d.dyn || d.lbDyn)) {
+      llvm::Value* ub = sym->dynUb ? toI64(emitExpr(sym->dynUb)) : i64(d.ub);
+      llvm::Value* lb = sym->dynLb ? toI64(emitExpr(sym->dynLb)) : i64(d.lb);
+      exts[k] = b_.CreateAdd(b_.CreateSub(ub, lb, "ctld"), i64(1), "ctlde");
+    } else {
+      exts[k] = i64((long long)d.ub - (long long)d.lb + 1);
+    }
+  }
+  llvm::Value* total = i64(elemSz);
+  for (size_t k = 0; k < rank; ++k)
+    total = b_.CreateMul(total, exts[k], "ctldtot");
+  if (rank == 1) {
+    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), total});
+  } else {
+    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), total, i64((long long)rank)});
+    for (size_t k = 0; k < rank; ++k)
+      b_.CreateCall(runtimeFn("pli_ctl_set_dim"), {ctlKeyOf(sym), i64((long long)k), exts[k]});
+  }
+  (void)loc;
+}
+
 void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   // Only skip CHAR(*) adjustable-length types and (*) CONTROLLED dynamic
   // arrays; everything else gets default-sized implicit allocation.
   if (sym->ty.isChar() && sym->ty.starLen && !sym->dynLenExpr)
     return;
-  if (sym->controlled && sym->ty.isArray() && sym->ty.isDynamic())
+  if (sym->controlled && sym->ty.isArray() && sym->ty.isDynamic()) {
+    // A `(*)` axis is ALLOCATE-supplied (no implicit generation); a non-`*`
+    // runtime bound `A(n)` sizes the implicit generation at block entry.
+    if (!ctlDeclaredRuntimeBound(sym))
+      return;
+    if (ctlImplicitAlloc_.count(sym))
+      return;
+    ctlImplicitAlloc_.insert(sym);
+    ctlAllocDeclared(sym, loc);
     return;
+  }
   if (ctlImplicitAlloc_.count(sym))
     return;
   ctlImplicitAlloc_.insert(sym);
@@ -3028,6 +3080,12 @@ void IRGen::emitAllocate(HStmt* s) {
         for (size_t k = 0; k < rank; ++k)
           b_.CreateCall(runtimeFn("pli_ctl_set_dim"), {ctlKeyOf(bsym), i64((long long)k), exts[k]});
         // INITIAL assigns with each allocation (rules (15),(26), SC26-3114).
+        emitCtlInit(bsym, s->loc);
+        continue;
+      } else if (ctlDeclaredRuntimeBound(bsym) && bounds.empty()) {
+        // A bare ALLOCATE of a CONTROLLED array with a non-`*` runtime DECLARE
+        // extent (rules (13),(89)): push a generation of the declared extent.
+        ctlAllocDeclared(bsym, s->loc);
         emitCtlInit(bsym, s->loc);
         continue;
       } else if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr) {
@@ -4736,7 +4794,9 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
         v.len = i64(ty.len);
     } else {
       v.ptr = addr;
-      v.len = i64(ty.len);
+      // A whole fixed array value spans every element; an element value spans
+      // its declared length (rules (12),(18)).
+      v.len = ty.isArray() ? i64(arrayExtent(ty) * (long long)ty.len) : i64(ty.len);
     }
     return v;
   }
@@ -4791,6 +4851,12 @@ void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceL
     llvm::StoreInst* si = b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
     if (packed)
       si->setAlignment(llvm::Align(1));
+  } else if (dt.isArray()) {
+    // A whole fixed array copy moves every element's bytes; identical shapes
+    // were checked in sema, and any residual length difference blank-pads or
+    // truncates per element (rules (12),(18),(86)).
+    long long total = arrayExtent(dt) * (long long)dt.len;
+    b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(total), v.ptr, v.len});
   } else {
     b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(dt.len), v.ptr, v.len});
   }
@@ -5041,8 +5107,18 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   v.ty = el;
   if (el.isChar()) {
-    d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
-    v.reg = i64(0);
+    // Fixed CHARACTER element (rules (12),(18)): the value is a view of the
+    // element's bytes. A VARYING element needs a per-element descriptor and
+    // stays diagnosed (invariant 2).
+    if (el.varying) {
+      d_.error(loc, "arrays of CHARACTER VARYING are not implemented in this stage", "(12)");
+      v.reg = i64(0);
+      return v;
+    }
+    llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
+    v.ptr = arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                             dynLb_.count(sym) ? dynLb_[sym] : nullptr);
+    v.len = i64(el.len);
     return v;
   }
   if (isCtlDynArray(sym)) {
@@ -5083,7 +5159,17 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
                               SourceLoc loc, HExpr* locPtr) {
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   if (el.isChar()) {
-    d_.error(loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
+    // Fixed CHARACTER element (rules (12),(18)): blank-pad/truncate the source
+    // into the element's bytes. A VARYING element stays diagnosed.
+    if (el.varying) {
+      d_.error(loc, "arrays of CHARACTER VARYING are not implemented in this stage", "(12)");
+      return;
+    }
+    llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
+    llvm::Value* addr =
+        arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                         dynLb_.count(sym) ? dynLb_[sym] : nullptr);
+    storeCharTo(addr, el, src, loc);
     return;
   }
   if (isCtlDynArray(sym)) {

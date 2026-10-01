@@ -1,0 +1,38 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* rules (15),(23),(26),(87)-(90): a CONTROLLED structure is a generation
+      unit — allocations push/pop the whole structure and each member's
+      INITIAL is assigned with every allocation. Covers a scalar structure and
+      an array of structures. */
+   controlled_struct_test: procedure options(main);
+      declare 1 rec controlled,
+              2 x fixed bin(31) init(1),
+              2 y fixed bin(31) init(2);
+      declare 1 arr(3) controlled,
+              2 v fixed bin(31) init(0);
+      declare fails fixed bin(31);
+
+      fails = 0;
+
+      /* the implicit entry generation has the per-member INITIAL values */
+      if rec.x ^= 1 or rec.y ^= 2 then fails = fails + 1;
+
+      /* an explicit ALLOCATE pushes a fresh, re-initialised generation */
+      allocate rec;
+      rec.x = 7;
+      if rec.x ^= 7 or rec.y ^= 2 then fails = fails + 1;
+      free rec;
+      if rec.x ^= 1 or rec.y ^= 2 then fails = fails + 1;
+
+      /* an array of structures is one generation of three elements */
+      arr(1).v = 11;
+      arr(3).v = 33;
+      if arr(1).v ^= 11 or arr(3).v ^= 33 then fails = fails + 1;
+      allocate arr;
+      if arr(1).v ^= 0 or arr(3).v ^= 0 then fails = fails + 1;
+      free arr;
+      if arr(1).v ^= 11 or arr(3).v ^= 33 then fails = fails + 1;
+
+      if fails = 0 then put skip list('PASS controlled_struct');
+      else put skip list('FAIL controlled_struct: fails =', fails);
+   end controlled_struct_test;

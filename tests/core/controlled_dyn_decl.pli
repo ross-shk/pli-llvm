@@ -1,0 +1,39 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* rules (13),(23),(87)-(90),(123),(126): a CONTROLLED array with a non-'*'
+      runtime DECLARE extent A(n) sizes its implicit entry generation at block
+      entry, and a bare ALLOCATE pushes another generation of the same declared
+      extent; references and DIM read the live extent of the latest generation.
+      Covers a 1-D array and a first-axis-dynamic N-D array. */
+   controlled_dyn_decl_test: procedure options(main);
+      declare n fixed bin(31) init(3);
+      declare a(n) fixed bin(31) controlled;
+      declare g(n, 2) fixed bin(31) controlled;
+      declare i fixed bin(31), j fixed bin(31), fails fixed bin(31);
+
+      fails = 0;
+      do i = 1 to n;
+         a(i) = i * 10;
+      end;
+      if dim(a) ^= 3 then fails = fails + 1;
+      if a(1) ^= 10 or a(3) ^= 30 then fails = fails + 1;
+
+      /* a bare ALLOCATE pushes a fresh generation of the declared extent */
+      allocate a;
+      a(1) = 99;
+      if a(1) ^= 99 then fails = fails + 1;
+      free a;
+      if a(1) ^= 10 then fails = fails + 1;
+
+      /* N-D: runtime first axis, fixed later axis */
+      do i = 1 to n;
+         do j = 1 to 2;
+            g(i, j) = i * 10 + j;
+         end;
+      end;
+      if dim(g) ^= 6 then fails = fails + 1;
+      if g(1, 1) ^= 11 or g(2, 2) ^= 22 then fails = fails + 1;
+
+      if fails = 0 then put skip list('PASS controlled_dyn_decl');
+      else put skip list('FAIL controlled_dyn_decl: fails =', fails);
+   end controlled_dyn_decl_test;
