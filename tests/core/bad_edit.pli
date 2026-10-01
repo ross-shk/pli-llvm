@@ -1,12 +1,12 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-   /* Edit-directed I/O diagnostics (rules (48)-(54),(108),(110)): an
-      unimplemented format item (B binary), and a GET EDIT data item that
-      is not a variable reference, must each be diagnosed. */
-   bad_edit_test: procedure options(main);
-      declare a fixed bin(31);
-      declare b fixed bin(31);
-      a = 1;
-      put edit(a) (b(8));           /* B format is unimplemented */
-      get edit(42) (f(5));          /* constant is not a variable */
+    /* Edit-directed I/O diagnostics (rules (48)-(54),(108),(110)): a B
+       format on a non-BIT item, and a GET EDIT data item that is not a
+       variable reference, must each be diagnosed. */
+    bad_edit_test: procedure options(main);
+       declare a fixed bin(31);
+       declare b fixed bin(31);
+       a = 1;
+       put edit(a) (b(8));           /* B format requires a BIT item */
+       get edit(42) (f(5));          /* constant is not a variable */
    end bad_edit_test;

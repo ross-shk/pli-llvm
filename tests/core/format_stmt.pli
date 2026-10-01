@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* FORMAT statement + R remote format (rules (44),(55)): a labelled
+    FORMAT statement stores its list, and R(label) splices it into an
+    EDIT, so a STRING round-trip recovers the values. */
+ format_stmt: procedure options(main);
+    declare fails fixed bin(31);
+    declare buf char(20);
+    declare a fixed bin(31);
+    declare b fixed bin(31);
+    declare c fixed bin(31);
+    declare d fixed bin(31);
+    fails = 0;
+    fmt: format (f(6), f(6));
+    a = 12;
+    b = 34;
+    put string(buf) edit(a, b) (r(fmt));
+    get string(buf) edit(c, d) (r(fmt));
+    if c ^= 12 then fails = fails + 1;
+    if d ^= 34 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS format_stmt');
+    else put skip list('FAIL format_stmt: fails =', fails);
+ end format_stmt;

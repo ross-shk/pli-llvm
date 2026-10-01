@@ -170,6 +170,64 @@ void pli_get_edit_x(long long w) {
   for (long long i = 0; i < w; ++i) rt_next_char();
 }
 
+/* B(w) output (rule (52)): nbits packed big-endian bits (first bit in the
+ * top bit) written as '0'/'1', right-justified in width w. */
+void pli_put_edit_bit(const char *p, long long nbits, long long w) {
+  if (nbits < 0)
+    nbits = 0;
+  if (w < nbits)
+    w = nbits;
+  for (long long i = nbits; i < w; ++i)
+    rt_put_raw(" ", 1);
+  for (long long i = 0; i < nbits; ++i) {
+    unsigned char byte = p ? (unsigned char)p[i / 8] : 0;
+    int bit = (byte >> (7 - (i % 8))) & 1;
+    rt_put_raw(bit ? "1" : "0", 1);
+  }
+}
+
+/* B(w) input (rule (52)): read a w-character field, collect '0'/'1' (leading
+ * blanks skipped), store up to cap bits packed big-endian; short fields are
+ * '0'-padded on the right to match BIT literal semantics, excess consumed. */
+void pli_get_edit_bit(char *dst, long long cap, long long w) {
+  long long nbytes = cap > 0 ? (cap + 7) / 8 : 0;
+  for (long long i = 0; i < nbytes; ++i)
+    dst[i] = 0;
+  if (w < 0)
+    w = 0;
+  long long got = 0;
+  for (long long i = 0; i < w; ++i) {
+    int c = rt_next_char();
+    if (c == EOF)
+      break;
+    if (c != '0' && c != '1')
+      continue; // blanks/padding skipped, like numeric fields
+    if (got < cap)
+      dst[got / 8] |= (char)((c - '0') << (7 - (got % 8)));
+    ++got;
+  }
+}
+
+/* COLUMN(n) on input (rule (48)): the next item starts at 1-based column n;
+ * skip blanks forward, opening a fresh line first when already past n. */
+void pli_get_edit_column(long long n) {
+  if (n < 1)
+    n = 1;
+  if (rt_in_col + 1 > (int)n) {
+    int c;
+    do {
+      c = rt_next_char();
+      if (c == EOF)
+        break;
+    } while (c != '\n');
+  }
+  while (rt_in_col + 1 < (int)n) {
+    int c = rt_next_char();
+    if (c == EOF)
+      break;
+  }
+}
+
 /* SKIP(n): consume input up to and including the nth newline. */
 void pli_get_edit_skip(long long n) {
   if (n < 1) n = 1;

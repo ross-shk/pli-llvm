@@ -9,6 +9,7 @@
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
 int rt_col = 0;
+int rt_in_col = 0;
 int rt_items_on_line = 0;
 /* Data-directed output (rule (106), QR1.5): names emitted in the open DATA
  * list, and a flag suppressing the value's blank separator after NAME=. */
@@ -51,13 +52,22 @@ void rt_put_raw(const char *p, size_t n) {
 }
 
 /* Read one input character from the active FILE stream, STRING source, or
- * stdin. */
+ * stdin. Tracks the input column for COLUMN positioning on GET EDIT. */
 int rt_next_char(void) {
+  int c;
   if (rt_in_f)
-    return getc(rt_in_f);
-  if (rt_in_buf)
-    return rt_in_pos < rt_in_len ? (unsigned char)rt_in_buf[rt_in_pos++] : EOF;
-  return getchar();
+    c = getc(rt_in_f);
+  else if (rt_in_buf)
+    c = rt_in_pos < rt_in_len ? (unsigned char)rt_in_buf[rt_in_pos++] : EOF;
+  else
+    c = getchar();
+  if (c == EOF)
+    return c;
+  if (c == '\n')
+    rt_in_col = 0;
+  else
+    ++rt_in_col;
+  return c;
 }
 
 void pli_put_skip(long long n) {

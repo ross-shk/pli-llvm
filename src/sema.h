@@ -187,6 +187,16 @@ private:
   // and check that the data items pair one-to-one with the data (A/F) formats,
   // and for GET that each item is an assignable reference of a matching type.
   void checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet);
+  // FORMAT statements (rule (44)) collected per procedure: label -> statement,
+  // so R(label) remote formats (rule (55)) splice the referenced list.
+  std::unordered_map<std::string, Stmt*> formatMap_;
+  // Collect FORMAT statements under body (recursively) into formatMap_.
+  void collectFormats(const std::vector<StmtP>& body);
+  // Collect one statement and its children into formatMap_.
+  void collectFormatsFromStmt(Stmt* s);
+  // Splice R(remote) items in fmts with the referenced FORMAT lists (rule 55).
+  // Returns false after a diagnostic (unknown label, cycle, P picture part).
+  bool expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc);
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);

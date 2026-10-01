@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* F/E scale factor (rules (50),(108)): the third F operand is a scale
+    factor p — a numeric expression evaluated for its effects; formatting
+    itself uses (w,d). This pins that the form parses, types, and emits
+    without error. */
+ edit_scale: procedure options(main);
+    declare fails fixed bin(31);
+    declare buf char(20);
+    declare a fixed bin(31);
+    declare b fixed bin(31);
+    fails = 0;
+    a = 123;
+    put string(buf) edit(a) (f(6, 0, 2));
+    get string(buf) edit(b) (f(6));
+    if b ^= 123 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS edit_scale');
+    else put skip list('FAIL edit_scale: fails =', fails);
+ end edit_scale;

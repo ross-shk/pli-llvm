@@ -1,0 +1,37 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* B format (rules (48),(52)): PUT EDIT writes a BIT string through
+    B(w) and GET EDIT reads it back, so a STRING round-trip recovers
+    the original bits. */
+ edit_b_test: procedure options(main);
+    declare fails fixed bin(31);
+    declare buf char(40);
+    declare a bit(4);
+    declare b bit(4);
+    declare c bit(1);
+    declare d bit(1);
+    declare chunk char(8);
+    fails = 0;
+    a = '1011'b;
+    put string(buf) edit(a) (b(4));
+    get string(buf) edit(b) (b(4));
+    if b ^= a then do;
+       fails = fails + 1;
+       put skip list('FAIL B roundtrip');
+    end;
+    c = '1'b;
+    put string(buf) edit(c) (b(4));
+    get string(buf) edit(d) (b(4));
+    if d ^= c then do;
+       fails = fails + 1;
+       put skip list('FAIL B single');
+    end;
+    a = '1011'b;
+    put string(buf) edit(a) (b(8));
+    chunk = substr(buf, 1, 8);
+    if chunk ^= '    1011' then do;
+       fails = fails + 1;
+       put skip list('FAIL B content', chunk);
+    end;
+    if fails = 0 then put skip list('PASS edit_b');
+    else put skip list('FAIL edit_b: fails =', fails);
+ end edit_b_test;

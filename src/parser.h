@@ -91,6 +91,8 @@ private:
   bool parseFormatItemInto(std::vector<FormatItem>& out);
   // Parse one non-group format item into fi.
   bool parseSingleFormatItem(FormatItem& fi);
+  // FORMAT statement (rule (44)): FORMAT(formatlist); with labels for R(ref).
+  StmtP parseFormatStmt(const std::vector<std::string>& labels);
   StmtP parseCall();
   StmtP parseWait();  // WAIT (rule 82, QR2.8): WAIT(ev,...)[(count)];
   StmtP parseDelay(); // DELAY (rule 83, QR2.8): DELAY(expr);

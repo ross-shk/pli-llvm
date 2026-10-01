@@ -117,6 +117,7 @@ int pli_snprintf(char *buf, size_t cap, const char *fmt, ...);
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
 extern int rt_col;
+extern int rt_in_col;
 extern int rt_items_on_line;
 /* Data-directed output (rule (106), QR1.5): names emitted in the open DATA
  * list, and a flag suppressing the value's blank separator after NAME=. */
@@ -158,6 +159,7 @@ int rt_next_char(void);
 #define in_buf rt_in_buf
 #define in_len rt_in_len
 #define in_pos rt_in_pos
+#define in_col rt_in_col
 #define pli_files rt_pli_files
 #define out_f rt_out_f
 #define in_f rt_in_f

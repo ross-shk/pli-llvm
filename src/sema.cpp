@@ -382,6 +382,8 @@ void Sema::processProc(Proc* p) {
   labelBeginChains_.clear();
   curBeginChain_.clear();
   curEntry_ = nullptr;
+  formatMap_.clear();
+  collectFormats(p->body);
   {
     std::vector<const Stmt*> beginChain;
     for (auto& s : p->body)
@@ -1707,6 +1709,32 @@ void Sema::collectLabels(Stmt* s, std::vector<const Stmt*>& chain) {
     chain.pop_back();
 }
 
+// FORMAT statements (rule (44)) collected per procedure: every label on a
+// FORMAT statement names its list for R(label) splicing (rule (55)).
+void Sema::collectFormats(const std::vector<StmtP>& body) {
+  for (auto& sp : body)
+    collectFormatsFromStmt(sp.get());
+}
+
+void Sema::collectFormatsFromStmt(Stmt* s) {
+  if (!s)
+    return;
+  if (s->kind == Stmt::Format) {
+    for (const std::string& l : s->labels) {
+      if (formatMap_.count(l))
+        d_.error(s->loc, "duplicate FORMAT label '" + l + "'", "(44)");
+      else
+        formatMap_[l] = s;
+    }
+  }
+  if (s->thenS)
+    collectFormatsFromStmt(s->thenS.get());
+  if (s->elseS)
+    collectFormatsFromStmt(s->elseS.get());
+  for (auto& b : s->body)
+    collectFormatsFromStmt(b.get());
+}
+
 // True when a declaration subtree carries a per-member INITIAL (rule (26)):
 // any descendant with its own init/initItems/initCall/valueInit.
 static bool structHasMemberInit(const std::vector<DeclItem*>& items,
@@ -3001,24 +3029,21 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (s->taskRef) {
         typeExpr(s->taskRef.get(), sc, p);
         Expr* t = s->taskRef.get();
-        if (t->kind != Expr::VarRef || !t->sym || t->sym->kind == Symbol::ProcName ||
-            !t->sym->ty.isTask())
-          d_.error(t->loc, "TASK option requires a TASK variable", "(79)");
-        else if (!t->path.empty() || !t->memberPath.empty())
-          d_.error(t->loc, "TASK of a structure member is not implemented in this stage", "(79)");
-        else if (t->sym->ty.isArray())
-          d_.error(t->loc, "TASK of an array element is not implemented in this stage", "(79)");
+        // A TASK reference is a scalar TASK variable, a TASK array element
+        // t(i), or a TASK structure member S.T (rules (79),(82)); each must
+        // resolve to a TASK-typed reference.
+        if (!((t->kind == Expr::VarRef && t->sym && t->sym->kind != Symbol::ProcName &&
+               t->ty.isTask()) ||
+              (t->kind == Expr::Subscript && t->sym && t->ty.isTask())))
+          d_.error(t->loc, "TASK option requires a TASK variable or element", "(79)");
       }
       if (s->eventRef) {
         typeExpr(s->eventRef.get(), sc, p);
         Expr* e = s->eventRef.get();
-        if (e->kind != Expr::VarRef || !e->sym || e->sym->kind == Symbol::ProcName ||
-            !e->sym->ty.isEvent())
-          d_.error(e->loc, "EVENT option requires an EVENT variable", "(79)");
-        else if (!e->path.empty() || !e->memberPath.empty())
-          d_.error(e->loc, "EVENT of a structure member is not implemented in this stage", "(79)");
-        else if (e->sym->ty.isArray())
-          d_.error(e->loc, "EVENT of an array element is not implemented in this stage", "(79)");
+        if (!((e->kind == Expr::VarRef && e->sym && e->sym->kind != Symbol::ProcName &&
+               e->ty.isEvent()) ||
+              (e->kind == Expr::Subscript && e->sym && e->ty.isEvent())))
+          d_.error(e->loc, "EVENT option requires an EVENT variable or element", "(79)");
       }
       if (s->priorityExpr) {
         typeExpr(s->priorityExpr.get(), sc, p);
@@ -3029,21 +3054,19 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   }
   case Stmt::Wait: {
-    // WAIT (rule (82), QR2.8): every event must be an EVENT variable; the
-    // optional count is a numeric expression (how many must complete).
+    // WAIT (rule (82), QR2.8): every event is a scalar EVENT variable, an
+    // EVENT array element, or an EVENT member; the optional count is a
+    // numeric expression (how many must complete).
     if (s->waitEvents.empty())
       d_.error(s->loc, "WAIT requires at least one event", "(82)");
     for (auto& e : s->waitEvents) {
       typeExpr(e.get(), sc, p);
-      if (e->kind != Expr::VarRef || !e->sym || e->sym->kind == Symbol::ProcName ||
-          !e->sym->ty.isEvent()) {
-        d_.error(e->loc, "WAIT requires an EVENT variable", "(82)");
+      if (!((e->kind == Expr::VarRef && e->sym && e->sym->kind != Symbol::ProcName &&
+             e->ty.isEvent()) ||
+            (e->kind == Expr::Subscript && e->sym && e->ty.isEvent()))) {
+        d_.error(e->loc, "WAIT requires an EVENT variable or element", "(82)");
         continue;
       }
-      if (!e->path.empty() || !e->memberPath.empty())
-        d_.error(e->loc, "WAIT of a structure member is not implemented in this stage", "(82)");
-      else if (e->sym->ty.isArray())
-        d_.error(e->loc, "WAIT of an array element is not implemented in this stage", "(82)");
     }
     if (s->waitCount) {
       typeExpr(s->waitCount.get(), sc, p);
@@ -3107,6 +3130,21 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Stop:
   case Stmt::Entry: // declaration-like; params/type resolved in processProc
     break;
+  case Stmt::Format: {
+    // A FORMAT statement (rule (44)) stores its list for R splicing; type
+    // the widths so errors surface even when no EDIT references the label.
+    for (auto& f : s->formats) {
+      typeExpr(f.w.get(), sc, p);
+      typeExpr(f.d.get(), sc, p);
+      typeExpr(f.s.get(), sc, p);
+      for (auto& sb : f.subs) {
+        typeExpr(sb.w.get(), sc, p);
+        typeExpr(sb.d.get(), sc, p);
+        typeExpr(sb.s.get(), sc, p);
+      }
+    }
+    break;
+  }
   case Stmt::Leave:
   case Stmt::Iterate: {
     // Extension (ADR-105): LEAVE exits / ITERATE continues the innermost
@@ -3484,17 +3522,113 @@ void Sema::checkFileTarget(Stmt* s, Scope* sc) {
     d_.error(s->loc, "the FILE and STRING options cannot be combined", "(105)");
 }
 
+// Deep-copy one format width/decimals tree for R splicing (rule (55)).
+static ExprP cloneFmtExpr(const Expr* e) {
+  if (!e)
+    return nullptr;
+  auto c = std::make_unique<Expr>();
+  c->kind = e->kind;
+  c->loc = e->loc;
+  c->ty = e->ty;
+  c->ival = e->ival;
+  c->fval = e->fval;
+  c->decScale = e->decScale;
+  c->decPrec = e->decPrec;
+  c->sval = e->sval;
+  c->name = e->name;
+  c->path = e->path;
+  c->memberPath = e->memberPath;
+  c->sym = e->sym;
+  if (e->locPtr)
+    c->locPtr = cloneFmtExpr(e->locPtr.get());
+  c->op = e->op;
+  if (e->a)
+    c->a = cloneFmtExpr(e->a.get());
+  if (e->b)
+    c->b = cloneFmtExpr(e->b.get());
+  for (const auto& a : e->args)
+    c->args.push_back(cloneFmtExpr(a.get()));
+  return c;
+}
+
+static FormatItem cloneFmtItem(const FormatItem& f) {
+  FormatItem c;
+  c.kind = f.kind;
+  c.w = cloneFmtExpr(f.w.get());
+  c.d = cloneFmtExpr(f.d.get());
+  c.s = cloneFmtExpr(f.s.get());
+  c.remote = f.remote;
+  for (const auto& sb : f.subs)
+    c.subs.push_back(cloneFmtItem(sb));
+  return c;
+}
+
+// Splice R(label) items with the referenced FORMAT lists (rules (44),(55)).
+// Nested R references expand recursively; cycles and unknown labels are
+// diagnosed, never silently dropped. Expanded items are deep copies so the
+// EDIT statement owns its expressions for typing.
+bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
+  std::unordered_set<std::string> active;
+  std::function<bool(std::vector<FormatItem>&, int)> expand =
+      [&](std::vector<FormatItem>& list, int depth) -> bool {
+    if (depth > 16) {
+      d_.error(loc, "remote format nesting too deep (possible R cycle)", "(55)");
+      return false;
+    }
+    std::vector<FormatItem> out;
+    for (auto& f : list) {
+      if (f.kind != FormatItem::Remote) {
+        out.push_back(cloneFmtItem(f));
+        continue;
+      }
+      auto it = formatMap_.find(f.remote);
+      if (it == formatMap_.end()) {
+        d_.error(loc, "R('" + f.remote + "') does not name a FORMAT statement", "(55)");
+        return false;
+      }
+      if (!active.insert(f.remote).second) {
+        d_.error(loc, "remote format cycle through '" + f.remote + "'", "(55)");
+        return false;
+      }
+      std::vector<FormatItem> inner;
+      for (auto& g : it->second->formats)
+        inner.push_back(cloneFmtItem(g));
+      if (!expand(inner, depth + 1))
+        return false;
+      for (auto& g : inner)
+        out.push_back(std::move(g));
+      active.erase(f.remote);
+    }
+    list = std::move(out);
+    return true;
+  };
+  return expand(fmts, 0);
+}
+
 // Edit-directed transmission (rule (108)): type the format widths/decimals and
-// the data items, then pair each data item with its data (A/F) format, skipping
-// the control formats (X/SKIP/PAGE/LINE) that act without consuming data. For
-// GET the paired item must be an assignable reference of a format-compatible
-// type.
+// the data items, then pair each data item with its data (A/B/C/F/E) format,
+// skipping the control formats (X/SKIP/PAGE/LINE/COLUMN) that act without
+// consuming data. For GET the paired item must be an assignable reference of
+// a format-compatible type.
 void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
+  // Remote formats splice before typing so the copies are typed here.
+  if (!expandRemoteFormats(s->formats, s->loc))
+    return;
   for (auto& it : s->items)
     typeExpr(it.get(), sc, p);
   for (auto& f : s->formats) {
     typeExpr(f.w.get(), sc, p);
     typeExpr(f.d.get(), sc, p);
+    typeExpr(f.s.get(), sc, p);
+    for (auto& sb : f.subs) {
+      typeExpr(sb.w.get(), sc, p);
+      typeExpr(sb.d.get(), sc, p);
+      typeExpr(sb.s.get(), sc, p);
+    }
+    // An F/E scale factor (rule (50)) is a numeric expression evaluated for
+    // its effects; formatting itself uses (w,d).
+    if (f.s && !f.s->ty.isNumeric() && !f.s->ty.isVoid())
+      d_.error(f.s->loc, "a scale factor on an F/E format must be numeric", "(50)");
   }
   // Aggregate items transmit element-wise; expansion runs before format
   // pairing so EDIT counts line up.
@@ -3502,13 +3636,13 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     return;
   size_t dataIdx = 0;
   for (auto& f : s->formats) {
-    if (isGet && f.kind == FormatItem::Column) {
-      d_.error(s->loc, "COLUMN positioning on input is not implemented in this stage", "(108)");
-      continue;
-    }
     if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
         f.kind == FormatItem::Line || f.kind == FormatItem::Column)
       continue; // a control format consumes no data item
+    if (f.kind == FormatItem::Remote) {
+      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+      continue;
+    }
     if (dataIdx >= s->items.size()) {
       d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
       break;
@@ -3516,6 +3650,10 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     Expr* it = s->items[dataIdx].get();
     if (f.kind == FormatItem::A && !it->ty.isChar())
       d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
+    else if (f.kind == FormatItem::B && !it->ty.isBit())
+      d_.error(it->loc, "a B format requires a BIT item", "(52)");
+    else if (f.kind == FormatItem::C && !it->ty.isComplex())
+      d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
     else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
       const char* letter = f.kind == FormatItem::F ? "F" : "E";
       const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
@@ -3537,7 +3675,8 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
   }
   size_t dataFormats = 0;
   for (auto& f : s->formats)
-    if (f.kind == FormatItem::A || f.kind == FormatItem::F || f.kind == FormatItem::E)
+    if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
+        f.kind == FormatItem::F || f.kind == FormatItem::E)
       ++dataFormats;
   if (dataFormats < s->items.size())
     d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
@@ -4956,9 +5095,16 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     Expr* a = e->args[0].get();
-    if (a->kind != Expr::VarRef || !a->sym || a->sym->kind == Symbol::ProcName ||
-        !a->sym->ty.isEvent()) {
-      d_.error(a->loc, "EVENT argument must be an EVENT variable", "(123)");
+    // An EVENT argument may be a scalar EVENT variable, an EVENT array element
+    // ev(i), or an EVENT member S.EV (rules (79),(82)); each resolves to an
+    // EVENT-typed reference whose live address the poll reads.
+    const Type* et = nullptr;
+    if (a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName && a->ty.isEvent())
+      et = &a->ty;
+    else if (a->kind == Expr::Subscript && a->sym && a->ty.isEvent())
+      et = &a->ty;
+    if (!et) {
+      d_.error(a->loc, "EVENT argument must be an EVENT variable or element", "(123)");
       e->ty = Type::voidTy();
       return true;
     }

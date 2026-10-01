@@ -26,12 +26,14 @@ void pli_string_get_open(char *buf, long long len) {
   rt_in_buf = buf;
   rt_in_len = (size_t)len;
   rt_in_pos = 0;
+  rt_in_col = 0;
 }
 
 /* End a STRING GET: return to SYSIN. */
 void pli_string_get_close(void) {
   rt_in_buf = NULL;
   rt_in_len = rt_in_pos = 0;
+  rt_in_col = 0;
 }
 
 /* OPEN (rules 100-103): open the file in `slot` with the given name (namelen
@@ -75,10 +77,12 @@ void pli_put_unselect(void) {
 /* FILE ( f ) input routing (rule 105): rt_next_char reads from the named file. */
 void pli_get_select(long long slot) {
   rt_in_f = (slot >= 0 && slot < PLI_MAX_FILES) ? rt_pli_files[slot] : NULL;
+  rt_in_col = 0;
 }
 
 void pli_get_unselect(void) {
   rt_in_f = NULL;
+  rt_in_col = 0;
 }
 
 /* SEQUENTIAL RECORD files (rules (112),(113), ADR-101): fixed-size binary

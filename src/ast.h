@@ -83,13 +83,20 @@ struct DefinedSub {
 };
 
 // One FORMAT item for edit-directed I/O (rules (48)-(54)): a data format
-// (A character, F fixed) that transmits the next data item, or a control format
-// (X spacing, SKIP/PAGE/LINE line control) that acts without consuming data.
-// F(w,d): w = field width, d = fractional digits; A(w)/X(w): w = field width.
+// (A character, B bit, C complex, F/E fixed) that transmits the next data
+// item, a control format (X spacing, SKIP/PAGE/LINE/COLUMN line control)
+// that acts without consuming data, or a remote R(label) spliced from a
+// FORMAT statement (rule (55)). F(w,d[,p]): w = field width, d =
+// fractional digits, p = scale factor (evaluated, then formatting uses
+// (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
+// formats for the real/imaginary parts; P stays diagnosed (D1 pictures).
 struct FormatItem {
-  enum Kind { A, F, E, X, Skip, Page, Line, Column } kind = A;
+  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote } kind = A;
   ExprP w; // field width
   ExprP d; // F/E: fractional digits
+  ExprP s; // F/E: scale factor p (rule (50)); null = absent
+  std::string remote; // R: FORMAT statement label (rule (55)); empty = none
+  std::vector<FormatItem> subs; // C: 1-2 inner real (F/E) formats (rule (51))
 };
 
 struct DeclItem {
@@ -178,6 +185,7 @@ struct Stmt {
     Write,       // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
     Wait,        // rule (82) WAIT(ev,...)[(count)] — suspend until events complete (QR2.8)
     Delay,       // rule (83) DELAY(expr) — suspend for N milliseconds (QR2.8)
+    Format,      // rule (44) FORMAT(formatlist); — remote format repository for R(ref)
     DefineAlias, // extension (ADR-114): DEFINE ALIAS name attrs (no HIR twin;
                  // dropped in lowering after sema registers the type)
   } kind = Null;

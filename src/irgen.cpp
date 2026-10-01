@@ -2191,6 +2191,7 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Null:
   case HStmt::Declare:
   case HStmt::Entry: // segment marker; handled by emitMultiEntryProc
+  case HStmt::Format: // remote repository only; R spliced in sema, no code
     break;
   case HStmt::Assign:
     emitAssign(s);
@@ -3694,13 +3695,25 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
   d_.error(loc, "GET LIST target is not assignable in this stage", "(110)");
 }
 
-// Edit-directed output (rule (108)): walk the format list, pairing each A/F
-// data format with the next data item and emitting the control (X/SKIP/PAGE/
-// LINE) items in order.
+// Edit-directed output (rule (108)): walk the format list, pairing each
+// A/B/C/F/E data format with the next data item and emitting the control
+// (X/SKIP/PAGE/LINE/COLUMN) items in order.
 void IRGen::emitPutEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
   llvm::Value* defD = i64(0);
   size_t di = 0;
+  // One real (F/E) part of a COMPLEX value (rule (51)): both parts are
+  // doubles, so F uses the float path and E the scientific path.
+  auto putRealPart = [&](llvm::Value* dbl, const HFormatItem& sub) {
+    llvm::Value* w = sub.w ? toI64(emitExpr(sub.w.get())) : defW;
+    llvm::Value* d = sub.d ? toI64(emitExpr(sub.d.get())) : defD;
+    if (sub.s)
+      (void)toI64(emitExpr(sub.s.get())); // scale evaluated for effects (50)
+    if (sub.kind == HFormatItem::E)
+      b_.CreateCall(runtimeFn("pli_put_edit_float_e"), {dbl, w, d});
+    else
+      b_.CreateCall(runtimeFn("pli_put_edit_float"), {dbl, w, d});
+  };
   for (auto& f : s->formats) {
     switch (f.kind) {
     case HFormatItem::X: {
@@ -3722,12 +3735,14 @@ void IRGen::emitPutEditItems(HStmt* s) {
       break;
     }
     case HFormatItem::Column: {
-      // Column positioning (rule (48)): GET columns are diagnosed in sema,
-      // so only output reaches here.
+      // Column positioning (rule (48)): pad blanks to 1-based column n.
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
       b_.CreateCall(runtimeFn("pli_put_edit_column"), {n});
       break;
     }
+    case HFormatItem::Remote:
+      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+      break;
     case HFormatItem::A: {
       if (di >= s->items.size())
         break;
@@ -3737,6 +3752,50 @@ void IRGen::emitPutEditItems(HStmt* s) {
       b_.CreateCall(runtimeFn("pli_put_edit_char"), {v.ptr, v.len, w});
       break;
     }
+    case HFormatItem::B: {
+      // Bit-string output (rule (52)): materialize the packed big-endian
+      // bytes into a temp and write them as '0'/'1' right-justified in w.
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = emitExpr(item);
+      long long nbits = v.ty.isBit() && v.ty.len > 0 ? v.ty.len : 1;
+      long long nbytes = (nbits + 7) / 8;
+      llvm::Value* tmp =
+          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "pebit");
+      llvm::Value* ptr = b_.CreateInBoundsGEP(
+          llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "pebitp");
+      if (nbits == 1) {
+        llvm::Value* one = b_.CreateZExt(v.reg, b_.getInt8Ty(), "b8");
+        // BIT(1) travels as i1; the packed byte holds it in the low bit, but
+        // the runtime reads the top bit of each byte, so shift into place.
+        llvm::Value* top = b_.CreateShl(
+            one, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "btop");
+        b_.CreateStore(top, ptr);
+      } else {
+        b_.CreateStore(v.reg, tmp);
+      }
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
+      b_.CreateCall(runtimeFn("pli_put_edit_bit"), {ptr, i64(nbits), w});
+      break;
+    }
+    case HFormatItem::C: {
+      // Complex output (rule (51)): one COMPLEX item through 1-2 inner real
+      // formats; a single sub serves both parts.
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = emitExpr(item);
+      llvm::Value* re = b_.CreateExtractValue(v.cpx, 0, "cpx.re");
+      llvm::Value* im = b_.CreateExtractValue(v.cpx, 1, "cpx.im");
+      if (f.subs.empty()) {
+        d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
+        break;
+      }
+      putRealPart(re, f.subs[0]);
+      putRealPart(im, f.subs.size() > 1 ? f.subs[1] : f.subs[0]);
+      break;
+    }
     case HFormatItem::F: {
       if (di >= s->items.size())
         break;
@@ -3744,6 +3803,8 @@ void IRGen::emitPutEditItems(HStmt* s) {
       Val v = emitExpr(item);
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
       llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+      if (f.s)
+        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
       if (v.ty.k == TK::Float) {
         b_.CreateCall(runtimeFn("pli_put_edit_float"), {v.reg, w, d});
       } else {
@@ -3759,6 +3820,8 @@ void IRGen::emitPutEditItems(HStmt* s) {
       Val v = convert(emitExpr(item), Type::flt(6), item->loc);
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
       llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+      if (f.s)
+        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
       b_.CreateCall(runtimeFn("pli_put_edit_float_e"), {v.reg, w, d});
       break;
     }
@@ -3766,8 +3829,8 @@ void IRGen::emitPutEditItems(HStmt* s) {
   }
 }
 
-// Edit-directed input (rule (108)): pair each A/F data format with the next
-// data item and emit the control (X/SKIP) items in order.
+// Edit-directed input (rule (108)): pair each A/B/C/F/E data format with
+// the next data item and emit the control (X/SKIP/COLUMN) items in order.
 void IRGen::emitGetEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
   size_t di = 0;
@@ -3787,8 +3850,15 @@ void IRGen::emitGetEditItems(HStmt* s) {
     case HFormatItem::Line:
       // Line control is not meaningful on input in this stage; ignored.
       break;
-    case HFormatItem::Column:
-      // Input positioning is diagnosed in sema; unreachable here.
+    case HFormatItem::Column: {
+      // Input positioning (rule (48)): skip forward to 1-based column n,
+      // opening a fresh line first when already past n.
+      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_get_edit_column"), {n});
+      break;
+    }
+    case HFormatItem::Remote:
+      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
       break;
     case HFormatItem::A: {
       if (di >= s->items.size())
@@ -3811,9 +3881,68 @@ void IRGen::emitGetEditItems(HStmt* s) {
         break;
       HExpr* t = s->items[di++].get();
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      if (f.s)
+        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
       Val v;
       v.reg = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w});
       v.ty = Type::flt(6);
+      storeGetTarget(t, v, s->loc);
+      break;
+    }
+    case HFormatItem::B: {
+      // Bit-string input (rule (52)): read a w-character '0'/'1' field into
+      // a temp packed buffer, then store through the normal BIT path.
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      long long nbits = t->ty.isBit() && t->ty.len > 0 ? t->ty.len : 1;
+      long long nbytes = (nbits + 7) / 8;
+      llvm::Value* tmp =
+          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "gebit");
+      llvm::Value* ptr = b_.CreateInBoundsGEP(
+          llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "gebitp");
+      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
+      b_.CreateCall(runtimeFn("pli_get_edit_bit"), {ptr, i64(nbits), w});
+      Val v;
+      v.ty = Type::bit((int)nbits);
+      if (nbits == 1) {
+        // The runtime packs into the top bit; BIT(1) travels as the low bit.
+        llvm::Value* byte = b_.CreateLoad(b_.getInt8Ty(), ptr, "gb8");
+        llvm::Value* low =
+            b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
+        v.reg = b_.CreateTrunc(low, b_.getInt1Ty(), "gb1");
+      } else {
+        v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, "gb");
+      }
+      storeGetTarget(t, v, s->loc);
+      break;
+    }
+    case HFormatItem::C: {
+      // Complex input (rule (51)): read the real/imaginary parts through the
+      // inner real widths, then store the {double,double} pair.
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      if (f.subs.empty()) {
+        d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
+        break;
+      }
+      const HFormatItem& s1 = f.subs[0];
+      const HFormatItem& s2 = f.subs.size() > 1 ? f.subs[1] : f.subs[0];
+      llvm::Value* w1 = s1.w ? toI64(emitExpr(s1.w.get())) : defW;
+      llvm::Value* w2 = s2.w ? toI64(emitExpr(s2.w.get())) : defW;
+      if (s1.s)
+        (void)toI64(emitExpr(s1.s.get()));
+      if (s2.s)
+        (void)toI64(emitExpr(s2.s.get()));
+      llvm::Value* re = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w1});
+      llvm::Value* im = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w2});
+      llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
+      cpx = b_.CreateInsertValue(cpx, re, 0, "cpx.re");
+      cpx = b_.CreateInsertValue(cpx, im, 1, "cpx.im");
+      Val v;
+      v.cpx = cpx;
+      v.ty = Type::complexTy();
       storeGetTarget(t, v, s->loc);
       break;
     }
@@ -4305,6 +4434,35 @@ void IRGen::emitCall(HStmt* s) {
   flushVarWrites();
 }
 
+// Address of an EVENT/TASK reference (rules (79),(82)): a scalar variable's
+// own cell, an array element ev(i) through the element-address path, or a
+// structure member S.EV through the member path. Returns null when no symbol.
+llvm::Value* IRGen::taskEventAddr(HExpr* e, SourceLoc loc) {
+  if (!e || !e->sym)
+    return nullptr;
+  if (e->kind == HExpr::Subscript && e->sym) {
+    if (!e->memberPath.empty()) {
+      // A member of one element of an array of structures arr(i).ev.
+      llvm::Value* elem = arrayElementAddr(e->sym->ty, addressOf(e->sym), e->args, loc);
+      return elementMemberAddr(e->sym, e->memberPath, elem);
+    }
+    if (e->sym->controlled) {
+      if (isCtlDynArray(e->sym))
+        return ctlDynElementAddr(e->sym, e->args, loc);
+      if (isCtlNDynArray(e->sym))
+        return ctlNDElementAddr(e->sym, e->args, loc);
+    }
+    if (e->sym->ty.isDynamic())
+      return arrayElementAddr(e->sym->ty, addressOf(e->sym), e->args, loc,
+                              dynUb_.count(e->sym) ? dynUb_[e->sym] : nullptr,
+                              dynLb_.count(e->sym) ? dynLb_[e->sym] : nullptr);
+    return arrayElementAddr(e->sym->ty, addressOf(e->sym), e->args, loc);
+  }
+  if (!e->memberPath.empty())
+    return memberAddr(e->sym, e->memberPath, loc);
+  return addressOf(e->sym);
+}
+
 // Asynchronous CALL (rule (79), QR2.8): marshal the callee arguments as for a
 // synchronous call, pack them into a heap context, and run a per-site wrapper
 // on a detached thread. The caller returns at once; WAIT/EVENT synchronises.
@@ -4360,11 +4518,11 @@ void IRGen::emitAsyncCall(HStmt* s) {
   }
 
   llvm::Value* eventAddr = llvm::Constant::getNullValue(b_.getPtrTy());
-  if (s->eventRef && s->eventRef->sym)
-    eventAddr = addressOf(s->eventRef->sym);
+  if (s->eventRef)
+    eventAddr = taskEventAddr(s->eventRef.get(), s->loc);
   llvm::Value* taskAddr = nullptr;
-  if (s->taskRef && s->taskRef->sym)
-    taskAddr = addressOf(s->taskRef->sym);
+  if (s->taskRef)
+    taskAddr = taskEventAddr(s->taskRef.get(), s->loc);
 
   // Context layout: [event addr, ...callArgs in order]. All addresses are
   // opaque pointers; extents are i64.
@@ -4419,9 +4577,10 @@ void IRGen::emitWait(HStmt* s) {
   // any k of them through pli_wait_n.
   if (!s->waitCount) {
     for (auto& e : s->waitEvents) {
-      if (!e->sym)
+      llvm::Value* addr = taskEventAddr(e.get(), s->loc);
+      if (!addr)
         continue;
-      b_.CreateCall(runtimeFn("pli_event_wait"), {addressOf(e->sym)});
+      b_.CreateCall(runtimeFn("pli_event_wait"), {addr});
     }
     return;
   }
@@ -4430,8 +4589,9 @@ void IRGen::emitWait(HStmt* s) {
   for (size_t i = 0; i < n; ++i) {
     llvm::Value* ep = b_.CreateInBoundsGEP(llvm::ArrayType::get(b_.getPtrTy(), (unsigned)n), arr,
                                            {i64(0), i64((long long)i)}, "we");
-    llvm::Value* addr = s->waitEvents[i]->sym ? addressOf(s->waitEvents[i]->sym)
-                                              : llvm::Constant::getNullValue(b_.getPtrTy());
+    llvm::Value* addr = taskEventAddr(s->waitEvents[i].get(), s->loc);
+    if (!addr)
+      addr = llvm::Constant::getNullValue(b_.getPtrTy());
     b_.CreateStore(addr, ep);
   }
   Val need = emitExpr(s->waitCount.get());

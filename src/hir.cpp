@@ -251,6 +251,16 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     hf.kind = static_cast<HFormatItem::Kind>(f.kind);
     hf.w = lowerExpr(f.w.get());
     hf.d = lowerExpr(f.d.get());
+    hf.s = lowerExpr(f.s.get());
+    hf.remote = f.remote;
+    for (const auto& sb : f.subs) {
+      HFormatItem hs;
+      hs.kind = static_cast<HFormatItem::Kind>(sb.kind);
+      hs.w = lowerExpr(sb.w.get());
+      hs.d = lowerExpr(sb.d.get());
+      hs.s = lowerExpr(sb.s.get());
+      hf.subs.push_back(std::move(hs));
+    }
     h->formats.push_back(std::move(hf));
   }
 
@@ -603,6 +613,8 @@ const char* stmtKind(HStmt::Kind k) {
     return "Read";
   case HStmt::Write:
     return "Write";
+  case HStmt::Format:
+    return "Format";
   }
   return "?";
 }

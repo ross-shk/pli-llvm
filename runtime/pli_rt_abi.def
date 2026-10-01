@@ -38,6 +38,7 @@ PLI_FN(pli_display_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */
  * X/SKIP/PAGE/LINE items. The fixed form takes the stored value, its decimal
  * scale (value*10^scale), the field width, and the fractional-digit count. */
 PLI_FN(pli_put_edit_char, VOID, (CPTR, I64, I64))
+PLI_FN(pli_put_edit_bit, VOID, (CPTR, I64, I64))
 PLI_FN(pli_put_edit_fixed, VOID, (I64, I64, I64, I64))
 PLI_FN(pli_put_edit_float, VOID, (DOUBLE, I64, I64))
 PLI_FN(pli_put_edit_float_e, VOID, (DOUBLE, I64, I64))
@@ -157,6 +158,8 @@ PLI_FN(pli_data_name_is, I32, (CPTR, I64, CPTR, I64))
  * and X/SKIP advance the input position. */
 PLI_FN(pli_get_edit_num, DOUBLE, (I64))
 PLI_FN(pli_get_edit_char, VOID, (PTR, I64, I64))
+PLI_FN(pli_get_edit_bit, VOID, (PTR, I64, I64))
+PLI_FN(pli_get_edit_column, VOID, (I64))
 PLI_FN(pli_get_edit_x, VOID, (I64))
 PLI_FN(pli_get_edit_skip, VOID, (I64))
 

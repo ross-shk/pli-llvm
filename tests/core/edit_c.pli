@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* C complex format (rules (51),(108)): one COMPLEX item transmits its
+    real and imaginary parts through the two inner F formats, and GET
+    reads them back, so a STRING round-trip recovers the value. */
+ edit_c_test: procedure options(main);
+    declare fails fixed bin(31);
+    declare buf char(40);
+    declare z complex;
+    declare w complex;
+    declare re1 fixed bin(31);
+    declare re2 fixed bin(31);
+    fails = 0;
+    z = complex(7, -3);
+    put string(buf) edit(z) (c(f(6), f(6)));
+    get string(buf) edit(w) (c(f(6), f(6)));
+    re1 = real(w);
+    re2 = imag(w);
+    if re1 ^= 7 then fails = fails + 1;
+    if re2 ^= -3 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS edit_c');
+    else put skip list('FAIL edit_c: fails =', fails);
+ end edit_c_test;

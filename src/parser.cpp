@@ -753,6 +753,9 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
       pendingEnd_ = e;
     return st;
   }
+  if (kw("FORMAT")) {
+    return parseFormatStmt(labels);
+  } // rule (44)
   if (kw("PUT")) {
     return parsePut();
   } // rules (104)-(109)
@@ -2844,6 +2847,10 @@ static FormatItem cloneFormatItem(const FormatItem& f) {
   c.kind = f.kind;
   c.w = cloneFormatExpr(f.w.get());
   c.d = cloneFormatExpr(f.d.get());
+  c.s = cloneFormatExpr(f.s.get());
+  c.remote = f.remote;
+  for (const auto& sb : f.subs)
+    c.subs.push_back(cloneFormatItem(sb));
   return c;
 }
 
@@ -2891,13 +2898,23 @@ bool Parser::parseSingleFormatItem(FormatItem& fi) {
     return false;
   }
   const std::string& w = cur().text;
-  // Format families recognised but not served by this slice (CM3).
-  if (w == "B" || w == "C" || w == "P" || w == "COLUMN" || w == "R") {
-    d_.error(cur().loc, "format item '" + w + "' is not implemented in this stage", "(48)");
+  // Picture-directed P items need PICTURE (D1); diagnosed, never dropped.
+  if (w == "P") {
+    d_.error(cur().loc, "format item 'P' requires PICTURE and is not implemented (D1)", "(53)");
     return false;
   }
   if (w == "A") {
     fi.kind = FormatItem::A;
+  } else if (w == "B") {
+    // Bit-string format (rule (52)): B[(w)] transmits a BIT item as '0'/'1'.
+    fi.kind = FormatItem::B;
+  } else if (w == "C") {
+    // Complex format (rule (51)): C(real[,real]) transmits one COMPLEX item
+    // through 1-2 inner real (F/E) formats for the real/imaginary parts.
+    fi.kind = FormatItem::C;
+  } else if (w == "R") {
+    // Remote format (rule (55)): R(label) splices the FORMAT statement's list.
+    fi.kind = FormatItem::Remote;
   } else if (w == "F") {
     fi.kind = FormatItem::F;
   } else if (w == "E") {
@@ -2910,32 +2927,99 @@ bool Parser::parseSingleFormatItem(FormatItem& fi) {
     fi.kind = FormatItem::Page;
   } else if (w == "LINE") {
     fi.kind = FormatItem::Line;
-  } else if (w == "COL") {
-    // Column positioning (rule (48)): COL(n) starts the next item at
-    // 1-based column n. The full word COLUMN stays diagnosed above.
+  } else if (w == "COL" || w == "COLUMN") {
+    // Column positioning (rule (48)): COL(n) and COLUMN(n) both start the
+    // next item at 1-based column n.
     fi.kind = FormatItem::Column;
   } else {
     d_.error(cur().loc, "'" + w + "' is not a format item", "(48)");
     return false;
   }
   advance(); // the format descriptor word
-  if (fi.kind == FormatItem::Column && cur().kind != Tok::LParen) {
+  if (fi.kind == FormatItem::Remote) {
+    // R(reference) (rule (55)): the label of a FORMAT statement in this block.
+    if (!expect(Tok::LParen, "(55)"))
+      return false;
+    if (cur().kind != Tok::Word) {
+      d_.error(cur().loc, "R requires a FORMAT statement label in parentheses", "(55)");
+      return false;
+    }
+    fi.remote = cur().text;
+    advance();
+    expect(Tok::RParen, "(55)");
+    return true;
+  }
+  if (fi.kind == FormatItem::C) {
+    // C(real[,real]): each part is an F/E real format with (w[,d]).
+    if (!expect(Tok::LParen, "(51)"))
+      return false;
+    for (;;) {
+      FormatItem inner;
+      if (!parseSingleFormatItem(inner))
+        return false;
+      if (inner.kind != FormatItem::F && inner.kind != FormatItem::E) {
+        d_.error(cur().loc, "a C format part must be an F or E real format", "(51)");
+        return false;
+      }
+      fi.subs.push_back(std::move(inner));
+      if (!eat(Tok::Comma))
+        break;
+      if ((int)fi.subs.size() >= 2)
+        break;
+    }
+    if (fi.subs.size() > 2) {
+      d_.error(cur().loc, "a C format takes at most two real formats", "(51)");
+      return false;
+    }
+    expect(Tok::RParen, "(51)");
+    return true;
+  }
+  if ((fi.kind == FormatItem::Column || fi.kind == FormatItem::B) && cur().kind != Tok::LParen &&
+      fi.kind == FormatItem::Column) {
     d_.error(cur().loc, "COL requires a column number in parentheses", "(48)");
     return false;
   }
-  if (eat(Tok::LParen)) { // optional ( width [, decimals ] )
+  if (eat(Tok::LParen)) { // optional ( width [, decimals [, scale ] ] )
     fi.w = parseExpr();
     if ((fi.kind == FormatItem::F || fi.kind == FormatItem::E) && eat(Tok::Comma)) {
       fi.d = parseExpr();
-      if (eat(Tok::Comma)) { // the third F operand is a scale factor
-        d_.error(cur().loc, "a scale factor on an F format item is not implemented in this stage",
-                 "(50)");
-        return false;
+      if (eat(Tok::Comma)) { // the third F operand is a scale factor (rule (50))
+        fi.s = parseExpr();
       }
     }
     expect(Tok::RParen, "(48)");
+  } else if (fi.kind == FormatItem::Column) {
+    d_.error(cur().loc, "COL requires a column number in parentheses", "(48)");
+    return false;
   }
   return true;
+}
+
+// format-sentence ::= [ labellist ] FORMAT formatlist ;   rule (44)
+// A FORMAT statement stores its format list under its labels for R(ref) use;
+// it emits no code. At least one label is required (the R target).
+StmtP Parser::parseFormatStmt(const std::vector<std::string>& labels) {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  st->labels = labels;
+  advance(); // FORMAT
+  st->kind = Stmt::Format;
+  if (labels.empty())
+    d_.error(st->loc, "a FORMAT statement requires a label for R reference", "(44)");
+  if (!expect(Tok::LParen, "(45)"))
+    return nullptr;
+  if (!at(Tok::RParen)) {
+    for (;;) {
+      if (!parseFormatItem(st.get()))
+        return nullptr;
+      if (!eat(Tok::Comma))
+        break;
+    }
+  }
+  if (!expect(Tok::RParen, "(45)"))
+    return nullptr;
+  expect(Tok::Semi, "(44)");
+  return st;
 }
 
 // call-statement ::= CALL identifier [argumentlist] ... ;          rule (78)

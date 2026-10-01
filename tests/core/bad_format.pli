@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Remote format diagnostics (rule (55)): an R reference to a label that
+    is not a FORMAT statement is diagnosed. */
+ bad_format: procedure options(main);
+    declare a fixed bin(31);
+    declare buf char(20);
+    a = 1;
+    put string(buf) edit(a) (r(nosuch));   /* unknown FORMAT label */
+ end bad_format;

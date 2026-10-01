@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* COLUMN positioning on input (rules (48),(108)): COL(n) skips
+    forward so the next item starts at 1-based column n, then the
+    paired item reads from that position. */
+ col_in: procedure options(main);
+    declare src char(16);
+    declare fails fixed bin(31);
+    declare a char(3);
+    declare b char(3);
+    fails = 0;
+    /* "abc  def" — column 1 starts a, column 6 starts d (after 2 blanks). */
+    src = 'abc  def';
+    get string(src) edit (a, b) (a(3), col(6), a(3));
+    if a ^= 'abc' then fails = fails + 1;
+    if b ^= 'def' then fails = fails + 1;
+    if fails = 0 then put skip list('PASS col_in');
+    else put skip list('FAIL col_in: fails =', fails);
+ end col_in;
