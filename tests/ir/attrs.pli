@@ -13,7 +13,7 @@
    s = 'hi';
    i = index(s, 'i');
    a(2) = i;
-   i = mod(i + a(2), 3);
+    i = mod(i + a(2), i);
    allocate x set(p);
    free x;
    put skip list(i);

@@ -6,10 +6,10 @@ CHECK: declare i64 @pli_mod_ll\(i64, i64\) #{{[0-9]+}}
 CHECK: declare void @pli_zerodivide\(\) #{{[0-9]+}}
 CHECK: declare nonnull ptr @pli_alloc\(i64\) #{{[0-9]+}}
 CHECK: declare void @pli_free\(ptr\) #{{[0-9]+}}
-CHECK: attributes #{{[0-9]+}} = \{ nounwind willreturn memory\(argmem: readwrite\) \}
-CHECK: attributes #{{[0-9]+}} = \{ nounwind willreturn memory\(argmem: read\) \}
-CHECK: attributes #{{[0-9]+}} = \{ cold noreturn nounwind \}
-CHECK: attributes #{{[0-9]+}} = \{ nounwind willreturn memory\(none\) \}
-CHECK: attributes #{{[0-9]+}} = \{ nounwind allockind\("alloc,uninitialized"\) allocsize\(0\) \}
-CHECK: attributes #{{[0-9]+}} = \{ nounwind willreturn allockind\("free"\) \}
+CHECK: attributes #{{[0-9]+}} = \{ noinline nounwind willreturn memory\(argmem: readwrite\) \}
+CHECK: attributes #{{[0-9]+}} = \{ noinline nounwind willreturn memory\(argmem: read\) \}
+CHECK: attributes #{{[0-9]+}} = \{ cold noinline noreturn nounwind \}
+CHECK: attributes #{{[0-9]+}} = \{ alwaysinline nounwind willreturn memory\(none\) \}
+CHECK: attributes #{{[0-9]+}} = \{ noinline nounwind allockind\("alloc,uninitialized"\) allocsize\(0\) \}
+CHECK: attributes #{{[0-9]+}} = \{ noinline nounwind willreturn allockind\("free"\) \}
 CHECK: attributes #{{[0-9]+}} = \{ nounwind \}

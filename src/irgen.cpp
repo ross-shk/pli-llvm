@@ -320,6 +320,7 @@ enum RtMem { RtMemDefault, RtMemNone, RtMemArgRead, RtMemArgReadWrite };
 struct RtAttr {
   bool noReturn = false;
   bool willReturn = false;
+  bool alwaysInline = false;
   RtMem mem = RtMemDefault;
   bool allocMalloc = false; // malloc-family: fresh, arg-0-sized object
   bool allocFree = false;   // free-family: releases a prior allocation
@@ -338,32 +339,31 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_alloc", {.allocMalloc = true, .allocSize = true, .nonNullRet = true}},
       {"pli_free", {.willReturn = true, .allocFree = true}},
       // Pure math: arithmetic over args and constant tables only.
-      {"pli_mod_ll", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_mod_dd", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_round", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_floor", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_ceil", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_sqrt", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_exp", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_log", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_sin", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_cos", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_tan", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_log2", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_log10", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_atan", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_asin", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_acos", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_atan2", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_cbrt", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_sinh", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_cosh", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_tanh", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_asinh", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_atanh", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_erf", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_erfc", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_sind", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_mod_ll", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_mod_dd", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_round", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_floor", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_ceil", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_sqrt", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_exp", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_log", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_sin", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_cos", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_tan", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_log2", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_log10", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_atan", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_asin", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_acos", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_cbrt", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_sinh", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_cosh", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_tanh", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_asinh", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_atanh", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_erf", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_erfc", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_sind", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_cosd", {.willReturn = true, .mem = RtMemNone}},
       {"pli_tand", {.willReturn = true, .mem = RtMemNone}},
       {"pli_atand", {.willReturn = true, .mem = RtMemNone}},
@@ -415,6 +415,10 @@ static void applyRuntimeAttrs(llvm::Function* f) {
   }
   if (a.willReturn)
     f->addFnAttr(llvm::Attribute::WillReturn);
+  if (a.alwaysInline)
+    f->addFnAttr(llvm::Attribute::AlwaysInline);
+  else
+    f->addFnAttr(llvm::Attribute::NoInline);
   switch (a.mem) {
   case RtMemNone:
     f->setMemoryEffects(llvm::MemoryEffects::none());
@@ -6877,7 +6881,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
   // COSD, TAND, ATAND. The argument is converted to FLOAT and the matching
-  // pli_* runtime wrapper is called.
+  // function is called. Non-degree variants map to LLVM intrinsics (inlined
+  // and lowered to hardware/libm by the optimizer); degree variants keep
+  // pli_* runtime wrappers that convert to radians first.
   if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
       e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
       e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
@@ -6894,12 +6900,23 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                                             "COS",   "TAN",  "LOG2",  "LOG10", "ATAN", "SINH",
                                             "COSH",  "TANH", "ATANH", "ERF",   "ERFC", "SIND",
                                             "COSD",  "TAND", "ATAND", "ASIN",  "ACOS", "CBRT"};
+    static const char* const kLLVMIntrinsic[] = {
+        "llvm.floor.f64", "llvm.ceil.f64", "llvm.sqrt.f64", "llvm.exp.f64",  "llvm.log.f64",
+        "llvm.sin.f64",   "llvm.cos.f64",  "llvm.tan.f64",  "llvm.log2.f64", "llvm.log10.f64",
+        "llvm.atan.f64",  "llvm.sinh.f64", "llvm.cosh.f64", "llvm.tanh.f64", nullptr,
+        nullptr,          nullptr,         nullptr,         nullptr,         nullptr,
+        nullptr,          "llvm.asin.f64", "llvm.acos.f64", nullptr};
     int ix = 0;
     for (int i = 0; i < 24; ++i)
       if (e->name == kMathName[i])
         ix = i;
     v.ty = e->ty;
-    v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
+    const char* intrinsic = kLLVMIntrinsic[ix];
+    if (intrinsic)
+      v.reg = b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x.reg},
+                            "math");
+    else
+      v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
     result = v;
     return true;
   }
@@ -7041,12 +7058,39 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_dd"), {av.reg, bv.reg}, "mod");
       v.reg = zerodivideResume(dz, m, flt(0.0));
     } else {
-      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0 (the
-      // runtime already yields 0 for this case; the trap adds notification).
-      llvm::Value* bi = toI64(bv);
-      llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-      llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_ll"), {toI64(av), bi});
-      llvm::Value* m64 = b_.CreateTrunc(zerodivideResume(dz, m, i64(0)), b_.getInt32Ty(), "mod32");
+      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
+      llvm::Value* avi = toI64(av);
+      llvm::Value* m;
+      if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bv.reg)) {
+        // FAST PATH: constant divisor — inline the MOD computation directly
+        // instead of calling pli_mod_ll, eliminating the runtime call entirely
+        // (rules (60)-(63), ADR-112). srem gives sign-of-dividend; PL/I MOD
+        // takes sign-of-divisor, so a conditional add corrects when signs differ
+        // and the remainder is nonzero.
+        llvm::APInt cv = ci->getValue();
+        if (cv.isZero()) {
+          // MOD(x, 0) resumes with 0; trap via zerodivideResume if checked.
+          m = zerodivideResume(b_.getTrue(), i64(0), i64(0));
+        } else {
+          llvm::Value* divisor = i64(cv.getSExtValue());
+          llvm::Value* r = b_.CreateSRem(avi, divisor, "mod");
+          llvm::Value* adj = b_.CreateAdd(r, divisor, "modadj");
+          llvm::Value* nz = b_.CreateICmpNE(r, i64(0), "modnz");
+          // Adjust when remainder is nonzero and sign(r) != sign(divisor).
+          bool bNeg = cv.isNegative();
+          llvm::Value* needAdj =
+              bNeg ? b_.CreateICmpUGE(r, i64(0), "modpos") : b_.CreateICmpSLT(r, i64(0), "modneg");
+          m = b_.CreateSelect(nz, b_.CreateSelect(needAdj, adj, r), r, "mods");
+        }
+      } else {
+        // General path: pli_mod_ll is AlwaysInline (Task 5), so LLVM can
+        // inline and fold the body when the divisor is known at -O2+.
+        llvm::Value* bi = toI64(bv);
+        llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
+        m = b_.CreateCall(runtimeFn("pli_mod_ll"), {avi, bi});
+        m = zerodivideResume(dz, m, i64(0));
+      }
+      llvm::Value* m64 = b_.CreateTrunc(m, b_.getInt32Ty(), "mod32");
       // Keep the value's LLVM width in sync with e->ty for later compares.
       v.reg = common.intBits() == 32 ? m64 : b_.CreateSExt(m64, llvmTy(common), "modw");
     }

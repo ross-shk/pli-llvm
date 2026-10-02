@@ -37,10 +37,11 @@ struct Val {
 
 class IRGen {
 public:
-  IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false,
+  IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
         std::string runtimeBc = "", bool linkBitcode = false)
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
-        noSizeChecks_(noSizeChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
+        noSizeChecks_(noSizeChecks), noZdivChecks_(noZdivChecks), runtimeBc_(std::move(runtimeBc)),
+        linkBitcode_(linkBitcode) {}
 
   std::string run(HProgram& prog);
 
@@ -527,11 +528,14 @@ private:
   // Global --no-size-checks (ADR-111) disables every SIZE trap, including
   // ones an ON SIZE handler would otherwise route.
   bool noSizeChecks_ = false;
+  bool noZdivChecks_ = false;
   bool sizeChecks() const {
     return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
   }
   bool subChecks() const { return checkStack_.empty() || !checkStack_.back().noSub; }
-  bool zdivChecks() const { return checkStack_.empty() || !checkStack_.back().noZdiv; }
+  bool zdivChecks() const {
+    return !noZdivChecks_ && (checkStack_.empty() || !checkStack_.back().noZdiv);
+  }
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.
