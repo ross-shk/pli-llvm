@@ -114,11 +114,13 @@ static void usage() {
          "  -emit-llvm       write LLVM IR per input and stop\n"
          "  --print-hir      lower to HIR and print it per input, then stop\n"
          "  -fsyntax-only    parse and analyse each input only\n"
-         "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
-         "  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE), ADR-111)\n"
+          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
+          "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
+          "                   cf. (NOSIZE), ADR-111)\n"
+          "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
           "  --no-zero-divide elide ZERODIVIDE traps program-wide (cf. (NOZERODIVIDE), ADR-112)\n"
           "  --no-conversion   elide CONVERSION traps program-wide (cf. (NOCONVERSION), ADR-170)\n"
-         "  --release        maximum optimization + stripped binary (minimal size)\n"
+          "  --release        maximum optimization + stripped binary (minimal size)\n"
          "  --debug          no optimization + debug info (-O0 -g)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
@@ -387,7 +389,8 @@ int main(int argc, char** argv) {
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
-   bool noSizeChecks = false, noZdivChecks = false, noConvChecks = false, wantVersion = false;
+  bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
+       noConvChecks = false, wantVersion = false;
   bool runtimeBcExplicit = false, useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
@@ -478,12 +481,18 @@ int main(int argc, char** argv) {
       optLevel = a;
     else if (a == "--release")
       release = true;
-    else if (a == "--no-size-checks")
+    else if (a == "--no-size-checks") {
       noSizeChecks = true;
-     else if (a == "--no-zero-divide")
-       noZdivChecks = true;
-     else if (a == "--no-conversion")
-       noConvChecks = true;
+    else if (a == "--no-size-checks") {
+      noSizeChecks = true;
+      noSizeChecksExplicit = true;
+    } else if (a == "--size-checks") {
+      noSizeChecks = false;
+      noSizeChecksExplicit = true;
+    } else if (a == "--no-zero-divide")
+      noZdivChecks = true;
+    else if (a == "--no-conversion")
+      noConvChecks = true;
     else if (a == "--debug")
       debug = true;
     else if (a == "--version" || a == "-V")
@@ -611,6 +620,11 @@ int main(int argc, char** argv) {
     optLevel = "-O0";
     backendFlags = " -g";
   }
+  // P1, Task 7: at -O2/-O3, FIXED overflow traps add a branch+trap per
+  // arithmetic op, blocking the optimizer's overflow-narrowing in tight loops.
+  // Disable them by default unless the user explicitly set --no-size-checks.
+  if (!noSizeChecksExplicit && (optLevel == "-O2" || optLevel == "-O3"))
+    noSizeChecks = true;
   // Explicit opt-in PGO/LTO (OPTIMIZATION.md §10, P3): the flags reach both
   // the per-file compile and the final link, so instrumented objects link
   // their profiling runtime and -flto objects meet a -flto link step.
@@ -862,8 +876,7 @@ int main(int argc, char** argv) {
             if (llt.getObjectFormat() == llvm::Triple::ELF && f == "-no_pie")
               f = "-no-pie";
             argStore.push_back(f);
-          }
-          else if (la.rfind("-fuse-ld=", 0) == 0)
+          } else if (la.rfind("-fuse-ld=", 0) == 0)
             continue; // clang-driver-only
           else
             argStore.push_back(la);

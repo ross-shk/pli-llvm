@@ -3358,12 +3358,14 @@ void IRGen::emitDoIter(HStmt* s) {
   Val from = emitExpr(s->from.get());
   storeTo(ctl, from, s->loc);
 
-  llvm::Value *toAddr = nullptr, *byAddr = nullptr;
-  if (s->to) {
-    Val to = convert(emitExpr(s->to.get()), ct, s->loc);
-    toAddr = entryAlloca(llvmTy(ct), "do.to." + id);
-    storeScalarTo(toAddr, ct, to);
-  }
+  // P1, Task 8: hoist loop-invariant TO and BY as SSA values instead of
+  // storing to an alloca and reloading every iteration — the per-iteration
+  // loads block LLVM's loop-invariant-sinking / LSR on the bounds (collatz,
+  // array_sort: the loads survive into optimized IR and pin the bound in a
+  // memory operand that can't be CSE'd across blocks).
+  Val tv;
+  if (s->to)
+    tv = convert(emitExpr(s->to.get()), ct, s->loc);
   Val by;
   if (s->by) {
     by = convert(emitExpr(s->by.get()), ct, s->loc);
@@ -3371,8 +3373,6 @@ void IRGen::emitDoIter(HStmt* s) {
     by.ty = ct;
     by.reg = ct.k == TK::Float ? flt(1.0) : llvm::ConstantInt::get(llvmTy(ct), 1, true);
   }
-  byAddr = entryAlloca(llvmTy(ct), "do.by." + id);
-  storeScalarTo(byAddr, ct, by);
 
   llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
@@ -3389,8 +3389,7 @@ void IRGen::emitDoIter(HStmt* s) {
 
   if (s->to) {
     Val cv = loadSym(ctl, ct);
-    llvm::Value* tv = b_.CreateLoad(llvmTy(ct), toAddr, "to");
-    llvm::Value* bv = b_.CreateLoad(llvmTy(ct), byAddr, "by");
+    llvm::Value* bv = by.reg;
     llvm::Value* zero = ct.k == TK::Float ? flt(0.0) : llvm::Constant::getNullValue(llvmTy(ct));
     llvm::Value* neg;
     if (ct.k == TK::Float)
@@ -3400,13 +3399,13 @@ void IRGen::emitDoIter(HStmt* s) {
     b_.CreateCondBr(neg, downL, upL);
 
     startBlock(upL);
-    llvm::Value* cu = ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv, "cmpup")
-                                        : b_.CreateICmpSLE(cv.reg, tv, "cmpup");
+    llvm::Value* cu = ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv.reg, "cmpup")
+                                        : b_.CreateICmpSLE(cv.reg, tv.reg, "cmpup");
     b_.CreateCondBr(cu, testL, endL);
 
     startBlock(downL);
-    llvm::Value* cd = ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv, "cmpdn")
-                                        : b_.CreateICmpSGE(cv.reg, tv, "cmpdn");
+    llvm::Value* cd = ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv.reg, "cmpdn")
+                                        : b_.CreateICmpSGE(cv.reg, tv.reg, "cmpdn");
     b_.CreateCondBr(cd, testL, endL);
 
     startBlock(testL);
@@ -3428,7 +3427,7 @@ void IRGen::emitDoIter(HStmt* s) {
 
   startBlock(stepL);
   Val cv = loadSym(ctl, ct);
-  llvm::Value* bv = b_.CreateLoad(llvmTy(ct), byAddr, "by");
+  llvm::Value* bv = by.reg;
   llvm::Value* nx =
       ct.k == TK::Float ? b_.CreateFAdd(cv.reg, bv, "next") : b_.CreateAdd(cv.reg, bv, "next");
   Val nv;
@@ -5892,8 +5891,44 @@ Val IRGen::emitExpr(HExpr* e) {
   if (!e)
     return v;
   switch (e->kind) {
-  case HExpr::Convert:
+  case HExpr::Convert: {
+    HExpr* src = e->a.get();
+    // Fast path (P1, Task 6): FIXED / FIXED → FIXED uses sdiv directly,
+    // skipping the FDiv float round-trip (FDiv + FPTosi). Only valid when the
+    // FLOAT result is immediately narrowed back to a scale-0 FIXED target —
+    // that conversion context is visible here in the Convert node, not in the
+    // Binary/Slash case (which always yields FLOAT per PL/I). For FLOAT
+    // results the fall-through below emits exact FDiv.
+    if (e->convTo.isFixed() && e->convTo.scale == 0 && src && src->kind == HExpr::Binary &&
+        src->op == Tok::Slash) {
+      Val av = emitExpr(src->a.get());
+      Val bv = emitExpr(src->b.get());
+       if (av.ty.isFixed() && bv.ty.isFixed() && av.ty.scale == 0 && bv.ty.scale == 0) {
+         Val v;
+         v.ty = e->convTo;
+         llvm::Value* ai = toI64(av, e->loc);
+         llvm::Value* bi = toI64(bv, e->loc);
+         llvm::Value* q;
+         // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
+         // Guard constant-zero divisor: CreateSDiv(x, 0) is UB, so emit
+         // zerodivideResume with a const-true condition and value 0.
+         if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bi)) {
+           if (ci->isZero()) {
+             q = zerodivideResume(b_.getTrue(), i64(0), i64(0));
+           } else {
+             q = b_.CreateSDiv(ai, bi, "bin");
+           }
+         } else {
+           llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
+           q = b_.CreateSDiv(ai, bi, "bin");
+           q = zerodivideResume(dz, q, i64(0));
+         }
+         v.reg = convert(Val{Type::fixedBin(63, 0), q}, e->convTo, e->loc).reg;
+         return v;
+       }
+    }
     return convert(emitExpr(e->a.get()), e->convTo, e->loc);
+  }
   case HExpr::IntLit:
     v.ty = e->ty;
     v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
