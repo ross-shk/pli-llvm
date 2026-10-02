@@ -160,16 +160,16 @@ class Runner:
                 steps = []
                 if libsrc.exists():
                     objs.append(self.out / f"{self.name}_lib.pli.o")
-                    steps.append([PLIC, str(libsrc), "-c", "-o", str(objs[-1])])
+                    steps.append([PLIC, "--size-checks", str(libsrc), "-c", "-o", str(objs[-1])])
                 if (self.dir / f"{self.name}.c").exists():
                     objs.append(self.out / f"{self.name}.c.o")
                     steps.append([CLANG, "-c", str(self.dir / f"{self.name}.c"),
                                   "-o", str(objs[-1])])
                 objs.append(self.out / f"{self.name}.pli.o")
-                steps.append([PLIC, str(src), "-c", "-o", str(objs[-1])])
+                steps.append([PLIC, "--size-checks", str(src), "-c", "-o", str(objs[-1])])
                 # Link through the plic driver (embedded libpli): clang is
                 # only the `.c` compiler above, never the linker here.
-                steps.append([PLIC] + [str(o) for o in objs] +
+                steps.append([PLIC, "--size-checks"] + [str(o) for o in objs] +
                                ["-o", str(self.out / self.name)])
                 failed = None
                 for step in steps:
@@ -177,7 +177,7 @@ class Runner:
                         failed = "cross-unit build failed"
                         break
             else:
-                if subprocess.run([PLIC, str(src), "-o", str(self.out / self.name)],
+                if subprocess.run([PLIC, "--size-checks", str(src), "-o", str(self.out / self.name)],
                                   stdout=cfh, stderr=subprocess.STDOUT).returncode != 0:
                     failed = "compilation failed"
                 else:
@@ -208,7 +208,7 @@ class Runner:
         compilefile = self.out / f"{self.name}.compile"
         with open(compilefile, "w") as cfh:
             rc = subprocess.run(
-                [PLIC, str(self.dir / f"{self.name}.pli"), "-emit-llvm", "-o", str(llfile)],
+                [PLIC, "--size-checks", str(self.dir / f"{self.name}.pli"), "-emit-llvm", "-o", str(llfile)],
                 stdout=cfh, stderr=subprocess.STDOUT).returncode
         if rc != 0:
             return f"FAIL {self.name} (compilation failed)\n{indented(compilefile.read_text(errors='replace'))}", 1

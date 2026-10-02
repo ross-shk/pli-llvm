@@ -23,7 +23,7 @@ EOF
 
 # Each overflow case must abort (rc != 0) with the overflow message.
 expect_abort() {
-  $PLIC "$OUT.$1.pli" -o "$OUT.$1" 2>/dev/null || { echo "FAIL overflow: $1 compile"; exit 1; }
+  $PLIC --size-checks "$OUT.$1.pli" -o "$OUT.$1" 2>/dev/null || { echo "FAIL overflow: $1 compile"; exit 1; }
   out=$("$OUT.$1" 2>&1); rc=$?
   case "$out" in
     *overflow*) ;;
@@ -54,7 +54,7 @@ cat > "$OUT.ok.pli" <<'EOF'
     put skip list(y);
  end overflow_ok;
 EOF
-$PLIC "$OUT.ok.pli" -o "$OUT.ok" || { echo "FAIL overflow: ok compile"; exit 1; }
+$PLIC --size-checks "$OUT.ok.pli" -o "$OUT.ok" || { echo "FAIL overflow: ok compile"; exit 1; }
 if [ "$("$OUT.ok")" = "2147483647
 0" ]; then
   echo "PASS overflow-ok";
