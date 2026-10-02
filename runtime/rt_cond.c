@@ -138,6 +138,13 @@ void pli_fixed_overflow(void) {
   pli_signal_error("FIXED overflow");
 }
 
+/* CONVERSION abort (rule 94, ADR-170): character-to-fixed conversion of text
+ * with no valid digits. Reached when no CONVERSION handler is established;
+ * otherwise IRGen routes the trap to the CONVERSION handler and resumes with 0. */
+void pli_conversion(void) {
+  pli_signal_error("CONVERSION: invalid numeric conversion");
+}
+
 /* ALLOCATE (rule 87): heap-allocate n bytes for a based structure. A null
  * return would be an ALLOCATION condition (M4); the interim raises a hard
  * error. */

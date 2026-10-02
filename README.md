@@ -81,7 +81,7 @@ ctest --test-dir build/cmake     # ~440 tests
 | **Data types**                    | `FIXED BIN/DEC(p,q)`, `FLOAT`, `COMPLEX`, `BIT`, `CHAR/VARYING/VARYINGZ`, `POINTER`              |
 | **Arrays & structures**           | Dynamic extents, cross-sections `A(i,*)`, reductions `SUM`/`PROD`/`ANY`/`ALL`, `LIKE`, `BY NAME` |
 | **Storage**                       | `BASED`/`ALLOCATE/FREE`, `CONTROLLED` stacks, `DEFINED` with `iSUB`, `ADDR`/`NULL`               |
-| **Conditions**                    | `ON`/`SIGNAL`/`REVERT` for `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, named conditions              |
+| **Conditions**                    | `ON`/`SIGNAL`/`REVERT` for `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, `CONVERSION`, named conditions              |
 | **Concurrency**                   | `TASK`/`EVENT`/`PRIORITY` async `CALL` with `WAIT`/`DELAY`                                       |
 | **Stream I/O**                    | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE`                          |
 | **Record I/O**                    | `WRITE`/`READ` fixed-size binary records                                                         |

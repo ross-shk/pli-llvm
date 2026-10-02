@@ -604,7 +604,7 @@ put skip list('resumed');
 revert error;
 ```
 
-Supported conditions: `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, and also programmer-named conditions.
+Supported conditions: `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, `CONVERSION`, and also programmer-named conditions. The `CONVERSION` condition is raised by `FIXED(char)` when the character string contains no valid digits, resuming with `0` in the handler.
 
 ```pli
 dcl a(5) fixed bin(31);
@@ -644,7 +644,7 @@ Use these when you have already validated the index and want to skip the runtime
 
 **Limitations**
 
-- `CONVERSION`, `OVERFLOW`, `STRINGRANGE`, and `UNDERFLOW` conditions are accepted as prefixes but only produce an unenforced warning — no runtime trap is raised.
+- `CONVERSION` is accepted as a prefix; `(NOCONVERSION)` suppresses the `FIXED(char)` trap so invalid text yields `0` without signalling (ADR-170).
 - `CHECK` conditions are rejected with a diagnostic.
 - `ON RETURN`, `GO TO` inside a unit, and `RETURN(value)` inside a handler are errors.
 
