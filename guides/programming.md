@@ -667,46 +667,44 @@ if counter = 1 then put skip list('PASS');
 
 worker: procedure;
   counter = counter + 1;
-end worker;
+end;
 ```
 
-A real-world example — compute a running sum in the background while the  
-main task does other work:
+A real-world example — compute a running sum in the background while the main task does other work:
 
 ```pli
 dcl done event;
 dcl result fixed bin(31);
+
 call background_sum event(done);
+
 /* main task: read user input, update display, etc. */
 wait(done);
 put skip list('sum =', result);
 
 background_sum: procedure;
-    dcl i fixed bin(31);
-    do i = 1 to 1000000;
-        result = result + i;
-    end;
-end background_sum;
+  dcl i fixed bin(31);
+
+  do i = 1 to 1000000;
+    result = result + i;
+  end;
+end;
 ```
 
-- `CALL ... TASK[(t)]` requests an async task; `PRIORITY(p)` is accepted  
-but currently ignored.
-- `TASK`/`EVENT` arrays and members are supported; external and function-async  
-tasks are errors in this stage.
+- `CALL ... TASK[(t)]` requests an async task; `PRIORITY(p)` is accepted but currently ignored.
+- `TASK`/`EVENT` arrays and members are supported; external and function-async tasks are errors in this stage.
 - `DELAY(n)` sleeps `n` milliseconds.
 
 **Limitations**
 
-- You must `WAIT` before a block exits, or the event's storage goes out of  
-scope while the task may still run.
+- You must `WAIT` before a block exits, or the event's storage goes out of scope while the task may still run.
 - `PRIORITY` as a built-in (not a statement option) is an error.
 
 ---
 
 ## Preprocessor
 
-`%INCLUDE` pulls in another file. `%XINCLUDE` is the include-once list form  
- — handy for shared headers that should not be double-defined.
+`%INCLUDE` pulls in another file. `%XINCLUDE` is the include-once list form — handy for shared headers that should not be double-defined.
 
 ```pli
 %xinclude 'common.inc', 'io.inc';   /* each file expands once */
@@ -723,8 +721,7 @@ A realistic use — centralise column widths and record layouts:
 dcl table(max_records) char(rec_len);
 ```
 
-`%IF / %THEN / %ELSE` and `%DECLARE`/`%ACTIVATE` parameterise includes  
- — useful for conditional builds (debug vs. release):
+`%IF / %THEN / %ELSE` and `%DECLARE`/`%ACTIVATE` parameterise includes — useful for conditional builds (debug vs. release):
 
 ```pli
 %declare debug;
@@ -732,13 +729,11 @@ dcl table(max_records) char(rec_len);
 %activate debug;
 ```
 
-`%REPLACE name BY <tokens>;` substitutes an identifier with source text  
-before parsing.
+`%REPLACE name BY <tokens>;` substitutes an identifier with source text before parsing.
 
 **Limitations**
 
-- `%DO`, `%GO TO`, and procedures are stubs: accepted syntactically but  
-diagnosed as unsupported.
+- `%DO`, `%GO TO`, and procedures are stubs: accepted syntactically but diagnosed as unsupported.
 
 ---
 
@@ -746,48 +741,44 @@ diagnosed as unsupported.
 
 ### List-directed I/O
 
-`PUT` and `GET` transmit whole data lists. `SKIP` emits a blank line;  
-`STRING(ref)` routes output into a character variable.
+`PUT` and `GET` transmit whole data lists. `SKIP` emits a blank line; `STRING(ref)` routes output into a character variable.
 
 ```pli
 dcl name char(20) varying;
 dcl count fixed bin(31);
+
 put skip list('Enter name:');
 get list(name);
 put skip list('Hello,' name);
 ```
 
-`GET` reads from `SYSIN` (stdin); `PUT` writes to `SYSOUT` (stdout). Both  
-are portable — they work the same whether the input is a terminal or  
-redirected from a file.
+`GET` reads from `SYSIN` (stdin); `PUT` writes to `SYSOUT` (stdout). Both are portable — they work the same whether the input is a terminal or redirected from a file.
 
 ### Edit-directed I/O
 
-`PUT EDIT` / `GET EDIT` pairs data items with format items. Use these when  
-you need precise column layout — reports, data exports, fixed-width files.
+`PUT EDIT` / `GET EDIT` pairs data items with format items. Use these when you need precise column layout — reports, data exports, fixed-width files.
 
 ```pli
 dcl a fixed bin(31), b char(4);
+
 a = 123;
+
 put edit(a) (f(6));             /* right-justified 6-wide integer */
 get edit(b) (a(4));             /* 4-char field */
 ```
 
-Served format items: `F(w,d)`, `E(w,d)`, `A(w)`, `X(w)`, `SKIP(n)`,  
-`PAGE`, `LINE(n)`, `B(n)` (bit), `C(real,imag)` (complex), `COL(n)`, and  
-`(n)(...)` repetition groups.
+Served format items: `F(w,d)`, `E(w,d)`, `A(w)`, `X(w)`, `SKIP(n)`, `PAGE`, `LINE(n)`, `B(n)` (bit), `C(real,imag)` (complex), `COL(n)`, and `(n)(...)` repetition groups.
 
 ### DATA-directed I/O
 
-`PUT DATA(x, y)` prints `NAME=value` pairs; `GET DATA` reads them in any  
-order, skipping unknown names. This is convenient for configuration files  
-where field order may vary:
+`PUT DATA(x, y)` prints `NAME=value` pairs; `GET DATA` reads them in any order, skipping unknown names. This is convenient for configuration files where field order may vary:
 
 ```pli
 dcl 1 config,
-    2 host char(20),
-    2 port fixed bin(31),
-    2 retries fixed bin(31);
+      2 host char(20),
+      2 port fixed bin(31),
+      2 retries fixed bin(31);
+
 get data(config);     /* reads host='...', port=8080, retries=3 */
 ```
 
@@ -795,6 +786,7 @@ get data(config);     /* reads host='...', port=8080, retries=3 */
 
 ```pli
 dcl f file;
+
 open file(f) title('data.txt') output;   /* stream file */
 put file(f) list(a, b);
 close file(f);
@@ -807,22 +799,20 @@ write file(f) from(a);
 **Limitations**
 
 - `RECORD`/`UPDATE`/`KEYED`/`IGNORE` options on `OPEN` are errors.
-- Record I/O is fixed-size binary only: `REWRITE`, `DELETE`, `LOCATE`,  
-`UNLOCK`, and `ON ENDFILE` are not implemented.
+- Record I/O is fixed-size binary only: `REWRITE`, `DELETE`, `LOCATE`, `UNLOCK`, and `ON ENDFILE` are not implemented.
 - `DISPLAY REPLY` form is an error.
 
 ---
 
 ## C interoperability
 
-Declare an external C function with `ENTRY ... RETURNS ... EXTERNAL('name')`, binding it to a C symbol. PL/I passes scalar arguments  
-by reference (address) by default; `OPTIONS(LINKAGE(SYSTEM))` or  
-`OPTIONS(BYVALUE)` marshals them as C values instead.
+Declare an external C function with `ENTRY ... RETURNS ... EXTERNAL('name')`, binding it to a C symbol. PL/I passes scalar arguments by reference (address) by default; `OPTIONS(LINKAGE(SYSTEM))` or `OPTIONS(BYVALUE)` marshals them as C values instead.
 
 ```pli
 dcl c_add entry(fixed bin(31), fixed bin(31))
-     returns(fixed bin(31))
-     options(linkage(system)) external('c_byval_add');
+  returns(fixed bin(31))
+  options(linkage(system)) external('c_byval_add');
+
 dcl r fixed bin(31);
 r = c_add(3, 4);                 /* calls the C function by value */
 ```
@@ -833,19 +823,15 @@ The matching C side:
 int c_byval_add(int a, int b) { return a + b; }
 ```
 
-`BYADDR(s)` opts a single `CALL` argument out of the structure copy so  
-callee writes are visible:
+`BYADDR(s)` opts a single `CALL` argument out of the structure copy so callee writes are visible:
 
 ```pli
 call proc(byaddr(mysize));          /* pass structure by address */
 ```
 
-`CHAR(n) VARYINGZ` arrives at a by-value C entry as a bare NUL-terminated  
-`char *`.
+`CHAR(n) VARYINGZ` arrives at a by-value C entry as a bare NUL-terminated `char *`.
 
 **Limitations**
 
-- Only scalar and pointer C parameters are supported by value; structure-valued C  
-returns through the PL/I hidden-buffer convention are errors in this stage.
-- Default by-reference calls pass addresses; a structure argument is copied  
-by value unless `BYADDR` opts it out.
+- Only scalar and pointer C parameters are supported by value; structure-valued C returns through the PL/I hidden-buffer convention are errors in this stage.
+- Default by-reference calls pass addresses; a structure argument is copied by value unless `BYADDR` opts it out.
