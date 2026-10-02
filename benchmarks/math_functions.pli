@@ -1,0 +1,20 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Transcendental math functions benchmark - exercises math builtins */
+test_math: PROCEDURE OPTIONS(MAIN);
+  DECLARE (i, j, n) FIXED BINARY(31);
+  DECLARE (x, y, sum) FLOAT DECIMAL(16);
+
+  n = 200;
+  sum = 0.0;
+  DO i = 1 TO n;
+    x = i * 0.01;
+    DO j = 1 TO 1000;
+      y = SIN(x) + COS(x) + SQRT(x + 1.0) + EXP(x) + LOG(x + 1.0);
+      sum = sum + y;
+      x = x + 0.001;
+    END;
+  END;
+
+  PUT SKIP LIST(sum);
+END test_math;

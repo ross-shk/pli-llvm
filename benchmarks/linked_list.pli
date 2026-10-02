@@ -1,0 +1,41 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Linked list benchmark - POINTER, ALLOCATE, BASED, FREE */
+test_llist: PROCEDURE OPTIONS(MAIN);
+  DECLARE (i, n, sum) FIXED BINARY(31);
+  DECLARE p POINTER;
+  DECLARE head POINTER;
+  DECLARE 1 node BASED(p),
+          2 val FIXED BINARY(31),
+          2 next POINTER;
+
+  n = 5000;
+  head = NULL();
+
+  /* Build linked list: 0 -> 1 -> 2 -> ... -> n-1 */
+  DO i = 0 TO n - 1;
+    ALLOCATE node SET(p);
+    p -> node.val = i;
+    p -> node.next = head;
+    head = p;
+  END;
+
+  /* Traverse and sum */
+  sum = 0;
+  p = head;
+  DO WHILE (p ^= NULL());
+    sum = sum + p -> node.val;
+    p = p -> node.next;
+  END;
+
+  /* Free all nodes */
+  DO i = 0 TO n - 1;
+    IF head ^= NULL() THEN DO;
+      p = head;
+      head = p -> node.next;
+      FREE p -> node;
+    END;
+  END;
+
+  PUT SKIP LIST(sum);
+END test_llist;
