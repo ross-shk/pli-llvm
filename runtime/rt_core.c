@@ -5,6 +5,10 @@
 #include "pli_rt.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 
 /* Version stamp for the bitcode runtime (OPTIMIZATION.md §10, P3): runtime.bc
  * is compiled by the same LLVM as plic, and IRGen checks this global before
@@ -37,4 +41,29 @@ void pli_exit(int code) { exit(code); }
 void pli_stop(void) {
   pli_rt_fini();
   pli_exit(0);
+}
+
+int pli_system(const char *cmd, long long len) {
+  char *buf = (char *)malloc((size_t)len + 1);
+  if (!buf) {
+    return -1;
+  }
+  memcpy(buf, cmd, (size_t)len);
+  buf[len] = '\0';
+#if defined(_WIN32)
+  FILE *fp = _popen(buf, "r");
+#else
+  FILE *fp = popen(buf, "r");
+#endif
+  int status = -1;
+  if (fp) {
+#if defined(_WIN32)
+    status = _pclose(fp);
+#else
+    int raw = pclose(fp);
+    status = WIFEXITED(raw) ? WEXITSTATUS(raw) : -1;
+#endif
+  }
+  free(buf);
+  return status;
 }

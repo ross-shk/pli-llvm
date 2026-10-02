@@ -5209,6 +5209,24 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::fixedBin(31, 0);
     return true;
   }
+  // SYSTEM built-in (rule (123)): SYSTEM(x) -> FIXED BIN(31) invoking the
+  // command processor with the command string x (character, or converted
+  // to character when numeric); returns the processor's exit code.
+  if (e->name == "SYSTEM") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "SYSTEM takes one argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    Expr* a = e->args[0].get();
+    if (!a->ty.isChar() && !a->ty.isNumeric()) {
+      d_.error(a->loc, "SYSTEM argument must be character or numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
   // FIXED built-in (rule (123)): FIXED(char) parses decimal text with
   // truncation, FIXED(numeric) truncates toward zero (the PL/I
   // FIXED(x) conversion entry point used by libnet's `port =

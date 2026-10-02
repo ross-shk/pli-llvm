@@ -120,6 +120,7 @@ PLI_FN(pli_on_top_ctx, PTR, (I64))      /* SIGNAL dispatch: top handler capture 
 PLI_FN(pli_on_depth_error, I64, (VOID)) /* block-entry save */
 PLI_FN(pli_on_reset_error, VOID, (I64)) /* block/procedure-exit restore */
 PLI_FN(pli_oncode, I32, (VOID))         /* ONCODE() */
+PLI_FN(pli_system, I32, (CPTR, I64))    /* SYSTEM(x) — command processor return code */
 PLI_FN(pli_set_oncode, VOID, (I32))
 /* Programmer-named conditions (rules (94),(99)): same stack, tagged entries.
  * Key 0 is ERROR; the ERROR functions above address key 0 only. */

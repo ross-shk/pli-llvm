@@ -5305,4 +5305,29 @@ parameter) — no caller-side precedent; a single extent with static
 strides reuses the existing hidden-arg slot. Accepting `*` on later
 axes (would need per-axis hidden extents, a different ABI).
 
+## ADR-186 — SYSTEM(x) built-in function
+
+**Context.** TR 25.084 rule (123) lists the miscellaneous built-in functions
+(ONCODE, SYSPARM, and others). IBM Enterprise PL/I adds SYSTEM(x) to this group:
+it invokes the system command processor with the command string x and returns
+its exit code as FIXED BIN(31). The compiler had ONCODE and SYSPARM but no
+SYSTEM, leaving a gap in the rule-(123) coverage.
+
+**Decision.** Add SYSTEM as a rule-(123) builtin (not an extension, since it
+appears in the IBM TR 25.084 appendix of miscellaneous built-ins alongside
+ONCODE/SYSPARM). Sema accepts a single argument of CHARACTER or numeric type
+(non-char/non-numeric is diagnosed); numeric arguments are implicitly converted
+to character via the CHAR path (charTemp + pli_char_of_fixed/pli_char_of_float)
+so the command string is correct. IRGen emits a call to pli_system(CPTR, I64)
+which returns I32 (sign-extended to the FIXED BIN(31) register). The runtime
+(pLi_system in rt_core.c) null-terminates the (ptr, len) input and invokes
+popen/pclose on POSIX (with WEXITSTATUS extraction) or _popen/_pclose on
+Windows, returning the shell's exit code.
+
+**Consequences.** `system.pli` (self-check) and `bad_system.pli` (diagnostic)
+pin the character and numeric argument paths and the arg-count/arg-type
+rejections. GRAMMAR-COVERAGE row (123) moves to include SYSTEM. The runtime
+function is not placed in kRuntimeAttrs — like pli_date/pli_time/pli_delay it
+performs external I/O and receives only the default NoUnwind.
+
 

@@ -7351,6 +7351,28 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // SYSTEM (rule (123)): invoke the command processor with command string x,
+  // returning the processor's exit code as FIXED BIN(31). Numeric arguments
+  // are converted to character via CHAR; character arguments pass through
+  // directly (the runtime null-terminates internally).
+  if (e->name == "SYSTEM") {
+    Val a = emitExpr(e->args[0].get());
+    Val cmd = a;
+    if (!a.ty.isChar()) {
+      int buflen = 13; // enough for any FIXED BIN(31,0): sign + 10 digits + nul
+      cmd = charTemp(buflen);
+      if (a.ty.k == TK::Float)
+        b_.CreateCall(runtimeFn("pli_char_of_float"), {cmd.ptr, cmd.len, a.reg});
+      else {
+        llvm::Value* iv = toI64(convert(a, Type::fixedBin(31, 0), e->loc));
+        b_.CreateCall(runtimeFn("pli_char_of_fixed"), {cmd.ptr, cmd.len, iv});
+      }
+    }
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_system"), {cmd.ptr, cmd.len}, "syso");
+    result = v;
+    return true;
+  }
   // EVENT (rules (79),(82), QR2.8): poll an event's completion as BIT(1).
   if (e->name == "EVENT") {
     HExpr* a = e->args[0].get();

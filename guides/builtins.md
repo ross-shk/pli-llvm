@@ -54,6 +54,7 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | Args     | `OMITTED`, `PRESENT`                                                                                                                      | `( p )`                  | `BIT(1)`                          |
 | Misc     | `ONCODE`                                                                                                                                  | `( )`                    | `FIXED BIN`                       |
 | Misc     | `SYSPARM`                                                                                                                                 | `( )`                    | `CHAR(n)` (compile-time constant) |
+| Misc     | `SYSTEM(x)`                                                                                                                               | `( x )`                  | `FIXED BIN(31)`                   |
 | Misc     | `PRIORITY`                                                                                                                                | `( ... )`                | not implemented                   |
 
 `*` = must be a constant in the current stage.
@@ -577,6 +578,17 @@ Returns `1` inside an `ERROR` unit raised by `SIGNAL`, `0` elsewhere.
 
 The value of the `--sysparm <s>` driver option, baked in at compile time.  
 It is a constant string whose length is fixed at compile time.
+
+### `SYSTEM(x)` → FIXED BINARY(31)
+
+Invokes the system command processor (`/bin/sh -c` on POSIX, `cmd.exe` on Windows) with the command string `x`. Returns the processor's exit code (0 = success, non-zero = failure). Character arguments are passed directly; numeric arguments are converted to character via `CHAR(x)`.
+
+```pli
+if system('test -f data.txt') = 0 then
+    put skip list('file exists');
+```
+
+**Limitations** — the argument must be `CHARACTER` or a numeric type; a `POINTER` or other type is an error.
 
 ### `DATE()`, `TIME()`
 
