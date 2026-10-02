@@ -721,15 +721,87 @@ int main(int argc, char** argv) {
             (void)sdk;
           }
         } else if (llt.getObjectFormat() == llvm::Triple::ELF) {
-          for (const char* crt : {"crt1.o", "crti.o"}) {
+          // PIE startup (matches clang): Scrt1.o + crtbeginS.o/crtendS.o with
+          // -pie and an explicit interpreter, else a non-PIE EXEC segfaults.
+          bool wantPIE = true;
+          for (const std::string& la : linkArgs) {
+            std::string f = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
+            if (f == "-static" || f == "-static-pie" || f == "-shared" || f == "-no-pie" ||
+                f == "-nopie" || f == "-no-pic")
+              wantPIE = false;
+          }
+          auto resolveCrt = [&](const char* primary, const char* fallback) {
             std::string p =
-                runCap(shellQuote(clangPath) + " -print-file-name=" + crt + " 2>/dev/null");
-            if (!p.empty() && p != crt)
-              argStore.push_back(p);
+                runCap(shellQuote(clangPath) + " -print-file-name=" + primary + " 2>/dev/null");
+            if (!p.empty() && p != primary)
+              return p;
+            if (fallback) {
+              p = runCap(shellQuote(clangPath) + " -print-file-name=" + fallback +
+                         " 2>/dev/null");
+              if (!p.empty() && p != fallback)
+                return p;
+            }
+            return std::string(primary);
+          };
+          if (wantPIE) {
+            // Dynamic linker per arch (lld needs it explicit or no INTERP).
+            std::string interp;
+            switch (llt.getArch()) {
+            case llvm::Triple::aarch64:
+              interp = "/lib/ld-linux-aarch64.so.1";
+              break;
+            case llvm::Triple::x86_64:
+              interp = "/lib64/ld-linux-x86-64.so.2";
+              break;
+            case llvm::Triple::arm:
+            case llvm::Triple::armeb:
+            case llvm::Triple::thumb:
+              interp = "/lib/ld-linux-armhf.so.3";
+              break;
+            case llvm::Triple::riscv64:
+              interp = "/lib/ld-linux-riscv64-lp64d.so.1";
+              break;
+            default:
+              break;
+            }
+            if (!interp.empty() && !fs::exists(interp)) {
+              if (llt.getArch() == llvm::Triple::x86_64 &&
+                  fs::exists("/lib/ld-linux-x86-64.so.2"))
+                interp = "/lib/ld-linux-x86-64.so.2";
+              else if (verbose)
+                std::cerr << "plic: interpreter " << interp << " not found\n";
+            }
+            argStore.push_back("-pie");
+            argStore.push_back("--eh-frame-hdr");
+            argStore.push_back("--hash-style=gnu");
+            argStore.push_back("--build-id");
+            if (!interp.empty()) {
+              argStore.push_back("-dynamic-linker");
+              argStore.push_back(interp);
+            }
+          }
+          argStore.push_back(resolveCrt(wantPIE ? "Scrt1.o" : "crt1.o", "crt1.o"));
+          argStore.push_back(resolveCrt("crti.o", nullptr));
+          argStore.push_back(resolveCrt(wantPIE ? "crtbeginS.o" : "crtbegin.o", "crtbegin.o"));
+          // Bridge clang's library search dirs so lld can find -lm, -lc, etc.
+          std::string sd = runCap(shellQuote(clangPath) + " -print-search-dirs 2>/dev/null");
+          if (auto pos = sd.find("libraries:"); pos != std::string::npos) {
+            std::string line = sd.substr(pos);
+            if (auto nl = line.find('\n'); nl != std::string::npos)
+              line = line.substr(0, nl);
+            if (auto eq = line.find('='); eq != std::string::npos)
+              line = line.substr(eq + 1);
+            std::stringstream ss(line);
+            std::string d;
+            while (std::getline(ss, d, ':')) {
+              if (!d.empty())
+                argStore.push_back("-L" + d);
+            }
           }
           std::string sysroot = runCap(shellQuote(clangPath) + " -print-sysroot 2>/dev/null");
-          if (!sysroot.empty() && sysroot != "/") {
-            argStore.push_back("-sysroot");
+          if (!sysroot.empty() && sysroot != "/" && sysroot.find("unknown argument") == std::string::npos &&
+              sysroot.find("no input files") == std::string::npos) {
+            argStore.push_back("--sysroot");
             argStore.push_back(sysroot);
           }
         }
@@ -737,10 +809,44 @@ int main(int argc, char** argv) {
           argStore.push_back(o);
         if (haveRtObj)
           argStore.push_back(rtObj);
-        if (llt.getObjectFormat() == llvm::Triple::ELF)
-          argStore.push_back("crtn.o");
+        if (llt.getObjectFormat() == llvm::Triple::ELF) {
+          bool wantPIE = true;
+          for (const std::string& la : linkArgs) {
+            std::string f = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
+            if (f == "-static" || f == "-static-pie" || f == "-shared" || f == "-no-pie" ||
+                f == "-nopie" || f == "-no-pic")
+              wantPIE = false;
+          }
+          auto resolveCrtTail = [&](const char* primary, const char* fallback) {
+            std::string p =
+                runCap(shellQuote(clangPath) + " -print-file-name=" + primary + " 2>/dev/null");
+            if (!p.empty() && p != primary)
+              return p;
+            if (fallback) {
+              p = runCap(shellQuote(clangPath) + " -print-file-name=" + fallback +
+                         " 2>/dev/null");
+              if (!p.empty() && p != fallback)
+                return p;
+            }
+            return std::string(primary);
+          };
+          argStore.push_back(resolveCrtTail(wantPIE ? "crtendS.o" : "crtend.o", "crtend.o"));
+          argStore.push_back(resolveCrtTail("crtn.o", nullptr));
+          // GCC unwinding helpers (matches clang: -lgcc --as-needed -lgcc_s).
+          argStore.push_back("-lgcc");
+          argStore.push_back("--as-needed");
+          argStore.push_back("-lgcc_s");
+          argStore.push_back("--no-as-needed");
+        }
         for (const std::string& s : desc.systemLibs)
           argStore.push_back(s);
+        if (llt.getObjectFormat() == llvm::Triple::ELF) {
+          // Trailing helpers (matches clang: -lc -lgcc --as-needed -lgcc_s).
+          argStore.push_back("-lgcc");
+          argStore.push_back("--as-needed");
+          argStore.push_back("-lgcc_s");
+          argStore.push_back("--no-as-needed");
+        }
         for (const std::string& f : desc.linkerFlags)
           argStore.push_back(f);
         for (const std::string& la : linkArgs) {

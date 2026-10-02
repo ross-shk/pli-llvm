@@ -122,16 +122,26 @@ target_compile_definitions(plic PRIVATE
   PLIC_HAVE_WINDOWS_AARCH64_RUNTIME=1)
 
 # Link LLVM components needed for in-process codegen + linking.
-# Core/IR (superset of the old `core irreader support linker` set).
-llvm_map_components_to_libnames(llvm_libs_core
-  Core IRReader Support BitReader BitWriter Linker)
-# MC/Target (host arch only for milestone)
-llvm_map_components_to_libnames(llvm_libs_mc
-  MC MCParser Object BinaryFormat TargetParser AsmParser AsmPrinter
-  CodeGen SelectionDAG GlobalISel
-  X86CodeGen X86AsmParser X86Desc X86Info
-  AArch64CodeGen AArch64AsmParser AArch64Desc AArch64Info
-  Passes LTO)
+# Shared-LLVM builds (Debian LLVM 22 sets LLVM_LINK_LLVM_DYLIB): link the
+# shared libLLVM only. Mixing static component archives with the shared lib
+# (pulled in by the Clang targets below) duplicates LLVM globals and crashes
+# flakily at exit after O2 codegen on ARM64 (free(): invalid pointer).
+# Static builds and Apple keep the component archives as before.
+if(LLVM_LINK_LLVM_DYLIB AND NOT APPLE)
+  set(llvm_libs_core LLVM z zstd)
+  set(llvm_libs_mc "")
+else()
+  # Core/IR (superset of the old `core irreader support linker` set).
+  llvm_map_components_to_libnames(llvm_libs_core
+    Core IRReader Support BitReader BitWriter Linker)
+  # MC/Target (host arch only for milestone)
+  llvm_map_components_to_libnames(llvm_libs_mc
+    MC MCParser Object BinaryFormat TargetParser AsmParser AsmPrinter
+    CodeGen SelectionDAG GlobalISel
+    X86CodeGen X86AsmParser X86Desc X86Info
+    AArch64CodeGen AArch64AsmParser AArch64Desc AArch64Info
+    Passes LTO)
+endif()
 # lld
 llvm_map_components_to_libnames(llvm_libs_lld
   lldELF lldMachO lldCOFF lldCommon)

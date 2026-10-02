@@ -369,8 +369,6 @@ private:
   // Address of a subscripted iSUB-DEFINED array element Y(k) (rules 134,126):
   // the base X element at the fixed subscripts with the iSUB slot set to k.
   llvm::Value* definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs, SourceLoc loc);
-  // Address of an EVENT/TASK reference (rules (79),(82)).
-  llvm::Value* taskEventAddr(HExpr* e, SourceLoc loc);
 
   Val convert(const Val& v, const Type& dst, SourceLoc loc);
   llvm::Value* toI1(const Val& v, SourceLoc loc);
