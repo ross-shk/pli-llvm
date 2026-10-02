@@ -23,6 +23,7 @@ Hello, world!
 ### Prerequisites
 - C++20 compiler (clang++/g++; MSVC on Windows)
 - CMake ≥ 3.20
+- Ninja build system (`brew install ninja` / `apt-get install ninja-build`)
 - LLVM ≥ 18 with `clang` and `lld`
 
 ### Build
@@ -32,7 +33,7 @@ make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
 # Linux:
 make -j8
 # or directly:
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
 cmake --build build/cmake -j8
 ```
 
@@ -174,9 +175,14 @@ Windows: use MSVC + CMake (no MinGW/MSYS2). The threading abstraction in `runtim
 
 `plic` can target Linux x86_64, Linux ARM64, Windows x86_64, Windows ARM64 from any host (requires LLVM with the target backends and `lld`).
 
-**Build with multi-target runtime bitcode** (embeds all 4 targets):
+`plic` is built natively on each host — no cross-compiling the compiler binary.
+`--triple`/`-target` cross-compiles **user PL/I code** using LLVM with the
+matching target backend and `lld`.
+
+**Build with multi-target runtime bitcode** (embeds all 4 targets; requires
+`PLIC_CROSS_BITCODE=ON` at build time):
 ```bash
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DPLIC_CROSS_BITCODE=ON
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DPLIC_CROSS_BITCODE=ON
 cmake --build build/cmake -j8
 ```
 
@@ -186,7 +192,11 @@ cmake --build build/cmake -j8
 ./build/plic -target aarch64-pc-windows-gnu program.pli -o program.exe
 ```
 
-Toolchain files in `cmake/toolchains/` for the 4 targets.
+Without `PLIC_CROSS_BITCODE`, the per-target runtime blobs are empty stubs;
+`--triple` then falls back to the host runtime blob, so cross-compilation of
+user code works for targets whose ABI matches the host (e.g. macOS-arm64 →
+Linux-arm64). Build with `PLIC_CROSS_BITCODE=ON` for genuine multi-target
+runtime bitcode across all 4 targets.
 
 ---
 

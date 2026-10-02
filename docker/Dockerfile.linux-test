@@ -5,7 +5,7 @@ FROM debian:trixie-slim
 # old for src/main.cpp (Module::setTargetTriple(Triple) needs LLVM >= 20).
 # The -dev packages provide LLVMConfig.cmake + lld headers for find_package().
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential clang-22 lld-22 llvm-22 llvm-22-dev libclang-22-dev liblld-22-dev libpolly-22-dev cmake make python3 git ca-certificates \
+      build-essential clang-22 lld-22 llvm-22 llvm-22-dev libclang-22-dev liblld-22-dev libpolly-22-dev cmake ninja-build make python3 git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 # Point find_package(LLVM/Clang) at the versioned install.
 ENV CMAKE_PREFIX_PATH=/usr/lib/llvm-22

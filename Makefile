@@ -4,8 +4,8 @@
 # lld and embeds the runtime bitcode). The Makefile delegates to CMake for
 # the static LLVM single-binary distribution, keeping the familiar
 # `make -j8 && make test` workflow. The only hard external dependencies
-# are a C++20 compiler, CMake, and an LLVM installation with lld, e.g.
-#   brew install llvm lld cmake
+# are a C++20 compiler, CMake, Ninja, and an LLVM installation with lld, e.g.
+#   brew install llvm lld cmake ninja
 #   make -j8 && make test
 #
 # Direct (non-CMake) compilation was retired when the driver gained its
@@ -24,7 +24,7 @@ RTLIB    := $(BUILD)/libpli.a
 
 # Default target delegates to CMake (parallelise with `make -j8`).
 all:
-	cmake -S . -B $(CMAKE_BUILD_DIR) $(CMAKE_ARGS) \
+	cmake -G Ninja -S . -B $(CMAKE_BUILD_DIR) $(CMAKE_ARGS) \
 		$(if $(LLVM_STATIC_PREFIX),-DLLVM_STATIC_PREFIX=$(LLVM_STATIC_PREFIX))
 	cmake --build $(CMAKE_BUILD_DIR) -j8
 	# Convenience symlinks for existing scripts/tests

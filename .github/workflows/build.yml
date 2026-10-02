@@ -16,10 +16,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install LLVM + lld (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build cmake
       - name: Install LLVM + lld (macOS)
         if: runner.os == 'macOS'
-        run: brew install llvm lld && echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+        run: brew install llvm lld ninja && echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
       - name: Build
         run: make -j8
       - name: Test
