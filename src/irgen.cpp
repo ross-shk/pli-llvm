@@ -1137,6 +1137,11 @@ void IRGen::emitGlobals() {
         for (Expr* e : s->initElems)
           els.push_back(scalarInitConstant(t.elementType(), e));
         ginit = llvm::ConstantArray::get(llvm::cast<llvm::ArrayType>(gt), els);
+      } else if (t.elementType().isEvent()) {
+        // A STATIC EVENT array starts complete (1) per element (rule (79)).
+        std::vector<llvm::Constant*> els((size_t)arrayExtent(t),
+                                         llvm::ConstantInt::get(b_.getInt32Ty(), 1, true));
+        ginit = llvm::ConstantArray::get(llvm::cast<llvm::ArrayType>(gt), els);
       } else {
         ginit = llvm::ConstantAggregateZero::get(gt);
       }
@@ -1210,6 +1215,18 @@ void IRGen::allocaLocals(HProc* p) {
       llvm::Value* region = b_.CreateCall(runtimeFn("pli_area_create"), {i64(s->areaSize)}, "area");
       b_.CreateStore(region, a);
       areaLocals_.push_back(s);
+    } else if (s->ty.isArray() &&
+               (s->ty.elementType().isTask() || s->ty.elementType().isEvent())) {
+      // A TASK/EVENT array (rules (15),(79),(82)): each element is its own
+      // handle/flag — TASK starts unset (0), EVENT starts complete (1).
+      bool isTask = s->ty.elementType().isTask();
+      llvm::ArrayType* arrTy =
+          llvm::ArrayType::get(llvmTy(s->ty.elementType()), (unsigned)arrayExtent(s->ty));
+      for (long long i = 0, n = arrayExtent(s->ty); i < n; ++i) {
+        llvm::Value* ep =
+            b_.CreateInBoundsGEP(arrTy, a, {i64(0), i64(i)}, isTask ? "tk.i" : "ev.i");
+        b_.CreateStore(i32(isTask ? 0 : 1), ep);
+      }
     } else if (s->ty.isTask())
       b_.CreateStore(i32(0), a);
     else if (s->ty.isEvent())

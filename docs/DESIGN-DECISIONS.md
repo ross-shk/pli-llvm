@@ -5155,4 +5155,46 @@ treating a runtime-bound `A(n)` CONTROLLED array as `A(*)` with the bound
 supplied at each `ALLOCATE` (loses the implicit entry generation, so
 first-use references would need an explicit `ALLOCATE` like `(*)` does).
 
+## ADR-181 — TASK/EVENT aggregates in tasking options and equal-size different-type DEFINED overlays
+
+**Context.** QR2.8 tasking (rules (15),(79),(82)) gated every TASK/EVENT
+reference to a scalar variable: the CALL options, WAIT, and the EVENT
+builtin rejected array elements and structure members. Worse, DECLARE
+silently dropped a bare `(n)` dimension before TASK/EVENT — the
+dimension-vs-precision follow set did not know those words — so
+`DCL EV(2) EVENT` became a scalar and `ev(1)` misparsed as a call.
+Rule (24) DEFINED required the identical type, rejecting same-size views
+such as `FIXED DEC(9)` over `FIXED BIN(31)` even though both lower to
+`i32` and every whole-base reference resolves to the base's address
+through an opaque pointer.
+
+**Decision.** (1) The dimension follow set accepts TASK/EVENT, so
+`DCL EV(2) EVENT` declares a real array; constant-bound TASK/EVENT arrays
+are served — each AUTOMATIC element starts unset (`TASK`) or complete
+(`EVENT`), each STATIC EVENT element starts complete — while dynamic
+extents stay diagnosed with rule (15). CALL TASK/EVENT options, WAIT
+lists (with or without count), and the EVENT builtin accept a scalar,
+an array element `ev(i)` (scalar, CONTROLLED, and dynamic element
+paths), or a member `s.ev` through one `taskEventAddr` addressing
+helper. (2) A whole-base DEFINED overlay accepts a different-type
+scalar pair with equal storage size (FIXED width via `intBits`, FLOAT
+8, COMPLEX 16, CHAR length, BIT `(n+7)/8`, TASK/EVENT 4); arrays,
+structs, VARYING, and pointer-likes stay same-type-only, and a size
+mismatch stays diagnosed with rule (24). Subscripted/iSUB DEFINED
+bases keep the exact element-type match.
+
+**Consequences.** `task_array.pli` and `task_member.pli` pin the newly
+served tasking forms; `defined_diff.pli` pins the memory-view overlay
+and `bad_defined.pli` pins the remaining diagnoses (undeclared base,
+size mismatch). GRAMMAR-COVERAGE rows (24),(78)–(80),(82),(83) move.
+Known limitation: an EVENT structure member still starts incomplete
+(struct zero-fill) until its first CALL — CALL-before-WAIT programs
+are unaffected.
+
+**Rejected.** Initialising EVENT array elements through a runtime call
+(entry stores match the scalar path and need no helper); serving
+dynamic TASK/EVENT arrays (their per-element init paths are unprobed);
+relaxing the iSUB/element DEFINED type match (element addressing there
+is type-driven, unlike the whole-base opaque address).
+
 

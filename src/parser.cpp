@@ -1942,7 +1942,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   // All bare constants (n): a dimension only when an attribute keyword follows.
   // POINTER, BASED and CONTROLLED ride here too, so `DCL H(4) POINTER`,
   // `DCL X(4) BASED(P)` and `DCL Y(4) CONTROLLED` form arrays rather
-  // than precision-4 scalars (rules (12),(15),(25)).
+  // than precision-4 scalars (rules (12),(15),(25)). TASK and EVENT ride
+  // here as well, so `DCL EV(2) EVENT` is an array of flags (rule (15)).
   auto isAttrWord = [&](const std::string& w) {
     return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
@@ -1950,7 +1951,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" ||
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
-           w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE";
+           w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
+           w == "EVENT";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);

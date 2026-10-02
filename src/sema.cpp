@@ -20,6 +20,34 @@ static bool hasDynamicMember(const Type& ty);
 // assignment). Defined below; forward-declared for the earlier DECLARE pass.
 static unsigned fnv1a(const char* s, size_t len);
 
+// Storage size in bytes of one scalar for a DEFINED whole-base overlay
+// (rule 24): two scalars with equal size share the base's address, each
+// reference loading/storing through its own declared type. Returns -1 when
+// the type has no fixed scalar size (arrays, structs, varying strings and
+// opaque handles stay same-type-only).
+static long long definedScalarBytes(const Type& t) {
+  if (t.isArray() || t.isStruct() || t.varying || t.starLen)
+    return -1;
+  switch (t.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    return t.intBits() / 8;
+  case TK::Float:
+    return 8; // lowered to double
+  case TK::Complex:
+    return 16; // lowered to a pair of doubles
+  case TK::Char:
+    return t.len;
+  case TK::Bit:
+    return (t.len + 7) / 8;
+  case TK::Task:
+  case TK::Event:
+    return 4; // lowered to an i32 handle/flag
+  default:
+    return -1; // POINTER/OFFSET/AREA/ENTRY/VOID stay same-type-only
+  }
+}
+
 // FIXED op FIXED -> FIXED with the wider precision and the larger scale;
 // anything involving FLOAT is FLOAT. This is the *common* result type for
 // +,-,comparison (and MIN/MAX/MOD), where a mixed-scale operand is rescaled
@@ -1024,13 +1052,15 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           item.sym->fileSlot = nextFileSlot_++;
           storage_.pop_back();
         }
-        // TASK/EVENT names (rules (15),(79),(82), QR2.8): scalar handles only
-        // in this stage; arrays, INITIAL/VALUE, LIKE/DEFINED/BASED stay diagnosed.
+        // TASK/EVENT names (rules (15),(79),(82), QR2.8): scalars or
+        // constant-bound arrays of handles; dynamic extents, INITIAL/VALUE,
+        // LIKE/DEFINED/BASED stay diagnosed.
         if (item.ty.isTask() || item.ty.isEvent()) {
           const char* what = item.ty.isTask() ? "TASK" : "EVENT";
-          if (item.ty.isArray())
+          if (item.ty.isDynamic())
             d_.error(item.loc,
-                     std::string("array ") + what + " variables are not implemented in this stage",
+                     std::string("dynamic ") + what +
+                         " array bounds are not implemented in this stage",
                      "(15)");
           if (item.init || !item.initItems.empty() || item.initCall || item.valueInit)
             d_.error(item.loc,
@@ -1045,9 +1075,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(15)");
         }
         // DEFINED (rule 24): the item overlays the storage of an already-
-        // declared variable of identical type in this scope, so it needs no
-        // storage of its own — references resolve to the base's address
-        // (ADR-018). Unsupported forms are diagnosed, never silently dropped.
+        // declared variable in this scope, so it needs no storage of its
+        // own — references resolve to the base's address (ADR-018).
+        // Unsupported forms are diagnosed, never silently dropped.
         bool isDefined = false;
         if (!item.definedBase.empty()) {
           Symbol* base = lookup(sc, item.definedBase);
@@ -1061,11 +1091,17 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(24)");
           } else if (item.definedSubs.empty()) {
             // Whole-base overlay (rule 24): the item shares the base's storage.
+            // A different-type overlay is a memory view when both scalars have
+            // the same storage size; a size mismatch stays diagnosed.
+            long long itemBytes = definedScalarBytes(item.ty);
+            long long baseBytes = definedScalarBytes(base->ty);
+            bool sameView = item.ty == base->ty ||
+                            (itemBytes > 0 && itemBytes == baseBytes);
             if (item.ty.isStruct() || base->ty.isStruct()) {
               d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
-            } else if (!(item.ty == base->ty)) {
+            } else if (!sameView) {
               d_.error(item.loc,
-                       "DEFINED requires the item and base to have the same type (" +
+                       "DEFINED requires the item and base to have the same storage size (" +
                            item.ty.desc() + " vs " + base->ty.desc() + ")",
                        "(24)");
             } else {
