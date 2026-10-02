@@ -5,7 +5,7 @@
 # --linker, -shared, --extra) and a cross-unit link against a C unit + libpli.
 set -u
 PLIC=./build/plic
-CLANG=clang
+CLANG=${CLANG:-clang}
 RTLIB=./build/libpli.a
 OUT=tests/driver/out/link
 mkdir -p tests/driver/out

@@ -91,6 +91,7 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   else if (optLevel == "-O3" || optLevel == "-Os")
     lvl = llvm::CodeGenOptLevel::Aggressive;
   llvm::TargetOptions opts;
+  opts.FunctionSections = true; // one section per function for --gc-sections / dead_strip
   const char* features = "";
   // PIE objects match what the clang-subprocess backend produced.
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(

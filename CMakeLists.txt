@@ -223,6 +223,7 @@ if(PLIC_CROSS_BITCODE)
                 -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
                 -O2
                 -ffunction-sections -fdata-sections
+                $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
                 -target ${target}
                 -o ${TARGET_BC_DIR}/${base}.bc
         DEPENDS ${CMAKE_SOURCE_DIR}/${src}
@@ -267,11 +268,12 @@ foreach(src ${RT_SRCS})
   get_filename_component(base ${src} NAME_WE)
   add_custom_command(
     OUTPUT ${DEFAULT_BC_DIR}/${base}.bc
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${DEFAULT_BC_DIR}
-    COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${DEFAULT_BC_DIR}
+        COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
             -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
             -O2
             -ffunction-sections -fdata-sections
+            $<$<PLATFORM_ID:Linux>:-fPIC>
             -target ${PLIC_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src}
@@ -309,6 +311,7 @@ foreach(rt_src ${RT_SRCS})
             -DPLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
             -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
             -O2 -ffunction-sections -fdata-sections
+            $<$<PLATFORM_ID:Linux>:-fPIC>
             -target ${PLIC_TARGET_TRIPLE}
             ${CMAKE_SOURCE_DIR}/${rt_src} -o ${rt_bc}
     DEPENDS ${CMAKE_SOURCE_DIR}/${rt_src}
