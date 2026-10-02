@@ -1,0 +1,40 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* rules (91)-(94): ON CONVERSION establishes a
+    handler; SIGNAL CONVERSION raises it; FIXED(char)
+    on text with no digits also raises it; the unit
+    runs, then control resumes after the trigger.
+    ONCODE() is 1 inside the unit, 0 outside.
+    (NOCONVERSION) suppresses the trap. */
+ onconv: procedure options(main);
+    declare x fixed bin(31);
+    declare y fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    on conversion put skip list('caught signal', oncode());
+    signal conversion;
+    put skip list('resumed');
+    revert conversion;
+
+    on conversion put skip list('caught fixed', oncode());
+    x = fixed('abc');
+    if x ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL fixed(abc) =', x);
+    end;
+    revert conversion;
+
+    on conversion put skip list('uncaught');
+    (noconversion):
+       y = fixed('xyz');
+    if y ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL noconv fixed(xyz) =', y);
+    end;
+    else put skip list('noconv ok');
+    revert conversion;
+
+    if fails = 0 then put skip list('PASS conversion');
+    else put skip list('FAIL conversion: fails =', fails);
+ end onconv;

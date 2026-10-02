@@ -271,7 +271,7 @@ llvm::GlobalVariable* IRGen::globalString(const std::string& s) {
 // ABI type tokens, used to expand runtime/pli_rt_abi.def into LLVM
 // signatures. RtVoid is also the "no arguments" marker (a function with no
 // parameters is written with a single VOID in the .def).
-enum RtTok { RtVoid, RtI64, RtI32, RtI8, RtDouble, RtPtr };
+enum RtTok { RtVoid, RtI64, RtI32, RtI8, RtDouble, RtPtr, RtI32Ptr };
 struct RtSig {
   RtTok ret;
   std::vector<RtTok> args;
@@ -287,13 +287,15 @@ static const std::map<std::string, RtSig>& kRuntimeSigs() {
 #define I32 RtI32
 #define I8 RtI8
 #define DOUBLE RtDouble
-#define PTR RtPtr
-#define CPTR RtPtr
+   #define PTR RtPtr
+   #define CPTR RtPtr
+   #define IPTR RtI32Ptr
 #define PLI_STRIP(...) __VA_ARGS__ // turn the .def's (a, b, c) into a braced list
 #define PLI_FN(name, ret, args) {#name, {ret, {PLI_STRIP args}}},
 #include "../runtime/pli_rt_abi.def"
 #undef PLI_FN
 #undef PLI_STRIP
+#undef IPTR
 #undef CPTR
 #undef PTR
 #undef DOUBLE
@@ -333,7 +335,8 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_signal_error", {.noReturn = true}},
       {"pli_subscript_oob", {.noReturn = true}},
       {"pli_zerodivide", {.noReturn = true}},
-      {"pli_fixed_overflow", {.noReturn = true}},
+       {"pli_fixed_overflow", {.noReturn = true}},
+       {"pli_conversion", {.noReturn = true}},
       {"pli_stop", {.noReturn = true}},
       // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
       {"pli_alloc", {.allocMalloc = true, .allocSize = true, .nonNullRet = true}},
@@ -376,7 +379,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_search", {.willReturn = true, .mem = RtMemArgRead}},
       {"pli_verify_from", {.willReturn = true, .mem = RtMemArgRead}},
       {"pli_rank", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgRead}},
+      {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_data_name_is", {.willReturn = true, .mem = RtMemArgRead}},
       // String writers: arg-pointed memory only, no error paths.
       {"pli_assign_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
@@ -464,9 +467,11 @@ llvm::Function* IRGen::runtimeFn(const std::string& name) {
       return b_.getInt8Ty();
     case RtDouble:
       return b_.getDoubleTy();
-    case RtPtr:
+     case RtPtr:
       return b_.getPtrTy();
-    }
+     case RtI32Ptr:
+      return b_.getPtrTy();
+     }
     return b_.getVoidTy();
   };
   const RtSig& s = it->second;
@@ -2051,9 +2056,11 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       name = "PLI_ON_SIZE_" + std::to_string(keyId.second);
     else if (keyId.first == Stmt::kSubscriptrangeCondKey)
       name = "PLI_ON_SUBSCRIPT_" + std::to_string(keyId.second);
-    else if (keyId.first == Stmt::kZerodivideCondKey)
-      name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
-    else
+     else if (keyId.first == Stmt::kZerodivideCondKey)
+       name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
+     else if (keyId.first == Stmt::kConversionCondKey)
+       name = "PLI_ON_CONVERSION_" + std::to_string(keyId.second);
+     else
       name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
     onHandlers_[keyId.first].push_back(
         llvm::Function::Create(ft, llvm::Function::InternalLinkage, name, &mod_));
@@ -2169,9 +2176,11 @@ void IRGen::emitSignal(HStmt* s) {
     msg = "SIGNAL SIZE";
   else if (s->condKey == Stmt::kSubscriptrangeCondKey)
     msg = "SIGNAL SUBSCRIPTRANGE";
-  else if (s->condKey == Stmt::kZerodivideCondKey)
-    msg = "SIGNAL ZERODIVIDE";
-  else
+   else if (s->condKey == Stmt::kZerodivideCondKey)
+     msg = "SIGNAL ZERODIVIDE";
+   else if (s->condKey == Stmt::kConversionCondKey)
+     msg = "SIGNAL CONVERSION";
+   else
     msg = "SIGNAL CONDITION(" + s->condName + ")";
   b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
   b_.CreateUnreachable();
@@ -2203,9 +2212,10 @@ void IRGen::emitStmt(HStmt* s) {
   CheckState top;
   if (!checkStack_.empty())
     top = checkStack_.back();
-  top.noSize = top.noSize || s->noSize;
-  top.noSub = top.noSub || s->noSub;
-  top.noZdiv = top.noZdiv || s->noZdiv;
+   top.noSize = top.noSize || s->noSize;
+   top.noSub = top.noSub || s->noSub;
+   top.noZdiv = top.noZdiv || s->noZdiv;
+   top.noConv = top.noConv || s->noConv;
   checkStack_.push_back(top);
   switch (s->kind) {
   case HStmt::Null:
@@ -7337,17 +7347,34 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
-  // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
-  // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
-  if (e->name == "FIXED") {
-    Val a = emitExpr(e->args[0].get());
-    if (a.ty.isChar()) {
-      llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len});
-      v.ty = e->ty;
-      v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
-      result = v;
-      return true;
-    }
+   // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
+   // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
+   if (e->name == "FIXED") {
+     Val a = emitExpr(e->args[0].get());
+     if (a.ty.isChar()) {
+       // CONVERSION (rule 94): when the text holds no digits, FIXED(char)
+       // traps through the CONVERSION dispatch (abort or ON unit); the resume
+       // value is 0, the value pli_fixed_of_char leaves in `ok=0` cases.
+       llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
+       llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_char"),
+                                      {a.ptr, a.len, okSlot});
+       if (convChecks()) {
+         llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
+         llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
+         llvm::BasicBlock* trapBB =
+             llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
+         llvm::BasicBlock* okBB =
+             llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
+         b_.CreateCondBr(fail, trapBB, okBB);
+         b_.SetInsertPoint(trapBB);
+         emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+         b_.SetInsertPoint(okBB);
+       }
+       v.ty = e->ty;
+       v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
+       result = v;
+       return true;
+     }
     if (a.ty.k == TK::Float) {
       llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_float"), {a.reg});
       v.ty = e->ty;
@@ -7383,6 +7410,28 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "ONCODE") {
     v.ty = e->ty;
     v.reg = b_.CreateCall(runtimeFn("pli_oncode"), {}, "oncode");
+    result = v;
+    return true;
+  }
+  // SYSTEM (rule (123)): invoke the command processor with command string x,
+  // returning the processor's exit code as FIXED BIN(31). Numeric arguments
+  // are converted to character via CHAR; character arguments pass through
+  // directly (the runtime null-terminates internally).
+  if (e->name == "SYSTEM") {
+    Val a = emitExpr(e->args[0].get());
+    Val cmd = a;
+    if (!a.ty.isChar()) {
+      int buflen = 13; // enough for any FIXED BIN(31,0): sign + 10 digits + nul
+      cmd = charTemp(buflen);
+      if (a.ty.k == TK::Float)
+        b_.CreateCall(runtimeFn("pli_char_of_float"), {cmd.ptr, cmd.len, a.reg});
+      else {
+        llvm::Value* iv = toI64(convert(a, Type::fixedBin(31, 0), e->loc));
+        b_.CreateCall(runtimeFn("pli_char_of_fixed"), {cmd.ptr, cmd.len, iv});
+      }
+    }
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_system"), {cmd.ptr, cmd.len}, "syso");
     result = v;
     return true;
   }

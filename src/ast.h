@@ -199,9 +199,10 @@ struct Stmt {
   bool until = false;              // DO UNTIL (extension, ADR-106): test cond after the body
   std::vector<ExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
   bool byName = false;             // rule (86) trailing ", BY NAME" on assignment
-  bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)
-  bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
-  bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
+   bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)
+   bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
+   bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
+   bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
   StmtP thenS, elseS;
   std::vector<StmtP> body;
 
@@ -265,6 +266,7 @@ struct Stmt {
   static constexpr int kSizeCondKey = -1;
   static constexpr int kSubscriptrangeCondKey = -2;
   static constexpr int kZerodivideCondKey = -3;
+  static constexpr int kConversionCondKey = -4; // CONVERSION (rule 94, QR1.2)
   std::string condName; // e.g. "ERROR", "SIZE", "SUBSCRIPTRANGE", "ZERODIVIDE",
                         // or a rule (99) condition name
   int condKey = 0;      // 0 = ERROR, negative = fixed key above, else condNames index + 1

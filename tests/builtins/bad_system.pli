@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Diagnostic test: SYSTEM takes exactly one argument and it must be
+    character or numeric (not a POINTER). */
+ bad_system: procedure options(main);
+    declare rc fixed bin(31);
+    declare p pointer;
+
+    rc = system();
+    rc = system('a', 'b');
+    rc = system(p);
+ end bad_system;
