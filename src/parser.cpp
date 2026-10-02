@@ -2009,8 +2009,7 @@ bool Parser::parseDescriptorType(Type& out) {
     // expressions in this stage); rejects floats and suffixed numbers.
     auto constNum = [&](long& v) -> bool {
       bool neg = eat(Tok::Minus);
-      if (!at(Tok::Number) || cur().isFloat || cur().binaryRadix || cur().imaginary ||
-          cur().hasExp)
+      if (!at(Tok::Number) || cur().isFloat || cur().binaryRadix || cur().imaginary || cur().hasExp)
         return false;
       v = boundedNonNeg(cur().text, cur().loc, d_, "dimension", "(36)");
       advance();
@@ -2073,8 +2072,7 @@ bool Parser::parseDescriptorType(Type& out) {
                "descriptor in this stage",
                "(36)");
     else
-      d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
-               "(36)");
+      d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage", "(36)");
     return false;
   };
   // Leading dimension (spec order, rule (36)): `(*) FIXED ...`.

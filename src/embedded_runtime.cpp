@@ -37,10 +37,8 @@ llvm::MemoryBufferRef getEmbeddedLibPLI() {
 
 size_t embeddedLibPLISize() { return plic_embedded_libpli_bc_len; }
 
-static void addBlobIfDefined(std::vector<RuntimeBlob>& blobs,
-                              const unsigned char* data,
-                              unsigned long len,
-                              const char* target) {
+static void addBlobIfDefined(std::vector<RuntimeBlob>& blobs, const unsigned char* data,
+                             unsigned long len, const char* target) {
   if (data && len > 0) {
     blobs.push_back({data, static_cast<size_t>(len), target});
   }
@@ -52,16 +50,22 @@ std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs() {
   addBlobIfDefined(blobs, plic_embedded_libpli_bc, plic_embedded_libpli_bc_len, PLIC_TARGET_TRIPLE);
   // Per-target blobs (conditionally compiled based on CMake config)
 #ifdef PLIC_HAVE_LINUX_X86_64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_x86_64_unknown_linux_gnu, plic_embedded_libpli_bc_x86_64_unknown_linux_gnu_len, "x86_64-unknown-linux-gnu");
+  addBlobIfDefined(blobs, plic_embedded_libpli_bc_x86_64_unknown_linux_gnu,
+                   plic_embedded_libpli_bc_x86_64_unknown_linux_gnu_len,
+                   "x86_64-unknown-linux-gnu");
 #endif
 #ifdef PLIC_HAVE_LINUX_AARCH64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_aarch64_unknown_linux_gnu, plic_embedded_libpli_bc_aarch64_unknown_linux_gnu_len, "aarch64-unknown-linux-gnu");
+  addBlobIfDefined(blobs, plic_embedded_libpli_bc_aarch64_unknown_linux_gnu,
+                   plic_embedded_libpli_bc_aarch64_unknown_linux_gnu_len,
+                   "aarch64-unknown-linux-gnu");
 #endif
 #ifdef PLIC_HAVE_WINDOWS_X86_64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_x86_64_pc_windows_gnu, plic_embedded_libpli_bc_x86_64_pc_windows_gnu_len, "x86_64-pc-windows-gnu");
+  addBlobIfDefined(blobs, plic_embedded_libpli_bc_x86_64_pc_windows_gnu,
+                   plic_embedded_libpli_bc_x86_64_pc_windows_gnu_len, "x86_64-pc-windows-gnu");
 #endif
 #ifdef PLIC_HAVE_WINDOWS_AARCH64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_aarch64_pc_windows_gnu, plic_embedded_libpli_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
+  addBlobIfDefined(blobs, plic_embedded_libpli_bc_aarch64_pc_windows_gnu,
+                   plic_embedded_libpli_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
 #endif
   return blobs;
 }

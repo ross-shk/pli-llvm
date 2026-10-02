@@ -100,10 +100,10 @@ struct HDeclItem {
 // FormatItem with lowered width/decimals expressions.
 struct HFormatItem {
   enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote } kind = A;
-  HExprP w; // field width
-  HExprP d; // F/E: fractional digits
-  HExprP s; // F/E: scale factor (evaluated for effects, formatting uses (w,d))
-  std::string remote; // R: FORMAT label (sema expands R, so HIR never carries one)
+  HExprP w;                      // field width
+  HExprP d;                      // F/E: fractional digits
+  HExprP s;                      // F/E: scale factor (evaluated for effects, formatting uses (w,d))
+  std::string remote;            // R: FORMAT label (sema expands R, so HIR never carries one)
   std::vector<HFormatItem> subs; // C: 1-2 inner real formats
 };
 

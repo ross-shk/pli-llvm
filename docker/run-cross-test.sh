@@ -28,7 +28,7 @@ cmd_linux_native() {
   # BUILD=build-linux keeps the container build clear of the host build/ dir.
   GROUP=${1:-core}
   docker run --rm $PLATFORM -v "$ROOT:/work" -w /work "$LINUX_IMG" \
-    sh -c "make BUILD=build-linux -j\$(nproc) && ./build-linux/plic tests/core/hello.pli -o /tmp/hello && /tmp/hello && PLIC=./build-linux/plic CLANG=clang-22 python3 tests/run_tests.py $GROUP"
+    sh -c "cmake -G Ninja -S . -B build-linux/cmake && cmake --build build-linux/cmake -j\$(nproc) && ./build-linux/cmake/plic tests/core/hello.pli -o /tmp/hello && /tmp/hello && ctest --test-dir build-linux/cmake -j\$(nproc) --output-on-failure -R \"${GROUP}\""
 }
 
 cmd_wine_run() {

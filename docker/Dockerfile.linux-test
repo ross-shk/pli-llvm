@@ -14,4 +14,4 @@ ENV CMAKE_PREFIX_PATH=/usr/lib/llvm-22
 ENV CC=clang-22 CXX=clang++-22
 WORKDIR /work
 # Default: parallel build then full suite (override with `docker run ... <cmd>`).
-CMD ["sh", "-c", "make -j$(nproc) && make test"]
+CMD ["sh", "-c", "cmake -G Ninja -S . -B build/cmake && cmake --build build/cmake -j$(nproc) && ctest --test-dir build/cmake -j$(nproc)"]

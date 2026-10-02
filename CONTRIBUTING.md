@@ -7,13 +7,12 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md `(what 
 ## Build and test
 
 ```bash
-make -j8                    # build/plic + build/libpli.a (parallel)
-make test                   # compile, run, diff every tests/*/*.pli (parallel)
-make check                  # analysis gate: -Werror + fmt-check + clang-tidy + scan-build
-./build/plic f.pli -o f    # compile a program
-./build/plic f.pli -emit-llvm -o f.ll   # inspect generated IR
-./build/plic f.pli -fsyntax-only        # front end only
-./build/plic f.pli -v --keep-ll         # show clang command, keep the .ll
+# Canonical build (CMake + Ninja):
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+cmake --build build/cmake -j$(nproc)        # build/plic + build/cmake/libpli.a
+ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.pli
+# or via the thin Makefile wrapper:
+make -j8 && make test
 ```
 
 ## Layer map — where a feature lands
@@ -35,7 +34,7 @@ One statement usually means five edits: AST kind → parse → check → emit �
 1. **Pick the rule or approved extension.** For standard PL/I, find the feature in `docs/GRAMMAR-COVERAGE.md` and note its rule number, e.g. `(104)-(109)` for stream I/O. For an extension, confirm it is listed in the relevant plan and follow its ADR and test requirements. Do not infer scope from another dialect.
 2. **Write the test first.** `tests/core/<feature>.pli`, lowercase PL/I, with a header comment naming the rules exercised. Add `tests/core/bad_<feature>.pli` if the feature has error cases.
 3. **Implement across the layers** in the table above, smallest change that works (KISS). Diagnose what you do not implement — never accept silently.
-4. **Verify**: `make test`. For a golden test, record the baseline: `./build/plic tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out` and read it before committing — it becomes the specification of behaviour, so a wrong line is a permanent wrong answer. A self-contained test needs no baseline: its `PASS` is the verdict. For a major edit run `make check` — the analysis gate (`-Werror` build + clang-format drift + clang-tidy + the clang static analyzer) must stay green; `make fmt` normalizes formatting first.
+4. **Verify**: `make test` (or `ctest --test-dir build/cmake`). For a golden test, record the baseline: `./build/cmake/plic tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out` and read it before committing — it becomes the specification of behaviour, so a wrong line is a permanent wrong answer. A self-contained test needs no baseline: its `PASS` is the verdict. For a major edit run `make check` (or `cmake --build build/cmake --target check`) — the analysis gate (`-Werror` build + clang-format drift + clang-tidy + scan-build) must stay green; `make fmt` (or `cmake --build build/cmake --target fmt`) normalizes formatting first.
 5. **Check the IR** for anything non-trivial: `-emit-llvm` and read it. Cheap, and catches silently-dropped work (see the worked example below).
 6. **Update docs**: flip the row in `docs/GRAMMAR-COVERAGE.md`; adjust `docs/ARCHITECTURE.md` §8 status and the README feature list if user-visible; add an ADR to `docs/DESIGN-DECISIONS.md` if you made a real decision (new number, never edit an existing ADR); note deviations from the spec.
 7. **Stage, do not commit.** `git add -A` and report what changed. Committing needs the maintainer's approval.
@@ -66,7 +65,7 @@ Diagnosis, in workflow order:
 1. `-emit-llvm` showed `@pli_g_X = internal global i32 0` — the `INITIAL` value never reached the IR. Root cause: variables of the external procedure get static storage (ADR-010), and `irgen.cpp:emitGlobals` always emitted a zero initializer while the prologue-store path was reserved for automatic variables. The value was dropped between two correct-looking branches.
 2. Test first: `tests/core/init.pli`, covering `INITIAL` for `FIXED`, `FLOAT`, `CHAR`, `CHAR VARYING`, `BIT`, a negative constant, and both storage classes.
 3. Fix across layers: sema attaches the folded constant to the symbol (`sema.h:Symbol::initExpr`) and checks it is assignable to the declared type; `emitGlobals` renders it per type.
-4. `make test` — 9/9, and `examples/if_else.pli` now prints `ok`.
+4. `make test` (9/9) and `examples/if_else.pli` now prints `ok`.
 
 The lesson worth generalising: **a feature that is "accepted" by the parser and sema but ignored by codegen is worse than one that is rejected.** Invariant 2  exists because of this class of bug.
 

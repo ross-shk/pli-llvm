@@ -736,8 +736,7 @@ int main(int argc, char** argv) {
             if (!p.empty() && p != primary)
               return p;
             if (fallback) {
-              p = runCap(shellQuote(clangPath) + " -print-file-name=" + fallback +
-                         " 2>/dev/null");
+              p = runCap(shellQuote(clangPath) + " -print-file-name=" + fallback + " 2>/dev/null");
               if (!p.empty() && p != fallback)
                 return p;
             }
@@ -765,8 +764,7 @@ int main(int argc, char** argv) {
               break;
             }
             if (!interp.empty() && !fs::exists(interp)) {
-              if (llt.getArch() == llvm::Triple::x86_64 &&
-                  fs::exists("/lib/ld-linux-x86-64.so.2"))
+              if (llt.getArch() == llvm::Triple::x86_64 && fs::exists("/lib/ld-linux-x86-64.so.2"))
                 interp = "/lib/ld-linux-x86-64.so.2";
               else if (verbose)
                 std::cerr << "plic: interpreter " << interp << " not found\n";
@@ -799,7 +797,8 @@ int main(int argc, char** argv) {
             }
           }
           std::string sysroot = runCap(shellQuote(clangPath) + " -print-sysroot 2>/dev/null");
-          if (!sysroot.empty() && sysroot != "/" && sysroot.find("unknown argument") == std::string::npos &&
+          if (!sysroot.empty() && sysroot != "/" &&
+              sysroot.find("unknown argument") == std::string::npos &&
               sysroot.find("no input files") == std::string::npos) {
             argStore.push_back("--sysroot");
             argStore.push_back(sysroot);
@@ -823,8 +822,7 @@ int main(int argc, char** argv) {
             if (!p.empty() && p != primary)
               return p;
             if (fallback) {
-              p = runCap(shellQuote(clangPath) + " -print-file-name=" + fallback +
-                         " 2>/dev/null");
+              p = runCap(shellQuote(clangPath) + " -print-file-name=" + fallback + " 2>/dev/null");
               if (!p.empty() && p != fallback)
                 return p;
             }

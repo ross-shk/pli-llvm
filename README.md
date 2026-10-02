@@ -5,8 +5,9 @@ A modern PL/I compiler built to the formal specification: **TR 25.084** (Concret
 **Single-binary distribution** (like Go/Zig) — the `plic` executable embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
 
 ```bash
-$ make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
-$ ./build/plic tests/core/hello.pli -o hello
+$ cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+$ cmake --build build/cmake -j$(nproc)
+$ ./build/cmake/plic tests/core/hello.pli -o hello
 $ ./hello
 Hello, world!
 ```
@@ -29,12 +30,15 @@ Hello, world!
 ### Build
 ```bash
 # macOS (Homebrew LLVM):
-make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
-# Linux:
-make -j8
-# or directly:
 cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j8
+cmake --build build/cmake -j$(nproc)
+
+# Linux:
+cmake -G Ninja -S . -B build/cmake
+cmake --build build/cmake -j$(nproc)
+
+# or via the thin Makefile wrapper (same CMake/Ninja build underneath):
+make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
 ```
 
 ### Cross-compile PL/I code
@@ -154,9 +158,9 @@ docs/        architecture, decisions, optimization, plans, coverage
 ## Building & Testing
 
 ```bash
-make -j8        # build via CMake (parallel)
-make test       # 441 tests (golden diff or PASS-grep)
-make check      # -Werror + fmt-check + clang-tidy + scan-build
+cmake --build build/cmake -j$(nproc)    # build via CMake/Ninja
+ctest --test-dir build/cmake           # test suite
+make check                             # quality gate (fmt + tidy + werror)
 make clean
 ```
 

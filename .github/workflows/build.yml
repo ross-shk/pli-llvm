@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
-# CI: build the self-contained plic per host, run the suite, gate the size.
+# CI: configure with CMake/Ninja, build, test, gate the size, smoke-test.
 name: build
 on:
   push:
@@ -16,26 +16,34 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install LLVM + lld (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build cmake
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build cmake python3
       - name: Install LLVM + lld (macOS)
         if: runner.os == 'macOS'
-        run: brew install llvm lld ninja && echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+        run: brew install llvm lld ninja cmake
+      - name: Configure (CMake + Ninja)
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+          else
+            cmake -G Ninja -S . -B build/cmake
+          fi
       - name: Build
-        run: make -j8
+        run: cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
       - name: Test
-        run: make test
+        run: ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
       - name: Size gate (stripped < 150 MB)
         run: |
-          make size-report
-          bytes=$(strip -o /tmp/plic.strip build/plic && (stat -f%z /tmp/plic.strip 2>/dev/null || stat -c%s /tmp/plic.strip))
+          strip -o /tmp/plic.strip build/cmake/plic
+          bytes=$(stat -f%z /tmp/plic.strip 2>/dev/null || stat -c%s /tmp/plic.strip)
+          echo "Stripped size: $bytes bytes"
           test "$bytes" -lt 157286400
       - name: Smoke (pure PL/I end-to-end)
         run: |
           printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n end smoke;\n' > /tmp/smoke.pli
-          ./build/plic /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
-          ./build/plic version
+          ./build/cmake/plic /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+          ./build/cmake/plic version
       - name: Upload plic binary
         uses: actions/upload-artifact@v4
         with:
           name: plic-${{ matrix.os }}
-          path: build/plic
+          path: build/cmake/plic
