@@ -571,6 +571,17 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
 // value plus a flag; a set flag traps through the SIZE path (hard ERROR
 // when no SIZE handler is established, QR1.4).
 llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
+  if (!sizeChecks()) {
+    // (NOSIZE): plain arithmetic — the wrapped value stands (rules (60)-(63),
+    // ADR-110). Skip the overflow intrinsic entirely; its struct return and
+    // extractvalue block the optimizer's overflow-narrowing passes.
+    std::string name = op == Tok::Plus ? "bin" : op == Tok::Minus ? "bin" : "bin";
+    if (op == Tok::Plus)
+      return b_.CreateAdd(a, b, name);
+    if (op == Tok::Minus)
+      return b_.CreateSub(a, b, name);
+    return b_.CreateMul(a, b, name);
+  }
   llvm::Type* ty = a->getType();
   unsigned bits = ty->getIntegerBitWidth();
   std::string base = op == Tok::Plus ? "sadd" : op == Tok::Minus ? "ssub" : "smul";
@@ -578,8 +589,6 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   llvm::Type* st = llvm::StructType::get(ctx_, {ty, b_.getInt1Ty()});
   llvm::Value* ov = b_.CreateCall(intrinsicFn(iname, st, {ty, ty}), {a, b}, "ov");
   llvm::Value* r = b_.CreateExtractValue(ov, 0, "bin");
-  if (!sizeChecks())
-    return r; // (NOSIZE): the wrapped value stands (rules (60)-(63), ADR-110)
   llvm::Value* of = b_.CreateExtractValue(ov, 1, "ovf");
   int seq = ovSeq_++;
   llvm::BasicBlock* trapBB =

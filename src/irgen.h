@@ -38,10 +38,10 @@ struct Val {
 class IRGen {
 public:
    IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
-         bool noConvChecks = false, std::string runtimeBc = "", bool linkBitcode = false)
-       : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
-         noSizeChecks_(noSizeChecks), noZdivChecks_(noZdivChecks), noConvChecks_(noConvChecks),
-         runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
+         bool noConvChecks = false, bool noSubChecks = false, std::string runtimeBc = "", bool linkBitcode = false)
+        : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
+          noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
+          noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
 
   std::string run(HProgram& prog);
 
@@ -526,15 +526,18 @@ private:
      bool noConv = false;
    };
    std::vector<CheckState> checkStack_;
-   // Global --no-size-checks (ADR-111) disables every SIZE trap, including
-   // ones an ON SIZE handler would otherwise route.
-   bool noSizeChecks_ = false;
-   bool noZdivChecks_ = false;
-   bool noConvChecks_ = false;
-   bool sizeChecks() const {
-     return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
-   }
-   bool subChecks() const { return checkStack_.empty() || !checkStack_.back().noSub; }
+    // Global --no-size-checks (ADR-111) disables every SIZE trap, including
+    // ones an ON SIZE handler would otherwise route.
+    bool noSizeChecks_ = false;
+    bool noSubChecks_ = false;
+    bool noZdivChecks_ = false;
+    bool noConvChecks_ = false;
+    bool sizeChecks() const {
+      return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
+    }
+    bool subChecks() const {
+      return !noSubChecks_ && (checkStack_.empty() || !checkStack_.back().noSub);
+    }
    bool zdivChecks() const {
      return !noZdivChecks_ && (checkStack_.empty() || !checkStack_.back().noZdiv);
    }
