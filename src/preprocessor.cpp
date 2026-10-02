@@ -380,7 +380,7 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
 // %IF expr %THEN directive [%ELSE directive] (ADR-083). Arms are full
 // directives run (or structurally skipped) recursively, so nesting works;
 // each arm is exactly one directive.
-size_t Preprocessor::processIf(const fs::path& path, const std::string& source, size_t i,
+size_t Preprocessor::processIf(const fs::path& path, const std::string& source, size_t,
                                size_t wordEnd, std::string& output, int& line, int& col,
                                bool active) {
   static const size_t npos = std::string::npos;

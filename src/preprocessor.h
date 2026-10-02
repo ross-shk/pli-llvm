@@ -34,7 +34,7 @@ private:
                           std::string& output, int& line, int& col, bool active);
   // %IF expr %THEN directive [%ELSE directive] (ADR-083): arms are full
   // directives run (or structurally skipped) recursively, so nesting works.
-  size_t processIf(const std::filesystem::path& path, const std::string& source, size_t i,
+  size_t processIf(const std::filesystem::path& path, const std::string& source, size_t,
                    size_t wordEnd, std::string& output, int& line, int& col, bool active);
   // Evaluate a %IF/%assignment integer expression (ADR-083); on failure
   // returns false after diagnosing at the directive position.

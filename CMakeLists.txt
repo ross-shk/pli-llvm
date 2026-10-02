@@ -1,18 +1,23 @@
-# plic — PL/I -> LLVM compiler (CMake build, M1: LLVM C++ API).
+# plic — PL/I -> LLVM compiler (CMake + Ninja build, ADR-002: LLVM C++ API).
 #
-# The Makefile remains the bootstrap build; this CMake build links the LLVM C++
-# API (ADR-002). Requires an LLVM installation with development libraries, e.g.
-#   brew install llvm cmake
-#   cmake -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-#   cmake --build build/cmake
+# CMake + Ninja is the canonical build. The Makefile is a thin convenience
+# wrapper that delegates to this CMake build. Requires an LLVM installation
+# with development libraries, e.g.:
+#   brew install llvm lld cmake ninja
+#   cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+#   cmake --build build/cmake -j$(nproc)
+# Quality gate: cmake --build build/cmake --target check
 cmake_minimum_required(VERSION 3.20)
 project(plic CXX C)
 
 include(GNUInstallDirs)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
+
+option(PLIC_WERROR "Treat compiler warnings as errors" OFF)
 
 find_package(LLVM REQUIRED CONFIG)
 if(LLVM_PACKAGE_VERSION VERSION_LESS 18)
@@ -22,8 +27,11 @@ find_package(Clang REQUIRED CONFIG)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
 add_definitions(${LLVM_DEFINITIONS})
-include_directories(${LLVM_INCLUDE_DIRS})
-include_directories(${CLANG_INCLUDE_DIRS})
+# Expose implicit C/C++ std-lib include paths in compile_commands.json so that
+# clang-tidy (from the LLVM install) can resolve <cstdio>, <vector>, etc.
+# when CMAKE_CXX_COMPILER is a different clang (e.g. Apple clang on macOS).
+set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+set(CMAKE_C_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES})
 
 set(PLIC_SOURCES
   src/main.cpp
@@ -90,6 +98,8 @@ endif()
 
 add_executable(plic ${PLIC_SOURCES})
 target_include_directories(plic PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
+# LLVM/Clang headers as SYSTEM to suppress their warnings under -Werror.
+target_include_directories(plic SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
 
 # Get the default target triple from LLVM for consistent bitcode generation
 # Use macosx14.0: macOS 15+ emits SME features (zcm/zcz) in function
@@ -189,6 +199,12 @@ option(PLIC_CROSS_BITCODE "Generate bitcode for cross-targets (needs sysroots)" 
 # pieces (ADR-079); the same sources feed both runtime paths below.
 add_library(libpli STATIC ${RT_SRCS})
 set_target_properties(libpli PROPERTIES OUTPUT_NAME pli)
+
+# Warnings: -Wall -Wextra on the C++ driver (libpli is C11 with its own style).
+target_compile_options(plic PRIVATE -Wall -Wextra)
+if(PLIC_WERROR)
+  target_compile_options(plic PRIVATE -Werror)
+endif()
 
 # Multi-target embedded runtime: generate bitcode for all supported targets.
 if(PLIC_CROSS_BITCODE)
@@ -335,3 +351,87 @@ install(TARGETS plic libpli
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(FILES ${PLIC_RUNTIME_BC} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+# --- Quality gate: formatting, static analysis, warnings-as-errors ---------------
+# The clang tooling is sought from the same LLVM installation as the compiler.
+find_program(CLANG_FORMAT_BIN NAMES clang-format clang-format-${LLVM_VERSION_MAJOR}
+  HINTS ${LLVM_TOOLS_BINARY_DIR})
+find_program(CLANG_TIDY_BIN NAMES clang-tidy clang-tidy-${LLVM_VERSION_MAJOR}
+  HINTS ${LLVM_TOOLS_BINARY_DIR})
+find_program(SCAN_BUILD_BIN NAMES scan-build scan-build-py
+  HINTS ${LLVM_TOOLS_BINARY_DIR})
+
+# All project sources managed by clang-format / clang-tidy.
+set(ALL_CPP_SOURCES ${PLIC_SOURCES})
+set(ALL_CPP_HEADERS
+  src/ast.h src/codegen.h src/diag.h src/embedded_runtime.h src/explain.h
+  src/hir.h src/irgen.h src/lexer.h src/parser.h src/preprocessor.h
+  src/sema.h src/target.h src/token.h src/types.h)
+set(ALL_C_SOURCES ${RT_SRCS})
+set(ALL_C_HEADERS
+  runtime/pli_rt.h runtime/pli_rt_state.h runtime/pli_rt_abi.def
+  runtime/sync/plic_thread.h)
+# clang-format scope: src/ only (ADR-042: src/ is clang-format-normalized).
+# The C runtime follows its own brace-less style; clang-tidy covers C++ only.
+set(ALL_FORMAT_SOURCES ${ALL_CPP_SOURCES} ${ALL_CPP_HEADERS})
+
+# fmt: format all sources in place.
+add_custom_target(fmt
+  COMMAND ${CLANG_FORMAT_BIN} -i ${ALL_FORMAT_SOURCES}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "clang-format: formatting sources"
+  VERBATIM)
+
+# fmt-check: verify formatting without modifying files.
+add_custom_target(fmt-check
+  COMMAND ${CLANG_FORMAT_BIN} --dry-run --Werror ${ALL_FORMAT_SOURCES}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "clang-format: checking formatting"
+  VERBATIM)
+
+# tidy: run clang-tidy over the C++ sources (needs compile_commands.json from a build).
+add_custom_target(tidy
+  COMMAND ${CLANG_TIDY_BIN} -p ${CMAKE_BINARY_DIR} --quiet ${ALL_CPP_SOURCES}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "clang-tidy: analyzing C++ sources"
+  VERBATIM)
+add_dependencies(tidy plic)
+
+# werror: rebuild with -DPLIC_WERROR=ON to enforce warnings-as-errors.
+add_custom_target(werror
+  COMMAND ${CMAKE_COMMAND} -S ${CMAKE_SOURCE_DIR} -B ${CMAKE_BINARY_DIR} -DPLIC_WERROR=ON
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target plic
+  COMMENT "Building plic with -Werror (PLIC_WERROR=ON)"
+  VERBATIM)
+
+# scan: run the clang static analyzer (scan-build) over the plic build.
+add_custom_target(scan
+  COMMAND ${SCAN_BUILD_BIN}
+    --use-c++=${CMAKE_CXX_COMPILER}
+    --use-cc=${CMAKE_C_COMPILER}
+    ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target plic
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "scan-build: static analyzer over plic"
+  VERBATIM)
+
+# check: full analysis gate — format check + static analysis + warnings-as-errors.
+# Runs each sub-target in order via cmake --build so the sequence is deterministic.
+add_custom_target(check
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target fmt-check
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target tidy
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target werror
+  COMMENT "Running analysis gate (fmt-check + tidy + werror)"
+  VERBATIM)
+
+# size-report: report the stripped size of the plic binary.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  add_custom_target(size-report
+    COMMAND strip -o ${CMAKE_BINARY_DIR}/plic.strip $<TARGET_FILE:plic>
+    COMMAND stat -f%z ${CMAKE_BINARY_DIR}/plic.strip
+    COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
+else()
+  add_custom_target(size-report
+    COMMAND strip $<TARGET_FILE:plic> -o ${CMAKE_BINARY_DIR}/plic.strip
+    COMMAND stat -c%s ${CMAKE_BINARY_DIR}/plic.strip
+    COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
+endif()

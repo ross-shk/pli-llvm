@@ -13,7 +13,7 @@ RUN_IMG=${RUN_IMG:-debian:trixie-slim}
 PLATFORM=${PLATFORM:-}
 
 usage() {
-  echo "usage: $(basename "$0") build|linux-native [test-group]|wine-run <prog.exe>|cross-run [--triple T] <src.pli>"
+  echo "usage: $(basename "$0") build|linux-native [test-group]|wine-run <prog.exe>"
   exit 2
 }
 
@@ -28,7 +28,7 @@ cmd_linux_native() {
   # BUILD=build-linux keeps the container build clear of the host build/ dir.
   GROUP=${1:-core}
   docker run --rm $PLATFORM -v "$ROOT:/work" -w /work "$LINUX_IMG" \
-    sh -c "make BUILD=build-linux -j\$(nproc) && ./build-linux/plic tests/core/hello.pli -o /tmp/hello && /tmp/hello && PLIC=./build-linux/plic CLANG=clang-22 python3 tests/run_tests.py $GROUP"
+    sh -c "cmake -G Ninja -S . -B build-linux/cmake && cmake --build build-linux/cmake -j\$(nproc) && ./build-linux/cmake/plic tests/core/hello.pli -o /tmp/hello && /tmp/hello && ctest --test-dir build-linux/cmake -j\$(nproc) --output-on-failure -R \"${GROUP}\""
 }
 
 cmd_wine_run() {
@@ -38,29 +38,9 @@ cmd_wine_run() {
   docker run --rm $PLATFORM -v "$ROOT:/work" -w /work "$WINE_IMG" wine64 "$EXE"
 }
 
-cmd_cross_run() {
-  # Run a host cross-compiled Linux binary in its matching container.
-  # Fails cleanly until PLIC_CROSS_BITCODE lands (bitcode triple mismatch).
-  TRIPLE="x86_64-unknown-linux-gnu"
-  if [ "${1:-}" = "--triple" ]; then TRIPLE=$2; shift 2; fi
-  [ $# -ge 1 ] || usage
-  SRC=$1
-  OUT=/tmp/plic-cross-$(basename "$SRC" .pli)
-  case $TRIPLE in
-    *x86_64*) RUN_PLATFORM="--platform linux/amd64" ;;
-    *) RUN_PLATFORM="" ;;
-  esac
-  "$ROOT/build/plic" --triple "$TRIPLE" "$SRC" -o "$OUT" || {
-    echo "cross-compile failed (likely missing per-target bitcode; see README PLIC_CROSS_BITCODE)" >&2
-    exit 1
-  }
-  docker run --rm $RUN_PLATFORM -v /tmp:/tmp "$RUN_IMG" "$OUT"
-}
-
 case ${1:-} in
   build) shift; cmd_build "$@" ;;
   linux-native) shift; cmd_linux_native "$@" ;;
   wine-run) shift; cmd_wine_run "$@" ;;
-  cross-run) shift; cmd_cross_run "$@" ;;
   *) usage ;;
 esac

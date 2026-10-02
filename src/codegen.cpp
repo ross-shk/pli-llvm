@@ -68,7 +68,8 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
     return false;
   }
   // Parse against M's own context so Linker can merge directly.
-  llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "libpli.bc");
+  llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len),
+                            "libpli.bc");
   llvm::Expected<std::unique_ptr<llvm::Module>> parsed =
       llvm::parseBitcodeFile(buf, M.getContext());
   if (!parsed) {
@@ -100,13 +101,15 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
   return true;
 }
 
-std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTriple, llvm::LLVMContext& ctx, std::string& err) {
+std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTriple,
+                                                   llvm::LLVMContext& ctx, std::string& err) {
   const RuntimeBlob* blob = selectRuntimeForTarget(targetTriple);
   if (!blob) {
     err = "no embedded runtime for target: " + targetTriple.getTriple();
     return nullptr;
   }
-  llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "libpli.bc");
+  llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len),
+                            "libpli.bc");
   auto modOrErr = llvm::parseBitcodeFile(buf, ctx);
   if (!modOrErr) {
     err = "cannot parse embedded libpli.bc";
@@ -116,7 +119,8 @@ std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTri
   return std::move(*modOrErr);
 }
 
-bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple, llvm::raw_pwrite_stream& out, std::string& err) {
+bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple,
+                       llvm::raw_pwrite_stream& out, std::string& err) {
   llvm::LLVMContext ctx;
   auto rt = parseEmbeddedRuntime(targetTriple, ctx, err);
   if (!rt)

@@ -92,10 +92,10 @@ struct DefinedSub {
 // formats for the real/imaginary parts; P stays diagnosed (D1 pictures).
 struct FormatItem {
   enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote } kind = A;
-  ExprP w; // field width
-  ExprP d; // F/E: fractional digits
-  ExprP s; // F/E: scale factor p (rule (50)); null = absent
-  std::string remote; // R: FORMAT statement label (rule (55)); empty = none
+  ExprP w;                      // field width
+  ExprP d;                      // F/E: fractional digits
+  ExprP s;                      // F/E: scale factor p (rule (50)); null = absent
+  std::string remote;           // R: FORMAT statement label (rule (55)); empty = none
   std::vector<FormatItem> subs; // C: 1-2 inner real (F/E) formats (rule (51))
 };
 

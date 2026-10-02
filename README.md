@@ -5,8 +5,9 @@ A modern PL/I compiler built to the formal specification: **TR 25.084** (Concret
 **Single-binary distribution** (like Go/Zig) — the `plic` executable embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
 
 ```bash
-$ make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
-$ ./build/plic tests/core/hello.pli -o hello
+$ cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+$ cmake --build build/cmake -j$(nproc)
+$ ./build/cmake/plic tests/core/hello.pli -o hello
 $ ./hello
 Hello, world!
 ```
@@ -25,18 +26,19 @@ Hello, world!
 
 - C++20 compiler (clang++/g++; MSVC on Windows)
 - CMake ≥ 3.20
+- Ninja build system (`brew install ninja` / `apt-get install ninja-build`)
 - LLVM ≥ 18 with `clang` and `lld`
 
 ### Build
 
 ```bash
 # macOS (Homebrew LLVM):
-make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+cmake --build build/cmake -j$(nproc)
+
 # Linux:
-make -j8
-# or directly:
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j8
+cmake -G Ninja -S . -B build/cmake
+cmake --build build/cmake -j$(nproc)
 ```
 
 ### Cross-compile PL/I code
@@ -64,7 +66,7 @@ end hello;
 ### Test
 
 ```bash
-make test             
+ctest --test-dir build/cmake     # ~440 tests
 ./tests/run_tests.py usecases   # specific group
 ```
 
@@ -172,17 +174,17 @@ Shows: arrays, `BIT` arrays, dynamic extents, `DO` loops with `TO/BY`, arithmeti
 ## Building & Testing
 
 ```bash
-make -j8        # build via CMake (parallel)
-make test       # 472 tests (golden diff or PASS-grep)
-make check      # -Werror + fmt-check + clang-tidy + scan-build
-make clean
+cmake --build build/cmake -j$(nproc)    # build via CMake/Ninja
+ctest --test-dir build/cmake           # test suite
+cmake --build build/cmake --target check   # quality gate (fmt + tidy + werror)
+cmake --build build/cmake --target clean
 ```
 
 CMake directly:
 
 ```bash
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j8
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+cmake --build build/cmake -j$(nproc)
 ctest --test-dir build/cmake
 ```
 
@@ -194,11 +196,15 @@ Windows: use MSVC + CMake (no MinGW/MSYS2). The threading abstraction in `runtim
 
 `plic` can target Linux x86_64, Linux ARM64, Windows x86_64, Windows ARM64 from any host (requires LLVM with the target backends and `lld`).
 
-**Build with multi-target runtime bitcode** (embeds all 4 targets):
+`plic` is built natively on each host — no cross-compiling the compiler binary.
+`--triple`/`-target` cross-compiles **user PL/I code** using LLVM with the
+matching target backend and `lld`.
 
+**Build with multi-target runtime bitcode** (embeds all 4 targets; requires
+`PLIC_CROSS_BITCODE=ON` at build time):
 ```bash
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DPLIC_CROSS_BITCODE=ON
-cmake --build build/cmake -j8
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DPLIC_CROSS_BITCODE=ON
+cmake --build build/cmake -j$(nproc)
 ```
 
 **Compile for a target**:
@@ -208,7 +214,11 @@ cmake --build build/cmake -j8
 ./build/plic -target aarch64-pc-windows-gnu program.pli -o program.exe
 ```
 
-Toolchain files in `cmake/toolchains/` for the 4 targets.
+Without `PLIC_CROSS_BITCODE`, the per-target runtime blobs are empty stubs;
+`--triple` then falls back to the host runtime blob, so cross-compilation of
+user code works for targets whose ABI matches the host (e.g. macOS-arm64 →
+Linux-arm64). Build with `PLIC_CROSS_BITCODE=ON` for genuine multi-target
+runtime bitcode across all 4 targets.
 
 ---
 

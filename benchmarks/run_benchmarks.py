@@ -71,7 +71,7 @@ def main():
     
     if not PLIC.exists():
         print(f"Error: plic not found at {PLIC}")
-        print("Run 'make -j8' first")
+        print("Build first: cmake -G Ninja -S . -B build/cmake && cmake --build build/cmake -j$(nproc)")
         return 1
     
     results = {}

@@ -162,7 +162,7 @@ private:
   // heap context, spawn a detached thread running a per-site wrapper, and
   // return at once. Shared by emitCall when a task option is present.
   void emitAsyncCall(HStmt* s);
-  void emitWait(HStmt* s);        // WAIT (rule (82), QR2.8)
+  void emitWait(HStmt* s); // WAIT (rule (82), QR2.8)
   // Address of a task/event operand (rule (78),(81)): accepts a scalar,
   // array-element (ev(i)) or member reference, covering CONTROLLED/dynamic
   // storage for the latter two. Returns a pointer to the underlying flag.
@@ -260,7 +260,7 @@ private:
   // the (single, 1-D) dynamic axis, `dynLb` the runtime lower bound, and `base`
   // is a bare element pointer.
   llvm::Value* arrayElementAddr(const Type& arr, llvm::Value* base, const std::vector<HExprP>& idxs,
-                                SourceLoc loc, llvm::Value* dynUb = nullptr,
+                                SourceLoc, llvm::Value* dynUb = nullptr,
                                 llvm::Value* dynLb = nullptr);
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
@@ -368,7 +368,7 @@ private:
   llvm::Value* definedConstAddr(Symbol* sym);
   // Address of a subscripted iSUB-DEFINED array element Y(k) (rules 134,126):
   // the base X element at the fixed subscripts with the iSUB slot set to k.
-  llvm::Value* definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs, SourceLoc loc);
+  llvm::Value* definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs, SourceLoc);
 
   Val convert(const Val& v, const Type& dst, SourceLoc loc);
   llvm::Value* toI1(const Val& v, SourceLoc loc);

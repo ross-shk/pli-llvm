@@ -554,7 +554,7 @@ table that `scripts/gen_rules.py` extracts from the spec at build time
 cannot drift from it. Only the formal grammar lines inside the code fences are
 extracted; the surrounding prose (including ⚠ OCR-caveat notes) is left in the
 spec, so `--explain` points the user at the rule without re-stating the prose.
-**Consequences.** `make` needs `python3` and the spec present at build time
+**Consequences.** The build needs `python3` and the spec present at build time
 (both already true in-repo). Driver tests (`tests/driver/*.sh`) were added to
 `run_tests.sh` to cover a driver-level feature the `.pli` harness cannot.
 **Rejected.** Hand-maintaining a rule table (duplicates the spec, drifts);
@@ -945,7 +945,7 @@ conversion once per target and require the RHS to be evaluated N times, and woul
 change the HIR/IR shape of the existing single-target case); serving mixed-type or
 `BY NAME` multiple assignment in this stage.
 
-## ADR-042 — Build tooling: clang stays the link driver; `make check` is the analysis gate
+## ADR-042 — Build tooling: clang stays the link driver; `cmake --build build/cmake --target check` is the analysis gate
 
 **Context.** The driver shells out to clang to assemble/optimize/link the emitted
 IR (ADR-002); there is no other linker in the picture, and the repo wants a single
@@ -953,16 +953,19 @@ gate the agents run for major edits so static analysis is actually exercised.
 
 **Decision.** `plic` keeps clang as its link driver and gains explicit link
 controls (`-L`, `-l`, `-Wl`, `--linker`, `-shared`, `-static`, `--extra`) passed
-through to that driver — no direct lld invocation. On the build side, `make check`
-rolls the analyzers into one gate: a `-Werror` rebuild (`make werror`), a
-clang-format drift check (`make fmt-check`, with `make fmt` to normalize),
-clang-tidy over the C++ sources (`make tidy`, scoped to bug-catching checks), and
-the clang static analyzer (`make scan`). `src/` is clang-format-normalized so the
+through to that driver — no direct lld invocation. On the build side,
+`cmake --build build/cmake --target check` rolls the analyzers into one gate:
+a `-Werror` rebuild (`cmake --build build/cmake --target werror`), a
+clang-format drift check (`cmake --build build/cmake --target fmt-check`,
+with `cmake --build build/cmake --target fmt` to normalize),
+clang-tidy over the C++ sources (`cmake --build build/cmake --target tidy`,
+scoped to bug-catching checks), and
+the clang static analyzer (`cmake --build build/cmake --target scan`). `src/` is clang-format-normalized so the
 gate is green from the start.
 
-**Consequences.** The Makefile is the canonical home for build tooling; CMake stays
-secondary and its `ctest` now drives `tests/run_tests.py` (fixing a dangling
-`run_tests.sh` reference). New edits should pass `make check`. The one-time
+**Consequences.** CMake is the canonical build system; its `ctest` drives
+`tests/run_tests.py` (fixing a dangling `run_tests.sh` reference). New edits
+should pass `cmake --build build/cmake --target check`. The one-time
 reformat of `src/` is mechanical and covered by the full test suite.
 
 **Rejected.** Driving lld directly (platform-specific sysroot/library matching on
@@ -1462,8 +1465,8 @@ structure members are not implemented" limitation).
 
 **Consequences.** `tests/core/struct_init.pli` covers scalar, nested, and array
 members, iteration factors, `*`, and re-initialization on each activation;
-`bad_struct_init.pli` diagnoses a count mismatch. `make test` (123) and `make
-check` stay green.
+`bad_struct_init.pli` diagnoses a count mismatch. `ctest --test-dir build/cmake` (123) and
+`cmake --build build/cmake --target check` stay green.
 
 **Rejected.** Folding during itemlist expansion (the leaves are heterogeneous, so
 a value must be folded against its own member type, not a single element type);
@@ -1488,8 +1491,8 @@ parameter would be sized from the wrong origin).
 
 **Consequences.** `tests/core/dyn_lower.pli` covers runtime `LBOUND`/`HBOUND`/
 `DIM`, fill/readback, and a `SUM` reduction over `A(lb:ub)` for several bound
-pairs; `bad_dyn_lower.pli` keeps the multi-axis gate. `make test` (125) and
-`make check` stay green.
+pairs; `bad_dyn_lower.pli` keeps the multi-axis gate. `ctest --test-dir build/cmake` (125) and
+`cmake --build build/cmake --target check` stay green.
 
 **Rejected.** Threading a lower-bound argument through the dyn-param / `*`
 calling conventions (extend the ABI in a later slice); multi-axis dynamic
@@ -1516,8 +1519,8 @@ parameter (the calling conventions convey only the upper bound/extent).
 **Consequences.** `tests/core/dyn_multi.pli` covers `A(n,4)` for several `n`
 (runtime LBOUND/HBOUND/DIM, row-major fill/readback); `bad_dyn_multi.pli`
 rejects `A(3,n)`; a constant-upper dynamic array `A(lb:5,3)` runs (the 
-`allocaLocals`/LBOUND paths no longer assume a runtime upper bound). `make test`
-(127) and `make check` stay green.
+`allocaLocals`/LBOUND paths no longer assume a runtime upper bound). `ctest --test-dir build/cmake`
+(127) and `cmake --build build/cmake --target check` stay green.
 
 **Rejected.** A dynamic extent on any axis beyond the first in this slice (needs
 runtime strides for each such axis, deferred); a dynamic multi-axis array passed
@@ -1547,7 +1550,7 @@ The dynamic member bound exprs are lowered in `hir.cpp` and owned by
 
 **Consequences.** `tests/core/struct_dyn.pli` covers a fixed scalar member beside
 a dynamic member, element write/readback via `s.v(i)` in loops, and scalar-member
-integrity across the dynamic buffer; `make test` stays green. Because a struct
+integrity across the dynamic buffer; `ctest --test-dir build/cmake` stays green. Because a struct
 field is now a pointer to separately-allocated data, a whole-structure storage
 copy would copy the pointer, not the pointed-to data — `Sema::checkAssignable`
 rejects a whole-structure assignment with a dynamic member (rule 13),
@@ -1583,7 +1586,7 @@ the same flat row-major buffer.
 **Consequences.** `tests/core/dyn_init.pli` covers a full matching itemlist with
 an iteration factor, a list shorter than the extent (only the supplied elements
 set; the rest stay uninitialized per AUTOMATIC semantics), a dynamic multi-axis
-array filling flat row-major, and re-run on every activation; `make test` stays
+array filling flat row-major, and re-run on every activation; `ctest --test-dir build/cmake` stays
 green. `bad_dynamic_array.pli` no longer rejects `INITIAL` on a dynamic array and
 now rejects only the multi-axis form.
 
@@ -1620,7 +1623,7 @@ array.
 and `SUM` on `s.v(n)` for several extents (including 0), a dynamic lower bound
 member `s.v(2:n+1)`, and fills then reduces the member buffer;
 `tests/core/bad_struct_dyn_len.pli` keeps a scalar member `s.a` rejected as an
-array built-in argument (rule 123); `make test` stays green. A subscripted member
+array built-in argument (rule 123); `ctest --test-dir build/cmake` stays green. A subscripted member
 `S.V(i)` remains rejected (it is a `Subscript`, not an unsubscripted `VarRef`).
 
 **Rejected.** Adding member knowledge to the symbol table (member bounds already
@@ -1652,7 +1655,7 @@ comparisons and mixing a pointer with an arithmetic value are diagnosed (rules
 **Consequences.** `tests/core/pointer.pli` covers `p = null()`, `p = addr(x)`,
 `q = p` pointer assignment, and `=`/`^=` comparisons against the null pointer and
 other pointers; `tests/core/bad_pointer.pli` rejects assigning a pointer to a
-numeric target; `make test` stays green. A pointer value cannot be written with
+numeric target; `ctest --test-dir build/cmake` stays green. A pointer value cannot be written with
 `PUT LIST` in this stage (diagnosed, rule 110); pointer parameters, based data,
 `->`, and `ALLOCATE`/`FREE` remain for later CM2 slices.
 
@@ -1685,7 +1688,7 @@ assignment targets.
 structure via `addr(y)`, writing/reading `rec.a` through P, and the locator form
 `P -> rec.a` on both sides of an assignment, observing the writes in `y`'s
 storage; `tests/core/bad_based.pli` rejects a locator whose right side is not a
-based variable; `make test` stays green. A whole based structure as a value, based
+based variable; `ctest --test-dir build/cmake` stays green. A whole based structure as a value, based
 array subscripts (`P -> X.arr(i)`), and `ALLOCATE`/`FREE` remain for later CM2
 slices.
 
@@ -1717,8 +1720,8 @@ dynamic-extent based arrays and the `IN (AREA)` option to QR2.3.
 **Consequences.** `tests/core/alloc.pli` covers two allocations of one based
 variable producing independent blocks, locator read/write, and both FREE forms;
 `tests/core/bad_alloc.pli` rejects allocating a non-based variable and
-`tests/core/bad_alloc_set.pli` a non-pointer SET target; `make test` and
-`make check` stay green. `pli_alloc` raises a hard ALLOCATION error on OOM until
+`tests/core/bad_alloc_set.pli` a non-pointer SET target; `ctest --test-dir build/cmake` and
+`cmake --build build/cmake --target check` stay green. `pli_alloc` raises a hard ALLOCATION error on OOM until
 condition handling (M4).
 
 **Rejected.** Calling libc `malloc`/`free` directly in emitted IR (kept behind
@@ -1748,8 +1751,8 @@ member/array-element character store paths are not served, matching assignment).
 
 **Consequences.** `tests/driver/get.sh` compiles a program that `GET LIST`s a
 pair of FIXED, a FLOAT, and a CHARACTER value, verifies each, and prints PASS;
-`tests/core/bad_get.pli` rejects reading into a constant; `make test` and
-`make check` stay green.
+`tests/core/bad_get.pli` rejects reading into a constant; `ctest --test-dir build/cmake` and
+`cmake --build build/cmake --target check` stay green.
 
 **Rejected.** Using C `scanf` directly in emitted IR (kept behind the
 `pli_*` ABI so signatures cannot drift, cf. ADR-002); supporting `FILE`/`STRING`
@@ -1778,7 +1781,7 @@ close it after (target addressed like an assignment left-hand side).
 
 **Consequences.** `tests/core/string.pli` does a `PUT STRING` → `GET STRING`
 round-trip and verifies the values are recovered; `tests/core/bad_string.pli`
-rejects a non-character STRING target; `make test` and `make check` stay green.
+rejects a non-character STRING target; `ctest --test-dir build/cmake` and `cmake --build build/cmake --target check` stay green.
 
 **Rejected.** Adding a parallel `pli_put_str_*`/`pli_get_str_*` per-type function
 set (duplicated the whole list-directed surface); routing through the FILE
@@ -1809,7 +1812,7 @@ a `FILE ( f )` option is diagnosed (this stage names one file).
 **Consequences.** `tests/driver/file.sh` does a `PUT FILE` → `GET FILE` round-trip
 against a relative filename in the gitignored test output directory and verifies
 the values; `tests/core/bad_file.pli` rejects a numeric variable as a FILE target;
-`make test` and `make check` stay green. `IDENT`/`LINESIZE`/`PAGESIZE`,
+`ctest --test-dir build/cmake` and `cmake --build build/cmake --target check` stay green. `IDENT`/`LINESIZE`/`PAGESIZE`,
 `RECORD`/`UPDATE`/`KEYED`/`ENVIRONMENT`, and record I/O stay M6.
 
 **Rejected.** Giving each FILE variable real runtime storage (it is only ever the
@@ -1844,7 +1847,7 @@ scaling.
 **Consequences.** `tests/core/edit.pli` round-trips `F(w)`, `A(w)`, `X(w)`, and
 `F(w,d)` through a STRING buffer and verifies the spacing content; `bad_edit.pli`
 diagnoses the unimplemented `E` format and a GET data item that is not a
-reference. `make test` and `make check` stay green; emitted IR shows the paired
+reference. `ctest --test-dir build/cmake` and `cmake --build build/cmake --target check` stay green; emitted IR shows the paired
 `pli_put_edit_*`/`pli_get_edit_*` calls. `DATA`, `COPY`, `LINE` options,
 format iteration `(n) (item)`, `E`/`B`/`C`/`P`/`COLUMN`/`R` items, a standalone
 `FORMAT` statement, and a third `F` scale operand stay diagnosed (M5/D1).
@@ -1887,7 +1890,7 @@ or a structure-returning call).
 **Consequences.** `tests/core/e_format.pli` round-trips `E(w,d)` through a STRING
 buffer and checks the rendered content; `tests/core/struct_return.pli` exercises
 a structure-returning function, a structure-valued assignment, and a by-value
-argument. `make test` (149/149) and `make check` stay green; emitted IR shows the
+argument. `ctest --test-dir build/cmake` (149/149) and `cmake --build build/cmake --target check` stay green; emitted IR shows the
 hidden result buffer and the by-value `memcpy`. `RETURNS` of a non-structure name,
 a dynamic-member structure, or a structure-returning function with `ENTRY`
 statements are diagnosed. `DATA`, `COPY`, `LINE` options, format iteration,
@@ -2941,7 +2944,7 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
 
  ## ADR-115 — Static-analysis robustness batch
 
- Context. `make check` (the `-Werror` + format + `tidy` + `scan-build`
+ Context. `cmake --build build/cmake --target check` (the `-Werror` + format + `tidy` + `scan-build`
  gate) was red, and no dedicated analyzer had ever run cleanly over
  the tree (`scan-build`/`clang-tidy`/`cppcheck` were absent from
  `PATH`; the LLVM cellar ships all three). Fixes below, each
@@ -2963,7 +2966,7 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  padding note dismissed as churn; the two `identicalInnerCondition`
  hits are balanced-scan-loop false positives.
 
-  Consequences. `make check` is green end to end including the
+  Consequences. `cmake --build build/cmake --target check` is green end to end including the
   `scan-build` step ("No bugs found"). Known limits: oversized
   integer literals still clamp via `strtoll` to a loud runtime
   trap rather than a compile-time diagnostic; parser recursion
@@ -5090,7 +5093,7 @@ the two-phase PGO round-trip plus a stale-profile (mismatch) rebuild. The
 P0 attribute table's rows stay correct against the merged bodies because
 they were audited against the same `runtime/*.c`. GRAMMAR-COVERAGE needs
 no row (no syntax or rule changed). A fresh `runtime.bc` is rebuilt from
-`make`/`make install`; older build trees silently use the archive (the
+`cmake --build build/cmake`/`cmake --install build/cmake`; older build trees silently use the archive (the
 `--no-bitcode-runtime` fallback). The CMake `libpli` target source list
 was corrected to the real `rt_*.c` files (it referenced a never-existing
 `runtime/pli_rt.c`).

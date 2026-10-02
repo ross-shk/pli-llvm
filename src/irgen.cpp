@@ -1215,8 +1215,7 @@ void IRGen::allocaLocals(HProc* p) {
       llvm::Value* region = b_.CreateCall(runtimeFn("pli_area_create"), {i64(s->areaSize)}, "area");
       b_.CreateStore(region, a);
       areaLocals_.push_back(s);
-    } else if (s->ty.isArray() &&
-               (s->ty.elementType().isTask() || s->ty.elementType().isEvent())) {
+    } else if (s->ty.isArray() && (s->ty.elementType().isTask() || s->ty.elementType().isEvent())) {
       // A TASK/EVENT array (rules (15),(79),(82)): each element is its own
       // handle/flag — TASK starts unset (0), EVENT starts complete (1).
       bool isTask = s->ty.elementType().isTask();
@@ -2207,7 +2206,7 @@ void IRGen::emitStmt(HStmt* s) {
   switch (s->kind) {
   case HStmt::Null:
   case HStmt::Declare:
-  case HStmt::Entry: // segment marker; handled by emitMultiEntryProc
+  case HStmt::Entry:  // segment marker; handled by emitMultiEntryProc
   case HStmt::Format: // remote repository only; R spliced in sema, no code
     break;
   case HStmt::Assign:
@@ -2990,10 +2989,10 @@ void IRGen::emitAllocate(HStmt* s) {
       llvm::Value* total = i64(elemSz);
       for (size_t k = 0; k < bsym->ty.dims.size(); ++k) {
         const Dim& d = bsym->ty.dims[k];
-        llvm::Value* ub = (k == 0 && bsym->dynUb) ? toI64(emitExpr(bsym->dynUb), s->loc)
-                                                 : i64(d.ub);
-        llvm::Value* lb = (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc)
-                                                            : i64(d.lb);
+        llvm::Value* ub =
+            (k == 0 && bsym->dynUb) ? toI64(emitExpr(bsym->dynUb), s->loc) : i64(d.ub);
+        llvm::Value* lb =
+            (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc) : i64(d.lb);
         if (k == 0) {
           // Later references check against the ALLOCATE-time extent, which
           // may differ from the entry-evaluated one when the bound changed.
@@ -3816,8 +3815,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
         llvm::Value* one = b_.CreateZExt(v.reg, b_.getInt8Ty(), "b8");
         // BIT(1) travels as i1; the packed byte holds it in the low bit, but
         // the runtime reads the top bit of each byte, so shift into place.
-        llvm::Value* top = b_.CreateShl(
-            one, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "btop");
+        llvm::Value* top = b_.CreateShl(one, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "btop");
         b_.CreateStore(top, ptr);
       } else {
         b_.CreateStore(v.reg, tmp);
@@ -3955,8 +3953,7 @@ void IRGen::emitGetEditItems(HStmt* s) {
       if (nbits == 1) {
         // The runtime packs into the top bit; BIT(1) travels as the low bit.
         llvm::Value* byte = b_.CreateLoad(b_.getInt8Ty(), ptr, "gb8");
-        llvm::Value* low =
-            b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
+        llvm::Value* low = b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
         v.reg = b_.CreateTrunc(low, b_.getInt1Ty(), "gb1");
       } else {
         v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, "gb");
@@ -4667,8 +4664,8 @@ long long IRGen::arrayExtent(const Type& arr) {
 // Each index is 1-based (or lb-based); the generated flat offset is
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
 llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
-                                     const std::vector<HExprP>& idxs, SourceLoc loc,
-                                     llvm::Value* dynUb, llvm::Value* dynLb) {
+                                     const std::vector<HExprP>& idxs, SourceLoc, llvm::Value* dynUb,
+                                     llvm::Value* dynLb) {
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
 
@@ -5562,8 +5559,7 @@ llvm::Value* IRGen::definedConstAddr(Symbol* sym) {
 // is a 1-D live overlay of one axis of the base array X, so Y(k) is the base
 // element X(fixed..., k, fixed...). The iSUB slot index is bounds-checked; the
 // fixed subscripts were compile-time checked.
-llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs,
-                                          SourceLoc loc) {
+llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs, SourceLoc) {
   Symbol* base = y->definedBase;
   const Type& bty = base->ty;
   const size_t n = bty.dims.size();
@@ -6607,22 +6603,15 @@ Val IRGen::emitExpr(HExpr* e) {
     case Tok::Power: {
       // Complex exponentiation a**b = exp(b*log(a)) (rule 121, CM5).
       // log(a) = ln|a| + i*arg(a); b*log(a) done as complex multiply.
-      llvm::Value* mag2 = b_.CreateFAdd(b_.CreateFMul(ar, ar), b_.CreateFMul(ai, ai),
-                                        "cpx.mag2");
-      llvm::Value* lnMag = b_.CreateFMul(
-          b_.CreateCall(runtimeFn("pli_log"), {mag2}, "cpx.ln"),
-          llvm::ConstantFP::get(b_.getDoubleTy(), 0.5), "cpx.lnmag");
-      llvm::Value* theta =
-          b_.CreateCall(runtimeFn("pli_atan2"), {ai, ar}, "cpx.arg");
-      llvm::Value* wr = b_.CreateFSub(b_.CreateFMul(br, lnMag), b_.CreateFMul(bi, theta),
-                                      "cpx.wr");
-      llvm::Value* wi = b_.CreateFAdd(b_.CreateFMul(br, theta), b_.CreateFMul(bi, lnMag),
-                                      "cpx.wi");
+      llvm::Value* mag2 = b_.CreateFAdd(b_.CreateFMul(ar, ar), b_.CreateFMul(ai, ai), "cpx.mag2");
+      llvm::Value* lnMag = b_.CreateFMul(b_.CreateCall(runtimeFn("pli_log"), {mag2}, "cpx.ln"),
+                                         llvm::ConstantFP::get(b_.getDoubleTy(), 0.5), "cpx.lnmag");
+      llvm::Value* theta = b_.CreateCall(runtimeFn("pli_atan2"), {ai, ar}, "cpx.arg");
+      llvm::Value* wr = b_.CreateFSub(b_.CreateFMul(br, lnMag), b_.CreateFMul(bi, theta), "cpx.wr");
+      llvm::Value* wi = b_.CreateFAdd(b_.CreateFMul(br, theta), b_.CreateFMul(bi, lnMag), "cpx.wi");
       llvm::Value* ew = b_.CreateCall(runtimeFn("pli_exp"), {wr}, "cpx.ew");
-      rr = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_cos"), {wi}, "cpx.cos"),
-                         "cpx.rr");
-      ri = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_sin"), {wi}, "cpx.sin"),
-                         "cpx.ri");
+      rr = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_cos"), {wi}, "cpx.cos"), "cpx.rr");
+      ri = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_sin"), {wi}, "cpx.sin"), "cpx.ri");
       // 0**0 is 1+0i; the log/exp chain would yield NaN there.
       llvm::Value* isZeroBase =
           b_.CreateFCmpOEQ(mag2, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "cpx.zb");
@@ -6632,10 +6621,8 @@ Val IRGen::emitExpr(HExpr* e) {
           b_.CreateFCmpOEQ(bi, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "cpx.iz");
       llvm::Value* isZeroExp = b_.CreateAnd(brZero, biZero, "cpx.ze");
       llvm::Value* bothZero = b_.CreateAnd(isZeroBase, isZeroExp, "cpx.zz");
-      rr = b_.CreateSelect(bothZero, llvm::ConstantFP::get(b_.getDoubleTy(), 1.0), rr,
-                           "cpx.rr0");
-      ri = b_.CreateSelect(bothZero, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), ri,
-                           "cpx.ri0");
+      rr = b_.CreateSelect(bothZero, llvm::ConstantFP::get(b_.getDoubleTy(), 1.0), rr, "cpx.rr0");
+      ri = b_.CreateSelect(bothZero, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), ri, "cpx.ri0");
       break;
     }
     default:

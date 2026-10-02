@@ -1095,8 +1095,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             // the same storage size; a size mismatch stays diagnosed.
             long long itemBytes = definedScalarBytes(item.ty);
             long long baseBytes = definedScalarBytes(base->ty);
-            bool sameView = item.ty == base->ty ||
-                            (itemBytes > 0 && itemBytes == baseBytes);
+            bool sameView = item.ty == base->ty || (itemBytes > 0 && itemBytes == baseBytes);
             if (item.ty.isStruct() || base->ty.isStruct()) {
               d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
             } else if (!sameView) {
@@ -1241,8 +1240,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // CONTROLLED structure's per-member INITIAL (ADR-175); a top-level
           // array itemlist or INITIAL(CALL) stays diagnosed.
           if (item.initCall ||
-              ((item.ty.isArray() || item.ty.isStruct()) &&
-               (item.init || !item.initItems.empty())))
+              ((item.ty.isArray() || item.ty.isStruct()) && (item.init || !item.initItems.empty())))
             ctlErr("INITIAL", "(26)");
           if (item.valueInit)
             ctlErr("VALUE", "(ADR-108)");
@@ -1357,8 +1355,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // itemlist (with iteration factors and '*') into one value per element.
         if (item.ty.isArray() && !isDefined) {
           if (item.ty.elementType().isChar() &&
-              (item.ty.elementType().varying || item.ty.elementType().starLen ||
-               item.controlled || item.ty.isDynamic()))
+              (item.ty.elementType().varying || item.ty.elementType().starLen || item.controlled ||
+               item.ty.isDynamic()))
             d_.error(item.loc,
                      "arrays of VARYING, adjustable, CONTROLLED, or dynamic-extent CHARACTER "
                      "are not implemented in this stage",
@@ -1880,8 +1878,7 @@ void Sema::checkStarLaterAxes(const Type& pty, const Type& aty, SourceLoc loc) {
     // The callee addresses with the parameter's lower bounds, so each later
     // axis must match exactly — not just in extent — to stay in bounds.
     if (ad.dyn || ad.lbDyn || ad.adj || ad.lb != pd.lb || ad.ub != pd.ub) {
-      d_.error(loc,
-               "an argument to a multi-axis '*' parameter must match its fixed later axes",
+      d_.error(loc, "an argument to a multi-axis '*' parameter must match its fixed later axes",
                "(13)");
       return;
     }
@@ -2725,10 +2722,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       auto checkOne = [&](Expr* t) {
         typeExpr(t, sc, p);
         if (t->kind != Expr::VarRef && t->kind != Expr::Subscript) {
-          d_.error(
-              t->loc,
-              "multiple-assignment target must be a variable or array element in this stage",
-              "(86)");
+          d_.error(t->loc,
+                   "multiple-assignment target must be a variable or array element in this stage",
+                   "(86)");
           return false;
         }
         if (t->kind == Expr::VarRef && t->sym && t->sym->kind == Symbol::ProcName) {
@@ -2753,8 +2749,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       bool anyArrayTarget = s->target->ty.isArray();
       for (auto& t : s->extraTargets)
         anyArrayTarget = anyArrayTarget || t->ty.isArray();
-      bool arrayValue =
-          s->value->ty.isArray() || valueHasWholeArrayRef(s->value.get(), false);
+      bool arrayValue = s->value->ty.isArray() || valueHasWholeArrayRef(s->value.get(), false);
       if (!anyArrayTarget && !arrayValue) {
         if (ok && !s->target->ty.isVoid()) {
           for (auto& t : s->extraTargets)
@@ -2765,8 +2760,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       // An array-valued source into scalar targets mixes ranks (rule 86).
       if (!anyArrayTarget) {
-        d_.error(s->loc, "cannot assign an array value to a scalar variable in this stage",
-                 "(86)");
+        d_.error(s->loc, "cannot assign an array value to a scalar variable in this stage", "(86)");
         break;
       }
       // Every target must be a plain whole-array variable of one static shape;
@@ -2792,8 +2786,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           return;
         }
         if (t->ty.isArray() && t->ty.dims != shapeDims) {
-          d_.error(t->loc,
-                   "multiple assignment to whole arrays requires identical array shapes",
+          d_.error(t->loc, "multiple assignment to whole arrays requires identical array shapes",
                    "(86)");
           wholeOk = false;
         }
@@ -3740,8 +3733,8 @@ static FormatItem cloneFmtItem(const FormatItem& f) {
 // EDIT statement owns its expressions for typing.
 bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
   std::unordered_set<std::string> active;
-  std::function<bool(std::vector<FormatItem>&, int)> expand =
-      [&](std::vector<FormatItem>& list, int depth) -> bool {
+  std::function<bool(std::vector<FormatItem>&, int)> expand = [&](std::vector<FormatItem>& list,
+                                                                  int depth) -> bool {
     if (depth > 16) {
       d_.error(loc, "remote format nesting too deep (possible R cycle)", "(55)");
       return false;
