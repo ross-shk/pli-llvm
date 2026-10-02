@@ -85,7 +85,7 @@ make test
 | **Stream I/O**                    | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE`                          |
 | **Record I/O**                    | `WRITE`/`READ` fixed-size binary records                                                         |
 | **Preprocessor**                  | `%INCLUDE`, `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`                             |
-| **Built-ins**                     | String, math, array/pointer/misc (see `GRAMMAR-COVERAGE.md`)                                     |
+| **Built-ins**                     | String, math, array/pointer/misc (see `guides/builtins.md`)                                 |
 | **No reserved words**             | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables                                  |
 
 Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *is* the to-do list.
@@ -139,6 +139,8 @@ Shows: arrays, `BIT` arrays, dynamic extents, `DO` loops with `TO/BY`, arithmeti
 | Doc                                                         | Purpose                                                                        |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | [CONTRIBUTING.md](CONTRIBUTING.md)                          | How to add features: layer map, workflow, invariants                           |
+| [guides/programming.md](guides/programming.md)              | Feature guide: data types, arrays, storage, I/O, conditions, concurrency      |
+| [guides/builtins.md](guides/builtins.md)                    | Built-in functions reference (string, math, array, pointer, misc)             |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md)                     | Pipeline, IR levels, data representation, ABI, runtime                         |
 | [GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)             | Rule-by-rule implementation status                                             |
 | [SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md) | TR 25.084 / Y33-6003 audit: GAP-ANALYSIS, CONFORMANCE-MATRIX, REMEDIATION-PLAN |
