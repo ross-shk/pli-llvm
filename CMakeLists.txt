@@ -101,14 +101,13 @@ target_include_directories(plic PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_D
 # LLVM/Clang headers as SYSTEM to suppress their warnings under -Werror.
 target_include_directories(plic SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
 
-# Get the default target triple from LLVM for consistent bitcode generation
-# Use macosx14.0: macOS 15+ emits SME features (zcm/zcz) in function
-# attributes that LLVM 23 does not support at codegen time ("Unsupported
-# stack probing method"). macOS 14 and earlier do not emit them.
+# Get the default target triple from LLVM for consistent bitcode generation.
+# Use clang (not CMAKE_C_COMPILER) for triple detection and bitcode generation
+# since GCC doesn't support -print-effective-triple or -emit-llvm -target.
 set(PLIC_TARGET_TRIPLE "" CACHE STRING "Target triple for runtime bitcode generation")
 if(NOT PLIC_TARGET_TRIPLE)
   execute_process(
-    COMMAND ${CMAKE_C_COMPILER} -print-effective-triple
+    COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -print-effective-triple
     OUTPUT_VARIABLE PLIC_HOST_TRIPLE
     OUTPUT_STRIP_TRAILING_WHITESPACE)
   set(PLIC_TARGET_TRIPLE ${PLIC_HOST_TRIPLE})
@@ -220,7 +219,7 @@ if(PLIC_CROSS_BITCODE)
       add_custom_command(
         OUTPUT ${TARGET_BC_DIR}/${base}.bc
         COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
-        COMMAND ${CMAKE_C_COMPILER} -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+        COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
                 -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
                 -O2
                 -ffunction-sections -fdata-sections
@@ -269,7 +268,7 @@ foreach(src ${RT_SRCS})
   add_custom_command(
     OUTPUT ${DEFAULT_BC_DIR}/${base}.bc
     COMMAND ${CMAKE_COMMAND} -E make_directory ${DEFAULT_BC_DIR}
-    COMMAND ${CMAKE_C_COMPILER} -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+    COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
             -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
             -O2
             -ffunction-sections -fdata-sections
