@@ -36,9 +36,6 @@ cmake --build build/cmake -j$(nproc)
 # Linux:
 cmake -G Ninja -S . -B build/cmake
 cmake --build build/cmake -j$(nproc)
-
-# or via the thin Makefile wrapper (same CMake/Ninja build underneath):
-make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
 ```
 
 ### Cross-compile PL/I code
@@ -62,7 +59,7 @@ end hello;
 
 ### Test
 ```bash
-make test             # 441 tests
+ctest --test-dir build/cmake     # ~440 tests
 ./tests/run_tests.py usecases   # specific group
 ```
 
@@ -160,14 +157,14 @@ docs/        architecture, decisions, optimization, plans, coverage
 ```bash
 cmake --build build/cmake -j$(nproc)    # build via CMake/Ninja
 ctest --test-dir build/cmake           # test suite
-make check                             # quality gate (fmt + tidy + werror)
-make clean
+cmake --build build/cmake --target check   # quality gate (fmt + tidy + werror)
+cmake --build build/cmake --target clean
 ```
 
 CMake directly:
 ```bash
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j8
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+cmake --build build/cmake -j$(nproc)
 ctest --test-dir build/cmake
 ```
 
@@ -187,7 +184,7 @@ matching target backend and `lld`.
 `PLIC_CROSS_BITCODE=ON` at build time):
 ```bash
 cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DPLIC_CROSS_BITCODE=ON
-cmake --build build/cmake -j8
+cmake --build build/cmake -j$(nproc)
 ```
 
 **Compile for a target**:

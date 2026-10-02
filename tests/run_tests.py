@@ -17,8 +17,8 @@ A group may mix test classes; each test is classified individually:
            PASS (case-insensitive); any FAIL in its output fails it
 
 Tests run concurrently, bounded by JOBS (default: number of CPUs). Results are
-printed in deterministic group order. `make -j` / `cmake --build -j` parallelises
-the compile step.
+printed in deterministic group order. `cmake --build -j` parallelises the
+compile step.
 """
 import os
 import signal
