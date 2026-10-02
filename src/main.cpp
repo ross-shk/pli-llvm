@@ -116,7 +116,8 @@ static void usage() {
          "  -fsyntax-only    parse and analyse each input only\n"
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
          "  --no-size-checks elide FIXED overflow traps program-wide (cf. (NOSIZE), ADR-111)\n"
-         "  --no-zero-divide elide ZERODIVIDE traps program-wide (cf. (NOZERODIVIDE), ADR-112)\n"
+          "  --no-zero-divide elide ZERODIVIDE traps program-wide (cf. (NOZERODIVIDE), ADR-112)\n"
+          "  --no-conversion   elide CONVERSION traps program-wide (cf. (NOCONVERSION), ADR-170)\n"
          "  --release        maximum optimization + stripped binary (minimal size)\n"
          "  --debug          no optimization + debug info (-O0 -g)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
@@ -188,7 +189,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        std::string& triple, const std::string& clangPath,
                        const std::string& sysparm, bool sysparmExplicit, bool compileOnly,
                        bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
-                       bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks,
+                        bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks, bool noConvChecks,
                        const std::string& optLevel, const std::string& backendFlags,
                        const fs::path& keepLLDir, int fileIndex, std::string* outObj,
                        const std::string& runtimeBc, bool linkBitcode, bool linkRuntimeIn = false,
@@ -247,7 +248,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM) {
-    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks);
+     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -280,7 +281,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // Explicit PGO/LTO (forceClangPipeline) always uses the clang pipeline so
   // backendFlags reach the compile step (the in-process path takes none).
   if (!forceClangPipeline) {
-    IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, runtimeBc, linkBitcode);
+     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, runtimeBc, linkBitcode);
     if (auto om = ipg.takeModule(hir)) {
       bool rtOk = true;
 #if PLIC_HAVE_LLD
@@ -339,7 +340,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
 
   // Fallback: textual IR assembled by the backend clang.
-  IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, runtimeBc, linkBitcode);
+   IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, runtimeBc, linkBitcode);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return false;
@@ -386,7 +387,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
-  bool noSizeChecks = false, noZdivChecks = false, wantVersion = false;
+   bool noSizeChecks = false, noZdivChecks = false, noConvChecks = false, wantVersion = false;
   bool runtimeBcExplicit = false, useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
@@ -479,8 +480,10 @@ int main(int argc, char** argv) {
       release = true;
     else if (a == "--no-size-checks")
       noSizeChecks = true;
-    else if (a == "--no-zero-divide")
-      noZdivChecks = true;
+     else if (a == "--no-zero-divide")
+       noZdivChecks = true;
+     else if (a == "--no-conversion")
+       noConvChecks = true;
     else if (a == "--debug")
       debug = true;
     else if (a == "--version" || a == "-V")
@@ -647,7 +650,7 @@ int main(int argc, char** argv) {
     std::string outObj;
     if (!compileOne(preprocessor, pliInputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
                     compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
-                    noSizeChecks, noZdivChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj,
+                     noSizeChecks, noZdivChecks, noConvChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj,
                     runtimeBc, linkBitcode, singleModuleFinalLink, needClangPipeline))
       return 1;
     if (!compileOnly)

@@ -103,7 +103,7 @@ PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */
 PLI_FN(pli_time, VOID, (PTR, I64))                    /* TIME() */
 PLI_FN(pli_char_of_fixed, VOID, (PTR, I64, I64))      /* CHAR(fixed) */
 PLI_FN(pli_char_of_float, VOID, (PTR, I64, DOUBLE))   /* CHAR(float) */
-PLI_FN(pli_fixed_of_char, I64, (CPTR, I64))           /* FIXED(char) */
+PLI_FN(pli_fixed_of_char, I64, (CPTR, I64, IPTR))     /* FIXED(char): *ok=0 on no digits */
 PLI_FN(pli_fixed_of_float, I64, (DOUBLE))             /* FIXED(float) */
 PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
@@ -111,6 +111,7 @@ PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */
 PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE abort (no handler) */
 PLI_FN(pli_zerodivide, VOID, (VOID))                  /* ZERODIVIDE abort (no handler) */
 PLI_FN(pli_fixed_overflow, VOID, (VOID))            /* FIXED overflow interim (QR1.2) */
+PLI_FN(pli_conversion, VOID, (VOID))                  /* CONVERSION abort (no handler, ADR-170) */
 
 PLI_FN(pli_on_push_error, VOID, (I64, PTR, PTR))  /* ON ERROR: id (0 = SYSTEM), handler fn, capture ctx */
 PLI_FN(pli_on_pop_error, VOID, (VOID))  /* REVERT ERROR */

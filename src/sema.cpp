@@ -2208,8 +2208,10 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kSizeCondKey;
   if (s->condName == "SUBSCRIPTRANGE")
     return Stmt::kSubscriptrangeCondKey;
-  if (s->condName == "ZERODIVIDE")
-    return Stmt::kZerodivideCondKey;
+   if (s->condName == "ZERODIVIDE")
+     return Stmt::kZerodivideCondKey;
+   if (s->condName == "CONVERSION")
+     return Stmt::kConversionCondKey;
   // Programmer-named conditions: deterministic hash ensures every
   // compilation unit assigns the same key to the same name, enabling
   // cross-object signal dispatch.
@@ -2460,11 +2462,12 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   auto inner = std::make_unique<Stmt>();
   inner->kind = Stmt::Assign;
   inner->loc = s->loc;
-  inner->noSize = s->noSize;
-  inner->noSub = s->noSub;
-  inner->noZdiv = s->noZdiv;
-  {
-    auto tgt = std::make_unique<Expr>();
+   inner->noSize = s->noSize;
+   inner->noSub = s->noSub;
+   inner->noZdiv = s->noZdiv;
+   inner->noConv = s->noConv;
+   {
+     auto tgt = std::make_unique<Expr>();
     tgt->kind = Expr::Call;
     tgt->name = t->name;
     tgt->path = t->path;
@@ -2812,6 +2815,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       fill->noSize = s->noSize;
       fill->noSub = s->noSub;
       fill->noZdiv = s->noZdiv;
+      fill->noConv = s->noConv;
       auto fillTgt = std::make_unique<Expr>();
       fillTgt->kind = Expr::VarRef;
       fillTgt->name = base;
@@ -2833,6 +2837,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         copy->noSize = s->noSize;
         copy->noSub = s->noSub;
         copy->noZdiv = s->noZdiv;
+        copy->noConv = s->noConv;
         auto ctgt = std::make_unique<Expr>();
         ctgt->kind = Expr::VarRef;
         ctgt->name = t->name;
@@ -4537,10 +4542,11 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   inner->value = std::move(s->value);
   inner->extraTargets = std::move(s->extraTargets);
   inner->byName = s->byName;
-  inner->noSize = s->noSize;
-  inner->noSub = s->noSub;
-  inner->noZdiv = s->noZdiv;
-  s->kind = Stmt::Group;
+   inner->noSize = s->noSize;
+   inner->noSub = s->noSub;
+   inner->noZdiv = s->noZdiv;
+   inner->noConv = s->noConv;
+   s->kind = Stmt::Group;
   s->byName = false;
   for (auto& f : fills)
     s->body.push_back(std::move(f));

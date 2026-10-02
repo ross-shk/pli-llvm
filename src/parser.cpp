@@ -560,7 +560,7 @@ StmtP Parser::parseStatement(Proc* owner) {
           continue;
         anyWord = true;
         const std::string& w = t_[k].text;
-        if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE")
+        if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE" || w == "CONVERSION")
           continue; // already enabled: no-op
         if (w == "NOSIZE") {
           st->noSize = true;
@@ -572,6 +572,10 @@ StmtP Parser::parseStatement(Proc* owner) {
         }
         if (w == "NOZERODIVIDE") {
           st->noZdiv = true;
+          continue;
+        }
+        if (w == "NOCONVERSION") {
+          st->noConv = true;
           continue;
         }
         allHandled = false;
@@ -663,6 +667,7 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->noSize = st->noSize;
       s->noSub = st->noSub;
       s->noZdiv = st->noZdiv;
+      s->noConv = st->noConv;
       return s;
     }
   }
@@ -673,6 +678,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     k->noSize = st->noSize;
     k->noSub = st->noSub;
     k->noZdiv = st->noZdiv;
+    k->noConv = st->noConv;
     return k;
   }
 
@@ -682,6 +688,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     s->noSize = st->noSize;
     s->noSub = st->noSub;
     s->noZdiv = st->noZdiv;
+    s->noConv = st->noConv;
   }
   return s;
 }
@@ -883,11 +890,15 @@ std::string Parser::parseCondition() {
     advance();
     return "SIZE";
   }
-  if (w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE") {
-    advance();
-    return w;
-  }
-  if (w == "FINISH" || w == "AREA") {
+   if (w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE") {
+     advance();
+     return w;
+   }
+   if (w == "CONVERSION") {
+     advance();
+     return w;
+   }
+   if (w == "FINISH" || w == "AREA") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
@@ -920,7 +931,8 @@ std::string Parser::parseCondition() {
     advance();
     if (!expect(Tok::RParen, "(99)"))
       return "";
-    if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE") {
+     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" ||
+         name == "ZERODIVIDE" || name == "CONVERSION") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

@@ -22,6 +22,7 @@ extern "C" {
 #define DOUBLE  double
 #define PTR     char *
 #define CPTR    const char *
+#define IPTR    int *
 #define PLI_FN(name, ret, args) ret name args;
 
 #include "pli_rt_state.h"
@@ -29,6 +30,7 @@ extern "C" {
 #include "pli_rt_abi.def"
 
 #undef PLI_FN
+#undef IPTR
 #undef CPTR
 #undef PTR
 #undef DOUBLE

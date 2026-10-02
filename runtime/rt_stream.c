@@ -189,8 +189,9 @@ void pli_char_of_float(char *dst, long long dstcap, double x) {
 
 /* FIXED(char): parse decimal text, truncating any fraction toward zero.
  * Leading blanks, one optional sign, then digits; stops at the first
- * non-digit (no CONVERSION condition in this stage). */
-long long pli_fixed_of_char(const char *s, long long slen) {
+ * non-digit. Sets *ok = 1 when at least one digit was consumed, 0 when the
+ * text has no numeric value (CONVERSION condition, rule 94, ADR-170). */
+long long pli_fixed_of_char(const char *s, long long slen, int *ok) {
   long long i = 0;
   while (i < slen && (s[i] == ' ' || s[i] == '\t'))
     ++i;
@@ -200,10 +201,13 @@ long long pli_fixed_of_char(const char *s, long long slen) {
     ++i;
   }
   long long v = 0;
+  int sawDigit = 0;
   while (i < slen && s[i] >= '0' && s[i] <= '9') {
     v = v * 10 + (s[i] - '0');
     ++i;
+    sawDigit = 1;
   }
+  *ok = sawDigit;
   return neg ? -v : v;
 }
 
