@@ -57,7 +57,7 @@ if [ ! -x "$CLDIR/llvm-profdata" ]; then
   ok=0
 fi
 
-"$CLDIR/llvm-profdata" merge -output="$OUT.profdata" "$PROFRAW" \
+"$CLDIR/llvm-profdata" merge --failure-mode=warn -output="$OUT.profdata" "$PROFRAW" \
   || { echo "FAIL: llvm-profdata merge"; ok=0; }
 
 # --- phase 2: rebuild using the profile --------------------------------

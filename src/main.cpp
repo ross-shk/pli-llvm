@@ -848,8 +848,14 @@ int main(int argc, char** argv) {
         for (const std::string& f : desc.linkerFlags)
           argStore.push_back(f);
         for (const std::string& la : linkArgs) {
-          if (la.rfind("-Wl,", 0) == 0)
-            argStore.push_back(la.substr(4)); // lld takes the flag directly
+          if (la.rfind("-Wl,", 0) == 0) {
+            // lld takes the flag directly, but ELF lld uses -no-pie (hyphen),
+            // not Mach-O's -no_pie (underscore).
+            std::string f = la.substr(4);
+            if (llt.getObjectFormat() == llvm::Triple::ELF && f == "-no_pie")
+              f = "-no-pie";
+            argStore.push_back(f);
+          }
           else if (la.rfind("-fuse-ld=", 0) == 0)
             continue; // clang-driver-only
           else
