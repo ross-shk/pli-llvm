@@ -5,7 +5,7 @@ A modern PL/I compiler built to the formal specification: **TR 25.084** (Concret
 **Single-binary distribution** (like Go/Zig) — the `plic` executable embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
 
 ```bash
-$ make -j8
+$ make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
 $ ./build/plic tests/core/hello.pli -o hello
 $ ./hello
 Hello, world!
@@ -27,9 +27,12 @@ Hello, world!
 
 ### Build
 ```bash
-make -j8              # builds via CMake (canonical)
+# macOS (Homebrew LLVM):
+make CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(brew --prefix llvm)" -j8
+# Linux:
+make -j8
 # or directly:
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir)
+cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
 cmake --build build/cmake -j8
 ```
 
@@ -54,7 +57,7 @@ end hello;
 
 ### Test
 ```bash
-make test             # 451 tests
+make test             # 441 tests
 ./tests/run_tests.py usecases   # specific group
 ```
 
@@ -151,14 +154,14 @@ docs/        architecture, decisions, optimization, plans, coverage
 
 ```bash
 make -j8        # build via CMake (parallel)
-make test       # 451 tests (golden diff or PASS-grep)
+make test       # 441 tests (golden diff or PASS-grep)
 make check      # -Werror + fmt-check + clang-tidy + scan-build
 make clean
 ```
 
 CMake directly:
 ```bash
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir)
+cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
 cmake --build build/cmake -j8
 ctest --test-dir build/cmake
 ```
@@ -173,7 +176,7 @@ Windows: use MSVC + CMake (no MinGW/MSYS2). The threading abstraction in `runtim
 
 **Build with multi-target runtime bitcode** (embeds all 4 targets):
 ```bash
-cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(llvm-config --cmakedir) -DPLIC_CROSS_BITCODE=ON
+cmake -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DPLIC_CROSS_BITCODE=ON
 cmake --build build/cmake -j8
 ```
 

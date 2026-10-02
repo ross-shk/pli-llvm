@@ -1,8 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
  /* '*' adjustable-extent array errors (rule (13)): a '*' extent is only valid
-    on a parameter (a block-scope '*' is rejected), and a '*' extent parameter
-    must be single-axis in this stage. */
+    on a parameter (a block-scope '*' is rejected), and a '*' may only lead
+    a parameter's dimensions — a '*' on a later axis or a multiple-'*'
+    parameter stays rejected. */
  bad_star_param: procedure options(main);
     declare a(10) fixed bin(31);
     declare n fixed bin(31);

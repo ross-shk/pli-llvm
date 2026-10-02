@@ -1,0 +1,82 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Dynamic BASED heap arrays (rules (25),
+     (89)): ALLOCATE x SET(p) sizes the
+     block from the live DECLARE bounds;
+     element refs and LBOUND/HBOUND/DIM
+     read the same live extent. */
+  based_heap_dyn: procedure options(main);
+     declare p pointer;
+     declare q pointer;
+     declare n fixed bin(31);
+     declare i fixed bin(31);
+     declare j fixed bin(31);
+     declare fails fixed bin(31);
+     declare x(n) fixed bin(31) based(p);
+     declare h(n) pointer based(q);
+     declare g(n, 2) fixed bin(31) based(p);
+     declare region area;
+     declare xa(n) fixed bin(31) based(p);
+     fails = 0;
+     /* 1-D numeric heap with live bounds */
+     n = 4;
+     allocate x set(p);
+     do i = 1 to n;
+        x(i) = i * 10;
+     end;
+     do i = 1 to n;
+        if x(i) ^= i * 10 then fails = fails + 1;
+     end;
+     if lbound(x) ^= 1 then fails = fails + 1;
+     if hbound(x) ^= 4 then fails = fails + 1;
+     if dim(x) ^= 4 then fails = fails + 1;
+     free x;
+     /* re-allocate a new extent: refs
+        follow the ALLOCATE-time bound */
+     n = 2;
+     allocate x set(p);
+     x(1) = 21; x(2) = 22;
+     if x(1) ^= 21 | x(2) ^= 22
+        then fails = fails + 1;
+     if hbound(x) ^= 2 then fails = fails + 1;
+     free x;
+     /* POINTER elements on the heap */
+     n = 3;
+     allocate h set(q);
+     h(1) = addr(n);
+     h(3) = addr(n);
+     if h(1) ^= addr(n) then fails = fails + 1;
+     if h(3) ^= addr(n) then fails = fails + 1;
+     if dim(h) ^= 3 then fails = fails + 1;
+     free h;
+     /* 2-D heap, dynamic first axis */
+     n = 3;
+     allocate g set(p);
+     do i = 1 to n;
+        do j = 1 to 2;
+           g(i, j) = i * 10 + j;
+        end;
+     end;
+     do i = 1 to n;
+        do j = 1 to 2;
+           if g(i, j) ^= i * 10 + j
+              then fails = fails + 1;
+        end;
+     end;
+     if hbound(g, 1) ^= 3 then fails = fails + 1;
+     if hbound(g, 2) ^= 2 then fails = fails + 1;
+     free g;
+     /* heap block inside an AREA region */
+     n = 4;
+     allocate xa in(region) set(p);
+     do i = 1 to n;
+        xa(i) = i;
+     end;
+     do i = 1 to n;
+        if xa(i) ^= i then fails = fails + 1;
+     end;
+     free xa in(region);
+     if fails = 0
+        then put skip list('PASS based-heap-dyn');
+        else put skip list('FAIL based-heap-dyn');
+  end based_heap_dyn;

@@ -1983,8 +1983,11 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
 // (`(*) FIXED BIN(31)`); the wishlist order (`FIXED BIN(31)(*)`) is accepted
 // too so existing libnet declarations compile unchanged.
 bool Parser::parseDescriptorType(Type& out) {
-  // One leading/trailing '*' dimension group in either position.
+  // One leading/trailing '*' dimension group in either position: `(*)`, or a
+  // leading '*' with constant later bounds `(*, n[, m...])` (rules (13),(36)).
+  // Fixed-first, non-first '*', and non-constant bounds diagnose (36).
   bool hasStar = false;
+  std::vector<Dim> starDims;
   auto isSingleStar = [&]() {
     return at(Tok::LParen) && peek().kind == Tok::Star && peek(2).kind == Tok::RParen;
   };
@@ -1993,13 +1996,69 @@ bool Parser::parseDescriptorType(Type& out) {
     advance();
     advance();
   };
-  // Leading dimension (spec order, rule (36)): `(*) FIXED ...`.
-  if (isSingleStar()) {
-    consumeSingleStar();
-    hasStar = true;
-  } else if (at(Tok::LParen)) {
-    // Any other leading group is a non-'*' dimension in this stage.
+  auto parseStarGroup = [&](std::vector<Dim>& dims) -> bool {
+    if (!at(Tok::LParen))
+      return false;
+    size_t save = i_;
     SourceLoc l = cur().loc;
+    advance();
+    std::vector<Dim> axes;
+    bool foundStar = false;
+    bool ok = true;
+    // One constant bound from plain numbers (descriptors carry no
+    // expressions in this stage); rejects floats and suffixed numbers.
+    auto constNum = [&](long& v) -> bool {
+      bool neg = eat(Tok::Minus);
+      if (!at(Tok::Number) || cur().isFloat || cur().binaryRadix || cur().imaginary ||
+          cur().hasExp)
+        return false;
+      v = boundedNonNeg(cur().text, cur().loc, d_, "dimension", "(36)");
+      advance();
+      if (neg)
+        v = -v;
+      return true;
+    };
+    for (;;) {
+      if (eat(Tok::Star)) {
+        Dim d;
+        d.dyn = true;
+        d.adj = true; // the bound is supplied by the caller, not an expression
+        axes.push_back(d);
+        foundStar = true;
+      } else {
+        long lb = 0, ub = 0;
+        if (!constNum(ub)) {
+          ok = false;
+          break;
+        }
+        Dim d;
+        if (eat(Tok::Colon)) {
+          d.lb = (int)ub;
+          if (!constNum(lb)) {
+            ok = false;
+            break;
+          }
+          d.ub = (int)lb;
+        } else {
+          d.ub = (int)ub; // bare extent: lower bound defaults to 1
+        }
+        axes.push_back(d);
+      }
+      if (!eat(Tok::Comma))
+        break;
+    }
+    ok = ok && eat(Tok::RParen);
+    // Served: a lone '*' or a leading '*' with constant later bounds.
+    bool restConst = true;
+    for (size_t k = 1; k < axes.size(); ++k)
+      if (axes[k].adj)
+        restConst = false;
+    if (ok && foundStar && !axes.empty() && axes[0].adj && restConst) {
+      dims = axes;
+      return true;
+    }
+    // Anything else: rewind, skip, diagnose (36).
+    i_ = save;
     int depth = 0;
     do {
       if (at(Tok::LParen))
@@ -2008,7 +2067,23 @@ bool Parser::parseDescriptorType(Type& out) {
         --depth;
       advance();
     } while (depth > 0 && !at(Tok::Eof));
-    d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage", "(36)");
+    if (foundStar)
+      d_.error(l,
+               "only a leading '*' with constant later bounds is supported in an ENTRY "
+               "descriptor in this stage",
+               "(36)");
+    else
+      d_.error(l, "only a '*' dimension is supported in an ENTRY descriptor in this stage",
+               "(36)");
+    return false;
+  };
+  // Leading dimension (spec order, rule (36)): `(*) FIXED ...`.
+  if (at(Tok::LParen)) {
+    std::vector<Dim> leadDims;
+    if (parseStarGroup(leadDims)) {
+      hasStar = true;
+      starDims = leadDims;
+    }
   }
   // A POINTER descriptor (rule (38)): C `void*` parameters ride as the
   // pointer value itself under LINKAGE(SYSTEM)/BYVALUE.
@@ -2020,6 +2095,10 @@ bool Parser::parseDescriptorType(Type& out) {
       else {
         consumeSingleStar();
         hasStar = true;
+        Dim d;
+        d.dyn = true;
+        d.adj = true;
+        starDims.push_back(d);
       }
     } else if (at(Tok::LParen)) {
       SourceLoc l = cur().loc;
@@ -2036,10 +2115,8 @@ bool Parser::parseDescriptorType(Type& out) {
     if (hasStar) {
       // Array of POINTER with caller-supplied extent (rules (13),(36)).
       out = Type::ptr();
-      Dim d;
-      d.dyn = true;
-      d.adj = true;
-      out.dims.push_back(d);
+      for (const auto& d : starDims)
+        out.dims.push_back(d);
       return true;
     }
     out = Type::ptr();
@@ -2119,6 +2196,10 @@ bool Parser::parseDescriptorType(Type& out) {
     else {
       consumeSingleStar();
       hasStar = true;
+      Dim d;
+      d.dyn = true;
+      d.adj = true;
+      starDims.push_back(d);
     }
   } else if (at(Tok::LParen)) {
     SourceLoc l = cur().loc;
@@ -2159,38 +2240,24 @@ bool Parser::parseDescriptorType(Type& out) {
     if (bag.starLen)
       d_.error(cur().loc, "a '*' string length is not implemented in this stage", "(18)");
     if (hasStar) {
-      Dim d;
-      d.dyn = true;
-      d.adj = true;
-      out.dims.push_back(d);
+      for (const auto& d : starDims)
+        out.dims.push_back(d);
     }
     out.controlled = bag.controlled;
   } else if (bag.floating) {
     out = Type::flt(bag.prec > 0 ? bag.prec : (bag.binary ? 21 : 6));
-    if (hasStar) {
-      Dim d;
-      d.dyn = true;
-      d.adj = true;
+    for (const auto& d : starDims)
       out.dims.push_back(d);
-    }
     out.controlled = bag.controlled;
   } else if (bag.binary) {
     out = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
-    if (hasStar) {
-      Dim d;
-      d.dyn = true;
-      d.adj = true;
+    for (const auto& d : starDims)
       out.dims.push_back(d);
-    }
     out.controlled = bag.controlled;
   } else {
     out = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
-    if (hasStar) {
-      Dim d;
-      d.dyn = true;
-      d.adj = true;
+    for (const auto& d : starDims)
       out.dims.push_back(d);
-    }
     out.controlled = bag.controlled;
   }
   if (hasStar && bag.varying) {

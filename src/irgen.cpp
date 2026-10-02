@@ -2977,6 +2977,36 @@ void IRGen::emitAllocate(HStmt* s) {
     Symbol* bsym = s->allocBase[i]->sym;
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
+    if (!bsym->controlled && bsym->ty.isArray() && bsym->ty.isDynamic()) {
+      // A dynamic-extent BASED heap array (rules (25),(89)): size the block
+      // from the live DECLARE bounds at ALLOCATE time. The first axis may be
+      // dynamic (later axes are static — sema gates the rest); each reference
+      // reads the same live bounds through the dope slots below.
+      const Type& el = bsym->ty.elementType();
+      long long elemSz =
+          (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+      if (elemSz <= 0)
+        elemSz = 1;
+      llvm::Value* total = i64(elemSz);
+      for (size_t k = 0; k < bsym->ty.dims.size(); ++k) {
+        const Dim& d = bsym->ty.dims[k];
+        llvm::Value* ub = (k == 0 && bsym->dynUb) ? toI64(emitExpr(bsym->dynUb), s->loc)
+                                                 : i64(d.ub);
+        llvm::Value* lb = (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc)
+                                                            : i64(d.lb);
+        if (k == 0) {
+          // Later references check against the ALLOCATE-time extent, which
+          // may differ from the entry-evaluated one when the bound changed.
+          if (bsym->dynUb)
+            dynUb_[bsym] = ub;
+          if (d.lbDyn && bsym->dynLb)
+            dynLb_[bsym] = lb;
+        }
+        llvm::Value* ext = b_.CreateAdd(b_.CreateSub(ub, lb, "bheap.e1"), i64(1), "bheap.ext");
+        total = b_.CreateMul(total, ext, "bheap.tot");
+      }
+      sz = total;
+    }
     if (bsym->controlled) {
       const auto& bounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : noBounds;
       HExpr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
@@ -4217,13 +4247,11 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
                                    : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub)))
                             : i64(d.ub);
     llvm::Value* lb = d.lbDyn ? (dynLb_.count(a->sym) ? dynLb_[a->sym] : i64(d.lb)) : i64(d.lb);
-    llvm::Value* ext = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
-    long long rest = 1;
-    for (size_t k = 1; k < arr.dims.size(); ++k)
-      rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
-    if (rest != 1)
-      ext = b_.CreateMul(ext, i64(rest), "extall");
-    return ext;
+    // The hidden `*` extent is the first axis's extent (ub - lb + 1), not the
+    // total element count: the callee stores it as dynUb_ (the upper bound of
+    // axis 1) and computes DIM as extent × product of later axes. For 1-D arrays
+    // rest == 1 anyway, so this is a no-op there.
+    return b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
   }
   return i64(d.ub - d.lb + 1);
 }
@@ -6576,8 +6604,42 @@ Val IRGen::emitExpr(HExpr* e) {
           b_.CreateFDiv(b_.CreateFSub(b_.CreateFMul(ai, br), b_.CreateFMul(ar, bi)), den, "cpx.ri");
       break;
     }
+    case Tok::Power: {
+      // Complex exponentiation a**b = exp(b*log(a)) (rule 121, CM5).
+      // log(a) = ln|a| + i*arg(a); b*log(a) done as complex multiply.
+      llvm::Value* mag2 = b_.CreateFAdd(b_.CreateFMul(ar, ar), b_.CreateFMul(ai, ai),
+                                        "cpx.mag2");
+      llvm::Value* lnMag = b_.CreateFMul(
+          b_.CreateCall(runtimeFn("pli_log"), {mag2}, "cpx.ln"),
+          llvm::ConstantFP::get(b_.getDoubleTy(), 0.5), "cpx.lnmag");
+      llvm::Value* theta =
+          b_.CreateCall(runtimeFn("pli_atan2"), {ai, ar}, "cpx.arg");
+      llvm::Value* wr = b_.CreateFSub(b_.CreateFMul(br, lnMag), b_.CreateFMul(bi, theta),
+                                      "cpx.wr");
+      llvm::Value* wi = b_.CreateFAdd(b_.CreateFMul(br, theta), b_.CreateFMul(bi, lnMag),
+                                      "cpx.wi");
+      llvm::Value* ew = b_.CreateCall(runtimeFn("pli_exp"), {wr}, "cpx.ew");
+      rr = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_cos"), {wi}, "cpx.cos"),
+                         "cpx.rr");
+      ri = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_sin"), {wi}, "cpx.sin"),
+                         "cpx.ri");
+      // 0**0 is 1+0i; the log/exp chain would yield NaN there.
+      llvm::Value* isZeroBase =
+          b_.CreateFCmpOEQ(mag2, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "cpx.zb");
+      llvm::Value* brZero =
+          b_.CreateFCmpOEQ(br, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "cpx.bz");
+      llvm::Value* biZero =
+          b_.CreateFCmpOEQ(bi, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "cpx.iz");
+      llvm::Value* isZeroExp = b_.CreateAnd(brZero, biZero, "cpx.ze");
+      llvm::Value* bothZero = b_.CreateAnd(isZeroBase, isZeroExp, "cpx.zz");
+      rr = b_.CreateSelect(bothZero, llvm::ConstantFP::get(b_.getDoubleTy(), 1.0), rr,
+                           "cpx.rr0");
+      ri = b_.CreateSelect(bothZero, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), ri,
+                           "cpx.ri0");
+      break;
+    }
     default:
-      break; // complex ** is diagnosed by sema
+      break;
     }
     llvm::Value* pair = llvm::UndefValue::get(llvmTy(common));
     pair = b_.CreateInsertValue(pair, rr, 0, "cpx.r");

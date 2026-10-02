@@ -1,0 +1,79 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Multi-axis '*' parameters (rules (12),
+     (13),(34)): a parameter `x(*, 3)`
+     takes its first-axis extent from the
+     caller while later axes stay fixed;
+     one hidden extent rides each call. */
+  star_param_multi: procedure options(main);
+     declare a(2, 3) fixed bin(31);
+     declare b(4, 3) fixed bin(31);
+     declare i fixed bin(31);
+     declare j fixed bin(31);
+     declare fails fixed bin(31);
+     fails = 0;
+     do i = 1 to 2;
+        do j = 1 to 3;
+           a(i, j) = i * 10 + j;
+        end;
+     end;
+     do i = 1 to 4;
+        do j = 1 to 3;
+           b(i, j) = i * 10 + j;
+        end;
+     end;
+     /* fixed actuals, different first
+        axes: bounds follow the actual */
+     call check2(a, 2);
+     call check2(b, 4);
+     /* write-through reaches caller */
+     call bump2(a);
+      if a(1, 1) ^= 12 then fails = fails + 1;
+     if a(2, 3) ^= 24 then fails = fails + 1;
+     /* dynamic actual carries its live
+        first-axis extent */
+     call dyn_wrap(4);
+     /* forwarding keeps the live extent */
+     if fwd2(b) ^= 4 then fails = fails + 1;
+     if fails = 0
+        then put skip list('PASS star-param-multi');
+        else put skip list('FAIL star-param-multi');
+  check2: procedure(x, k);
+     declare x(*, 3) fixed bin(31);
+     declare k fixed bin(31);
+     declare i fixed bin(31);
+     declare j fixed bin(31);
+     if lbound(x, 1) ^= 1 then fails = fails + 1;
+     if hbound(x, 1) ^= k then fails = fails + 1;
+     if lbound(x, 2) ^= 1 then fails = fails + 1;
+     if hbound(x, 2) ^= 3 then fails = fails + 1;
+     if dim(x) ^= k * 3 then fails = fails + 1;
+  end check2;
+  dyn_wrap: procedure(k);
+     declare k fixed bin(31);
+     declare e(k, 3) fixed bin(31);
+     declare i fixed bin(31);
+     declare j fixed bin(31);
+     do i = 1 to k;
+        do j = 1 to 3;
+           e(i, j) = i + j;
+        end;
+     end;
+     call check2(e, k);
+     if e(k, 3) ^= k + 3 then fails = fails + 1;
+  end dyn_wrap;
+  bump2: procedure(x);
+     declare x(*, 3) fixed bin(31);
+     declare i fixed bin(31);
+     declare j fixed bin(31);
+     do i = 1 to hbound(x, 1);
+        do j = 1 to 3;
+           x(i, j) = x(i, j) + 1;
+        end;
+     end;
+  end bump2;
+  fwd2: procedure(xs) returns(fixed bin(31));
+     declare xs(*, 3) fixed bin(31);
+     return(hbound(xs, 1));
+  end fwd2;
+  end star_param_multi;

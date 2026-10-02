@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Multiple assignment to whole arrays
+     (rule 86): targets share one shape;
+     scalar/array mixes and array values
+     into scalars stay diagnosed. */
+  badmultiassignarray: procedure options(main);
+     declare a(3) fixed bin(31);
+     declare b(4) fixed bin(31);
+     declare x fixed bin(31);
+     a, b = a;
+  end badmultiassignarray;

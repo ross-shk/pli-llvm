@@ -82,12 +82,6 @@ bad_corner_cases: package;
       x = a + a;
    end;
 
-   /* Bad: array expression in multiple assignment */
-   bad_array_multiassign: proc;
-      declare a(10) fixed bin(31), b(10) fixed bin(31), c(10) fixed bin(31);
-      a, b = c + c;
-   end;
-
    /* Bad: RECURSIVE missing on recursive procedure */
    bad_recursive: proc;
       call bad_recursive();

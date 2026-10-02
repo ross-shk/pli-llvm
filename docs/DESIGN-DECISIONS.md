@@ -5197,4 +5197,109 @@ dynamic TASK/EVENT arrays (their per-element init paths are unprobed);
 relaxing the iSUB/element DEFINED type match (element addressing there
 is type-driven, unlike the whole-base opaque address).
 
+## ADR-182 — Complex exponentiation via exp(b*log(a))
+
+**Context.** Rule (121) served complex `+ - * /` over `{double,double}`
+pairs, but `**` on a complex operand was diagnosed. A new runtime
+entry for complex power would need a two-double struct across the
+`pli_rt_abi.def` boundary.
+
+**Decision.** Lower complex `**` inline in `emitExpr`: `log(a)` from
+`pli_log`/`pli_atan2`, a complex multiply by `b`, then `pli_exp` with
+`pli_cos`/`pli_sin` — no ABI change. `0**0` selects `1+0i` since the
+log chain yields NaN there; other zero-base cases fall through to
+the chain. Results carry floating-point residue (e.g. `1e-16`), so
+tests compare within `1e-6`.
+
+**Consequences.** `complex_pow.pli` pins `**2`, `**3`, `i**2`, and a
+complex `**1`; `bad_complex_power.pli` is removed. GRAMMAR-COVERAGE
+row (115)–(122) moves.
+
+**Rejected.** A `pli_cpow` runtime helper (new struct ABI for one
+operator); repeated-multiplication fast paths (extra runtime
+branches for exactness the tolerance already covers).
+
+## ADR-183 — Multiple assignment to whole arrays via a temp desugar
+
+**Context.** Rule (86) served scalar multi-assignment (`a, b, c = e`
+evaluates once, stores to each) but diagnosed any whole-array target
+or array-valued source. Single whole-array assignment already served
+variable copies, scalar broadcasts, and element-wise expression
+expansion through separate paths.
+
+**Decision.** In sema, `a, b, ... = v` with array targets desugars to
+a Group: `PLI$MA = v` (RHS evaluated once) plus one plain single
+whole-array copy per target, each riding its own served path. Served
+for plain static same-shape array targets with variable,
+scalar-broadcast, or expression sources; shape mismatches,
+scalar/array mixes, array values into scalars, and
+dynamic/parameter/DEFINED/BASED/member targets stay diagnosed with
+rule (86).
+
+**Consequences.** `multiassign_array.pli` pins variable, broadcast,
+expression, and evaluate-once behavior; `bad_multiassign_array.pli`
+pins the shape diagnosis; the stale `bad_array_multiassign` block
+leaves `bad_corner_cases.pli` (served there now). GRAMMAR-COVERAGE
+row (86) moves.
+
+**Rejected.** Per-target expansion without a temp (re-evaluates
+side-effecting RHS once per target); a new IRGen multi-target array
+path (duplicates the three single-target paths it reuses).
+
+## ADR-184 — Dynamic BASED heap arrays sized from live DECLARE bounds
+
+**Context.** Rules (25),(89) served fixed-extent BASED heap cells
+(`ALLOCATE x SET(p)` sized from the descriptor) but diagnosed any
+dynamic-extent based array. The reference side already worked: based
+subscripts address through the loaded pointer with live `dynUb_/dynLb_`
+dope slots evaluated at entry (pass 2b), shared with runtime-`(n)`
+overlays.
+
+**Decision.** Sema lifts the blanket diagnostic — DECLARE stays the
+gatekeeper for element types and later-axis dynamics, with a defensive
+rule-(13) diagnostic for a dynamic non-first axis. IRGen sizes the
+block in `emitAllocate` from the live bounds at ALLOCATE time
+(`extent × elemSize` per axis) and refreshes the dope slots there, so
+later references check against the ALLOCATE-time extent even when the
+bound changed since entry. Per-ALLOCATE bounds stay rejected (dims
+live on DECLARE, pinned by `bad_based_alloc_dim.pli`).
+
+**Consequences.** `based_heap_dyn.pli` pins 1-D, re-allocated,
+POINTER-element, multi-axis first-dynamic, and `IN (area)` heaps with
+live `LBOUND`/`HBOUND`/`DIM`. GRAMMAR-COVERAGE row (25) moves.
+
+**Rejected.** Storing extents in the heap block header (references
+already read separate dope slots; a header would split the overlay
+and heap representations); evaluating bounds only at entry (wrong
+block size when the bound changes before ALLOCATE).
+
+## ADR-185 — Multi-axis `*` adjustable-extent parameters
+
+**Context.** Rule (13) served single-axis `*` parameters (`x(*)`) —
+one hidden i64 extent argument, lower bound 1, stride addressing the
+solo axis. A multi-axis parameter like `x(*, 3)` was diagnosed as
+"single-axis only". The runtime multi-axis dynamic-array path
+(`argExtent`, `dynUb_`, `arrayElementAddr`) already handled
+multi-axis dynamic arrays; the gap was the hidden-argument convention
+and the caller-side check.
+
+**Decision.** Extend the `*` convention to `x(*, n[, m...])` where
+only the first axis is `*` and later axes are constant. The parser
+(`parseDescriptorType` and `tryParseDimension`) accepts a leading `*`
+with constant later bounds; sema's `checkStarLaterAxes` verifies the
+actual matches the parameter's later axes exactly; the single hidden
+i64 carries the first-axis extent (ub − lb + 1, not the total element
+count, so the callee's `dynUb_` is the first-axis upper bound).
+
+**Consequences.** `star_param_multi.pli` pins bounds, `DIM`,
+write-through, forwarding, and `hbound` return for `e(k, 3)` passed
+to `x(*, 3)`. `argExtent` no longer multiplies by later-axis extents.
+`bad_star_param.pli`'s `x(*, *)` still diagnosed (multiple `*`
+axes). GRAMMAR-COVERAGE rows (12),(13) and (34)–(38) move.
+
+**Rejected.** Passing a full dope vector (multiple i64 args per
+parameter) — no caller-side precedent; a single extent with static
+strides reuses the existing hidden-arg slot. Accepting `*` on later
+axes (would need per-axis hidden extents, a different ABI).
+
 

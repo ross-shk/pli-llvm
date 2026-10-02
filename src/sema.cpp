@@ -1384,9 +1384,22 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                            (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
             if (hasStar && !isParam && !ctlStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
-            if (hasStar && isParam && item.ty.dims.size() != 1)
-              d_.error(item.loc, "a '*' extent parameter must be single-axis in this stage",
-                       "(13)");
+            if (hasStar && isParam) {
+              // A multi-axis '*' parameter is served when only the first axis
+              // is adjustable and later axes are constant (rules (13),(36)):
+              // one hidden extent rides the call and static strides address
+              // the rest. Any other '*' placement stays diagnosed.
+              bool multiStar = false;
+              for (size_t k = 1; k < item.ty.dims.size(); ++k)
+                if (item.ty.dims[k].adj || item.ty.dims[k].dyn || item.ty.dims[k].lbDyn)
+                  multiStar = true;
+              if (!item.ty.dims.empty() && !item.ty.dims[0].adj)
+                multiStar = true;
+              if (multiStar)
+                d_.error(item.loc,
+                         "a '*' extent parameter needs a leading '*' with constant later axes",
+                         "(13)");
+            }
             for (auto& b : item.dynBounds)
               if (b)
                 typeExpr(b.get(), sc, p);
@@ -1851,6 +1864,28 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
                " is not implemented in this stage",
            "(86)");
   return false;
+}
+
+void Sema::checkStarLaterAxes(const Type& pty, const Type& aty, SourceLoc loc) {
+  if (!pty.isArray() || pty.dims.size() < 2 || !pty.dims[0].adj)
+    return;
+  if (!aty.isArray() || aty.dims.size() != pty.dims.size()) {
+    d_.error(loc, "an argument to a multi-axis '*' parameter must be an array of the same rank",
+             "(13)");
+    return;
+  }
+  for (size_t k = 1; k < pty.dims.size(); ++k) {
+    const Dim& pd = pty.dims[k];
+    const Dim& ad = aty.dims[k];
+    // The callee addresses with the parameter's lower bounds, so each later
+    // axis must match exactly — not just in extent — to stay in bounds.
+    if (ad.dyn || ad.lbDyn || ad.adj || ad.lb != pd.lb || ad.ub != pd.ub) {
+      d_.error(loc,
+               "an argument to a multi-axis '*' parameter must match its fixed later axes",
+               "(13)");
+      return;
+    }
+  }
 }
 
 const Type* Sema::structLeafType(Expr* e) {
@@ -2692,7 +2727,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         if (t->kind != Expr::VarRef && t->kind != Expr::Subscript) {
           d_.error(
               t->loc,
-              "multiple-assignment target must be a scalar variable or array element in this stage",
+              "multiple-assignment target must be a variable or array element in this stage",
               "(86)");
           return false;
         }
@@ -2701,37 +2736,126 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           return false;
         }
         checkValueTarget(t); // VALUE constants cannot receive values (ADR-108)
-        if (!s->value->ty.isVoid() && !t->ty.isVoid())
+        // Array targets and array-valued sources are claimed by the whole-array
+        // path below, which checks shapes there; scalar lists check here.
+        if (!s->value->ty.isVoid() && !t->ty.isVoid() && !t->ty.isArray() &&
+            !s->value->ty.isArray() && !valueHasWholeArrayRef(s->value.get(), false))
           checkAssignable(t->ty, s->value->ty, t->loc, "assignment");
         return true;
       };
       bool ok = checkOne(s->target.get());
       for (auto& t : s->extraTargets)
         ok = checkOne(t.get()) && ok;
-      // Whole arrays in a multiple-assignment list stay diagnosed (rule 86):
-      // neither an array target nor an array-valued source has an element-wise
-      // form here.
-      if (s->value->ty.isArray() || valueHasWholeArrayRef(s->value.get(), false)) {
-        ok = false;
-        d_.error(s->value->loc,
-                 "multiple assignment of an array value is not implemented in this stage", "(86)");
-      }
-      if (s->target->ty.isArray()) {
-        ok = false;
-        d_.error(s->target->loc,
-                 "multiple assignment to a whole array is not implemented in this stage", "(86)");
-      }
+      // Whole-array multi-assignment (rule 86): a whole-array target or an
+      // array-valued source desugars through a temp below. Scalar lists keep
+      // the shared-RHS store path (the value converts once to the first
+      // target's type, so all targets share that type).
+      bool anyArrayTarget = s->target->ty.isArray();
       for (auto& t : s->extraTargets)
-        if (t->ty.isArray()) {
-          ok = false;
-          d_.error(t->loc, "multiple assignment to a whole array is not implemented in this stage",
-                   "(86)");
+        anyArrayTarget = anyArrayTarget || t->ty.isArray();
+      bool arrayValue =
+          s->value->ty.isArray() || valueHasWholeArrayRef(s->value.get(), false);
+      if (!anyArrayTarget && !arrayValue) {
+        if (ok && !s->target->ty.isVoid()) {
+          for (auto& t : s->extraTargets)
+            if (!(t->ty == s->target->ty))
+              d_.error(t->loc, "multiple-assignment targets must all have the same type", "(86)");
         }
-      if (ok && !s->target->ty.isVoid()) {
-        for (auto& t : s->extraTargets)
-          if (!(t->ty == s->target->ty))
-            d_.error(t->loc, "multiple-assignment targets must all have the same type", "(86)");
+        break;
       }
+      // An array-valued source into scalar targets mixes ranks (rule 86).
+      if (!anyArrayTarget) {
+        d_.error(s->loc, "cannot assign an array value to a scalar variable in this stage",
+                 "(86)");
+        break;
+      }
+      // Every target must be a plain whole-array variable of one static shape;
+      // mixed scalar/array lists, member arrays, and dynamic storage stay
+      // diagnosed. The temp below carries the first target's shape.
+      bool wholeOk = ok;
+      std::vector<Dim> shapeDims = s->target->ty.dims;
+      auto checkWhole = [&](Expr* t) {
+        if (t->kind != Expr::VarRef || !t->sym || t->sym->kind != Symbol::Var ||
+            !t->memberPath.empty() || t->locPtr || !t->ty.isArray()) {
+          d_.error(t->loc,
+                   "multiple assignment to a whole array needs whole-array variable targets",
+                   "(86)");
+          wholeOk = false;
+          return;
+        }
+        if (t->ty.isDynamic() || !wholeArrayStorageOk(t)) {
+          d_.error(t->loc,
+                   "multiple assignment of parameters, DEFINED overlays, BASED storage, or "
+                   "dynamic arrays is not implemented in this stage",
+                   "(86)");
+          wholeOk = false;
+          return;
+        }
+        if (t->ty.isArray() && t->ty.dims != shapeDims) {
+          d_.error(t->loc,
+                   "multiple assignment to whole arrays requires identical array shapes",
+                   "(86)");
+          wholeOk = false;
+        }
+      };
+      checkWhole(s->target.get());
+      for (auto& t : s->extraTargets)
+        checkWhole(t.get());
+      if (!wholeOk)
+        break;
+      // Evaluate the RHS once into a temp, then copy it to every target with
+      // plain single whole-array assignments (each rides its own served path:
+      // scalar broadcast, identical copy, or element-wise expansion).
+      Type tty = arrayValue ? s->target->ty : s->value->ty;
+      std::string base = "PLI$MA";
+      while (lookup(sc, base))
+        base += "X";
+      Symbol* ts = declare(sc, base, tty, s->loc, Symbol::Var, false);
+      ts->owner = p;
+      p->localSyms.push_back(ts);
+      auto fill = std::make_unique<Stmt>();
+      fill->kind = Stmt::Assign;
+      fill->loc = s->loc;
+      fill->noSize = s->noSize;
+      fill->noSub = s->noSub;
+      fill->noZdiv = s->noZdiv;
+      auto fillTgt = std::make_unique<Expr>();
+      fillTgt->kind = Expr::VarRef;
+      fillTgt->name = base;
+      fillTgt->loc = s->loc;
+      fill->target = std::move(fillTgt);
+      fill->value = std::move(s->value);
+      // One copy per target, in list order (rule 86).
+      std::vector<Expr*> targets;
+      targets.push_back(s->target.get());
+      for (auto& t : s->extraTargets)
+        targets.push_back(t.get());
+      s->kind = Stmt::Group;
+      s->byName = false;
+      s->body.push_back(std::move(fill));
+      for (Expr* t : targets) {
+        auto copy = std::make_unique<Stmt>();
+        copy->kind = Stmt::Assign;
+        copy->loc = t->loc;
+        copy->noSize = s->noSize;
+        copy->noSub = s->noSub;
+        copy->noZdiv = s->noZdiv;
+        auto ctgt = std::make_unique<Expr>();
+        ctgt->kind = Expr::VarRef;
+        ctgt->name = t->name;
+        ctgt->path = t->path;
+        ctgt->loc = t->loc;
+        copy->target = std::move(ctgt);
+        auto cval = std::make_unique<Expr>();
+        cval->kind = Expr::VarRef;
+        cval->name = base;
+        cval->loc = t->loc;
+        copy->value = std::move(cval);
+        s->body.push_back(std::move(copy));
+      }
+      s->target.reset();
+      s->extraTargets.clear();
+      checkStmt(s, sc, p);
       break;
     }
     // SUBSTR pseudo-variable (M2): substr(v, i, n) on the left of '=' — v
@@ -3027,8 +3151,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           if (s->args[i]->kind == Expr::Star) {
             if (i >= calleeParams.size() || !calleeParams[i]->isOptional)
               d_.error(s->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)", "");
-          } else if (i < calleeParams.size())
+          } else if (i < calleeParams.size()) {
             checkAssignable(calleeParams[i]->ty, s->args[i]->ty, s->args[i]->loc, "argument");
+            checkStarLaterAxes(calleeParams[i]->ty, s->args[i]->ty, s->args[i]->loc);
+          }
         }
         for (; i < expect; ++i)
           if (i >= calleeParams.size() || !calleeParams[i]->isOptional) {
@@ -3385,10 +3511,19 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         }
         continue;
       }
-      if (bsym->ty.isArray() && bsym->ty.isDynamic())
-        d_.error(s->allocBase[i]->loc,
-                 "ALLOCATE of a dynamic-extent based array is not implemented in this stage",
-                 "(89)");
+      // A dynamic-extent BASED heap array (rules (25),(89)): ALLOCATE sizes
+      // the block from the live DECLARE bounds, so a bare `ALLOCATE x SET(p)`
+      // is served. Element types and later-axis dynamics were already gated at
+      // DECLARE; a dynamic axis past the first cannot reach here silently.
+      if (bsym->ty.isArray() && bsym->ty.isDynamic()) {
+        for (size_t k = 1; k < bsym->ty.dims.size(); ++k)
+          if (bsym->ty.dims[k].dyn || bsym->ty.dims[k].lbDyn) {
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE over a dynamic non-first axis is not implemented in this stage",
+                     "(13)");
+            break;
+          }
+      }
       const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
       if (!bbounds.empty() || (i < s->allocCharLen.size() && s->allocCharLen[i])) {
         for (const auto& b : bbounds) {
@@ -4097,8 +4232,10 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         if (e->args[i]->kind == Expr::Star) {
           if (i >= calleeParams.size() || !calleeParams[i]->isOptional)
             d_.error(e->args[i]->loc, "'*' omits a parameter that is not OPTIONAL (ADR-119)", "");
-        } else if (i < calleeParams.size())
+        } else if (i < calleeParams.size()) {
           checkAssignable(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc, "argument");
+          checkStarLaterAxes(calleeParams[i]->ty, e->args[i]->ty, e->args[i]->loc);
+        }
       }
       for (; i < nparams; ++i)
         if (i >= calleeParams.size() || !calleeParams[i]->isOptional) {
@@ -4185,9 +4322,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // PL/I's exact FIXED scale rules are M2 (ADR-006). Truncation on
       // assignment to a FIXED target preserves the usual observable result.
       if (complexArith(A, B)) {
-        if (e->op == Tok::Power) {
-          d_.error(e->loc, "complex exponentiation is not implemented in this stage", "(121)");
-        }
+        // Complex exponentiation a**b = exp(b*log(a)) (rule 121, CM5).
         e->ty = Type::complexTy();
       } else if (!A.isNumeric() || !B.isNumeric()) {
         d_.error(e->loc, "operator requires arithmetic operands", "(121)");

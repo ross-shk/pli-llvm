@@ -263,6 +263,11 @@ private:
   // a diagnostic.
   bool expandAggregateItems(Stmt* s, Scope* sc, Proc* p, bool isGet);
   bool checkAssignable(const Type& dst, const Type& src, SourceLoc loc, const char* what);
+  // Later-axis match for a multi-axis adjustable parameter (rules (13),(36)):
+  // the actual must be an array of the same rank with equal static later axes,
+  // so callee addressing with the hidden first-axis extent stays in bounds.
+  // No-op for anything else (single-axis keeps its lax flat-view contract).
+  void checkStarLaterAxes(const Type& pty, const Type& aty, SourceLoc loc);
   // Struct leaf type of a whole-structure reference (VarRef, top-level or
   // qualified path to a minor structure), or nullptr if it is not a structure.
   const Type* structLeafType(Expr* e);
