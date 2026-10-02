@@ -483,8 +483,6 @@ int main(int argc, char** argv) {
       release = true;
     else if (a == "--no-size-checks") {
       noSizeChecks = true;
-    else if (a == "--no-size-checks") {
-      noSizeChecks = true;
       noSizeChecksExplicit = true;
     } else if (a == "--size-checks") {
       noSizeChecks = false;
