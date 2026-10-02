@@ -6,8 +6,8 @@ PL/I Compiler Benchmark Harness
 
 Compiles and runs benchmarks with different optimization levels, comparing
 generated PL/I code performance against C baselines. Each benchmark has a
-`.pli` source (compiled with `plic`) and a `_c.c` source (compiled with `cc`),
-both implementing the same algorithm so the results are comparable.
+`.pli` source (compiled with `plic`) and a `baseline/<name>_c.c` source
+(compiled with `cc`), all implementing the same algorithm.
 """
 import os
 import subprocess
@@ -25,23 +25,28 @@ RESULTS_DIR = BENCHMARK_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 BENCHMARKS = [
-    ("scalar_arith",    "scalar_arith.pli",     "scalar_arith_c.c"),
-    ("array_matmul",    "array_matmul.pli",     "array_matmul_c.c"),
-    ("string_ops",      "string_ops.pli",       "string_ops_c.c"),
-    ("decimal_ops",     "decimal_ops.pli",      "decimal_ops_c.c"),
-    ("condition_ops",   "condition_ops.pli",    "condition_ops_c.c"),
-    ("proc_calls",      "proc_calls.pli",       "proc_calls_c.c"),
-    ("math_functions",  "math_functions.pli",   "math_functions_c.c"),
-    ("bit_ops",         "bit_ops.pli",          "bit_ops_c.c"),
-    ("array_sort",      "array_sort.pli",       "array_sort_c.c"),
-    ("linked_list",     "linked_list.pli",      "linked_list_c.c"),
-    ("collatz",         "collatz.pli",          "collatz_c.c"),
+    ("scalar_arith",      "scalar_arith.pli",      "baseline/scalar_arith_c.c"),
+    ("array_matmul",      "array_matmul.pli",      "baseline/array_matmul_c.c"),
+    ("string_ops",        "string_ops.pli",        "baseline/string_ops_c.c"),
+    ("decimal_ops",       "decimal_ops.pli",       "baseline/decimal_ops_c.c"),
+    ("condition_ops",     "condition_ops.pli",     "baseline/condition_ops_c.c"),
+    ("proc_calls",        "proc_calls.pli",        "baseline/proc_calls_c.c"),
+    ("math_functions",    "math_functions.pli",    "baseline/math_functions_c.c"),
+    ("bit_ops",           "bit_ops.pli",           "baseline/bit_ops_c.c"),
+    ("array_sort",        "array_sort.pli",        "baseline/array_sort_c.c"),
+    ("linked_list",       "linked_list.pli",       "baseline/linked_list_c.c"),
+    ("collatz",           "collatz.pli",           "baseline/collatz_c.c"),
+    ("controlled_stack",  "controlled_stack.pli",  "baseline/controlled_stack_c.c"),
+    ("on_conditions",     "on_conditions.pli",     "baseline/on_conditions_c.c"),
+    ("matrix_float",      "matrix_float.pli",      "baseline/matrix_float_c.c"),
+    ("mandelbrot",        "mandelbrot.pli",        "baseline/mandelbrot_c.c"),
+    ("io_throughput",     "io_throughput.pli",     "baseline/io_throughput_c.c"),
 ]
 
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3"]
 RUNS_PER_BENCH = 5
 
-BENCHMARKS_REQUIRING_MATH = {"math_functions"}
+BENCHMARKS_REQUIRING_MATH = {"math_functions", "matrix_float"}
 
 
 def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[int, str, str]:
@@ -104,8 +109,8 @@ def main():
 
     # Header for the comparison table
     print(f"{'Benchmark':<20} {'Opt':<6} {'PL/I (ms)':>12} {'C (ms)':>12} "
-          f"{'Ratio':>8} {'PL/I out':>16} {'C out':>16}")
-    print("-" * 92)
+          f"{'Ratio':>8} {'Match':>6}")
+    print("-" * 68)
 
     results = {}
 

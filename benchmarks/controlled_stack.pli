@@ -1,0 +1,25 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (13),(23),(87)-(90),(123),(126): CONTROLLED array generations.
+   Each ALLOCATE pushes a generation of size n, references address
+   the latest generation, FREE pops LIFO. This benchmark stresses the
+   generation-stack allocation/deallocation machinery with a tight loop
+   of push-fill-sum-pop cycles. */
+controlled_stack: procedure options(main);
+   declare n fixed bin(31);
+   declare i fixed bin(31);
+   declare j fixed bin(31);
+   declare s fixed bin(31);
+   declare fds(100) fixed bin(31) controlled;
+   s = 0;
+   n = 2000;
+   do i = 1 to n;
+      allocate fds(100);
+      do j = 1 to 100;
+         fds(j) = i;
+      end;
+      s = s + fds(1);
+      free fds;
+   end;
+   put skip list(s);
+end controlled_stack;

@@ -1,0 +1,46 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* 2-D float matrix multiply: memory-bound (3 x 100x100 arrays) with
+   transcendental seeding (SIN/COS/SQRT). Float literals use E0
+   notation so they are FLOAT, not FIXED DECIMAL, matching the C
+   baseline. Output is an integer checksum (BIN 63) so PL/I and C
+   produce bit-identical results. */
+matrix_float: procedure options(main);
+   declare n fixed bin(31);
+   declare (i, j, k) fixed bin(31);
+   declare chk fixed bin(63);
+   declare (x, sum) float decimal(16);
+   declare a(100,100) float decimal(16);
+   declare b(100,100) float decimal(16);
+   declare c(100,100) float decimal(16);
+
+   n = 100;
+   do i = 1 to n;
+      do j = 1 to n;
+         x = (i + j) * 0.01E0;
+         a(i,j) = sin(x) + cos(x * 0.5E0);
+         b(i,j) = (i - j) * 0.01E0;
+         b(i,j) = sqrt(b(i,j) * b(i,j) + 1.0E0);
+         c(i,j) = 0.0E0;
+      end;
+   end;
+
+   do i = 1 to n;
+      do j = 1 to n;
+         sum = 0.0E0;
+         do k = 1 to n;
+            sum = sum + a(i,k) * b(k,j);
+         end;
+         c(i,j) = sum;
+      end;
+   end;
+
+   chk = 0;
+   do i = 1 to n;
+      do j = 1 to n;
+         chk = chk + floor(c(i,j));
+         chk = chk + floor(c(i,j) * 1000.0E0);
+      end;
+   end;
+   put skip list(chk);
+end matrix_float;

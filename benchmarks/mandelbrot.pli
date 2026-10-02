@@ -1,0 +1,36 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Mandelbrot set: processor-bound float arithmetic in a tight double
+   loop. z = z*z + c iteration with escape-radius check. Float literals
+   use E0 notation so they are FLOAT, not FIXED DECIMAL, matching the C
+   baseline. Output is the total escape-iteration count (integer). */
+mandelbrot: procedure options(main);
+   declare (w, h, max_iter, total) fixed bin(31);
+   declare (cx, cy, zx, zy, tmp, mag) float decimal(16);
+   declare (i, j, iter) fixed bin(31);
+
+   w = 600;
+   h = 400;
+   max_iter = 100;
+   total = 0;
+
+   do j = 0 to h - 1;
+      do i = 0 to w - 1;
+         cx = (i * 3.6E0) / w - 2.6E0;
+         cy = (j * 3.0E0) / h - 1.5E0;
+         zx = 0.0E0;
+         zy = 0.0E0;
+         iter = 0;
+         do while (iter < max_iter);
+            tmp = zx * zx - zy * zy;
+            zy = 2.0E0 * zx * zy + cy;
+            zx = tmp + cx;
+            mag = zx * zx + zy * zy;
+            iter = iter + 1;
+            if mag > 64.0E0 then leave;
+         end;
+         total = total + iter;
+      end;
+   end;
+   put skip list(total);
+end mandelbrot;

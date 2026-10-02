@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Rules (91)-(94): ON ZERODIVIDE establishes a handler that
+   resumes division by zero with 0. This benchmark performs repeated
+   integer divisions in a tight loop, triggering the handler whenever
+   the divisor is zero (every 100th iteration), and accumulates a
+   deterministic checksum. */
+on_conditions: procedure options(main);
+   declare i fixed bin(31);
+   declare s fixed bin(31);
+   declare q fixed bin(31);
+   s = 0;
+   on zerodivide begin;
+      return;
+   end;
+   do i = 1 to 50000;
+      q = 1000000 / mod(i, 100);
+      s = s + i;
+      s = s + mod(q, 10);
+   end;
+   put skip list(s);
+end on_conditions;
