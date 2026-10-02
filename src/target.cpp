@@ -50,11 +50,19 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t) {
     d.systemLibs = {"kernel32.lib", "ucrt.lib", "vcruntime.lib"};
     d.linkerFlags = {"/entry:mainCRTStartup", "/subsystem:console", "/MD"};
     break;
-  case llvm::Triple::MachO:
+  case llvm::Triple::MachO: {
     d.lldDriver = "macho";
     d.systemLibs = {"-lSystem", "-lm"};
-    d.linkerFlags = {"-dead_strip", "-platform_version", "macos", "13.0", "13.0"};
+    // Derive the macOS version from the triple (translates Darwin N -> macOS)
+    // so the -platform_version matches the object files' minos instead of
+    // hardcoded value that mismatches the host OS.
+    std::string macosMinVer = "13.0";
+    llvm::VersionTuple vt;
+    if (t.getMacOSXVersion(vt) && !vt.empty())
+      macosMinVer = vt.getAsString();
+    d.linkerFlags = {"-dead_strip", "-platform_version", "macos", macosMinVer, macosMinVer};
     break;
+  }
   default:
     break;
   }
