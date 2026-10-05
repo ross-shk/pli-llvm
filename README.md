@@ -18,14 +18,12 @@ plic tests/core/hello.pli -o hello
 A more practical taste — parallel sum with two tasks sharing a heap array. `ALLOCATE ... SET` takes a heap block, each `CALL ... EVENT` runs on its own thread, `WAIT` joins, and `FREE` releases the block:
 
 ```pli
-parsum: procedure options(main);
-    declare i fixed bin(31);
-    declare heap pointer;
-    declare data(100) fixed bin(31) based(heap);
-    declare ev1 event;
-    declare ev2 event;
-    declare part1 fixed bin(31);
-    declare part2 fixed bin(31);
+parrallel_sum: proc options(main);
+    dcl i fixed bin(31);
+    dcl heap pointer,
+        data(100) fixed bin(31) based(heap);
+    dcl (ev1, ev2) event;
+    dcl (part1, part2) fixed bin(31);
 
     allocate data set(heap);
     do i = 1 to 100;
@@ -40,27 +38,25 @@ parsum: procedure options(main);
     put skip list('sum 1..100 =', part1 + part2);
     free data;
 
-sum_first: procedure;
-    declare j fixed bin(31);
-    declare s fixed bin(31);
+sum_first: proc;
+    dcl (j, s) fixed bin(31);
     s = 0;
     do j = 1 to 50;
         s = s + data(j);
     end;
     part1 = s;
-end sum_first;
+end;
 
-sum_second: procedure;
-    declare j fixed bin(31);
-    declare s fixed bin(31);
+sum_second: proc;
+    dcl (j, s) fixed bin(31);
     s = 0;
     do j = 51 to 100;
         s = s + data(j);
     end;
     part2 = s;
-end sum_second;
+end;
 
-end parsum;
+end;
 ```
 
 ```sh
