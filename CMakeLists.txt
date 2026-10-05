@@ -62,8 +62,11 @@ find_path(LLD_INCLUDE_DIR lld/Common/Driver.h
   NO_DEFAULT_PATH)
 if(NOT LLD_INCLUDE_DIR)
   # Try to find lld cmake config to get its include dir
+  # (LLDConfig.cmake sets LLD_INCLUDE_DIRS, uppercase).
   find_package(lld QUIET)
-  if(lld_INCLUDE_DIRS)
+  if(LLD_INCLUDE_DIRS)
+    set(LLD_INCLUDE_DIR ${LLD_INCLUDE_DIRS})
+  elseif(lld_INCLUDE_DIRS)
     set(LLD_INCLUDE_DIR ${lld_INCLUDE_DIRS})
   endif()
 endif()
@@ -145,10 +148,11 @@ else()
     Core IRReader Support BitReader BitWriter Linker)
   # MC/Target (host arch only for milestone)
   llvm_map_components_to_libnames(llvm_libs_mc
-    MC MCParser Object BinaryFormat TargetParser AsmParser AsmPrinter
-    CodeGen SelectionDAG GlobalISel
-    X86CodeGen X86AsmParser X86Desc X86Info
-    AArch64CodeGen AArch64AsmParser AArch64Desc AArch64Info
+    MC MCParser MCDisassembler Object BinaryFormat TargetParser AsmParser AsmPrinter
+    CodeGen SelectionDAG GlobalISel Option
+    X86CodeGen X86AsmParser X86Disassembler X86Desc X86Info
+    AArch64CodeGen AArch64AsmParser AArch64Disassembler AArch64Desc AArch64Info
+    WindowsManifest WindowsDriver LibDriver
     Passes LTO)
 endif()
 # lld
@@ -187,7 +191,12 @@ else()
 endif()
 
 # Static C++ runtime for portability.
-if(NOT APPLE)
+if(APPLE)
+  # Nothing additional needed on macOS.
+elseif(WIN32)
+  # Default is already /MD (dynamic CRT) matching LLVM. Do not pass /MD or
+  # /MT to the linker (LNK4044); CRT selection is a compiler flag.
+else()
   target_link_options(plic PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
@@ -200,9 +209,17 @@ add_library(libpli STATIC ${RT_SRCS})
 set_target_properties(libpli PROPERTIES OUTPUT_NAME pli)
 
 # Warnings: -Wall -Wextra on the C++ driver (libpli is C11 with its own style).
-target_compile_options(plic PRIVATE -Wall -Wextra)
+if(MSVC)
+  target_compile_options(plic PRIVATE /W3)
+else()
+  target_compile_options(plic PRIVATE -Wall -Wextra)
+endif()
 if(PLIC_WERROR)
-  target_compile_options(plic PRIVATE -Werror)
+  if(MSVC)
+    target_compile_options(plic PRIVATE /WX)
+  else()
+    target_compile_options(plic PRIVATE -Werror)
+  endif()
 endif()
 
 # Multi-target embedded runtime: generate bitcode for all supported targets.

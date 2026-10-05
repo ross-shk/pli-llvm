@@ -8,6 +8,7 @@
 #endif
 
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -436,14 +437,21 @@ static void applyRuntimeAttrs(llvm::Function* f) {
     break;
   }
   if (a.allocMalloc) {
+#if LLVM_VERSION_MAJOR >= 20
     f->addFnAttr(llvm::Attribute::getWithAllocKind(ctx, llvm::AllocFnKind::Alloc |
                                                             llvm::AllocFnKind::Uninitialized));
+#else
+    // LLVM <20 has no allockind attr (getWithAllocKind); allocsize alone.
+    (void)ctx;
+#endif
     if (a.allocSize)
       f->addFnAttr(llvm::Attribute::getWithAllocSizeArgs(ctx, 0, std::nullopt));
     if (a.nonNullRet)
       f->addRetAttr(llvm::Attribute::get(ctx, llvm::Attribute::NonNull));
   } else if (a.allocFree) {
+#if LLVM_VERSION_MAJOR >= 20
     f->addFnAttr(llvm::Attribute::getWithAllocKind(ctx, llvm::AllocFnKind::Free));
+#endif
   }
 }
 
@@ -916,9 +924,9 @@ std::string IRGen::run(HProgram& prog) {
   if (!triple_.empty()) {
     llvm::Triple t(triple_);
     if (t.isMacOSX()) {
-      mod_.setTargetTriple(llvm::Triple("arm64-apple-macosx15.0"));
+      mod_.setTargetTriple("arm64-apple-macosx15.0");
     } else {
-      mod_.setTargetTriple(llvm::Triple(triple_));
+      mod_.setTargetTriple(triple_);
     }
   }
   mod_.print(os, nullptr);
@@ -961,7 +969,7 @@ bool IRGen::linkRuntimeBitcode() {
   // Compare arch + OS family, not the version-qualified triple string: Apple's
   // darwin/macosx naming and the OS version differ between LLVM builds (e.g.
   // arm64-apple-darwin25.6.0 vs arm64-apple-macosx26.0.0) yet are the same ABI.
-  llvm::Triple rtTriple = rt->getTargetTriple();
+  llvm::Triple rtTriple(rt->getTargetTriple());
   llvm::Triple tgtTriple(triple_);
   // LLVM 23 splits the Darwin family into Darwin and MacOSX OSType values;
   // both are the same ABI family, so fold them onto one key.
