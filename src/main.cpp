@@ -126,8 +126,11 @@ static void usage() {
           "                   cf. (NOSIZE), ADR-111)\n"
           "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
           "  --no-zero-divide elide ZERODIVIDE traps program-wide (cf. (NOZERODIVIDE), ADR-112)\n"
-          "  --no-conversion   elide CONVERSION traps program-wide (cf. (NOCONVERSION), ADR-170)\n"
-          "  --release        maximum optimization + stripped binary (minimal size)\n"
+           "  --no-conversion   elide CONVERSION traps program-wide (cf. (NOCONVERSION), ADR-170)\n"
+           "  --no-subscript    elide SUBSCRIPTRANGE checks (default at -O2/-O3;\n"
+           "                   cf. (NOSUBSCRIPTRANGE), ADR-111)\n"
+           "  --subscript-checks  force SUBSCRIPTRANGE checks (overrides -O2/-O3 default)\n"
+           "  --release        maximum optimization + stripped binary (minimal size)\n"
          "  --debug          no optimization + debug info (-O0 -g)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
@@ -215,8 +218,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        std::string& triple, const std::string& clangPath,
                        const std::string& sysparm, bool sysparmExplicit, bool compileOnly,
                        bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
-                        bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks, bool noConvChecks,
-                       const std::string& optLevel, const std::string& backendFlags,
+                         bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks, bool noConvChecks,
+                        bool noSubChecks,
+                        const std::string& optLevel, const std::string& backendFlags,
                        const fs::path& keepLLDir, int fileIndex, std::string* outObj,
                        const std::string& runtimeBc, bool linkBitcode, bool linkRuntimeIn = false,
                        bool forceClangPipeline = false) {
@@ -274,7 +278,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM) {
-     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks);
+     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -307,7 +311,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // Explicit PGO/LTO (forceClangPipeline) always uses the clang pipeline so
   // backendFlags reach the compile step (the in-process path takes none).
   if (!forceClangPipeline) {
-     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, runtimeBc, linkBitcode);
+     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc, linkBitcode);
     if (auto om = ipg.takeModule(hir)) {
       bool rtOk = true;
 #if PLIC_HAVE_LLD
@@ -366,7 +370,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
 
   // Fallback: textual IR assembled by the backend clang.
-   IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, runtimeBc, linkBitcode);
+   IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc, linkBitcode);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return false;
@@ -414,7 +418,7 @@ int main(int argc, char** argv) {
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
-       noConvChecks = false, wantVersion = false;
+       noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
   bool runtimeBcExplicit = false, useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
@@ -508,14 +512,27 @@ int main(int argc, char** argv) {
     else if (a == "--no-size-checks") {
       noSizeChecks = true;
       noSizeChecksExplicit = true;
+      noSubChecks = true;
+      noSubChecksExplicit = true;
     } else if (a == "--size-checks") {
       noSizeChecks = false;
       noSizeChecksExplicit = true;
+      // Safety checks imply each other (ADR-111): forcing SIZE traps back on
+      // at -O2/-O3 brings SUBSCRIPTRANGE checks too, so condition-handling
+      // tests that use --size-checks get the checks they expect.
+      noSubChecks = false;
+      noSubChecksExplicit = true;
     } else if (a == "--no-zero-divide")
       noZdivChecks = true;
     else if (a == "--no-conversion")
       noConvChecks = true;
-    else if (a == "--debug")
+    else if (a == "--no-subscript") {
+      noSubChecks = true;
+      noSubChecksExplicit = true;
+    } else if (a == "--subscript-checks") {
+      noSubChecks = false;
+      noSubChecksExplicit = true;
+    } else if (a == "--debug")
       debug = true;
     else if (a == "--version" || a == "-V")
       wantVersion = true;
@@ -647,6 +664,10 @@ int main(int argc, char** argv) {
   // Disable them by default unless the user explicitly set --no-size-checks.
   if (!noSizeChecksExplicit && (optLevel == "-O2" || optLevel == "-O3"))
     noSizeChecks = true;
+  // SUBSCRIPTRANGE bounds checks add branch + clamp + offset per array access;
+  // disable by default at -O2/-O3 for performance (ADR-111).
+  if (!noSubChecksExplicit && (optLevel == "-O2" || optLevel == "-O3"))
+    noSubChecks = true;
   // Explicit opt-in PGO/LTO (OPTIMIZATION.md §10, P3): the flags reach both
   // the per-file compile and the final link, so instrumented objects link
   // their profiling runtime and -flto objects meet a -flto link step.
@@ -686,7 +707,7 @@ int main(int argc, char** argv) {
     std::string outObj;
     if (!compileOne(preprocessor, pliInputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
                     compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
-                     noSizeChecks, noZdivChecks, noConvChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj,
+                     noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj,
                     runtimeBc, linkBitcode, singleModuleFinalLink, needClangPipeline))
       return 1;
     if (!compileOnly)

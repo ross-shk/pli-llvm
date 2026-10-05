@@ -38,10 +38,10 @@ struct Val {
 class IRGen {
 public:
    IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
-         bool noConvChecks = false, std::string runtimeBc = "", bool linkBitcode = false)
-       : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
-         noSizeChecks_(noSizeChecks), noZdivChecks_(noZdivChecks), noConvChecks_(noConvChecks),
-         runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
+         bool noConvChecks = false, bool noSubChecks = false, std::string runtimeBc = "", bool linkBitcode = false)
+        : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
+          noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
+          noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
 
   std::string run(HProgram& prog);
 
@@ -526,15 +526,18 @@ private:
      bool noConv = false;
    };
    std::vector<CheckState> checkStack_;
-   // Global --no-size-checks (ADR-111) disables every SIZE trap, including
-   // ones an ON SIZE handler would otherwise route.
-   bool noSizeChecks_ = false;
-   bool noZdivChecks_ = false;
-   bool noConvChecks_ = false;
-   bool sizeChecks() const {
-     return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
-   }
-   bool subChecks() const { return checkStack_.empty() || !checkStack_.back().noSub; }
+    // Global --no-size-checks (ADR-111) disables every SIZE trap, including
+    // ones an ON SIZE handler would otherwise route.
+    bool noSizeChecks_ = false;
+    bool noSubChecks_ = false;
+    bool noZdivChecks_ = false;
+    bool noConvChecks_ = false;
+    bool sizeChecks() const {
+      return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
+    }
+    bool subChecks() const {
+      return !noSubChecks_ && (checkStack_.empty() || !checkStack_.back().noSub);
+    }
    bool zdivChecks() const {
      return !noZdivChecks_ && (checkStack_.empty() || !checkStack_.back().noZdiv);
    }
@@ -554,6 +557,18 @@ private:
   // Per-procedure tracking for implicit ALLOCATE of CONTROLLED variables
   // (IBM Enterprise PL/I): one bit per symbol prevents duplicate pushes.
   std::unordered_set<Symbol*> ctlImplicitAlloc_;
+  // Loop-invariant CONTROLLED base/length cache (IRGen LICM for ctl stacks):
+  // a DO loop with no ALLOCATE/FREE/CALL inside hoists pli_ctl_addr/len out
+  // of the body; addressOf/ctlDynBound hit these while the loop emits.
+  std::unordered_map<Symbol*, llvm::Value*> ctlAddrHoist_;
+  std::unordered_map<Symbol*, llvm::Value*> ctlLenHoist_;
+  std::map<std::pair<Symbol*, size_t>, llvm::Value*> ctlExtHoist_;
+  void collectCtlExprUses(HExpr* e, std::unordered_set<Symbol*>& uses, bool& hasCall);
+  void collectCtlLoopInfo(HStmt* s, std::unordered_set<Symbol*>& uses,
+                          std::unordered_set<Symbol*>& muts, bool& hasCall);
+  void hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
+                           std::vector<Symbol*>& hoisted,
+                           std::vector<std::pair<Symbol*, size_t>>& hoistedExt);
   // AUTOMATIC AREA variables of the procedure being emitted (rule (20)): the
   // runtime region is created at entry and destroyed on every exit path.
   std::vector<Symbol*> areaLocals_;
