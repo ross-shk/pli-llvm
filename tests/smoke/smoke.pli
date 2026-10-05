@@ -1,0 +1,3 @@
+ smoke: proc options(main);
+   put list('ok');
+ end smoke;
