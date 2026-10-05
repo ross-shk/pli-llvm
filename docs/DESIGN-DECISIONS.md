@@ -3208,9 +3208,33 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   invalid-character diagnostic (a `break` there would push an
   unset token — the error path must `continue` the lex loop).
 
-  Consequences. `concat_bang.pli` runs (single and chained `!!`);
-  `bad_bang.pli` pins the lone-`!` rejection. Quad `1.0q0`
-  literals and `BIT(n>1)` storage stay later slices.
+   Consequences. `concat_bang.pli` runs (single and chained `!!`);
+   `bad_bang.pli` pins the lone-`!` rejection. Quad `1.0q0`
+   literals and `BIT(n>1)` storage stay later slices.
+
+   ## ADR-185 — Implicit CHAR(24) conversion in concatenation
+
+   Context. Rule (119) `||` was implemented for character operands only
+   (`concat_flat.pli`, M0). Non-character operands (`5 || 'abc'`)
+   were diagnosed as "not implemented" — a placeholder gap, not a
+   spec deviation.
+
+   Decision. Non-character operands in `||` receive an implicit
+   `CHAR(24)` conversion (rule (123) image width) before concatenation,
+   reusing the existing `pli_char_of_fixed` / `pli_char_of_float`
+   runtime helpers — the same path as the `CHAR(x)` builtin. A new
+   `charOf(HExpr*)` helper in IRGen (`irgen.h:394`, previously an
+   unimplemented stub) centralises the leaf materialisation: char
+   operands delegate to `emitExpr` (zero overhead), non-char operands
+   allocate a `charTemp(24)` and call the runtime image function.
+   Sema computes the result length by accumulating per-operand widths
+   (char → `operand.len`, non-char → 24) instead of rejecting mixed
+   operands.
+
+   Consequences. `concat_mixed.pli` pins the conversion for FIXED and
+   FLOAT operands; interior blanks from 24-char images are not stripped
+   by `trim()` (documented in the test); char-only concat paths are
+   unchanged (zero-overhead fast path).
 
   ## ADR-126 — Packed BIT(n) strings, big-endian bytes
 

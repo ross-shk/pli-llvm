@@ -6128,6 +6128,20 @@ Val IRGen::charTemp(int len) {
   return v;
 }
 
+Val IRGen::charOf(HExpr* e) {
+  Val v = emitExpr(e);
+  if (v.ty.isChar())
+    return v;
+  Val dst = charTemp(24);
+  if (e->ty.k == TK::Float) {
+    b_.CreateCall(runtimeFn("pli_char_of_float"), {dst.ptr, dst.len, v.reg});
+  } else {
+    llvm::Value* iv = toI64(convert(v, Type::fixedBin(31, 0), e->loc));
+    b_.CreateCall(runtimeFn("pli_char_of_fixed"), {dst.ptr, dst.len, iv});
+  }
+  return dst;
+}
+
 // Hidden result buffer for a character function (rules (34),(37)): a
 // `CHAR(*) VARYING` result rides a caller-sized max so short static
 // descriptors (len 1) never truncate the returned value.
@@ -6670,16 +6684,10 @@ Val IRGen::emitExpr(HExpr* e) {
         stack.push_back(ex->a.get());
         continue;
       }
-      leaves.push_back(emitExpr(ex));
-    }
-    for (auto& leaf : leaves)
-      if (!leaf.ty.isChar()) {
-        v.ty = e->ty;
-        v.reg = i64(0);
-        return v;
-      }
-    v.ty = e->ty;
-    llvm::Value* total = leaves[0].len;
+       leaves.push_back(charOf(ex));
+     }
+     v.ty = e->ty;
+     llvm::Value* total = leaves[0].len;
     for (size_t i = 1; i < leaves.size(); ++i)
       total = b_.CreateAdd(total, leaves[i].len, "clen");
     v.ptr = b_.CreateAlloca(b_.getInt8Ty(), total, "cbuf");

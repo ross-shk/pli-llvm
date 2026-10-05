@@ -4362,14 +4362,13 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       break;
     case Tok::Concat:
-      if (!A.isChar() || !B.isChar()) {
-        d_.error(e->loc,
-                 "concatenation of non-character data is not implemented "
-                 "in this stage",
-                 "(119)");
-        e->ty = Type::chr(1);
-      } else {
+      if (A.isChar() && B.isChar()) {
         e->ty = Type::chr(A.len + B.len);
+      } else {
+        // Rule (119): non-character operands are implicitly converted to
+        // CHAR (24) before concatenation, mirroring the CHAR builtin.
+        int len = (A.isChar() ? A.len : 24) + (B.isChar() ? B.len : 24);
+        e->ty = Type::chr(len);
       }
       break;
     case Tok::Amp:
