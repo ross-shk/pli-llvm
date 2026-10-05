@@ -7,7 +7,7 @@
 # objects to prove they link cleanly.
 set -u
 PLIC=$PWD/build/plic
-CLANG=clang
+CLANG=${CLANG:-clang}
 RTLIB=$PWD/build/libpli.a
 OUT=tests/driver/out/multic
 mkdir -p tests/driver/out
@@ -32,6 +32,7 @@ if $PLIC -c multic_a.pli multic_b.pli -o x.o 2>/dev/null; then
   echo "FAIL multic: accepted -o with multiple -c inputs"
   exit 1
 fi
-$CLANG multic_b.o multic_a.o "$RTLIB" -o multic || { echo "FAIL multic: link"; exit 1; }
+# -lm after the archive: libpli needs libm on Linux (no-op on macOS).
+$CLANG multic_b.o multic_a.o "$RTLIB" -lm -o multic || { echo "FAIL multic: link"; exit 1; }
 ./multic
 exit 0

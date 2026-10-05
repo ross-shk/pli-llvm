@@ -6935,8 +6935,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
   // COSD, TAND, ATAND. The argument is converted to FLOAT and the matching
   // function is called. Non-degree variants map to LLVM intrinsics (inlined
-  // and lowered to hardware/libm by the optimizer); degree variants keep
-  // pli_* runtime wrappers that convert to radians first.
+  // and lowered to hardware/libm by the optimizer), except TAN/ATAN/SINH/
+  // COSH/TANH/ASIN/ACOS on LLVM < 20, whose backends leave the llvm.* call
+  // in the object file (undefined symbol at link); those use the pli_*
+  // musl-port wrappers instead. Degree variants keep pli_* runtime wrappers
+  // that convert to radians first.
   if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
       e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
       e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
@@ -6965,6 +6968,15 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         ix = i;
     v.ty = e->ty;
     const char* intrinsic = kLLVMIntrinsic[ix];
+#if LLVM_VERSION_MAJOR < 20
+    // LLVM < 20 has no backend lowering for these seven (the llvm.* call
+    // survives to the object file and fails the link); route them through
+    // the pli_* musl-port wrappers, which exist for every entry above.
+    if (intrinsic && (e->name == "TAN" || e->name == "ATAN" || e->name == "SINH" ||
+                      e->name == "COSH" || e->name == "TANH" || e->name == "ASIN" ||
+                      e->name == "ACOS"))
+      intrinsic = nullptr;
+#endif
     if (intrinsic)
       v.reg = b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x.reg},
                             "math");

@@ -8,7 +8,7 @@
 # asserted with nm (T = global text, t = local).
 set -u
 PLIC=./build/plic
-CC=${CC:-clang}
+CC=${CC:-${CLANG:-clang}}
 RTLIB=./build/libpli.a
 OUT=tests/driver/out/package
 mkdir -p tests/driver/out
@@ -44,6 +44,7 @@ $PLIC "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL package: main compile"
 SYM_PREFIX=$([ "$(uname -s)" = "Darwin" ] && echo "_" || echo "")
 nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PUB" >/dev/null || { echo "FAIL package: ${SYM_PREFIX}PUB not exported"; exit 1; }
 if nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PRIV" >/dev/null; then echo "FAIL package: ${SYM_PREFIX}PRIV leaked"; exit 1; fi
-$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" -o "$OUT" || { echo "FAIL package: link"; exit 1; }
+# -lm after the archive: libpli needs libm on Linux (no-op on macOS).
+$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" -lm -o "$OUT" || { echo "FAIL package: link"; exit 1; }
 "$OUT"
 exit 0
