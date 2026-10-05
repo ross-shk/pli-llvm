@@ -446,9 +446,13 @@ static void applyRuntimeAttrs(llvm::Function* f) {
   }
   if (a.willReturn)
     f->addFnAttr(llvm::Attribute::WillReturn);
-  if (a.alwaysInline)
+  if (a.alwaysInline) {
+    // linkRuntimeBitcode stamped NoInline on all runtime bodies to keep the
+    // non-wrappers alive across -dead_strip; the always-inline math wrappers
+    // must be inlined, so drop NoInline before forcing AlwaysInline.
+    f->removeFnAttr(llvm::Attribute::NoInline);
     f->addFnAttr(llvm::Attribute::AlwaysInline);
-  else
+  } else
     f->addFnAttr(llvm::Attribute::NoInline);
   switch (a.mem) {
   case RtMemNone:
@@ -626,6 +630,27 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   }
   llvm::Type* ty = a->getType();
   unsigned bits = ty->getIntegerBitWidth();
+  // Constant-fold overflow checks (Task 12): both operands compile-time known,
+  // so compute the result and overflow flag at emit time and drop the
+  // with.overflow intrinsic + trap block. Only matters at -O0/-O1 (-O2/-O3
+  // default to NOSIZE per Task 7). Sound because both operands are constants.
+  if (auto* ca = llvm::dyn_cast<llvm::ConstantInt>(a)) {
+    if (auto* cb = llvm::dyn_cast<llvm::ConstantInt>(b)) {
+      const llvm::APInt& av = ca->getValue();
+      const llvm::APInt& bv = cb->getValue();
+      bool of = false;
+      llvm::APInt rv;
+      if (op == Tok::Plus)
+        rv = av.sadd_ov(bv, of);
+      else if (op == Tok::Minus)
+        rv = av.ssub_ov(bv, of);
+      else // Tok::Star
+        rv = av.smul_ov(bv, of);
+      if (!of)
+        return llvm::ConstantInt::get(ty, rv);
+      // Overflow possible: fall through to the intrinsic + trap path below.
+    }
+  }
   std::string base = op == Tok::Plus ? "sadd" : op == Tok::Minus ? "ssub" : "smul";
   std::string iname = "llvm." + base + ".with.overflow.i" + std::to_string(bits);
   llvm::Type* st = llvm::StructType::get(ctx_, {ty, b_.getInt1Ty()});
@@ -1037,6 +1062,25 @@ bool IRGen::linkRuntimeBitcode() {
   // runtime's global state (CONTROLLED/ON stacks, I/O) stays shared across
   // units; the P0 side-table facts are re-applied so the optimizer keeps the
   // audited memory/alloc effects on the real bodies.
+  // Strip the build host's target-cpu / target-features from the pre-compiled
+  // runtime (IRGen P0): if they survive into the merged module, LLVM's inliner
+  // refuses to honour the AlwaysInline that applyRuntimeAttrs stamps on the
+  // math wrappers (pli_sin, pli_mod_ll, ...) when the feature sets differ.
+  // KEEP probe-stack: runtime.bc is built for apple-m1, and __chkstk_darwin is
+  // the native probe method for arm64-apple (our targets), so it is sound.
+  // Stamp NoInline on every runtime body so the non-always-inline wrappers
+  // (e.g. pli_put_list_char) are not generically inlined at -O2 and survive
+  // -dead_strip at link (tests/driver/link.sh dead-strip sub-check). The math
+  // wrappers are re-attributed by applyRuntimeAttrs below, which clears NoInline
+  // and sets AlwaysInline for them. Mirrors linkEmbeddedLibPLI
+  // (codegen.cpp:80-95) / emitRuntimeObject (codegen.cpp:128-139).
+  for (auto& F : *rt) {
+    if (F.hasFnAttribute("target-cpu"))
+      F.removeFnAttr("target-cpu");
+    if (F.hasFnAttribute("target-features"))
+      F.removeFnAttr("target-features");
+    F.addFnAttr(llvm::Attribute::NoInline);
+  }
   // Align the data layout with ours first: both describe the same ABI, but
   // clang's darwin layout carries extra address-space pointee specs that the
   // runtime C never uses, and the linker warns on any textual difference.
@@ -6684,10 +6728,10 @@ Val IRGen::emitExpr(HExpr* e) {
         stack.push_back(ex->a.get());
         continue;
       }
-       leaves.push_back(charOf(ex));
-     }
-     v.ty = e->ty;
-     llvm::Value* total = leaves[0].len;
+      leaves.push_back(charOf(ex));
+    }
+    v.ty = e->ty;
+    llvm::Value* total = leaves[0].len;
     for (size_t i = 1; i < leaves.size(); ++i)
       total = b_.CreateAdd(total, leaves[i].len, "clen");
     v.ptr = b_.CreateAlloca(b_.getInt8Ty(), total, "cbuf");
