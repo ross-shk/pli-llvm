@@ -2,7 +2,17 @@
 
 A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics).
 
-**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy, just pick the executable for your platform from GitHub.
+**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a release tarball and extract the `plic` binary:
+
+```sh
+# macOS (Apple Silicon)
+curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-darwin-arm64.tar.gz \
+  | tar xzf - && sudo mv darwin-arm64/plic /usr/local/bin/
+
+# Linux (x86_64)
+curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-linux-x86_64.tar.gz \
+  | tar xzf - && sudo mv linux-x86_64/plic /usr/local/bin/
+```
 
 A "Hello, world!" program:
 
