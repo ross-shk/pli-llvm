@@ -2,54 +2,7 @@
 
 A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics).
 
-**Single-binary distribution** (like Go/Zig) — the `plic` executable embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
-
-```bash
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-./build/cmake/plic tests/core/hello.pli -o hello
-./hello
-Hello, world!
-```
-
-### Platforms
-
-- **Linux** (x86_64, ARM64): clang or gcc
-- **macOS** (Intel, Apple Silicon): clang
-- **Windows** (x86_64, ARM64): **MSVC/nmake** (not MinGW); portable threading abstraction wraps POSIX pthreads and Win32 primitives
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- C++20 compiler (clang++/g++; MSVC on Windows)
-- CMake ≥ 3.20
-- Ninja build system (`brew install ninja` / `apt-get install ninja-build`)
-- LLVM ≥ 18 with `clang` and `lld`
-
-### Build
-
-```bash
-# macOS (Homebrew LLVM):
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j
-
-# Linux:
-cmake -G Ninja -S . -B build/cmake
-cmake --build build/cmake -j
-```
-
-### Cross-compile PL/I code
-
-Compile for another target with `--triple` (build `plic` with `PLIC_CROSS_BITCODE=ON` first):
-
-```bash
-./build/cmake/plic --triple x86_64-unknown-linux-gnu program.pli -o program
-./build/cmake/plic -target aarch64-pc-windows-gnu program.pli -o program.exe
-```
-
-### Run a PL/I program
+**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
 
 ```pli
 hello: procedure options(main);
@@ -57,173 +10,182 @@ hello: procedure options(main);
 end hello;
 ```
 
-```bash
+```sh
+plic tests/core/hello.pli -o hello
+./hello
+```
+
+## Platforms
+
+- **Linux** (x86_64, ARM64): gcc or clang
+- **macOS** (Intel, Apple Silicon): clang
+- **Windows** (x86_64, ARM64): MSVC + Ninja (not MinGW/MSYS2/Cygwin)
+
+Threading is abstracted in `runtime/sync/plic_thread.h` (POSIX pthreads on Linux/macOS, Win32 primitives on Windows).
+
+---
+
+## Requirements
+
+| Tool | Minimum | Notes |
+| ---- | ------- | ----- |
+| C++20 compiler | gcc 12 / clang 15 / MSVC 2022 17.x | Plus a Windows 10/11 SDK on Windows |
+| CMake | 3.20 | All platforms |
+| Ninja | any recent | Canonical generator on all platforms, including Windows |
+| LLVM + clang + lld | 18 | Dev libraries **and** `lld` headers/libs required; see below |
+| Python | 3 | For `scripts/gen_*.py` and `tests/run_tests.py` |
+| Git | any recent | Optional; without it `plic version` reports `unknown` |
+
+LLVM sources:
+
+- **Linux:** distro `llvm`/`clang`/`lld` dev packages, or a self-built LLVM.
+- **macOS:** `brew install llvm lld ninja cmake` (note: stock `llvm` formula omits `lld`, so `lld` is a separate formula).
+- **Windows:** no standard prebuilt LLVM ships everything `plic` needs, so build LLVM 18.x from source with `clang;lld` and the `X86;AArch64` targets (one-time cost), then point `CMAKE_PREFIX_PATH` at the install dir. Forward slashes work best in CMake paths (`C:/llvm-install`).
+
+---
+
+## Build
+
+### Linux
+
+```sh
+cmake -G Ninja -S . -B build/cmake
+cmake --build build/cmake -j
+```
+
+### macOS (Homebrew LLVM)
+
+```sh
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"
+cmake --build build/cmake -j
+```
+
+### Windows (MSVC + Ninja)
+
+Run from `cmd.exe` (not PowerShell, not MinGW):
+
+```bat
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+cmake -G Ninja -S C:/path/to/pli-llvm -B C:/path/to/pli-llvm/build/cmake ^
+  -DCMAKE_PREFIX_PATH=C:/path/to/llvm-install ^
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build C:/path/to/pli-llvm/build/cmake -j
+```
+
+Notes:
+
+- `vcvarsall.bat x64` is required so MSVC, the Windows SDK, and `cl.exe` are on `PATH`.
+- `CMAKE_PREFIX_PATH` must point at your LLVM **install** prefix (the directory containing `lib/cmake/llvm`). Use forward slashes.
+- Ninja must be on `PATH` (`pip install ninja`, or a Ninja release, or the VS-bundled copy).
+- Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `plic` itself — use native MSVC.
+
+Building LLVM 18.x on Windows (one-time setup, Release, `X86;AArch64` only):
+
+```bat
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+cmake -G Ninja -S llvm-project/llvm -B llvm-build ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DLLVM_ENABLE_PROJECTS="clang;lld" ^
+  -DLLVM_TARGETS_TO_BUILD="X86;AArch64" ^
+  -DCMAKE_INSTALL_PREFIX=C:/llvm-install
+
+cmake --build llvm-build -j --target install
+```
+
+Then build `plic` with `-DCMAKE_PREFIX_PATH=C:/llvm-install`.
+
+### Test
+
+```sh
+ctest --test-dir build/cmake -j        # full suite (~450 tests)
+python3 tests/run_tests.py usecases    # one group
+```
+
+Quality gate (format + static analysis + warnings-as-errors):
+
+```sh
+cmake --build build/cmake --target check
+```
+
+---
+
+## Use
+
+Compile for the host:
+
+```sh
 ./build/cmake/plic tests/core/hello.pli -o hello
 ./hello
 ```
 
-### Test
+Cross-compile PL/I code with `--triple` (first build `plic` with `PLIC_CROSS_BITCODE=ON` so all 4 runtime bitcodes are embedded):
 
-```bash
-ctest --test-dir build/cmake     # ~440 tests
-./tests/run_tests.py usecases   # specific group
+```sh
+cmake -G Ninja -S . -B build/cmake -DPLIC_CROSS_BITCODE=ON   # + platform flags above
+cmake --build build/cmake -j
+
+./build/cmake/plic --triple x86_64-unknown-linux-gnu program.pli -o program
+./build/cmake/plic --triple x86_64-pc-windows-gnu program.pli -o program.exe
 ```
+
+Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. Without `PLIC_CROSS_BITCODE=ON`, `--triple` falls back to the host runtime blob and only works when the target ABI matches the host.
 
 ---
 
-## What Works Today
+## What works today
 
-| Feature                           | Examples                                                                                         |
-| --------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Procedures & functions**        | `OPTIONS(MAIN)`, internal, `RETURNS`, `RECURSIVE`, multiple entry points                         |
-| **Static link for nested scopes** | Internal procedures access enclosing automatics; externals stay reentrant                        |
-| **C interop**                     | `ENTRY ... EXTERNAL`, `BYVALUE`, `LINKAGE(SYSTEM)` for scalars/pointers                          |
-| **Data types**                    | `FIXED BIN/DEC(p,q)`, `FLOAT`, `COMPLEX`, `BIT`, `CHAR/VARYING/VARYINGZ`, `POINTER`              |
-| **Arrays & structures**           | Dynamic extents, cross-sections `A(i,*)`, reductions `SUM`/`PROD`/`ANY`/`ALL`, `LIKE`, `BY NAME` |
-| **Storage**                       | `BASED`/`ALLOCATE/FREE`, `CONTROLLED` stacks, `DEFINED` with `iSUB`, `ADDR`/`NULL`               |
-| **Conditions**                    | `ON`/`SIGNAL`/`REVERT` for `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, `CONVERSION`, named conditions              |
-| **Concurrency**                   | `TASK`/`EVENT`/`PRIORITY` async `CALL` with `WAIT`/`DELAY`                                       |
-| **Stream I/O**                    | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE`                          |
-| **Record I/O**                    | `WRITE`/`READ` fixed-size binary records                                                         |
-| **Preprocessor**                  | `%INCLUDE`, `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`                             |
-| **Built-ins**                     | String, math, array/pointer/misc (see `guides/builtins.md`)                                      |
-| **No reserved words**             | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables                                  |
+| Feature | Examples |
+| ------- | -------- |
+| **Procedures & functions** | `OPTIONS(MAIN)`, internal, `RETURNS`, `RECURSIVE`, multiple entry points |
+| **Static link for nested scopes** | Internal procedures access enclosing automatics; externals stay reentrant |
+| **C interop** | `ENTRY ... EXTERNAL`, `BYVALUE`, `LINKAGE(SYSTEM)` for scalars/pointers |
+| **Data types** | `FIXED BIN/DEC(p,q)`, `FLOAT`, `COMPLEX`, `BIT`, `CHAR/VARYING/VARYINGZ`, `POINTER` |
+| **Arrays & structures** | Dynamic extents, cross-sections `A(i,*)`, reductions `SUM`/`PROD`/`ANY`/`ALL`, `LIKE`, `BY NAME` |
+| **Storage** | `BASED`/`ALLOCATE/FREE`, `CONTROLLED` stacks, `DEFINED` with `iSUB`, `ADDR`/`NULL` |
+| **Conditions** | `ON`/`SIGNAL`/`REVERT` for `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, `CONVERSION`, named conditions |
+| **Concurrency** | `TASK`/`EVENT`/`PRIORITY` async `CALL` with `WAIT`/`DELAY` |
+| **Stream I/O** | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE` |
+| **Record I/O** | `WRITE`/`READ` fixed-size binary records |
+| **Preprocessor** | `%INCLUDE`, `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE` |
+| **Built-ins** | String, math, array/pointer/misc (see `guides/builtins.md`) |
+| **No reserved words** | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables |
 
-Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *is* the to-do list.
-
----
-
-## Interesting Example: Prime Sieve
-
-```pli
-sieve: procedure options(main);
-    declare (n, i, k, count, limit) fixed bin(31);
-    declare primes(1000) fixed bin(31);
-    declare sieve(1000) bit(1);
-
-    put skip list('Limit:');
-    get list(n);
-    limit = min(n, 1000);
-
-    sieve = '1'b;
-    sieve(1) = '0'b;
-    count = 0;
-
-    do i = 2 to limit;
-        if sieve(i) then do;
-            count = count + 1;
-            primes(count) = i;
-            do k = i * i to limit by i;
-                sieve(k) = '0'b;
-            end;
-        end;
-    end;
-
-    put skip list('Found ');
-    put skip list(count);
-    put skip list(' primes');
-    put skip list('First 10:');
-    do i = 1 to min(10, count);
-        put skip list(primes(i));
-    end;
-
-    put skip list('PASS');
-end sieve;
-```
-
-Shows: arrays, `BIT` arrays, dynamic extents, `DO` loops with `TO/BY`, arithmetic, `MIN`, string handling, and list-directed I/O.
+Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *is* the to-do list. Larger examples live in `tests/usecases/` and `benchmarks/`.
 
 ---
 
 ## Documentation
 
-| Doc                                                         | Purpose                                                                        |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                          | How to add features: layer map, workflow, invariants                           |
-| [guides/programming.md](guides/programming.md)              | Feature guide: data types, arrays, storage, I/O, conditions, concurrency       |
-| [guides/builtins.md](guides/builtins.md)                    | Built-in functions reference (string, math, array, pointer, misc)              |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md)                     | Pipeline, IR levels, data representation, ABI, runtime                         |
-| [GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)             | Rule-by-rule implementation status                                             |
-| [SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md) | TR 25.084 / Y33-6003 audit: GAP-ANALYSIS, CONFORMANCE-MATRIX, REMEDIATION-PLAN |
-| [DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)             | Historical design decisions (ADRs)                                             |
-
----
+| Doc | Purpose |
+| --- | ------- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to add features: layer map, workflow, invariants |
+| [guides/programming.md](guides/programming.md) | Feature guide: data types, arrays, storage, I/O, conditions, concurrency |
+| [guides/builtins.md](guides/builtins.md) | Built-in functions reference |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Pipeline, IR levels, data representation, ABI, runtime |
+| [GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md) | Rule-by-rule implementation status |
+| [SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md) | TR 25.084 / Y33-6003 audit |
+| [DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) | Historical design decisions (ADRs) |
 
 ## Layout
 
-| Path                          | Contents                                                                                                                                                                                                  |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/`                        | Compiler modules: `lexer`, `parser`, `sema`, `hir`, `irgen`, `preprocessor`, `diag`, `types`, `ast`, `target`, `codegen`, `embedded_runtime`, `explain`, `token`, `main`                                  |
-| `runtime/`                    | `libpli`: list-directed I/O, string semantics, conditions, storage, math, task; `sync/` for threading abstraction                                                                                         |
-| `tests/`                      | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`, `preprocessor`, `multimodule`, `corner_cases`): golden (`expected/*.out` diff) or self-checking (prints PASS), `bad_*` must fail |
-| `tests/builtins/`             | built-in function tests — `typeBuiltin`/`emitBuiltin` + `pli_*` helpers                                                                                                                                   |
-| `benchmarks/`                 | PL/I benchmark programs + `run_benchmarks.py` runner                                                                                                                                                      |
-| `docker/`                     | Dockerfiles for cross-platform test images (`Dockerfile.linux-test`, `Dockerfile.wine-test`)                                                                                                              |
-| `scripts/`                    | Build utilities: `gen_embed.py` (runtime bitcode embedding), `gen_rules.py` (rules table)                                                                                                                 |
-| `CMakeLists.txt`              | Canonical CMake build: links LLVM C++ API + `lld`, embeds runtime bitcode, defines `fmt`/`tidy`/`werror`/`check`/`clean` targets                                                                          |
-| `CONTRIBUTING.md`             | How to add features: layer map, workflow, invariants                                                                                                                                                      |
-| `.github/workflows/`          | CI (`build.yml`)                                                                                                                                                                                          |
-| `docs/`                       | ARCHITECTURE, DESIGN-DECISIONS (ADRs), GRAMMAR-COVERAGE, SPEC-COMPLIANCE-REPORT                                                                                                                           |
-| `TR25.084-concrete-syntax.md` | the spec: rules (1)–(151), with ⚠ notes where the scan was damaged                                                                                                                                        |
+| Path | Contents |
+| ---- | -------- |
+| `src/` | Compiler: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target, codegen, embedded runtime |
+| `runtime/` | `libpli` (I/O, strings, conditions, storage, math, tasks) + `sync/plic_thread.h` threading abstraction |
+| `tests/` | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`, `preprocessor`, `multimodule`, `corner_cases`) |
+| `CMakeLists.txt` | Canonical build: LLVM C++ API + `lld`, embedded runtime bitcode |
+| `docs/` / `guides/` | Architecture, ADRs, grammar coverage, compliance report, programming guides |
+| `TR25.084-concrete-syntax.md` | The spec: rules (1)–(151) |
 
 ---
 
-## Building & Testing
+## Known deviations
 
-```bash
-cmake --build build/cmake -j    # build via CMake/Ninja
-ctest --test-dir build/cmake           # test suite
-cmake --build build/cmake --target check   # quality gate (fmt + tidy + werror)
-cmake --build build/cmake --target clean
-```
-
-CMake directly:
-
-```bash
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j
-ctest --test-dir build/cmake
-```
-
-Windows: use MSVC + CMake (no MinGW/MSYS2). The threading abstraction in `runtime/sync/plic_thread.h` wraps `pthread_once`/`pthread_mutex`/`pthread_cond` and `InitOnceExecuteOnce`/`CRITICAL_SECTION`/`CONDITION_VARIABLE`/`_beginthreadex`/`Sleep`.
-
----
-
-## Cross-Compilation
-
-`plic` can target Linux x86_64, Linux ARM64, Windows x86_64, Windows ARM64 from any host (requires LLVM with the target backends and `lld`).
-
-`plic` is built natively on each host — no cross-compiling the compiler binary.  
-`--triple`/`-target` cross-compiles **user PL/I code** using LLVM with the  
-matching target backend and `lld`.
-
-**Build with multi-target runtime bitcode** (embeds all 4 targets; requires  
-`PLIC_CROSS_BITCODE=ON` at build time):
-
-```bash
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DPLIC_CROSS_BITCODE=ON
-cmake --build build/cmake -j
-```
-
-**Compile for a target**:
-
-```bash
-./build/cmake/plic --triple x86_64-unknown-linux-gnu program.pli -o program
-./build/cmake/plic -target aarch64-pc-windows-gnu program.pli -o program.exe
-```
-
-Without `PLIC_CROSS_BITCODE`, the per-target runtime blobs are empty stubs;  
-`--triple` then falls back to the host runtime blob, so cross-compilation of  
-user code works for targets whose ABI matches the host (e.g. macOS-arm64 →  
-Linux-arm64). Build with `PLIC_CROSS_BITCODE=ON` for genuine multi-target  
-runtime bitcode across all 4 targets.
-
----
-
-## Known Deviations
-
-1. **`/` and `**` use floating-point** (ADR-014); exact `FIXED` division/scale is D1/QR2
-2. **Unimplemented = diagnosed** with rule number — see `GRAMMAR-COVERAGE.md`
+1. **`/` and `**` use floating-point** (ADR-014); exact `FIXED` division/scale is D1/QR2.
+2. **Unimplemented = diagnosed** with rule number — see `GRAMMAR-COVERAGE.md`.
 
 ---
 
