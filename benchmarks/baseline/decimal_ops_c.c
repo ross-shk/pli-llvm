@@ -10,7 +10,7 @@ int main(void) {
     rate = 0.0875;
     grand = 0.0;
 
-    for (i = 1; i <= 5000; i++) {
+    for (i = 1; i <= 200000; i++) {
         price = i * 1.99;
         qty = i / 10 + 1;
         total = price * qty;

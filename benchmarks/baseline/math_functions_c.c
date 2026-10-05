@@ -11,7 +11,7 @@ int main(void) {
     n = 200;
     sum = 0.0;
     for (i = 1; i <= n; i++) {
-        x = i * 0.01;
+        x = i / 100.0;           /* matches plic's exact DECIMAL(i,2)->FLOAT = (double)stored/10^scale */
         for (j = 1; j <= 1000; j++) {
             y = sin(x) + cos(x) + sqrt(x + 1.0) + exp(x) + log(x + 1.0);
             sum = sum + y;

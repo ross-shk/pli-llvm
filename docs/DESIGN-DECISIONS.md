@@ -5413,4 +5413,40 @@ static system paths. The `linkArgs` vector mixes `-L`, `-l`, and `-Wl,` entries
 (parsed flat during arg parsing), so discovered `-L` dirs appear after any
 interleaved user `-l` flags — an accepted limitation noted in the plan.
 
+---
+
+## ADR-189 — Exact scaled-integer `BINARY * DECIMAL` (no FLOAT for integer BINARY)
+
+**Context.** ADR-006/056 represent `FIXED DECIMAL(p,q)` as an `i64` scaled by 10^q,
+so a `BINARY(scale 0)` times a `DECIMAL(scale>0)` product is exact: the raw stored
+integers multiply and the product scale is the sum (e.g. `i*1.99` → `imul i, 199`,
+scale 2). ADR-014 promoted mixed `BINARY × DECIMAL(scale>0)` to FLOAT to avoid
+decimal-literal truncation (OPTIMIZATION-PLAN 2026-10-05); that FLOAT path turned
+one exact `imul` into `fmul`+`fmul`+`fcvtzs`, dominating the `decimal_ops` benchmark
+hot loop.
+
+**Decision.** `mulResultType` promotes to FLOAT **only** for a genuine cross-base
+product — a *fractional* `FIXED BINARY` operand (base-2 scale > 0) times a DECIMAL
+operand, whose non-dyadic fraction no binary scale can represent. An integer BINARY
+(scale 0) times a DECIMAL(scale>0) stays an exact `FIXED DECIMAL` (ADR-006/056), and
+the existing raw-integer multiply emitter (`IRGen`, `op==Star && common.isFixed()`)
+fires unchanged. `DECIMAL*DECIMAL`, `BINARY*BINARY`, and `BINARY * integer DECIMAL`
+are unaffected.
+
+**Consequences.** `i*1.99` lowers to a single `mul i64 …, 199` at all optimization
+levels (`src/irgen.cpp` raw-mul path, `checkedArith`→`CreateMul`). The `math_functions`
+parity test (`x = i*0.01` into FLOAT) is preserved by aligning the C baseline to
+`i/100.0` (R1b): PL/I's DECIMAL→FLOAT convert already emits `(double)stored/10^scale`
+= `i/100.0`, so the two match bit-for-bit. `tests/core/arith.pli` (`2+3*4`),
+`tests/core/decimal.pli` (DEC*DEC), `tests/core/scaled.pli`, `tests/core/divide.pli`
+and `driver/decimal_overflow` all stay green (322 ctest assertions, 0 regressions).
+The remaining `i/10` FLOAT division in `decimal_ops` is deferred to P3/ADR-006's M2.
+
+**Risks.** `BINARY(scale>0) * DECIMAL(scale>0)` still promotes to FLOAT (correct —
+a base-2 fraction times a base-10 fraction is genuinely lossy). The intermediate
+product type for `BINARY * DECIMAL(scale>0)` is widened to `FixedDec` so nested
+products (e.g. `(i*1.99)*1.00`) keep the DECIMAL scale label instead of mis-reading
+it as a binary scale. `BINARY * integer DECIMAL (scale 0)` keeps the existing `FixedBin`
+kind — no widening for the common `3*n` case (collatz).
+
 

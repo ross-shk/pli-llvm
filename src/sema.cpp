@@ -70,17 +70,26 @@ Type arithResultType(const Type& a, const Type& b) {
 Type mulResultType(const Type& a, const Type& b) {
   if (a.k == TK::Float || b.k == TK::Float)
     return arithResultType(a, b);
-  // Mixed-point rule (mirrors `/` and `**`, ADR-014): FIXED BINARY * FIXED
-  // DECIMAL with a fractional decimal operand (scale > 0) promotes to FLOAT. A
-  // binary scale (2^q) cannot represent a non-dyadic decimal fraction (e.g. 0.01
-  // or 1.99), so keeping the product fixed would truncate the decimal operand to
-  // 0/1 and silently corrupt the result. DECIMAL*DECIMAL and BINARY*BINARY
-  // (including integer-valued decimals, scale 0) stay fixed so exact decimal and
-  // integer products are unchanged.
-  if ((a.k == TK::FixedBin && b.k == TK::FixedDec && b.scale > 0) ||
-      (a.k == TK::FixedDec && b.k == TK::FixedBin && a.scale > 0))
+  // FLOAT only for a genuine cross-base product: a fractional FIXED BINARY
+  // operand (base-2 scale > 0) times a DECIMAL operand. A binary scale (2^q)
+  // cannot represent a non-dyadic decimal fraction, so the product is lossy in
+  // FLOAT only when the BINARY operand is itself fractional. An integer BINARY
+  // (scale 0) times a DECIMAL(scale>0) is an exact fixed product: the raw
+  // scaled integers multiply directly (product scale = sum of scales,
+  // ADR-006/056), so i*1.99 lowers to a single imul with no FLOAT conversion.
+  // DECIMAL*DECIMAL and BINARY*BINARY are unchanged.
+  if ((a.k == TK::FixedBin && b.k == TK::FixedDec && a.scale > 0) ||
+      (a.k == TK::FixedDec && b.k == TK::FixedBin && b.scale > 0))
     return Type::flt(std::max(6, std::max(a.prec, b.prec)));
   Type t = arithResultType(a, b);
+  // A BINARY * fractional DECIMAL product is decimal-scaled: the stored
+  // integers multiply directly (ADR-006/056), so the result kind is DECIMAL
+  // even though arithResultType returned BINARY (it only yields DECIMAL when
+  // both operands are DECIMAL). Binary * integer DECIMAL (scale 0) keeps the
+  // existing BINARY kind — no widening for the common 3*n case.
+  if (t.k != TK::FixedDec && ((a.k == TK::FixedBin && b.k == TK::FixedDec && b.scale > 0) ||
+                              (a.k == TK::FixedDec && b.k == TK::FixedBin && a.scale > 0)))
+    t.k = TK::FixedDec;
   t.scale = a.scale + b.scale;
   return t;
 }
