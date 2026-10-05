@@ -1,15 +1,17 @@
-# plic — a PL/I compiler targeting LLVM
+# pli-llvm — a PL/I compiler targeting LLVM
 
 A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics).
 
-**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a release tarball and extract the `plic` binary:
+**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a [release](https://github.com/ross-shk/pli-llvm/releases/tag/v0.1.0) archive, extract the `plic` binary and put it in the executable path, on the Mac (Apple Silicon):
 
 ```sh
-# macOS (Apple Silicon)
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-darwin-arm64.tar.gz \
   | tar xzf - && sudo mv darwin-arm64/plic /usr/local/bin/
+```
 
-# Linux (x86_64)
+or on Linux (x86_64):
+
+```
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-linux-x86_64.tar.gz \
   | tar xzf - && sudo mv linux-x86_64/plic /usr/local/bin/
 ```
@@ -50,14 +52,14 @@ parrallel_sum: proc options(main);
   put skip list('sum 1..100 =', part1 + part2);
   free data;
 
-sum_first: proc;
-  dcl (j, s) fixed bin(31);
-  s = 0;
-  do j = 1 to 50;
-    s = s + data(j);
+  sum_first: proc;
+    dcl (j, s) fixed bin(31);
+    s = 0;
+    do j = 1 to 50;
+      s = s + data(j);
+    end;
+    part1 = s;
   end;
-  part1 = s;
-end;
 
 sum_second: proc;
   dcl (j, s) fixed bin(31);
@@ -244,13 +246,6 @@ Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *
 | `CMakeLists.txt`              | Canonical build: LLVM C++ API + `lld`, embedded runtime bitcode                                                         |
 | `docs/` / `guides/`           | Architecture, ADRs, grammar coverage, compliance report, programming guides                                             |
 | `TR25.084-concrete-syntax.md` | The spec: rules (1)–(151)                                                                                               |
-
----
-
-## Known deviations
-
-1. **`/` and `**` use floating-point** (ADR-014); exact `FIXED` division/scale is D1/QR2.
-2. **Unimplemented = diagnosed** with rule number — see `GRAMMAR-COVERAGE.md`.
 
 ---
 
