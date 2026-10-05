@@ -47,8 +47,9 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t) {
     break;
   case llvm::Triple::COFF:
     d.lldDriver = "coff";
-    d.systemLibs = {"kernel32.lib", "ucrt.lib", "vcruntime.lib"};
-    d.linkerFlags = {"/entry:mainCRTStartup", "/subsystem:console", "/MD"};
+    d.systemLibs = {"kernel32.lib", "ucrt.lib", "vcruntime.lib", "msvcrt.lib", "oldnames.lib"};
+    // NOTE: /MD is a compiler flag, not a linker flag — lld-link rejects it.
+    d.linkerFlags = {"/entry:mainCRTStartup", "/subsystem:console"};
     break;
   case llvm::Triple::MachO: {
     d.lldDriver = "macho";
@@ -77,7 +78,7 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
 
   std::string lookupErr;
   llvm::Triple ttm(triple);
-  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(ttm, lookupErr);
+  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, lookupErr);
   if (!target) {
     err = "cannot find target for triple '" + triple + "': " + lookupErr;
     return nullptr;
@@ -95,6 +96,6 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   const char* features = "";
   // PIE objects match what the clang-subprocess backend produced.
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-      ttm, "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
+      triple, "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
 }
 } // namespace plic

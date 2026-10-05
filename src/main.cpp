@@ -11,7 +11,14 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#define popen _popen
+#define pclose _pclose
+#else
 #include <unistd.h>
+#endif
 #include <vector>
 
 #include "diag.h"
@@ -161,10 +168,22 @@ static void printVersion() {
 }
 
 static std::string shellQuote(const std::string& s) {
+#ifdef _WIN32
+  // cmd.exe quoting: only quote when needed (spaces/tabs/quotes). Always
+  // quoting breaks MSVC system() -> cmd /c quote stripping for executables
+  // without spaces (e.g. C:/dev/.../clang.exe).
+  if (s.find_first_of(" \t\"") == std::string::npos)
+    return s;
+  std::string out = "\"";
+  for (char c : s)
+    out += c == '"' ? "\\\"" : std::string(1, c);
+  return out + "\"";
+#else
   std::string out = "'";
   for (char c : s)
     out += c == '\'' ? "'\\''" : std::string(1, c);
   return out + "'";
+#endif
 }
 
 static fs::path executablePath(const char* arg0) {
@@ -176,7 +195,12 @@ static fs::path executablePath(const char* arg0) {
     return p;
   std::stringstream dirs(path);
   std::string dir;
-  while (std::getline(dirs, dir, ':')) {
+#ifdef _WIN32
+  const char sep = ';';
+#else
+  const char sep = ':';
+#endif
+  while (std::getline(dirs, dir, sep)) {
     fs::path candidate = fs::path(dir.empty() ? "." : dir) / p;
     if (fs::exists(candidate))
       return fs::absolute(candidate);
@@ -311,7 +335,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
           om->mod->setDataLayout(tm->createDataLayout());
           // Also set module target triple to ensure consistent
           // feature handling during codegen (module triple affects some defaults).
-          om->mod->setTargetTriple(llvm::Triple(triple));
+          om->mod->setTargetTriple(triple);
           // Mirror the clang backend: optimize the (runtime-linked) IR at the
           // requested -O level before codegen.
           plic::optimizeModule(*om->mod, optLevel);
@@ -900,8 +924,12 @@ int main(int argc, char** argv) {
           else
             argStore.push_back(la);
         }
-        argStore.push_back("-o");
-        argStore.push_back(output);
+        if (llt.getObjectFormat() == llvm::Triple::COFF) {
+          argStore.push_back("/out:" + output);
+        } else {
+          argStore.push_back("-o");
+          argStore.push_back(output);
+        }
         std::vector<const char*> argv;
         for (const std::string& a : argStore)
           argv.push_back(a.c_str());
@@ -942,16 +970,25 @@ int main(int argc, char** argv) {
   std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags;
 #ifdef __APPLE__
   cmd += " -Wl,-dead_strip";
+#elif defined(_WIN32)
+  // COFF: no dead-strip / pthread flags via clang driver on Windows.
 #else
   cmd += " -Wl,--gc-sections";
 #endif
+#ifndef _WIN32
   cmd += " -pthread";
+#endif
   for (const std::string& o : objs)
     cmd += " " + shellQuote(o);
   if (!runtimeLib.empty())
     cmd += " " + shellQuote(runtimeLib);
   for (const std::string& la : linkArgs)
     cmd += " " + la; // link flags
+#if !defined(_WIN32) && !defined(__APPLE__)
+  // libpli's mathport needs libm (after the archive: ld resolves left to
+  // right); macOS bundles it in libSystem.
+  cmd += " -lm";
+#endif
   cmd += " -o " + shellQuote(output);
   if (verbose)
     std::cerr << "+ " << cmd << "\n";

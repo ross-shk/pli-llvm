@@ -182,7 +182,11 @@ void pli_low(char *dst, long long n) { pli_memset(dst, 0x00, (size_t)n); }
 void pli_date(char *buf, long long cap) {
   time_t now = time(NULL);
   struct tm tmv;
+#ifdef _WIN32
+  localtime_s(&tmv, &now);
+#else
   localtime_r(&now, &tmv);
+#endif
   char tmp[16];
   int n = pli_snprintf(tmp, sizeof tmp, "%04d%02d%02d",
                    tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
@@ -195,7 +199,11 @@ void pli_date(char *buf, long long cap) {
 void pli_time(char *buf, long long cap) {
   time_t now = time(NULL);
   struct tm tmv;
+#ifdef _WIN32
+  localtime_s(&tmv, &now);
+#else
   localtime_r(&now, &tmv);
+#endif
   char tmp[16];
   int n = pli_snprintf(tmp, sizeof tmp, "%02d%02d%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
   long long i = 0;

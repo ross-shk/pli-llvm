@@ -37,7 +37,9 @@ EOF
 $PLIC "$OUT.pli" -c -o "$OUT.pli.o" || { echo "FAIL: plic -c failed"; ok=0; }
 $CLANG -c "$OUT.c" -o "$OUT.c.o" || { echo "FAIL: clang -c failed"; ok=0; }
 # Link pli object, C object and the runtime into one binary.
-$CLANG "$OUT.pli.o" "$OUT.c.o" "$RTLIB" -o "$OUT" || { echo "FAIL: cross-unit link failed"; ok=0; }
+# (-lm after the archive: libpli's ROUND/mathport refs need libm on Linux;
+# harmless on macOS where libm is in libSystem.)
+$CLANG "$OUT.pli.o" "$OUT.c.o" "$RTLIB" -lm -o "$OUT" || { echo "FAIL: cross-unit link failed"; ok=0; }
 check "cross-unit run" "$($OUT)" "plic: 42"
 
 # --- -Wl and --linker surface in the backend command (via -v) ---------------

@@ -5330,4 +5330,44 @@ rejections. GRAMMAR-COVERAGE row (123) moves to include SYSTEM. The runtime
 function is not placed in kRuntimeAttrs — like pli_date/pli_time/pli_delay it
 performs external I/O and receives only the default NoUnwind.
 
+## ADR-187 — CONVERSION condition: FIXED(char) trap, ON/SIGNAL/REVERT, (NOCONVERSION)
+
+**Context.** TR 25.084 rule (62) lists CONVERSION as a prefix, and rule (94)
+includes it as a condition (usable in ON/SIGNAL/REVERT). The compiler
+recognized only ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE — every other condition
+was diagnosed. The most common CONVERSION trigger is `FIXED(char)` when the
+character string has no valid numeric digits, but the compiler silently
+returned 0 instead of signalling. The `CONVERSION`/`NOCONVERSION` prefixes
+were accepted as syntax but produced no runtime behaviour.
+
+**Decision.** Add CONVERSION as a fixed condition key (`kConversionCondKey =
+-4`, mirroring the negative-key scheme for SIZE/SUBSCRIPTRANGE/ZERODIVIDE).
+
+  - Parser: `CONVERSION` is accepted in `parseCondition` (rules 91/93);
+    `CONDITION(CONVERSION)` is rejected as rule (99) (cannot name a built-in
+    condition). The prefix parser accepts `CONVERSION` (no-op, already enabled)
+    and `NOCONVERSION` (sets `noConv`).
+
+  - Sema: `resolveCondKey` returns `kConversionCondKey` for "CONVERSION";
+    `noConv` propgates through desugared assignment groups (BY NAME, multiple
+    assign) and the DO/IF/BEGIN check-stack carries it to children.
+
+  - IRGen: `FIXED(char)` calls `pli_fixed_of_char` with an `int *ok` out-param;
+    when `ok == 0` (no digits consumed) and `convChecks()` is true, a
+    `emitCondTrap`-style block routes through the CONVERSION dispatch (abort via
+    `pli_conversion` when no handler, or run the top ON-unit and resume). The
+    resume value is 0, which `pli_fixed_of_char` already returns in that case.
+    The `--no-conversion` global flag and the `(NOCONVERSION)` prefix suppress
+    the trap entirely.
+
+  - Runtime: `pli_fixed_of_char` gains an `int *ok` parameter (ABI token `IPTR`,
+    a new `int *` token alongside `PTR`/`CPTR`). `pli_conversion` is the abort
+    path (calls `pli_signal_error`). `ONCODE()` is unaffected — it remains 1
+    only inside the ERROR unit.
+
+**Consequences.** `on_conversion.pli` (self-check) covers ON/SIGNAL/REVERT
+CONVERSION, the FIXED(char) trap, ONCODE behavior (0 inside CONVERSION), and the
+(NOCONVERSION) prefix. `bad_on_cond_conversion.pli` pins `CONDITION(CONVERSION)`
+rejection. GRAMMAR-COVERAGE rows (60)–(63) and (91)–(99) updated.
+
 

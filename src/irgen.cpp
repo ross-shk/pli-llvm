@@ -8,6 +8,7 @@
 #endif
 
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -463,14 +464,21 @@ static void applyRuntimeAttrs(llvm::Function* f) {
     break;
   }
   if (a.allocMalloc) {
+#if LLVM_VERSION_MAJOR >= 20
     f->addFnAttr(llvm::Attribute::getWithAllocKind(ctx, llvm::AllocFnKind::Alloc |
                                                             llvm::AllocFnKind::Uninitialized));
+#else
+    // LLVM <20 has no allockind attr (getWithAllocKind); allocsize alone.
+    (void)ctx;
+#endif
     if (a.allocSize)
       f->addFnAttr(llvm::Attribute::getWithAllocSizeArgs(ctx, 0, std::nullopt));
     if (a.nonNullRet)
       f->addRetAttr(llvm::Attribute::get(ctx, llvm::Attribute::NonNull));
   } else if (a.allocFree) {
+#if LLVM_VERSION_MAJOR >= 20
     f->addFnAttr(llvm::Attribute::getWithAllocKind(ctx, llvm::AllocFnKind::Free));
+#endif
   }
 }
 
@@ -952,9 +960,9 @@ std::string IRGen::run(HProgram& prog) {
   if (!triple_.empty()) {
     llvm::Triple t(triple_);
     if (t.isMacOSX()) {
-      mod_.setTargetTriple(llvm::Triple("arm64-apple-macosx15.0"));
+      mod_.setTargetTriple("arm64-apple-macosx15.0");
     } else {
-      mod_.setTargetTriple(llvm::Triple(triple_));
+      mod_.setTargetTriple(triple_);
     }
   }
   mod_.print(os, nullptr);
@@ -997,7 +1005,7 @@ bool IRGen::linkRuntimeBitcode() {
   // Compare arch + OS family, not the version-qualified triple string: Apple's
   // darwin/macosx naming and the OS version differ between LLVM builds (e.g.
   // arm64-apple-darwin25.6.0 vs arm64-apple-macosx26.0.0) yet are the same ABI.
-  llvm::Triple rtTriple = rt->getTargetTriple();
+  llvm::Triple rtTriple(rt->getTargetTriple());
   llvm::Triple tgtTriple(triple_);
   // LLVM 23 splits the Darwin family into Darwin and MacOSX OSType values;
   // both are the same ABI family, so fold them onto one key.
@@ -7182,8 +7190,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
   // COSD, TAND, ATAND. The argument is converted to FLOAT and the matching
   // function is called. Non-degree variants map to LLVM intrinsics (inlined
-  // and lowered to hardware/libm by the optimizer); degree variants keep
-  // pli_* runtime wrappers that convert to radians first.
+  // and lowered to hardware/libm by the optimizer), except TAN/ATAN/SINH/
+  // COSH/TANH/ASIN/ACOS on LLVM < 20, whose backends leave the llvm.* call
+  // in the object file (undefined symbol at link); those use the pli_*
+  // musl-port wrappers instead. Degree variants keep pli_* runtime wrappers
+  // that convert to radians first.
   if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
       e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
       e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
@@ -7212,6 +7223,15 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         ix = i;
     v.ty = e->ty;
     const char* intrinsic = kLLVMIntrinsic[ix];
+#if LLVM_VERSION_MAJOR < 20
+    // LLVM < 20 has no backend lowering for these seven (the llvm.* call
+    // survives to the object file and fails the link); route them through
+    // the pli_* musl-port wrappers, which exist for every entry above.
+    if (intrinsic && (e->name == "TAN" || e->name == "ATAN" || e->name == "SINH" ||
+                      e->name == "COSH" || e->name == "TANH" || e->name == "ASIN" ||
+                      e->name == "ACOS"))
+      intrinsic = nullptr;
+#endif
     if (intrinsic)
       v.reg = b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x.reg},
                             "math");
