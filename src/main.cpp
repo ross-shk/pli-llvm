@@ -728,8 +728,8 @@ int main(int argc, char** argv) {
     }
     if (verbose)
       std::cerr << "plic: runtime.bc not found at " << runtimeBc
-                << "; linking the sectioned archive instead\n";
-    useBitcode = false;
+                << "; falling back to the embedded runtime\n";
+    runtimeBc.clear();
   }
 
   Preprocessor preprocessor;
@@ -824,7 +824,7 @@ int main(int argc, char** argv) {
   // Bitcode runtime: the MAIN unit embeds the pli_* definitions; the archive
   // always stays on the link line, where it is never pulled once the symbols
   // are defined by that embedded copy (runtime globals must stay shared).
-  const bool linkBitcode = useBitcode && !emitLLVM;
+  const bool linkBitcode = useBitcode && !emitLLVM && !runtimeBc.empty();
   // Explicit PGO/LTO must reach the backend clang verbatim on both steps, so
   // those builds always take the clang pipeline, never the in-process paths
   // (which take no backend flags).
