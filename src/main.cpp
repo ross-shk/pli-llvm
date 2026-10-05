@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #ifdef _WIN32
@@ -144,18 +145,30 @@ static void usage() {
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
          "  --triple <t>     target triple (default: host triple, in-process)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
-         "  -L <dir>         add a library search path to the link step\n"
-         "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
-         "  -l<lib>          link a library (e.g. -lm) on the link step\n"
-         "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
-         "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
-         "  -shared -static  produce a shared / static binary\n"
-         "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
-         "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-         "  --version        print plic + LLVM versions and the host triple, then exit\n"
-         "  -v               show the sub-commands being run\n"
-         "  -h, --help       this message\n"
-         "\n"
+          "  -L <dir>         add a library search path to the link step\n"
+          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
+          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
+          "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
+          "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
+          "  -shared -static  produce a shared / static binary\n"
+          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
+          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
+          "  --version        print plic + LLVM versions and the host triple, then exit\n"
+          "  -v               show the sub-commands being run\n"
+          "  -h, --help       this message\n"
+          "\n"
+          "  environment:\n"
+          "  $PLIC_INCLUDE_PATH  colon-separated %INCLUDE search dirs (after -I)\n"
+          "  $PLIC_LIB_PATH      colon-separated library search dirs (after -L)\n"
+          "  $PLIC_SYSPARM       value returned by the SYSPARM builtin ((123))\n"
+          "\n"
+          "  library/include discovery:\n"
+          "  plic walks upward from the source root (cwd) and the plic executable\n"
+          "  directory, adding lib/ and lib/pli/ to library search paths and\n"
+          "  include/ and inc/ to %INCLUDE search paths at each ancestor. On\n"
+          "  Linux/macOS, /usr/lib, /usr/local/lib and the matching include paths\n"
+          "  are added as static fallbacks.\n"
+          "\n"
          "  plic version     same as --version (Go/Zig style)\n";
 }
 
@@ -206,6 +219,37 @@ static fs::path executablePath(const char* arg0) {
       return fs::absolute(candidate);
   }
   return p;
+}
+
+// Zig-style upward filesystem walk: starting from `start`, walk to each ancestor
+// (including start), and at each level check for `subdirs`. Directories that
+// exist are added (deduped by weakly-canonical path via `seen`). Stops at the
+// filesystem root where parent_path() == self.
+static std::vector<fs::path> searchUpwards(const fs::path& start,
+                                           const std::vector<std::string>& subdirs,
+                                           std::set<std::string>& seen) {
+  std::vector<fs::path> results;
+  fs::path cur = fs::absolute(start);
+  while (true) {
+    for (const std::string& sub : subdirs) {
+      fs::path candidate = cur / sub;
+      std::error_code ec;
+      if (fs::is_directory(candidate, ec)) {
+        ec.clear();
+        fs::path canon = fs::weakly_canonical(candidate, ec);
+        if (ec)
+          continue;
+        std::string key = canon.string();
+        if (seen.insert(key).second)
+          results.push_back(canon);
+      }
+    }
+    fs::path parent = cur.parent_path();
+    if (cur == parent)
+      break;
+    cur = parent;
+  }
+  return results;
 }
 
 // Compile one translation unit through the full pipeline (preprocessor ->
@@ -579,10 +623,75 @@ int main(int argc, char** argv) {
   }
   const bool linkOnly = pliInputs.empty();
 
+  // Upward filesystem walks (Zig-style) for include and library directories.
+  // Start from the source root (cwd) and the plic executable directory; at each
+  // ancestor check for lib/, lib/pli/ (libraries) and include/, inc/ (headers).
+  fs::path exeDir = executablePath(argv[0]).parent_path();
+  fs::path srcRoot = fs::current_path();
+  std::set<std::string> seenPaths;
+  std::vector<fs::path> srcIncDirs = searchUpwards(srcRoot, {"include", "inc"}, seenPaths);
+  std::vector<fs::path> exeIncDirs = searchUpwards(exeDir, {"include", "inc"}, seenPaths);
+  std::vector<fs::path> srcLibDirs = searchUpwards(srcRoot, {"lib", "lib/pli"}, seenPaths);
+  std::vector<fs::path> exeLibDirs = searchUpwards(exeDir, {"lib", "lib/pli"}, seenPaths);
+  // Discovered include dirs: source-root walk first, then exe walk.
+  std::vector<fs::path> discoveredIncDirs = srcIncDirs;
+  discoveredIncDirs.insert(discoveredIncDirs.end(), exeIncDirs.begin(), exeIncDirs.end());
+  // Discovered library dirs (for -L): source-root walk first, then exe walk.
+  std::vector<fs::path> discoveredLibDirs = srcLibDirs;
+  discoveredLibDirs.insert(discoveredLibDirs.end(), exeLibDirs.begin(), exeLibDirs.end());
+#if !defined(_WIN32)
+  // Static system paths (Linux + macOS): deduplicated against walk results.
+  const std::vector<std::string> staticIncDirs = {"/usr/include", "/usr/include/pli",
+                                                  "/usr/local/include", "/usr/local/include/pli"};
+  for (const std::string& d : staticIncDirs) {
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(d, ec);
+    if (ec)
+      continue;
+    if (fs::is_directory(p, ec) && seenPaths.insert(p.string()).second)
+      discoveredIncDirs.push_back(p);
+  }
+  const std::vector<std::string> staticLibDirs = {"/usr/lib", "/usr/lib/pli",
+                                                  "/usr/local/lib", "/usr/local/lib/pli"};
+  for (const std::string& d : staticLibDirs) {
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(d, ec);
+    if (ec)
+      continue;
+    if (fs::is_directory(p, ec) && seenPaths.insert(p.string()).second)
+      discoveredLibDirs.push_back(p);
+  }
+#endif
+  // PLIC_LIB_PATH (colon-separated, like LIBRARY_PATH): searched after user -L,
+  // before the upward-walk and static system library dirs.
+  if (const char* env = std::getenv("PLIC_LIB_PATH")) {
+    std::stringstream ss(env);
+    std::string dir;
+    while (std::getline(ss, dir, ':'))
+      if (!dir.empty())
+        linkArgs.push_back("-L" + dir);
+  }
+  // Append discovered library dirs as -L entries so they feed both the
+  // in-process lld path and the clang fallback path.
+  for (const fs::path& d : discoveredLibDirs)
+    linkArgs.push_back("-L" + d.string());
+
   if (!runtimeExplicit && !runtimeLib.empty() && !fs::exists(runtimeLib)) {
     fs::path installed = PLIC_INSTALL_RUNTIME_LIB;
-    if (installed.empty() || !fs::exists(installed))
-      installed = executablePath(argv[0]).parent_path().parent_path() / "lib/libpli.a";
+    if (installed.empty() || !fs::exists(installed)) {
+      // Search the exe-dir upward walk for libpli.a before the hardcoded fallback.
+      bool found = false;
+      for (const fs::path& d : exeLibDirs) {
+        fs::path cand = d / "libpli.a";
+        if (fs::exists(cand)) {
+          installed = cand;
+          found = true;
+          break;
+        }
+      }
+      if (!found)
+        installed = executablePath(argv[0]).parent_path().parent_path() / "lib/libpli.a";
+    }
     if (fs::exists(installed))
       runtimeLib = installed.string();
   }
@@ -592,10 +701,23 @@ int main(int argc, char** argv) {
   // named runtime.bc must exist (a typo is a user error); the baked-in
   // default falls back to the sectioned archive when missing (e.g. an older
   // build tree). --no-bitcode-runtime always selects the archive path.
-  if (!runtimeBcExplicit && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
+  // Only search for runtime.bc when the bitcode runtime is actually used.
+  if (useBitcode && !runtimeBcExplicit && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
     fs::path installed = PLIC_INSTALL_RUNTIME_BC;
-    if (installed.empty() || !fs::exists(installed))
-      installed = executablePath(argv[0]).parent_path().parent_path() / "lib/runtime.bc";
+    if (installed.empty() || !fs::exists(installed)) {
+      // Search the exe-dir upward walk for runtime.bc before the fallback.
+      bool found = false;
+      for (const fs::path& d : exeLibDirs) {
+        fs::path cand = d / "runtime.bc";
+        if (fs::exists(cand)) {
+          installed = cand;
+          found = true;
+          break;
+        }
+      }
+      if (!found)
+        installed = executablePath(argv[0]).parent_path().parent_path() / "lib/runtime.bc";
+    }
     if (fs::exists(installed))
       runtimeBc = installed.string();
   }
@@ -624,6 +746,10 @@ int main(int argc, char** argv) {
         hasEnvPath = true;
       }
   }
+  // Discovered include dirs from the upward walks and static system paths,
+  // searched before the executable-relative default.
+  for (const fs::path& d : discoveredIncDirs)
+    preprocessor.addIncludeDir(d);
   // Executable-relative default (mirrors the runtime-lib fallback below).
   std::string defaultInc =
       (executablePath(argv[0]).parent_path().parent_path() / "share/plic/include").string();
@@ -634,7 +760,13 @@ int main(int argc, char** argv) {
       std::cerr << "plic:   " << d << "\n";
     if (hasEnvPath)
       std::cerr << "plic:   $PLIC_INCLUDE_PATH\n";
+    for (const fs::path& d : discoveredIncDirs)
+      std::cerr << "plic:   " << d << "\n";
     std::cerr << "plic:   " << defaultInc << "\n";
+    std::cerr << "plic: library search dirs:\n";
+    for (const std::string& la : linkArgs)
+      if (la.rfind("-L", 0) == 0)
+        std::cerr << "plic:   " << la << "\n";
   }
 
   // clang-matching guards: a single -o cannot name more than one output.

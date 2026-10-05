@@ -117,7 +117,9 @@ include-once `%XINCLUDE a[, b...];` list form (quoted, bare, or
 parenthesized names; repeats skip). Members resolve relative
 to the containing source file; a name without an extension falls back to
 `.inc`. Quoted paths are also accepted. Include paths can be supplied with
-`-I` or `PLIC_INCLUDE_PATH`. Directives inside comments and strings are ignored;
+`-I` or `PLIC_INCLUDE_PATH`, or discovered automatically by an upward
+filesystem walk from the source root and the plic executable (ADR-188).
+Directives inside comments and strings are ignored;
 include cycles and missing members are diagnosed. The preprocessor also
 supports the directives listed in the grammar-coverage ledger; other Chapter 9
 forms are diagnosed rather than silently passed through.

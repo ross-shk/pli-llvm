@@ -731,6 +731,20 @@ dcl table(max_records) char(rec_len);
 
 `%REPLACE name BY <tokens>;` substitutes an identifier with source text before parsing.
 
+### Include search paths
+
+`%INCLUDE` and `%XINCLUDE` search for a named file in this order:
+
+1. The directory of the including source file.
+2. Directories from repeatable `-I` flags (first match wins).
+3. `PLIC_INCLUDE_PATH` (colon-separated, like `CPATH`).
+4. `include/` and `inc/` directories found by walking upward from the
+   current working directory, then from the plic executable's directory.
+5. Static system paths (`/usr/include`, `/usr/local/include`) on Linux/macOS.
+6. The executable-relative `share/plic/include` default.
+
+Use `-v` to list all configured include and library search paths.
+
 **Limitations**
 
 - `%DO`, `%GO TO`, and procedures are stubs: accepted syntactically but diagnosed as unsupported.

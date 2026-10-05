@@ -5370,4 +5370,47 @@ CONVERSION, the FIXED(char) trap, ONCODE behavior (0 inside CONVERSION), and the
 (NOCONVERSION) prefix. `bad_on_cond_conversion.pli` pins `CONDITION(CONVERSION)`
 rejection. GRAMMAR-COVERAGE rows (60)–(63) and (91)–(99) updated.
 
+## ADR-188 — Zig-style upward filesystem walk for library and include paths
+
+**Context.** The compiler resolves the plic runtime (`libpli.a`, `runtime.bc`)
+and include snippets via a combination of `-I`/`-L` flags, `PLIC_INCLUDE_PATH`,
+and a baked-in/exe-relative default. When plic is relocatable (single-binary or
+installed prefix) or invoked from a project tree with local `lib/` and
+`include/` directories, the user must hand the paths to the driver. Zig and Go
+solve this with an upward walk from both the source root and the toolchain
+executable, then static system paths.
+
+**Decision.** After argument parsing and after the early-exit checks
+(`--explain`, `--version`, no inputs), plic computes its executable directory
+(`executablePath(argv[0])`) and the source root (`current_path()`), then
+walks upward from each via `searchUpwards()` (in `src/main.cpp`). At every
+ancestor it checks for `lib` and `lib/pli` (library dirs) and `include` and
+`inc` (header dirs); existing directories are collected, deduped by
+weakly-canonical path, and ordered source-root-walk first, then exe-walk, then
+static system paths on Linux/macOS (`/usr/lib`, `/usr/local/lib`,
+`/usr/include`, `/usr/local/include` — existence-checked, deduped).
+
+Library dirs are appended as `-L<dir>` entries to `linkArgs` after user `-L`
+flags and a new colon-separated `PLIC_LIB_PATH` env var (mirroring
+`LIBRARY_PATH`), so they feed both the in-process lld path and the clang
+fallback path. Include dirs are added to the preprocessor after
+`PLIC_INCLUDE_PATH` and before the exe-relative `share/plic/include` default.
+
+The runtime-lib fallback (ADR-079 idiom) now searches the exe-dir walk results
+for `libpli.a` / `runtime.bc` before falling back to `<exe>/../lib`. The
+`runtime.bc` search is guarded by `useBitcode` (so `--no-bitcode-runtime` skips
+it), and explicit `--runtime` / `--runtime-bc` flags are never overridden.
+
+A `-v` flag lists all resolved include and library search dirs.
+
+**Consequences.** `tests/driver/include_dirs` still passes (user `-I` and
+`PLIC_INCLUDE_PATH` keep their first-wins priority over walk results).
+Manual validation confirmed: (1) `-v` from a project with `include/` and
+`lib/` lists the walked dirs, (2) `PLIC_LIB_PATH=/custom/lib` appears before
+walk results, (3) a relocatable install under `/tmp/testprefix/{bin,lib,include}`
+finds the runtime and dirs via the walk, (4) invoking from `/` still resolves
+static system paths. The `linkArgs` vector mixes `-L`, `-l`, and `-Wl,` entries
+(parsed flat during arg parsing), so discovered `-L` dirs appear after any
+interleaved user `-l` flags — an accepted limitation noted in the plan.
+
 
