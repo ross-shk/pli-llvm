@@ -288,9 +288,9 @@ static const std::map<std::string, RtSig>& kRuntimeSigs() {
 #define I32 RtI32
 #define I8 RtI8
 #define DOUBLE RtDouble
-   #define PTR RtPtr
-   #define CPTR RtPtr
-   #define IPTR RtI32Ptr
+#define PTR RtPtr
+#define CPTR RtPtr
+#define IPTR RtI32Ptr
 #define PLI_STRIP(...) __VA_ARGS__ // turn the .def's (a, b, c) into a braced list
 #define PLI_FN(name, ret, args) {#name, {ret, {PLI_STRIP args}}},
 #include "../runtime/pli_rt_abi.def"
@@ -319,7 +319,14 @@ static const std::map<std::string, RtSig>& kRuntimeSigs() {
 // the default: nounwind only. Universal nounwind holds because the
 // runtime is C without EH and no entry unwinds its caller back into
 // generated code (task spawn hands the pointer to pthread_create).
-enum RtMem { RtMemDefault, RtMemNone, RtMemArgRead, RtMemArgReadWrite, RtMemReadonly, RtMemOtherMod };
+enum RtMem {
+  RtMemDefault,
+  RtMemNone,
+  RtMemArgRead,
+  RtMemArgReadWrite,
+  RtMemReadonly,
+  RtMemOtherMod
+};
 struct RtAttr {
   bool noReturn = false;
   bool willReturn = false;
@@ -336,20 +343,20 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_signal_error", {.noReturn = true}},
       {"pli_subscript_oob", {.noReturn = true}},
       {"pli_zerodivide", {.noReturn = true}},
-       {"pli_fixed_overflow", {.noReturn = true}},
-       {"pli_conversion", {.noReturn = true}},
+      {"pli_fixed_overflow", {.noReturn = true}},
+      {"pli_conversion", {.noReturn = true}},
       {"pli_stop", {.noReturn = true}},
       // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
       {"pli_alloc", {.allocMalloc = true, .allocSize = true, .nonNullRet = true}},
       {"pli_free", {.willReturn = true, .allocFree = true}},
-     // CONTROLLED allocation/dealloc: modify global generation stacks (ADR-111).
-     // Modelled as all-location readwrite (not a narrower location): the
-     // embedded runtime.bc carries clang-inferred location facts (readers are
-     // `read, inaccessiblemem: none`), and link-time merging INTERSECTS
-     // conflicting memory facts — a narrower claim here collapses to
-     // `memory(none)` and lets LLVM CSE an addr across an alloc. Loop
-     // hoisting is done explicitly in IRGen (emitDoIter), so LLVM needs no
-     // facts beyond "these calls all touch the same state".
+      // CONTROLLED allocation/dealloc: modify global generation stacks (ADR-111).
+      // Modelled as all-location readwrite (not a narrower location): the
+      // embedded runtime.bc carries clang-inferred location facts (readers are
+      // `read, inaccessiblemem: none`), and link-time merging INTERSECTS
+      // conflicting memory facts — a narrower claim here collapses to
+      // `memory(none)` and lets LLVM CSE an addr across an alloc. Loop
+      // hoisting is done explicitly in IRGen (emitDoIter), so LLVM needs no
+      // facts beyond "these calls all touch the same state".
       {"pli_ctl_alloc", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_alloc_dims", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_ensure", {.willReturn = false, .mem = RtMemOtherMod}},
@@ -450,16 +457,16 @@ static void applyRuntimeAttrs(llvm::Function* f) {
   case RtMemArgRead:
     f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref));
     break;
-   case RtMemArgReadWrite:
-     f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef));
-     break;
-   case RtMemReadonly:
-     f->setMemoryEffects(llvm::MemoryEffects::readOnly());
-     break;
-    case RtMemOtherMod: {
-     f->setMemoryEffects(llvm::MemoryEffects::unknown());
-     break;
-   }
+  case RtMemArgReadWrite:
+    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef));
+    break;
+  case RtMemReadonly:
+    f->setMemoryEffects(llvm::MemoryEffects::readOnly());
+    break;
+  case RtMemOtherMod: {
+    f->setMemoryEffects(llvm::MemoryEffects::unknown());
+    break;
+  }
   default:
     break;
   }
@@ -502,11 +509,11 @@ llvm::Function* IRGen::runtimeFn(const std::string& name) {
       return b_.getInt8Ty();
     case RtDouble:
       return b_.getDoubleTy();
-     case RtPtr:
+    case RtPtr:
       return b_.getPtrTy();
-     case RtI32Ptr:
+    case RtI32Ptr:
       return b_.getPtrTy();
-     }
+    }
     return b_.getVoidTy();
   };
   const RtSig& s = it->second;
@@ -2108,11 +2115,11 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       name = "PLI_ON_SIZE_" + std::to_string(keyId.second);
     else if (keyId.first == Stmt::kSubscriptrangeCondKey)
       name = "PLI_ON_SUBSCRIPT_" + std::to_string(keyId.second);
-     else if (keyId.first == Stmt::kZerodivideCondKey)
-       name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
-     else if (keyId.first == Stmt::kConversionCondKey)
-       name = "PLI_ON_CONVERSION_" + std::to_string(keyId.second);
-     else
+    else if (keyId.first == Stmt::kZerodivideCondKey)
+      name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
+    else if (keyId.first == Stmt::kConversionCondKey)
+      name = "PLI_ON_CONVERSION_" + std::to_string(keyId.second);
+    else
       name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
     onHandlers_[keyId.first].push_back(
         llvm::Function::Create(ft, llvm::Function::InternalLinkage, name, &mod_));
@@ -2144,7 +2151,7 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       ctlAddrHoist_.clear();
       ctlLenHoist_.clear();
       ctlExtHoist_.clear();
-      areaLocals_.clear();       // ... and owns no AREA regions
+      areaLocals_.clear(); // ... and owns no AREA regions
       for (Symbol* gs : sema_.storage())
         if (gs->isStatic && gs->kind == Symbol::Var)
           symAddr_[gs] = mod_.getGlobalVariable(gs->irName.substr(1), true);
@@ -2231,11 +2238,11 @@ void IRGen::emitSignal(HStmt* s) {
     msg = "SIGNAL SIZE";
   else if (s->condKey == Stmt::kSubscriptrangeCondKey)
     msg = "SIGNAL SUBSCRIPTRANGE";
-   else if (s->condKey == Stmt::kZerodivideCondKey)
-     msg = "SIGNAL ZERODIVIDE";
-   else if (s->condKey == Stmt::kConversionCondKey)
-     msg = "SIGNAL CONVERSION";
-   else
+  else if (s->condKey == Stmt::kZerodivideCondKey)
+    msg = "SIGNAL ZERODIVIDE";
+  else if (s->condKey == Stmt::kConversionCondKey)
+    msg = "SIGNAL CONVERSION";
+  else
     msg = "SIGNAL CONDITION(" + s->condName + ")";
   b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
   b_.CreateUnreachable();
@@ -2267,10 +2274,10 @@ void IRGen::emitStmt(HStmt* s) {
   CheckState top;
   if (!checkStack_.empty())
     top = checkStack_.back();
-   top.noSize = top.noSize || s->noSize;
-   top.noSub = top.noSub || s->noSub;
-   top.noZdiv = top.noZdiv || s->noZdiv;
-   top.noConv = top.noConv || s->noConv;
+  top.noSize = top.noSize || s->noSize;
+  top.noSub = top.noSub || s->noSub;
+  top.noZdiv = top.noZdiv || s->noZdiv;
+  top.noConv = top.noConv || s->noConv;
   checkStack_.push_back(top);
   switch (s->kind) {
   case HStmt::Null:
@@ -3524,9 +3531,8 @@ void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
     if (isCtlNDynArray(sym)) {
       for (size_t k = 0; k < sym->ty.dims.size(); ++k) {
         auto key = std::make_pair(sym, k);
-        ctlExtHoist_[key] =
-            b_.CreateCall(runtimeFn("pli_ctl_extent"), {ctlKeyOf(sym), i64((long long)k)},
-                          "ctlhoist.e");
+        ctlExtHoist_[key] = b_.CreateCall(runtimeFn("pli_ctl_extent"),
+                                          {ctlKeyOf(sym), i64((long long)k)}, "ctlhoist.e");
         hoistedExt.push_back(key);
       }
     }
@@ -6166,29 +6172,29 @@ Val IRGen::emitExpr(HExpr* e) {
         src->op == Tok::Slash) {
       Val av = emitExpr(src->a.get());
       Val bv = emitExpr(src->b.get());
-       if (av.ty.isFixed() && bv.ty.isFixed() && av.ty.scale == 0 && bv.ty.scale == 0) {
-         Val v;
-         v.ty = e->convTo;
-         llvm::Value* ai = toI64(av, e->loc);
-         llvm::Value* bi = toI64(bv, e->loc);
-         llvm::Value* q;
-         // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
-         // Guard constant-zero divisor: CreateSDiv(x, 0) is UB, so emit
-         // zerodivideResume with a const-true condition and value 0.
-         if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bi)) {
-           if (ci->isZero()) {
-             q = zerodivideResume(b_.getTrue(), i64(0), i64(0));
-           } else {
-             q = b_.CreateSDiv(ai, bi, "bin");
-           }
-         } else {
-           llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-           q = b_.CreateSDiv(ai, bi, "bin");
-           q = zerodivideResume(dz, q, i64(0));
-         }
-         v.reg = convert(Val{Type::fixedBin(63, 0), q}, e->convTo, e->loc).reg;
-         return v;
-       }
+      if (av.ty.isFixed() && bv.ty.isFixed() && av.ty.scale == 0 && bv.ty.scale == 0) {
+        Val v;
+        v.ty = e->convTo;
+        llvm::Value* ai = toI64(av, e->loc);
+        llvm::Value* bi = toI64(bv, e->loc);
+        llvm::Value* q;
+        // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
+        // Guard constant-zero divisor: CreateSDiv(x, 0) is UB, so emit
+        // zerodivideResume with a const-true condition and value 0.
+        if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bi)) {
+          if (ci->isZero()) {
+            q = zerodivideResume(b_.getTrue(), i64(0), i64(0));
+          } else {
+            q = b_.CreateSDiv(ai, bi, "bin");
+          }
+        } else {
+          llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
+          q = b_.CreateSDiv(ai, bi, "bin");
+          q = zerodivideResume(dz, q, i64(0));
+        }
+        v.reg = convert(Val{Type::fixedBin(63, 0), q}, e->convTo, e->loc).reg;
+        return v;
+      }
     }
     return convert(emitExpr(e->a.get()), e->convTo, e->loc);
   }
@@ -6791,7 +6797,10 @@ Val IRGen::emitExpr(HExpr* e) {
   Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
                                         b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
                       : e->ty;
-  if (!isCmp && (op == Tok::Slash || op == Tok::Power) && !common.isComplex())
+  // Power always promotes to FLOAT (rule 121, CM5). Division stays in the
+  // type sema chose: FIXED for integer-valued operands (P3, ADR-190 — sdiv),
+  // FLOAT for non-integer operands (fdiv).
+  if (!isCmp && op == Tok::Power && !common.isComplex())
     common = Type::flt(e->ty.prec);
   Val av, bv;
   if (op == Tok::Star && common.isFixed()) {
@@ -6971,13 +6980,35 @@ Val IRGen::emitExpr(HExpr* e) {
       r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin");
     break;
   case Tok::Slash: {
-    // ZERODIVIDE (rule 94): a zero divisor traps — hard abort when no handler
-    // is established, else the handler runs and the division resumes with 0.
-    // (Spelled out: the local `flt` flag shadows the flt() constant helper.)
-    llvm::Value* fzero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
-    llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, fzero, "zdiv");
-    llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
-    r = zerodivideResume(dz, div, fzero);
+    if (flt) {
+      // FLOAT division (ADR-014): fdiv, zero-divide resumes with 0.0.
+      llvm::Value* fzero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
+      llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, fzero, "zdiv");
+      llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
+      r = zerodivideResume(dz, div, fzero);
+    } else {
+      // Integer division (P3, ADR-190): sdiv truncates toward zero, matching
+      // PL/I's FIXED division semantics (rule 121). Operands widened to i64 so
+      // CreateSDiv is well-defined (32-bit sdiv has narrower range); result is
+      // narrowed back to common's width below to keep ICmp/arith types aligned.
+      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0 — guarded
+      // to avoid CreateSDiv UB (LLVM: sdiv by zero is UB).
+      llvm::Value* ai = toI64(av);
+      llvm::Value* bi = toI64(bv);
+      llvm::Value* q;
+      if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bi)) {
+        if (ci->isZero()) {
+          q = zerodivideResume(b_.getTrue(), i64(0), i64(0));
+        } else {
+          q = b_.CreateSDiv(ai, bi, "bin");
+        }
+      } else {
+        llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
+        q = b_.CreateSDiv(ai, bi, "bin");
+        q = zerodivideResume(dz, q, i64(0));
+      }
+      r = convert(Val{Type::fixedBin(63, 0), q}, common, e->loc).reg;
+    }
     break;
   }
   case Tok::Power:
@@ -7227,9 +7258,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // LLVM < 20 has no backend lowering for these seven (the llvm.* call
     // survives to the object file and fails the link); route them through
     // the pli_* musl-port wrappers, which exist for every entry above.
-    if (intrinsic && (e->name == "TAN" || e->name == "ATAN" || e->name == "SINH" ||
-                      e->name == "COSH" || e->name == "TANH" || e->name == "ASIN" ||
-                      e->name == "ACOS"))
+    if (intrinsic &&
+        (e->name == "TAN" || e->name == "ATAN" || e->name == "SINH" || e->name == "COSH" ||
+         e->name == "TANH" || e->name == "ASIN" || e->name == "ACOS"))
       intrinsic = nullptr;
 #endif
     if (intrinsic)
@@ -7622,34 +7653,33 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
-   // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
-   // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
-   if (e->name == "FIXED") {
-     Val a = emitExpr(e->args[0].get());
-     if (a.ty.isChar()) {
-       // CONVERSION (rule 94): when the text holds no digits, FIXED(char)
-       // traps through the CONVERSION dispatch (abort or ON unit); the resume
-       // value is 0, the value pli_fixed_of_char leaves in `ok=0` cases.
-       llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
-       llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_char"),
-                                      {a.ptr, a.len, okSlot});
-       if (convChecks()) {
-         llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
-         llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
-         llvm::BasicBlock* trapBB =
-             llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
-         llvm::BasicBlock* okBB =
-             llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
-         b_.CreateCondBr(fail, trapBB, okBB);
-         b_.SetInsertPoint(trapBB);
-         emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
-         b_.SetInsertPoint(okBB);
-       }
-       v.ty = e->ty;
-       v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
-       result = v;
-       return true;
-     }
+  // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
+  // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
+  if (e->name == "FIXED") {
+    Val a = emitExpr(e->args[0].get());
+    if (a.ty.isChar()) {
+      // CONVERSION (rule 94): when the text holds no digits, FIXED(char)
+      // traps through the CONVERSION dispatch (abort or ON unit); the resume
+      // value is 0, the value pli_fixed_of_char leaves in `ok=0` cases.
+      llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
+      llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len, okSlot});
+      if (convChecks()) {
+        llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
+        llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
+        llvm::BasicBlock* trapBB =
+            llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
+        llvm::BasicBlock* okBB =
+            llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
+        b_.CreateCondBr(fail, trapBB, okBB);
+        b_.SetInsertPoint(trapBB);
+        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+        b_.SetInsertPoint(okBB);
+      }
+      v.ty = e->ty;
+      v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
+      result = v;
+      return true;
+    }
     if (a.ty.k == TK::Float) {
       llvm::Value* r = b_.CreateCall(runtimeFn("pli_fixed_of_float"), {a.reg});
       v.ty = e->ty;

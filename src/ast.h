@@ -199,10 +199,10 @@ struct Stmt {
   bool until = false;              // DO UNTIL (extension, ADR-106): test cond after the body
   std::vector<ExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
   bool byName = false;             // rule (86) trailing ", BY NAME" on assignment
-   bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)
-   bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
-   bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
-   bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
+  bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)
+  bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
+  bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
+  bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
   StmtP thenS, elseS;
   std::vector<StmtP> body;
 

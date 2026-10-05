@@ -122,16 +122,16 @@ static void usage() {
          "  -emit-llvm       write LLVM IR per input and stop\n"
          "  --print-hir      lower to HIR and print it per input, then stop\n"
          "  -fsyntax-only    parse and analyse each input only\n"
-          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
-          "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
-          "                   cf. (NOSIZE), ADR-111)\n"
-          "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
-          "  --no-zero-divide elide ZERODIVIDE traps program-wide (cf. (NOZERODIVIDE), ADR-112)\n"
-           "  --no-conversion   elide CONVERSION traps program-wide (cf. (NOCONVERSION), ADR-170)\n"
-           "  --no-subscript    elide SUBSCRIPTRANGE checks (default at -O2/-O3;\n"
-           "                   cf. (NOSUBSCRIPTRANGE), ADR-111)\n"
-           "  --subscript-checks  force SUBSCRIPTRANGE checks (overrides -O2/-O3 default)\n"
-           "  --release        maximum optimization + stripped binary (minimal size)\n"
+         "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
+         "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
+         "                   cf. (NOSIZE), ADR-111)\n"
+         "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
+         "  --no-zero-divide elide ZERODIVIDE traps program-wide (cf. (NOZERODIVIDE), ADR-112)\n"
+         "  --no-conversion   elide CONVERSION traps program-wide (cf. (NOCONVERSION), ADR-170)\n"
+         "  --no-subscript    elide SUBSCRIPTRANGE checks (default at -O2/-O3;\n"
+         "                   cf. (NOSUBSCRIPTRANGE), ADR-111)\n"
+         "  --subscript-checks  force SUBSCRIPTRANGE checks (overrides -O2/-O3 default)\n"
+         "  --release        maximum optimization + stripped binary (minimal size)\n"
          "  --debug          no optimization + debug info (-O0 -g)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
@@ -145,30 +145,30 @@ static void usage() {
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
          "  --triple <t>     target triple (default: host triple, in-process)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
-          "  -L <dir>         add a library search path to the link step\n"
-          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
-          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
-          "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
-          "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
-          "  -shared -static  produce a shared / static binary\n"
-          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
-          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-          "  --version        print plic + LLVM versions and the host triple, then exit\n"
-          "  -v               show the sub-commands being run\n"
-          "  -h, --help       this message\n"
-          "\n"
-          "  environment:\n"
-          "  $PLIC_INCLUDE_PATH  colon-separated %INCLUDE search dirs (after -I)\n"
-          "  $PLIC_LIB_PATH      colon-separated library search dirs (after -L)\n"
-          "  $PLIC_SYSPARM       value returned by the SYSPARM builtin ((123))\n"
-          "\n"
-          "  library/include discovery:\n"
-          "  plic walks upward from the source root (cwd) and the plic executable\n"
-          "  directory, adding lib/ and lib/pli/ to library search paths and\n"
-          "  include/ and inc/ to %INCLUDE search paths at each ancestor. On\n"
-          "  Linux/macOS, /usr/lib, /usr/local/lib and the matching include paths\n"
-          "  are added as static fallbacks.\n"
-          "\n"
+         "  -L <dir>         add a library search path to the link step\n"
+         "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
+         "  -l<lib>          link a library (e.g. -lm) on the link step\n"
+         "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
+         "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
+         "  -shared -static  produce a shared / static binary\n"
+         "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
+         "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
+         "  --version        print plic + LLVM versions and the host triple, then exit\n"
+         "  -v               show the sub-commands being run\n"
+         "  -h, --help       this message\n"
+         "\n"
+         "  environment:\n"
+         "  $PLIC_INCLUDE_PATH  colon-separated %INCLUDE search dirs (after -I)\n"
+         "  $PLIC_LIB_PATH      colon-separated library search dirs (after -L)\n"
+         "  $PLIC_SYSPARM       value returned by the SYSPARM builtin ((123))\n"
+         "\n"
+         "  library/include discovery:\n"
+         "  plic walks upward from the source root (cwd) and the plic executable\n"
+         "  directory, adding lib/ and lib/pli/ to library search paths and\n"
+         "  include/ and inc/ to %INCLUDE search paths at each ancestor. On\n"
+         "  Linux/macOS, /usr/lib, /usr/local/lib and the matching include paths\n"
+         "  are added as static fallbacks.\n"
+         "\n"
          "  plic version     same as --version (Go/Zig style)\n";
 }
 
@@ -262,12 +262,11 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        std::string& triple, const std::string& clangPath,
                        const std::string& sysparm, bool sysparmExplicit, bool compileOnly,
                        bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
-                         bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks, bool noConvChecks,
-                        bool noSubChecks,
-                        const std::string& optLevel, const std::string& backendFlags,
-                       const fs::path& keepLLDir, int fileIndex, std::string* outObj,
-                       const std::string& runtimeBc, bool linkBitcode, bool linkRuntimeIn = false,
-                       bool forceClangPipeline = false) {
+                       bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks,
+                       bool noConvChecks, bool noSubChecks, const std::string& optLevel,
+                       const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
+                       std::string* outObj, const std::string& runtimeBc, bool linkBitcode,
+                       bool linkRuntimeIn = false, bool forceClangPipeline = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -322,7 +321,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM) {
-     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks);
+    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -355,7 +354,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // Explicit PGO/LTO (forceClangPipeline) always uses the clang pipeline so
   // backendFlags reach the compile step (the in-process path takes none).
   if (!forceClangPipeline) {
-     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc, linkBitcode);
+    IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
+              linkBitcode);
     if (auto om = ipg.takeModule(hir)) {
       bool rtOk = true;
 #if PLIC_HAVE_LLD
@@ -414,7 +414,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
 
   // Fallback: textual IR assembled by the backend clang.
-   IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc, linkBitcode);
+  IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
+              linkBitcode);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return false;
@@ -651,8 +652,8 @@ int main(int argc, char** argv) {
     if (fs::is_directory(p, ec) && seenPaths.insert(p.string()).second)
       discoveredIncDirs.push_back(p);
   }
-  const std::vector<std::string> staticLibDirs = {"/usr/lib", "/usr/lib/pli",
-                                                  "/usr/local/lib", "/usr/local/lib/pli"};
+  const std::vector<std::string> staticLibDirs = {"/usr/lib", "/usr/lib/pli", "/usr/local/lib",
+                                                  "/usr/local/lib/pli"};
   for (const std::string& d : staticLibDirs) {
     std::error_code ec;
     fs::path p = fs::weakly_canonical(d, ec);
@@ -839,8 +840,9 @@ int main(int argc, char** argv) {
     std::string outObj;
     if (!compileOne(preprocessor, pliInputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
                     compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
-                     noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel, backendFlags, keepLLDir, (int)i, &outObj,
-                    runtimeBc, linkBitcode, singleModuleFinalLink, needClangPipeline))
+                    noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel, backendFlags,
+                    keepLLDir, (int)i, &outObj, runtimeBc, linkBitcode, singleModuleFinalLink,
+                    needClangPipeline))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);

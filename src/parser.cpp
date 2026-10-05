@@ -890,15 +890,15 @@ std::string Parser::parseCondition() {
     advance();
     return "SIZE";
   }
-   if (w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE") {
-     advance();
-     return w;
-   }
-   if (w == "CONVERSION") {
-     advance();
-     return w;
-   }
-   if (w == "FINISH" || w == "AREA") {
+  if (w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE") {
+    advance();
+    return w;
+  }
+  if (w == "CONVERSION") {
+    advance();
+    return w;
+  }
+  if (w == "FINISH" || w == "AREA") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
@@ -931,8 +931,8 @@ std::string Parser::parseCondition() {
     advance();
     if (!expect(Tok::RParen, "(99)"))
       return "";
-     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" ||
-         name == "ZERODIVIDE" || name == "CONVERSION") {
+    if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
+        name == "CONVERSION") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

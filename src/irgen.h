@@ -37,11 +37,12 @@ struct Val {
 
 class IRGen {
 public:
-   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
-         bool noConvChecks = false, bool noSubChecks = false, std::string runtimeBc = "", bool linkBitcode = false)
-        : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
-          noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
-          noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
+  IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
+        bool noConvChecks = false, bool noSubChecks = false, std::string runtimeBc = "",
+        bool linkBitcode = false)
+      : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
+        noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
+        noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
 
   std::string run(HProgram& prog);
 
@@ -519,31 +520,31 @@ private:
   // Condition enable-state (rules (60)-(63), ADR-110/112): effective
   // disables per statement, OR-inherited through compound statements so a
   // prefixed group covers its body. The trap sites read the top.
-   struct CheckState {
-     bool noSize = false;
-     bool noSub = false;
-     bool noZdiv = false;
-     bool noConv = false;
-   };
-   std::vector<CheckState> checkStack_;
-    // Global --no-size-checks (ADR-111) disables every SIZE trap, including
-    // ones an ON SIZE handler would otherwise route.
-    bool noSizeChecks_ = false;
-    bool noSubChecks_ = false;
-    bool noZdivChecks_ = false;
-    bool noConvChecks_ = false;
-    bool sizeChecks() const {
-      return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
-    }
-    bool subChecks() const {
-      return !noSubChecks_ && (checkStack_.empty() || !checkStack_.back().noSub);
-    }
-   bool zdivChecks() const {
-     return !noZdivChecks_ && (checkStack_.empty() || !checkStack_.back().noZdiv);
-   }
-   bool convChecks() const {
-     return !noConvChecks_ && (checkStack_.empty() || !checkStack_.back().noConv);
-   }
+  struct CheckState {
+    bool noSize = false;
+    bool noSub = false;
+    bool noZdiv = false;
+    bool noConv = false;
+  };
+  std::vector<CheckState> checkStack_;
+  // Global --no-size-checks (ADR-111) disables every SIZE trap, including
+  // ones an ON SIZE handler would otherwise route.
+  bool noSizeChecks_ = false;
+  bool noSubChecks_ = false;
+  bool noZdivChecks_ = false;
+  bool noConvChecks_ = false;
+  bool sizeChecks() const {
+    return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noSize);
+  }
+  bool subChecks() const {
+    return !noSubChecks_ && (checkStack_.empty() || !checkStack_.back().noSub);
+  }
+  bool zdivChecks() const {
+    return !noZdivChecks_ && (checkStack_.empty() || !checkStack_.back().noZdiv);
+  }
+  bool convChecks() const {
+    return !noConvChecks_ && (checkStack_.empty() || !checkStack_.back().noConv);
+  }
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.

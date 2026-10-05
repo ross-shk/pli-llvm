@@ -2227,10 +2227,10 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kSizeCondKey;
   if (s->condName == "SUBSCRIPTRANGE")
     return Stmt::kSubscriptrangeCondKey;
-   if (s->condName == "ZERODIVIDE")
-     return Stmt::kZerodivideCondKey;
-   if (s->condName == "CONVERSION")
-     return Stmt::kConversionCondKey;
+  if (s->condName == "ZERODIVIDE")
+    return Stmt::kZerodivideCondKey;
+  if (s->condName == "CONVERSION")
+    return Stmt::kConversionCondKey;
   // Programmer-named conditions: deterministic hash ensures every
   // compilation unit assigns the same key to the same name, enabling
   // cross-object signal dispatch.
@@ -2481,12 +2481,12 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   auto inner = std::make_unique<Stmt>();
   inner->kind = Stmt::Assign;
   inner->loc = s->loc;
-   inner->noSize = s->noSize;
-   inner->noSub = s->noSub;
-   inner->noZdiv = s->noZdiv;
-   inner->noConv = s->noConv;
-   {
-     auto tgt = std::make_unique<Expr>();
+  inner->noSize = s->noSize;
+  inner->noSub = s->noSub;
+  inner->noZdiv = s->noZdiv;
+  inner->noConv = s->noConv;
+  {
+    auto tgt = std::make_unique<Expr>();
     tgt->kind = Expr::Call;
     tgt->name = t->name;
     tgt->path = t->path;
@@ -4334,12 +4334,25 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       break;
     case Tok::Slash:
-    case Tok::Power:
-      // Division and exponentiation are evaluated in floating point in M0;
-      // PL/I's exact FIXED scale rules are M2 (ADR-006). Truncation on
-      // assignment to a FIXED target preserves the usual observable result.
+      // Exact integer division (P3, ADR-190): when both operands are fixed-point
+      // and integer-valued (scale 0), `/` truncates toward zero — PL/I rule 121
+      // semantics — and the result type is FIXED (arithResultType), not FLOAT.
+      // Non-integer `/` (any FLOAT operand, or DECIMAL with scale > 0) stays
+      // FLOAT for correct fractional results (ADR-014 stand-down).
       if (complexArith(A, B)) {
-        // Complex exponentiation a**b = exp(b*log(a)) (rule 121, CM5).
+        e->ty = Type::complexTy();
+      } else if (!A.isNumeric() || !B.isNumeric()) {
+        d_.error(e->loc, "operator requires arithmetic operands", "(121)");
+        e->ty = Type::flt(6);
+      } else if (A.isFixed() && B.isFixed() && A.scale == 0 && B.scale == 0) {
+        e->ty = arithResultType(A, B);
+      } else {
+        e->ty = Type::flt(std::max(6, std::max(A.prec, B.prec)));
+      }
+      break;
+    case Tok::Power:
+      // Exponentiation is evaluated in floating point (rule 121, CM5).
+      if (complexArith(A, B)) {
         e->ty = Type::complexTy();
       } else if (!A.isNumeric() || !B.isNumeric()) {
         d_.error(e->loc, "operator requires arithmetic operands", "(121)");
@@ -4561,11 +4574,11 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   inner->value = std::move(s->value);
   inner->extraTargets = std::move(s->extraTargets);
   inner->byName = s->byName;
-   inner->noSize = s->noSize;
-   inner->noSub = s->noSub;
-   inner->noZdiv = s->noZdiv;
-   inner->noConv = s->noConv;
-   s->kind = Stmt::Group;
+  inner->noSize = s->noSize;
+  inner->noSub = s->noSub;
+  inner->noZdiv = s->noZdiv;
+  inner->noConv = s->noConv;
+  s->kind = Stmt::Group;
   s->byName = false;
   for (auto& f : fills)
     s->body.push_back(std::move(f));

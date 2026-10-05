@@ -5449,4 +5449,50 @@ products (e.g. `(i*1.99)*1.00`) keep the DECIMAL scale label instead of mis-read
 it as a binary scale. `BINARY * integer DECIMAL (scale 0)` keeps the existing `FixedBin`
 kind — no widening for the common `3*n` case (collatz).
 
+---
+
+## ADR-190 — Exact integer `/` for integer-valued operands (M0→M2)
+
+**Context.** M0 evaluated all `/` (and `**`) in FLOAT via ADR-014, even for integer
+operands (`7 / 2` → `3.5` → truncate on assignment → `3`). This costs an `fdiv` in every
+loop iteration that divides integer values: `qty = i / 10 + 1` in `decimal_ops.pli`
+emits `fdiv` + `fadd` + `fmul` (scale-up) + `fcvtzs` (down to FIXED), where a single
+`sdiv` + `add` + `mul` suffices (PL/I rule 121: integer division truncates toward zero).
+A partial fast-path existed in `Convert` (irgen.cpp:6159) for direct `FIXED = int/int`,
+but did not handle nested expressions like `(i / 10) + 1`.
+
+**Decision.** `divResultType`: when both `/` operands are FIXED and integer-valued
+(scale 0), the expression type is FIXED (arithmetic result, scale 0) — integer
+truncation — not FLOAT. `**` stays FLOAT (no integer exponentiation in hardware,
+rule 121 CM5). The sema `/` case is split from `**`. In irgen, the `Tok::Slash`
+binary case branches on `flt`: FLOAT emits `fdiv` (unchanged); FIXED emits `sdiv`
+with the same ZERODIVIDE guard pattern as the existing `Convert` fast-path
+(constant-zero → no `sdiv`; runtime-zero → `ICmpEQ` guard + `zerodivideResume`).
+The `Convert` fast-path is retained as a no-op (it still matches direct
+`FIXED = int/int` and emits the same `sdiv`).
+
+Non-integer `/` (any FLOAT operand, or DECIMAL/DECIMAL with scale > 0) stays FLOAT.
+This preserves `divide(10,4) = 2.5` and `7.5 / 2.5 = 3.0`.
+
+**Consequences.** `i / 10` lowers to `sdiv i64, 10` — the remaining `fdiv` in the
+`decimal_ops.pli` hot loop is eliminated, completing the all-integer loop
+(`mul` for `*`, `sdiv` for `/`, `sdiv` magic-multiply for rescale). Test impact:
+`arith.pli` line 5 `7/2 into FLOAT = 3.5` → `3` (integer division truncates to 3,
+then SIToFP gives 3.0, printed as `3`). This is correct PL/I M2 semantics.
+`on_zerodivide.pli`, `on_scope_goto.pli`, `condition_edge.pli`, `line_comment.pli`,
+`sum_expr.pli`, `array_expr.pli`, `scaled.pli` all preserve their results (integer
+operands divide evenly or the result is assigned to FIXED via the same truncation).
+`tests/driver/nochecks.sh` `(nozerodivide)` prefix: `q = 7 / z` where q is FLOAT
+now emits `sdiv` (not `fdiv`); with z=0 on ARM64 `sdiv` yields 0 (no hardware trap),
+and `zerodivideResume` with NOZERODIVIDE returns the `sdiv` result directly — same
+"done" output, no `pli_zerodivide` in IR (check passes).
+
+**Risks.** `sdiv` by a runtime-zero divisor is technically UB in LLVM IR (the `sdiv`
+is emitted before the `ICmpEQ` branch). This is pre-existing in the `Convert`
+fast-path (irgen.cpp:6186) and on ARM64 the hardware `SDIV` by zero returns 0
+(defined), so all tests pass on macOS arm64. A future hardening pass could use
+`select(dz, 0, sdiv_safe)` for cross-platform safety. `BINARY / BINARY(scale>0)`
+(e.g. `fixed bin(15,2) / fixed bin(15,2)`) correctly stays FLOAT — the cross-base
+scale mismatch is genuinely lossy.
+
 
