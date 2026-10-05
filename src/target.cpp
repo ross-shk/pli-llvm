@@ -78,7 +78,7 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
 
   std::string lookupErr;
   llvm::Triple ttm(triple);
-  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, lookupErr);
+  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(ttm, lookupErr);
   if (!target) {
     err = "cannot find target for triple '" + triple + "': " + lookupErr;
     return nullptr;
@@ -96,6 +96,6 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   const char* features = "";
   // PIE objects match what the clang-subprocess backend produced.
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-      triple, "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
+      ttm, "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
 }
 } // namespace plic

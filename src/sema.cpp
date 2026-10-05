@@ -70,6 +70,16 @@ Type arithResultType(const Type& a, const Type& b) {
 Type mulResultType(const Type& a, const Type& b) {
   if (a.k == TK::Float || b.k == TK::Float)
     return arithResultType(a, b);
+  // Mixed-point rule (mirrors `/` and `**`, ADR-014): FIXED BINARY * FIXED
+  // DECIMAL with a fractional decimal operand (scale > 0) promotes to FLOAT. A
+  // binary scale (2^q) cannot represent a non-dyadic decimal fraction (e.g. 0.01
+  // or 1.99), so keeping the product fixed would truncate the decimal operand to
+  // 0/1 and silently corrupt the result. DECIMAL*DECIMAL and BINARY*BINARY
+  // (including integer-valued decimals, scale 0) stay fixed so exact decimal and
+  // integer products are unchanged.
+  if ((a.k == TK::FixedBin && b.k == TK::FixedDec && b.scale > 0) ||
+      (a.k == TK::FixedDec && b.k == TK::FixedBin && a.scale > 0))
+    return Type::flt(std::max(6, std::max(a.prec, b.prec)));
   Type t = arithResultType(a, b);
   t.scale = a.scale + b.scale;
   return t;
