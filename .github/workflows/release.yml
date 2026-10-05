@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# CI: build release binaries for macOS and Linux on tag push, then publish.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            asset: plic-linux-x86_64
+          - os: macos-latest
+            asset: plic-darwin-arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM + lld (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build cmake python3
+
+      - name: Install LLVM + lld (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm lld ninja cmake
+
+      - name: Configure (CMake + Ninja)
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+          else
+            cmake -G Ninja -S . -B build/cmake
+          fi
+
+      - name: Build
+        run: cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Test
+        run: ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Strip binary
+        run: strip -o build/cmake/plic.stripped build/cmake/plic
+
+      - name: Rename for release
+        run: mv build/cmake/plic.stripped build/cmake/${{ matrix.asset }}
+
+      - name: Smoke test
+        run: |
+          printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n end smoke;\n' > /tmp/smoke.pli
+          ./build/cmake/${{ matrix.asset }} /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: build/cmake/${{ matrix.asset }}
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-artifacts/*
