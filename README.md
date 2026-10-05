@@ -2,11 +2,13 @@
 
 A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics).
 
-**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy.
+**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy, just pick the executable for your platform from GitHub.
+
+A "Hello, world!" program:
 
 ```pli
 hello: procedure options(main);
-    put skip list('Hello, world!');
+  put skip list('Hello, world!');
 end hello;
 ```
 
@@ -19,41 +21,41 @@ A more practical taste — parallel sum with two tasks sharing a heap array. `AL
 
 ```pli
 parrallel_sum: proc options(main);
-    dcl i fixed bin(31);
-    dcl heap pointer,
-        data(100) fixed bin(31) based(heap);
-    dcl (ev1, ev2) event;
-    dcl (part1, part2) fixed bin(31);
+  dcl i fixed bin(31);
+  dcl heap pointer,
+      data(100) fixed bin(31) based(heap);
+  dcl (ev1, ev2) event;
+  dcl (part1, part2) fixed bin(31);
 
-    allocate data set(heap);
-    do i = 1 to 100;
-        data(i) = i;
-    end;
+  allocate data set(heap);
+  do i = 1 to 100;
+    data(i) = i;
+  end;
 
-    part1 = 0; part2 = 0;
-    call sum_first event(ev1);
-    call sum_second event(ev2);
-    wait(ev1, ev2);
+  part1 = 0; part2 = 0;
+  call sum_first event(ev1);
+  call sum_second event(ev2);
+  wait(ev1, ev2);
 
-    put skip list('sum 1..100 =', part1 + part2);
-    free data;
+  put skip list('sum 1..100 =', part1 + part2);
+  free data;
 
 sum_first: proc;
-    dcl (j, s) fixed bin(31);
-    s = 0;
-    do j = 1 to 50;
-        s = s + data(j);
-    end;
-    part1 = s;
+  dcl (j, s) fixed bin(31);
+  s = 0;
+  do j = 1 to 50;
+    s = s + data(j);
+  end;
+  part1 = s;
 end;
 
 sum_second: proc;
-    dcl (j, s) fixed bin(31);
-    s = 0;
-    do j = 51 to 100;
-        s = s + data(j);
-    end;
-    part2 = s;
+  dcl (j, s) fixed bin(31);
+  s = 0;
+  do j = 51 to 100;
+    s = s + data(j);
+  end;
+  part2 = s;
 end;
 
 end;
@@ -65,7 +67,13 @@ plic parsum.pli -o parsum
 sum 1..100 =        5050
 ```
 
-## Platforms
+See [Programming Guide](./guides/programming.md) for guidance and more examples, and [built-ins](./guides/builtins.md) for the supported built-ins.
+
+---
+
+## Build
+
+### Supported Platforms
 
 - **Linux** (x86_64, ARM64): gcc or clang
 - **macOS** (Intel, Apple Silicon): clang
@@ -73,28 +81,23 @@ sum 1..100 =        5050
 
 Threading is abstracted in `runtime/sync/plic_thread.h` (POSIX pthreads on Linux/macOS, Win32 primitives on Windows).
 
----
+### Requirements
 
-## Requirements
-
-| Tool               | Minimum                            | Notes                                                        |
-| ------------------ | ---------------------------------- | ------------------------------------------------------------ |
-| C++20 compiler     | gcc 12 / clang 15 / MSVC 2022 17.x | Plus a Windows 10/11 SDK on Windows                          |
-| CMake              | 3.20                               | All platforms                                                |
-| Ninja              | any recent                         | Canonical generator on all platforms, including Windows      |
-| LLVM + clang + lld | 18                                 | Dev libraries **and** `lld` headers/libs required; see below |
-| Python             | 3                                  | For `scripts/gen_*.py` and `tests/run_tests.py`              |
-| Git                | any recent                         | Optional; without it `plic version` reports `unknown`        |
+<table class="markdown-table">
+  <tr><th>Tool</th><th>Minimum</th><th>Notes</th></tr>
+  <tr><td>C++20 compiler</td><td>gcc 12 / clang 15 / MSVC 2022 17.x</td><td>Plus a Windows 10/11 SDK on Windows</td></tr>
+  <tr><td>CMake</td><td>3.20</td><td>All platforms</td></tr>
+  <tr><td>Ninja</td><td>any recent</td><td>Canonical generator on all platforms, including Windows</td></tr>
+  <tr><td>LLVM + clang + lld</td><td>18</td><td>Dev libraries and lld headers/libs required; see below</td></tr>
+  <tr><td>Python</td><td>3</td><td>For scripts/gen_*.py and tests/run_tests.py</td></tr>
+  <tr><td>Git</td><td>any recent</td><td>Optional; without it plic version reports unknown</td></tr>
+</table>
 
 LLVM sources:
 
 - **Linux:** distro `llvm`/`clang`/`lld` dev packages, or a self-built LLVM.
 - **macOS:** `brew install llvm lld ninja cmake` (note: stock `llvm` formula omits `lld`, so `lld` is a separate formula).
 - **Windows:** no standard prebuilt LLVM ships everything `plic` needs, so build LLVM 18.x from source with `clang;lld` and the `X86;AArch64` targets (one-time cost), then point `CMAKE_PREFIX_PATH` at the install dir. Forward slashes work best in CMake paths (`C:/llvm-install`).
-
----
-
-## Build
 
 ### Linux
 
@@ -200,8 +203,8 @@ Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86
 | **Control flow (extensions)**     | `SELECT`/`WHEN`/`OTHERWISE`, `LEAVE`/`ITERATE`, `DO UNTIL`, local `GO TO`, `//` comments                                                                                                                                                                                  |
 | **Stream I/O**                    | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE`, `FORMAT` + `R(label)`, `DISPLAY`                                                                                                                                                                 |
 | **Record I/O**                    | `WRITE`/`READ` sequential fixed-size binary records                                                                                                                                                                                                                       |
-| **Preprocessor**                  | `%INCLUDE`/`%XINCLUDE` (+`-I`, `PLIC_INCLUDE_PATH`, upward-walk `include/`/`inc/` + system defaults), `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`, `%REPLACE`                                                                                                           |
-| **Separate compilation & driver** | `EXTERNAL` linkage across units, multi-unit `plic` invocation, `-c`/`-emit-llvm`, `-I`, `-L`, `PLIC_LIB_PATH`, `--sysparm`, `-v`                                                                                                                                         |
+| **Preprocessor**                  | `%INCLUDE`/`%XINCLUDE` (+`-I`, `PLIC_INCLUDE_PATH`, upward-walk `include/`/`inc/` + system defaults), `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`, `%REPLACE`                                                                                                |
+| **Separate compilation & driver** | `EXTERNAL` linkage across units, multi-unit `plic` invocation, `-c`/`-emit-llvm`, `-I`, `-L`, `PLIC_LIB_PATH`, `--sysparm`, `-v`                                                                                                                                          |
 | **Built-ins**                     | String (+`TRIM`/`TALLY`/`UPPERCASE`/`LOWERCASE`/`CENTER`/`SEARCH`/`RANK`/`COLLATE`/`HIGH`/`LOW`/`DATE`/`TIME`), `CHAR`/`FIXED`, math (+degree trig, `ATAN2`/`CBRT`/`ERF`), `COMPLEX`/`REAL`/`IMAG`/`CONJG`, `LBOUND`/`HBOUND`/`DIM`, `SYSPARM` (see `guides/builtins.md`) |
 | **No reserved words**             | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables                                                                                                                                                                                                           |
 
