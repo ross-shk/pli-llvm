@@ -318,7 +318,7 @@ static const std::map<std::string, RtSig>& kRuntimeSigs() {
 // the default: nounwind only. Universal nounwind holds because the
 // runtime is C without EH and no entry unwinds its caller back into
 // generated code (task spawn hands the pointer to pthread_create).
-enum RtMem { RtMemDefault, RtMemNone, RtMemArgRead, RtMemArgReadWrite };
+enum RtMem { RtMemDefault, RtMemNone, RtMemArgRead, RtMemArgReadWrite, RtMemReadonly, RtMemOtherMod };
 struct RtAttr {
   bool noReturn = false;
   bool willReturn = false;
@@ -341,6 +341,26 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
       {"pli_alloc", {.allocMalloc = true, .allocSize = true, .nonNullRet = true}},
       {"pli_free", {.willReturn = true, .allocFree = true}},
+     // CONTROLLED allocation/dealloc: modify global generation stacks (ADR-111).
+     // Modelled as all-location readwrite (not a narrower location): the
+     // embedded runtime.bc carries clang-inferred location facts (readers are
+     // `read, inaccessiblemem: none`), and link-time merging INTERSECTS
+     // conflicting memory facts — a narrower claim here collapses to
+     // `memory(none)` and lets LLVM CSE an addr across an alloc. Loop
+     // hoisting is done explicitly in IRGen (emitDoIter), so LLVM needs no
+     // facts beyond "these calls all touch the same state".
+      {"pli_ctl_alloc", {.willReturn = false, .mem = RtMemOtherMod}},
+      {"pli_ctl_alloc_dims", {.willReturn = false, .mem = RtMemOtherMod}},
+      {"pli_ctl_ensure", {.willReturn = false, .mem = RtMemOtherMod}},
+      {"pli_ctl_free", {.willReturn = false, .mem = RtMemOtherMod}},
+      {"pli_ctl_set_dim", {.willReturn = false, .mem = RtMemOtherMod}},
+      // CONTROLLED / ON / AREA readers: read global state, never write (ADR-111).
+      // All-location read for the same link-merge reason as above.
+      {"pli_ctl_addr", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_ctl_len", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_ctl_depth", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_ctl_extent", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_ctl_rank", {.willReturn = true, .mem = RtMemReadonly}},
       // Pure math: arithmetic over args and constant tables only.
       {"pli_mod_ll", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_mod_dd", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
@@ -429,9 +449,16 @@ static void applyRuntimeAttrs(llvm::Function* f) {
   case RtMemArgRead:
     f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref));
     break;
-  case RtMemArgReadWrite:
-    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef));
-    break;
+   case RtMemArgReadWrite:
+     f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef));
+     break;
+   case RtMemReadonly:
+     f->setMemoryEffects(llvm::MemoryEffects::readOnly());
+     break;
+    case RtMemOtherMod: {
+     f->setMemoryEffects(llvm::MemoryEffects::unknown());
+     break;
+   }
   default:
     break;
   }
@@ -1195,8 +1222,13 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
   }
   // A CONTROLLED variable (rules (15),(87)-(90), ADR-140) has no frame
   // storage: its address is the latest generation on its runtime stack.
-  if (sym->controlled)
+  // Inside a hoisted DO loop the preheader already read it (emitDoIter).
+  if (sym->controlled) {
+    auto hit = ctlAddrHoist_.find(sym);
+    if (hit != ctlAddrHoist_.end())
+      return hit->second;
     return b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctladdr");
+  }
   // rule (8): an enclosing variable is reached through this frame's static
   // link; otherwise it is this frame's own storage (globals / allocas /
   // parameters). Both are recorded in symAddr_.
@@ -1753,6 +1785,9 @@ void IRGen::emitProc(HProc* p) {
   symAddr_.clear();
   structRetPtr_ = nullptr;
   ctlImplicitAlloc_.clear();
+  ctlAddrHoist_.clear();
+  ctlLenHoist_.clear();
+  ctlExtHoist_.clear();
   // Re-seed globals: static storage resolves the same in every procedure.
   for (Symbol* s : sema_.storage())
     if (s->isStatic && s->kind == Symbol::Var)
@@ -2098,6 +2133,9 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       onScopes_.clear();
       symAddr_.clear();
       ctlImplicitAlloc_.clear(); // a handler allocates/frees nothing implicitly
+      ctlAddrHoist_.clear();
+      ctlLenHoist_.clear();
+      ctlExtHoist_.clear();
       areaLocals_.clear();       // ... and owns no AREA regions
       for (Symbol* gs : sema_.storage())
         if (gs->isStatic && gs->kind == Symbol::Var)
@@ -3322,11 +3360,189 @@ void IRGen::emitIf(HStmt* s) {
   startBlock(endL);
 }
 
+// Collect CONTROLLED uses and calls under one expression: VarRef/Subscript on
+// a controlled symbol is a generation-stack read; any Call may reallocate a
+// aliased dummy stack, so it blocks hoisting (flushVarWrites already reloads).
+void IRGen::collectCtlExprUses(HExpr* e, std::unordered_set<Symbol*>& uses, bool& hasCall) {
+  if (!e)
+    return;
+  if (e->kind == HExpr::Call)
+    hasCall = true;
+  if ((e->kind == HExpr::VarRef || e->kind == HExpr::Subscript) && e->sym && e->sym->controlled)
+    uses.insert(e->sym);
+  collectCtlExprUses(e->a.get(), uses, hasCall);
+  collectCtlExprUses(e->b.get(), uses, hasCall);
+  collectCtlExprUses(e->locPtr.get(), uses, hasCall);
+  for (auto& a : e->args)
+    collectCtlExprUses(a.get(), uses, hasCall);
+}
+
+// Walk one statement for loop-hoist analysis: `uses` gains every CONTROLLED
+// symbol read, `muts` every symbol an ALLOCATE/FREE (or a growing CHAR(*)
+// store) may re-stack, and `hasCall` any call/handler/wait that may do so
+// transitively. Missing a mutator would miscompile, so CALLs block hoisting.
+void IRGen::collectCtlLoopInfo(HStmt* s, std::unordered_set<Symbol*>& uses,
+                               std::unordered_set<Symbol*>& muts, bool& hasCall) {
+  if (!s)
+    return;
+  auto walkE = [&](HExpr* e) { collectCtlExprUses(e, uses, hasCall); };
+  switch (s->kind) {
+  case HStmt::Allocate:
+    for (auto& b : s->allocBase) {
+      if (b && b->sym && b->sym->controlled)
+        muts.insert(b->sym);
+      walkE(b.get());
+    }
+    for (auto& e : s->allocSet)
+      walkE(e.get());
+    for (auto& e : s->allocArea)
+      walkE(e.get());
+    for (auto& e : s->allocCharLen)
+      walkE(e.get());
+    for (auto& bb : s->allocBounds)
+      for (auto& b : bb) {
+        walkE(b.lb.get());
+        walkE(b.ub.get());
+      }
+    return;
+  case HStmt::Free:
+    for (auto& b : s->freeBase) {
+      if (b && b->sym && b->sym->controlled)
+        muts.insert(b->sym);
+      walkE(b.get());
+    }
+    for (auto& e : s->freeArea)
+      walkE(e.get());
+    return;
+  case HStmt::CallS:
+    hasCall = true;
+    for (auto& a : s->args)
+      walkE(a.get());
+    walkE(s->taskRef.get());
+    walkE(s->eventRef.get());
+    walkE(s->priorityExpr.get());
+    return;
+  case HStmt::On:
+    hasCall = true;
+    walkE(s->oncodeExpr.get());
+    return;
+  case HStmt::Wait:
+    hasCall = true;
+    for (auto& e : s->waitEvents)
+      walkE(e.get());
+    walkE(s->waitCount.get());
+    return;
+  case HStmt::Assign: {
+    auto noteTarget = [&](HExpr* t) {
+      if (t && t->sym && t->sym->controlled && t->sym->ty.isChar() && t->sym->ty.starLen)
+        muts.insert(t->sym);
+      walkE(t);
+    };
+    noteTarget(s->target.get());
+    for (auto& t : s->extraTargets)
+      noteTarget(t.get());
+    walkE(s->value.get());
+    walkE(s->cond.get());
+    walkE(s->from.get());
+    walkE(s->to.get());
+    walkE(s->by.get());
+    walkE(s->stringTarget.get());
+    break;
+  }
+  default:
+    break;
+  }
+  walkE(s->target.get());
+  walkE(s->value.get());
+  walkE(s->cond.get());
+  walkE(s->from.get());
+  walkE(s->to.get());
+  walkE(s->by.get());
+  walkE(s->skipCount.get());
+  walkE(s->stringTarget.get());
+  walkE(s->oncodeExpr.get());
+  walkE(s->waitCount.get());
+  for (auto& t : s->extraTargets)
+    walkE(t.get());
+  for (auto& it : s->items)
+    walkE(it.get());
+  for (auto& a : s->args)
+    walkE(a.get());
+  for (auto& e : s->waitEvents)
+    walkE(e.get());
+  for (auto& f : s->formats) {
+    walkE(f.w.get());
+    walkE(f.d.get());
+    walkE(f.s.get());
+    for (auto& sub : f.subs) {
+      walkE(sub.w.get());
+      walkE(sub.d.get());
+      walkE(sub.s.get());
+    }
+  }
+  if (s->thenS)
+    collectCtlLoopInfo(s->thenS.get(), uses, muts, hasCall);
+  if (s->elseS)
+    collectCtlLoopInfo(s->elseS.get(), uses, muts, hasCall);
+  if (s->unit && s->kind != HStmt::On)
+    collectCtlLoopInfo(s->unit.get(), uses, muts, hasCall);
+  for (auto& b : s->body)
+    collectCtlLoopInfo(b.get(), uses, muts, hasCall);
+}
+
+// Hoist loop-invariant CONTROLLED reads before a DO loop: for every used
+// symbol with no ALLOCATE/FREE/CALL inside, emit one addr+len (+N-D extents)
+// that the body reuses via the hoist maps. Element stores write the data
+// buffer, never the stack metadata, so the hoist is sound. Callers erase the
+// returned symbols from the maps on loop exit.
+void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
+                                std::vector<Symbol*>& hoisted,
+                                std::vector<std::pair<Symbol*, size_t>>& hoistedExt) {
+  std::unordered_set<Symbol*> uses, muts;
+  bool hasCall = false;
+  for (auto& b : body)
+    if (b)
+      collectCtlLoopInfo(b.get(), uses, muts, hasCall);
+  if (cond)
+    collectCtlExprUses(cond, uses, hasCall);
+  if (hasCall || uses.empty())
+    return;
+  for (Symbol* sym : uses) {
+    if (!sym || !sym->controlled || muts.count(sym) || ctlAddrHoist_.count(sym))
+      continue;
+    ctlAddrHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlhoist.a");
+    ctlLenHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctlhoist.l");
+    hoisted.push_back(sym);
+    if (isCtlNDynArray(sym)) {
+      for (size_t k = 0; k < sym->ty.dims.size(); ++k) {
+        auto key = std::make_pair(sym, k);
+        ctlExtHoist_[key] =
+            b_.CreateCall(runtimeFn("pli_ctl_extent"), {ctlKeyOf(sym), i64((long long)k)},
+                          "ctlhoist.e");
+        hoistedExt.push_back(key);
+      }
+    }
+  }
+}
+
 void IRGen::emitDoWhile(HStmt* s) {
   std::string id = std::to_string(n_++);
   llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
   llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);
+  // Loop-invariant CONTROLLED bases hoist before the loop (no stack mutation
+  // inside, so one addr+len serves every iteration).
+  std::vector<Symbol*> hoisted;
+  std::vector<std::pair<Symbol*, size_t>> hoistedExt;
+  hoistCtlForLoopBody(s->body, s->cond.get(), hoisted, hoistedExt);
+  auto unhoist = [&] {
+    for (Symbol* h : hoisted) {
+      ctlAddrHoist_.erase(h);
+      ctlLenHoist_.erase(h);
+    }
+    for (auto& k : hoistedExt)
+      ctlExtHoist_.erase(k);
+  };
   if (s->until) {
     // DO UNTIL (extension, ADR-106): the body runs first, then a true
     // condition exits (LEAVE targets endL, ITERATE re-tests via condL).
@@ -3341,6 +3557,7 @@ void IRGen::emitDoWhile(HStmt* s) {
     Val c = emitExpr(s->cond.get());
     b_.CreateCondBr(toI1(c, s->loc), endL, bodyL);
     startBlock(endL);
+    unhoist();
     return;
   }
   branch(condL);
@@ -3354,6 +3571,7 @@ void IRGen::emitDoWhile(HStmt* s) {
   loopStack_.pop_back();
   branch(condL);
   startBlock(endL);
+  unhoist();
 }
 
 // DO v = e1 [TO e2] [BY e3] [WHILE(e4)];                    rules (71)-(73)
@@ -3392,6 +3610,13 @@ void IRGen::emitDoIter(HStmt* s) {
       s->to ? llvm::BasicBlock::Create(ctx_, "do.down." + id, curFn_) : nullptr;
   llvm::BasicBlock* testL =
       s->to ? llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_) : nullptr;
+
+  // Loop-invariant CONTROLLED bases hoist here (after FROM/TO/BY, before the
+  // loop): one addr+len per used stack serves the whole body. A body with
+  // ALLOCATE/FREE/CALL keeps per-iteration calls (hoistCtl checks).
+  std::vector<Symbol*> ctlHoisted;
+  std::vector<std::pair<Symbol*, size_t>> ctlHoistedExt;
+  hoistCtlForLoopBody(s->body, s->cond.get(), ctlHoisted, ctlHoistedExt);
 
   branch(condL);
   startBlock(condL);
@@ -3446,6 +3671,12 @@ void IRGen::emitDoIter(HStmt* s) {
   branch(condL);
 
   startBlock(endL);
+  for (Symbol* h : ctlHoisted) {
+    ctlAddrHoist_.erase(h);
+    ctlLenHoist_.erase(h);
+  }
+  for (auto& k : ctlHoistedExt)
+    ctlExtHoist_.erase(k);
 }
 
 // Data-directed output (rule (106), QR1.5): each item prints as NAME=value,
@@ -4348,7 +4579,10 @@ llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
     return nullptr;
   if (ty.varying) {
     if (sym && sym->controlled) {
-      llvm::Value* total = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
+      auto hit = ctlLenHoist_.find(sym);
+      llvm::Value* total = (hit != ctlLenHoist_.end())
+                               ? hit->second
+                               : b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
       return b_.CreateSub(total, i64(4), "ctlmax");
     }
     // Non-controlled VARYING STAR parameter: max capacity from hidden arg.
@@ -4356,8 +4590,12 @@ llvm::Value* IRGen::adjustLen(Symbol* sym, const Type& ty) {
       return dynLen_[sym];
     return nullptr;
   }
-  if (sym && sym->controlled)
+  if (sym && sym->controlled) {
+    auto hit = ctlLenHoist_.find(sym);
+    if (hit != ctlLenHoist_.end())
+      return hit->second;
     return b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
+  }
   if (sym && dynLen_.count(sym))
     return dynLen_[sym];
   return nullptr;
@@ -5200,7 +5438,11 @@ llvm::Value* IRGen::ctlDynBound(Symbol* sym) {
   long long elemSz = (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
   if (elemSz <= 0)
     elemSz = 1;
-  llvm::Value* total = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
+  // Hoisted loops reuse the preheader len; the udiv stays loop-invariant too.
+  auto hit = ctlLenHoist_.find(sym);
+  llvm::Value* total = (hit != ctlLenHoist_.end())
+                           ? hit->second
+                           : b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctllen");
   return b_.CreateUDiv(total, i64(elemSz), "ctlub");
 }
 
@@ -5262,6 +5504,10 @@ long long IRGen::ctlNDLb(Symbol* sym, size_t axis) {
 }
 
 llvm::Value* IRGen::ctlNDExtent(Symbol* sym, size_t axis) {
+  // Hoisted loops reuse the preheader extent for this axis.
+  auto hit = ctlExtHoist_.find({sym, axis});
+  if (hit != ctlExtHoist_.end())
+    return hit->second;
   return b_.CreateCall(runtimeFn("pli_ctl_extent"), {ctlKeyOf(sym), i64((long long)axis)},
                        "ctlext");
 }

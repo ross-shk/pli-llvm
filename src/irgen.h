@@ -557,6 +557,18 @@ private:
   // Per-procedure tracking for implicit ALLOCATE of CONTROLLED variables
   // (IBM Enterprise PL/I): one bit per symbol prevents duplicate pushes.
   std::unordered_set<Symbol*> ctlImplicitAlloc_;
+  // Loop-invariant CONTROLLED base/length cache (IRGen LICM for ctl stacks):
+  // a DO loop with no ALLOCATE/FREE/CALL inside hoists pli_ctl_addr/len out
+  // of the body; addressOf/ctlDynBound hit these while the loop emits.
+  std::unordered_map<Symbol*, llvm::Value*> ctlAddrHoist_;
+  std::unordered_map<Symbol*, llvm::Value*> ctlLenHoist_;
+  std::map<std::pair<Symbol*, size_t>, llvm::Value*> ctlExtHoist_;
+  void collectCtlExprUses(HExpr* e, std::unordered_set<Symbol*>& uses, bool& hasCall);
+  void collectCtlLoopInfo(HStmt* s, std::unordered_set<Symbol*>& uses,
+                          std::unordered_set<Symbol*>& muts, bool& hasCall);
+  void hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
+                           std::vector<Symbol*>& hoisted,
+                           std::vector<std::pair<Symbol*, size_t>>& hoistedExt);
   // AUTOMATIC AREA variables of the procedure being emitted (rule (20)): the
   // runtime region is created at entry and destroyed on every exit path.
   std::vector<Symbol*> areaLocals_;
