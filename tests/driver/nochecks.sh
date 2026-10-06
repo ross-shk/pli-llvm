@@ -5,7 +5,7 @@
 # elide their traps (rules (60)-(63), ADR-112): the checks vanish
 # from the IR, and formerly-aborting programs complete.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=tests/driver/out/nochecks
 mkdir -p tests/driver/out
 

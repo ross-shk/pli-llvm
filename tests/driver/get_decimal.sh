@@ -4,7 +4,7 @@
 # tests/driver/get_decimal.sh — GET LIST into FIXED DECIMAL (QR1.2):
 # "12.5" reads 1250 into a dec(4,2); the program verifies itself.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/get_decimal
 mkdir -p tests/driver/out
 

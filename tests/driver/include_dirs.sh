@@ -7,7 +7,7 @@
 # file still fails the compile. Runs from the repo root; fixtures live in
 # the gitignored out/ dir.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/include_dirs
 mkdir -p tests/driver/out/inc_a tests/driver/out/inc_b
 

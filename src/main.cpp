@@ -379,7 +379,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
           om->mod->setDataLayout(tm->createDataLayout());
           // Also set module target triple to ensure consistent
           // feature handling during codegen (module triple affects some defaults).
-          om->mod->setTargetTriple(llvm::Triple(triple));
+          om->mod->setTargetTriple(triple);
           // Mirror the clang backend: optimize the (runtime-linked) IR at the
           // requested -O level before codegen.
           plic::optimizeModule(*om->mod, optLevel);
@@ -432,8 +432,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     os << ir;
   }
 
-  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags +
-                    " " + shellQuote(llPath.string()) + " -c -o " + shellQuote(objPath.string());
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel +
+                    backendFlags + " " + shellQuote(llPath.string()) + " -c -o " +
+                    shellQuote(objPath.string());
   if (verbose)
     std::cerr << "+ " << cmd << "\n";
   int rc = system(cmd.c_str());
@@ -680,18 +681,29 @@ int main(int argc, char** argv) {
   if (!runtimeExplicit && !runtimeLib.empty() && !fs::exists(runtimeLib)) {
     fs::path installed = PLIC_INSTALL_RUNTIME_LIB;
     if (installed.empty() || !fs::exists(installed)) {
-      // Search the exe-dir upward walk for libpli.a before the hardcoded fallback.
+      // Search the exe-dir upward walk for the runtime archive before the
+      // hardcoded fallback. The archive name is platform-specific
+      // (pli.lib on Windows, libpli.a elsewhere).
+#ifdef _WIN32
+      static const char* kRtLibNames[] = {"pli.lib", "libpli.a"};
+#else
+      static const char* kRtLibNames[] = {"libpli.a", "pli.lib"};
+#endif
       bool found = false;
       for (const fs::path& d : exeLibDirs) {
-        fs::path cand = d / "libpli.a";
-        if (fs::exists(cand)) {
-          installed = cand;
-          found = true;
-          break;
+        for (const char* n : kRtLibNames) {
+          fs::path cand = d / n;
+          if (fs::exists(cand)) {
+            installed = cand;
+            found = true;
+            break;
+          }
         }
+        if (found)
+          break;
       }
       if (!found)
-        installed = executablePath(argv[0]).parent_path().parent_path() / "lib/libpli.a";
+        installed = executablePath(argv[0]).parent_path().parent_path() / "lib" / kRtLibNames[0];
     }
     if (fs::exists(installed))
       runtimeLib = installed.string();
@@ -1101,7 +1113,24 @@ int main(int argc, char** argv) {
   // Fallback: link the per-file objects with libpli via the backend clang.
   // Drop unreferenced runtime sections (the archive is sectioned, ADR-079);
   // multitasking (QR2.8) runs on pthreads.
-  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags;
+  // On Windows the driver defaults to the static CRT (LIBCMT) while pli.lib
+  // is built with the dynamic CRT (/MD): drop the static default lib and use
+  // the dynamic one, otherwise the link fails with LNK4098/LNK2019.
+#ifdef _WIN32
+  const char* linkCrtFlag = "-Xlinker /NODEFAULTLIB:libcmt.lib -Xlinker /DEFAULTLIB:msvcrt.lib ";
+#else
+  const char* linkCrtFlag = "";
+#endif
+#ifdef _WIN32
+  // LTO objects are LLVM bitcode, which MSVC link.exe cannot read (LNK1107):
+  // route LTO links through lld-link, which handles bitcode natively.
+  // Non-LTO links keep the default (MSVC link) behavior.
+  const char* linkLldFlag = !ltoKind.empty() ? "-fuse-ld=lld " : "";
+#else
+  const char* linkLldFlag = "";
+#endif
+  std::string cmd = shellQuote(clangPath) + " " + linkCrtFlag + linkLldFlag +
+                    "-Wno-override-module " + optLevel + backendFlags;
 #ifdef __APPLE__
   cmd += " -Wl,-dead_strip";
 #elif defined(_WIN32)

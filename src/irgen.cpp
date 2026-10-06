@@ -992,9 +992,9 @@ std::string IRGen::run(HProgram& prog) {
   if (!triple_.empty()) {
     llvm::Triple t(triple_);
     if (t.isMacOSX()) {
-      mod_.setTargetTriple(llvm::Triple("arm64-apple-macosx15.0"));
+      mod_.setTargetTriple("arm64-apple-macosx15.0");
     } else {
-      mod_.setTargetTriple(t);
+      mod_.setTargetTriple(t.getTriple());
     }
   }
   mod_.print(os, nullptr);

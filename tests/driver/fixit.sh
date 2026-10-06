@@ -5,7 +5,7 @@
 # is rendered at the caret column. Exercises missing THEN, '=', PROCEDURE and
 # END. Rules (75),(86),(2),(7).
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/fixit
 mkdir -p "$OUT"
 ok=1

@@ -6,9 +6,16 @@
 # gitignored out/ dir so the .o artifacts stay out of the repo; links the two
 # objects to prove they link cleanly.
 set -u
-PLIC=$PWD/build/plic
+# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
+# is no libm (the UCRT provides it), and program output uses CRLF. On Unix
+# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
+  *) EXE=; MATHLIB=-lm ;;
+esac
+PLIC=${PLIC:-$PWD/build/plic}
 CLANG=${CLANG:-clang}
-RTLIB=$PWD/build/libpli.a
+RTLIB=${RTLIB:-$PWD/build/libpli.a}
 OUT=tests/driver/out/multic
 mkdir -p tests/driver/out
 cd tests/driver/out
@@ -33,6 +40,6 @@ if $PLIC -c multic_a.pli multic_b.pli -o x.o 2>/dev/null; then
   exit 1
 fi
 # -lm after the archive: libpli needs libm on Linux (no-op on macOS).
-$CLANG multic_b.o multic_a.o "$RTLIB" -lm -o multic || { echo "FAIL multic: link"; exit 1; }
-./multic
+$CLANG multic_b.o multic_a.o "$RTLIB" $MATHLIB -o multic$EXE || { echo "FAIL multic: link"; exit 1; }
+./multic$EXE
 exit 0

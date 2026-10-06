@@ -78,7 +78,10 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
 
   std::string lookupErr;
   llvm::Triple ttm(triple);
-  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(ttm, lookupErr);
+  // NOTE: StringRef overloads are used (not Triple) for compatibility with
+  // LLVM 18 through 22: newer LLVM added Triple overloads, but the StringRef
+  // forms exist on all supported versions.
+  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(ttm.getTriple(), lookupErr);
   if (!target) {
     err = "cannot find target for triple '" + triple + "': " + lookupErr;
     return nullptr;
@@ -96,6 +99,6 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   const char* features = "";
   // PIE objects match what the clang-subprocess backend produced.
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-      ttm, "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
+      ttm.getTriple(), "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
 }
 } // namespace plic

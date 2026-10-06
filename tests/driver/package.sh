@@ -7,9 +7,16 @@
 # -c; cc links the objects with libpli. Symbol visibility is
 # asserted with nm (T = global text, t = local).
 set -u
-PLIC=./build/plic
+# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
+# is no libm (the UCRT provides it), and program output uses CRLF. On Unix
+# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
+  *) EXE=; MATHLIB=-lm ;;
+esac
+PLIC=${PLIC:-./build/plic}
 CC=${CC:-${CLANG:-clang}}
-RTLIB=./build/libpli.a
+RTLIB=${RTLIB:-./build/libpli.a}
 OUT=tests/driver/out/package
 mkdir -p tests/driver/out
 
@@ -45,6 +52,6 @@ SYM_PREFIX=$([ "$(uname -s)" = "Darwin" ] && echo "_" || echo "")
 nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PUB" >/dev/null || { echo "FAIL package: ${SYM_PREFIX}PUB not exported"; exit 1; }
 if nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PRIV" >/dev/null; then echo "FAIL package: ${SYM_PREFIX}PRIV leaked"; exit 1; fi
 # -lm after the archive: libpli needs libm on Linux (no-op on macOS).
-$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" -lm -o "$OUT" || { echo "FAIL package: link"; exit 1; }
-"$OUT"
+$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB -o "$OUT$EXE" || { echo "FAIL package: link"; exit 1; }
+"$OUT$EXE"
 exit 0

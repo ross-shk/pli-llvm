@@ -5,12 +5,21 @@
 # --flto=thin / --flto=full are forwarded to both the compile and the link
 # step, single- and multi-unit.
 set -u
-PLIC=./build/plic
+# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
+# is no libm (the UCRT provides it), and program output uses CRLF. On Unix
+# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
+  *) EXE=; MATHLIB=-lm ;;
+esac
+PLIC=${PLIC:-./build/plic}
 OUT=tests/driver/out/flto
 mkdir -p tests/driver/out
 
 ok=1
 check() {
+  # Strip CR: Windows programs emit CRLF (a no-op on Unix).
+  set -- "$1" "$(printf '%s' "$2" | tr -d '\r')" "$3"
   if [ "$2" != "$3" ]; then
     echo "FAIL: $1"
     echo "  expected: $3"
@@ -26,16 +35,16 @@ cat > "$OUT.pli" <<'EOF'
 EOF
 
 # --- ThinLTO: flag reaches both steps, binary runs ----------------------
-cmd=$($PLIC "$OUT.pli" -o "$OUT.thin" --flto=thin -v 2>&1) \
+cmd=$($PLIC "$OUT.pli" -o "$OUT.thin$EXE" --flto=thin -v 2>&1) \
   || { echo "FAIL: thin-lto compile+link"; ok=0; }
 printf '%s\n' "$cmd" | grep -q -- '-flto=thin' \
   || { echo "FAIL: -flto=thin not passed through"; ok=0; }
-check "thin run" "$($OUT.thin)" "PASS flto"
+check "thin run" "$($OUT.thin$EXE)" "PASS flto"
 
 # --- full LTO ------------------------------------------------------------
-$PLIC "$OUT.pli" -o "$OUT.full" --flto=full \
+$PLIC "$OUT.pli" -o "$OUT.full$EXE" --flto=full \
   || { echo "FAIL: full-lto compile+link"; ok=0; }
-check "full run" "$($OUT.full)" "PASS flto"
+check "full run" "$($OUT.full$EXE)" "PASS flto"
 
 # --- multi-unit ThinLTO across two plic inputs in one driver call ------
 cat > "$OUT.lib.pli" <<'EOF'
@@ -50,9 +59,9 @@ cat > "$OUT.main.pli" <<'EOF'
     put skip list('PASS flto', flto_lib(21));
  end flto_main2;
 EOF
-$PLIC "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi" --flto=thin \
+$PLIC "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi$EXE" --flto=thin \
   || { echo "FAIL: multi-unit thin-lto"; ok=0; }
-check "multi thin run" "$($OUT.multi)" "PASS flto 42"
+check "multi thin run" "$($OUT.multi$EXE)" "PASS flto 42"
 
 [ "$ok" -eq 1 ] && echo PASS
 exit 0

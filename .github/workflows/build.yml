@@ -8,9 +8,13 @@ on:
 
 jobs:
   build-test:
+    defaults:
+      run:
+        shell: bash
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,30 +32,70 @@ jobs:
       - name: Install LLVM + lld (macOS)
         if: runner.os == 'macOS'
         run: brew install llvm lld ninja cmake
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install LLVM + lld (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install llvm ninja -y
+          echo "CMAKE_PREFIX_PATH=C:\Program Files\LLVM" >> "$GITHUB_ENV"
+          echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
       - name: Configure (CMake + Ninja)
         run: |
           if [ "${{ runner.os }}" = "macOS" ]; then
             cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_BUILD_TYPE=Release
           else
             cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-22
           fi
       - name: Build
-        run: cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cmake --build build/cmake -j$NUMBER_OF_PROCESSORS
+          else
+            cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          fi
       - name: Test
-        run: ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ctest --test-dir build/cmake -j$NUMBER_OF_PROCESSORS
+          else
+            ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          fi
       - name: Size gate (stripped < 150 MB)
         run: |
-          strip -o /tmp/plic.strip build/cmake/plic
-          bytes=$(stat -f%z /tmp/plic.strip 2>/dev/null || stat -c%s /tmp/plic.strip)
-          echo "Stripped size: $bytes bytes"
-          test "$bytes" -lt 157286400
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bytes=$(stat -c%s build/cmake/plic.exe)
+            echo "Unstripped size: $bytes bytes"
+            test "$bytes" -lt 157286400
+          else
+            strip -o /tmp/plic.strip build/cmake/plic
+            bytes=$(stat -f%z /tmp/plic.strip 2>/dev/null || stat -c%s /tmp/plic.strip)
+            echo "Stripped size: $bytes bytes"
+            test "$bytes" -lt 157286400
+          fi
       - name: Smoke (pure PL/I end-to-end)
         run: |
-          printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n end smoke;\n' > /tmp/smoke.pli
-          ./build/cmake/plic /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
-          ./build/cmake/plic version
-      - name: Upload plic binary
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n end smoke;\n' > /tmp/smoke.pli
+            ./build/cmake/plic.exe /tmp/smoke.pli -o /tmp/smoke.exe && /tmp/smoke.exe
+            ./build/cmake/plic.exe version
+          else
+            printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n end smoke;\n' > /tmp/smoke.pli
+            ./build/cmake/plic /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+            ./build/cmake/plic version
+          fi
+      - name: Upload plic binary (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: plic-${{ matrix.os }}
           path: build/cmake/plic
+      - name: Upload plic binary (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: plic-${{ matrix.os }}
+          path: build/cmake/plic.exe

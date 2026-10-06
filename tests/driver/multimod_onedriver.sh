@@ -5,7 +5,7 @@
 # a single plic invocation compiles a MAIN unit and a library unit and links
 # them, replacing the manual -c + clang link of multimod.sh.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=tests/driver/out/multimod_onedriver
 mkdir -p tests/driver/out
 

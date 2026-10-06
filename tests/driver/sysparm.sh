@@ -5,7 +5,7 @@
 # returns the --sysparm option value baked in at compile time (empty when
 # none is given). Compiles one program with --sysparm HELLO and one without.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/sysparm
 mkdir -p tests/driver/out
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# CI: build release binaries for macOS and Linux on tag push, then publish.
+# CI: build release binaries for macOS, Linux and Windows on tag push, then publish.
 name: release
 
 on:
@@ -9,10 +9,13 @@ on:
 
 jobs:
   build:
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
             asset: plic-linux-x86_64
@@ -20,6 +23,9 @@ jobs:
           - os: macos-latest
             asset: plic-darwin-arm64
             platdir: darwin-arm64
+          - os: windows-latest
+            asset: plic-windows-x86_64
+            platdir: windows-x86_64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -41,38 +47,93 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install llvm lld ninja cmake
 
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install LLVM + lld (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install llvm ninja -y
+          echo "CMAKE_PREFIX_PATH=C:\Program Files\LLVM" >> "$GITHUB_ENV"
+          echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
+
       - name: Configure (CMake + Ninja)
         run: |
           if [ "${{ runner.os }}" = "macOS" ]; then
             cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_BUILD_TYPE=Release
           else
             cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-22
           fi
 
       - name: Build
-        run: cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cmake --build build/cmake -j$NUMBER_OF_PROCESSORS
+          else
+            cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          fi
 
       - name: Test
         continue-on-error: true
-        run: ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ctest --test-dir build/cmake -j$NUMBER_OF_PROCESSORS
+          else
+            ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          fi
 
-      - name: Strip and pack into tarball
+      - name: Strip and pack into tarball (Unix)
+        if: runner.os != 'Windows'
         run: |
           strip -o build/cmake/plic.stripped build/cmake/plic
           mkdir -p ${{ matrix.platdir }}
           cp build/cmake/plic.stripped ${{ matrix.platdir }}/plic
           tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/plic
 
-      - name: Smoke test
+      - name: Pack into archives (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # plic.exe is self-contained (embedded runtime bitcode); the static
+          # lib + bitcode are bundled for cross-unit (-c) workflows.
+          # Layout matches README: <platdir>/plic.exe + <platdir>/lib/... .
+          mkdir -p ${{ matrix.platdir }}/lib
+          cp build/cmake/plic.exe ${{ matrix.platdir }}/plic.exe
+          cp build/cmake/pli.lib ${{ matrix.platdir }}/lib/pli.lib
+          cp build/cmake/runtime.bc ${{ matrix.platdir }}/lib/runtime.bc
+          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}
+          powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}' -DestinationPath '${{ matrix.asset }}.zip'"
+
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
         run: |
           printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n   end smoke;\n' > /tmp/smoke.pli
           ./build/cmake/plic.stripped /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
 
-      - name: Upload artifact
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n   end smoke;\n' > /tmp/smoke.pli
+          ./build/cmake/plic.exe /tmp/smoke.pli -o /tmp/smoke.exe && /tmp/smoke.exe
+
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}.tar.gz
+          retention-days: 1
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}.tar.gz
+            ${{ matrix.asset }}.zip
           retention-days: 1
 
   publish:
