@@ -71,14 +71,15 @@ plic hello.pli -o hello
 
 `put skip list(...)` is your `print()`. It prints each item and `skip` starts a new line first. We'll meet `get list(...)` soon — that's your `input()`.
 
-> ***Short-hand notation: **you can shorten *`procedure`* to *`proc`, `initialize` to `init`, `varying` to `var`, `pointer` to `ptr` and so on for your convinience.
+> **Short-hand notation:** you can shorten `procedure` to `proc`, `initialize` to `init`, `varying` to `var`, `pointer` to `ptr` and so on for your convinience.
 
-> **No reserved words.** `if`, `put`, `return` and friends are ordinary names; the parser figures out from position whether you mean the keyword or your own variable, so you don't have to worry about stumbling on reserved words when naming your functions and variables.
+> **No reserved words:** `if`, `put`, `return` and friends are ordinary names; the parser figures out from position whether you mean the keyword or your own variable, so you don't have to worry about stumbling on reserved words when naming your functions and variables.
 
 > **Python friends:** `put skip list('hi', x)` is `print('hi', x)`.  
 > **Go friends:** `hello: procedure options(main); ... end hello;` is `func main() { ... }` with a name tag on both ends.
 
-> **Run the full example:** [`examples/getting_started.pli`](../examples/getting_started.pli) — `plic getting_started.pli -o getting_started && ./getting_started`.
+> **Run the full example:** [`examples/getting_started.pli`](../examples/getting_started.pli) — `plic getting_started.pli -o getting_started && ./getting_started`, make sure  
+> to `cd` into `examples/ `first.
 
 ---
 
@@ -98,9 +99,9 @@ If you've used `int`, `float`, `str`, `bool` — you're covered. PL/I just has m
 A few beginner notes:
 
 - `dcl` is short for `declare`. Use either.
-- `/* ... */` is a comment. `// ...` to end-of-line also works.
-- `fixed bin(31)` means "31-bit signed integer". That's the everyday integer — just use it.
-- `char(10)` is a fixed 10-byte buffer, blank-padded. `char(10) varying` is the friendly one: it remembers how long your text actually is. **When in doubt, use `varying`.** It behaves like a Python string.
+- `/* ... */` is a multi-line comment. `// ...` to end-of-line also works.
+- `fixed bin(31)` means "31-bit signed integer", actually maps to the regular 32-bit integer. That's the everyday integer — just use it.
+- `char(10)` is a fixed 10-byte buffer, blank-padded. `char(10) varying` is the friendly one: it remembers how long your text actually is, while 10 sets the maximum number of character it can hold. **When in doubt, use **`varying`**.** It behaves like a Python string.
 - `dcl z char(20) varyingz;` is a NUL-terminated string for talking to C (more in [C interoperability](#c-interoperability)).
 
 If you skip the type, PL/I guesses: names starting with I–N become `fixed bin(31)`, everything else becomes `float dec(6)`. This is a 1960s habit. Explicit is better — always write your type.
@@ -807,7 +808,7 @@ Bounds-checking example — the handler runs, then execution resumes with the in
 Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconversion)` skip the check for one statement when you've already validated it:
 
 ```pli
- (nosubscriptrange) a(i) = 0;  /* trust me, i is fine */
+ (nosubscriptrange): a(i) = 0;  /* trust me, i is fine */
 ```
 
 > **Python friends:** `on ... / signal ...` is `try: ... except: ...` that resumes instead of jumping to the except's end. `revert` is leaving the `with` block.
@@ -892,18 +893,21 @@ Centralise widths and layouts in an include:
 
 ```pli
  /* config.inc */
- %dcl max_records fixed bin(31) value(1000);
+ %declare max_records value(1000);
+ %activate max_records;
 
  %include 'config.inc';
 
- dcl table(1000) char(80) varying;
+ dcl table(%max_records) char(80) varying;
 ```
 
-`%if / %then / %else` with `%declare` / `%activate` parameterises includes — like build tags or feature flags for debug vs. release:
+`%if / %then / %else` with `%declare` / `%activate` selects code — like build tags or feature flags for debug vs. release:
 
 ```pli
- %declare debug;
- %if debug %then %activate debug;
+ %declare debug value(1);
+ %activate debug;
+ %if debug = 1 %then put skip list('debug is on');
+ %else put skip list('debug is off');
 ```
 
 `%replace name by <tokens>;` substitutes an identifier with source text before parsing.
@@ -923,7 +927,7 @@ Use `-v` to list the configured paths.
 
 - `%do`, `%go to`, and preprocessor procedures parse but report "unsupported".
 
-> **Run the full example:** [`examples/preprocessor.pli`](../examples/preprocessor.pli) (with `preprocessor_defs.inc`, `preprocessor_debug_on.inc`, `preprocessor_debug_off.inc` next to it) — `plic preprocessor.pli -o pp && ./pp`.
+> **Run the full example:** [`examples/preprocessor.pli`](../examples/preprocessor.pli) (with `preprocessor_defs.inc` next to it) — `plic preprocessor.pli -o pp && ./pp`.
 
 ---
 
