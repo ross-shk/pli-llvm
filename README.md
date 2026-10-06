@@ -16,6 +16,16 @@ curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-linux
   | tar xzf - && sudo mv linux-x86_64/plic /usr/local/bin/
 ```
 
+or on Windows (x86_64):
+
+```bat
+curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-windows-x86_64.zip -o plic.zip
+tar -xf plic.zip
+move windows-x86_64\plic.exe %USERPROFILE%\bin\
+```
+
+The Windows ZIP contains `plic.exe` (self-contained, with embedded runtime bitcode) plus optional `lib/pli.lib` and `lib/runtime.bc` for cross-unit (`-c`) compilation workflows. For basic single-file programs, `plic.exe` alone is sufficient. `curl` and `tar` ship with Windows 10+.
+
 A "Hello, world!" program:
 
 ```pli
