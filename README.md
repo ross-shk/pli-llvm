@@ -1,6 +1,6 @@
-# pli-llvm — a PL/I compiler targeting LLVM
+# A PL/I compiler targeting LLVM
 
-A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics).
+A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). Currently supports about 80% of **TR 25.084** features with some features added from IBM Enterprise PL/I.
 
 **Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a [release](https://github.com/ross-shk/pli-llvm/releases/tag/v0.1.0) archive, extract the `plic` binary and put it in the executable path, on the Mac (Apple Silicon):
 
