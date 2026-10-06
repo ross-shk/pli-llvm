@@ -583,8 +583,8 @@ StmtP Parser::parseStatement(Proc* owner) {
       if (!anyWord || !allHandled)
         d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
     } else {
-      i_ = save;
-      break;
+      d_.error(l, "condition prefix must end with ':'", "(60)");
+      return nullptr;
     }
   }
 
@@ -2271,7 +2271,7 @@ bool Parser::parseDescriptorType(Type& out) {
     out.controlled = bag.controlled;
   }
   if (hasStar && bag.varying) {
-    d_.error(cur().loc, "VARYING arrays are not implemented in this stage", "(12)");
+    d_.error(cur().loc, "adjustable-length VARYING arrays are not implemented in this stage", "(12)");
   }
   return true;
 }

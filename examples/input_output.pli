@@ -13,8 +13,8 @@
    put skip list('Hello,', name);
    put skip list('count =', count);
 
-   /* string: format into a fixed buffer */
-   dcl buff char(100);
+   /* string: format into a varying buffer */
+   dcl buff char(100) varying;
 
    put string(buff) list('n=', 42);
    put skip list('buff =', buff);
@@ -28,13 +28,14 @@
    put skip edit('hi', 7) (a(4), f(4));
 
    /* data-directed: self-describing dump */
-   dcl host char(20) varying,
-       port fixed bin(31);
+   dcl 1 config,
+         2 host char(20) varying,
+         2 port fixed bin(31);
 
-   host = 'localhost';
-   port = 8080;
+   config.host = 'localhost';
+   config.port = 8080;
 
-   put data(host, port);
+   put data(config);
 
    /* file round-trip */
    dcl f file;

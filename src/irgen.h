@@ -153,6 +153,8 @@ private:
   // and ";"-terminated; names are compile-time globals, values reuse the
   // list-directed printers.
   void emitPutDataItems(HStmt* s);
+  void emitPutDataStruct(HExpr* t, const std::string& prefix);
+  void emitPutDataScalar(HExpr* t, const std::string& name);
   // Data-directed input (rule (106)): read NAME=value pairs in any order,
   // storing each into the matching item and skipping unknown names.
   void emitGetDataItems(HStmt* s);

@@ -1,9 +1,7 @@
  /* Shared sizes live here: one edit resizes every table that includes
     this header. */
     
- %declare tabcap;
+ %declare tabcap value(1000);
  %activate tabcap;
- %tabcap = 1000;
- %declare namewidth;
+ %declare namewidth value(30);
  %activate namewidth;
- %namewidth = 30;

@@ -1374,12 +1374,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // itemlist (with iteration factors and '*') into one value per element.
         if (item.ty.isArray() && !isDefined) {
           if (item.ty.elementType().isChar() &&
-              (item.ty.elementType().varying || item.ty.elementType().starLen || item.controlled ||
+              (item.ty.elementType().starLen || item.controlled ||
                item.ty.isDynamic()))
             d_.error(item.loc,
-                     "arrays of VARYING, adjustable, CONTROLLED, or dynamic-extent CHARACTER "
+                     "arrays of adjustable, CONTROLLED, or dynamic-extent CHARACTER "
                      "are not implemented in this stage",
                      "(12)");
+          // VARYING element arrays are now supported (rule 12)
           if (item.ty.isDynamic()) {
             // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
             // serves only a single-axis AUTOMATIC array whose lower and upper
@@ -3039,12 +3040,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // qualified, structure, pointer, and complex items stay diagnosed.
       for (auto& it : s->items) {
         typeExpr(it.get(), sc, p);
-        if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName ||
-            !it->memberPath.empty()) {
-          d_.error(it->loc, "a PUT DATA item must be a scalar variable", "(110)");
+        if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName) {
+          d_.error(it->loc, "a PUT DATA item must be a variable reference", "(110)");
           continue;
         }
-        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() || it->ty.isComplex() ||
+        // Allow structures: they will be expanded to their members in codegen
+        if (it->ty.isVoid() || it->ty.isPointer() || it->ty.isComplex() ||
             it->ty.isArray()) {
           d_.error(it->loc, "PUT DATA of this type is not implemented in this stage", "(110)");
         }
@@ -3686,8 +3687,10 @@ void Sema::checkStringTarget(Stmt* s, Scope* sc, Proc* p, bool isGet) {
   Expr* t = s->stringTarget.get();
   if (t->kind != Expr::VarRef || !t->sym || t->sym->kind == Symbol::ProcName)
     d_.error(t->loc, "the STRING option requires a character variable", "(105)");
-  else if (!t->ty.isChar() || t->ty.varying)
-    d_.error(t->loc, "the STRING option requires a NONVARYING CHARACTER variable", "(105)");
+  else if (!t->ty.isChar())
+    d_.error(t->loc, "the STRING option requires a CHARACTER variable", "(105)");
+  else if (isGet && t->ty.varying)
+    d_.error(t->loc, "GET STRING requires a NONVARYING CHARACTER variable", "(105)");
   else if (!isGet)
     checkValueTarget(t); // PUT STRING formats into its target (ADR-108)
   if (s->page || s->skip)

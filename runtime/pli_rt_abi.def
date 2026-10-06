@@ -166,7 +166,7 @@ PLI_FN(pli_get_edit_x, VOID, (I64))
 PLI_FN(pli_get_edit_skip, VOID, (I64))
 
 PLI_FN(pli_string_put_open, VOID, (PTR, I64))         /* STRING output (105) */
-PLI_FN(pli_string_put_close, VOID, (PTR, I64))
+PLI_FN(pli_string_put_close, I64, (PTR, I64))         /* STRING output (105), returns length written */
 PLI_FN(pli_string_get_open, VOID, (PTR, I64))         /* STRING input (105) */
 PLI_FN(pli_string_get_close, VOID, (VOID))
 
