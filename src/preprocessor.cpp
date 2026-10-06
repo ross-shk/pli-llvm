@@ -450,7 +450,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
   if (active && !evalCondExpr(source.substr(wordEnd, thenAt - wordEnd), path, directiveLine,
                               directiveCol, cond))
     return npos;
-  // One directive per arm, at the caller's activity gated by the condition.
+  // One directive or statement per arm, at the caller's activity gated by the condition.
   // thenAt points at '%': re-scan to the end of the THEN word itself, since
   // spaces may sit between them.
   size_t arm = thenAt + 1;
@@ -462,11 +462,59 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
   while (arm < source.size() && (source[arm] == ' ' || source[arm] == '\t' || source[arm] == '\r' ||
                                  source[arm] == '\n' || source[arm] == '\f'))
     ++arm;
-  if (arm >= source.size() || source[arm] != '%') {
-    error(path, directiveLine, directiveCol, "expected a directive after %THEN");
+  if (arm >= source.size()) {
+    error(path, directiveLine, directiveCol, "expected a directive or statement after %THEN");
     return npos;
   }
-  size_t next = processDirective(path, source, arm, output, line, col, active && cond != 0);
+  size_t next;
+  if (source[arm] == '%') {
+    // Directive arm
+    next = processDirective(path, source, arm, output, line, col, active && cond != 0);
+  } else {
+    // Statement arm: find the terminating semicolon (not in string/comment)
+    size_t stmtEnd = arm;
+    bool inStr = false, inCmt = false, inLineCmt = false;
+    while (stmtEnd < source.size()) {
+      char c = source[stmtEnd];
+      if (inLineCmt) {
+        if (c == '\n') inLineCmt = false;
+      } else if (inCmt) {
+        if (c == '*' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '/') {
+          inCmt = false;
+          stmtEnd += 2;
+          continue;
+        }
+      } else if (inStr) {
+        if (c == '\'' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '\'') {
+          stmtEnd += 2;
+          continue;
+        }
+        if (c == '\'') inStr = false;
+      } else {
+        if (c == '/' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '*') {
+          inCmt = true;
+          stmtEnd += 2;
+          continue;
+        }
+        if (c == '/' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '/') {
+          inLineCmt = true;
+          stmtEnd += 2;
+          continue;
+        }
+        if (c == '\'') {
+          inStr = true;
+        } else if (c == ';') {
+          ++stmtEnd; // include the semicolon
+          break;
+        }
+      }
+      ++stmtEnd;
+    }
+    if (active && cond != 0) {
+      output.append(source, arm, stmtEnd - arm);
+    }
+    next = stmtEnd;
+  }
   if (next == npos)
     return npos;
   // An optional %ELSE arm takes the inverted condition.
@@ -488,11 +536,57 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
              (source[arm2] == ' ' || source[arm2] == '\t' || source[arm2] == '\r' ||
               source[arm2] == '\n' || source[arm2] == '\f'))
         ++arm2;
-      if (arm2 >= source.size() || source[arm2] != '%') {
-        error(path, directiveLine, directiveCol, "expected a directive after %ELSE");
+      if (arm2 >= source.size()) {
+        error(path, directiveLine, directiveCol, "expected a directive or statement after %ELSE");
         return npos;
       }
-      next = processDirective(path, source, arm2, output, line, col, active && cond == 0);
+      if (source[arm2] == '%') {
+        next = processDirective(path, source, arm2, output, line, col, active && cond == 0);
+      } else {
+        // Statement arm for %ELSE
+        size_t stmtEnd = arm2;
+        bool inStr = false, inCmt = false, inLineCmt = false;
+        while (stmtEnd < source.size()) {
+          char c = source[stmtEnd];
+          if (inLineCmt) {
+            if (c == '\n') inLineCmt = false;
+          } else if (inCmt) {
+            if (c == '*' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '/') {
+              inCmt = false;
+              stmtEnd += 2;
+              continue;
+            }
+          } else if (inStr) {
+            if (c == '\'' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '\'') {
+              stmtEnd += 2;
+              continue;
+            }
+            if (c == '\'') inStr = false;
+          } else {
+            if (c == '/' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '*') {
+              inCmt = true;
+              stmtEnd += 2;
+              continue;
+            }
+            if (c == '/' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '/') {
+              inLineCmt = true;
+              stmtEnd += 2;
+              continue;
+            }
+            if (c == '\'') {
+              inStr = true;
+            } else if (c == ';') {
+              ++stmtEnd; // include the semicolon
+              break;
+            }
+          }
+          ++stmtEnd;
+        }
+        if (active && cond == 0) {
+          output.append(source, arm2, stmtEnd - arm2);
+        }
+        next = stmtEnd;
+      }
       if (next == npos)
         return npos;
     }
@@ -708,12 +802,54 @@ bool Preprocessor::expandOneInclude(const fs::path& input, const std::string& ra
 bool Preprocessor::handleDeclare(const fs::path& input, const std::string& operand, int line,
                                  int col) {
   // %DECLARE a, b (ADR-083): integer preprocessor variables, default 0.
+  // Also supports %DECLARE name VALUE(expr) for initialization (ADR-083).
   // Redeclaration keeps the current value (include-twice idempotent).
   std::stringstream ss(operand);
   std::string item;
   bool any = false;
   while (std::getline(ss, item, ',')) {
     std::string name = upper(trim(item));
+    // Check for VALUE clause: name VALUE(expr)
+    long long initValue = 0;
+    bool hasValue = false;
+    size_t valuePos = name.find("VALUE");
+    if (valuePos != std::string::npos) {
+      // Extract name and VALUE expression
+      std::string beforeValue = trim(name.substr(0, valuePos));
+      std::string afterValue = trim(name.substr(valuePos + 5)); // skip "VALUE"
+      if (!beforeValue.empty()) {
+        name = upper(beforeValue);
+      } else {
+        error(input, line, col, "expected a name before VALUE in %DECLARE");
+        return false;
+      }
+      if (!afterValue.empty() && afterValue[0] == '(') {
+        // Find matching closing parenthesis
+        int depth = 0;
+        size_t endPos = std::string::npos;
+        for (size_t i = 0; i < afterValue.size(); ++i) {
+          if (afterValue[i] == '(') ++depth;
+          else if (afterValue[i] == ')') {
+            if (--depth == 0) {
+              endPos = i;
+              break;
+            }
+          }
+        }
+        if (endPos != std::string::npos) {
+          std::string valueExpr = afterValue.substr(1, endPos - 1);
+          if (!evalCondExpr(valueExpr, input, line, col, initValue))
+            return false;
+          hasValue = true;
+        } else {
+          error(input, line, col, "unterminated VALUE expression in %DECLARE");
+          return false;
+        }
+      } else {
+        error(input, line, col, "expected '(' after VALUE in %DECLARE");
+        return false;
+      }
+    }
     if (name.empty()) {
       error(input, line, col, "expected a name in %DECLARE");
       return false;
@@ -729,7 +865,7 @@ bool Preprocessor::handleDeclare(const fs::path& input, const std::string& opera
       }
     any = true;
     if (!ppVars_.count(name))
-      ppVars_[name] = 0;
+      ppVars_[name] = hasValue ? initValue : 0;
   }
   if (!any) {
     error(input, line, col, "expected a name in %DECLARE");

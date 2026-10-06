@@ -12,13 +12,16 @@ void pli_string_put_open(char *buf, long long cap) {
   rt_items_on_line = 0;
 }
 
-/* End a STRING PUT: blank-pad the unused tail, then return to SYSPRINT. */
-void pli_string_put_close(char *buf, long long cap) {
+/* End a STRING PUT: blank-pad the unused tail, then return to SYSPRINT.
+ * Returns the number of characters written. */
+long long pli_string_put_close(char *buf, long long cap) {
   (void)buf;
+  size_t len = rt_out_len;
   if (rt_out_buf && rt_out_len < (size_t)cap)
     pli_memset(rt_out_buf + rt_out_len, ' ', (size_t)cap - rt_out_len);
   rt_out_buf = NULL;
   rt_out_cap = rt_out_len = 0;
+  return (long long)len;
 }
 
 /* STRING (rule 105) GET: read list-directed input from buf (len bytes). */

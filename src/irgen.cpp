@@ -1189,15 +1189,19 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
     // A character INITIAL (rule (26)): materialise the blank-padded bytes
     // into a global so the value has a pointer form like any char value.
     std::string text(t.len, ' ');
-    if (e && e->kind == Expr::CharLit)
-      for (int i = 0; i < t.len && i < (int)e->sval.size(); ++i)
+    int actualLen = 0;
+    if (e && e->kind == Expr::CharLit) {
+      actualLen = (int)e->sval.size();
+      for (int i = 0; i < t.len && i < actualLen; ++i)
         text[i] = e->sval[i];
+    }
     llvm::Constant* data = llvm::ConstantDataArray::getString(ctx_, text, false);
     llvm::GlobalVariable* g = new llvm::GlobalVariable(
         mod_, data->getType(), true, llvm::GlobalValue::PrivateLinkage, data, ".initchar");
     g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
     v.ptr = b_.CreateConstGEP2_32(data->getType(), g, 0, 0, "initcp");
-    v.len = i64(t.len);
+    // For VARYING strings, the live length is the actual string length, not the max
+    v.len = i64(t.varying ? actualLen : t.len);
     break;
   }
   case TK::Bit: {
@@ -1541,7 +1545,12 @@ void IRGen::emitInitials(HProc* p) {
         for (Expr* e : sym->initElems) {
           llvm::Value* idx = i32(i++);
           llvm::Value* p = b_.CreateGEP(aty, base, {i32(0), idx}, "init.el");
-          storeScalarTo(p, et, initValue(et, e));
+          Val v = initValue(et, e);
+          if (et.isChar()) {
+            storeCharTo(p, et, v, item.loc, false);
+          } else {
+            storeScalarTo(p, et, v, false);
+          }
         }
         continue;
       }
@@ -3745,33 +3754,61 @@ void IRGen::emitDoIter(HStmt* s) {
 void IRGen::emitPutDataItems(HStmt* s) {
   for (auto& item : s->items) {
     HExpr* t = item.get();
-    llvm::Value* name = globalString(t->sym->name);
-    b_.CreateCall(runtimeFn("pli_put_data_name"), {name, i64((long long)t->sym->name.size())});
-    Val v = emitExpr(item.get());
-    switch (v.ty.k) {
-    case TK::Char:
-      b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
-      break;
-    case TK::Float:
-      b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
-      break;
-    case TK::Bit: {
-      llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-      b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
-      break;
-    }
-    case TK::FixedBin:
-    case TK::FixedDec:
-      if (v.ty.k == TK::FixedDec && v.ty.scale > 0)
-        b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
-      else
-        b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
-      break;
-    default:
-      break;
+    if (t->ty.isStruct()) {
+      emitPutDataStruct(t, t->sym->name);
+    } else {
+      emitPutDataScalar(t, t->sym->name);
     }
   }
   b_.CreateCall(runtimeFn("pli_put_data_end"), {});
+}
+
+void IRGen::emitPutDataStruct(HExpr* t, const std::string& prefix) {
+  const Type& ty = t->ty;
+  for (size_t i = 0; i < ty.members.size(); ++i) {
+    const auto& m = ty.members[i];
+    std::string memberName = prefix + "." + m->name;
+    HExprP memberExpr = std::make_unique<HExpr>();
+    memberExpr->kind = HExpr::VarRef;
+    memberExpr->sym = t->sym;
+    memberExpr->ty = m->ty;
+    memberExpr->memberPath = t->memberPath;
+    memberExpr->memberPath.push_back(i);
+    memberExpr->loc = t->loc;
+    if (m->ty.isStruct()) {
+      emitPutDataStruct(memberExpr.get(), memberName);
+    } else {
+      emitPutDataScalar(memberExpr.get(), memberName);
+    }
+  }
+}
+
+void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
+  llvm::Value* nameVal = globalString(name);
+  b_.CreateCall(runtimeFn("pli_put_data_name"), {nameVal, i64((long long)name.size())});
+  Val v = emitExpr(t);
+  switch (v.ty.k) {
+  case TK::Char:
+    b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
+    break;
+  case TK::Float:
+    b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
+    break;
+  case TK::Bit: {
+    llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+    b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
+    break;
+  }
+  case TK::FixedBin:
+  case TK::FixedDec:
+    if (v.ty.k == TK::FixedDec && v.ty.scale > 0)
+      b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
+    else
+      b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+    break;
+  default:
+    break;
+  }
 }
 
 void IRGen::emitPut(HStmt* s) {
@@ -3788,11 +3825,22 @@ void IRGen::emitPut(HStmt* s) {
   // STRING (rule 105) sink: route the list-directed output into the character
   // variable instead of SYSPRINT.
   llvm::Value *sdata = nullptr, *slen = nullptr;
+  bool isVarying = false;
+  llvm::Value *slenPrefix = nullptr; // for varying: pointer to length prefix
   if (s->stringTarget) {
     HExpr* st = s->stringTarget.get();
-    sdata =
-        st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
-    slen = i64(st->ty.len);
+    if (st->ty.isChar() && st->ty.varying) {
+      // VARYING string: data is at struct index 1, length prefix at index 0
+      llvm::Value* base = st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+      sdata = b_.CreateStructGEP(llvmTy(st->sym->ty), base, 1, "vdata");
+      slen = i64(st->ty.len); // capacity
+      slenPrefix = b_.CreateStructGEP(llvmTy(st->sym->ty), base, 0, "vlen");
+      isVarying = true;
+    } else {
+      sdata =
+          st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+      slen = i64(st->ty.len);
+    }
     b_.CreateCall(runtimeFn("pli_string_put_open"), {sdata, slen});
   }
   // FILE ( f ) (rule 105): route the list-directed output through the named
@@ -3853,8 +3901,13 @@ void IRGen::emitPut(HStmt* s) {
       }
     }
   }
-  if (s->stringTarget)
-    b_.CreateCall(runtimeFn("pli_string_put_close"), {sdata, slen});
+  if (s->stringTarget) {
+    llvm::Value* written = b_.CreateCall(runtimeFn("pli_string_put_close"), {sdata, slen});
+    if (isVarying) {
+      // Store the actual length written into the varying string's length prefix
+      b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), slenPrefix);
+    }
+  }
   if (s->fileSym)
     b_.CreateCall(runtimeFn("pli_put_unselect"), {});
 }
@@ -5636,11 +5689,18 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   v.ty = el;
   if (el.isChar()) {
     // Fixed CHARACTER element (rules (12),(18)): the value is a view of the
-    // element's bytes. A VARYING element needs a per-element descriptor and
-    // stays diagnosed (invariant 2).
+    // element's bytes. A VARYING element is a struct { i32 len, [N x i8] data }.
     if (el.varying) {
-      d_.error(loc, "arrays of CHARACTER VARYING are not implemented in this stage", "(12)");
-      v.reg = i64(0);
+      llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
+      llvm::Value* elemAddr =
+          arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                           dynLb_.count(sym) ? dynLb_[sym] : nullptr);
+      // Load the length prefix (index 0 of the struct)
+      llvm::Value* lenPtr = b_.CreateStructGEP(llvmTy(el), elemAddr, 0, "vlen");
+      llvm::Value* len = b_.CreateLoad(b_.getInt32Ty(), lenPtr, "vlen");
+      v.len = b_.CreateSExt(len, b_.getInt64Ty(), "vlen64");
+      // Get the data pointer (index 1 of the struct)
+      v.ptr = b_.CreateStructGEP(llvmTy(el), elemAddr, 1, "vdata");
       return v;
     }
     llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
@@ -5688,9 +5748,21 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   if (el.isChar()) {
     // Fixed CHARACTER element (rules (12),(18)): blank-pad/truncate the source
-    // into the element's bytes. A VARYING element stays diagnosed.
+    // into the element's bytes. A VARYING element uses pli_assign_varying.
     if (el.varying) {
-      d_.error(loc, "arrays of CHARACTER VARYING are not implemented in this stage", "(12)");
+      llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
+      llvm::Value* elemAddr =
+          arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
+                           dynLb_.count(sym) ? dynLb_[sym] : nullptr);
+      // Get the data pointer (index 1 of the struct)
+      llvm::Value* dp = b_.CreateStructGEP(llvmTy(el), elemAddr, 1, "vdata");
+      // Get the length prefix pointer (index 0 of the struct)
+      llvm::Value* lp = b_.CreateStructGEP(llvmTy(el), elemAddr, 0, "vlenp");
+      // Use pli_assign_varying to store the varying string
+      Val cv = convert(src, el, loc);
+      llvm::Value* written = b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(el.len), cv.ptr, cv.len});
+      // Store the returned length into the length prefix
+      b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), lp);
       return;
     }
     llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
