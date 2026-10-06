@@ -7,13 +7,16 @@
    deterministic checksum. */
 on_conditions: procedure options(main);
    declare i fixed bin(31);
-   declare s fixed bin(31);
+    declare s fixed bin(63);
    declare q fixed bin(31);
-   s = 0;
-   on zerodivide begin;
+    s = 0;
+    /* Bare RETURN ends the ON-unit and resumes after the faulting division
+       with q = 0 (rule 91; cf. irgen.cpp zerodivideResume). Every 100th
+       iteration faults, so this loop measures ~1% handler-take rate. */
+    on zerodivide begin;
       return;
    end;
-   do i = 1 to 50000;
+     do i = 1 to 60000000;
       q = 1000000 / mod(i, 100);
       s = s + i;
       s = s + mod(q, 10);

@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 int main(void) {
-    int w = 600, h = 400, max_iter = 100;
+    int w = 1200, h = 800, max_iter = 100;
     int total = 0, i, j, iter;
     double cx, cy, zx, zy, tmp, mag;
 

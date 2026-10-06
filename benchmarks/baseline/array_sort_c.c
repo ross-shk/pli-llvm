@@ -5,12 +5,12 @@
 
 int main(void) {
     int i, j, n, tmp, sum;
-    int arr[2000];
+    int arr[18000];
 
-    n = 2000;
+    n = 18000;
     /* Initialize reverse-sorted: arr[0]=n-1, arr[1]=n-2, ..., arr[n-1]=0
        matches PL/I arr(i) = n - i for i=1..n (1-based).
-       Sum of 0..1999 = 1999000. */
+       Sum of 0..17999 = 161991000. */
     for (i = 0; i < n; i++) {
         arr[i] = n - 1 - i;
     }

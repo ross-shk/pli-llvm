@@ -9,8 +9,8 @@ mandelbrot: procedure options(main);
    declare (cx, cy, zx, zy, tmp, mag) float decimal(16);
    declare (i, j, iter) fixed bin(31);
 
-   w = 600;
-   h = 400;
+    w = 1200;
+    h = 800;
    max_iter = 100;
    total = 0;
 

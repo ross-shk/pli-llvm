@@ -1,8 +1,8 @@
 #include <stdio.h>
 
 int main(void) {
-    int s = 0;
-    for (int i = 1; i <= 50000; i++) {
+    long long s = 0;
+    for (int i = 1; i <= 60000000; i++) {
         int q;
         int d = i % 100;
         if (d != 0)
@@ -12,6 +12,6 @@ int main(void) {
         s += i;
         s += q % 10;
     }
-    printf("%d\n", s);
+    printf("%lld\n", s);
     return 0;
 }

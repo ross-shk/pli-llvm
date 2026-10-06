@@ -27,19 +27,22 @@ int sum_array(int n, int arr[]) {
 }
 
 int main(void) {
-    int i, result, test_arr[20];
+    int i, k, test_arr[20];
+    long long result;
 
     for (i = 0; i < 20; i++) {
         test_arr[i] = i + 1;
     }
 
     result = 0;
-    for (i = 1; i <= 12; i++) {
-        result = result + factorial(i) + fibonacci(i);
+    for (k = 0; k < 500000; k++) {
+        for (i = 1; i <= 12; i++) {
+            result = result + factorial(i) + fibonacci(i);
+        }
     }
 
     result = result + sum_array(20, test_arr);
 
-    printf("%d\n", result);
+    printf("%lld\n", result);
     return 0;
 }

@@ -4,10 +4,11 @@
 #include <stdio.h>
 
 int main(void) {
-    int i, j, k, n, sum;
-    int a[100][100], b[100][100], c[100][100];
+    int i, j, k, n;
+    long long sum;
+    int a[400][400], b[400][400], c[400][400];
 
-    n = 100;
+    n = 400;
 
     for (i = 0; i < n; i++) {
         for (j = 0; j < n; j++) {
@@ -34,6 +35,6 @@ int main(void) {
         }
     }
 
-    printf("%d\n", sum);
+    printf("%lld\n", sum);
     return 0;
 }

@@ -8,7 +8,7 @@ int main(void) {
     int i, j, n;
     double x, y, sum;
 
-    n = 200;
+    n = 5000;
     sum = 0.0;
     for (i = 1; i <= n; i++) {
         x = i / 100.0;           /* matches plic's exact DECIMAL(i,2)->FLOAT = (double)stored/10^scale */
@@ -19,6 +19,6 @@ int main(void) {
         }
     }
 
-    printf("%.6g\n", sum);
+    printf("%.15g\n", sum);
     return 0;
 }

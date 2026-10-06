@@ -4,10 +4,11 @@
 #include <stdio.h>
 
 int main(void) {
-    int i, j, sum, denom, result;
+    int i, j, denom, result;
+    long long sum;
 
     sum = 0;
-    for (i = 1; i <= 100000; i++) {
+    for (i = 1; i <= 600000; i++) {
         for (j = 1; j <= 100; j++) {
             denom = (j % 17) + 1;
             result = i / denom;
@@ -15,6 +16,6 @@ int main(void) {
         }
     }
 
-    printf("%d\n", sum);
+    printf("%lld\n", sum);
     return 0;
 }

@@ -10,10 +10,11 @@ typedef struct node {
 } node_t;
 
 int main(void) {
-    int i, n, sum;
+    int i, n;
+    long long sum;
     node_t *p, *head;
 
-    n = 5000;
+     n = 3000000;
     head = NULL;
 
     /* Build linked list: 0 -> 1 -> 2 -> ... -> n-1 */
@@ -41,6 +42,6 @@ int main(void) {
         }
     }
 
-    printf("%d\n", sum);
+    printf("%lld\n", sum);
     return 0;
 }

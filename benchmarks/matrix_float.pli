@@ -10,11 +10,11 @@ matrix_float: procedure options(main);
    declare (i, j, k) fixed bin(31);
    declare chk fixed bin(63);
    declare (x, sum) float decimal(16);
-   declare a(100,100) float decimal(16);
-   declare b(100,100) float decimal(16);
-   declare c(100,100) float decimal(16);
+    declare a(400,400) float decimal(16);
+    declare b(400,400) float decimal(16);
+    declare c(400,400) float decimal(16);
 
-   n = 100;
+    n = 400;
    do i = 1 to n;
       do j = 1 to n;
          x = (i + j) * 0.01E0;

@@ -3,12 +3,12 @@
 /* Array operations benchmark - matrix multiply */
 test_array: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j, k, n) FIXED BINARY(31);
-  DECLARE a(100,100) FIXED BINARY(31);
-  DECLARE b(100,100) FIXED BINARY(31);
-  DECLARE c(100,100) FIXED BINARY(31);
-  DECLARE sum FIXED BINARY(31);
+  DECLARE a(400,400) FIXED BINARY(31);
+  DECLARE b(400,400) FIXED BINARY(31);
+  DECLARE c(400,400) FIXED BINARY(31);
+  DECLARE sum FIXED BINARY(63);          /* checksum overflows 32-bit at n=400 */
 
-  n = 100;
+  n = 400;
   
   /* Initialize matrices */
   DO i = 1 TO n;

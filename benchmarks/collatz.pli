@@ -2,18 +2,18 @@
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Collatz conjecture benchmark - integer arithmetic and branching */
 test_collatz: PROCEDURE OPTIONS(MAIN);
-  DECLARE (i, n, steps, total) FIXED BINARY(31);
+  DECLARE (i, m, n, steps, total) FIXED BINARY(63);
 
-  n = 50000;
+   n = 400000;
   total = 0;
   DO i = 2 TO n;
     steps = 0;
-    n = i;
-    DO WHILE (n > 1);
-      IF MOD(n, 2) = 0 THEN
-        n = n / 2;
+    m = i;
+    DO WHILE (m > 1);
+      IF MOD(m, 2) = 0 THEN
+        m = m / 2;
       ELSE
-        n = 3 * n + 1;
+        m = 3 * m + 1;
       steps = steps + 1;
     END;
     total = total + steps;

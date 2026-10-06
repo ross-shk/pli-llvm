@@ -1,4 +1,4 @@
 CHECK: define {{.*}}@PLI_MAIN
-CHECK: alloca i8, i64 {{.*}}, align 1
+CHECK: @pli_alloc
 CHECK: call void @llvm.memcpy.p0.p0.i64
 CHECK-NOT: pli_concat

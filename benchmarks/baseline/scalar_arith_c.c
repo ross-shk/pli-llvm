@@ -4,12 +4,15 @@
 #include <stdio.h>
 
 int main(void) {
-    int i, sum;
+    long long i, n, sum, hash;
     double x, y, z;
 
     sum = 0;
-    for (i = 1; i <= 5000; i++) {
-        sum = sum + i;
+    hash = 1;
+    n = 35000000;
+    for (i = 1; i <= n; i++) {
+        sum = sum + (hash % 100);
+        hash = (hash * 1103515245LL + 12345) & 0x7FFFFFFFLL;
     }
 
     x = 0.0;
@@ -20,6 +23,6 @@ int main(void) {
         y = z;
     }
 
-    printf("%d %.6g %.6g\n", sum, x, y);
+    printf("%lld %.15g %.15g\n", sum, x, y);
     return 0;
 }
