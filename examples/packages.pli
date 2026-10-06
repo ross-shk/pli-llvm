@@ -1,0 +1,34 @@
+ /* Packages: group code, export the public face. 
+   
+    Run: plic packages.pli -o pkgs */
+
+ mathlib: package exports(doubleit, is_even);
+   doubleit: proc(x) returns(fixed bin(31));
+     dcl x fixed bin(31);
+     return(helper(x) + x);
+   end;
+
+   is_even: proc(x) returns(bit(1));
+     dcl x fixed bin(31);
+     if mod(x, 2) = 0 then return('1'b);
+     return('0'b);
+   end;
+
+   helper: proc(x) returns(fixed bin(31));
+     dcl x fixed bin(31);
+     return(x + 1);
+   end;
+ end mathlib;
+
+ use_pkgs: proc options(main);
+   /* usually specified in include files */
+   dcl doubleit entry(fixed bin(31)) 
+    returns(fixed bin(31)) external;
+
+   dcl is_even entry(fixed bin(31))
+     returns(bit(1)) external;
+
+   put skip list('double(21) =', doubleit(21));
+   
+   if is_even(4) then put skip list('4 is even');
+ end use_pkgs;

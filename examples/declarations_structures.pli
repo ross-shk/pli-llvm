@@ -1,0 +1,28 @@
+ /* Structures: group fields, nest them, reuse shapes with LIKE. 
+
+    Run: plic declarations_structures.pli -o d */
+
+ dcls: proc options(main);
+   dcl 1 employee,
+         2 name char(30) varying,
+         2 id fixed bin(31),
+         2 salary fixed dec(7,2);
+   dcl 1 office,
+         2 street char(40) varying,
+         2 city char(25) varying;
+   dcl 1 backup like employee;
+
+   employee.name = 'Alice';
+   employee.id = 7;
+   employee.salary = 75000.00;
+   office.street = '14 Main St';
+   office.city = 'Trenton';
+
+   backup = employee;
+
+   put skip list('name =', employee.name);
+   put skip list('id =', employee.id);
+   put skip list('salary =', employee.salary);
+   put skip list('city =', office.city);
+   put skip list('backup =', backup.name);
+ end;

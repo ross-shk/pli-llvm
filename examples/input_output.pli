@@ -1,0 +1,52 @@
+ /* I/O: LIST, STRING, EDIT, DATA, files. 
+   
+    Run: plic input_output.pli -o io */
+
+ io: proc options(main);
+   /* list-directed to stdout */
+   dcl name char(20) varying,
+       count fixed bin(31);
+
+   name = 'ada';
+   count = 3;
+
+   put skip list('Hello,', name);
+   put skip list('count =', count);
+
+   /* string: format into a fixed buffer */
+   dcl buff char(100);
+
+   put string(buff) list('n=', 42);
+   put skip list('buff =', buff);
+
+   /* edit-directed: fixed columns */
+   dcl a fixed bin(31);
+
+   a = 123;
+
+   put skip edit(a) (f(6));
+   put skip edit('hi', 7) (a(4), f(4));
+
+   /* data-directed: self-describing dump */
+   dcl host char(20) varying,
+       port fixed bin(31);
+
+   host = 'localhost';
+   port = 8080;
+
+   put data(host, port);
+
+   /* file round-trip */
+   dcl f file;
+   dcl line char(40) varying;
+
+   open file(f) title('io_demo.txt') output;
+   put file(f) list('file hello');
+   close file(f);
+
+   open file(f) title('io_demo.txt') input;
+   get file(f) list(line);
+   close file(f);
+   
+   put skip list('file said:', line);
+ end;

@@ -1,0 +1,55 @@
+ /* Procedures: nesting, RETURNS, RECURSIVE, OPTIONAL params, ENTRY.
+
+    Run: plic procedures_functions.pli -o p */
+
+ procs: proc options(main);
+   dcl r fixed bin(31);
+
+   call helper(5);
+   r = add(3, 4);
+
+   put skip list('add =', r);
+   put skip list('fact(5) =', fact(5));
+   put skip list('cube(3) =', cube(3));
+
+   call greet('sam', '!');
+   call greet('sam', *);
+   call greet('sam');
+
+ helper: proc(n);
+   dcl n fixed bin(31);
+   put skip list('n =', n);
+ end;
+
+ add: proc(a, b) returns(fixed bin(31));
+   dcl (a, b) fixed bin(31);
+   return(a + b);
+ end;
+
+ fact: proc(n) recursive returns(fixed bin(31));
+   dcl n fixed bin(31);
+   if n <= 1 then return(1);
+   return(n * fact(n - 1));
+ end;
+
+ greet: proc(name, punct);
+   dcl name char(20) varying;
+   dcl punct char(5) varying optional;
+
+   if omitted(punct) then
+     put skip list('hi ' || name);
+   else
+     put skip list('hi ' || name || punct);
+ end;
+
+ area: proc(d) returns(fixed bin(31));
+   dcl (d, r) fixed bin(31);
+
+   r = d * d;
+   return(r);
+   
+ cube: entry(d) returns(fixed bin(31));
+   r = d * d * d;
+   return(r);
+ end;
+ end;

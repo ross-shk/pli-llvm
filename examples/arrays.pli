@@ -1,0 +1,51 @@
+ /* Arrays: fixed bounds, dynamic size, 
+    slices, whole-array math. 
+
+    Run: plic arrays.pli -o arrays */
+
+ arrays: proc options(main);
+   dcl scores(5) fixed bin(31);
+   dcl board(3,4) fixed bin(31);
+   dcl temps(-2:2) fixed bin(31);
+
+   dcl i fixed bin(31);
+   do i = 1 to 5;
+     scores(i) = i * 10;
+   end;
+
+   board(2,3) = 99;
+   temps(-2) = 1;
+
+   put skip list('scores(1) =', scores(1));
+   put skip list('board(2,3) =', board(2,3));
+   put skip list('temps lb/hb =', lbound(temps));
+   put skip list('sum =', sum(scores));
+
+   /* slice: whole row write, row read */
+   dcl m(3,5) fixed bin(31);
+   m(2,*) = 0;
+   m(1,*) = 42;
+
+   dcl row(5) fixed bin(31);
+   row = m(1,*);
+   put skip list('row sum =', sum(row));
+
+   /* whole-array math, no loop */
+   scores = scores * 2;
+   put skip list('doubled sum =', sum(scores));
+   
+   /* dynamic size frozen on block entry */
+   call fill(4);
+
+ fill: procedure(n);
+   dcl (n, j) fixed bin(31),
+       a(n) fixed bin(31);
+
+   do j = 1 to n;
+     a(j) = j * 2;
+   end;
+
+   put skip list('dyn dim =', dim(a));
+   put skip list('dyn sum =', sum(a));
+ end;
+ end;

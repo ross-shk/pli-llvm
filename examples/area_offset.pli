@@ -1,0 +1,29 @@
+ /* AREA + OFFSET: an arena pool with 
+    reusable blocks. 
+
+    Run: plic area_offset.pli -o arena */
+    
+ arena: proc options(main);
+   dcl region area(4096);
+   dcl (pa, pb) offset(region);
+
+   dcl 1 slot based(pa),
+         2 v fixed bin(31);
+   dcl 1 other based(pb),
+         2 v fixed bin(31);
+
+   alloc slot in(region) set(pa);
+   slot.v = 11;
+
+   alloc other in(region) set(pb);
+   other.v = 22;
+
+   put skip list('a =', slot.v);
+   put skip list('b =', other.v);
+
+   free slot in(region);
+   pa = null();
+
+   put skip list('b still =', other.v);
+   free other in(region);
+ end;

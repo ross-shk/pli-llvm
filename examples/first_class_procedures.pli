@@ -1,0 +1,33 @@
+ /* First-class procedures: keep functions in variables, pass them 
+    as callbacks. 
+
+    Run: plic first_class_procedures.pli -o f */
+
+ firstcls: proc options(main);
+   dcl on_get entry(fixed bin(31))
+     returns(fixed bin(31)) variable;
+
+   on_get = add1;
+   put skip list('add1(41) =', on_get(41));
+   
+   on_get = dbl;
+   put skip list('dbl(41) =', on_get(41));
+   put skip list('dispatch =', dispatch(add1));
+   put skip list('dispatch =', dispatch(dbl));
+
+ add1: proc(x) returns(fixed bin(31));
+   dcl x fixed bin(31);
+   return(x + 1);
+ end;
+
+ dbl: proc(x) returns(fixed bin(31));
+   dcl x fixed bin(31);
+   return(x * 2);
+ end dbl;
+
+ dispatch: proc(cb) returns(fixed bin(31));
+   dcl cb entry(fixed bin(31))
+     returns(fixed bin(31)) variable;
+   return(cb(41));
+ end;
+ end;

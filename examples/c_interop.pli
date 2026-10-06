@@ -1,0 +1,27 @@
+ /* C interop: declare the C function as an ENTRY with 
+    LINKAGE(SYSTEM), then call it. 
+
+    Build: 
+      clang -c c_interop_helper.c 
+      plic c_interop.pli c_interop_helper.o -o cinterop 
+      ./cinterop 
+ */
+ cdemo: proc options(main);
+   dcl c_add entry(fixed bin(31), fixed bin(31))
+     returns(fixed bin(31))
+     options(linkage(system))
+     external('c_byval_add');
+
+   dcl c_mul entry(fixed bin(31), fixed bin(31))
+     returns(fixed bin(31))
+     options(linkage(system))
+     external('c_byval_mul');
+
+   dcl r fixed bin(31);
+
+   r = c_add(3, 4);
+   put skip list('3 + 4 =', r);
+   
+   r = c_mul(6, 7);
+   put skip list('6 * 7 =', r);
+ end;

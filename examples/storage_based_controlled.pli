@@ -1,0 +1,43 @@
+ /* Storage: BASED views, CONTROLLED stack, heap ALLOCATE/FREE. 
+    
+    Run: plic storage_based_controlled.pli */
+
+ storage: proc options(main);
+   dcl 1 target,
+         2 value fixed bin(31);
+   dcl p pointer;
+   
+   dcl 1 view based(p),  /* based: a view through a pointer */
+         2 value fixed bin(31);
+
+   p = addr(target);
+   view.value = 42;
+
+   put skip list('via view =', target.value);
+   put skip list('explicit =', p -> view.value);
+
+   /* controlled: a stack of generations */
+   dcl c fixed bin(31) controlled;
+
+   allocate c;
+   c = 11;
+
+   allocate c;
+   c = 22;
+
+   put skip list('top =', c);
+
+   free c;
+   put skip list('after free =', c);
+
+   /* heap block with SET */
+   dcl q pointer;
+   dcl 1 rec based(q),
+         2 data fixed bin(31);
+
+   allocate rec set(q);
+   q -> rec.data = 99;
+
+   put skip list('heap =', q -> rec.data);
+   free rec;
+ end;

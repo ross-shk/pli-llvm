@@ -1,0 +1,62 @@
+ /* Control flow: IF, DO, BEGIN, SELECT, 
+    LEAVE/ITERATE, DO UNTIL, GO TO. 
+
+    Run: plic control_flow.pli -o flow */
+
+ flow: proc options(main);
+   dcl (score, total) fixed bin(31),
+       i fixed bin(31);
+
+   score = 85;
+   if score >= 90 then 
+     put skip list('A');
+   else if score >= 80 then 
+     put skip list('B');
+   else 
+     put skip list('keep trying');
+
+   total = 0;
+   do i = 1 to 10;
+     total = total + i;
+   end;
+   put skip list('1..10 =', total);
+
+   do while (total < 1000);
+     total = total * 2;
+   end;
+   put skip list('grown =', total);
+
+   /* scope block */
+   begin;
+     dcl tmp fixed bin(31) init(5);
+     total = total + tmp;
+   end;
+   
+   /* select: first match wins */
+   dcl st char(10) varying;
+
+   st = 'active';
+   select (st);
+     when ('pending') put skip list('waiting');
+     when ('active') put skip list('working');
+     otherwise put skip list('huh?');
+   end;
+
+   /* leave = break, iterate = continue */
+   do i = 1 to 100;
+     if i > 5 then leave;
+     if mod(i, 2) = 0 then iterate;
+
+     put skip list('odd =', i);
+   end;
+
+   /* do until always runs once */
+   dcl step fixed bin(31) init(0);
+   dcl done bit(1) init('0'b);
+
+   do until (done);
+     step = step + 1;
+     if step >= 3 then done = '1'b;
+   end;
+   put skip list('steps =', step);
+ end;

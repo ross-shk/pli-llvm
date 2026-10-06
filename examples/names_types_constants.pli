@@ -1,0 +1,20 @@
+ /* Named constants (VALUE) and type names (DEFINE ALIAS). 
+   
+    Run: plic names_types_constants.pli -o names */
+
+ names: proc options(main);
+   dcl max fixed bin(31) value(100);
+   dcl greeting char(20) varying value('hi');
+
+   define alias scores fixed bin(31);
+
+   dcl (midterm, final) type scores;
+
+   midterm = 88;
+   final = 92;
+   
+   put skip list(greeting || ', cap =', max);
+   put skip list('mid =', midterm);
+   put skip list('final =', final);
+   put skip list('avg =', (midterm + final) / 2);
+ end names;

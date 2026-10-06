@@ -1,0 +1,23 @@
+ /* Operators: precedence, || glue, compare. 
+   
+    Run: plic operators_expressions.pli -o ops */
+ ops: proc options(main);
+   dcl r fixed bin(31);
+   dcl (s, tag) char(20) varying;
+
+   r = -3 ** 2;
+   put skip list('-3 ** 2 =', r);
+
+   s = 'a' || 'b' || 'c';
+   put skip list('glue =', s);
+
+   tag = 'user-' || 42;
+   put skip list('tag =', tag);
+
+   tag = 'user-' !! '42';
+   put skip list('alias !! =', tag);
+   
+   if r < 0 then put skip list('r is negative');
+   if tag = 'user-42' then put skip list('eq works');
+   if r ^= 9 then put skip list('not-eq works');
+ end;

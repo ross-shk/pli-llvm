@@ -1,0 +1,27 @@
+ /* Data types: the everyday declarations. 
+   
+    Run: plic data_types.pli -o datatypes */
+
+ datatypes: proc options(main);
+   dcl count fixed bin(31),
+       price fixed dec(7,2),
+       temp float dec(6);
+   dcl name char(20) varying;
+   dcl flag bit(1);
+
+   count = 42;
+   price = 12.34;
+   temp = 98.6;
+   name = 'ada';
+   flag = '1'b;
+
+   put skip list('count =', count);
+   put skip list('price =', price);
+   put skip list('temp =', temp);
+   put skip list('name =', name);
+   put skip list('flag =', flag);
+   
+   /* fixed dec keeps cents exact */
+   price = price + 0.01;
+   put skip list('price + 1c =', price);
+ end;

@@ -1,0 +1,22 @@
+ /* Concurrency: background CALL + EVENT, 
+    WAIT to join, poll, DELAY to sleep. 
+
+    Run: plic concurrency.pli -o conc */
+
+ conc: proc options(main);
+   dcl done event;
+   dcl counter fixed bin(31) init(0);
+   
+   call worker event(done);
+
+   /* main thread stays free here */
+   put skip list('main is free while worker runs');
+   wait(done);
+
+   put skip list('counter =', counter);
+   if counter = 1 then put skip list('PASS worker');
+
+ worker: proc;
+   counter = counter + 1;
+ end;
+ end;

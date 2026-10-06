@@ -1,0 +1,48 @@
+ /* Conditions: ON/SIGNAL/REVERT with resume. 
+
+    Run: plic conditions.pli -o conds */
+
+ conds: proc options(main);
+   dcl a(5) fixed bin(31);
+   dcl i fixed bin(31);
+   dcl (total, bump) fixed dec(7,2);
+
+   do i = 1 to 5;
+     a(i) = i * 10;
+   end;
+
+   /* named-condition resume demo */
+   on error begin;
+     put skip list('caught an error');
+   end;
+
+   signal error;
+
+   put skip list('resumed after error');
+   revert error;
+
+   /* bounds trap resumes with clamped index */
+   on subscriptrange put skip list('bad index');
+
+   i = 0;
+   put skip list('a(0)->', a(i));
+   revert subscriptrange;
+
+   /* overflow guard for money math */
+   total = 0;
+   bump = 99999.99;
+   on size begin;
+     put skip list('would overflow, capping');
+     total = 99999.99;
+   end;
+
+   total = total + bump;
+   put skip list('total =', total);
+   revert size;
+
+   /* one-shot opt-out when index is known good (a condition prefix
+      ends with a colon) */
+   i = 2;
+   (nosubscriptrange): a(i) = 0;
+   put skip list('a(2) =', a(2));
+ end;

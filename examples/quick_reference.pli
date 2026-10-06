@@ -1,0 +1,38 @@
+ /* Quick reference: one program touching each major feature. See 
+    the per-topic examples for the full story. 
+
+    Run: plic quick_reference.pli -o quickref */
+
+ quickref: proc options(main);
+   /* types + expressions */
+   dcl count fixed bin(31);
+   dcl price fixed dec(7,2);
+   dcl name char(20) varying;
+
+   count = 3;
+   price = 12.34;
+   name = 'sam';
+
+   put skip list('hi ' || name);
+   put skip list('total =', count * price);
+
+   /* array + builtin */
+   dcl a(3) fixed bin(31);
+
+   dcl i fixed bin(31);
+   do i = 1 to 3;
+     a(i) = i * 10;
+   end;
+
+   put skip list('sum =', sum(a));
+
+   /* procedure + condition */
+   on error put skip list('caught error');
+   put skip list('double(21) =', dbl(21));
+   revert error;
+   
+ dbl: proc(x) returns(fixed bin(31));
+   dcl x fixed bin(31);
+   return(x * 2);
+ end dbl;
+ end quickref;

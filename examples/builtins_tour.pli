@@ -1,0 +1,38 @@
+ /* Built-ins tour: strings, math, arrays. 
+    Full list: guides/builtins.md. 
+   
+    Run: plic builtins_tour.pli -o bi */
+
+ bitour: proc options(main);
+   dcl email char(40) varying;
+   dcl a(5) fixed bin(31);
+   dcl s char(24) varying;
+   dcl (n, i) fixed bin(31);
+
+   email = 'user@example.com';
+
+   if index(email, '@') > 0 then
+     put skip list('has @: valid');
+
+   put skip list('len =', length(email));
+   put skip list('user =', substr(email, 1, 4));
+   put skip list('trimmed =', trim('  hi  '));
+   put skip list('upper =', uppercase(email));
+   put skip list('abs =', abs(-7));
+   put skip list('mod =', mod(17, 5));
+   put skip list('min =', min(3, 8, 1));
+   put skip list('sqrt =', sqrt(9.0));
+
+   do i = 1 to 5;
+     a(i) = i;
+   end;
+
+   put skip list('sum =', sum(a));
+
+   s = char(42);
+   put skip list('char(42) =', s);
+   
+   n = fixed('1234');
+   put skip list('fixed =', n);
+   put skip list('today =', date());
+ end;

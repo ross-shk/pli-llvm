@@ -5,7 +5,8 @@
 
 build/
 tests/*/out/
-examples/
+examples/bkp/
+examples/out/
 .jspace/
 .kilo/
 __pycache__

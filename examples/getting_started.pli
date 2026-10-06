@@ -1,0 +1,13 @@
+ /* Getting started: your first PL/I program. 
+
+    Run: plic getting_started.pli -o getting 
+         ./getting */
+
+ hello: proc options(main);
+   dcl who char(20) varying;
+
+   who = 'world';
+
+   put skip list('Hello, ' || who || '!');
+   put skip list('2 + 3 =', 2 + 3);
+ end;

@@ -1,0 +1,25 @@
+ /* Preprocessor: shared header, shorthand, conditional includes. 
+
+    Run: plic preprocessor.pli -o pp */
+
+ %include 'preprocessor_defs.inc';
+
+ %replace bound by 5;
+ %declare debug;
+ %activate debug;
+ %debug = 1;
+
+ demo: proc options(main);
+   dcl table(%tabcap) char(80);
+   dcl small(bound) fixed bin(31);
+
+   dcl i fixed bin(31);
+   do i = 1 to bound;
+     small(i) = i;
+   end;
+   put skip list('cap =', %tabcap);
+   put skip list('sum =', sum(small));
+   
+   %if debug = 1 %then %include 'preprocessor_debug_on.inc';
+   %else %include 'preprocessor_debug_off.inc';
+ end;
