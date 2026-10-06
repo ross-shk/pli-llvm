@@ -6,12 +6,12 @@
 
 int main(void) {
     int i, len;
-    char base[1001], temp[101], result[10001], substr_result[6];
+    char base[1001], temp[101], result[180001], substr_result[6];
 
     strcpy(base, "Hello, PL/I! ");
     result[0] = '\0';
 
-    for (i = 0; i < 500; i++) {
+    for (i = 0; i < 8000; i++) {
         snprintf(temp, sizeof(temp), "%s[%sitem%s] ", base, "", "");
         strcat(result, temp);
     }

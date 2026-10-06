@@ -5,12 +5,13 @@
    output path — plus a final integer checksum. Both PL/I and C produce
    identical stdout so the harness can verify correctness. */
 io_throughput: procedure options(main);
-   declare i fixed bin(31);
-   declare total fixed bin(31);
+    declare i fixed bin(31);
+    declare (sq, total) fixed bin(63);
 
    total = 0;
-   do i = 1 to 1000;
-      put skip list(i, i * i, abs(5000 - i * 3));
+     do i = 1 to 200000;
+      sq = i;                 /* widen before multiply: i*i overflows 31-bit past 46341 */
+      put skip list(i, sq * sq, abs(5000 - i * 3));
       total = total + i;
    end;
    put skip list(total);

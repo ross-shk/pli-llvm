@@ -5,7 +5,7 @@ test_math: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j, n) FIXED BINARY(31);
   DECLARE (x, y, sum) FLOAT DECIMAL(16);
 
-  n = 200;
+   n = 5000;
   sum = 0.0;
   DO i = 1 TO n;
     x = i * 0.01;
@@ -16,5 +16,5 @@ test_math: PROCEDURE OPTIONS(MAIN);
     END;
   END;
 
-  PUT SKIP LIST(sum);
+  PUT SKIP EDIT(sum)(E(24,15));
 END test_math;

@@ -2,10 +2,11 @@
 /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Division benchmark - tests FIXED/FIXED → FIXED fast path */
 test_div: PROCEDURE OPTIONS(MAIN);
-  DECLARE (i, j, sum, denom, result) FIXED BINARY(31);
+  DECLARE (i, j, denom, result) FIXED BINARY(31);
+  DECLARE sum FIXED BINARY(63);
 
   sum = 0;
-  DO i = 1 TO 100000;
+   DO i = 1 TO 600000;
     DO j = 1 TO 100;
       denom = MOD(j, 17) + 1;
       result = i / denom;

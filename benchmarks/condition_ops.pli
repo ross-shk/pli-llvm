@@ -1,27 +1,26 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* Condition handling benchmark - SUBSCRIPTRANGE and SIZE */
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Condition handling benchmark - SUBSCRIPTRANGE handler machinery */
 test_conditions: PROCEDURE OPTIONS(MAIN);
-  DECLARE (i, j, n, sum) FIXED BINARY(31);
-  DECLARE a(100) FIXED BINARY(31);
+   DECLARE i FIXED BINARY(63);
+   DECLARE (n, bad, rep) FIXED BINARY(31);
+  DECLARE sum FIXED BINARY(63);
+   DECLARE a(250000) FIXED BINARY(63);
   DECLARE (x, y) FIXED BINARY(31);
 
-  ON SUBSCRIPTRANGE
-    BEGIN;
-      PUT SKIP LIST('Subscript range error');
-    END;
+   ON SUBSCRIPTRANGE
+     BEGIN;
+       bad = bad + 1;
+     END;
 
-  ON SIZE
-    BEGIN;
-      PUT SKIP LIST('Size error');
-    END;
-
-  n = 100;
+   n = 250000;
   sum = 0;
-  DO i = 1 TO n;
-    a(i) = i * i;
-    sum = sum + a(i);
-  END;
+   DO rep = 1 TO 300;
+     DO i = 1 TO n;
+     a(i) = i * i + MOD(i, 3);
+     sum = sum + a(i);
+     END;
+   END;
 
   /* Test overflow - use smaller values to avoid immediate overflow */
   x = 1000;
@@ -31,5 +30,15 @@ test_conditions: PROCEDURE OPTIONS(MAIN);
     y = y + 1;
   END;
 
-  PUT SKIP LIST(sum, x, y);
+  /* Region 2: intentional SUBSCRIPTRANGE every 16th iteration.
+     a(n+1) is a runtime index (not a literal), so the compile-time
+     bounds check is skipped and --subscript-checks catches it at runtime.
+     The handler resumes after the faulting store (rule 91). */
+  bad = 0;
+  DO i = 1 TO 1600;
+    IF MOD(i, 16) = 0 THEN a(n + 1) = i;  /* fires, resumes */
+    ELSE
+      a(MOD(i, 100) + 1) = i;
+  END;
+  PUT SKIP LIST(sum, x, y, bad);
 END test_conditions;

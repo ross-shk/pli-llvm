@@ -6734,7 +6734,7 @@ Val IRGen::emitExpr(HExpr* e) {
     llvm::Value* total = leaves[0].len;
     for (size_t i = 1; i < leaves.size(); ++i)
       total = b_.CreateAdd(total, leaves[i].len, "clen");
-    v.ptr = b_.CreateAlloca(b_.getInt8Ty(), total, "cbuf");
+     v.ptr = b_.CreateCall(runtimeFn("pli_alloc"), {total}, "cbuf");
     v.len = total;
     llvm::Value* off = i64(0);
     for (auto& leaf : leaves) {

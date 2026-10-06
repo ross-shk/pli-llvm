@@ -5,14 +5,14 @@
 #include <stdlib.h>
 
 int main(void) {
-    int s = 0;
-    for (int i = 1; i <= 2000; i++) {
+    long long s = 0;
+    for (int i = 1; i <= 1000000; i++) {
         int *fds = malloc(100 * sizeof(int));
         for (int j = 0; j < 100; j++)
             fds[j] = i;
         s += fds[0];
         free(fds);
     }
-    printf("%d\n", s);
+    printf("%lld\n", s);
     return 0;
 }

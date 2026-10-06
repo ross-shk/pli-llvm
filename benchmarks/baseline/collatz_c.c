@@ -4,9 +4,9 @@
 #include <stdio.h>
 
 int main(void) {
-    int i, m, n, steps, total;
+    long i, m, n, steps, total;
 
-    n = 50000;
+    n = 400000;
     total = 0;
     for (i = 2; i <= n; i++) {
         steps = 0;
@@ -21,6 +21,6 @@ int main(void) {
         total = total + steps;
     }
 
-    printf("%d\n", total);
+    printf("%ld\n", total);
     return 0;
 }

@@ -2,14 +2,14 @@
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Linked list benchmark - POINTER, ALLOCATE, BASED, FREE */
 test_llist: PROCEDURE OPTIONS(MAIN);
-  DECLARE (i, n, sum) FIXED BINARY(31);
+  DECLARE (i, n, sum) FIXED BINARY(63);
   DECLARE p POINTER;
   DECLARE head POINTER;
   DECLARE 1 node BASED(p),
           2 val FIXED BINARY(31),
           2 next POINTER;
 
-  n = 5000;
+   n = 3000000;
   head = NULL();
 
   /* Build linked list: 0 -> 1 -> 2 -> ... -> n-1 */

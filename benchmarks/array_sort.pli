@@ -3,9 +3,9 @@
 /* Array sorting benchmark - bubble sort on a large array */
 test_sort: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j, n, tmp, sum) FIXED BINARY(31);
-  DECLARE arr(2000) FIXED BINARY(31);
+   DECLARE arr(18000) FIXED BINARY(31);
 
-  n = 2000;
+   n = 18000;
   DO i = 1 TO n;
     arr(i) = n - i;
   END;

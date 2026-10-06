@@ -2,7 +2,8 @@
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Procedure call benchmark - recursive and iterative */
 test_procedures: PROCEDURE OPTIONS(MAIN);
-  DECLARE (i, result) FIXED BINARY(31);
+  DECLARE (i, k) FIXED BINARY(31);
+  DECLARE result FIXED BINARY(63);
   DECLARE test_arr(20) FIXED BINARY(31);
 
   /* Recursive factorial */
@@ -28,7 +29,7 @@ test_procedures: PROCEDURE OPTIONS(MAIN);
   /* Sum array elements */
   sum_array: PROCEDURE(n, arr) RETURNS(FIXED BINARY(31));
     DECLARE n FIXED BINARY(31);
-    DECLARE arr(100) FIXED BINARY(31);
+    DECLARE arr(20) FIXED BINARY(31);
     DECLARE (i, sum) FIXED BINARY(31);
     sum = 0;
     DO i = 1 TO n;
@@ -42,8 +43,10 @@ test_procedures: PROCEDURE OPTIONS(MAIN);
   END;
 
   result = 0;
-  DO i = 1 TO 12;
-    result = result + factorial(i) + fibonacci(i);
+   DO k = 1 TO 500000;
+    DO i = 1 TO 12;
+      result = result + factorial(i) + fibonacci(i);
+    END;
   END;
 
   result = result + sum_array(20, test_arr);

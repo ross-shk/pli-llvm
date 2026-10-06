@@ -5,14 +5,14 @@ test_string: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j, len) FIXED BINARY(31);
   DECLARE base CHARACTER(1000) VARYING;
   DECLARE temp CHARACTER(100) VARYING;
-  DECLARE result CHARACTER(10000) VARYING;
+  DECLARE result CHARACTER(180000) VARYING;
   DECLARE substr_result CHARACTER(10) VARYING;
 
   base = 'Hello, PL/I! ';
   result = '';
 
   /* Repeated concatenation */
-  DO i = 1 TO 500;
+  DO i = 1 TO 8000;
     temp = base || '[' || 'item' || '] ';
     result = result || temp;
   END;

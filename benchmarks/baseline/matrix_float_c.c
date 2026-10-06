@@ -5,11 +5,11 @@
 #include <math.h>
 
 int main(void) {
-    int n = 100;
+    int n = 400;
     int i, j, k;
     long chk;
     double sum, x;
-    double a[100][100], b[100][100], c[100][100];
+    double a[400][400], b[400][400], c[400][400];
 
     for (i = 1; i <= n; i++) {
         for (j = 1; j <= n; j++) {

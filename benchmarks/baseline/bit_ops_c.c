@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 int main(void) {
-    int i, sum;
+    long long i, sum, hash;
     uint32_t a, b, c, d, mask;
 
     a = 0xAAAAAAAAu;
@@ -13,14 +13,16 @@ int main(void) {
     mask = 0x0000FFFFu;
 
     sum = 0;
-    for (i = 0; i < 100000; i++) {
+    hash = 1;
+    for (i = 1; i <= 50000000; i++) {
         c = a & b;
         d = a | b;
         a = (c | (~d)) & mask;
         b = (a & c) | (~a);
-        if (a != b) sum = sum + 1;
+        hash = (hash * 1103515245LL + 12345) & 0x7FFFFFFFLL;
+        if (a != b) sum = sum + (hash % 100);
     }
 
-    printf("%d\n", sum);
+    printf("%lld\n", sum);
     return 0;
 }

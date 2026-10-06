@@ -2,21 +2,23 @@
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* Bit string operations benchmark - AND, OR, NOT on BIT values */
 test_bitops: PROCEDURE OPTIONS(MAIN);
-  DECLARE (i, j, sum) FIXED BINARY(31);
-  DECLARE (a, b, c, d, mask) BIT(32);
+   DECLARE (i, sum, hash) FIXED BINARY(63);
+   DECLARE (a, b, c, d, mask) BIT(32);
 
-  a = '10101010101010101010101010101010'B;
-  b = '11111111000000001111111100000000'B;
-  mask = '00000000000000001111111111111111'B;
+   a = '10101010101010101010101010101010'B;
+   b = '11111111000000001111111100000000'B;
+   mask = '00000000000000001111111111111111'B;
 
-  sum = 0;
-  DO i = 1 TO 100000;
-    c = a & b;
-    d = a | b;
-    a = (c | (¬d)) & mask;
-    b = (a & c) | (¬a);
-    IF a ^= b THEN sum = sum + 1;
-  END;
+   sum = 0;
+   hash = 1;
+   DO i = 1 TO 50000000;
+     c = a & b;
+     d = a | b;
+     a = (c | (¬d)) & mask;
+     b = (a & c) | (¬a);
+     hash = MOD(hash * 1103515245 + 12345, 2147483648);
+     IF a ^= b THEN sum = sum + MOD(hash, 100);
+   END;
 
   PUT SKIP LIST(sum);
 END test_bitops;
