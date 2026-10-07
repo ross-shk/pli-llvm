@@ -9,11 +9,17 @@
 // `plic --print-hir`). Character and aggregate semantics stay in codegen.
 #include "hir.h"
 
+#include <algorithm>
 #include <ostream>
+#include <string>
 
 #include "sema.h"
 
 namespace {
+
+// Print a wide (i128) scaled DECIMAL literal (ADR-191): ostream has no
+// 128-bit overload, so render via the portable decimal helper.
+std::string wideToString(PliI128 v) { return pli_to_dec_string(v); }
 
 // True when IRGen's `convert` would emit a real instruction: a bit <-> scalar
 // change, float <-> fixed, or a FIXED width or scale change. Character and
@@ -59,6 +65,7 @@ HExprP lowerExprBase(const Expr* e) {
   h->loc = e->loc;
   h->ty = e->ty;
   h->ival = e->ival;
+  h->wideIval = e->wideIval;
   h->fval = e->fval;
   h->decScale = e->decScale;
   h->decPrec = e->decPrec;
@@ -427,7 +434,7 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
     os << ")";
     break;
   case HExpr::DecLit:
-    os << "DecLit(" << e->ival << ",q" << e->decScale << ":";
+    os << "DecLit(" << wideToString(e->wideIval) << ",q" << e->decScale << ":";
     printType(os, e->ty);
     os << ")";
     break;

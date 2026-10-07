@@ -10,11 +10,16 @@
 #ifndef PLI_RT_H
 #define PLI_RT_H
 
+/* Before extern "C": the wide-int header carries C++ operator overloads on
+ * MSVC, which cannot live in a C-linkage block. */
+#include "pli_wide128.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Expand the .def's type tokens to C types. */
+/* Expand the .def's type tokens to C types. I128 is the portable 128-bit
+ * integer (MSVC has no __int128): same 16-byte two's-complement layout. */
 #define VOID    void
 #define I64     long long
 #define I32     int
@@ -23,6 +28,7 @@ extern "C" {
 #define PTR     char *
 #define CPTR    const char *
 #define IPTR    int *
+#define I128    PliI128
 #define PLI_FN(name, ret, args) ret name args;
 
 #include "pli_rt_state.h"
@@ -30,6 +36,7 @@ extern "C" {
 #include "pli_rt_abi.def"
 
 #undef PLI_FN
+#undef I128
 #undef IPTR
 #undef CPTR
 #undef PTR

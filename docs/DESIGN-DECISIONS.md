@@ -5519,4 +5519,39 @@ fast-path (irgen.cpp:6186) and on ARM64 the hardware `SDIV` by zero returns 0
 (e.g. `fixed bin(15,2) / fixed bin(15,2)`) correctly stays FLOAT — the cross-base
 scale mismatch is genuinely lossy.
 
+## ADR-191 — Wide `FIXED DECIMAL` (>18 digit) as a 128-bit scaled integer
+
+**Context.** `intBits()` (src/types.h:219-225) mapped every `FIXED DECIMAL` with
+`prec > 9` to an i64 (~19 digits max). A `DECIMAL(25,2)` accumulator therefore
+overflows i64 (wraps at `-O2`/`-O3`; traps "FIXED overflow" with size checks on),
+so the `decimal_ops.pli` benchmark at 30 M iterations "diverges catastrophically"
+(prints ~1.68e16 instead of the true ~1.95e21). This was the deferred "BCD path"
+non-goal (DECIMAL-PERF-PLAN.md §5 P5).
+
+**Decision.** Represent a genuinely declared `FIXED DECIMAL(p,q)` with `p > 18`
+as an LLVM **i128** / C **__int128** scaled integer, reusing the existing exact
+scaled-integer model (ADR-006, ADR-056). `intBits()` returns 128 for `FixedDec`
+carrying the `wideDec` flag, which the `fixedDec` factory sets only for
+genuinely declared `p > 18` — never for the inflated 31/63-digit sentinel
+precisions that `arithResultType` uses as a storage-class hint (those stay i64
+unless an operand is genuinely wide, in which case the flag propagates).
+i128 holds ~38 digits, covering the PL/I maximum of 31 decimal digits and the
+`DECIMAL(25,2)` case. The arithmetic emitters (`checkedArith`, `Star`) are
+already width-generic; the work is i128 constant/rescale helpers, an i128 branch
+in the `convert()` fixed→fixed rescale and the integer `/` path, i128-aware
+precision traps, i128 `wideIval` decimal literals (`parseDecConstant`
+accumulates in i128), and `__int128` runtime I/O entry points
+(`pli_put_list_decfixed128` / `pli_display_decfixed128`).
+
+**Consequences.** `DECIMAL(25,2)` accumulates exactly over 30 M iterations and
+prints the true value. The p<=18 hot paths are untouched (still i32/i64), so
+`decimal_ops` speed is preserved. The runtime I/O boundary gains a `__int128`
+entry point (arm64: passed as a pair of x-registers).
+
+**Rejected.** True packed BCD (4-bit-digit representation plus a full runtime
+add/sub/mul/div library) — matches classic mainframe PL/I but is a large,
+separate runtime subsystem with no benefit for this workload; 32-bit or wider
+integer-only widening (i128 already fits the standard's 31-digit cap and the
+`DECIMAL(25,2)` case).
+
 

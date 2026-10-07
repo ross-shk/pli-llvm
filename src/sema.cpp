@@ -61,8 +61,16 @@ Type arithResultType(const Type& a, const Type& b) {
   // A common DECIMAL type only when both operands are DECIMAL: FIXED BINARY
   // scale is 2-based (2^q) and must not be rescaled by powers of ten.
   bool dec = a.k == TK::FixedDec && b.k == TK::FixedDec;
-  return dec ? Type::fixedDec(p, std::max(a.scale, b.scale))
-             : Type::fixedBin(p, std::max(a.scale, b.scale));
+  Type t = dec ? Type::fixedDec(p, std::max(a.scale, b.scale))
+               : Type::fixedBin(p, std::max(a.scale, b.scale));
+  if (dec) {
+    // The sentinel prec (31/63) is a storage-class hint, not a declared
+    // precision, so the factory's wideDec (prec>18) must not take it: a wide
+    // result is wide only when an operand is genuinely wide (ADR-191), and
+    // propagates i128 storage from it.
+    t.wideDec = a.wideDec || b.wideDec;
+  }
+  return t;
 }
 
 // Product of two FIXED operands: the scale of the result is the sum of the
@@ -90,6 +98,17 @@ Type mulResultType(const Type& a, const Type& b) {
   if (t.k != TK::FixedDec && ((a.k == TK::FixedBin && b.k == TK::FixedDec && b.scale > 0) ||
                               (a.k == TK::FixedDec && b.k == TK::FixedBin && a.scale > 0)))
     t.k = TK::FixedDec;
+  // ADR-191: widen storage to i128 when a FIXED DECIMAL product can outgrow
+  // an i64. Multiplication grows digit-count by the sum of operand precisions
+  // (ADR-056); a DECIMAL*DECIMAL product with a.prec+b.prec > 18 needs i128 so
+  // `total*rate` (DEC18*DEC5 = 23 digits, ~1.6e19 > i64 max) stays exact. The
+  // size trap (magTrap) checks the rescaled *target* value, not the raw product,
+  // so widening the product does not over-trap on assignment.
+  if (t.k == TK::FixedDec) {
+    if (a.k == TK::FixedDec && b.k == TK::FixedDec)
+      t.prec = std::min(a.prec + b.prec, 31);
+    t.wideDec = a.wideDec || b.wideDec || t.prec > 18;
+  }
   t.scale = a.scale + b.scale;
   return t;
 }
@@ -1962,6 +1981,7 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
   }
   if (lit != e) { // apply the leading unary minus once
     lit->ival = -lit->ival;
+    lit->wideIval = -lit->wideIval;
     lit->fval = -lit->fval;
   }
   bool strInit = lit->kind == Expr::CharLit;
@@ -2539,6 +2559,7 @@ static ExprP cloneExpr(const Expr* e) {
   c->loc = e->loc;
   c->ty = e->ty;
   c->ival = e->ival;
+  c->wideIval = e->wideIval;
   c->fval = e->fval;
   c->decScale = e->decScale;
   c->decPrec = e->decPrec;
@@ -3722,6 +3743,7 @@ static ExprP cloneFmtExpr(const Expr* e) {
   c->loc = e->loc;
   c->ty = e->ty;
   c->ival = e->ival;
+  c->wideIval = e->wideIval;
   c->fval = e->fval;
   c->decScale = e->decScale;
   c->decPrec = e->decPrec;

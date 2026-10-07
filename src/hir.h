@@ -46,6 +46,7 @@ struct HExpr {
   Type ty{}; // the value's type after sema typing
 
   long long ival = 0;
+  PliI128 wideIval = 0; // DecLit: full scaled value (ADR-191); ival is its i64 truncation
   double fval = 0;
   int decScale = 0;                 // DecLit: fraction digits q (the 10^q scaling of ival)
   int decPrec = 0;                  // DecLit: total significant digits p
