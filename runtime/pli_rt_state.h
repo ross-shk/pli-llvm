@@ -173,6 +173,7 @@ void rt_separate(void);
 void rt_display_begin(void);
 void rt_display_end(void);
 void rt_format_decfixed(char *buf, size_t cap, long long v, long long q);
+void rt_format_decfixed128(char *buf, size_t cap, __int128 v, long long q);
 int rt_get_token(char *buf, size_t cap);
 int rt_data_namechar(int c);
 void rt_pli_on_push(long long key, long long id, void *fn, void *ctx);
@@ -190,6 +191,7 @@ void pli_exit(int code);
 #define display_begin rt_display_begin
 #define display_end rt_display_end
 #define format_decfixed rt_format_decfixed
+#define format_decfixed128 rt_format_decfixed128
 #define get_token rt_get_token
 #define data_namechar rt_data_namechar
 #define pli_on_push rt_pli_on_push

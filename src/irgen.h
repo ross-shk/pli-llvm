@@ -60,6 +60,9 @@ private:
   llvm::Type* llvmTy(const Type& t);
   llvm::Value* i32(int v);
   llvm::Value* i64(long long v);
+  llvm::Value* i128(__int128 v);
+  // LLVM constant for a wide DECIMAL literal rescaled to FIXED target t (ADR-191).
+  llvm::Constant* wideDecConstant(const Type& t, __int128 w);
   llvm::Value* flt(double d);
   llvm::AllocaInst* entryAlloca(llvm::Type* ty, const llvm::Twine& name);
   void startBlock(llvm::BasicBlock* bb); // branch into bb unless terminated, then insert there

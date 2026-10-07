@@ -23,6 +23,7 @@ extern "C" {
 #define PTR     char *
 #define CPTR    const char *
 #define IPTR    int *
+#define I128    __int128
 #define PLI_FN(name, ret, args) ret name args;
 
 #include "pli_rt_state.h"

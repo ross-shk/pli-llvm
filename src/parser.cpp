@@ -29,12 +29,15 @@ static void parseDecConstant(const std::string& text, Expr& e) {
   size_t dot = text.find('.');
   std::string intPart = dot == std::string::npos ? text : text.substr(0, dot);
   std::string fracPart = dot == std::string::npos ? "" : text.substr(dot + 1);
-  long long scaled = 0;
+  // Accumulate in i128 (ADR-191): a 31-digit scaled value exceeds i64, so the
+  // old long long accumulator wrapped wide literals at parse time.
+  __int128 scaled = 0;
   for (char c : intPart)
     scaled = scaled * 10 + (c - '0');
   for (char c : fracPart)
     scaled = scaled * 10 + (c - '0');
-  e.ival = scaled;
+  e.wideIval = scaled;
+  e.ival = (long long)scaled;
   e.decScale = (int)fracPart.size();
   e.decPrec = (int)(intPart.size() + fracPart.size());
 }
@@ -2302,6 +2305,7 @@ ExprP Parser::cloneExpr(const Expr* e) {
   c->loc = e->loc;
   c->ty = e->ty;
   c->ival = e->ival;
+  c->wideIval = e->wideIval;
   c->fval = e->fval;
   c->decScale = e->decScale;
   c->decPrec = e->decPrec;
@@ -2901,6 +2905,7 @@ static ExprP cloneFormatExpr(const Expr* e) {
   c->loc = e->loc;
   c->ty = e->ty;
   c->ival = e->ival;
+  c->wideIval = e->wideIval;
   c->fval = e->fval;
   c->decScale = e->decScale;
   c->decPrec = e->decPrec;

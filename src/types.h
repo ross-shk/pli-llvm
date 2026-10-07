@@ -57,6 +57,7 @@ struct Type {
   int prec = 15;        // precision: digits (DECIMAL) or bits (BINARY)
   int scale = 0;        // FIXED scale factor q
   int len = 1;          // CHARACTER/BIT length
+  bool wideDec = false; // (ADR-191): wide (>18 digit) FIXED DECIMAL held in i128
   bool varying = false; // VARYING (rule 15)
   // VARYINGZ (IBM Enterprise PL/I extension, ADR-168): a varying-length
   // character string whose C-ABI form is NUL-terminated. Internally it reuses
@@ -123,6 +124,7 @@ struct Type {
     t.k = TK::FixedDec;
     t.prec = p;
     t.scale = q;
+    t.wideDec = p > 18; // ADR-191: genuinely wide declared DECIMAL -> i128
     return t;
   }
   static Type flt(int p = 6) {
@@ -216,11 +218,19 @@ struct Type {
   bool isEvent() const { return k == TK::Event; }
 
   // Integer width chosen for FIXED values (M0 keeps FIXED scale 0 only).
+  // FixedDec: <=9 digits fit an i32, <=18 fit an i64; a genuinely wide
+  // (>18 digit) DECIMAL — flagged by `wideDec`, not the inflated prec sentinel
+  // of an arithmetic-result type — is held in an i128 (~38 digits, covering the
+  // PL/I maximum of 31 digits) so accumulators like grand DECIMAL(25,2) over
+  // 30M iterations don't overflow (ADR-191).
   int intBits() const {
     if (k == TK::FixedBin)
       return prec <= 31 ? 32 : 64;
-    if (k == TK::FixedDec)
+    if (k == TK::FixedDec) {
+      if (wideDec)
+        return 128;
       return prec <= 9 ? 32 : 64;
+    }
     return 32;
   }
 
@@ -279,6 +289,7 @@ inline Type& Type::operator=(const Type& o) {
   prec = o.prec;
   scale = o.scale;
   len = o.len;
+  wideDec = o.wideDec;
   varying = o.varying;
   varyingz = o.varyingz;
   starLen = o.starLen;

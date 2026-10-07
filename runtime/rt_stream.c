@@ -263,6 +263,70 @@ void pli_display_decfixed(long long v, long long q) {
   display_end();
 }
 
+/* Print a __int128 magnitude into buf (caller ensures room); returns count.
+ * The stored integer of a >18 digit FIXED DECIMAL (ADR-191) overflows i64, so
+ * output formats the full 128-bit value directly instead of truncating.
+ * There is no printf length modifier for __int128, so digits come from
+ * repeated div/mod by 10. */
+static size_t pli_fmt128(char *buf, size_t cap, unsigned __int128 v) {
+  char tmp[40];
+  int n = 0;
+  if (v == 0)
+    tmp[n++] = '0';
+  while (v != 0 && n < (int)sizeof(tmp)) {
+    tmp[n++] = (char)('0' + v % 10);
+    v /= 10;
+  }
+  if ((size_t)n > cap)
+    n = (int)cap;
+  for (int i = 0; i < n; ++i)
+    buf[n - 1 - i] = tmp[i];
+  return (size_t)n;
+}
+
+/* >18 digit FIXED DECIMAL output (QR1.2): format a 128-bit stored integer with
+ * exactly q fraction digits (round-trip faithful, no FP). */
+void rt_format_decfixed128(char *buf, size_t cap, __int128 v, long long q) {
+  char *p = buf;
+  unsigned __int128 mag;
+  if (v < 0) {
+    *p++ = '-';
+    mag = (unsigned __int128)(-(v + 1)) + 1; /* |INT128_MIN| without signed UB */
+  } else {
+    mag = (unsigned __int128)v;
+  }
+  unsigned __int128 factor = 1;
+  for (long long i = 0; i < q; ++i)
+    factor *= 10;
+  size_t n = pli_fmt128(p, cap - (size_t)(p - buf), mag / factor);
+  p += n;
+  if (q > 0) {
+    *p++ = '.';
+    unsigned __int128 rem = mag % factor;
+    for (long long i = q - 1; i >= 0; --i) {
+      unsigned __int128 digit = 1;
+      for (long long j = 0; j < i; ++j)
+        digit *= 10;
+      *p++ = (char)('0' + rem / digit);
+      rem %= digit;
+    }
+  }
+  *p = '\0';
+}
+void pli_put_list_decfixed128(__int128 v, long long q) {
+  char buf[64];
+  rt_format_decfixed128(buf, sizeof buf, v, q);
+  separate();
+  rt_put_raw(buf, pli_strlen(buf));
+}
+void pli_display_decfixed128(__int128 v, long long q) {
+  char buf[64];
+  rt_format_decfixed128(buf, sizeof buf, v, q);
+  display_begin();
+  rt_put_raw(buf, pli_strlen(buf));
+  display_end();
+}
+
 /* List-directed output of a scaled FIXED value (ADR-006): the stored integer v
  * holds the value * 2^scale, so print v / 2^scale exactly as a decimal. The
  * fractional part of a dyadic rational terminates, so the digit loop is exact. */
