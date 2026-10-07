@@ -277,9 +277,15 @@ class Runner:
             return f"FAIL {self.name} (missing {self.name}.check)", 1
         llfile = self.out / f"{self.name}.ll"
         compilefile = self.out / f"{self.name}.compile"
+        # Optional per-test compiler flags (e.g. --experimental-lowering=llvm).
+        flagsfile = self.dir / f"{self.name}.flags"
+        flags = []
+        if flagsfile.exists():
+            flags = flagsfile.read_text(errors="replace").strip().split()
         with open(compilefile, "w") as cfh:
             rc = subprocess.run(
-                [PLIC, "--size-checks", str(self.dir / f"{self.name}.pli"), "-emit-llvm", "-o", str(llfile)],
+                [PLIC, "--size-checks", *flags, str(self.dir / f"{self.name}.pli"),
+                 "-emit-llvm", "-o", str(llfile)],
                 stdout=cfh, stderr=subprocess.STDOUT).returncode
         if rc != 0:
             return f"FAIL {self.name} (compilation failed)\n{indented(compilefile.read_text(errors='replace'))}", 1

@@ -1,0 +1,4 @@
+ test: procedure options(main);
+   declare r fixed bin(31);
+   r = index('hello', 'll');
+ end test;

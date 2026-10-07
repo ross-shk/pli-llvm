@@ -565,9 +565,12 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
   return table;
 }
 
-// Operations with a direct LLVM lowering implemented (populated P1+). Empty in P0.
+// Operations with a direct LLVM lowering implemented (populated P1+).
 static const std::set<std::string>& kLLVMLowerings() {
-  static const std::set<std::string> table = {};
+  static const std::set<std::string> table = {
+      "assign_char",
+      "index",
+  };
   return table;
 }
 
@@ -588,12 +591,12 @@ bool IRGen::useRuntimeCall(const std::string& op) {
     if (hasLLVMLowering(op))
       return false;
     return true;
-  case LowerMode::Auto:
-    // Operations in kRuntimeDefault are designated for LLVM lowering (P1+).
-    // Until kLLVMLowerings() is populated (P0), fall back to runtime.
-    if (kRuntimeDefault().count(op))
-      return !hasLLVMLowering(op);
+  case LowerMode::Auto: {
+    auto dit = kRuntimeDefault().find(op);
+    if (dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op))
+      return false;
     return true;
+  }
   }
   return true;
 }
@@ -615,13 +618,109 @@ llvm::Value* IRGen::emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
     return b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen});
   }
   // P1 direct LLVM lowering for INDEX goes here.
-  return b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen});
+  return emitIndexLLVM(a, aLen, b, bLen);
+}
+
+// Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
+//   blen <= 0 → 1; blen > alen → 0; else scan i for first run where
+//   a[i..i+blen-1] == b[0..blen-1].
+llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                                  llvm::Value* bLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* aLen64 = b_.CreateZExtOrTrunc(aLen, b_.getInt64Ty(), "idx.alen");
+  llvm::Value* bLen64 = b_.CreateZExtOrTrunc(bLen, b_.getInt64Ty(), "idx.blen");
+
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "idx.check", F);
+  llvm::BasicBlock* ret1BB = llvm::BasicBlock::Create(ctx_, "idx.ret1", F);
+  llvm::BasicBlock* ret0BB = llvm::BasicBlock::Create(ctx_, "idx.ret0", F);
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "idx.outer", F);
+  llvm::BasicBlock* innerBB = llvm::BasicBlock::Create(ctx_, "idx.inner", F);
+  llvm::BasicBlock* checkByteBB = llvm::BasicBlock::Create(ctx_, "idx.check_byte", F);
+  llvm::BasicBlock* innerLatchBB = llvm::BasicBlock::Create(ctx_, "idx.inner.latch", F);
+  llvm::BasicBlock* outerLatchBB = llvm::BasicBlock::Create(ctx_, "idx.outer.latch", F);
+  llvm::BasicBlock* matchBB = llvm::BasicBlock::Create(ctx_, "idx.match", F);
+  llvm::BasicBlock* outerEndBB = llvm::BasicBlock::Create(ctx_, "idx.outer.end", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "idx.exit", F);
+
+  // Entry: blen <= 0 → 1; else check blen > alen.
+  llvm::Value* blenLe0 = b_.CreateICmpULE(bLen64, zero, "idx.blenle0");
+  b_.CreateCondBr(blenLe0, ret1BB, checkBB);
+
+  // ret1: empty needle → result = 1.
+  startBlock(ret1BB);
+  b_.CreateBr(exitBB);
+
+  // check: blen > alen → result = 0; else enter outer loop.
+  startBlock(checkBB);
+  llvm::Value* blenGtAlen = b_.CreateICmpUGT(bLen64, aLen64, "idx.blen_gt_alen");
+  b_.CreateCondBr(blenGtAlen, ret0BB, outerBB);
+
+  // ret0: no possible match → result = 0.
+  startBlock(ret0BB);
+  b_.CreateBr(exitBB);
+
+  // outer.header: i = phi, exit when i + blen > alen.
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "idx.i");
+  iPhi->addIncoming(zero, checkBB);
+  llvm::Value* iPlusBlen = b_.CreateAdd(iPhi, bLen64, "idx.i_plus_blen");
+  llvm::Value* outerExit = b_.CreateICmpUGT(iPlusBlen, aLen64, "idx.outer_exit");
+  b_.CreateCondBr(outerExit, outerEndBB, innerBB);
+
+  // inner.header: j = phi, full match when j >= blen.
+  startBlock(innerBB);
+  llvm::PHINode* jPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "idx.j");
+  jPhi->addIncoming(zero, outerBB);
+  llvm::Value* jgeBl = b_.CreateICmpUGE(jPhi, bLen64, "idx.j_ge_blen");
+  b_.CreateCondBr(jgeBl, matchBB, checkByteBB);
+
+  // check_byte: compare a[i+j] vs b[j].
+  startBlock(checkByteBB);
+  llvm::Value* ij = b_.CreateAdd(iPhi, jPhi, "idx.ij");
+  llvm::Value* aiPtr = b_.CreateGEP(b_.getInt8Ty(), a, {ij}, "idx.ai_ptr");
+  llvm::Value* bjPtr = b_.CreateGEP(b_.getInt8Ty(), b, {jPhi}, "idx.bj_ptr");
+  llvm::Value* ai = b_.CreateLoad(b_.getInt8Ty(), aiPtr, "idx.ai");
+  llvm::Value* bj = b_.CreateLoad(b_.getInt8Ty(), bjPtr, "idx.bj");
+  llvm::Value* mismatch = b_.CreateICmpNE(ai, bj, "idx.mismatch");
+  b_.CreateCondBr(mismatch, outerLatchBB, innerLatchBB);
+
+  // inner.latch: j = j + 1, back to inner.header.
+  startBlock(innerLatchBB);
+  llvm::Value* jNext = b_.CreateAdd(jPhi, one64, "idx.j_next");
+  jPhi->addIncoming(jNext, innerLatchBB);
+  b_.CreateBr(innerBB);
+
+  // outer.latch: i = i + 1, back to outer.header.
+  startBlock(outerLatchBB);
+  llvm::Value* iNext = b_.CreateAdd(iPhi, one64, "idx.i_next");
+  iPhi->addIncoming(iNext, outerLatchBB);
+  b_.CreateBr(outerBB);
+
+  // match: result = i + 1.
+  startBlock(matchBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "idx.result");
+  b_.CreateBr(exitBB);
+
+  // outer.end: no match found → result = 0.
+  startBlock(outerEndBB);
+  b_.CreateBr(exitBB);
+
+  // exit: merge all result values.
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 4, "idx.out");
+  resultPhi->addIncoming(one64, ret1BB);
+  resultPhi->addIncoming(zero, ret0BB);
+  resultPhi->addIncoming(matchResult, matchBB);
+  resultPhi->addIncoming(zero, outerEndBB);
+
+  return resultPhi;
 }
 
 // Direct LLVM lowering for assign_char (P1+): copies min(dstLen, srcLen) bytes
 // via memmove (overlap-safe per constraint 6), then blank-fills the tail.
-// P0 leaves hasLLVMLowering empty, so this body is dormant until the policy
-// table is flipped. The shape follows the C runtime (rt_string.c pli_assign_char).
+// The shape follows the C runtime (rt_string.c pli_assign_char).
 void IRGen::emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
                                llvm::Value* srcLen) {
   llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
@@ -630,12 +729,13 @@ void IRGen::emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Valu
   llvm::Value* n =
       b_.CreateSelect(b_.CreateICmpULT(srcLen64, dstLen64), srcLen64, dstLen64, "ac.n");
   b_.CreateMemMove(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), n, false);
-  // Blank-fill the tail past the copied bytes (dstLen > n). When n == 0 the
-  // whole buffer is filled; this matches pli_assign_char's
+  // Blank-fill the tail past the copied bytes (dstLen > n), starting at dst+n.
+  // When n == 0 the whole buffer is filled; this matches pli_assign_char's
   // `if (dstlen > n) memset(dst+n, ' ', dstlen-n)`.
   llvm::Value* padLen = b_.CreateSelect(b_.CreateICmpUGT(dstLen64, n),
                                         b_.CreateSub(dstLen64, n, "ac.pad"), zero, "ac.padlen");
-  b_.CreateMemSet(dst, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
+  llvm::Value* padPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {n}, "ac.padptr");
+  b_.CreateMemSet(padPtr, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
 }
 
 // Get (or create) a declaration for a runtime `pli_*` function. The signature

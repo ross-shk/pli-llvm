@@ -44,6 +44,7 @@ generation to clang. The more detailed HIR/MIR optimization strategy in
 
 ## 2. Pipeline
 
+### 2.1 Pipeline (as implemented)
 ```
 file.pli
    │
@@ -65,6 +66,10 @@ HIR                typed representation with explicit conversions
    ▼
 IRGen              builds an LLVM module with `llvm::IRBuilder`
    │
+   ├── Lowering policy dispatch (experimental, see §3.4)
+   │     • `assign_char`, `index` → direct LLVM IR (memmove/memset, search loop)
+   │     • other operations → `pli_*` C runtime calls in `libpli`
+   │
    ├── `-emit-llvm` ──► textual `.ll` file
    │
    └── clang ──► object file ──► link with `libpli` ──► executable
@@ -77,7 +82,22 @@ objects; `-emit-llvm` writes a `.ll` per input. External procedures and
 variables (rule (42)) resolve at the object link, so no cross-file semantic
 analysis is needed.
 
-### Why separate AST, HIR, and LLVM IR
+### 2.3 Lowering policy (experimental)
+
+IRGen owns lowering policy behind the experimental flag
+`--experimental-lowering=auto|runtime|llvm|mlir` (with per-operation overrides
+via `<op>:<mode>`). Each pilot operation has a policy entry in
+`kRuntimeDefault()` (the default selection) and, when a direct LLVM body exists,
+an entry in `kLLVMLowerings()`. Call sites always go through the
+`emitAssignChar`/`emitIndex` dispatch wrappers, which consult the policy table.
+In `runtime` mode every operation uses its `pli_*` C runtime call; in `llvm`
+mode admitted operations lower directly to LLVM IR (e.g. `assign_char` →
+`memmove` + `memset`, `index` → a counted search loop). The runtime call
+remains the differential regression oracle throughout migration. See
+`docs/MLIR-RUNTIME-MIGRATION-MATRIX.md` for the full operation matrix and
+`design-docs/mlir-runtime-migration-plan.md` for the phased plan.
+
+### 2.2 Why separate AST, HIR, and LLVM IR
 
 The AST records source syntax. HIR is a typed, lower-level representation that
 makes implicit conversions explicit before code generation. This separation
@@ -101,7 +121,7 @@ that passes described for MIR are present in the current compiler.
 | Types | `src/types.h` | attribute → type mapping |
 | Sema | `src/sema.{h,cpp}` | scopes, declarations, defaults, typing, conversions |
 | HIR | `src/hir.{h,cpp}` | typed AST lowering with explicit conversions (ADR-005); `--print-hir` |
-| IR generation | `src/irgen.{h,cpp}` | LLVM IR via `llvm::IRBuilder<>` (ADR-002); consumes HIR |
+| IR generation | `src/irgen.{h,cpp}` | LLVM IR via `llvm::IRBuilder<>` (ADR-002); consumes HIR; lowering policy dispatch for pilot operations |
 | Runtime | `runtime/` | C support routines for I/O, strings, conditions, storage, and other implemented features |
 
 ### 3.1 Source input
@@ -195,6 +215,11 @@ Common runtime responsibilities include list-directed and edit-directed I/O,
 character operations, condition dispatch, dynamic storage, and task/event
 support. Some language forms that would use these services are still diagnosed.
 
+Some string operations (`assign_char`, `index`) have experimental direct LLVM
+lowerings that bypass the runtime call when `--experimental-lowering=llvm`
+(mode selection, or the `auto` default once the policy table is flipped in P5).
+The runtime call path remains available and tested in all modes.
+
 ## 4. Data representation and ABI
 
 | PL/I data | Representation | Notes |
@@ -274,8 +299,9 @@ missing `THEN` under the offending token — for the unambiguous recovery cases
 
 | Layer | Mechanism | Status |
 |---|---|---|
-| IR checks | `tests/ir/*.pli` and ordered `*.check` patterns against `-emit-llvm` output | Implemented |
+| IR checks | `tests/ir/*.pli` and ordered `*.check` patterns against `-emit-llvm` output; optional `.flags` sidecar supplies per-test compiler flags (e.g. `--experimental-lowering=llvm`) | Implemented |
 | Execution tests | Compile and run; compare `expected/` output or check self-reported `PASS` | Implemented |
+| Driver tests | `tests/driver/*.sh` scripts compile one source under multiple modes and compare outputs | Implemented |
 | Diagnostic tests | `bad_*.pli` cases must fail as expected | Implemented |
 | Coverage ledger | `GRAMMAR-COVERAGE.md` maps each rule to implementation notes and tests | Maintained with feature work |
 | Corpus compilation, differential tests, grammar fuzzing | Proposed broader conformance tools | Roadmap; see implementation plans |

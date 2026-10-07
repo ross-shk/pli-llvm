@@ -471,6 +471,8 @@ private:
   // Direct LLVM lowering for assign_char (P1+): memmove + blank-pad tail.
   void emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
                           llvm::Value* srcLen);
+  // Direct LLVM lowering for INDEX (P1+): bytewise search loop.
+  llvm::Value* emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
   // Get-or-create an LLVM intrinsic with an explicit signature (used only for
   // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
   llvm::Function* intrinsicFn(const std::string& name, llvm::Type* ret,

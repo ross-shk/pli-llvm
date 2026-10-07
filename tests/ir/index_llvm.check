@@ -1,0 +1,4 @@
+CHECK-NOT: pli_index
+CHECK: idx.outer
+CHECK: phi i64
+CHECK: getelementptr i8

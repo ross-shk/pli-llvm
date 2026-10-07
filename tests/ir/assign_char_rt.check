@@ -1,0 +1,3 @@
+CHECK: call.*@pli_assign_char
+CHECK-NOT: @llvm.memmove
+CHECK-NOT: @llvm.memset

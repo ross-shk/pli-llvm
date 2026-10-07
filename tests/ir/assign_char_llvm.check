@@ -1,0 +1,4 @@
+CHECK-NOT: pli_assign_char
+CHECK: @llvm.memmove
+CHECK: @llvm.memset
+CHECK: getelementptr i8
