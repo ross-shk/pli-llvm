@@ -477,7 +477,8 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
     while (stmtEnd < source.size()) {
       char c = source[stmtEnd];
       if (inLineCmt) {
-        if (c == '\n') inLineCmt = false;
+        if (c == '\n')
+          inLineCmt = false;
       } else if (inCmt) {
         if (c == '*' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '/') {
           inCmt = false;
@@ -489,7 +490,8 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
           stmtEnd += 2;
           continue;
         }
-        if (c == '\'') inStr = false;
+        if (c == '\'')
+          inStr = false;
       } else {
         if (c == '/' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '*') {
           inCmt = true;
@@ -549,7 +551,8 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
         while (stmtEnd < source.size()) {
           char c = source[stmtEnd];
           if (inLineCmt) {
-            if (c == '\n') inLineCmt = false;
+            if (c == '\n')
+              inLineCmt = false;
           } else if (inCmt) {
             if (c == '*' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '/') {
               inCmt = false;
@@ -561,7 +564,8 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
               stmtEnd += 2;
               continue;
             }
-            if (c == '\'') inStr = false;
+            if (c == '\'')
+              inStr = false;
           } else {
             if (c == '/' && stmtEnd + 1 < source.size() && source[stmtEnd + 1] == '*') {
               inCmt = true;
@@ -828,7 +832,8 @@ bool Preprocessor::handleDeclare(const fs::path& input, const std::string& opera
         int depth = 0;
         size_t endPos = std::string::npos;
         for (size_t i = 0; i < afterValue.size(); ++i) {
-          if (afterValue[i] == '(') ++depth;
+          if (afterValue[i] == '(')
+            ++depth;
           else if (afterValue[i] == ')') {
             if (--depth == 0) {
               endPos = i;

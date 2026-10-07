@@ -2275,7 +2275,8 @@ bool Parser::parseDescriptorType(Type& out) {
     out.controlled = bag.controlled;
   }
   if (hasStar && bag.varying) {
-    d_.error(cur().loc, "adjustable-length VARYING arrays are not implemented in this stage", "(12)");
+    d_.error(cur().loc, "adjustable-length VARYING arrays are not implemented in this stage",
+             "(12)");
   }
   return true;
 }

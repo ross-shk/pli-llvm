@@ -1393,8 +1393,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // itemlist (with iteration factors and '*') into one value per element.
         if (item.ty.isArray() && !isDefined) {
           if (item.ty.elementType().isChar() &&
-              (item.ty.elementType().starLen || item.controlled ||
-               item.ty.isDynamic()))
+              (item.ty.elementType().starLen || item.controlled || item.ty.isDynamic()))
             d_.error(item.loc,
                      "arrays of adjustable, CONTROLLED, or dynamic-extent CHARACTER "
                      "are not implemented in this stage",
@@ -3066,8 +3065,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           continue;
         }
         // Allow structures: they will be expanded to their members in codegen
-        if (it->ty.isVoid() || it->ty.isPointer() || it->ty.isComplex() ||
-            it->ty.isArray()) {
+        if (it->ty.isVoid() || it->ty.isPointer() || it->ty.isComplex() || it->ty.isArray()) {
           d_.error(it->loc, "PUT DATA of this type is not implemented in this stage", "(110)");
         }
       }

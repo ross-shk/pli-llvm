@@ -379,7 +379,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
           om->mod->setDataLayout(tm->createDataLayout());
           // Also set module target triple to ensure consistent
           // feature handling during codegen (module triple affects some defaults).
-          om->mod->setTargetTriple(triple);
+          om->mod->setTargetTriple(llvm::Triple(triple));
           // Mirror the clang backend: optimize the (runtime-linked) IR at the
           // requested -O level before codegen.
           plic::optimizeModule(*om->mod, optLevel);
@@ -432,9 +432,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     os << ir;
   }
 
-  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel +
-                    backendFlags + " " + shellQuote(llPath.string()) + " -c -o " +
-                    shellQuote(objPath.string());
+  std::string cmd = shellQuote(clangPath) + " -Wno-override-module " + optLevel + backendFlags +
+                    " " + shellQuote(llPath.string()) + " -c -o " + shellQuote(objPath.string());
   if (verbose)
     std::cerr << "+ " << cmd << "\n";
   int rc = system(cmd.c_str());

@@ -7,9 +7,9 @@
 // them with a proper node hierarchy + visitor, and inserts the HIR layer
 // described in docs/ARCHITECTURE.md.
 #pragma once
+#include "../runtime/pli_wide128.h" /* PliI128: portable 128-bit int (ADR-191) */
 #include "token.h"
 #include "types.h"
-#include "../runtime/pli_wide128.h" /* PliI128: portable 128-bit int (ADR-191) */
 #include <memory>
 #include <string>
 #include <vector>

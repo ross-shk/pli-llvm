@@ -21,7 +21,7 @@ option(PLIC_WERROR "Treat compiler warnings as errors" OFF)
 
 find_package(LLVM REQUIRED CONFIG)
 if(LLVM_PACKAGE_VERSION VERSION_LESS 18)
-  message(FATAL_ERROR "plic requires LLVM 18 or newer")
+  message(FATAL_ERROR "plic requires LLVM 20 or newer")
 endif()
 find_package(Clang REQUIRED CONFIG)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

@@ -110,7 +110,7 @@ Threading is abstracted in `runtime/sync/plic_thread.h` (POSIX pthreads on Linux
   <tr><td>C++20 compiler</td><td>gcc 12 / clang 15 / MSVC 2022 17.x</td><td>Plus a Windows 10/11 SDK on Windows</td></tr>
   <tr><td>CMake</td><td>3.20</td><td>All platforms</td></tr>
   <tr><td>Ninja</td><td>any recent</td><td>Canonical generator on all platforms, including Windows</td></tr>
-  <tr><td>LLVM + clang + lld</td><td>18</td><td>Dev libraries and lld headers/libs required; see below</td></tr>
+  <tr><td>LLVM + clang + lld</td><td>20</td><td>Dev libraries and lld headers/libs required; see below</td></tr>
   <tr><td>Python</td><td>3</td><td>For scripts/gen_*.py and tests/run_tests.py</td></tr>
   <tr><td>Git</td><td>any recent</td><td>Optional; without it plic version reports unknown</td></tr>
 </table>
@@ -119,7 +119,7 @@ LLVM sources:
 
 - **Linux:** distro `llvm`/`clang`/`lld` dev packages, or a self-built LLVM.
 - **macOS:** `brew install llvm lld ninja cmake` (note: stock `llvm` formula omits `lld`, so `lld` is a separate formula).
-- **Windows:** no standard prebuilt LLVM ships everything `plic` needs, so build LLVM 18.x from source with `clang;lld` and the `X86;AArch64` targets (one-time cost), then point `CMAKE_PREFIX_PATH` at the install dir. Forward slashes work best in CMake paths (`C:/llvm-install`).
+- **Windows:** no standard prebuilt LLVM ships everything `plic` needs, so build LLVM 20.x from source with `clang;lld` and the `X86;AArch64` targets (one-time cost), then point `CMAKE_PREFIX_PATH` at the install dir. Forward slashes work best in CMake paths (`C:/llvm-install`).
 
 ### Linux
 
@@ -156,7 +156,7 @@ Notes:
 - Ninja must be on `PATH` (`pip install ninja`, or a Ninja release, or the VS-bundled copy).
 - Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `plic` itself — use native MSVC.
 
-Building LLVM 18.x on Windows (one-time setup, Release, `X86;AArch64` only):
+Building LLVM 20.x on Windows (one-time setup, Release, `X86;AArch64` only):
 
 ```bat
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64

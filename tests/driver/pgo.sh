@@ -67,8 +67,8 @@ fi
 
 # llvm-profdata lives next to the clang plic bakes in (llvm-profdata is not
 # assumed on PATH): recover its directory from a -v compile command.
-CLDIR=$(printf '%s\n' "$cmd" | grep -o "'[^']*bin/clang[^']*'" | head -1 | tr -d "'")"
-[ -z "$CLDIR" ] && CLDIR=$(printf '%s\n' "$cmd" | grep -o '"[^"]*bin/clang[^"]*"' | head -1 | tr -d '"')"
+CLDIR=$(printf '%s\n' "$cmd" | grep -o "'[^']*bin/clang[^']*'" | head -1 | tr -d "'")
+[ -z "$CLDIR" ] && CLDIR=$(printf '%s\n' "$cmd" | grep -o '"[^"]*bin/clang[^"]*"' | head -1 | tr -d '"')
 [ -z "$CLDIR" ] && CLDIR=$(printf '%s\n' "$cmd" | grep -o '[^ ]*bin/clang[^ ]*' | head -1 | tr -d "'" | tr -d '"')
 CLDIR=$(dirname "$CLDIR")
 if [ ! -x "$CLDIR/llvm-profdata$EXE" ]; then

@@ -1058,9 +1058,9 @@ std::string IRGen::run(HProgram& prog) {
   if (!triple_.empty()) {
     llvm::Triple t(triple_);
     if (t.isMacOSX()) {
-      mod_.setTargetTriple("arm64-apple-macosx15.0");
+      mod_.setTargetTriple(llvm::Triple("arm64-apple-macosx15.0"));
     } else {
-      mod_.setTargetTriple(t.getTriple());
+      mod_.setTargetTriple(t);
     }
   }
   mod_.print(os, nullptr);
@@ -3927,12 +3927,13 @@ void IRGen::emitPut(HStmt* s) {
   // variable instead of SYSPRINT.
   llvm::Value *sdata = nullptr, *slen = nullptr;
   bool isVarying = false;
-  llvm::Value *slenPrefix = nullptr; // for varying: pointer to length prefix
+  llvm::Value* slenPrefix = nullptr; // for varying: pointer to length prefix
   if (s->stringTarget) {
     HExpr* st = s->stringTarget.get();
     if (st->ty.isChar() && st->ty.varying) {
       // VARYING string: data is at struct index 1, length prefix at index 0
-      llvm::Value* base = st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+      llvm::Value* base =
+          st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
       sdata = b_.CreateStructGEP(llvmTy(st->sym->ty), base, 1, "vdata");
       slen = i64(st->ty.len); // capacity
       slenPrefix = b_.CreateStructGEP(llvmTy(st->sym->ty), base, 0, "vlen");
@@ -5867,7 +5868,8 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(el), elemAddr, 0, "vlenp");
       // Use pli_assign_varying to store the varying string
       Val cv = convert(src, el, loc);
-      llvm::Value* written = b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(el.len), cv.ptr, cv.len});
+      llvm::Value* written =
+          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(el.len), cv.ptr, cv.len});
       // Store the returned length into the length prefix
       b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), lp);
       return;
@@ -6950,7 +6952,7 @@ Val IRGen::emitExpr(HExpr* e) {
     llvm::Value* total = leaves[0].len;
     for (size_t i = 1; i < leaves.size(); ++i)
       total = b_.CreateAdd(total, leaves[i].len, "clen");
-     v.ptr = b_.CreateCall(runtimeFn("pli_alloc"), {total}, "cbuf");
+    v.ptr = b_.CreateCall(runtimeFn("pli_alloc"), {total}, "cbuf");
     v.len = total;
     llvm::Value* off = i64(0);
     for (auto& leaf : leaves) {
