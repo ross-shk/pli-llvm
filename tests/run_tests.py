@@ -21,7 +21,6 @@ printed in deterministic group order. `cmake --build -j` parallelises the
 compile step.
 """
 import os
-import signal
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -34,27 +33,56 @@ TIMEOUT = 10  # seconds per exec run step
 # catch genuine hangs quickly.
 DRIVER_TIMEOUT = 60  # seconds per driver test
 ROOT = Path(__file__).resolve().parent.parent
-PLIC = os.environ.get("PLIC", str(ROOT / "build" / "plic"))
+IS_WINDOWS = sys.platform == "win32"
+EXE_EXT = ".exe" if IS_WINDOWS else ""
+
+
+def _default_plic():
+    # CTest passes PLIC explicitly ($<TARGET_FILE:plic>); this default only
+    # matters for manual runs. Prefer the CMake layout (build/cmake) when it
+    # exists, falling back to the legacy build/ path.
+    for cand in (ROOT / "build" / "cmake" / f"plic{EXE_EXT}",
+                 ROOT / "build" / f"plic{EXE_EXT}"):
+        if cand.exists():
+            return str(cand)
+    return str(ROOT / "build" / "cmake" / f"plic{EXE_EXT}")
+
+
+def _default_rtlib():
+    # Windows static lib is pli.lib (OUTPUT_NAME pli); Unix is libpli.a.
+    lib = "pli.lib" if IS_WINDOWS else "libpli.a"
+    for cand in (ROOT / "build" / "cmake" / lib,
+                 ROOT / "build" / lib):
+        if cand.exists():
+            return str(cand)
+    return str(ROOT / "build" / "cmake" / lib)
+
+
+PLIC = os.environ.get("PLIC", _default_plic())
 # RTLIB is legacy (kept for env compat): the driver links its embedded libpli.
-RTLIB = os.environ.get("RTLIB", str(ROOT / "build" / "libpli.a"))
+RTLIB = os.environ.get("RTLIB", _default_rtlib())
 CLANG = os.environ.get("CLANG", "clang")
 TYPES = ("driver", "exec", "diag", "ir")
 
 
 def run_cmd(cmd, outfile, timeout=TIMEOUT):
-    """Run `cmd`, appending stdout+stderr to `outfile`; kill the process group
+    """Run `cmd`, appending stdout+stderr to `outfile`; kill the process
     if it exceeds `timeout`. Return (returncode, timeout_bool) — 124 on timeout."""
     # Popen (not run) so the timeout path still owns the child handle: `run`
     # raises before binding its result, which crashed the whole suite instead
     # of failing the one slow job.
     with open(outfile, "wb") as fh:
+        # start_new_session is POSIX-only; on Windows the default process
+        # group is fine since we kill the direct child via proc.kill().
+        popen_kwargs = {} if IS_WINDOWS else {"start_new_session": True}
         proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+                                **popen_kwargs)
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                # Portable kill: os.killpg/getpgid do not exist on Windows.
+                proc.kill()
             except (ProcessLookupError, PermissionError):
                 pass
             proc.wait()
@@ -130,19 +158,62 @@ class Runner:
         outfile = self.out / f"{self.name}.out"
         expected = self.dir / "expected" / f"{self.name}.out"
         if expected.exists():
-            diff = subprocess.run(["diff", "-u", str(expected), str(outfile)],
-                                  capture_output=True, text=True)
-            if diff.returncode == 0:
+            # Portable unified diff: the external `diff` utility is not
+            # available on Windows, so use difflib on both platforms for
+            # identical output.
+            import difflib
+            exp_lines = expected.read_text(errors="replace").splitlines()
+            out_lines = outfile.read_text(errors="replace").splitlines() if outfile.exists() else []
+            diff = list(difflib.unified_diff(
+                exp_lines, out_lines,
+                fromfile=str(expected), tofile=str(outfile), lineterm=""))
+            if not diff:
                 return f"PASS {self.name}", 0
-            return f"FAIL {self.name} (output differs)\n{indented(diff.stdout)}", 1
+            return f"FAIL {self.name} (output differs)\n{indented(chr(10).join(diff))}", 1
         text = outfile.read_text(errors="replace") if outfile.exists() else ""
         if "PASS" in text.upper() and "FAIL" not in text.upper():
             return f"PASS {self.name}", 0
+        # A script may SKIP itself (e.g. toolchain lacks a feature); a skip
+        # with no failure is a pass-equivalent, reported distinctly.
+        if text.lstrip().startswith("SKIP") and "FAIL" not in text.upper():
+            first = text.strip().splitlines()[0]
+            reason = first[4:].strip().lstrip(":").strip() or "skipped"
+            return f"SKIP {self.name} ({reason})", 0
         return f"FAIL {self.name} (self test did not print PASS)\n\n{indented(text)}", 1
 
     def driver(self):
-        rc, _ = run_cmd(["sh", str(self.dir / f"{self.name}.sh")],
-                        self.out / f"{self.name}.out", DRIVER_TIMEOUT)
+        import shutil
+        sh = shutil.which("sh")
+        if sh is None:
+            # Git for Windows ships sh.exe outside the default PATH.
+            for cand in (r"C:\Program Files\Git\bin\sh.exe",
+                         r"C:\Program Files (x86)\Git\bin\sh.exe"):
+                if Path(cand).exists():
+                    sh = cand
+                    break
+        if sh is None:
+            return f"FAIL {self.name} (sh not found: driver tests need a POSIX shell)\n", 1
+        # Forward the resolved tool paths: driver scripts default to
+        # ./build/plic, so the env must carry the real (possibly .exe) path.
+        import os as _os
+        env = dict(_os.environ, PLIC=PLIC, RTLIB=RTLIB, CLANG=CLANG)
+        try:
+            with open(self.out / f"{self.name}.out", "wb") as fh:
+                proc = subprocess.Popen([sh, str(self.dir / f"{self.name}.sh")],
+                                        stdout=fh, stderr=subprocess.STDOUT,
+                                        cwd=str(ROOT), env=env)
+                try:
+                    proc.wait(timeout=DRIVER_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    proc.wait()
+                    return f"FAIL {self.name} (timed out after {DRIVER_TIMEOUT}s)\n", 1
+                rc = proc.returncode
+        except FileNotFoundError as e:
+            return f"FAIL {self.name} (cannot run shell: {e})\n", 1
         if rc == 124:
             return f"FAIL {self.name} (timed out after {DRIVER_TIMEOUT}s)\n", 1
         return self.check_out()
@@ -170,14 +241,14 @@ class Runner:
                 # Link through the plic driver (embedded libpli): clang is
                 # only the `.c` compiler above, never the linker here.
                 steps.append([PLIC, "--size-checks"] + [str(o) for o in objs] +
-                               ["-o", str(self.out / self.name)])
+                               ["-o", str(self.out / (self.name + EXE_EXT))])
                 failed = None
                 for step in steps:
                     if subprocess.run(step, stdout=cfh, stderr=subprocess.STDOUT).returncode != 0:
                         failed = "cross-unit build failed"
                         break
             else:
-                if subprocess.run([PLIC, "--size-checks", str(src), "-o", str(self.out / self.name)],
+                if subprocess.run([PLIC, "--size-checks", str(src), "-o", str(self.out / (self.name + EXE_EXT))],
                                   stdout=cfh, stderr=subprocess.STDOUT).returncode != 0:
                     failed = "compilation failed"
                 else:
@@ -185,7 +256,7 @@ class Runner:
         if failed:
             return (f"FAIL {self.name} ({failed})\n"
                     f"{indented(compilefile.read_text(errors='replace'))}"), 1
-        rc, _ = run_cmd([str(self.out / self.name)], self.out / f"{self.name}.out")
+        rc, _ = run_cmd([str(self.out / (self.name + EXE_EXT))], self.out / f"{self.name}.out")
         if rc == 124:
             return f"FAIL {self.name} (timed out after {TIMEOUT}s)\n", 1
         return self.check_out()
@@ -286,8 +357,19 @@ def main():
     ncores = os.cpu_count() or 4
     workers = int(os.environ.get("JOBS", str(ncores)))
 
+    # Tests that cannot run on Windows for platform reasons (not code bugs):
+    # - builtins/system shells out to the Unix `true`/`false` commands.
+    # - core/socket_pair needs <sys/socket.h>, absent on Windows.
+    WINDOWS_SKIP = {
+        ("tests/builtins", "system"): "needs Unix true/false commands",
+        ("tests/core", "socket_pair"): "needs <sys/socket.h>",
+    }
+
     def work(job):
         dir_path, name, kind = job
+        # dir_path may use native separators; normalize for the skip lookup.
+        if IS_WINDOWS and (Path(dir_path).as_posix(), name) in WINDOWS_SKIP:
+            return job, f"SKIP {name} ({WINDOWS_SKIP[(Path(dir_path).as_posix(), name)]})", 0
         r = Runner(dir_path, name)
         r.kind = kind
         result, rc = r.run()

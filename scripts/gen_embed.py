@@ -14,6 +14,8 @@ import sys
 
 
 def main(src: str, dst: str, target_suffix: str = "") -> None:
+    # "/dev/null" is a sentinel string here, never opened, so this stub path
+    # is portable (Windows has no /dev/null file).
     if src == "/dev/null":
         # Generate empty stub arrays for non-cross builds
         data = b""

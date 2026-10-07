@@ -4,7 +4,7 @@
 # tests/driver/explain.sh — `--explain <rule>` prints the TR 25.084 production.
 # Exercises rule (16), a multi-line wrapped rule (128), and the error paths.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 
 ok=1
 check() {

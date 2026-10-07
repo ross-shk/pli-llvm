@@ -7,9 +7,16 @@
 # with -c; cc links the objects with libpli. It runs from the
 # gitignored out/ dir so artifacts do not pollute the repo.
 set -u
-PLIC=./build/plic
+# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
+# is no libm (the UCRT provides it), and program output uses CRLF. On Unix
+# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
+  *) EXE=; MATHLIB=-lm ;;
+esac
+PLIC=${PLIC:-./build/plic}
 CC=${CC:-${CLANG:-clang}}
-RTLIB=./build/libpli.a
+RTLIB=${RTLIB:-./build/libpli.a}
 OUT=tests/driver/out/multimod
 mkdir -p tests/driver/out
 
@@ -51,6 +58,6 @@ EOF
 $PLIC "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL multimod: lib compile"; exit 1; }
 $PLIC "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL multimod: main compile"; exit 1; }
 # -lm after the archive: libpli needs libm on Linux (no-op on macOS).
-$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" -lm -o "$OUT" || { echo "FAIL multimod: link"; exit 1; }
-"$OUT"
+$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
+"$OUT$EXE"
 exit 0

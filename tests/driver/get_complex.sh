@@ -5,7 +5,7 @@
 # token reads both parts, a bare number reads with zero imaginary part.
 # The program verifies the values itself and prints PASS.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/get_complex
 mkdir -p tests/driver/out
 

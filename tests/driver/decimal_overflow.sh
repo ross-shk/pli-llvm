@@ -8,7 +8,14 @@
 # (checked-ssub plus conversion trap, as in driver/overflow for binary).
 # In-range edges, including rescaled narrowing that fits, run clean.
 set -u
-PLIC=./build/plic
+# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
+# is no libm (the UCRT provides it), and program output uses CRLF. On Unix
+# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
+  *) EXE=; MATHLIB=-lm ;;
+esac
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/decimal_overflow
 mkdir -p tests/driver/out
 
@@ -23,8 +30,8 @@ EOF
 
 # Each overflow case must abort (rc != 0) with the overflow message.
 expect_abort() {
-  $PLIC --size-checks "$OUT.$1.pli" -o "$OUT.$1" 2>/dev/null || { echo "FAIL decimal-overflow: $1 compile"; exit 1; }
-  out=$("$OUT.$1" 2>&1); rc=$?
+  $PLIC --size-checks "$OUT.$1.pli" -o "$OUT.$1$EXE" 2>/dev/null || { echo "FAIL decimal-overflow: $1 compile"; exit 1; }
+  out=$("$OUT.$1$EXE" 2>&1); rc=$?
   case "$out" in
     *overflow*) ;;
     *) echo "FAIL decimal-overflow: $1 wrong message"; exit 1;;
@@ -67,8 +74,8 @@ cat > "$OUT.ok.pli" <<'EOF'
     put skip list(i);
  end decimal_overflow_ok;
 EOF
-$PLIC --size-checks "$OUT.ok.pli" -o "$OUT.ok" || { echo "FAIL decimal-overflow: ok compile"; exit 1; }
-if [ "$("$OUT.ok")" = "999.99
+$PLIC --size-checks "$OUT.ok.pli" -o "$OUT.ok$EXE" || { echo "FAIL decimal-overflow: ok compile"; exit 1; }
+if [ "$("$OUT.ok$EXE" | tr -d '\r')" = "999.99
 100.0000
 100.00
 100" ]; then

@@ -10,13 +10,22 @@
 # sectioned archive; a runtime.bc not built by this LLVM is diagnosed at load
 # time; a missing explicitly named runtime.bc is an error.
 set -u
-PLIC=./build/plic
+# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
+# is no libm (the UCRT provides it), and program output uses CRLF. On Unix
+# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
+  *) EXE=; MATHLIB=-lm ;;
+esac
+PLIC=${PLIC:-./build/plic}
 OUT=tests/driver/out/bitcode_runtime
 OUTDIR=tests/driver/out
 mkdir -p "$OUTDIR"
 
 ok=1
 check() {
+  # Strip CR: Windows programs emit CRLF (a no-op on Unix).
+  set -- "$1" "$(printf '%s' "$2" | tr -d '\r')" "$3"
   if [ "$2" != "$3" ]; then
     echo "FAIL: $1"
     echo "  expected: $3"
@@ -33,22 +42,22 @@ EOF
 
 # --- default: the MAIN unit embeds the runtime, so --keep-ll shows the
 #     pli_* bodies (external linkage) instead of bare declarations ------
-$PLIC "$OUT.pli" -o "$OUT.bc" --keep-ll || { echo "FAIL: default build"; ok=0; }
+$PLIC "$OUT.pli" -o "$OUT.bc$EXE" --keep-ll || { echo "FAIL: default build"; ok=0; }
 grep -q "define.*@pli_put_list_char" "$OUT.ll" \
   || { echo "FAIL: kept .ll lacks an embedded runtime body"; ok=0; }
 grep -q "declare.*@pli_put_list_char" "$OUT.ll" \
   && { echo "FAIL: runtime still a bare declaration"; ok=0; }
-check "default run" "$($OUT.bc)" "PASS bitcode_runtime"
+check "default run" "$($OUT.bc$EXE)" "PASS bitcode_runtime"
 
 # --- --no-bitcode-runtime: back to the sectioned archive, so the module
 #     carries only declarations -----------------------------------------
-$PLIC "$OUT.pli" -o "$OUT.nobc" --no-bitcode-runtime --keep-ll \
+$PLIC "$OUT.pli" -o "$OUT.nobc$EXE" --no-bitcode-runtime --keep-ll \
   || { echo "FAIL: --no-bitcode-runtime build"; ok=0; }
 grep -q "declare.*@pli_put_list_char" "$OUT.ll" \
   || { echo "FAIL: archive mode lacks a pli_* declaration"; ok=0; }
 grep -q "define.*@pli_put_list_char" "$OUT.ll" \
   && { echo "FAIL: archive mode unexpectedly embeds the runtime"; ok=0; }
-check "archive run" "$($OUT.nobc)" "PASS bitcode_runtime"
+check "archive run" "$($OUT.nobc$EXE)" "PASS bitcode_runtime"
 
 # --- multi-unit: only the MAIN object embeds the runtime; the library unit's
 #     external pli_* references resolve against that one shared copy (runtime
@@ -65,9 +74,9 @@ cat > "$OUT.main.pli" <<'EOF'
     put skip list('PASS bitcode_runtime');
  end br_main;
 EOF
-$PLIC "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi" \
+$PLIC "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi$EXE" \
   || { echo "FAIL: multi-unit bitcode link"; ok=0; }
-check "multi-unit run" "$($OUT.multi | tr -d '\n')" "lib unitPASS bitcode_runtime"
+check "multi-unit run" "$($OUT.multi$EXE | tr -d '\r\n')" "lib unitPASS bitcode_runtime"
 
 # --- a runtime.bc that this plic did not build is rejected at load -----
 cat > "$OUT.fake.ll" <<'EOF'

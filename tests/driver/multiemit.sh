@@ -5,7 +5,7 @@
 # input (cc-like per-file mode), and rejects -o with multiple inputs. Runs from
 # the gitignored out/ dir so the .ll artifacts stay out of the repo.
 set -u
-PLIC=$PWD/build/plic
+PLIC=${PLIC:-$PWD/build/plic}
 OUT=tests/driver/out/multiemit
 mkdir -p tests/driver/out
 cd tests/driver/out

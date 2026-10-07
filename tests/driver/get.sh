@@ -5,7 +5,7 @@
 # numeric and character values from SYSIN (stdin) into variables. The program
 # verifies the read values itself and prints PASS.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/get
 mkdir -p tests/driver/out
 

@@ -5,7 +5,7 @@
 # whole arrays and cross-sections read element-wise in row-major order.
 # The program verifies the read values itself and prints PASS.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=./tests/driver/out/get_array
 mkdir -p tests/driver/out
 

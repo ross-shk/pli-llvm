@@ -119,7 +119,7 @@ message(STATUS "Target triple for bitcode: ${PLIC_TARGET_TRIPLE}")
 
 target_compile_definitions(plic PRIVATE
   PLIC_RUNTIME_LIB="$<TARGET_FILE:libpli>"
-  PLIC_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/libpli.a"
+  PLIC_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_FILE_NAME:libpli>"
   PLIC_RUNTIME_BC="${CMAKE_BINARY_DIR}/runtime.bc"
   PLIC_INSTALL_RUNTIME_BC="${CMAKE_INSTALL_FULL_LIBDIR}/runtime.bc"
   PLIC_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
@@ -443,7 +443,13 @@ add_custom_target(check
   VERBATIM)
 
 # size-report: report the stripped size of the plic binary.
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  # No strip/stat on MSVC hosts; report the raw binary size instead.
+  add_custom_target(size-report
+    COMMAND ${CMAKE_COMMAND} -E echo "plic size (unstripped, Windows has no strip):"
+    COMMAND powershell -NoProfile -Command "(Get-Item $<TARGET_FILE:plic>).Length"
+    COMMENT "Size of plic (target: < 100 MB, hard cap 150 MB)")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   add_custom_target(size-report
     COMMAND strip -o ${CMAKE_BINARY_DIR}/plic.strip $<TARGET_FILE:plic>
     COMMAND stat -f%z ${CMAKE_BINARY_DIR}/plic.strip

@@ -5,7 +5,7 @@
 # traps program-wide: an overflowing computation with no (NOSIZE)
 # prefix wraps instead of aborting.
 set -u
-PLIC=./build/plic
+PLIC=${PLIC:-./build/plic}
 OUT=tests/driver/out/nosize_flag
 mkdir -p tests/driver/out
 
