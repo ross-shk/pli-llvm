@@ -6318,8 +6318,13 @@ Val IRGen::emitExpr(HExpr* e) {
             q = b_.CreateSDiv(ai, bi, "bin");
           }
         } else {
+          // UB-safe: sdiv by zero is UB, so the raw sdiv must not execute
+          // with a zero divisor even speculatively — LLVM would otherwise
+          // assume dz==false and delete the trap. Divide by a safe divisor
+          // (1 when dz) and discard via the resume select.
           llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-          q = b_.CreateSDiv(ai, bi, "bin");
+          llvm::Value* safe = b_.CreateSelect(dz, i64(1), bi, "zdiv.safe");
+          q = b_.CreateSDiv(ai, safe, "bin");
           q = zerodivideResume(dz, q, i64(0));
         }
         v.reg = convert(Val{Type::fixedBin(63, 0), q}, e->convTo, e->loc).reg;
@@ -7127,8 +7132,11 @@ Val IRGen::emitExpr(HExpr* e) {
           q = b_.CreateSDiv(ai, bi, "bin");
         }
       } else {
+        // UB-safe (see Convert fast path above): never sdiv by a possibly-
+        // zero divisor; use a safe divisor and discard via resume select.
         llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-        q = b_.CreateSDiv(ai, bi, "bin");
+        llvm::Value* safe = b_.CreateSelect(dz, i64(1), bi, "zdiv.safe");
+        q = b_.CreateSDiv(ai, safe, "bin");
         q = zerodivideResume(dz, q, i64(0));
       }
       r = convert(Val{Type::fixedBin(63, 0), q}, common, e->loc).reg;
