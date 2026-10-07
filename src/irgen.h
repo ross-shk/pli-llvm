@@ -23,6 +23,12 @@
 #include "hir.h"
 #include "sema.h"
 
+// Experimental lowering modes (design-docs/mlir-runtime-migration-plan.md §5.2).
+// Auto: use each operation's policy-table default. Runtime: force pli_* calls.
+// LLVM: direct IRBuilder where implemented, else runtime fallback. MLIR: only
+// in MLIR-enabled builds (P2).
+enum class LowerMode { Auto, Runtime, LLVM, MLIR };
+
 // A materialised PL/I value.
 //   scalars : `reg` holds the LLVM value (i32/i64/double, or i1 for BIT)
 //   strings : `ptr` holds a pointer to the first character and `len` an i64
@@ -39,10 +45,12 @@ class IRGen {
 public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
         bool noConvChecks = false, bool noSubChecks = false, std::string runtimeBc = "",
-        bool linkBitcode = false)
+        bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
+        std::map<std::string, LowerMode> perOpOverrides = {})
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
         noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
-        noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode) {}
+        noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode),
+        lowerMode_(lowerMode), perOpOverrides_(std::move(perOpOverrides)) {}
 
   std::string run(HProgram& prog);
 
@@ -439,6 +447,30 @@ private:
   // The signature is taken from runtime/pli_rt_abi.def (the single source of
   // truth for the runtime ABI), not re-specified by the caller.
   llvm::Function* runtimeFn(const std::string& name);
+  // Resolve the effective lowering mode for one operation, honouring a
+  // per-operation override first and then the global mode. Returns true when
+  // the operation should use its pli_* runtime call; false when a direct
+  // LLVM lowering is implemented for the requested mode. Forced modes that
+  // have no implementation fall back to runtime and report the fallback
+  // under -v (design-docs/mlir-runtime-migration-plan.md §5.2, §6.5).
+  // Resolve the effective lowering mode for one operation, honouring a
+  // per-operation override first and then the global mode. Returns true when
+  // the operation should use its pli_* runtime call; false when a direct
+  // LLVM lowering is implemented for the requested mode. Forced modes that
+  // have no implementation fall back to runtime and report the fallback
+  // under -v (design-docs/mlir-runtime-migration-plan.md §5.2, §6.5).
+  bool useRuntimeCall(const std::string& op);
+  // True when a direct LLVM lowering exists for `op` (populated in P1+).
+  bool hasLLVMLowering(const std::string& op);
+  // Dispatch wrappers for the P0/P1 pilot operations. Each checks the
+  // active lowering mode and either emits a pli_* runtime call or a direct
+  // LLVM lowering (P1+). call sites always go through these so the policy
+  // table and per-op overrides are honoured uniformly.
+  void emitAssignChar(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src, llvm::Value* srcLen);
+  llvm::Value* emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
+  // Direct LLVM lowering for assign_char (P1+): memmove + blank-pad tail.
+  void emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
+                          llvm::Value* srcLen);
   // Get-or-create an LLVM intrinsic with an explicit signature (used only for
   // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
   llvm::Function* intrinsicFn(const std::string& name, llvm::Type* ret,
@@ -585,6 +617,8 @@ private:
   // its members are simply never pulled once the symbols are defined.
   std::string runtimeBc_;
   bool linkBitcode_ = false;
+  LowerMode lowerMode_;
+  std::map<std::string, LowerMode> perOpOverrides_;
   // Parse runtime.bc, check its LLVM stamp and target triple, merge the whole
   // runtime into the module, and re-apply the P0 side-table facts to the real
   // bodies. The embedded definitions keep their external linkage so every

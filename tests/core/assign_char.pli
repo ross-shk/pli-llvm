@@ -1,0 +1,43 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* CHAR(n) assignment semantics (rule (85)): copy min(src,dst) bytes
+   via memmove, blank-fill the tail. Boundary cases: empty source,
+   short source, long source (clipping), self-overlap. Tests both
+   the runtime pli_assign_char and the --experimental-lowering=auto
+   dispatch that selects it in P0. */
+ac: PROCEDURE OPTIONS(MAIN);
+  DECLARE s CHAR(8);
+  DECLARE v CHAR(8) VARYING;
+  DECLARE t CHAR(10);
+  DECLARE fails FIXED BIN(31);
+  fails = 0;
+
+  /* Empty source → dst fully blank-padded */
+  v = '';
+  s = v;
+  IF s ^= '        ' THEN fails = fails + 1;
+
+  /* Source shorter than dest → blank-fill tail */
+  v = 'AB';
+  s = v;
+  IF s ^= 'AB      ' THEN fails = fails + 1;
+
+  /* Source longer than dest → clipped */
+  v = 'ABCDEFGHIJ';
+  s = v;
+  IF s ^= 'ABCDEFGH' THEN fails = fails + 1;
+
+  /* Exact-length source → no padding, no clipping */
+  v = '12345678';
+  s = v;
+  IF s ^= '12345678' THEN fails = fails + 1;
+
+  /* Self-overlap: substr of same buffer writes back. memmove is
+     overlap-safe so the source bytes survive the copy. */
+  t = 'ABCDEFGH  ';
+  t = substr(t, 2, 7);
+  IF t ^= 'BCDEFGH   ' THEN fails = fails + 1;
+
+  IF fails = 0 THEN PUT SKIP LIST('PASS assign_char');
+  ELSE PUT SKIP LIST('FAIL assign_char:', fails);
+END ac;

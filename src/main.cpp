@@ -157,6 +157,14 @@ static void usage() {
          "  -v               show the sub-commands being run\n"
          "  -h, --help       this message\n"
          "\n"
+         "  experimental (design-docs/mlir-runtime-migration-plan.md):\n"
+         "  --experimental-lowering=<mode>\n"
+         "                   select lowering strategy for pli_* operations:\n"
+         "                   auto (default), runtime, llvm, or mlir\n"
+         "  --experimental-lowering=<op>:<mode>\n"
+         "                   override one operation, leave others on auto\n"
+         "  -emit-mlir       emit the pli MLIR helper module (MLIR-enabled builds only)\n"
+         "\n"
          "  environment:\n"
          "  $PLIC_INCLUDE_PATH  colon-separated %INCLUDE search dirs (after -I)\n"
          "  $PLIC_LIB_PATH      colon-separated library search dirs (after -L)\n"
@@ -266,6 +274,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool noConvChecks, bool noSubChecks, const std::string& optLevel,
                        const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
                        std::string* outObj, const std::string& runtimeBc, bool linkBitcode,
+                       LowerMode lowerMode = LowerMode::Auto,
+                       const std::map<std::string, LowerMode>& perOpOverrides = {},
                        bool linkRuntimeIn = false, bool forceClangPipeline = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
@@ -321,7 +331,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM) {
-    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks);
+    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
+                runtimeBc, false, lowerMode, perOpOverrides);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -355,7 +366,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // backendFlags reach the compile step (the in-process path takes none).
   if (!forceClangPipeline) {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
-              linkBitcode);
+              linkBitcode, lowerMode, perOpOverrides);
     if (auto om = ipg.takeModule(hir)) {
       bool rtOk = true;
 #if PLIC_HAVE_LLD
@@ -415,7 +426,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   // Fallback: textual IR assembled by the backend clang.
   IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
-              linkBitcode);
+              linkBitcode, lowerMode, perOpOverrides);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return false;
@@ -467,6 +478,10 @@ int main(int argc, char** argv) {
   bool runtimeBcExplicit = false, useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
+  // Experimental lowering mode (design-docs/mlir-runtime-migration-plan.md §5.2).
+  LowerMode lowerMode = LowerMode::Auto;
+  std::map<std::string, LowerMode> perOpOverrides;
+  bool emitMlir = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -548,6 +563,36 @@ int main(int argc, char** argv) {
         return 2;
       }
       explain = (int)v;
+    } else if (a.rfind("--experimental-lowering=", 0) == 0) {
+      std::string val = a.substr(24);
+      std::string opName;
+      std::string modeStr;
+      auto colon = val.find(':');
+      if (colon != std::string::npos) {
+        opName = val.substr(0, colon);
+        modeStr = val.substr(colon + 1);
+      } else {
+        modeStr = val;
+      }
+      LowerMode parsed;
+      if (modeStr == "auto")
+        parsed = LowerMode::Auto;
+      else if (modeStr == "runtime")
+        parsed = LowerMode::Runtime;
+      else if (modeStr == "llvm")
+        parsed = LowerMode::LLVM;
+      else if (modeStr == "mlir")
+        parsed = LowerMode::MLIR;
+      else {
+        std::cerr << "plic: --experimental-lowering expects auto|runtime|llvm|mlir, or op:mode\n";
+        return 2;
+      }
+      if (colon != std::string::npos)
+        perOpOverrides[opName] = parsed;
+      else
+        lowerMode = parsed;
+    } else if (a == "-emit-mlir") {
+      emitMlir = true;
     } else if (a == "-v")
       verbose = true;
     else if (a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os")
@@ -825,6 +870,21 @@ int main(int argc, char** argv) {
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
   const bool terminalMode = compileOnly || emitLLVM || syntaxOnly || print_hir;
+  // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
+  // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
+  // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
+  if (emitMlir) {
+#if !defined(PLIC_ENABLE_MLIR)
+    std::cerr << "plic: -emit-mlir requires an MLIR-enabled build (-DPLIC_ENABLE_MLIR=ON)\n";
+    return 2;
+#endif
+    if (lowerMode == LowerMode::Runtime || lowerMode == LowerMode::LLVM) {
+      std::cerr << "plic: -emit-mlir conflicts with --experimental-lowering=runtime/llvm\n";
+      return 2;
+    }
+  }
+  if (emitMlir)
+    emitLLVM = true; // -emit-mlir also stops after emission
   // Every unit of a multi-input link is a relocatable object (like -c): only
   // units that actually declare OPTIONS(MAIN) emit a `main` shim.
   const bool semaCompileOnly = compileOnly || (pliInputs.size() + foreignObjs.size() > 1);
@@ -852,8 +912,8 @@ int main(int argc, char** argv) {
     if (!compileOne(preprocessor, pliInputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
                     compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
                     noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel, backendFlags,
-                    keepLLDir, (int)i, &outObj, runtimeBc, linkBitcode, singleModuleFinalLink,
-                    needClangPipeline))
+                    keepLLDir, (int)i, &outObj, runtimeBc, linkBitcode, lowerMode, perOpOverrides,
+                    singleModuleFinalLink, needClangPipeline))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);

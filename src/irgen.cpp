@@ -2,6 +2,7 @@
 // Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 #include "irgen.h"
 #include <algorithm>
+#include <set>
 
 #ifndef PLIC_LLVM_VERSION
 #define PLIC_LLVM_VERSION "unknown"
@@ -550,6 +551,91 @@ static void applyRuntimeAttrs(llvm::Function* f) {
     f->addFnAttr(llvm::Attribute::getWithAllocKind(ctx, llvm::AllocFnKind::Free));
 #endif
   }
+}
+
+// --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) -----
+
+// P0 policy: every operation defaults to runtime. P5 flips entries one wave at
+// a time as lowerings land. The table is operation-name → prefers direct LLVM.
+static const std::map<std::string, bool>& kRuntimeDefault() {
+  static const std::map<std::string, bool> table = {
+      {"assign_char", false},
+      {"index", false},
+  };
+  return table;
+}
+
+// Operations with a direct LLVM lowering implemented (populated P1+). Empty in P0.
+static const std::set<std::string>& kLLVMLowerings() {
+  static const std::set<std::string> table = {};
+  return table;
+}
+
+bool IRGen::hasLLVMLowering(const std::string& op) { return kLLVMLowerings().count(op) > 0; }
+
+bool IRGen::useRuntimeCall(const std::string& op) {
+  LowerMode mode = lowerMode_;
+  auto oit = perOpOverrides_.find(op);
+  if (oit != perOpOverrides_.end())
+    mode = oit->second;
+  switch (mode) {
+  case LowerMode::Runtime:
+    return true;
+  case LowerMode::MLIR:
+    // MLIR not compiled in this build (P2+ gates it). Fall back to runtime.
+    return true;
+  case LowerMode::LLVM:
+    if (hasLLVMLowering(op))
+      return false;
+    return true;
+  case LowerMode::Auto:
+    // Operations in kRuntimeDefault are designated for LLVM lowering (P1+).
+    // Until kLLVMLowerings() is populated (P0), fall back to runtime.
+    if (kRuntimeDefault().count(op))
+      return !hasLLVMLowering(op);
+    return true;
+  }
+  return true;
+}
+
+// --- P0/P1 pilot dispatch wrappers (design-docs/mlir-runtime-migration-plan.md) ===
+
+void IRGen::emitAssignChar(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
+                           llvm::Value* srcLen) {
+  if (useRuntimeCall("assign_char")) {
+    b_.CreateCall(runtimeFn("pli_assign_char"), {dst, dstLen, src, srcLen});
+    return;
+  }
+  emitAssignCharLLVM(dst, dstLen, src, srcLen);
+}
+
+llvm::Value* IRGen::emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                              llvm::Value* bLen) {
+  if (useRuntimeCall("index")) {
+    return b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen});
+  }
+  // P1 direct LLVM lowering for INDEX goes here.
+  return b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen});
+}
+
+// Direct LLVM lowering for assign_char (P1+): copies min(dstLen, srcLen) bytes
+// via memmove (overlap-safe per constraint 6), then blank-fills the tail.
+// P0 leaves hasLLVMLowering empty, so this body is dormant until the policy
+// table is flipped. The shape follows the C runtime (rt_string.c pli_assign_char).
+void IRGen::emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
+                               llvm::Value* srcLen) {
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "ac.sl");
+  llvm::Value* dstLen64 = b_.CreateZExtOrTrunc(dstLen, b_.getInt64Ty(), "ac.dl");
+  llvm::Value* n =
+      b_.CreateSelect(b_.CreateICmpULT(srcLen64, dstLen64), srcLen64, dstLen64, "ac.n");
+  b_.CreateMemMove(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), n, false);
+  // Blank-fill the tail past the copied bytes (dstLen > n). When n == 0 the
+  // whole buffer is filled; this matches pli_assign_char's
+  // `if (dstlen > n) memset(dst+n, ' ', dstlen-n)`.
+  llvm::Value* padLen = b_.CreateSelect(b_.CreateICmpUGT(dstLen64, n),
+                                        b_.CreateSub(dstLen64, n, "ac.pad"), zero, "ac.padlen");
+  b_.CreateMemSet(dst, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
 }
 
 // Get (or create) a declaration for a runtime `pli_*` function. The signature
@@ -1435,7 +1521,7 @@ void IRGen::allocaLocals(HProc* p) {
         llvm::Value* dp = b_.CreateStructGEP(llvmTy(s->ty), a, 1, "vdat");
         b_.CreateMemCpy(dp, llvm::MaybeAlign(), g, llvm::MaybeAlign(), i64(s->ty.len));
       } else {
-        b_.CreateCall(runtimeFn("pli_assign_char"), {a, i64(s->ty.len), g, i64(0)});
+        emitAssignChar(a, i64(s->ty.len), g, i64(0));
       }
     }
   }
@@ -2567,8 +2653,7 @@ void IRGen::emitStmt(HStmt* s) {
         llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 0, "rlenp");
         b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "rl32"), lp);
       } else if (rty.starLen) {
-        b_.CreateCall(runtimeFn("pli_assign_char"),
-                      {structRetPtr_, i64(kStarRetMax), v.ptr, v.len});
+        emitAssignChar(structRetPtr_, i64(kStarRetMax), v.ptr, v.len);
       } else {
         storeCharTo(structRetPtr_, rty, v, s->loc);
       }
@@ -4564,7 +4649,7 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
           a->memberPath.empty())
         pendingVarWrites_.push_back({addr, a->sym, pty});
     } else {
-      b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(pty.len), cv.ptr, cv.len});
+      emitAssignChar(addr, i64(pty.len), cv.ptr, cv.len);
     }
   } else {
     Val cv = convert(av, pty, a->loc);
@@ -5537,9 +5622,9 @@ void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceL
     // were checked in sema, and any residual length difference blank-pads or
     // truncates per element (rules (12),(18),(86)).
     long long total = arrayExtent(dt) * (long long)dt.len;
-    b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(total), v.ptr, v.len});
+    emitAssignChar(addr, i64(total), v.ptr, v.len);
   } else {
-    b_.CreateCall(runtimeFn("pli_assign_char"), {addr, i64(dt.len), v.ptr, v.len});
+    emitAssignChar(addr, i64(dt.len), v.ptr, v.len);
   }
 }
 
@@ -5611,10 +5696,10 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
         // Always reload fresh addr+len — may have changed in expBB
         llvm::Value* faddr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "fraddr");
         llvm::Value* flen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "flen");
-        b_.CreateCall(runtimeFn("pli_assign_char"), {faddr, flen, v.ptr, v.len});
+        emitAssignChar(faddr, flen, v.ptr, v.len);
         return;
       }
-      b_.CreateCall(runtimeFn("pli_assign_char"), {addr, live, v.ptr, v.len});
+      emitAssignChar(addr, live, v.ptr, v.len);
       return;
     }
     storeCharTo(addr, dt, v, loc);
@@ -7475,7 +7560,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "INDEX") {
     Val a = emitExpr(e->args[0].get());
     Val b = emitExpr(e->args[1].get());
-    llvm::Value* r = b_.CreateCall(runtimeFn("pli_index"), {a.ptr, a.len, b.ptr, b.len});
+    llvm::Value* r = emitIndex(a.ptr, a.len, b.ptr, b.len);
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "idx32");
     result = v;

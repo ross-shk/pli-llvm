@@ -1,0 +1,39 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* INDEX function semantics (rule (92)): 1-based position of the first
+   occurrence of needle in haystack. Boundary cases: empty needle
+   returns 1, needle longer than haystack returns 0, match at
+   position 1, match in middle, no match returns 0, match at last
+   position. Exercises pli_index / emitIndex dispatch. */
+idx: PROCEDURE OPTIONS(MAIN);
+  DECLARE fails FIXED BIN(31);
+  fails = 0;
+
+  /* Empty needle → returns 1 (per pli_index: blen <= 0 → return 1) */
+  IF INDEX('hello', '') ^= 1 THEN fails = fails + 1;
+
+  /* Needle longer than haystack → returns 0 */
+  IF INDEX('hi', 'hello') ^= 0 THEN fails = fails + 1;
+
+  /* Match at position 1 → returns 1 */
+  IF INDEX('hello', 'h') ^= 1 THEN fails = fails + 1;
+
+  /* Match in middle → correct 1-based position */
+  IF INDEX('hello', 'll') ^= 3 THEN fails = fails + 1;
+  IF INDEX('hello world', 'wor') ^= 7 THEN fails = fails + 1;
+
+  /* No match → returns 0 */
+  IF INDEX('hello', 'x') ^= 0 THEN fails = fails + 1;
+  IF INDEX('hello', 'hez') ^= 0 THEN fails = fails + 1;
+
+  /* Match at last position */
+  IF INDEX('hello', 'lo') ^= 4 THEN fails = fails + 1;
+  IF INDEX('abc', 'c') ^= 3 THEN fails = fails + 1;
+
+  /* Case sensitivity: INDEX is case-sensitive */
+  IF INDEX('Hello', 'h') ^= 0 THEN fails = fails + 1;
+  IF INDEX('Hello', 'H') ^= 1 THEN fails = fails + 1;
+
+  IF fails = 0 THEN PUT SKIP LIST('PASS index');
+  ELSE PUT SKIP LIST('FAIL index:', fails);
+END idx;
