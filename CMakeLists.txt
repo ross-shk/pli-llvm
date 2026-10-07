@@ -389,6 +389,7 @@ set(ALL_CPP_HEADERS
 set(ALL_C_SOURCES ${RT_SRCS})
 set(ALL_C_HEADERS
   runtime/pli_rt.h runtime/pli_rt_state.h runtime/pli_rt_abi.def
+  runtime/pli_wide128.h
   runtime/sync/plic_thread.h)
 # clang-format scope: src/ only (ADR-042: src/ is clang-format-normalized).
 # The C runtime follows its own brace-less style; clang-tidy covers C++ only.
