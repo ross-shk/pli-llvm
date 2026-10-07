@@ -468,11 +468,46 @@ private:
   // table and per-op overrides are honoured uniformly.
   void emitAssignChar(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src, llvm::Value* srcLen);
   llvm::Value* emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
+  // Dispatch wrappers for W1 string operations (P3). Each checks the active
+  // lowering mode and either emits a pli_* runtime call or a direct LLVM
+  // lowering.
+  llvm::Value* emitAssignVarying(llvm::Value* dst, llvm::Value* cap, llvm::Value* src,
+                                 llvm::Value* srcLen);
+  void emitHigh(llvm::Value* dst, llvm::Value* n);
+  void emitLow(llvm::Value* dst, llvm::Value* n);
+  void emitUppercase(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen);
+  void emitLowercase(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen);
+  void emitReverse(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen);
+  void emitCenter(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                  llvm::Value* w);
+  llvm::Value* emitCmpChar(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
   // Direct LLVM lowering for assign_char (P1+): memmove + blank-pad tail.
   void emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
                           llvm::Value* srcLen);
   // Direct LLVM lowering for INDEX (P1+): bytewise search loop.
   llvm::Value* emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
+  // Direct LLVM lowering for assign_varying (P3): memmove + blank-pad + return n.
+  llvm::Value* emitAssignVaryingLLVM(llvm::Value* dst, llvm::Value* cap, llvm::Value* src,
+                                     llvm::Value* srcLen);
+  // Direct LLVM lowering for HIGH (P3): memset with 0xFF.
+  void emitHighLLVM(llvm::Value* dst, llvm::Value* n);
+  // Direct LLVM lowering for LOW (P3): memset with 0x00.
+  void emitLowLLVM(llvm::Value* dst, llvm::Value* n);
+  // Direct LLVM lowering for UPPERCASE (P3): byte-fold a-z → A-Z loop + pad.
+  void emitUppercaseLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                         llvm::Value* srcLen);
+  // Direct LLVM lowering for LOWERCASE (P3): byte-fold A-Z → a-z loop + pad.
+  void emitLowercaseLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                         llvm::Value* srcLen);
+  // Direct LLVM lowering for REVERSE (P3): reverse-copy loop + pad.
+  void emitReverseLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                       llvm::Value* srcLen);
+  // Direct LLVM lowering for CENTER (P3): center in field width + pad.
+  void emitCenterLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                      llvm::Value* w);
+  // Direct LLVM lowering for cmp_char (P3): blank-extended byte comparison.
+  llvm::Value* emitCmpCharLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                               llvm::Value* bLen);
   // Get-or-create an LLVM intrinsic with an explicit signature (used only for
   // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
   llvm::Function* intrinsicFn(const std::string& name, llvm::Type* ret,

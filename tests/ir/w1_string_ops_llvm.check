@@ -1,0 +1,8 @@
+CHECK-NOT: call.*pli_assign_varying
+CHECK-NOT: call.*pli_high
+CHECK-NOT: call.*pli_low
+CHECK-NOT: call.*pli_uppercase
+CHECK-NOT: call.*pli_lowercase
+CHECK-NOT: call.*pli_reverse
+CHECK-NOT: call.*pli_center
+CHECK-NOT: call.*pli_cmp_char

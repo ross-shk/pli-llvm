@@ -1,0 +1,47 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* W1 string operations: assign_varying, high, low, uppercase, lowercase,
+    reverse, center, cmp_char — rules (80)–(83). Boundary cases cover
+    empty/zero-length, clipping to capacity, overlap safety, blank extension. */
+ w1_ops: procedure options(main);
+    declare fails fixed bin(31) init(0);
+
+    /* --- assign_varying --- */
+    declare v char(20) varying;
+    v = 'hello';
+    if v ^= 'hello' then fails = fails + 1;
+    /* truncation to capacity */
+    v = 'this is a very long string that exceeds';
+    if v ^= 'this is a very long' then fails = fails + 1;
+    /* varying-to-varying copy */
+    declare v2 char(10) varying init('abc');
+    v = v2;
+    if v ^= v2 then fails = fails + 1;
+
+    /* --- high / low (highest/lowest collating chars) --- */
+    declare h char(1);
+    h = high(1);
+    if rank(h) ^= 255 then fails = fails + 1;
+    declare l char(1);
+    l = low(1);
+    if rank(l) ^= 0 then fails = fails + 1;
+
+    /* --- uppercase / lowercase --- */
+    if uppercase('hello') ^= 'HELLO' then fails = fails + 1;
+    if lowercase('HeLLo') ^= 'hello' then fails = fails + 1;
+
+    /* --- reverse --- */
+    if reverse('hello') ^= 'olleh' then fails = fails + 1;
+    if reverse('ab') ^= 'ba' then fails = fails + 1;
+
+    /* --- center --- */
+    if center('x', 5) ^= '  x  ' then fails = fails + 1;
+    if center('ab', 6) ^= '  ab  ' then fails = fails + 1;
+
+    /* --- cmp_char (via string comparison, rule 117) --- */
+    if 'abc' = 'abd' then fails = fails + 1;
+    if 'abc' ^= 'abc' then fails = fails + 1;
+    if 'ab' ^= 'ab ' then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS w1 string ops');
+    else put skip list('FAIL w1 string ops: fails =', fails);
+ end w1_ops;

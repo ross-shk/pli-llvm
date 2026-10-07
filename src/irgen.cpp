@@ -474,6 +474,8 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_assign_varying", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_concat", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_substr", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_substr_assign", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_substr_assign_varying", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_repeat", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_translate", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_trim", {.willReturn = true, .mem = RtMemArgReadWrite}},
@@ -568,8 +570,8 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
 // Operations with a direct LLVM lowering implemented (populated P1+).
 static const std::set<std::string>& kLLVMLowerings() {
   static const std::set<std::string> table = {
-      "assign_char",
-      "index",
+      "assign_char", "index",     "assign_varying", "high",   "low",
+      "uppercase",   "lowercase", "reverse",        "center", "cmp_char",
   };
   return table;
 }
@@ -619,6 +621,76 @@ llvm::Value* IRGen::emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
   }
   // P1 direct LLVM lowering for INDEX goes here.
   return emitIndexLLVM(a, aLen, b, bLen);
+}
+
+// --- W1 dispatch wrappers (P3) ---
+
+llvm::Value* IRGen::emitAssignVarying(llvm::Value* dst, llvm::Value* cap, llvm::Value* src,
+                                      llvm::Value* srcLen) {
+  if (useRuntimeCall("assign_varying")) {
+    return b_.CreateCall(runtimeFn("pli_assign_varying"), {dst, cap, src, srcLen}, "varying.n");
+  }
+  return emitAssignVaryingLLVM(dst, cap, src, srcLen);
+}
+
+void IRGen::emitHigh(llvm::Value* dst, llvm::Value* n) {
+  if (useRuntimeCall("high")) {
+    b_.CreateCall(runtimeFn("pli_high"), {dst, n});
+    return;
+  }
+  emitHighLLVM(dst, n);
+}
+
+void IRGen::emitLow(llvm::Value* dst, llvm::Value* n) {
+  if (useRuntimeCall("low")) {
+    b_.CreateCall(runtimeFn("pli_low"), {dst, n});
+    return;
+  }
+  emitLowLLVM(dst, n);
+}
+
+void IRGen::emitUppercase(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                          llvm::Value* srcLen) {
+  if (useRuntimeCall("uppercase")) {
+    b_.CreateCall(runtimeFn("pli_uppercase"), {dst, dstcap, src, srcLen});
+    return;
+  }
+  emitUppercaseLLVM(dst, dstcap, src, srcLen);
+}
+
+void IRGen::emitLowercase(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                          llvm::Value* srcLen) {
+  if (useRuntimeCall("lowercase")) {
+    b_.CreateCall(runtimeFn("pli_lowercase"), {dst, dstcap, src, srcLen});
+    return;
+  }
+  emitLowercaseLLVM(dst, dstcap, src, srcLen);
+}
+
+void IRGen::emitReverse(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                        llvm::Value* srcLen) {
+  if (useRuntimeCall("reverse")) {
+    b_.CreateCall(runtimeFn("pli_reverse"), {dst, dstcap, src, srcLen});
+    return;
+  }
+  emitReverseLLVM(dst, dstcap, src, srcLen);
+}
+
+void IRGen::emitCenter(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                       llvm::Value* w) {
+  if (useRuntimeCall("center")) {
+    b_.CreateCall(runtimeFn("pli_center"), {dst, dstcap, src, srcLen, w});
+    return;
+  }
+  emitCenterLLVM(dst, dstcap, src, srcLen, w);
+}
+
+llvm::Value* IRGen::emitCmpChar(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                                llvm::Value* bLen) {
+  if (useRuntimeCall("cmp_char")) {
+    return b_.CreateCall(runtimeFn("pli_cmp_char"), {a, aLen, b, bLen}, "scmp");
+  }
+  return emitCmpCharLLVM(a, aLen, b, bLen);
 }
 
 // Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
@@ -738,9 +810,259 @@ void IRGen::emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Valu
   b_.CreateMemSet(padPtr, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
 }
 
+// --- W1 direct LLVM lowerings (P3) ---
+// Mirrors the C bodies in runtime/rt_string.c. Each preserves the exact
+// semantics: overlap safety (memmove), zero-length guards, and blank padding.
+
+// assign_varying: memmove(min(cap,srclen)) + blank-pad tail + return n.
+llvm::Value* IRGen::emitAssignVaryingLLVM(llvm::Value* dst, llvm::Value* cap, llvm::Value* src,
+                                          llvm::Value* srcLen) {
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* cap64 = b_.CreateZExtOrTrunc(cap, b_.getInt64Ty(), "av.cap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "av.sl");
+  llvm::Value* n = b_.CreateSelect(b_.CreateICmpULT(srcLen64, cap64), srcLen64, cap64, "av.n");
+  b_.CreateMemMove(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), n, false);
+  llvm::Value* padLen = b_.CreateSelect(b_.CreateICmpUGT(cap64, n),
+                                        b_.CreateSub(cap64, n, "av.pad"), zero, "av.padlen");
+  llvm::Value* padPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {n}, "av.padptr");
+  b_.CreateMemSet(padPtr, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
+  return n;
+}
+
+// high(n): fill n bytes with 0xFF.
+void IRGen::emitHighLLVM(llvm::Value* dst, llvm::Value* n) {
+  b_.CreateMemSet(dst, b_.getInt8((unsigned char)0xFF), n, llvm::MaybeAlign(), false);
+}
+
+// low(n): fill n bytes with 0x00.
+void IRGen::emitLowLLVM(llvm::Value* dst, llvm::Value* n) {
+  b_.CreateMemSet(dst, b_.getInt8((unsigned char)0x00), n, llvm::MaybeAlign(), false);
+}
+
+// uppercase(dstcap, s, slen): byte-fold a-z → A-Z, blank-pad tail.
+void IRGen::emitUppercaseLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                              llvm::Value* srcLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "uc.cap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "uc.sl");
+  llvm::Value* limit =
+      b_.CreateSelect(b_.CreateICmpULT(srcLen64, dstcap64), srcLen64, dstcap64, "uc.limit");
+  llvm::Value* lcA = llvm::ConstantInt::get(b_.getInt8Ty(), (uint64_t)'a');
+  llvm::Value* lcZ = llvm::ConstantInt::get(b_.getInt8Ty(), (uint64_t)'z');
+  llvm::Value* caseDiff = llvm::ConstantInt::get(b_.getInt8Ty(), (uint64_t)('a' - 'A'));
+
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "uc.loop", F);
+  llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(ctx_, "uc.body", F);
+  llvm::BasicBlock* padBB = llvm::BasicBlock::Create(ctx_, "uc.pad", F);
+  b_.CreateBr(loopBB);
+  // Track predecessor for PHI: startBlock inserts br from current block.
+  llvm::BasicBlock* pred = b_.GetInsertBlock();
+  startBlock(loopBB);
+  llvm::PHINode* i = b_.CreatePHI(b_.getInt64Ty(), 2, "uc.i");
+  i->addIncoming(zero, pred);
+  llvm::Value* done = b_.CreateICmpUGE(i, limit, "uc.done");
+  b_.CreateCondBr(done, padBB, bodyBB);
+
+  startBlock(bodyBB);
+  llvm::Value* srcPtr = b_.CreateGEP(b_.getInt8Ty(), src, {i}, "uc.sptr");
+  llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(), srcPtr, "uc.c");
+  llvm::Value* isLower =
+      b_.CreateAnd(b_.CreateICmpULE(lcA, c), b_.CreateICmpULE(c, lcZ), "uc.islo");
+  llvm::Value* fold = b_.CreateSub(c, caseDiff, "uc.fold");
+  llvm::Value* out = b_.CreateSelect(isLower, fold, c, "uc.out");
+  llvm::Value* dstPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {i}, "uc.dptr");
+  b_.CreateStore(out, dstPtr);
+  llvm::Value* next = b_.CreateAdd(i, one, "uc.next");
+  i->addIncoming(next, bodyBB);
+  b_.CreateBr(loopBB);
+
+  // Blank-pad dst[limit..dstcap) via memset.
+  startBlock(padBB);
+  llvm::Value* padLen = b_.CreateSelect(b_.CreateICmpUGT(dstcap64, limit),
+                                        b_.CreateSub(dstcap64, limit, "uc.pad"), zero, "uc.padlen");
+  llvm::Value* padPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {limit}, "uc.padptr");
+  b_.CreateMemSet(padPtr, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
+}
+
+// lowercase(dstcap, s, slen): byte-fold A-Z → a-z, blank-pad tail.
+void IRGen::emitLowercaseLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                              llvm::Value* srcLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "lc.cap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "lc.sl");
+  llvm::Value* limit =
+      b_.CreateSelect(b_.CreateICmpULT(srcLen64, dstcap64), srcLen64, dstcap64, "lc.limit");
+  llvm::Value* ucA = llvm::ConstantInt::get(b_.getInt8Ty(), (uint64_t)'A');
+  llvm::Value* ucZ = llvm::ConstantInt::get(b_.getInt8Ty(), (uint64_t)'Z');
+  llvm::Value* caseDiff = llvm::ConstantInt::get(b_.getInt8Ty(), (uint64_t)('a' - 'A'));
+
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "lc.loop", F);
+  llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(ctx_, "lc.body", F);
+  llvm::BasicBlock* padBB = llvm::BasicBlock::Create(ctx_, "lc.pad", F);
+  b_.CreateBr(loopBB);
+  llvm::BasicBlock* pred = b_.GetInsertBlock();
+  startBlock(loopBB);
+  llvm::PHINode* i = b_.CreatePHI(b_.getInt64Ty(), 2, "lc.i");
+  i->addIncoming(zero, pred);
+  llvm::Value* done = b_.CreateICmpUGE(i, limit, "lc.done");
+  b_.CreateCondBr(done, padBB, bodyBB);
+
+  startBlock(bodyBB);
+  llvm::Value* srcPtr = b_.CreateGEP(b_.getInt8Ty(), src, {i}, "lc.sptr");
+  llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(), srcPtr, "lc.c");
+  llvm::Value* isUpper =
+      b_.CreateAnd(b_.CreateICmpULE(ucA, c), b_.CreateICmpULE(c, ucZ), "lc.isup");
+  llvm::Value* fold = b_.CreateAdd(c, caseDiff, "lc.fold");
+  llvm::Value* out = b_.CreateSelect(isUpper, fold, c, "lc.out");
+  llvm::Value* dstPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {i}, "lc.dptr");
+  b_.CreateStore(out, dstPtr);
+  llvm::Value* next = b_.CreateAdd(i, one, "lc.next");
+  i->addIncoming(next, bodyBB);
+  b_.CreateBr(loopBB);
+
+  startBlock(padBB);
+  llvm::Value* padLen = b_.CreateSelect(b_.CreateICmpUGT(dstcap64, limit),
+                                        b_.CreateSub(dstcap64, limit, "lc.pad"), zero, "lc.padlen");
+  llvm::Value* padPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {limit}, "lc.padptr");
+  b_.CreateMemSet(padPtr, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
+}
+
+// reverse(dstcap, s, slen): reverse-copy, blank-pad tail.
+void IRGen::emitReverseLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                            llvm::Value* srcLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "rv.cap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "rv.sl");
+  llvm::Value* n =
+      b_.CreateSelect(b_.CreateICmpULT(srcLen64, dstcap64), srcLen64, dstcap64, "rv.n");
+
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "rv.loop", F);
+  llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(ctx_, "rv.body", F);
+  llvm::BasicBlock* padBB = llvm::BasicBlock::Create(ctx_, "rv.pad", F);
+  b_.CreateBr(loopBB);
+  llvm::BasicBlock* pred = b_.GetInsertBlock();
+  startBlock(loopBB);
+  llvm::PHINode* i = b_.CreatePHI(b_.getInt64Ty(), 2, "rv.i");
+  i->addIncoming(zero, pred);
+  llvm::Value* done = b_.CreateICmpUGE(i, n, "rv.done");
+  b_.CreateCondBr(done, padBB, bodyBB);
+
+  startBlock(bodyBB);
+  // dst[i] = s[slen - 1 - i]
+  llvm::Value* srcIdx = b_.CreateSub(b_.CreateSub(srcLen64, one, "rv.off"), i, "rv.sidx");
+  llvm::Value* srcPtr = b_.CreateGEP(b_.getInt8Ty(), src, {srcIdx}, "rv.sptr");
+  llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(), srcPtr, "rv.c");
+  llvm::Value* dstPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {i}, "rv.dptr");
+  b_.CreateStore(c, dstPtr);
+  llvm::Value* next = b_.CreateAdd(i, one, "rv.next");
+  i->addIncoming(next, bodyBB);
+  b_.CreateBr(loopBB);
+
+  startBlock(padBB);
+  llvm::Value* padLen = b_.CreateSelect(b_.CreateICmpUGT(dstcap64, n),
+                                        b_.CreateSub(dstcap64, n, "rv.pad"), zero, "rv.padlen");
+  llvm::Value* padPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {n}, "rv.padptr");
+  b_.CreateMemSet(padPtr, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
+}
+
+// center(dstcap, s, slen, w): center in field of width w (clamped to dstcap),
+// blank-pad tail. Mirrors pli_center.
+void IRGen::emitCenterLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                           llvm::Value* srcLen, llvm::Value* w) {
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "ct.cap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "ct.sl");
+  llvm::Value* w64 = w;
+  // w < 0 → 0; field = min(w, dstcap); take = min(slen, field); left = (field-take)/2.
+  llvm::Value* wClamped =
+      b_.CreateSelect(b_.CreateICmpSLT(w64, zero, "ct.wneg"), zero, w64, "ct.wc");
+  llvm::Value* field =
+      b_.CreateSelect(b_.CreateICmpULT(wClamped, dstcap64), wClamped, dstcap64, "ct.field");
+  llvm::Value* take =
+      b_.CreateSelect(b_.CreateICmpULT(srcLen64, field), srcLen64, field, "ct.take");
+  llvm::Value* left = b_.CreateExactUDiv(b_.CreateSub(field, take, "ct.excess"),
+                                         llvm::ConstantInt::get(b_.getInt64Ty(), 2), "ct.left");
+
+  // Fill [0, left) with spaces via memset.
+  b_.CreateMemSet(dst, b_.getInt8(' '), left, llvm::MaybeAlign(), false);
+  // Copy src[0..take) to dst[left..left+take) via memmove.
+  b_.CreateMemMove(b_.CreateGEP(b_.getInt8Ty(), dst, {left}, "ct.dstcopy"), llvm::MaybeAlign(), src,
+                   llvm::MaybeAlign(), take, false);
+  // Blank-pad [left+take, dstcap).
+  llvm::Value* padStart = b_.CreateAdd(left, take, "ct.padstart");
+  llvm::Value* padLen =
+      b_.CreateSelect(b_.CreateICmpUGT(dstcap64, padStart),
+                      b_.CreateSub(dstcap64, padStart, "ct.pad"), zero, "ct.padlen");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {padStart}, "ct.padptr"), b_.getInt8(' '),
+                  padLen, llvm::MaybeAlign(), false);
+}
+
+// cmp_char(a, alen, b, blen): return -1/0/1 with blank extension.
+// Iterates min(alen, blen) bytes; shorter operand is blank-extended.
+// cmp_char(a, alen, b, blen): return -1/0/1 with blank extension.
+llvm::Value* IRGen::emitCmpCharLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                                    llvm::Value* bLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* negOne = llvm::ConstantInt::get(b_.getInt64Ty(), (uint64_t)-1);
+  llvm::Value* aLen64 = b_.CreateZExtOrTrunc(aLen, b_.getInt64Ty(), "sc.alen");
+  llvm::Value* bLen64 = b_.CreateZExtOrTrunc(bLen, b_.getInt64Ty(), "sc.blen");
+  llvm::Value* n = b_.CreateSelect(b_.CreateICmpULT(aLen64, bLen64), bLen64, aLen64, "sc.n");
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), (uint64_t)' ');
+
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "sc.loop", F);
+  llvm::BasicBlock* cmpBB = llvm::BasicBlock::Create(ctx_, "sc.cmp", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "sc.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "sc.exit", F);
+
+  llvm::BasicBlock* pred = b_.GetInsertBlock();
+  b_.CreateBr(loopBB);
+  startBlock(loopBB);
+  llvm::PHINode* i = b_.CreatePHI(b_.getInt64Ty(), 2, "sc.i");
+  i->addIncoming(zero, pred);
+  llvm::Value* exhausted = b_.CreateICmpUGE(i, n, "sc.exhausted");
+  b_.CreateCondBr(exhausted, doneBB, cmpBB);
+
+  startBlock(cmpBB);
+  llvm::Value* aiPtr = b_.CreateGEP(b_.getInt8Ty(), a, {i}, "sc.aptr");
+  llvm::Value* biPtr = b_.CreateGEP(b_.getInt8Ty(), b, {i}, "sc.bptr");
+  llvm::Value* ai = b_.CreateLoad(b_.getInt8Ty(), aiPtr, "sc.ac");
+  llvm::Value* bi = b_.CreateLoad(b_.getInt8Ty(), biPtr, "sc.bc");
+  // Blank-extend: pick from actual byte if i < len, else ' '.
+  llvm::Value* aVal = b_.CreateSelect(b_.CreateICmpULT(i, aLen64), ai, blank, "sc.av");
+  llvm::Value* bVal = b_.CreateSelect(b_.CreateICmpULT(i, bLen64), bi, blank, "sc.bv");
+  llvm::Value* aExt = b_.CreateZExt(aVal, b_.getInt64Ty(), "sc.av64");
+  llvm::Value* bExt = b_.CreateZExt(bVal, b_.getInt64Ty(), "sc.bv64");
+  llvm::Value* diff = b_.CreateSub(aExt, bExt, "sc.diff");
+  llvm::Value* lt = b_.CreateICmpSLT(diff, zero, "sc.lt");
+  llvm::Value* gt = b_.CreateICmpSGT(diff, zero, "sc.gt");
+  llvm::Value* pos = b_.CreateSelect(gt, one, zero, "sc.pos");
+  llvm::Value* result = b_.CreateSelect(lt, negOne, pos, "sc.result");
+  // On mismatch, exit with result; otherwise increment i and continue.
+  llvm::Value* ne = b_.CreateICmpNE(aVal, bVal, "sc.ne");
+  i->addIncoming(b_.CreateAdd(i, one, "sc.next"), cmpBB);
+  b_.CreateCondBr(ne, exitBB, loopBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  // exitBB: merge mismatch result from cmpBB and zero from doneBB.
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "sc.result");
+  resultPhi->addIncoming(result, cmpBB);
+  resultPhi->addIncoming(zero, doneBB);
+  // Truncate to i32 to match pli_cmp_char's return type (int).
+  return b_.CreateTrunc(resultPhi, b_.getInt32Ty(), "sc.res");
+}
+
 // Get (or create) a declaration for a runtime `pli_*` function. The signature
-// comes from runtime/pli_rt_abi.def, not from the caller, so the emitted IR
-// cannot drift from the C ABI.
 llvm::Function* IRGen::runtimeFn(const std::string& name) {
   auto& sigs = kRuntimeSigs();
   auto it = sigs.find(name);
@@ -2748,8 +3070,7 @@ void IRGen::emitStmt(HStmt* s) {
       const Type& rty = curProc_->retTy;
       if (rty.starLen && rty.varying) {
         llvm::Value* dp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 1, "rdata");
-        llvm::Value* ln =
-            b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(kStarRetMax), v.ptr, v.len});
+        llvm::Value* ln = emitAssignVarying(dp, i64(kStarRetMax), v.ptr, v.len);
         llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 0, "rlenp");
         b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "rl32"), lp);
       } else if (rty.starLen) {
@@ -4738,8 +5059,7 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     Val cv = av;
     if (pty.varying) {
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(pty), addr, 1, "vdata");
-      llvm::Value* ln =
-          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(pty.len), cv.ptr, cv.len});
+      llvm::Value* ln = emitAssignVarying(dp, i64(pty.len), cv.ptr, cv.len);
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(pty), addr, 0, "vlenp");
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
       // A varying-char variable of a different declared length is copied into
@@ -4792,14 +5112,13 @@ void IRGen::flushVarWrites() {
       llvm::Value* dp = b_.CreateGEP(b_.getInt8Ty(), target, {b_.getInt64(4)}, "data_ptr");
       // Write data from the dummy into the generation buffer; store the
       // (clamped) result length back to offset 0.
-      llvm::Value* ln = b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, ddata, dlen});
+      llvm::Value* ln = emitAssignVarying(dp, max, ddata, dlen);
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty()), target);
     } else {
       // Fixed-size or non-controlled CHAR varying: write into the alloca'd
       // descriptor struct using StructGEP offsets 0 (length) and 1 (data).
       llvm::Value* cdata = b_.CreateStructGEP(llvmTy(cty), target, 1, "cdata");
-      llvm::Value* ln =
-          b_.CreateCall(runtimeFn("pli_assign_varying"), {cdata, i64(cty.len), ddata, dlen});
+      llvm::Value* ln = emitAssignVarying(cdata, i64(cty.len), ddata, dlen);
       llvm::Value* clp = b_.CreateStructGEP(llvmTy(cty), target, 0, "clenp");
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "clen"), clp);
     }
@@ -5711,8 +6030,7 @@ void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceL
   }
   if (dt.varying) {
     llvm::Value* dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
-    llvm::Value* ln =
-        b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(dt.len), v.ptr, v.len});
+    llvm::Value* ln = emitAssignVarying(dp, i64(dt.len), v.ptr, v.len);
     llvm::Value* lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
     llvm::StoreInst* si = b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
     if (packed)
@@ -5751,7 +6069,7 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
       if (!max)
         max = i64(dt.len);
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(dt), addr, 1, "vdata");
-      llvm::Value* ln = b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, max, v.ptr, v.len});
+      llvm::Value* ln = emitAssignVarying(dp, max, v.ptr, v.len);
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(dt), addr, 0, "vlenp");
       b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "l32"), lp);
       return;
@@ -6053,8 +6371,7 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(el), elemAddr, 0, "vlenp");
       // Use pli_assign_varying to store the varying string
       Val cv = convert(src, el, loc);
-      llvm::Value* written =
-          b_.CreateCall(runtimeFn("pli_assign_varying"), {dp, i64(el.len), cv.ptr, cv.len});
+      llvm::Value* written = emitAssignVarying(dp, i64(el.len), cv.ptr, cv.len);
       // Store the returned length into the length prefix
       b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), lp);
       return;
@@ -7187,7 +7504,7 @@ Val IRGen::emitExpr(HExpr* e) {
   Val b = emitExpr(e->b.get());
 
   if (isCmp && a.ty.isChar() && b.ty.isChar()) { // rule (117)
-    llvm::Value* c = b_.CreateCall(runtimeFn("pli_cmp_char"), {a.ptr, a.len, b.ptr, b.len}, "scmp");
+    llvm::Value* c = emitCmpChar(a.ptr, a.len, b.ptr, b.len);
     llvm::CmpInst::Predicate pred = llvm::CmpInst::ICMP_EQ;
     switch (op) {
     case Tok::Eq:
@@ -7824,7 +8141,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "REVERSE") {
     Val s = emitExpr(e->args[0].get());
     Val dst = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_reverse"), {dst.ptr, dst.len, s.ptr, s.len});
+    emitReverse(dst.ptr, dst.len, s.ptr, s.len);
     dst.len = i64(e->ty.len);
     result = dst;
     return true;
@@ -8035,7 +8352,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "UPPERCASE") {
     Val s = emitExpr(e->args[0].get());
     Val dst = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_uppercase"), {dst.ptr, dst.len, s.ptr, s.len});
+    emitUppercase(dst.ptr, dst.len, s.ptr, s.len);
     dst.len = i64(e->ty.len);
     result = dst;
     return true;
@@ -8043,8 +8360,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "HIGH" || e->name == "LOW") {
     Val n = emitExpr(e->args[0].get());
     Val out = charTemp(e->ty.len);
-    std::string fn = e->name == "HIGH" ? "pli_high" : "pli_low";
-    b_.CreateCall(runtimeFn(fn), {out.ptr, toI64(n)});
+    if (e->name == "HIGH")
+      emitHigh(out.ptr, toI64(n));
+    else
+      emitLow(out.ptr, toI64(n));
     out.len = i64(e->ty.len);
     result = out;
     return true;
@@ -8054,7 +8373,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "LOWERCASE") {
     Val s = emitExpr(e->args[0].get());
     Val dst = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_lowercase"), {dst.ptr, dst.len, s.ptr, s.len});
+    emitLowercase(dst.ptr, dst.len, s.ptr, s.len);
     dst.len = i64(e->ty.len);
     result = dst;
     return true;
@@ -8063,7 +8382,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val w = emitExpr(e->args[1].get());
     Val dst = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_center"), {dst.ptr, dst.len, s.ptr, s.len, toI64(w)});
+    emitCenter(dst.ptr, dst.len, s.ptr, s.len, toI64(w));
     dst.len = i64(e->ty.len);
     result = dst;
     return true;

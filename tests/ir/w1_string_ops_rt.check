@@ -1,0 +1,8 @@
+CHECK: call.*@pli_assign_varying
+CHECK: call.*@pli_high
+CHECK: call.*@pli_low
+CHECK: call.*@pli_uppercase
+CHECK: call.*@pli_lowercase
+CHECK: call.*@pli_reverse
+CHECK: call.*@pli_center
+CHECK: call.*@pli_cmp_char
