@@ -22,10 +22,13 @@ option(PLIC_WERROR "Treat compiler warnings as errors" OFF)
 find_package(LLVM REQUIRED CONFIG)
 # Prebuilt LLVM 23 on Windows was compiled with ZLIB, zstd, and LibXml2 support
 # but doesn't ship those libraries. Provide them as linkable targets.
-# The *_ROOT hints below are optional: point them at a local zlib/zstd build
-# or a vcpkg install if available; otherwise empty INTERFACE targets satisfy
-# LLVM's link requirements (zlib/zstd features degrade gracefully, libxml2
-# manifest merging is covered by in-tree stubs).
+# Point the *_ROOT hints below at a local zlib/zstd build or a vcpkg install:
+# real static libraries are REQUIRED at link time. The static lld/LLVM
+# archives reference zlib/zstd symbols directly (adler32, compress2,
+# ZSTD_compress2, ...), so the empty INTERFACE fallbacks below only satisfy
+# configure — without real libs the link fails with undefined symbols.
+# LibXml2 is the exception: manifest merging is covered by in-tree stubs
+# (runtime/libxml2_stubs.c, added to plic sources below).
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # Drop the old dev-machine hint var (replaced by the *_ROOT vars below).
   unset(PLIC_LLVM_DEPS_DIR CACHE)
@@ -43,6 +46,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
       message(STATUS "ZLIB: ${ZLIB_LIB}")
     else()
       add_library(ZLIB::ZLIB INTERFACE IMPORTED)
+      message(WARNING "ZLIB not found (set PLIC_ZLIB_ROOT or install via vcpkg) — link will fail with undefined zlib symbols")
     endif()
   endif()
   # zstd
@@ -56,6 +60,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
       message(STATUS "zstd: ${ZSTD_LIB}")
     else()
       add_library(zstd::libzstd_static INTERFACE IMPORTED)
+      message(WARNING "zstd not found (set PLIC_ZSTD_ROOT or install via vcpkg) — link will fail with undefined zstd symbols")
     endif()
   endif()
   # LibXml2: the prebuilt LLVM expects libxml2 (WindowsManifest merging) but
