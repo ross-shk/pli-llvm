@@ -490,6 +490,30 @@ private:
   llvm::Value* emitSearch(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen,
                           llvm::Value* start);
   llvm::Value* emitTally(llvm::Value* x, llvm::Value* xLen, llvm::Value* y, llvm::Value* yLen);
+  // Dispatch wrappers for W3 clipping/padding operations (P3).
+  void emitSubstr(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                  llvm::Value* start, llvm::Value* len);
+  void emitSubstrAssign(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* start, llvm::Value* len,
+                        llvm::Value* src, llvm::Value* srcLen);
+  void emitSubstrAssignVarying(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* lenptr,
+                               llvm::Value* start, llvm::Value* len, llvm::Value* src,
+                               llvm::Value* srcLen);
+  void emitRepeat(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                  llvm::Value* n);
+  void emitTranslate(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                     llvm::Value* out, llvm::Value* outLen, llvm::Value* in, llvm::Value* inLen);
+  void emitTrim(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                llvm::Value* pad, llvm::Value* padLen);
+  // Direct LLVM lowering for SUBSTR (P3): extract + blank-pad.
+  void emitSubstrLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                      llvm::Value* start, llvm::Value* len);
+  // Direct LLVM lowering for substr_assign (P3): overwrite + blank-pad.
+  void emitSubstrAssignLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* start,
+                            llvm::Value* len, llvm::Value* src, llvm::Value* srcLen);
+  // Direct LLVM lowering for substr_assign_varying (P3): +grow VARYING length.
+  void emitSubstrAssignVaryingLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* lenptr,
+                                   llvm::Value* start, llvm::Value* len, llvm::Value* src,
+                                   llvm::Value* srcLen);
   // Direct LLVM lowering for assign_char (P1+): memmove + blank-pad tail.
   void emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
                           llvm::Value* srcLen);
@@ -530,6 +554,16 @@ private:
                               llvm::Value* start);
   // Direct LLVM lowering for TALLY (P3): non-overlapping count of y in x.
   llvm::Value* emitTallyLLVM(llvm::Value* x, llvm::Value* xLen, llvm::Value* y, llvm::Value* yLen);
+  // Direct LLVM lowering for REPEAT (P3): copy src n times + blank-pad.
+  void emitRepeatLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                      llvm::Value* n);
+  // Direct LLVM lowering for TRANSLATE (P3): map in→out table, passthrough unmatched.
+  void emitTranslateLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                         llvm::Value* out, llvm::Value* outLen, llvm::Value* in,
+                         llvm::Value* inLen);
+  // Direct LLVM lowering for TRIM (P3): strip leading/trailing pad chars, blank-pad.
+  void emitTrimLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                    llvm::Value* pad, llvm::Value* padLen);
   // Get-or-create an LLVM intrinsic with an explicit signature (used only for
   // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
   llvm::Function* intrinsicFn(const std::string& name, llvm::Type* ret,

@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* W3 IR check: runtime mode. CHECK confirms pli_* calls present. */
+w3_rt: procedure options(main);
+    declare s char(20) varying;
+    s = substr('hello', 2, 3);
+    s = repeat('ab', 3);
+    s = translate('abc', 'def', 'a');
+    s = trim('  hello  ');
+end w3_rt;

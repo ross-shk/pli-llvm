@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* W3 clipping/padding/capacity IR check: exercises SUBSTR, REPEAT,
+   TRANSLATE, TRIM in direct LLVM mode. CHECK-NOT confirms no pli_* calls. */
+w3_ir: procedure options(main);
+    declare s char(20) varying;
+    s = substr('hello', 2, 3);
+    s = repeat('ab', 3);
+    s = translate('abc', 'def', 'a');
+    s = trim('  hello  ');
+end w3_ir;

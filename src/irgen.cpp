@@ -585,6 +585,13 @@ static const std::set<std::string>& kLLVMLowerings() {
       "verify_from",
       "search",
       "tally",
+      // W3 clipping, padding, capacity operations
+      "substr",
+      "substr_assign",
+      "substr_assign_varying",
+      "repeat",
+      "translate",
+      "trim",
   };
   return table;
 }
@@ -738,6 +745,65 @@ llvm::Value* IRGen::emitTally(llvm::Value* x, llvm::Value* xLen, llvm::Value* y,
     return b_.CreateCall(runtimeFn("pli_tally"), {x, xLen, y, yLen}, "tally");
   }
   return emitTallyLLVM(x, xLen, y, yLen);
+}
+
+// --- W3 dispatch wrappers (clipping, padding, capacity) ---
+
+void IRGen::emitSubstr(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                       llvm::Value* start, llvm::Value* len) {
+  if (useRuntimeCall("substr")) {
+    b_.CreateCall(runtimeFn("pli_substr"), {dst, dstcap, src, srcLen, start, len});
+    return;
+  }
+  emitSubstrLLVM(dst, dstcap, src, srcLen, start, len);
+}
+
+void IRGen::emitSubstrAssign(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* start,
+                             llvm::Value* len, llvm::Value* src, llvm::Value* srcLen) {
+  if (useRuntimeCall("substr_assign")) {
+    b_.CreateCall(runtimeFn("pli_substr_assign"), {dst, dstcap, start, len, src, srcLen});
+    return;
+  }
+  emitSubstrAssignLLVM(dst, dstcap, start, len, src, srcLen);
+}
+
+void IRGen::emitSubstrAssignVarying(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* lenptr,
+                                    llvm::Value* start, llvm::Value* len, llvm::Value* src,
+                                    llvm::Value* srcLen) {
+  if (useRuntimeCall("substr_assign_varying")) {
+    b_.CreateCall(runtimeFn("pli_substr_assign_varying"),
+                  {dst, dstcap, lenptr, start, len, src, srcLen});
+    return;
+  }
+  emitSubstrAssignVaryingLLVM(dst, dstcap, lenptr, start, len, src, srcLen);
+}
+
+void IRGen::emitRepeat(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
+                       llvm::Value* n) {
+  if (useRuntimeCall("repeat")) {
+    b_.CreateCall(runtimeFn("pli_repeat"), {dst, dstcap, src, srcLen, n});
+    return;
+  }
+  emitRepeatLLVM(dst, dstcap, src, srcLen, n);
+}
+
+void IRGen::emitTranslate(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                          llvm::Value* out, llvm::Value* outLen, llvm::Value* in,
+                          llvm::Value* inLen) {
+  if (useRuntimeCall("translate")) {
+    b_.CreateCall(runtimeFn("pli_translate"), {dst, dstcap, s, sLen, out, outLen, in, inLen});
+    return;
+  }
+  emitTranslateLLVM(dst, dstcap, s, sLen, out, outLen, in, inLen);
+}
+
+void IRGen::emitTrim(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                     llvm::Value* pad, llvm::Value* padLen) {
+  if (useRuntimeCall("trim")) {
+    b_.CreateCall(runtimeFn("pli_trim"), {dst, dstcap, s, sLen, pad, padLen});
+    return;
+  }
+  emitTrimLLVM(dst, dstcap, s, sLen, pad, padLen);
 }
 
 // Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
@@ -1409,6 +1475,351 @@ llvm::Value* IRGen::emitTallyLLVM(llvm::Value* x, llvm::Value* xLen, llvm::Value
 
   startBlock(exitBB);
   return donePhi;
+}
+
+// --- W3 direct LLVM lowerings (P3) ---
+// Mirrors the C bodies in runtime/rt_string.c. Each takes dst/dstcap and
+// produces the same bit-for-bit result as the runtime pli_* entry.
+
+// substr(dst, dstcap, src, srclen, start, len): copy `len` chars from src
+// starting at 1-based `start`, clipping to srclen and dstcap, blank-padding
+// the tail. Mirrors pli_substr.
+void IRGen::emitSubstrLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                           llvm::Value* srcLen, llvm::Value* start, llvm::Value* len) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "sub.dstcap");
+  llvm::Value* srclen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "sub.srclen");
+  llvm::Value* start0 = b_.CreateSub(start, one, "sub.start0");
+
+  // n = min(len, dstcap); avail = max(srclen - start0, 0); take = min(n, avail).
+  llvm::Value* n = b_.CreateZExtOrTrunc(len, b_.getInt64Ty(), "sub.n");
+  llvm::Value* nClipped = b_.CreateSelect(b_.CreateICmpUGT(n, dstcap64), dstcap64, n, "sub.nclip");
+  llvm::Value* avail = b_.CreateSelect(b_.CreateICmpULT(srclen64, start0), zero,
+                                       b_.CreateSub(srclen64, start0, "sub.avail"), "sub.avail");
+  llvm::Value* take =
+      b_.CreateSelect(b_.CreateICmpULT(avail, nClipped), avail, nClipped, "sub.take");
+  // start < 1 → no data copied, blank-fill the whole result (matches runtime guard).
+  llvm::Value* validStart = b_.CreateICmpUGE(start, one, "sub.valid_start");
+  take = b_.CreateSelect(validStart, take, zero, "sub.take_safe");
+
+  llvm::Value* srcPtr = b_.CreateGEP(b_.getInt8Ty(), src, {start0}, "sub.srcptr");
+  b_.CreateMemMove(dst, llvm::MaybeAlign(), srcPtr, llvm::MaybeAlign(), take, false);
+  // blank-pad tail of the extraction.
+  llvm::Value* padLen = b_.CreateSub(nClipped, take, "sub.padlen");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {take}, "sub.padptr"), blank, padLen,
+                  llvm::MaybeAlign(), false);
+}
+
+// substr_assign(dst, dstcap, start, len, src, srclen): overwrite `len` chars of
+// dst starting at 1-based `start` with src, blank-filling the tail. Mirrors
+// pli_substr_assign.
+void IRGen::emitSubstrAssignLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* start,
+                                 llvm::Value* len, llvm::Value* src, llvm::Value* srcLen) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "sa.dstcap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "sa.srclen");
+  llvm::Value* start0 = b_.CreateSub(start, one, "sa.start0");
+
+  // n = len; space = dstcap - (start-1); if space <= 0 → return.
+  llvm::Value* n = b_.CreateZExtOrTrunc(len, b_.getInt64Ty(), "sa.n");
+  llvm::Value* space = b_.CreateSub(dstcap64, start0, "sa.space");
+  llvm::Value* nClipped = b_.CreateSelect(b_.CreateICmpUGT(n, space), space, n, "sa.nclip");
+
+  // take = min(srcLen, nClipped).
+  llvm::Value* take =
+      b_.CreateSelect(b_.CreateICmpULT(srcLen64, nClipped), srcLen64, nClipped, "sa.take");
+
+  // memmove src into dst[start-1..start0+nClip).
+  llvm::Value* dstPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {start0}, "sa.dstptr");
+  b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), src, llvm::MaybeAlign(), take, false);
+  // blank-fill the rest.
+  llvm::Value* padLen = b_.CreateSub(nClipped, take, "sa.padlen");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {start0, take}, "sa.padptr"), blank, padLen,
+                  llvm::MaybeAlign(), false);
+}
+
+// substr_assign_varying(dst, dstcap, lenptr, start, len, src, srclen):
+// same as substr_assign, plus grow the VARYING live length when the overlay
+// reaches past it. Mirrors pli_substr_assign_varying.
+void IRGen::emitSubstrAssignVaryingLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* lenptr,
+                                        llvm::Value* start, llvm::Value* len, llvm::Value* src,
+                                        llvm::Value* srcLen) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "sarv.dstcap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "sarv.srclen");
+  llvm::Value* start0 = b_.CreateSub(start, one, "sarv.start0");
+
+  // load old live length.
+  llvm::Value* oldLen = b_.CreateLoad(b_.getInt32Ty(), lenptr, "sarv.oldlen");
+  llvm::Value* oldLen64 = b_.CreateZExtOrTrunc(oldLen, b_.getInt64Ty(), "sarv.oldlen64");
+  llvm::Value* oldClamped =
+      b_.CreateSelect(b_.CreateICmpSGT(oldLen64, dstcap64), dstcap64, oldLen64, "sarv.oldc");
+
+  // n = len; space = dstcap - (start-1); nClip = min(n, space).
+  llvm::Value* n = b_.CreateZExtOrTrunc(len, b_.getInt64Ty(), "sarv.n");
+  llvm::Value* space = b_.CreateSub(dstcap64, start0, "sarv.space");
+  llvm::Value* nClipped = b_.CreateSelect(b_.CreateICmpUGT(n, space), space, n, "sarv.nclip");
+
+  // Fill gap between old and start with blanks if start > old.
+  llvm::Value* gap =
+      b_.CreateSelect(b_.CreateICmpUGT(start0, oldClamped),
+                      b_.CreateSub(start0, oldClamped, "sarv.gap"), zero, "sarv.gapval");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {oldClamped}, "sarv.gappptr"), blank, gap,
+                  llvm::MaybeAlign(), false);
+
+  // take = min(srcLen, nClip).
+  llvm::Value* take =
+      b_.CreateSelect(b_.CreateICmpULT(srcLen64, nClipped), srcLen64, nClipped, "sarv.take");
+  // memmove src into dst[start-1..].
+  llvm::Value* dstPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {start0}, "sarv.dstptr");
+  b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), src, llvm::MaybeAlign(), take, false);
+  // blank-pad tail of the overlay.
+  llvm::Value* padLen = b_.CreateSub(nClipped, take, "sarv.padlen");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {start0, take}, "sarv.padptr"), blank, padLen,
+                  llvm::MaybeAlign(), false);
+
+  // Grow live length: end = max(start0 + nClip, oldLen).
+  llvm::Value* end = b_.CreateAdd(start0, nClipped, "sarv.end");
+  end = b_.CreateSelect(b_.CreateICmpUGT(end, oldClamped), end, oldClamped, "sarv.endmax");
+  llvm::Value* end32 = b_.CreateTrunc(end, b_.getInt32Ty(), "sarv.end32");
+  b_.CreateStore(end32, lenptr, false);
+}
+
+// repeat(dst, dstcap, src, srclen, n): copy src n times into dst, then
+// blank-pad the remainder. Mirrors pli_repeat.
+void IRGen::emitRepeatLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src,
+                           llvm::Value* srcLen, llvm::Value* n) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "rep.dstcap");
+  llvm::Value* srcLen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "rep.srclen");
+
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "rep.loop", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "rep.latch", F);
+  llvm::BasicBlock* endBB = llvm::BasicBlock::Create(ctx_, "rep.end", F);
+
+  llvm::Value* kN = b_.CreateZExtOrTrunc(n, b_.getInt64Ty(), "rep.n");
+  b_.CreateMemSet(dst, blank, dstcap64, llvm::MaybeAlign(), false);
+  b_.CreateCondBr(b_.CreateICmpULE(kN, zero, "rep.n_zero"), endBB, loopBB);
+
+  llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+  startBlock(loopBB);
+  llvm::PHINode* k = b_.CreatePHI(b_.getInt64Ty(), 2, "rep.k");
+  k->addIncoming(zero, preLoopBB);
+  // out = k * srclen; if out >= dstcap → exit.
+  llvm::Value* outOff = b_.CreateMul(k, srcLen64, "rep.out_off");
+  b_.CreateCondBr(b_.CreateICmpUGE(outOff, dstcap64, "rep.out_full"), endBB, latchBB);
+
+  startBlock(latchBB);
+  // copyLen = min(srcLen, dstcap - out).
+  llvm::Value* room = b_.CreateSub(dstcap64, outOff, "rep.room");
+  llvm::Value* copyLen =
+      b_.CreateSelect(b_.CreateICmpULE(srcLen64, room), srcLen64, room, "rep.copy_len");
+  llvm::Value* dstPtr = b_.CreateGEP(b_.getInt8Ty(), dst, {outOff}, "rep.dstptr");
+  b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), src, llvm::MaybeAlign(), copyLen, false);
+  k->addIncoming(b_.CreateAdd(k, one, "rep.k_next"), latchBB);
+  b_.CreateBr(loopBB);
+
+  startBlock(endBB);
+}
+
+// translate(dst, dstcap, s, slen, out, outlen, in, inlen): for each char in s,
+// look it up in `in`; if found at index j < outlen, output out[j]; else
+// passthrough. Mirrors pli_translate.
+void IRGen::emitTranslateLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s,
+                              llvm::Value* sLen, llvm::Value* out, llvm::Value* outLen,
+                              llvm::Value* in, llvm::Value* inLen) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "tr.slen");
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "tr.dstcap");
+  llvm::Value* outLen64 = b_.CreateZExtOrTrunc(outLen, b_.getInt64Ty(), "tr.outlen");
+  llvm::Value* inLen64 = b_.CreateZExtOrTrunc(inLen, b_.getInt64Ty(), "tr.inlen");
+
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "tr.loop", F);
+  llvm::BasicBlock* innerBB = llvm::BasicBlock::Create(ctx_, "tr.inner", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "tr.check", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "tr.done", F);
+
+  // Outer loop: i = phi.  Load s[i]; exit when i >= slen or i >= dstcap.
+  llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+  b_.CreateBr(loopBB);
+  startBlock(loopBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tr.i");
+  iPhi->addIncoming(zero, preLoopBB);
+  llvm::Value* si =
+      b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "tr.siptr"), "tr.si");
+  llvm::Value* iDone = b_.CreateOr(b_.CreateICmpUGE(iPhi, sLen64, "tr.i_ge_slen"),
+                                   b_.CreateICmpUGE(iPhi, dstcap64, "tr.i_ge_dst"), "tr.i_done");
+  b_.CreateCondBr(iDone, doneBB, innerBB);
+
+  // Inner loop: k = phi.  Exit when k >= inlen (not found) or s[i] == in[k] (found).
+  startBlock(innerBB);
+  llvm::PHINode* kPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tr.k");
+  kPhi->addIncoming(zero, loopBB);
+  llvm::Value* kNext = b_.CreateAdd(kPhi, one, "tr.k_next");
+  kPhi->addIncoming(kNext, innerBB);
+  llvm::Value* kGeInlen = b_.CreateICmpUGE(kPhi, inLen64, "tr.k_ge_inlen");
+  llvm::Value* ik =
+      b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), in, {kPhi}, "tr.inptr"), "tr.ik");
+  llvm::Value* siEqIk = b_.CreateICmpEQ(si, ik, "tr.eq");
+  b_.CreateCondBr(b_.CreateOr(kGeInlen, siEqIk, "tr.found"), checkBB, innerBB);
+
+  // check: if k < outlen → out[k]; else s[i] (passthrough).  Then i++.
+  startBlock(checkBB);
+  llvm::Value* kLtOut = b_.CreateICmpULT(kPhi, outLen64, "tr.k_lt_outlen");
+  llvm::Value* byteVal = b_.CreateSelect(
+      kLtOut,
+      b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), out, {kPhi}, "tr.outptr"),
+                    "tr.outk"),
+      si, "tr.byte");
+  b_.CreateStore(byteVal, b_.CreateGEP(b_.getInt8Ty(), dst, {iPhi}, "tr.dstptr"), false);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one, "tr.i_next"), checkBB);
+  b_.CreateBr(loopBB);
+
+  startBlock(doneBB);
+}
+
+// trim(dst, dstcap, s, slen, pad, padlen): copy s minus leading/trailing pad
+// characters, left-justified, blank-padded to dstcap. A null pad means blanks.
+void IRGen::emitTrimLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                         llvm::Value* pad, llvm::Value* padLen) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "trim.slen");
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "trim.dstcap");
+  llvm::Value* padLen64 = b_.CreateZExtOrTrunc(padLen, b_.getInt64Ty(), "trim.padlen");
+  llvm::Value* padNonNull =
+      b_.CreateICmpNE(pad, llvm::ConstantPointerNull::get(b_.getPtrTy()), "trim.pad_nonnull");
+
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* loSlot = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "trim.lo");
+  llvm::Value* hiSlot = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "trim.hi");
+  llvm::Value* outSlot = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "trim.out");
+  b_.CreateStore(zero, loSlot, false);
+  b_.CreateStore(sLen64, hiSlot, false);
+  b_.CreateStore(zero, outSlot, false);
+
+  // isPad(c): if !padNonNull → c == blank; else memchr(pad, c, padlen) != null.
+  auto emitIsPad = [&](llvm::Value* c) -> llvm::Value* {
+    llvm::Value* isBlank = b_.CreateICmpEQ(c, blank, "trim.isblank");
+    llvm::FunctionType* memchrType = llvm::FunctionType::get(
+        b_.getPtrTy(), {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()}, false);
+    llvm::Function* memchrFn = llvm::cast<llvm::Function>(
+        b_.GetInsertBlock()->getModule()->getOrInsertFunction("memchr", memchrType).getCallee());
+    llvm::Value* c32 = b_.CreateZExt(c, b_.getInt32Ty(), "trim.c32");
+    llvm::Value* found = b_.CreateCall(memchrFn, {pad, c32, padLen64}, "trim.memchr");
+    llvm::Value* inSet =
+        b_.CreateICmpNE(found, llvm::ConstantPointerNull::get(b_.getPtrTy()), "trim.inset");
+    return b_.CreateSelect(padNonNull, inSet, isBlank, "trim.ispad");
+  };
+
+  llvm::BasicBlock* loBB = llvm::BasicBlock::Create(ctx_, "trim.lo", F);
+  llvm::BasicBlock* loBodyBB = llvm::BasicBlock::Create(ctx_, "trim.lo_body", F);
+  llvm::BasicBlock* loExitBB = llvm::BasicBlock::Create(ctx_, "trim.lo_ex", F);
+  llvm::BasicBlock* hiBB = llvm::BasicBlock::Create(ctx_, "trim.hi", F);
+  llvm::BasicBlock* hiBodyBB = llvm::BasicBlock::Create(ctx_, "trim.hi_body", F);
+  llvm::BasicBlock* hiExitBB = llvm::BasicBlock::Create(ctx_, "trim.hi_ex", F);
+  llvm::BasicBlock* copyBB = llvm::BasicBlock::Create(ctx_, "trim.copy", F);
+  llvm::BasicBlock* copyBodyBB = llvm::BasicBlock::Create(ctx_, "trim.copy_body", F);
+  llvm::BasicBlock* padBB = llvm::BasicBlock::Create(ctx_, "trim.pad", F);
+  llvm::BasicBlock* padBodyBB = llvm::BasicBlock::Create(ctx_, "trim.pad_body", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "trim.done", F);
+
+  // Phase 1: lo scan — while (lo < hi && isPad(s[lo])) lo++.
+  b_.CreateBr(loBB);
+  startBlock(loBB);
+  {
+    llvm::Value* lo = b_.CreateLoad(b_.getInt64Ty(), loSlot, "trim.lo_v");
+    llvm::Value* hi = b_.CreateLoad(b_.getInt64Ty(), hiSlot, "trim.hi_v");
+    llvm::Value* loLtHi = b_.CreateICmpULT(lo, hi, "trim.lo_lt_hi");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {lo}, "trim.lo_ptr"), "trim.c");
+    llvm::Value* isPad = emitIsPad(c);
+    b_.CreateCondBr(b_.CreateAnd(loLtHi, isPad, "trim.lo_cont"), loBodyBB, loExitBB);
+  }
+  startBlock(loBodyBB);
+  {
+    llvm::Value* lo = b_.CreateLoad(b_.getInt64Ty(), loSlot, "trim.lo_inc");
+    b_.CreateStore(b_.CreateAdd(lo, one, "trim.lo_n"), loSlot, false);
+    b_.CreateBr(loBB);
+  }
+
+  // Phase 2: hi scan — while (hi > lo && isPad(s[hi-1])) hi--.
+  startBlock(loExitBB);
+  b_.CreateBr(hiBB);
+  startBlock(hiBB);
+  {
+    llvm::Value* lo = b_.CreateLoad(b_.getInt64Ty(), loSlot, "trim.hi_lo_v");
+    llvm::Value* hi = b_.CreateLoad(b_.getInt64Ty(), hiSlot, "trim.hi_v");
+    llvm::Value* hiGtLo = b_.CreateICmpUGT(hi, lo, "trim.hi_gt_lo");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(),
+        b_.CreateGEP(b_.getInt8Ty(), s, {b_.CreateSub(hi, one, "trim.hi_m1")}, "trim.hi_ptr"),
+        "trim.c2");
+    llvm::Value* isPad = emitIsPad(c);
+    b_.CreateCondBr(b_.CreateAnd(hiGtLo, isPad, "trim.hi_cont"), hiBodyBB, hiExitBB);
+  }
+  startBlock(hiBodyBB);
+  {
+    llvm::Value* hi = b_.CreateLoad(b_.getInt64Ty(), hiSlot, "trim.hi_dec");
+    b_.CreateStore(b_.CreateSub(hi, one, "trim.hi_n"), hiSlot, false);
+    b_.CreateBr(hiBB);
+  }
+
+  // Phase 3: copy s[lo..hi-1] → dst[0..], stop at dstcap.
+  startBlock(hiExitBB);
+  b_.CreateBr(copyBB);
+  startBlock(copyBB);
+  {
+    llvm::Value* lo = b_.CreateLoad(b_.getInt64Ty(), loSlot, "trim.cp_lo");
+    llvm::Value* hi = b_.CreateLoad(b_.getInt64Ty(), hiSlot, "trim.cp_hi");
+    llvm::Value* out = b_.CreateLoad(b_.getInt64Ty(), outSlot, "trim.cp_out");
+    llvm::Value* loLtHi = b_.CreateICmpULT(lo, hi, "trim.cp_lo_lt_hi");
+    llvm::Value* outLtCap = b_.CreateICmpULT(out, dstcap64, "trim.cp_out_lt_cap");
+    b_.CreateCondBr(b_.CreateAnd(loLtHi, outLtCap, "trim.cp_cont"), copyBodyBB, padBB);
+  }
+  startBlock(copyBodyBB);
+  {
+    llvm::Value* lo = b_.CreateLoad(b_.getInt64Ty(), loSlot, "trim.cpb_lo");
+    llvm::Value* out = b_.CreateLoad(b_.getInt64Ty(), outSlot, "trim.cpb_out");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {lo}, "trim.cp_src"), "trim.cp_c");
+    b_.CreateStore(c, b_.CreateGEP(b_.getInt8Ty(), dst, {out}, "trim.cp_dst"), false);
+    b_.CreateStore(b_.CreateAdd(lo, one, "trim.cp_lo_n"), loSlot, false);
+    b_.CreateStore(b_.CreateAdd(out, one, "trim.cp_out_n"), outSlot, false);
+    b_.CreateBr(copyBB);
+  }
+
+  // Phase 4: blank-pad dst[out..] up to dstcap.
+  startBlock(padBB);
+  {
+    llvm::Value* out = b_.CreateLoad(b_.getInt64Ty(), outSlot, "trim.pp_out");
+    b_.CreateCondBr(b_.CreateICmpULT(out, dstcap64, "trim.pp_cont"), padBodyBB, doneBB);
+  }
+  startBlock(padBodyBB);
+  {
+    llvm::Value* out = b_.CreateLoad(b_.getInt64Ty(), outSlot, "trim.pp_inc");
+    b_.CreateStore(blank, b_.CreateGEP(b_.getInt8Ty(), dst, {out}, "trim.pp_dst"), false);
+    b_.CreateStore(b_.CreateAdd(out, one, "trim.pp_out_n"), outSlot, false);
+    b_.CreateBr(padBB);
+  }
+  startBlock(doneBB);
 }
 
 // Get (or create) a declaration for a runtime `pli_*` function. The signature
@@ -3602,12 +4013,10 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* stor = addressOf(sym);
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 0, "vlenp");
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 1, "vdata");
-      b_.CreateCall(runtimeFn("pli_substr_assign_varying"),
-                    {dp, cap, lp, toI64(start), toI64(len), rhs.ptr, rhs.len});
+      emitSubstrAssignVarying(dp, cap, lp, toI64(start), toI64(len), rhs.ptr, rhs.len);
       return;
     }
-    b_.CreateCall(runtimeFn("pli_substr_assign"),
-                  {sv.ptr, cap, toI64(start), toI64(len), rhs.ptr, rhs.len});
+    emitSubstrAssign(sv.ptr, cap, toI64(start), toI64(len), rhs.ptr, rhs.len);
     return;
   }
   // Slice assignment (rule 126): a cross-section A(i, *, ...) on either side
@@ -8312,13 +8721,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         out.ptr = b_.CreateAlloca(b_.getInt8Ty(), cap, "svbuf");
         out.len = cap;
       }
-      b_.CreateCall(runtimeFn("pli_substr"), {out.ptr, out.len, s.ptr, s.len, toI64(start), live});
+      emitSubstr(out.ptr, out.len, s.ptr, s.len, toI64(start), live);
       out.len = live;
       result = out;
       return true;
     }
-    b_.CreateCall(runtimeFn("pli_substr"),
-                  {out.ptr, out.len, s.ptr, s.len, toI64(start), toI64(len)});
+    emitSubstr(out.ptr, out.len, s.ptr, s.len, toI64(start), toI64(len));
     out.len = i64(e->ty.len);
     result = out;
     return true;
@@ -8643,7 +9051,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val out = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_repeat"), {out.ptr, out.len, s.ptr, s.len, toI64(n)});
+    emitRepeat(out.ptr, out.len, s.ptr, s.len, toI64(n));
     out.len = i64(e->ty.len);
     result = out;
     return true;
@@ -8668,8 +9076,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val out = emitExpr(e->args[1].get());
     Val in = emitExpr(e->args[2].get());
     Val dst = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_translate"),
-                  {dst.ptr, dst.len, s.ptr, s.len, out.ptr, out.len, in.ptr, in.len});
+    emitTranslate(dst.ptr, dst.len, s.ptr, s.len, out.ptr, out.len, in.ptr, in.len);
     dst.len = i64(e->ty.len);
     result = dst;
     return true;
@@ -8684,7 +9091,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       pad = p.ptr;
       padlen = p.len;
     }
-    b_.CreateCall(runtimeFn("pli_trim"), {dst.ptr, dst.len, s.ptr, s.len, pad, padlen});
+    emitTrim(dst.ptr, dst.len, s.ptr, s.len, pad, padlen);
     dst.len = i64(e->ty.len);
     result = dst;
     return true;
