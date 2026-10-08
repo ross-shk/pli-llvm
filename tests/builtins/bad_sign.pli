@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Diagnostic test: SIGN with a wrong arity and a non-numeric argument
+    are rejected. rule (123), Appendix 1. */
+ badsign: procedure options(main);
+     declare x fixed bin(31);
+     declare s char(4);
+     s = 'abcd';
+     x = sign();      /* error: SIGN takes one argument */
+     x = sign(-7, 9); /* error: SIGN takes one argument */
+     x = sign(s);     /* error: SIGN argument must be numeric */
+ end badsign;
