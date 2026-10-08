@@ -495,7 +495,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_on_source", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_onkey", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
-  };
+    };
   return table;
 }
 
@@ -566,16 +566,40 @@ static void applyRuntimeAttrs(llvm::Function* f) {
 
 // P0 policy: every operation defaults to runtime. P5 flips entries one wave at
 // a time as lowerings land. The table is operation-name → prefers direct LLVM.
+// P5 flips: W1, W2, W3 default to LLVM. W4 remains runtime (binary size
+// regression: 51632 B LLVM vs 35440 B runtime).
 static const std::map<std::string, bool>& kRuntimeDefault() {
   static const std::map<std::string, bool> table = {
-      {"assign_char", false},
-      {"index", false},
-      // P4+: W4 scalar math and conversions default to runtime until P5 flip
+      {"assign_char", true},
+      {"index", true},
+      {"assign_varying", true},
+      {"high", true},
+      {"low", true},
+      {"uppercase", true},
+      {"lowercase", true},
+      {"reverse", true},
+      {"center", true},
+      {"cmp_char", true},
+      // P5 flip: W2 default is now LLVM (was runtime)
+      {"verify", true},
+      {"verify_from", true},
+      {"search", true},
+      {"tally", true},
+      // P5 flip: W3 default is now LLVM (was runtime)
+      {"substr", true},
+      {"substr_assign", true},
+      {"substr_assign_varying", true},
+      {"repeat", true},
+      {"translate", true},
+      {"trim", true},
+      // P4+: W4 scalar math and conversions default to runtime until P5/W4 flip
       {"fixed_of_float", false},
       {"fixed_of_char", false},
   };
   return table;
 }
+
+// --- end lowering policy ---
 
 // Operations with a direct LLVM lowering implemented (populated P1+).
 static const std::set<std::string>& kLLVMLowerings() {

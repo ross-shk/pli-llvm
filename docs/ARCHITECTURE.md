@@ -66,10 +66,11 @@ HIR                typed representation with explicit conversions
    ▼
 IRGen              builds an LLVM module with `llvm::IRBuilder`
    │
-   ├── Lowering policy dispatch (experimental, see §3.4)
-   │     • `assign_char`, `index` → direct LLVM IR (memmove/memset, search loop)
-   │     • other operations → `pli_*` C runtime calls in `libpli`
-   │
+    ├── Lowering policy dispatch (experimental, see §3.3)
+    │     • W1/W2/W3 operations (assign_char, index, verify, substr, …) → direct LLVM IR
+    │     • W4 operations (fixed_of_float, fixed_of_char) → runtime (binary-size regression)
+    │     • remaining operations → `pli_*` C runtime calls in `libpli`
+    │
    ├── `-emit-llvm` ──► textual `.ll` file
    │
    └── clang ──► object file ──► link with `libpli` ──► executable
@@ -88,12 +89,14 @@ IRGen owns lowering policy behind the experimental flag
 `--experimental-lowering=auto|runtime|llvm|mlir` (with per-operation overrides
 via `<op>:<mode>`). Each pilot operation has a policy entry in
 `kRuntimeDefault()` (the default selection) and, when a direct LLVM body exists,
-an entry in `kLLVMLowerings()`. Call sites always go through the
-`emitAssignChar`/`emitIndex` dispatch wrappers, which consult the policy table.
-In `runtime` mode every operation uses its `pli_*` C runtime call; in `llvm`
-mode admitted operations lower directly to LLVM IR (e.g. `assign_char` →
-`memmove` + `memset`, `index` → a counted search loop). The runtime call
-remains the differential regression oracle throughout migration. See
+an entry in `kLLVMLowerings()`. Call sites always go through dispatch wrappers
+(`emitAssignChar`, `emitIndex`, etc.), which consult the policy table. In
+`runtime` mode every operation uses its `pli_*` C runtime call; in `llvm` mode
+admitted operations lower directly to LLVM IR (e.g. `assign_char` → `memmove`
++ `memset`, `index` → a counted search loop, `verify` → nested search loops,
+`substr` → `memmove` + blank-pad). W1/W2/W3 operations now default to direct
+LLVM (`kRuntimeDefault()` sets them to `true`); W4 remains runtime. The runtime
+call remains the differential regression oracle throughout migration. See
 `docs/MLIR-RUNTIME-MIGRATION-MATRIX.md` for the full operation matrix and
 `design-docs/mlir-runtime-migration-plan.md` for the phased plan.
 

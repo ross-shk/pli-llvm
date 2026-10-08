@@ -17,6 +17,7 @@ __pycache__
 zapp.yaml
 docs/archive/
 benchmarks/results/
+*.lib
 
 AGENTS.md
 build-*
