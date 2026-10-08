@@ -1,0 +1,24 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/getting_started.pli: first program,
+    string concatenation and integer arithmetic. Prints FAIL per
+    violated check, PASS only if all hold. */
+
+ hello: proc options(main);
+   dcl who char(20) varying;
+   dcl fails fixed bin(31);
+
+   fails = 0;
+   who = 'world';
+
+   if 'Hello, ' || who || '!' ^= 'Hello, world!' then do;
+      fails = fails + 1;
+      put skip list('FAIL: greeting =', 'Hello, ' || who || '!');
+   end;
+   if 2 + 3 ^= 5 then do;
+      fails = fails + 1;
+      put skip list('FAIL: 2 + 3 =', 2 + 3);
+   end;
+
+   if fails = 0 then put skip list('PASS');
+ end hello;

@@ -1,0 +1,45 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/preprocessor.pli: shared header,
+    shorthand and conditional code. Prints FAIL per violated check,
+    PASS only if all hold. */
+
+ %include 'preprocessor_defs.inc';
+
+ %replace bound by 5;
+ %declare debug value(1);
+ %activate debug;
+
+ demo: proc options(main);
+   dcl table(%tabcap) char(80) varying;
+   dcl small(bound) fixed bin(31);
+
+   dcl i fixed bin(31);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   do i = 1 to bound;
+     small(i) = i;
+   end;
+
+   if %tabcap ^= 1000 then do;
+      fails = fails + 1;
+      put skip list('FAIL: cap =', %tabcap);
+   end;
+   if sum(small) ^= 15 then do;
+      fails = fails + 1;
+      put skip list('FAIL: sum =', sum(small));
+   end;
+
+   table(1) = 'hello';
+   if table(1) ^= 'hello' then do;
+      fails = fails + 1;
+      put skip list('FAIL: first =', table(1));
+   end;
+
+   %if debug = 1 %then put skip list('debug is on');
+   %else put skip list('debug is off');
+
+   if fails = 0 then put skip list('PASS');
+ end demo;

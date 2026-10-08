@@ -1,0 +1,29 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/concurrency.pli: background CALL + EVENT,
+    WAIT to join. Prints FAIL per violated check, PASS only if all hold. */
+
+ conc: proc options(main);
+   dcl done event;
+   dcl counter fixed bin(31) init(0);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   call worker event(done);
+
+   /* main thread stays free here */
+   put skip list('main is free while worker runs');
+   wait(done);
+
+   if counter ^= 1 then do;
+      fails = fails + 1;
+      put skip list('FAIL: counter =', counter);
+   end;
+
+   if fails = 0 then put skip list('PASS');
+
+ worker: proc;
+   counter = counter + 1;
+ end worker;
+ end conc;

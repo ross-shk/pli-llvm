@@ -1,0 +1,70 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/procedures_functions.pli: nesting,
+    RETURNS, RECURSIVE, OPTIONAL params, ENTRY. Prints FAIL per
+    violated check, PASS only if all hold. */
+
+ procs: proc options(main);
+   dcl r fixed bin(31);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   call helper(5);
+   r = add(3, 4);
+   if r ^= 7 then do;
+      fails = fails + 1;
+      put skip list('FAIL: add =', r);
+   end;
+   if fact(5) ^= 120 then do;
+      fails = fails + 1;
+      put skip list('FAIL: fact(5) =', fact(5));
+   end;
+   if cube(3) ^= 27 then do;
+      fails = fails + 1;
+      put skip list('FAIL: cube(3) =', cube(3));
+   end;
+
+   call greet('sam', '!');
+   call greet('sam', *);
+   call greet('sam');
+
+   if fails = 0 then put skip list('PASS');
+
+ helper: proc(n);
+   dcl n fixed bin(31);
+   put skip list('n =', n);
+ end helper;
+
+ add: proc(a, b) returns(fixed bin(31));
+   dcl (a, b) fixed bin(31);
+   return(a + b);
+ end add;
+
+ fact: proc(n) recursive returns(fixed bin(31));
+   dcl n fixed bin(31);
+   if n <= 1 then return(1);
+   return(n * fact(n - 1));
+ end fact;
+
+ greet: proc(name, punct);
+   dcl name char(20) varying;
+   dcl punct char(5) varying optional;
+
+   if omitted(punct) then
+     put skip list('hi ' || name);
+   else
+     put skip list('hi ' || name || punct);
+ end greet;
+
+ area: proc(d) returns(fixed bin(31));
+   dcl (d, r) fixed bin(31);
+
+   r = d * d;
+   return(r);
+
+ cube: entry(d) returns(fixed bin(31));
+   r = d * d * d;
+   return(r);
+ end area;
+ end procs;

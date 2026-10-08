@@ -1,0 +1,43 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/area_offset.pli: AREA + OFFSET arena
+    pool with reusable blocks. Prints FAIL per violated check, PASS
+    only if all hold. */
+
+ arena: proc options(main);
+   dcl region area(4096);
+   dcl (pa, pb) offset(region);
+
+   dcl 1 slot based(pa),
+         2 v fixed bin(31);
+   dcl 1 other based(pb),
+         2 v fixed bin(31);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   allocate slot in(region) set(pa);
+   slot.v = 11;
+
+   allocate other in(region) set(pb);
+   other.v = 22;
+   if slot.v ^= 11 then do;
+      fails = fails + 1;
+      put skip list('FAIL: a =', slot.v);
+   end;
+   if other.v ^= 22 then do;
+      fails = fails + 1;
+      put skip list('FAIL: b =', other.v);
+   end;
+
+   free slot in(region);
+   pa = null();
+
+   if other.v ^= 22 then do;
+      fails = fails + 1;
+      put skip list('FAIL: b still =', other.v);
+   end;
+   free other in(region);
+
+   if fails = 0 then put skip list('PASS');
+ end arena;

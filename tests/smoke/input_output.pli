@@ -1,0 +1,69 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/input_output.pli: LIST, STRING, EDIT,
+    DATA and file round-trip. The file is written to the gitignored
+    scratch dir so the test leaves no litter in the repo root. Prints
+    FAIL per violated check, PASS only if all hold. */
+
+ io: proc options(main);
+   dcl name char(20) varying,
+       count fixed bin(31);
+   dcl buff char(100) varying;
+   dcl a fixed bin(31);
+   dcl 1 config,
+         2 host char(20) varying,
+         2 port fixed bin(31);
+   dcl f file;
+   dcl line char(40) varying;
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   name = 'ada';
+   count = 3;
+
+   put skip list('Hello,', name);
+   if count ^= 3 then do;
+      fails = fails + 1;
+      put skip list('FAIL: count =', count);
+   end;
+
+   /* string: format into a varying buffer */
+   put string(buff) list('n=', 42);
+   if buff ^= 'n= 42' then do;
+      fails = fails + 1;
+      put skip list('FAIL: buff =', buff);
+   end;
+
+   /* edit-directed: fixed columns */
+   a = 123;
+   put skip edit(a) (f(6));
+   put skip edit('hi', 7) (a(4), f(4));
+
+   /* data-directed: self-describing dump */
+   config.host = 'localhost';
+   config.port = 8080;
+   put data(config);
+   if config.port ^= 8080 then do;
+      fails = fails + 1;
+      put skip list('FAIL: port =', config.port);
+   end;
+
+   /* file round-trip into the gitignored scratch dir: list-directed
+      output writes 'file hello'; a single GET LIST reads back the
+      first data item. */
+   open file(f) title('tests/smoke/out/io_demo.txt') output;
+   put file(f) list('file hello');
+   close file(f);
+
+   open file(f) title('tests/smoke/out/io_demo.txt') input;
+   get file(f) list(line);
+   close file(f);
+
+   if line ^= 'file' then do;
+      fails = fails + 1;
+      put skip list('FAIL: file said:', line);
+   end;
+
+   if fails = 0 then put skip list('PASS');
+ end io;

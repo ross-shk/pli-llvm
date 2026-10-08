@@ -1,0 +1,50 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/declarations_structures.pli: structures,
+    nesting and LIKE. Prints FAIL per violated check, PASS only if all
+    hold. */
+
+ dcls: proc options(main);
+   dcl 1 employee,
+         2 name char(30) varying,
+         2 id fixed bin(31),
+         2 salary fixed dec(7,2);
+   dcl 1 office,
+         2 street char(40) varying,
+         2 city char(25) varying;
+   dcl 1 backup like employee;
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   employee.name = 'Alice';
+   employee.id = 7;
+   employee.salary = 75000.00;
+   office.street = '14 Main St';
+   office.city = 'Trenton';
+
+   backup = employee;
+
+   if employee.name ^= 'Alice' then do;
+      fails = fails + 1;
+      put skip list('FAIL: name =', employee.name);
+   end;
+   if employee.id ^= 7 then do;
+      fails = fails + 1;
+      put skip list('FAIL: id =', employee.id);
+   end;
+   if employee.salary ^= 75000.00 then do;
+      fails = fails + 1;
+      put skip list('FAIL: salary =', employee.salary);
+   end;
+   if office.city ^= 'Trenton' then do;
+      fails = fails + 1;
+      put skip list('FAIL: city =', office.city);
+   end;
+   if backup.name ^= 'Alice' then do;
+      fails = fails + 1;
+      put skip list('FAIL: backup =', backup.name);
+   end;
+
+   if fails = 0 then put skip list('PASS');
+ end dcls;

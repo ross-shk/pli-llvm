@@ -1,0 +1,47 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/quick_reference.pli: one program
+    touching each major feature. Prints FAIL per violated check, PASS
+    only if all hold. */
+
+ quickref: proc options(main);
+   dcl count fixed bin(31);
+   dcl price fixed dec(7,2);
+   dcl name char(20) varying;
+   dcl a(3) fixed bin(31);
+   dcl i fixed bin(31);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   count = 3;
+   price = 12.34;
+   name = 'sam';
+
+   if count * price ^= 37.02 then do;
+      fails = fails + 1;
+      put skip list('FAIL: total =', count * price);
+   end;
+
+   do i = 1 to 3;
+     a(i) = i * 10;
+   end;
+   if sum(a) ^= 60 then do;
+      fails = fails + 1;
+      put skip list('FAIL: sum =', sum(a));
+   end;
+
+   on error put skip list('caught error');
+   if dbl(21) ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL: double(21) =', dbl(21));
+   end;
+   revert error;
+
+   if fails = 0 then put skip list('PASS');
+
+ dbl: proc(x) returns(fixed bin(31));
+   dcl x fixed bin(31);
+   return(x * 2);
+ end dbl;
+ end quickref;

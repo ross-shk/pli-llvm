@@ -1,0 +1,80 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/arrays.pli: fixed bounds, dynamic size,
+    slices and whole-array math. Prints FAIL per violated check, PASS
+    only if all hold. */
+
+ arrays: proc options(main);
+   dcl scores(5) fixed bin(31);
+   dcl board(3,4) fixed bin(31);
+   dcl temps(-2:2) fixed bin(31);
+   dcl m(3,5) fixed bin(31);
+   dcl row(5) fixed bin(31);
+   dcl i fixed bin(31);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   do i = 1 to 5;
+     scores(i) = i * 10;
+   end;
+
+   board(2,3) = 99;
+   temps(-2) = 1;
+
+   if scores(1) ^= 10 then do;
+      fails = fails + 1;
+      put skip list('FAIL: scores(1) =', scores(1));
+   end;
+   if board(2,3) ^= 99 then do;
+      fails = fails + 1;
+      put skip list('FAIL: board(2,3) =', board(2,3));
+   end;
+   if lbound(temps) ^= -2 then do;
+      fails = fails + 1;
+      put skip list('FAIL: temps lbound =', lbound(temps));
+   end;
+   if sum(scores) ^= 150 then do;
+      fails = fails + 1;
+      put skip list('FAIL: sum =', sum(scores));
+   end;
+
+   /* slice: whole row write, row read */
+   m(2,*) = 0;
+   m(1,*) = 42;
+   row = m(1,*);
+   if sum(row) ^= 210 then do;
+      fails = fails + 1;
+      put skip list('FAIL: row sum =', sum(row));
+   end;
+
+   /* whole-array math, no loop */
+   scores = scores * 2;
+   if sum(scores) ^= 300 then do;
+      fails = fails + 1;
+      put skip list('FAIL: doubled sum =', sum(scores));
+   end;
+
+   /* dynamic size frozen on block entry */
+   call fill(4);
+
+ fill: procedure(n);
+   dcl (n, j) fixed bin(31),
+       a(n) fixed bin(31);
+
+   do j = 1 to n;
+     a(j) = j * 2;
+   end;
+
+   if dim(a) ^= 4 then do;
+      fails = fails + 1;
+      put skip list('FAIL: dyn dim =', dim(a));
+   end;
+   if sum(a) ^= 20 then do;
+      fails = fails + 1;
+      put skip list('FAIL: dyn sum =', sum(a));
+   end;
+ end fill;
+
+   if fails = 0 then put skip list('PASS');
+ end arrays;

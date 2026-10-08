@@ -1,0 +1,38 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/c_interop.pli: call C functions
+    declared as ENTRY with LINKAGE(SYSTEM). The runner compiles the
+    companion c_interop_helper.c with clang and links it through the
+    plic driver. Prints FAIL per violated check, PASS only if all
+    hold. */
+
+ cdemo: proc options(main);
+   dcl c_add entry(fixed bin(31), fixed bin(31))
+     returns(fixed bin(31))
+     options(linkage(system))
+     external('c_byval_add');
+
+   dcl c_mul entry(fixed bin(31), fixed bin(31))
+     returns(fixed bin(31))
+     options(linkage(system))
+     external('c_byval_mul');
+
+   dcl r fixed bin(31);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   r = c_add(3, 4);
+   if r ^= 7 then do;
+      fails = fails + 1;
+      put skip list('FAIL: 3 + 4 =', r);
+   end;
+
+   r = c_mul(6, 7);
+   if r ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL: 6 * 7 =', r);
+   end;
+
+   if fails = 0 then put skip list('PASS');
+ end cdemo;

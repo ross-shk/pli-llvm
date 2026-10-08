@@ -1,0 +1,51 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/first_class_procedures.pli: functions
+    kept in variables and passed as callbacks. Prints FAIL per violated
+    check, PASS only if all hold. */
+
+ firstcls: proc options(main);
+   dcl on_get entry(fixed bin(31))
+     returns(fixed bin(31)) variable;
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   on_get = add1;
+   if on_get(41) ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL: add1(41) =', on_get(41));
+   end;
+
+   on_get = dbl;
+   if on_get(41) ^= 82 then do;
+      fails = fails + 1;
+      put skip list('FAIL: dbl(41) =', on_get(41));
+   end;
+   if dispatch(add1) ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL: dispatch(add1) =', dispatch(add1));
+   end;
+   if dispatch(dbl) ^= 82 then do;
+      fails = fails + 1;
+      put skip list('FAIL: dispatch(dbl) =', dispatch(dbl));
+   end;
+
+   if fails = 0 then put skip list('PASS');
+
+ add1: proc(x) returns(fixed bin(31));
+   dcl x fixed bin(31);
+   return(x + 1);
+ end add1;
+
+ dbl: proc(x) returns(fixed bin(31));
+   dcl x fixed bin(31);
+   return(x * 2);
+ end dbl;
+
+ dispatch: proc(cb) returns(fixed bin(31));
+   dcl cb entry(fixed bin(31))
+     returns(fixed bin(31)) variable;
+   return(cb(41));
+ end dispatch;
+ end firstcls;

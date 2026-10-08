@@ -1,0 +1,85 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/control_flow.pli: IF, DO, BEGIN,
+    SELECT, LEAVE/ITERATE, DO UNTIL. Prints FAIL per violated check,
+    PASS only if all hold. */
+
+ flow: proc options(main);
+   dcl (score, total) fixed bin(31),
+       i fixed bin(31);
+   dcl st char(10) varying;
+   dcl step fixed bin(31) init(0);
+   dcl done bit(1) init('0'b);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   score = 85;
+   if score >= 90 then
+     put skip list('A');
+   else if score >= 80 then
+     put skip list('B');
+   else
+     put skip list('keep trying');
+
+   total = 0;
+   do i = 1 to 10;
+     total = total + i;
+   end;
+   if total ^= 55 then do;
+      fails = fails + 1;
+      put skip list('FAIL: 1..10 =', total);
+   end;
+
+   do while (total < 1000);
+     total = total * 2;
+   end;
+   if total ^= 1760 then do;
+      fails = fails + 1;
+      put skip list('FAIL: grown =', total);
+   end;
+
+   /* scope block */
+   begin;
+     dcl tmp fixed bin(31) init(5);
+     total = total + tmp;
+   end;
+   if total ^= 1765 then do;
+      fails = fails + 1;
+      put skip list('FAIL: after begin =', total);
+   end;
+
+   /* select: first match wins */
+   st = 'active';
+   select (st);
+     when ('pending') put skip list('waiting');
+     when ('active') put skip list('working');
+     otherwise put skip list('huh?');
+   end;
+
+   /* leave = break, iterate = continue: odd 1,3,5 (5 is odd) */
+   total = 0;
+   do i = 1 to 100;
+     if i > 5 then leave;
+     if mod(i, 2) = 0 then iterate;
+     total = total + i;
+   end;
+   if total ^= 9 then do;
+      fails = fails + 1;
+      put skip list('FAIL: odd total =', total);
+   end;
+
+   /* do until always runs once */
+   step = 0;
+   done = '0'b;
+   do until (done);
+     step = step + 1;
+     if step >= 3 then done = '1'b;
+   end;
+   if step ^= 3 then do;
+      fails = fails + 1;
+      put skip list('FAIL: steps =', step);
+   end;
+
+   if fails = 0 then put skip list('PASS');
+ end flow;

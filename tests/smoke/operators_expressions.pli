@@ -1,0 +1,52 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/operators_expressions.pli: precedence,
+    || glue, compare. Prints FAIL per violated check, PASS only if all
+    hold. */
+
+ ops: proc options(main);
+   dcl r fixed bin(31);
+   dcl (s, tag) char(20) varying;
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   r = -3 ** 2;
+   if r ^= -9 then do;
+      fails = fails + 1;
+      put skip list('FAIL: -3 ** 2 =', r);
+   end;
+
+   s = 'a' || 'b' || 'c';
+   if s ^= 'abc' then do;
+      fails = fails + 1;
+      put skip list('FAIL: glue =', s);
+   end;
+
+   tag = 'user-' || 42;
+   if tag ^= 'user-42' then do;
+      fails = fails + 1;
+      put skip list('FAIL: tag =', tag);
+   end;
+
+   tag = 'user-' !! '42';
+   if tag ^= 'user-42' then do;
+      fails = fails + 1;
+      put skip list('FAIL: alias !! =', tag);
+   end;
+
+   if r >= 0 then do;
+      fails = fails + 1;
+      put skip list('FAIL: r not negative =', r);
+   end;
+   if tag ^= 'user-42' then do;
+      fails = fails + 1;
+      put skip list('FAIL: eq works =', tag);
+   end;
+   if r = 9 then do;
+      fails = fails + 1;
+      put skip list('FAIL: not-eq r =', r);
+   end;
+
+   if fails = 0 then put skip list('PASS');
+ end ops;

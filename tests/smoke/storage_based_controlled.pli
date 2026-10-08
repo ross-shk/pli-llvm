@@ -1,0 +1,64 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Smoke test port of examples/storage_based_controlled.pli: BASED
+    views, CONTROLLED stack, heap ALLOCATE/FREE. Prints FAIL per
+    violated check, PASS only if all hold. */
+
+ storage: proc options(main);
+   dcl 1 target,
+         2 value fixed bin(31);
+   dcl p pointer;
+
+   dcl 1 view based(p),  /* based: a view through a pointer */
+         2 value fixed bin(31);
+
+   dcl c fixed bin(31) controlled;
+   dcl q pointer;
+   dcl 1 rec based(q),
+         2 data fixed bin(31);
+   dcl fails fixed bin(31);
+
+   fails = 0;
+
+   p = addr(target);
+   view.value = 42;
+
+   if target.value ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL: via view =', target.value);
+   end;
+   if p -> view.value ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL: explicit =', p -> view.value);
+   end;
+
+   /* controlled: a stack of generations */
+   allocate c;
+   c = 11;
+
+   allocate c;
+   c = 22;
+
+   if c ^= 22 then do;
+      fails = fails + 1;
+      put skip list('FAIL: top =', c);
+   end;
+
+   free c;
+   if c ^= 11 then do;
+      fails = fails + 1;
+      put skip list('FAIL: after free =', c);
+   end;
+
+   /* heap block with SET */
+   allocate rec set(q);
+   q -> rec.data = 99;
+
+   if q -> rec.data ^= 99 then do;
+      fails = fails + 1;
+      put skip list('FAIL: heap =', q -> rec.data);
+   end;
+   free rec;
+
+   if fails = 0 then put skip list('PASS');
+ end storage;
