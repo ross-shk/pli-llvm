@@ -267,7 +267,8 @@ void pli_display_decfixed(long long v, long long q) {
  * The stored integer of a >18 digit FIXED DECIMAL (ADR-191) overflows i64, so
  * output formats the full 128-bit value directly instead of truncating.
  * There is no printf length modifier for 128 bits, so digits come from
- * repeated div/mod by 10 through the portable helpers (MSVC has no __int128).
+ * repeated div/mod by 10 through the portable helpers (MSVC lacks __int128;
+ * clang-cl supports it natively).
  */
 static size_t pli_fmt128(char *buf, size_t cap, PliU128 v) {
   char tmp[40];

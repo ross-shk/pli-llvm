@@ -27,7 +27,8 @@ def main(src: str, dst: str, target_suffix: str = "") -> None:
         f.write("// Do not edit. Regenerated on every build from libpli.bc.\n")
         array_name = f"plic_embedded_libpli_bc{target_suffix}"
         if len(data) == 0:
-            # MSVC rejects zero-size arrays (C2466); emit one dummy byte.
+            # MSVC/cl.exe rejects zero-size arrays (C2466); emit one dummy
+            # byte. clang-cl also rejects this; use 1-element arrays.
             # The _len stays 0 so the byte is never read.
             f.write(f'extern "C" const unsigned char {array_name}[1] = {{\n')
             f.write("  0x00,\n")

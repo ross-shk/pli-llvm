@@ -32,13 +32,13 @@ jobs:
       - name: Install LLVM + lld (macOS)
         if: runner.os == 'macOS'
         run: brew install llvm lld ninja cmake
-      - name: Set up MSVC (Windows)
+      - name: Set up MSVC dev (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
-      - name: Install LLVM + lld (Windows)
+      - name: Install LLVM 23 (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install llvm ninja -y
+          choco install llvm ninja -y --version=23.1.3
           echo "CMAKE_PREFIX_PATH=C:\Program Files\LLVM" >> "$GITHUB_ENV"
           echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
       - name: Configure (CMake + Ninja)
@@ -46,7 +46,7 @@ jobs:
           if [ "${{ runner.os }}" = "macOS" ]; then
             cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
           elif [ "${{ runner.os }}" = "Windows" ]; then
-            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_BUILD_TYPE=Release
+            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
           else
             cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23
           fi
@@ -67,8 +67,9 @@ jobs:
       - name: Size gate (stripped < 150 MB)
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            bytes=$(stat -c%s build/cmake/plic.exe)
-            echo "Unstripped size: $bytes bytes"
+            llvm-objcopy --strip-all -o /tmp/plic.strip build/cmake/plic.exe
+            bytes=$(stat -c%s /tmp/plic.strip 2>/dev/null || stat -f%z /tmp/plic.strip)
+            echo "Stripped size: $bytes bytes"
             test "$bytes" -lt 157286400
           else
             strip -o /tmp/plic.strip build/cmake/plic

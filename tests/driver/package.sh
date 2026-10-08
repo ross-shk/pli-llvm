@@ -11,8 +11,8 @@ set -u
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
 # EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
-  *) EXE=; MATHLIB=-lm ;;
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
+  *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
 esac
 PLIC=${PLIC:-./build/plic}
 CC=${CC:-${CLANG:-clang}}
@@ -52,6 +52,6 @@ SYM_PREFIX=$([ "$(uname -s)" = "Darwin" ] && echo "_" || echo "")
 nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PUB" >/dev/null || { echo "FAIL package: ${SYM_PREFIX}PUB not exported"; exit 1; }
 if nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PRIV" >/dev/null; then echo "FAIL package: ${SYM_PREFIX}PRIV leaked"; exit 1; fi
 # -lm after the archive: libpli needs libm on Linux (no-op on macOS).
-$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB -o "$OUT$EXE" || { echo "FAIL package: link"; exit 1; }
+$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL package: link"; exit 1; }
 "$OUT$EXE"
 exit 0

@@ -10,8 +10,8 @@ set -u
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
 # EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
-  *) EXE=; MATHLIB=-lm ;;
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
+  *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
 esac
 PLIC=${PLIC:-$PWD/build/plic}
 CLANG=${CLANG:-clang}
@@ -40,6 +40,6 @@ if $PLIC -c multic_a.pli multic_b.pli -o x.o 2>/dev/null; then
   exit 1
 fi
 # -lm after the archive: libpli needs libm on Linux (no-op on macOS).
-$CLANG multic_b.o multic_a.o "$RTLIB" $MATHLIB -o multic$EXE || { echo "FAIL multic: link"; exit 1; }
+$CLANG multic_b.o multic_a.o "$RTLIB" $MATHLIB $RTLIBFLAGS -o multic$EXE || { echo "FAIL multic: link"; exit 1; }
 ./multic$EXE
 exit 0
