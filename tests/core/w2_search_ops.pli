@@ -1,0 +1,47 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* W2 search/scan operations: INDEX, VERIFY, SEARCH, TALLY — rules
+    (92) and extension ADR-107. Boundary cases: empty strings, zero
+    length, start below 1, start past end, one-based results, early
+    exit, non-overlapping tally stride. Exercises emitVerify/emitVerifyFrom/
+    emitSearch/emitTally dispatch + direct LLVM lowerings. */
+ w2_ops: procedure options(main);
+    declare fails fixed bin(31) init(0);
+
+    /* --- INDEX (rule 92): 1-based position, empty needle → 1 --- */
+    if index('hello', 'll') ^= 3 then fails = fails + 1;
+    if index('hello', '') ^= 1 then fails = fails + 1;
+    if index('hello', 'x') ^= 0 then fails = fails + 1;
+
+    /* --- VERIFY(s, t): first char of s NOT in t, 0 if all present --- */
+    if verify('ABCD', 'BCD') ^= 1 then fails = fails + 1;
+    if verify('ABCD', 'ABCD') ^= 0 then fails = fails + 1;
+    if verify('A1B2', 'ABCD') ^= 2 then fails = fails + 1;
+    if verify('', 'ABC') ^= 0 then fails = fails + 1;
+    if verify('ABC', '') ^= 1 then fails = fails + 1;
+
+    /* --- VERIFY(s, t, start): from position start (1-based, <1→1) --- */
+    if verify('A1B2C3', 'ABC', 2) ^= 2 then fails = fails + 1;
+    if verify('A1B2C3', 'A1', 1) ^= 3 then fails = fails + 1;
+    if verify('ABC', 'ABCD', 0) ^= 0 then fails = fails + 1;
+    if verify('ABC', 'ABCD', 10) ^= 0 then fails = fails + 1;
+    if verify('', 'ABC', 1) ^= 0 then fails = fails + 1;
+
+    /* --- SEARCH(s, t, start): first char of s (from start) IN t --- */
+    if search('hello world', 'xdz', 1) ^= 11 then fails = fails + 1;
+    if search('hello', 'ax', 1) ^= 0 then fails = fails + 1;
+    if search('hello', 'a', 1) ^= 0 then fails = fails + 1;
+    if search('hello', 'ol', 0) ^= 3 then fails = fails + 1;
+    if search('hello', 'ol', 10) ^= 0 then fails = fails + 1;
+    if search('', 'abc', 1) ^= 0 then fails = fails + 1;
+
+    /* --- TALLY(x, y): non-overlapping count, empty → 0 --- */
+    if tally('abcabc', 'bc') ^= 2 then fails = fails + 1;
+    if tally('aaa', 'aa') ^= 1 then fails = fails + 1;
+    if tally('abc', 'z') ^= 0 then fails = fails + 1;
+    if tally('', 'a') ^= 0 then fails = fails + 1;
+    if tally('abc', '') ^= 0 then fails = fails + 1;
+    if tally('a b c', ' ') ^= 2 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS w2 search ops');
+    else put skip list('FAIL w2 search ops: fails =', fails);
+ end w2_ops;

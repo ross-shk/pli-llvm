@@ -570,8 +570,21 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
 // Operations with a direct LLVM lowering implemented (populated P1+).
 static const std::set<std::string>& kLLVMLowerings() {
   static const std::set<std::string> table = {
-      "assign_char", "index",     "assign_varying", "high",   "low",
-      "uppercase",   "lowercase", "reverse",        "center", "cmp_char",
+      "assign_char",
+      "index",
+      "assign_varying",
+      "high",
+      "low",
+      "uppercase",
+      "lowercase",
+      "reverse",
+      "center",
+      "cmp_char",
+      // W2 search/scan operations
+      "verify",
+      "verify_from",
+      "search",
+      "tally",
   };
   return table;
 }
@@ -691,6 +704,40 @@ llvm::Value* IRGen::emitCmpChar(llvm::Value* a, llvm::Value* aLen, llvm::Value* 
     return b_.CreateCall(runtimeFn("pli_cmp_char"), {a, aLen, b, bLen}, "scmp");
   }
   return emitCmpCharLLVM(a, aLen, b, bLen);
+}
+
+// --- W2 dispatch wrappers (search/scan operations) ---
+
+llvm::Value* IRGen::emitVerify(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
+                               llvm::Value* tLen) {
+  if (useRuntimeCall("verify")) {
+    return b_.CreateCall(runtimeFn("pli_verify"), {s, sLen, t, tLen}, "verify");
+  }
+  return emitVerifyLLVM(s, sLen, t, tLen);
+}
+
+llvm::Value* IRGen::emitVerifyFrom(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
+                                   llvm::Value* tLen, llvm::Value* start) {
+  if (useRuntimeCall("verify_from")) {
+    return b_.CreateCall(runtimeFn("pli_verify_from"), {s, sLen, t, tLen, start}, "vrf");
+  }
+  return emitVerifyFromLLVM(s, sLen, t, tLen, start);
+}
+
+llvm::Value* IRGen::emitSearch(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen,
+                               llvm::Value* start) {
+  if (useRuntimeCall("search")) {
+    return b_.CreateCall(runtimeFn("pli_search"), {s, sLen, t, tLen, start}, "search");
+  }
+  return emitSearchLLVM(s, sLen, t, tLen, start);
+}
+
+llvm::Value* IRGen::emitTally(llvm::Value* x, llvm::Value* xLen, llvm::Value* y,
+                              llvm::Value* yLen) {
+  if (useRuntimeCall("tally")) {
+    return b_.CreateCall(runtimeFn("pli_tally"), {x, xLen, y, yLen}, "tally");
+  }
+  return emitTallyLLVM(x, xLen, y, yLen);
 }
 
 // Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
@@ -1060,6 +1107,308 @@ llvm::Value* IRGen::emitCmpCharLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Val
   resultPhi->addIncoming(zero, doneBB);
   // Truncate to i32 to match pli_cmp_char's return type (int).
   return b_.CreateTrunc(resultPhi, b_.getInt32Ty(), "sc.res");
+}
+
+// --- W2 direct LLVM lowerings (P3) ---
+// Mirrors the C bodies in runtime/rt_string.c. Each returns i64 (truncated
+// to i32 by the call site), preserving the runtime's 1-based semantics.
+
+// verify(s, t): 1-based position of the first char of s that does NOT
+// appear in t, or 0 if every char of s is in t. Mirrors pli_verify.
+llvm::Value* IRGen::emitVerifyLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
+                                   llvm::Value* tLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+  llvm::Value* tLen64 = b_.CreateZExtOrTrunc(tLen, b_.getInt64Ty(), "vrf.tlen");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* innerBB = llvm::BasicBlock::Create(ctx_, "vrf.inner", F);
+  llvm::BasicBlock* checkByteBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* innerLatchBB = llvm::BasicBlock::Create(ctx_, "vrf.inner.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.found", F);
+  llvm::BasicBlock* nomatchBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  // Entry: slen <= 0 → done (return 0).
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  // outer: i = phi; exit when i >= slen.
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(zero, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, innerBB);
+
+  // inner: j = phi; if j >= tlen → char not in t → nomatch (return i+1).
+  startBlock(innerBB);
+  llvm::PHINode* jPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.j");
+  jPhi->addIncoming(zero, outerBB);
+  llvm::Value* jGeTlen = b_.CreateICmpUGE(jPhi, tLen64, "vrf.j_ge_tlen");
+  b_.CreateCondBr(jGeTlen, nomatchBB, checkByteBB);
+
+  // check_byte: compare s[i] vs t[j]; if equal → found (advance i); else j++.
+  startBlock(checkByteBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* tjPtr = b_.CreateGEP(b_.getInt8Ty(), t, {jPhi}, "vrf.tj_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  llvm::Value* tj = b_.CreateLoad(b_.getInt8Ty(), tjPtr, "vrf.tj");
+  llvm::Value* eq = b_.CreateICmpEQ(si, tj, "vrf.eq");
+  b_.CreateCondBr(eq, foundBB, innerLatchBB);
+
+  // inner.latch: j = j + 1, back to inner.header.
+  startBlock(innerLatchBB);
+  jPhi->addIncoming(b_.CreateAdd(jPhi, one64, "vrf.j_next"), innerLatchBB);
+  b_.CreateBr(innerBB);
+
+  // found: s[i] is in t → advance i and retry.
+  startBlock(foundBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "vrf.i_next"), foundBB);
+  b_.CreateBr(outerBB);
+
+  // nomatch: s[i] is NOT in t → return i + 1.
+  startBlock(nomatchBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "vrf.result");
+  b_.CreateBr(exitBB);
+
+  // done: no mismatched char found → return 0.
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  // exit: merge results.
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, nomatchBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// verify_from(s, t, start): like verify but scans from position `start`
+// (1-based, < 1 clamped to 1). Mirrors pli_verify_from.
+llvm::Value* IRGen::emitVerifyFromLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
+                                       llvm::Value* tLen, llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+  llvm::Value* tLen64 = b_.CreateZExtOrTrunc(tLen, b_.getInt64Ty(), "vrf.tlen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "vrf.start");
+  // start < 1 → 1; i starts at start-1 (0-based).
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "vrf.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "vrf.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* innerBB = llvm::BasicBlock::Create(ctx_, "vrf.inner", F);
+  llvm::BasicBlock* checkByteBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* innerLatchBB = llvm::BasicBlock::Create(ctx_, "vrf.inner.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.found", F);
+  llvm::BasicBlock* nomatchBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  // Entry: slen <= 0 → done (return 0).
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, innerBB);
+
+  startBlock(innerBB);
+  llvm::PHINode* jPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.j");
+  jPhi->addIncoming(zero, outerBB);
+  llvm::Value* jGeTlen = b_.CreateICmpUGE(jPhi, tLen64, "vrf.j_ge_tlen");
+  b_.CreateCondBr(jGeTlen, nomatchBB, checkByteBB);
+
+  startBlock(checkByteBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* tjPtr = b_.CreateGEP(b_.getInt8Ty(), t, {jPhi}, "vrf.tj_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  llvm::Value* tj = b_.CreateLoad(b_.getInt8Ty(), tjPtr, "vrf.tj");
+  llvm::Value* eq = b_.CreateICmpEQ(si, tj, "vrf.eq");
+  b_.CreateCondBr(eq, foundBB, innerLatchBB);
+
+  startBlock(innerLatchBB);
+  jPhi->addIncoming(b_.CreateAdd(jPhi, one64, "vrf.j_next"), innerLatchBB);
+  b_.CreateBr(innerBB);
+
+  startBlock(foundBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "vrf.i_next"), foundBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(nomatchBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "vrf.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, nomatchBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// search(s, t, start): 1-based position of the first char of s (from `start`,
+// clamped to 1) that IS in t, or 0. Mirrors pli_search.
+llvm::Value* IRGen::emitSearchLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
+                                   llvm::Value* tLen, llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "srch.slen");
+  llvm::Value* tLen64 = b_.CreateZExtOrTrunc(tLen, b_.getInt64Ty(), "srch.tlen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "srch.start");
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "srch.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "srch.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "srch.outer", F);
+  llvm::BasicBlock* innerBB = llvm::BasicBlock::Create(ctx_, "srch.inner", F);
+  llvm::BasicBlock* checkByteBB = llvm::BasicBlock::Create(ctx_, "srch.check_byte", F);
+  llvm::BasicBlock* innerLatchBB = llvm::BasicBlock::Create(ctx_, "srch.inner.latch", F);
+  llvm::BasicBlock* outerLatchBB = llvm::BasicBlock::Create(ctx_, "srch.outer.latch", F);
+  llvm::BasicBlock* matchedBB = llvm::BasicBlock::Create(ctx_, "srch.matched", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "srch.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "srch.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "srch.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "srch.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, innerBB);
+
+  startBlock(innerBB);
+  llvm::PHINode* jPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.j");
+  jPhi->addIncoming(zero, outerBB);
+  llvm::Value* jGeTlen = b_.CreateICmpUGE(jPhi, tLen64, "srch.j_ge_tlen");
+  b_.CreateCondBr(jGeTlen, outerLatchBB, checkByteBB);
+
+  startBlock(checkByteBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "srch.si_ptr");
+  llvm::Value* tjPtr = b_.CreateGEP(b_.getInt8Ty(), t, {jPhi}, "srch.tj_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "srch.si");
+  llvm::Value* tj = b_.CreateLoad(b_.getInt8Ty(), tjPtr, "srch.tj");
+  llvm::Value* eq = b_.CreateICmpEQ(si, tj, "srch.eq");
+  b_.CreateCondBr(eq, matchedBB, innerLatchBB);
+
+  startBlock(innerLatchBB);
+  jPhi->addIncoming(b_.CreateAdd(jPhi, one64, "srch.j_next"), innerLatchBB);
+  b_.CreateBr(innerBB);
+
+  // outer.latch: char not in t → advance i.
+  startBlock(outerLatchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "srch.i_next"), outerLatchBB);
+  b_.CreateBr(outerBB);
+
+  // matched: char found → return i + 1.
+  startBlock(matchedBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "srch.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.out");
+  resultPhi->addIncoming(matchResult, matchedBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// tally(x, y): count of non-overlapping occurrences of y in x.
+// Mirrors pli_tally: ylen<=0 or xlen<ylen → 0; otherwise scan with stride
+// ylen on match, stride 1 on mismatch.
+llvm::Value* IRGen::emitTallyLLVM(llvm::Value* x, llvm::Value* xLen, llvm::Value* y,
+                                  llvm::Value* yLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* xLen64 = b_.CreateZExtOrTrunc(xLen, b_.getInt64Ty(), "tally.xlen");
+  llvm::Value* yLen64 = b_.CreateZExtOrTrunc(yLen, b_.getInt64Ty(), "tally.ylen");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "tally.outer", F);
+  llvm::BasicBlock* innerBB = llvm::BasicBlock::Create(ctx_, "tally.inner", F);
+  llvm::BasicBlock* checkByteBB = llvm::BasicBlock::Create(ctx_, "tally.check_byte", F);
+  llvm::BasicBlock* innerLatchBB = llvm::BasicBlock::Create(ctx_, "tally.inner.latch", F);
+  llvm::BasicBlock* matchBB = llvm::BasicBlock::Create(ctx_, "tally.match", F);
+  llvm::BasicBlock* nomatchBB = llvm::BasicBlock::Create(ctx_, "tally.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "tally.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "tally.exit", F);
+
+  // Entry: ylen <= 0 → 0; xlen < ylen → 0.
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* yEmpty = b_.CreateICmpULE(yLen64, zero, "tally.y_empty");
+  llvm::Value* xTooSmall = b_.CreateICmpULT(xLen64, yLen64, "tally.x_too_small");
+  llvm::Value* abort = b_.CreateOr(yEmpty, xTooSmall, "tally.abort");
+  b_.CreateCondBr(abort, doneBB, outerBB);
+
+  // outer: i = phi, n = phi; exit when i + ylen > xlen.
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 3, "tally.i");
+  iPhi->addIncoming(zero, entryBB);
+  llvm::PHINode* nPhi = b_.CreatePHI(b_.getInt64Ty(), 3, "tally.n");
+  nPhi->addIncoming(zero, entryBB);
+  llvm::Value* iPlusYlen = b_.CreateAdd(iPhi, yLen64, "tally.i_plus_ylen");
+  llvm::Value* outerExit = b_.CreateICmpUGT(iPlusYlen, xLen64, "tally.outer_exit");
+  b_.CreateCondBr(outerExit, doneBB, innerBB);
+
+  // inner: j = phi; if j >= ylen → all matched → matchBB.
+  startBlock(innerBB);
+  llvm::PHINode* jPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tally.j");
+  jPhi->addIncoming(zero, outerBB);
+  llvm::Value* jGeYlen = b_.CreateICmpUGE(jPhi, yLen64, "tally.j_ge_ylen");
+  b_.CreateCondBr(jGeYlen, matchBB, checkByteBB);
+
+  // check_byte: compare x[i+j] vs y[j]; mismatch → nomatchBB.
+  startBlock(checkByteBB);
+  llvm::Value* ij = b_.CreateAdd(iPhi, jPhi, "tally.ij");
+  llvm::Value* xijPtr = b_.CreateGEP(b_.getInt8Ty(), x, {ij}, "tally.xij_ptr");
+  llvm::Value* yjPtr = b_.CreateGEP(b_.getInt8Ty(), y, {jPhi}, "tally.yj_ptr");
+  llvm::Value* xij = b_.CreateLoad(b_.getInt8Ty(), xijPtr, "tally.xij");
+  llvm::Value* yj = b_.CreateLoad(b_.getInt8Ty(), yjPtr, "tally.yj");
+  llvm::Value* mismatch = b_.CreateICmpNE(xij, yj, "tally.mismatch");
+  b_.CreateCondBr(mismatch, nomatchBB, innerLatchBB);
+
+  // inner.latch: j = j + 1, back to inner.header.
+  startBlock(innerLatchBB);
+  jPhi->addIncoming(b_.CreateAdd(jPhi, one64, "tally.j_next"), innerLatchBB);
+  b_.CreateBr(innerBB);
+
+  // match: n++ and i += ylen, then back to outer.
+  startBlock(matchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, yLen64, "tally.i_match"), matchBB);
+  nPhi->addIncoming(b_.CreateAdd(nPhi, one64, "tally.n_next"), matchBB);
+  b_.CreateBr(outerBB);
+
+  // nomatch: i++ only, then back to outer.
+  startBlock(nomatchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "tally.i_nomatch"), nomatchBB);
+  nPhi->addIncoming(nPhi, nomatchBB);
+  b_.CreateBr(outerBB);
+
+  // done: merge n from loop-exit or zero from entry-abort.
+  startBlock(doneBB);
+  llvm::PHINode* donePhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tally.n_done");
+  donePhi->addIncoming(nPhi, outerBB);
+  donePhi->addIncoming(zero, entryBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  return donePhi;
 }
 
 // Get (or create) a declaration for a runtime `pli_*` function. The signature
@@ -8305,9 +8654,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* r;
     if (e->args.size() == 3) {
       Val st = emitExpr(e->args[2].get());
-      r = b_.CreateCall(runtimeFn("pli_verify_from"), {s.ptr, s.len, t.ptr, t.len, toI64(st)});
+      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
     } else {
-      r = b_.CreateCall(runtimeFn("pli_verify"), {s.ptr, s.len, t.ptr, t.len});
+      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
     }
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
@@ -8343,7 +8692,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "TALLY") {
     Val x = emitExpr(e->args[0].get());
     Val y = emitExpr(e->args[1].get());
-    llvm::Value* r = b_.CreateCall(runtimeFn("pli_tally"), {x.ptr, x.len, y.ptr, y.len});
+    llvm::Value* r = emitTally(x.ptr, x.len, y.ptr, y.len);
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "tal32");
     result = v;
@@ -8391,8 +8740,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val t = emitExpr(e->args[1].get());
     Val st = emitExpr(e->args[2].get());
-    llvm::Value* r =
-        b_.CreateCall(runtimeFn("pli_search"), {s.ptr, s.len, t.ptr, t.len, toI64(st)});
+    llvm::Value* r = emitSearch(s.ptr, s.len, t.ptr, t.len, toI64(st));
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "srch32");
     result = v;
@@ -8404,9 +8752,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* r;
     if (e->args.size() == 3) {
       Val st = emitExpr(e->args[2].get());
-      r = b_.CreateCall(runtimeFn("pli_verify_from"), {s.ptr, s.len, t.ptr, t.len, toI64(st)});
+      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
     } else {
-      r = b_.CreateCall(runtimeFn("pli_verify"), {s.ptr, s.len, t.ptr, t.len});
+      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
     }
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");

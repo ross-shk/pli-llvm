@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* W2 search/scan IR check: exercises VERIFY, SEARCH, TALLY, INDEX
+    in direct LLVM mode. CHECK-NOT confirms no pli_* calls remain. */
+ w2_ir: procedure options(main);
+    declare r fixed bin(31);
+    declare s char(20) varying;
+    s = 'hello';
+    r = index(s, 'll');
+    r = verify('ABCD', 'BCD');
+    r = search('hello world', 'xdz', 1);
+    r = tally('abcabc', 'bc');
+ end w2_ir;

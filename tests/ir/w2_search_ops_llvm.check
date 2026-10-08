@@ -1,0 +1,6 @@
+CHECK-NOT: call.*@pli_index
+CHECK-NOT: call.*@pli_verify
+CHECK-NOT: call.*@pli_verify_from
+CHECK-NOT: call.*@pli_search
+CHECK-NOT: call.*@pli_tally
+CHECK: phi i64

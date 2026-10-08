@@ -481,6 +481,15 @@ private:
   void emitCenter(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* src, llvm::Value* srcLen,
                   llvm::Value* w);
   llvm::Value* emitCmpChar(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
+  // Dispatch wrappers for W2 search/scan operations (P3). Each checks the
+  // active lowering mode and either emits a pli_* runtime call or a direct
+  // LLVM lowering.
+  llvm::Value* emitVerify(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen);
+  llvm::Value* emitVerifyFrom(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen,
+                              llvm::Value* start);
+  llvm::Value* emitSearch(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen,
+                          llvm::Value* start);
+  llvm::Value* emitTally(llvm::Value* x, llvm::Value* xLen, llvm::Value* y, llvm::Value* yLen);
   // Direct LLVM lowering for assign_char (P1+): memmove + blank-pad tail.
   void emitAssignCharLLVM(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src,
                           llvm::Value* srcLen);
@@ -508,6 +517,19 @@ private:
   // Direct LLVM lowering for cmp_char (P3): blank-extended byte comparison.
   llvm::Value* emitCmpCharLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
                                llvm::Value* bLen);
+  // Direct LLVM lowering for VERIFY (P3): bytewise scan for first char
+  // absent from the delimiter set, 1-based result.
+  llvm::Value* emitVerifyLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen);
+  // Direct LLVM lowering for VERIFY(s,t,from) (P3): same as verify but
+  // starting at position `start` (1-based, clamped to 1).
+  llvm::Value* emitVerifyFromLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
+                                  llvm::Value* tLen, llvm::Value* start);
+  // Direct LLVM lowering for SEARCH (P3): first char present in the set,
+  // 1-based, starting at `start` (clamped to 1).
+  llvm::Value* emitSearchLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen,
+                              llvm::Value* start);
+  // Direct LLVM lowering for TALLY (P3): non-overlapping count of y in x.
+  llvm::Value* emitTallyLLVM(llvm::Value* x, llvm::Value* xLen, llvm::Value* y, llvm::Value* yLen);
   // Get-or-create an LLVM intrinsic with an explicit signature (used only for
   // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
   llvm::Function* intrinsicFn(const std::string& name, llvm::Type* ret,

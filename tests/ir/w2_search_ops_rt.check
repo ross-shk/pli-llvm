@@ -1,0 +1,4 @@
+CHECK: call.*@pli_index
+CHECK: call.*@pli_verify
+CHECK: call.*@pli_search
+CHECK: call.*@pli_tally
