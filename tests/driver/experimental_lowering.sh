@@ -12,21 +12,29 @@ mkdir -p "$OUT"
 
 cat > "$OUT.witness.pli" <<'EOF'
 witness: procedure options(main);
-  declare s char(8);
-  declare v char(8) varying;
-  declare fails fixed bin(31);
-  fails = 0;
-  v = 'AB';
-  s = v;
-  if s ^= 'AB      ' then fails = fails + 1;
-  v = 'ABCDEFGHIJ';
-  s = v;
-  if s ^= 'ABCDEFGH' then fails = fails + 1;
-  if index('hello', 'll') ^= 3 then fails = fails + 1;
-  if index('hi', 'hello') ^= 0 then fails = fails + 1;
-  if index('hello', '') ^= 1 then fails = fails + 1;
-  if fails = 0 then put skip list('PASS witness');
-  else put skip list('FAIL witness:', fails);
+   declare s char(8);
+   declare v char(8) varying;
+   declare f float(6);
+   declare x fixed bin(31);
+   declare fails fixed bin(31);
+   fails = 0;
+   v = 'AB';
+   s = v;
+   if s ^= 'AB      ' then fails = fails + 1;
+   v = 'ABCDEFGHIJ';
+   s = v;
+   if s ^= 'ABCDEFGH' then fails = fails + 1;
+   if index('hello', 'll') ^= 3 then fails = fails + 1;
+   if index('hi', 'hello') ^= 0 then fails = fails + 1;
+   if index('hello', '') ^= 1 then fails = fails + 1;
+   /* W4: FIXED(float) and FIXED(char) differential check */
+   f = 3.14;
+   x = fixed(f);
+   if x ^= 3 then fails = fails + 1;
+   x = fixed('123');
+   if x ^= 123 then fails = fails + 1;
+   if fails = 0 then put skip list('PASS witness');
+   else put skip list('FAIL witness:', fails);
 end witness;
 EOF
 

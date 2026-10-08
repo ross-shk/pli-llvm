@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* W4 IR check: runtime mode. CHECK confirms pli_* calls present. */
+w4_rt: procedure options(main);
+    declare x fixed bin(31);
+    declare f float(6);
+    declare s char(20);
+    x = fixed(f);
+    x = fixed(s);
+    x = fixed('123');
+end w4_rt;

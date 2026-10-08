@@ -564,6 +564,12 @@ private:
   // Direct LLVM lowering for TRIM (P3): strip leading/trailing pad chars, blank-pad.
   void emitTrimLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
                     llvm::Value* pad, llvm::Value* padLen);
+  // Direct LLVM lowering for FIXED(float) (W4): fptosi.sat.i64 matches the
+  // runtime pli_fixed_of_float clamping + truncation-toward-zero semantics.
+  llvm::Value* emitFixedOfFloatLLVM(llvm::Value* x);
+  // Direct LLVM lowering for FIXED(char) (W4): skip blanks, optional sign,
+  // scan digits, set *ok=0 when no digits found.
+  llvm::Value* emitFixedOfCharLLVM(llvm::Value* s, llvm::Value* slen, llvm::Value* okSlot);
   // Get-or-create an LLVM intrinsic with an explicit signature (used only for
   // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
   llvm::Function* intrinsicFn(const std::string& name, llvm::Type* ret,

@@ -1,0 +1,2 @@
+CHECK: call.*@pli_fixed_of_float
+CHECK: call.*@pli_fixed_of_char
