@@ -583,16 +583,16 @@ static const std::set<std::string>& kLLVMLowerings() {
       // W2 search/scan operations
       "verify",
       "verify_from",
-      "search",
-      "tally",
-      // W3 clipping, padding, capacity operations
-      "substr",
-      "substr_assign",
-      "substr_assign_varying",
-      "repeat",
-      "translate",
-      "trim",
-  };
+       "search",
+       "tally",
+       // W3 clipping, padding, capacity operations
+       "substr",
+       "substr_assign",
+       "substr_assign_varying",
+       "repeat",
+       "translate",
+       "trim",
+   };
   return table;
 }
 
@@ -803,7 +803,7 @@ void IRGen::emitTrim(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm
     b_.CreateCall(runtimeFn("pli_trim"), {dst, dstcap, s, sLen, pad, padLen});
     return;
   }
-  emitTrimLLVM(dst, dstcap, s, sLen, pad, padLen);
+   emitTrimLLVM(dst, dstcap, s, sLen, pad, padLen);
 }
 
 // Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
@@ -1830,7 +1830,7 @@ void IRGen::emitTrimLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, 
     b_.CreateStore(b_.CreateAdd(out, one, "trim.pp_out_n"), outSlot, false);
     b_.CreateBr(padBB);
   }
-  startBlock(doneBB);
+   startBlock(doneBB);
 }
 
 // Get (or create) a declaration for a runtime `pli_*` function. The signature
