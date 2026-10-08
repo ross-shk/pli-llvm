@@ -1,0 +1,36 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* BOOL built-in (TR 25.084 rule 123, Appendix 1): BOOL(b1, b2, b3) returns
+    b2 when b1 is true (1), else b3. */
+ bool_test: procedure options(main);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   /* numeric branches */
+   if bool('1'b, 42, 99) ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL bool(1b, 42, 99) =', bool('1'b, 42, 99));
+   end;
+
+   if bool('0'b, 42, 99) ^= 99 then do;
+      fails = fails + 1;
+      put skip list('FAIL bool(0b, 42, 99) =', bool('0'b, 42, 99));
+   end;
+
+   /* character branches */
+   declare s char(10);
+   s = bool('1'b, 'hello', 'world');
+   if s ^= 'hello' then do;
+      fails = fails + 1;
+      put skip list('FAIL bool char true =', s);
+   end;
+
+   s = bool('0'b, 'hello', 'world');
+   if s ^= 'world' then do;
+      fails = fails + 1;
+      put skip list('FAIL bool char false =', s);
+   end;
+
+   if fails = 0 then put skip list('PASS bool');
+   else put skip list('FAIL bool: fails =', fails);
+ end bool_test;

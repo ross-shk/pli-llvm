@@ -1,0 +1,34 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* FILEOPEN/LINENO/PAGENO built-ins (TR 25.084 rule 123, Appendix 1).
+    These query file state; without an open file they return 0/false. */
+ fileno_test: procedure options(main);
+   declare f fixed bin(31);
+   declare r bit(1);
+   declare ln fixed bin(31);
+   declare pg fixed bin(31);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   f = 0;
+   r = fileopen(f);
+   if r ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL fileopen(0) =', r);
+   end;
+
+   ln = lineno(f);
+   if ln < 0 then do;
+      fails = fails + 1;
+      put skip list('FAIL lineno(0) =', ln);
+   end;
+
+   pg = pageno(f);
+   if pg < 0 then do;
+      fails = fails + 1;
+      put skip list('FAIL pageno(0) =', pg);
+   end;
+
+   if fails = 0 then put skip list('PASS fileopen/lineno/pageno');
+   else put skip list('FAIL fileopen: fails =', fails);
+ end fileno_test;

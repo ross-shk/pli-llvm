@@ -186,6 +186,25 @@ unsigned char pli_record_read_bit(long long slot) {
   return v;
 }
 
+/* FILEOPEN(f) (TR 123): returns 1 if the file in slot f is open, 0 otherwise. */
+int pli_file_open_slot(long long slot) {
+  return slot >= 0 && slot < PLI_MAX_FILES && rt_pli_files[slot] != NULL;
+}
+
+/* LINENO(f) (TR 123): returns the current line counter for the file in slot f.
+   M0 has no per-file line tracking; return 0. */
+long long pli_lineno(long long slot) {
+  (void)slot;
+  return 0;
+}
+
+/* PAGENO(f) (TR 123): returns the current page number for the file in slot f.
+   M0 has no page tracking; return 0. */
+long long pli_pageno(long long slot) {
+  (void)slot;
+  return 0;
+}
+
 /* Edit-directed output (rules (108),(44)-(54)). All output routes through
  * rt_put_raw so STRING/FILE sources and sinks are honoured. */
 

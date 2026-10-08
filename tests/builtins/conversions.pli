@@ -1,0 +1,40 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* BINARY/DECIMAL/FLOAT built-ins: convert x to FIXED BINARY,
+    FIXED DECIMAL, or FLOAT, with optional precision/scale.
+    rule (123) Appendix 1. */
+ conv_test: procedure options(main);
+    declare x fixed bin(31);
+    declare y fixed dec(9,2);
+    declare z float dec(6);
+    declare fails fixed bin(31);
+
+    fails = 0;
+
+    /* BASIC(x) converts to FIXED BINARY */
+    x = binary(42.0);   if x ^= 42 then do; fails = fails + 1; put skip list('FAIL b(42)', x); end;
+    x = binary(3);      if x ^= 3 then do; fails = fails + 1; put skip list('FAIL b(3)', x); end;
+
+    /* DECIMAL(x) converts to FIXED DECIMAL(31,0): FLOAT input truncates toward
+       zero (ADR-006), DECIMAL-to-DECIMAL scale reduction rounds half away from
+       zero (ADR-056). */
+    y = decimal(42);      if y ^= 42.00 then do; fails = fails + 1; put skip list('FAIL d(42)', y); end;
+    y = decimal(3.5);     if y ^= 4.00 then do; fails = fails + 1; put skip list('FAIL d(3.5)', y); end;
+    y = decimal(3.5e0);   if y ^= 3.00 then do; fails = fails + 1; put skip list('FAIL d(3.5e0)', y); end;
+
+    /* FLOAT(x) converts to FLOAT */
+    z = float(42);      if z ^= 42.0 then do; fails = fails + 1; put skip list('FAIL f(42)', z); end;
+    z = float(3);       if z ^= 3.0 then do; fails = fails + 1; put skip list('FAIL f(3)', z); end;
+
+    /* precision override: binary(3, 12) -> FIXED BIN(12) */
+    x = binary(3, 12);  if x ^= 3 then do; fails = fails + 1; put skip list('FAIL b(3,12)', x); end;
+
+    /* scale override: decimal(3, 9, 2) -> FIXED DEC(9,2) */
+    x = decimal(3, 9, 2); if x ^= 3 then do; fails = fails + 1; put skip list('FAIL d(3,9,2)', x); end;
+
+    /* float precision override: float(3, 6) -> FLOAT(6) */
+    z = float(3, 6);    if z ^= 3.0 then do; fails = fails + 1; put skip list('FAIL f(3,6)', z); end;
+
+    if fails = 0 then put skip list('PASS binary_decimal_float');
+    else put skip list('FAIL binary_decimal_float: ', fails);
+ end conv_test;

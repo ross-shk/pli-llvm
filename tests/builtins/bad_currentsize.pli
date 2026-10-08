@@ -1,0 +1,6 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* bad CURRENTSIZE: takes one argument (rule 123). */
+ cursize_bad: procedure options(main);
+   declare x fixed bin(31);
+   x = currentsize();
+ end cursize_bad;

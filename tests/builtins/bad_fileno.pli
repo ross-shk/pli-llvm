@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* bad FILEOPEN: takes one argument. */
+ fileno_bad: procedure options(main);
+   declare x bit(1);
+   x = fileopen();
+ end fileno_bad;
+

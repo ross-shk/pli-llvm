@@ -4889,10 +4889,26 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
-    e->ty = Type::flt(6);
-    return true;
-  }
-  // ATAN2(y, x) (CM5, Appendix 1): C-order two-argument arctangent.
+     e->ty = Type::flt(6);
+     return true;
+   }
+   // EXPONENT built-in (rule (123), Appendix 1): the binary exponent e such
+   // that x = f * 2^e (0.5 <= |f| < 1); 0 for 0.0 or NaN. Returns FIXED BIN(63).
+   if (e->name == "EXPONENT") {
+     if (e->args.size() != 1) {
+       d_.error(e->loc, "EXPONENT expects 1 argument", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     if (!e->args[0]->ty.isNumeric()) {
+       d_.error(e->args[0]->loc, "EXPONENT argument must be numeric", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     e->ty = Type::fixedBin(63, 0);
+     return true;
+   }
+   // ATAN2(y, x) (CM5, Appendix 1): C-order two-argument arctangent.
   if (e->name == "ATAN2") {
     if (e->args.size() != 2) {
       d_.error(e->loc, "ATAN2 expects 2 arguments (y, x)", "(123)");
@@ -5319,10 +5335,55 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     d_.error(e->args[0]->loc, "FIXED argument must be character or numeric", "(123)");
-    e->ty = Type::voidTy();
-    return true;
-  }
-  // CHAR built-in (rule (123)): CHAR(x) renders a scalar value as text
+     e->ty = Type::voidTy();
+     return true;
+   }
+   // BINARY/DECIMAL/FLOAT built-in (rule (123), Appendix 1): convert x to
+   // FIXED BINARY, FIXED DECIMAL, or FLOAT, with optional precision/scale.
+   // BINARY(x[,p]), DECIMAL(x[,p[,s]]), FLOAT(x[,p]) — p/s must be constants.
+   if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
+     const char* nm = e->name.c_str();
+     int lo = 1, hi = 3;
+     if (e->name == "BINARY" || e->name == "FLOAT")
+       hi = 2;
+     if (e->args.size() < (size_t)lo || e->args.size() > (size_t)hi) {
+       d_.error(e->loc, std::string(nm) + " expects " + std::to_string(lo) +
+                          "-" + std::to_string(hi) + " arguments", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     const Type& a = e->args[0]->ty;
+     if (!a.isChar() && !a.isNumeric()) {
+       d_.error(e->args[0]->loc, std::string(nm) + " argument must be character or numeric", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     int p = 0, s = 0;
+     if (e->args.size() >= 2) {
+       if (e->args[1]->kind != Expr::IntLit) {
+         d_.error(e->args[1]->loc, std::string(nm) + " precision must be a constant", "(123)");
+         e->ty = Type::voidTy();
+         return true;
+       }
+       p = (int)e->args[1]->ival;
+     }
+     if (e->args.size() >= 3) {
+       if (e->args[2]->kind != Expr::IntLit) {
+         d_.error(e->args[2]->loc, std::string(nm) + " scale must be a constant", "(123)");
+         e->ty = Type::voidTy();
+         return true;
+       }
+       s = (int)e->args[2]->ival;
+     }
+     if (e->name == "BINARY")
+       e->ty = Type::fixedBin(p > 0 ? p : 31, s);
+     else if (e->name == "DECIMAL")
+       e->ty = Type::fixedDec(p > 0 ? p : 31, s);
+     else
+       e->ty = Type::flt(p > 0 ? p : 6);
+     return true;
+   }
+   // CHAR built-in (rule (123)): CHAR(x) renders a scalar value as text
   // (the PL/I CHAR(x) conversion used by libnet's
   // `trim(char(moves))` and `'...' || char(port)` chains).
   if (e->name == "CHAR") {
@@ -5405,10 +5466,41 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
-    e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
-    return true;
-  }
-  // Array attribute built-ins (M2, rules (12),(13),(123)): LBOUND/HBOUND/
+     e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
+     return true;
+   }
+   // ADD/SUBTRACT built-in (rule (123), Appendix 1): a+b / a-b as the common
+   // arithmetic type, or as FIXED BINARY(p,s) when precision/scale override
+   // is given. The 3rd/4th args must be constant integers.
+   if (e->name == "ADD" || e->name == "SUBTRACT") {
+     const char* nm = e->name.c_str();
+     if (e->args.size() < 2 || e->args.size() > 4) {
+       d_.error(e->loc, std::string(nm) + " expects 2-4 arguments (a, b [, p [, s]])", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+       d_.error(e->loc, std::string(nm) + " arguments must be numeric", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     // Precision/scale override: result is FIXED BINARY(p, s), s defaults to 0.
+     if (e->args.size() >= 3) {
+       int p = e->args[2]->ival;
+       int s = e->args.size() >= 4 ? (int)e->args[3]->ival : 0;
+       if (e->args[2]->kind != Expr::IntLit || p <= 0 ||
+           (e->args.size() >= 4 && (e->args[3]->kind != Expr::IntLit || s < 0))) {
+         d_.error(e->loc, std::string(nm) + " precision/scale must be constants", "(123)");
+         e->ty = Type::voidTy();
+         return true;
+       }
+       e->ty = Type::fixedBin(p, s);
+     } else {
+       e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+     }
+     return true;
+   }
+   // Array attribute built-ins (M2, rules (12),(13),(123)): LBOUND/HBOUND/
   // DIM/DIMENSION of an array. With constant bounds these fold to
   // compile-time values; the first argument must be an unsubscripted array.
   // An optional second integer-constant argument selects the axis (1-based);
@@ -5514,6 +5606,143 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     }
     d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
     e->ty = Type::voidTy();
+    return true;
+  }
+  // COPY (rule (123), Appendix 1): COPY(s, n) -> CHARACTER LEN(s) repeating
+  // s n times (identical to REPEAT). n is rounded toward zero, 0/negative -> ''.
+  if (e->name == "COPY") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "COPY takes two arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isChar()) {
+      d_.error(e->args[0]->loc, "COPY argument 1 must be character", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    int n = e->args[1]->kind == Expr::IntLit ? (int)e->args[1]->ival : -1;
+    if (n < 0) {
+      d_.error(e->args[1]->loc, "COPY count must be a constant in this stage", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::chr(e->args[0]->ty.len * n);
+    return true;
+  }
+  // ISOCHAR (IBM extension, ADR-193): ISOCHAR(i1, i2) -> CHARACTER(n) where
+  // n = i2 - i1 + 1, containing the characters with code points i1..i2.
+  if (e->name == "ISOCHAR") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "ISOCHAR takes two arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    for (size_t i = 0; i < e->args.size(); ++i) {
+      if (!e->args[i]->ty.isNumeric()) {
+        d_.error(e->args[i]->loc, "ISOCHAR arguments must be numeric", "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+    }
+    e->ty = Type::chr(256);  // max span for 8-bit code points
+    return true;
+  }
+  // BOOL (rule (123), Appendix 1): BOOL(b1, b2, b3) -> if b1 then b2 else b3.
+  // b1 is BIT(1); b2/b3 must have a common type, the result has that type.
+  if (e->name == "BOOL") {
+    if (e->args.size() != 3) {
+      d_.error(e->loc, "BOOL takes three arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isBit() || e->args[0]->ty.len != 1) {
+      d_.error(e->args[0]->loc, "BOOL argument 1 must be BIT(1)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (e->args[1]->ty != e->args[2]->ty) {
+      d_.error(e->loc, "BOOL arguments 2 and 3 must have the same type", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = e->args[1]->ty;
+    return true;
+  }
+  // ONKEY (rule (123), Appendix 1): ONKEY() -> BIT(1) indicating whether a
+  // SIGNAL is pending in the current ON handler chain. Takes no arguments.
+  if (e->name == "ONKEY") {
+    if (!e->args.empty()) {
+      d_.error(e->loc, "ONKEY takes no arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::bit(1);
+    return true;
+  }
+  // ONSOURCE (rule (123), Appendix 1): ONSOURCE() -> FIXED BIN(15) key of the
+  // current SIGNAL's source procedure (0 if no SIGNAL is active). Takes none.
+  if (e->name == "ONSOURCE") {
+    if (!e->args.empty()) {
+      d_.error(e->loc, "ONSOURCE takes no arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(15, 0);
+    return true;
+  }
+  // CURRENTSIZE (rule (123), Appendix 1): CURRENTSIZE(x) -> the storage size
+  // (in bytes/units) currently allocated to x. x may be any variable.
+  if (e->name == "CURRENTSIZE") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "CURRENTSIZE takes one argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // EMPTY (rule (123), Appendix 1): EMPTY() -> AREA. Returns a null AREA handle.
+  if (e->name == "EMPTY") {
+    if (!e->args.empty()) {
+      d_.error(e->loc, "EMPTY takes no arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::areaTy();
+    return true;
+  }
+  // FILEOPEN (rule (123), Appendix 1): FILEOPEN(x) -> BIT(1) = 1 if file x is
+  // open, 0 otherwise. x is an EXTERNAL file (by name) or a file designator.
+  if (e->name == "FILEOPEN") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "FILEOPEN takes one argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::bit(1);
+    return true;
+  }
+  // LINENO (rule (123), Appendix 1): LINENO(x) -> FIXED BIN(31) line number of
+  // the file x (1-based), 0 if closed or no line tracking.
+  if (e->name == "LINENO") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "LINENO takes one argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // PAGENO (rule (123), Appendix 1): PAGENO(x) -> FIXED BIN(31) page number of
+  // the file x, 0 if closed or no page tracking.
+  if (e->name == "PAGENO") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "PAGENO takes one argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
     return true;
   }
   return false;

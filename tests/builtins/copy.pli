@@ -1,0 +1,30 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* COPY built-in (TR 25.084 rule 123, Appendix 1): COPY(s, n) duplicates
+    string s n times — identical to REPEAT. */
+ copy_test: procedure options(main);
+   declare t char(6);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   t = copy('AB', 3);
+   if t ^= 'ABABAB' then do;
+      fails = fails + 1;
+      put skip list('FAIL copy AB 3 =', t);
+   end;
+
+   t = copy('x', 5);
+   if t ^= 'xxxxx' then do;
+      fails = fails + 1;
+      put skip list('FAIL copy x 5 =', t);
+   end;
+
+   t = copy('Hi', 0);
+   if t ^= '' then do;
+      fails = fails + 1;
+      put skip list('FAIL copy Hi 0 =', t);
+   end;
+
+   if fails = 0 then put skip list('PASS copy');
+   else put skip list('FAIL copy: fails =', fails);
+ end copy_test;

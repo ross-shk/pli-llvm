@@ -1,0 +1,20 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* EMPTY built-in (TR 25.084 rule 123, Appendix 1): EMPTY() returns a null
+    AREA handle. */
+ empty_test: procedure options(main);
+   declare a area;
+   declare p pointer;
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   a = empty();
+
+   if a ^= null() then do;
+      fails = fails + 1;
+      put skip list('FAIL empty() != null()');
+   end;
+
+   if fails = 0 then put skip list('PASS empty');
+   else put skip list('FAIL empty: fails =', fails);
+ end empty_test;

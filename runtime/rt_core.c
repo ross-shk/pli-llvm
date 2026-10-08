@@ -67,3 +67,9 @@ int pli_system(const char *cmd, long long len) {
   free(buf);
   return status;
 }
+
+/* EMPTY() (ADR-200): returns a null AREA handle. The AREA is a pointer;
+   an empty/null AREA is simply NULL. */
+char *pli_empty_area(void) {
+  return NULL;
+}

@@ -1,0 +1,6 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* bad ONKEY: takes no arguments. */
+ onkey_bad: procedure options(main);
+   declare x fixed bin(31);
+   x = onkey(1);
+ end onkey_bad;

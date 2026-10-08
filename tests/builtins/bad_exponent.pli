@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Diagnostic test: EXPONENT with wrong arity and non-numeric arg
+    are rejected. rule (123), Appendix 1. */
+ badexp: procedure options(main);
+    declare x fixed bin(31);
+    declare s char(4);
+    s = 'abcd';
+    x = exponent();     /* error: EXPONENT expects 1 argument */
+    x = exponent(1, 2); /* error: EXPONENT expects 1 argument */
+    x = exponent(s);    /* error: EXPONENT argument must be numeric */
+ end badexp;

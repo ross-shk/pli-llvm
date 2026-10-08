@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* bad COPY: wrong argument count (rule 123). */
+ copy_bad: procedure options(main);
+   declare t char(6);
+
+   t = copy('AB');
+ end copy_bad;

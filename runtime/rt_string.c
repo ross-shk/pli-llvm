@@ -28,6 +28,16 @@ void pli_concat(char *dst, const char *a, long long alen, const char *b, long lo
   if (blen > 0) pli_memmove(dst + alen, b, (size_t)blen);
 }
 
+/* ISOCHAR(i1, i2) (IBM extension, ADR-193): writes the character(s) whose
+   ISO/ASCII code points range from i1 to i2 (inclusive) into dst. */
+void pli_isochar(char *dst, long long dstlen, int lo, int hi) {
+  long long n = (lo <= hi) ? (long long)(hi - lo + 1) : 0;
+  if (n > dstlen) n = dstlen;
+  for (long long i = 0; i < n; ++i)
+    dst[i] = (char)(lo + (int)i);
+  if (dstlen > n) pli_memset(dst + n, ' ', (size_t)(dstlen - n));
+}
+
 /* SUBSTR(s, i, n): copy up to n characters of s starting at the 1-based
  * position i, blank-filling the tail. Positions past the end of s clip to
  * blanks (a real compiler would raise SUBSCRIPTRANGE, M3). */

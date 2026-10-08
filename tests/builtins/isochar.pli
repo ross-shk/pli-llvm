@@ -1,0 +1,24 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* ISOCHAR built-in (IBM extension, ADR-193): ISOCHAR(lo, hi) returns a
+    CHARACTER string containing the characters with code points lo..hi. */
+ isoch_test: procedure options(main);
+   declare t char(10);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   t = isochar(65, 67);
+   if t ^= 'ABC' then do;
+      fails = fails + 1;
+      put skip list('FAIL isochar(65,67) =', t);
+   end;
+
+   t = isochar(97, 99);
+   if t ^= 'abc' then do;
+      fails = fails + 1;
+      put skip list('FAIL isochar(97,99) =', t);
+   end;
+
+   if fails = 0 then put skip list('PASS isochar');
+   else put skip list('FAIL isochar: fails =', fails);
+ end isoch_test;

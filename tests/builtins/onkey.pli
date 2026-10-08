@@ -1,0 +1,25 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* ONKEY/ONSOURCE built-ins (TR 25.084 rule 123, Appendix 1): query the
+    current ON/SIGNAL state. Outside a handler both return 0. */
+ onkey_test: procedure options(main);
+   declare k fixed bin(31);
+   declare s fixed bin(31);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   k = onkey();
+   if k ^= 0 then do;
+      fails = fails + 1;
+      put skip list('FAIL onkey outside handler =', k);
+   end;
+
+   s = onsource();
+   if s ^= 0 then do;
+      fails = fails + 1;
+      put skip list('FAIL onsource outside handler =', s);
+   end;
+
+   if fails = 0 then put skip list('PASS onkey/onsource');
+   else put skip list('FAIL onkey/onsource: fails =', fails);
+ end onkey_test;

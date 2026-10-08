@@ -116,6 +116,20 @@ void pli_set_oncode(int c) {
   pli_oncode_val = c;
 }
 
+/* ONKEY() (rule (123), Appendix 1): returns BIT(1) = 1 if a SIGNAL is
+   currently being handled (i.e. we're inside an ON handler unit). */
+int pli_onkey(void) {
+  return pli_err_sp > 0 ? 1 : 0;
+}
+
+/* ONSOURCE() (rule (123), Appendix 1): returns the key of the current
+   SIGNAL's source condition (0 = SYSTEM/none). */
+int pli_on_source(void) {
+  if (pli_err_sp <= 0)
+    return 0;
+  return (int)pli_err_stack[pli_err_sp - 1].key;
+}
+
 /* SUBSCRIPTRANGE abort (no handler): a runtime subscript is out of bounds.
  * Reached when no SUBSCRIPTRANGE handler is established; otherwise IRGen
  * routes the trap to the handler and resumes with the index clamped. */

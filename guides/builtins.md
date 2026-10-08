@@ -18,6 +18,7 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | String   | `LENGTH`                                                                                                                                  | `( s )`                  | `FIXED BIN`                       |
 | String   | `REVERSE`                                                                                                                                 | `( s )`                  | `CHAR(len(s))`                    |
 | String   | `REPEAT`                                                                                                                                  | `( s, n )`               | `CHAR(len(s)*n)`                  |
+| String   | `COPY`                                                                                                                                    | `( s, n )`               | `CHAR(len(s)*n)`                  |
 | String   | `TRANSLATE`                                                                                                                               | `( s, out, in )`         | `CHAR(len(s))`                    |
 | String   | `VERIFY`                                                                                                                                  | `( s, set [, start] )`   | `FIXED BIN`                       |
 | String   | `TRIM`                                                                                                                                    | `( s [, pad] )`          | `CHAR(len(s))`                    |
@@ -54,9 +55,17 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | Async    | `EVENT`                                                                                                                                   | `( ev )`                 | `BIT(1)`                          |
 | Args     | `OMITTED`, `PRESENT`                                                                                                                      | `( p )`                  | `BIT(1)`                          |
 | Misc     | `ONCODE`                                                                                                                                  | `( )`                    | `FIXED BIN`                       |
+| Misc     | `ONKEY`                                                                                                                                    | `( )`                    | `BIT(1)`                          |
+| Misc     | `ONSOURCE`                                                                                                                                  | `( )`                    | `FIXED BIN(15)`                   |
 | Misc     | `SYSPARM`                                                                                                                                 | `( )`                    | `CHAR(n)` (compile-time constant) |
 | Misc     | `SYSTEM(x)`                                                                                                                               | `( x )`                  | `FIXED BIN(31)`                   |
 | Misc     | `PRIORITY`                                                                                                                                | `( ... )`                | not implemented                   |
+| Storage  | `EMPTY`                                                                                                                                    | `( )`                    | `AREA`                            |
+| Storage  | `CURRENTSIZE`                                                                                                                                | `( x )`                  | `FIXED BIN(31)`                   |
+| File     | `FILEOPEN`                                                                                                                                 | `( x )`                  | `BIT(1)`                          |
+| File     | `LINENO`                                                                                                                                    | `( x )`                  | `FIXED BIN(31)`                   |
+| File     | `PAGENO`                                                                                                                                    | `( x )`                  | `FIXED BIN(31)`                   |
+| IBM      | `ISOCHAR`                                                                                                                                    | `( lo, hi )`             | `CHAR(n)`                         |
 
 `*` = must be a constant in the current stage.
 
@@ -172,6 +181,15 @@ put skip list(reverse(word));         /* 'gfedcba' */
 ```pli
 dcl s char(10) varying;
 s = repeat('ab', 3);                  /* 'ababab' */
+```
+
+### `COPY(s, n)` → CHARACTER(len(s) * n)
+
+Identical to `REPEAT`: `n` must be a constant; the result's length is `len(s) * n`.
+
+```pli
+dcl s char(10);
+s = copy('AB', 3);                   /* 'ABABAB' */
 ```
 
 A realistic use — pad a line to a fixed width:
@@ -372,6 +390,15 @@ put skip list(sign(-7));          /* -1 */
 put skip list(sign(0));           /* 0 */
 put skip list(sign(3.5));         /* 1 */
 put skip list(sign(-2.5));        /* -1 */
+```
+
+### `BOOL(b1, b2, b3)` → type of b2/b3
+
+A conditional expression: returns `b2` when `b1` is true (`'1'b`), else `b3`. Arguments 2 and 3 must have the same type. The condition must be `BIT(1)`.
+
+```pli
+dcl x fixed bin(31);
+x = bool(y > 0, 1, -1);           /* sign of y, without using SIGN(x) */
 ```
 
 ### `TRUNC(x)` → same type
@@ -605,3 +632,48 @@ if system('test -f data.txt') = 0 then
 ### `DATE()`, `TIME()`
 
 See [String built-ins](#string-built-ins).
+
+### `ONCODE()` → FIXED BINARY
+
+Returns `1` inside an `ERROR` unit raised by `SIGNAL`, `0` elsewhere.
+
+### `ONKEY()` → BIT(1)
+
+Returns `'1'b` when execution is inside an `ON` handler unit (i.e., a `SIGNAL` has been recognized and a handler is running), `'0'b` otherwise.
+
+### `ONSOURCE()` → FIXED BINARY(15)
+
+Returns the key identifying the source of the current `SIGNAL` (0 when no condition is active).
+
+### `EMPTY()` → AREA
+
+Returns a null AREA handle (the area equivalent of `NULL()` for pointers).
+
+```pli
+dcl area area;
+allocate area in area;   /* AREA is implicitly initialised to EMPTY() */
+```
+
+### `CURRENTSIZE(x)` → FIXED BINARY(31)
+
+Returns the storage size (in bytes) of the current value of variable `x`. For a `CHARACTER(n)` argument, returns `n`.
+
+### `FILEOPEN(x)` → BIT(1)
+
+Returns `'1'b` if the external file `x` is currently open, `'0'b` otherwise.
+
+### `LINENO(x)` → FIXED BINARY(31)
+
+Returns the current line number of file `x` (0 if closed or no line tracking is active).
+
+### `PAGENO(x)` → FIXED BINARY(31)
+
+Returns the current page number of file `x` (0 if closed or no page tracking is active).
+
+### `ISOCHAR(lo, hi)` → CHARACTER(256) *(IBM extension)*
+
+Returns the CHARACTER string comprising the characters whose ISO/ASCII code points range from `lo` to `hi` (inclusive).
+
+```pli
+put skip list(isochar(65, 67));   /* 'ABC' */
+```

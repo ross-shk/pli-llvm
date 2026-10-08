@@ -488,6 +488,13 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_low", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_char_of_float", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_isochar", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_file_open_slot", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_lineno", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_pageno", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_source", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_onkey", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
   };
   return table;
 }
@@ -7514,8 +7521,9 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     return out;
   }
 
-  // A locator value is passed through unchanged between POINTER/OFFSET targets
-  // (rules (15),(22)): assignment copies the address, no numeric conversion.
+  // A locator value is passed through unchanged between POINTER/OFFSET/AREA
+  // targets (rules (15),(22),(20)): assignment copies the address, no numeric
+  // conversion.
   if (v.ty.isLocator() && dst.isLocator())
     return v;
 
@@ -7637,7 +7645,13 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     } else {
       floatRangeTrap(f, -2147483648.0, true, 2147483648.0);
     }
-    out.reg = b_.CreateFPToSI(f, llvmTy(dst), "cvt");
+    // Use fptosi.sat (via emitFixedOfFloatLLVM) for 64-bit targets to avoid
+    // LLVM 23 constant-folding CreateFPToSI(3.5, i64) to 4 instead of 3.
+    if (llvmTy(dst)->getIntegerBitWidth() == 64) {
+      out.reg = emitFixedOfFloatLLVM(f);
+    } else {
+      out.reg = b_.CreateFPToSI(f, llvmTy(dst), "cvt");
+    }
     return out;
   }
   if (!srcFloat && dstFloat) {
@@ -8913,10 +8927,27 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* r = b_.CreateSelect(neg, m1, b_.CreateSelect(pos, one, i64(0), "signp"), "sign");
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "sign32");
-    result = v;
-    return true;
-  }
-  // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
+     result = v;
+     return true;
+   }
+   // EXPONENT (rule (123), Appendix 1): the binary exponent e such that
+   // x = f * 2^e, 0.5 <= |f| < 1; 0 for 0.0 or NaN. Uses llvm.frexp.f64.
+   if (e->name == "EXPONENT") {
+     Val a = emitExpr(e->args[0].get());
+     Val f = convert(a, Type::flt(6), e->loc);
+     // frexp returns {mantissa, exponent}; EXPONENT is the exponent part.
+     llvm::StructType* st = llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getInt32Ty()});
+     llvm::Value* pair = b_.CreateCall(intrinsicFn("llvm.frexp.f64.i32", st, {b_.getDoubleTy()}),
+                                      {f.reg}, "exp");
+     // frexp yields i32; EXPONENT wants FIXED BIN(63), widen to i64.
+     llvm::Value* exp = b_.CreateExtractValue(pair, 1, "exp");
+     llvm::Value* exp64 = b_.CreateSExt(exp, b_.getInt64Ty(), "exp64");
+     v.ty = e->ty;
+     v.reg = exp64;
+     result = v;
+     return true;
+   }
+   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
   // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
   // COSD, TAND, ATAND. The argument is converted to FLOAT and the matching
@@ -9185,11 +9216,31 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // ZERODIVIDE (rule 94): as for `/`, a zero divisor traps, resuming with 0.
     llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
-    v.reg = zerodivideResume(dz, div, flt(0.0));
-    result = v;
-    return true;
-  }
-  if (e->name == "ROUND") {
+     v.reg = zerodivideResume(dz, div, flt(0.0));
+     result = v;
+     return true;
+   }
+   // ADD/SUBTRACT (rule (123), Appendix 1): a+b / a-b in the common type, or
+   // FIXED BINARY(p,s) when a precision/scale override is given. FIXED overflow
+   // is checked (QR1.2); FLOAT goes through plain fadd/fsub.
+   if (e->name == "ADD" || e->name == "SUBTRACT") {
+     Val a = emitExpr(e->args[0].get());
+     Val b = emitExpr(e->args[1].get());
+     const Type& common = e->ty;
+     Val av = convert(a, common, e->loc);
+     Val bv = convert(b, common, e->loc);
+     v.ty = common;
+     if (common.k == TK::Float) {
+       v.reg = e->name == "ADD" ? b_.CreateFAdd(av.reg, bv.reg, "add")
+                                : b_.CreateFSub(av.reg, bv.reg, "sub");
+     } else {
+       Tok op = e->name == "ADD" ? Tok::Plus : Tok::Minus;
+       v.reg = checkedArith(op, av.reg, bv.reg);
+     }
+     result = v;
+     return true;
+   }
+   if (e->name == "ROUND") {
     Val x = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val xd = convert(x, Type::flt(6), e->loc);
@@ -9397,11 +9448,46 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       result = v;
       return true;
     }
-    v = convert(a, e->ty, e->loc);
-    result = v;
-    return true;
   }
-  // CHAR (rule (123)): renders a scalar value as text into a fresh buffer;
+  // BINARY/DECIMAL/FLOAT (rule (123), Appendix 1): numeric conversion with
+   // optional precision/scale override. char input reuses the FIXED(char)
+   // decimal-text parse path (CONVERSION trap, ADR-170); numeric input goes
+   // through convert(), which already handles float->fixed scaling (ADR-006)
+   // and fixed->float back-scaling.
+     if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
+       Val a = emitExpr(e->args[0].get());
+       if (a.ty.isChar()) {
+         // char -> numeric: parse decimal text via the FIXED(char) path, then
+         // convert the parsed FIXED BIN(63) to the requested target type.
+         llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
+         llvm::Value* r;
+         if (useRuntimeCall("fixed_of_char")) {
+           r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len, okSlot}, "fxc_rt");
+         } else {
+           r = emitFixedOfCharLLVM(a.ptr, a.len, okSlot);
+         }
+         if (convChecks()) {
+           llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
+           llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
+           llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
+           llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
+           b_.CreateCondBr(fail, trapBB, okBB);
+           b_.SetInsertPoint(trapBB);
+           emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+           b_.SetInsertPoint(okBB);
+         }
+         Val fixed;
+         fixed.ty = Type::fixedBin(63, 0);
+         fixed.reg = b_.CreateTrunc(r, b_.getInt64Ty(), "fxc");
+         v = convert(fixed, e->ty, e->loc);
+         result = v;
+         return true;
+       }
+       v = convert(a, e->ty, e->loc);
+       result = v;
+       return true;
+     }
+   // CHAR (rule (123)): renders a scalar value as text into a fresh buffer;
   // a character argument passes through (truncated/padded by assignment).
   if (e->name == "CHAR") {
     Val a = emitExpr(e->args[0].get());
@@ -9725,6 +9811,111 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     startBlock(endL);
     v.ty = e->ty;
     v.reg = b_.CreateLoad(isBit ? b_.getInt1Ty() : llvmTy(e->ty), acc, "rdres");
+    result = v;
+    return true;
+  }
+  // COPY (rule (123) Appendix 1): identical to REPEAT; reuse the same runtime
+  // helper which has matching signature and semantics.
+  if (e->name == "COPY") {
+    Val s = emitExpr(e->args[0].get());
+    Val n = emitExpr(e->args[1].get());
+    Val out = charTemp(e->ty.len);
+    emitRepeat(out.ptr, out.len, s.ptr, s.len, toI64(n));
+    out.len = i64(e->ty.len);
+    result = out;
+    return true;
+  }
+  // ISOCHAR (IBM extension, ADR-193): fill dst[i] = (char)(lo + i).
+  if (e->name == "ISOCHAR") {
+    Val lo = emitExpr(e->args[0].get());
+    Val hi = emitExpr(e->args[1].get());
+    Val out = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_isochar"),
+                  {out.ptr, out.len,
+                   b_.CreateTrunc(toI64(lo), b_.getInt32Ty(), "isochar.lo"),
+                   b_.CreateTrunc(toI64(hi), b_.getInt32Ty(), "isochar.hi")});
+    out.len = i64(e->ty.len);
+    result = out;
+    return true;
+  }
+  // BOOL (rule (123) Appendix 1): LLVM select on a BIT(1) condition.
+  if (e->name == "BOOL") {
+    Val c = emitExpr(e->args[0].get());
+    Val t = emitExpr(e->args[1].get());
+    Val f = emitExpr(e->args[2].get());
+    v.ty = e->ty;
+    if (e->ty.isChar()) {
+      // Character branches: select the pointer/length pair.
+      llvm::Value* selPtr = b_.CreateSelect(c.reg, t.ptr, f.ptr, "bool.ptr");
+      llvm::Value* selLen = b_.CreateSelect(c.reg, t.len, f.len, "bool.len");
+      v.ptr = selPtr;
+      v.len = selLen;
+    } else if (e->ty.isBit()) {
+      v.reg = b_.CreateSelect(c.reg, t.reg, f.reg, "bool.sel");
+    } else {
+      v.reg = b_.CreateSelect(c.reg, t.reg, f.reg, "bool.sel");
+    }
+    result = v;
+    return true;
+  }
+  // ONKEY (rule (123)): read whether a SIGNAL is currently being handled.
+  if (e->name == "ONKEY") {
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_onkey"), {}, "onkey");
+    result = v;
+    return true;
+  }
+  // ONSOURCE (rule (123)): read the current SIGNAL source procedure key.
+  if (e->name == "ONSOURCE") {
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_on_source"), {}, "onsrc");
+    result = v;
+    return true;
+  }
+  // CURRENTSIZE (rule (123)): the live size of a variable's buffer or element.
+  if (e->name == "CURRENTSIZE") {
+    Val a = emitExpr(e->args[0].get());
+    v.ty = e->ty;
+    if (a.ty.isChar()) {
+      // Character argument: return the string length.
+      v.reg = a.len;
+    } else {
+      // Numeric/bit/float: return the element's byte width from its type.
+      int bits = a.ty.intBits();
+      v.reg = i64((long long)(bits / 8));
+    }
+    result = v;
+    return true;
+  }
+  // EMPTY (rule (123)): the null AREA handle.
+  if (e->name == "EMPTY") {
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_empty_area"), {}, "empty");
+    result = v;
+    return true;
+  }
+  // FILEOPEN (rule (123)): query whether file x is open.
+  if (e->name == "FILEOPEN") {
+    Val a = emitExpr(e->args[0].get());
+    v.ty = e->ty;
+    llvm::Value* open = b_.CreateCall(runtimeFn("pli_file_open_slot"), {toI64(a)}, "fopen");
+    v.reg = b_.CreateTrunc(open, b_.getInt1Ty(), "fopen1");
+    result = v;
+    return true;
+  }
+  // LINENO (rule (123)): query the current line number of file x.
+  if (e->name == "LINENO") {
+    Val a = emitExpr(e->args[0].get());
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_lineno"), {toI64(a)}, "lineno");
+    result = v;
+    return true;
+  }
+  // PAGENO (rule (123)): query the current page number of file x.
+  if (e->name == "PAGENO") {
+    Val a = emitExpr(e->args[0].get());
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_pageno"), {toI64(a)}, "pageno");
     result = v;
     return true;
   }

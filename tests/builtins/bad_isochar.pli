@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* bad ISOCHAR: wrong argument count. */
+ isoch_bad: procedure options(main);
+   declare t char(10);
+
+   t = isochar(65);
+ end isoch_bad;

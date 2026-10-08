@@ -211,7 +211,7 @@ struct Type {
   bool isOffset() const { return k == TK::Offset; }
   // A locator value: POINTER or OFFSET (rules (15),(22)). Both are opaque
   // addresses at run time; the distinction is enforced in sema.
-  bool isLocator() const { return k == TK::Pointer || k == TK::Offset; }
+  bool isLocator() const { return k == TK::Pointer || k == TK::Offset || k == TK::Area; }
   bool isVoid() const { return k == TK::Void; }
   bool isComplex() const { return k == TK::Complex; }
   bool isTask() const { return k == TK::Task; }

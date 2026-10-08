@@ -134,6 +134,7 @@ Per Invariant 3: all diagnostics follow `d_.error(loc, msg, "(nn)")` format citi
 - Arithmetic built-ins (ABS, SIGN) cover edge cases including floats
 - String built-ins cover edge cases
 - Array inquiry/reduction built-ins verified
+- Phase A Extras: COPY (reuse REPEAT), ISOCHAR (IBM ext), BOOL (LLVM select), ONKEY/ONSOURCE (cond-stack), EMPTY (null AREA), CURRENTSIZE (type-derived), FILEOPEN/LINENO/PAGENO (file-state) — all with good/bad test coverage
 
 ### Driver Tests (driver/) — Shell scripts for integration/testing infrastructure
 - Verify build system, include paths, sysparm, package, task concurrency
