@@ -559,11 +559,21 @@ static void applyRuntimeAttrs(llvm::Function* f) {
 
 // P0 policy: every operation defaults to runtime. P5 flips entries one wave at
 // a time as lowerings land. The table is operation-name → prefers direct LLVM.
+// P5 flip: W1 default is now LLVM (was runtime). W4 remains runtime (binary
+// size regression: 51632 B LLVM vs 35440 B runtime).
 static const std::map<std::string, bool>& kRuntimeDefault() {
   static const std::map<std::string, bool> table = {
-      {"assign_char", false},
-      {"index", false},
-      // P4+: W4 scalar math and conversions default to runtime until P5 flip
+      {"assign_char", true},
+      {"index", true},
+      {"assign_varying", true},
+      {"high", true},
+      {"low", true},
+      {"uppercase", true},
+      {"lowercase", true},
+      {"reverse", true},
+      {"center", true},
+      {"cmp_char", true},
+      // P4+: W4 scalar math and conversions default to runtime until P5/W4 flip
       {"fixed_of_float", false},
       {"fixed_of_char", false},
   };
