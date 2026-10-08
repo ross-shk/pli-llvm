@@ -462,6 +462,8 @@ private:
   bool useRuntimeCall(const std::string& op);
   // True when a direct LLVM lowering exists for `op` (populated in P1+).
   bool hasLLVMLowering(const std::string& op);
+  // True when the pli_* runtime body for `op` has been retired (P6).
+  bool isRetiredRuntimeOp(const std::string& op);
   // Dispatch wrappers for the P0/P1 pilot operations. Each checks the
   // active lowering mode and either emits a pli_* runtime call or a direct
   // LLVM lowering (P1+). call sites always go through these so the policy

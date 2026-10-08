@@ -1,3 +1,0 @@
-CHECK: call.*@pli_index
-CHECK-NOT: idx.outer
-CHECK-NOT: phi i64

@@ -459,35 +459,15 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_tand", {.willReturn = true, .mem = RtMemNone}},
       {"pli_atand", {.willReturn = true, .mem = RtMemNone}},
       {"pli_fixed_of_float", {.willReturn = true, .mem = RtMemNone}},
-      // String readers: arg-pointed memory only, no error paths.
-      {"pli_verify", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_tally", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_cmp_char", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_index", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_search", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_verify_from", {.willReturn = true, .mem = RtMemArgRead}},
+      // String readers (non-retired W4/misc): arg-pointed memory only.
       {"pli_rank", {.willReturn = true, .mem = RtMemArgRead}},
       {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_data_name_is", {.willReturn = true, .mem = RtMemArgRead}},
-      // String writers: arg-pointed memory only, no error paths.
-      {"pli_assign_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_assign_varying", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_concat", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_substr", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_substr_assign", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_substr_assign_varying", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_repeat", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_translate", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_trim", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_uppercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_lowercase", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_center", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_collate", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_reverse", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_high", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_low", {.willReturn = true, .mem = RtMemArgReadWrite}},
-      {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_char_of_float", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      // String writers (non-retired): arg-pointed memory only, no error paths.
+      {"pli_concat", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_collate", {.willReturn = true, .mem = RtMemArgReadWrite}},
   };
   return table;
 }
@@ -559,8 +539,8 @@ static void applyRuntimeAttrs(llvm::Function* f) {
 
 // P0 policy: every operation defaults to runtime. P5 flips entries one wave at
 // a time as lowerings land. The table is operation-name → prefers direct LLVM.
-// P5 flip: W1 default is now LLVM (was runtime). W4 remains runtime (binary
-// size regression: 51632 B LLVM vs 35440 B runtime).
+// P5 flips: W1, W2, W3 default to LLVM. W4 remains runtime (binary size
+// regression: 51632 B LLVM vs 35440 B runtime).
 static const std::map<std::string, bool>& kRuntimeDefault() {
   static const std::map<std::string, bool> table = {
       {"assign_char", true},
@@ -573,12 +553,58 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"reverse", true},
       {"center", true},
       {"cmp_char", true},
+      // P5 flip: W2 default is now LLVM (was runtime)
+      {"verify", true},
+      {"verify_from", true},
+      {"search", true},
+      {"tally", true},
+      // P5 flip: W3 default is now LLVM (was runtime)
+      {"substr", true},
+      {"substr_assign", true},
+      {"substr_assign_varying", true},
+      {"repeat", true},
+      {"translate", true},
+      {"trim", true},
       // P4+: W4 scalar math and conversions default to runtime until P5/W4 flip
       {"fixed_of_float", false},
       {"fixed_of_char", false},
   };
   return table;
 }
+
+// P6: W1/W2 operations whose pli_* C bodies have been removed; the runtime
+// path is no longer available. Explicit runtime requests fall through to
+// the auto/LLVM path instead of calling the deleted symbol.
+static const std::set<std::string>& kRetiredRuntimeOps() {
+  static const std::set<std::string> table = {
+      // W1 (P6/W1)
+      "assign_char",
+      "index",
+      "assign_varying",
+      "high",
+      "low",
+      "uppercase",
+      "lowercase",
+      "reverse",
+      "center",
+      "cmp_char",
+      // W2 (P6/W2)
+      "verify",
+      "verify_from",
+      "search",
+      "tally",
+      // W3 (P6/W3)
+      "substr",
+      "substr_assign",
+      "substr_assign_varying",
+      "repeat",
+      "translate",
+      "trim",
+  };
+  return table;
+}
+
+bool IRGen::isRetiredRuntimeOp(const std::string& op) { return kRetiredRuntimeOps().count(op) > 0; }
 
 // Operations with a direct LLVM lowering implemented (populated P1+).
 static const std::set<std::string>& kLLVMLowerings() {
@@ -617,13 +643,33 @@ bool IRGen::hasLLVMLowering(const std::string& op) { return kLLVMLowerings().cou
 bool IRGen::useRuntimeCall(const std::string& op) {
   LowerMode mode = lowerMode_;
   auto oit = perOpOverrides_.find(op);
-  if (oit != perOpOverrides_.end())
+  bool perOpOverride = (oit != perOpOverrides_.end());
+  if (perOpOverride)
     mode = oit->second;
   switch (mode) {
   case LowerMode::Runtime:
+    if (isRetiredRuntimeOp(op)) {
+      if (perOpOverride) {
+        d_.error(SourceLoc{},
+                 "runtime path for '" + op +
+                     "' has been retired; "
+                     "use --experimental-lowering=llvm for this operation",
+                 "(P6)");
+      } else {
+        d_.warn(SourceLoc{},
+                "runtime path for '" + op +
+                    "' has been retired; "
+                    "falling back to LLVM lowering",
+                "(P6)");
+      }
+      return false;
+    }
     return true;
   case LowerMode::MLIR:
-    // MLIR not compiled in this build (P2+ gates it). Fall back to runtime.
+    // MLIR not compiled in this build (P2+ gates it). Fall back to runtime,
+    // but retired ops have no runtime — use LLVM if available.
+    if (isRetiredRuntimeOp(op) && hasLLVMLowering(op))
+      return false;
     return true;
   case LowerMode::LLVM:
     if (hasLLVMLowering(op))

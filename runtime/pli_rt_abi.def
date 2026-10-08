@@ -50,13 +50,7 @@ PLI_FN(pli_put_edit_skip, VOID, (I64))
 PLI_FN(pli_put_edit_page, VOID, (VOID))
 PLI_FN(pli_put_edit_line, VOID, (I64))
 
-PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
-PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))
-PLI_FN(pli_concat, VOID, (PTR, CPTR, I64, CPTR, I64))
-PLI_FN(pli_substr, VOID, (PTR, I64, CPTR, I64, I64, I64))    /* SUBSTR */
-PLI_FN(pli_substr_assign, VOID, (PTR, I64, I64, I64, CPTR, I64)) /* SUBSTR pseudo-var */
-PLI_FN(pli_substr_assign_varying, VOID, (PTR, I64, PTR, I64, I64, CPTR, I64)) /* SUBSTR pseudo-var on VARYING */
-PLI_FN(pli_index, I64, (CPTR, I64, CPTR, I64))        /* INDEX */
+ PLI_FN(pli_concat, VOID, (PTR, CPTR, I64, CPTR, I64))
 PLI_FN(pli_mod_ll, I64, (I64, I64))                   /* MOD */
 PLI_FN(pli_mod_dd, DOUBLE, (DOUBLE, DOUBLE))
 PLI_FN(pli_round, DOUBLE, (DOUBLE, I64))              /* ROUND */
@@ -86,28 +80,14 @@ PLI_FN(pli_sind, DOUBLE, (DOUBLE))
 PLI_FN(pli_cosd, DOUBLE, (DOUBLE))
 PLI_FN(pli_tand, DOUBLE, (DOUBLE))
 PLI_FN(pli_atand, DOUBLE, (DOUBLE))
-PLI_FN(pli_repeat, VOID, (PTR, I64, CPTR, I64, I64))  /* REPEAT */
-PLI_FN(pli_verify, I64, (CPTR, I64, CPTR, I64))       /* VERIFY */
-PLI_FN(pli_translate, VOID, (PTR, I64, CPTR, I64, CPTR, I64, CPTR, I64)) /* TRANSLATE */
-PLI_FN(pli_trim, VOID, (PTR, I64, CPTR, I64, CPTR, I64))   /* TRIM (extension) */
-PLI_FN(pli_tally, I64, (CPTR, I64, CPTR, I64))             /* TALLY (extension) */
-PLI_FN(pli_uppercase, VOID, (PTR, I64, CPTR, I64))       /* UPPERCASE (Bridge B4) */
-PLI_FN(pli_lowercase, VOID, (PTR, I64, CPTR, I64))       /* LOWERCASE */
-PLI_FN(pli_center, VOID, (PTR, I64, CPTR, I64, I64))     /* CENTER(s, w) */
-PLI_FN(pli_search, I64, (CPTR, I64, CPTR, I64, I64))     /* SEARCH(s, set, start) */
-PLI_FN(pli_verify_from, I64, (CPTR, I64, CPTR, I64, I64)) /* VERIFY(s, set, start) */
 PLI_FN(pli_rank, I64, (CPTR, I64))                       /* RANK(c) */
 PLI_FN(pli_collate, VOID, (PTR, I64, I64))              /* COLLATE(n) */
-PLI_FN(pli_reverse, VOID, (PTR, I64, CPTR, I64))       /* REVERSE(s) */
-PLI_FN(pli_high, VOID, (PTR, I64))                    /* HIGH(n) */
-PLI_FN(pli_low, VOID, (PTR, I64))                     /* LOW(n) */
 PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */
 PLI_FN(pli_time, VOID, (PTR, I64))                    /* TIME() */
 PLI_FN(pli_char_of_fixed, VOID, (PTR, I64, I64))      /* CHAR(fixed) */
 PLI_FN(pli_char_of_float, VOID, (PTR, I64, DOUBLE))   /* CHAR(float) */
 PLI_FN(pli_fixed_of_char, I64, (CPTR, I64, IPTR))     /* FIXED(char): *ok=0 on no digits */
 PLI_FN(pli_fixed_of_float, I64, (DOUBLE))             /* FIXED(float) */
-PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
 PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */
 PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE abort (no handler) */

@@ -1,4 +1,5 @@
-CHECK: call.*@pli_substr
-CHECK: call.*@pli_repeat
-CHECK: call.*@pli_translate
-CHECK: call.*@pli_trim
+CHECK-NOT: call.*@pli_substr
+CHECK-NOT: call.*@pli_repeat
+CHECK-NOT: call.*@pli_translate
+CHECK-NOT: call.*@pli_trim
+CHECK: phi i64

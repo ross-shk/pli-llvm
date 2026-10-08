@@ -1,4 +1,0 @@
- test: procedure options(main);
-   declare s char(8);
-   s = 'AB';
- end test;
