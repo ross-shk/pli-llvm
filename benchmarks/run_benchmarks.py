@@ -7,7 +7,7 @@ PL/I Compiler Benchmark Harness
 Compiles and runs benchmarks with different optimization levels, comparing
 generated PL/I code performance against C baselines. Each benchmark has a
 `.pli` source (compiled with `plic`) and a `baseline/<name>_c.c` source
-(compiled with `cc`), all implementing the same algorithm.
+(compiled with `clang`), all implementing the same algorithm.
 """
 import os
 import subprocess
@@ -22,7 +22,7 @@ from typing import Dict, List, Tuple, Optional
 
 BENCHMARK_DIR = Path(__file__).parent
 PLIC = BENCHMARK_DIR.parent / "build" / "plic"
-CC = os.environ.get("CC", "cc")
+CC = os.environ.get("CC", "clang.exe")
 RESULTS_DIR = BENCHMARK_DIR / "results"
 BIN_DIR = RESULTS_DIR / "bin"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -116,10 +116,11 @@ def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
     return rc == 0
 
 
-def compile_c(bench_name: str, c_file: str, opt: str, output: Path) -> bool:
-    """Compile a C benchmark with cc at the given optimization level."""
+def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
+              compiler: str = CC) -> bool:
+    """Compile a C benchmark with the given compiler at the given optimization level."""
     src = BENCHMARK_DIR / c_file
-    cmd = [CC, opt, str(src), "-o", str(output)]
+    cmd = [compiler, opt, str(src), "-o", str(output)]
     if bench_name in BENCHMARKS_REQUIRING_MATH:
         cmd.append("-lm")
     rc, out, err = run_command(cmd)
@@ -197,7 +198,13 @@ def main():
                              "identical stdout to the default run (P1.7)")
     parser.add_argument("--runs", type=int, default=RUNS_PER_BENCH,
                         help="timed runs per benchmark (default: %(default)s)")
+    parser.add_argument("--cc", type=str, default=None,
+                        help="C compiler to use (overrides CC env var, "
+                             "default: clang.exe)")
     args = parser.parse_args()
+
+    # Use --cc argument if provided, otherwise fall back to env var, then default
+    cc_cmd = args.cc or os.environ.get("CC", "clang.exe")
 
     print("PL/I Compiler Benchmark Harness")
     print("=" * 70)
