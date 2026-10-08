@@ -34,6 +34,7 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | Type     | `CHAR`                                                                                                                                    | `( x )`                  | `CHAR(24)`                        |
 | Type     | `FIXED`                                                                                                                                   | `( char | num )`         | `FIXED BIN(31)`                   |
 | Numeric  | `ABS`                                                                                                                                     | `( x )`                  | same type as `x`                  |
+| Numeric  | `SIGN`                                                                                                                                    | `( x )`                  | `FIXED BIN(31)`                  |
 | Numeric  | `TRUNC`                                                                                                                                   | `( x )`                  | same type as `x`                  |
 | Numeric  | `PRECISION`                                                                                                                               | `( x, p )`               | `x` at precision `p`              |
 | Numeric  | `MIN`, `MAX`                                                                                                                              | `( a, b, ... )`          | common type                       |
@@ -360,6 +361,17 @@ Magnitude; for `COMPLEX`, `|x + iy| = sqrt(x² + y²)` as a `FLOAT`.
 
 ```pli
 put skip list(abs(-7));           /* 7 */
+```
+
+### `SIGN(x)` → FIXED BINARY(31)
+
+Returns `-1` for a negative argument, `0` for zero, and `+1` for a positive one. The sign of a `FLOAT` argument is compared in floating point (a `NaN` argument yields `0`).
+
+```pli
+put skip list(sign(-7));          /* -1 */
+put skip list(sign(0));           /* 0 */
+put skip list(sign(3.5));         /* 1 */
+put skip list(sign(-2.5));        /* -1 */
 ```
 
 ### `TRUNC(x)` → same type

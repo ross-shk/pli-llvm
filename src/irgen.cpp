@@ -8898,6 +8898,24 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // SIGN built-in (rule (123), Appendix 1): -1/0/+1 for negative/zero/positive,
+  // pure LLVM selects, no runtime call. The argument is compared to zero in
+  // its own type (integer or float), so NaN yields 0 (unordered both ways).
+  if (e->name == "SIGN") {
+    Val a = emitExpr(e->args[0].get());
+    llvm::Value* z = llvm::Constant::getNullValue(llvmTy(a.ty));
+    llvm::Value* neg = (a.ty.k == TK::Float) ? b_.CreateFCmpOLT(a.reg, z, "sgnn")
+                                             : b_.CreateICmpSLT(a.reg, z, "sgnn");
+    llvm::Value* pos = (a.ty.k == TK::Float) ? b_.CreateFCmpOGT(a.reg, z, "sgnp")
+                                             : b_.CreateICmpSGT(a.reg, z, "sgnp");
+    llvm::Value* m1 = i64(-1);
+    llvm::Value* one = i64(1);
+    llvm::Value* r = b_.CreateSelect(neg, m1, b_.CreateSelect(pos, one, i64(0), "signp"), "sign");
+    v.ty = e->ty;
+    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "sign32");
+    result = v;
+    return true;
+  }
   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
   // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,

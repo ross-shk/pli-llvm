@@ -131,6 +131,7 @@ Per Invariant 3: all diagnostics follow `d_.error(loc, msg, "(nn)")` format citi
 
 ### Builtins Tests (builtins/) — Comprehensive for served built-ins
 - Math built-ins well-tested including degree variants
+- Arithmetic built-ins (ABS, SIGN) cover edge cases including floats
 - String built-ins cover edge cases
 - Array inquiry/reduction built-ins verified
 

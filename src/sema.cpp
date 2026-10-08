@@ -4804,6 +4804,22 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = e->args[0]->ty;
     return true;
   }
+  // SIGN built-in (rule (123), Appendix 1): returns -1, 0, or +1 for a
+  // negative, zero, or positive numeric argument; result is FIXED BIN(31).
+  if (e->name == "SIGN") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "SIGN takes one argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric()) {
+      d_.error(e->args[0]->loc, "SIGN argument must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
   // REVERSE (rule (123)): mirrors a string; returns same-length CHAR.
   if (e->name == "REVERSE") {
     if (e->args.size() != 1) {
