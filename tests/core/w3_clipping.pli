@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* W3 clipping/padding/capacity operations: SUBSTR (rule 30), REPEAT
    (rule 31), TRANSLATE (rule 32), TRIM (extension ADR-077). Boundary
-   cases: start < 1, length > available, empty source, zero-length,
-   VARYING-length growth, pad characters, capacity clamping. */
+   cases: start past end, length > available, zero-length,
+   VARYING-length growth, pad characters, capacity clamping, overlap. */
 w3_ops: procedure options(main);
     declare fails fixed bin(31) init(0);
     declare result char(20) varying;
@@ -17,17 +17,31 @@ w3_ops: procedure options(main);
     result = substr('hello', 3, 0);
     if result ^= '' then fails = fails + 1;
 
+    /* SUBSTR boundary: start past end → blanks, zero-length */
+    result = substr('hello', 6, 3);
+    if result ^= '   ' then fails = fails + 1;
+    result = substr('hello', 7, 2);
+    if result ^= '  ' then fails = fails + 1;
+
     /* --- REPEAT --- */
     result = repeat('ab', 3);
     if result ^= 'ababab' then fails = fails + 1;
     result = repeat('x', 0);
     if result ^= '' then fails = fails + 1;
+    /* REPEAT with src longer than field width → clipped to cap */
+    result = repeat('abcde', 1);
+    if result ^= 'abcde' then fails = fails + 1;
 
     /* --- TRANSLATE --- */
     result = translate('abc', 'def', 'a');
     if result ^= 'dbc' then fails = fails + 1;
     result = translate('hello', 'H', 'h');
     if result ^= 'Hello' then fails = fails + 1;
+    /* TRANSLATE with unmatched chars → passthrough */
+    result = translate('hello', 'X', 'h');
+    if result ^= 'Xello' then fails = fails + 1;
+    result = translate('hello', 'HI', 'he');
+    if result ^= 'HIllo' then fails = fails + 1;
 
     /* --- TRIM --- */
     result = trim('  hello  ');
@@ -36,6 +50,22 @@ w3_ops: procedure options(main);
     if result ^= 'hello' then fails = fails + 1;
     result = trim('   ', ' ');
     if result ^= '' then fails = fails + 1;
+    /* TRIM with custom pad set and leading/trailing chars */
+    result = trim('00abc00', '0');
+    if result ^= 'abc' then fails = fails + 1;
+    result = trim('xxxhelloxxx', 'x');
+    if result ^= 'hello' then fails = fails + 1;
+
+    /* SUBSTR assignment (rule 86/123) and varying-length growth */
+    declare buf char(20);
+    buf = 'hello world';
+    substr(buf, 2, 3) = 'XYZ';
+    if buf ^= 'hXYZo world' then fails = fails + 1;
+    declare vg char(20) varying;
+    vg = 'ab';
+    substr(vg, 4, 2) = 'cd';
+    if length(vg) ^= 5 then fails = fails + 1;
+    if vg ^= 'ab cd' then fails = fails + 1;
 
     if fails = 0 then put skip list('PASS w3 ops');
     else put skip list('FAIL w3 ops: fails =', fails);

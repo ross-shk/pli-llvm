@@ -1539,7 +1539,8 @@ void IRGen::emitSubstrAssignLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Va
   b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), src, llvm::MaybeAlign(), take, false);
   // blank-fill the rest.
   llvm::Value* padLen = b_.CreateSub(nClipped, take, "sa.padlen");
-  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {start0, take}, "sa.padptr"), blank, padLen,
+  llvm::Value* padPtr2 = b_.CreateAdd(start0, take, "sa.padptr_off");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {padPtr2}, "sa.padptr"), blank, padLen,
                   llvm::MaybeAlign(), false);
 }
 
@@ -1583,7 +1584,8 @@ void IRGen::emitSubstrAssignVaryingLLVM(llvm::Value* dst, llvm::Value* dstcap, l
   b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), src, llvm::MaybeAlign(), take, false);
   // blank-pad tail of the overlay.
   llvm::Value* padLen = b_.CreateSub(nClipped, take, "sarv.padlen");
-  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {start0, take}, "sarv.padptr"), blank, padLen,
+  llvm::Value* padPtr2 = b_.CreateAdd(start0, take, "sarv.padptr_off");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {padPtr2}, "sarv.padptr"), blank, padLen,
                   llvm::MaybeAlign(), false);
 
   // Grow live length: end = max(start0 + nClip, oldLen).
@@ -1619,7 +1621,9 @@ void IRGen::emitRepeatLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s
   k->addIncoming(zero, preLoopBB);
   // out = k * srclen; if out >= dstcap → exit.
   llvm::Value* outOff = b_.CreateMul(k, srcLen64, "rep.out_off");
-  b_.CreateCondBr(b_.CreateICmpUGE(outOff, dstcap64, "rep.out_full"), endBB, latchBB);
+  b_.CreateCondBr(b_.CreateOr(b_.CreateICmpUGE(k, kN, "rep.k_done"),
+                              b_.CreateICmpUGE(outOff, dstcap64, "rep.out_full"), "rep.exit_cond"),
+                  endBB, latchBB);
 
   startBlock(latchBB);
   // copyLen = min(srcLen, dstcap - out).
@@ -1666,25 +1670,32 @@ void IRGen::emitTranslateLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value
                                    b_.CreateICmpUGE(iPhi, dstcap64, "tr.i_ge_dst"), "tr.i_done");
   b_.CreateCondBr(iDone, doneBB, innerBB);
 
-  // Inner loop: k = phi.  Exit when k >= inlen (not found) or s[i] == in[k] (found).
+  llvm::BasicBlock* loadBB = llvm::BasicBlock::Create(ctx_, "tr.load", F);
+
+  // Inner loop: k = phi.  If k >= inlen → not found, go to checkBB.
+  // Otherwise load in[k], compare with s[i]; match → checkBB, mismatch → k++, loop.
   startBlock(innerBB);
   llvm::PHINode* kPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tr.k");
   kPhi->addIncoming(zero, loopBB);
-  llvm::Value* kNext = b_.CreateAdd(kPhi, one, "tr.k_next");
-  kPhi->addIncoming(kNext, innerBB);
   llvm::Value* kGeInlen = b_.CreateICmpUGE(kPhi, inLen64, "tr.k_ge_inlen");
+  b_.CreateCondBr(kGeInlen, checkBB, loadBB);
+
+  startBlock(loadBB);
   llvm::Value* ik =
       b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), in, {kPhi}, "tr.inptr"), "tr.ik");
   llvm::Value* siEqIk = b_.CreateICmpEQ(si, ik, "tr.eq");
-  b_.CreateCondBr(b_.CreateOr(kGeInlen, siEqIk, "tr.found"), checkBB, innerBB);
+  kPhi->addIncoming(b_.CreateAdd(kPhi, one, "tr.k_next"), loadBB);
+  b_.CreateCondBr(siEqIk, checkBB, innerBB);
 
-  // check: if k < outlen → out[k]; else s[i] (passthrough).  Then i++.
+  // check: if k < inlen → found → out[k] (or blank if k >= outlen); else passthrough.
   startBlock(checkBB);
-  llvm::Value* kLtOut = b_.CreateICmpULT(kPhi, outLen64, "tr.k_lt_outlen");
+  llvm::Value* kLtIn = b_.CreateICmpULT(kPhi, inLen64, "tr.k_lt_inlen");
+  llvm::Value* outK = b_.CreateLoad(
+      b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), out, {kPhi}, "tr.outptr"), "tr.outk");
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
   llvm::Value* byteVal = b_.CreateSelect(
-      kLtOut,
-      b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), out, {kPhi}, "tr.outptr"),
-                    "tr.outk"),
+      kLtIn,
+      b_.CreateSelect(b_.CreateICmpULT(kPhi, outLen64, "tr.k_lt_out"), outK, blank, "tr.out_sel"),
       si, "tr.byte");
   b_.CreateStore(byteVal, b_.CreateGEP(b_.getInt8Ty(), dst, {iPhi}, "tr.dstptr"), false);
   iPhi->addIncoming(b_.CreateAdd(iPhi, one, "tr.i_next"), checkBB);
