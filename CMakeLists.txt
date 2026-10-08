@@ -20,8 +20,56 @@ set(CMAKE_C_STANDARD 11)
 option(PLIC_WERROR "Treat compiler warnings as errors" OFF)
 
 find_package(LLVM REQUIRED CONFIG)
-if(LLVM_PACKAGE_VERSION VERSION_LESS 18)
-  message(FATAL_ERROR "plic requires LLVM 20 or newer")
+# Prebuilt LLVM 23 on Windows was compiled with ZLIB, zstd, and LibXml2 support
+# but doesn't ship those libraries. Provide them as linkable targets.
+# The *_ROOT hints below are optional: point them at a local zlib/zstd build
+# or a vcpkg install if available; otherwise empty INTERFACE targets satisfy
+# LLVM's link requirements (zlib/zstd features degrade gracefully, libxml2
+# manifest merging is covered by in-tree stubs).
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  # Drop the old dev-machine hint var (replaced by the *_ROOT vars below).
+  unset(PLIC_LLVM_DEPS_DIR CACHE)
+  set(PLIC_ZLIB_ROOT "" CACHE PATH "Optional zlib install prefix (contains lib/)")
+  set(PLIC_ZSTD_ROOT "" CACHE PATH "Optional zstd install prefix (contains lib/)")
+  set(PLIC_VCPKG_ROOT "C:/vcpkg/installed/x64-windows" CACHE PATH "Optional vcpkg triplet root")
+  # ZLIB (prefer static: the import lib would add a zlib.dll startup dependency)
+  if(NOT TARGET ZLIB::ZLIB)
+    find_file(ZLIB_LIB NAMES zlibstatic.lib zlib.lib
+      HINTS ${PLIC_ZLIB_ROOT}/lib ${PLIC_VCPKG_ROOT}/lib
+      NO_DEFAULT_PATH)
+    if(ZLIB_LIB)
+      add_library(ZLIB::ZLIB STATIC IMPORTED)
+      set_target_properties(ZLIB::ZLIB PROPERTIES IMPORTED_LOCATION "${ZLIB_LIB}")
+      message(STATUS "ZLIB: ${ZLIB_LIB}")
+    else()
+      add_library(ZLIB::ZLIB INTERFACE IMPORTED)
+    endif()
+  endif()
+  # zstd
+  if(NOT TARGET zstd::libzstd_static)
+    find_file(ZSTD_LIB NAMES libzstd_static.lib zstd.lib
+      HINTS ${PLIC_ZSTD_ROOT}/lib ${PLIC_VCPKG_ROOT}/lib
+      NO_DEFAULT_PATH)
+    if(ZSTD_LIB)
+      add_library(zstd::libzstd_static STATIC IMPORTED)
+      set_target_properties(zstd::libzstd_static PROPERTIES IMPORTED_LOCATION "${ZSTD_LIB}")
+      message(STATUS "zstd: ${ZSTD_LIB}")
+    else()
+      add_library(zstd::libzstd_static INTERFACE IMPORTED)
+    endif()
+  endif()
+  # LibXml2: the prebuilt LLVM expects libxml2 (WindowsManifest merging) but
+  # ships no binaries, and the old import-lib stub only covered 8 of the 16
+  # symbols LLVM 23 needs (besides requiring a nonexistent libxml2.dll at
+  # startup). Use an empty target and provide static abort-stubs in-tree
+  # (runtime/libxml2_stubs.c, added to plic sources below) instead.
+  if(NOT TARGET LibXml2::LibXml2)
+    add_library(LibXml2::LibXml2 INTERFACE IMPORTED)
+    message(STATUS "LibXml2: in-tree stubs (runtime/libxml2_stubs.c)")
+  endif()
+endif()
+if(LLVM_PACKAGE_VERSION VERSION_LESS 23)
+  message(FATAL_ERROR "plic requires LLVM 23 or newer (found ${LLVM_PACKAGE_VERSION})")
 endif()
 find_package(Clang REQUIRED CONFIG)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -146,14 +194,20 @@ else()
   # Core/IR (superset of the old `core irreader support linker` set).
   llvm_map_components_to_libnames(llvm_libs_core
     Core IRReader Support BitReader BitWriter Linker)
-  # MC/Target (host arch only for milestone)
+  # MC/Target (all targets — initializeAllTargets() needs them all).
   llvm_map_components_to_libnames(llvm_libs_mc
     MC MCParser MCDisassembler Object BinaryFormat TargetParser AsmParser AsmPrinter
     CodeGen SelectionDAG GlobalISel Option
     X86CodeGen X86AsmParser X86Disassembler X86Desc X86Info
     AArch64CodeGen AArch64AsmParser AArch64Disassembler AArch64Desc AArch64Info
+    ARM ARMAsmParser ARMCodeGen ARMDesc ARMDisassembler ARMInfo
+    BPF BPFAsmParser BPFCodeGen BPFDesc BPFDisassembler BPFInfo
+    WebAssembly WebAssemblyAsmParser WebAssemblyCodeGen WebAssemblyDesc
+    WebAssemblyDisassembler WebAssemblyInfo
+    NVPTX NVPTXCodeGen NVPTXDesc NVPTXInfo
+    RISCV RISCVAsmParser RISCVCodeGen RISCVDesc RISCVInfo
     WindowsManifest WindowsDriver LibDriver
-    Passes LTO)
+    Passes LTO DTLTO)
 endif()
 # lld
 llvm_map_components_to_libnames(llvm_libs_lld
@@ -168,6 +222,54 @@ endif()
 target_link_libraries(plic PRIVATE plic_rules
   ${llvm_libs_lld} ${llvm_libs_mc} ${llvm_libs_core}
   clangFrontend clangParse clangLex clangBasic clangAST)
+
+# compiler-rt provides __divti3 (128-bit division) needed for i128 arithmetic
+# on Windows where the CRT doesn't include it.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" _LLVM_MAJOR "${LLVM_PACKAGE_VERSION}")
+  find_file(CLANG_RT_BUILTINS
+    NAMES clang_rt.builtins-x86_64.lib clang_rt.builtins-aarch64.lib
+    HINTS ${CMAKE_PREFIX_PATH}/lib/clang/${_LLVM_MAJOR}/lib/windows)
+  if(CLANG_RT_BUILTINS)
+    target_link_libraries(plic PRIVATE ${CLANG_RT_BUILTINS})
+    message(STATUS "compiler-rt builtins: ${CLANG_RT_BUILTINS}")
+  else()
+    message(WARNING "compiler-rt builtins not found (clang_rt.builtins) — 128-bit division may fail to link")
+  endif()
+endif()
+
+# clang-cl + lld-link: CMake doesn't auto-detect MSVC C++ stdlib (IMPLICIT_LINK_LIBRARIES is empty).
+# The prebuilt LLVM 23 libraries use /MT (static CRT), so plic must use /MT too to avoid
+# RuntimeLibrary mismatch (MT_StaticRelease vs MD_DynamicRelease).
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set_property(TARGET plic PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+  # CMake already invokes lld-link.exe directly for the clang-cl+Ninja link
+  # (see CMAKE_LINKER); passing -fuse-ld=lld here would forward a driver-only
+  # flag to lld-link ("ignoring unknown argument"). The -fuse-ld=lld flag is
+  # only needed when linking *through* the clang driver (see src/main.cpp,
+  # which shells out to clang for user programs).
+  # /DEFAULTLIB:libcmt.lib pulls in the MT-variant CRT and C++ stdlib objects
+  # (provides __std_remove_8, __std_replace_8, ___chkstk_ms, etc.) without a
+  # RuntimeLibrary mismatch. MSVC libs must come after LLVM/lld libs on the link line.
+  target_link_options(plic PRIVATE /DEFAULTLIB:libcmt.lib)
+  target_link_libraries(plic PRIVATE
+    kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib
+    advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib)
+  # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
+  # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
+  # Compiled from runtime/stl_stubs.c as part of the build.
+  target_sources(plic PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c)
+  # Silence expected clang warnings for the __std_*/xml* helper stubs
+  # (reserved double-underscore names, pre-C99 declaration style).
+  set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c PROPERTIES
+    COMPILE_OPTIONS "-Wno-reserved-identifier;-Wno-missing-prototypes;-Wno-unsafe-buffer-usage;-Wno-unreachable-code-return;-Wno-declaration-after-statement;-Wno-unused-parameter")
+  message(STATUS "MSVC STL helper stubs: runtime/stl_stubs.c")
+  message(STATUS "Using /MT (static CRT) to match prebuilt LLVM libraries")
+endif()
 
 # Force-include lld + host target so their symbols survive static dead-stripping.
 # Homebrew lld only provides dynamic libraries, so use those directly.
@@ -191,11 +293,15 @@ else()
 endif()
 
 # Static C++ runtime for portability.
+# Windows: plic itself uses /MT (MSVC_RUNTIME_LIBRARY=MultiThreaded, set above)
+# to match the prebuilt LLVM 23 libs; libpli stays on the /MD default so user
+# programs link against the dynamic CRT (see src/main.cpp linkCrtFlag).
+# CRT selection is a per-target compile property, not a link option
+# (passing /MD//MT to lld-link warns LNK4044), so no link options here.
 if(APPLE)
   # Nothing additional needed on macOS.
 elseif(WIN32)
-  # Default is already /MD (dynamic CRT) matching LLVM. Do not pass /MD or
-  # /MT to the linker (LNK4044); CRT selection is a compiler flag.
+  # No link options needed (see above).
 else()
   target_link_options(plic PRIVATE -static-libstdc++ -static-libgcc)
 endif()
@@ -209,16 +315,17 @@ add_library(libpli STATIC ${RT_SRCS})
 set_target_properties(libpli PROPERTIES OUTPUT_NAME pli)
 
 # Warnings: -Wall -Wextra on the C++ driver (libpli is C11 with its own style).
-if(MSVC)
-  target_compile_options(plic PRIVATE /W3)
-else()
+# Use Clang compiler ID check FIRST: clang-cl defines the Clang ID but also
+# sets MSVC=TRUE in CMake. We want -Wall -Wextra for clang-cl, not /W3.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(plic PRIVATE -Wall -Wextra)
-endif()
-if(PLIC_WERROR)
-  if(MSVC)
-    target_compile_options(plic PRIVATE /WX)
-  else()
+  if(PLIC_WERROR)
     target_compile_options(plic PRIVATE -Werror)
+  endif()
+elseif(MSVC)
+  target_compile_options(plic PRIVATE /W3)
+  if(PLIC_WERROR)
+    target_compile_options(plic PRIVATE /WX)
   endif()
 endif()
 
@@ -444,20 +551,45 @@ add_custom_target(check
   VERBATIM)
 
 # size-report: report the stripped size of the plic binary.
+# Use a portable CMake script for size reporting — stat/sh cannot be used
+# in CMake custom targets on Windows (cmd.exe context with Ninja).
+file(WRITE ${CMAKE_BINARY_DIR}/size_report.cmake
+  "if(NOT EXISTS \"${CMAKE_BINARY_DIR}/plic.strip\")\n"
+  "  message(FATAL_ERROR \"Stripped binary not found: ${CMAKE_BINARY_DIR}/plic.strip\")\n"
+  "endif()\n"
+  "file(SIZE \"${CMAKE_BINARY_DIR}/plic.strip\" plic_size)\n"
+  "message(STATUS \"Stripped size of plic: \${plic_size} bytes (target: < 100 MB, hard cap 150 MB)\")\n"
+  "if(\${plic_size} GREATER 157286400)\n"
+  "  message(FATAL_ERROR \"Binary exceeds 150 MB limit\")\n"
+  "endif()\n")
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  # No strip/stat on MSVC hosts; report the raw binary size instead.
-  add_custom_target(size-report
-    COMMAND ${CMAKE_COMMAND} -E echo "plic size (unstripped, Windows has no strip):"
-    COMMAND powershell -NoProfile -Command "(Get-Item $<TARGET_FILE:plic>).Length"
-    COMMENT "Size of plic (target: < 100 MB, hard cap 150 MB)")
+  find_program(LLVM_OBJCOPY_BIN NAMES llvm-objcopy
+    HINTS ${CMAKE_PREFIX_PATH}/bin ${LLVM_TOOLS_BINARY_DIR})
+  if(LLVM_OBJCOPY_BIN)
+    add_custom_target(size-report
+      COMMAND ${LLVM_OBJCOPY_BIN} --strip-all -o ${CMAKE_BINARY_DIR}/plic.strip $<TARGET_FILE:plic>
+      COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/size_report.cmake
+      COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
+  else()
+    # No llvm-objcopy: report the raw binary size portably (same 150 MB gate).
+    file(WRITE ${CMAKE_BINARY_DIR}/size_report_raw.cmake
+      "file(SIZE \"\${PLIC_BIN}\" plic_size)\n"
+      "message(STATUS \"Raw size of plic (no llvm-objcopy): \${plic_size} bytes (target: < 100 MB, hard cap 150 MB)\")\n"
+      "if(\${plic_size} GREATER 157286400)\n"
+      "  message(FATAL_ERROR \"Binary exceeds 150 MB limit\")\n"
+      "endif()\n")
+    add_custom_target(size-report
+      COMMAND ${CMAKE_COMMAND} -DPLIC_BIN=$<TARGET_FILE:plic> -P ${CMAKE_BINARY_DIR}/size_report_raw.cmake
+      COMMENT "Raw plic size (target: < 100 MB, hard cap 150 MB)")
+  endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   add_custom_target(size-report
     COMMAND strip -o ${CMAKE_BINARY_DIR}/plic.strip $<TARGET_FILE:plic>
-    COMMAND stat -f%z ${CMAKE_BINARY_DIR}/plic.strip
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/size_report.cmake
     COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
 else()
   add_custom_target(size-report
     COMMAND strip $<TARGET_FILE:plic> -o ${CMAKE_BINARY_DIR}/plic.strip
-    COMMAND stat -c%s ${CMAKE_BINARY_DIR}/plic.strip
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/size_report.cmake
     COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
 endif()

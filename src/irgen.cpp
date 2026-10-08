@@ -48,7 +48,7 @@ static long long pliRescaleDown(long long v, int k, bool decTarget) {
 // 10^k as a compile-time 128-bit value (ADR-191): wide FIXED DECIMAL
 // (>18 digit) rescale constants (e.g. 10^25) exceed an i64, so the i64
 // helpers above are insufficient for the wide path. PliI128 keeps this
-// portable (MSVC has no __int128).
+// portable (MSVC lacks __int128; clang-cl supports it natively).
 static PliI128 pliPow10_128(int k) {
   PliI128 p = 1;
   for (int i = 0; i < k; ++i)

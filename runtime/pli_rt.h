@@ -11,7 +11,8 @@
 #define PLI_RT_H
 
 /* Before extern "C": the wide-int header carries C++ operator overloads on
- * MSVC, which cannot live in a C-linkage block. */
+ * MSVC (portable fallback), which cannot live in a C-linkage block. */
+
 #include "pli_wide128.h"
 
 #ifdef __cplusplus
@@ -19,7 +20,8 @@ extern "C" {
 #endif
 
 /* Expand the .def's type tokens to C types. I128 is the portable 128-bit
- * integer (MSVC has no __int128): same 16-byte two's-complement layout. */
+ * integer (MSVC lacks __int128; clang-cl supports it natively): same 16-byte
+ * two's-complement layout. */
 #define VOID    void
 #define I64     long long
 #define I32     int

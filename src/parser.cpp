@@ -31,7 +31,7 @@ static void parseDecConstant(const std::string& text, Expr& e) {
   std::string fracPart = dot == std::string::npos ? "" : text.substr(dot + 1);
   // Accumulate in i128 (ADR-191): a 31-digit scaled value exceeds i64, so the
   // old long long accumulator wrapped wide literals at parse time. PliI128
-  // keeps this portable (MSVC has no __int128).
+  // keeps this portable (MSVC lacks __int128; clang-cl supports it natively).
   PliI128 scaled = 0;
   for (char c : intPart)
     scaled = scaled * 10 + (c - '0');

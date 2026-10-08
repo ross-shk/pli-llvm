@@ -1070,6 +1070,30 @@ int main(int argc, char** argv) {
             argStore.push_back(la);
         }
         if (llt.getObjectFormat() == llvm::Triple::COFF) {
+          // compiler-rt builtins for 128-bit helpers (__udivti3, __divti3)
+          // used by the runtime. Resolved relative to the backend clang:
+          // <prefix>/bin/clang -> <prefix>/lib/clang/<major>/lib/windows/.
+          std::string rtArch;
+          if (llt.getArch() == llvm::Triple::x86_64)
+            rtArch = "x86_64";
+          else if (llt.getArch() == llvm::Triple::aarch64)
+            rtArch = "aarch64";
+          else if (llt.getArch() == llvm::Triple::arm)
+            rtArch = "arm";
+          if (!rtArch.empty()) {
+            fs::path clangBin = fs::path(clangPath).parent_path();
+            std::string llvmVer = PLIC_LLVM_VERSION;
+            auto dot = llvmVer.find('.');
+            std::string major = dot == std::string::npos ? llvmVer : llvmVer.substr(0, dot);
+            fs::path builtins = clangBin.parent_path() / "lib" / "clang" / major / "lib" /
+                                "windows" / ("clang_rt.builtins-" + rtArch + ".lib");
+            std::error_code bsec;
+            if (fs::exists(builtins, bsec))
+              argStore.push_back(builtins.string());
+            else if (verbose)
+              std::cerr << "plic: compiler-rt builtins not found (" << builtins.string()
+                        << "), 128-bit division may fail to link\n";
+          }
           argStore.push_back("/out:" + output);
         } else {
           argStore.push_back("-o");
@@ -1112,23 +1136,23 @@ int main(int argc, char** argv) {
   // Fallback: link the per-file objects with libpli via the backend clang.
   // Drop unreferenced runtime sections (the archive is sectioned, ADR-079);
   // multitasking (QR2.8) runs on pthreads.
-  // On Windows the driver defaults to the static CRT (LIBCMT) while pli.lib
-  // is built with the dynamic CRT (/MD): drop the static default lib and use
-  // the dynamic one, otherwise the link fails with LNK4098/LNK2019.
+  // Windows (clang-cl + lld-link): libpli is built with the dynamic CRT (/MD),
+  // so force user programs onto the dynamic CRT as well (drop any static
+  // libcmt default, use msvcrt), route every link through lld-link (which
+  // reads LLVM bitcode natively, unlike old MSVC link.exe/LNK1107), and use
+  // compiler-rt for 128-bit helpers (__udivti3, __divti3) since Windows has
+  // no libgcc.
 #ifdef _WIN32
   const char* linkCrtFlag = "-Xlinker /NODEFAULTLIB:libcmt.lib -Xlinker /DEFAULTLIB:msvcrt.lib ";
+  // lld-link handles LLVM bitcode natively.
+  const char* linkLldFlag = "-fuse-ld=lld ";
+  const char* linkRtFlag = "--rtlib=compiler-rt ";
 #else
   const char* linkCrtFlag = "";
-#endif
-#ifdef _WIN32
-  // LTO objects are LLVM bitcode, which MSVC link.exe cannot read (LNK1107):
-  // route LTO links through lld-link, which handles bitcode natively.
-  // Non-LTO links keep the default (MSVC link) behavior.
-  const char* linkLldFlag = !ltoKind.empty() ? "-fuse-ld=lld " : "";
-#else
   const char* linkLldFlag = "";
+  const char* linkRtFlag = "";
 #endif
-  std::string cmd = shellQuote(clangPath) + " " + linkCrtFlag + linkLldFlag +
+  std::string cmd = shellQuote(clangPath) + " " + linkCrtFlag + linkLldFlag + linkRtFlag +
                     "-Wno-override-module " + optLevel + backendFlags;
 #ifdef __APPLE__
   cmd += " -Wl,-dead_strip";

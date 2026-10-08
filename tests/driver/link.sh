@@ -8,8 +8,8 @@ set -u
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
 # EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
-  *) EXE=; MATHLIB=-lm ;;
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
+  *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
 esac
 PLIC=${PLIC:-./build/plic}
 CLANG=${CLANG:-clang}
@@ -48,7 +48,7 @@ $CLANG -c "$OUT.c" -o "$OUT.c.o" || { echo "FAIL: clang -c failed"; ok=0; }
 # Link pli object, C object and the runtime into one binary.
 # (-lm after the archive: libpli's ROUND/mathport refs need libm on Linux;
 # harmless on macOS where libm is in libSystem.)
-$CLANG "$OUT.pli.o" "$OUT.c.o" "$RTLIB" $MATHLIB -o "$OUT$EXE" || { echo "FAIL: cross-unit link failed"; ok=0; }
+$CLANG "$OUT.pli.o" "$OUT.c.o" "$RTLIB" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL: cross-unit link failed"; ok=0; }
 check "cross-unit run" "$($OUT$EXE)" "plic: 42"
 
 # -Wl/--linker/-shared/nm probe Unix link behavior; skip on Windows.

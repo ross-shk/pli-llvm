@@ -11,7 +11,7 @@
  * is implementation-defined in this stage. */
 /* No static initializers: CRITICAL_SECTION/CONDITION_VARIABLE have none, so
  * both mutexes and the cond are created once via pli_once. */
-/* One-time init: MSVC has no static mutex/cond initializers. */
+/* One-time init: MSVC and clang-cl both lack static mutex/cond initializers. */
 static pli_mutex pli_ev_mu;
 static pli_cond pli_ev_cv;
 static pli_mutex pli_task_mu;

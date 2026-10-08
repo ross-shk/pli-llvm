@@ -3,11 +3,12 @@
 /* pli_wide128.h — portable 128-bit integer (ADR-191 Windows compat).
  *
  * Wide (>18 digit) FIXED DECIMAL values are held in 128 bits. GCC/Clang
- * spell that `__int128`, which MSVC does not implement, so on MSVC the same
- * value is a two's-complement (lo, hi) pair with identical layout (16 bytes,
- * 8-aligned, little-endian halves). All arithmetic goes through the helpers
- * below so compiler and runtime sources build unchanged on every toolchain:
- * the portable implementation is used on MSVC, native operators elsewhere.
+ * spell that `__int128`, which MSVC lacks (clang-cl supports it natively),
+ * so the portable (lo, hi) pair is used only on true MSVC builds: identical
+ * layout (16 bytes, 8-aligned, little-endian halves). All arithmetic goes
+ * through the helpers below so compiler and runtime sources build unchanged
+ * on every toolchain: the portable implementation is used on MSVC, native
+ * operators elsewhere.
  *
  * Only the operations ADR-191 needs are provided: add/sub/mul (low 128 bits),
  * unsigned divmod (shift-subtract, host-side use only — never in hot paths),
@@ -21,7 +22,7 @@
 
 #include <stdint.h>
 
-#if defined(_MSC_VER) || defined(PLI_WIDE128_FORCE_PORTABLE)
+#if (defined(_MSC_VER) && !defined(__clang__)) || defined(PLI_WIDE128_FORCE_PORTABLE)
 typedef struct PliU128 {
   uint64_t lo;
   uint64_t hi;
@@ -344,7 +345,8 @@ static inline std::string pli_to_dec_string(PliI128 v) {
 
 #ifdef __cplusplus
 #ifdef PLI_WIDE128_PORTABLE
-/* MSVC operator sugar so compiler sources read like native __int128 code.
+/* MSVC (portable fallback) operator sugar so compiler sources read like
+ * native __int128 code. clang-cl uses native operators instead. */
  * Mixed int operands convert implicitly via PliI128(long long). */
 inline PliI128 operator+(PliI128 a, PliI128 b) { return pli_to_s(pli_add_u(pli_to_u(a), pli_to_u(b))); }
 inline PliI128 operator-(PliI128 a, PliI128 b) { return pli_to_s(pli_sub_u(pli_to_u(a), pli_to_u(b))); }

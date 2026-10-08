@@ -13,6 +13,14 @@ cmake --build build/cmake -j$(nproc)        # build/plic + build/cmake/libpli.a
 ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.pli
 ```
 
+```bat
+:: Windows (clang-cl + lld-link):
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=C:/path/to/llvm-23 -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+cmake --build build/cmake -j
+ctest --test-dir build/cmake
+```
+
 ## Layer map — where a feature lands
 
 | Feature kind                  | Touch                                                                                                      | Example        |
@@ -84,7 +92,7 @@ Existing uppercase tests stay as they are — follow the style of the file you  
 
 ## Code style
 
-- C++20, `-Wall -Wextra` clean. Two-space indent, `lowerCamelCase` functions, `snake_case_` for private members with a trailing underscore as in `src/irgen.h`.
+- C++20, `-Wall -Wextra` clean on clang-cl (and gcc/clang on Linux/macOS). Two-space indent, `lowerCamelCase` functions, `snake_case_` for private members with a trailing underscore as in `src/irgen.h`.
 - One-line comment above a block stating its **intent**, not its mechanics. Cite rule numbers in comments where a production is implemented: `// if-statement ::= if-clause statement …  rules (74),(75)`.
 - No exceptions, no RTTI, no dependencies beyond the standard library.
 - Runtime is C11 and must stay free of C++ and of allocation on hot paths.

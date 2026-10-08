@@ -11,8 +11,8 @@ set -u
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
 # EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
-  *) EXE=; MATHLIB=-lm ;;
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
+  *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
 esac
 PLIC=${PLIC:-./build/plic}
 CC=${CC:-${CLANG:-clang}}
@@ -58,6 +58,6 @@ EOF
 $PLIC "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL multimod: lib compile"; exit 1; }
 $PLIC "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL multimod: main compile"; exit 1; }
 # -lm after the archive: libpli needs libm on Linux (no-op on macOS).
-$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
+$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
 "$OUT$EXE"
 exit 0

@@ -99,7 +99,7 @@ See [Programming Guide](./guides/programming.md) for guidance and more examples,
 
 - **Linux** (x86_64, ARM64): gcc or clang
 - **macOS** (Intel, Apple Silicon): clang
-- **Windows** (x86_64, ARM64): MSVC + Ninja (not MinGW/MSYS2/Cygwin)
+- **Windows** (x86_64, ARM64): clang-cl + lld-link + Ninja
 
 Threading is abstracted in `runtime/sync/plic_thread.h` (POSIX pthreads on Linux/macOS, Win32 primitives on Windows).
 
@@ -107,10 +107,10 @@ Threading is abstracted in `runtime/sync/plic_thread.h` (POSIX pthreads on Linux
 
 <table class="markdown-table">
   <tr><th>Tool</th><th>Minimum</th><th>Notes</th></tr>
-  <tr><td>C++20 compiler</td><td>gcc 12 / clang 15 / MSVC 2022 17.x</td><td>Plus a Windows 10/11 SDK on Windows</td></tr>
+  <tr><td>C++20 compiler</td><td>gcc 12 / clang 15 / clang-cl 18+</td><td>Plus a Windows 10/11 SDK on Windows (clang-cl uses MSVC ABI)</td></tr>
   <tr><td>CMake</td><td>3.20</td><td>All platforms</td></tr>
   <tr><td>Ninja</td><td>any recent</td><td>Canonical generator on all platforms, including Windows</td></tr>
-  <tr><td>LLVM + clang + lld</td><td>20</td><td>Dev libraries and lld headers/libs required; see below</td></tr>
+  <tr><td>LLVM + clang + lld</td><td>23</td><td>Dev libraries and lld headers/libs required; see below</td></tr>
   <tr><td>Python</td><td>3</td><td>For scripts/gen_*.py and tests/run_tests.py</td></tr>
   <tr><td>Git</td><td>any recent</td><td>Optional; without it plic version reports unknown</td></tr>
 </table>
@@ -119,7 +119,7 @@ LLVM sources:
 
 - **Linux:** distro `llvm`/`clang`/`lld` dev packages, or a self-built LLVM.
 - **macOS:** `brew install llvm lld ninja cmake` (note: stock `llvm` formula omits `lld`, so `lld` is a separate formula).
-- **Windows:** no standard prebuilt LLVM ships everything `plic` needs, so build LLVM 20.x from source with `clang;lld` and the `X86;AArch64` targets (one-time cost), then point `CMAKE_PREFIX_PATH` at the install dir. Forward slashes work best in CMake paths (`C:/llvm-install`).
+- **Windows:** LLVM 23 prebuilt (`clang+llvm-23.1.3-x86_64-pc-windows-msvc.tar.xz`) ships clang-cl, lld-link, and llvm-objcopy. Extract it and point `CMAKE_PREFIX_PATH` at the install dir. Forward slashes work best in CMake paths (`C:/llvm-23`).
 
 ### Linux
 
@@ -135,7 +135,7 @@ cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"
 cmake --build build/cmake -j
 ```
 
-### Windows (MSVC + Ninja)
+### Windows (clang-cl + Ninja)
 
 Run from `cmd.exe` (not PowerShell, not MinGW):
 
@@ -144,6 +144,8 @@ call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliar
 
 cmake -G Ninja -S C:/path/to/pli-llvm -B C:/path/to/pli-llvm/build/cmake ^
   -DCMAKE_PREFIX_PATH=C:/path/to/llvm-install ^
+  -DCMAKE_C_COMPILER=clang-cl ^
+  -DCMAKE_CXX_COMPILER=clang-cl ^
   -DCMAKE_BUILD_TYPE=Release
 
 cmake --build C:/path/to/pli-llvm/build/cmake -j
@@ -151,12 +153,13 @@ cmake --build C:/path/to/pli-llvm/build/cmake -j
 
 Notes:
 
-- `vcvarsall.bat x64` is required so MSVC, the Windows SDK, and `cl.exe` are on `PATH`.
+- `vcvarsall.bat x64` provides the Windows SDK environment (headers + CRT libs).
+  The compiler itself is `clang-cl` (LLVM), not `cl.exe`.
 - `CMAKE_PREFIX_PATH` must point at your LLVM **install** prefix (the directory containing `lib/cmake/llvm`). Use forward slashes.
 - Ninja must be on `PATH` (`pip install ninja`, or a Ninja release, or the VS-bundled copy).
-- Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `plic` itself — use native MSVC.
+- Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `plic` itself — use clang-cl + lld-link.
 
-Building LLVM 20.x on Windows (one-time setup, Release, `X86;AArch64` only):
+Building LLVM 23.x on Windows (one-time setup, Release, `X86;AArch64` only):
 
 ```bat
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
