@@ -7,7 +7,7 @@
 int main(void) {
     int n = 400;
     int i, j, k;
-    long chk;
+    long long chk;
     double sum, x;
     double a[400][400], b[400][400], c[400][400];
 
@@ -38,6 +38,6 @@ int main(void) {
             chk += (long)floor(c[i-1][j-1] * 1000.0);
         }
     }
-    printf("%ld\n", chk);
+    printf("%lld\n", chk);
     return 0;
 }

@@ -100,6 +100,13 @@ def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[i
         return -1, "", "Timeout"
 
 
+# Stack size in bytes. Benchmarks with large stack-allocated arrays
+# (array_matmul: 3x 400x400 ints = ~1.92MB; matrix_float: 3x 400x400 doubles
+# = ~3.84MB) exceed the default 1MB Windows stack and crash with
+# STATUS_STACK_OVERFLOW. 16MB gives headroom for all current benchmarks.
+STACK_SIZE = 16777216
+
+
 def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
                 extra_flags: Optional[List[str]] = None) -> bool:
     """Compile a PL/I benchmark with plic at the given optimization level.
@@ -107,7 +114,8 @@ def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
     If *extra_flags* is None, the bench-level EXTRA_PLIFLAGS are used (P1.6).
     """
     src = BENCHMARK_DIR / pli_file
-    cmd = [str(PLIC), str(src), "-o", str(output), opt]
+    cmd = [str(PLIC), str(src), "-o", str(output), opt,
+           "-Wl,/STACK:" + str(STACK_SIZE)]
     cmd.extend(extra_flags if extra_flags is not None
                else EXTRA_PLIFLAGS.get(bench_name, []))
     rc, out, err = run_command(cmd)
@@ -120,7 +128,8 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
               compiler: str = CC) -> bool:
     """Compile a C benchmark with the given compiler at the given optimization level."""
     src = BENCHMARK_DIR / c_file
-    cmd = [compiler, opt, str(src), "-o", str(output)]
+    cmd = [compiler, opt, "-march=x86-64", str(src), "-o", str(output),
+           "-Wl,/STACK:" + str(STACK_SIZE)]
     if bench_name in BENCHMARKS_REQUIRING_MATH:
         cmd.append("-lm")
     rc, out, err = run_command(cmd)
