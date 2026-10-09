@@ -5826,3 +5826,58 @@ matching the `pli_on_source` getter.
 an `ON` handler, blank/default otherwise. Test:
 `tests/builtins/onsource_assign.pli`.
 
+## ADR-206 — `NULL(:ENTRY:/:FILE:/:LABEL:)` typed nulls
+
+**Context.** `NULL()` yields the null `POINTER`, but `ENTRY` variables
+(ADR-171) and `LABEL` variables (ADR-192) had no "unset" literal — every
+null carried pointer type, so giving them an initial value required a live
+procedure or label.
+
+**Decision.** New `: ... :` designator syntax in enquiry call arguments: the
+parser captures the raw words between the colons into an `Expr::TypeTag`
+node, gated to the five enquiry built-ins (anywhere else the designator is
+diagnosed, rule (123)). `NULL(:ENTRY:)` / `NULL(:LABEL:)` return `entryTy` /
+`labelTy`; every one of these lowers to the same opaque null pointer, so
+IRGen needs no new code beyond the typed result. `NULL(:FILE:)` is diagnosed
+instead — files have no value type (rules (39),(40): `void` plus a slot
+flag), so a null file value has no representation in this stage.
+
+**Consequences.** Entry and label variables can be initialized to a typed
+null; mistyped uses are caught by ordinary assignment checking. Tests:
+`tests/builtins/enquiries.pli`, `tests/builtins/bad_enquiries.pli`.
+
+## ADR-207 — `DECLARESIZE(:var:)` declared-size enquiry
+
+**Context.** `CURRENTSIZE` (ADR-198) reports the *live* size of a value, but
+nothing reported the *declared* (static) size — e.g. for sizing a buffer
+without a live value at hand.
+
+**Decision.** `DECLARESIZE(:var:)` resolves the single-word designator to
+its symbol in the `Call` pre-pass and folds the byte count in sema
+(`staticStoreBytes`: FIXED `intBits`/8, FLOAT 8, CHARACTER declared length,
+BIT `ceil(n/8)`, pointer/area/offset/entry/label handles 8, TASK/EVENT 4,
+COMPLEX 16, structures summed (unions take the max, ADR-202), static arrays
+multiplied out). The count rides to IRGen on the call node's `ival`, which
+emits a `FIXED BINARY(31)` constant. Unknown/non-variable designators are
+diagnosed (123); dynamically-sized variables are diagnosed (13).
+
+**Consequences.** Pure compile-time — no ABI entries, no runtime helpers.
+Tests: `tests/builtins/enquiries.pli`, `tests/builtins/bad_enquiries.pli`.
+
+## ADR-208 — `EPSILON`/`MAXVAL`/`MINVAL` float enquiries
+
+**Context.** Code needing float limits (convergence thresholds, range
+checks) tuned its literals by hand; nothing exposed the format's properties.
+
+**Decision.** `EPSILON` / `MAXVAL` / `MINVAL` take a `:FLOAT ...:` designator
+and return `FLOAT`. The designator only has to name a float type — precision
+details are accepted but unrefined, because every `FLOAT` lowers to a
+double. Values are the C doubles: `DBL_EPSILON`, `DBL_MAX`, and `DBL_MIN`
+(`MINVAL` is the smallest positive normalized double, Fortran `TINY`),
+emitted as pure LLVM constants.
+
+**Consequences.** One set of values serves every float designator; if a
+second float format ever lands, the designator text is already threaded
+through for refinement. Tests: `tests/builtins/enquiries.pli`,
+`tests/builtins/bad_enquiries.pli`.
+

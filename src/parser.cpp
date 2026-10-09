@@ -133,6 +133,13 @@ static int precOf(Tok op) {
   }
 }
 
+// The five enquiry built-ins (Phase F, ADR-206/207/208) are the only calls
+// whose argument list may hold a ': ... :' designator.
+static bool isEnquiryName(const std::string& w) {
+  return w == "NULL" || w == "DECLARESIZE" || w == "EPSILON" || w == "MAXVAL" ||
+         w == "MINVAL";
+}
+
 bool Parser::expect(Tok k, const char* rule) {
   if (at(k)) {
     advance();
@@ -3952,6 +3959,30 @@ bool Parser::decodeHexLiteral(const std::string& hex, SourceLoc loc, std::string
   return true;
 }
 
+ExprP Parser::parseTypeDesignator(const char* rule) {
+  auto t = std::make_unique<Expr>();
+  t->kind = Expr::TypeTag;
+  t->loc = cur().loc;
+  advance(); // :
+  std::string raw;
+  for (;;) {
+    if (at(Tok::Eof) || at(Tok::Semi)) {
+      d_.error(cur().loc, "expected ':' to close the type designator", rule);
+      break;
+    }
+    if (eat(Tok::Colon))
+      break;
+    if (!cur().text.empty()) {
+      if (!raw.empty())
+        raw += ' ';
+      raw += cur().text;
+    }
+    advance();
+  }
+  t->sval = raw;
+  return t;
+}
+
 ExprP Parser::parsePrimary() {
   auto e = std::make_unique<Expr>();
   e->loc = cur().loc;
@@ -4082,6 +4113,10 @@ ExprP Parser::parsePrimary() {
               star->loc = cur().loc;
               b->args.push_back(std::move(star));
               advance();
+            } else if (at(Tok::Colon) && isEnquiryName(b->name)) {
+              // A ': ... :' designator (ADR-206/207/208) names a declaration
+              // or type for an enquiry built-in; sema interprets the text.
+              b->args.push_back(parseTypeDesignator("(126)"));
             } else {
               b->args.push_back(parseExpr());
             }

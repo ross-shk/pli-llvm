@@ -89,6 +89,20 @@ file_path = null();
 if file_path = null() then put skip list('no file selected');
 ```
 
+### `NULL(:ENTRY:)` / `NULL(:LABEL:)` *(Subset-G extension, ADR-206)*
+
+Typed nulls for entry and label variables, which a plain `NULL()` (pointer type) cannot initialise:
+
+```pli
+dcl on_ping entry variable;
+dcl lab label;
+
+on_ping = null(:entry:);
+lab = null(:label:);
+```
+
+`NULL(:FILE:)` is an error in this stage — files have no value type. Any other designator, or a `: ... :` outside an enquiry built-in, is an error.
+
 ### `ADDR(x)` → POINTER
 
 The address of a variable, array element, or structure member. Taking an address is how you build pointer-linked data structures without losing safety checks — subscript range checking still applies:
@@ -696,6 +710,28 @@ allocate area in area;   /* AREA is implicitly initialised to EMPTY() */
 ### `CURRENTSIZE(x)` → FIXED BINARY(31)
 
 Returns the storage size (in bytes) of the current value of variable `x`. For a `CHARACTER(n)` argument, returns `n`.
+
+### `DECLARESIZE(:var:)` → FIXED BINARY(31) *(Subset-G extension, ADR-207)*
+
+Returns the declared static storage size (in bytes) of a variable — the compile-time counterpart to `CURRENTSIZE`. `CHARACTER` gives the declared length, `BIT(n)` rounds up to whole bytes, structures sum their members, static arrays multiply out. The designator must name a declared variable; dynamically-sized variables are an error in this stage.
+
+```pli
+dcl name char(20);
+dcl n fixed bin(31);
+
+n = declaresize(:name:);   /* 20 */
+```
+
+### `EPSILON(:FLOAT...:)` / `MAXVAL(:FLOAT...:)` / `MINVAL(:FLOAT...:)` → FLOAT *(Subset-G extension, ADR-208)*
+
+Properties of the FLOAT format: the double epsilon, the largest finite double, and the smallest positive normalized double. The designator must name a FLOAT type (precision details are accepted but do not change the value — every `FLOAT` lowers to a double).
+
+```pli
+dcl e float;
+
+e = epsilon(:float binary(53):);
+if e <= 0.0 then put skip list('no epsilon');
+```
 
 ### `FILEOPEN(x)` → BIT(1)
 

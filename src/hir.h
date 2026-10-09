@@ -41,6 +41,7 @@ struct HExpr {
     Star,       // '*' in a subscript list — a cross-section axis (rule 126)
     ComplexLit, // imaginary constant (rule 139): fval is the imaginary part
     Convert,    // explicit conversion (HIR only)
+    TypeTag,    // ': ... :' enquiry designator (ADR-206/207/208): raw text in sval
   } kind = IntLit;
   SourceLoc loc{};
   Type ty{}; // the value's type after sema typing

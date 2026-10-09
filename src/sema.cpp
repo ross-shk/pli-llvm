@@ -20,6 +20,10 @@ static bool hasDynamicMember(const Type& ty);
 // assignment). Defined below; forward-declared for the earlier DECLARE pass.
 static unsigned fnv1a(const char* s, size_t len);
 
+// Split a ': ... :' designator's raw text on blanks (ADR-206/207/208).
+// Defined below; forward-declared for the Call pre-pass in typeExpr.
+static std::vector<std::string> splitDesignator(const std::string& raw);
+
 // Storage size in bytes of one scalar for a DEFINED whole-base overlay
 // (rule 24): two scalars with equal size share the base's address, each
 // reference loading/storing through its own declared type. Returns -1 when
@@ -4035,6 +4039,13 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // its meaning is assigned by the enclosing subscript, so it stays void.
     e->ty = Type::voidTy();
     break;
+  case Expr::TypeTag:
+    // A ': ... :' designator (ADR-206/207/208) names a declaration or type
+    // for an enquiry built-in; standing alone it is not a value. The Call
+    // pre-pass above skips designator args, so reaching here means misuse.
+    d_.error(e->loc, "a ': ... :' designator is only allowed in an enquiry built-in", "(123)");
+    e->ty = Type::voidTy();
+    break;
   case Expr::VarRef: {
     // ONSOURCE pseudo-variable (TR 123, ADR-210): bare ONSOURCE has a type so
     // it can be assigned to; the IRGen emits pli_set_on_source calls.
@@ -4101,8 +4112,18 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // Reclassified in the Call case; never re-dispatched here.
     break;
   case Expr::Call: {
-    for (auto& a : e->args)
+    for (auto& a : e->args) {
+      // A `: ... :` designator (ADR-206/207/208) is interpreted by its
+      // enquiry built-in below, not typed as a value; resolve a single-word
+      // designator to its symbol here so DECLARESIZE can read the type.
+      if (a->kind == Expr::TypeTag) {
+        auto words = splitDesignator(a->sval);
+        if (words.size() == 1)
+          a->sym = lookup(sc, words[0]);
+        continue;
+      }
       typeExpr(a.get(), sc, p);
+    }
     // A qualified reference being subscripted, S.A(i) (rules 124,126): the
     // callee name is a structure and the path resolves to an array member.
     // Reclassify as a Subscript of the member's element type, carrying the
@@ -4724,14 +4745,162 @@ void Sema::checkByValueArgs(Symbol* sym, const std::vector<ExprP>& args) {
 // Type a built-in function call; return true if `e` is one of the
 // recognised built-ins (typed or diagnosed here). Extracted from the
 // typeExpr Call case so each built-in is a self-contained block.
+// Split a ': ... :' designator's raw text on blanks (ADR-206/207/208).
+static std::vector<std::string> splitDesignator(const std::string& raw) {
+  std::vector<std::string> words;
+  std::string cur;
+  for (char c : raw) {
+    if (c == ' ' || c == '\t') {
+      if (!cur.empty()) {
+        words.push_back(cur);
+        cur.clear();
+      }
+    } else
+      cur += c;
+  }
+  if (!cur.empty())
+    words.push_back(cur);
+  return words;
+}
+// Declared static storage bytes of a type (ADR-207); -1 when the size is not
+// statically known (dynamic bounds, void). Aggregates sum their members.
+static long long staticStoreBytes(const Type& t) {
+  if (!t.dims.empty()) {
+    long long n = 1;
+    for (const auto& d : t.dims) {
+      if (d.dyn || d.lbDyn)
+        return -1;
+      n *= (long long)(d.ub - d.lb + 1);
+    }
+    long long el = staticStoreBytes(t.elementType());
+    return el < 0 ? -1 : n * el;
+  }
+  switch (t.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    return t.intBits() / 8;
+  case TK::Float:
+    return 8; // every FLOAT lowers to a double
+  case TK::Char:
+    return t.len; // VARYING: the declared maximum
+  case TK::Bit:
+    return (t.len + 7) / 8;
+  case TK::Pointer:
+  case TK::Offset:
+  case TK::Area:
+  case TK::Entry:
+  case TK::Label:
+    return 8; // opaque pointer-sized handles
+  case TK::Task:
+  case TK::Event:
+    return 4; // an i32 handle/flag
+  case TK::Complex:
+    return 16; // two doubles
+  case TK::Struct: {
+    // A UNION overlays its members (ADR-202): the size is the largest one.
+    long long n = 0;
+    for (const auto& m : t.members) {
+      long long s = staticStoreBytes(m->ty);
+      if (s < 0)
+        return -1;
+      n = t.isUnion ? std::max(n, s) : n + s;
+    }
+    return n;
+  }
+  default:
+    return -1;
+  }
+}
 bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // Names matching none of these are user function procedures and are
   // handled in typeExpr's general function-call path.
+  // A ': ... :' designator outside the five enquiry built-ins (ADR-206/207/
+  // 208) is never a value; diagnose it once instead of cascading per-builtin
+  // arity/type errors.
+  const bool isEnquiry = e->name == "NULL" || e->name == "DECLARESIZE" ||
+                         e->name == "EPSILON" || e->name == "MAXVAL" ||
+                         e->name == "MINVAL";
+  if (!isEnquiry) {
+    for (const auto& a : e->args)
+      if (a->kind == Expr::TypeTag) {
+        d_.error(a->loc, "a ': ... :' designator is only allowed in an enquiry built-in",
+                 "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+  }
   // NULL built-in (rule 123, Appendix 1): yields the null POINTER value.
+  // With a designator (EXT, ADR-206) — NULL(:ENTRY:) / NULL(:LABEL:) — it
+  // yields a typed null ENTRY / LABEL value instead.
   if (e->name == "NULL") {
+    if (e->args.size() == 1 && e->args[0]->kind == Expr::TypeTag) {
+      auto words = splitDesignator(e->args[0]->sval);
+      if (words.size() == 1 && words[0] == "ENTRY") {
+        e->ty = Type::entryTy();
+        return true;
+      }
+      if (words.size() == 1 && words[0] == "LABEL") {
+        e->ty = Type::labelTy();
+        return true;
+      }
+      if (words.size() == 1 && words[0] == "FILE") {
+        d_.error(e->args[0]->loc, "NULL(:FILE:) is not implemented in this stage", "(40)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      d_.error(e->args[0]->loc, "NULL designator must be :ENTRY:, :FILE: or :LABEL:", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
     if (!e->args.empty())
       d_.error(e->loc, "NULL takes no arguments", "(123)");
     e->ty = Type::ptr();
+    return true;
+  }
+  // DECLARESIZE (EXT, ADR-207): DECLARESIZE(:var:) -> FIXED BIN(31), the
+  // declared static storage bytes of a variable (the maximum for VARYING).
+  // The count is folded here so IRGen emits a constant (e->ival carries it).
+  if (e->name == "DECLARESIZE") {
+    if (e->args.size() != 1 || e->args[0]->kind != Expr::TypeTag) {
+      d_.error(e->loc, "DECLARESIZE takes a ':variable:' designator", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    Expr* a = e->args[0].get();
+    if (!a->sym || (a->sym->kind != Symbol::Var && a->sym->kind != Symbol::Param)) {
+      d_.error(a->loc, "DECLARESIZE designator must name a declared variable", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    long long bytes = staticStoreBytes(a->sym->ty);
+    if (bytes < 0) {
+      d_.error(a->loc,
+               "DECLARESIZE of a dynamically-sized variable is not implemented in this stage",
+               "(13)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ival = bytes;
+    e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // EPSILON/MAXVAL/MINVAL (EXT, ADR-208): float enquiries over a `:FLOAT...:`
+  // designator. Every FLOAT lowers to a double, so the designator only has to
+  // name a float type; precision details do not change the value.
+  if (e->name == "EPSILON" || e->name == "MAXVAL" || e->name == "MINVAL") {
+    if (e->args.size() != 1 || e->args[0]->kind != Expr::TypeTag) {
+      d_.error(e->loc, std::string(e->name) + " takes a ':FLOAT ...:' designator", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    auto words = splitDesignator(e->args[0]->sval);
+    if (words.empty() || words[0] != "FLOAT") {
+      d_.error(e->args[0]->loc, std::string(e->name) + " designator must name a FLOAT type",
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::flt(6);
     return true;
   }
   // ADDR built-in (rule 123, Appendix 1; Y33-6003 BASED storage builtin;

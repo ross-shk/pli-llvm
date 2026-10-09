@@ -474,6 +474,9 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
     printType(os, e->convTo);
     os << ")";
     break;
+  case HExpr::TypeTag:
+    os << "TypeTag(:" << e->sval << ":)";
+    break;
   case HExpr::Unary: {
     const char* op = e->op == Tok::Not ? "not" : "neg";
     os << "Unary(" << op << " ";

@@ -2,6 +2,7 @@
 // Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 #include "irgen.h"
 #include <algorithm>
+#include <cfloat>
 #include <set>
 
 #ifndef PLIC_LLVM_VERSION
@@ -8095,6 +8096,13 @@ Val IRGen::emitExpr(HExpr* e) {
     v.ty = Type::voidTy();
     v.reg = i64(0);
     return v;
+  case HExpr::TypeTag:
+    // A ': ... :' designator (ADR-206/207/208) is consumed by its enquiry
+    // built-in; reaching the value emitter means a lowering bug.
+    d_.error(e->loc, "a ': ... :' designator is only valid in an enquiry built-in", "(123)");
+    v.ty = Type::voidTy();
+    v.reg = i64(0);
+    return v;
   case HExpr::Subscript:
     if (!e->sym) {
       v.ty = e->ty;
@@ -8906,9 +8914,30 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "NULL") {
-    // NULL (rule 123, Appendix 1): the null POINTER value.
+    // NULL (rule 123, Appendix 1): the null POINTER value; with an enquiry
+    // designator (EXT, ADR-206) the typed null ENTRY/LABEL value instead.
+    // Every one of these lowers to an opaque pointer, so one null serves all.
     v.ty = e->ty;
     v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+    result = v;
+    return true;
+  }
+  // DECLARESIZE (EXT, ADR-207): the sema-folded static storage byte count.
+  if (e->name == "DECLARESIZE") {
+    v.ty = e->ty;
+    v.reg = llvm::ConstantInt::get(llvmTy(v.ty), (uint64_t)e->ival, false);
+    result = v;
+    return true;
+  }
+  // EPSILON/MAXVAL/MINVAL (EXT, ADR-208): double constants. Every FLOAT
+  // lowers to a double, so one set of values serves every designator:
+  // EPSILON is the double epsilon, MAXVAL the largest finite double,
+  // MINVAL the smallest positive normalized double (Fortran TINY).
+  if (e->name == "EPSILON" || e->name == "MAXVAL" || e->name == "MINVAL") {
+    v.ty = e->ty;
+    v.reg = flt(e->name == "EPSILON" ? DBL_EPSILON
+                : e->name == "MAXVAL" ? DBL_MAX
+                                      : DBL_MIN);
     result = v;
     return true;
   }

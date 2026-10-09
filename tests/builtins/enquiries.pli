@@ -1,0 +1,84 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Phase F enquiries (EXT, ADR-206/207/208). */
+  enquiries_test: procedure options(main);
+    declare fails fixed bin(31);
+    declare x fixed bin(31);
+    declare c char(10);
+    declare b bit(5);
+    declare f float;
+    declare a(4) fixed bin(31);
+    declare 1 s, 2 m fixed bin(31),
+      2 t char(4);
+    declare e float;
+    declare ee entry variable;
+    declare lab label;
+
+    fails = 0;
+
+    /* DECLARESIZE (ADR-207): static storage bytes. */
+    if declaresize(:x:) ^= 4 then do;
+       fails = fails + 1;
+       put skip list('FAIL dsize fixed');
+    end;
+    if declaresize(:c:) ^= 10 then do;
+       fails = fails + 1;
+       put skip list('FAIL dsize char');
+    end;
+    if declaresize(:b:) ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL dsize bit');
+    end;
+    if declaresize(:f:) ^= 8 then do;
+       fails = fails + 1;
+       put skip list('FAIL dsize float');
+    end;
+    if declaresize(:a:) ^= 16 then do;
+       fails = fails + 1;
+       put skip list('FAIL dsize array');
+    end;
+    if declaresize(:s:) ^= 8 then do;
+       fails = fails + 1;
+       put skip list('FAIL dsize struct');
+    end;
+
+    /* EPSILON/MAXVAL/MINVAL (ADR-208). */
+    e = epsilon(:float:);
+    if e <= 0.0 then do;
+       fails = fails + 1;
+       put skip list('FAIL eps <= 0');
+    end;
+    if e >= 1.0e-15 then do;
+       fails = fails + 1;
+       put skip list('FAIL eps big');
+    end;
+    e = epsilon(:float binary(53):);
+    if e <= 0.0 then do;
+       fails = fails + 1;
+       put skip list('FAIL eps53 <= 0');
+    end;
+    if e >= 1.0e-15 then do;
+       fails = fails + 1;
+       put skip list('FAIL eps53 big');
+    end;
+    e = maxval(:float:);
+    if e <= 1.0e307 then do;
+       fails = fails + 1;
+       put skip list('FAIL maxval');
+    end;
+    e = minval(:float:);
+    if e <= 0.0 then do;
+       fails = fails + 1;
+       put skip list('FAIL minval <= 0');
+    end;
+    if e >= 1.0e-307 then do;
+       fails = fails + 1;
+       put skip list('FAIL minval big');
+    end;
+
+    /* NULL(:ENTRY:/:LABEL:) (ADR-206). */
+    ee = null(:entry:);
+    lab = null(:label:);
+
+    if fails = 0 then put skip list('PASS enquiries');
+    else put skip list('FAIL enquiries:', fails);
+  end enquiries_test;

@@ -164,6 +164,9 @@ private:
   ExprP parseUnary();
   ExprP parsePower();
   ExprP parsePrimary();
+  // A ': ... :' enquiry designator (ADR-206/207/208): captures the raw words
+  // between the colons for the five enquiry built-ins to interpret.
+  ExprP parseTypeDesignator(const char* rule);
 
   // --- INITIAL itemlist (rules 26-31) ---------------------------------
   // Parse a comma-separated list of INITIAL items, stopping at the enclosing

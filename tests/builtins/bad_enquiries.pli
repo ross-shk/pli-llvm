@@ -1,0 +1,11 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* bad enquiries: each statement must fail (ADR-206/207/208). */
+  enquiries_bad: procedure options(main);
+    declare x fixed bin(31);
+    declare e float;
+    x = null(:file:);
+    e = epsilon(:fixed:);
+    x = declaresize(:nosuch:);
+    e = minval();
+    x = null(:bogus:);
+  end enquiries_bad;
