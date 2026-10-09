@@ -243,3 +243,120 @@ void pli_get_edit_skip(long long n) {
 
 /* CALL ... EVENT(ev): mark the event incomplete before the task starts. */
 
+/* P picture-directed output (rules (53),(146)-(148)): format a FIXED value
+ * (stored as val*10^scale) against the PICTURE edit string. Digits are
+ * right-aligned in digit positions; Z suppresses leading zeros, 9 forces a
+ * zero. Supports: Z, 9, V, ., +, -, S, X, A, and fixed characters. */
+void pli_put_edit_pic(long long val, long long scale, int sign,
+                      const char *pic, long long piclen) {
+  if (piclen <= 0)
+    return;
+  int isneg = sign < 0;
+  long long av = isneg ? -val : val;
+
+  /* Decompose |val| into big-endian decimal digits. */
+  long long digits[64];
+  long long ndig = 0;
+  if (av == 0) {
+    digits[0] = 0;
+    ndig = 1;
+  } else {
+    long long tmp = av;
+    while (tmp > 0 && ndig < 64) {
+      digits[ndig++] = tmp % 10;
+      tmp /= 10;
+    }
+    for (long long i = 0; i < ndig / 2; ++i) {
+      long long t = digits[i];
+      digits[i] = digits[ndig - 1 - i];
+      digits[ndig - 1 - i] = t;
+    }
+  }
+
+  /* Count digit positions and locate the decimal marker (V or first '.'). */
+  long long vpos = -1;
+  for (long long i = 0; i < piclen; ++i) {
+    if (pic[i] == 'V' || (pic[i] == '.' && vpos < 0)) { vpos = i; break; }
+  }
+  /* Picture fractional digit count (digits after the decimal marker). */
+  long long picfrac = 0;
+  if (vpos >= 0)
+    for (long long i = vpos + 1; i < piclen; ++i)
+      if (pic[i] == 'Z' || pic[i] == '9') ++picfrac;
+
+  /* Value: val_int integer digits, val_frac fractional digits. */
+  long long val_int = ndig > scale ? ndig - scale : 0;
+  long long val_frac = scale < ndig ? scale : 0;
+
+  /* Walk the picture, emitting characters. */
+  char outbuf[128];
+  long long ocap = piclen < (long long)sizeof(outbuf) ? piclen : (long long)sizeof(outbuf);
+  for (long long i = 0; i < ocap; ++i) outbuf[i] = ' ';
+  long long oi = 0;
+  int led_zero = 1;
+
+  /* Track current picture digit index for fractional positions. */
+  long long frac_idx = 0;  /* 0-based among picture fractional digit positions */
+
+  for (long long pi = 0; pi < piclen && oi < ocap; ++pi) {
+    char c = pic[pi];
+    int is_fractional = (vpos >= 0 && pi > vpos);
+
+    if (c == 'V') continue;  /* no output char */
+
+    if (c == '9' || c == 'Z') {
+      if (is_fractional) {
+        /* Fractional digit: emit value's fractional digit or '0'. */
+        long long src = val_int + frac_idx;
+        long long vfrac_idx = frac_idx;  /* index among value fractional digits */
+        if (vfrac_idx < val_frac) {
+          char d = (char)('0' + digits[val_int + vfrac_idx]);
+          led_zero = 0;
+          outbuf[oi++] = d;
+        } else {
+          outbuf[oi++] = '0';  /* zero-pad if value has fewer fractional digits */
+        }
+        ++frac_idx;
+      } else {
+        /* Integer digit: right-align value integer digits in picture positions.
+         * Count total picture integer digit positions. */
+        long long pic_int_total = 0;
+        for (long long j = 0; j < (vpos >= 0 ? vpos : piclen); ++j)
+          if (pic[j] == 'Z' || pic[j] == '9') ++pic_int_total;
+        /* Our index among picture integer positions (left-to-right). */
+        long long int_idx = 0;
+        for (long long j = 0; j < pi; ++j)
+          if (pic[j] == 'Z' || pic[j] == '9') ++int_idx;
+        /* Map to source digit index: right-aligned. */
+        long long src_idx = int_idx - (pic_int_total - val_int);
+        if (src_idx < 0) {
+          outbuf[oi++] = (c == '9') ? '0' : ' ';  /* Z→blank, 9→zero */
+        } else if (src_idx < val_int) {
+          char d = (char)('0' + digits[src_idx]);
+          if (c == 'Z' && d == '0' && led_zero) {
+            outbuf[oi++] = ' ';  /* leading zero suppression */
+          } else {
+            led_zero = 0;
+            outbuf[oi++] = d;
+          }
+        } else {
+          /* Value has fewer integer digits than picture; Z→blank, 9→'0'. */
+          outbuf[oi++] = (c == '9') ? '0' : ' ';
+        }
+      }
+      continue;
+    }
+    if (c == '.' || c == ',') { outbuf[oi++] = '.'; continue; }
+    if (c == '+' || c == '-') {
+      outbuf[oi++] = isneg ? '-' : (c == '-' ? ' ' : '+');
+      continue;
+    }
+    if (c == 'S') { outbuf[oi++] = isneg ? '-' : ' '; continue; }
+    if (c == 'X') { outbuf[oi++] = ' '; continue; }
+    if (c == 'A') { outbuf[oi++] = ' '; continue; }
+    outbuf[oi++] = c;
+  }
+  outbuf[ocap] = '\0';
+  rt_put_raw(outbuf, oi);
+}
+

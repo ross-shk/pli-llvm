@@ -61,6 +61,7 @@ struct HExpr {
   std::vector<HExprP> args; // Call
 
   Type convTo{}; // Convert: the target type of the conversion
+  bool isLabel = false;
 };
 
 struct HStmt;
@@ -100,11 +101,12 @@ struct HDeclItem {
 // One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
 // FormatItem with lowered width/decimals expressions.
 struct HFormatItem {
-  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote } kind = A;
+  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P } kind = A;
   HExprP w;                      // field width
   HExprP d;                      // F/E: fractional digits
   HExprP s;                      // F/E: scale factor (evaluated for effects, formatting uses (w,d))
   std::string remote;            // R: FORMAT label (sema expands R, so HIR never carries one)
+  std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
   std::vector<HFormatItem> subs; // C: 1-2 inner real formats
 };
 
@@ -181,7 +183,11 @@ struct HStmt {
   // STRING ( reference ) option (rule 105): the character variable the list-
   // directed output is written into (PUT) or input read from (GET); null =
   // SYSIN/SYSPRINT.
-  HExprP stringTarget;
+   HExprP stringTarget;
+
+  // GO TO (rule (77)): direct jump target label name (name = label), or
+  // indirect via a LABEL variable expression (gotoTarget, rule (21)).
+  HExprP gotoTarget;
 
   // FILE ( f ) option (rule 105) and OPEN/CLOSE FILE ( f ): the resolved FILE
   // variable and its runtime slot; OPEN carries the TITLE string and mode.

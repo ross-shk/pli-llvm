@@ -32,18 +32,24 @@ size_t rt_in_len = 0, rt_in_pos = 0;
  * the FILE ( f ) option of a PUT/GET; when set they override stdout/stdin. */
 #define PLI_MAX_FILES 16
 FILE *rt_pli_files[PLI_MAX_FILES] = {0};
+int rt_pli_nonprint[PLI_MAX_FILES] = {0};
 /* Volatile: the compiler must emit a real memory access for every read/write
    so the optimizer cannot see through the pli_set_pageno/pli_pageno wrappers
    and eliminate them as dead stores/loads when bitcode is merged at -O2. */
 volatile long long rt_pli_pages[PLI_MAX_FILES] = {0};
 FILE *rt_out_f = NULL;
 FILE *rt_in_f = NULL;
+/* NONPRINT flag (ADR-204): when rt_out_discard is set, output is discarded
+   instead of falling through to stdout. Set by pli_put_select on a NONPRINT file. */
+int rt_out_discard = 0;
 
 void rt_put_raw(const char *p, size_t n) {
   if (rt_out_f) {
     fwrite(p, 1, n, rt_out_f);
     return;
   }
+  if (rt_out_discard)
+    return;
   if (rt_out_buf) {
     size_t take = n < (rt_out_cap - rt_out_len) ? n : (rt_out_cap - rt_out_len);
     if (take > 0)
@@ -77,16 +83,16 @@ int rt_next_char(void) {
 void pli_put_skip(long long n) {
   if (n < 1) n = 1;
   if (rt_col > 0) {
-    fputc('\n', stdout);
+    rt_put_raw("\n", 1);
     rt_col = 0;
   }
-  for (long long i = 1; i < n; ++i) fputc('\n', stdout);
+  for (long long i = 1; i < n; ++i) rt_put_raw("\n", 1);
   rt_items_on_line = 0;
 }
 
 void pli_put_page(void) {
-  if (rt_col > 0) fputc('\n', stdout);
-  fputc('\f', stdout);
+  if (rt_col > 0) rt_put_raw("\n", 1);
+  rt_put_raw("\f", 1);
   rt_col = 0;
   rt_items_on_line = 0;
 }

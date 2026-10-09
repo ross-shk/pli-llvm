@@ -1,0 +1,13 @@
+nonprint_test: procedure options(main);
+   dcl f nonprint file;
+   dcl i fixed bin(31);
+   dcl fails fixed bin(31);
+   fails = 0;
+   open file(f) output;
+   do i = 1 to 5;
+      put file(f) skip list('this should not appear');
+   end;
+   close file(f);
+   if fails = 0 then put skip list('PASS nonprint');
+   else put skip list('FAIL nonprint');
+end nonprint_test;

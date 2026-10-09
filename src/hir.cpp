@@ -80,6 +80,7 @@ HExprP lowerExprBase(const Expr* e) {
   h->b = lowerExpr(e->b.get());
   for (const auto& a : e->args)
     h->args.push_back(lowerExpr(a.get()));
+  h->isLabel = e->isLabel;
   return h;
 }
 
@@ -248,6 +249,8 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
 
   h->skipCount = lowerExpr(s->skipCount.get());
   h->stringTarget = lowerExpr(s->stringTarget.get());
+  // GO TO (expr) via LABEL variable (rule (77), rule (21)): lower the target.
+  h->gotoTarget = lowerExpr(s->gotoTarget.get());
   for (const auto& it : s->items)
     h->items.push_back(lowerExpr(it.get()));
   // Edit-directed format list (rule (108)): lower each item's width/decimals.
@@ -260,6 +263,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     hf.w = lowerExpr(f.w.get());
     hf.d = lowerExpr(f.d.get());
     hf.s = lowerExpr(f.s.get());
+    hf.pic = f.pic;
     hf.remote = f.remote;
     for (const auto& sb : f.subs) {
       HFormatItem hs;

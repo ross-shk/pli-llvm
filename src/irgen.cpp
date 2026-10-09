@@ -181,10 +181,11 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
     // `__attribute__((packed))` record (ADR-169).
     return llvm::StructType::get(ctx_, mts, t.unaligned);
   }
-  case TK::Pointer:
-  case TK::Offset: // an OFFSET is an opaque locator (rule (22))
-  case TK::Area:   // an AREA is a pointer to the runtime region (rule (20))
-  case TK::Entry:  // an ENTRY value is a procedure pointer (ADR-171)
+   case TK::Pointer:
+   case TK::Offset: // an OFFSET is an opaque locator (rule (22))
+   case TK::Area:   // an AREA is a pointer to the runtime region (rule (20))
+   case TK::Entry:  // an ENTRY value is a procedure pointer (ADR-171)
+   case TK::Label:  // a LABEL variable holds an IR block address (rule (21))
     return b_.getPtrTy();
   case TK::Task:
   case TK::Event:
@@ -500,6 +501,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_unspec_assign", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_onkey", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_put_edit_pic", {.willReturn = true, .alwaysInline = true, .mem = RtMemOtherMod}},
     };
   return table;
 }
@@ -4068,9 +4070,23 @@ void IRGen::emitStmt(HStmt* s) {
     // Rule (91) / Y33 block termination: a GO TO that leaves enclosing BEGIN
     // blocks reverts the handlers those blocks established, restoring the
     // depth saved at the outermost exited block's entry.
-    if (llvm::Value* depth = onExitDepth(s->name))
-      b_.CreateCall(runtimeFn("pli_on_reset_error"), {depth});
-    b_.CreateBr(labelBlocks_[s->name]);
+      if (s->gotoTarget) {
+       Val v = emitExpr(s->gotoTarget.get());
+       llvm::Value* addr = v.reg;
+       if (!addr)
+         addr = llvm::ConstantPointerNull::get(b_.getPtrTy());
+       if (!addr->getType()->isPointerTy())
+         addr = b_.CreateIntToPtr(addr, b_.getPtrTy(), "gotoptr");
+       // Collect all label blocks in this function as possible destinations (rule 77).
+       llvm::IndirectBrInst* ib = b_.CreateIndirectBr(addr, (unsigned)labelBlocks_.size());
+       for (auto& kv : labelBlocks_)
+         ib->addDestination(kv.second);
+    } else {
+      // Direct GO TO label: jump to the named block.
+      if (llvm::Value* depth = onExitDepth(s->name))
+        b_.CreateCall(runtimeFn("pli_on_reset_error"), {depth});
+      b_.CreateBr(labelBlocks_[s->name]);
+    }
     break;
   }
   checkStack_.pop_back();
@@ -4916,9 +4932,10 @@ void IRGen::emitFree(HStmt* s) {
 void IRGen::emitOpen(HStmt* s) {
   Symbol* f = s->fileSym;
   llvm::Value* name = globalString(s->openTitle);
-  b_.CreateCall(
-      runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
-      {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(s->openInput ? 0 : 1)});
+   b_.CreateCall(
+       runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
+       {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(s->openInput ? 0 : 1),
+        i64(f->fileNonprint ? 1 : 0)});
 }
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
@@ -5406,6 +5423,11 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
 }
 
 void IRGen::emitPut(HStmt* s) {
+  // FILE ( f ) (rule 105): route the list-directed output through the named
+  // file's stream instead of SYSPRINT. Select before page/skip so all output
+  // goes to the named file.
+  if (s->fileSym)
+    b_.CreateCall(runtimeFn("pli_put_select"), {i64(s->fileSym->fileSlot)});
   if (s->page)
     b_.CreateCall(runtimeFn("pli_put_page"), {});
   if (s->skip) {
@@ -5438,10 +5460,6 @@ void IRGen::emitPut(HStmt* s) {
     }
     b_.CreateCall(runtimeFn("pli_string_put_open"), {sdata, slen});
   }
-  // FILE ( f ) (rule 105): route the list-directed output through the named
-  // file's stream instead of SYSPRINT.
-  if (s->fileSym)
-    b_.CreateCall(runtimeFn("pli_put_select"), {i64(s->fileSym->fileSlot)});
   if (s->edit) {
     emitPutEditItems(s);
   } else if (s->data) {
@@ -5498,6 +5516,9 @@ void IRGen::emitPut(HStmt* s) {
       case TK::Event:
         d_.error(s->loc, "a TASK/EVENT value cannot be written with PUT LIST in this stage",
                  "(110)");
+        break;
+      case TK::Label:
+        d_.error(s->loc, "a LABEL value cannot be written with PUT LIST in this stage", "(110)");
         break;
       }
     }
@@ -5835,6 +5856,33 @@ void IRGen::emitPutEditItems(HStmt* s) {
       b_.CreateCall(runtimeFn("pli_put_edit_float_e"), {v.reg, w, d});
       break;
     }
+    case HFormatItem::P: {
+      // P(picture): picture-directed output (rules (53),(146)-(148));
+      // formats a numeric value via pli_put_edit_pic against the picture string.
+      if (di >= s->items.size())
+        break;
+      HExpr* item = s->items[di++].get();
+      Val v = emitExpr(item);
+      if (v.ty.isFixed()) {
+        llvm::Value* val = toI64(v);
+        llvm::Value* scale = i64(v.ty.scale);
+        // sign derived from the value: -1 if negative, +1 if non-negative.
+        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
+        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
+        b_.CreateCall(runtimeFn("pli_put_edit_pic"),
+                      {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
+      } else if (v.ty.k == TK::Float) {
+        // Convert float to fixed-decimal via truncation.
+        llvm::Value* val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
+        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picfsn");
+        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picfs");
+        b_.CreateCall(runtimeFn("pli_put_edit_pic"),
+                      {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
+      } else {
+        d_.error(item->loc, "P edit item requires a numeric value", "(53)");
+      }
+      break;
+    }
     }
   }
 }
@@ -5955,6 +6003,10 @@ void IRGen::emitGetEditItems(HStmt* s) {
       storeGetTarget(t, v, s->loc);
       break;
     }
+    case HFormatItem::P:
+      // P input: picture-directed input is not implemented in this stage (D1).
+      d_.error(s->loc, "P edit item on GET is not implemented in this stage", "(53)");
+      break;
     }
   }
 }
@@ -7626,6 +7678,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     return v;
   if (v.ty.isEvent() && dst.isEvent())
     return v;
+  if (v.ty.isLabel() && dst.isLabel())
+    return v;
 
   // Complex conversions (QR2.2/CM5): a complex value is an {double,double}
   // pair. complex -> complex passes through; complex -> real takes the real
@@ -8834,13 +8888,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
-  if (e->name == "ADDR") {
-    // ADDR (rule 123, Appendix 1; Y33-6003 BASED builtin; IBM storage-
-    // control): the address of a variable as a POINTER. A subscripted
-    // element (rules 123,126, wishlist #4) addresses the same storage
-    // load/store use, so SUBSCRIPTRANGE still applies.
-    HExpr* a = e->args[0].get();
-    if (a->kind == HExpr::VarRef && a->sym) {
+   if (e->name == "ADDR") {
+     HExpr* a = e->args[0].get();
+      if (a->kind == HExpr::VarRef && a->isLabel) {
+        v.ty = e->ty;
+        llvm::BasicBlock* bb = lookupLabelBlock(a->name);
+        if (!bb || !curFn_) {
+          v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+        } else {
+          v.reg = llvm::BlockAddress::get(curFn_, bb);
+        }
+        result = v;
+        return true;
+      }
+     if (a->kind == HExpr::VarRef && a->sym) {
       v.ty = e->ty;
       // A qualified member S.A.B GEPs off the base; a locator P->X
       // addresses off the locator value instead of the own base.

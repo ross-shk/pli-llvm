@@ -142,8 +142,12 @@ extern size_t rt_in_len, rt_in_pos;
  * the FILE ( f ) option of a PUT/GET; when set they override stdout/stdin. */
 #define PLI_MAX_FILES 16
 extern FILE *rt_pli_files[PLI_MAX_FILES];
-extern FILE *rt_out_f;
+ extern FILE *rt_out_f;
 extern FILE *rt_in_f;
+/* NONPRINT discard flag (ADR-204): when set, output goes nowhere instead of stdout. */
+extern int rt_out_discard;
+/* NONPRINT flag per file slot (ADR-204): when set, output to that file is discarded. */
+extern int rt_pli_nonprint[PLI_MAX_FILES];
 /* Page counters per file slot (PLI PAGENO pseudo-variable). */
 extern volatile long long rt_pli_pages[PLI_MAX_FILES];
 

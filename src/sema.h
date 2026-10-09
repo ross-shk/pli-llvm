@@ -27,6 +27,7 @@ struct Symbol {
   bool isOptional = false; // OPTIONAL parameter (extension): may be omitted at a call
   bool isCond = false;     // DECLARE name CONDITION; (rule 9) programmer-named condition
   bool fileAttr = false;   // FILE variable (rules 39,40): a named file
+  bool fileNonprint = false; // NONPRINT (ADR-204): stream writes to this file discarded
   int fileSlot = -1;       // runtime slot index for a FILE variable (100-103)
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry

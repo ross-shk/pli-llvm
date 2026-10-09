@@ -49,6 +49,7 @@ PLI_FN(pli_put_edit_column, VOID, (I64))
 PLI_FN(pli_put_edit_skip, VOID, (I64))
 PLI_FN(pli_put_edit_page, VOID, (VOID))
 PLI_FN(pli_put_edit_line, VOID, (I64))
+PLI_FN(pli_put_edit_pic, VOID, (I64, I64, I32, CPTR, I64))
 
 PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
 PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))
@@ -186,7 +187,7 @@ PLI_FN(pli_string_put_close, I64, (PTR, I64))         /* STRING output (105), re
 PLI_FN(pli_string_get_open, VOID, (PTR, I64))         /* STRING input (105) */
 PLI_FN(pli_string_get_close, VOID, (VOID))
 
-PLI_FN(pli_file_open, VOID, (I64, CPTR, I64, I64))    /* OPEN (100-103): slot, name, mode */
+PLI_FN(pli_file_open, VOID, (I64, CPTR, I64, I64, I64))    /* OPEN (100-103): slot, name, mode, nonprint(ADR-204) */
 PLI_FN(pli_file_close, VOID, (I64))
 PLI_FN(pli_put_select, VOID, (I64))                   /* FILE output routing (105) */
 PLI_FN(pli_put_unselect, VOID, (VOID))

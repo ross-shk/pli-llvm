@@ -1087,6 +1087,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // A FILE variable carries no runtime storage of its own: its identity
           // is the compile-time slot that OPEN/CLOSE/FILE( f ) pass to libpli.
           item.sym->fileAttr = true;
+          item.sym->fileNonprint = item.nonprint;
           item.sym->fileSlot = nextFileSlot_++;
           storage_.pop_back();
         }
@@ -1871,6 +1872,8 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     return true;
   if (dst.isEvent() && src.isEvent())
     return true;
+  if (dst.isLabel() && src.isLabel())
+    return true;
   // Locator assignment (rules (15),(22)): copy the address; a POINTER/OFFSET
   // target takes a POINTER/OFFSET source (NULL, ADDR, another locator). The
   // two locator kinds are interchangeable at run time (both are opaque
@@ -2119,7 +2122,7 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
     default:
       break;
     }
-    checkExpr(s->target.get());
+     checkExpr(s->target.get());
     for (auto& t : s->extraTargets)
       checkExpr(t.get());
     checkExpr(s->value.get());
@@ -3687,20 +3690,23 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     checkFileTarget(s, sc);
     break;
   case Stmt::Goto:
-    // GO TO target must be a label defined in this procedure (rules (64),(77)).
-    if (procLabels_.find(s->name) == procLabels_.end()) {
-      d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
-      break;
-    }
-    // A GO TO may not enter an inactive block (Y33 block activation): the
-    // target's enclosing BEGIN chain must be a prefix of the current one.
-    {
-      auto lc = labelBeginChains_.find(s->name);
-      if (lc != labelBeginChains_.end()) {
-        const std::vector<const Stmt*>& target = lc->second;
-        if (target.size() > curBeginChain_.size() ||
-            !std::equal(target.begin(), target.end(), curBeginChain_.begin()))
-          d_.error(s->loc, "GO TO into an inactive block is not allowed", "(77)");
+    // Direct GO TO label: target must be a label in this procedure (rules (64),(77)).
+    // Indirect GO TO (expr): operand is a LABEL variable, skip the label check.
+    if (s->gotoTarget) {
+      typeExpr(s->gotoTarget.get(), sc, p);
+    } else {
+      if (procLabels_.find(s->name) == procLabels_.end()) {
+        d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
+        break;
+      }
+      {
+        auto lc = labelBeginChains_.find(s->name);
+        if (lc != labelBeginChains_.end()) {
+          const std::vector<const Stmt*>& target = lc->second;
+          if (target.size() > curBeginChain_.size() ||
+              !std::equal(target.begin(), target.end(), curBeginChain_.begin()))
+            d_.error(s->loc, "GO TO into an inactive block is not allowed", "(77)");
+        }
       }
     }
     break;
@@ -3810,13 +3816,14 @@ static ExprP cloneFmtExpr(const Expr* e) {
   return c;
 }
 
-static FormatItem cloneFmtItem(const FormatItem& f) {
-  FormatItem c;
-  c.kind = f.kind;
-  c.w = cloneFmtExpr(f.w.get());
-  c.d = cloneFmtExpr(f.d.get());
-  c.s = cloneFmtExpr(f.s.get());
-  c.remote = f.remote;
+ static FormatItem cloneFmtItem(const FormatItem& f) {
+   FormatItem c;
+   c.kind = f.kind;
+   c.w = cloneFmtExpr(f.w.get());
+   c.d = cloneFmtExpr(f.d.get());
+   c.s = cloneFmtExpr(f.s.get());
+   c.pic = f.pic;
+   c.remote = f.remote;
   for (const auto& sb : f.subs)
     c.subs.push_back(cloneFmtItem(sb));
   return c;
@@ -3918,6 +3925,11 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
       d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
     }
+    if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+      /* P: picture-directed output; requires a numeric item. */
+    } else if (f.kind == FormatItem::P && !it->ty.isNumeric()) {
+      d_.error(it->loc, "a P format requires a numeric item", "(53)");
+    }
     if (isGet) {
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
                  it->kind == Expr::Subscript;
@@ -3933,10 +3945,10 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     ++dataIdx;
   }
   size_t dataFormats = 0;
-  for (auto& f : s->formats)
-    if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
-        f.kind == FormatItem::F || f.kind == FormatItem::E)
-      ++dataFormats;
+    for (auto& f : s->formats)
+     if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
+         f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
+       ++dataFormats;
   if (dataFormats < s->items.size())
     d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
 }
@@ -4025,8 +4037,13 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
   case Expr::VarRef: {
     // ONSOURCE pseudo-variable (TR 123, ADR-202): bare ONSOURCE has a type so
     // it can be assigned to; the IRGen emits pli_set_on_source calls.
-    if (e->name == "ONSOURCE") {
+     if (e->name == "ONSOURCE") {
       e->ty = Type::fixedBin(15, 0);
+      break;
+    }
+    if (procLabels_.count(e->name)) {
+      e->ty = Type::labelTy();
+      e->isLabel = true;
       break;
     }
     Symbol* sym = lookup(sc, e->name);
@@ -4765,10 +4782,14 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
         a->ty = a->ty.elementType();
       }
     }
-    bool ok = a->kind == Expr::VarRef || a->kind == Expr::Subscript;
-    if (ok && a->sym && a->sym->kind == Symbol::ProcName)
-      ok = false;
-    if (!ok) {
+     bool ok = a->kind == Expr::VarRef || a->kind == Expr::Subscript;
+     if (ok && a->sym && a->sym->kind == Symbol::ProcName)
+       ok = false;
+     if (a->kind == Expr::VarRef && a->isLabel) {
+       e->ty = Type::labelTy();
+       return true;
+     }
+     if (!ok) {
       d_.error(a->loc, "ADDR requires a variable or array element in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;

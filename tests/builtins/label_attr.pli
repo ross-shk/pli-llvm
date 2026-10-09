@@ -1,0 +1,15 @@
+label_test: procedure options(main);
+   declare lab label;
+   declare fails fixed bin(31);
+   fails = 0;
+
+   lab = addr(target);
+   go to (lab);
+
+   fails = 1;
+   put skip list('FAIL label: should not reach here');
+   return;
+
+target:
+   put skip list('PASS label');
+end label_test;

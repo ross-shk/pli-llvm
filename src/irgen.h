@@ -628,6 +628,7 @@ private:
   // (rules 127 and (34),(37)): the caller-supplied buffer that a RETURN
   // copies into before returning void.
   llvm::Value* structRetPtr_ = nullptr;
+  llvm::BasicBlock* lookupLabelBlock(const std::string& name) { return labelBlocks_.count(name) ? labelBlocks_[name] : nullptr; }
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
   // ON-unit scope on block termination (rule (91); Y33 "Activation and
   // Termination of Blocks"): a GO TO that leaves one or more BEGIN blocks

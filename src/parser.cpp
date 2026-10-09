@@ -811,25 +811,35 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     advance(); // GO
     advance(); // TO
     st->kind = Stmt::Goto;
-    if (at(Tok::Word)) {
-      st->name = cur().text;
-      advance();
-    } else
-      d_.error(cur().loc, "expected a label after GO TO", "(77)");
-    expect(Tok::Semi, "(77)");
-    return st;
-  }
-  if (kw("GOTO")) {
-    // GOTO label ;   (one-word spelling)                  rule (77)
-    auto st = std::make_unique<Stmt>();
-    st->loc = cur().loc;
-    advance();
-    st->kind = Stmt::Goto;
-    if (at(Tok::Word)) {
-      st->name = cur().text;
-      advance();
-    } else
-      d_.error(cur().loc, "expected a label after GOTO", "(77)");
+       if (at(Tok::Word)) {
+       st->name = cur().text;
+       advance();
+     } else if (at(Tok::LParen)) {
+       // GO TO ( expr ) — indirect jump through a LABEL variable (rule (77),
+       // rule (21)): the operand is a label variable holding a block address.
+       advance(); // (
+       st->gotoTarget = parseExpr();
+       expect(Tok::RParen, "(77)");
+     } else
+       d_.error(cur().loc, "expected a label after GO TO", "(77)");
+   expect(Tok::Semi, "(77)");
+   return st;
+ }
+ if (kw("GOTO")) {
+   // GOTO label ;   (one-word spelling)                  rule (77)
+   auto st = std::make_unique<Stmt>();
+   st->loc = cur().loc;
+   advance();
+   st->kind = Stmt::Goto;
+   if (at(Tok::Word)) {
+     st->name = cur().text;
+     advance();
+   } else if (at(Tok::LParen)) {
+     advance(); // (
+     st->gotoTarget = parseExpr();
+     expect(Tok::RParen, "(77)");
+   } else
+     d_.error(cur().loc, "expected a label after GOTO", "(77)");
     expect(Tok::Semi, "(77)");
     return st;
   }
@@ -1712,9 +1722,33 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "CELL" || w == "GENERIC" ||
-          w == "BUILTIN") {
-        d_.error(cur().loc, "attribute " + w + " is not implemented in this stage", "(15)");
+      if (w == "PICTURE" || w == "PIC") {
+        // picture-attribute ::= PICTURE ( 'picture-string' )  rules (19),(146)-(148)
+        // PICTURE names a declared variable whose type is implied by the picture.
+        advance();
+        if (eat(Tok::LParen)) {
+          if (at(Tok::CharLit)) {
+            item.picture = cur().sval;
+            advance();
+          } else {
+            d_.error(cur().loc, "PICTURE requires a character-string literal in parentheses", "(19)");
+          }
+          expect(Tok::RParen, "(19)");
+        } else {
+          d_.error(cur().loc, "PICTURE requires ( 'picture-string' )", "(19)");
+        }
+        continue;
+      }
+      if (w == "LABEL") {
+        // LABEL (rule (21)): a label variable — a variable that can hold a
+        // block address and be the target of an indirect GO TO.
+        advance();
+        item.labelAttr = true;
+        continue;
+      }
+      if (w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
+        // CELL, GENERIC, BUILTIN are not Subset-G attributes; diagnosed.
+        d_.error(cur().loc, "attribute " + w + " is not a Subset-G attribute", "(15)");
         advance();
         if (at(Tok::LParen)) {
           int d = 0;
@@ -1726,6 +1760,27 @@ void Parser::parseDeclTail(DeclItem& item) {
             advance();
           } while (d && !at(Tok::Eof));
         }
+        continue;
+      }
+      if (w == "RESERVED") {
+        // RESERVED (TR 25.084 rule (15)): attribute acceptance only — a
+        // reserved-name variable has no structural effect in this stage.
+        advance();
+        item.reserved = true;
+        continue;
+      }
+      if (w == "UNION") {
+        // UNION (ADR-202): overlapping minor structures (Subset-G extension).
+        // The first occurrence starts the overlay; subsequent members share
+        // offset 0. Implemented via the DEFINED overlay path.
+        advance();
+        item.unionAttr = true;
+        continue;
+      }
+      if (w == "NONPRINT" || w == "NOPRINT") {
+        // NONPRINT (ADR-204): stream writes to this file are discarded.
+        advance();
+        item.nonprint = true;
         continue;
       }
       break; // not an attribute: next declaration item or end
@@ -1809,6 +1864,9 @@ void Parser::parseDeclTail(DeclItem& item) {
   } else if (bag.event) {
     // An EVENT name (rules (15),(79),(82), QR2.8): a completion flag.
     item.ty = Type::eventTy();
+  } else if (item.labelAttr) {
+    // LABEL (rule (21)): a label variable holds a block address for GO TO.
+    item.ty = Type::labelTy();
   } else if (bag.file) {
     // A FILE variable carries no computational value (rules 39,40); the parser
     // records the flag and sema assigns it a runtime slot at OPEN/CLOSE.
@@ -2984,10 +3042,22 @@ bool Parser::parseSingleFormatItem(FormatItem& fi) {
     return false;
   }
   const std::string& w = cur().text;
-  // Picture-directed P items need PICTURE (D1); diagnosed, never dropped.
+  // Picture-directed P items use PICTURE (rule 53, rules 146-148).
   if (w == "P") {
-    d_.error(cur().loc, "format item 'P' requires PICTURE and is not implemented (D1)", "(53)");
-    return false;
+    advance(); // consume P
+    if (eat(Tok::LParen)) {
+      if (at(Tok::CharLit)) {
+        fi.kind = FormatItem::P;
+        fi.pic = cur().sval;
+        advance();
+      } else {
+        d_.error(cur().loc, "P requires a picture string literal in parentheses", "(53)");
+      }
+      expect(Tok::RParen, "(53)");
+    } else {
+      d_.error(cur().loc, "P requires ( 'picture-string' )", "(53)");
+    }
+    return true;
   }
   if (w == "A") {
     fi.kind = FormatItem::A;

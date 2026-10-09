@@ -42,8 +42,10 @@ void pli_string_get_close(void) {
 /* OPEN (rules 100-103): open the file in `slot` with the given name (namelen
  * bytes, not nul-terminated). mode 0 = INPUT, 1 = OUTPUT. The FILE variable's
  * slot is a compile-time constant, so rt_pli_files[slot] is stable across the
- * OPEN/GET/PUT/CLOSE statements that name it. */
-void pli_file_open(long long slot, const char *name, long long namelen, long long mode) {
+ * OPEN/GET/PUT/CLOSE statements that name it. nonprint=1 (ADR-204): output
+ * to this file is silently discarded. */
+void pli_file_open(long long slot, const char *name, long long namelen, long long mode,
+                   long long nonprint) {
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   char buf[256];
@@ -52,7 +54,13 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   buf[n] = '\0';
   if (rt_pli_files[slot])
     fclose(rt_pli_files[slot]);
-  rt_pli_files[slot] = fopen(buf, mode ? "w" : "r");
+  if (nonprint) {
+    rt_pli_files[slot] = NULL;
+    rt_pli_nonprint[slot] = 1;
+  } else {
+    rt_pli_files[slot] = fopen(buf, mode ? "w" : "r");
+    rt_pli_nonprint[slot] = 0;
+  }
 }
 
 /* CLOSE (rule 102): close the file in `slot` and release the slot. */
@@ -68,13 +76,18 @@ void pli_file_close(long long slot) {
 /* FILE ( f ) output routing (rule 105): rt_put_raw writes to the named file until
  * the matching unselect returns to SYSPRINT. */
 void pli_put_select(long long slot) {
-  rt_out_f = (slot >= 0 && slot < PLI_MAX_FILES) ? rt_pli_files[slot] : NULL;
+  if (slot >= 0 && slot < PLI_MAX_FILES && !rt_pli_nonprint[slot])
+    rt_out_f = rt_pli_files[slot];
+  else
+    rt_out_f = NULL;  /* NONPRINT: discard output (ADR-204) */
+  rt_out_discard = (slot >= 0 && slot < PLI_MAX_FILES && rt_pli_nonprint[slot]);
   rt_col = 0;
   rt_items_on_line = 0;
 }
 
 void pli_put_unselect(void) {
   rt_out_f = NULL;
+  rt_out_discard = 0;
 }
 
 /* FILE ( f ) input routing (rule 105): rt_next_char reads from the named file. */

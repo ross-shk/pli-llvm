@@ -53,6 +53,7 @@ struct Expr {
   // VarRef: this is the based-variable operand of an ALLOCATE item (rule (88)).
   // An unconnected BASED variable may be named there without a locator.
   bool allocBaseRef = false;
+  bool isLabel = false;
   Tok op = Tok::Eof; // Binary / Unary operator
   ExprP a, b;
   std::vector<ExprP> args; // Call
@@ -93,12 +94,13 @@ struct DefinedSub {
 // (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
 // formats for the real/imaginary parts; P stays diagnosed (D1 pictures).
 struct FormatItem {
-  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote } kind = A;
+  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P } kind = A;
   ExprP w;                      // field width
   ExprP d;                      // F/E: fractional digits
   ExprP s;                      // F/E: scale factor p (rule (50)); null = absent
-  std::string remote;           // R: FORMAT statement label (rule (55)); empty = none
-  std::vector<FormatItem> subs; // C: 1-2 inner real (F/E) formats (rule (51))
+   std::string remote;           // R: FORMAT statement label (rule (55)); empty = none
+   std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
+   std::vector<FormatItem> subs; // C: 1-2 inner real (F/E) formats (rule (51))
 };
 
 struct DeclItem {
@@ -147,12 +149,17 @@ struct DeclItem {
   bool isCondition = false;      // DECLARE name CONDITION; (rule 9)
   bool fileAttr = false;         // DECLARE name FILE (rules 39,40): a named file
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
-  bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
-  Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
-  std::string extName;           // EXTERNAL('name') case-sensitive C symbol
-  bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
-  bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
-                                 // scalar/pointer params marshal by value (C ABI)
+   bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
+   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
+   bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
+   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
+                                  // scalar/pointer params marshal by value (C ABI)
+   std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
+   bool reserved = false;         // RESERVED (ADR-203): no init
+   bool unionAttr = false;        // UNION (ADR-202): overlay with next member
+   bool labelAttr = false;        // LABEL (rule (21)): label variable
+   bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
 };
 
 struct Stmt {
@@ -244,7 +251,8 @@ struct Stmt {
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
                            // file; READ/WRITE transfer fixed-size binary records
 
-  std::vector<ExprP> args; // CALL arguments
+   std::vector<ExprP> args; // CALL arguments
+   ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))
 
   // CALL task options (rule (79), QR2.8): TASK[(ref)], EVENT(ref),
   // PRIORITY(expr) in any order. taskRef/eventRef are VarRef to a TASK/EVENT

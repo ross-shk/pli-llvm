@@ -25,8 +25,9 @@ enum class TK {
   Offset,   // OFFSET: a locator into an AREA (rule (22))
   Complex,  // COMPLEX: a pair of FLOAT real/imaginary parts (QR2.2/CM5)
   Task,     // TASK: a task name for async CALL (rules (15),(79), QR2.8)
-  Event,    // EVENT: an event name for CALL/WAIT sync (rules (15),(79),(82), QR2.8)
-  Void,
+   Event,        // EVENT: an event name for CALL/WAIT sync (rules (15),(79),(82), QR2.8)
+   Label,       // LABEL: a label variable (rule (21)) — holds a block address
+   Void,
 };
 
 // One level-numbered structure member (rule 11). Defined after Type: a member's
@@ -193,11 +194,17 @@ struct Type {
     return t;
   }
   // An event name (QR2.8): a completion flag (0 incomplete, 1 complete).
-  static Type eventTy() {
-    Type t;
-    t.k = TK::Event;
-    return t;
-  }
+   static Type eventTy() {
+     Type t;
+     t.k = TK::Event;
+     return t;
+   }
+   // A label variable (rule (21)): holds a block address for indirect GO TO.
+   static Type labelTy() {
+     Type t;
+     t.k = TK::Label;
+     return t;
+   }
   // Build a structure type from its level-numbered members (rule 11).
   static Type structTy(std::vector<Member> m);
 
@@ -216,6 +223,7 @@ struct Type {
   bool isComplex() const { return k == TK::Complex; }
   bool isTask() const { return k == TK::Task; }
   bool isEvent() const { return k == TK::Event; }
+  bool isLabel() const { return k == TK::Label; }
 
   // Integer width chosen for FIXED values (M0 keeps FIXED scale 0 only).
   // FixedDec: <=9 digits fit an i32, <=18 fit an i64; a genuinely wide
@@ -264,9 +272,11 @@ struct Type {
       return "COMPLEX";
     case TK::Task:
       return "TASK";
-    case TK::Event:
+   case TK::Event:
       return "EVENT";
-    case TK::Void:
+     case TK::Label:
+      return "LABEL";
+     case TK::Void:
       return "VOID";
     }
     return "?";
