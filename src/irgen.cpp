@@ -8833,14 +8833,16 @@ Val IRGen::emitExpr(HExpr* e) {
       // Complex exponentiation a**b = exp(b*log(a)) (rule 121, CM5).
       // log(a) = ln|a| + i*arg(a); b*log(a) done as complex multiply.
       llvm::Value* mag2 = b_.CreateFAdd(b_.CreateFMul(ar, ar), b_.CreateFMul(ai, ai), "cpx.mag2");
-      llvm::Value* lnMag = b_.CreateFMul(b_.CreateCall(runtimeFn("pli_log"), {mag2}, "cpx.ln"),
+      llvm::Value* lnMag = b_.CreateFMul(emitUnaryMath("pli_log", "llvm.log.f64", mag2, "cpx.ln"),
                                          llvm::ConstantFP::get(b_.getDoubleTy(), 0.5), "cpx.lnmag");
-      llvm::Value* theta = b_.CreateCall(runtimeFn("pli_atan2"), {ai, ar}, "cpx.arg");
+      llvm::Value* theta = emitBinaryMath("pli_atan2", "llvm.atan2.f64", ai, ar, "cpx.arg");
       llvm::Value* wr = b_.CreateFSub(b_.CreateFMul(br, lnMag), b_.CreateFMul(bi, theta), "cpx.wr");
       llvm::Value* wi = b_.CreateFAdd(b_.CreateFMul(br, theta), b_.CreateFMul(bi, lnMag), "cpx.wi");
-      llvm::Value* ew = b_.CreateCall(runtimeFn("pli_exp"), {wr}, "cpx.ew");
-      rr = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_cos"), {wi}, "cpx.cos"), "cpx.rr");
-      ri = b_.CreateFMul(ew, b_.CreateCall(runtimeFn("pli_sin"), {wi}, "cpx.sin"), "cpx.ri");
+      llvm::Value* ew = emitUnaryMath("pli_exp", "llvm.exp.f64", wr, "cpx.ew");
+      llvm::Value* cosw = emitUnaryMath("pli_cos", "llvm.cos.f64", wi, "cpx.cos");
+      llvm::Value* sinw = emitUnaryMath("pli_sin", "llvm.sin.f64", wi, "cpx.sin");
+      rr = b_.CreateFMul(ew, cosw, "cpx.rr");
+      ri = b_.CreateFMul(ew, sinw, "cpx.ri");
       // 0**0 is 1+0i; the log/exp chain would yield NaN there.
       llvm::Value* isZeroBase =
           b_.CreateFCmpOEQ(mag2, llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "cpx.zb");
@@ -8951,6 +8953,21 @@ Val IRGen::emitExpr(HExpr* e) {
   v.ty = common;
   v.reg = r;
   return v;
+}
+// Math transcendental helpers (W4b): emit LLVM intrinsic in llvm mode or
+// pli_* call in runtime mode, gated by useRuntimeCall.
+llvm::Value* IRGen::emitUnaryMath(const std::string& plifn, const std::string& intrinsic,
+                                  llvm::Value* x, const llvm::Twine& name) {
+  if (useRuntimeCall(plifn))
+    return b_.CreateCall(runtimeFn(plifn), {x}, name);
+  return b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x}, name);
+}
+llvm::Value* IRGen::emitBinaryMath(const std::string& plifn, const std::string& intrinsic,
+                                   llvm::Value* x, llvm::Value* y, const llvm::Twine& name) {
+  if (useRuntimeCall(plifn))
+    return b_.CreateCall(runtimeFn(plifn), {x, y}, name);
+  return b_.CreateCall(
+      intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy(), b_.getDoubleTy()}), {x, y}, name);
 }
 // Emit a built-in function call (SUBSTR, INDEX, ABS, ...). Returns true
 // if `e` is one of the recognised built-ins, filling `result`; false if

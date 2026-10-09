@@ -319,6 +319,12 @@ private:
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.
   bool emitBuiltin(HExpr* e, Val& out);
+  // Math transcendental helpers (W4b): emit LLVM intrinsic in llvm mode or
+  // pli_* call in runtime mode, gated by useRuntimeCall.
+  llvm::Value* emitUnaryMath(const std::string& plifn, const std::string& intrinsic, llvm::Value* x,
+                             const llvm::Twine& name);
+  llvm::Value* emitBinaryMath(const std::string& plifn, const std::string& intrinsic,
+                              llvm::Value* x, llvm::Value* y, const llvm::Twine& name);
   Val loadSym(Symbol* sym, const Type& ty);
   void storeTo(Symbol* sym, const Val& v, SourceLoc loc);
   // `packed` marks a destination inside an UNALIGNED structure: the store then
