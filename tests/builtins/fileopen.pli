@@ -1,0 +1,40 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* FILEOPEN/LINENO/PAGENO (rule 123): file-state queries by slot. */
+  fileopen_test: procedure options(main);
+    declare f fixed bin(31);
+    declare fails fixed bin(31);
+    declare ln fixed bin(31);
+    declare pg fixed bin(31);
+    declare op bit(1);
+
+    fails = 0;
+    f = 7;
+
+    /* Never-opened slot reads closed, line 0, page 0. */
+    op = fileopen(f);
+    if op then do;
+       fails = fails + 1;
+       put skip list('FAIL fileopen(7)');
+    end;
+    ln = lineno(f);
+    if ln ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL lineno(7)', ln);
+    end;
+    pg = pageno(f);
+    if pg ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL pageno(7)', pg);
+    end;
+
+    /* PAGENO pseudo-variable round-trips. */
+    pageno(f) = 3;
+    pg = pageno(f);
+    if pg ^= 3 then do;
+       fails = fails + 1;
+       put skip list('FAIL pageno = 3', pg);
+    end;
+
+    if fails = 0 then put skip list('PASS fileopen');
+    else put skip list('FAIL fileopen:', fails);
+  end fileopen_test;

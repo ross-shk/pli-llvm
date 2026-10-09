@@ -119,7 +119,7 @@ PLI_FN(pli_pageno, I64, (I64))                        /* PAGENO(f): slot -> curr
 PLI_FN(pli_set_pageno, VOID, (I64, I64))              /* PAGENO(f)=n: set page counter (ADR-201) */
 PLI_FN(pli_onkey, I32, (VOID))                        /* ONKEY: 1 if a SIGNAL is currently being handled */
 PLI_FN(pli_on_source, I32, (VOID))                    /* ONSOURCE: current SIGNAL source key */
-PLI_FN(pli_set_on_source, VOID, (I32))                /* ONSOURCE = key: set source key (ADR-202) */
+PLI_FN(pli_set_on_source, VOID, (I32))                /* ONSOURCE = key: set source key (ADR-210) */
 PLI_FN(pli_onfile, VOID, (PTR, I64))                  /* ONFILE(): file of current I/O condition, blank when none */
 
 PLI_FN(pli_unspec_assign, VOID, (PTR, I64, PTR, I64))/* UNSPEC(var)=bits: memcpy raw storage (ADR-196) */

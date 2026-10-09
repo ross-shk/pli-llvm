@@ -2944,7 +2944,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
       break;
     }
-    // ONSOURCE pseudo-variable (TR 123, ADR-202): onsource = key sets the source
+    // ONSOURCE pseudo-variable (TR 123, ADR-210): onsource = key sets the source
     // condition key of the currently-handled SIGNAL.
     if (s->target->kind == Expr::VarRef && s->target->name == "ONSOURCE") {
       if (!s->value->ty.isVoid())
@@ -4036,7 +4036,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     e->ty = Type::voidTy();
     break;
   case Expr::VarRef: {
-    // ONSOURCE pseudo-variable (TR 123, ADR-202): bare ONSOURCE has a type so
+    // ONSOURCE pseudo-variable (TR 123, ADR-210): bare ONSOURCE has a type so
     // it can be assigned to; the IRGen emits pli_set_on_source calls.
      if (e->name == "ONSOURCE") {
       e->ty = Type::fixedBin(15, 0);

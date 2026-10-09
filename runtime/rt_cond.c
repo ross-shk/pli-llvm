@@ -131,7 +131,7 @@ int pli_on_source(void) {
   return pli_on_source_key;
 }
 
-/* ONSOURCE = key (TR 123, ADR-202): set the source condition key of the
+/* ONSOURCE = key (TR 123, ADR-210): set the source condition key of the
    currently-handled SIGNAL. If inside an ON handler, sets the topmost stack
    entry; otherwise stores a pending key for later ONSOURCE() reads. */
 void pli_set_on_source(int key) {

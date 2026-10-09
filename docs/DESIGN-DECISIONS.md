@@ -5554,4 +5554,275 @@ separate runtime subsystem with no benefit for this workload; 32-bit or wider
 integer-only widening (i128 already fits the standard's 31-digit cap and the
 `DECIMAL(25,2)` case).
 
+## ADR-202 — `UNION` overlapping structure members
+
+**Context.** PL/I `UNION` (Subset-G extension) declares minor structures that
+all start at offset 0 and share storage (`DCL 1 u UNION, 2 a FIXED BIN(31),
+2 b CHAR(10);`). This is the classic C `union` overlay: writing `u.a` clobbers
+the bytes of `u.b`.
+
+**Decision.** Add an `isUnion` flag to `Type` (src/types.h). When set,
+`llvmTy()` returns a byte array `[maxBytes x i8]` sized to the largest member
+(dynamic-array members contribute pointer size). The `structMemberGEP` helper
+(src/irgen.cpp) skips the `CreateStructGEP` for union members — all return
+the base address at offset 0. `emitByNameCopy`, `emitStructInitValues`, and
+`emitByNameCopy`'s internal `fieldAddr` lambda all route through
+`structMemberGEP`, so union layout is handled uniformly. Member types and
+semantics are unchanged; only the address computation differs.
+
+**Consequences.** No runtime support needed — the overlay is a compile-time
+addressing decision (offset 0 for all members). The byte-array backing store
+ensures correct sizing. Type equality (`operator==`) distinguishes union from
+non-union structs, so BY NAME assignment (rule 86) requires identical
+`isUnion` flags.
+
+## ADR-203 — `RESERVED` attribute (storage reservation without initialization)
+
+**Context.** TR 25.084 rule (15) allows `DCL x RESERVED;` to reserve storage
+without zero-initialization or `INITIAL` processing. PL/I's `RESERVED` is an
+attribute on the declaration, not a separate allocation class.
+
+**Decision.** Accept the attribute at parse time and set `item.reserved =
+true` (src/ast.h). No semantic or codegen effect is needed: the variable is
+already allocated via the normal path (`allocaLocals` / `emitGlobals`), and
+the C/C++ stack/globals are zero-initialized by default. The attribute is
+accepted so that existing PL/I code using it compiles without diagnostic.
+
+**Consequences.** Storage is zero-initialized implicitly by the C runtime.
+The flag is available for future diagnostics (e.g., detecting `INITIAL` on a
+`RESERVED` variable) if needed.
+
+## ADR-204 — `NONPRINT` stream attribute (discard output to a file)
+
+**Context.** PL/I `NONPRINT` (IBM Enterprise PL/I extension, Subset-G manual)
+marks a FILE variable whose output is silently discarded instead of written to
+the file. It is the complement of `PRINT` — the file's output stream is routed
+to a null sink rather than a real file descriptor.
+
+**Decision.** Add a `fileNonprint` flag to `Symbol` (src/sema.h:31) and a
+`nonprint` field to `DeclItem` (src/ast.h). Sema propagates the flag from the
+attribute to the symbol (src/sema.cpp). The runtime stores per-file nonprint
+state: `pli_file_open` accepts a `nonprint` parameter (src/runtime/rt_file.c),
+and when true stores a NULL file handle with the flag. A global `rt_out_discard`
+flag (runtime/rt_stream.c) is set by `pli_put_select` before output and cleared
+by `pli_put_unselect`; `rt_put_raw` checks the discard flag and skips the write.
+IRGen passes `f->fileNonprint` to `pli_file_open` and calls
+`pli_put_select`/`pli_put_unselect` around page/skip output (src/irgen.cpp).
+
+**Consequences.** Output to a NONPRINT file is silently dropped with no
+runtime side effects. The `rt_out_discard` flag is thread-local per the
+existing `rt_out_f` pattern. The `pli_file_open` ABI signature changed to
+include the `nonprint` parameter (runtime/pli_rt_abi.def).
+
+## ADR-195 — `EVERY`/`SOME` reduction built-ins (Subset-G extension)
+
+**Context.** Subset-G specifies `EVERY(array)` and `SOME(array)` as aggregate
+reduction predicates (rule (123)): `EVERY` returns BIT(1) TRUE if every element
+of the array is true (non-zero), `SOME` returns TRUE if any element is true.
+IBM PL/I treats `EVERY` = `ALL` and `SOME` = `ANY`. These complement the
+existing `ANY`/`ALL` built-ins (both reduce a BIT array expression to BIT(1)).
+
+**Decision.** Treat `EVERY`/`SOME` identically to `ALL`/`ANY` in
+`Sema::typeBuiltin` (src/sema.cpp) — same type-checking (BIT array or BIT
+expression), same result type (BIT(1)), same accumulator identity (true for
+EVERY/ALL, false for SOME/ANY), same reduce-loop in
+`IRGen::emitBuiltin` (src/irgen.cpp). Add EVERY/SOME to the
+`expandReductionTemps` scan so array-expression arguments (`EVERY(a > 0)`)
+are expanded to a static temp in direct-assignment context, and to
+`drainPendingReduces` for the backstop diagnostic.
+
+**Consequences.** No new ABI entries or runtime helpers — pure LLVM. The
+element-wise expression form (`EVERY(a > 0)`) is only served in direct
+assignment (mirrors `SUM(a + 1)`), per the existing reduction restriction.
+Tests: `tests/builtins/every_some.pli`, `tests/builtins/bad_every.pli`.
+
+## ADR-197 — `DATETIME` built-in (Subset-G extension)
+
+**Context.** Subset-G specifies `DATETIME(...)` alongside `DATE` and `TIME`
+(rule (123)): where `DATE()` returns `CHARACTER(8)` (`YYYYMMDD`) and `TIME()`
+returns `CHARACTER(6)` (`HHMMSS`), `DATETIME()` returns `CHARACTER(14)`
+(`YYYYMMDDHHMMSS`). The existing runtime already serves DATE/TIME through
+`pli_date`/`pli_time` (runtime/rt_string.c), which stamp the current local
+time into a caller buffer and blank-pad the tail.
+
+**Decision.** Extend the DATE/TIME handlers in `Sema::typeBuiltin`
+(src/sema.cpp) and `IRGen::emitBuiltin` (src/irgen.cpp) with the `DATETIME`
+name — same shape (no arguments, fixed-length character result of length
+14), lowered through a new `pli_datetime` runtime helper
+(`PLI_FN(pli_datetime, VOID, (PTR, I64))` in runtime/pli_rt_abi.def) that
+writes the concatenated stamp with the same blank-pad convention.
+
+**Consequences.** One small runtime function reusing the DATE/TIME pattern;
+no new lowering machinery. `DATETIME() = DATE() || TIME()` character-wise
+(the test asserts the concatenation). Tests: `tests/builtins/datetime.pli`,
+`tests/builtins/bad_datetime.pli`.
+
+## ADR-199 — `IDENTICAL` aggregate-comparison built-in (Subset-G extension)
+
+**Context.** Subset-G specifies `IDENTICAL(a1, a2)` (rule (123)):
+`BIT(1)` TRUE when the two operands have identical types and values —
+element-wise for arrays, storage-wise for structures — FALSE otherwise.
+The gap plan lists it as a Phase A-agg MLIR candidate, but per the lowering
+policy (direct LLVM behind `--experimental-lowering=llvm`; MLIR only for W6
+after the ADR-158 gate) it lands as direct LLVM first, reusing the
+SUM/PROD/ANY/ALL loop shape already proven for EVERY/SOME (ADR-195).
+
+**Decision.** `Sema::typeBuiltin` (src/sema.cpp) accepts any two arguments
+and returns `BIT(1)`; unions (no active-member tracking), VARYING strings
+and dynamic arrays nested inside compared structures, and arrays of
+aggregates stay diagnosed (padding/garbage has no value semantics in this
+stage). `IRGen::emitBuiltin` (src/irgen.cpp) lowers directly: differing
+static types fold to FALSE; same-typed scalars compare once in their own
+domain (`emitCmpChar` with blank extension for CHARACTER, part-wise
+`FCmpOEQ` for COMPLEX, `FCmpOEQ` for FLOAT, `ICmpEQ` otherwise,
+byte-unrolled for wide BIT); same-typed arrays AND-fold element pairs over
+`min(nA, nB)` starting from a size-equality bit (so dynamic live-bound
+mismatches read FALSE without overrunning, rules (12),(13)); same-typed
+structures AND-fold member values recursively (fixed array members loop
+element-wise), never padding bytes.
+
+**Consequences.** No new ABI entries or runtime helpers — pure LLVM. Strict
+static type identity means `IDENTICAL(3, 3.5)` and `IDENTICAL('abc',
+'abcd')` are FALSE without emitting a comparison. Unions, nested
+VARYING/dynamic shapes, and arrays of aggregates remain diagnosed gaps for
+a later stage. Tests: `tests/builtins/identical.pli`,
+`tests/builtins/bad_identical.pli`.
+
+## ADR-192 — `LABEL` attribute (rule (21))
+
+**Context.** TR 25.084 rule (21) gives label variables: a variable that can
+hold a statement label so `GO TO` can indirect through it. The block-address
+machinery already exists for direct `GO TO` (rule (64)).
+
+**Decision.** `DCL lab LABEL;` declares a label variable holding an LLVM
+block address. `ADDR(target)` yields a `LABEL` value; `lab = ADDR(target);`
+stores it and `GO TO (lab)` indirects through it (src/sema.cpp,
+src/irgen.cpp).
+
+**Consequences.** No ABI change — pure compiler lowering. Test:
+`tests/builtins/label_attr.pli`.
+
+## ADR-193 — `ISOCHAR` built-in (IBM extension)
+
+**Context.** IBM PL/I provides `ISOCHAR(i1, i2)`: the characters with code
+points `i1..i2`. It is an extension here, not TR 25.084.
+
+**Decision.** `Sema::typeBuiltin` (src/sema.cpp) takes two numeric arguments
+and returns `CHARACTER(256)` — the maximum span for 8-bit code points.
+`IRGen::emitBuiltin` (src/irgen.cpp) calls runtime `pli_isochar`
+(`PLI_FN(pli_isochar, VOID, (PTR, I64, I32, I32))`), which fills
+`dst[i] = (char)(lo + i)`.
+
+**Consequences.** One runtime helper, fixed by the ABI. Tests:
+`tests/builtins/isochar.pli`, `tests/builtins/bad_isochar.pli`.
+
+## ADR-194 — `BOOL` built-in (rule (123), Appendix 1)
+
+**Context.** `BOOL(b1, b2, b3)` selects `b2` when `b1` is true, else `b3` —
+a pure value selection with no runtime semantics.
+
+**Decision.** `Sema::typeBuiltin` (src/sema.cpp) requires `BIT(1)` for `b1`
+and a common type for `b2`/`b3`, returning that type. `IRGen::emitBuiltin`
+(src/irgen.cpp) lowers to a pure LLVM `select` (character branches select
+the pointer/length pair). No ABI entries, no runtime helpers.
+
+**Consequences.** Zero-cost conditional values for every servable type.
+Tests: `tests/builtins/bool.pli`, `tests/builtins/bad_bool.pli`.
+
+## ADR-196 — `UNSPEC` function + pseudo-variable (rule (123))
+
+**Context.** `UNSPEC(x)` exposes the raw storage of `x` as a bit string;
+`UNSPEC(var) = bits` writes a bit string into raw storage. Both directions
+are needed (debugging, serialization) and share one definition of "storage".
+
+**Decision.** `Sema::typeBuiltin` (src/sema.cpp) types the function result
+from the operand's store size; the assignment target must be a modifiable
+variable (rule (86) otherwise). `IRGen::emitBuiltin` (src/irgen.cpp)
+materializes storage bytes as an `[N x i8]` array load; `IRGen::storeTo`
+copies `min(srcLen, storage)` into the variable's address with the usual
+blank/tail handling (runtime `pli_unspec_copy`, `runtime/rt_cond.c`).
+
+**Consequences.** Raw views expose padding bytes — callers comparing values
+must use `IDENTICAL` (ADR-199), not `UNSPEC` equality. Test:
+`tests/builtins/unspec_test.pli` (round-trip incl. the pseudo-variable).
+
+## ADR-198 — `CURRENTSIZE` built-in (rule (123), Appendix 1)
+
+**Context.** `CURRENTSIZE(x)` reports the live size of `x`: the current
+string length for characters, the element width otherwise. Numbered ADR-198
+because ADR-199 was consumed by `IDENTICAL` (ADR-199), which landed first.
+
+**Decision.** `Sema::typeBuiltin` (src/sema.cpp) takes one argument and
+returns `FIXED BINARY(31)`. `IRGen::emitBuiltin` (src/irgen.cpp) lowers in
+pure LLVM: character arguments return the live length (so `VARYING` strings
+report their current length), anything else returns the type-derived byte
+width. No ABI entries, no runtime helpers.
+
+**Consequences.** Zero-cost size queries; dynamic bounds stay live because
+lengths are read from the value, not the type. Tests:
+`tests/builtins/currentsize.pli`, `tests/builtins/bad_currentsize.pli`.
+
+## ADR-200 — `EMPTY` built-in (rule (123), Appendix 1)
+
+**Context.** `EMPTY()` denotes the null `AREA` handle — the area equivalent
+of `NULL`.
+
+**Decision.** `Sema::typeBuiltin` (src/sema.cpp) takes no arguments and
+returns `AREA`. `IRGen::emitBuiltin` (src/irgen.cpp) calls runtime
+`pli_empty_area` (`PLI_FN(pli_empty_area, PTR, (VOID))`,
+`runtime/rt_core.c`), which returns the null handle.
+
+**Consequences.** One trivial runtime helper. Tests:
+`tests/builtins/empty.pli`, `tests/builtins/bad_empty.pli`.
+
+## ADR-201 — `PAGENO` pseudo-variable (rule (123))
+
+**Context.** The `PAGENO(f)` function reads the current page counter of
+file `f`; the assignment form `PAGENO(f) = n` sets it (e.g. after handling
+a `PAGE` condition).
+
+**Decision.** Sema (src/sema.cpp) types the target's file slot as a
+modifiable variable (rule (86) otherwise) and checks the value against the
+counter type. `IRGen::storeTo` (src/irgen.cpp) emits runtime
+`pli_set_pageno` (`PLI_FN(pli_set_pageno, VOID, (I64, I64))`), the setter
+matching the `pli_pageno` getter used by the function form.
+
+**Consequences.** Symmetric getter/setter pair over per-file runtime state.
+Tests: `tests/builtins/pageno_assign.pli`, reads in
+`tests/builtins/fileopen.pli`.
+
+## ADR-209 — picture `P` edit item in `PUT EDIT` (rules (53),(146)-(148))
+
+**Context.** The `P('picstr')` format item renders the next numeric data
+item through a picture string (`Z`/`9`/`V`/`.`/`+`/`-`/`S`/`X`/`A`). I/O
+formatting stays in runtime C per the MLIR out-of-scope list, so this needs
+no MLIR admission.
+
+**Decision.** IRGen lowers `P` items to runtime `pli_put_edit_pic`
+(`PLI_FN(pli_put_edit_pic, VOID, (I64, I64, I32, CPTR, I64))`,
+`runtime/rt_edit.c`), passing value, scale, sign, and the picture string.
+`GET EDIT P` stays diagnosed (Phase D1); the `PICTURE` attribute type and
+the `VALID`/`EDIT` built-ins (Phase C1a/C1e) remain future work.
+
+**Consequences.** Numeric picture output works end to end; picture-directed
+input and declared picture variables are diagnosed gaps, not silent ones.
+Test: `tests/builtins/picture_test.pli`.
+
+## ADR-210 — `ONSOURCE` pseudo-variable (rule (123))
+
+**Context.** The `ONSOURCE` function reads the source key of the
+`SIGNAL` currently being handled; the assignment form `ONSOURCE = key`
+sets it. Stray comments cited this as "ADR-202", which is the `UNION`
+attribute — this ADR gives the pseudo-variable its own number and those
+citations are corrected to ADR-210.
+
+**Decision.** Sema (src/sema.cpp) gives bare `ONSOURCE` a type so it can
+appear in expressions and accepts `ONSOURCE = key` with the key checked
+against `FIXED BINARY(15)`. `IRGen::storeTo` (src/irgen.cpp) emits runtime
+`pli_set_on_source` (`PLI_FN(pli_set_on_source, VOID, (I32))`), the setter
+matching the `pli_on_source` getter.
+
+**Consequences.** Symmetric with the function form; only meaningful inside
+an `ON` handler, blank/default otherwise. Test:
+`tests/builtins/onsource_assign.pli`.
 

@@ -4254,7 +4254,7 @@ void IRGen::emitAssign(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_set_pageno"), {toI64(slot), toI64(rhs)});
     return;
   }
-  // ONSOURCE pseudo-variable (TR 123, ADR-202): onsource = key calls the runtime
+  // ONSOURCE pseudo-variable (TR 123, ADR-210): onsource = key calls the runtime
   // setter to update the source condition key of the current SIGNAL handler.
   if (s->target->kind == HExpr::VarRef && s->target->name == "ONSOURCE") {
     Val rhs = emitExpr(s->value.get());
