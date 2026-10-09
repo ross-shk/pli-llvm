@@ -147,6 +147,25 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     return nullptr;
   if (s->kind == Stmt::DefineAlias)
     return nullptr; // registered in sema; no runtime statement (extension, ADR-114)
+  if (s->kind == Stmt::DefineConstant) {
+    // Registered in sema; lower as a Declare carrying the symbol so irgen's
+    // emitInitials stores the constant (Char/Bit inits only emit from a
+    // declaration item). A duplicate (s->sym null) lowers to an empty
+    // Declare, which emitInitials skips (extension, ADR-205).
+    auto hc = std::make_unique<HStmt>();
+    hc->kind = HStmt::Declare;
+    hc->loc = s->loc;
+    hc->labels = s->labels;
+    if (s->sym) {
+      HDeclItem hd;
+      hd.name = s->name;
+      hd.ty = s->sym->ty;
+      hd.loc = s->loc;
+      hd.sym = s->sym;
+      hc->decls.push_back(std::move(hd));
+    }
+    return hc;
+  }
   auto h = std::make_unique<HStmt>();
   h->kind = static_cast<HStmt::Kind>(s->kind);
   h->loc = s->loc;

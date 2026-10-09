@@ -198,6 +198,8 @@ struct Stmt {
     Format,      // rule (44) FORMAT(formatlist); — remote format repository for R(ref)
     DefineAlias, // extension (ADR-114): DEFINE ALIAS name attrs (no HIR twin;
                  // dropped in lowering after sema registers the type)
+    DefineConstant, // extension (ADR-205): DEFINE CONSTANT name const (lowers
+                    // to a Declare carrying the symbol, so inits emit)
   } kind = Null;
 
   SourceLoc loc{};

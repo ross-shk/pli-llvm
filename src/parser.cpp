@@ -247,6 +247,12 @@ std::unique_ptr<Program> Parser::parse() {
     if (cur().isWord("DEFINE") && peek().isWord("ALIAS")) {
       if (StmtP d = parseDefineAlias())
         prog_->defines.push_back(std::move(d));
+    } else if (cur().isWord("DEFINE") && peek().isWord("CONSTANT")) {
+      // DEFINE CONSTANT at file scope is not implemented in this stage
+      // (ADR-205): constants live in a procedure frame, like VALUE does.
+      d_.error(cur().loc,
+               "DEFINE CONSTANT at file scope is not implemented in this stage (ADR-205)", "");
+      resync();
     } else {
       parseExternalProcedure();
     }
@@ -300,6 +306,39 @@ StmtP Parser::parseDefineAlias() {
   st->aliasTy = item.ty;
   if (!eat(Tok::Semi)) {
     d_.error(cur().loc, "expected ';' after the DEFINE ALIAS statement (ADR-114)", "");
+    resync();
+    return nullptr;
+  }
+  return st;
+}
+
+// define-constant-statement (extension, ADR-205): DEFINE CONSTANT name const;
+// a textual named constant. The value parses as a general expression so a
+// later constant expression stays possible, but sema only accepts a bare
+// literal there (mirroring VALUE's single-constant fold).
+StmtP Parser::parseDefineConstant() {
+  SourceLoc loc = cur().loc;
+  advance(); // DEFINE
+  advance(); // CONSTANT (the dispatch checked the spelling)
+  if (!at(Tok::Word)) {
+    d_.error(cur().loc, "expected a constant name after DEFINE CONSTANT (ADR-205)", "");
+    resync();
+    return nullptr;
+  }
+  std::string name = cur().text;
+  advance();
+  ExprP v = parseExpr();
+  if (!v) {
+    resync();
+    return nullptr;
+  }
+  auto st = std::make_unique<Stmt>();
+  st->kind = Stmt::DefineConstant;
+  st->loc = loc;
+  st->name = name;
+  st->value = std::move(v);
+  if (!eat(Tok::Semi)) {
+    d_.error(cur().loc, "expected ';' after the DEFINE CONSTANT statement (ADR-205)", "");
     resync();
     return nullptr;
   }
@@ -743,8 +782,13 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     return parseDeclare();
   } // rule (9)
   if (kw("DEFINE")) {
+    // DEFINE ALIAS (ADR-114) and DEFINE CONSTANT (ADR-205) share the DEFINE
+    // head; anything else falls into the alias parse for its diagnostic.
+    // peek() only reads ahead, so it is safe in both probe and real modes.
+    if (peek().isWord("CONSTANT"))
+      return parseDefineConstant();
     return parseDefineAlias();
-  } // extension (ADR-114)
+  } // extensions (ADR-114, ADR-205)
   if (kw("IF")) {
     return parseIf(owner);
   } // rules (74),(75)

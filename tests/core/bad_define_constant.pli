@@ -1,0 +1,11 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* extension (ADR-205): DEFINE CONSTANT needs a
+     constant value; writes are diagnosed. */
+  badconst: procedure options(main);
+     define constant max 100;
+     define constant max 200;
+     declare other fixed bin(31);
+     define constant doubled other + 1;
+     max = 5;
+  end badconst;

@@ -5881,3 +5881,33 @@ second float format ever lands, the designator text is already threaded
 through for refinement. Tests: `tests/builtins/enquiries.pli`,
 `tests/builtins/bad_enquiries.pli`.
 
+## ADR-205 — DEFINE CONSTANT textual named constants
+
+**Context.** Subset G has a `DEFINE CONSTANT` statement for textual
+constants, but TR 25.084 has no such production. The `VALUE` attribute
+(ADR-108) already implements named constants as read-only storage, so a
+second implementation would duplicate the checker, the init emission, and
+every write-position diagnostic.
+
+**Decision.** `DEFINE CONSTANT name const;` declares a named constant whose
+type is the literal's own expression type (integer → `FIXED DECIMAL`,
+`3.14` → `FIXED DECIMAL(3,2)`, float → `FLOAT`, string → `CHAR(n)`, bit →
+`BIT(n)`). Only a bare literal (optionally signed) is accepted; anything
+else is diagnosed (ADR-205). The symbol rides the `VALUE` machinery
+verbatim: ordinary `AUTOMATIC` storage (`STATIC` becomes a global),
+initialized once from the folded literal, `isValue` set so every write
+position is diagnosed by the shared checker (citing ADR-108). The statement
+lowers in HIR to a `Declare` carrying the symbol, so `emitInitials` stores
+the `CHAR`/`BIT` inits (`FIXED`/`FLOAT` store early in `allocaLocals` via
+`localSyms`). Duplicates are diagnosed via `declare()` (9); a bare
+`DEFINE CONSTANT` as an `IF` body is diagnosed (74); use inside an `ON`-unit
+is diagnosed (91); file scope is diagnosed (ADR-205) since constants live
+in a procedure frame, like `VALUE`.
+
+**Consequences.** `tests/core/define_constant.pli` covers fixed, decimal,
+float, character, bit, and negative constants in expressions plus use as an
+array bound; `tests/core/bad_define_constant.pli` pins duplicates,
+non-constant values, and reassignment. Known limits: no constant
+expressions (`OTHER + 1` is diagnosed — the same limit `VALUE` has);
+file-scope constants stay diagnosed.
+

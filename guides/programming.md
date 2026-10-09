@@ -190,6 +190,14 @@ Two small helpers keep code tidy.
  /* max = 5;  -- the compiler says no */
 ```
 
+`define constant` names a constant without writing any attributes — the type comes from the value itself. Same no-reassignment enforcement as `value`.
+
+```pli
+ define constant max 100;
+ define constant pi 3.14;
+ /* max = 5;  -- the compiler says no */
+```
+
 `define alias` names a reusable attribute set — like `type MyInt = int` in Go.
 
 ```pli

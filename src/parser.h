@@ -71,6 +71,7 @@ private:
   StmtP parseSelect(Proc* owner);        // SELECT (extension, ADR-104): desugars to IFs
   StmtP parseLoopExit(bool isIterate);   // LEAVE/ITERATE [label] (extension, ADR-105)
   StmtP parseDefineAlias();              // DEFINE ALIAS name attrs (extension, ADR-114)
+  StmtP parseDefineConstant();           // DEFINE CONSTANT name const (extension, ADR-205)
   static ExprP cloneExpr(const Expr* e); // deep copy for SELECT value lists
   // Decode a hex X literal payload to bytes (rule (143)); false after a
   // diagnostic, in which case out is untouched.

@@ -818,6 +818,49 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       defineAlias(sc, s->name, s->aliasTy, s->loc);
       continue;
     }
+    if (s->kind == Stmt::DefineConstant) {
+      // DEFINE CONSTANT (extension, ADR-205): a textual named constant that
+      // rides the VALUE machinery (ADR-108) — ordinary storage initialized
+      // once from the folded literal, with every write position diagnosed by
+      // the shared checker. The type is the literal's own expression type.
+      Expr* v = s->value.get();
+      Expr* lit = v;
+      bool neg = false;
+      if (lit && lit->kind == Expr::Unary && lit->a &&
+          (lit->op == Tok::Minus || lit->op == Tok::Plus)) {
+        neg = lit->op == Tok::Minus;
+        lit = lit->a.get();
+      }
+      if (!lit || (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit &&
+                   lit->kind != Expr::FltLit && lit->kind != Expr::CharLit &&
+                   lit->kind != Expr::BitLit)) {
+        d_.error(s->loc, "DEFINE CONSTANT requires a constant value (ADR-205)", "");
+        continue;
+      }
+      typeExpr(lit, sc, p);
+      if (neg) { // apply the leading unary minus once (as in VALUE's fold)
+        lit->ival = -lit->ival;
+        lit->wideIval = -lit->wideIval;
+        lit->fval = -lit->fval;
+      }
+      // A same-scope duplicate is diagnosed by declare(); only arm a fresh
+      // symbol so the first value survives, never silently overwritten.
+      bool dup = sc->tab.find(s->name) != sc->tab.end();
+      Symbol* sym = declare(sc, s->name, lit->ty, s->loc, Symbol::Var, isStatic);
+      sym->owner = p; // which procedure's frame holds this constant
+      if (!dup) {
+        sym->initExpr = lit; // consumed by code generation
+        sym->isValue = true;
+        // Record AUTOMATIC constants so codegen allocates them (STATIC ones
+        // become LLVM globals via emitGlobals, as with DECLARE).
+        if (!isStatic)
+          p->localSyms.push_back(sym);
+        // Carried to HIR so emitInitials stores the constant (Char/Bit
+        // inits only emit from a declaration item, never from localSyms).
+        s->sym = sym;
+      }
+      continue;
+    }
     if (s->kind == Stmt::Declare) {
       // Build the level-numbered structure hierarchy (rule 11): a member item
       // belongs to the nearest preceding item with a strictly smaller level.
@@ -1756,7 +1799,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         scopes_.push_back(std::move(child));
         beginScopes_[s->thenS.get()] = raw;
         collectDecls(s->thenS->body, raw, p, isStatic);
-      } else if (s->thenS->kind == Stmt::Declare || s->thenS->kind == Stmt::DefineAlias) {
+      } else if (s->thenS->kind == Stmt::Declare || s->thenS->kind == Stmt::DefineAlias ||
+                 s->thenS->kind == Stmt::DefineConstant) {
         d_.error(s->thenS->loc, "DECLARE/DEFINE cannot be the body of an IF statement", "(74)");
       }
     }
@@ -1768,7 +1812,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         scopes_.push_back(std::move(child));
         beginScopes_[s->elseS.get()] = raw;
         collectDecls(s->elseS->body, raw, p, isStatic);
-      } else if (s->elseS->kind == Stmt::Declare || s->elseS->kind == Stmt::DefineAlias) {
+      } else if (s->elseS->kind == Stmt::Declare || s->elseS->kind == Stmt::DefineAlias ||
+                 s->elseS->kind == Stmt::DefineConstant) {
         d_.error(s->elseS->loc, "DECLARE/DEFINE cannot be the body of an IF statement", "(74)");
       }
     }
@@ -2107,6 +2152,10 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
       break;
     case Stmt::DefineAlias:
       d_.error(s->loc, "DEFINE ALIAS inside an ON-unit is not implemented in this stage", "(91)");
+      break;
+    case Stmt::DefineConstant:
+      d_.error(s->loc, "DEFINE CONSTANT inside an ON-unit is not implemented in this stage",
+               "(91)");
       break;
     case Stmt::Entry:
       d_.error(s->loc, "ENTRY inside an ON-unit is not implemented in this stage", "(91)");
@@ -2739,6 +2788,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Declare:
     break; // handled in collectDecls
   case Stmt::DefineAlias:
+    break; // handled in collectDecls
+  case Stmt::DefineConstant:
     break; // handled in collectDecls
   case Stmt::Assign: {
     typeExpr(s->value.get(), sc, p);

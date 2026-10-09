@@ -158,6 +158,7 @@ entry points below are where that chain terminates.
 | `PICTURE` attribute (TR (19),(146)-(148)) | served | `P('picstr')` edit item in PUT EDIT formats a numeric data item through a picture string (Z/9/V/./+/- /S/X/A); GET EDIT P → D1 (`picture_test.pli`) |
 | `RESERVED` attribute (ADR-203) | accepted | `DCL x RESERVED fixed bin(31);` reserves storage without initialization; parsed and accepted, no runtime effect (`reserved_test.pli`) |
 | Phase F enquiries (ADR-206/207/208) | served | Subset-G extensions over a `: ... :` designator argument (raw words between colons, enquiry built-ins only): `NULL(:ENTRY:)` / `NULL(:LABEL:)` yield typed nulls (`NULL(:FILE:)` diagnosed — files have no value type); `DECLARESIZE(:var:)` folds the declared static byte count in sema (dynamic sizes diagnosed); `EPSILON` / `MAXVAL` / `MINVAL` over `:FLOAT ...:` yield double constants; misuse diagnosed with the rule number (`enquiries.pli`, `bad_enquiries.pli`) |
+| `DEFINE CONSTANT` (ADR-205) | served | Subset-G extension: `DEFINE CONSTANT name const;` declares a read-only named constant whose type is the literal's own expression type; rides the `VALUE` machinery (ordinary storage, single init, shared write checker citing ADR-108); lowers to a `Declare` carrying the symbol so inits emit; non-literal values, duplicates (9), bare `IF`-body use (74), `ON`-unit use (91), and file scope diagnosed (`define_constant.pli`, `bad_define_constant.pli`) |
 
 ## Updating this ledger
 
