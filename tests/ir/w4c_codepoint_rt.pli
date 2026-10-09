@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* W4c IR golden (runtime mode): RANK/COLLATE/ISOCHAR must use pli_* calls. */
+w4c_codepoint_rt: procedure options(main);
+   declare c char(1);
+   declare n fixed bin(31);
+   c = 'A';
+   n = rank(c);
+   put skip list(n);
+   c = collate(65);
+   put skip list(c);
+end w4c_codepoint_rt;

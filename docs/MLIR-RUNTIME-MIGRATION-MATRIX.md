@@ -211,6 +211,16 @@ Full suite: 516 passed, 0 failed.
 
 **Decision**: Direct LLVM for the 13 codegen-backed intrinsics. The remaining 10 (atanh, erf, erfc, cbrt, all degree-trig) have no LLVM intrinsic with arm64 backend support or no intrinsic at all — they remain `runtime` default. W4b demonstrates the `useRuntimeCall` gate pattern for math functions; future waves apply the same pattern when a target's backend adds intrinsic support.
 
+## W4c — code-point operations (direct LLVM)
+
+| operation | runtime symbol | purity/effects | overlap-safe | edge cases | existing tests | witness benchmark | runtime-bitcode result | LLVM result | MLIR admission | current default | removal |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| rank | pli_rank | willreturn, alwaysinline; argmem readonly | n/a | empty string → 0, first char code point | tests/builtins/string.pli, tests/core/w4c_codepoint.pli | tests/core/w4c_codepoint.pli | baseline: alwaysinline musl-port wrapper | P3: `rank.reg = zext(load(s[0]))` with `select(slen > 0, rank, 0)` guard (no OOB on empty); `useRuntimeCall("pli_rank")` gate; IR golden `w4c_codepoint_llvm.check` (CHECK-NOT pli_rank, CHECK rank.byte), `w4c_codepoint_rt.check` (CHECK pli_rank, CHECK-NOT rank.byte); 524/524 tests pass | n/a (direct LLVM) | **llvm** (default flip) | retained |
+| collate | pli_collate | willreturn, alwaysinline; argmem readwrite | n/a | n mod 256, blank-pad tail, n=0 → blank fill | tests/builtins/string.pli, tests/core/w4c_codepoint.pli | tests/core/w4c_codepoint.pli | baseline: alwaysinline musl-port wrapper | P3: `store(byte(n & 0xFF), dst[0]) + memset(dst+1, ' ', dstcap-1)`; `useRuntimeCall("pli_collate")` gate; IR golden tests pass | n/a (direct LLVM) | **llvm** (default flip) | retained |
+| isochar | pli_isochar | willreturn, alwaysinline; argmem readwrite | n/a | lo>hi → zero fill + blank-pad, range > dstcap → clip | tests/core/w4c_codepoint.pli | tests/core/w4c_codepoint.pli | baseline: alwaysinline musl-port wrapper | P3: counted loop `dst[i] = (char)(lo+i)` for `i in [0, min(n,dstlen))`, blank-pad tail; `useRuntimeCall("pli_isochar")` gate; IR golden tests pass | n/a (direct LLVM) | **llvm** (default flip) | retained |
+
+**W4c evidence**: RANK/COLLATE/ISOCHAR are simple code-point operations migrated to direct LLVM. RANK loads the first byte and zero-extends with a length guard to avoid OOB on empty strings. COLLATE stores the truncated byte and uses `llvm.memset` for the blank tail. ISOCHAR uses a counted loop with a PHI counter, matching the runtime's `(lo<=hi) ? (hi-lo+1) : 0` range and clipping to dstcap. Witness `w4c_codepoint.pli` (RANK on 'A', 'a', empty; COLLATE for 65 and 321; ISOCHAR(65,67)) passes in both modes; IR golden tests `w4c_codepoint_{llvm,rt}.{pli,flags,check}` pass. Full suite: 524 passed, 0 failed.
+
 ## W5 — reductions, checked arithmetic, decimal scale, BIT ops (direct LLVM)
 
 | operation | runtime symbol | purity/effects | overlap-safe | edge cases | existing tests | witness benchmark | runtime-bitcode result | LLVM result | MLIR admission | current default | removal |

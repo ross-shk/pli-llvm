@@ -591,36 +591,40 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"repeat", true},
       {"translate", true},
       {"trim", true},
-       // P5 flip: W4 scalar math and conversions default to LLVM
-       {"fixed_of_float", true},
-       {"fixed_of_char", true},
-       {"char_of_fixed", true},
-       {"char_of_float", true},
-       // P5 flip: W4b math transcendentals default to LLVM (intrinsics vs pli_* musl-port)
-       {"pli_sqrt", true},
-       {"pli_exp", true},
-       {"pli_log", true},
-       {"pli_sin", true},
-       {"pli_cos", true},
-       {"pli_tan", true},
-       {"pli_log2", true},
-       {"pli_log10", true},
-       {"pli_atan", true},
-       {"pli_sinh", true},
-       {"pli_cosh", true},
-       {"pli_tanh", true},
-       {"pli_atanh", true},
-       {"pli_erf", true},
-       {"pli_erfc", true},
-       {"pli_sind", true},
-       {"pli_cosd", true},
-       {"pli_tand", true},
-       {"pli_atand", true},
-       {"pli_asin", true},
-       {"pli_acos", true},
-       {"pli_cbrt", true},
-       {"pli_atan2", true},
-   };
+      // P5 flip: W4 scalar math and conversions default to LLVM
+      {"fixed_of_float", true},
+      {"fixed_of_char", true},
+      {"char_of_fixed", true},
+      {"char_of_float", true},
+      // P5 flip: W4b math transcendentals default to LLVM (intrinsics vs pli_* musl-port)
+      {"pli_sqrt", true},
+      {"pli_exp", true},
+      {"pli_log", true},
+      {"pli_sin", true},
+      {"pli_cos", true},
+      {"pli_tan", true},
+      {"pli_log2", true},
+      {"pli_log10", true},
+      {"pli_atan", true},
+      {"pli_sinh", true},
+      {"pli_cosh", true},
+      {"pli_tanh", true},
+      {"pli_atanh", true},
+      {"pli_erf", true},
+      {"pli_erfc", true},
+      {"pli_sind", true},
+      {"pli_cosd", true},
+      {"pli_tand", true},
+      {"pli_atand", true},
+      {"pli_asin", true},
+      {"pli_acos", true},
+      {"pli_cbrt", true},
+      {"pli_atan2", true},
+      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
+      {"pli_rank", true},
+      {"pli_collate", true},
+      {"pli_isochar", true},
+  };
   return table;
 }
 
@@ -651,36 +655,40 @@ static const std::set<std::string>& kLLVMLowerings() {
       "repeat",
       "translate",
       "trim",
-       // W4 scalar conversions
-       "fixed_of_float",
-       "fixed_of_char",
-       "char_of_fixed",
-       "char_of_float",
-       // W4b math transcendentals (intrinsics)
-       "pli_sqrt",
-       "pli_exp",
-       "pli_log",
-       "pli_sin",
-       "pli_cos",
-       "pli_tan",
-       "pli_log2",
-       "pli_log10",
-       "pli_atan",
-       "pli_sinh",
-       "pli_cosh",
-       "pli_tanh",
-       "pli_atanh",
-       "pli_erf",
-       "pli_erfc",
-       "pli_sind",
-       "pli_cosd",
-       "pli_tand",
-       "pli_atand",
-       "pli_asin",
-       "pli_acos",
-       "pli_cbrt",
-       "pli_atan2",
-   };
+      // W4 scalar conversions
+      "fixed_of_float",
+      "fixed_of_char",
+      "char_of_fixed",
+      "char_of_float",
+      // W4b math transcendentals (intrinsics)
+      "pli_sqrt",
+      "pli_exp",
+      "pli_log",
+      "pli_sin",
+      "pli_cos",
+      "pli_tan",
+      "pli_log2",
+      "pli_log10",
+      "pli_atan",
+      "pli_sinh",
+      "pli_cosh",
+      "pli_tanh",
+      "pli_atanh",
+      "pli_erf",
+      "pli_erfc",
+      "pli_sind",
+      "pli_cosd",
+      "pli_tand",
+      "pli_atand",
+      "pli_asin",
+      "pli_acos",
+      "pli_cbrt",
+      "pli_atan2",
+      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
+      "pli_rank",
+      "pli_collate",
+      "pli_isochar",
+  };
   return table;
 }
 
@@ -9171,12 +9179,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
-   // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
-   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
-   // COSD, TAND, ATAND. All variants map to LLVM intrinsics on LLVM 22+
-   // (intrinsicFn) with a pli_* musl-port fallback for degree variants.
-   // W4b: useRuntimeCall gates intrinsics vs pli_* so --experimental-lowering=runtime
-   // forces runtime calls for differential testing.
+  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
+  // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
+  // COSD, TAND, ATAND. All variants map to LLVM intrinsics on LLVM 22+
+  // (intrinsicFn) with a pli_* musl-port fallback for degree variants.
+  // W4b: useRuntimeCall gates intrinsics vs pli_* so --experimental-lowering=runtime
+  // forces runtime calls for differential testing.
   if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
       e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
       e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
@@ -9193,41 +9201,41 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                                             "COS",   "TAN",  "LOG2",  "LOG10", "ATAN", "SINH",
                                             "COSH",  "TANH", "ATANH", "ERF",   "ERFC", "SIND",
                                             "COSD",  "TAND", "ATAND", "ASIN",  "ACOS", "CBRT"};
-     static const char* const kLLVMIntrinsic[] = {
-         "llvm.floor.f64", "llvm.ceil.f64", "llvm.sqrt.f64", "llvm.exp.f64",  "llvm.log.f64",
-         "llvm.sin.f64",   "llvm.cos.f64",  "llvm.tan.f64",  "llvm.log2.f64", "llvm.log10.f64",
-         "llvm.atan.f64",  "llvm.sinh.f64", "llvm.cosh.f64", "llvm.tanh.f64", nullptr,
-         nullptr,          nullptr,         nullptr,         nullptr,         nullptr,
-         nullptr,          "llvm.asin.f64", "llvm.acos.f64", nullptr};
+    static const char* const kLLVMIntrinsic[] = {
+        "llvm.floor.f64", "llvm.ceil.f64", "llvm.sqrt.f64", "llvm.exp.f64",  "llvm.log.f64",
+        "llvm.sin.f64",   "llvm.cos.f64",  "llvm.tan.f64",  "llvm.log2.f64", "llvm.log10.f64",
+        "llvm.atan.f64",  "llvm.sinh.f64", "llvm.cosh.f64", "llvm.tanh.f64", nullptr,
+        nullptr,          nullptr,         nullptr,         nullptr,         nullptr,
+        nullptr,          "llvm.asin.f64", "llvm.acos.f64", nullptr};
     int ix = 0;
     for (int i = 0; i < 24; ++i)
       if (e->name == kMathName[i])
         ix = i;
-     v.ty = e->ty;
-     const char* intrinsic = kLLVMIntrinsic[ix];
-     bool useRT = useRuntimeCall(kMathFn[ix]);
-     if (intrinsic && !useRT)
-       v.reg = b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x.reg},
-                             "math");
-     else
-       v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
-     result = v;
-     return true;
+    v.ty = e->ty;
+    const char* intrinsic = kLLVMIntrinsic[ix];
+    bool useRT = useRuntimeCall(kMathFn[ix]);
+    if (intrinsic && !useRT)
+      v.reg = b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x.reg},
+                            "math");
+    else
+      v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
+    result = v;
+    return true;
   }
-   // ATAN2(y, x) (CM5): both arguments convert to FLOAT, C argument order.
-   if (e->name == "ATAN2") {
-     Val y = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
-     Val x = convert(emitExpr(e->args[1].get()), Type::flt(6), e->loc);
-     v.ty = e->ty;
-     if (useRuntimeCall("pli_atan2"))
-       v.reg = b_.CreateCall(runtimeFn("pli_atan2"), {y.reg, x.reg}, "atan2");
-     else
-       v.reg = b_.CreateCall(intrinsicFn("llvm.atan2.f64", b_.getDoubleTy(),
-                                        {b_.getDoubleTy(), b_.getDoubleTy()}),
-                            {y.reg, x.reg}, "atan2");
-     result = v;
-     return true;
-   }
+  // ATAN2(y, x) (CM5): both arguments convert to FLOAT, C argument order.
+  if (e->name == "ATAN2") {
+    Val y = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
+    Val x = convert(emitExpr(e->args[1].get()), Type::flt(6), e->loc);
+    v.ty = e->ty;
+    if (useRuntimeCall("pli_atan2"))
+      v.reg = b_.CreateCall(runtimeFn("pli_atan2"), {y.reg, x.reg}, "atan2");
+    else
+      v.reg = b_.CreateCall(
+          intrinsicFn("llvm.atan2.f64", b_.getDoubleTy(), {b_.getDoubleTy(), b_.getDoubleTy()}),
+          {y.reg, x.reg}, "atan2");
+    result = v;
+    return true;
+  }
   // Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1). A complex
   // value is an {double,double} struct held in Val::cpx. COMPLEX builds one
   // from two FLOAT parts; REAL/IMAG extract a part as a FLOAT; CONJG negates
@@ -9587,18 +9595,42 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // RANK(c) (rule (123)): code point of the first character, 0 when empty.
   if (e->name == "RANK") {
     Val s = emitExpr(e->args[0].get());
-    llvm::Value* r = b_.CreateCall(runtimeFn("pli_rank"), {s.ptr, s.len});
     v.ty = e->ty;
-    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "rnk32");
+    if (useRuntimeCall("pli_rank")) {
+      llvm::Value* r = b_.CreateCall(runtimeFn("pli_rank"), {s.ptr, s.len});
+      v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "rnk32");
+    } else {
+      // Direct LLVM: if slen > 0, load and zext the first byte; else 0.
+      llvm::Value* isNonempty = b_.CreateICmpUGT(s.len, i64(0), "rank.nonempty");
+      llvm::Value* zero = b_.CreateSub(s.len, s.len, "rank.zero"); // constant 0
+      llvm::Value* first = b_.CreateLoad(b_.getInt8Ty(), s.ptr, "rank.byte");
+      llvm::Value* rankval = b_.CreateZExt(first, b_.getInt64Ty(), "rank.val");
+      llvm::Value* result64 = b_.CreateSelect(isNonempty, rankval, zero, "rank.sel");
+      v.reg = b_.CreateTrunc(result64, b_.getInt32Ty(), "rnk32");
+    }
     result = v;
     return true;
   }
+  // COLLATE(n) (rule (123)): char with code (n mod 256), blank-pad the tail.
   if (e->name == "COLLATE") {
     Val n = emitExpr(e->args[0].get());
     Val dst = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_collate"), {dst.ptr, dst.len, toI64(n)});
+    v.ty = e->ty;
+    if (useRuntimeCall("pli_collate")) {
+      b_.CreateCall(runtimeFn("pli_collate"), {dst.ptr, dst.len, toI64(n)});
+    } else {
+      // Direct LLVM: store byte (n & 0xFF) at dst[0], memset rest with spaces.
+      llvm::Value* byte = b_.CreateTrunc(toI64(n), b_.getInt8Ty(), "collate.byte");
+      b_.CreateStore(byte, dst.ptr);
+      if (e->ty.len > 1) {
+        llvm::Value* tailPtr = b_.CreateGEP(b_.getInt8Ty(), dst.ptr, i64(1), "collate.tail");
+        llvm::Value* tailLen = i64(e->ty.len - 1);
+        b_.CreateMemSet(tailPtr, b_.getInt8(' '), tailLen, llvm::MaybeAlign(), false);
+      }
+    }
     dst.len = i64(e->ty.len);
     result = dst;
     return true;
@@ -10054,9 +10086,50 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val lo = emitExpr(e->args[0].get());
     Val hi = emitExpr(e->args[1].get());
     Val out = charTemp(e->ty.len);
-    b_.CreateCall(runtimeFn("pli_isochar"),
-                  {out.ptr, out.len, b_.CreateTrunc(toI64(lo), b_.getInt32Ty(), "isochar.lo"),
-                   b_.CreateTrunc(toI64(hi), b_.getInt32Ty(), "isochar.hi")});
+    v.ty = e->ty;
+    if (useRuntimeCall("pli_isochar")) {
+      b_.CreateCall(runtimeFn("pli_isochar"),
+                    {out.ptr, out.len, b_.CreateTrunc(toI64(lo), b_.getInt32Ty(), "isochar.lo"),
+                     b_.CreateTrunc(toI64(hi), b_.getInt32Ty(), "isochar.hi")});
+    } else {
+      // Direct LLVM: fill dst[i] = (char)(lo + i) for i in [0, min(n, dstlen)),
+      // blank-pad the tail. n = (lo <= hi) ? (hi - lo + 1) : 0.
+      llvm::Value* lo64 = toI64(lo);
+      llvm::Value* hi64 = toI64(hi);
+      llvm::Value* loLeHi = b_.CreateICmpSLE(lo64, hi64, "isochar.lo_le_hi");
+      llvm::Value* nRange = b_.CreateSub(hi64, lo64, "isochar.n_range");
+      nRange = b_.CreateAdd(nRange, i64(1), "isochar.n");
+      llvm::Value* zero = b_.CreateSub(lo64, lo64, "isochar.zero"); // 0
+      llvm::Value* n = b_.CreateSelect(loLeHi, nRange, zero, "isochar.n_sel");
+      llvm::Value* dstLen = i64(e->ty.len);
+      llvm::Value* nClamped =
+          b_.CreateSelect(b_.CreateICmpULT(n, dstLen), n, dstLen, "isochar.n_clamped");
+      // Scalar loop: for i in [0, nClamped) store (char)(lo + i).
+      llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+      llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "isochar.loop", curFn_);
+      llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(ctx_, "isochar.body", curFn_);
+      llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(ctx_, "isochar.after", curFn_);
+      b_.CreateBr(loopBB);
+      b_.SetInsertPoint(loopBB);
+      llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "isochar.i");
+      iPhi->addIncoming(i64(0), entryBB);
+      llvm::Value* cond = b_.CreateICmpULT(iPhi, nClamped, "isochar.cond");
+      b_.CreateCondBr(cond, bodyBB, afterBB);
+      b_.SetInsertPoint(bodyBB);
+      llvm::Value* code = b_.CreateAdd(lo64, iPhi, "isochar.code");
+      llvm::Value* c = b_.CreateTrunc(code, b_.getInt8Ty(), "isochar.char");
+      llvm::Value* elemPtr = b_.CreateGEP(b_.getInt8Ty(), out.ptr, iPhi, "isochar.ptr");
+      b_.CreateStore(c, elemPtr);
+      iPhi->addIncoming(b_.CreateAdd(iPhi, i64(1), "isochar.inc"), bodyBB);
+      b_.CreateBr(loopBB);
+      b_.SetInsertPoint(afterBB);
+      // Blank-pad the tail (if any).
+      if (e->ty.len > 0) {
+        llvm::Value* tailPtr = b_.CreateGEP(b_.getInt8Ty(), out.ptr, nClamped, "isochar.pad");
+        llvm::Value* padLen = b_.CreateSub(dstLen, nClamped, "isochar.padlen");
+        b_.CreateMemSet(tailPtr, b_.getInt8(' '), padLen, llvm::MaybeAlign(), false);
+      }
+    }
     out.len = i64(e->ty.len);
     result = out;
     return true;
