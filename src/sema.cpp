@@ -4595,7 +4595,8 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
     if (!e)
       return;
     if ((e->kind == Expr::Call) &&
-        (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL")) {
+         (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL" ||
+          e->name == "EVERY" || e->name == "SOME")) {
       for (auto& pr : pendingReduces_)
         if (pr.call == e && pr.owner == p) {
           found.push_back(e);
@@ -5344,14 +5345,14 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   }
   // DATE/TIME built-ins (M2): date() -> CHARACTER(8) 'YYYYMMDD', time()
   // -> CHARACTER(6) 'HHMMSS'; both take no arguments.
-  if (e->name == "DATE" || e->name == "TIME") {
+  if (e->name == "DATE" || e->name == "TIME" || e->name == "DATETIME") {
     if (!e->args.empty()) {
-      d_.error(e->loc, std::string(e->name == "DATE" ? "DATE" : "TIME") + " takes no arguments",
-               "(123)");
+      d_.error(e->loc, std::string(e->name == "DATE" ? "DATE" : e->name == "TIME" ? "TIME" : "DATETIME") +
+               " takes no arguments", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
-    e->ty = Type::chr(e->name == "DATE" ? 8 : 6);
+    e->ty = Type::chr(e->name == "DATE" ? 8 : e->name == "TIME" ? 6 : 14);
     return true;
   }
   // SYSPARM built-in (rule (123)): sysparm() -> CHARACTER(n) holding the
@@ -5623,15 +5624,19 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     return true;
   }
   // Array reduction built-ins (M2, rule (123)): SUM/PROD reduce a numeric
-  // array to its element type; ANY/ALL reduce a BIT array to BIT(1). Each
-  // takes a single unsubscripted array argument in this stage.
-  if (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL") {
+  // array to its element type; ANY/ALL/EVERY/SOME reduce a BIT array or BIT
+  // expression to BIT(1). EVERY ≡ ALL, SOME ≡ ANY (IBM PL/I).
+  if (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL" ||
+      e->name == "EVERY" || e->name == "SOME") {
     if (e->args.size() != 1) {
       d_.error(e->loc, e->name + " takes one array argument in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
     Expr* a = e->args[0].get();
+    const bool isAllAny = (e->name == "ALL" || e->name == "ANY");
+    const bool isEverySome = (e->name == "EVERY" || e->name == "SOME");
+    const bool isBitReduce = isAllAny || isEverySome;
     // An unsubscripted array reference, including a qualified structure member
     // array (S.V); a->ty is the resolved array reference type.
     bool isArr = a->kind == Expr::VarRef && a->sym && a->ty.isArray();
@@ -5644,7 +5649,7 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
         e->ty = Type::voidTy();
         return true;
       }
-      if (e->name == "ANY" || e->name == "ALL") {
+      if (isBitReduce) {
         if (!el.isBit()) {
           d_.error(a->loc, e->name + " requires a BIT array in this stage", "(123)");
           e->ty = Type::voidTy();
@@ -5666,18 +5671,18 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     // direct assignment, diagnosed at the backstop anywhere else.
     Type shape;
     if (reduceArgShapeOk(a, shape)) {
-      if ((e->name == "ANY" || e->name == "ALL") && !a->ty.isBit()) {
+      if (isBitReduce && !a->ty.isBit()) {
         d_.error(a->loc, e->name + " requires a BIT expression in this stage", "(123)");
         e->ty = Type::voidTy();
         return true;
       }
-      if ((e->name == "SUM" || e->name == "PROD") && (a->ty.isChar() || !a->ty.isNumeric())) {
+      if (!isBitReduce && (a->ty.isChar() || !a->ty.isNumeric())) {
         d_.error(a->loc, e->name + " requires a numeric expression in this stage", "(123)");
         e->ty = Type::voidTy();
         return true;
       }
       pendingReduces_.push_back({e, p});
-      e->ty = (e->name == "ANY" || e->name == "ALL") ? Type::bit(1) : a->ty;
+      e->ty = isBitReduce ? Type::bit(1) : a->ty;
       return true;
     }
     d_.error(a->loc, e->name + " argument must be an array in this stage", "(123)");
@@ -5767,6 +5772,17 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::fixedBin(15, 0);
     return true;
   }
+  // ONFILE (rule (123), Appendix 1): ONFILE() -> CHARACTER(32) naming the file
+  // of the current I/O condition (blank when none is active). Takes none.
+  if (e->name == "ONFILE") {
+    if (!e->args.empty()) {
+      d_.error(e->loc, "ONFILE takes no arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::chr(32);
+    return true;
+  }
   // CURRENTSIZE (rule (123), Appendix 1): CURRENTSIZE(x) -> the storage size
   // (in bytes/units) currently allocated to x. x may be any variable.
   if (e->name == "CURRENTSIZE") {
@@ -5819,6 +5835,72 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // IDENTICAL (rule (123), Appendix 1): IDENTICAL(a, b) -> BIT(1) = 1 if a and
+  // b have identical types and values (element-wise for aggregates), 0 otherwise.
+  if (e->name == "IDENTICAL") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "IDENTICAL takes two arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    // Unions overlay members with no active-member tracking in this stage;
+    // VARYING strings compare by live length and dynamic member arrays by
+    // live bounds, neither of which the lowering resolves below the top
+    // level; arrays of aggregates carry padding with no value semantics.
+    // Diagnose any of those shapes rather than miscompare.
+    std::function<bool(const Type&)> hasUnion = [&](const Type& t) -> bool {
+      if (t.isUnion)
+        return true;
+      if (t.isArray())
+        return hasUnion(t.elementType());
+      if (t.isStruct())
+        for (auto& m : t.members)
+          if (hasUnion(m->ty))
+            return true;
+      return false;
+    };
+    // True for aggregate shapes below the top level that the struct folder
+    // cannot compare: dynamic or aggregate-element arrays, and VARYING
+    // members (top-level dynamic arrays pair live bounds directly).
+    std::function<bool(const Type&, int)> badNested = [&](const Type& t, int depth) -> bool {
+      if (t.isArray()) {
+        const Type& el = t.elementType();
+        if (el.isStruct() || el.isArea() || el.isUnion || el.varying)
+          return true;
+        return depth > 0 && t.isDynamic();
+      }
+      if (t.isStruct())
+        for (auto& m : t.members)
+          if (m->ty.varying || badNested(m->ty, depth + 1))
+            return true;
+      return false;
+    };
+    for (auto& arg : e->args) {
+      if (hasUnion(arg->ty)) {
+        d_.error(arg->loc, "IDENTICAL over unions is not implemented in this stage",
+                 "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      if (badNested(arg->ty, 0)) {
+        d_.error(arg->loc, "IDENTICAL over this aggregate shape is not implemented in this stage",
+                 "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      // An element of an array of aggregates (arr(i) holding a structure)
+      // has the same padding problem one level down.
+      if (arg->kind == Expr::Subscript && arg->sym && arg->sym->ty.isArray() &&
+          arg->ty.isStruct()) {
+        d_.error(arg->loc, "IDENTICAL over arrays of aggregates is not implemented in this stage",
+                 "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+    }
+    e->ty = Type::bit(1);
     return true;
   }
   // UNSPEC (rule (123), ADR-196): UNSPEC(x) returns the raw storage of x as a

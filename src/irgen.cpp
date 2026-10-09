@@ -9560,9 +9560,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = dst;
     return true;
   }
-  if (e->name == "DATE" || e->name == "TIME") {
+  if (e->name == "DATE" || e->name == "TIME" || e->name == "DATETIME") {
     Val out = charTemp(e->ty.len);
-    std::string fn = e->name == "DATE" ? "pli_date" : "pli_time";
+    std::string fn = e->name == "DATE" ? "pli_date"
+                    : e->name == "TIME" ? "pli_time" : "pli_datetime";
     b_.CreateCall(runtimeFn(fn), {out.ptr, out.len});
     out.len = i64(e->ty.len);
     result = out;
@@ -9874,10 +9875,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   // Array reduction built-ins (M2, rule (123)): walk the whole single-axis
-  // extent and reduce — SUM/PROD over numeric elements, ANY/ALL over BIT
-  // elements. The accumulator and counter live in entry allocas so they
-  // survive the emitted loop's basic blocks.
-  if (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL") {
+  // extent and reduce — SUM/PROD over numeric elements, ANY/ALL/EVERY/SOME over
+  // BIT elements. The accumulator and counter live in entry allocas so they
+  // survive the emitted loop's basic blocks. EVERY ≡ ALL, SOME ≡ ANY.
+  if (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL" ||
+      e->name == "EVERY" || e->name == "SOME") {
     HExpr* a = e->args[0].get();
     if (!a->sym) {
       v.ty = e->ty;
@@ -9890,7 +9892,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     const bool isMember = !a->memberPath.empty();
     const Type& arr = isMember ? memberType(a->sym, a->memberPath) : a->sym->ty;
     const Type& el = arr.elementType();
-    const bool isBit = e->name == "ANY" || e->name == "ALL";
+    const bool isBit = e->name == "ANY" || e->name == "ALL" ||
+                       e->name == "EVERY" || e->name == "SOME";
     const bool isFloat = !isBit && el.k == TK::Float;
     llvm::Value *ub = nullptr, *lb = nullptr;
     llvm::Value* base =
@@ -9934,14 +9937,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     std::string id = std::to_string(n_++);
     // Accumulator identity: 0 for SUM, 1 for PROD, false for ANY, true for ALL.
     llvm::Value* accInit;
-    if (e->name == "SUM")
+     if (e->name == "SUM")
       accInit = llvm::Constant::getNullValue(llvmTy(e->ty));
     else if (e->name == "PROD")
       accInit = isFloat ? flt(1.0) : llvm::ConstantInt::get(llvmTy(e->ty), 1, true);
-    else if (e->name == "ANY")
+    else if (e->name == "ANY" || e->name == "SOME")
       accInit = b_.getInt1(false);
     else
-      accInit = b_.getInt1(true); // ALL
+      accInit = b_.getInt1(true); // ALL or EVERY
     llvm::AllocaInst* acc = entryAlloca(isBit ? b_.getInt1Ty() : llvmTy(e->ty), "rd.acc." + id);
     b_.CreateStore(accInit, acc);
     llvm::AllocaInst* ctr = entryAlloca(b_.getInt64Ty(), "rd.i." + id);
@@ -9973,10 +9976,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       nv = isFloat ? b_.CreateFAdd(av, ev.reg, "rds") : b_.CreateAdd(av, ev.reg, "rds");
     else if (e->name == "PROD")
       nv = isFloat ? b_.CreateFMul(av, ev.reg, "rds") : b_.CreateMul(av, ev.reg, "rds");
-    else if (e->name == "ANY")
+    else if (e->name == "ANY" || e->name == "SOME")
       nv = b_.CreateOr(av, ev.reg, "rdo");
     else
-      nv = b_.CreateAnd(av, ev.reg, "rda");
+      nv = b_.CreateAnd(av, ev.reg, "rda"); // ALL or EVERY
     b_.CreateStore(nv, acc);
     branch(stepL);
     startBlock(stepL);
@@ -10047,6 +10050,278 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // pli_on_source returns i32 (ABI), FIXED BIN(15) is i32 — types match.
     v.reg = b_.CreateCall(runtimeFn("pli_on_source"), {}, "onsrc");
     result = v;
+    return true;
+  }
+  // IDENTICAL (rule (123), ADR-199): IDENTICAL(a, b) -> BIT(1); 1 when a and b
+  // hold identical values (element-wise for arrays, member-wise for
+  // structures so padding bytes never participate), 0 otherwise. Static type
+  // identity is required first; aggregates AND-fold into an i1 accumulator in
+  // direct LLVM loops, like the reduction loop above but over pairs.
+  if (e->name == "IDENTICAL") {
+    HExpr* A = e->args[0].get();
+    HExpr* B = e->args[1].get();
+    // Differing static types are never identical (rule (123) Appendix 1).
+    if (A->ty != B->ty) {
+      v.ty = e->ty;
+      v.reg = b_.getInt1(false);
+      result = v;
+      return true;
+    }
+    // One element-pair comparison between two addresses of element type el:
+    // character elements compare with blank extension (rule (117)), wide BIT
+    // byte by byte (packed big-endian), COMPLEX part-wise, FLOAT ordered.
+    auto eqElem = [&](llvm::Value* epA, llvm::Value* epB, const Type& el,
+                      bool packA, bool packB) -> llvm::Value* {
+      if (el.isChar()) {
+        llvm::Value* spA =
+            b_.CreateBitCast(epA, llvm::PointerType::get(ctx_, 0), "ideq.ca");
+        llvm::Value* spB =
+            b_.CreateBitCast(epB, llvm::PointerType::get(ctx_, 0), "ideq.cb");
+        return b_.CreateICmpEQ(emitCmpChar(spA, i64(el.len), spB, i64(el.len)), i32(0),
+                               "ideq.c");
+      }
+      llvm::LoadInst* rlA = b_.CreateLoad(llvmTy(el), epA, "ideql.a");
+      llvm::LoadInst* rlB = b_.CreateLoad(llvmTy(el), epB, "ideql.b");
+      if (packA)
+        rlA->setAlignment(llvm::Align(1));
+      if (packB)
+        rlB->setAlignment(llvm::Align(1));
+      if (el.isBit() && el.len == 1)
+        return b_.CreateICmpEQ(b_.CreateTrunc(rlA, b_.getInt1Ty(), "ideq.a1"),
+                               b_.CreateTrunc(rlB, b_.getInt1Ty(), "ideq.b1"), "ideq.b");
+      if (el.isBit()) {
+        llvm::Value* w = b_.getInt1(true);
+        for (int k = 0; k < bitBytes(el.len); ++k)
+          w = b_.CreateAnd(w, b_.CreateICmpEQ(b_.CreateExtractValue(rlA, (unsigned)k, "ideq.ax"),
+                                             b_.CreateExtractValue(rlB, (unsigned)k, "ideq.bx"),
+                                             "ideq.bk"),
+                           "ideq.ba");
+        return w;
+      }
+      if (el.isComplex()) {
+        llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
+                                        b_.CreateExtractValue(rlA, 0, "ideq.ar"),
+                                        b_.CreateExtractValue(rlB, 0, "ideq.br"), "ideq.er");
+        llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
+                                        b_.CreateExtractValue(rlA, 1, "ideq.ai"),
+                                        b_.CreateExtractValue(rlB, 1, "ideq.bi"), "ideq.ei");
+        return b_.CreateAnd(er, ei, "ideq.cx");
+      }
+      if (el.k == TK::Float)
+        return b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, rlA, rlB, "ideq.f");
+      return b_.CreateICmpEQ(rlA, rlB, "ideq.i");
+    };
+    // A counted 0..bound loop running body(c) per index (rules (12),(13)).
+    auto countedLoop = [&](llvm::Value* bound, const std::string& tag, auto&& body) {
+      std::string lid = std::to_string(n_++);
+      llvm::AllocaInst* ctr = entryAlloca(b_.getInt64Ty(), tag + ".i." + lid);
+      b_.CreateStore(i64(0), ctr);
+      llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, tag + ".cond." + lid, curFn_);
+      llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, tag + ".body." + lid, curFn_);
+      llvm::BasicBlock* stepL = llvm::BasicBlock::Create(ctx_, tag + ".step." + lid, curFn_);
+      llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, tag + ".end." + lid, curFn_);
+      branch(condL);
+      startBlock(condL);
+      llvm::Value* c = b_.CreateLoad(b_.getInt64Ty(), ctr, tag + "c");
+      b_.CreateCondBr(b_.CreateICmpSLT(c, bound, tag + "cmp"), bodyL, endL);
+      startBlock(bodyL);
+      body(c);
+      branch(stepL);
+      startBlock(stepL);
+      b_.CreateStore(b_.CreateAdd(c, i64(1), tag + "inc"), ctr);
+      branch(condL);
+      startBlock(endL);
+    };
+    // Aggregate-array case: both sides unsubscripted arrays. The fold starts
+    // from the size-equality bit over min(nA, nB) elements, so a live-bound
+    // mismatch on dynamic arrays yields false without overrunning (12),(13).
+    if (A->ty.isArray() && B->ty.isArray()) {
+      if (!A->sym || !B->sym) {
+        v.ty = e->ty;
+        v.reg = b_.getInt1(false);
+        result = v;
+        return true;
+      }
+      const bool mA = !A->memberPath.empty();
+      const bool mB = !B->memberPath.empty();
+      const Type& arrA = mA ? memberType(A->sym, A->memberPath) : A->sym->ty;
+      const Type& arrB = mB ? memberType(B->sym, B->memberPath) : B->sym->ty;
+      const Type& el = arrA.elementType();
+      // Resolve one side's storage base, element count, and layout.
+      auto side = [&](HExpr* X, const Type& arr, bool isMember, llvm::Value*& base,
+                      llvm::Value*& n, llvm::Type*& arrTy, bool& dyn, bool& packed) {
+        llvm::Value *ub = nullptr, *lb = nullptr;
+        base = isMember ? (arr.isDynamic() ? dynamicMemberBase(X->sym, X->memberPath, e->loc, ub, lb)
+                                           : memberAddr(X->sym, X->memberPath, e->loc))
+                        : addressOf(X->sym);
+        dyn = arr.isArray() && arr.isDynamic();
+        packed = isMember && !dyn && packedMemberPath(X->sym->ty, X->memberPath);
+        arrTy = nullptr;
+        if (dyn) {
+          const Dim& d0 = arr.dims[0];
+          llvm::Value *mub = nullptr, *mlb = nullptr;
+          if (isMember) {
+            auto it = memberDyn_.find(MemberDyn{X->sym, X->memberPath});
+            mub = it != memberDyn_.end() ? it->second.ub : nullptr;
+            mlb = it != memberDyn_.end() ? it->second.lb : nullptr;
+          }
+          llvm::Value* rlb = d0.lbDyn ? (isMember ? (mlb ? mlb : i64(d0.lb))
+                                                   : (dynLb_.count(X->sym) ? dynLb_[X->sym] : i64(d0.lb)))
+                                      : i64(d0.lb);
+          llvm::Value* rub = isMember ? (mub ? mub : i64(d0.ub))
+                                      : (dynUb_.count(X->sym) ? dynUb_[X->sym] : i64(d0.ub));
+          n = b_.CreateAdd(b_.CreateSub(rub, rlb, "idn1"), i64(1), "idn");
+          long long rest = 1;
+          for (size_t k = 1; k < arr.dims.size(); ++k)
+            rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+          if (rest != 1)
+            n = b_.CreateMul(n, i64(rest), "idnall");
+        } else {
+          n = i64(arrayExtent(arr));
+          arrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(arr));
+        }
+      };
+      llvm::Value *baseA, *baseB, *nA, *nB;
+      llvm::Type *arrTyA, *arrTyB;
+      bool dynA, dynB, packA, packB;
+      side(A, arrA, mA, baseA, nA, arrTyA, dynA, packA);
+      side(B, arrB, mB, baseB, nB, arrTyB, dynB, packB);
+      std::string id = std::to_string(n_++);
+      llvm::Value* sizeEq = b_.CreateICmpEQ(nA, nB, "ideq.n");
+      llvm::Value* bound =
+          b_.CreateSelect(b_.CreateICmpSLT(nA, nB, "ideq.min"), nA, nB, "ideq.b");
+      llvm::AllocaInst* acc = entryAlloca(b_.getInt1Ty(), "ideq.acc." + id);
+      b_.CreateStore(sizeEq, acc);
+      countedLoop(bound, "ideq", [&](llvm::Value* c) {
+        llvm::Value* epA = dynA ? b_.CreateInBoundsGEP(llvmTy(el), baseA, {c}, "ideqp.a")
+                                : b_.CreateInBoundsGEP(arrTyA, baseA, {i64(0), c}, "ideqp.a");
+        llvm::Value* epB = dynB ? b_.CreateInBoundsGEP(llvmTy(el), baseB, {c}, "ideqp.b")
+                                : b_.CreateInBoundsGEP(arrTyB, baseB, {i64(0), c}, "ideqp.b");
+        llvm::Value* eq = eqElem(epA, epB, el, packA, packB);
+        b_.CreateStore(b_.CreateAnd(b_.CreateLoad(b_.getInt1Ty(), acc, "ideqacc"), eq, "ideq.a"),
+                       acc);
+      });
+      v.ty = e->ty;
+      v.reg = b_.CreateLoad(b_.getInt1Ty(), acc, "ideqres");
+      result = v;
+      return true;
+    }
+    // Structure case: both sides whole structures of one static type; fold an
+    // AND over member values, never padding bytes (which carry no value).
+    // Unions and dynamic/aggregate member arrays are diagnosed in sema.
+    if (A->ty.isStruct() && !A->ty.isArray()) {
+      Val a = emitExpr(A);
+      Val b = emitExpr(B);
+      if (!a.ptr || !b.ptr) {
+        v.ty = e->ty;
+        v.reg = b_.getInt1(false);
+        result = v;
+        return true;
+      }
+      const Type& rootA = A->sym ? A->sym->ty : A->ty;
+      const Type& rootB = B->sym ? B->sym->ty : B->ty;
+      std::string id = std::to_string(n_++);
+      llvm::AllocaInst* acc = entryAlloca(b_.getInt1Ty(), "ideq.sacc." + id);
+      b_.CreateStore(b_.getInt1(true), acc);
+      // Recursive member fold; paths stay absolute from each side's root so
+      // packed (UNALIGNED) loads use align 1 (ADR-169).
+      auto fold = [&](auto&& self, llvm::Value* pA, llvm::Value* pB, const Type& ty,
+                      std::vector<unsigned>& pathA,
+                      std::vector<unsigned>& pathB) -> void {
+        for (unsigned i = 0; i < ty.members.size(); ++i) {
+          const Type& mt = ty.members[i]->ty;
+          llvm::Value* fA = structMemberGEP(ty, pA, i, "ideq.fa");
+          llvm::Value* fB = structMemberGEP(ty, pB, i, "ideq.fb");
+          pathA.push_back(i);
+          pathB.push_back(i);
+          if (mt.isStruct()) {
+            self(self, fA, fB, mt, pathA, pathB);
+          } else if (mt.isArray()) {
+            // Fixed array members compare element-wise (anything else nested
+            // is diagnosed in sema).
+            const Type& mel = mt.elementType();
+            llvm::ArrayType* elArrTy =
+                llvm::ArrayType::get(llvmTy(mel), (unsigned)arrayExtent(mt));
+            bool pkA = packedMemberPath(rootA, pathA);
+            bool pkB = packedMemberPath(rootB, pathB);
+            countedLoop(i64(arrayExtent(mt)), "ideq.m", [&](llvm::Value* c) {
+              llvm::Value* qA =
+                  b_.CreateInBoundsGEP(elArrTy, fA, {i64(0), c}, "ideq.qa");
+              llvm::Value* qB =
+                  b_.CreateInBoundsGEP(elArrTy, fB, {i64(0), c}, "ideq.qb");
+              b_.CreateStore(b_.CreateAnd(b_.CreateLoad(b_.getInt1Ty(), acc, "ideqmacc"),
+                                          eqElem(qA, qB, mel, pkA, pkB), "ideq.ma"),
+                             acc);
+            });
+          } else {
+            bool pkA = packedMemberPath(rootA, pathA);
+            bool pkB = packedMemberPath(rootB, pathB);
+            b_.CreateStore(b_.CreateAnd(b_.CreateLoad(b_.getInt1Ty(), acc, "ideqsacc"),
+                                        eqElem(fA, fB, mt, pkA, pkB), "ideq.sa"),
+                           acc);
+          }
+          pathA.pop_back();
+          pathB.pop_back();
+        }
+      };
+      std::vector<unsigned> pathA = A->memberPath;
+      std::vector<unsigned> pathB = B->memberPath;
+      fold(fold, a.ptr, b.ptr, A->ty, pathA, pathB);
+      v.ty = e->ty;
+      v.reg = b_.CreateLoad(b_.getInt1Ty(), acc, "ideqsres");
+      result = v;
+      return true;
+    }
+    // Scalar case: one comparison in the operand's own domain (rule (117)).
+    Val a = emitExpr(A);
+    Val b = emitExpr(B);
+    v.ty = e->ty;
+    if (a.ty.isChar() && b.ty.isChar()) {
+      v.reg = b_.CreateICmpEQ(emitCmpChar(a.ptr, a.len, b.ptr, b.len), i32(0), "ideq.c");
+    } else if (a.ty.isComplex() || b.ty.isComplex()) {
+      Val ac = convert(a, Type::complexTy(), e->loc);
+      Val bc = convert(b, Type::complexTy(), e->loc);
+      llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
+                                      b_.CreateExtractValue(ac.cpx, 0, "ideq.cr"),
+                                      b_.CreateExtractValue(bc.cpx, 0, "ideq.cr"), "ideq.er");
+      llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
+                                      b_.CreateExtractValue(ac.cpx, 1, "ideq.ci"),
+                                      b_.CreateExtractValue(bc.cpx, 1, "ideq.ci"), "ideq.ei");
+      v.reg = b_.CreateAnd(er, ei, "ideq.cx");
+    } else if (a.ty.isBit() && b.ty.isBit() && a.ty.len > 1) {
+      // Wide BIT scalars compare byte by byte (packed big-endian).
+      int nBytes = bitBytes(a.ty.len);
+      llvm::Value* eq = b_.getInt1(true);
+      for (int k = 0; k < nBytes; ++k)
+        eq = b_.CreateAnd(eq, b_.CreateICmpEQ(b_.CreateExtractValue(a.reg, (unsigned)k, "ideq.wa"),
+                                             b_.CreateExtractValue(b.reg, (unsigned)k, "ideq.wb"),
+                                             "ideq.wk"),
+                          "ideq.w");
+      v.reg = eq;
+    } else if (a.ty.k == TK::Float || b.ty.k == TK::Float) {
+      Type common = arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
+                                   b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty);
+      Val av = convert(a, common, e->loc);
+      Val bv = convert(b, common, e->loc);
+      v.reg = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, av.reg, bv.reg, "ideq.f");
+    } else {
+      Type common = arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
+                                   b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty);
+      Val av = convert(a, common, e->loc);
+      Val bv = convert(b, common, e->loc);
+      v.reg = b_.CreateICmpEQ(av.reg, bv.reg, "ideq.i");
+    }
+    result = v;
+    return true;
+  }
+  // ONFILE (rule (123)): the file of the current I/O condition; blank when no
+  // file condition is active (the only reachable state while ON ENDFILE/KEY
+  // stays diagnosed, matching IBM's out-of-context null).
+  if (e->name == "ONFILE") {
+    Val out = charTemp(e->ty.len);
+    b_.CreateCall(runtimeFn("pli_onfile"), {out.ptr, out.len});
+    out.len = i64(e->ty.len);
+    result = out;
     return true;
   }
   // CURRENTSIZE (rule (123)): the live size of a variable's buffer or element.

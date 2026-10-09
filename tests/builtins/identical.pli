@@ -1,0 +1,130 @@
+identical_test: procedure options(main);
+   declare fails fixed bin(31);
+   declare i fixed bin(31);
+   declare r bit(1);
+   declare a(4) fixed bin(31);
+   declare b(4) fixed bin(31);
+   declare c1(3) char(4);
+   declare c2(3) char(4);
+   declare f1 float;
+   declare f2 float;
+   declare b1(4) bit(1);
+   declare b2(4) bit(1);
+   declare 1 s1,
+      2 x fixed bin(31),
+      2 y char(6);
+   declare 1 s2,
+      2 x fixed bin(31),
+      2 y char(6);
+   fails = 0;
+   /* scalar fixed */
+   if identical(3, 3) ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical fixed eq');
+   end;
+   if identical(3, 4) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical fixed ne');
+   end;
+   /* scalar float */
+   f1 = 3.5; f2 = 3.5;
+   if identical(f1, f2) ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical float eq');
+   end;
+   f2 = 4.5;
+   if identical(f1, f2) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical float ne');
+   end;
+   /* scalar char + mismatched lengths are never identical */
+   if identical('abcd', 'abcd') ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical char eq');
+   end;
+   if identical('abcd', 'abce') ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical char ne');
+   end;
+   if identical('abc', 'abcd') ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical char len');
+   end;
+   /* scalar bit */
+   if identical('1'b, '1'b) ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical bit eq');
+   end;
+   if identical('1'b, '0'b) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical bit ne');
+   end;
+   /* differing static types are never identical */
+   if identical(3, 3.5) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical fixed/float');
+   end;
+   if identical(65, 'A') ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical fixed/char');
+   end;
+   /* fixed arrays */
+   do i = 1 to 4;
+      a(i) = i * 10;
+      b(i) = i * 10;
+   end;
+   if identical(a, b) ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical array eq');
+   end;
+   b(3) = 99;
+   if identical(a, b) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical array ne');
+   end;
+   /* char arrays */
+   c1(1) = 'aa'; c1(2) = 'bb'; c1(3) = 'cc';
+   c2(1) = 'aa'; c2(2) = 'bb'; c2(3) = 'cc';
+   if identical(c1, c2) ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical char array eq');
+   end;
+   c2(2) = 'zz';
+   if identical(c1, c2) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical char array ne');
+   end;
+   /* bit arrays */
+   do i = 1 to 4;
+      b1(i) = '1'b;
+      b2(i) = '1'b;
+   end;
+   if identical(b1, b2) ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical bit array eq');
+   end;
+   b2(4) = '0'b;
+   if identical(b1, b2) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical bit array ne');
+   end;
+   /* structures */
+   s1.x = 7; s1.y = 'hello';
+   s2.x = 7; s2.y = 'hello';
+   if identical(s1, s2) ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical struct eq');
+   end;
+   s2.y = 'world!';
+   if identical(s1, s2) ^= '0'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical struct ne');
+   end;
+   r = identical(a, a);
+   if r ^= '1'b then do;
+      fails = fails + 1;
+      put skip list('FAIL identical self');
+   end;
+   if fails = 0 then put skip list('PASS identical');
+   else put skip list('FAIL identical: fails =', fails);
+end identical_test;

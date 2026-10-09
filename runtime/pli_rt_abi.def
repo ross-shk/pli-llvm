@@ -104,6 +104,7 @@ PLI_FN(pli_high, VOID, (PTR, I64))                    /* HIGH(n) */
 PLI_FN(pli_low, VOID, (PTR, I64))                     /* LOW(n) */
 PLI_FN(pli_date, VOID, (PTR, I64))                    /* DATE() */
 PLI_FN(pli_time, VOID, (PTR, I64))                    /* TIME() */
+PLI_FN(pli_datetime, VOID, (PTR, I64))                /* DATETIME(): YYYYMMDDHHMMSS */
 PLI_FN(pli_char_of_fixed, VOID, (PTR, I64, I64))      /* CHAR(fixed) */
 PLI_FN(pli_char_of_float, VOID, (PTR, I64, DOUBLE))   /* CHAR(float) */
 PLI_FN(pli_fixed_of_char, I64, (CPTR, I64, IPTR))     /* FIXED(char): *ok=0 on no digits */
@@ -119,6 +120,7 @@ PLI_FN(pli_set_pageno, VOID, (I64, I64))              /* PAGENO(f)=n: set page c
 PLI_FN(pli_onkey, I32, (VOID))                        /* ONKEY: 1 if a SIGNAL is currently being handled */
 PLI_FN(pli_on_source, I32, (VOID))                    /* ONSOURCE: current SIGNAL source key */
 PLI_FN(pli_set_on_source, VOID, (I32))                /* ONSOURCE = key: set source key (ADR-202) */
+PLI_FN(pli_onfile, VOID, (PTR, I64))                  /* ONFILE(): file of current I/O condition, blank when none */
 
 PLI_FN(pli_unspec_assign, VOID, (PTR, I64, PTR, I64))/* UNSPEC(var)=bits: memcpy raw storage (ADR-196) */
 

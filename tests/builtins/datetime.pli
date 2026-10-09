@@ -1,39 +1,56 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
- /* DATE and TIME built-in functions: date() returns the current date as a
-    CHARACTER(8) 'YYYYMMDD' string, time() the time as a CHARACTER(6)
-    'HHMMSS' string. M2 built-ins (Y33-6003 DATE, TIME). */
- datetime_test: procedure options(main);
-    declare d char(8);
-    declare t char(6);
-    declare fails fixed bin(31);
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* DATE and TIME built-in functions: date() returns the current date as a
+   CHARACTER(8) 'YYYYMMDD' string, time() the time as a CHARACTER(6) 'HHMMSS'
+   string, datetime() as a CHARACTER(14) 'YYYYMMDDHHMMSS' string. */
+   datetime_test: procedure options(main);
+     declare d char(8);
+     declare t char(6);
+     declare dt char(14);
+     declare fails fixed bin(31);
 
-    fails = 0;
+     fails = 0;
 
-    d = date();
-    t = time();
+     d = date();
+     t = time();
+     dt = datetime();
 
-    if length(d) ^= 8 then do;
-       fails = fails + 1;
-       put skip list('FAIL date length =', length(d));
-    end;
+     if length(d) ^= 8 then do;
+        fails = fails + 1;
+        put skip list('FAIL date length =', length(d));
+     end;
 
-    if length(t) ^= 6 then do;
-       fails = fails + 1;
-       put skip list('FAIL time length =', length(t));
-    end;
+     if length(t) ^= 6 then do;
+        fails = fails + 1;
+        put skip list('FAIL time length =', length(t));
+     end;
 
-    /* date() and time() differ from an arbitrary fixed string. */
-    if d = 'XXXXXXXX' then do;
-       fails = fails + 1;
-       put skip list('FAIL date constant');
-    end;
+     if length(dt) ^= 14 then do;
+        fails = fails + 1;
+        put skip list('FAIL datetime length =', length(dt));
+     end;
 
-    if t = '123456' then do;
-       fails = fails + 1;
-       put skip list('FAIL time constant');
-    end;
+     /* date() and time() differ from an arbitrary fixed string. */
+     if d = 'XXXXXXXX' then do;
+        fails = fails + 1;
+        put skip list('FAIL date constant');
+     end;
 
-    if fails = 0 then put skip list('PASS datetime');
-    else put skip list('FAIL datetime: fails =', fails);
- end datetime_test;
+     if t = '123456' then do;
+        fails = fails + 1;
+        put skip list('FAIL time constant');
+     end;
+
+     /* datetime() = date() + time() */
+     if substr(dt, 1, 8) ^= d then do;
+        fails = fails + 1;
+        put skip list('FAIL datetime date part');
+     end;
+     if substr(dt, 9, 6) ^= t then do;
+        fails = fails + 1;
+        put skip list('FAIL datetime time part');
+     end;
+
+     if fails = 0 then put skip list('PASS datetime');
+     else put skip list('FAIL datetime: fails =', fails);
+   end datetime_test;

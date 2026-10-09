@@ -32,6 +32,7 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | String   | `HIGH`, `LOW`                                                                                                                             | `( n )`                  | `CHAR(n)`                         |
 | String   | `DATE`                                                                                                                                    | `( )`                    | `CHAR(8)`                         |
 | String   | `TIME`                                                                                                                                    | `( )`                    | `CHAR(6)`                         |
+| String   | `DATETIME`                                                                                                                                | `( )`                    | `CHAR(14)`                        |
 | Type     | `CHAR`                                                                                                                                    | `( x )`                  | `CHAR(24)`                        |
 | Type     | `FIXED`                                                                                                                                   | `( char | num )`         | `FIXED BIN(31)`                   |
 | Numeric  | `ABS`                                                                                                                                     | `( x )`                  | same type as `x`                  |
@@ -52,11 +53,14 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | Array    | `LBOUND`, `HBOUND`, `DIM`, `DIMENSION`                                                                                                    | `( A [, axis] )`         | `FIXED BIN`                       |
 | Array    | `SUM`, `PROD`                                                                                                                             | `( A )`                  | element type                      |
 | Array    | `ANY`, `ALL`                                                                                                                              | `( A )`                  | `BIT(1)`                          |
+| Array    | `EVERY`, `SOME`                                                                                                                           | `( A )`                  | `BIT(1)`                          |
+| Array    | `IDENTICAL`                                                                                                                               | `( a, b )`               | `BIT(1)`                          |
 | Async    | `EVENT`                                                                                                                                   | `( ev )`                 | `BIT(1)`                          |
 | Args     | `OMITTED`, `PRESENT`                                                                                                                      | `( p )`                  | `BIT(1)`                          |
 | Misc     | `ONCODE`                                                                                                                                  | `( )`                    | `FIXED BIN`                       |
 | Misc     | `ONKEY`                                                                                                                                    | `( )`                    | `BIT(1)`                          |
 | Misc     | `ONSOURCE`                                                                                                                                  | `( )`                    | `FIXED BIN(15)`                   |
+| Misc     | `ONFILE`                                                                                                                                    | `( )`                    | `CHAR(32)`                        |
 | Misc     | `SYSPARM`                                                                                                                                 | `( )`                    | `CHAR(n)` (compile-time constant) |
 | Misc     | `SYSTEM(x)`                                                                                                                               | `( x )`                  | `FIXED BIN(31)`                   |
 | Misc     | `PRIORITY`                                                                                                                                | `( ... )`                | not implemented                   |
@@ -329,12 +333,13 @@ l = low(3);                     /* three NUL bytes */
 put skip list(length(h));       /* 3 */
 ```
 
-### `DATE()` → CHARACTER(8), `TIME()` → CHARACTER(6)
+### `DATE()` → CHARACTER(8), `TIME()` → CHARACTER(6), `DATETIME()` → CHARACTER(14)
 
-`DATE()` returns `YYYYMMDD`; `TIME()` returns `HHMMSS`.
+`DATE()` returns `YYYYMMDD`; `TIME()` returns `HHMMSS`; `DATETIME()` returns `YYYYMMDDHHMMSS` (i.e. `DATE() || TIME()`).
 
 ```pli
 put skip list('Run started:', date(), time());  /* e.g. 20261002 094210 */
+put skip list(datetime());                      /* e.g. 20261002094210 */
 ```
 
 ---
@@ -563,6 +568,30 @@ b(1) = '1'b;
 put skip list(any(b));          /* '1'B */
 ```
 
+### `EVERY(A)`, `SOME(A)` → BIT(1) *(Subset-G extension, ADR-195)*
+
+`EVERY` is `ALL` and `SOME` is `ANY` under IBM names: `EVERY` is true if every element is set, `SOME` if any element is set. Same `BIT`-array restriction.
+
+```pli
+if every(b) then put skip list('all set');
+if some(b) then put skip list('at least one set');
+```
+
+### `IDENTICAL(a, b)` → BIT(1) *(Subset-G extension, ADR-199)*
+
+True (`'1'b`) when `a` and `b` have identical static types and equal values — compared element-wise for arrays and member-wise for structures (padding never participates) — and false (`'0'b`) otherwise. Differing static types (e.g. `FIXED` vs `FLOAT`, or `CHAR(3)` vs `CHAR(4)`) are never identical.
+
+```pli
+dcl v1(4) fixed bin(31), v2(4) fixed bin(31);
+
+if identical(v1, v2) then put skip list('vectors match');
+if identical(x, x) then put skip list('self-identical');
+```
+
+**Limitations**
+
+- Arrays of structures/areas, unions anywhere in the operands, `VARYING` strings nested in compared aggregates, and dynamic arrays nested in compared structures are errors in this stage.
+
 **Limitations**
 
 - Reductions take one argument (the array) in the current stage; element-wise expression forms expand to a temp only in direct assignment.
@@ -629,7 +658,7 @@ if system('test -f data.txt') = 0 then
 
 **Limitations** — the argument must be `CHARACTER` or a numeric type; a `POINTER` or other type is an error.
 
-### `DATE()`, `TIME()`
+### `DATE()`, `TIME()`, `DATETIME()`
 
 See [String built-ins](#string-built-ins).
 
@@ -644,6 +673,16 @@ Returns `'1'b` when execution is inside an `ON` handler unit (i.e., a `SIGNAL` h
 ### `ONSOURCE()` → FIXED BINARY(15)
 
 Returns the key identifying the source of the current `SIGNAL` (0 when no condition is active).
+
+### `ONFILE()` → CHARACTER(32)
+
+Returns the name of the file for which the current I/O condition (`ENDFILE`, `KEY`, `UNDEFINEDFILE`, …) was raised — blank when no file condition is active. While `ON ENDFILE`/`KEY` handling stays diagnosed, every reachable call returns blank (IBM's out-of-context null).
+
+```pli
+dcl f char(32);
+f = onfile();
+if f = '' then put skip list('no file condition active');
+```
 
 ### `EMPTY()` → AREA
 

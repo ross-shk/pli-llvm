@@ -221,6 +221,24 @@ void pli_time(char *buf, long long cap) {
   for (; i < cap; ++i) buf[i] = ' ';
 }
 
+/* DATETIME(): write the current local date and time as 'YYYYMMDDHHMMSS' (14 chars). */
+void pli_datetime(char *buf, long long cap) {
+  time_t now = time(NULL);
+  struct tm tmv;
+#ifdef _WIN32
+  localtime_s(&tmv, &now);
+#else
+  localtime_r(&now, &tmv);
+#endif
+  char tmp[32];
+  int n = pli_snprintf(tmp, sizeof tmp, "%04d%02d%02d%02d%02d%02d",
+                       tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                       tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+  long long i = 0;
+  for (; i < cap && i < n; ++i) buf[i] = tmp[i];
+  for (; i < cap; ++i) buf[i] = ' ';
+}
+
 /* Comparison of character data: the shorter operand is notionally extended
  * with blanks on the right. */
 int pli_cmp_char(const char *a, long long alen, const char *b, long long blen) {

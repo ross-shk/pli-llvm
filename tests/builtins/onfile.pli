@@ -1,0 +1,21 @@
+onfile_test: procedure options(main);
+   declare s char(32);
+   declare fails fixed bin(31);
+   fails = 0;
+   /* Outside any file-condition handler ONFILE() is blank. */
+   s = onfile();
+   if s ^= '' then do;
+      fails = fails + 1;
+      put skip list('FAIL onfile outside handler not blank');
+   end;
+   if onfile() ^= '' then do;
+      fails = fails + 1;
+      put skip list('FAIL onfile direct compare');
+   end;
+   if length(onfile()) ^= 32 then do;
+      fails = fails + 1;
+      put skip list('FAIL onfile length');
+   end;
+   if fails = 0 then put skip list('PASS onfile');
+   else put skip list('FAIL onfile: fails =', fails);
+end onfile_test;

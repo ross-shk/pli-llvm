@@ -1,0 +1,4 @@
+onfile_bad: procedure options(main);
+   declare s char(32);
+   s = onfile(1);
+end onfile_bad;

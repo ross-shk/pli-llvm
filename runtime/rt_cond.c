@@ -141,6 +141,14 @@ void pli_set_on_source(int key) {
     pli_on_source_key = key;
 }
 
+/* ONFILE() (rule (123), Appendix 1): the file of the current I/O condition.
+   No file-condition tracking exists while ON ENDFILE/KEY stays diagnosed, so
+   every reachable call is out-of-context -> blank (IBM's null string). */
+void pli_onfile(char *buf, long long cap) {
+  for (long long i = 0; i < cap; ++i)
+    buf[i] = ' ';
+}
+
 /* UNSPEC(var) = bits (rule (123), ADR-196): copy raw storage. Copies min(srcLen,
    dstSize) bytes; remaining dst bytes are zero-filled when src is shorter. */
 void pli_unspec_assign(char *dst, long long dstSize, char *src, long long srcLen) {
