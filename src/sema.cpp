@@ -1050,6 +1050,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         }
         Type st = Type::structTy(std::move(ms));
         st.unaligned = unaligned;
+        st.isUnion = it.unionAttr; // UNION overlay (ADR-202): members share offset 0
         st.dims = it.ty.dims; // an array of structures: keep the level item's dimension
         return st;
       };

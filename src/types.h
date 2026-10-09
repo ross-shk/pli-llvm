@@ -80,6 +80,10 @@ struct Type {
   // unless they carry an explicit ALIGNED. Part of type equivalence because a
   // packed and an aligned structure with the same members have different layout.
   bool unaligned = false;
+  // Union overlay (ADR-202, Subset-G extension): all members start at offset 0,
+  // sharing storage. Part of layout but not type equivalence — a union and a
+  // non-union struct with the same members have different layout.
+  bool isUnion = false;
   // Array dimension bounds per axis — rules (12),(13). Empty for a scalar.
   // `len`/`prec`/... describe the element type.
   std::vector<Dim> dims;
@@ -305,6 +309,7 @@ inline Type& Type::operator=(const Type& o) {
   starLen = o.starLen;
   controlled = o.controlled;
   unaligned = o.unaligned;
+  isUnion = o.isUnion; // Union overlay layout (ADR-202)
   dims = o.dims;
   members.clear();
   members.reserve(o.members.size());
@@ -318,7 +323,7 @@ inline Type& Type::operator=(Type&& o) noexcept = default;
 
 inline bool Type::operator==(const Type& o) const {
   if (k != o.k || prec != o.prec || scale != o.scale || len != o.len || varying != o.varying ||
-      starLen != o.starLen || unaligned != o.unaligned || dims != o.dims)
+      starLen != o.starLen || unaligned != o.unaligned || isUnion != o.isUnion || dims != o.dims)
     return false;
   if (members.size() != o.members.size())
     return false;

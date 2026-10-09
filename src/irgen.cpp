@@ -167,6 +167,20 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
     return llvm::ArrayType::get(b_.getInt8Ty(), t.len);
   }
   case TK::Struct: {
+    // UNION overlay (ADR-202): all members share offset 0, so the LLVM storage
+    // is a byte array sized to the largest member (dynamic arrays use pointer
+    // size). Member access casts to the member's type at offset 0.
+    if (t.isUnion) {
+      unsigned maxBytes = 0;
+      for (const auto& m : t.members) {
+        if (m->ty.isArray() && m->ty.isDynamic())
+          maxBytes = std::max(maxBytes, (unsigned)mod_.getDataLayout().getPointerSize());
+        else
+          maxBytes = std::max(maxBytes,
+                              (unsigned)mod_.getDataLayout().getTypeStoreSize(llvmTy(m->ty)));
+      }
+      return llvm::ArrayType::get(b_.getInt8Ty(), maxBytes);
+    }
     // A level-numbered structure (rule 11): an LLVM literal struct of its
     // members, recursively laid out in declaration order. A dynamic (runtime
     // extent, rule 13) array member is a bare runtime-sized buffer, so its
@@ -4373,7 +4387,7 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* addr = base;
       const Type* cur = &root;
       for (unsigned f : rel) {
-        addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "dcp.f");
+       addr = structMemberGEP(*cur, addr, f, "dcp.f");
         cur = &cur->members[f]->ty;
       }
       return addr;
@@ -6759,6 +6773,15 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
   return b_.CreateInBoundsGEP(arrTy, base, {i64(0), flat}, "aelem");
 }
 
+// GEP to a struct member at field index `f` in struct type `cur`. For a UNION
+// (ADR-202), all members share offset 0 — returns `addr` unchanged. For regular
+// structs, emits CreateStructGEP to the sequential field offset.
+llvm::Value* IRGen::structMemberGEP(const Type& cur, llvm::Value* addr, unsigned f, const char* name) {
+  if (cur.isUnion)
+    return addr; // union member: offset 0 (ADR-202)
+  return b_.CreateStructGEP(llvmTy(cur), addr, f, name);
+}
+
 // Address of a qualified member S.A.B (rule 124): descend the recorded field
 // indices one struct at a time with CreateStructGEP (the same API the
 // varying-string addressing uses), so each GEP selects one field of the
@@ -6767,7 +6790,7 @@ llvm::Value* IRGen::memberAddr(Symbol* base, const std::vector<unsigned>& path, 
   llvm::Value* addr = addressOf(base);
   const Type* cur = &base->ty;
   for (unsigned f : path) {
-    addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "mem");
+    addr = structMemberGEP(*cur, addr, f, "mem");
     cur = &cur->members[f]->ty;
   }
   return addr;
@@ -6783,7 +6806,7 @@ llvm::Value* IRGen::elementMemberAddr(Symbol* base, const std::vector<unsigned>&
   Type elem = base->ty.elementType(); // stable copy of the element structure type
   const Type* cur = &elem;
   for (unsigned f : path) {
-    addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "mem");
+    addr = structMemberGEP(*cur, addr, f, "mem");
     cur = &cur->members[f]->ty;
   }
   return addr;
@@ -6798,7 +6821,7 @@ llvm::Value* IRGen::locatorMemberAddr(Symbol* base, const std::vector<unsigned>&
   llvm::Value* addr = baseAddr;
   const Type* cur = &base->ty;
   for (unsigned f : path) {
-    addr = b_.CreateStructGEP(llvmTy(*cur), addr, f, "lmem");
+     addr = structMemberGEP(*cur, addr, f, "lmem");
     cur = &cur->members[f]->ty;
   }
   return addr;
@@ -6849,8 +6872,9 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
     if (j == (size_t)-1)
       continue; // name absent from the source: skipped
     const Member& sm = *src.members[j];
-    llvm::Value* d = b_.CreateStructGEP(llvmTy(dst), dstBase, (unsigned)i, "bnm.d");
-    llvm::Value* s = b_.CreateStructGEP(llvmTy(src), srcBase, (unsigned)j, "bnm.s");
+     // For UNION (ADR-202), all members are at offset 0
+     llvm::Value* d = structMemberGEP(dst, dstBase, (unsigned)i, "bnm.d");
+     llvm::Value* s = structMemberGEP(src, srcBase, (unsigned)j, "bnm.s");
     if (dm.ty.isStruct() && sm.ty.isStruct()) {
       std::vector<unsigned> dp = dstPrefix;
       dp.push_back((unsigned)i);
@@ -6940,7 +6964,7 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
                                  size_t& idx, SourceLoc loc) {
   for (size_t i = 0; i < ty.members.size(); ++i) {
     const Member& m = *ty.members[i];
-    llvm::Value* mem = b_.CreateStructGEP(llvmTy(ty), base, (unsigned)i, "init.mem");
+     llvm::Value* mem = structMemberGEP(ty, base, (unsigned)i, "init.mem");
     if (m.ty.isStruct()) {
       emitStructInitValues(mem, m.ty, vals, idx, loc);
     } else if (m.ty.isArray()) {

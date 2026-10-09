@@ -1,0 +1,27 @@
+union_overlay: procedure options(main);
+   dcl 1 u union,
+       2 a fixed bin(31),
+       2 b fixed bin(31);
+   dcl 1 v union,
+       2 x fixed bin(31),
+       2 y char(8);
+   dcl fails fixed bin(31);
+   fails = 0;
+   u.a = 42;
+   if u.b ^= 42 then do;
+      fails = 1;
+      put skip list('FAIL: u.b != 42');
+   end;
+   u.b = 99;
+   if u.a ^= 99 then do;
+      fails = 1;
+      put skip list('FAIL: u.a != 99');
+   end;
+   v.x = 65;
+   if substr(v.y, 1, 1) ^= 'A' then do;
+      fails = 1;
+      put skip list('FAIL: v.y(1:1) != A');
+   end;
+   if fails = 0 then put skip list('PASS union overlay');
+   else put skip list('FAIL union overlay');
+end union_overlay;

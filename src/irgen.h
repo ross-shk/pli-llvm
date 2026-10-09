@@ -280,7 +280,11 @@ private:
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.
-  llvm::Value* memberAddr(Symbol* base, const std::vector<unsigned>& path, SourceLoc loc);
+   llvm::Value* memberAddr(Symbol* base, const std::vector<unsigned>& path, SourceLoc loc);
+   // GEP to a struct member at field index `f` in struct type `cur`. For a UNION
+   // (ADR-202), all members share offset 0 — returns `addr` unchanged. For regular
+   // structs, emits CreateStructGEP to the sequential field offset.
+   llvm::Value* structMemberGEP(const Type& cur, llvm::Value* addr, unsigned f, const char* name);
   // Address of a member of one structure element of an array of structures
   // (rule 124): like memberAddr, but GEPs from a caller-supplied element address
   // through the recorded field indices against the element structure type.
