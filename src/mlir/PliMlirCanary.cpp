@@ -11,10 +11,10 @@
 #include "PliDialect.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
@@ -55,8 +55,7 @@ static ModuleOp buildCanaryModule(MLIRContext* ctx) {
   Block* entry = func.addEntryBlock();
   builder.setInsertionPointToStart(&func.getBody().front());
 
-  Value length = builder.create<arith::ConstantOp>(
-      loc, i64Ty, IntegerAttr::get(i64Ty, 4096));
+  Value length = builder.create<arith::ConstantOp>(loc, i64Ty, IntegerAttr::get(i64Ty, 4096));
 
   Value dst = entry->getArgument(0);
   Value src = entry->getArgument(1);

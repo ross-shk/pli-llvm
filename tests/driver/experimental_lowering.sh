@@ -38,7 +38,13 @@ witness: procedure options(main);
 end witness;
 EOF
 
-modes="auto runtime llvm mlir"
+# Detect MLIR support: a non-MLIR build diagnoses --experimental-lowering=mlir.
+mlir_modes=""
+if $PLIC --experimental-lowering=mlir -fsyntax-only "$OUT.witness.pli" 2>/dev/null; then
+  mlir_modes="mlir"
+fi
+
+modes="auto runtime llvm $mlir_modes"
 ok=1
 ref=""
 for mode in $modes; do

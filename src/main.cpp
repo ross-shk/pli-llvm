@@ -605,6 +605,12 @@ int main(int argc, char** argv) {
         std::cerr << "plic: --experimental-lowering expects auto|runtime|llvm|mlir, or op:mode\n";
         return 2;
       }
+#ifndef PLIC_ENABLE_MLIR
+      if (parsed == LowerMode::MLIR) {
+        std::cerr << "plic: --experimental-lowering=mlir requires an MLIR-enabled build (-DPLIC_ENABLE_MLIR=ON)\n";
+        return 2;
+      }
+#endif
       if (colon != std::string::npos)
         perOpOverrides[opName] = parsed;
       else

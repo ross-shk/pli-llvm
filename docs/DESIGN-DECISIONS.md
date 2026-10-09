@@ -5554,4 +5554,37 @@ separate runtime subsystem with no benefit for this workload; 32-bit or wider
 integer-only widening (i128 already fits the standard's 31-digit cap and the
 `DECIMAL(25,2)` case).
 
+## ADR-192 — Optional MLIR helper bridge architecture (P2 spike)
+
+**Context.** ADR-002 keeps `IRGen` as the only LLVM-aware component; no
+`mlir/` header may enter the parser, sema, AST, or HIR layers. ADR-158
+gates production MLIR behind a measured W6 aggregate/vector admission ticket.
+The P2 spike proves the integration boundary without touching PL/I semantics.
+
+**Decision.** Add `PLIC_ENABLE_MLIR` (default `OFF`) controlling a
+`src/mlir/` sub-library (`plic_mlir`). The canary dialect has one operation,
+`pli.buffer_copy`, built from ODS TableGen (`src/mlir/pli_dialect.td`).
+`-emit-mlir` forms a synthetic canary module, runs the conversion pipeline
+(Pli -> LLVM dialect), verifies, and prints the resulting LLVM module — it
+does not lower any W1-W5 PL/I operation. MLIR-disabled builds diagnose
+`-emit-mlir` and `--experimental-lowering=mlir` with a clear error. The non-MLIR
+build has zero MLIR headers or link dependencies.
+
+**Integration boundary.** `src/main.cpp` calls `mlir::plic::runMlirCanary`
+under `#ifdef PLIC_ENABLE_MLIR`. The canary builds and verifies an MLIR module
+internally; codegen receives only a verified LLVM module (same path as the
+existing `llvm::Module` pipeline). MLIR/LLVM contexts are owned by the canary
+call and destroyed before return.
+
+**Consequences.** An optional MLIR build adds ~1.3 MB to the `plic` binary
+(126.8 MB -> 127.5 MB) and links against MLIR's shared `libMLIR.so`. The canary
+reaches verified LLVM IR with no illegal operations or unresolved casts. Clean
+configure/build time and the default-off policy preserve the non-MLIR path's
+exact behavior. Production MLIR for W6 operations (P4) requires a separate
+ADR-158 admission ticket and will not be enabled by this ADR.
+
+**Rejected.** Whole-function HIR-to-MLIR lowering (would require coverage of
+every HIR form and violates ADR-002); using `unrealized_conversion_cast` as the
+final bridge (the conversion target must reject it); shipping MLIR enabled by
+default (keeps P2 time-boxed and non-blocking for P3/P5).
 

@@ -21,16 +21,12 @@
 
 namespace mlir::plic {
 
-void PliDialect::initialize() {
-  addOperations<BufferCopyOp>();
-}
+void PliDialect::initialize() { addOperations<BufferCopyOp>(); }
 
-Attribute PliDialect::parseAttribute(DialectAsmParser &parser,
-                                      Type type) const {
+Attribute PliDialect::parseAttribute(DialectAsmParser& parser, Type type) const {
   return Attribute();
 }
 
-void PliDialect::printAttribute(Attribute attr,
-                                 DialectAsmPrinter &os) const {}
+void PliDialect::printAttribute(Attribute attr, DialectAsmPrinter& os) const {}
 
 } // namespace mlir::plic
