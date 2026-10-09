@@ -2911,6 +2911,54 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
       break;
     }
+    // EXPONENT pseudo-variable (rule (123)): exponent(fvar) = n sets the binary
+    // exponent of a float variable, preserving the mantissa.
+    if (s->target->kind == Expr::Call && s->target->name == "EXPONENT") {
+      Expr* t = s->target.get();
+      if (t->args[0]->kind != Expr::VarRef || !t->args[0]->sym ||
+          t->args[0]->sym->kind == Symbol::ProcName) {
+        d_.error(t->args[0]->loc,
+                 "EXPONENT assignment target must be a modifiable numeric variable", "(86)");
+        break;
+      }
+      checkValueTarget(t->args[0].get());
+      if (!s->value->ty.isVoid())
+        checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
+      break;
+    }
+    // PAGENO pseudo-variable (TR 123, ADR-201): pageno(f) = n sets the page
+    // counter for file f.
+    if (s->target->kind == Expr::Call && s->target->name == "PAGENO") {
+      Expr* t = s->target.get();
+      if (t->args[0]->kind != Expr::VarRef || !t->args[0]->sym ||
+          t->args[0]->sym->kind == Symbol::ProcName) {
+        d_.error(t->args[0]->loc,
+                 "PAGENO assignment target must be a modifiable variable", "(86)");
+        break;
+      }
+      if (!s->value->ty.isVoid())
+        checkAssignable(t->ty, s->value->ty, s->loc, "assignment");
+      break;
+    }
+    // ONSOURCE pseudo-variable (TR 123, ADR-202): onsource = key sets the source
+    // condition key of the currently-handled SIGNAL.
+    if (s->target->kind == Expr::VarRef && s->target->name == "ONSOURCE") {
+      if (!s->value->ty.isVoid())
+        checkAssignable(Type::fixedBin(15, 0), s->value->ty, s->loc, "assignment");
+      break;
+    }
+    // UNSPEC pseudo-variable (rule (123), ADR-196): UNSPEC(var) = bits copies the
+    // RHS bit/pointer view into the raw storage of var.
+    if (s->target->kind == Expr::Call && s->target->name == "UNSPEC") {
+      Expr* t = s->target.get();
+      if (t->args[0]->kind != Expr::VarRef || !t->args[0]->sym ||
+          t->args[0]->sym->kind == Symbol::ProcName) {
+        d_.error(t->args[0]->loc,
+                 "UNSPEC assignment target must be a modifiable variable", "(86)");
+        break;
+      }
+      break;
+    }
     // A cross-section assignment target A(i, *) = value (rule 126): the target
     // denotes a reduced-rank slice (its type was set to the star-axis shape by
     // typeExpr). The value must be a same-shape array variable or cross-section,
@@ -3975,6 +4023,12 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     e->ty = Type::voidTy();
     break;
   case Expr::VarRef: {
+    // ONSOURCE pseudo-variable (TR 123, ADR-202): bare ONSOURCE has a type so
+    // it can be assigned to; the IRGen emits pli_set_on_source calls.
+    if (e->name == "ONSOURCE") {
+      e->ty = Type::fixedBin(15, 0);
+      break;
+    }
     Symbol* sym = lookup(sc, e->name);
     if (!sym) {
       sym = implicitDeclare(sc, e->name, e->loc, false);
@@ -5743,6 +5797,18 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::fixedBin(31, 0);
+    return true;
+  }
+  // UNSPEC (rule (123), ADR-196): UNSPEC(x) returns the raw storage of x as a
+  // BIT string whose length in bits is the storage size of x.
+  if (e->name == "UNSPEC") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "UNSPEC takes one argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    int bits = e->args[0]->ty.intBits();
+    e->ty = Type::bit(bits);
     return true;
   }
   return false;

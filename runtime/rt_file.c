@@ -198,11 +198,18 @@ long long pli_lineno(long long slot) {
   return 0;
 }
 
-/* PAGENO(f) (TR 123): returns the current page number for the file in slot f.
-   M0 has no page tracking; return 0. */
+/* PAGENO(f) (TR 123): returns the current page number for the file in slot f. */
 long long pli_pageno(long long slot) {
-  (void)slot;
-  return 0;
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return 0;
+  return rt_pli_pages[slot];
+}
+
+/* PAGENO(f) = n (TR 123, ADR-201): set the page counter for slot f. */
+void pli_set_pageno(long long slot, long long val) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  rt_pli_pages[slot] = val;
 }
 
 /* Edit-directed output (rules (108),(44)-(54)). All output routes through

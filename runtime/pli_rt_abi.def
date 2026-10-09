@@ -114,8 +114,12 @@ PLI_FN(pli_isochar, VOID, (PTR, I64, I32, I32))       /* ISOCHAR(lo, hi): dst, d
 PLI_FN(pli_file_open_slot, I32, (I64))                /* FILEOPEN(f): slot -> 1 if open, 0 if closed */
 PLI_FN(pli_lineno, I64, (I64))                        /* LINENO(f): slot -> current line number */
 PLI_FN(pli_pageno, I64, (I64))                        /* PAGENO(f): slot -> current page number */
+PLI_FN(pli_set_pageno, VOID, (I64, I64))              /* PAGENO(f)=n: set page counter (ADR-201) */
 PLI_FN(pli_onkey, I32, (VOID))                        /* ONKEY: 1 if a SIGNAL is currently being handled */
 PLI_FN(pli_on_source, I32, (VOID))                    /* ONSOURCE: current SIGNAL source key */
+PLI_FN(pli_set_on_source, VOID, (I32))                /* ONSOURCE = key: set source key (ADR-202) */
+
+PLI_FN(pli_unspec_assign, VOID, (PTR, I64, PTR, I64))/* UNSPEC(var)=bits: memcpy raw storage (ADR-196) */
 
 PLI_FN(pli_empty_area, PTR, (VOID))                   /* EMPTY(): null AREA handle */
 

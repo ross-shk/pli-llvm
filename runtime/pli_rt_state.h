@@ -144,6 +144,8 @@ extern size_t rt_in_len, rt_in_pos;
 extern FILE *rt_pli_files[PLI_MAX_FILES];
 extern FILE *rt_out_f;
 extern FILE *rt_in_f;
+/* Page counters per file slot (PLI PAGENO pseudo-variable). */
+extern volatile long long rt_pli_pages[PLI_MAX_FILES];
 
 /* Stream helpers shared across TUs (defined in rt_stream.c). */
 void rt_put_raw(const char *p, size_t n);

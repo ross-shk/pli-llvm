@@ -1,0 +1,33 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* EXPONENT pseudo-variable (TR 25.084 rule 123): EXPONENT(fvar) = n sets
+    the binary exponent of a float variable to n, preserving the mantissa. */
+ exponent_assign_test: procedure options(main);
+   declare f float bin(6);
+   declare e fixed bin(31);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   f = 4.0;            /* 4.0 = 1.0 * 2^3, so exponent = 3 */
+   e = exponent(f);    /* should be 3 */
+   if e ^= 3 then do;
+      fails = fails + 1;
+      put skip list('FAIL exponent(4.0) =', e);
+   end;
+
+   exponent(f) = 2;    /* f should become 1.0 * 2^2 = 4.0 / 2 = 2.0 */
+   if f ^= 2.0 then do;
+      fails = fails + 1;
+      put skip list('FAIL exponent=2 gave', f);
+   end;
+
+   f = 8.0;            /* 8.0 = 0.5 * 2^4, exponent = 4 */
+   exponent(f) = 1;    /* f should become 0.5 * 2^1 = 1.0 */
+   if f ^= 1.0 then do;
+      fails = fails + 1;
+      put skip list('FAIL exponent=1 on 8.0 gave', f);
+   end;
+
+   if fails = 0 then put skip list('PASS exponent_assign');
+   else put skip list('FAIL exponent_assign: fails =', fails);
+ end exponent_assign_test;

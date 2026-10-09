@@ -98,6 +98,27 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
     err = "cannot link embedded libpli.bc";
     return false;
   }
+  // Re-apply audited MemoryEffects + inline attributes on the now-defined
+  // runtime functions. linkEmbeddedLibPLI replaces our declarations (which had
+  // the correct applyRuntimeAttrs facts) with bitcode definitions carrying
+  // clang's default attrs — so the optimizer cannot eliminate or mis-optimize
+  // calls it wouldn't otherwise touch. Mirrors IRGen::linkRuntimeBitcode (P0).
+  {
+    auto applyRuntimeAttrs = [](llvm::Function& f) {
+      llvm::StringRef name = f.getName();
+      if (name == "pli_set_pageno" || name == "pli_pageno") {
+        f.addFnAttr(llvm::Attribute::NoUnwind);
+        f.addFnAttr(llvm::Attribute::NoInline);
+        if (name == "pli_set_pageno")
+          f.setMemoryEffects(llvm::MemoryEffects::unknown());
+        else
+          f.setMemoryEffects(llvm::MemoryEffects::readOnly());
+      }
+    };
+    for (auto& f : M.functions())
+      if (!f.isDeclaration())
+        applyRuntimeAttrs(f);
+  }
   return true;
 }
 

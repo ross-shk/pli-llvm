@@ -422,8 +422,10 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_ctl_ensure", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_free", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_set_dim", {.willReturn = false, .mem = RtMemOtherMod}},
+      // Runtime init/fini: touch global state, always return.
+      {"pli_rt_init", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_rt_fini", {.willReturn = true, .mem = RtMemOtherMod}},
       // CONTROLLED / ON / AREA readers: read global state, never write (ADR-111).
-      // All-location read for the same link-merge reason as above.
       {"pli_ctl_addr", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_ctl_len", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_ctl_depth", {.willReturn = true, .mem = RtMemReadonly}},
@@ -492,7 +494,10 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_file_open_slot", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_lineno", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_pageno", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_set_pageno", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_on_source", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_set_on_source", {.willReturn = false, .mem = RtMemOtherMod}},
+      {"pli_unspec_assign", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_onkey", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
     };
@@ -2442,21 +2447,26 @@ std::string IRGen::run(HProgram& prog) {
   // C entry point: initialise the runtime, invoke the MAIN procedure,
   // terminate normally (this is where FINISH would be raised, see M5).
   if (prog.mainProc) {
-    llvm::Function* main = llvm::Function::Create(llvm::FunctionType::get(b_.getInt32Ty(), false),
-                                                  llvm::Function::ExternalLinkage, "main", &mod_);
-    llvm::BasicBlock* bb = llvm::BasicBlock::Create(ctx_, "entry", main);
-    b_.SetInsertPoint(bb);
-    b_.CreateCall(runtimeFn("pli_rt_init"), {});
-    llvm::Function* mfn = mod_.getFunction(prog.mainProc->irName.substr(1));
-    if (!mfn) {
-      mfn = llvm::Function::Create(llvm::FunctionType::get(b_.getVoidTy(), false),
-                                   llvm::Function::InternalLinkage, prog.mainProc->irName.substr(1),
-                                   &mod_);
-      llvm::BasicBlock* mb = llvm::BasicBlock::Create(ctx_, "entry", mfn);
-      b_.SetInsertPoint(mb);
-      b_.CreateRetVoid();
-    }
-    b_.SetInsertPoint(bb);
+     llvm::Function* main = llvm::Function::Create(llvm::FunctionType::get(b_.getInt32Ty(), false),
+                                                   llvm::Function::ExternalLinkage, "main", &mod_);
+     llvm::BasicBlock* bb = llvm::BasicBlock::Create(ctx_, "entry", main);
+     b_.SetInsertPoint(bb);
+     b_.CreateCall(runtimeFn("pli_rt_init"), {});
+     llvm::Function* mfn = mod_.getFunction(prog.mainProc->irName.substr(1));
+     if (!mfn) {
+       mfn = llvm::Function::Create(llvm::FunctionType::get(b_.getVoidTy(), false),
+                                    llvm::Function::InternalLinkage, prog.mainProc->irName.substr(1),
+                                    &mod_);
+       llvm::BasicBlock* mb = llvm::BasicBlock::Create(ctx_, "entry", mfn);
+       b_.SetInsertPoint(mb);
+       b_.CreateRetVoid();
+     }
+     // Noinline: the optimizer's interprocedural analysis on the inlined body
+     // can mis-reason about opaque pli_* pseudo-variable calls (set_pageno /
+     // pageno) and collapse main() to unreachable. Keeping the MAIN proc as a
+     // call boundary preserves correct control flow through pli_rt_fini.
+     mfn->addFnAttr(llvm::Attribute::NoInline);
+     b_.SetInsertPoint(bb);
     b_.CreateCall(mfn, {});
     b_.CreateCall(runtimeFn("pli_rt_fini"), {});
     b_.CreateRet(i32(0));
@@ -4181,6 +4191,61 @@ void IRGen::emitAssign(HStmt* s) {
       return;
     }
     emitSubstrAssign(sv.ptr, cap, toI64(start), toI64(len), rhs.ptr, rhs.len);
+    return;
+  }
+  // EXPONENT pseudo-variable (rule (123)): exponent(fvar) = n decomposes fvar
+  // via llvm.frexp, replaces the exponent with n, and stores the result back.
+  if (s->target->kind == HExpr::Call && s->target->name == "EXPONENT") {
+    HExpr* t = s->target.get();
+    HExpr* base = t->args[0].get();
+    Symbol* sym = base->sym;
+    llvm::Value* addr = addressOf(sym);
+    llvm::Value* oldVal = b_.CreateLoad(b_.getDoubleTy(), addr, "exp_old");
+    Val rhs = emitExpr(s->value.get());
+    llvm::Value* newExp = toI64(rhs);
+    llvm::StructType* st = llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getInt32Ty()});
+    llvm::Value* pair = b_.CreateCall(
+        intrinsicFn("llvm.frexp.f64.i32", st, {b_.getDoubleTy()}),
+        {oldVal}, "exp_decomp");
+    llvm::Value* mant = b_.CreateExtractValue(pair, 0, "mant");
+    llvm::Value* newExpI32 = b_.CreateTrunc(newExp, b_.getInt32Ty(), "exp_i32");
+    llvm::Value* newVal =
+        b_.CreateCall(intrinsicFn("llvm.ldexp.f64.i32", b_.getDoubleTy(), {b_.getDoubleTy(), b_.getInt32Ty()}),
+                      {mant, newExpI32}, "exp_new");
+    b_.CreateStore(newVal, addr);
+    return;
+  }
+  // PAGENO pseudo-variable (TR 123, ADR-201): pageno(f) = n calls the runtime
+  // setter to update the per-file page counter.
+  if (s->target->kind == HExpr::Call && s->target->name == "PAGENO") {
+    HExpr* t = s->target.get();
+    Val rhs = emitExpr(s->value.get());
+    Val slot = emitExpr(t->args[0].get());
+    b_.CreateCall(runtimeFn("pli_set_pageno"), {toI64(slot), toI64(rhs)});
+    return;
+  }
+  // ONSOURCE pseudo-variable (TR 123, ADR-202): onsource = key calls the runtime
+  // setter to update the source condition key of the current SIGNAL handler.
+  if (s->target->kind == HExpr::VarRef && s->target->name == "ONSOURCE") {
+    Val rhs = emitExpr(s->value.get());
+    b_.CreateCall(runtimeFn("pli_set_on_source"), {b_.CreateTrunc(toI64(rhs), b_.getInt32Ty(), "src32")});
+    return;
+  }
+  // UNSPEC pseudo-variable (rule (123), ADR-196): UNSPEC(var) = bits copies the
+  // RHS bit view into the raw storage of var.
+  if (s->target->kind == HExpr::Call && s->target->name == "UNSPEC") {
+    HExpr* t = s->target.get();
+    HExpr* var = t->args[0].get();
+    Val rhs = emitExpr(s->value.get());
+    if (var->kind == HExpr::VarRef && var->sym) {
+      llvm::Value* addr = addressOf(var->sym);
+      unsigned dstSz = (unsigned)mod_.getDataLayout().getTypeStoreSize(llvmTy(var->sym->ty)).getFixedValue();
+      unsigned srcSz = (unsigned)mod_.getDataLayout().getTypeStoreSize(rhs.reg->getType()).getFixedValue();
+      // Store RHS in a temp so we can pass a pointer to pli_unspec_assign.
+      llvm::Value* tmp = b_.CreateAlloca(rhs.reg->getType(), nullptr, "unspec_rhs");
+      b_.CreateStore(rhs.reg, tmp);
+      b_.CreateCall(runtimeFn("pli_unspec_assign"), {addr, i64(dstSz), tmp, i64(srcSz)});
+    }
     return;
   }
   // Slice assignment (rule 126): a cross-section A(i, *, ...) on either side
@@ -9885,13 +9950,16 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // ONKEY (rule (123)): read whether a SIGNAL is currently being handled.
   if (e->name == "ONKEY") {
     v.ty = e->ty;
-    v.reg = b_.CreateCall(runtimeFn("pli_onkey"), {}, "onkey");
+    // pli_onkey returns i32 (ABI), PL/I BIT(1) is i1 — truncate.
+    v.reg = b_.CreateTrunc(b_.CreateCall(runtimeFn("pli_onkey"), {}, "onkey"),
+                           llvmTy(v.ty), "onkey1");
     result = v;
     return true;
   }
   // ONSOURCE (rule (123)): read the current SIGNAL source procedure key.
   if (e->name == "ONSOURCE") {
     v.ty = e->ty;
+    // pli_on_source returns i32 (ABI), FIXED BIN(15) is i32 — types match.
     v.reg = b_.CreateCall(runtimeFn("pli_on_source"), {}, "onsrc");
     result = v;
     return true;
@@ -9931,7 +9999,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "LINENO") {
     Val a = emitExpr(e->args[0].get());
     v.ty = e->ty;
-    v.reg = b_.CreateCall(runtimeFn("pli_lineno"), {toI64(a)}, "lineno");
+    // pli_lineno returns i64 (ABI), FIXED BIN(31) is i32 — truncate.
+    v.reg = b_.CreateTrunc(b_.CreateCall(runtimeFn("pli_lineno"), {toI64(a)}, "lineno"),
+                           llvmTy(v.ty), "lineno32");
     result = v;
     return true;
   }
@@ -9939,7 +10009,31 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "PAGENO") {
     Val a = emitExpr(e->args[0].get());
     v.ty = e->ty;
-    v.reg = b_.CreateCall(runtimeFn("pli_pageno"), {toI64(a)}, "pageno");
+    // pli_pageno returns i64 (ABI), FIXED BIN(31) is i32 — truncate.
+    v.reg = b_.CreateTrunc(b_.CreateCall(runtimeFn("pli_pageno"), {toI64(a)}, "pageno"),
+                           llvmTy(v.ty), "pageno32");
+    result = v;
+    return true;
+  }
+  // UNSPEC (rule (123), ADR-196): UNSPEC(x) returns the raw storage bytes of x
+  // as a BIT string. Materializes the storage bytes as a byte array value.
+  if (e->name == "UNSPEC") {
+    HExpr* a = e->args[0].get();
+    v.ty = e->ty;
+    llvm::Value* addr;
+    llvm::Type* llvmSrcTy;
+    if (a->kind == HExpr::VarRef && a->sym) {
+      addr = addressOf(a->sym);
+      llvmSrcTy = llvmTy(a->sym->ty);
+    } else {
+      Val av = emitExpr(a);
+      addr = av.reg;
+      llvmSrcTy = llvmTy(av.ty);
+    }
+    unsigned sz = (unsigned)mod_.getDataLayout().getTypeStoreSize(llvmSrcTy).getFixedValue();
+    llvm::ArrayType* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), sz);
+    llvm::Value* bytePtr = b_.CreateBitCast(addr, llvm::PointerType::get(ctx_, 0), "unspec_ptr");
+    v.reg = b_.CreateLoad(arrTy, bytePtr, "unspec_val");
     result = v;
     return true;
   }

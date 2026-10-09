@@ -32,6 +32,10 @@ size_t rt_in_len = 0, rt_in_pos = 0;
  * the FILE ( f ) option of a PUT/GET; when set they override stdout/stdin. */
 #define PLI_MAX_FILES 16
 FILE *rt_pli_files[PLI_MAX_FILES] = {0};
+/* Volatile: the compiler must emit a real memory access for every read/write
+   so the optimizer cannot see through the pli_set_pageno/pli_pageno wrappers
+   and eliminate them as dead stores/loads when bitcode is merged at -O2. */
+volatile long long rt_pli_pages[PLI_MAX_FILES] = {0};
 FILE *rt_out_f = NULL;
 FILE *rt_in_f = NULL;
 

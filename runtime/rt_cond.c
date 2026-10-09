@@ -36,6 +36,7 @@ static _Thread_local struct {
 } pli_err_stack[PLI_ON_MAX];
 static _Thread_local int pli_err_sp = 0;
 static _Thread_local int pli_oncode_val = 0;
+static _Thread_local int pli_on_source_key = 0;
 void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
   if (pli_err_sp < PLI_ON_MAX) {
     pli_err_stack[pli_err_sp].key = key;
@@ -125,9 +126,31 @@ int pli_onkey(void) {
 /* ONSOURCE() (rule (123), Appendix 1): returns the key of the current
    SIGNAL's source condition (0 = SYSTEM/none). */
 int pli_on_source(void) {
-  if (pli_err_sp <= 0)
-    return 0;
-  return (int)pli_err_stack[pli_err_sp - 1].key;
+  if (pli_err_sp > 0)
+    return (int)pli_err_stack[pli_err_sp - 1].key;
+  return pli_on_source_key;
+}
+
+/* ONSOURCE = key (TR 123, ADR-202): set the source condition key of the
+   currently-handled SIGNAL. If inside an ON handler, sets the topmost stack
+   entry; otherwise stores a pending key for later ONSOURCE() reads. */
+void pli_set_on_source(int key) {
+  if (pli_err_sp > 0)
+    pli_err_stack[pli_err_sp - 1].key = (long long)key;
+  else
+    pli_on_source_key = key;
+}
+
+/* UNSPEC(var) = bits (rule (123), ADR-196): copy raw storage. Copies min(srcLen,
+   dstSize) bytes; remaining dst bytes are zero-filled when src is shorter. */
+void pli_unspec_assign(char *dst, long long dstSize, char *src, long long srcLen) {
+  long long n = srcLen < dstSize ? srcLen : dstSize;
+  pli_memcpy(dst, src, (size_t)n);
+  if (n < dstSize) {
+    char *tail = dst + n;
+    for (long long i = 0; i < dstSize - n; ++i)
+      tail[i] = 0;
+  }
 }
 
 /* SUBSCRIPTRANGE abort (no handler): a runtime subscript is out of bounds.

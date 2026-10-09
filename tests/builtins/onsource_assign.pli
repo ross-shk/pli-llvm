@@ -1,0 +1,27 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* ONSOURCE pseudo-variable (TR 25.084 rule 123, ADR-202): ONSOURCE = n sets
+    the source condition key of the currently-handled SIGNAL. */
+ onsource_assign_test: procedure options(main);
+   declare key fixed bin(15);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   /* ONSOURCE without a handler returns 0 (SYSTEM/none). */
+   key = onsource();
+   if key ^= 0 then do;
+      fails = fails + 1;
+      put skip list('FAIL onsource() without handler gave', key);
+   end;
+
+   /* ONSOURCE = assignment sets the key. */
+   onsource = 42;
+   key = onsource();
+   if key ^= 42 then do;
+      fails = fails + 1;
+      put skip list('FAIL onsource = 42 gave', key);
+   end;
+
+   if fails = 0 then put skip list('PASS onsource_assign');
+   else put skip list('FAIL onsource_assign: fails =', fails);
+ end onsource_assign_test;
