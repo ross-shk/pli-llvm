@@ -495,7 +495,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_on_source", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_onkey", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
-    };
+  };
   return table;
 }
 
@@ -592,11 +592,11 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"repeat", true},
       {"translate", true},
       {"trim", true},
-      // P4+: W4 scalar math and conversions default to runtime until P5/W4 flip
-      {"fixed_of_float", false},
-      {"fixed_of_char", false},
-       {"char_of_fixed", true},
-       {"char_of_float", true},
+      // P5 flip: W4 scalar math and conversions default to LLVM
+      {"fixed_of_float", true},
+      {"fixed_of_char", true},
+      {"char_of_fixed", true},
+      {"char_of_float", true},
   };
   return table;
 }
@@ -681,7 +681,7 @@ llvm::Value* IRGen::emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
     return b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen});
   }
   // P1 direct LLVM lowering for INDEX goes here.
-   return emitIndexLLVM(a, aLen, b, bLen);
+  return emitIndexLLVM(a, aLen, b, bLen);
 }
 
 // --- W4 dispatch wrappers (P3) ---
@@ -2063,8 +2063,8 @@ void IRGen::emitCharOfFixedLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Val
     llvm::Value* val = b_.CreateLoad(b_.getInt64Ty(), valSlot, "cof.val_b");
     llvm::Value* cnt = b_.CreateLoad(b_.getInt64Ty(), cntSlot, "cof.cnt_b");
     llvm::Value* mod = b_.CreateURem(val, ten, "cof.urmod");
-     llvm::Value* digit = b_.CreateAdd(
-         b_.CreateTrunc(mod, b_.getInt8Ty(), "cof.mod8"), zeroCh, "cof.digit");
+    llvm::Value* digit =
+        b_.CreateAdd(b_.CreateTrunc(mod, b_.getInt8Ty(), "cof.mod8"), zeroCh, "cof.digit");
     llvm::Value* pos = b_.CreateSub(dbufCap, b_.CreateAdd(cnt, one, "cof.next_cnt"), "cof.pos");
     b_.CreateStore(digit, b_.CreateGEP(b_.getInt8Ty(), dbuf, {pos}, "cof.dptr"));
     b_.CreateStore(b_.CreateAdd(cnt, one, "cof.cnt_inc"), cntSlot, false);
@@ -2075,15 +2075,17 @@ void IRGen::emitCharOfFixedLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Val
   // After extraction: cnt = digit count, digits at dbuf[24-cnt .. 23].
   // For v == 0, cnt = 0; the afterBB block ensures at least one '0' digit.
   startBlock(exitBB);
-  { b_.CreateBr(afterBB); }
+  {
+    b_.CreateBr(afterBB);
+  }
 
   // Write sign + digits to dst, then blank-pad.
   startBlock(afterBB);
   {
     llvm::Value* cnt = b_.CreateLoad(b_.getInt64Ty(), cntSlot, "cof.cnt_a");
     // Zero case: cnt = 0 → use 1 (dbuf[23] was pre-seeded with '0').
-    llvm::Value* cntClamped = b_.CreateSelect(
-        b_.CreateICmpEQ(cnt, zero, "cof.cnt0"), one, cnt, "cof.cnt_clamped");
+    llvm::Value* cntClamped =
+        b_.CreateSelect(b_.CreateICmpEQ(cnt, zero, "cof.cnt0"), one, cnt, "cof.cnt_clamped");
     llvm::Value* neg = b_.CreateLoad(b_.getInt1Ty(), negSlot, "cof.neg_a");
     // If negative, write '-' at dst[0]; digits start at dst[1] (or dst[0]).
     llvm::Value* dstOff = b_.CreateSelect(neg, one, zero, "cof.dst_off");
@@ -2095,15 +2097,14 @@ void IRGen::emitCharOfFixedLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Val
                    /*volatile=*/false);
     // Copy digit chars to dst[dstOff..].
     b_.CreateMemCpy(b_.CreateGEP(b_.getInt8Ty(), dst, {dstOff}, "cof.dst_start"),
-                    llvm::MaybeAlign(), srcPtr, llvm::MaybeAlign(),
-                    cntClamped);
+                    llvm::MaybeAlign(), srcPtr, llvm::MaybeAlign(), cntClamped);
     // Blank-pad: dst[dstOff + cnt .. cap) with spaces.
     llvm::Value* writeEnd = b_.CreateAdd(dstOff, cntClamped, "cof.wend");
-    llvm::Value* padLen = b_.CreateSelect(
-        b_.CreateICmpUGT(cap, writeEnd, "cof.cap_gt_wend"),
-        b_.CreateSub(cap, writeEnd, "cof.pad_len"), zero, "cof.padlen");
-    b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {writeEnd}, "cof.padptr"),
-                    space, padLen, llvm::MaybeAlign(), false);
+    llvm::Value* padLen =
+        b_.CreateSelect(b_.CreateICmpUGT(cap, writeEnd, "cof.cap_gt_wend"),
+                        b_.CreateSub(cap, writeEnd, "cof.pad_len"), zero, "cof.padlen");
+    b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {writeEnd}, "cof.padptr"), space, padLen,
+                    llvm::MaybeAlign(), false);
   }
 }
 
@@ -2115,7 +2116,6 @@ void IRGen::emitCharOfFloatLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Val
   llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
   llvm::Value* space = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
   llvm::Value* cap = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "cof.cap");
-  llvm::Value* xc = x;
 
   // Temp buffer for sprintf output (max ~16 chars for %.6g, +1 for NUL).
   llvm::Value* tmp = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), 48), "cof.tmp");
@@ -2123,21 +2123,21 @@ void IRGen::emitCharOfFloatLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Val
   // Format string "%.6g".
   llvm::Value* fmt = b_.CreateGlobalString("%.6g", "cof.fmt");
   // sprintf(char*, const char*, double) — variadic but only one vararg.
-  llvm::FunctionType* sprintfType = llvm::FunctionType::get(
-      b_.getInt32Ty(), {b_.getPtrTy(), b_.getPtrTy()}, true);
+  llvm::FunctionType* sprintfType =
+      llvm::FunctionType::get(b_.getInt32Ty(), {b_.getPtrTy(), b_.getPtrTy()}, true);
   llvm::Function* sprintfFn = llvm::cast<llvm::Function>(
       F->getParent()->getOrInsertFunction("sprintf", sprintfType).getCallee());
-  llvm::Value* n = b_.CreateCall(sprintfFn, {tmpPtr, fmt, xc}, "cof.n");
+  llvm::Value* n = b_.CreateCall(sprintfFn, {tmpPtr, fmt, x}, "cof.n");
   // Copy min(n, cap) bytes from tmp to dst, then blank-pad.
   llvm::Value* n64 = b_.CreateZExtOrTrunc(n, b_.getInt64Ty(), "cof.n64");
-  llvm::Value* copyLen = b_.CreateSelect(
-      b_.CreateICmpULT(n64, cap, "cof.nltcap"), n64, cap, "cof.cplen");
-   b_.CreateMemCpy(dst, llvm::MaybeAlign(), tmpPtr, llvm::MaybeAlign(), copyLen);
-  llvm::Value* padLen = b_.CreateSelect(
-      b_.CreateICmpUGT(cap, copyLen, "cof.cap_gt_cl"),
-      b_.CreateSub(cap, copyLen, "cof.pad_len"), zero, "cof.padlen");
-  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {copyLen}, "cof.padptr"),
-                  space, padLen, llvm::MaybeAlign(), false);
+  llvm::Value* copyLen =
+      b_.CreateSelect(b_.CreateICmpULT(n64, cap, "cof.nltcap"), n64, cap, "cof.cplen");
+  b_.CreateMemCpy(dst, llvm::MaybeAlign(), tmpPtr, llvm::MaybeAlign(), copyLen);
+  llvm::Value* padLen =
+      b_.CreateSelect(b_.CreateICmpUGT(cap, copyLen, "cof.cap_gt_cl"),
+                      b_.CreateSub(cap, copyLen, "cof.pad_len"), zero, "cof.padlen");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {copyLen}, "cof.padptr"), space, padLen,
+                  llvm::MaybeAlign(), false);
 }
 llvm::Function* IRGen::runtimeFn(const std::string& name) {
   auto& sigs = kRuntimeSigs();
@@ -9103,27 +9103,27 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* r = b_.CreateSelect(neg, m1, b_.CreateSelect(pos, one, i64(0), "signp"), "sign");
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "sign32");
-     result = v;
-     return true;
-   }
-   // EXPONENT (rule (123), Appendix 1): the binary exponent e such that
-   // x = f * 2^e, 0.5 <= |f| < 1; 0 for 0.0 or NaN. Uses llvm.frexp.f64.
-   if (e->name == "EXPONENT") {
-     Val a = emitExpr(e->args[0].get());
-     Val f = convert(a, Type::flt(6), e->loc);
-     // frexp returns {mantissa, exponent}; EXPONENT is the exponent part.
-     llvm::StructType* st = llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getInt32Ty()});
-     llvm::Value* pair = b_.CreateCall(intrinsicFn("llvm.frexp.f64.i32", st, {b_.getDoubleTy()}),
-                                      {f.reg}, "exp");
-     // frexp yields i32; EXPONENT wants FIXED BIN(63), widen to i64.
-     llvm::Value* exp = b_.CreateExtractValue(pair, 1, "exp");
-     llvm::Value* exp64 = b_.CreateSExt(exp, b_.getInt64Ty(), "exp64");
-     v.ty = e->ty;
-     v.reg = exp64;
-     result = v;
-     return true;
-   }
-   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
+    result = v;
+    return true;
+  }
+  // EXPONENT (rule (123), Appendix 1): the binary exponent e such that
+  // x = f * 2^e, 0.5 <= |f| < 1; 0 for 0.0 or NaN. Uses llvm.frexp.f64.
+  if (e->name == "EXPONENT") {
+    Val a = emitExpr(e->args[0].get());
+    Val f = convert(a, Type::flt(6), e->loc);
+    // frexp returns {mantissa, exponent}; EXPONENT is the exponent part.
+    llvm::StructType* st = llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getInt32Ty()});
+    llvm::Value* pair =
+        b_.CreateCall(intrinsicFn("llvm.frexp.f64.i32", st, {b_.getDoubleTy()}), {f.reg}, "exp");
+    // frexp yields i32; EXPONENT wants FIXED BIN(63), widen to i64.
+    llvm::Value* exp = b_.CreateExtractValue(pair, 1, "exp");
+    llvm::Value* exp64 = b_.CreateSExt(exp, b_.getInt64Ty(), "exp64");
+    v.ty = e->ty;
+    v.reg = exp64;
+    result = v;
+    return true;
+  }
+  // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
   // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
   // COSD, TAND, ATAND. The argument is converted to FLOAT and the matching
@@ -9392,31 +9392,31 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // ZERODIVIDE (rule 94): as for `/`, a zero divisor traps, resuming with 0.
     llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
-     v.reg = zerodivideResume(dz, div, flt(0.0));
-     result = v;
-     return true;
-   }
-   // ADD/SUBTRACT (rule (123), Appendix 1): a+b / a-b in the common type, or
-   // FIXED BINARY(p,s) when a precision/scale override is given. FIXED overflow
-   // is checked (QR1.2); FLOAT goes through plain fadd/fsub.
-   if (e->name == "ADD" || e->name == "SUBTRACT") {
-     Val a = emitExpr(e->args[0].get());
-     Val b = emitExpr(e->args[1].get());
-     const Type& common = e->ty;
-     Val av = convert(a, common, e->loc);
-     Val bv = convert(b, common, e->loc);
-     v.ty = common;
-     if (common.k == TK::Float) {
-       v.reg = e->name == "ADD" ? b_.CreateFAdd(av.reg, bv.reg, "add")
-                                : b_.CreateFSub(av.reg, bv.reg, "sub");
-     } else {
-       Tok op = e->name == "ADD" ? Tok::Plus : Tok::Minus;
-       v.reg = checkedArith(op, av.reg, bv.reg);
-     }
-     result = v;
-     return true;
-   }
-   if (e->name == "ROUND") {
+    v.reg = zerodivideResume(dz, div, flt(0.0));
+    result = v;
+    return true;
+  }
+  // ADD/SUBTRACT (rule (123), Appendix 1): a+b / a-b in the common type, or
+  // FIXED BINARY(p,s) when a precision/scale override is given. FIXED overflow
+  // is checked (QR1.2); FLOAT goes through plain fadd/fsub.
+  if (e->name == "ADD" || e->name == "SUBTRACT") {
+    Val a = emitExpr(e->args[0].get());
+    Val b = emitExpr(e->args[1].get());
+    const Type& common = e->ty;
+    Val av = convert(a, common, e->loc);
+    Val bv = convert(b, common, e->loc);
+    v.ty = common;
+    if (common.k == TK::Float) {
+      v.reg = e->name == "ADD" ? b_.CreateFAdd(av.reg, bv.reg, "add")
+                               : b_.CreateFSub(av.reg, bv.reg, "sub");
+    } else {
+      Tok op = e->name == "ADD" ? Tok::Plus : Tok::Minus;
+      v.reg = checkedArith(op, av.reg, bv.reg);
+    }
+    result = v;
+    return true;
+  }
+  if (e->name == "ROUND") {
     Val x = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val xd = convert(x, Type::flt(6), e->loc);
@@ -9624,46 +9624,53 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       result = v;
       return true;
     }
+    // FIXED(numeric): a FIXED DECIMAL/BINARY source converts to the declared
+    // FIXED type via convert(), which handles scale rescaling (ADR-006).
+    v = convert(a, e->ty, e->loc);
+    result = v;
+    return true;
   }
   // BINARY/DECIMAL/FLOAT (rule (123), Appendix 1): numeric conversion with
-   // optional precision/scale override. char input reuses the FIXED(char)
-   // decimal-text parse path (CONVERSION trap, ADR-170); numeric input goes
-   // through convert(), which already handles float->fixed scaling (ADR-006)
-   // and fixed->float back-scaling.
-     if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
-       Val a = emitExpr(e->args[0].get());
-       if (a.ty.isChar()) {
-         // char -> numeric: parse decimal text via the FIXED(char) path, then
-         // convert the parsed FIXED BIN(63) to the requested target type.
-         llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
-         llvm::Value* r;
-         if (useRuntimeCall("fixed_of_char")) {
-           r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len, okSlot}, "fxc_rt");
-         } else {
-           r = emitFixedOfCharLLVM(a.ptr, a.len, okSlot);
-         }
-         if (convChecks()) {
-           llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
-           llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
-           llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
-           llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
-           b_.CreateCondBr(fail, trapBB, okBB);
-           b_.SetInsertPoint(trapBB);
-           emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
-           b_.SetInsertPoint(okBB);
-         }
-         Val fixed;
-         fixed.ty = Type::fixedBin(63, 0);
-         fixed.reg = b_.CreateTrunc(r, b_.getInt64Ty(), "fxc");
-         v = convert(fixed, e->ty, e->loc);
-         result = v;
-         return true;
-       }
-       v = convert(a, e->ty, e->loc);
-       result = v;
-       return true;
-     }
-   // CHAR (rule (123)): renders a scalar value as text into a fresh buffer;
+  // optional precision/scale override. char input reuses the FIXED(char)
+  // decimal-text parse path (CONVERSION trap, ADR-170); numeric input goes
+  // through convert(), which already handles float->fixed scaling (ADR-006)
+  // and fixed->float back-scaling.
+  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
+    Val a = emitExpr(e->args[0].get());
+    if (a.ty.isChar()) {
+      // char -> numeric: parse decimal text via the FIXED(char) path, then
+      // convert the parsed FIXED BIN(63) to the requested target type.
+      llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
+      llvm::Value* r;
+      if (useRuntimeCall("fixed_of_char")) {
+        r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len, okSlot}, "fxc_rt");
+      } else {
+        r = emitFixedOfCharLLVM(a.ptr, a.len, okSlot);
+      }
+      if (convChecks()) {
+        llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
+        llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
+        llvm::BasicBlock* trapBB =
+            llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
+        llvm::BasicBlock* okBB =
+            llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
+        b_.CreateCondBr(fail, trapBB, okBB);
+        b_.SetInsertPoint(trapBB);
+        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+        b_.SetInsertPoint(okBB);
+      }
+      Val fixed;
+      fixed.ty = Type::fixedBin(63, 0);
+      fixed.reg = b_.CreateTrunc(r, b_.getInt64Ty(), "fxc");
+      v = convert(fixed, e->ty, e->loc);
+      result = v;
+      return true;
+    }
+    v = convert(a, e->ty, e->loc);
+    result = v;
+    return true;
+  }
+  // CHAR (rule (123)): renders a scalar value as text into a fresh buffer;
   // a character argument passes through (truncated/padded by assignment).
   if (e->name == "CHAR") {
     Val a = emitExpr(e->args[0].get());
@@ -9700,12 +9707,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     if (!a.ty.isChar()) {
       int buflen = 13; // enough for any FIXED BIN(31,0): sign + 10 digits + nul
       cmd = charTemp(buflen);
-       if (a.ty.k == TK::Float)
-         emitCharOfFloat(cmd.ptr, cmd.len, a.reg);
-       else {
-         llvm::Value* iv = toI64(convert(a, Type::fixedBin(31, 0), e->loc));
-         emitCharOfFixed(cmd.ptr, cmd.len, iv);
-       }
+      if (a.ty.k == TK::Float)
+        emitCharOfFloat(cmd.ptr, cmd.len, a.reg);
+      else {
+        llvm::Value* iv = toI64(convert(a, Type::fixedBin(31, 0), e->loc));
+        emitCharOfFixed(cmd.ptr, cmd.len, iv);
+      }
     }
     v.ty = e->ty;
     v.reg = b_.CreateCall(runtimeFn("pli_system"), {cmd.ptr, cmd.len}, "syso");
@@ -10007,8 +10014,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val hi = emitExpr(e->args[1].get());
     Val out = charTemp(e->ty.len);
     b_.CreateCall(runtimeFn("pli_isochar"),
-                  {out.ptr, out.len,
-                   b_.CreateTrunc(toI64(lo), b_.getInt32Ty(), "isochar.lo"),
+                  {out.ptr, out.len, b_.CreateTrunc(toI64(lo), b_.getInt32Ty(), "isochar.lo"),
                    b_.CreateTrunc(toI64(hi), b_.getInt32Ty(), "isochar.hi")});
     out.len = i64(e->ty.len);
     result = out;
