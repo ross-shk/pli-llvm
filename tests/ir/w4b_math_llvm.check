@@ -1,0 +1,15 @@
+CHECK-NOT: call.*@pli_sqrt
+CHECK-NOT: call.*@pli_exp
+CHECK-NOT: call.*@pli_log
+CHECK-NOT: call.*@pli_sin
+CHECK-NOT: call.*@pli_cos
+CHECK-NOT: call.*@pli_tan
+CHECK-NOT: call.*@pli_log2
+CHECK-NOT: call.*@pli_log10
+CHECK-NOT: call.*@pli_atan
+CHECK-NOT: call.*@pli_sinh
+CHECK-NOT: call.*@pli_cosh
+CHECK-NOT: call.*@pli_tanh
+CHECK-NOT: call.*@pli_atanh
+CHECK: call.*@llvm.sqrt.f64
+CHECK: call.*@llvm.atan2.f64

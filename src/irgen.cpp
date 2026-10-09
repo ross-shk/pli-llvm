@@ -591,12 +591,36 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"repeat", true},
       {"translate", true},
       {"trim", true},
-      // P5 flip: W4 scalar math and conversions default to LLVM
-      {"fixed_of_float", true},
-      {"fixed_of_char", true},
-      {"char_of_fixed", true},
-      {"char_of_float", true},
-  };
+       // P5 flip: W4 scalar math and conversions default to LLVM
+       {"fixed_of_float", true},
+       {"fixed_of_char", true},
+       {"char_of_fixed", true},
+       {"char_of_float", true},
+       // P5 flip: W4b math transcendentals default to LLVM (intrinsics vs pli_* musl-port)
+       {"pli_sqrt", true},
+       {"pli_exp", true},
+       {"pli_log", true},
+       {"pli_sin", true},
+       {"pli_cos", true},
+       {"pli_tan", true},
+       {"pli_log2", true},
+       {"pli_log10", true},
+       {"pli_atan", true},
+       {"pli_sinh", true},
+       {"pli_cosh", true},
+       {"pli_tanh", true},
+       {"pli_atanh", true},
+       {"pli_erf", true},
+       {"pli_erfc", true},
+       {"pli_sind", true},
+       {"pli_cosd", true},
+       {"pli_tand", true},
+       {"pli_atand", true},
+       {"pli_asin", true},
+       {"pli_acos", true},
+       {"pli_cbrt", true},
+       {"pli_atan2", true},
+   };
   return table;
 }
 
@@ -627,12 +651,36 @@ static const std::set<std::string>& kLLVMLowerings() {
       "repeat",
       "translate",
       "trim",
-      // W4 scalar conversions
-      "fixed_of_float",
-      "fixed_of_char",
-      "char_of_fixed",
-      "char_of_float",
-  };
+       // W4 scalar conversions
+       "fixed_of_float",
+       "fixed_of_char",
+       "char_of_fixed",
+       "char_of_float",
+       // W4b math transcendentals (intrinsics)
+       "pli_sqrt",
+       "pli_exp",
+       "pli_log",
+       "pli_sin",
+       "pli_cos",
+       "pli_tan",
+       "pli_log2",
+       "pli_log10",
+       "pli_atan",
+       "pli_sinh",
+       "pli_cosh",
+       "pli_tanh",
+       "pli_atanh",
+       "pli_erf",
+       "pli_erfc",
+       "pli_sind",
+       "pli_cosd",
+       "pli_tand",
+       "pli_atand",
+       "pli_asin",
+       "pli_acos",
+       "pli_cbrt",
+       "pli_atan2",
+   };
   return table;
 }
 
@@ -9123,15 +9171,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   // Scalar math built-ins (QR2.7, Appendix 1, <math.h> analogues): FLOOR,
-  // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
-  // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
-  // COSD, TAND, ATAND. The argument is converted to FLOAT and the matching
-  // function is called. Non-degree variants map to LLVM intrinsics (inlined
-  // and lowered to hardware/libm by the optimizer), except TAN/ATAN/SINH/
-  // COSH/TANH/ASIN/ACOS on LLVM < 20, whose backends leave the llvm.* call
-  // in the object file (undefined symbol at link); those use the pli_*
-  // musl-port wrappers instead. Degree variants keep pli_* runtime wrappers
-  // that convert to radians first.
+   // CEIL, SQRT, EXP, LOG, SIN, COS, TAN, LOG2, LOG10, ATAN, SINH, COSH, TANH,
+   // ATANH, ERF, ERFC, ASIN, ACOS, CBRT, and the degree trig variants SIND,
+   // COSD, TAND, ATAND. All variants map to LLVM intrinsics on LLVM 22+
+   // (intrinsicFn) with a pli_* musl-port fallback for degree variants.
+   // W4b: useRuntimeCall gates intrinsics vs pli_* so --experimental-lowering=runtime
+   // forces runtime calls for differential testing.
   if (e->name == "FLOOR" || e->name == "CEIL" || e->name == "SQRT" || e->name == "EXP" ||
       e->name == "LOG" || e->name == "SIN" || e->name == "COS" || e->name == "TAN" ||
       e->name == "LOG2" || e->name == "LOG10" || e->name == "ATAN" || e->name == "SINH" ||
@@ -9148,44 +9193,41 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                                             "COS",   "TAN",  "LOG2",  "LOG10", "ATAN", "SINH",
                                             "COSH",  "TANH", "ATANH", "ERF",   "ERFC", "SIND",
                                             "COSD",  "TAND", "ATAND", "ASIN",  "ACOS", "CBRT"};
-    static const char* const kLLVMIntrinsic[] = {
-        "llvm.floor.f64", "llvm.ceil.f64", "llvm.sqrt.f64", "llvm.exp.f64",  "llvm.log.f64",
-        "llvm.sin.f64",   "llvm.cos.f64",  "llvm.tan.f64",  "llvm.log2.f64", "llvm.log10.f64",
-        "llvm.atan.f64",  "llvm.sinh.f64", "llvm.cosh.f64", "llvm.tanh.f64", nullptr,
-        nullptr,          nullptr,         nullptr,         nullptr,         nullptr,
-        nullptr,          "llvm.asin.f64", "llvm.acos.f64", nullptr};
+     static const char* const kLLVMIntrinsic[] = {
+         "llvm.floor.f64", "llvm.ceil.f64", "llvm.sqrt.f64", "llvm.exp.f64",  "llvm.log.f64",
+         "llvm.sin.f64",   "llvm.cos.f64",  "llvm.tan.f64",  "llvm.log2.f64", "llvm.log10.f64",
+         "llvm.atan.f64",  "llvm.sinh.f64", "llvm.cosh.f64", "llvm.tanh.f64", nullptr,
+         nullptr,          nullptr,         nullptr,         nullptr,         nullptr,
+         nullptr,          "llvm.asin.f64", "llvm.acos.f64", nullptr};
     int ix = 0;
     for (int i = 0; i < 24; ++i)
       if (e->name == kMathName[i])
         ix = i;
-    v.ty = e->ty;
-    const char* intrinsic = kLLVMIntrinsic[ix];
-#if LLVM_VERSION_MAJOR < 20
-    // LLVM < 20 has no backend lowering for these seven (the llvm.* call
-    // survives to the object file and fails the link); route them through
-    // the pli_* musl-port wrappers, which exist for every entry above.
-    if (intrinsic &&
-        (e->name == "TAN" || e->name == "ATAN" || e->name == "SINH" || e->name == "COSH" ||
-         e->name == "TANH" || e->name == "ASIN" || e->name == "ACOS"))
-      intrinsic = nullptr;
-#endif
-    if (intrinsic)
-      v.reg = b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x.reg},
-                            "math");
-    else
-      v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
-    result = v;
-    return true;
+     v.ty = e->ty;
+     const char* intrinsic = kLLVMIntrinsic[ix];
+     bool useRT = useRuntimeCall(kMathFn[ix]);
+     if (intrinsic && !useRT)
+       v.reg = b_.CreateCall(intrinsicFn(intrinsic, b_.getDoubleTy(), {b_.getDoubleTy()}), {x.reg},
+                             "math");
+     else
+       v.reg = b_.CreateCall(runtimeFn(kMathFn[ix]), {x.reg}, "math");
+     result = v;
+     return true;
   }
-  // ATAN2(y, x) (CM5): both arguments convert to FLOAT, C argument order.
-  if (e->name == "ATAN2") {
-    Val y = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
-    Val x = convert(emitExpr(e->args[1].get()), Type::flt(6), e->loc);
-    v.ty = e->ty;
-    v.reg = b_.CreateCall(runtimeFn("pli_atan2"), {y.reg, x.reg}, "math");
-    result = v;
-    return true;
-  }
+   // ATAN2(y, x) (CM5): both arguments convert to FLOAT, C argument order.
+   if (e->name == "ATAN2") {
+     Val y = convert(emitExpr(e->args[0].get()), Type::flt(6), e->loc);
+     Val x = convert(emitExpr(e->args[1].get()), Type::flt(6), e->loc);
+     v.ty = e->ty;
+     if (useRuntimeCall("pli_atan2"))
+       v.reg = b_.CreateCall(runtimeFn("pli_atan2"), {y.reg, x.reg}, "atan2");
+     else
+       v.reg = b_.CreateCall(intrinsicFn("llvm.atan2.f64", b_.getDoubleTy(),
+                                        {b_.getDoubleTy(), b_.getDoubleTy()}),
+                            {y.reg, x.reg}, "atan2");
+     result = v;
+     return true;
+   }
   // Complex component/conjugate built-ins (QR2.2/CM5, Appendix 1). A complex
   // value is an {double,double} struct held in Val::cpx. COMPLEX builds one
   // from two FLOAT parts; REAL/IMAG extract a part as a FLOAT; CONJG negates

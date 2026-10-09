@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* W4b IR golden (llvm mode): math transcendentals must use llvm.* intrinsics,
+   not pli_* runtime calls. */
+w4b_math_llvm: procedure options(main);
+   declare f float(6);
+   f = sqrt(4.0) + exp(1.0) + atan2(1.0, 1.0);
+   put skip list(f);
+end w4b_math_llvm;

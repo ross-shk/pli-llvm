@@ -1,0 +1,5 @@
+CHECK: call.*@pli_sqrt
+CHECK: call.*@pli_exp
+CHECK: call.*@pli_atan2
+CHECK-NOT: call.*@llvm.sqrt.f64
+CHECK-NOT: call.*@llvm.atan2.f64
