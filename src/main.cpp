@@ -29,6 +29,9 @@
 #include "lexer.h"
 #include "parser.h"
 #include "preprocessor.h"
+#if defined(PLIC_ENABLE_MLIR)
+#include "mlir/PliDialect.h"
+#endif
 #include "sema.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/TargetParser/Host.h"
@@ -269,7 +272,8 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
 static bool compileOne(Preprocessor& preprocessor, const std::string& input, std::string& output,
                        std::string& triple, const std::string& clangPath,
                        const std::string& sysparm, bool sysparmExplicit, bool compileOnly,
-                       bool semaCompileOnly, bool emitLLVM, bool syntaxOnly, bool print_hir,
+                       bool semaCompileOnly, bool emitLLVM, bool emitMlir, bool syntaxOnly,
+                        bool print_hir,
                        bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks,
                        bool noConvChecks, bool noSubChecks, const std::string& optLevel,
                        const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
@@ -330,7 +334,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   fs::path inPath(input);
   std::string base = inPath.stem().string();
 
-  if (emitLLVM) {
+  if (emitLLVM || emitMlir) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
                 runtimeBc, false, lowerMode, perOpOverrides);
     std::string ir = irgen.run(hir);
@@ -339,6 +343,20 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // -o is restricted to a single input (checked in main); otherwise each
     // input writes its own <base>.ll.
     std::string dest = output.empty() ? base + ".ll" : output;
+    if (emitMlir) {
+#if defined(PLIC_ENABLE_MLIR)
+      // P2: -emit-mlir prints the canary MLIR helper module, not PL/I IR.
+      // The canary exercises the full MLIR pipeline without lowering W1-W5 ops.
+      if (!mlir::plic::runMlirCanary(llvm::outs()))
+        return false;
+      if (verbose)
+        std::cerr << "plic: -emit-mlir emitted canary module (synthetic)\n";
+      return true;
+#else
+      std::cerr << "plic: -emit-mlir requires an MLIR-enabled build (-DPLIC_ENABLE_MLIR=ON)\n";
+      return false;
+#endif
+    }
     std::ofstream os(dest, std::ios::binary);
     if (!os) {
       std::cerr << "plic: cannot write " << dest << "\n";
@@ -662,9 +680,9 @@ int main(int argc, char** argv) {
   std::vector<std::string> pliInputs, foreignObjs;
   for (const std::string& in : inputs)
     (isPLISource(in) ? pliInputs : foreignObjs).push_back(in);
-  if (!foreignObjs.empty() && (compileOnly || emitLLVM || syntaxOnly || print_hir)) {
+  if (!foreignObjs.empty() && (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir)) {
     std::cerr
-        << "plic: object inputs cannot be used with -c/-emit-llvm/-fsyntax-only/--print-hir\n";
+        << "plic: object inputs cannot be used with -c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir\n";
     return 2;
   }
   const bool linkOnly = pliInputs.empty();
@@ -832,7 +850,7 @@ int main(int argc, char** argv) {
     std::cerr << "plic: cannot specify -o when generating multiple output files\n";
     return 2;
   }
-  if (multi && !output.empty() && (emitLLVM || syntaxOnly || print_hir)) {
+  if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir)) {
     std::cerr << "plic: -o is ambiguous with a per-file mode and multiple inputs\n";
     return 2;
   }
@@ -869,19 +887,13 @@ int main(int argc, char** argv) {
 
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
-  const bool terminalMode = compileOnly || emitLLVM || syntaxOnly || print_hir;
+  const bool terminalMode = compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir;
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
-  if (emitMlir) {
-#if !defined(PLIC_ENABLE_MLIR)
-    std::cerr << "plic: -emit-mlir requires an MLIR-enabled build (-DPLIC_ENABLE_MLIR=ON)\n";
+  if (emitMlir && (lowerMode == LowerMode::Runtime || lowerMode == LowerMode::LLVM)) {
+    std::cerr << "plic: -emit-mlir conflicts with --experimental-lowering=runtime/llvm\n";
     return 2;
-#endif
-    if (lowerMode == LowerMode::Runtime || lowerMode == LowerMode::LLVM) {
-      std::cerr << "plic: -emit-mlir conflicts with --experimental-lowering=runtime/llvm\n";
-      return 2;
-    }
   }
   if (emitMlir)
     emitLLVM = true; // -emit-mlir also stops after emission
@@ -910,7 +922,7 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < pliInputs.size(); ++i) {
     std::string outObj;
     if (!compileOne(preprocessor, pliInputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
-                    compileOnly, semaCompileOnly, emitLLVM, syntaxOnly, print_hir, keepLL, verbose,
+                    compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, keepLL, verbose,
                     noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel, backendFlags,
                     keepLLDir, (int)i, &outObj, runtimeBc, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, needClangPipeline))

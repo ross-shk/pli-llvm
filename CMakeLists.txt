@@ -79,6 +79,22 @@ endif()
 find_package(Clang REQUIRED CONFIG)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
+
+if(PLIC_ENABLE_MLIR)
+  find_package(MLIR REQUIRED CONFIG)
+  message(STATUS "Using MLIR from ${MLIR_DIR}")
+  # Verify LLVM and MLIR share the same installation prefix and version.
+  get_filename_component(_mlir_lib_prefix "${MLIR_DIR}" DIRECTORY)
+  get_filename_component(_llvm_lib_prefix "${LLVM_DIR}" DIRECTORY)
+  if(NOT "${_mlir_lib_prefix}" STREQUAL "${_llvm_lib_prefix}")
+    message(WARNING "MLIR (${MLIR_DIR}) does not match LLVM (${LLVM_DIR}) — versions or prefixes differ")
+  endif()
+  list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+  include(AddMLIR)
+  include(TableGen)
+  add_definitions(${MLIR_DEFINITIONS})
+endif()
+
 add_definitions(${LLVM_DEFINITIONS})
 # Expose implicit C/C++ std-lib include paths in compile_commands.json so that
 # clang-tidy (from the LLVM install) can resolve <cstdio>, <vector>, etc.
@@ -100,6 +116,35 @@ set(PLIC_SOURCES
   src/codegen.cpp
   src/embedded_runtime.cpp
 )
+
+# P2: MLIR canary dialect sources (compiled only with PLIC_ENABLE_MLIR=ON).
+# The canary is a synthetic operation that exercises the full MLIR pipeline
+# without lowering any W1-W5 PL/I operation.
+if(PLIC_ENABLE_MLIR)
+  set(LLVM_TARGET_DEFINITIONS src/mlir/pli_dialect.td)
+  mlir_tablegen(PliDialect.h.inc -gen-dialect-decls -dialect=pli
+    EXTRA_INCLUDES ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
+  mlir_tablegen(PliDialect.cpp.inc -gen-dialect-defs -dialect=pli
+    EXTRA_INCLUDES ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
+  mlir_tablegen(PliOps.h.inc -gen-op-decls -dialect=pli
+    EXTRA_INCLUDES ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
+  mlir_tablegen(PliOps.cpp.inc -gen-op-defs -dialect=pli
+    EXTRA_INCLUDES ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
+  add_library(plic_mlir STATIC
+    src/mlir/PliDialect.cpp
+    src/mlir/PliLowering.cpp
+    src/mlir/PliMlirCanary.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/PliDialect.h.inc
+    ${CMAKE_CURRENT_BINARY_DIR}/PliOps.h.inc
+    ${CMAKE_CURRENT_BINARY_DIR}/PliDialect.cpp.inc
+    ${CMAKE_CURRENT_BINARY_DIR}/PliOps.cpp.inc)
+   target_include_directories(plic_mlir PUBLIC
+    ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${MLIR_INCLUDE_DIRS})
+  # MLIR shared library provides all needed MLIR symbols (MLIR_LINK_MLIR_DYLIB=1).
+  target_link_libraries(plic_mlir PUBLIC MLIR)
+  target_compile_features(plic_mlir PRIVATE cxx_std_20)
+endif()
 
 set(RT_SRCS
   runtime/rt_core.c runtime/rt_stream.c runtime/rt_string.c
@@ -186,6 +231,13 @@ target_compile_definitions(plic PRIVATE
   PLIC_HAVE_WINDOWS_X86_64_RUNTIME=1
   PLIC_HAVE_WINDOWS_AARCH64_RUNTIME=1)
 
+# P2: wire MLIR canary library into plic when MLIR is enabled.
+if(PLIC_ENABLE_MLIR)
+  target_compile_definitions(plic PRIVATE PLIC_ENABLE_MLIR)
+  target_link_libraries(plic PRIVATE plic_mlir)
+  # plic_mlir is PUBLIC-linked, so MLIR_INCLUDE_DIRS propagates transitively.
+endif()
+
 # Link LLVM components needed for in-process codegen + linking.
 # Shared-LLVM builds (Debian LLVM 22 sets LLVM_LINK_LLVM_DYLIB): link the
 # shared libLLVM only. Mixing static component archives with the shared lib
@@ -227,6 +279,11 @@ endif()
 target_link_libraries(plic PRIVATE plic_rules
   ${llvm_libs_lld} ${llvm_libs_mc} ${llvm_libs_core}
   clangFrontend clangParse clangLex clangBasic clangAST)
+
+# P2: link MLIR targets when MLIR is enabled.
+if(PLIC_ENABLE_MLIR)
+  target_link_libraries(plic PRIVATE plic_mlir)
+endif()
 
 # compiler-rt provides __divti3 (128-bit division) needed for i128 arithmetic
 # on Windows where the CRT doesn't include it.
@@ -313,6 +370,10 @@ endif()
 
 # Cross-compilation bitcode generation (Phase 2+): requires sysroots.
 option(PLIC_CROSS_BITCODE "Generate bitcode for cross-targets (needs sysroots)" OFF)
+
+# P2: optional MLIR support for the canary dialect spike. Off by default;
+# an MLIR-enabled build must link against the matching LLVM/MLIR package.
+option(PLIC_ENABLE_MLIR "Build the experimental MLIR canary dialect (P2)" OFF)
 
 # libpli runtime (C11). One source per section so the archive strips unused
 # pieces (ADR-079); the same sources feed both runtime paths below.
@@ -493,11 +554,15 @@ find_program(SCAN_BUILD_BIN NAMES scan-build scan-build-py
   HINTS ${LLVM_TOOLS_BINARY_DIR})
 
 # All project sources managed by clang-format / clang-tidy.
-set(ALL_CPP_SOURCES ${PLIC_SOURCES})
-set(ALL_CPP_HEADERS
-  src/ast.h src/codegen.h src/diag.h src/embedded_runtime.h src/explain.h
-  src/hir.h src/irgen.h src/lexer.h src/parser.h src/preprocessor.h
-  src/sema.h src/target.h src/token.h src/types.h)
+  set(ALL_CPP_SOURCES ${PLIC_SOURCES})
+  set(ALL_CPP_HEADERS
+    src/ast.h src/codegen.h src/diag.h src/embedded_runtime.h src/explain.h
+    src/hir.h src/irgen.h src/lexer.h src/parser.h src/preprocessor.h
+    src/sema.h src/target.h src/token.h src/types.h)
+  if(PLIC_ENABLE_MLIR)
+    list(APPEND ALL_CPP_SOURCES src/mlir/PliDialect.cpp src/mlir/PliLowering.cpp)
+    list(APPEND ALL_CPP_HEADERS src/mlir/PliDialect.h)
+  endif()
 set(ALL_C_SOURCES ${RT_SRCS})
 set(ALL_C_HEADERS
   runtime/pli_rt.h runtime/pli_rt_state.h runtime/pli_rt_abi.def
