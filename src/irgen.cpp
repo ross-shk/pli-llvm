@@ -455,9 +455,10 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_erf", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_erfc", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_sind", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
-      {"pli_cosd", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_tand", {.willReturn = true, .mem = RtMemNone}},
-      {"pli_atand", {.willReturn = true, .mem = RtMemNone}},
+      {"pli_cosd", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_tand", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_atand", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
+      {"pli_atan2", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_fixed_of_float", {.willReturn = true, .mem = RtMemNone}},
       // String readers: arg-pointed memory only, no error paths.
       {"pli_verify", {.willReturn = true, .mem = RtMemArgRead}},
@@ -9145,7 +9146,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* im = b_.CreateExtractValue(a.cpx, 1, "abim");
       llvm::Value* m =
           b_.CreateFAdd(b_.CreateFMul(re, re, "abq1"), b_.CreateFMul(im, im, "abq2"), "abq");
-      r = b_.CreateCall(runtimeFn("pli_sqrt"), {m}, "abss");
+      // Gate on the lowering policy like the math builtins (W4b).
+      r = emitUnaryMath("pli_sqrt", "llvm.sqrt.f64", m, "abss");
     } else if (at.k == TK::Float) {
       r = b_.CreateCall(intrinsicFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()}), {a.reg},
                         "abs");
