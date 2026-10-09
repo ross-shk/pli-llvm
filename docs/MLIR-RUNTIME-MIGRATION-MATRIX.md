@@ -386,21 +386,27 @@ P4 (W6 production MLIR) gated on W6 admission ticket.
 
 ## P3 — Direct LLVM wave rollout
 
-W1-W4 direct LLVM lowerings are implemented and all P5 defaults flipped to LLVM.
+W1-W6 direct LLVM lowerings are implemented and P5 defaults flipped to LLVM.
 W1 (assign_char, index, assign_varying, high, low, uppercase, lowercase, reverse,
 center, cmp_char) and W2 (verify, verify_from, search, tally) are complete with IR
 golden tests, execution tests, and P5 defaults flipped. W3 (substr, substr_assign,
-substr_assign_varying, repeat, translate, trim) is complete with P5 defaults flipped.
-W4 (fixed_of_float, fixed_of_char, char_of_fixed, char_of_float, floor, ceil) all
-have direct LLVM lowerings with P5 defaults flipped; mod_ll/mod_dd/round use
-`AlwaysInline` (no separate lowering needed). W5 (checked arithmetic, array
-reductions) is already direct LLVM.
+substr_assign_varying, repeat, translate, trim) is complete with P5 defaults
+flipped. W4 (fixed_of_float, fixed_of_char, char_of_fixed, char_of_float, floor,
+ceil) all have direct LLVM lowerings with P5 defaults flipped; mod_ll/mod_dd/round
+use `AlwaysInline` (no separate lowering needed). W4b (math transcendentals:
+sqrt, exp, log, log2, log10, sin, cos, tan, atan, sinh, cosh, tanh, asin, acos,
+atan2 — all with LLVM intrinsics; atanh/erf/erfc/cbrt and degree-trig sind/cosd/
+tand/atand remain runtime-only due to no arm64 codegen) complete with P5 defaults
+flipped for the 13 intrinsic-backed functions. W4c (RANK, COLLATE, ISOCHAR — direct
+LLVM code-point operations) complete with P5 defaults flipped. W5 (checked arithmetic,
+array reductions) is already direct LLVM. W6 (aggregate/vector copy) was confirmed
+already covered by W1's assign_char LLVM lowering — no additional work needed.
 
 **Pre-existing bug fixed**: `FIXED(decimal_literal)` (e.g. `fixed(3.14)`,
 `fixed(9.9)`) returned 0 because the `emitBuiltin` FIXED handler only matched
 `FIXED(char)` and `FIXED(float)`, falling through for FIXED DECIMAL/BINARY args.
 Added `convert()` fallback at irgen.cpp:9629. This also fixed the crash in
-`w4_scalar` at the `(noconversion)` handler. Full suite: 516 passed, 0 failed.
+`w4_scalar` at the `(noconversion)` handler. Full suite: 524 passed, 0 failed.
 
 **W1 operations (all complete):**
 
