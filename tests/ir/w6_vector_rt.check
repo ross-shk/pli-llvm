@@ -1,0 +1,1 @@
+CHECK: call.*@pli_assign_char

@@ -562,12 +562,11 @@ static void applyRuntimeAttrs(llvm::Function* f) {
   }
 }
 
-// --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) -----
+// --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) ---
 
 // P0 policy: every operation defaults to runtime. P5 flips entries one wave at
-// a time as lowerings land. The table is operation-name → prefers direct LLVM.
-// P5 flips: W1, W2, W3 default to LLVM. W4 remains runtime (binary size
-// regression: 51632 B LLVM vs 35440 B runtime).
+// a time as lowerings land. The table is operation-name -> prefers direct LLVM.
+// P5 flips: W1, W2, W3, W4 default is now LLVM (was runtime).
 static const std::map<std::string, bool>& kRuntimeDefault() {
   static const std::map<std::string, bool> table = {
       {"assign_char", true},
