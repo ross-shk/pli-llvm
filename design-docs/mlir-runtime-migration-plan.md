@@ -484,8 +484,26 @@ independently in P3.
 
 ### P3 - Direct LLVM wave rollout
 
-**Goal:** migrate W1-W5 candidates one operation at a time using the proven
+**Goal:** migrate W1-W6 candidates one operation at a time using the proven
 direct LLVM pattern.
+
+W1-W6 direct LLVM lowerings complete:
+
+1. W1 straight-line and elementwise strings (assign_char, index, assign_varying,
+   high, low, uppercase, lowercase, reverse, center, cmp_char).
+2. W2 search loops (verify, verify_from, search, tally).
+3. W3 substring and clipping operations (substr, substr_assign, substr_assign_varying,
+   repeat, translate, trim).
+4. W4 scalar math and conversions (fixed_of_float, fixed_of_char, char_of_fixed,
+   char_of_float, floor, ceil; mod_ll/mod_dd/round use AlwaysInline).
+5. W4b math transcendentals (13 LLVM intrinsics: sqrt, exp, log, log2, log10, sin,
+   cos, tan, atan, sinh, cosh, tanh, atan2; 10 runtime-only: atanh, erf, erfc, cbrt,
+   sind, cosd, tand, atand).
+6. W4c code-point operations (RANK, COLLATE, ISOCHAR).
+7. W5 checked operations and reductions (already direct LLVM via with.overflow
+   intrinsics; array reductions already inlined loops).
+8. W6 aggregate/vector copy (confirmed already covered by W1's assign_char LLVM
+   lowering — direct LLVM path closes the ADR-158 gap, no MLIR needed).
 
 Apply this order unless measurements justify a different one:
 
@@ -493,8 +511,11 @@ Apply this order unless measurements justify a different one:
 2. W2 search loops.
 3. W3 substring and clipping operations.
 4. W4 scalar math and conversions.
-5. W5 checked operations and reductions, after a dedicated ADR for the split
+5. W4b math transcendentals (conditional on intrinsic availability per target).
+6. W4c code-point operations.
+7. W5 checked operations and reductions, after a dedicated ADR for the split
    between pure value computation and runtime condition dispatch/resumption.
+8. W6 aggregate/vector (conditional on ADR-158 admission ticket).
 
 For each operation:
 
@@ -743,9 +764,9 @@ Recommended initial policy:
 ```text
 P0 inventory and evidence
  -> P1 direct LLVM pilots
- -> P3 direct LLVM waves -> P5 defaults -> P6 cleanup -> P7 docs
+ -> P3 direct LLVM waves (W1-W6, W4b, W4c) -> P5 defaults -> P6 cleanup -> P7 docs
  `-> optional P2 MLIR infrastructure spike
-       `-> conditional P4 W6 aggregate/vector pilot -> P5
+       `-> conditional P4 W6 aggregate/vector pilot -> P5 (skipped — W6 gap closed by direct LLVM)
 ```
 
 P0 and P1 are required. P3 direct LLVM work does not depend on P2. P2 may
@@ -754,3 +775,12 @@ documentation. P4 requires both an accepted P2 architecture and a measured W6
 admission ticket. Rejecting MLIR is a successful outcome: the purpose of the
 plan is better, maintainable generated code, not adoption of a particular
 framework.
+
+**P4 skip decision**: W6 aggregate/vector copy was the sole P4 candidate.
+P1 step 10 demonstrated an ADR-158 residual gap (runtime NoInline prevents
+auto-vectorization; direct LLVM enables it), leading to a granted ADR-158
+ticket. However, W1's `assign_char` LLVM lowering (`emitAssignCharLLVM`)
+already emits `llvm.memmove` with full auto-vectorization for aggregate copies.
+The direct LLVM path fully closes the gap — no MLIR benefit demonstrated.
+P4 is skipped. The MLIR infrastructure from P2 (if accepted) remains available
+for future aggregate/vector candidates beyond the initial W6 witness.
