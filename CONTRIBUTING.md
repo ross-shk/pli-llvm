@@ -21,6 +21,15 @@ cmake --build build/cmake -j
 ctest --test-dir build/cmake
 ```
 
+Optional MLIR canary build (proves the `plic_mlir` bridge, lowers no PL/I operation — see ADR-192):
+
+```bash
+cmake -G Ninja -S . -B build/mlir -DPLIC_ENABLE_MLIR=ON -DMLIR_DIR=<llvm-install>/lib/cmake/mlir
+cmake --build build/mlir -j
+```
+
+`MLIR_DIR` must come from the same install as the LLVM CMake packages (matching version and prefix), otherwise configure warns. Without it, `-emit-mlir` and `--experimental-lowering=mlir` diagnose cleanly and the build has no MLIR dependency.
+
 ## Layer map — where a feature lands
 
 | Feature kind                  | Touch                                                                                                      | Example        |

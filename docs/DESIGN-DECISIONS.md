@@ -5588,3 +5588,31 @@ every HIR form and violates ADR-002); using `unrealized_conversion_cast` as the
 final bridge (the conversion target must reject it); shipping MLIR enabled by
 default (keeps P2 time-boxed and non-blocking for P3/P5).
 
+## ADR-194 — Production MLIR lowering rejected; direct LLVM IR is the migration target (P4 outcome)
+
+**Context.** The migration plan ended with P4 (lower migrated operations
+through the MLIR `pli` dialect) once P2 proved the integration boundary
+(ADR-192) and P3 delivered direct LLVM IR wave by wave (W1–W4c, W6). The
+ADR-158 admission ticket gated production MLIR on a measured W6
+aggregate/vector win.
+
+**Decision.** P4 is closed without production MLIR. Direct LLVM IR built by
+`IRGen` is the migration target for every wave, which upholds ADR-002 (IRGen
+stays the only LLVM-aware component) with no dialect, conversion-pass, or
+version-match maintenance. Concretely: W6 needed no MLIR because W1's
+`assign_char` lowering (`llvm.memmove` + `llvm.memset`) already vectorizes
+through LLVM's own passes, closing the ADR-158 gap; 8 math wrappers stay
+runtime-only because LLVM 23 has no arm64 codegen for `atanh`/`erf`/`erfc`/
+`cbrt` intrinsics and no intrinsic equivalent for the degree→radian wrappers
+`sind`/`cosd`/`tand`/`atand`. MLIR stays a canary behind `PLIC_ENABLE_MLIR`
+(`-emit-mlir` proves the bridge, it lowers no PL/I operation).
+
+**Consequences.** The `--experimental-lowering=runtime` fallback and its IR
+goldens remain the differential oracle; P6 runtime-body removal still waits on
+its compatibility window. A future MLIR production attempt needs a new ADR
+with fresh measurements against this baseline.
+
+**Rejected.** Per-operation `pli` dialect lowering (all measured paths show
+LLVM passes already recover the performance); deleting the 8 runtime-only
+bodies now (they are the only implementation, P6 step 1 fails).
+

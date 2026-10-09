@@ -67,9 +67,12 @@ HIR                typed representation with explicit conversions
 IRGen              builds an LLVM module with `llvm::IRBuilder`
    │
     ├── Lowering policy dispatch (experimental, see §3.3)
-    │     • W1/W2/W3 operations (assign_char, index, verify, substr, …) → direct LLVM IR
-    │     • W4 operations (fixed_of_float, fixed_of_char) → runtime (binary-size regression)
-    │     • remaining operations → `pli_*` C runtime calls in `libpli`
+    │     • W1/W2/W3 string operations (assign_char, index, verify, substr, …) → direct LLVM IR
+    │     • W4 conversions (fixed_of_float, fixed_of_char, char_of_fixed, char_of_float) → direct LLVM IR
+    │     • W4b math with backend support (sqrt, exp, log, sin, cos, atan2, …) → LLVM intrinsics
+    │     • W4c code-point ops (rank, collate, isochar) and W6 aggregate copy → direct LLVM IR
+    │     • 8 math wrappers without backend support (atanh, erf, erfc, cbrt, sind/cosd/tand/atand) → `pli_*` calls
+    │     • I/O, conditions, allocation, tasking, host services → `pli_*` C runtime calls in `libpli`
     │
    ├── `-emit-llvm` ──► textual `.ll` file
    │
@@ -94,8 +97,13 @@ an entry in `kLLVMLowerings()`. Call sites always go through dispatch wrappers
 `runtime` mode every operation uses its `pli_*` C runtime call; in `llvm` mode
 admitted operations lower directly to LLVM IR (e.g. `assign_char` → `memmove`
 + `memset`, `index` → a counted search loop, `verify` → nested search loops,
-`substr` → `memmove` + blank-pad). W1/W2/W3 operations now default to direct
-LLVM (`kRuntimeDefault()` sets them to `true`); W4 remains runtime. The runtime
+`substr` → `memmove` + blank-pad, `sqrt` → `llvm.sqrt.f64`, `rank` → guarded
+first-byte load). W1/W2/W3, W4 conversions, W4b intrinsics-backed math, W4c,
+and W6 (via `assign_char`) now default to direct LLVM (`kRuntimeDefault()`
+sets them to `true`); the 8 math wrappers without backend support (atanh, erf,
+erfc, cbrt, sind/cosd/tand/atand) stay runtime-only, as do `mod`/`round`
+(`AlwaysInline` bodies, no separate lowering). Complex `a**b` and complex
+`abs` reuse the same math gates. The runtime
 call remains the differential regression oracle throughout migration. See
 `docs/MLIR-RUNTIME-MIGRATION-MATRIX.md` for the full operation matrix and
 `design-docs/mlir-runtime-migration-plan.md` for the phased plan.
@@ -218,10 +226,12 @@ Common runtime responsibilities include list-directed and edit-directed I/O,
 character operations, condition dispatch, dynamic storage, and task/event
 support. Some language forms that would use these services are still diagnosed.
 
-Some string operations (`assign_char`, `index`) have experimental direct LLVM
-lowerings that bypass the runtime call when `--experimental-lowering=llvm`
-(mode selection, or the `auto` default once the policy table is flipped in P5).
-The runtime call path remains available and tested in all modes.
+String, conversion, math, code-point, and aggregate-copy operations with a
+direct LLVM lowering (W1–W4c, W6) bypass the runtime call when
+`--experimental-lowering=llvm` (mode selection, or the `auto` default now that
+the policy table is flipped to LLVM in P5). The 8 math wrappers without
+backend support keep their `pli_*` call in every mode. The runtime call path
+remains available and tested in all modes.
 
 ## 4. Data representation and ABI
 
