@@ -18,6 +18,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -9627,14 +9628,40 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
           m = zerodivideResume(b_.getTrue(), i64(0), i64(0));
         } else {
           llvm::Value* divisor = i64(cv.getSExtValue());
-          llvm::Value* r = b_.CreateSRem(avi, divisor, "mod");
-          llvm::Value* adj = b_.CreateAdd(r, divisor, "modadj");
-          llvm::Value* nz = b_.CreateICmpNE(r, i64(0), "modnz");
-          // Adjust when remainder is nonzero and sign(r) != sign(divisor).
-          bool bNeg = cv.isNegative();
-          llvm::Value* needAdj =
-              bNeg ? b_.CreateICmpUGE(r, i64(0), "modpos") : b_.CreateICmpSLT(r, i64(0), "modneg");
-          m = b_.CreateSelect(nz, b_.CreateSelect(needAdj, adj, r), r, "mods");
+          // intent: srem gives sign-of-dividend; PL/I MOD takes sign-of-divisor.
+          // When the dividend is known non-negative and the divisor is positive,
+          // srem already yields the correct non-negative result — skip the
+          // adjust/select chain entirely (P1.3).
+          llvm::SimplifyQuery SQ(mod_.getDataLayout());
+          // intent: isKnownNonNegative with no DominatorTree/AssumptionCache
+          // cannot see through load(sext) at IRGen time. Check if the dividend
+          // is a constant (common for MOD(literal, k)) for the fast path.
+          bool avNonNeg = false;
+          if (auto* avConst = llvm::dyn_cast<llvm::ConstantInt>(avi))
+            avNonNeg = !avConst->getValue().isNegative();
+          else
+            avNonNeg = llvm::isKnownNonNegative(avi, SQ);
+          if (avNonNeg && cv.isStrictlyPositive()) {
+            // intent: for a non-negative dividend and positive divisor, the
+            // remainder is already correct. If the divisor is a power of two,
+            // MOD(x, 2^k) = x & (2^k - 1) — replace srem with a bitwise-and.
+            if (cv.isPowerOf2()) {
+              uint64_t mask = cv.getZExtValue() - 1;
+              m = b_.CreateAnd(avi, i64(mask), "modand");
+            } else {
+              m = b_.CreateSRem(avi, divisor, "mod");
+            }
+          } else {
+            // General case: adjust when sign(r) != sign(divisor).
+            llvm::Value* r = b_.CreateSRem(avi, divisor, "mod");
+            llvm::Value* adj = b_.CreateAdd(r, divisor, "modadj");
+            llvm::Value* nz = b_.CreateICmpNE(r, i64(0), "modnz");
+            // Adjust when remainder is nonzero and sign(r) != sign(divisor).
+            bool bNeg = cv.isNegative();
+            llvm::Value* needAdj =
+                bNeg ? b_.CreateICmpUGE(r, i64(0), "modpos") : b_.CreateICmpSLT(r, i64(0), "modneg");
+            m = b_.CreateSelect(nz, b_.CreateSelect(needAdj, adj, r), r, "mods");
+          }
         }
       } else {
         // General path: pli_mod_ll is AlwaysInline (Task 5), so LLVM can
