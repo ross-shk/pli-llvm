@@ -10,6 +10,8 @@ generated PL/I code performance against C baselines. Each benchmark has a
 (compiled with `clang`), all implementing the same algorithm.
 """
 import os
+import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -21,8 +23,33 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 BENCHMARK_DIR = Path(__file__).parent
-PLIC = BENCHMARK_DIR.parent / "build" / "plic"
-CC = os.environ.get("CC", "clang.exe")
+
+
+def _default_cc() -> str:
+    """C compiler default: plain `clang` (found via PATH on every OS)."""
+    found = shutil.which("clang")
+    return found or "clang"
+
+
+def _find_plic() -> Path:
+    """Locate the plic binary: `build/plic[.exe]` with `build/cmake` fallback."""
+    here = BENCHMARK_DIR.parent / "build"
+    cands = [
+        here / ("plic.exe" if os.name == "nt" else "plic"),
+        here / "plic",
+        here / "plic.exe",
+        here / "cmake" / ("plic.exe" if os.name == "nt" else "plic"),
+        here / "cmake" / "plic",
+        here / "cmake" / "plic.exe",
+    ]
+    for c in cands:
+        if c.is_file():
+            return c
+    return cands[0]
+
+
+PLIC = Path(os.environ.get("PLIC", str(_find_plic())))
+CC = os.environ.get("CC", _default_cc())
 RESULTS_DIR = BENCHMARK_DIR / "results"
 BIN_DIR = RESULTS_DIR / "bin"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -104,7 +131,25 @@ def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[i
 # (array_matmul: 3x 400x400 ints = ~1.92MB; matrix_float: 3x 400x400 doubles
 # = ~3.84MB) exceed the default 1MB Windows stack and crash with
 # STATUS_STACK_OVERFLOW. 16MB gives headroom for all current benchmarks.
+# This is a Windows-only link flag (/STACK is link.exe syntax and unknown to
+# GNU ld); Linux/macOS default stacks (8MB) already fit, so no flag there.
 STACK_SIZE = 16777216
+IS_WINDOWS = os.name == "nt"
+EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
+
+
+def _stack_flags() -> List[str]:
+    if IS_WINDOWS:
+        return ["-Wl,/STACK:" + str(STACK_SIZE)]
+    return []
+
+
+def _arch_flags() -> List[str]:
+    # -march=x86-64 is only valid on x86_64 hosts; ARM (e.g. macOS arm64
+    # runners) and other arches must not receive it.
+    if platform.machine() in ("x86_64", "AMD64", "x64"):
+        return ["-march=x86-64"]
+    return []
 
 
 def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
@@ -114,8 +159,8 @@ def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
     If *extra_flags* is None, the bench-level EXTRA_PLIFLAGS are used (P1.6).
     """
     src = BENCHMARK_DIR / pli_file
-    cmd = [str(PLIC), str(src), "-o", str(output), opt,
-           "-Wl,/STACK:" + str(STACK_SIZE)]
+    cmd = [str(PLIC), str(src), "-o", str(output), opt]
+    cmd.extend(_stack_flags())
     cmd.extend(extra_flags if extra_flags is not None
                else EXTRA_PLIFLAGS.get(bench_name, []))
     rc, out, err = run_command(cmd)
@@ -125,11 +170,13 @@ def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
 
 
 def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
-              compiler: str = CC) -> bool:
+              compiler: Optional[str] = None) -> bool:
     """Compile a C benchmark with the given compiler at the given optimization level."""
+    if compiler is None:
+        compiler = CC
     src = BENCHMARK_DIR / c_file
-    cmd = [compiler, opt, "-march=x86-64", str(src), "-o", str(output),
-           "-Wl,/STACK:" + str(STACK_SIZE)]
+    cmd = [compiler, opt] + _arch_flags() + [str(src), "-o", str(output)]
+    cmd.extend(_stack_flags())
     if bench_name in BENCHMARKS_REQUIRING_MATH:
         cmd.append("-lm")
     rc, out, err = run_command(cmd)
@@ -208,12 +255,17 @@ def main():
     parser.add_argument("--runs", type=int, default=RUNS_PER_BENCH,
                         help="timed runs per benchmark (default: %(default)s)")
     parser.add_argument("--cc", type=str, default=None,
-                        help="C compiler to use (overrides CC env var, "
-                             "default: clang.exe)")
+                         help="C compiler to use (overrides CC env var, "
+                              "default: clang)")
+    parser.add_argument("--plic", type=str, default=None,
+                        help="plic binary to use (overrides PLIC env var)")
     args = parser.parse_args()
 
     # Use --cc argument if provided, otherwise fall back to env var, then default
-    cc_cmd = args.cc or os.environ.get("CC", "clang.exe")
+    cc_cmd = args.cc or os.environ.get("CC", _default_cc())
+    plic_cmd = args.plic or os.environ.get("PLIC", str(_find_plic()))
+    global PLIC
+    PLIC = Path(plic_cmd)
 
     print("PL/I Compiler Benchmark Harness")
     print("=" * 70)
@@ -243,11 +295,12 @@ def main():
         forced_flags = CHECKS_FORCED_FLAGS
 
         for opt in opt_levels:
-            pli_exe = BIN_DIR / f"{bench_name}_pli_{opt.replace('-', '')}"
-            c_exe = BIN_DIR / f"{bench_name}_c_{opt.replace('-', '')}"
+            tag = opt.replace('-', '')
+            pli_exe = BIN_DIR / f"{bench_name}_pli_{tag}{EXE_SUFFIX}"
+            c_exe = BIN_DIR / f"{bench_name}_c_{tag}{EXE_SUFFIX}"
 
             if args.checks_forced:
-                pli_exe_forced = BIN_DIR / f"{bench_name}_pli_forced_{opt.replace('-', '')}"
+                pli_exe_forced = BIN_DIR / f"{bench_name}_pli_forced_{tag}{EXE_SUFFIX}"
                 default_flags_str = ""
                 forced_flags_str = " ".join(forced_flags)
 
@@ -265,7 +318,8 @@ def main():
                     continue
 
                 # --- C compile (skip mtime in forced mode) ---
-                if not compile_c(bench_name, c_file, opt, c_exe):
+                if not compile_c(bench_name, c_file, opt, c_exe,
+                                 compiler=cc_cmd):
                     print(f"{bench_name:<20} {opt:<6} C COMPILE FAILED")
                     results[bench_name][opt] = {"error": "c_compile_failed"}
                     continue
@@ -306,7 +360,8 @@ def main():
                     results[bench_name][opt] = {"error": "pli_compile_failed"}
                     continue
             if needs_recompile(src_c, c_exe):
-                if not compile_c(bench_name, c_file, opt, c_exe):
+                if not compile_c(bench_name, c_file, opt, c_exe,
+                                 compiler=cc_cmd):
                     print(f"{bench_name:<20} {opt:<6} C COMPILE FAILED")
                     results[bench_name][opt] = {"error": "c_compile_failed"}
                     continue

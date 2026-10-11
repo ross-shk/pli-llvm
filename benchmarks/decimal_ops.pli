@@ -1,18 +1,21 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* Fixed decimal arithmetic benchmark */
+/* Fixed decimal arithmetic benchmark.
+   Per-iteration values are bounded with MOD so the 30M-iteration
+   accumulator stays in i64 range: grand is FIXED DECIMAL(18,2) and the
+   >18-digit (i128) I/O path is not exercised here (ADR-191). */
 test_decimal: PROCEDURE OPTIONS(MAIN);
   DECLARE (i, j) FIXED BINARY(31);
   DECLARE (price, qty, total, tax) FIXED DECIMAL(18,2);
-   DECLARE grand FIXED DECIMAL(25,2);
+  DECLARE grand FIXED DECIMAL(18,2);
   DECLARE rate FIXED DECIMAL(5,4);
 
   rate = 0.0875;  /* 8.75% tax rate */
   grand = 0;
 
-   DO i = 1 TO 30000000;
-    price = i * 1.99;
-    qty = i / 10 + 1;
+  DO i = 1 TO 30000000;
+    price = MOD(i, 1000) * 1.99;
+    qty = MOD(i, 100) / 10 + 1;
     total = price * qty;
     tax = total * rate;
     grand = grand + total + tax;
