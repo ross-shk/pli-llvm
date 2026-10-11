@@ -1,20 +1,23 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
- /* rules (79),(82),(87)-(90): tasks allocate
-    their own heap BASED blocks and CONTROLLED
-    generations; disjoint result slots keep the
-    workers race-free under WAIT-for-all. A
-    worker never touches an enclosing BASED
-    variable through a locator (codegen crash,
-    found by this test's first draft). */
+ /* rules (8),(25),(79),(82),(87)-(90):
+    workers allocate their own heap BASED
+    blocks and CONTROLLED generations and
+    also reach the main block through its
+    locator link (a bare BASED static-link
+    slot carries an explicit null); disjoint
+    cells keep the workers race-free under
+    WAIT-for-all. */
  talloc: procedure options(main);
     declare e1 event;
     declare e2 event;
     declare res(2) fixed bin(31);
     declare fails fixed bin(31);
     declare p pointer;
+    declare pa pointer;
     declare 1 mrec based,
               2 v fixed bin(31);
+    declare marr(2) fixed bin(31) based;
     fails = 0;
     res(1) = 0;
     res(2) = 0;
@@ -22,6 +25,9 @@
        the workers' own allocations */
     allocate mrec set(p);
     p -> mrec.v = 7;
+    allocate marr set(pa);
+    pa -> marr(1) = 0;
+    pa -> marr(2) = 0;
     call w(1) event(e1);
     call w(2) event(e2);
     wait(e1, e2);
@@ -29,9 +35,16 @@
        fails = fails + 1;
     if res(2) ^= 222 then
        fails = fails + 1;
-    /* the workers never saw main's block */
+    /* each worker stored through the
+       enclosing locator into its cell */
+    if pa -> marr(1) ^= 101 then
+       fails = fails + 1;
+    if pa -> marr(2) ^= 202 then
+       fails = fails + 1;
+    /* the scalar block is untouched */
     if p -> mrec.v ^= 7 then
        fails = fails + 1;
+    free pa -> marr;
     free p -> mrec;
     if fails = 0 then
        put skip list('PASS task_alloc_combo');
@@ -49,6 +62,7 @@
        allocate c;
        c = k * 10;
        res(k) = q -> wrec.v + c + k;
+       pa -> marr(k) = q -> wrec.v + k;
        free q -> wrec;
        free c;
     end w;

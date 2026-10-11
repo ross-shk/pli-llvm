@@ -6611,7 +6611,13 @@ void IRGen::appendStaticLinks(Proc* callee, std::vector<llvm::Value*>& args) {
                "(8)");
       continue;
     }
-    args.push_back(addressOf(v));
+    llvm::Value* link = addressOf(v);
+    // A bare BASED variable (rule (25)) has no storage of its own, so
+    // addressOf yields null; it is only ever reached through a locator
+    // link (passed separately), so its own slot carries an explicit null.
+    if (!link && v->isBased())
+      link = llvm::Constant::getNullValue(b_.getPtrTy());
+    args.push_back(link);
   }
 }
 
