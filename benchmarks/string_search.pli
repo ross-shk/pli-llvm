@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* String search benchmark - INDEX/SUBSTR scan over a 100KB buffer. */
+/* Exercises runtime string helpers (pli_index), complements string_ops */
+/* concatenation. Partners string_ops. */
+/*
+ * Bounds (P2 checklist item 1):
+ *   - buffer: ~76KB base + 12-char sentinel = ~75788 chars (fits CHARACTER(102400))
+ *   - INDEX returns 1-based position (1..75788); max per iter < 2^31
+ *   - sum: 3000 iters * 75779 = ~2.27e8 (fits FIXED BINARY(63)) ✓
+ *
+ * Scaling rule (P2 checklist item 2): 3000 INDEX scans over 76KB buffer —
+ * slow enough for >50ms at -O2 (~124ms measured).
+ *
+ * Codegen pinned (P2 checklist item 4): runtime pli_index byte-compare loop;
+ * no SIMD vectorisation (INDEX defaults to runtime path, see kRuntimeDefault).
+ */
+test_search: PROCEDURE OPTIONS(MAIN);
+   DECLARE (i, n, pos) FIXED BINARY(31);
+   DECLARE (sum) FIXED BINARY(63);
+   DECLARE buffer CHARACTER(102400) VARYING;
+
+   /* Build ~76KB buffer from repeating 37-char base */
+   buffer = '';
+   DO i = 1 TO 2048;
+     buffer = buffer || 'abcdefghijklmnopqrstuvwxyz0123456789 ';
+   END;
+
+   /* Append sentinel — 'SENTINEL' appears at position 75779 (1-based) */
+   buffer = buffer || 'ZZSENTINELZZ';
+
+   sum = 0;
+   n = 3000;
+
+   DO i = 1 TO n;
+     pos = INDEX(buffer, 'SENTINEL');
+     sum = sum + pos;
+   END;
+
+   PUT SKIP LIST(sum);
+END test_search;

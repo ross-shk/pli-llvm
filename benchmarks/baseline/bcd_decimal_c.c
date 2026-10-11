@@ -1,12 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
 /* C baseline for bcd_decimal benchmark */
-/* Match = ~ by design: PL/I exact BCD decimal vs C double (see DECIMAL-PERF-PLAN.md §8). */
+/* Match = ~ by design: C double has ~15-16 significant digits; */
+/* PL/I DECIMAL(25,4) is exact to 25 digits. */
 #include <stdio.h>
 
 int main(void) {
     int i, n;
-    double rate, grand, price, qty, total, tax;
+    double price, qty, total, tax, grand, rate;
 
     rate = 0.0875;
     grand = 0.0;

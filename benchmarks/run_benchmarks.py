@@ -67,6 +67,7 @@ BENCHMARKS = [
     ("division",          "division.pli",          "baseline/division_c.c"),
     ("fixed_bin63",       "fixed_bin63.pli",       "baseline/fixed_bin63_c.c"),
     ("bcd_decimal",       "bcd_decimal.pli",       "baseline/bcd_decimal_c.c"),
+    ("string_search",     "string_search.pli",     "baseline/string_search_c.c"),
 ]
 
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3"]
@@ -103,6 +104,7 @@ CHECKS = {
     "division":         {"min_ms_O2": 50, "float_tol": False},
     "fixed_bin63":      {"min_ms_O2": 50, "float_tol": False},
     "bcd_decimal":      {"min_ms_O2": 50, "float_tol": False},  # expected ~: BCD decimal vs double
+    "string_search":    {"min_ms_O2": 50, "float_tol": False},
 }
 
 
