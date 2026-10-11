@@ -211,20 +211,33 @@ for (auto& F : *rt) {
 
 ## Expected Results — Achieved
 
-All P0+P1 targets met (verified 2026-10-05):
+All P0+P1+P1.3 targets met (verified 2026-10-11):
 | Benchmark | Was | Now (-O3) | Target |
 |-----------|-----|-----------|--------|
-| collatz | 3.10x | ~1.08x (✓) | ~1.0x |
+| collatz | 3.10x | 1.00x (✓) | ~1.0x |
 | array_sort | 1.80x | ~0.72x (✓) | ~1.0x |
 | math_functions | 1.42x (✗) | 1.00x (✓ match) | ~1.0x (✓ match) |
 | controlled_stack | 1.34x | ~1.0-1.7x (✓) noise | ~1.0x |
 | linked_list | 1.27x | ~1.05-1.12x (✓) | ~1.0x |
 | mandelbrot | 1.28x | ~0.93-1.15x (✓) | ~1.0x |
 | on_conditions | 1.14x | ~0.82-1.15x (✓) | ~0.95x |
+| collatz `MOD(n,8)` | — | constant-folded at IRGen for literal operands (P1.3) | — |
 | **Average (-O3)** | **1.27x** | **~1.10x**; **-O2: 0.98x (parity)** | **~1.0x** |
 
 Remaining gap is `decimal_ops` (✗, fundamental PL/I per-assignment DECIMAL
-rounding vs C `double` accumulation — both correct, not a compiler defect).
+rounding vs C `double` accumulation — both correct, not a compiler defect)
+and `string_ops` (✗, VARYING runtime length tracking — known P2 target).
+
+## P1.3 Benchmark Impact (collatz — uses `MOD(n,8)` in hot loop)
+| Level | Was (P1.2) | Now (P1.3) | Delta |
+|-------|------------|------------|-------|
+| -O2   | 0.84x      | 0.84x      | parity |
+| -O3   | ~1.08x     | 1.00x      | **-0.04x (closer to target)** |
+
+Constant-operand MOD in literal benchmarks are fully constant-folded at
+IRGen (zero `srem`/adjust in emitted IR). Variable-operand MOD falls to
+the general path at IRGen but LLVM opt passes eliminate dead adjust chains
+at -O2/-O3. No regression detected (W7 guard: ✓).
 
 ## Remaining (P2, future work)
 - **Task 11** (SSA promotion in IRGen, `allocaLocals`/`loadSym`/`storeTo`): large refactor.

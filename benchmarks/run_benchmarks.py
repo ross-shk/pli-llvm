@@ -65,6 +65,8 @@ BENCHMARKS = [
     ("mandelbrot",        "mandelbrot.pli",        "baseline/mandelbrot_c.c"),
     ("io_throughput",     "io_throughput.pli",     "baseline/io_throughput_c.c"),
     ("division",          "division.pli",          "baseline/division_c.c"),
+    ("fixed_bin63",       "fixed_bin63.pli",       "baseline/fixed_bin63_c.c"),
+    ("bcd_decimal",       "bcd_decimal.pli",       "baseline/bcd_decimal_c.c"),
 ]
 
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3"]
@@ -99,6 +101,8 @@ CHECKS = {
     "mandelbrot":       {"min_ms_O2": 50, "float_tol": False},
     "io_throughput":    {"min_ms_O2": 50, "float_tol": False},
     "division":         {"min_ms_O2": 50, "float_tol": False},
+    "fixed_bin63":      {"min_ms_O2": 50, "float_tol": False},
+    "bcd_decimal":      {"min_ms_O2": 50, "float_tol": False},  # expected ~: BCD decimal vs double
 }
 
 
@@ -548,8 +552,9 @@ def main():
             else:
                 print(f"  ✗ parity (float mismatch)")
                 all_checks_ok = False
-        elif bench_name == "decimal_ops":
-            # decimal_ops uses fixed-decimal arithmetic, C uses double — expected mismatch
+        elif bench_name in ("decimal_ops", "bcd_decimal"):
+            # decimal_ops/bcd_decimal use exact decimal arithmetic; C uses double —
+            # expected ~ mismatch (see DECIMAL-PERF-PLAN.md §8 non-goal)
             if pli_out.strip() == c_out.strip():
                 print(f"  ✓ parity (exact)")
             else:
