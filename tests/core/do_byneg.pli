@@ -1,0 +1,38 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* P1.1: one-branch DO loop — BY -1 (negative constant) counts
+    down, omitted BY and BY 1 count up. The sema-folded byNegConst
+    flag lets emitDoIter skip the runtime sign test and emit a
+    single canonical branch. */
+ do_byneg: procedure options(main);
+    declare i fixed bin(31);
+    declare s fixed bin(31);
+
+    /* omitted BY: counts up */
+    s = 0;
+    do i = 1 to 5;
+       s = s + i;
+    end;
+    put skip list('asc', s);
+
+    /* BY 1 (positive constant): counts up */
+    s = 0;
+    do i = 1 to 5 by 1;
+       s = s + i;
+    end;
+    put skip list('byone', s);
+
+    /* BY -1 (negative constant): counts down */
+    s = 0;
+    do i = 10 to 1 by -1;
+       s = s + i;
+    end;
+    put skip list('byneg', s);
+
+    /* BY -2 (negative constant): counts down by twos */
+    s = 0;
+    do i = 10 to 1 by -2;
+       s = s + i;
+    end;
+    put skip list('byneg2', s);
+ end do_byneg;

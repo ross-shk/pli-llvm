@@ -5500,9 +5500,8 @@ void IRGen::emitDoIter(HStmt* s) {
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
   llvm::BasicBlock* stepL = llvm::BasicBlock::Create(ctx_, "do.step." + id, curFn_);
   llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);
-  llvm::BasicBlock* upL = s->to ? llvm::BasicBlock::Create(ctx_, "do.up." + id, curFn_) : nullptr;
-  llvm::BasicBlock* downL =
-      s->to ? llvm::BasicBlock::Create(ctx_, "do.down." + id, curFn_) : nullptr;
+  llvm::BasicBlock* upL = nullptr;
+  llvm::BasicBlock* downL = nullptr;
   llvm::BasicBlock* testL =
       s->to ? llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_) : nullptr;
 
@@ -5518,26 +5517,42 @@ void IRGen::emitDoIter(HStmt* s) {
 
   if (s->to) {
     Val cv = loadSym(ctl, ct);
-    llvm::Value* bv = by.reg;
-    llvm::Value* zero = ct.k == TK::Float ? flt(0.0) : llvm::Constant::getNullValue(llvmTy(ct));
-    llvm::Value* neg;
-    if (ct.k == TK::Float)
-      neg = b_.CreateFCmpOLT(bv, zero, "negstep");
-    else
-      neg = b_.CreateICmpSLT(bv, zero, "negstep");
-    b_.CreateCondBr(neg, downL, upL);
+    // P1.1: collapse the runtime sign test into one canonical branch when BY
+    // is a compile-time integer constant (omitted BY defaults to +1).  Float
+    // and variable-BY DO loops keep the sign-test path below.
+    bool oneBranch = ct.k != TK::Float && llvm::isa<llvm::ConstantInt>(by.reg);
+    if (oneBranch) {
+      bool descending = s->byNegConst ||
+                          llvm::cast<llvm::ConstantInt>(by.reg)->isNegative();
+      llvm::Value* cmp = descending
+                             ? b_.CreateICmpSGE(cv.reg, tv.reg, "docmp")
+                             : b_.CreateICmpSLE(cv.reg, tv.reg, "docmp");
+      b_.CreateCondBr(cmp, testL, endL);
+      startBlock(testL);
+    } else {
+      // Float or variable-BY: runtime sign test + up/down branches.
+      upL = llvm::BasicBlock::Create(ctx_, "do.up." + id, curFn_);
+      downL = llvm::BasicBlock::Create(ctx_, "do.down." + id, curFn_);
+      llvm::Value* bv = by.reg;
+      llvm::Value* zero =
+          ct.k == TK::Float ? flt(0.0) : llvm::Constant::getNullValue(llvmTy(ct));
+      llvm::Value* neg =
+          ct.k == TK::Float ? b_.CreateFCmpOLT(bv, zero, "negstep")
+                            : b_.CreateICmpSLT(bv, zero, "negstep");
+      b_.CreateCondBr(neg, downL, upL);
 
-    startBlock(upL);
-    llvm::Value* cu = ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv.reg, "cmpup")
-                                        : b_.CreateICmpSLE(cv.reg, tv.reg, "cmpup");
-    b_.CreateCondBr(cu, testL, endL);
+      startBlock(upL);
+      llvm::Value* cu = ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv.reg, "cmpup")
+                                          : b_.CreateICmpSLE(cv.reg, tv.reg, "cmpup");
+      b_.CreateCondBr(cu, testL, endL);
 
-    startBlock(downL);
-    llvm::Value* cd = ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv.reg, "cmpdn")
-                                        : b_.CreateICmpSGE(cv.reg, tv.reg, "cmpdn");
-    b_.CreateCondBr(cd, testL, endL);
+      startBlock(downL);
+      llvm::Value* cd = ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv.reg, "cmpdn")
+                                          : b_.CreateICmpSGE(cv.reg, tv.reg, "cmpdn");
+      b_.CreateCondBr(cd, testL, endL);
 
-    startBlock(testL);
+      startBlock(testL);
+    }
   }
 
   if (s->cond) { // WHILE clause

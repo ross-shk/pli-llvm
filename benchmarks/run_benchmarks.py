@@ -10,6 +10,7 @@ generated PL/I code performance against C baselines. Each benchmark has a
 (compiled with `clang`), all implementing the same algorithm.
 """
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -22,13 +23,23 @@ from typing import Dict, List, Tuple, Optional
 
 BENCHMARK_DIR = Path(__file__).parent
 PLIC = BENCHMARK_DIR.parent / "build" / "plic"
-CC = os.environ.get("CC", "clang.exe")
+IS_WINDOWS = platform.system() == "Windows"
+IS_MACOS = platform.system() == "Darwin"
+CC = os.environ.get("CC", "clang.exe" if IS_WINDOWS else "clang")
+# Stack size needed for large-array benchmarks (matrix_float: 3x400x400 doubles
+# = ~3.84 MB). Platform-specific: Windows linker /STACK, macOS via ulimit,
+# Linux ld --stack. On macOS the 8 MB default suffices, so no flag is passed.
+STACK_SIZE = 16777216
 RESULTS_DIR = BENCHMARK_DIR / "results"
 BIN_DIR = RESULTS_DIR / "bin"
 RESULTS_DIR.mkdir(exist_ok=True)
 BIN_DIR.mkdir(exist_ok=True)
 
 MAX_RESULTS = 20
+
+# Warn if any benchmark's PL/I/C ratio at -O2 worsens by more than this relative
+# threshold compared to the most recent saved run (P1.1 W7 regression guard).
+DETERIORATION_THRESHOLD = 0.05
 
 # Per-benchmark PL/I flags that must be active for the benchmark to measure
 # what it claims (P1.6).
@@ -107,6 +118,17 @@ def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[i
 STACK_SIZE = 16777216
 
 
+def stack_flag() -> str:
+    """Platform-appropriate stack-size linker flag (P1.5 cross-platform)."""
+    if IS_WINDOWS:
+        return "-Wl,/STACK:" + str(STACK_SIZE)
+    # macOS (8 MB default suffices for these benchmarks) and Linux
+    # (ld accepts --stack) — pass nothing on macOS, use --stack on Linux.
+    if not IS_MACOS:
+        return "-Wl,--stack," + str(STACK_SIZE)
+    return ""
+
+
 def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
                 extra_flags: Optional[List[str]] = None) -> bool:
     """Compile a PL/I benchmark with plic at the given optimization level.
@@ -114,8 +136,10 @@ def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
     If *extra_flags* is None, the bench-level EXTRA_PLIFLAGS are used (P1.6).
     """
     src = BENCHMARK_DIR / pli_file
-    cmd = [str(PLIC), str(src), "-o", str(output), opt,
-           "-Wl,/STACK:" + str(STACK_SIZE)]
+    cmd = [str(PLIC), str(src), "-o", str(output), opt]
+    sf = stack_flag()
+    if sf:
+        cmd.append(sf)
     cmd.extend(extra_flags if extra_flags is not None
                else EXTRA_PLIFLAGS.get(bench_name, []))
     rc, out, err = run_command(cmd)
@@ -128,8 +152,12 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
               compiler: str = CC) -> bool:
     """Compile a C benchmark with the given compiler at the given optimization level."""
     src = BENCHMARK_DIR / c_file
-    cmd = [compiler, opt, "-march=x86-64", str(src), "-o", str(output),
-           "-Wl,/STACK:" + str(STACK_SIZE)]
+    cmd = [compiler, opt, str(src), "-o", str(output)]
+    if not IS_MACOS:
+        cmd.append("-march=x86-64")
+    sf = stack_flag()
+    if sf:
+        cmd.append(sf)
     if bench_name in BENCHMARKS_REQUIRING_MATH:
         cmd.append("-lm")
     rc, out, err = run_command(cmd)
@@ -197,6 +225,53 @@ def prune_old_results(files: List[Path], keep: int = MAX_RESULTS):
         f.unlink(missing_ok=True)
 
 
+def load_previous_results(current_filename: Optional[str] = None) -> Optional[Dict]:
+    """Load the most recent previous benchmark results JSON.
+
+    *current_filename* (the basename of the file about to be or just written)
+    is excluded so that the current run never compares against itself (W7
+    regression guard).  Returns None if no usable previous run exists.
+    """
+    json_files = sorted(RESULTS_DIR.glob("benchmark_results_*.json"),
+                        key=lambda f: f.stat().st_mtime, reverse=True)
+    if not json_files:
+        return None
+    for f in json_files:
+        if current_filename and f.name == current_filename:
+            continue
+        try:
+            with open(f) as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def check_for_deterioration(results: Dict, previous: Dict) -> List[str]:
+    """Compare current -O2 ratios against the previous run.
+
+    Returns a list of warning strings for benchmarks whose ratio worsened
+    (increased) by more than DETERIORATION_THRESHOLD (5 % relative).
+    """
+    warnings = []
+    for bench_name, _, _ in BENCHMARKS:
+        cur = results.get(bench_name, {}).get("-O2", {})
+        prev = previous.get(bench_name, {}).get("-O2", {})
+        cur_ratio = cur.get("ratio")
+        prev_ratio = prev.get("ratio")
+        if cur_ratio is None or prev_ratio is None:
+            continue
+        if prev_ratio <= 0:
+            continue
+        rel_change = (cur_ratio - prev_ratio) / prev_ratio
+        if rel_change > DETERIORATION_THRESHOLD:
+            warnings.append(
+                f"  {bench_name:<20} ⚠ ratio {cur_ratio:.2f}x vs prev "
+                f"{prev_ratio:.2f}x (+{rel_change*100:.1f}%)"
+            )
+    return warnings
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(
@@ -209,7 +284,7 @@ def main():
                         help="timed runs per benchmark (default: %(default)s)")
     parser.add_argument("--cc", type=str, default=None,
                         help="C compiler to use (overrides CC env var, "
-                             "default: clang.exe)")
+                             "default: clang on Unix/macOS, clang.exe on Windows)")
     args = parser.parse_args()
 
     # Use --cc argument if provided, otherwise fall back to env var, then default
@@ -485,6 +560,23 @@ def main():
             else:
                 print(f"  ✗ parity (output mismatch)")
                 all_checks_ok = False
+
+    # Regression guard: compare against the most recent previous run (W7)
+    previous = load_previous_results(json_file.name)
+    if previous is not None:
+        warnings = check_for_deterioration(results, previous)
+        if warnings:
+            print("\n=== REGRESSION WARNINGS ===")
+            for w in warnings:
+                print(w)
+            print(f"\n⚠ {len(warnings)} benchmark(s) deteriorated by >"
+                  f"{int(DETERIORATION_THRESHOLD*100)}% at -O2 vs previous run")
+        else:
+            print("\n=== REGRESSION CHECK ===")
+            print("  ✓ No material deterioration detected at -O2 vs previous run")
+    else:
+        print("\n=== REGRESSION CHECK ===")
+        print("  — No previous results found to compare against")
 
     return 0 if all_checks_ok else 1
 
