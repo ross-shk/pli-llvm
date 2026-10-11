@@ -106,9 +106,10 @@ void pli_get_unselect(void) {
  * record, each READ consumes one; the byte size comes from the caller's
  * type (FIXED 8, FLOAT 8, BIT 1, CHAR n). A use of a closed slot, a failed
  * transfer, or a short READ (EOF) raises ERROR, since ON ENDFILE stays
- * diagnosed. Images are host byte order (implementation-defined). */
+ * diagnosed. Images are host byte order (implementation-defined).
+ * nonprint=1 (ADR-204): like pli_file_open, output is silently discarded. */
 void pli_file_open_record(long long slot, const char *name, long long namelen,
-                          long long mode) {
+                          long long mode, long long nonprint) {
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   char buf[256];
@@ -117,6 +118,12 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
   buf[n] = '\0';
   if (rt_pli_files[slot])
     fclose(rt_pli_files[slot]);
+  if (nonprint) {
+    rt_pli_files[slot] = NULL;
+    rt_pli_nonprint[slot] = 1;
+    return;
+  }
+  rt_pli_nonprint[slot] = 0;
   rt_pli_files[slot] = fopen(buf, mode ? "wb" : "rb");
 }
 

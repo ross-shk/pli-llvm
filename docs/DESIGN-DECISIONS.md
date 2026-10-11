@@ -5973,3 +5973,25 @@ with fresh measurements against this baseline.
 LLVM passes already recover the performance); deleting the 8 runtime-only
 bodies now (they are the only implementation, P6 step 1 fails).
 
+## ADR-211 — `NONPRINT` on SEQUENTIAL RECORD files (rules (112),(113))
+
+**Context.** ADR-204 gave `NONPRINT` stream files discard semantics by
+threading a fifth `nonprint` argument through `emitOpen` into
+`pli_file_open`. The same commit passed the flag to
+`pli_file_open_record` too, but the record callee kept its 4-argument
+signature (`runtime/rt_file.c`, `runtime/pli_rt_abi.def`) — so every
+`OPEN` of a RECORD file failed LLVM module verification
+(`tests/corner_cases/record_io_edge.pli`, `tests/driver/record.sh`).
+
+**Decision.** Extend the fifth `nonprint` argument to
+`pli_file_open_record` (`PLI_FN(pli_file_open_record, VOID, (I64, CPTR,
+I64, I64, I64))`): `nonprint=1` leaves the slot closed and flagged,
+mirroring `pli_file_open`, so record output to such a file is silently
+discarded. Discard (rather than diagnosing `NONPRINT` on RECORD files)
+keeps one call shape in `emitOpen` and treats the print-file attribute
+as meaningless-but-harmless for binary records.
+
+**Consequences.** No sema change — `NONPRINT` was already accepted on the
+`DECLARE`; only the runtime signature was missing. Tests:
+`tests/corner_cases/record_io_edge.pli`, `tests/driver/record.sh`.
+
