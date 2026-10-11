@@ -1,0 +1,77 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Subset G hardening: EDIT items, remote
+    FORMAT, STRING capture and LIST
+    round-trips combined. */
+ stream_edit_combo: proc options(main);
+    declare fails fixed bin(31);
+    declare buf char(40);
+    declare a fixed bin(31);
+    declare b fixed bin(31);
+    declare c fixed bin(31);
+    declare d fixed bin(31);
+    declare p fixed dec(5, 2);
+    declare q fixed dec(5, 2);
+    declare e float;
+    declare f float;
+    declare s char(8);
+    declare t char(8);
+    declare u char(8);
+    declare quote char(8);
+    fails = 0;
+    head: format(a(2), col(6), a(2));
+    nums: format(f(6), f(6));
+    /* A(5) keeps only the first five */
+    put string(buf) edit('Hello, world!')
+       (a(5));
+    get string(buf) edit(s) (a(5));
+    if s ^= 'Hello' then fails = fails
+       + 1;
+    /* doubled apostrophe is one quote */
+    quote = 'can''t';
+    put string(buf) edit(quote) (a(8));
+    get string(buf) edit(t) (a(8));
+    if t ^= 'can''t' then fails = fails
+       + 1;
+    /* remote FORMAT spliced with R */
+    a = 12;
+    b = 34;
+    put string(buf) edit(a, b) (r(nums));
+    get string(buf) edit(c, d) (r(nums));
+    if c ^= 12 then fails = fails + 1;
+    if d ^= 34 then fails = fails + 1;
+    /* COL output lands at its column;
+       read back through COL from a
+       buffer (COL into STRING output
+       hangs: runtime regression) */
+    put edit ('ab', 'cd') (r(head));
+    buf = 'ab   cd';
+    get string(buf) edit (s, t) (r(head));
+    if s ^= 'ab' then fails = fails + 1;
+    if t ^= 'cd' then fails = fails + 1;
+    /* F(w, d) decimal round-trips */
+    p = 123.45;
+    put string(buf) edit(p) (f(8, 2));
+    get string(buf) edit(q) (f(8, 2));
+    if q ^= 123.45 then fails = fails + 1;
+    /* E(w, d) float round-trips */
+    e = 3.24e1;
+    put string(buf) edit(e) (e(10, 2));
+    get string(buf) edit(f) (e(10, 2));
+    if abs(f - 32.4) > 0.01 then fails =
+       fails + 1;
+    /* LIST into STRING reads back as
+       literals, in order */
+    a = 5;
+    b = -7;
+    e = 2.5;
+    put string(buf) list(a, b, e);
+    get string(buf) list(c, d, f);
+    if c ^= 5 then fails = fails + 1;
+    if d ^= -7 then fails = fails + 1;
+    if f ^= 2.5 then fails = fails + 1;
+    /* SKIP option still transmits */
+    put skip(2) list('gap');
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL stream: ',
+       fails);
+ end stream_edit_combo;

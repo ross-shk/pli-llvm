@@ -1,0 +1,100 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Subset G hardening: ON units nested
+    with SIGNAL, REVERT, ONCODE, RETURN
+    and prefix guards in one flow. */
+ cond_nest_combo: proc options(main);
+    declare fails fixed bin(31);
+    declare x fixed bin(31);
+    declare y fixed bin(31);
+    declare idx fixed bin(31);
+    declare a(10) fixed bin(31);
+    declare seen fixed bin(31);
+    fails = 0;
+    seen = 0;
+    /* SIZE resumes with the wrapped
+       value after the handler runs */
+    on size begin;
+       seen = seen + 1;
+    end;
+    x = 2147483647;
+    x = x + 1;
+    if seen ^= 1 then fails = fails + 1;
+    if x ^= -2147483648 then fails =
+       fails + 1;
+    /* ZERODIVIDE resumes with zero */
+    on zerodivide begin;
+       seen = seen + 10;
+    end;
+    y = 10 / 0;
+    if seen ^= 11 then fails = fails + 1;
+    if y ^= 0 then fails = fails + 1;
+    /* SUBSCRIPTRANGE clamps the index;
+       idx keeps the slip past the
+       compile-time check */
+    on subscriptrange begin;
+       seen = seen + 100;
+    end;
+    a(5) = 5;
+    idx = 15;
+    a(idx) = 99;
+    if seen ^= 111 then fails = fails
+       + 1;
+    if a(10) ^= 99 then fails = fails
+       + 1;
+    /* ONCODE is 1 inside, 0 outside */
+    on error begin;
+       if oncode() ^= 1 then seen = -1;
+       else seen = seen + 1000;
+    end;
+    if oncode() ^= 0 then fails = fails
+       + 1;
+    signal error;
+    if seen ^= 1111 then fails = fails
+       + 1;
+    /* RETURN in a unit resumes after
+       the SIGNAL statement */
+    on error begin;
+       seen = seen + 10000;
+       return;
+    end;
+    seen = seen + 1;
+    signal error;
+    seen = seen + 2;
+    if seen ^= 11114 then fails = fails
+       + 1;
+    /* a unit may arm and fire the next
+       unit; inner bodies only PUT */
+    on error begin;
+       put skip list('outer unit');
+       on zerodivide begin;
+          put skip list('inner unit');
+          return;
+       end;
+       signal zerodivide;
+       put skip list('outer after');
+    end;
+    signal error;
+    /* REVERT pops, so the first three
+       arms are gone */
+    revert size;
+    revert zerodivide;
+    revert subscriptrange;
+    revert error;
+    /* prefixes suppress without arms */
+    (nosize): do;
+       x = 2147483647;
+       x = x + 1;
+    end;
+    if x ^= -2147483648 then fails =
+       fails + 1;
+    (nozerodivide): do;
+       y = 10 / 0;
+    end;
+    (nosubscriptrange): do;
+       a(3) = 33;
+    end;
+    if a(3) ^= 33 then fails = fails + 1;
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL conds: ',
+       fails);
+ end cond_nest_combo;

@@ -1,0 +1,80 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Subset G hardening: level numbers,
+    nested minors and BY NAME copies
+    combined. UNION overlays stay out
+    until the HEAD regression is fixed. */
+ struct_combo: proc options(main);
+    declare 10 rect,
+       20 upleft,
+          30 x float,
+          30 y float,
+       20 lowright,
+          30 x float,
+          30 y float;
+    declare 1 addr,
+       2 city char(12),
+       2 road,
+          3 name char(12),
+          3 num fixed bin(31);
+    declare 1 src,
+       2 a fixed bin(31),
+       2 v(2) fixed bin(31),
+       2 pt,
+          3 px fixed bin(31),
+          3 py fixed bin(31),
+       2 onlys fixed bin(31);
+    declare 1 dst,
+       2 a fixed bin(31),
+       2 v(2) fixed bin(31),
+       2 pt,
+          3 px fixed bin(31),
+          3 pz fixed bin(31),
+       2 onlyd fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    /* non-consecutive levels address
+       the same way as 1/2/3 */
+    rect.upleft.x = 20.5;
+    rect.upleft.y = 30.5;
+    rect.lowright.x = 40.5;
+    rect.lowright.y = 10.5;
+    if rect.upleft.x ^= 20.5 then fails =
+       fails + 1;
+    if rect.lowright.y ^= 10.5 then
+       fails = fails + 1;
+    /* deeper minor paths read and
+       write through two levels */
+    addr.city = 'Springfield';
+    addr.road.name = 'Main';
+    addr.road.num = 12;
+    if addr.city ^= 'Springfield' then
+       fails = fails + 1;
+    if addr.road.num ^= 12 then fails =
+       fails + 1;
+    /* BY NAME copies shared names only,
+       recursing into minor structs */
+    src.a = 11;
+    src.v(1) = 1;
+    src.v(2) = 2;
+    src.pt.px = 33;
+    src.pt.py = 44;
+    src.onlys = 99;
+    dst.onlyd = 7;
+    dst.pt.pz = 55;
+    dst = src, by name;
+    if dst.a ^= 11 then fails = fails + 1;
+    if dst.v(1) ^= 1 then fails = fails
+       + 1;
+    if dst.v(2) ^= 2 then fails = fails
+       + 1;
+    if dst.pt.px ^= 33 then fails = fails
+       + 1;
+    /* absent names keep prior values */
+    if dst.pt.pz ^= 55 then fails = fails
+       + 1;
+    if dst.onlyd ^= 7 then fails = fails
+       + 1;
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL struct: ',
+       fails);
+ end struct_combo;

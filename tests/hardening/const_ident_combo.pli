@@ -1,0 +1,54 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Subset G hardening: VALUE constants,
+    case folding and keywords used as
+    identifiers combined. DEFINE CONSTANT
+    stays out until its HEAD regression
+    is fixed; it rides this machinery. */
+ const_ident_combo: procedure options(main);
+    declare max fixed bin(31) value(100);
+    declare neg fixed bin(31) value(-7);
+    declare lim fixed bin(31) value(10);
+    declare total fixed bin(31);
+    declare t(max) fixed bin(31);
+    declare u(lim) fixed bin(31);
+    declare Foo fixed bin(31);
+    declare select fixed bin(31);
+    declare leave fixed bin(31);
+    declare until fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    /* case is folded: one variable */
+    Foo = 41;
+    FOO = FOO + 1;
+    if fOo ^= 42 then fails = fails + 1;
+    /* keywords still name variables */
+    select = 7;
+    leave = 8;
+    until = 9;
+    if SeLeCt + LeAvE + UnTiL ^= 24 then
+       fails = fails + 1;
+    /* keywords work spelled any case */
+    SeLeCt (select);
+       WhEn (7) total = 1;
+       OtHeRwIsE total = 2;
+    EnD;
+    if total ^= 1 then fails = fails + 1;
+    /* constants feed bounds and exprs */
+    total = max + neg;
+    if total ^= 93 then fails = fails + 1;
+    total = lim * 2;
+    if total ^= 20 then fails = fails + 1;
+    if hbound(t) ^= 100 then fails =
+       fails + 1;
+    if hbound(u) ^= 10 then fails = fails
+       + 1;
+    /* control vars mix with the rest */
+    do total = 1 to 3;
+       select = select + total;
+    end;
+    if select ^= 13 then fails = fails
+       + 1;
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL consts: ',
+       fails);
+ end const_ident_combo;

@@ -1,0 +1,69 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Subset G hardening: precedence chain
+    plus conversions combined in one
+    flow (intro-060 rules). */
+ ops_conv_combo: procedure options(main);
+    declare fails fixed bin(31);
+    declare x fixed bin(31);
+    declare r char(8);
+    declare b bit(1);
+    fails = 0;
+    /* unary minus binds looser than ** */
+    x = -3**2;
+    if x ^= -9 then fails = fails + 1;
+    /* ** is right associative */
+    x = 2**3**2;
+    if x ^= 512 then fails = fails + 1;
+    /* + binds tighter than ||: the '5'
+       lands at 25, past a 24-wide
+       image of (3 + 4) */
+    if index(3 + 4 || '5', '5') ^= 25
+       then fails = fails + 1;
+    /* & binds tighter than |, so this
+       is '1'B | ('0'B & '0'B) */
+    b = '1'b | '0'b & '0'b;
+    if b ^= '1'b then fails = fails + 1;
+    /* comparison binds tighter than & */
+    b = '1'b & '1'b = '1'b;
+    if b ^= '1'b then fails = fails + 1;
+    /* unary not flips a single bit */
+    b = ^'1'b;
+    if b ^= '0'b then fails = fails + 1;
+    /* FIXED() reads a numeric string,
+       the explicit form of '4' -> 4 */
+    x = 3 + fixed('4');
+    if x ^= 7 then fails = fails + 1;
+    x = fixed('111');
+    if x ^= 111 then fails = fails + 1;
+    /* a bit literal is binary: 30 */
+    x = '11110'B;
+    if x ^= 30 then fails = fails + 1;
+    /* || converts the number to text;
+       the number goes last so trim
+       strips the padding */
+    if trim('n=' || (30 + fixed('4')))
+       ^= 'n=34' then fails = fails + 1;
+    /* a comparison result drives IF */
+    if (5 = 5) then b = '1'b;
+    else b = '0'b;
+    if b ^= '1'b then fails = fails + 1;
+    /* 48-charset word spellings */
+    if 5 GT 3 then b = '1'b;
+    else b = '0'b;
+    if b ^= '1'b then fails = fails + 1;
+    r = 'ab' CAT 'cd';
+    if r ^= 'abcd' then fails = fails + 1;
+    /* ^= and ^> spellings */
+    if 5 ^= 6 then b = '1'b;
+    else b = '0'b;
+    if b ^= '1'b then fails = fails + 1;
+    if 5 ^> 10 then b = '1'b;
+    else b = '0'b;
+    if b ^= '1'b then fails = fails + 1;
+    /* !! aliases || */
+    r = 'ab' !! 'cd';
+    if r ^= 'abcd' then fails = fails + 1;
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL ops_conv: ',
+       fails);
+ end ops_conv_combo;

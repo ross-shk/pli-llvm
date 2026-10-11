@@ -1,0 +1,143 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Subset G hardening: custom lower
+    bounds, negative bounds, generic (*)
+    procs, per-axis bounds and reductions
+    combined. */
+ array_generic_combo: proc options(main);
+    declare fails fixed bin(31);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare t(-1:1, 0:2) fixed bin(31);
+    declare v(5) fixed bin(31);
+    declare u(-2:2) fixed bin(31);
+    declare m(2, 3) fixed bin(31);
+    fails = 0;
+    /* A(5) means A(1:5) */
+    do i = 1 to 5;
+       v(i) = i * 10;
+    end;
+    if lbound(v) ^= 1 then fails = fails
+       + 1;
+    if hbound(v) ^= 5 then fails = fails
+       + 1;
+    if dim(v) ^= 5 then fails = fails + 1;
+    if sum(v) ^= 150 then fails = fails
+       + 1;
+    /* a second 1-D shape with a lower
+       bound below 1 */
+    do i = -2 to 2;
+       u(i) = i + 3;
+    end;
+    if lbound(u) ^= -2 then fails = fails
+       + 1;
+    if hbound(u) ^= 2 then fails = fails
+       + 1;
+    if dimension(u) ^= 5 then fails =
+       fails + 1;
+    /* one (*) callee serves both shapes */
+    if total(v) ^= 150 then fails = fails
+       + 1;
+    if total(u) ^= 15 then fails = fails
+       + 1;
+    call dbl(v);
+    call dbl(u);
+    if v(1) ^= 20 then fails = fails + 1;
+    if v(5) ^= 100 then fails = fails
+       + 1;
+    if u(-2) ^= 2 then fails = fails + 1;
+    if u(2) ^= 10 then fails = fails + 1;
+    /* negative 2-D bounds hold i * j */
+    do i = -1 to 1;
+       do j = 0 to 2;
+          t(i, j) = i * j;
+       end;
+    end;
+    if t(-1, 2) ^= -2 then fails = fails
+       + 1;
+    if t(0, 1) ^= 0 then fails = fails
+       + 1;
+    if lbound(t, 1) ^= -1 then fails =
+       fails + 1;
+    if hbound(t, 1) ^= 1 then fails =
+       fails + 1;
+    if lbound(t, 2) ^= 0 then fails =
+       fails + 1;
+    if hbound(t, 2) ^= 2 then fails =
+       fails + 1;
+    if dimension(t, 1) ^= 3 then fails =
+       fails + 1;
+    if dimension(t, 2) ^= 3 then fails =
+       fails + 1;
+    call fill(t);
+    if t(1, 2) ^= 3 then fails = fails
+       + 1;
+    if t(-1, 0) ^= -1 then fails = fails
+       + 1;
+    if trace(t) ^= 3 then fails = fails
+       + 1;
+    /* a second 2-D shape, same pattern */
+    do i = 1 to 2;
+       do j = 1 to 3;
+          m(i, j) = i + j;
+       end;
+    end;
+    call fillm(m);
+    if m(2, 3) ^= 5 then fails = fails
+       + 1;
+    if tracem(m) ^= 10 then fails = fails
+       + 1;
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL array_gen: ',
+       fails);
+ total: procedure(w)
+    returns(fixed bin(31));
+    declare w(*) fixed bin(31);
+    declare k fixed bin(31);
+    declare s fixed bin(31);
+    s = 0;
+    do k = lbound(w) to hbound(w);
+       s = s + w(k);
+    end;
+    return(s);
+ end total;
+ dbl: procedure(w);
+    declare w(*) fixed bin(31);
+    declare k fixed bin(31);
+    do k = lbound(w) to hbound(w);
+       w(k) = w(k) * 2;
+    end;
+ end dbl;
+ fill: procedure(g);
+    declare g(-1:1, 0:2) fixed bin(31);
+    declare a fixed bin(31);
+    declare q fixed bin(31);
+    do a = lbound(g, 1) to hbound(g, 1);
+       do q = lbound(g, 2) to
+          hbound(g, 2);
+          g(a, q) = a + q;
+       end;
+    end;
+ end fill;
+ trace: procedure(g)
+    returns(fixed bin(31));
+    declare g(-1:1, 0:2) fixed bin(31);
+    return(g(-1, 0) + g(0, 1) +
+       g(1, 2));
+ end trace;
+ fillm: procedure(g);
+    declare g(2, 3) fixed bin(31);
+    declare a fixed bin(31);
+    declare q fixed bin(31);
+    do a = 1 to 2;
+       do q = 1 to 3;
+          g(a, q) = a + q;
+       end;
+    end;
+ end fillm;
+ tracem: procedure(g)
+    returns(fixed bin(31));
+    declare g(2, 3) fixed bin(31);
+    return(g(1, 1) + g(1, 2) +
+       g(2, 3));
+ end tracem;
+ end array_generic_combo;
