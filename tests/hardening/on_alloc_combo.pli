@@ -1,0 +1,107 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* rules (87)-(94): heap BASED blocks and
+    CONTROLLED generations stay intact across
+    condition traps and resumes. Slips run
+    over AUTOMATIC, heap BASED, and CONTROLLED
+    arrays (each clamps into range), a SIZE
+    trap fires on heap decimal arithmetic,
+    and ERROR sees the live top generation.
+    Units only touch CONTROLLED data (91). */
+ onalloc: procedure options(main);
+    declare a(5) fixed bin(31);
+    declare d fixed decimal(5,2);
+    declare i fixed bin(31);
+    declare v fixed bin(31);
+    declare c(4) fixed bin(31) controlled;
+    declare mark fixed bin(31) controlled;
+    declare code fixed bin(31);
+    declare fails fixed bin(31);
+    declare p pointer;
+    declare q pointer;
+    declare h(5) fixed bin(31) based;
+    declare 1 rec based,
+              2 m fixed decimal(5,2),
+              2 f fixed bin(31);
+    fails = 0;
+    code = 0;
+    do i = 1 to 5;
+       a(i) = i * 10;
+    end;
+    allocate c;
+    c(1) = 10;
+    c(4) = 40;
+    allocate mark;
+    mark = 0;
+    allocate h set(p);
+    p -> h(1) = 10;
+    p -> h(5) = 50;
+    allocate rec set(q);
+    q -> rec.f = 333;
+    q -> rec.m = 999.99;
+    /* slips clamp on every storage class */
+    on subscriptrange begin;
+       mark = mark + 1;
+    end;
+    i = 0;
+    v = a(i);
+    if v ^= 10 then
+       fails = fails + 1;
+    i = 6;
+    v = p -> h(i);
+    if v ^= 50 then
+       fails = fails + 1;
+    i = 5;
+    v = c(i);
+    if v ^= 40 then
+       fails = fails + 1;
+    i = 7;
+    c(i) = 99;
+    if c(4) ^= 99 then
+       fails = fails + 1;
+    i = 8;
+    p -> h(i) = 77;
+    if p -> h(5) ^= 77 then
+       fails = fails + 1;
+    revert subscriptrange;
+    if mark ^= 5 then
+       fails = fails + 1;
+    /* an overflow reaches SIZE; only the
+       firing is asserted, not the wrap */
+    on size begin;
+       mark = mark + 100;
+    end;
+    q -> rec.m = q -> rec.m + 0.01;
+    revert size;
+    if mark ^= 105 then
+       fails = fails + 1;
+    /* ERROR sees the live top generation */
+    on error begin;
+       mark = mark + 1000;
+       code = oncode();
+    end;
+    signal error;
+    revert error;
+    if mark ^= 1105 then
+       fails = fails + 1;
+    if code ^= 1 then
+       fails = fails + 1;
+    /* every allocation survived */
+    if p -> h(1) ^= 10 then
+       fails = fails + 1;
+    if q -> rec.f ^= 333 then
+       fails = fails + 1;
+    if c(1) ^= 10 then
+       fails = fails + 1;
+    if c(4) ^= 99 then
+       fails = fails + 1;
+    free p -> h;
+    free q -> rec;
+    free c;
+    free mark;
+    if fails = 0 then
+       put skip list('PASS on_alloc_combo');
+    else
+       put skip list('FAIL on_alloc: ',
+          fails);
+ end onalloc;

@@ -1,0 +1,58 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* rules (79),(82),(91)-(94): the condition
+    stack is thread-local, so each worker
+    establishes, fires, and reverts its own
+    ON-units; main's stack (ONCODE 0) is
+    unaffected. Handlers only write slots. */
+ ton: procedure options(main);
+    declare e1 event;
+    declare e2 event;
+    declare s1 fixed bin(31);
+    declare s2 fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    s1 = 0;
+    s2 = 0;
+    call w1 event(e1);
+    call w2 event(e2);
+    wait(e1, e2);
+    /* a real divide trap: handler ran and
+       the faulting store never landed */
+    if s1 ^= 1000 then
+       fails = fails + 1;
+    /* a signalled ERROR with its code */
+    if s2 ^= 1 then
+       fails = fails + 1;
+    /* main never established a unit */
+    if oncode() ^= 0 then
+       fails = fails + 1;
+    if fails = 0 then
+       put skip list('PASS task_on_combo');
+    else
+       put skip list('FAIL task_on: ',
+          fails);
+    w1: procedure;
+       declare hit fixed bin(31);
+       declare c fixed bin(31);
+       hit = 0;
+       c = 0;
+       on zerodivide begin;
+          hit = 1;
+          c = 99;
+       end;
+       c = 10 / 0;
+       s1 = hit * 1000 + c;
+       revert zerodivide;
+    end w1;
+    w2: procedure;
+       declare code fixed bin(31);
+       code = 0;
+       on error begin;
+          code = oncode();
+       end;
+       signal error;
+       s2 = code;
+       revert error;
+    end w2;
+ end ton;

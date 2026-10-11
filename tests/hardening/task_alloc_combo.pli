@@ -1,0 +1,55 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* rules (79),(82),(87)-(90): tasks allocate
+    their own heap BASED blocks and CONTROLLED
+    generations; disjoint result slots keep the
+    workers race-free under WAIT-for-all. A
+    worker never touches an enclosing BASED
+    variable through a locator (codegen crash,
+    found by this test's first draft). */
+ talloc: procedure options(main);
+    declare e1 event;
+    declare e2 event;
+    declare res(2) fixed bin(31);
+    declare fails fixed bin(31);
+    declare p pointer;
+    declare 1 mrec based,
+              2 v fixed bin(31);
+    fails = 0;
+    res(1) = 0;
+    res(2) = 0;
+    /* main-side heap use interleaved with
+       the workers' own allocations */
+    allocate mrec set(p);
+    p -> mrec.v = 7;
+    call w(1) event(e1);
+    call w(2) event(e2);
+    wait(e1, e2);
+    if res(1) ^= 111 then
+       fails = fails + 1;
+    if res(2) ^= 222 then
+       fails = fails + 1;
+    /* the workers never saw main's block */
+    if p -> mrec.v ^= 7 then
+       fails = fails + 1;
+    free p -> mrec;
+    if fails = 0 then
+       put skip list('PASS task_alloc_combo');
+    else
+       put skip list('FAIL task_alloc: ',
+          fails);
+    w: procedure(k);
+       declare k fixed bin(31);
+       declare q pointer;
+       declare 1 wrec based,
+                 2 v fixed bin(31);
+       declare c fixed bin(31) controlled;
+       allocate wrec set(q);
+       q -> wrec.v = k * 100;
+       allocate c;
+       c = k * 10;
+       res(k) = q -> wrec.v + c + k;
+       free q -> wrec;
+       free c;
+    end w;
+ end talloc;
