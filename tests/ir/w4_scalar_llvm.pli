@@ -1,11 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* W4 scalar conversion IR check: exercises FIXED(float) and FIXED(char)
-   in direct LLVM mode. CHECK-NOT confirms no pli_* calls remain. */
+/* W4 scalar conversion IR check: exercises FIXED(float), FIXED(char),
+   CHAR(fixed), and CHAR(float) in direct LLVM mode. CHECK-NOT confirms
+   no pli_* calls remain for the migrated operations. */
 w4_ir: procedure options(main);
     declare x fixed bin(31);
     declare f float(6);
     declare s char(20);
+    declare y char(24);
+    f = 3.5;
     x = fixed(f);
     x = fixed(s);
     x = fixed('123');
+    y = 'val=' || 42;
+    y = 'flt=' || f;
+    y = 'neg=' || -7;
+    y = 'zero=' || 0;
 end w4_ir;

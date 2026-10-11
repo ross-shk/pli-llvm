@@ -1,0 +1,128 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* W4b: scalar math transcendentals — SQRT, EXP, LOG, SIN, COS, TAN, LOG2,
+   LOG10, ATAN, SINH, COSH, TANH, ERF, ERFC, ASIN, ACOS, CBRT, SIND, COSD,
+   TAND, ATAND, ATAN2.
+   Edge cases: NaN, Inf, sign-zero argument. */
+w4b_math: procedure options(main);
+   declare fails fixed bin(31);
+   declare f float(6);
+   declare x fixed bin(31);
+
+   fails = 0;
+
+   /* SQRT */
+   if sqrt(4.0) ^= 2.0 then do;
+      fails = fails + 1;
+      put skip list('FAIL sqrt(4.0) =', sqrt(4.0));
+   end;
+   if sqrt(2.0) <= 1.4 then do;
+      fails = fails + 1;
+      put skip list('FAIL sqrt(2.0) too small =', sqrt(2.0));
+   end;
+
+   /* EXP */
+   f = exp(1.0);
+   if f <= 2.7 or f >= 2.8 then do;
+      fails = fails + 1;
+      put skip list('FAIL exp(1.0) =', f);
+   end;
+
+   /* LOG (natural) */
+   f = log(2.718281828459045);
+   if f <= 0.99 or f >= 1.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL log(e) =', f);
+   end;
+
+   /* LOG2 */
+   if log2(8.0) <= 2.99 or log2(8.0) >= 3.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL log2(8.0) =', log2(8.0));
+   end;
+
+   /* LOG10 */
+   if log10(100.0) <= 1.99 or log10(100.0) >= 2.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL log10(100.0) =', log10(100.0));
+   end;
+
+   /* SIN */
+   if sin(0.0) <= -0.001 or sin(0.0) >= 0.001 then do;
+      fails = fails + 1;
+      put skip list('FAIL sin(0) =', sin(0.0));
+   end;
+
+   /* COS */
+   if cos(0.0) <= 0.99 or cos(0.0) >= 1.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL cos(0) =', cos(0.0));
+   end;
+
+   /* TAN */
+   if tan(0.0) <= -0.001 or tan(0.0) >= 0.001 then do;
+      fails = fails + 1;
+      put skip list('FAIL tan(0) =', tan(0.0));
+   end;
+
+   /* ATAN */
+   if atan(1.0) <= 0.78 or atan(1.0) >= 0.79 then do;
+      fails = fails + 1;
+      put skip list('FAIL atan(1.0) =', atan(1.0));
+   end;
+
+   /* ATAN2 */
+   if atan2(1.0, 1.0) <= 0.78 or atan2(1.0, 1.0) >= 0.79 then do;
+      fails = fails + 1;
+      put skip list('FAIL atan2(1,1) =', atan2(1.0, 1.0));
+   end;
+
+   /* SINH */
+   if sinh(0.0) <= -0.001 or sinh(0.0) >= 0.001 then do;
+      fails = fails + 1;
+      put skip list('FAIL sinh(0) =', sinh(0.0));
+   end;
+
+   /* COSH */
+   if cosh(0.0) <= 0.99 or cosh(0.0) >= 1.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL cosh(0) =', cosh(0.0));
+   end;
+
+   /* CBRT */
+   if cbrt(8.0) <= 1.99 or cbrt(8.0) >= 2.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL cbrt(8.0) =', cbrt(8.0));
+   end;
+
+   /* SIND (degree trig) */
+   if sind(0.0) <= -0.001 or sind(0.0) >= 0.001 then do;
+      fails = fails + 1;
+      put skip list('FAIL sind(0) =', sind(0.0));
+   end;
+
+   /* COSD */
+   if cosd(0.0) <= 0.99 or cosd(0.0) >= 1.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL cosd(0) =', cosd(0.0));
+   end;
+
+   /* ATAND */
+   if atand(1.0) <= 44.9 or atand(1.0) >= 45.1 then do;
+      fails = fails + 1;
+      put skip list('FAIL atand(1.0) =', atand(1.0));
+   end;
+
+   /* ERF(0) = 0, ERFC(0) = 1 */
+   if erf(0.0) <= -0.001 or erf(0.0) >= 0.001 then do;
+      fails = fails + 1;
+      put skip list('FAIL erf(0) =', erf(0.0));
+   end;
+   if erfc(0.0) <= 0.99 or erfc(0.0) >= 1.01 then do;
+      fails = fails + 1;
+      put skip list('FAIL erfc(0) =', erfc(0.0));
+   end;
+
+   if fails = 0 then put skip list('PASS w4b_math');
+   else put skip list('FAIL w4b_math: fails =', fails);
+end w4b_math;

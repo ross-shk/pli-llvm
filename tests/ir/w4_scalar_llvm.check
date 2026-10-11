@@ -1,3 +1,6 @@
+CHECK-NOT: call.*@pli_char_of_fixed
+CHECK-NOT: call.*@pli_char_of_float
 CHECK-NOT: call.*@pli_fixed_of_float
 CHECK-NOT: call.*@pli_fixed_of_char
 CHECK: call {{.*}} @llvm.fptosi.sat.i64.f64
+CHECK: call.*sprintf

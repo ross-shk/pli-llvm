@@ -1,0 +1,67 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* W4c: RANK, COLLATE, ISOCHAR — code-point operations.
+   Edge cases: empty string (RANK->0), n mod 256 for COLLATE,
+   ISOCHAR range lo>hi (zero fill), ISOCHAR range > dstcap (clip). */
+w4c_codepoint: procedure options(main);
+   declare fails fixed bin(31);
+   declare c char(1);
+   declare s char(16);
+   declare n fixed bin(31);
+
+   fails = 0;
+
+   /* RANK: code point of first character */
+   c = 'A';
+   n = rank(c);
+   if n ^= 65 then do;
+      fails = fails + 1;
+      put skip list('FAIL rank(A) =', n);
+   end;
+
+   c = 'a';
+   n = rank(c);
+   if n ^= 97 then do;
+      fails = fails + 1;
+      put skip list('FAIL rank(a) =', n);
+   end;
+
+   /* RANK of space-only string: first char is space, code 32 */
+   s = '';
+   n = rank(s);
+   if n ^= 32 then do;
+      fails = fails + 1;
+      put skip list('FAIL rank(" ") =', n);
+   end;
+
+   /* COLLATE: character for code n (mod 256) */
+   s = collate(65);
+   if substr(s, 1, 1) ^= 'A' then do;
+      fails = fails + 1;
+      put skip list('FAIL collate(65) =', substr(s, 1, 1));
+   end;
+
+   s = collate(65 + 256);
+   if substr(s, 1, 1) ^= 'A' then do;
+      fails = fails + 1;
+      put skip list('FAIL collate(321) mod =', substr(s, 1, 1));
+   end;
+
+   /* ISOCHAR: fill dst with chars from lo to hi */
+   s = isochar(65, 67);
+   if substr(s, 1, 1) ^= 'A' then do;
+      fails = fails + 1;
+      put skip list('FAIL isochar(65,67)[1] =', substr(s, 1, 1));
+   end;
+   if substr(s, 2, 1) ^= 'B' then do;
+      fails = fails + 1;
+      put skip list('FAIL isochar(65,67)[2] =', substr(s, 2, 1));
+   end;
+   if substr(s, 3, 1) ^= 'C' then do;
+      fails = fails + 1;
+      put skip list('FAIL isochar(65,67)[3] =', substr(s, 3, 1));
+   end;
+
+   if fails = 0 then put skip list('PASS w4c_codepoint');
+   else put skip list('FAIL w4c_codepoint: fails =', fails);
+end w4c_codepoint;

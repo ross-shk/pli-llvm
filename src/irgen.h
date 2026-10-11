@@ -323,6 +323,12 @@ private:
   // `e` was a recognised built-in; false otherwise, so emitExpr can fall
   // through to the general function-call path.
   bool emitBuiltin(HExpr* e, Val& out);
+  // Math transcendental helpers (W4b): emit LLVM intrinsic in llvm mode or
+  // pli_* call in runtime mode, gated by useRuntimeCall.
+  llvm::Value* emitUnaryMath(const std::string& plifn, const std::string& intrinsic, llvm::Value* x,
+                             const llvm::Twine& name);
+  llvm::Value* emitBinaryMath(const std::string& plifn, const std::string& intrinsic,
+                              llvm::Value* x, llvm::Value* y, const llvm::Twine& name);
   Val loadSym(Symbol* sym, const Type& ty);
   void storeTo(Symbol* sym, const Val& v, SourceLoc loc);
   // `packed` marks a destination inside an UNALIGNED structure: the store then
@@ -574,6 +580,16 @@ private:
   // Direct LLVM lowering for FIXED(char) (W4): skip blanks, optional sign,
   // scan digits, set *ok=0 when no digits found.
   llvm::Value* emitFixedOfCharLLVM(llvm::Value* s, llvm::Value* slen, llvm::Value* okSlot);
+  // Direct LLVM lowering for CHAR(fixed) (W4): integer → decimal string,
+  // blank-padded to dstcap. Mirrors rt_stream.c pli_char_of_fixed.
+  void emitCharOfFixedLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* v);
+  // Dispatch wrapper: uses runtime call or direct LLVM lowering for CHAR(fixed).
+  void emitCharOfFixed(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* v);
+  // Direct LLVM lowering for CHAR(float) (W4): float → %.6g string via sprintf,
+  // blank-padded to dstcap. Eliminates the opaque pli_char_of_float call.
+  void emitCharOfFloatLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* x);
+  // Dispatch wrapper: uses runtime call or direct LLVM lowering for CHAR(float).
+  void emitCharOfFloat(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* x);
   // Get-or-create an LLVM intrinsic with an explicit signature (used only for
   // non-ABI LLVM builtins such as llvm.pow.f64 / llvm.fabs.f64).
   llvm::Function* intrinsicFn(const std::string& name, llvm::Type* ret,
