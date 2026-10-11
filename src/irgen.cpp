@@ -6941,20 +6941,35 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
   // and the GEP is on the element pointer.
   if (arr.isDynamic()) {
     llvm::Value* flat = i64(0);
-    llvm::Value* oob = b_.getInt1(false);
     long long stride = 1;
+    bool flatIsZero = true;
+    llvm::Value* oob = subChecks() ? b_.getInt1(false) : nullptr;
     for (size_t k = nAxes; k-- > 0;) {
       const Dim& dk = arr.dims[k];
       llvm::Value* i = toI64(emitExpr(idxs[k].get()));
       llvm::Value* lb = k == 0 && dk.lbDyn ? dynLb : i64(dk.lb);
       llvm::Value* ub = k == 0 && dk.dyn ? dynUb : i64(dk.ub);
-      oob = b_.CreateOr(
-          oob, b_.CreateOr(b_.CreateICmpSLT(i, lb, "lo"), b_.CreateICmpSGT(i, ub, "hi")), "oob");
-      // A handled slip resumes with this axis clamped into range (rule 94);
-      // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
-      llvm::Value* idx = subChecks() ? clampIndex(i, lb, ub) : i;
+      // Bounds-check comparisons (lo/hi/oob) are dead when SUBSCRIPTRANGE
+      // is off — emit none. ClampIndex is the slip resume (rule 94).
+      llvm::Value* idx = i;
+      if (subChecks()) {
+        llvm::Value* lo = b_.CreateICmpSLT(i, lb, "lo");
+        llvm::Value* hi = b_.CreateICmpSGT(i, ub, "hi");
+        oob = b_.CreateOr(oob, b_.CreateOr(lo, hi, "oob"), "oob");
+        idx = clampIndex(i, lb, ub);
+      }
+      // intent: row-major flat offset = sum_k (idx_k - lb_k) * stride_k
       llvm::Value* off = b_.CreateSub(idx, lb, "off");
-      flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
+      // skipMul: stride 1 needs no multiply (strength reduction P1.2)
+      llvm::Value* contrib = (stride == 1) ? off
+          : b_.CreateMul(off, i64(stride), "scaled");
+      // skipAdd: initial accumulator is 0 — skip the add (strength reduction)
+      if (flatIsZero) {
+        flat = contrib;
+      } else {
+        flat = b_.CreateAdd(flat, contrib, "flat");
+      }
+      flatIsZero = false;
       stride *= (dk.ub - dk.lb + 1); // later axes are fixed; only axis 0 is runtime
     }
     if (subChecks()) {
@@ -6972,19 +6987,32 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
   // Emit every index and OR the per-axis out-of-bounds flags into one check,
   // accumulating the row-major flat offset (last axis is contiguous).
   llvm::Value* flat = i64(0);
-  llvm::Value* oob = b_.getInt1(false);
   long long stride = 1;
+  bool flatIsZero = true;
+  llvm::Value* oob = subChecks() ? b_.getInt1(false) : nullptr;
   for (size_t k = nAxes; k-- > 0;) {
     const long long lb = arr.dims[k].lb, ub = arr.dims[k].ub;
     llvm::Value* i = toI64(emitExpr(idxs[k].get()));
-    oob = b_.CreateOr(
-        oob, b_.CreateOr(b_.CreateICmpSLT(i, i64(lb), "lo"), b_.CreateICmpSGT(i, i64(ub), "hi")),
-        "oob");
-    // A handled slip resumes with this axis clamped into range (rule 94);
-    // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
-    llvm::Value* idx = subChecks() ? clampIndex(i, i64(lb), i64(ub)) : i;
+    // Bounds-check comparisons are dead when SUBSCRIPTRANGE is off — emit none.
+    llvm::Value* idx = i;
+    if (subChecks()) {
+      llvm::Value* lo = b_.CreateICmpSLT(i, i64(lb), "lo");
+      llvm::Value* hi = b_.CreateICmpSGT(i, i64(ub), "hi");
+      oob = b_.CreateOr(oob, b_.CreateOr(lo, hi, "oob"), "oob");
+      idx = clampIndex(i, i64(lb), i64(ub));
+    }
+    // intent: row-major flat offset = sum_k (idx_k - lb_k) * stride_k
     llvm::Value* off = b_.CreateSub(idx, i64(lb), "off");
-    flat = b_.CreateAdd(flat, b_.CreateMul(off, i64(stride), "scaled"), "flat");
+    // skipMul: stride 1 needs no multiply (strength reduction P1.2)
+    llvm::Value* contrib = (stride == 1) ? off
+        : b_.CreateMul(off, i64(stride), "scaled");
+    // skipAdd: initial accumulator is 0 — skip the add (strength reduction)
+    if (flatIsZero) {
+      flat = contrib;
+    } else {
+      flat = b_.CreateAdd(flat, contrib, "flat");
+    }
+    flatIsZero = false;
     stride *= (ub - lb + 1);
   }
 
