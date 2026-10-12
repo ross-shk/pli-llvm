@@ -5995,3 +5995,36 @@ as meaningless-but-harmless for binary records.
 `DECLARE`; only the runtime signature was missing. Tests:
 `tests/corner_cases/record_io_edge.pli`, `tests/driver/record.sh`.
 
+## ADR-212 — `!noalias`/`!alias.scope` on plain `AUTOMATIC` locals (P2)
+
+**Context.** PL/I `AUTOMATIC` variables declared in a procedure are disjoint
+unless the program explicitly aliases them — through `BASED` pointers
+(ADR-164), `DEFINED` overlays (rules (39)/(40)), by-reference parameters, or
+`CONTROLLED` generations. C pointers may always alias, so C compilers cannot
+hoist or vectorize memory operations through pointers that could overlap.
+PL/I's stronger locality fact is free knowledge the LLVM optimizer can exploit
+for loop invariant code motion (LICM) and LoopAA-based vectorization — but
+only if it is expressed as LLVM alias metadata.
+
+**Decision.** In `allocaLocals` (`src/irgen.cpp:3135`), every plain
+`AUTOMATIC` local `alloca` — non-`BASED`, non-`CONTROLLED`, non-`STATIC`,
+non-`DEFINED`-overlay, non-parameter, no address taken — is tagged with a
+per-function `!alias.scope` domain and `!noalias` against all sibling scopes.
+The matching `annotateAlias` helper (`src/irgen.cpp:7547`) stamps
+`!alias.scope={own}` + `!noalias={peers}` on the loads and stores for those
+symbols. `BASED`/`CONTROLLED`/`STATIC`/`DEFINED`/parameter/temporary accesses
+remain unannotated and fall back to BasicAA, which is always sound.
+
+Litmus tests (`tests/core/alias_noalias.pli`, `tests/core/alias_defined.pli`,
+`tests/core/alias_based.pli`):
+- Positive: two plain `AUTOMATIC` arrays in a loop — after P2 the allocas
+  carry `!noalias` and the loop vectorizes; output identical before/after.
+- Negative (DEFINED): `DEFINED` overlay pair — no `!noalias`, output identical.
+- Negative (BASED): `P->X(i)` store/load pair — no `!noalias`, output identical.
+
+**Consequences.** Enables LICM hoisting and LoopAA vectorization on the hot
+`matmul`/`sort`/`collatz` loops. The claim is narrow by construction: the
+no-go set excludes every construct that can alias (ADR-018/047/048/140,
+ADR-164/165), so the metadata is truthful, not approximate. All 21 benchmarks
+pass `--checks-forced` parity (traps on, facts off — output unchanged).
+
