@@ -83,6 +83,16 @@ private:
   // Every storage-owning symbol this frame can address directly (global,
   // local alloca, parameter, or a static link) to its address value.
   std::unordered_map<Symbol*, llvm::Value*> symAddr_;
+  // P2 alias facts (LICM/LAA): one domain per emitted function; each plain
+  // AUTOMATIC local owns a scope in it. Scalar loads/stores stamp
+  // !alias.scope={own} + !noalias={all other scopes}. Reset per function so
+  // nested procedures never claim disjointness from a parent frame.
+  llvm::MDNode* aliasDomain_ = nullptr;
+  std::vector<llvm::MDNode*> aliasScopes_;
+  std::unordered_map<Symbol*, llvm::MDNode*> aliasScopeOf_;
+  // Stamp !alias.scope/!noalias on one memory instruction for symbol s;
+  // silently skips symbols without a scope (shared/aliased storage).
+  void annotateAlias(llvm::Instruction* inst, Symbol* s);
   // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
   // bound value of its dynamic axis, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynUb_;
@@ -150,6 +160,12 @@ private:
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
   void emitAssign(HStmt* s);
+  // Self-append peephole (rule (119), P4): X = X || lit... appends in place
+  // for AUTOMATIC scalar VARYING targets; false for any other shape.
+  bool emitSelfAppend(HStmt* s);
+  // libc scan declaration (memchr/memcmp) with audited facts for LICM (P4).
+  llvm::Function* scanFn(const std::string& name, llvm::Type* ret,
+                         llvm::ArrayRef<llvm::Type*> params);
   void emitIf(HStmt* s);
   void emitDoWhile(HStmt* s);
   void emitDoIter(HStmt* s);
@@ -333,7 +349,10 @@ private:
   void storeTo(Symbol* sym, const Val& v, SourceLoc loc);
   // `packed` marks a destination inside an UNALIGNED structure: the store then
   // uses align 1 rather than the value type's natural alignment (ADR-169).
-  void storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool packed = false);
+  // `aliasSym` (P2) stamps !alias.scope/!noalias when the address is exactly
+  // that symbol's own AUTOMATIC alloca; null leaves the store unannotated.
+  void storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool packed = false,
+                     Symbol* aliasSym = nullptr);
   // Copy a character value into a buffer (rules (34),(37),(86)): blank-pad or
   // truncate to the destination length, setting the live length for VARYING.
   // `packed` as for storeScalarTo (the VARYING length word is the aligned part).

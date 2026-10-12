@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
 #include "irgen.h"
+#include "codegen.h" // plic::applyRuntimeFnAttrs declaration
 #include <algorithm>
 #include <cfloat>
 #include <set>
@@ -13,7 +14,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/Function.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
@@ -586,6 +587,16 @@ static void applyRuntimeAttrs(llvm::Function* f) {
   }
 }
 
+// Shared with codegen.cpp linkEmbeddedLibPLI: re-apply the audited P0
+// side-table facts to a linked runtime definition. Unknown names (user
+// functions) are left alone — unlike applyRuntimeAttrs, this never stamps
+// NoUnwind on names outside the table.
+void plic::applyRuntimeFnAttrs(llvm::Function& f) {
+  if (kRuntimeAttrs().count(f.getName().str()) == 0)
+    return;
+  applyRuntimeAttrs(&f);
+}
+
 // --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) ---
 
 // P0 policy: every operation defaults to runtime. P5 flips entries one wave at
@@ -944,15 +955,42 @@ void IRGen::emitTrim(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm
   emitTrimLLVM(dst, dstcap, s, sLen, pad, padLen);
 }
 
+// Fetch (or insert) a libc scan declaration with the full audited fact set:
+// nounwind + willreturn + nofree/nosync/nocallback + argmem-read-only +
+// speculatable. Speculation soundness: every emitted call passes valid
+// string pointers with honest in-bounds lengths (the memcmp operands are
+// additionally clamped to a zero-length no-read on unusable candidates), so
+// speculative execution can neither fault nor observe anything — mirroring
+// clang's own treatment of these builtins. Lets LICM hoist the calls out of
+// conditional blocks in hot loops (P4).
+llvm::Function* IRGen::scanFn(const std::string& name, llvm::Type* ret,
+                              llvm::ArrayRef<llvm::Type*> params) {
+  llvm::Function* f = llvm::cast<llvm::Function>(
+      b_.GetInsertBlock()->getModule()->getOrInsertFunction(name,
+          llvm::FunctionType::get(ret, params, false)).getCallee());
+  f->addFnAttr(llvm::Attribute::NoUnwind);
+  f->addFnAttr(llvm::Attribute::WillReturn);
+  f->addFnAttr(llvm::Attribute::NoFree);
+  f->addFnAttr(llvm::Attribute::NoSync);
+  f->addFnAttr(llvm::Attribute::NoCallback);
+  f->addFnAttr(llvm::Attribute::Speculatable);
+  f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref));
+  return f;
+}
+
 // Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
 //   blen <= 0 -> 1; blen > alen -> 0; else scan a for first run where
 //   a[pos..pos+blen-1] == b[0..blen-1].
 //
 // Fast path: a single memchr(a, b[0], alen) call with loop-invariant
-// arguments, followed by byte-by-byte verification. Because the memchr
-// call has loop-invariant arguments and is marked argmem-read-only, LLVM's
-// LICM hoists the entire fast path out of hot loops (matching strstr codegen
-// parity in benchmark harness).
+// arguments, followed by a single memcmp(a+safePos, b, safeLen)
+// verification. Both calls are argmem-read-only and unconditional within
+// this block, so once the blen > alen guard above folds (loop-invariant),
+// LLVM's LICM hoists each out of hot loops — matching strstr codegen parity
+// in the benchmark harness. The backend lowers memcmp to a SIMD compare
+// instead of an IR-level byte loop (P4 verify-loop vectorization).
+// Clamping (safePos/safeLen collapse to (0, 0) on a memchr miss or overrun)
+// keeps the memcmp in bounds on every path, including speculative ones.
 //
 // Slow path: falls back to pli_index runtime call for the rare case where
 // the first byte of the needle appears before the actual match position.
@@ -969,7 +1007,6 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   llvm::BasicBlock* ret0BB = llvm::BasicBlock::Create(ctx_, "idx.ret0", F);
   llvm::BasicBlock* fastPathBB = llvm::BasicBlock::Create(ctx_, "idx.fast_path", F);
   llvm::BasicBlock* verifyBB = llvm::BasicBlock::Create(ctx_, "idx.verify", F);
-  llvm::BasicBlock* verifyNextBB = llvm::BasicBlock::Create(ctx_, "idx.vnext", F);
   llvm::BasicBlock* matchBB = llvm::BasicBlock::Create(ctx_, "idx.match", F);
   llvm::BasicBlock* slowPathBB = llvm::BasicBlock::Create(ctx_, "idx.slow_path", F);
   llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "idx.exit", F);
@@ -997,16 +1034,11 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   llvm::Value* b0 = b_.CreateLoad(b_.getInt8Ty(), b, "idx.b0");
   llvm::Value* b032 = b_.CreateZExt(b0, b_.getInt32Ty(), "idx.b032");
 
-  llvm::FunctionType* memchrType =
-      llvm::FunctionType::get(b_.getPtrTy(), {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()},
-                               false);
-  llvm::Function* memchrFn =
-      llvm::cast<llvm::Function>(b_.GetInsertBlock()->getModule()->getOrInsertFunction("memchr",
-                                                                                       memchrType)
-                                     .getCallee());
-  memchrFn->addFnAttr(llvm::Attribute::NoUnwind);
-  memchrFn->addFnAttr("memory", "argmem: read");
-  llvm::Value* found = b_.CreateCall(memchrFn, {a, b032, aLen64}, "idx.memchr");
+  llvm::Function* memchrFn = scanFn("memchr", b_.getPtrTy(),
+                                      {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()});
+  llvm::CallInst* foundCall = b_.CreateCall(memchrFn, {a, b032, aLen64}, "idx.memchr");
+  foundCall->addFnAttr(llvm::Attribute::Speculatable);
+  llvm::Value* found = foundCall;
 
   // found == null -> no match -> return 0
   llvm::Value* foundNull = b_.CreateICmpEQ(
@@ -1022,29 +1054,32 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   llvm::Value* dontFit = b_.CreateICmpUGT(posPlusBlen, aLen64, "idx.dont_fit");
 
   llvm::Value* shouldExit = b_.CreateOr(foundNull, dontFit, "idx.should_exit");
+
+  // Clamp the verify operands so the memcmp below is in bounds on every
+  // path: (0, 0) reads nothing when the candidate is unusable, otherwise
+  // the exact (pos, blen). Zero-length memcmp dereferences nothing, so the
+  // call below is safe to execute (and hoist) unconditionally.
+  llvm::Value* safePos = b_.CreateSelect(shouldExit, zero, pos, "idx.safe_pos");
+  llvm::Value* safeLen = b_.CreateSelect(shouldExit, zero, bLen64, "idx.safe_len");
+  llvm::Value* aPosPtr = b_.CreateGEP(b_.getInt8Ty(), a, {safePos}, "idx.apos_ptr");
+  llvm::Function* memcmpFn = scanFn("memcmp", b_.getInt32Ty(),
+                                      {b_.getPtrTy(), b_.getPtrTy(), b_.getInt64Ty()});
+  llvm::CallInst* cmpCall = b_.CreateCall(memcmpFn, {aPosPtr, b, safeLen}, "idx.memcmp");
+  cmpCall->addFnAttr(llvm::Attribute::Speculatable);
+  llvm::Value* cmp = cmpCall;
+  llvm::Value* cmpEq =
+      b_.CreateICmpEQ(cmp, llvm::ConstantInt::get(b_.getInt32Ty(), 0), "idx.cmp_eq");
+  llvm::Value* verified =
+      b_.CreateAnd(cmpEq, b_.CreateNot(shouldExit, "idx.not_exit"), "idx.verified");
+
+  // Miss/overrun exits without touching the slow path; otherwise the
+  // verified flag picks match vs. slow path in the tail block.
   b_.CreateCondBr(shouldExit, ret0BB, verifyBB);
 
-  // verify: byte-by-byte comparison at first candidate position.
+  // verify: tail branch only (all computation hoisted above so LICM can
+  // lift the memchr+memcmp pair out of enclosing loops together).
   startBlock(verifyBB);
-  llvm::PHINode* jPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "idx.j");
-  jPhi->addIncoming(zero, fastPathBB);
-
-  llvm::Value* ajOff = b_.CreateAdd(pos, jPhi, "idx.aj_off");
-  llvm::Value* ajPtr = b_.CreateGEP(b_.getInt8Ty(), a, {ajOff}, "idx.aj_ptr");
-  llvm::Value* bjPtr = b_.CreateGEP(b_.getInt8Ty(), b, {jPhi}, "idx.bj_ptr");
-  llvm::Value* ajVal = b_.CreateLoad(b_.getInt8Ty(), ajPtr, "idx.aj_val");
-  llvm::Value* bjVal = b_.CreateLoad(b_.getInt8Ty(), bjPtr, "idx.bj_val");
-  llvm::Value* mismatch = b_.CreateICmpNE(ajVal, bjVal, "idx.mismatch");
-
-  // Mismatch -> slow path (call runtime pli_index); else -> check done.
-  b_.CreateCondBr(mismatch, slowPathBB, verifyNextBB);
-
-  // verifyNext: j = j + 1; full match when j >= blen.
-  startBlock(verifyNextBB);
-  llvm::Value* jNext = b_.CreateAdd(jPhi, one64, "idx.j_next");
-  jPhi->addIncoming(jNext, verifyNextBB);
-  llvm::Value* allMatched = b_.CreateICmpUGE(jNext, bLen64, "idx.all_matched");
-  b_.CreateCondBr(allMatched, matchBB, verifyBB);
+  b_.CreateCondBr(verified, matchBB, slowPathBB);
 
   // match: result = pos + 1 (PL/I is 1-based).
   startBlock(matchBB);
@@ -3070,6 +3105,12 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
 
 void IRGen::allocaLocals(HProc* p) {
   areaLocals_.clear();
+  // P2 alias facts start fresh per function (see aliasScopeOf_): scopes from
+  // an enclosing procedure must never describe this frame's storage.
+  aliasDomain_ = nullptr;
+  aliasScopes_.clear();
+  aliasScopeOf_.clear();
+  llvm::MDBuilder mdb(ctx_);
   // Pass 1: fixed-size storage (scalars and constant-bounds arrays). Dynamic
   // arrays are deferred so that any variables their bounds reference are
   // already addressable.
@@ -3083,9 +3124,27 @@ void IRGen::allocaLocals(HProc* p) {
       a = entryAlloca(llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(s->ty)),
                       s->irName.substr(1));
     } else {
-      a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
-    }
-    symAddr_[s] = a;
+     a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
+     }
+     // P2: tag plain AUTOMATIC allocas with alias-disjoint facts so LLVM
+     // knows loads through this pointer cannot be clobbered by calls or
+     // stores via unrelated pointers (exercises LICM + LAA). Only plain
+     // automatic locals qualify — no aliases may be taken (definedBase,
+     // based, controlled, static, or params). All scopes share one domain
+     // per function so the facts compare; scalar loads/stores stamp the
+     // matching !alias.scope/!noalias via annotateAlias. (ADR-002: IRGen only.)
+     if (!s->isBased() && !s->controlled && !s->isStatic &&
+         !s->definedBase && s->kind == Symbol::Var) {
+       if (!aliasDomain_)
+         aliasDomain_ = mdb.createAnonymousAliasScopeDomain("plic");
+       llvm::MDNode* scope = mdb.createAnonymousAliasScope(aliasDomain_, "plain-automatic");
+       aliasScopes_.push_back(scope);
+       aliasScopeOf_[s] = scope;
+       llvm::AllocaInst* ai = llvm::cast<llvm::AllocaInst>(a);
+       ai->setMetadata(llvm::LLVMContext::MD_noalias,
+                        llvm::MDNode::get(ctx_, {scope}));
+     }
+     symAddr_[s] = a;
     // Constant scalar INITIAL/VALUE stores at once (rule 26): dynamic bound
     // expressions below load locals, and the store must dominate those loads
     // even without optimization. emitInitials skips these (same helper).
@@ -4344,6 +4403,82 @@ void IRGen::emitStmt(HStmt* s) {
   checkStack_.pop_back();
 }
 
+// Self-append peephole (rule (119), P4): X = X || L1 || ... || Ln where X is
+// an AUTOMATIC scalar VARYING target and every tail leaf is a string
+// literal. Appends each literal in place past the live length, truncating at
+// capacity exactly like the generic temp-buffer + assign path (which copies
+// the temp's first min(cap, total) bytes back), then stores the new length.
+// Skips the temp buffer (pli_alloc + double copy) and the blank-pad, whose
+// extent is provably empty here: the live length only grows, so the new tail
+// [n, cap) sits inside the already-blank old tail [old, cap). Literal
+// globals cannot overlap X and carry no side effects, so in-place evaluation
+// order is unobservable. Returns false for any other shape.
+bool IRGen::emitSelfAppend(HStmt* s) {
+  if (!s->extraTargets.empty())
+    return false;
+  HExpr* t = s->target.get();
+  HExpr* rhs = s->value.get();
+  if (!t || !rhs || t->kind != HExpr::VarRef || !t->sym)
+    return false;
+  Symbol* sym = t->sym;
+  if (!t->memberPath.empty() || t->locPtr || !sym->ty.isChar() || sym->ty.isArray() ||
+      !sym->ty.varying || sym->ty.starLen)
+    return false;
+  // AUTOMATIC storage only: the frame alloca is stable and its tail starts
+  // blank (allocaLocals blank-fills); CONTROLLED generations, STATICs, BASED
+  // cells and DEFINED overlays keep the generic path and its blank repair.
+  if (sym->isBased() || sym->controlled || sym->isStatic || sym->definedBase)
+    return false;
+  if (rhs->kind != HExpr::Binary || rhs->op != Tok::Concat)
+    return false;
+  // Flatten the spine (as the generic concat lowering does): leaves[0] must
+  // be X itself, every other leaf a string literal.
+  std::vector<HExpr*> order;
+  std::vector<HExpr*> stack{rhs};
+  while (!stack.empty()) {
+    HExpr* ex = stack.back();
+    stack.pop_back();
+    if (ex->kind == HExpr::Binary && ex->op == Tok::Concat) {
+      stack.push_back(ex->b.get());
+      stack.push_back(ex->a.get());
+      continue;
+    }
+    order.push_back(ex);
+  }
+  if (order.empty() || order[0]->kind != HExpr::VarRef || order[0]->sym != sym ||
+      !order[0]->memberPath.empty() || order[0]->locPtr)
+    return false;
+  for (size_t i = 1; i < order.size(); ++i)
+    if (order[i]->kind != HExpr::CharLit)
+      return false;
+  llvm::Value* stor = addressOf(sym);
+  if (!stor)
+    return false;
+  llvm::Value* lp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 0, "sa.vlenp");
+  llvm::Value* dp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 1, "sa.vdata");
+  llvm::Value* old32 = b_.CreateLoad(b_.getInt32Ty(), lp, "sa.old");
+  llvm::Value* off = b_.CreateZExt(old32, b_.getInt64Ty(), "sa.off");
+  llvm::Value* cap = i64(sym->ty.len);
+  // Clamp a corrupt live length into range so the remainder below cannot
+  // underflow; every writer stores min(cap, total), so this never fires.
+  off = b_.CreateSelect(b_.CreateICmpULT(off, cap, "sa.inrange"), off, cap, "sa.clamp");
+  for (size_t i = 1; i < order.size(); ++i) {
+    const std::string& lit = order[i]->sval;
+    if (lit.empty())
+      continue;
+    llvm::Value* llen = i64((long long)lit.size());
+    llvm::Value* rem = b_.CreateSub(cap, off, "sa.rem");
+    llvm::Value* take =
+        b_.CreateSelect(b_.CreateICmpULT(llen, rem, "sa.fits"), llen, rem, "sa.take");
+    llvm::Value* dstp = b_.CreateGEP(b_.getInt8Ty(), dp, {off}, "sa.dstp");
+    b_.CreateMemMove(dstp, llvm::MaybeAlign(), globalString(lit), llvm::MaybeAlign(), take,
+                     false);
+    off = b_.CreateAdd(off, take, "sa.off");
+  }
+  b_.CreateStore(b_.CreateTrunc(off, b_.getInt32Ty(), "sa.len"), lp);
+  return true;
+}
+
 void IRGen::emitAssign(HStmt* s) {
   if (!s->target)
     return;
@@ -4722,6 +4857,10 @@ void IRGen::emitAssign(HStmt* s) {
     return;
   }
   if (s->target->kind != HExpr::VarRef || !s->target->sym)
+    return;
+  // Self-append peephole first: X = X || lit... appends in place when the
+  // target qualifies; anything else falls through to generic concat+assign.
+  if (emitSelfAppend(s))
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
@@ -5601,8 +5740,16 @@ void IRGen::emitDoIter(HStmt* s) {
   startBlock(stepL);
   Val cv = loadSym(ctl, ct);
   llvm::Value* bv = by.reg;
-  llvm::Value* nx =
-      ct.k == TK::Float ? b_.CreateFAdd(cv.reg, bv, "next") : b_.CreateAdd(cv.reg, bv, "next");
+  llvm::Value* nx;
+  if (ct.k == TK::Float) {
+    nx = b_.CreateFAdd(cv.reg, bv, "next");
+  } else if (!sizeChecks() && !subChecks()) {
+    // P3.1: overflow checks are off, so the step cannot trap; mark nsw to
+    // unlock indvars/LSR closed forms like C loop counters (rule (86) DO).
+    nx = b_.CreateNSWAdd(cv.reg, bv, "next");
+  } else {
+    nx = b_.CreateAdd(cv.reg, bv, "next");
+  }
   Val nv;
   nv.ty = ct;
   nv.reg = nx;
@@ -7307,6 +7454,28 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
   }
 }
 
+// Stamp !alias.scope={own} + !noalias={all other function scopes} on one
+// memory instruction for symbol s. Skips symbols without a scope (BASED,
+// CONTROLLED, STATIC, DEFINED overlays, parameters, temps): those accesses
+// stay unannotated and fall back to BasicAA, which is always sound.
+void IRGen::annotateAlias(llvm::Instruction* inst, Symbol* s) {
+  if (!inst || !s)
+    return;
+  auto it = aliasScopeOf_.find(s);
+  if (it == aliasScopeOf_.end())
+    return;
+  llvm::MDNode* own = it->second;
+  inst->setMetadata(llvm::LLVMContext::MD_alias_scope, llvm::MDNode::get(ctx_, {own}));
+  if (aliasScopes_.size() > 1) {
+    std::vector<llvm::Metadata*> others;
+    others.reserve(aliasScopes_.size() - 1);
+    for (llvm::MDNode* sc : aliasScopes_)
+      if (sc != own)
+        others.push_back(sc);
+    inst->setMetadata(llvm::LLVMContext::MD_noalias, llvm::MDNode::get(ctx_, others));
+  }
+}
+
 Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   Val v;
   v.ty = ty;
@@ -7315,7 +7484,8 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     if (ty.varying) {
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(ty), addr, 1, "vdata");
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(ty), addr, 0, "vlenp");
-      llvm::Value* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "l32");
+      llvm::LoadInst* l32 = b_.CreateLoad(b_.getInt32Ty(), lp, "l32");
+      annotateAlias(l32, sym);
       v.ptr = dp;
       v.len = b_.CreateSExt(l32, b_.getInt64Ty(), "l64");
     } else if (ty.starLen) {
@@ -7335,7 +7505,8 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     }
     return v;
   }
-  llvm::Value* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
+  llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
+  annotateAlias(r, sym);
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is the {double,double} struct itself.
     v.cpx = r;
@@ -7349,12 +7520,14 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   return v;
 }
 
-void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool packed) {
+void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool packed,
+                          Symbol* aliasSym) {
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is stored as the {double,double} struct.
     llvm::StoreInst* si = b_.CreateStore(v.cpx, addr);
     if (packed)
       si->setAlignment(llvm::Align(1));
+    annotateAlias(si, aliasSym);
     return;
   }
   llvm::Value* val = v.reg;
@@ -7367,6 +7540,7 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool 
   llvm::StoreInst* si = b_.CreateStore(val, addr);
   if (packed)
     si->setAlignment(llvm::Align(1));
+  annotateAlias(si, aliasSym);
 }
 
 void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceLoc loc,
@@ -7474,7 +7648,7 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
     return;
   }
   Val cv = convert(v, dt, loc);
-  storeScalarTo(addr, dt, cv);
+  storeScalarTo(addr, dt, cv, false, sym);
 }
 
 // A CONTROLLED numeric array with per-generation extents (rules (13),(89),

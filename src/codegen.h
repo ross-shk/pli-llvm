@@ -12,6 +12,7 @@
 #include "llvm/TargetParser/Triple.h"
 
 namespace llvm {
+class Function;
 class Module;
 class LLVMContext;
 class TargetMachine;
@@ -19,6 +20,10 @@ class raw_pwrite_stream;
 } // namespace llvm
 
 namespace plic {
+// Re-apply the audited P0 side-table facts (kRuntimeAttrs in irgen.cpp) to
+// one linked runtime definition whose declaration-time facts were lost at
+// link time. Unknown names (user functions) are left alone.
+void applyRuntimeFnAttrs(llvm::Function& f);
 // Run the IR optimization pipeline for the driver `-O` level (`-O0`..`-O3`,
 // `-Os`). The clang backend this replaces optimized at the same level; without
 // this the in-process path would emit unoptimized IR (behaviour + perf drift).

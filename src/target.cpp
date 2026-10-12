@@ -72,8 +72,8 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t) {
 }
 
 std::unique_ptr<llvm::TargetMachine>
-createTargetMachine(const std::string& triple, const std::string& optLevel, std::string& err) {
-  // One-time all-target init for cross-compilation.
+createTargetMachine(const std::string& triple, const std::string& optLevel, std::string& err,
+                    bool marchNative) {
   initializeAllTargets();
 
   std::string lookupErr;
@@ -83,7 +83,6 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
     err = "cannot find target for triple '" + triple + "': " + lookupErr;
     return nullptr;
   }
-  // Map the driver -O flag onto the LLVM codegen level.
   llvm::CodeGenOptLevel lvl = llvm::CodeGenOptLevel::Default;
   if (optLevel == "-O0")
     lvl = llvm::CodeGenOptLevel::None;
@@ -92,10 +91,11 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   else if (optLevel == "-O3" || optLevel == "-Os")
     lvl = llvm::CodeGenOptLevel::Aggressive;
   llvm::TargetOptions opts;
-  opts.FunctionSections = true; // one section per function for --gc-sections / dead_strip
+  opts.FunctionSections = true;
+  // --march=native: use host CPU's feature set (opt-in; default stays generic).
+   std::string cpu = marchNative ? llvm::sys::getHostCPUName().str() : "generic";
   const char* features = "";
-  // PIE objects match what the clang-subprocess backend produced.
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-      ttm, "generic", features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
+      ttm, cpu, features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
 }
 } // namespace plic
