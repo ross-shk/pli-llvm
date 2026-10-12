@@ -47,7 +47,8 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t) {
     break;
   case llvm::Triple::COFF:
     d.lldDriver = "coff";
-    d.systemLibs = {"kernel32.lib", "ucrt.lib", "vcruntime.lib", "msvcrt.lib", "oldnames.lib"};
+    d.systemLibs = {"kernel32.lib", "ucrt.lib", "vcruntime.lib", "msvcrt.lib",
+                    "oldnames.lib", "legacy_stdio_definitions.lib"};
     // NOTE: /MD is a compiler flag, not a linker flag — lld-link rejects it.
     d.linkerFlags = {"/entry:mainCRTStartup", "/subsystem:console"};
     break;

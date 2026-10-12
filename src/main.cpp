@@ -1221,7 +1221,7 @@ int main(int argc, char** argv) {
   // compiler-rt for 128-bit helpers (__udivti3, __divti3) since Windows has
   // no libgcc.
 #ifdef _WIN32
-  const char* linkCrtFlag = "-Xlinker /NODEFAULTLIB:libcmt.lib -Xlinker /DEFAULTLIB:msvcrt.lib ";
+  const char* linkCrtFlag = "-Xlinker /NODEFAULTLIB:libcmt.lib -Xlinker /DEFAULTLIB:msvcrt.lib -Xlinker /DEFAULTLIB:legacy_stdio_definitions.lib ";
   // lld-link handles LLVM bitcode natively.
   const char* linkLldFlag = "-fuse-ld=lld ";
   const char* linkRtFlag = "--rtlib=compiler-rt ";
