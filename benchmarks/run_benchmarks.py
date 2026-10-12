@@ -108,6 +108,50 @@ CHECKS = {
 }
 
 
+def get_machine_info() -> Dict:
+    """Collect machine and toolchain metadata for JSON results (P3)."""
+    info = {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(aliased=True),
+        "machine": platform.machine(),
+        "processor": platform.processor() or "unknown",
+        "cpu_count": os.cpu_count(),
+    }
+    try:
+        rc, out, _ = run_command([str(PLIC), "--version"])
+        if rc == 0:
+            first = out.strip().split('\n')[0]
+            info["plic_version"] = first
+            # Extract LLVM version from parenthetical: "plic v... (LLVM 23.1.2, ...)"
+            import re
+            m = re.search(r'\(LLVM\s+([\d.]+)', first)
+            info["llvm_version"] = m.group(1) if m else "unknown"
+    except Exception:
+        info["plic_version"] = "unknown"
+        info["llvm_version"] = "unknown"
+    try:
+        rc, out, _ = run_command([CC, "--version"])
+        if rc == 0:
+            info["clang_version"] = out.strip().split('\n')[0]
+    except Exception:
+        info["clang_version"] = "unknown"
+    return info
+
+
+def pin_cmd(cmd: List[str]) -> List[str]:
+    """Prepend process pinning flags for stable timings (P3).
+    Linux: taskset -c 0 (pin to CPU 0). macOS: nice -n -20 (high priority).
+    Single-runner is already guaranteed by sequential execution in the harness.
+    Falls back to no pinning if the tool is unavailable (non-fatal)."""
+    if IS_WINDOWS:
+        return cmd  # Windows: no pinning wrapper
+    if IS_MACOS:
+        # best-effort nice; won't fail if we lack privileges
+        return ["nice", "-n", "-20"] + cmd
+    # Linux: try taskset; if unavailable (FileNotFoundError), run_command catches it
+    return ["taskset", "-c", "0"] + cmd
+
+
 def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[int, str, str]:
     """Run a command and return (returncode, stdout, stderr)."""
     try:
@@ -176,15 +220,16 @@ def run_benchmark(exe: Path, runs: int = RUNS_PER_BENCH,
                   warmup: int = 1) -> Tuple[List[float], str]:
     """Run a benchmark multiple times and return execution times in seconds.
 
-    One warmup run is performed untimed (P1.2). Returns (times, last_stdout).
+    One warmup run is performed untimed (P1.2). Process pinning (P3) prepends
+    taskset/nice for noise reduction. Returns (times, last_stdout).
     """
     times = []
     for _ in range(warmup):
-        run_command([str(exe)], timeout=60)
+        run_command(pin_cmd([str(exe)]), timeout=60)
     out = ""
     for _ in range(runs):
         start = time.perf_counter()
-        rc, out, err = run_command([str(exe)], timeout=60)
+        rc, out, err = run_command(pin_cmd([str(exe)]), timeout=60)
         end = time.perf_counter()
         if rc == 0:
             times.append(end - start)
@@ -247,7 +292,11 @@ def load_previous_results(current_filename: Optional[str] = None) -> Optional[Di
             continue
         try:
             with open(f) as fh:
-                return json.load(fh)
+                data = json.load(fh)
+            # Support both old (flat results) and new ({"machine", "results"}) formats
+            if isinstance(data, dict) and "results" in data:
+                return data["results"]
+            return data
         except (json.JSONDecodeError, OSError):
             continue
     return None
@@ -436,10 +485,11 @@ def main():
                   f"{pli_min*1000:>10.2f} {pli_median*1000:>10.2f} "
                   f"{c_median*1000:>10.2f} {ratio:>7.2f}x {out_match:>6}")
 
-    # Save JSON
+    # Save JSON with machine metadata (P3)
     json_file = RESULTS_DIR / f"benchmark_results_{ts}.json"
+    machine_info = get_machine_info()
     with open(json_file, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump({"machine": machine_info, "results": results}, f, indent=2)
 
     # Save CSV (P1.5)
     csv_file = RESULTS_DIR / f"summary_{ts}.csv"

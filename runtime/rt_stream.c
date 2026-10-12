@@ -46,6 +46,7 @@ int rt_out_discard = 0;
 void rt_put_raw(const char *p, size_t n) {
   if (rt_out_f) {
     fwrite(p, 1, n, rt_out_f);
+    rt_col += (int)n;
     return;
   }
   if (rt_out_discard)
@@ -82,6 +83,12 @@ int rt_next_char(void) {
 
 void pli_put_skip(long long n) {
   if (n < 1) n = 1;
+  if (rt_out_f) {
+    for (long long i = 0; i < n; ++i) rt_put_raw("\n", 1);
+    rt_col = 0;
+    rt_items_on_line = 0;
+    return;
+  }
   if (rt_col > 0) {
     rt_put_raw("\n", 1);
     rt_col = 0;
