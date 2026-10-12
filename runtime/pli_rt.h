@@ -19,9 +19,10 @@
 extern "C" {
 #endif
 
-/* Expand the .def's type tokens to C types. I128 is the portable 128-bit
- * integer (MSVC lacks __int128; clang-cl supports it natively): same 16-byte
- * two's-complement layout. */
+/* Expand the .def's type tokens to C types. Wide (>18 digit) DECIMAL values
+ * cross the ABI as (lo, hi) I64 halves (see pli_rt_abi.def); the portable
+ * 128-bit integer below is for arithmetic/formatting inside the runtime only
+ * (MSVC lacks __int128; clang-cl supports it natively). */
 #define VOID    void
 #define I64     long long
 #define I32     int
@@ -30,7 +31,6 @@ extern "C" {
 #define PTR     char *
 #define CPTR    const char *
 #define IPTR    int *
-#define I128    PliI128
 #define PLI_FN(name, ret, args) ret name args;
 
 #include "pli_rt_state.h"
@@ -38,7 +38,6 @@ extern "C" {
 #include "pli_rt_abi.def"
 
 #undef PLI_FN
-#undef I128
 #undef IPTR
 #undef CPTR
 #undef PTR

@@ -32,7 +32,7 @@ def _default_cc() -> str:
 
 
 def _find_plic() -> Path:
-    """Locate the plic binary: `build/plic[.exe]` with `build/cmake` fallback."""
+    """Locate the plic binary: newest of `build/plic[.exe]`, `build/cmake/...`."""
     here = BENCHMARK_DIR.parent / "build"
     cands = [
         here / ("plic.exe" if os.name == "nt" else "plic"),
@@ -42,9 +42,9 @@ def _find_plic() -> Path:
         here / "cmake" / "plic",
         here / "cmake" / "plic.exe",
     ]
-    for c in cands:
-        if c.is_file():
-            return c
+    found = [c for c in cands if c.is_file()]
+    if found:
+        return max(found, key=lambda c: c.stat().st_mtime)
     return cands[0]
 
 

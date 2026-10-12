@@ -5545,8 +5545,12 @@ accumulates in i128), and `__int128` runtime I/O entry points
 
 **Consequences.** `DECIMAL(25,2)` accumulates exactly over 30 M iterations and
 prints the true value. The p<=18 hot paths are untouched (still i32/i64), so
-`decimal_ops` speed is preserved. The runtime I/O boundary gains a `__int128`
-entry point (arm64: passed as a pair of x-registers).
+`decimal_ops` speed is preserved. The runtime I/O boundary gains a wide
+entry point taking the value as explicit `(lo, hi)` i64 halves, never as a
+by-value 128-bit integer: clang lowers a by-value `__int128` parameter
+indirectly (by pointer) on x86_64-pc-windows-msvc but in registers on
+SysV/ARM64, so by-value i128 in generated IR crashes against the runtime
+body on Windows (fixed post-ADR).
 
 **Rejected.** True packed BCD (4-bit-digit representation plus a full runtime
 add/sub/mul/div library) — matches classic mainframe PL/I but is a large,

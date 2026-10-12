@@ -81,13 +81,23 @@ static PliI128 decLitRescaled128(const Expr* e, const Type& t) {
 
 // True when a DECIMAL literal needs the wide constant path (ADR-191): its
 // full value exceeds i64, or the target itself is wide (a narrow literal
-// scaled up into a wide target can overflow i64 mid-rescale).
+// scaled up into a wide target can overflow i64 mid-rescale). A >18-digit
+// integer constant is likewise genuinely wide (rule 135): for a wide target
+// rescale from the full wideIval, never the saturated i64 ival.
 static bool needsWideDecLit(const Expr* e, const Type& t) {
-  return e && e->kind == Expr::DecLit && (t.intBits() == 128 || e->decPrec > 18);
+  if (!e)
+    return false;
+  if (e->kind == Expr::DecLit)
+    return t.intBits() == 128 || e->decPrec > 18;
+  return e->kind == Expr::IntLit && t.intBits() == 128;
 }
 // HIR twin of the above for emitted decimal literals.
 static bool needsWideDecLit(const HExpr* e, const Type& t) {
-  return e && e->kind == HExpr::DecLit && (t.intBits() == 128 || e->decPrec > 18);
+  if (!e)
+    return false;
+  if (e->kind == HExpr::DecLit)
+    return t.intBits() == 128 || e->decPrec > 18;
+  return e->kind == HExpr::IntLit && t.intBits() == 128;
 }
 
 // Numeric value of a constant INITIAL expression (rule 26). A DECIMAL literal
@@ -99,6 +109,8 @@ static double iniNumeric(const Expr* e) {
     return e->fval;
   if (e->kind == Expr::DecLit)
     return pli_to_double(e->wideIval) / (double)pliPow10(e->decScale);
+  if (e->kind == Expr::IntLit)
+    return pli_to_double(e->wideIval); // exact for wide literals (ADR-191)
   return (double)e->ival;
 }
 
@@ -347,7 +359,7 @@ llvm::GlobalVariable* IRGen::globalString(const std::string& s) {
 // ABI type tokens, used to expand runtime/pli_rt_abi.def into LLVM
 // signatures. RtVoid is also the "no arguments" marker (a function with no
 // parameters is written with a single VOID in the .def).
-enum RtTok { RtVoid, RtI64, RtI32, RtI8, RtDouble, RtPtr, RtI32Ptr, RtI128 };
+enum RtTok { RtVoid, RtI64, RtI32, RtI8, RtDouble, RtPtr, RtI32Ptr };
 struct RtSig {
   RtTok ret;
   std::vector<RtTok> args;
@@ -366,7 +378,6 @@ static const std::map<std::string, RtSig>& kRuntimeSigs() {
 #define PTR RtPtr
 #define CPTR RtPtr
 #define IPTR RtI32Ptr
-#define I128 RtI128
 #define PLI_STRIP(...) __VA_ARGS__ // turn the .def's (a, b, c) into a braced list
 #define PLI_FN(name, ret, args) {#name, {ret, {PLI_STRIP args}}},
 #include "../runtime/pli_rt_abi.def"
@@ -2238,8 +2249,6 @@ llvm::Function* IRGen::runtimeFn(const std::string& name) {
       return b_.getPtrTy();
     case RtI32Ptr:
       return b_.getPtrTy();
-    case RtI128:
-      return b_.getInt128Ty();
     }
     return b_.getVoidTy();
   };
@@ -2254,6 +2263,18 @@ llvm::Function* IRGen::runtimeFn(const std::string& name) {
     f = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
   applyRuntimeAttrs(f);
   return f;
+}
+
+// Wide (>18 digit) FIXED DECIMAL output (ADR-191): the runtime takes the
+// 128-bit value as explicit (lo, hi) i64 halves, never as a by-value i128.
+// Clang lowers a by-value __int128 parameter indirectly (by pointer) on
+// x86_64-pc-windows-msvc but in registers on SysV/ARM64, so a by-value i128
+// call in generated IR disagrees with the runtime body on Windows.
+void IRGen::emitWideDecOut(const char* fn, llvm::Value* wideReg, long long scale) {
+  llvm::Value* lo = b_.CreateTrunc(wideReg, b_.getInt64Ty(), "wdec.lo");
+  llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(wideReg, (uint64_t)64, "wdec.shr"),
+                                   b_.getInt64Ty(), "wdec.hi");
+  b_.CreateCall(runtimeFn(fn), {lo, hi, i64(scale)});
 }
 
 // Get (or create) an LLVM intrinsic with an explicit signature. Only used for
@@ -4148,12 +4169,12 @@ void IRGen::emitStmt(HStmt* s) {
     case TK::FixedBin:
     case TK::FixedDec:
       if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
-        if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs __int128 I/O
-          b_.CreateCall(runtimeFn("pli_display_decfixed128"), {v.reg, i64(v.ty.scale)});
+        if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
+          emitWideDecOut("pli_display_decfixed128", v.reg, v.ty.scale);
         else
           b_.CreateCall(runtimeFn("pli_display_decfixed"), {toI64(v), i64(v.ty.scale)});
       } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-        b_.CreateCall(runtimeFn("pli_display_decfixed128"), {v.reg, i64(0)});
+        emitWideDecOut("pli_display_decfixed128", v.reg, 0);
       } else {
         b_.CreateCall(runtimeFn("pli_display_fixed"), {toI64(v)});
       }
@@ -5630,12 +5651,12 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
   case TK::FixedBin:
   case TK::FixedDec:
     if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
-      if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs __int128 I/O
-        b_.CreateCall(runtimeFn("pli_put_list_decfixed128"), {v.reg, i64(v.ty.scale)});
+      if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
+        emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
       else
         b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
     } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-      b_.CreateCall(runtimeFn("pli_put_list_decfixed128"), {v.reg, i64(0)});
+      emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
     } else {
       b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
     }
@@ -5705,12 +5726,12 @@ void IRGen::emitPut(HStmt* s) {
       case TK::FixedBin:
       case TK::FixedDec:
         if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
-          if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs __int128 I/O
-            b_.CreateCall(runtimeFn("pli_put_list_decfixed128"), {v.reg, i64(v.ty.scale)});
+          if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
+            emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
           else
             b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
         } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-          b_.CreateCall(runtimeFn("pli_put_list_decfixed128"), {v.reg, i64(0)});
+          emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
         } else {
           b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
         }
@@ -8260,7 +8281,13 @@ Val IRGen::emitExpr(HExpr* e) {
   }
   case HExpr::IntLit:
     v.ty = e->ty;
-    v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
+    // A >18-digit integer constant is genuinely wide (rule 135, ADR-191):
+    // emit the full i128 wideIval like a wide DECIMAL literal, not the
+    // saturated i64 ival.
+    if (e->ty.intBits() == 128)
+      v.reg = i128(e->wideIval);
+    else
+      v.reg = llvm::ConstantInt::get(llvmTy(e->ty), e->ival, true);
     return v;
   case HExpr::DecLit:
     v.ty = e->ty;

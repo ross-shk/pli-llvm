@@ -451,11 +451,15 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
   }
   (void)ind;
   switch (e->kind) {
-  case HExpr::IntLit:
-    os << "IntLit(" << e->ival << ":";
-    printType(os, e->ty);
-    os << ")";
-    break;
+    case HExpr::IntLit:
+      // A genuinely wide integer constant prints its full value (ADR-191).
+      if (e->ty.intBits() == 128)
+        os << "IntLit(" << wideToString(e->wideIval) << ":";
+      else
+        os << "IntLit(" << e->ival << ":";
+      printType(os, e->ty);
+      os << ")";
+      break;
   case HExpr::DecLit:
     os << "DecLit(" << wideToString(e->wideIval) << ",q" << e->decScale << ":";
     printType(os, e->ty);

@@ -457,6 +457,9 @@ private:
   // The signature is taken from runtime/pli_rt_abi.def (the single source of
   // truth for the runtime ABI), not re-specified by the caller.
   llvm::Function* runtimeFn(const std::string& name);
+  // Wide (>18 digit) FIXED DECIMAL output (ADR-191): pass the i128 value as
+  // explicit (lo, hi) i64 halves plus the scale (see pli_rt_abi.def).
+  void emitWideDecOut(const char* fn, llvm::Value* wideReg, long long scale);
   // Resolve the effective lowering mode for one operation, honouring a
   // per-operation override first and then the global mode. Returns true when
   // the operation should use its pli_* runtime call; false when a direct

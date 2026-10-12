@@ -1,0 +1,25 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+   /* ADR-191: list-directed and DISPLAY output of wide (>18 digit)
+      FIXED DECIMAL passes the value as (lo, hi) halves (a by-value i128
+      disagrees with the runtime body on Windows x64); integer constants
+      with >18 digits are genuinely wide (rule 135), not saturated. */
+   wide_decimal: procedure options(main);
+      declare pos fixed dec(25, 2);
+      declare neg fixed dec(25, 2);
+      declare whole fixed dec(25);
+      declare prod fixed dec(25, 2);
+      declare z fixed dec(25, 2);
+      pos = 123456789012345678901.25;
+      neg = -98765432109876543210.75;
+      whole = 12345678901234567890123;
+      prod = 123456789012345.67 * 1000.01;
+      z = 0;
+      put skip list(pos);
+      put skip list(neg);
+      put skip list(whole);
+      put skip list(prod);
+      put skip list(z);
+      display(pos);
+      display(neg);
+   end wide_decimal;

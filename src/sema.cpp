@@ -4065,11 +4065,26 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
   if (!e)
     return;
   switch (e->kind) {
-  case Expr::IntLit:
-    e->ty = Type::fixedDec(e->ival > 99999 || e->ival < -99999 ? 15 : 5, 0);
+  case Expr::IntLit: {
+    // An integer constant is a fixed-point constant whose precision is its
+    // digit count (rule 135): a value beyond i64 is genuinely wide (ADR-191)
+    // and needs i128 storage like any DECIMAL(p>18). In-range values keep the
+    // historical 15/5 precision tiers exactly.
+    if (e->wideIval != pli_from_i64(e->ival)) {
+      PliU128 u = pli_mag_s(e->wideIval);
+      int digits = 0;
+      do {
+        pli_divmod10(&u);
+        ++digits;
+      } while (!pli_iszero_u(u));
+      e->ty = Type::fixedDec(digits, 0);
+    } else {
+      e->ty = Type::fixedDec(e->ival > 99999 || e->ival < -99999 ? 15 : 5, 0);
+    }
     if (e->ty.intBits() == 32 && (e->ival > 2147483647LL || e->ival < -2147483648LL))
       e->ty = Type::fixedBin(63, 0);
     break;
+  }
   case Expr::DecLit:
     e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
     break;

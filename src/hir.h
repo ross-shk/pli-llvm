@@ -48,6 +48,7 @@ struct HExpr {
 
   long long ival = 0;
   PliI128 wideIval = 0; // DecLit: full scaled value (ADR-191); ival is its i64 truncation
+                        // IntLit: full value when the digits exceed i64 (rule 135); ival is strtoll (saturating)
   double fval = 0;
   int decScale = 0;                 // DecLit: fraction digits q (the 10^q scaling of ival)
   int decPrec = 0;                  // DecLit: total significant digits p

@@ -22,7 +22,21 @@ static int boundedNonNeg(const std::string& text, SourceLoc loc, Diags& d, const
   return (int)v;
 }
 
-// Parse an exact FIXED DECIMAL constant (rule 135): digits with a fraction
+// Parse an integer literal (rule 135): a digit string with no point or
+// exponent. Sets ival via strtoll (saturating, as before — narrow paths keep
+// their exact historical behavior) and wideIval to the full value (ADR-191:
+// an integer constant's precision is its digit count, so a >18-digit literal
+// is genuinely wide and needs i128 storage like a wide DECIMAL literal).
+static void parseIntConstant(const std::string& text, Expr& e, int base) {
+  PliI128 v = 0;
+  for (char c : text) {
+    if (c < '0' || c > '9' || c - '0' >= base)
+      continue; // radix suffixes and separators are not value digits
+    v = v * base + (c - '0');
+  }
+  e.wideIval = v;
+  e.ival = strtoll(text.c_str(), nullptr, base);
+}
 // point and no exponent, e.g. "3.14". Sets ival to the value scaled by 10^q,
 // decScale to the fraction digit count q, and decPrec to the digit count p.
 static void parseDecConstant(const std::string& text, Expr& e) {
@@ -4092,10 +4106,10 @@ ExprP Parser::parsePrimary() {
       }
     } else if (t.binaryRadix) {
       e->kind = Expr::IntLit;
-      e->ival = strtoll(t.text.c_str(), nullptr, 2);
+      parseIntConstant(t.text, *e, 2);
     } else {
       e->kind = Expr::IntLit;
-      e->ival = strtoll(t.text.c_str(), nullptr, 10);
+      parseIntConstant(t.text, *e, 10);
     }
     advance();
     return e;

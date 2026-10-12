@@ -319,14 +319,20 @@ void rt_format_decfixed128(char *buf, size_t cap, PliI128 v, long long q) {
   }
   *p = '\0';
 }
-void pli_put_list_decfixed128(PliI128 v, long long q) {
+/* >18 digit FIXED DECIMAL output (QR1.2): format a 128-bit stored integer with
+ * exactly q fraction digits (round-trip faithful, no FP). The value arrives
+ * as (lo, hi) halves (see pli_rt_abi.def): a by-value 128-bit parameter
+ * would lower differently on each target (indirect on Windows x64). */
+void pli_put_list_decfixed128(long long lo, long long hi, long long q) {
   char buf[64];
+  PliI128 v = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
   rt_format_decfixed128(buf, sizeof buf, v, q);
   separate();
   rt_put_raw(buf, pli_strlen(buf));
 }
-void pli_display_decfixed128(PliI128 v, long long q) {
+void pli_display_decfixed128(long long lo, long long hi, long long q) {
   char buf[64];
+  PliI128 v = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
   rt_format_decfixed128(buf, sizeof buf, v, q);
   display_begin();
   rt_put_raw(buf, pli_strlen(buf));
