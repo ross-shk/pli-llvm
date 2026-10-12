@@ -10,7 +10,7 @@ int main(void) {
     FILE *f;
     const char *path = "/tmp/plic_fileio_test";
 
-    n = 10000;
+    n = 500000;
 
     /* WRITE phase */
     f = fopen(path, "w");

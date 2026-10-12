@@ -6,10 +6,10 @@
 /*
  * Bounds (P2 checklist item 1):
  *   - record values: i * 7 MOD 1000, max 997 (fits FIXED BINARY(31))
- *   - checksum: 10000 iters * ~500K = ~5e9 (fits FIXED BINARY(63)) ✓
+   *   - checksum: 500000 iters * ~400K = ~2e11 (fits FIXED BINARY(63)) ✓
  *
- * Scaling rule (P2 checklist item 2): 10000 records each side, 20000
- * file operations total — slow enough for >50ms at -O2.
+   * Scaling rule (P2 checklist item 2): 100000 records each side, 200000
+   * file operations total — slow enough for >50ms at -O2.
  *
  * Codegen pinned (P2 checklist item 4): GET/PUT stream I/O path through
  * the runtime list-directed output buffer (see irgen.cpp PUT/GET lowering).
@@ -19,7 +19,7 @@ test_fileio: PROCEDURE OPTIONS(MAIN);
    DECLARE checksum FIXED BINARY(63);
    DECLARE f FILE;
 
-   n = 10000;
+   n = 500000;
 
    /* WRITE phase — SKIP writes each value on its own record (newline) */
    OPEN FILE(f) TITLE('/tmp/plic_fileio_test') OUTPUT;

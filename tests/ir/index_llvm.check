@@ -1,4 +1,6 @@
 CHECK-NOT: pli_index
-CHECK: idx.outer
+CHECK: memchr
+CHECK: idx.verify
 CHECK: phi i64
-CHECK: getelementptr i8
+CHECK: getelementptr i8, ptr
+CHECK: idx.match

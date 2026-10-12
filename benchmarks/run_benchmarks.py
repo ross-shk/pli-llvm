@@ -68,6 +68,7 @@ BENCHMARKS = [
     ("fixed_bin63",       "fixed_bin63.pli",       "baseline/fixed_bin63_c.c"),
     ("bcd_decimal",       "bcd_decimal.pli",       "baseline/bcd_decimal_c.c"),
     ("string_search",     "string_search.pli",     "baseline/string_search_c.c"),
+    ("file_io",           "file_io.pli",           "baseline/file_io_c.c"),
 ]
 
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3"]
