@@ -1,0 +1,39 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* BCD decimal arithmetic benchmark - FIXED DECIMAL(25,4) (>18 digits). */
+/* Partners decimal_ops (which stays within 18-digit i64 DECIMAL). */
+/* Match = ~ by design: PL/I exact BCD decimal vs C double (see §8 non-goal). */
+/*
+ * Bounds (P2 checklist item 1; DECIMAL(25,4) holds up to 10^21):
+ *   - price = i * 1.9999: max 20M * 1.9999 ~ 4e7 (8 digits)
+ *   - qty = i / 10 + 1: max ~2M (7 digits)
+ *   - total = price * qty: max ~8e13 (14 digits, fits)
+ *   - tax = total * rate: max ~7e12 (13 digits, fits)
+ *   - grand: 20M iters * ~8e13 = ~1.6e21 (22 digits, fits 25-digit target) ✓
+ *
+ * Scaling rule (P2 checklist item 2): 20M iterations of BCD-scale multiply-
+ * add — slow enough for >50ms at -O2 (~117ms measured).
+ *
+ * Codegen pinned (P2 checklist item 4): i128 arithmetic for >18-digit DECIMAL;
+ * per-assignment rounding to scale 4 via runtime helpers; pli_put_list_decfixed128
+ * I/O path.
+ */
+test_bcd: PROCEDURE OPTIONS(MAIN);
+   DECLARE (i, n) FIXED BINARY(31);
+   DECLARE (price, qty, total, tax, grand) FIXED DECIMAL(25,4);
+   DECLARE rate FIXED DECIMAL(5,4);
+
+   rate = 0.0875;
+   grand = 0;
+   n = 20000000;
+
+   DO i = 1 TO n;
+     price = i * 1.9999;
+     qty = i / 10 + 1;
+     total = price * qty;
+     tax = total * rate;
+     grand = grand + total + tax;
+   END;
+
+   PUT SKIP LIST(grand);
+END test_bcd;

@@ -146,7 +146,9 @@ static void usage() {
          "  --fprofile-generate  instrument the build for PGO (writes a profile)\n"
          "  --fprofile-use=<d>   rebuild using a merged profile (llvm-profdata out)\n"
          "  --clang <path>   clang to assemble/link the IR (default: LLVM's clang)\n"
-         "  --triple <t>     target triple (default: host triple, in-process)\n"
+          "  --triple <t>     target triple (default: host triple, in-process)\n"
+          "  --march=native   opt-in: use host CPU features (default: generic;\n"
+          "                   CI/baselines always use generic; local hot runs only)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
@@ -280,7 +282,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        std::string* outObj, const std::string& runtimeBc, bool linkBitcode,
                        LowerMode lowerMode = LowerMode::Auto,
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
-                       bool linkRuntimeIn = false, bool forceClangPipeline = false) {
+                       bool linkRuntimeIn = false, bool forceClangPipeline = false,
+                       bool marchNative = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -402,7 +405,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       if (rtOk) {
         // Create TargetMachine using the provided target triple.
         std::string tmErr;
-        if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr)) {
+        if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
           // The IRGen layout is approximate; the TargetMachine owns the truth
           // (llc behaviour — the clang fallback used -Wno-override-module).
           om->mod->setDataLayout(tm->createDataLayout());
@@ -491,6 +494,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
   bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
+  bool marchNative = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
   bool runtimeBcExplicit = false, useBitcode = true, pgoGenerate = false;
@@ -545,6 +549,8 @@ int main(int argc, char** argv) {
       clangPath = next("--clang");
     else if (a == "--triple")
       triple = next("--triple");
+    else if (a == "--march=native")
+      marchNative = true;
     else if (a == "--sysparm") {
       sysparm = next("--sysparm");
       sysparmExplicit = true;
@@ -963,7 +969,7 @@ int main(int argc, char** argv) {
     llvm::Triple llt(triple);
     const plic::TargetDesc& desc = plic::getTargetDesc(llt);
     std::string tmErr;
-    if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr)) {
+    if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
       // With the file-based bitcode runtime (linkBitcode) the MAIN object
       // already defines every pli_* symbol, so no separate runtime object
       // is emitted (it would duplicate them). Otherwise multi-input links

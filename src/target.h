@@ -28,6 +28,9 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t);
 // Initialize all LLVM targets (not just native) for cross-compilation.
 void initializeAllTargets();
 // TargetMachine for the given triple; null on failure with `err` set.
+// When *marchNative* is set, use the host CPU's feature set instead of
+// "generic" (opt-in for local hot runs; CI/baselines always use generic).
 std::unique_ptr<llvm::TargetMachine>
-createTargetMachine(const std::string& triple, const std::string& optLevel, std::string& err);
+createTargetMachine(const std::string& triple, const std::string& optLevel,
+                    std::string& err, bool marchNative = false);
 } // namespace plic

@@ -1,0 +1,46 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* String search benchmark - INDEX scan over a 76KB buffer. */
+/* One byte is poked per iteration so the scan stays loop-variant */
+/* and every search genuinely executes; complements string_ops. */
+/*
+ * Bounds:
+ *   - buffer: 76KB base + 12-char tail = 75788 chars
+ *     (fits CHARACTER(102400))
+ *   - poke range 1..70000 never touches the tail, so the needle
+ *     is always found at 75779 (fits FIXED BINARY(31)); a single
+ *     poke cannot forge an 8-char early match in sequential text
+ *   - sum: 48000 iters * 75779 = ~3.64e9 (fits FIXED BINARY(63)) ✓
+ *
+ * Scaling rule: 48000 poke + INDEX scans, each sweeping ~76KB for
+ * a tail-only match — slowest -O2 config past 50ms (~100ms).
+ *
+ * Codegen pinned: P4 INDEX lowers to inline memchr + memcmp; the
+ * per-iteration store clobbers the buffer, so LICM cannot hoist
+ * the scans (a read-only scan over untouched memory hoists).
+ */
+test_search: PROCEDURE OPTIONS(MAIN);
+   DECLARE (i, n, pos) FIXED BINARY(31);
+   DECLARE (sum) FIXED BINARY(63);
+   DECLARE buffer CHARACTER(102400) VARYING;
+
+   /* Build ~76KB buffer from repeating 37-char base */
+   buffer = '';
+   DO i = 1 TO 2048;
+     buffer = buffer || 'abcdefghijklmnopqrstuvwxyz0123456789 ';
+   END;
+
+   /* Append sentinel tail holding both needles */
+   buffer = buffer || 'ZZSENTINELZZ';
+
+   sum = 0;
+   n = 48000;
+
+   DO i = 1 TO n;
+     SUBSTR(buffer, MOD(i, 70000) + 1, 1) = 'x';
+     pos = INDEX(buffer, 'SENTINEL');
+     sum = sum + pos;
+   END;
+
+   PUT SKIP LIST(sum);
+END test_search;

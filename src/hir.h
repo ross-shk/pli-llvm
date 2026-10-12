@@ -153,6 +153,8 @@ struct HStmt {
 
   HExprP target, value, cond, from, to, by;
   bool until = false;               // DO UNTIL (extension, ADR-106): test cond after the body
+  // sema-folded: true only when BY is a compile-time negative integer constant
+  bool byNegConst = false;          // P1.1: lets emitDoIter skip the runtime sign test
   std::vector<HExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
   bool byName = false;              // rule (86) trailing ", BY NAME" on assignment
   bool noSize = false;              // (NOSIZE) prefix (rules (60)-(63), ADR-110)

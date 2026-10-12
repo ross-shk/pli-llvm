@@ -1,6 +1,8 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* W2 search/scan IR check: exercises VERIFY, SEARCH, TALLY, INDEX
-    in direct LLVM mode. CHECK-NOT confirms no pli_* calls remain. */
+    in direct LLVM mode. INDEX lowers to an inline memchr+memcmp fast path
+    (no byte loop) with a cold pli_index slow-path call for first-candidate
+    mismatches; VERIFY/SEARCH/TALLY stay fully inline with no pli_* calls. */
  w2_ir: procedure options(main);
     declare r fixed bin(31);
     declare s char(20) varying;

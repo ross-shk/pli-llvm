@@ -6,9 +6,9 @@
 int main(void) {
     int i, j, k, n;
     long long sum;
-    int a[400][400], b[400][400], c[400][400];
+    int a[512][512], b[512][512], c[512][512];
 
-    n = 400;
+    n = 512;
 
     for (i = 0; i < n; i++) {
         for (j = 0; j < n; j++) {

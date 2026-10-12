@@ -50,12 +50,17 @@ def _find_plic() -> Path:
 
 PLIC = Path(os.environ.get("PLIC", str(_find_plic())))
 CC = os.environ.get("CC", _default_cc())
+IS_MACOS = platform.system() == "Darwin"
 RESULTS_DIR = BENCHMARK_DIR / "results"
 BIN_DIR = RESULTS_DIR / "bin"
 RESULTS_DIR.mkdir(exist_ok=True)
 BIN_DIR.mkdir(exist_ok=True)
 
 MAX_RESULTS = 20
+
+# Warn if any benchmark's PL/I/C ratio at -O2 worsens by more than this relative
+# threshold compared to the most recent saved run (P1.1 W7 regression guard).
+DETERIORATION_THRESHOLD = 0.05
 
 # Per-benchmark PL/I flags that must be active for the benchmark to measure
 # what it claims (P1.6).
@@ -81,6 +86,10 @@ BENCHMARKS = [
     ("mandelbrot",        "mandelbrot.pli",        "baseline/mandelbrot_c.c"),
     ("io_throughput",     "io_throughput.pli",     "baseline/io_throughput_c.c"),
     ("division",          "division.pli",          "baseline/division_c.c"),
+    ("fixed_bin63",       "fixed_bin63.pli",       "baseline/fixed_bin63_c.c"),
+    ("bcd_decimal",       "bcd_decimal.pli",       "baseline/bcd_decimal_c.c"),
+    ("string_search",     "string_search.pli",     "baseline/string_search_c.c"),
+    ("file_io",           "file_io.pli",           "baseline/file_io_c.c"),
 ]
 
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3"]
@@ -115,7 +124,55 @@ CHECKS = {
     "mandelbrot":       {"min_ms_O2": 50, "float_tol": False},
     "io_throughput":    {"min_ms_O2": 50, "float_tol": False},
     "division":         {"min_ms_O2": 50, "float_tol": False},
+    "fixed_bin63":      {"min_ms_O2": 50, "float_tol": False},
+    "bcd_decimal":      {"min_ms_O2": 50, "float_tol": False},  # expected ~: BCD decimal vs double
+    "string_search":    {"min_ms_O2": 50, "float_tol": False},
+    "file_io":          {"min_ms_O2": 50, "float_tol": False},
 }
+
+
+def get_machine_info() -> Dict:
+    """Collect machine and toolchain metadata for JSON results (P3)."""
+    info = {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(aliased=True),
+        "machine": platform.machine(),
+        "processor": platform.processor() or "unknown",
+        "cpu_count": os.cpu_count(),
+    }
+    try:
+        rc, out, _ = run_command([str(PLIC), "--version"])
+        if rc == 0:
+            first = out.strip().split('\n')[0]
+            info["plic_version"] = first
+            # Extract LLVM version from parenthetical: "plic v... (LLVM 23.1.2, ...)"
+            import re
+            m = re.search(r'\(LLVM\s+([\d.]+)', first)
+            info["llvm_version"] = m.group(1) if m else "unknown"
+    except Exception:
+        info["plic_version"] = "unknown"
+        info["llvm_version"] = "unknown"
+    try:
+        rc, out, _ = run_command([CC, "--version"])
+        if rc == 0:
+            info["clang_version"] = out.strip().split('\n')[0]
+    except Exception:
+        info["clang_version"] = "unknown"
+    return info
+
+
+def pin_cmd(cmd: List[str]) -> List[str]:
+    """Prepend process pinning flags for stable timings (P3).
+    Linux: taskset -c 0 (pin to CPU 0). macOS: nice -n -20 (high priority).
+    Single-runner is already guaranteed by sequential execution in the harness.
+    Falls back to no pinning if the tool is unavailable (non-fatal)."""
+    if IS_WINDOWS:
+        return cmd  # Windows: no pinning wrapper
+    if IS_MACOS:
+        # best-effort nice; won't fail if we lack privileges
+        return ["nice", "-n", "-20"] + cmd
+    # Linux: try taskset; if unavailable (FileNotFoundError), run_command catches it
+    return ["taskset", "-c", "0"] + cmd
 
 
 def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[int, str, str]:
@@ -189,15 +246,16 @@ def run_benchmark(exe: Path, runs: int = RUNS_PER_BENCH,
                   warmup: int = 1) -> Tuple[List[float], str]:
     """Run a benchmark multiple times and return execution times in seconds.
 
-    One warmup run is performed untimed (P1.2). Returns (times, last_stdout).
+    One warmup run is performed untimed (P1.2). Process pinning (P3) prepends
+    taskset/nice for noise reduction. Returns (times, last_stdout).
     """
     times = []
     for _ in range(warmup):
-        run_command([str(exe)], timeout=60)
+        run_command(pin_cmd([str(exe)]), timeout=60)
     out = ""
     for _ in range(runs):
         start = time.perf_counter()
-        rc, out, err = run_command([str(exe)], timeout=60)
+        rc, out, err = run_command(pin_cmd([str(exe)]), timeout=60)
         end = time.perf_counter()
         if rc == 0:
             times.append(end - start)
@@ -242,6 +300,57 @@ def prune_old_results(files: List[Path], keep: int = MAX_RESULTS):
     files = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
     for f in files[keep:]:
         f.unlink(missing_ok=True)
+
+
+def load_previous_results(current_filename: Optional[str] = None) -> Optional[Dict]:
+    """Load the most recent previous benchmark results JSON.
+
+    *current_filename* (the basename of the file about to be or just written)
+    is excluded so that the current run never compares against itself (W7
+    regression guard).  Returns None if no usable previous run exists.
+    """
+    json_files = sorted(RESULTS_DIR.glob("benchmark_results_*.json"),
+                        key=lambda f: f.stat().st_mtime, reverse=True)
+    if not json_files:
+        return None
+    for f in json_files:
+        if current_filename and f.name == current_filename:
+            continue
+        try:
+            with open(f) as fh:
+                data = json.load(fh)
+            # Support both old (flat results) and new ({"machine", "results"}) formats
+            if isinstance(data, dict) and "results" in data:
+                return data["results"]
+            return data
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def check_for_deterioration(results: Dict, previous: Dict) -> List[str]:
+    """Compare current -O2 ratios against the previous run.
+
+    Returns a list of warning strings for benchmarks whose ratio worsened
+    (increased) by more than DETERIORATION_THRESHOLD (5 % relative).
+    """
+    warnings = []
+    for bench_name, _, _ in BENCHMARKS:
+        cur = results.get(bench_name, {}).get("-O2", {})
+        prev = previous.get(bench_name, {}).get("-O2", {})
+        cur_ratio = cur.get("ratio")
+        prev_ratio = prev.get("ratio")
+        if cur_ratio is None or prev_ratio is None:
+            continue
+        if prev_ratio <= 0:
+            continue
+        rel_change = (cur_ratio - prev_ratio) / prev_ratio
+        if rel_change > DETERIORATION_THRESHOLD:
+            warnings.append(
+                f"  {bench_name:<20} ⚠ ratio {cur_ratio:.2f}x vs prev "
+                f"{prev_ratio:.2f}x (+{rel_change*100:.1f}%)"
+            )
+    return warnings
 
 
 def main():
@@ -410,10 +519,11 @@ def main():
                   f"{pli_min*1000:>10.2f} {pli_median*1000:>10.2f} "
                   f"{c_median*1000:>10.2f} {ratio:>7.2f}x {out_match:>6}")
 
-    # Save JSON
+    # Save JSON with machine metadata (P3)
     json_file = RESULTS_DIR / f"benchmark_results_{ts}.json"
+    machine_info = get_machine_info()
     with open(json_file, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump({"machine": machine_info, "results": results}, f, indent=2)
 
     # Save CSV (P1.5)
     csv_file = RESULTS_DIR / f"summary_{ts}.csv"
@@ -528,8 +638,9 @@ def main():
             else:
                 print(f"  ✗ parity (float mismatch)")
                 all_checks_ok = False
-        elif bench_name == "decimal_ops":
-            # decimal_ops uses fixed-decimal arithmetic, C uses double — expected mismatch
+        elif bench_name in ("decimal_ops", "bcd_decimal"):
+            # decimal_ops/bcd_decimal use exact decimal arithmetic; C uses double —
+            # expected ~ mismatch (see DECIMAL-PERF-PLAN.md §8 non-goal)
             if pli_out.strip() == c_out.strip():
                 print(f"  ✓ parity (exact)")
             else:
@@ -540,6 +651,23 @@ def main():
             else:
                 print(f"  ✗ parity (output mismatch)")
                 all_checks_ok = False
+
+    # Regression guard: compare against the most recent previous run (W7)
+    previous = load_previous_results(json_file.name)
+    if previous is not None:
+        warnings = check_for_deterioration(results, previous)
+        if warnings:
+            print("\n=== REGRESSION WARNINGS ===")
+            for w in warnings:
+                print(w)
+            print(f"\n⚠ {len(warnings)} benchmark(s) deteriorated by >"
+                  f"{int(DETERIORATION_THRESHOLD*100)}% at -O2 vs previous run")
+        else:
+            print("\n=== REGRESSION CHECK ===")
+            print("  ✓ No material deterioration detected at -O2 vs previous run")
+    else:
+        print("\n=== REGRESSION CHECK ===")
+        print("  — No previous results found to compare against")
 
     return 0 if all_checks_ok else 1
 

@@ -1,6 +1,9 @@
-CHECK-NOT: call.*@pli_index
+CHECK: memchr
+CHECK: memcmp
+CHECK-NOT: idx.vnext
+CHECK: call.*@pli_index
+CHECK: phi i64
 CHECK-NOT: call.*@pli_verify
 CHECK-NOT: call.*@pli_verify_from
 CHECK-NOT: call.*@pli_search
 CHECK-NOT: call.*@pli_tally
-CHECK: phi i64

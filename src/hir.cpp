@@ -385,6 +385,10 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
       h->to = convIf(std::move(h->to), ct);
       h->by = convIf(std::move(h->by), ct);
     }
+    // P1.1: sema-fold — flag a negative constant BY so emitDoIter can emit a
+    // single canonical branch instead of a runtime sign test.
+    if (h->by && h->by->kind == HExpr::IntLit && h->by->ival < 0)
+      h->byNegConst = true;
     break;
   default:
     if (!h->value)
