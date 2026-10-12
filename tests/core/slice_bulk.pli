@@ -1,0 +1,36 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* P4.2 bulk copies (rules (12),(126)): a contiguous slice (a row)
+    copies whole; a strided slice (a column) keeps the element
+    loop; an overlapping row-to-row copy stays exact. */
+ slice_bulk: procedure options(main);
+    declare a(3, 4) fixed bin(31);
+    declare r(4) fixed bin(31);
+    declare c(3) fixed bin(31);
+    declare i fixed bin(31), j fixed bin(31);
+    declare bad fixed bin(31);
+    do i = 1 to 3;
+       do j = 1 to 4;
+          a(i, j) = 10 * i + j;
+       end;
+    end;
+    bad = 0;
+    r = a(2, *);
+    do j = 1 to 4;
+       if r(j) ^= 20 + j then bad = bad + 1;
+    end;
+    c = a(*, 3);
+    do i = 1 to 3;
+       if c(i) ^= 10 * i + 3 then bad = bad + 1;
+    end;
+    a(1, *) = a(3, *);
+    do j = 1 to 4;
+       if a(1, j) ^= 30 + j then bad = bad + 1;
+    end;
+    a(2, *) = r;
+    do j = 1 to 4;
+       if a(2, j) ^= 20 + j then bad = bad + 1;
+    end;
+    if bad = 0 then put skip list('PASS slice_bulk');
+    else put skip list('MISMATCH slice_bulk:', bad);
+ end slice_bulk;

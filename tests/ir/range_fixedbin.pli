@@ -1,0 +1,8 @@
+ test: procedure options(main);
+   declare a(100) fixed bin(31);
+   declare i fixed bin(31);
+   do i = 1 to 100;
+     a(i) = i;
+   end;
+   put skip list(a(50));
+ end test;

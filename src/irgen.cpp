@@ -13,6 +13,7 @@
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -2859,12 +2860,15 @@ bool IRGen::linkRuntimeBitcode() {
   // runtime's global state (CONTROLLED/ON stacks, I/O) stays shared across
   // units; the P0 side-table facts are re-applied so the optimizer keeps the
   // audited memory/alloc effects on the real bodies.
-  // Strip the build host's target-cpu / target-features from the pre-compiled
-  // runtime (IRGen P0): if they survive into the merged module, LLVM's inliner
-  // refuses to honour the AlwaysInline that applyRuntimeAttrs stamps on the
-  // math wrappers (pli_sin, pli_mod_ll, ...) when the feature sets differ.
-  // KEEP probe-stack: runtime.bc is built for apple-m1, and __chkstk_darwin is
-  // the native probe method for arm64-apple (our targets), so it is sound.
+  // Strip the build host's target-cpu / target-features / probe-stack from the
+  // pre-compiled runtime (IRGen P0, P5.1): if they survive into the merged
+  // module, LLVM's inliner refuses to honour the AlwaysInline that
+  // applyRuntimeAttrs stamps on the math wrappers (pli_sin, pli_mod_ll, ...)
+  // when the feature sets differ, and a probe-stack / target-cpu mismatch
+  // against the link-time TargetMachine breaks the backend on some targets.
+  // The TargetMachine re-applies its own defaults at codegen, so stripping
+  // is sound on every target. Identical strip in linkEmbeddedLibPLI and
+  // emitRuntimeObject (codegen.cpp).
   // Stamp NoInline on every runtime body so the non-always-inline wrappers
   // (e.g. pli_put_list_char) are not generically inlined at -O2 and survive
   // -dead_strip at link (tests/driver/link.sh dead-strip sub-check). The math
@@ -2876,6 +2880,8 @@ bool IRGen::linkRuntimeBitcode() {
       F.removeFnAttr("target-cpu");
     if (F.hasFnAttribute("target-features"))
       F.removeFnAttr("target-features");
+    if (F.hasFnAttribute("probe-stack"))
+      F.removeFnAttr("probe-stack");
     F.addFnAttr(llvm::Attribute::NoInline);
   }
   // Align the data layout with ours first: both describe the same ABI, but
@@ -5673,6 +5679,64 @@ void IRGen::emitDoIter(HStmt* s) {
   llvm::BasicBlock* testL =
       s->to ? llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_) : nullptr;
 
+
+  // P3c+P3.3: emit a preheader block before the loop header (condL). condL is the
+  // loop header (target of the backedge from stepL), so the preheader runs once
+  // before the first iteration — the right place for trip-count assumes and loop
+  // metadata setup.
+  llvm::BasicBlock* preL =
+      llvm::BasicBlock::Create(ctx_, "do.pre." + id, curFn_);
+  branch(preL);
+  startBlock(preL);
+
+  // P3c: llvm.assume trip-count hint when FROM, TO, and BY are all compile-time
+  // constants — gives the optimizer an explicit trip count instead of forcing it
+  // to infer from phi+icmp. Sound because PL/I DO semantics are defined: BY=0
+  // is diagnosed in sema (rule (86)).
+  if (s->from && s->to &&
+      s->from->kind == HExpr::IntLit && s->to->kind == HExpr::IntLit &&
+      llvm::isa<llvm::ConstantInt>(by.reg)) {
+    int64_t fromVal = s->from->ival;
+    int64_t toVal = s->to->ival;
+    int64_t byVal = llvm::cast<llvm::ConstantInt>(by.reg)->getSExtValue();
+    int64_t maxTrip = 0;
+    if (byVal > 0 && toVal >= fromVal)
+      maxTrip = (toVal - fromVal) / byVal + 1;
+    else if (byVal < 0 && fromVal >= toVal)
+      maxTrip = (fromVal - toVal) / (-byVal) + 1;
+    if (maxTrip > 0) {
+      // intent: trip = ceil(|to-from| / |by|) + 1, computed from LLVM values;
+      // constant-folded for const bounds, but the @llvm.assume still records
+      // the trip-count bound for passes like LoopVectorize.
+      llvm::Value* span64 = b_.CreateSub(
+          b_.CreateSExt(tv.reg, b_.getInt64Ty(), "trip.tv64"),
+          b_.CreateSExt(from.reg, b_.getInt64Ty(), "trip.from64"),
+          "trip.span");
+      llvm::Value* absStep = b_.CreateSelect(
+          b_.CreateICmpSGE(span64, b_.getInt64(0), "step.is"),
+          b_.CreateNeg(by.reg, "step.abs"), by.reg, "trip.step");
+      absStep = b_.CreateSExt(absStep, b_.getInt64Ty(), "step64");
+      llvm::Value* absSpan =
+          b_.CreateSelect(b_.CreateICmpSGE(span64, b_.getInt64(0), "span.pos"),
+                           span64, b_.CreateNeg(span64, "span.neg"), "trip.absspan");
+      llvm::Value* sm1 =
+          b_.CreateSub(absStep, b_.getInt64(1), "trip.sm1");
+      llvm::Value* q = b_.CreateUDiv(
+          b_.CreateAdd(absSpan, sm1, "trip.adj"), absStep, "trip.q");
+      llvm::Value* trip = b_.CreateAdd(q, b_.getInt64(1), "trip");
+      b_.CreateAssumption(b_.CreateICmpULE(trip, b_.getInt64(maxTrip)));
+    }
+  }
+
+  // P3.3: build loop ID metadata for mustprogress; parallel_access added on the
+  // backedge only when P2 proved the body disjoint (see aliasScopeOf_).
+  // The self-referential node is completed and attached at the backedge.
+  llvm::MDBuilder mdb(ctx_);
+  llvm::SmallVector<llvm::Metadata*, 4> loopProps;
+  loopProps.push_back(mdb.createString("llvm.loop.mustprogress"));
+  loopID_ = llvm::MDNode::getDistinct(ctx_, {});
+  loopMDs_ = loopProps;
+
   // Loop-invariant CONTROLLED bases hoist here (after FROM/TO/BY, before the
   // loop): one addr+len per used stack serves the whole body. A body with
   // ALLOCATE/FREE/CALL keeps per-iteration calls (hoistCtl checks).
@@ -5754,7 +5818,19 @@ void IRGen::emitDoIter(HStmt* s) {
   nv.ty = ct;
   nv.reg = nx;
   storeTo(ctl, nv, s->loc);
-  branch(condL);
+
+  // P3.3: attach llvm.loop metadata to the backedge (header->latch->header).
+  // The loop ID is self-referential: MDNode with itself as operand 0.
+  llvm::UncondBrInst* backedge = b_.CreateBr(condL);
+  if (loopID_) {
+    llvm::SmallVector<llvm::Metadata*, 4> ops;
+    ops.push_back(loopID_); // self-reference slot
+    for (llvm::Metadata* prop : loopMDs_)
+      ops.push_back(prop);
+    llvm::MDNode* loopID = llvm::MDNode::getDistinct(ctx_, ops);
+    loopID->replaceOperandWith(0, loopID);
+    backedge->setMetadata(llvm::LLVMContext::MD_loop, loopID);
+  }
 
   startBlock(endL);
   for (Symbol* h : ctlHoisted) {
@@ -6447,8 +6523,16 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     return dst;
   }
   bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
-                a->sym->ty.k == pty.k && a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
+                a->memberPath.empty() && a->sym->ty.k == pty.k &&
+                a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
                 a->sym->ty.varying == pty.varying;
+  // P4.1: a member leaf with identical layout rides by reference too — same
+  // type, aligned, addressable — skipping the dummy copy (rules (34),(38)).
+  // Locator-qualified, DEFINED-overlay and struct leaves keep the old paths.
+  bool memberDirect =
+      !pty.isStruct() && !(pty.isChar() && pty.starLen) && a->kind == HExpr::VarRef && a->sym &&
+      a->sym->kind != Symbol::ProcName && !a->memberPath.empty() && !a->locPtr &&
+      !a->sym->definedBase && a->ty == pty && !packedMemberPath(a->sym->ty, a->memberPath);
   if (pty.isChar() && pty.starLen) {
     // An adjustable-length `CHAR(*)` parameter (rule (18)) takes the caller's
     // character variable directly by reference (no copy): the callee's length
@@ -6506,6 +6590,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   }
   if (direct)
     return addressOf(a->sym);
+  if (memberDirect)
+    return memberAddr(a->sym, a->memberPath, a->loc);
   llvm::Value* addr = entryAlloca(llvmTy(pty), "dummy");
   Val av = emitExpr(a);
   if (pty.isChar()) {
@@ -7476,6 +7562,27 @@ void IRGen::annotateAlias(llvm::Instruction* inst, Symbol* s) {
   }
 }
 
+// Stamp !range on a FIXED BINARY(p) load (P3b): the declared precision bounds
+// the value to a signed p-bit range, narrower than the i32/i64 storage. LLVM
+// can then fold downstream overflow checks and narrow induction variables.
+// Guard: only when sizeChecks() is off — at -O2/-O3 the optimizer already
+// assumes no signed overflow, making the range fact consistent; with traps on
+// the trap blocks own overflow control and the range would be unsound.
+void IRGen::stampFixedBinRange(llvm::LoadInst* load, const Type& ty) {
+  if (!load || ty.k != TK::FixedBin || sizeChecks())
+    return;
+  unsigned typeWidth = load->getType()->getIntegerBitWidth();
+  unsigned prec = ty.prec;
+  if (prec <= 0 || prec >= typeWidth)
+    return; // range fills the type — no narrowing
+  // Signed p-bit range: [-(2^(p-1)), 2^(p-1)-1]; LLVM range is half-open.
+  llvm::APInt lo = llvm::APInt::getSignedMinValue(prec).sextOrTrunc(typeWidth);
+  llvm::APInt hi = llvm::APInt::getSignedMaxValue(prec).sextOrTrunc(typeWidth);
+  hi += 1; // half-open upper bound, widened before increment to avoid prec-bit overflow
+  llvm::MDBuilder mdb(load->getContext());
+  load->setMetadata(llvm::LLVMContext::MD_range, mdb.createRange(lo, hi));
+}
+
 Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   Val v;
   v.ty = ty;
@@ -7505,8 +7612,9 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     }
     return v;
   }
-  llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
+   llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
   annotateAlias(r, sym);
+  stampFixedBinRange(r, ty);
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is the {double,double} struct itself.
     v.cpx = r;
@@ -7868,13 +7976,14 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   llvm::Value* addr =
       arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
                        dynLb_.count(sym) ? dynLb_[sym] : nullptr);
-  llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
-  if (el.isBit() && el.len == 1)
-    v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
-  else
-    v.reg = r;
-  return v;
-}
+     llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
+     stampFixedBinRange(cast<llvm::LoadInst>(r), el);
+     if (el.isBit() && el.len == 1)
+       v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
+     else
+       v.reg = r;
+      return v;
+   }
 
 // Store one array element (rule 126): convert to the element type, then store
 // through the bounds-checked element address.
@@ -8018,6 +8127,34 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   } else {
     sv = build(x);
     srcArrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(*sv.arr));
+  }
+
+  // P4.2 bulk fast path: both views walk a trailing-axis run with the same
+  // total, so the gather is one contiguous copy (rules (12),(126)). memmove
+  // stays overlap-safe for self/overlaying slices; LLVM expands it inline.
+  auto suffixRun = [](const View& vw) {
+    const size_t n = vw.arr->dims.size();
+    if (vw.stars.size() > n)
+      return false;
+    const size_t off = n - vw.stars.size();
+    for (size_t j = 0; j < vw.stars.size(); ++j)
+      if (vw.stars[j] != off + j)
+        return false;
+    return true;
+  };
+  if (!broadcast && tv.total == sv.total && tv.stars.size() == sv.stars.size() &&
+      suffixRun(tv) && suffixRun(sv) && sv.arr->elementType() == el && !el.isChar() &&
+      !el.isStruct() && !tv.arr->isDynamic() && !sv.arr->isDynamic() && !tv.packed &&
+      !sv.packed && !t->locPtr && !x->locPtr && t->sym && x->sym && !t->sym->controlled &&
+      !x->sym->controlled) {
+    llvm::Value* dstPtr =
+        b_.CreateInBoundsGEP(tgtArrTy, tv.base, {i64(0), tv.fixedFlat}, "csd");
+    llvm::Value* srcPtr =
+        b_.CreateInBoundsGEP(srcArrTy, sv.base, {i64(0), sv.fixedFlat}, "css");
+    llvm::Value* nbytes = b_.CreateMul(
+        i64(total), i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "csn");
+    b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), srcPtr, llvm::MaybeAlign(), nbytes);
+    return;
   }
 
   llvm::AllocaInst* ctr = entryAlloca(b_.getInt64Ty(), "cs.i." + std::to_string(n_++));
@@ -8698,6 +8835,7 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::LoadInst* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
       if (packed)
         r->setAlignment(llvm::Align(1));
+      stampFixedBinRange(r, leaf);
       v.reg = leaf.isBit() && leaf.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
@@ -9346,6 +9484,12 @@ Val IRGen::emitExpr(HExpr* e) {
     break;
   }
   case Tok::Power:
+    // P4 fast path: x**2 with a constant integer exponent 2 is a single fmul,
+    // exact for every finite base (a negative base still squares positive).
+    if (e->b->kind == HExpr::IntLit && e->b->ival == 2) {
+      r = b_.CreateFMul(av.reg, av.reg, "sq");
+      break;
+    }
     r = b_.CreateCall(
         intrinsicFn("llvm.pow.f64", b_.getDoubleTy(), {b_.getDoubleTy(), b_.getDoubleTy()}),
         {av.reg, bv.reg}, "bin");

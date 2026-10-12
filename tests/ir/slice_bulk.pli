@@ -1,0 +1,12 @@
+ test: procedure options(main);
+   declare a(3, 4) fixed bin(31);
+   declare r(4) fixed bin(31);
+   declare i fixed bin(31), j fixed bin(31);
+   do i = 1 to 3;
+     do j = 1 to 4;
+       a(i, j) = 10 * i + j;
+     end;
+   end;
+   r = a(2, *);
+   put skip list(r(4));
+ end test;

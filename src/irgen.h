@@ -93,6 +93,14 @@ private:
   // Stamp !alias.scope/!noalias on one memory instruction for symbol s;
   // silently skips symbols without a scope (shared/aliased storage).
   void annotateAlias(llvm::Instruction* inst, Symbol* s);
+  // Stamp !range from a FIXED BINARY(p) declared precision on a load (P3b).
+  // Sound only when sizeChecks() is off — at -O2/-O3 the optimizer already
+  // assumes no signed overflow, and the range makes that explicit so LLVM
+  // can narrow the value and fold downstream overflow guards.
+  void stampFixedBinRange(llvm::LoadInst* load, const Type& ty);
+  // P3.3 loop metadata state (set in emitDoIter preheader, used on backedge).
+  llvm::MDNode* loopID_ = nullptr;
+  llvm::SmallVector<llvm::Metadata*, 4> loopMDs_;
   // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
   // bound value of its dynamic axis, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynUb_;

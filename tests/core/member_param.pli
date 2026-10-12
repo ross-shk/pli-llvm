@@ -1,0 +1,26 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* P4.1 dummy audit (rules (34),(38)): a member leaf whose layout
+    matches the parameter rides by reference, so callee writes
+    reach the caller just like a plain variable actual. */
+ member_param: procedure options(main);
+    declare 1 s, 2 x fixed bin(31), 2 y fixed bin(31);
+    declare 1 t, 2 u, 3 v fixed bin(31);
+    declare bad fixed bin(31);
+    inc: procedure(n);
+       declare n fixed bin(31);
+       n = n + 1;
+    end inc;
+    bad = 0;
+    s.x = 41;
+    call inc(s.x);
+    if s.x ^= 42 then bad = bad + 1;
+    t.u.v = 10;
+    call inc(t.u.v);
+    if t.u.v ^= 11 then bad = bad + 1;
+    s.y = 7;
+    call inc(s.y);
+    if s.y ^= 8 then bad = bad + 1;
+    if bad = 0 then put skip list('PASS member_param');
+    else put skip list('MISMATCH member_param:', bad);
+ end member_param;
