@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 int main(void) {
-    long i, m, n, steps, total;
+    long long i, m, n, steps, total;
 
     n = 400000;
     total = 0;
@@ -21,6 +21,6 @@ int main(void) {
         total = total + steps;
     }
 
-    printf("%ld\n", total);
+    printf("%lld\n", total);
     return 0;
 }
