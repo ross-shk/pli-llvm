@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* P6.1 negative litmus: a RECURSIVE internal procedure must NOT be marked
+   alwaysinline, even at -O2 with checks off — recursion requires a real call. */
+INLINE_RECURSIVE_IR: PROCEDURE OPTIONS(MAIN);
+   DECLARE N FIXED BINARY(31);
+   DECLARE R FIXED BINARY(63);
+   recursive_proc: PROCEDURE(N) RECURSIVE RETURNS(FIXED BIN(31));
+     DECLARE N FIXED BINARY(31);
+     IF N <= 1 THEN RETURN(1);
+     RETURN(N * recursive_proc(N - 1));
+   END recursive_proc;
+   R = recursive_proc(10);
+   PUT SKIP LIST(R);
+END INLINE_RECURSIVE_IR;

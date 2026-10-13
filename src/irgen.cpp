@@ -3514,6 +3514,44 @@ llvm::Value* IRGen::onExitDepth(const std::string& label) {
 // regardless of emission order. Plain procedures get one function (filled by
 // emitPlainProc); multi-entry procedures get the shared impl (filled by
 // emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
+// P6.1: decide whether a procedure is a candidate for AlwaysInline.
+// Conservative: only non-recursive internal procs with plain params
+// (no adjustable arrays, CHAR(*), BASED, CONTROLLED, DEFINED, or STATIC).
+bool IRGen::inlineInternal(const HProc* p) const {
+  if (p->isRecursive || p->isMain || p->isExternal || p->isPackage
+      || !p->entryNames.empty() || !inlineProcs())
+    return false;
+  for (const Symbol* prm : p->paramSyms) {
+    if (!prm)
+      continue;
+    if (prm->ty.isArray() || isStarLen(prm->ty) || prm->isBased()
+        || prm->controlled || prm->definedBase || prm->isStatic)
+      return false;
+  }
+  return true;
+}
+
+// P6.3: strip through cast instructions (sext/trunc/zext) to find whether v
+// traces back to a load from a non-negative DO index's alloca.
+bool IRGen::isDerivedFromNonNegDoIndex(llvm::Value* v) const {
+  while (auto* inst = llvm::dyn_cast<llvm::Instruction>(v)) {
+    if (auto* li = llvm::dyn_cast<llvm::LoadInst>(inst)) {
+      llvm::Value* ptr = li->getPointerOperand();
+      for (Symbol* s : nonNegDoIndices_) {
+        auto it = symAddr_.find(s);
+        if (it != symAddr_.end() && it->second == ptr)
+          return true;
+      }
+      return false;
+    }
+    if (inst->getNumOperands() >= 1)
+      v = inst->getOperand(0);
+    else
+      return false;
+  }
+  return false;
+}
+
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
@@ -3691,6 +3729,14 @@ static bool procEstablishesOn(HProc* p) {
 void IRGen::emitProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
+  // P6.1: mark small internal non-recursive procs for inlining so hot call
+  // sites pay no frame setup at -O2 (LLVM inlines at -O3 already).
+  if (inlineInternal(p)) {
+    if (llvm::Function* fn = mod_.getFunction(p->irName.substr(1))) {
+      fn->removeFnAttr(llvm::Attribute::NoInline);
+      fn->addFnAttr(llvm::Attribute::AlwaysInline);
+    }
+  }
   curProc_ = p;
   labelBlocks_.clear();
   labelBeginChain_.clear();
@@ -5654,6 +5700,17 @@ void IRGen::emitDoIter(HStmt* s) {
   Val from = emitExpr(s->from.get());
   storeTo(ctl, from, s->loc);
 
+  // P6.3: track DO control vars whose FROM is a non-negative constant and BY
+  // is ascending (absent or positive) — the index stays >= FROM >= 0, so MOD
+  // (index, k) with positive k can skip the sign-adjust chain. FROM is checked
+  // against the emitted constant (sema may promote the literal to a TypeTag
+  // HExpr for a wider control var, so HExpr::IntLit alone is unreliable).
+  bool nonNegDo = false;
+  if (!s->byNegConst && from.reg &&
+      llvm::isa<llvm::ConstantInt>(from.reg) &&
+      !llvm::cast<llvm::ConstantInt>(from.reg)->getValue().isNegative())
+    nonNegDo = true;
+
   // P1, Task 8: hoist loop-invariant TO and BY as SSA values instead of
   // storing to an alloca and reloading every iteration — the per-iteration
   // loads block LLVM's loop-invariant-sinking / LSR on the bounds (collatz,
@@ -5794,11 +5851,15 @@ void IRGen::emitDoIter(HStmt* s) {
     branch(bodyL);
   }
 
+  if (nonNegDo)
+    nonNegDoIndices_.insert(ctl);
   startBlock(bodyL);
   loopStack_.push_back({s->labels, endL, stepL});
   for (auto& b : s->body)
     emitStmt(b.get());
   loopStack_.pop_back();
+  if (nonNegDo)
+    nonNegDoIndices_.erase(ctl);
   branch(stepL);
 
   startBlock(stepL);
@@ -9979,14 +10040,17 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
           // srem already yields the correct non-negative result — skip the
           // adjust/select chain entirely (P1.3).
           llvm::SimplifyQuery SQ(mod_.getDataLayout());
-          // intent: isKnownNonNegative with no DominatorTree/AssumptionCache
-          // cannot see through load(sext) at IRGen time. Check if the dividend
-          // is a constant (common for MOD(literal, k)) for the fast path.
-          bool avNonNeg = false;
-          if (auto* avConst = llvm::dyn_cast<llvm::ConstantInt>(avi))
-            avNonNeg = !avConst->getValue().isNegative();
-          else
-            avNonNeg = llvm::isKnownNonNegative(avi, SQ);
+           // intent: isKnownNonNegative with no DominatorTree/AssumptionCache
+           // cannot see through load(sext) at IRGen time. Check if the dividend
+           // is a constant, or derived from a DO index whose FROM is known
+           // non-negative (P6.3). Otherwise fall back to isKnownNonNegative.
+           bool avNonNeg = false;
+           if (auto* avConst = llvm::dyn_cast<llvm::ConstantInt>(avi))
+             avNonNeg = !avConst->getValue().isNegative();
+            else if (isDerivedFromNonNegDoIndex(avi))
+              avNonNeg = true;
+            else
+              avNonNeg = llvm::isKnownNonNegative(avi, SQ);
           if (avNonNeg && cv.isStrictlyPositive()) {
             // intent: for a non-negative dividend and positive divisor, the
             // remainder is already correct. If the divisor is a power of two,

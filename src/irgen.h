@@ -254,6 +254,10 @@ private:
   // True when a parameter is an adjustable-length `CHAR(*)` (rule (18)); its
   // hidden argument is a character length, not an array extent.
   static bool isStarLen(const Type& t) { return t.isChar() && t.starLen; }
+  // P6.1: true for a small internal, non-recursive, single-entry procedure
+  // whose parameters are all plain scalars or fixed-size arrays — safe to
+  // mark AlwaysInline so hot call sites pay no frame setup at -O2.
+  bool inlineInternal(const HProc* p) const;
   // Number of `*`-adjustable-extent parameters in `params` (each contributes a
   // hidden i64 extent argument after the by-reference pointers).
   size_t nAdjustable(const std::vector<Symbol*>& params) {
@@ -729,6 +733,16 @@ private:
   bool convChecks() const {
     return !noConvChecks_ && (checkStack_.empty() || !checkStack_.back().noConv);
   }
+  // P6.1: true when internal procedures should be marked AlwaysInline
+  // (checks off = -O2/-O3 default; at -O0 checks are on, no inliner runs).
+  bool inlineProcs() const {
+    return noSizeChecks_ && noSubChecks_ && (checkStack_.empty() ||
+            (!checkStack_.back().noSize && !checkStack_.back().noSub));
+  }
+  // P6.3: track DO control variables whose FROM is a non-negative constant
+  // so MOD(index, k) with positive k skips the sign-adjust chain.
+  std::unordered_set<Symbol*> nonNegDoIndices_;
+  bool isDerivedFromNonNegDoIndex(llvm::Value* v) const;
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.
