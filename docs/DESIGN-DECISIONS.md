@@ -6028,3 +6028,45 @@ no-go set excludes every construct that can alias (ADR-018/047/048/140,
 ADR-164/165), so the metadata is truthful, not approximate. All 21 benchmarks
 pass `--checks-forced` parity (traps on, facts off — output unchanged).
 
+---
+
+## ADR-213 — Target-aware optimization pipeline for auto-vectorization
+
+**Context.** At `-O2`/`-O3`, LLVM's loop vectorizer refuses to vectorize
+PL/I DO-loops even when the IR is in canonical SSA form (phi induction
+variable, `nsw` stepping, `!noalias` allocas, `!range` loads). Investigation
+revealed that DO-control-variable allocas ARE promoted to SSA by SROA — the
+control variable becomes a phi node (`lsr.iv`) in optimized IR. The real
+blocker is that `optimizeModule` (`src/codegen.cpp:48`) builds the
+`PassBuilder` without passing the `TargetMachine`, so
+`buildPerModuleDefaultPipeline` uses the default `TargetIRAnalysis` — a
+generic target that reports zero vector registers and no SIMD support. LLVM's
+loop vectorizer consults this TTI and silently skips every loop.
+
+Evidence: `opt -passes='default<O3>'` on the *same* plic-generated IR
+vectorizes the DO-loop (4-wide SIMD on arm64). Plic's own `optimizeModule`
+at the same `O3` level does not — the only difference is the missing
+`TargetMachine*` in the `PassBuilder` constructor.
+
+**Decision.** Pass the `TargetMachine` to the `PassBuilder` constructor so it
+registers the target-specific `TargetIRAnalysis` (NEON on arm64, SSE/AVX on
+x86). Change `optimizeModule` signature to accept `llvm::TargetMachine&` and
+forward it as `PB.getTM()` (or `TM->getTMTargetIRAnalysis()`). All call sites
+in `src/main.cpp` already hold a live `TargetMachine` before calling
+`optimizeModule`.
+
+**Consequences.** `-O2`/`-O3` loops that were scalar-only (e.g. `A(i) = A(i) + i`
+over a 1000-element array) now vectorize to 4-wide SIMD, matching clang's
+codegen. The `--march=native` flag already passes the host CPU to
+`createTargetMachine`, so the vector features are correct on the build host.
+`--checks-forced` parity is unaffected: vectorization is a code-quality gain,
+not a semantic change. `tests/ir/do_ssa.pli` pins a vectorized phi induction
+variable at `-O3`.
+
+**Rejected.** Manually emitting phi nodes in `emitDoIter` (complex, error-prone,
+duplicates what SROA already achieves); adding a separate `-passes=loop-vectorize`
+invocation after the default pipeline (the vectorizer needs TTI registered in
+the analysis manager, which `buildPerModuleDefaultPipeline` sets up only once).
+
+
+

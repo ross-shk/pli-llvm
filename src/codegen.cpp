@@ -34,12 +34,17 @@ static llvm::OptimizationLevel toOptLevel(const std::string& s) {
   return llvm::OptimizationLevel::O2;
 }
 
-void optimizeModule(llvm::Module& M, const std::string& optLevel) {
+void optimizeModule(llvm::Module& M, llvm::TargetMachine& TM,
+                    const std::string& optLevel) {
   llvm::LoopAnalysisManager LAM;
   llvm::FunctionAnalysisManager FAM;
   llvm::CGSCCAnalysisManager CGAM;
   llvm::ModuleAnalysisManager MAM;
-  llvm::PassBuilder PB;
+  // ADR-213: forward the TargetMachine so buildPerModuleDefaultPipeline
+  // registers target-specific TargetIRAnalysis (SIMD features). Without TM,
+  // the default TTI reports zero vector registers and the loop vectorizer
+  // silently skips every loop.
+  llvm::PassBuilder PB(&TM);
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);

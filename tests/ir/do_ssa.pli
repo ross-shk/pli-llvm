@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* ADR-213 litmus: a canonical DO-loop over an array must emit IRGen patterns
+   that LLVM's loop vectorizer can promote to SIMD when the target-aware
+   pipeline (PassBuilder with TargetMachine) is active:
+     - one-branch ascending DO: icmp sle + condbr (P1.1)
+     - nsw step: add nsw (P3.1/P5.3)
+     - !noalias on the array alloca (P2)
+   The .check pins these in the -emit-llvm (unoptimized) IR. Vectorization
+   itself is verified by benchmarks (string_ops, matmul, array_sort), not by
+   the IR test framework (which only sees unoptimized IR). */
+DO_SSA_A: PROCEDURE OPTIONS(MAIN);
+   DECLARE I, S FIXED BINARY(31);
+   DECLARE A(1000) FIXED BINARY(31);
+   DO I = 1 TO 1000;
+     A(I) = I;
+   END;
+   DO I = 1 TO 1000;
+     S = S + A(I);
+   END;
+   PUT SKIP LIST(S);
+END DO_SSA_A;
