@@ -6112,3 +6112,82 @@ instead of fixing threading here).
 
 
 
+## ADR-215 — By-value passing for read-only scalar internal parameters
+
+Rules (4),(34),(38): every internal parameter rode by reference (ptr), so
+even a bounded self-recursion like `factorial` kept 33M runtime calls at
+`-O2` while C folded the same shape to constants (2.97x). Marking the
+recursive procedure `AlwaysInline` changed nothing (Exp1: 2.95x) — the -O2
+inliner will not inline recursion through a pointer indirection. Passing
+the same parameter as an `i32` value folds the whole nest at `-O2` (Exp2:
+1.03x, in-tree: 1.04x).
+
+**Decision.** `computeByValueParams` decides every internal parameter's
+convention once per program, before `declareProc`. A parameter rides by
+value when the procedure is internal, single-entry, unnamed,
+never address-taken as an ENTRY value (ADR-171 uses the all-pointer
+convention), never called asynchronously (rule (79) packs addresses), and
+the `inlineProcs` gate holds (checks off); and when the parameter is a
+plain FIXED/FLOAT/POINTER scalar (mirroring `marshalArg`) that no body in
+its lexical subtree stores through or exposes the address of. The subtree
+walk covers assignment targets (including SUBSTR/EXPONENT/UNSPEC
+pseudo-variable targets and `ALLOCATE .. SET`), direct call arguments,
+`ADDR`/`BYADDR`/`OMITTED`/`PRESENT`, DO control variables, GET items, and
+nested-procedure bodies (static-link reads stay sound — only writes
+disqualify). Multi-entry procedures, OPTIONAL parameters, DEFINED-overlay
+bases, and any uncertainty keep by reference, which is always sound. The
+callee materializes a frame cell for the value, so static links, nested
+`argAddr` calls, and alias metadata keep working unchanged; call sites
+marshal through the existing `marshalArg` path. `tests/ir/byval_param.pli`
+pins `FACT(i32` vs `BUMP(ptr`; `tests/core/byval_semantics.pli` pins the
+preserved semantics (visible stores, nested capture, mixed conventions,
+OPTIONAL omission).
+
+**Consequences.** Bounded recursion with constant arguments now folds at
+`-O2` exactly like C (unroll + CGSCC inline/propagation cascade, unlocked
+by the SSA argument). Non-inlined calls keep one store/load pair that SROA
+removes after inlining; `--checks-forced` builds keep by reference via the
+shared gate, so forced-checks parity is unaffected.
+
+**Rejected.** Extending `AlwaysInline` to recursive procedures (measured
+no-op — the inliner still refuses); a whole-program "all scalars by
+value" switch (breaks ENTRY-variable and async conventions, needs the
+eligibility proof anyway); forwarding-argument refinement for wrapper
+procs (`g(x) { return f(x); }` stays by reference — documented future
+work, unneeded for the measured gap).
+
+## ADR-216 — Variable-tail in-place self-append for VARYING strings
+
+Rule (119): `result = result || temp` in a loop paid a fresh `pli_alloc`
+plus two full-buffer copies and a capacity-sized blank-pad per trip —
+O(n²) traffic that left `string_ops` at 7.33x behind C's `strcat` loop.
+The P4 `emitSelfAppend` peephole only fired for literal tails, so any
+variable tail fell through to the generic temp-buffer path.
+
+**Decision.** Extend `emitSelfAppend` to variable tails. A tail leaf is
+safe when it is a string literal (as before) or a `VarRef` to disjoint
+storage: a same-frame AUTOMATIC local (its frame alloca cannot overlap
+the target), or a by-value parameter (a private stable cell, ADR-215).
+By-reference parameters could alias the target through the caller, and
+BASED/CONTROLLED/STATIC/DEFINED cells carry no disjointness guarantee,
+so all of those keep the generic path. Self-concatenation (`X = X || X`)
+is safe: reads always span `[0, old)` while writes land at `[old, ...)`.
+Each leaf appends past the live length with the same
+`min(cap, total)` truncation the generic path computes, then stores the
+new length; the blank-pad stays skipped by the existing growth-only
+argument. `tests/ir/self_append_var.pli` pins the shape (no `pli_alloc`
+in the procedure); `tests/core/self_append.pli` pins the semantics
+(values, truncation, self-concat, loop growth).
+
+**Consequences.** Same-shape string churn drops from O(n²) to O(n):
+`string_ops` goes 7.33x → 0.18x (C still rescans with `strcat`; we copy
+only the new tail). The generic concat path is untouched, so every other
+shape behaves exactly as before.
+
+**Rejected.** Direct concat emission for `T = A || B...` (head ≠ target):
+unneeded once the hot append reaches 0.18x — the remaining temp churn is
+~3ms and shrinking it further is not worth a second lowering. Blank-pad
+elimination on the generic path: the hot path no longer pads, so the
+proof burden buys nothing measurable. Freeing the generic temp buffer:
+it would fix the RSS leak (unfreed temp per concat-assign) but not the
+traffic; recorded as a separate issue, not attempted here.

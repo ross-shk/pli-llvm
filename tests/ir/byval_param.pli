@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* P6.1b litmus: a read-only scalar param of an internal procedure must
+    pass by value at -O2 (checks off), even when RECURSIVE; a param the
+    body stores to keeps the by-reference address form. */
+ byval_param_ir: procedure options(main);
+   declare r fixed bin(63);
+   declare y fixed bin(31);
+   fact: procedure(n) recursive returns(fixed bin(31));
+     declare n fixed bin(31);
+     if n <= 1 then return(1);
+     return(n * fact(n - 1));
+   end fact;
+   bump: procedure(x) returns(fixed bin(31));
+     declare x fixed bin(31);
+     x = x + 10;
+     return(x);
+   end bump;
+   r = fact(10);
+   y = 5;
+   r = r + bump(y);
+   put skip list(r, y);
+ end byval_param_ir;

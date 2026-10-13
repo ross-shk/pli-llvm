@@ -1,0 +1,3 @@
+CHECK-LABEL: define internal void {{.*}}SELF_APPEND_VAR
+CHECK-NOT: pli_alloc
+CHECK: ret void

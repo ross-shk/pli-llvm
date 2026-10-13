@@ -83,6 +83,10 @@ private:
   // Every storage-owning symbol this frame can address directly (global,
   // local alloca, parameter, or a static link) to its address value.
   std::unordered_map<Symbol*, llvm::Value*> symAddr_;
+  // P6.1b (ADR-215): every internal-procedure parameter decided by-value
+  // (read-only scalar, address never taken) maps to true; absent or false
+  // keeps the by-reference address form. Filled by computeByValueParams.
+  std::unordered_map<Symbol*, char> byValParam_;
   // P2 alias facts (LICM/LAA): one domain per emitted function; each plain
   // AUTOMATIC local owns a scope in it. Scalar loads/stores stamp
   // !alias.scope={own} + !noalias={all other scopes}. Reset per function so
@@ -258,6 +262,19 @@ private:
   // whose parameters are all plain scalars or fixed-size arrays — safe to
   // mark AlwaysInline so hot call sites pay no frame setup at -O2.
   bool inlineInternal(const HProc* p) const;
+  // P6.1b (ADR-215): read-only scalar parameters of eligible internal
+  // procedures ride by value. Decided once per program before declareProc;
+  // consulted by declareProc, emitPlainProc, and every call site.
+  void computeByValueParams(const HProgram& prog);
+  bool isByValueParam(Symbol* s) const {
+    auto it = byValParam_.find(s);
+    return it != byValParam_.end() && it->second;
+  }
+  // P6.1b (ADR-215) eligibility walk: any VarRef to s, address taken for s
+  // in e, and stores/address escapes for s in st (all true = keep by-ref).
+  bool exprMentions(HExpr* e, Symbol* s) const;
+  bool exprTakesAddr(HExpr* e, Symbol* s) const;
+  bool stmtTakesAddr(HStmt* st, Symbol* s) const;
   // Number of `*`-adjustable-extent parameters in `params` (each contributes a
   // hidden i64 extent argument after the by-reference pointers).
   size_t nAdjustable(const std::vector<Symbol*>& params) {
