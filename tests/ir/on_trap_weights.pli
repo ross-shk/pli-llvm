@@ -1,0 +1,20 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (91)-(94): the ZERODIVIDE trap edge is cold (~1% taken),
+    so its branch carries !prof branch_weights favouring the
+    hot resume edge; the no-handler edge in the dispatch does
+    too. Keeps the hot loop contiguous for the optimizer. */
+ on_trap_weights: procedure options(main);
+    declare i fixed bin(31);
+    declare s fixed bin(63);
+    declare q fixed bin(31);
+    s = 0;
+    on zerodivide begin;
+       return;
+    end;
+    do i = 1 to 1000;
+       q = 1000000 / mod(i, 100);
+       s = s + q;
+    end;
+    put skip list(s);
+ end on_trap_weights;

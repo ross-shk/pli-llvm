@@ -519,6 +519,19 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_set_on_source", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_unspec_assign", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_onkey", {.willReturn = true, .mem = RtMemReadonly}},
+      // ON handler stack (rules (91)-(94)): readers only read the
+      // thread-local stack, writers push/pop/reset it. Push may abort on
+      // overflow, so it claims no willReturn; the rest always return.
+      {"pli_on_top_cond", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_top_ctx", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_top_fn", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_top_error", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_depth_error", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_pop_cond", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_on_pop_error", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_on_reset_error", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_on_push_cond", {.mem = RtMemOtherMod}},
+      {"pli_on_push_error", {.mem = RtMemOtherMod}},
       {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_put_edit_pic", {.willReturn = true, .alwaysInline = true, .mem = RtMemOtherMod}},
     };
@@ -2536,7 +2549,11 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
   llvm::Value* none = b_.CreateICmpEQ(top, i64(0), tag + "none");
   llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, tag + ".abort", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, tag + ".dispatch", curFn_);
-  b_.CreateCondBr(none, abortBB, dspBB);
+  // intent: with a handler established the empty-stack edge is cold;
+  // weight the dispatch edge so the trap block stays out of the hot path.
+  llvm::MDBuilder mdb(ctx_);
+  if (auto* br = b_.CreateCondBr(none, abortBB, dspBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(abortBB);
   b_.CreateCall(runtimeFn(abortFn), {});
   b_.CreateUnreachable();
@@ -2576,7 +2593,11 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
   std::string zid = std::to_string(n_++);
   llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "zd.trap." + zid, curFn_);
   llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "zd.ok." + zid, curFn_);
-  b_.CreateCondBr(isZero, trapBB, okBB);
+  // intent: the faulting-divisor edge is cold (~1% taken); weight the hot
+  // resume edge so the loop stays contiguous for the optimizer.
+  llvm::MDBuilder zmdb(ctx_);
+  if (auto* br = b_.CreateCondBr(isZero, trapBB, okBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(trapBB);
   emitCondTrap(Stmt::kZerodivideCondKey, "pli_zerodivide", "zd", okBB);
   b_.SetInsertPoint(okBB);

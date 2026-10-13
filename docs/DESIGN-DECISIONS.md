@@ -6068,5 +6068,47 @@ duplicates what SROA already achieves); adding a separate `-passes=loop-vectoriz
 invocation after the default pipeline (the vectorizer needs TTI registered in
 the analysis manager, which `buildPerModuleDefaultPipeline` sets up only once).
 
+## ADR-214 — One-slot CONTROLLED generation freelist
+
+Rules (87)–(90): per-iteration `ALLOCATE`/`FREE` of the same size paid a
+full `malloc`/`free` plus generation bookkeeping every trip. The
+`controlled_stack` benchmark (1M push-fill-sum-pop cycles of 400 bytes) ran
+1.76x behind its C baseline at `-O3`.
+
+Evidence: per-outer-iteration call inventory vs C (`malloc` + `free` + 100
+stores) is `pli_ctl_alloc` (table scan + grow check + `malloc` + 3
+bookkeeping stores) + 2 hoisted `pli_ctl_addr`/`pli_ctl_len` reads + one
+`pli_ctl_addr` for the post-loop read + `pli_ctl_free` (scan + 2 frees +
+store). All runtime bodies stay `NoInline` (the dead-strip driver test
+relies on it), so none of this folds at the call site.
+
+**Decision.** Recycle the last freed 1-D generation buffer for the same
+key and size inside `rt_storage.c` (no ABI change — signatures and
+`pli_rt_abi.def` untouched). `pli_ctl_free` stashes the popped buffer in a
+one-slot cache instead of freeing it; `pli_ctl_alloc` reuses the slot on a
+same-key/same-size hit. Mismatch evicts first, so peak retention is one
+buffer (reclaimed by the OS at exit; no cross-file fini hook, keeping the
+diff to one file). N-D generations bypass the cache: anything with a
+nonzero rank (including 1-D generations that later gained extents via
+`pli_ctl_set_dim`) frees normally. `ALLOCATE(*)` reuse stays coherent
+without consulting the cache: it reads the live top generation through
+`pli_ctl_addr`/`pli_ctl_len`, which the cache can never alias (every
+stashed buffer came from a popped slot). Threading matches the existing
+table (process-global, not TLS). `tests/core/controlled_reuse.pli` pins
+the semantics: same-size churn, size-change evict, LIFO depth restore,
+cross-key separation, and the N-D `(*,*)` path.
+
+**Consequences.** Same-shape LIFO churn becomes a pointer handoff: no
+`malloc`/`free` on the hot path. Contents stay undefined per the language
+(the test always writes before reading), and live generations can never
+alias the slot. `pli_ctl_ensure` inherits the benefit via `pli_ctl_alloc`.
+
+**Rejected.** A multi-slot or per-key cache (unbounded retention, more
+bookkeeping than the one buffer it saves); teaching IRGen to elide the
+pair (needs escape/provenance analysis across calls — the runtime owns the
+table, so a local cache is the KISS fix); a `_Thread_local` slot (the
+table it mirrors is already process-global — matching existing practice
+instead of fixing threading here).
+
 
 

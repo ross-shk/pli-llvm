@@ -1,0 +1,89 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Rules (87)-(90): CONTROLLED generation reuse. LIFO
+    allocate/free pairs of identical size may reuse one
+    cached buffer; contents stay undefined and live
+    generations never alias across keys or depths. */
+ controlled_reuse: procedure options(main);
+   dcl fails fixed bin(31);
+   dcl i fixed bin(31);
+   dcl k fixed bin(31);
+   dcl s fixed bin(63);
+   dcl fds fixed bin(31) controlled;
+   dcl g fixed bin(31) controlled;
+   dcl x(*,*) fixed bin(31) controlled;
+   fails = 0;
+   /* same-size churn: fill, sum, free, repeat */
+   do k = 1 to 20;
+     allocate fds (100);
+     do i = 1 to 100;
+       fds(i) = k;
+     end;
+     s = 0;
+     do i = 1 to 100;
+       s = s + fds(i);
+     end;
+     if s ^= k * 100 then fails = fails + 1;
+     free fds;
+   end;
+   /* size change evicts the cached buffer */
+   allocate fds (100);
+   do i = 1 to 100;
+     fds(i) = 1;
+   end;
+   free fds;
+   allocate fds (50);
+   if hbound(fds) ^= 50 then fails = fails + 1;
+   s = 0;
+   do i = 1 to 50;
+     fds(i) = 2;
+   end;
+   do i = 1 to 50;
+     s = s + fds(i);
+   end;
+   if s ^= 100 then fails = fails + 1;
+   free fds;
+   allocate fds (100);
+   if hbound(fds) ^= 100 then fails = fails + 1;
+   free fds;
+   /* LIFO depth: a freed top never disturbs livegens */
+   allocate fds (10);
+   do i = 1 to 10;
+     fds(i) = 5;
+   end;
+   allocate fds (20);
+   if hbound(fds) ^= 20 then fails = fails + 1;
+   do i = 1 to 20;
+     fds(i) = 7;
+   end;
+   if fds(1) ^= 7 then fails = fails + 1;
+   free fds;
+   if hbound(fds) ^= 10 then fails = fails + 1;
+   if fds(1) ^= 5 then fails = fails + 1;
+   if fds(10) ^= 5 then fails = fails + 1;
+   free fds;
+   /* cross-key: interleaved stacks stay separate */
+   allocate fds (10);
+   allocate g (10);
+   do i = 1 to 10;
+     fds(i) = 1;
+     g(i) = 2;
+   end;
+   s = fds(1) + g(1);
+   if s ^= 3 then fails = fails + 1;
+   if fds(10) ^= 1 then fails = fails + 1;
+   if g(10) ^= 2 then fails = fails + 1;
+   free g;
+   free fds;
+   /* N-D path bypasses the 1-D cache, still works */
+   allocate x (2,3);
+   x(2,3) = 99;
+   if x(2,3) ^= 99 then fails = fails + 1;
+   allocate x (*,*);
+   if dim(x,1) ^= 2 then fails = fails + 1;
+   if dim(x,2) ^= 3 then fails = fails + 1;
+   free x;
+   free x;
+   if fails = 0 then put skip list('PASS controlled_reuse');
+   else put skip list('FAIL controlled_reuse: fails =', fails);
+ end controlled_reuse;

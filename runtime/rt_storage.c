@@ -77,10 +77,32 @@ static void ctlGrow(CtlVar *v) {
   v->cap = ncap;
 }
 
+/* One-slot generation freelist (ADR-214): LIFO allocate/free pairs of an
+ * identical size reuse one cached buffer instead of malloc/free churn.
+ * Sound because ALLOCATE leaves contents undefined and FREE pops LIFO, so a
+ * cached buffer is indistinguishable from fresh memory. One slot bounds
+ * retention to a single buffer (reclaimed by the OS at exit). Only 1-D
+ * generations (rank 0) enter the cache; the N-D path bypasses it. The cache
+ * never aliases a live generation: every stashed buffer came from a popped
+ * depth slot and leaves the cache on the next same-shape alloc. Threading
+ * matches the existing table (process-global, not TLS). */
+typedef struct {
+  long long key;
+  char *bytes;
+  long long len;
+} CtlCache;
+static CtlCache ctlCache = {.key = -1, .bytes = NULL, .len = 0};
+
 void pli_ctl_alloc(long long key, long long n) {
   CtlVar *v = ctlFind(key, 1);
   ctlGrow(v);
-  v->gens[v->depth] = pli_alloc(n);
+  // intent: same-key/same-size LIFO churn reuses the cached buffer.
+  if (ctlCache.bytes && ctlCache.key == key && ctlCache.len == n) {
+    v->gens[v->depth] = ctlCache.bytes;
+    ctlCache.bytes = NULL;
+  } else {
+    v->gens[v->depth] = pli_alloc(n);
+  }
   v->lens[v->depth] = n;
   v->ranks[v->depth] = 0;
   v->dimss[v->depth] = NULL;
@@ -156,9 +178,28 @@ void pli_ctl_free(long long key) {
   if (!v || v->depth <= 0)
     pli_signal_error("FREE of empty CONTROLLED stack");
   --v->depth;
-  free(v->gens[v->depth]);
   free(v->dimss[v->depth]);
   v->dimss[v->depth] = NULL;
+  // intent: stash 1-D buffers for the next same-shape ALLOCATE; evict a
+  // stale entry first so retention stays one buffer. N-D generations
+  // (which may have gained extents via pli_ctl_set_dim) bypass the cache.
+  char *buf = v->gens[v->depth];
+  v->gens[v->depth] = NULL;
+  if (v->ranks[v->depth] == 0) {
+    long long n = v->lens[v->depth];
+    if (ctlCache.bytes) {
+      if (ctlCache.key == key && ctlCache.len == n) {
+        free(buf); // slot already serves this shape: drop the duplicate
+        return;
+      }
+      free(ctlCache.bytes); // evict stale entry before stashing
+    }
+    ctlCache.key = key;
+    ctlCache.bytes = buf;
+    ctlCache.len = n;
+  } else {
+    free(buf);
+  }
 }
 
 char *pli_ctl_addr(long long key) {
