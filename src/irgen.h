@@ -560,6 +560,9 @@ private:
                           llvm::Value* srcLen);
   // Direct LLVM lowering for INDEX (P1+): bytewise search loop.
   llvm::Value* emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
+  // P7.2: SIMD-accelerated INDEX for constant needles on ARM64 NEON.
+  llvm::Value* emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                                     llvm::Value* bLen, llvm::StringRef needleStr);
   // Direct LLVM lowering for assign_varying (P3): memmove + blank-pad + return n.
   llvm::Value* emitAssignVaryingLLVM(llvm::Value* dst, llvm::Value* cap, llvm::Value* src,
                                      llvm::Value* srcLen);

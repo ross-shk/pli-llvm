@@ -1,0 +1,7 @@
+CHECK-NOT: pli_index
+CHECK: memchr
+CHECK: idx.simd_search
+CHECK: idx.simd_verify
+CHECK: idx.simd_match
+CHECK: phi i64
+CHECK-NOT: memcmp

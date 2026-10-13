@@ -1,0 +1,6 @@
+/* P7.2 SIMD retry path: constant needle 'abab' in 'abXcabab' — 'a' at
+   pos 0 doesn't match (xab), retry via memchr→verify loop. */
+test: procedure options(main);
+    declare r fixed bin(31);
+    r = index('abXcabab', 'abab');
+end test;

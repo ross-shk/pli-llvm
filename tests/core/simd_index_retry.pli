@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* P7.2 SIMD retry path: INDEX with a constant needle whose first byte
+   appears before the actual match, forcing the simd_search → simd_verify
+   retry loop (no pli_index slow-path call). */
+test: procedure options(main);
+    declare r fixed bin(31);
+    r = index('abXcabab', 'abab');
+    if r ^= 5 then put skip list('FAIL simd_retry:', r);
+    else put skip list('PASS simd_retry');
+end test;

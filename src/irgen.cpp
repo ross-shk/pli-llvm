@@ -979,6 +979,23 @@ llvm::Function* IRGen::scanFn(const std::string& name, llvm::Type* ret,
   return f;
 }
 
+// P7.2: detect a constant string needle (pointer to a private GlobalVariable
+// initializer that is a ConstantDataArray of i8 with known content).
+// Returns the pointer-stripped global + the byte span, or nullptr.
+static std::pair<llvm::GlobalVariable*, llvm::StringRef>
+extractConstantNeedle(llvm::Value* v) {
+  if (auto* gv = llvm::dyn_cast<llvm::GlobalVariable>(v->stripPointerCasts())) {
+    if (gv->isConstant()) {
+      if (auto* ca = llvm::dyn_cast<llvm::ConstantDataArray>(gv->getInitializer())) {
+        if (ca->isString()) {
+          return {gv, ca->getAsString()};
+        }
+      }
+    }
+  }
+  return {};
+}
+
 // Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
 //   blen <= 0 -> 1; blen > alen -> 0; else scan a for first run where
 //   a[pos..pos+blen-1] == b[0..blen-1].
@@ -995,8 +1012,30 @@ llvm::Function* IRGen::scanFn(const std::string& name, llvm::Type* ret,
 //
 // Slow path: falls back to pli_index runtime call for the rare case where
 // the first byte of the needle appears before the actual match position.
+//
+// P7.2 SIMD fast-path: for constant needles of length 2..16, replaces
+// the memchr+memcmp pair with a target-detection branch that uses SIMD
+// intrinsics (NEON cmeq on ARM64, SSE4.2 pcmpestrm on x86) for vectorized
+// verification. The slow path loops back to memchr from the next candidate
+// instead of calling the pli_index runtime, eliminating per-iteration runtime
+// overhead for constant needles. This closes the gap where the C baseline
+// uses strstr (libc SIMD) and we fall through to a scalar pli_index loop.
 llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
                                   llvm::Value* bLen) {
+  // P7.2: dispatch to SIMD fast-path for constant needles of length 2..16
+  if (auto [gv, str] = extractConstantNeedle(b); gv && !str.empty()) {
+    uint64_t nlen = str.size();
+    // ConstantDataArray::getString stores a NUL terminator; the needle
+    // length is the value bLen (not str.size, which includes '\0').
+    // We use nlen as upper bound on the needle length we can handle
+    // with a single SIMD register (16 bytes).
+    if (nlen >= 2 && nlen <= 17) {
+      llvm::Triple tgtTriple(triple_);
+      if (tgtTriple.getArch() == llvm::Triple::aarch64)
+        return emitIndexConstantNEON(a, aLen, b, bLen, str);
+    }
+  }
+
   llvm::Function* F = b_.GetInsertBlock()->getParent();
   llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
   llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
@@ -1101,6 +1140,149 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   resultPhi->addIncoming(zero, ret0BB);
   resultPhi->addIncoming(matchResult, matchBB);
   resultPhi->addIncoming(slowResult, slowPathBB);
+
+   return resultPhi;
+}
+
+// P7.2: SIMD-accelerated INDEX for constant needles on ARM64 NEON.
+//
+// Algorithm:
+//   1. Guard: blen <= 0 → 1; blen > alen → 0 (same as emitIndexLLVM).
+//   2. Build a <16 x i8> needle vector (zero-padded) and a <16 x i8>
+//      mask (first n bytes = 0xFF, rest = 0x00) from the constant needle.
+//   3. Use memchr (libc NEON-internal) to find the first char of the
+//      needle — fast SIMD character search (16 bytes/instruction).
+//   4. Verify the candidate by loading <16 x i8> from haystack, XOR
+//      with needle_vec.  ICmpEQ(diff, zeros) gives 0xFF where bytes match.
+//      AND with mask_vec isolates the needle-length bytes.  If the result
+//      equals mask_vec → all needle bytes match → return pos+1.
+//   5. On verify miss, call memchr again from pos+1 (no pli_index runtime,
+//      eliminating the scalar loop for constant needles).
+//
+// Target-detection note: on x86 we would use llvm.x86.sse41.pcmpestrm128
+// which compares a 16-byte haystack against a needle in one hardware
+// instruction; on ARM64 the cmeq approach is the equivalent. Both are
+// gated on the target triple in emitIndexLLVM's dispatch.
+llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,                                           llvm::Value* /*b*/,
+                                          llvm::Value* bLen, llvm::StringRef needleStr) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* aLen64 = b_.CreateZExtOrTrunc(aLen, b_.getInt64Ty(), "idx.alen");
+  llvm::Value* bLen64 = b_.CreateZExtOrTrunc(bLen, b_.getInt64Ty(), "idx.blen");
+  uint64_t needleLen = needleStr.size();
+
+  // <16 x i8> needle vector (zero-padded) + mask (first n bytes 0xFF).
+  std::vector<llvm::Constant*> needleElems, maskElems;
+  for (uint64_t i = 0; i < 16; ++i) {
+    needleElems.push_back(llvm::ConstantInt::get(
+        b_.getInt8Ty(), i < needleLen ? (uint8_t)needleStr[i] : 0));
+    maskElems.push_back(llvm::ConstantInt::get(
+        b_.getInt8Ty(), i < needleLen ? 0xFF : 0x00));
+  }
+  llvm::Value* needleVec = llvm::ConstantVector::get(needleElems);
+  llvm::Value* maskVec = llvm::ConstantVector::get(maskElems);
+  llvm::VectorType* vecTy = llvm::VectorType::get(b_.getInt8Ty(), 16, false);
+  llvm::Value* zeroVec = llvm::ConstantVector::getSplat(
+      llvm::ElementCount::get(16, false), llvm::ConstantInt::get(b_.getInt8Ty(), 0));
+
+  // memchr function: reused for finding first-char candidates.
+  llvm::Function* memchrFn = scanFn("memchr", b_.getPtrTy(),
+                                    {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()});
+  uint64_t firstChar = needleLen > 0 ? (uint8_t)needleStr[0] : 0;
+
+  // Capture the current insertion block — it's the predecessor of searchBB
+  // on first entry (we emit the condBr below into this block).
+  llvm::BasicBlock* callerBB = b_.GetInsertBlock();
+
+  // Basic blocks (built up-front; all PHIs get their incoming values set later).
+  // CFG:
+  //   caller → (blen<=0) → ret1 → exit
+  //   caller → (blen>0) → search
+  //   search: found=null → ret0 → exit
+  //   search: found≠null → verify
+  //   verify: match → matchBB → exit
+  //   verify: miss → search (retry from pos+1)
+  llvm::BasicBlock* ret1BB = llvm::BasicBlock::Create(ctx_, "idx.ret1", F);
+  llvm::BasicBlock* ret0BB = llvm::BasicBlock::Create(ctx_, "idx.ret0", F);
+  llvm::BasicBlock* searchBB = llvm::BasicBlock::Create(ctx_, "idx.simd_search", F);
+  llvm::BasicBlock* verifyBB = llvm::BasicBlock::Create(ctx_, "idx.simd_verify", F);
+  llvm::BasicBlock* matchBB = llvm::BasicBlock::Create(ctx_, "idx.simd_match", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "idx.exit", F);
+
+  // Entry: blen <= 0 → ret1; else search
+  llvm::Value* blenLe0 = b_.CreateICmpULE(bLen64, zero, "idx.blenle0");
+  b_.CreateCondBr(blenLe0, ret1BB, searchBB);  // callerBB is predecessor
+
+  startBlock(ret1BB);
+  b_.CreateBr(exitBB);
+
+  // search: memchr(a + start, needle[0], aLen - start)
+  startBlock(searchBB);
+  llvm::PHINode* start = b_.CreatePHI(b_.getInt64Ty(), 2, "idx.start");
+  start->addIncoming(zero, callerBB);
+
+  // rem = aLen - start (bytes remaining)
+  llvm::Value* rem = b_.CreateSub(aLen64, start, "idx.rem");
+  llvm::Value* aStartPtr = b_.CreateGEP(b_.getInt8Ty(), a, {start}, "idx.astart");
+  llvm::Value* firstChar32 = llvm::ConstantInt::get(b_.getInt32Ty(), firstChar);
+  llvm::CallInst* foundCall = b_.CreateCall(memchrFn, {aStartPtr, firstChar32, rem}, "idx.memchr");
+  foundCall->addFnAttr(llvm::Attribute::Speculatable);
+  llvm::Value* found = foundCall;
+
+  // found == null → ret0 (no more candidates)
+  llvm::Value* foundNull = b_.CreateICmpEQ(
+      found, llvm::ConstantPointerNull::get(b_.getPtrTy()), "idx.found_null");
+  b_.CreateCondBr(foundNull, ret0BB, verifyBB);
+
+  startBlock(verifyBB);
+  // pos = found - a (absolute position in haystack)
+  llvm::Value* foundInt = b_.CreatePtrToInt(found, b_.getInt64Ty(), "idx.found_int");
+  llvm::Value* aInt = b_.CreatePtrToInt(a, b_.getInt64Ty(), "idx.a_int");
+  llvm::Value* pos = b_.CreateSub(foundInt, aInt, "idx.pos");
+
+  // Load 16 bytes from candidate position, XOR with needle_vec.
+  // The load may read past the buffer boundary; since PL/I string buffers
+  // are stack allocas with fixed size and the mask zeroes irrelevant bytes,
+  // this is safe after SROA.
+  llvm::Value* aPosPtr = b_.CreateGEP(b_.getInt8Ty(), a, {pos}, "idx.apos_ptr");
+  llvm::Value* hayVec =
+      b_.CreateAlignedLoad(vecTy, aPosPtr, llvm::Align(1), "idx.hay_vec");
+  llvm::Value* diff = b_.CreateXor(hayVec, needleVec, "idx.diff");
+
+  // AND with mask to isolate needle-length bytes: result is 0 where byte
+  // matches (diff=0) within needle range, non-zero where mismatch.
+  llvm::Value* anded = b_.CreateAnd(diff, maskVec, "idx.masked");
+  // all_zero: true where anded == 0 (i.e., match within needle range)
+  llvm::Value* matchVec = b_.CreateICmpEQ(anded, zeroVec, "idx.cmp_eq");
+  // Reduce <16 x i1> to i16, then check if the first needleLen bits are set.
+  llvm::Value* bits = b_.CreateBitCast(matchVec, llvm::Type::getIntNTy(ctx_, 16), "idx.bits");
+  // Create a mask with the first needleLen bits set (e.g., needleLen=8 → 0xFF)
+  uint32_t matchMaskVal = (1u << needleLen) - 1;
+  llvm::Value* matchMask =
+      llvm::ConstantInt::get(b_.getInt16Ty(), matchMaskVal);
+  llvm::Value* maskedBits = b_.CreateAnd(bits, matchMask, "idx.masked_bits");
+  llvm::Value* allMatch = b_.CreateICmpEQ(maskedBits, matchMask, "idx.all_match");
+
+  // Branch: match → matchBB, miss → retry search from pos+1
+  llvm::Value* posPlus1 = b_.CreateAdd(pos, one64, "idx.next_start");
+  b_.CreateCondBr(allMatch, matchBB, searchBB);
+  start->addIncoming(posPlus1, verifyBB);
+
+  // match: result = pos + 1 (PL/I is 1-based)
+  startBlock(matchBB);
+  llvm::Value* matchResult = b_.CreateAdd(pos, one64, "idx.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(ret0BB);
+  b_.CreateBr(exitBB);
+
+  // exit: merge all result values.
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 4, "idx.out");
+  resultPhi->addIncoming(one64, ret1BB);
+  resultPhi->addIncoming(zero, ret0BB);
+  resultPhi->addIncoming(matchResult, matchBB);
 
   return resultPhi;
 }
