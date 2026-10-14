@@ -798,22 +798,24 @@ private:
   // AUTOMATIC AREA variables of the procedure being emitted (rule (20)): the
   // runtime region is created at entry and destroyed on every exit path.
   std::vector<Symbol*> areaLocals_;
-  // Bitcode runtime (OPTIMIZATION.md §10, P3): runtimeBc_ is the path to the
-  // build-tree runtime.bc (empty selects the embedded blob for single-binary
-  // installs); linkBitcode_ requests linking its pli_* definitions
+  // Bitcode runtime (OPTIMIZATION.md §10, P3): runtimeBc_ names an external
+  // bitcode file (--runtime-bc; empty selects the embedded blob);
+  // linkBitcode_ requests linking its pli_* definitions
   // into the module. Only the MAIN unit embeds (runtime globals must stay
-  // shared across units), so the archive stays on the final link line where
-  // its members are simply never pulled once the symbols are defined.
+  // shared across units); an explicit --runtime archive stays on the final
+  // link line where its members are simply never pulled once the symbols are
+  // defined.
   std::string runtimeBc_;
   bool linkBitcode_ = false;
   LowerMode lowerMode_;
   std::map<std::string, LowerMode> perOpOverrides_;
-  // Parse runtime.bc (or the embedded blob when runtimeBc_ is empty), check
+  // Parse the runtime bitcode (or the embedded blob when runtimeBc_ is empty), check
   // its LLVM stamp and target triple, merge the whole
   // runtime into the module, and re-apply the P0 side-table facts to the real
   // bodies. The embedded definitions keep their external linkage so every
   // unit's pli_* references resolve to this one shared copy (runtime globals
-  // stay shared); the archive stays on the link line but is never pulled.
+  // stay shared); an explicit --runtime archive stays on the link line but
+  // is never pulled.
   // Returns false after diagnosing.
   bool linkRuntimeBitcode();
 };

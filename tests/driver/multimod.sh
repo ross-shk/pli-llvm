@@ -4,7 +4,8 @@
 # tests/driver/multimod.sh — multi-module PL/I programs (rules
 # (2),(38),(42)): a library module provides external procedures,
 # the MAIN module calls them across the link. Each unit compiles
-# with -c; cc links the objects with pli_runtime. It runs from the
+# with -c; cc links the objects (the -c MAIN object already carries
+# the merged runtime definitions). It runs from the
 # gitignored out/ dir so artifacts do not pollute the repo.
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
@@ -16,7 +17,6 @@ case "$(uname -s)" in
 esac
 PLI=${PLI:-./build/cmake/pli}
 CC=${CC:-${CLANG:-clang}}
-RTLIB=${RTLIB:-./build/cmake/libpli_runtime.a}
 OUT=tests/driver/out/multimod
 mkdir -p tests/driver/out
 
@@ -57,7 +57,7 @@ EOF
 
 $PLI "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL multimod: lib compile"; exit 1; }
 $PLI "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL multimod: main compile"; exit 1; }
-# -lm after the archive: pli_runtime needs libm on Linux (no-op on macOS).
-$CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
+# -lm after the objects: the merged runtime needs libm on Linux (no-op on macOS).
+$CC "$OUT.main.o" "$OUT.lib.o" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
 "$OUT$EXE"
 exit 0

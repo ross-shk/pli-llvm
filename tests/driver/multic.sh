@@ -15,7 +15,6 @@ case "$(uname -s)" in
 esac
 PLI=${PLI:-$PWD/build/cmake/pli}
 CLANG=${CLANG:-clang}
-RTLIB=${RTLIB:-$PWD/build/cmake/libpli_runtime.a}
 OUT=tests/driver/out/multic
 mkdir -p tests/driver/out
 cd tests/driver/out
@@ -39,7 +38,7 @@ if $PLI -c multic_a.pli multic_b.pli -o x.o 2>/dev/null; then
   echo "FAIL multic: accepted -o with multiple -c inputs"
   exit 1
 fi
-# -lm after the archive: pli_runtime needs libm on Linux (no-op on macOS).
-$CLANG multic_b.o multic_a.o "$RTLIB" $MATHLIB $RTLIBFLAGS -o multic$EXE || { echo "FAIL multic: link"; exit 1; }
+# -lm after the objects: the merged runtime needs libm on Linux (no-op on macOS).
+$CLANG multic_b.o multic_a.o $MATHLIB $RTLIBFLAGS -o multic$EXE || { echo "FAIL multic: link"; exit 1; }
 ./multic$EXE
 exit 0

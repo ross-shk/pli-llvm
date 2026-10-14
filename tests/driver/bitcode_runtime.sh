@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/bitcode_runtime.sh — OPTIMIZATION.md §10 (P3): the bitcode
-# runtime. IRGen merges the pli_* definitions from runtime.bc into the MAIN
-# unit (full merge, ADR-179 — library units reference symbols the MAIN unit
-# never calls, so a LinkOnlyNeeded pull would drag the archive back in and
-# duplicate them); the archive stays on the link line, never pulled once the
-# symbols are defined; --no-bitcode-runtime compiles every unit against the
-# sectioned archive; a runtime.bc not built by this LLVM is diagnosed at load
-# time; a missing explicitly named runtime.bc is an error.
+# runtime. IRGen merges the pli_* definitions from the embedded blob into the
+# MAIN unit (full merge, ADR-179 — library units reference symbols the MAIN
+# unit never calls, so a LinkOnlyNeeded pull would duplicate them); an
+# explicit --runtime archive stays on the link line, never pulled once the
+# symbols are defined; --no-bitcode-runtime keeps every unit's references
+# external, resolved at link from the embedded blob; an external bitcode file
+# not built by this LLVM is diagnosed at load time; a missing explicitly
+# named runtime.bc is an error.
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
@@ -49,7 +50,7 @@ grep -q "declare.*@pli_put_list_char" "$OUT.ll" \
   && { echo "FAIL: runtime still a bare declaration"; ok=0; }
 check "default run" "$($OUT.bc$EXE)" "PASS bitcode_runtime"
 
-# --- --no-bitcode-runtime: back to the sectioned archive, so the module
+# --- --no-bitcode-runtime: references stay external, so the module
 #     carries only declarations -----------------------------------------
 $PLI "$OUT.pli" -o "$OUT.nobc$EXE" --no-bitcode-runtime --keep-ll \
   || { echo "FAIL: --no-bitcode-runtime build"; ok=0; }

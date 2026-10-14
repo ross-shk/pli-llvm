@@ -9,7 +9,7 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md `(what 
 ```bash
 # Canonical build (CMake + Ninja):
 cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j$(nproc)        # build/cmake/pli + build/cmake/libpli_runtime.a
+cmake --build build/cmake -j$(nproc)        # build/cmake/pli (runtime embedded)
 ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.pli
 ```
 

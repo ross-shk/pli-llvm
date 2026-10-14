@@ -2992,15 +2992,14 @@ std::string IRGen::run(HProgram& prog) {
   }
 
   // Bitcode runtime (OPTIMIZATION.md §10, P3): link the pli_* definitions the
-  // module references in from runtime.bc, so clang compiles real bodies and
-  // can inline/specialize them instead of resolving external archive calls.
+  // module references in from the runtime bitcode, so clang compiles real
+  // bodies and can inline/specialize them instead of leaving external calls.
   // Only the MAIN unit embeds: runtime globals (CONTROLLED and ON stacks,
   // I/O state) must be shared across units, so every other unit keeps
-  // external pli_* references that the embedded copy or libpli_runtime.a satisfies.
+  // external pli_* references that the embedded copy satisfies.
   // -emit-llvm keeps the raw module (its IR goldens pin compiler output, not
   // the runtime); the driver passes linkBitcode_ = false there. An empty
-  // runtimeBc_ means the installed files are absent, so the embedded blob is
-  // merged instead (single-binary distribution).
+  // runtimeBc_ selects the embedded blob; --runtime-bc names an external file.
   if (linkBitcode_ && prog.mainProc)
     if (!linkRuntimeBitcode())
       return "";
@@ -3031,13 +3030,13 @@ std::string IRGen::run(HProgram& prog) {
 }
 
 // Bitcode runtime (OPTIMIZATION.md §10, P3): pull the pli_* definitions the
-// module references out of runtime.bc so clang compiles real bodies and can
-// inline/specialize them. The LLVM version stamp (rt_core.c pli_llvm_version)
-// is checked first: runtime.bc is built by the same LLVM as pli, and a stale
-// bitcode would mis-compile silently. The whole runtime is merged into the
-// MAIN unit with external linkage, so every unit's pli_* references resolve
-// to this one shared copy and the runtime's global state stays shared.
-// An empty runtimeBc_ selects the embedded blob (single-binary install).
+// module references out of the runtime bitcode so clang compiles real bodies
+// and can inline/specialize them. The LLVM version stamp (rt_core.c
+// pli_llvm_version) is checked first: the bitcode is built by the same LLVM
+// as pli, and a stale bitcode would mis-compile silently. The whole runtime
+// is merged into the MAIN unit with external linkage, so every unit's pli_*
+// references resolve to this one shared copy and the runtime's global state
+// stays shared. An empty runtimeBc_ selects the embedded blob.
 bool IRGen::linkRuntimeBitcode() {
   // Load the runtime from disk (--runtime-bc) or from the embedded blob.
   std::unique_ptr<llvm::Module> rt;

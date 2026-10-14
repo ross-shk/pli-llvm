@@ -216,8 +216,6 @@ endif()
 message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
 target_compile_definitions(pli PRIVATE
-  PLI_RUNTIME_LIB="$<TARGET_FILE:pli_runtime>"
-  PLI_RUNTIME_BC="${CMAKE_BINARY_DIR}/runtime.bc"
   PLI_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
   PLI_VERSION="${PLI_VERSION}"
   PLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
@@ -354,8 +352,8 @@ endif()
 
 # Static C++ runtime for portability.
 # Windows: pli itself uses /MT (MSVC_RUNTIME_LIBRARY=MultiThreaded, set above)
-# to match the prebuilt LLVM 23 libs; pli_runtime stays on the /MD default so user
-# programs link against the dynamic CRT (see src/main.cpp linkCrtFlag).
+# to match the prebuilt LLVM 23 libs; user programs link against the dynamic
+# CRT (see src/main.cpp linkCrtFlag).
 # CRT selection is a per-target compile property, not a link option
 # (passing /MD//MT to lld-link warns LNK4044), so no link options here.
 if(APPLE)
@@ -373,10 +371,11 @@ option(PLI_CROSS_BITCODE "Generate bitcode for cross-targets (needs sysroots)" O
 # an MLIR-enabled build must link against the matching LLVM/MLIR package.
 option(PLI_ENABLE_MLIR "Build the experimental MLIR canary dialect (P2)" OFF)
 
-# pli runtime (C11). One source per section so the archive strips unused
-# pieces (ADR-079); the same sources feed both runtime paths below.
-add_library(pli_runtime STATIC ${RT_SRCS})
-set_target_properties(pli_runtime PROPERTIES OUTPUT_NAME pli_runtime)
+# pli runtime (C11). One source per section so the link drops unused pieces
+# (ADR-079); the sources feed only the embedded bitcode below — no archive or
+# runtime.bc file is built or installed (single-binary distribution). The
+# --runtime / --runtime-bc flags still accept user-supplied external files,
+# and --no-bitcode-runtime materialises the link input from the embedded blob.
 
 # Warnings: -Wall -Wextra on the C++ driver (pli_runtime is C11 with its own style).
 # Use Clang compiler ID check FIRST: clang-cl defines the Clang ID but also
@@ -485,43 +484,6 @@ add_custom_command(
 add_custom_target(embedded_runtime_inc_default DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc)
 add_dependencies(pli embedded_runtime_inc_default)
 
-# File-based bitcode runtime (OPTIMIZATION.md §10, P3): the same sources
-# compiled to LLVM IR with the matching clang and merged into runtime.bc with
-# llvm-link. IRGen merges the runtime into the MAIN unit so clang sees real
-# bodies; the archive stays for --no-bitcode-runtime. rt_core.c stamps
-# runtime.bc with the LLVM version, checked at load time so a stale bitcode
-# is diagnosed, not mis-linked. (The embedded blob above serves the
-# in-process path; this file serves --runtime-bc and the Makefile build.)
-set(PLI_RUNTIME_BC ${CMAKE_BINARY_DIR}/runtime.bc)
-set(PLI_RUNTIME_BCS "")
-foreach(rt_src ${RT_SRCS})
-  get_filename_component(rt_base ${rt_src} NAME_WE)
-  set(rt_bc ${CMAKE_BINARY_DIR}/${rt_base}.bc)
-  add_custom_command(
-    OUTPUT ${rt_bc}
-    COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c
-            -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
-            -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
-            -O2 -ffunction-sections -fdata-sections
-            $<$<PLATFORM_ID:Linux>:-fPIC>
-            -target ${PLI_TARGET_TRIPLE}
-            ${CMAKE_SOURCE_DIR}/${rt_src} -o ${rt_bc}
-    DEPENDS ${CMAKE_SOURCE_DIR}/${rt_src}
-    COMMENT "Compiling ${rt_base}.c to bitcode"
-    VERBATIM
-  )
-  list(APPEND PLI_RUNTIME_BCS ${rt_bc})
-endforeach()
-add_custom_command(
-  OUTPUT ${PLI_RUNTIME_BC}
-  COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${PLI_RUNTIME_BCS}
-          -o ${PLI_RUNTIME_BC}
-  DEPENDS ${PLI_RUNTIME_BCS}
-  COMMENT "Merging the runtime bitcode (runtime.bc)"
-  VERBATIM
-)
-add_custom_target(runtime_bc ALL DEPENDS ${PLI_RUNTIME_BC})
-
 # Generated rules table for --explain (see scripts/gen_rules.py); the spec and
 # the generator are the source of truth, so regenerate on every build.
 add_custom_command(
@@ -539,7 +501,7 @@ add_test(NAME pli-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/run_tests.py)
 set_tests_properties(pli-tests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  ENVIRONMENT "PLI=$<TARGET_FILE:pli>;RTLIB=$<TARGET_FILE:pli_runtime>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
+  ENVIRONMENT "PLI=$<TARGET_FILE:pli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
 
 # Single-binary distribution: only the pli driver ships. The runtime travels
 # embedded (embedded_runtime.inc), so no libpli_runtime.a / runtime.bc is

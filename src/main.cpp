@@ -3,7 +3,7 @@
 // main.cpp — pli driver.
 //
 // Pipeline: source -> preprocessor -> lexer -> parser -> sema -> LLVM IR ->
-// clang (assemble, optimize, link with pli_runtime). See docs/ARCHITECTURE.md.
+// clang (assemble, optimize, link with the embedded runtime). See docs/ARCHITECTURE.md.
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -56,11 +56,11 @@
 #define PLI_RUNTIME_LIB ""
 #endif
 
-// Path to the bitcode runtime (OPTIMIZATION.md §10, P3): build/runtime.bc,
-// baked in at build time like PLI_RUNTIME_LIB. IRGen merges the pli_*
-// definitions from it into the MAIN unit so clang sees real bodies;
-// --no-bitcode-runtime restores the sectioned-archive path and --runtime-bc
-// overrides the location.
+// Bitcode runtime source (OPTIMIZATION.md §10, P3): empty by default, which
+// selects the embedded blob. IRGen merges the pli_* definitions from it into
+// the MAIN unit so clang sees real bodies; --no-bitcode-runtime keeps every
+// unit's references external for the link step, and --runtime-bc supplies an
+// external bitcode file instead.
 #ifndef PLI_RUNTIME_BC
 #define PLI_RUNTIME_BC ""
 #endif
@@ -106,7 +106,8 @@ static void usage() {
          "usage: pli [options] file.pli...\n"
          "\n"
          "Multiple inputs compile like cc: each file becomes an independent\n"
-         "relocatable object and they are linked together with pli_runtime into one\n"
+         "relocatable object and they are linked together with the embedded\n"
+         "runtime into one\n"
          "output (-o names it). -c writes <base>.o per input and does not link.\n"
          "\n"
          "options:\n"
@@ -129,11 +130,14 @@ static void usage() {
          "  --release        maximum optimization + stripped binary (minimal size)\n"
          "  --debug          no optimization + debug info (-O0 -g)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
-         "  --runtime <lib>  path to libpli_runtime.a (default: baked in at build time)\n"
+         "  --runtime <lib>  path to an external runtime archive (default: none;\n"
+         "                   the embedded runtime is used instead)\n"
          "  --no-bitcode-runtime\n"
-         "                   link the sectioned libpli_runtime.a instead of merging the\n"
-         "                   pli_* definitions from runtime.bc into the MAIN unit\n"
-         "  --runtime-bc <f> path to runtime.bc (default: baked in at build time)\n"
+         "                   keep pli_* references external and resolve them at link\n"
+         "                   from the embedded runtime instead of merging the\n"
+         "                   definitions into the MAIN unit\n"
+         "  --runtime-bc <f> path to an external runtime bitcode file (default: none;\n"
+         "                   the embedded runtime blob is merged instead)\n"
          "  --flto=thin|full explicit ThinLTO / full LTO on the compile+link steps\n"
          "  --fprofile-generate  instrument the build for PGO (writes a profile)\n"
          "  --fprofile-use=<d>   rebuild using a merged profile (llvm-profdata out)\n"
@@ -384,8 +388,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       bool rtOk = true;
 #if PLI_HAVE_LLD
       // Single-module fast path: runtime linked at BC level (never `-c`).
-      // Bitcode (linkBitcode, file or embedded) already merged the runtime via
-      // IRGen, so the embedded blob is only linked when it did not.
+      // Bitcode (linkBitcode, embedded or --runtime-bc) already merged the
+      // runtime via IRGen, so the embedded blob is only linked when it did not.
       if (linkRuntimeIn && !linkBitcode && !compileOnly) {
         std::string rtErr;
         llvm::Triple targetTriple(triple);
@@ -863,19 +867,21 @@ int main(int argc, char** argv) {
   if (keepLLDir.empty())
     keepLLDir = ".";
   // Runtime-once fast path: one PL/I input becoming the executable directly.
-  // Bitcode runtime: the MAIN unit embeds the pli_* definitions; the archive
-  // always stays on the link line, where it is never pulled once the symbols
+  // Bitcode runtime: the MAIN unit embeds the pli_* definitions from the
+  // embedded blob (or an explicit --runtime-bc file); an explicit --runtime
+  // archive stays on the link line, where it is never pulled once the symbols
   // are defined by that embedded copy (runtime globals must stay shared).
-  // An empty runtimeBc selects the embedded blob (single-binary install), so
-  // the merge stays enabled when the installed files are absent.
+  // An empty runtimeBc selects the embedded blob, so the merge needs no
+  // runtime files on disk.
   const bool linkBitcode = useBitcode && !emitLLVM;
   // Explicit PGO/LTO must reach the backend clang verbatim on both steps, so
   // those builds always take the clang pipeline, never the in-process paths
   // (which take no backend flags).
   const bool needClangPipeline = pgoGenerate || !pgoUse.empty() || !ltoKind.empty();
   // Runtime-once fast path: one PL/I input becoming the executable directly.
-  // Disabled for the archive path (!useBitcode: --no-bitcode-runtime links
-  // libpli_runtime.a instead) and for explicit PGO/LTO (clang pipeline above).
+  // Disabled for the archive path (!useBitcode: --no-bitcode-runtime keeps
+  // external references for the link step) and for explicit PGO/LTO (clang
+  // pipeline above).
   const bool singleModuleFinalLink = !compileOnly && !terminalMode && pliInputs.size() == 1 &&
                                      foreignObjs.empty() && useBitcode && !needClangPipeline;
   std::vector<std::string> objs = foreignObjs;
@@ -900,11 +906,12 @@ int main(int argc, char** argv) {
   // --- link step ----------------------------------------------------------
   // In-process link first (no subprocess); the clang pipeline below is the
   // fallback until lld ships everywhere (review §1: brew llvm has no lld).
-  // Link the per-file objects with pli_runtime. With the bitcode runtime the MAIN
-  // object already defines the pli_* symbols, so the archive's members are
-  // simply never pulled (no duplicates); --no-bitcode-runtime compiles every
-  // unit against the archive as before. Drop unreferenced runtime sections
-  // (the archive is sectioned, ADR-079); multitasking (QR2.8) runs on pthreads.
+  // With the bitcode runtime the MAIN object already defines the pli_*
+  // symbols (an explicit --runtime archive's members are then simply never
+  // pulled: no duplicates); --no-bitcode-runtime compiles every unit with
+  // external references resolved at link from the embedded blob. Drop
+  // unreferenced runtime sections (function sections, ADR-079);
+  // multitasking (QR2.8) runs on pthreads.
   if (output.empty())
     output = "a.out";
   if (triple.empty())
@@ -918,11 +925,12 @@ int main(int argc, char** argv) {
     const pli::TargetDesc& desc = pli::getTargetDesc(llt);
     std::string tmErr;
     if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
-      // With the bitcode runtime (linkBitcode, file or embedded) the MAIN object
-      // already defines every pli_* symbol, so no separate runtime object
-      // is emitted (it would duplicate them). Otherwise multi-input links
-      // carry the runtime as its own object (runtime-once); single-module
-      // links already carry it at BC level (singleModuleFinalLink above).
+      // With the bitcode runtime (linkBitcode, embedded or --runtime-bc) the
+      // MAIN object already defines every pli_* symbol, so no separate
+      // runtime object is emitted (it would duplicate them). Otherwise
+      // multi-input links carry the runtime as its own object (runtime-once);
+      // single-module links already carry it at BC level
+      // (singleModuleFinalLink above).
       std::string rtObj;
       bool haveRtObj = false;
       if (!singleModuleFinalLink && !linkBitcode) {
@@ -1198,10 +1206,12 @@ int main(int argc, char** argv) {
 #endif
   for (const std::string& o : objs)
     cmd += " " + shellQuote(o);
-  // Single-binary fallback: the archive is optional. With the bitcode runtime
-  // (linkBitcode) MAIN already defines pli_*, so a missing archive is simply
-  // omitted. On the archive path (--no-bitcode-runtime) a missing archive is
-  // materialised from the embedded blob as a native object for clang.
+  // Single-binary link: no runtime files ship with the binary. With the
+  // bitcode runtime (linkBitcode) MAIN already defines pli_*, so an explicit
+  // --runtime archive is only added when it exists (its members are then
+  // never pulled). On the archive path (--no-bitcode-runtime) the runtime is
+  // materialised from the embedded blob as a native object for clang, unless
+  // --runtime names an archive to use instead.
   const bool runtimeLibUsable = !runtimeLib.empty() && fs::exists(runtimeLib);
   std::string fallbackRtObj;
   if (linkBitcode) {

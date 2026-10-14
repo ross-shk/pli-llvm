@@ -48,19 +48,7 @@ def _default_pli():
     return str(ROOT / "build" / "cmake" / f"pli{EXE_EXT}")
 
 
-def _default_rtlib():
-    # Windows static lib is pli_runtime.lib (OUTPUT_NAME pli_runtime); Unix is libpli_runtime.a.
-    lib = "pli_runtime.lib" if IS_WINDOWS else "libpli_runtime.a"
-    for cand in (ROOT / "build" / "cmake" / lib,
-                 ROOT / "build" / lib):
-        if cand.exists():
-            return str(cand)
-    return str(ROOT / "build" / "cmake" / lib)
-
-
 PLI = os.environ.get("PLI", _default_pli())
-# RTLIB is legacy (kept for env compat): the driver links its embedded pli_runtime.
-RTLIB = os.environ.get("RTLIB", _default_rtlib())
 CLANG = os.environ.get("CLANG", "clang")
 TYPES = ("driver", "exec", "diag", "ir")
 
@@ -196,7 +184,7 @@ class Runner:
         # Forward the resolved tool paths: driver scripts default to
         # ./build/cmake/pli, so the env must carry the real (possibly .exe) path.
         import os as _os
-        env = dict(_os.environ, PLI=PLI, RTLIB=RTLIB, CLANG=CLANG)
+        env = dict(_os.environ, PLI=PLI, CLANG=CLANG)
         try:
             with open(self.out / f"{self.name}.out", "wb") as fh:
                 proc = subprocess.Popen([sh, str(self.dir / f"{self.name}.sh")],

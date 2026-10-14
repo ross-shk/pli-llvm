@@ -24,7 +24,7 @@ tar -xf pli.zip
 move windows-x86_64\pli.exe %USERPROFILE%\bin\
 ```
 
-The Windows ZIP contains `pli.exe` (self-contained, with embedded runtime bitcode) plus optional `lib/pli_runtime.lib` and `lib/runtime.bc` for cross-unit (`-c`) compilation workflows. For basic single-file programs, `pli.exe` alone is sufficient. `curl` and `tar` ship with Windows 10+.
+The Windows ZIP contains just `pli.exe` (self-contained, with embedded runtime bitcode). `curl` and `tar` ship with Windows 10+.
 
 A "Hello, world!" program:
 
@@ -175,7 +175,7 @@ cmake --build llvm-build -j --target install
 
 Then build `pli` with `-DCMAKE_PREFIX_PATH=C:/llvm-install`.
 
-### Test
+## Test
 
 ```sh
 ctest --test-dir build/cmake -j        # full suite (~450 tests)
@@ -187,6 +187,32 @@ Quality gate (format + static analysis + warnings-as-errors):
 ```sh
 cmake --build build/cmake --target check
 ```
+
+---
+
+## Install
+
+After building, install to the default prefix (`/usr/local` on Linux/macOS, `C:/Program Files/pli` on Windows):
+
+```sh
+cmake --install build/cmake
+```
+
+Override the prefix with `--prefix`:
+
+```sh
+cmake --install build/cmake --prefix /opt/pli        # Unix
+cmake --install build/cmake --prefix C:/pli           # Windows
+```
+
+This installs just the `pli` binary to `<prefix>/bin/` — nothing else.
+The runtime is embedded inside the binary as a byte array
+(`embedded_runtime.inc`), so the installed compiler works standalone: the
+default compile-and-link path (in-process `lld`), the bitcode merge that
+inlines `pli_*` calls into the MAIN unit, and even the clang fallback link
+(which materialises the runtime from the embedded copy) all run with no
+extra files alongside the executable. `--runtime` / `--runtime-bc` still
+accept user-supplied external runtime files when you need them.
 
 ---
 
