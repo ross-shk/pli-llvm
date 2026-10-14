@@ -20,5 +20,8 @@ docs/archive/
 benchmarks/results/
 *.lib
 
+# runtime-generated test data files
+test_rec.dat
+
 AGENTS.md
 build-*
