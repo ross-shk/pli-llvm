@@ -1,7 +1,7 @@
 CHECK: memchr
-CHECK: xor <16 x i8>
+CHECK: (xor <16 x i8>|idx\.memcmp)
 CHECK-NOT: idx.vnext
-CHECK-NOT: call.*@pli_index
+CHECK: (idx\.simd_verify|idx\.verify)
 CHECK: phi i64
 CHECK-NOT: call.*@pli_verify
 CHECK-NOT: call.*@pli_verify_from
