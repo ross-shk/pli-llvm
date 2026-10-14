@@ -3,6 +3,9 @@ call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliar
 set "LLVM_BIN=C:\Users\Nick\Development\clang+llvm-23.1.3-x86_64-pc-windows-msvc\bin"
 set "PATH=%LLVM_BIN%;%PATH%"
 set "CC=clang.exe"
+REM Create an empty m.lib so -lm links when baselines are built manually
+REM (math funcs are in the CRT). Mirrors the top-level run_benchmarks.cmd.
+"%LLVM_BIN%\llvm-lib.exe" /OUT:"C:\Users\Nick\Development\pli-llvm\build\m.lib" 2>nul
 set "LIB=C:\Users\Nick\Development\pli-llvm\build;%LIB%"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"

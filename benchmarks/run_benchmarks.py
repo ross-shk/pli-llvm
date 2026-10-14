@@ -179,24 +179,65 @@ def get_machine_info() -> Dict:
 def pin_cmd(cmd: List[str]) -> List[str]:
     """Prepend process pinning flags for stable timings (P3).
     Linux: taskset -c 0 (pin to CPU 0). macOS: nice -n -20 (high priority).
+    Windows: no argv wrapper exists, so the command is returned unchanged and
+    run_command applies affinity/priority to the child handle instead.
     Single-runner is already guaranteed by sequential execution in the harness.
     Falls back to no pinning if the tool is unavailable (non-fatal)."""
     if IS_WINDOWS:
-        return cmd  # Windows: no pinning wrapper
+        return cmd
     if IS_MACOS:
         # best-effort nice; won't fail if we lack privileges
         return ["nice", "-n", "-20"] + cmd
-    # Linux: try taskset; if unavailable (FileNotFoundError), run_command catches it
+    # Linux: taskset when present; otherwise run unpinned (a missing taskset
+    # must not fail the harness — run_command also guards with OSError).
+    if shutil.which("taskset") is None:
+        return cmd
     return ["taskset", "-c", "0"] + cmd
 
 
-def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[int, str, str]:
-    """Run a command and return (returncode, stdout, stderr)."""
+def _pin_child_windows(proc: "subprocess.Popen") -> None:
+    """Best-effort Windows equivalent of taskset+nice: pin the child to CPU 0
+    and raise its priority class. Never raises; pinning is noise reduction,
+    not correctness."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        # HIGH_PRIORITY_CLASS (0x80): above-normal without starving the OS the
+        # way REALTIME would. Affinity mask 1 = CPU 0, mirroring taskset -c 0.
+        kernel32.SetPriorityClass(proc._handle, 0x00000080)
+        kernel32.SetProcessAffinityMask(proc._handle, 1)
+    except Exception:
+        pass
+
+
+def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[int, str, str]:
+    """Run a command and return (returncode, stdout, stderr).
+
+    encoding="utf-8" (not the locale default) so the ✓/≈/✗/⚠ output survives
+    a C/POSIX locale on Linux even without PYTHONUTF8 set. On Windows the
+    child is pinned to CPU 0 at high priority (see _pin_child_windows).
+    """
+    try:
+        if IS_WINDOWS:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, cwd=cwd,
+                                    text=True, encoding="utf-8")
+            _pin_child_windows(proc)
+            try:
+                out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, err = proc.communicate()
+                return -1, out, "Timeout"
+            return proc.returncode, out, err
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", cwd=cwd, timeout=timeout)
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
         return -1, "", "Timeout"
+    except OSError as e:
+        # Missing helper (e.g. taskset/nice) or spawn failure: report, don't crash.
+        return -1, "", f"spawn failed: {e}"
 
 
 # Stack size in bytes. Benchmarks with large stack-allocated arrays
@@ -249,7 +290,9 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
     src = BENCHMARK_DIR / c_file
     cmd = [compiler, opt] + _arch_flags() + [str(src), "-o", str(output)]
     cmd.extend(_stack_flags())
-    if bench_name in BENCHMARKS_REQUIRING_MATH:
+    if bench_name in BENCHMARKS_REQUIRING_MATH and not IS_WINDOWS:
+        # -lm is POSIX-only; on Windows the math routines live in the CRT,
+        # so no import library is needed (and no m.lib bootstrap either).
         cmd.append("-lm")
     rc, out, err = run_command(cmd)
     if rc != 0:
@@ -338,7 +381,7 @@ def load_previous_results(current_filename: Optional[str] = None) -> Optional[Di
         if current_filename and f.name == current_filename:
             continue
         try:
-            with open(f) as fh:
+            with open(f, encoding="utf-8") as fh:
                 data = json.load(fh)
             # Support both old (flat results) and new ({"machine", "results"}) formats
             if isinstance(data, dict) and "results" in data:
@@ -571,12 +614,12 @@ def main():
     # Save JSON with machine metadata (P3)
     json_file = RESULTS_DIR / f"benchmark_results_{ts}.json"
     machine_info = get_machine_info()
-    with open(json_file, "w") as f:
+    with open(json_file, "w", encoding="utf-8") as f:
         json.dump({"machine": machine_info, "results": results}, f, indent=2)
 
     # Save CSV (P1.5)
     csv_file = RESULTS_DIR / f"summary_{ts}.csv"
-    with open(csv_file, "w", newline="") as f:
+    with open(csv_file, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["benchmark", "opt", "flags", "pli_min_ms",
                     "pli_median_ms", "c_median_ms", "ratio", "match"])

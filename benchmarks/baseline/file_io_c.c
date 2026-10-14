@@ -8,7 +8,8 @@
 int main(void) {
     int i, n, val, checksum;
     FILE *f;
-    const char *path = "/tmp/pli_fileio_test";
+    /* Relative scratch file: CWD-writable on Windows and Unix alike. */
+    const char *path = "pli_fileio_test.tmp";
 
     n = 500000;
 

@@ -25,8 +25,13 @@ typedef struct {
   long long **dimss;
   long long depth, cap;
 } CtlVar;
-static CtlVar *ctlVars = NULL;
-static long long ctlCount = 0;
+/* Thread-local per ADR-016 (multitasking design): each task owns its
+ * CONTROLLED generation stacks, mirroring the thread-local ON-handler stack
+ * in rt_cond.c. Workers calling CALL ... EVENT therefore allocate and free
+ * their own generations without racing the main task or each other through
+ * this table (see tests/hardening/task_alloc_combo.pli). */
+static _Thread_local CtlVar *ctlVars = NULL;
+static _Thread_local long long ctlCount = 0;
 
 /* Find (or, when create is set, append) the generation stack for a variable.
  * Keys are the sema-assigned FNV-1a name hashes, so unrelated CONTROLLED
@@ -84,14 +89,15 @@ static void ctlGrow(CtlVar *v) {
  * retention to a single buffer (reclaimed by the OS at exit). Only 1-D
  * generations (rank 0) enter the cache; the N-D path bypasses it. The cache
  * never aliases a live generation: every stashed buffer came from a popped
- * depth slot and leaves the cache on the next same-shape alloc. Threading
- * matches the existing table (process-global, not TLS). */
+ * depth slot and leaves the cache on the next same-shape alloc. The cache
+ * is thread-local with the table: a process-global slot would hand one
+ * worker's freed buffer to another worker holding the same key. */
 typedef struct {
   long long key;
   char *bytes;
   long long len;
 } CtlCache;
-static CtlCache ctlCache = {.key = -1, .bytes = NULL, .len = 0};
+static _Thread_local CtlCache ctlCache = {.key = -1, .bytes = NULL, .len = 0};
 
 void pli_ctl_alloc(long long key, long long n) {
   CtlVar *v = ctlFind(key, 1);

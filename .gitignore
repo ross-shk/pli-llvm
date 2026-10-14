@@ -22,6 +22,7 @@ benchmarks/results/
 
 # runtime-generated test data files
 test_rec.dat
+pli_fileio_test.tmp
 
 AGENTS.md
 build-*

@@ -21,8 +21,10 @@ test_fileio: PROCEDURE OPTIONS(MAIN);
 
    n = 500000;
 
-   /* WRITE phase — SKIP writes each value on its own record (newline) */
-   OPEN FILE(f) TITLE('/tmp/pli_fileio_test') OUTPUT;
+    /* WRITE phase — SKIP writes each value on its own record (newline).
+       Relative scratch file: CWD-writable on Windows and Unix alike
+       (no /tmp dependency). */
+    OPEN FILE(f) TITLE('pli_fileio_test.tmp') OUTPUT;
    DO i = 1 TO n;
       val = MOD(i * 7, 1000);
       PUT FILE(f) SKIP LIST(val);
@@ -31,7 +33,7 @@ test_fileio: PROCEDURE OPTIONS(MAIN);
 
    /* READ phase */
    checksum = 0;
-   OPEN FILE(f) TITLE('/tmp/pli_fileio_test') INPUT;
+    OPEN FILE(f) TITLE('pli_fileio_test.tmp') INPUT;
    DO i = 1 TO n;
       GET FILE(f) SKIP LIST(val);
       checksum = checksum + val;

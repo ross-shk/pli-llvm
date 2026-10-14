@@ -56,7 +56,10 @@ printf '%s\n' "$cmd" | grep -q -- '-fprofile-generate' \
   || { echo "FAIL: -fprofile-generate not passed through"; ok=0; }
 # Run once, inside the per-test directory: the instrumented binary drops
 # default_<id>_0.profraw in its working directory, which must not be the
-# shared repo root under concurrent suites.
+# shared repo root under concurrent suites. Drop stale profiles first: a
+# leftover (e.g. half-written by a killed run) for the same binary id makes
+# the profile runtime fail its merge and fail the test.
+rm -f "$OUT"/default_*.profraw
 phase1_out=$(cd "$OUT" && ../pgo.gen$EXE)
 check "phase1 run" "$phase1_out" "PASS pgo 500500"
 PROFRAW=$(ls "$OUT"/default_*.profraw 2>/dev/null | head -1)
