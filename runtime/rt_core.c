@@ -28,6 +28,9 @@ void pli_rt_init(void) {
 }
 
 void pli_rt_fini(void) {
+  /* ADR-220: flush buffered stdout before the trailing-newline fputc so
+   * the final newline lands after the buffered content, not before it. */
+  rt_flush_stdout();
   if (col > 0) {
     fputc('\n', stdout);
     col = 0;

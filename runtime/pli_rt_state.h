@@ -154,6 +154,8 @@ extern volatile long long rt_pli_pages[PLI_MAX_FILES];
 /* Stream helpers shared across TUs (defined in rt_stream.c). */
 void rt_put_raw(const char *p, size_t n);
 int rt_next_char(void);
+/* ADR-220: flush the stdout write slab before program exit or FILE routing. */
+void rt_flush_stdout(void);
 
 /* Compatibility aliases so split sources keep their original identifiers. */
 #define col rt_col

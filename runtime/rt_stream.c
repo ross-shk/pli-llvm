@@ -43,6 +43,20 @@ FILE *rt_in_f = NULL;
    instead of falling through to stdout. Set by pli_put_select on a NONPRINT file. */
 int rt_out_discard = 0;
 
+/* Stdout write buffer (ADR-220): tiny fwrite calls dominate IO-throughput
+ * (benchmarks/io_throughput.pli). Accumulate stdout writes in an 8 KiB slab
+ * and drain with one fwrite per fill; flush the remainder at rt_fini. */
+#define RT_STDOUT_BUF 8192
+static char rt_stdout_buf[RT_STDOUT_BUF];
+static size_t rt_stdout_pos = 0;
+
+void rt_flush_stdout(void) {
+  if (rt_stdout_pos > 0) {
+    fwrite(rt_stdout_buf, 1, rt_stdout_pos, stdout);
+    rt_stdout_pos = 0;
+  }
+}
+
 void rt_put_raw(const char *p, size_t n) {
   if (rt_out_f) {
     fwrite(p, 1, n, rt_out_f);
@@ -58,7 +72,14 @@ void rt_put_raw(const char *p, size_t n) {
     rt_out_len += take;
     return;
   }
-  fwrite(p, 1, n, stdout);
+  /* Buffered stdout: copy into the slab when it fits, else flush + drain. */
+  if (rt_stdout_pos + n <= RT_STDOUT_BUF) {
+    pli_memcpy(rt_stdout_buf + rt_stdout_pos, p, n);
+    rt_stdout_pos += n;
+  } else {
+    rt_flush_stdout();
+    fwrite(p, 1, n, stdout);
+  }
   rt_col += (int)n;
 }
 

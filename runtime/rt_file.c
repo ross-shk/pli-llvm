@@ -76,6 +76,9 @@ void pli_file_close(long long slot) {
 /* FILE ( f ) output routing (rule 105): rt_put_raw writes to the named file until
  * the matching unselect returns to SYSPRINT. */
 void pli_put_select(long long slot) {
+  /* ADR-220: drain any buffered stdout before routing to a named file so
+   * output ordering stays correct. */
+  rt_flush_stdout();
   if (slot >= 0 && slot < PLI_MAX_FILES && !rt_pli_nonprint[slot])
     rt_out_f = rt_pli_files[slot];
   else

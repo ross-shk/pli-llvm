@@ -6282,3 +6282,25 @@ error to `pp_line.inc:3:` and a post-include root error to
 unchanged (flat line == root file-local line, root path matches `rootCanon_`).
 No golden `.out` pinned diagnostic wording (none existed), so zero churn outside
 include cases.
+
+## ADR-220 — Buffered stdout in `rt_put_raw` (io_throughput fix)
+
+`io_throughput.pli` performed 7 tiny `fwrite` calls per loop iteration (newline,
+3 formatters each with a separator + data, plus the final line), so 200 K
+iterations produced ~1.4 M single-byte-to-10-byte `fwrite` calls. At `-O2` this
+left the benchmark at 1.53× behind the C baseline's one `printf` per line.
+
+**Decision.** Add an 8 KiB slab buffer to `rt_put_raw` (`runtime/rt_stream.c`):
+stdout writes accumulate in the slab via `pli_memcpy` and drain with a single
+`fwrite` per fill; the buffer is flushed at `pli_rt_fini` (before the trailing
+newline `fputc`, so ordering is preserved), at `pli_put_select` (before routing
+to a named FILE, so `FILE(f)` output does not interleave ahead of buffered
+stdout), and when the slab cannot contain the incoming write. The STRING sink,
+named-file, and NONPRINT-discard paths are unchanged — they bypass the slab and
+call through `rt_put_raw`'s existing branches directly. `rt_flush_stdout` is
+declared in `pli_rt_state.h` so `rt_core.c` and `rt_file.c` can call it.
+
+**Consequences.** `io_throughput` at `-O2` drops from 1.53× → 0.83× (now faster
+than C, which still pays `printf` format-parse overhead per call). All 589
+tests pass; `--checks-forced` parity is exact across every target benchmark;
+the `-O2` geomean improves as a direct result.
