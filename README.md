@@ -202,17 +202,8 @@ Override the prefix with `--prefix`:
 
 ```sh
 cmake --install build/cmake --prefix /opt/pli        # Unix
-cmake --install build/cmake --prefix C:/pli           # Windows
+cmake --install build/cmake --prefix C:/pli          # Windows
 ```
-
-This installs just the `pli` binary to `<prefix>/bin/` — nothing else.
-The runtime is embedded inside the binary as a byte array
-(`embedded_runtime.inc`), so the installed compiler works standalone: the
-default compile-and-link path (in-process `lld`), the bitcode merge that
-inlines `pli_*` calls into the MAIN unit, and even the clang fallback link
-(which materialises the runtime from the embedded copy) all run with no
-extra files alongside the executable. `--runtime` / `--runtime-bc` still
-accept user-supplied external runtime files when you need them.
 
 ---
 
