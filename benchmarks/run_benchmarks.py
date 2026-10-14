@@ -169,7 +169,7 @@ def get_machine_info() -> Dict:
     except Exception:
         git_hash = "unknown"
     try:
-        plic_mtime = PLIC.stat().st_mtime_ns
+        plic_mtime = PLI.stat().st_mtime_ns
     except OSError:
         plic_mtime = 0
     info["compiler_id"] = f"{git_hash}:{plic_mtime}"

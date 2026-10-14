@@ -153,8 +153,8 @@ cmake --build C:/path/to/pli-llvm/build/cmake -j
 
 Notes:
 
-- `vcvarsall.bat x64` provides the Windows SDK environment (headers + CRT libs).
-  The compiler itself is `clang-cl` (LLVM), not `cl.exe`.
+- `vcvarsall.bat x64` provides the Windows SDK environment (headers + CRT libs).  
+The compiler itself is `clang-cl` (LLVM), not `cl.exe`.
 - `CMAKE_PREFIX_PATH` must point at your LLVM **install** prefix (the directory containing `lib/cmake/llvm`). Use forward slashes.
 - Ninja must be on `PATH` (`pip install ninja`, or a Ninja release, or the VS-bundled copy).
 - Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `pli` itself — use clang-cl + lld-link.
@@ -201,7 +201,7 @@ cmake --install build/cmake
 Override the prefix with `--prefix`:
 
 ```sh
-cmake --install build/cmake --prefix /opt/pli        # Unix or --prefix C:/pli on Windows
+cmake --install build/cmake --prefix /opt/pli      # Unix or --prefix C:/pli on Windows
 ```
 
 ---
@@ -244,8 +244,8 @@ Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86
 | **Control flow (extensions)**     | `SELECT`/`WHEN`/`OTHERWISE`, `LEAVE`/`ITERATE`, `DO UNTIL`, local `GO TO`, `//` comments                                                                                                                                                                                  |
 | **Stream I/O**                    | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE`, `FORMAT` + `R(label)`, `DISPLAY`                                                                                                                                                                 |
 | **Record I/O**                    | `WRITE`/`READ` sequential fixed-size binary records                                                                                                                                                                                                                       |
-| **Preprocessor**                  | `%INCLUDE`/`%XINCLUDE` (+`-I`, `PLI_INCLUDE_PATH`, upward-walk `include/`/`inc/` + system defaults), `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`, `%REPLACE`                                                                                                |
-| **Separate compilation & driver** | `EXTERNAL` linkage across units, multi-unit `pli` invocation, `-c`/`-emit-llvm`, `-I`, `-L`, `PLI_LIB_PATH`, `--sysparm`, `-v`                                                                                                                                          |
+| **Preprocessor**                  | `%INCLUDE`/`%XINCLUDE` (+`-I`, `PLI_INCLUDE_PATH`, upward-walk `include/`/`inc/` + system defaults), `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`, `%REPLACE`                                                                                                 |
+| **Separate compilation & driver** | `EXTERNAL` linkage across units, multi-unit `pli` invocation, `-c`/`-emit-llvm`, `-I`, `-L`, `PLI_LIB_PATH`, `--sysparm`, `-v`                                                                                                                                            |
 | **Built-ins**                     | String (+`TRIM`/`TALLY`/`UPPERCASE`/`LOWERCASE`/`CENTER`/`SEARCH`/`RANK`/`COLLATE`/`HIGH`/`LOW`/`DATE`/`TIME`), `CHAR`/`FIXED`, math (+degree trig, `ATAN2`/`CBRT`/`ERF`), `COMPLEX`/`REAL`/`IMAG`/`CONJG`, `LBOUND`/`HBOUND`/`DIM`, `SYSPARM` (see `guides/builtins.md`) |
 | **No reserved words**             | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables                                                                                                                                                                                                           |
 
@@ -270,7 +270,7 @@ Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *
 | Path                          | Contents                                                                                                                |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `src/`                        | Compiler: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target, codegen, embedded runtime                 |
-| `runtime/`                    | `pli_runtime` (I/O, strings, conditions, storage, math, tasks) + `sync/pli_thread.h` threading abstraction                  |
+| `runtime/`                    | `pli_runtime` (I/O, strings, conditions, storage, math, tasks) + `sync/pli_thread.h` threading abstraction              |
 | `tests/`                      | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`, `preprocessor`, `multimodule`, `corner_cases`) |
 | `CMakeLists.txt`              | Canonical build: LLVM C++ API + `lld`, embedded runtime bitcode                                                         |
 | `docs/` / `guides/`           | Architecture, ADRs, grammar coverage, compliance report, programming guides                                             |
