@@ -799,7 +799,8 @@ private:
   // runtime region is created at entry and destroyed on every exit path.
   std::vector<Symbol*> areaLocals_;
   // Bitcode runtime (OPTIMIZATION.md §10, P3): runtimeBc_ is the path to the
-  // build-tree runtime.bc; linkBitcode_ requests linking its pli_* definitions
+  // build-tree runtime.bc (empty selects the embedded blob for single-binary
+  // installs); linkBitcode_ requests linking its pli_* definitions
   // into the module. Only the MAIN unit embeds (runtime globals must stay
   // shared across units), so the archive stays on the final link line where
   // its members are simply never pulled once the symbols are defined.
@@ -807,7 +808,8 @@ private:
   bool linkBitcode_ = false;
   LowerMode lowerMode_;
   std::map<std::string, LowerMode> perOpOverrides_;
-  // Parse runtime.bc, check its LLVM stamp and target triple, merge the whole
+  // Parse runtime.bc (or the embedded blob when runtimeBc_ is empty), check
+  // its LLVM stamp and target triple, merge the whole
   // runtime into the module, and re-apply the P0 side-table facts to the real
   // bodies. The embedded definitions keep their external linkage so every
   // unit's pli_* references resolve to this one shared copy (runtime globals

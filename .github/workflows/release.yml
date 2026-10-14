@@ -97,15 +97,12 @@ jobs:
       - name: Pack into archives (Windows)
         if: runner.os == 'Windows'
         run: |
-          # pli.exe is self-contained (embedded runtime bitcode); the static
-          # lib + bitcode are bundled for cross-unit (-c) workflows.
-          # Layout matches README: <platdir>/pli.exe + <platdir>/lib/... .
-          mkdir -p ${{ matrix.platdir }}/lib
+          # pli.exe is self-contained (embedded runtime bitcode): the archive
+          # ships the binary alone, matching the Unix tarballs.
+          mkdir -p ${{ matrix.platdir }}
           cp build/cmake/pli.exe ${{ matrix.platdir }}/pli.exe
-          cp build/cmake/pli_runtime.lib ${{ matrix.platdir }}/lib/pli_runtime.lib
-          cp build/cmake/runtime.bc ${{ matrix.platdir }}/lib/runtime.bc
-          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}
-          powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}' -DestinationPath '${{ matrix.asset }}.zip'"
+          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli.exe
+          powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}/pli.exe' -DestinationPath '${{ matrix.asset }}.zip'"
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows'

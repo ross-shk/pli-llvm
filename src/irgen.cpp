@@ -2,6 +2,7 @@
 // Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 #include "irgen.h"
 #include "codegen.h" // pli::applyRuntimeFnAttrs declaration
+#include "embedded_runtime.h"
 #include <algorithm>
 #include <cfloat>
 #include <set>
@@ -11,6 +12,7 @@
 #endif
 
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/ConstantRange.h"
@@ -2996,8 +2998,10 @@ std::string IRGen::run(HProgram& prog) {
   // I/O state) must be shared across units, so every other unit keeps
   // external pli_* references that the embedded copy or libpli_runtime.a satisfies.
   // -emit-llvm keeps the raw module (its IR goldens pin compiler output, not
-  // the runtime); the driver passes linkBitcode_ = false there.
-  if (linkBitcode_ && !runtimeBc_.empty() && prog.mainProc)
+  // the runtime); the driver passes linkBitcode_ = false there. An empty
+  // runtimeBc_ means the installed files are absent, so the embedded blob is
+  // merged instead (single-binary distribution).
+  if (linkBitcode_ && prog.mainProc)
     if (!linkRuntimeBitcode())
       return "";
 
@@ -3033,15 +3037,38 @@ std::string IRGen::run(HProgram& prog) {
 // bitcode would mis-compile silently. The whole runtime is merged into the
 // MAIN unit with external linkage, so every unit's pli_* references resolve
 // to this one shared copy and the runtime's global state stays shared.
+// An empty runtimeBc_ selects the embedded blob (single-binary install).
 bool IRGen::linkRuntimeBitcode() {
-  llvm::SMDiagnostic err;
-  std::unique_ptr<llvm::Module> rt = llvm::parseIRFile(runtimeBc_, err, ctx_);
-  if (!rt) {
-    d_.error({},
-             "internal error: cannot load the runtime bitcode '" + runtimeBc_ +
-                 "': " + err.getMessage().str(),
-             "");
-    return false;
+  // Load the runtime from disk (--runtime-bc) or from the embedded blob.
+  std::unique_ptr<llvm::Module> rt;
+  std::string rtName;
+  if (runtimeBc_.empty()) {
+    // Single-binary fallback: parse the embedded bundle for this target.
+    const pli::RuntimeBlob* blob = pli::selectRuntimeForTarget(llvm::Triple(triple_));
+    if (!blob) {
+      d_.error({}, "internal error: no embedded runtime for target '" + triple_ + "'", "");
+      return false;
+    }
+    llvm::MemoryBufferRef buf(
+        llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "pli_runtime.bc");
+    auto modOrErr = llvm::parseBitcodeFile(buf, ctx_);
+    if (!modOrErr) {
+      d_.error({}, "internal error: cannot parse the embedded runtime bitcode", "");
+      llvm::consumeError(modOrErr.takeError());
+      return false;
+    }
+    rt = std::move(*modOrErr);
+    rtName = "embedded pli_runtime.bc";
+  } else {
+    llvm::SMDiagnostic err;
+    rt = llvm::parseIRFile(runtimeBc_, err, ctx_);
+    if (!rt) {
+      d_.error({}, "internal error: cannot load the runtime bitcode '" + runtimeBc_ +
+                       "': " + err.getMessage().str(),
+               "");
+      return false;
+    }
+    rtName = runtimeBc_;
   }
   // A missing or mismatched stamp means a foreign or stale runtime.bc: the
   // emitted IR syntax is tied to the LLVM pli was built against.
@@ -3051,10 +3078,9 @@ bool IRGen::linkRuntimeBitcode() {
       if (llvm::ConstantDataArray* s = llvm::dyn_cast<llvm::ConstantDataArray>(init))
         stamp = s->getAsCString().str(); // strips the trailing NUL
   if (stamp != PLI_LLVM_VERSION) {
-    d_.error({},
-             "runtime bitcode '" + runtimeBc_ + "' was built with LLVM " + stamp +
-                 " but pli with LLVM " PLI_LLVM_VERSION +
-                 " — rebuild it or pass --no-bitcode-runtime",
+    d_.error({}, "runtime bitcode '" + rtName + "' was built with LLVM " + stamp +
+                     " but pli with LLVM " PLI_LLVM_VERSION +
+                     " — rebuild it or pass --no-bitcode-runtime",
              "");
     return false;
   }

@@ -217,9 +217,7 @@ message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
 target_compile_definitions(pli PRIVATE
   PLI_RUNTIME_LIB="$<TARGET_FILE:pli_runtime>"
-  PLI_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_FILE_NAME:pli_runtime>"
   PLI_RUNTIME_BC="${CMAKE_BINARY_DIR}/runtime.bc"
-  PLI_INSTALL_RUNTIME_BC="${CMAKE_INSTALL_FULL_LIBDIR}/runtime.bc"
   PLI_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
   PLI_VERSION="${PLI_VERSION}"
   PLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
@@ -410,6 +408,7 @@ if(PLI_CROSS_BITCODE)
         OUTPUT ${TARGET_BC_DIR}/${base}.bc
         COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
         COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+                -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
                 -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
                 -O2
                 -ffunction-sections -fdata-sections
@@ -417,7 +416,8 @@ if(PLI_CROSS_BITCODE)
                 -target ${target}
                 -o ${TARGET_BC_DIR}/${base}.bc
         DEPENDS ${CMAKE_SOURCE_DIR}/${src}
-        COMMENT "bitcode: ${base} for ${target}")
+        COMMENT "bitcode: ${base} for ${target}"
+        VERBATIM)
       list(APPEND TARGET_RT_BCS ${TARGET_BC_DIR}/${base}.bc)
     endforeach()
     add_custom_command(
@@ -460,6 +460,7 @@ foreach(src ${RT_SRCS})
     OUTPUT ${DEFAULT_BC_DIR}/${base}.bc
       COMMAND ${CMAKE_COMMAND} -E make_directory ${DEFAULT_BC_DIR}
         COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+            -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
             -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
             -O2
             -ffunction-sections -fdata-sections
@@ -467,7 +468,8 @@ foreach(src ${RT_SRCS})
             -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src}
-    COMMENT "bitcode: ${base} for ${PLI_TARGET_TRIPLE}")
+    COMMENT "bitcode: ${base} for ${PLI_TARGET_TRIPLE}"
+    VERBATIM)
   list(APPEND DEFAULT_RT_BCS ${DEFAULT_BC_DIR}/${base}.bc)
 endforeach()
 add_custom_command(
@@ -539,10 +541,11 @@ set_tests_properties(pli-tests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   ENVIRONMENT "PLI=$<TARGET_FILE:pli>;RTLIB=$<TARGET_FILE:pli_runtime>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
 
-install(TARGETS pli pli_runtime
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES ${PLI_RUNTIME_BC} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+# Single-binary distribution: only the pli driver ships. The runtime travels
+# embedded (embedded_runtime.inc), so no libpli_runtime.a / runtime.bc is
+# installed; the driver falls back to the embedded blob when they are absent.
+install(TARGETS pli
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # --- Quality gate: formatting, static analysis, warnings-as-errors ---------------
 # The clang tooling is sought from the same LLVM installation as the compiler.

@@ -56,10 +56,6 @@
 #define PLI_RUNTIME_LIB ""
 #endif
 
-#ifndef PLI_INSTALL_RUNTIME_LIB
-#define PLI_INSTALL_RUNTIME_LIB ""
-#endif
-
 // Path to the bitcode runtime (OPTIMIZATION.md §10, P3): build/runtime.bc,
 // baked in at build time like PLI_RUNTIME_LIB. IRGen merges the pli_*
 // definitions from it into the MAIN unit so clang sees real bodies;
@@ -67,10 +63,6 @@
 // overrides the location.
 #ifndef PLI_RUNTIME_BC
 #define PLI_RUNTIME_BC ""
-#endif
-
-#ifndef PLI_INSTALL_RUNTIME_BC
-#define PLI_INSTALL_RUNTIME_BC ""
 #endif
 
 // Version and LLVM identity baked in at build time (self-contained milestone:
@@ -392,8 +384,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       bool rtOk = true;
 #if PLI_HAVE_LLD
       // Single-module fast path: runtime linked at BC level (never `-c`).
-      // File-based bitcode (linkBitcode) already embedded the runtime via
-      // IRGen, so the embedded blob is only used when it did not.
+      // Bitcode (linkBitcode, file or embedded) already merged the runtime via
+      // IRGen, so the embedded blob is only linked when it did not.
       if (linkRuntimeIn && !linkBitcode && !compileOnly) {
         std::string rtErr;
         llvm::Triple targetTriple(triple);
@@ -752,62 +744,16 @@ int main(int argc, char** argv) {
   for (const fs::path& d : discoveredLibDirs)
     linkArgs.push_back("-L" + d.string());
 
-  if (!runtimeExplicit && !runtimeLib.empty() && !fs::exists(runtimeLib)) {
-    fs::path installed = PLI_INSTALL_RUNTIME_LIB;
-    if (installed.empty() || !fs::exists(installed)) {
-      // Search the exe-dir upward walk for the runtime archive before the
-      // hardcoded fallback. The archive name is platform-specific
-      // (pli_runtime.lib on Windows, libpli_runtime.a elsewhere).
-#ifdef _WIN32
-      static const char* kRtLibNames[] = {"pli_runtime.lib", "libpli_runtime.a"};
-#else
-      static const char* kRtLibNames[] = {"libpli_runtime.a", "pli_runtime.lib"};
-#endif
-      bool found = false;
-      for (const fs::path& d : exeLibDirs) {
-        for (const char* n : kRtLibNames) {
-          fs::path cand = d / n;
-          if (fs::exists(cand)) {
-            installed = cand;
-            found = true;
-            break;
-          }
-        }
-        if (found)
-          break;
-      }
-      if (!found)
-        installed = executablePath(argv[0]).parent_path().parent_path() / "lib" / kRtLibNames[0];
-    }
-    if (fs::exists(installed))
-      runtimeLib = installed.string();
-  }
+  // Single-binary distribution: the runtime ships embedded in the binary,
+  // so there is no installed-runtime lookup. runtimeLib/runtimeBc are either
+  // the baked-in build-tree defaults (development) or explicit --runtime /
+  // --runtime-bc paths (external option). A missing default falls back to
+  // the embedded blob below; a missing explicit path is a user error.
   // Bitcode runtime (OPTIMIZATION.md §10, P3): by default IRGen merges the
   // pli_* definitions out of runtime.bc into the MAIN unit (lib units keep
-  // external references resolved by that one shared copy). An explicitly
-  // named runtime.bc must exist (a typo is a user error); the baked-in
-  // default falls back to the sectioned archive when missing (e.g. an older
-  // build tree). --no-bitcode-runtime always selects the archive path.
-  // Only search for runtime.bc when the bitcode runtime is actually used.
-  if (useBitcode && !runtimeBcExplicit && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
-    fs::path installed = PLI_INSTALL_RUNTIME_BC;
-    if (installed.empty() || !fs::exists(installed)) {
-      // Search the exe-dir upward walk for runtime.bc before the fallback.
-      bool found = false;
-      for (const fs::path& d : exeLibDirs) {
-        fs::path cand = d / "runtime.bc";
-        if (fs::exists(cand)) {
-          installed = cand;
-          found = true;
-          break;
-        }
-      }
-      if (!found)
-        installed = executablePath(argv[0]).parent_path().parent_path() / "lib/runtime.bc";
-    }
-    if (fs::exists(installed))
-      runtimeBc = installed.string();
-  }
+  // external references resolved by that one shared copy).
+  // --no-bitcode-runtime always selects the archive path.
+  // Only consider runtime.bc when the bitcode runtime is actually used.
   if (useBitcode && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
     if (runtimeBcExplicit) {
       std::cerr << "pli: no such runtime bitcode: " << runtimeBc << "\n";
@@ -920,7 +866,9 @@ int main(int argc, char** argv) {
   // Bitcode runtime: the MAIN unit embeds the pli_* definitions; the archive
   // always stays on the link line, where it is never pulled once the symbols
   // are defined by that embedded copy (runtime globals must stay shared).
-  const bool linkBitcode = useBitcode && !emitLLVM && !runtimeBc.empty();
+  // An empty runtimeBc selects the embedded blob (single-binary install), so
+  // the merge stays enabled when the installed files are absent.
+  const bool linkBitcode = useBitcode && !emitLLVM;
   // Explicit PGO/LTO must reach the backend clang verbatim on both steps, so
   // those builds always take the clang pipeline, never the in-process paths
   // (which take no backend flags).
@@ -970,7 +918,7 @@ int main(int argc, char** argv) {
     const pli::TargetDesc& desc = pli::getTargetDesc(llt);
     std::string tmErr;
     if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
-      // With the file-based bitcode runtime (linkBitcode) the MAIN object
+      // With the bitcode runtime (linkBitcode, file or embedded) the MAIN object
       // already defines every pli_* symbol, so no separate runtime object
       // is emitted (it would duplicate them). Otherwise multi-input links
       // carry the runtime as its own object (runtime-once); single-module
@@ -1250,8 +1198,49 @@ int main(int argc, char** argv) {
 #endif
   for (const std::string& o : objs)
     cmd += " " + shellQuote(o);
-  if (!runtimeLib.empty())
+  // Single-binary fallback: the archive is optional. With the bitcode runtime
+  // (linkBitcode) MAIN already defines pli_*, so a missing archive is simply
+  // omitted. On the archive path (--no-bitcode-runtime) a missing archive is
+  // materialised from the embedded blob as a native object for clang.
+  const bool runtimeLibUsable = !runtimeLib.empty() && fs::exists(runtimeLib);
+  std::string fallbackRtObj;
+  if (linkBitcode) {
+    if (runtimeLibUsable)
+      cmd += " " + shellQuote(runtimeLib);
+    else if (verbose)
+      std::cerr << "pli: runtime archive not found; MAIN already defines pli_* (embedded)\n";
+  } else if (runtimeLibUsable) {
     cmd += " " + shellQuote(runtimeLib);
+  } else if (!runtimeExplicit) {
+    // Emit the embedded runtime as a native object for the clang link line.
+    std::string tmErr;
+    auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative);
+    if (!tm) {
+      std::cerr << "pli: no target (" << tmErr << ")\n";
+      return 1;
+    }
+    fallbackRtObj =
+        (fs::temp_directory_path() / ("pli_runtime-fallback-" + std::to_string(getpid()) + ".o"))
+            .string();
+    std::error_code ec;
+    llvm::raw_fd_ostream os(fallbackRtObj, ec, llvm::sys::fs::OF_None);
+    std::string rtErr;
+    llvm::Triple llt(triple);
+    if (ec || !pli::emitRuntimeObject(*tm, llt, os, rtErr)) {
+      std::cerr << "pli: cannot materialise the embedded runtime (" << rtErr << ")\n";
+      if (!fallbackRtObj.empty()) {
+        std::error_code rmEc;
+        fs::remove(fallbackRtObj, rmEc);
+      }
+      return 1;
+    }
+    os.close();
+    if (verbose)
+      std::cerr << "pli: emitted fallback runtime object " << fallbackRtObj << "\n";
+    cmd += " " + shellQuote(fallbackRtObj);
+  } else {
+    cmd += " " + shellQuote(runtimeLib);
+  }
   for (const std::string& la : linkArgs)
     cmd += " " + la; // link flags
 #if !defined(_WIN32) && !defined(__APPLE__)
@@ -1267,6 +1256,10 @@ int main(int argc, char** argv) {
   for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
     std::error_code ec;
     fs::remove(objs[i], ec);
+  }
+  if (!fallbackRtObj.empty()) {
+    std::error_code ec;
+    fs::remove(fallbackRtObj, ec);
   }
   if (rc != 0) {
     std::cerr << "pli: backend failed\n";
