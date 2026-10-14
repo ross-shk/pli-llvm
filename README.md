@@ -201,8 +201,7 @@ cmake --install build/cmake
 Override the prefix with `--prefix`:
 
 ```sh
-cmake --install build/cmake --prefix /opt/pli        # Unix
-cmake --install build/cmake --prefix C:/pli          # Windows
+cmake --install build/cmake --prefix /opt/pli        # Unix or --prefix C:/pli on Windows
 ```
 
 ---
