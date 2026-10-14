@@ -6191,3 +6191,34 @@ elimination on the generic path: the hot path no longer pads, so the
 proof burden buys nothing measurable. Freeing the generic temp buffer:
 it would fix the RSS leak (unfreed temp per concat-assign) but not the
 traffic; recorded as a separate issue, not attempted here.
+
+## ADR-217 — Free the generic concat temp buffer at assignment
+
+Rule (119): the generic concat lowering evaluates into a fresh `pli_alloc`
+buffer, and every assignment path copied it into the target and dropped
+the pointer — one leaked buffer per evaluation. At `-O2` LLVM usually
+removes the dead pair itself, but at `-O0` 500000 `r = a || b` trips
+grow RSS to ~109MB (measured). Relying on the optimizer to take out the
+garbage is not a memory policy.
+
+**Decision.** `freeConcatTemp` frees the buffer after the consuming store
+at every assignment shape that can receive a concat RHS: plain and
+multi-target assignment, SUBSTR-target, array-element (including member
+and iSUB paths), and member/locator-target assignment. The predicate is
+the HIR shape (top node `Binary`/`Concat`, which the lowering always
+materializes fresh with no aliases), so any other RHS is a no-op; each
+temp is freed exactly once, after its last read.
+`tests/ir/concat_free.pli` pins the shape (`pli_alloc` paired with
+`pli_free`).
+
+**Consequences.** `-O0` RSS for the 500K-assign loop drops ~109MB → ~1MB
+with identical output; `-O2` timings are unchanged (`string_ops` 0.16x,
+`proc_calls` 1.02x — the pair folds as before). One-shot consumers
+(`PUT`/`CALL`/`RETURN`/compare temps) still leak their bounded buffer;
+they execute once per statement rather than per loop trip, so they stay
+as found.
+
+**Rejected.** Ownership tracking on `Val` (every consumer would need the
+same check — more sites for identical coverage); freeing one-shot temps
+(unmeasured, adds call noise where the optimizer currently folds
+cleanly).

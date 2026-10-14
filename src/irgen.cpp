@@ -5124,6 +5124,17 @@ bool IRGen::emitSelfAppend(HStmt* s) {
   return true;
 }
 
+// Rule (119): a concat RHS evaluates into a fresh pli_alloc buffer; once an
+// assignment has copied it into the target the buffer is dead. Free it so
+// repeated assignment in a loop does not grow RSS without bound (the -O2
+// pipeline often removes the pair on its own, but -O0 must not OOM). The
+// buffer is fresh per evaluation with no aliases, and every call site runs
+// after the consuming store completes. Any other RHS shape is a no-op.
+void IRGen::freeConcatTemp(HExpr* rhs, llvm::Value* buf) {
+  if (rhs && rhs->kind == HExpr::Binary && rhs->op == Tok::Concat && buf)
+    b_.CreateCall(runtimeFn("pli_free"), {buf});
+}
+
 void IRGen::emitAssign(HStmt* s) {
   if (!s->target)
     return;
@@ -5173,6 +5184,8 @@ void IRGen::emitAssign(HStmt* s) {
     storeOne(s->target.get());
     for (auto& t : s->extraTargets)
       storeOne(t.get());
+    // Every store above copied the RHS; a concat temp is dead now.
+    freeConcatTemp(s->value.get(), v.ptr);
     return;
   }
   // BY NAME assignment (rule 86): S = T BY NAME copies each same-named member
@@ -5236,9 +5249,11 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 0, "vlenp");
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 1, "vdata");
       emitSubstrAssignVarying(dp, cap, lp, toI64(start), toI64(len), rhs.ptr, rhs.len);
+      freeConcatTemp(s->value.get(), rhs.ptr);
       return;
     }
     emitSubstrAssign(sv.ptr, cap, toI64(start), toI64(len), rhs.ptr, rhs.len);
+    freeConcatTemp(s->value.get(), rhs.ptr);
     return;
   }
   // EXPONENT pseudo-variable (rule (123)): exponent(fvar) = n decomposes fvar
@@ -5330,6 +5345,7 @@ void IRGen::emitAssign(HStmt* s) {
           storeCharTo(addr, el, v, s->loc, packed);
         else
           storeScalarTo(addr, el, convert(v, el, s->loc), packed);
+        freeConcatTemp(s->value.get(), v.ptr);
         return;
       }
       // A subscripted member array S.A(i) = e (rules 124,126): store through
@@ -5345,6 +5361,7 @@ void IRGen::emitAssign(HStmt* s) {
         storeCharTo(addr, el, v, s->loc, packed);
       else
         storeScalarTo(addr, el, convert(v, el, s->loc), packed);
+      freeConcatTemp(s->value.get(), v.ptr);
       return;
     }
     // An iSUB-DEFINED array target Y(k) (rule 134) has no storage of its own:
@@ -5352,9 +5369,11 @@ void IRGen::emitAssign(HStmt* s) {
     if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
       llvm::Value* addr = definedSubElementAddr(t->sym, t->args, s->loc);
       storeScalarTo(addr, t->ty, convert(v, t->ty, s->loc));
+      freeConcatTemp(s->value.get(), v.ptr);
       return;
     }
     storeArrayElement(t->sym, t->args, v, s->loc, t->locPtr.get());
+    freeConcatTemp(s->value.get(), v.ptr);
     return;
   }
   // Whole-structure assignment S = T (rule 127): copy the source structure's
@@ -5499,6 +5518,7 @@ void IRGen::emitAssign(HStmt* s) {
       storeCharTo(addr, leaf, v, s->loc, packed);
     else
       storeScalarTo(addr, leaf, convert(v, leaf, s->loc), packed);
+    freeConcatTemp(s->value.get(), v.ptr);
     return;
   }
   if (s->target->kind != HExpr::VarRef || !s->target->sym)
@@ -5509,6 +5529,7 @@ void IRGen::emitAssign(HStmt* s) {
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
+  freeConcatTemp(s->value.get(), v.ptr);
 }
 
 // Implicit ALLOCATE for CONTROLLED variables (IBM Enterprise PL/I): push a

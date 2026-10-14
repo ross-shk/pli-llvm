@@ -175,6 +175,10 @@ private:
   // Self-append peephole (rule (119), P4): X = X || lit... appends in place
   // for AUTOMATIC scalar VARYING targets; false for any other shape.
   bool emitSelfAppend(HStmt* s);
+  // Rule (119): a concat RHS evaluates into a fresh pli_alloc buffer; once
+  // an assignment has copied it into the target the buffer is dead. Free it
+  // unless the RHS is some other shape (no-op then).
+  void freeConcatTemp(HExpr* rhs, llvm::Value* buf);
   // libc scan declaration (memchr/memcmp) with audited facts for LICM (P4).
   llvm::Function* scanFn(const std::string& name, llvm::Type* ret,
                          llvm::ArrayRef<llvm::Type*> params);
