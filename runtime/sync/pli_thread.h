@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* runtime/sync/plic_thread.h — portable threading abstraction (Phase 0). */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* runtime/sync/pli_thread.h — portable threading abstraction (Phase 0). */
 /* One identical C11 API over POSIX pthreads and MSVC primitives, so the
  * runtime compiles for ELF/Mach-O/COFF hosts without #ifdefs at use sites.
  * All functions are static inline; the header has no link-time footprint.
  * Compilable as C11; no C++ in the runtime. */
-#ifndef PLIC_THREAD_H
-#define PLIC_THREAD_H
+#ifndef PLI_THREAD_H
+#define PLI_THREAD_H
 
 #if defined(_WIN32)
 #include <process.h>
@@ -190,4 +190,4 @@ static inline void pli_sleep_ms(long long ms) {
 #endif
 }
 
-#endif /* PLIC_THREAD_H */
+#endif /* PLI_THREAD_H */

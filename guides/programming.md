@@ -1,14 +1,14 @@
-# PL/I Programming Guide — plic
+# PL/I Programming Guide — pli
 
-Welcome! This is a friendly tour of what `plic` can do today. You don't need to know 1960s mainframes — if you've written a little Python or Go, you already know most of the ideas. We'll point out the similarities as we go.
+Welcome! This is a friendly tour of what `pli` can do today. You don't need to know 1960s mainframes — if you've written a little Python or Go, you already know most of the ideas. We'll point out the similarities as we go.
 
 Each section has a short explanation plus a runnable snippet. Copy any snippet into a `.pli` file and run it with:
 
 ```bash
-plic name.pli -o name && ./name
+pli name.pli -o name && ./name
 ```
 
-> Style note: `.pli` examples below use one leading space and modern lowercase. Text starts in column 2 and stops before column 72 (the old card margins). `plic` enforces this, so just copy the style you see here.
+> Style note: `.pli` examples below use one leading space and modern lowercase. Text starts in column 2 and stops before column 72 (the old card margins). `pli` enforces this, so just copy the style you see here.
 
 - [Quick reference](#quick-reference)
 - [Getting started](#getting-started)
@@ -46,9 +46,9 @@ plic name.pli -o name && ./name
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
 
-If a feature is missing, `plic` tells you the rule number (like `(24)` or `(91)`) instead of silently accepting it. That's a feature: gaps are always diagnosed.
+If a feature is missing, `pli` tells you the rule number (like `(24)` or `(91)`) instead of silently accepting it. That's a feature: gaps are always diagnosed.
 
-> **Run the full example:** [`examples/quick_reference.pli`](../examples/quick_reference.pli) — `plic quick_reference.pli -o quickref && ./quickref`.
+> **Run the full example:** [`examples/quick_reference.pli`](../examples/quick_reference.pli) — `pli quick_reference.pli -o quickref && ./quickref`.
 
 ---
 
@@ -65,7 +65,7 @@ A PL/I program is one or more procedures. The one marked `options(main)` is wher
 That's it. No imports, no headers. Save as `hello.pli`, then:
 
 ```bash
-plic hello.pli -o hello
+pli hello.pli -o hello
 ./hello
 ```
 
@@ -78,7 +78,7 @@ plic hello.pli -o hello
 > **Python friends:** `put skip list('hi', x)` is `print('hi', x)`.  
 > **Go friends:** `hello: procedure options(main); ... end hello;` is `func main() { ... }` with a name tag on both ends.
 
-> **Run the full example:** [`examples/getting_started.pli`](../examples/getting_started.pli) — `plic getting_started.pli -o getting_started && ./getting_started`, make sure  
+> **Run the full example:** [`examples/getting_started.pli`](../examples/getting_started.pli) — `pli getting_started.pli -o getting_started && ./getting_started`, make sure  
 > to `cd` into `examples/ `first.
 
 ---
@@ -126,7 +126,7 @@ Overflow of `+ - *` on fixed types can raise the `size` condition (see [Conditio
 - `/` and `**` use floating-point even for fixed operands.
 - `picture` and `label` variables are not implemented.
 
-> **Run the full example:** [`examples/data_types.pli`](../examples/data_types.pli) — `plic data_types.pli -o data_types && ./data_types`.
+> **Run the full example:** [`examples/data_types.pli`](../examples/data_types.pli) — `pli data_types.pli -o data_types && ./data_types`.
 
 ---
 
@@ -174,7 +174,7 @@ You can also narrow to a sub-structure with `like s.a.b` (a deep copy of that br
 
 - `like` of a non-structure, or `like` plus a dimension, is an error the compiler reports.
 
-> **Run the full example:** [`examples/declarations_structures.pli`](../examples/declarations_structures.pli) — `plic declarations_structures.pli -o decls && ./decls`.
+> **Run the full example:** [`examples/declarations_structures.pli`](../examples/declarations_structures.pli) — `pli declarations_structures.pli -o decls && ./decls`.
 
 ---
 
@@ -210,7 +210,7 @@ Two small helpers keep code tidy.
 
 > **Beginner tip:** start with `value` for magic numbers (`max_retries`, `line_width`). Reach for `define alias` when three declarations share the same long attribute list.
 
-> **Run the full example:** [`examples/names_types_constants.pli`](../examples/names_types_constants.pli) — `plic names_types_constants.pli -o names && ./names`.
+> **Run the full example:** [`examples/names_types_constants.pli`](../examples/names_types_constants.pli) — `pli names_types_constants.pli -o names && ./names`.
 
 ---
 
@@ -317,7 +317,7 @@ For `bit(1)` masks there are `any` and `all` (like Python's `any()` / `all()`).
 - Both sides of an array assignment must have the same shape.
 - Dynamic multi-axis arrays allow a dynamic *first* axis only, e.g. `a(n,4)`.
 
-> **Run the full example:** [`examples/arrays.pli`](../examples/arrays.pli) — `plic arrays.pli -o arrays && ./arrays`.
+> **Run the full example:** [`examples/arrays.pli`](../examples/arrays.pli) — `pli arrays.pli -o arrays && ./arrays`.
 
 ---
 
@@ -356,7 +356,7 @@ The usual `> >= = < <=` plus `^=` / `¬=` for "not equal". Complex values only s
 
 - `**` with complex exponents and a few edge cases are future work.
 
-> **Run the full example:** [`examples/operators_expressions.pli`](../examples/operators_expressions.pli) — `plic operators_expressions.pli -o ops && ./ops`.
+> **Run the full example:** [`examples/operators_expressions.pli`](../examples/operators_expressions.pli) — `pli operators_expressions.pli -o ops && ./ops`.
 
 ---
 
@@ -478,7 +478,7 @@ Local `go to` jumps to a label. You'll rarely need it now that `leave`/`iterate`
 
 Jumping *into* an inactive block is an error. Jumping to an enclosing procedure is future work.
 
-> **Run the full example:** [`examples/control_flow.pli`](../examples/control_flow.pli) — `plic control_flow.pli -o flow && ./flow`.
+> **Run the full example:** [`examples/control_flow.pli`](../examples/control_flow.pli) — `pli control_flow.pli -o flow && ./flow`.
 
 ---
 
@@ -567,7 +567,7 @@ One body, several names, via `entry` — handy for related calculations that sha
 
 `area(5)` is 25, `cube(5)` is 125.
 
-> **Run the full example:** [`examples/procedures_functions.pli`](../examples/procedures_functions.pli) — `plic procedures_functions.pli -o procs && ./procs`.
+> **Run the full example:** [`examples/procedures_functions.pli`](../examples/procedures_functions.pli) — `pli procedures_functions.pli -o procs && ./procs`.
 
 ---
 
@@ -592,7 +592,7 @@ A `package` groups procedures under one scope — like a Go package or a Python 
 > **Go friends:** `package ... exports(...)` is `package mathlib` plus capitalised (exported) names.  
 > **Python friends:** it's a module where `exports` is your `__all__`.
 
-> **Run the full example:** [`examples/packages.pli`](../examples/packages.pli) — `plic packages.pli -o pkgs && ./pkgs`.
+> **Run the full example:** [`examples/packages.pli`](../examples/packages.pli) — `pli packages.pli -o pkgs && ./pkgs`.
 
 ---
 
@@ -627,7 +627,7 @@ Callbacks are just parameters with the same shape:
 > **Python friends:** `on_get = add1` is `on_get = add1` — then `on_get(41)` calls it. Same idea.  
 > **Go friends:** think `var onGet func(int) int`.
 
-> **Run the full example:** [`examples/first_class_procedures.pli`](../examples/first_class_procedures.pli) — `plic first_class_procedures.pli -o firstcls && ./firstcls`.
+> **Run the full example:** [`examples/first_class_procedures.pli`](../examples/first_class_procedures.pli) — `pli first_class_procedures.pli -o firstcls && ./firstcls`.
 
 ---
 
@@ -692,7 +692,7 @@ With `set`, `allocate` hands you a fresh heap block in a pointer:
 - `set` on a controlled allocate warns and is ignored (it's stack-managed, not heap).
 - A few exotic combinations (dynamic-extent character members mid-structure, `bit(n>1)` controlled arrays in spots) are diagnosed.
 
-> **Run the full example:** [`examples/storage_based_controlled.pli`](../examples/storage_based_controlled.pli) — `plic storage_based_controlled.pli -o storage && ./storage`.
+> **Run the full example:** [`examples/storage_based_controlled.pli`](../examples/storage_based_controlled.pli) — `pli storage_based_controlled.pli -o storage && ./storage`.
 
 ---
 
@@ -717,7 +717,7 @@ An `area` is a memory pool for `based` allocation; an `offset` is an opaque loca
 
 - Static/external areas, `area(*)`, arrays of areas/offsets, and offset arithmetic are diagnosed.
 
-> **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `plic area_offset.pli -o arena && ./arena`.
+> **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.
 
 ---
 
@@ -761,7 +761,7 @@ Affine forms like `x(m*1sub + c)` are served too.
 
 - `position` is an error; at most one iSUB per overlay; the base must be in the same or an enclosing scope.
 
-> **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `plic defined_isub.pli -o overlays && ./overlays`.
+> **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `pli defined_isub.pli -o overlays && ./overlays`.
 
 ---
 
@@ -825,7 +825,7 @@ Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconvers
 
 - `check` conditions, `on return`, `go to` inside a unit, and `return(value)` inside a handler are diagnosed.
 
-> **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `plic conditions.pli -o conds && ./conds`.
+> **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `pli conditions.pli -o conds && ./conds`.
 
 ---
 
@@ -885,7 +885,7 @@ Also: `call ... task[(t)]` requests an async task (`priority(p)` is accepted but
 
 - You must `wait` before the block exits, or the event's storage may vanish while the task still runs. External and function-async tasks are diagnosed.
 
-> **Run the full example:** [`examples/concurrency.pli`](../examples/concurrency.pli) — `plic concurrency.pli -o conc && ./conc`.
+> **Run the full example:** [`examples/concurrency.pli`](../examples/concurrency.pli) — `pli concurrency.pli -o conc && ./conc`.
 
 ---
 
@@ -924,10 +924,10 @@ Centralise widths and layouts in an include:
 
 1. The including file's directory.
 2. Repeatable `-I` flags (first match wins).
-3. `PLIC_INCLUDE_PATH` (colon-separated, like `CPATH`).
-4. `include/` and `inc/` found by walking up from the source and from the `plic` executable.
+3. `PLI_INCLUDE_PATH` (colon-separated, like `CPATH`).
+4. `include/` and `inc/` found by walking up from the source and from the `pli` executable.
 5. Static system paths (`/usr/include`, `/usr/local/include`) on Linux/macOS.
-6. Executable-relative `share/plic/include`.
+6. Executable-relative `share/pli/include`.
 
 Use `-v` to list the configured paths.
 
@@ -935,7 +935,7 @@ Use `-v` to list the configured paths.
 
 - `%do`, `%go to`, and preprocessor procedures parse but report "unsupported".
 
-> **Run the full example:** [`examples/preprocessor.pli`](../examples/preprocessor.pli) (with `preprocessor_defs.inc` next to it) — `plic preprocessor.pli -o pp && ./pp`.
+> **Run the full example:** [`examples/preprocessor.pli`](../examples/preprocessor.pli) (with `preprocessor_defs.inc` next to it) — `pli preprocessor.pli -o pp && ./pp`.
 
 ---
 
@@ -1016,7 +1016,7 @@ Served items: `f(w,d)`, `e(w,d)`, `a(w)`, `x(w)`, `skip(n)`, `page`, `line(n)`, 
 
 - `record`/`update`/`keyed` open options, `rewrite`/`delete`/`locate`/`unlock`, and `on endfile` are diagnosed. Record I/O is fixed-size binary only.
 
-> **Run the full example:** [`examples/input_output.pli`](../examples/input_output.pli) — `plic input_output.pli -o io && ./io` (writes `io_demo.txt` in the current directory).
+> **Run the full example:** [`examples/input_output.pli`](../examples/input_output.pli) — `pli input_output.pli -o io && ./io` (writes `io_demo.txt` in the current directory).
 
 ---
 
@@ -1063,7 +1063,7 @@ Conversions (think `str()` / `int()`):
 
 Dates, addresses, and friends: `date()` gives `YYYYMMDD`, `time()` gives `HHMMSS`; `addr(x)` is `&x` and `null()` is `None`/`nil` for pointers.
 
-> **Run the full example:** [`examples/builtins_tour.pli`](../examples/builtins_tour.pli) — `plic builtins_tour.pli -o bitour && ./bitour`.
+> **Run the full example:** [`examples/builtins_tour.pli`](../examples/builtins_tour.pli) — `pli builtins_tour.pli -o bitour && ./bitour`.
 
 ---
 
@@ -1096,7 +1096,7 @@ Call C like `ctypes` (Python) or `cgo` (Go). Declare the C function as an `entry
 
 - Only scalar and pointer C parameters by value for now; structure-valued C returns via the hidden-buffer convention are diagnosed.
 
-> **Run the full example:** [`examples/c_interop.pli`](../examples/c_interop.pli) with [`examples/c_interop_helper.c`](../examples/c_interop_helper.c) — `clang -c c_interop_helper.c && plic c_interop.pli c_interop_helper.o -o cinterop && ./cinterop`.
+> **Run the full example:** [`examples/c_interop.pli`](../examples/c_interop.pli) with [`examples/c_interop_helper.c`](../examples/c_interop_helper.c) — `clang -c c_interop_helper.c && pli c_interop.pli c_interop_helper.o -o cinterop && ./cinterop`.
 
 ---
 

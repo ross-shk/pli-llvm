@@ -1,13 +1,13 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/record.sh — SEQUENTIAL RECORD files (112),(113):
 # WRITE FILE(f) FROM(v) appends one fixed-size binary record and
 # READ FILE(f) INTO(v) reads one back; the program round-trips
 # FIXED, FLOAT, CHAR, and BIT values and prints PASS. It runs from
 # the gitignored out/ dir so the data file does not pollute the repo.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/record
 mkdir -p tests/driver/out
 
@@ -72,7 +72,7 @@ cat > "$OUT.pli" <<'EOF'
  end record_test;
 EOF
 
-$PLIC "$OUT.pli" -o "$OUT" || { echo "FAIL record: compile"; exit 1; }
+$PLI "$OUT.pli" -o "$OUT" || { echo "FAIL record: compile"; exit 1; }
 ( cd tests/driver/out && ./record )
 rm -f tests/driver/out/recordtest.dat
 exit 0

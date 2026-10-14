@@ -1,6 +1,6 @@
  /* Data types: the everyday declarations. 
    
-    Run: plic data_types.pli -o datatypes */
+    Run: pli data_types.pli -o datatypes */
 
  datatypes: proc options(main);
    dcl count fixed bin(31),

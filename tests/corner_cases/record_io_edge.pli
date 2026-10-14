@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Record I/O edge cases (rules 112,113): Sequential RECORD I/O.
    WRITE FROM, READ INTO with fixed-size binary records. */
 record_io_edge: procedure options(main);

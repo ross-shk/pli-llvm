@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rules (20),(22),(88),(90): cross-module AREA/OFFSET allocation.
     The library allocates into the caller's region and returns the
     offset; the caller views the same block. Companion of

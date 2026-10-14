@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # docker/run-cross-test.sh — agent entry point for Linux/Windows testing from macOS.
-# Native Linux tests build plic *inside* the container (host plic emits Mach-O
+# Native Linux tests build pli *inside* the container (host pli emits Mach-O
 # and cross-bitcode is not ready yet); Wine runs Windows .exe files headless.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -24,15 +24,15 @@ cmd_build() {
 }
 
 cmd_linux_native() {
-  # Build plic natively on Linux and smoke-test it (default: hello + group).
+  # Build pli natively on Linux and smoke-test it (default: hello + group).
   # BUILD=build-linux keeps the container build clear of the host build/ dir.
   GROUP=${1:-core}
   docker run --rm $PLATFORM -v "$ROOT:/work" -w /work "$LINUX_IMG" \
-    sh -c "cmake -G Ninja -S . -B build-linux/cmake && cmake --build build-linux/cmake -j\$(nproc) && ./build-linux/cmake/plic tests/core/hello.pli -o /tmp/hello && /tmp/hello && ctest --test-dir build-linux/cmake -j\$(nproc) --output-on-failure -R \"${GROUP}\""
+    sh -c "cmake -G Ninja -S . -B build-linux/cmake && cmake --build build-linux/cmake -j\$(nproc) && ./build-linux/cmake/pli tests/core/hello.pli -o /tmp/hello && /tmp/hello && ctest --test-dir build-linux/cmake -j\$(nproc) --output-on-failure -R \"${GROUP}\""
 }
 
 cmd_wine_run() {
-  # Run a Windows .exe produced by plic under headless Wine.
+  # Run a Windows .exe produced by pli under headless Wine.
   [ $# -ge 1 ] || usage
   EXE=$1
   docker run --rm $PLATFORM -v "$ROOT:/work" -w /work "$WINE_IMG" wine64 "$EXE"

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* pli_wide128.h — portable 128-bit integer (ADR-191 Windows compat).
  *
  * Wide (>18 digit) FIXED DECIMAL values are held in 128 bits. GCC/Clang

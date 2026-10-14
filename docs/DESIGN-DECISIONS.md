@@ -6226,3 +6226,29 @@ as found.
 same check — more sites for identical coverage); freeing one-shot temps
 (unmeasured, adds call noise where the optimizer currently folds
 cleanly).
+
+## ADR-218 — Rebrand the toolchain from `plic` to `pli`
+
+The working title `plic` (PL/I compiler) collided with nothing but read
+as a typo of the language name everywhere it appeared: the binary, the
+`PLIC_*` macros and env vars, the `plic::` namespace, and hundreds of
+doc and test references. The shorter name matches the `.pli` extension
+and the `pli_*` runtime symbols, so the whole toolchain now reads as one
+thing.
+
+**Decision.** Rename everything word-boundary `plic` to `pli`: the
+`add_executable` target, help text and `pli:` diagnostics, the
+`PLI_VERSION`/`PLI_ENABLE_MLIR`/etc. macros, the `PLI_SYSPARM`,
+`PLI_INCLUDE_PATH` and `PLI_LIB_PATH` env vars, the `pli::` and
+`mlir::pli` namespaces, `share/pli/include`, the `PLI` test-harness var,
+and all doc/test/CI references including the `Copyright ... pli:` file
+headers. The runtime archive moves from `libpli.a`/`pli.lib` to
+`libpli_runtime.a`/`pli_runtime.lib` (target `pli_runtime`) so the new
+`pli`/`pli.exe` binary shares no stem with it; `runtime.bc` keeps its
+name. The old names are gone with no compatibility shim. History in this
+file keeps its original wording (ADRs are immutable).
+
+**Consequences.** Fresh `build/cmake` configure required (stale
+`PLIC_*` cache entries); `pli version` plus the full `ctest` suite pass
+after the rename. `rg -w plic` is empty outside this file's history.
+Driver fallbacks move to the canonical `./build/cmake/pli` path.

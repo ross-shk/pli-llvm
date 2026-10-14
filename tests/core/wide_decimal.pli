@@ -1,5 +1,5 @@
   /* SPDX-License-Identifier: Apache-2.0 */
-  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
    /* ADR-191: list-directed and DISPLAY output of wide (>18 digit)
       FIXED DECIMAL passes the value as (lo, hi) halves (a by-value i128
       disagrees with the runtime body on Windows x64); integer constants

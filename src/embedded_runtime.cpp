@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
-// embedded_runtime.cpp — materialise the embedded libpli.bc as a buffer.
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// embedded_runtime.cpp — materialise the embedded pli_runtime.bc as a buffer.
 #include "embedded_runtime.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -12,30 +12,30 @@
 // Per-target generated arrays (included by CMake at build time).
 // These are generated for: _x86_64_unknown_linux_gnu, _aarch64_unknown_linux_gnu,
 // _x86_64_pc_windows_gnu, _aarch64_pc_windows_gnu (full triple names with - replaced by _)
-// The actual includes are added by CMake based on PLIC_TARGETS.
-#ifdef PLIC_HAVE_LINUX_X86_64_RUNTIME
+// The actual includes are added by CMake based on PLI_TARGETS.
+#ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
 #include "embedded_runtime_x86_64_unknown_linux_gnu.inc"
 #endif
-#ifdef PLIC_HAVE_LINUX_AARCH64_RUNTIME
+#ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
 #include "embedded_runtime_aarch64_unknown_linux_gnu.inc"
 #endif
-#ifdef PLIC_HAVE_WINDOWS_X86_64_RUNTIME
+#ifdef PLI_HAVE_WINDOWS_X86_64_RUNTIME
 #include "embedded_runtime_x86_64_pc_windows_gnu.inc"
 #endif
-#ifdef PLIC_HAVE_WINDOWS_AARCH64_RUNTIME
+#ifdef PLI_HAVE_WINDOWS_AARCH64_RUNTIME
 #include "embedded_runtime_aarch64_pc_windows_gnu.inc"
 #endif
 
-namespace plic {
+namespace pli {
 
 llvm::MemoryBufferRef getEmbeddedLibPLI() {
   return llvm::MemoryBufferRef(
-      llvm::StringRef(reinterpret_cast<const char*>(plic_embedded_libpli_bc),
-                      plic_embedded_libpli_bc_len),
-      "libpli.bc");
+      llvm::StringRef(reinterpret_cast<const char*>(pli_embedded_runtime_bc),
+                      pli_embedded_runtime_bc_len),
+      "pli_runtime.bc");
 }
 
-size_t embeddedLibPLISize() { return plic_embedded_libpli_bc_len; }
+size_t embeddedLibPLISize() { return pli_embedded_runtime_bc_len; }
 
 static void addBlobIfDefined(std::vector<RuntimeBlob>& blobs, const unsigned char* data,
                              unsigned long len, const char* target) {
@@ -47,25 +47,25 @@ static void addBlobIfDefined(std::vector<RuntimeBlob>& blobs, const unsigned cha
 std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs() {
   std::vector<RuntimeBlob> blobs;
   // Default (host) blob - always present
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc, plic_embedded_libpli_bc_len, PLIC_TARGET_TRIPLE);
+  addBlobIfDefined(blobs, pli_embedded_runtime_bc, pli_embedded_runtime_bc_len, PLI_TARGET_TRIPLE);
   // Per-target blobs (conditionally compiled based on CMake config)
-#ifdef PLIC_HAVE_LINUX_X86_64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_x86_64_unknown_linux_gnu,
-                   plic_embedded_libpli_bc_x86_64_unknown_linux_gnu_len,
+#ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
+  addBlobIfDefined(blobs, pli_embedded_runtime_bc_x86_64_unknown_linux_gnu,
+                   pli_embedded_runtime_bc_x86_64_unknown_linux_gnu_len,
                    "x86_64-unknown-linux-gnu");
 #endif
-#ifdef PLIC_HAVE_LINUX_AARCH64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_aarch64_unknown_linux_gnu,
-                   plic_embedded_libpli_bc_aarch64_unknown_linux_gnu_len,
+#ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
+  addBlobIfDefined(blobs, pli_embedded_runtime_bc_aarch64_unknown_linux_gnu,
+                   pli_embedded_runtime_bc_aarch64_unknown_linux_gnu_len,
                    "aarch64-unknown-linux-gnu");
 #endif
-#ifdef PLIC_HAVE_WINDOWS_X86_64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_x86_64_pc_windows_gnu,
-                   plic_embedded_libpli_bc_x86_64_pc_windows_gnu_len, "x86_64-pc-windows-gnu");
+#ifdef PLI_HAVE_WINDOWS_X86_64_RUNTIME
+  addBlobIfDefined(blobs, pli_embedded_runtime_bc_x86_64_pc_windows_gnu,
+                   pli_embedded_runtime_bc_x86_64_pc_windows_gnu_len, "x86_64-pc-windows-gnu");
 #endif
-#ifdef PLIC_HAVE_WINDOWS_AARCH64_RUNTIME
-  addBlobIfDefined(blobs, plic_embedded_libpli_bc_aarch64_pc_windows_gnu,
-                   plic_embedded_libpli_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
+#ifdef PLI_HAVE_WINDOWS_AARCH64_RUNTIME
+  addBlobIfDefined(blobs, pli_embedded_runtime_bc_aarch64_pc_windows_gnu,
+                   pli_embedded_runtime_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
 #endif
   return blobs;
 }
@@ -80,11 +80,11 @@ const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t) {
   }
   // Fallback to default blob
   for (const auto& blob : blobs) {
-    if (blob.target == PLIC_TARGET_TRIPLE) {
+    if (blob.target == PLI_TARGET_TRIPLE) {
       return &blob;
     }
   }
   return nullptr;
 }
 
-} // namespace plic
+} // namespace pli

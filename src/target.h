@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 // target.h — data-driven target knowledge (host now, additive later).
 //
 // Adding a cross target = adding a row + a bundled libc/startup lookup,
@@ -15,7 +15,7 @@ namespace llvm {
 class TargetMachine;
 }
 
-namespace plic {
+namespace pli {
 struct TargetDesc {
   llvm::Triple::ObjectFormatType objFmt = llvm::Triple::UnknownObjectFormat;
   std::string defaultTriple;            // e.g. "arm64-apple-darwin25.6.0"
@@ -33,4 +33,4 @@ void initializeAllTargets();
 std::unique_ptr<llvm::TargetMachine>
 createTargetMachine(const std::string& triple, const std::string& optLevel,
                     std::string& err, bool marchNative = false);
-} // namespace plic
+} // namespace pli

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rules (25),(124),(126): library side of based_loc_arr.pli.
     Heap cells live behind a fixed BASED array; caller
     buffers are reached through runtime-(n) overlays. All

@@ -1,11 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/nosize_flag.sh — --no-size-checks disables the SIZE
 # traps program-wide: an overflowing computation with no (NOSIZE)
 # prefix wraps instead of aborting.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=tests/driver/out/nosize_flag
 mkdir -p tests/driver/out
 
@@ -17,7 +17,7 @@ nsflag: procedure options(main);
 end nsflag;
 EOF
 
-$PLIC "$OUT.pli" --no-size-checks -o "$OUT" || { echo "FAIL nosize-flag: compile"; exit 1; }
+$PLI "$OUT.pli" --no-size-checks -o "$OUT" || { echo "FAIL nosize-flag: compile"; exit 1; }
 out=$("$OUT" 2>&1); rc=$?
 case "$out" in
   *-2147483648*) ;;

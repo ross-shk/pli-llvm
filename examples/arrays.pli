@@ -1,7 +1,7 @@
  /* Arrays: fixed bounds, dynamic size, 
     slices, whole-array math. 
 
-    Run: plic arrays.pli -o arrays */
+    Run: pli arrays.pli -o arrays */
 
  arrays: proc options(main);
    dcl scores(5) fixed bin(31);

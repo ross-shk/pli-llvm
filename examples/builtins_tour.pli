@@ -1,7 +1,7 @@
  /* Built-ins tour: strings, math, arrays. 
     Full list: guides/builtins.md. 
    
-    Run: plic builtins_tour.pli -o bi */
+    Run: pli builtins_tour.pli -o bi */
 
  bitour: proc options(main);
    dcl email char(40) varying;

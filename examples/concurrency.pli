@@ -1,7 +1,7 @@
  /* Concurrency: background CALL + EVENT, 
     WAIT to join, poll, DELAY to sleep. 
 
-    Run: plic concurrency.pli -o conc */
+    Run: pli concurrency.pli -o conc */
 
  conc: proc options(main);
    dcl done event;

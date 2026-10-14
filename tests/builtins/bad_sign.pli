@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Diagnostic test: SIGN with a wrong arity and a non-numeric argument
     are rejected. rule (123), Appendix 1. */
  badsign: procedure options(main);

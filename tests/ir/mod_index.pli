@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* P6.3 litmus: MOD(DO_index, k) with FROM >= 0 and positive constant k
    must emit a plain srem (no modadj/modnz/modneg/select chain). The existing
    mod_lit test covers constant dividends; this pins the DO-index path. */

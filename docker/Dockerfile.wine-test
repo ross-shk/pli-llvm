@@ -1,4 +1,4 @@
-# Headless runner for plic-produced Windows .exe files (console only, no X).
+# Headless runner for pli-produced Windows .exe files (console only, no X).
 # NOTE: on ARM Macs run this image with --platform linux/amd64 — ARM Wine
 # cannot execute x86_64 Windows binaries, emulation covers it.
 FROM debian:trixie-slim

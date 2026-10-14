@@ -2,29 +2,29 @@
 
 A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). Currently supports about 80% of **TR 25.084** features with some features added from IBM Enterprise PL/I.
 
-**Single-binary distribution** (like Go/Zig) — `plic` embeds the PL/I runtime bitcode (`libpli.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a [release](https://github.com/ross-shk/pli-llvm/releases/tag/v0.1.0) archive, extract the `plic` binary and put it in the executable path, on the Mac (Apple Silicon):
+**Single-binary distribution** (like Go/Zig) — `pli` embeds the PL/I runtime bitcode (`pli_runtime.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a [release](https://github.com/ross-shk/pli-llvm/releases/tag/v0.1.0) archive, extract the `pli` binary and put it in the executable path, on the Mac (Apple Silicon):
 
 ```sh
-curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-darwin-arm64.tar.gz \
-  | tar xzf - && sudo mv darwin-arm64/plic /usr/local/bin/
+curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-darwin-arm64.tar.gz \
+  | tar xzf - && sudo mv darwin-arm64/pli /usr/local/bin/
 ```
 
 or on Linux (x86_64):
 
 ```
-curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-linux-x86_64.tar.gz \
-  | tar xzf - && sudo mv linux-x86_64/plic /usr/local/bin/
+curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-linux-x86_64.tar.gz \
+  | tar xzf - && sudo mv linux-x86_64/pli /usr/local/bin/
 ```
 
 or on Windows (x86_64):
 
 ```bat
-curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/plic-windows-x86_64.zip -o plic.zip
-tar -xf plic.zip
-move windows-x86_64\plic.exe %USERPROFILE%\bin\
+curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -o pli.zip
+tar -xf pli.zip
+move windows-x86_64\pli.exe %USERPROFILE%\bin\
 ```
 
-The Windows ZIP contains `plic.exe` (self-contained, with embedded runtime bitcode) plus optional `lib/pli.lib` and `lib/runtime.bc` for cross-unit (`-c`) compilation workflows. For basic single-file programs, `plic.exe` alone is sufficient. `curl` and `tar` ship with Windows 10+.
+The Windows ZIP contains `pli.exe` (self-contained, with embedded runtime bitcode) plus optional `lib/pli_runtime.lib` and `lib/runtime.bc` for cross-unit (`-c`) compilation workflows. For basic single-file programs, `pli.exe` alone is sufficient. `curl` and `tar` ship with Windows 10+.
 
 A "Hello, world!" program:
 
@@ -35,7 +35,7 @@ end hello;
 ```
 
 ```sh
-plic tests/core/hello.pli -o hello
+pli tests/core/hello.pli -o hello
 ./hello
 ```
 
@@ -84,7 +84,7 @@ end;
 ```
 
 ```sh
-plic parsum.pli -o parsum
+pli parsum.pli -o parsum
 ./parsum
 sum 1..100 =        5050
 ```
@@ -101,7 +101,7 @@ See [Programming Guide](./guides/programming.md) for guidance and more examples,
 - **macOS** (Intel, Apple Silicon): clang
 - **Windows** (x86_64, ARM64): clang-cl + lld-link + Ninja
 
-Threading is abstracted in `runtime/sync/plic_thread.h` (POSIX pthreads on Linux/macOS, Win32 primitives on Windows).
+Threading is abstracted in `runtime/sync/pli_thread.h` (POSIX pthreads on Linux/macOS, Win32 primitives on Windows).
 
 ### Requirements
 
@@ -112,7 +112,7 @@ Threading is abstracted in `runtime/sync/plic_thread.h` (POSIX pthreads on Linux
   <tr><td>Ninja</td><td>any recent</td><td>Canonical generator on all platforms, including Windows</td></tr>
   <tr><td>LLVM + clang + lld</td><td>23</td><td>Dev libraries and lld headers/libs required; see below</td></tr>
   <tr><td>Python</td><td>3</td><td>For scripts/gen_*.py and tests/run_tests.py</td></tr>
-  <tr><td>Git</td><td>any recent</td><td>Optional; without it plic version reports unknown</td></tr>
+  <tr><td>Git</td><td>any recent</td><td>Optional; without it pli version reports unknown</td></tr>
 </table>
 
 LLVM sources:
@@ -157,7 +157,7 @@ Notes:
   The compiler itself is `clang-cl` (LLVM), not `cl.exe`.
 - `CMAKE_PREFIX_PATH` must point at your LLVM **install** prefix (the directory containing `lib/cmake/llvm`). Use forward slashes.
 - Ninja must be on `PATH` (`pip install ninja`, or a Ninja release, or the VS-bundled copy).
-- Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `plic` itself — use clang-cl + lld-link.
+- Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `pli` itself — use clang-cl + lld-link.
 
 Building LLVM 23.x on Windows (one-time setup, Release, `X86;AArch64` only):
 
@@ -173,7 +173,7 @@ cmake -G Ninja -S llvm-project/llvm -B llvm-build ^
 cmake --build llvm-build -j --target install
 ```
 
-Then build `plic` with `-DCMAKE_PREFIX_PATH=C:/llvm-install`.
+Then build `pli` with `-DCMAKE_PREFIX_PATH=C:/llvm-install`.
 
 ### Test
 
@@ -192,24 +192,24 @@ cmake --build build/cmake --target check
 
 ## Use
 
-After build, make sure `plic`from `./build/cmake/plic` is in the executable path, compile for the host:
+After build, make sure `pli` from `./build/cmake/pli` is in the executable path, compile for the host:
 
 ```sh
-plic tests/core/hello.pli -o hello
+pli tests/core/hello.pli -o hello
 ./hello
 ```
 
-Cross-compile PL/I code with `--triple` (first build `plic` with `PLIC_CROSS_BITCODE=ON` so all 4 runtime bitcodes are embedded):
+Cross-compile PL/I code with `--triple` (first build `pli` with `PLI_CROSS_BITCODE=ON` so all 4 runtime bitcodes are embedded):
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DPLIC_CROSS_BITCODE=ON   # + platform flags above
+cmake -G Ninja -S . -B build/cmake -DPLI_CROSS_BITCODE=ON   # + platform flags above
 cmake --build build/cmake -j
 
-./build/cmake/plic --triple x86_64-unknown-linux-gnu program.pli -o program
-./build/cmake/plic --triple x86_64-pc-windows-gnu program.pli -o program.exe
+./build/cmake/pli --triple x86_64-unknown-linux-gnu program.pli -o program
+./build/cmake/pli --triple x86_64-pc-windows-gnu program.pli -o program.exe
 ```
 
-Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. Without `PLIC_CROSS_BITCODE=ON`, `--triple` falls back to the host runtime blob and only works when the target ABI matches the host.
+Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. Without `PLI_CROSS_BITCODE=ON`, `--triple` falls back to the host runtime blob and only works when the target ABI matches the host.
 
 ---
 
@@ -228,8 +228,8 @@ Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86
 | **Control flow (extensions)**     | `SELECT`/`WHEN`/`OTHERWISE`, `LEAVE`/`ITERATE`, `DO UNTIL`, local `GO TO`, `//` comments                                                                                                                                                                                  |
 | **Stream I/O**                    | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE`, `FORMAT` + `R(label)`, `DISPLAY`                                                                                                                                                                 |
 | **Record I/O**                    | `WRITE`/`READ` sequential fixed-size binary records                                                                                                                                                                                                                       |
-| **Preprocessor**                  | `%INCLUDE`/`%XINCLUDE` (+`-I`, `PLIC_INCLUDE_PATH`, upward-walk `include/`/`inc/` + system defaults), `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`, `%REPLACE`                                                                                                |
-| **Separate compilation & driver** | `EXTERNAL` linkage across units, multi-unit `plic` invocation, `-c`/`-emit-llvm`, `-I`, `-L`, `PLIC_LIB_PATH`, `--sysparm`, `-v`                                                                                                                                          |
+| **Preprocessor**                  | `%INCLUDE`/`%XINCLUDE` (+`-I`, `PLI_INCLUDE_PATH`, upward-walk `include/`/`inc/` + system defaults), `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`, `%REPLACE`                                                                                                |
+| **Separate compilation & driver** | `EXTERNAL` linkage across units, multi-unit `pli` invocation, `-c`/`-emit-llvm`, `-I`, `-L`, `PLI_LIB_PATH`, `--sysparm`, `-v`                                                                                                                                          |
 | **Built-ins**                     | String (+`TRIM`/`TALLY`/`UPPERCASE`/`LOWERCASE`/`CENTER`/`SEARCH`/`RANK`/`COLLATE`/`HIGH`/`LOW`/`DATE`/`TIME`), `CHAR`/`FIXED`, math (+degree trig, `ATAN2`/`CBRT`/`ERF`), `COMPLEX`/`REAL`/`IMAG`/`CONJG`, `LBOUND`/`HBOUND`/`DIM`, `SYSPARM` (see `guides/builtins.md`) |
 | **No reserved words**             | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables                                                                                                                                                                                                           |
 
@@ -254,7 +254,7 @@ Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *
 | Path                          | Contents                                                                                                                |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `src/`                        | Compiler: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target, codegen, embedded runtime                 |
-| `runtime/`                    | `libpli` (I/O, strings, conditions, storage, math, tasks) + `sync/plic_thread.h` threading abstraction                  |
+| `runtime/`                    | `pli_runtime` (I/O, strings, conditions, storage, math, tasks) + `sync/pli_thread.h` threading abstraction                  |
 | `tests/`                      | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`, `preprocessor`, `multimodule`, `corner_cases`) |
 | `CMakeLists.txt`              | Canonical build: LLVM C++ API + `lld`, embedded runtime bitcode                                                         |
 | `docs/` / `guides/`           | Architecture, ADRs, grammar coverage, compliance report, programming guides                                             |

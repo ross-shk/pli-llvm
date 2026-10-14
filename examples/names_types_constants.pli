@@ -1,6 +1,6 @@
  /* Named constants (VALUE) and type names (DEFINE ALIAS). 
    
-    Run: plic names_types_constants.pli -o names */
+    Run: pli names_types_constants.pli -o names */
 
  names: proc options(main);
    dcl max fixed bin(31) value(100);

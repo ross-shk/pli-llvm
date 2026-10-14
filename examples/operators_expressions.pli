@@ -1,6 +1,6 @@
  /* Operators: precedence, || glue, compare. 
    
-    Run: plic operators_expressions.pli -o ops */
+    Run: pli operators_expressions.pli -o ops */
  ops: proc options(main);
    dcl r fixed bin(31);
    dcl (s, tag) char(20) varying;

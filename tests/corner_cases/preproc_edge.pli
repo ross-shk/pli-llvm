@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Preprocessor edge cases (C28 Ch.9, ADR-071, ADR-083, ADR-113):
    %INCLUDE, %REPLACE, %DECLARE, %IF/%THEN/%ELSE, %ACTIVATE/%DEACTIVATE,
    %XINCLUDE. Tests cover nesting, recursion, activation, search paths. */

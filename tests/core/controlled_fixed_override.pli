@@ -1,5 +1,5 @@
   /* SPDX-License-Identifier: Apache-2.0 */
-  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
   /* Rules (13),(23),(87)-(90),(123),(126): ALLOCATE bounds override
      the DECLARE bounds of a fixed 1-D CONTROLLED array (IBM
      Enterprise PL/I). Bare ALLOCATE uses the descriptor; ALLOCATE

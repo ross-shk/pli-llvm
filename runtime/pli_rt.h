@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* pli_rt.h — PL/I runtime library (libpli), M0 subset.
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* pli_rt.h — PL/I runtime library (pli_runtime), M0 subset.
  *
  * Prototypes are generated from runtime/pli_rt_abi.def, the single source of
  * truth for the pli_* ABI (names are the ABI: see docs/ARCHITECTURE.md

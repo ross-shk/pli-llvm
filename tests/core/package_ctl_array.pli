@@ -1,5 +1,5 @@
   /* SPDX-License-Identifier: Apache-2.0 */
-  /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+  /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
   /* extension (ADR-109) + rules (13),(15),(26),(87)-(90): package-scope
      CONTROLLED declarations. A package member shares one
      program-lifetime generation: fixed arrays serve bare and

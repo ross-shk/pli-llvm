@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* PACKAGE / EXPORTS (ADR-109): cross-module package with shared data.
    Companion to pkg_xfer.pli. */
 pkgx: package exports(pkg_init, pkg_add, pkg_get, pkg_mul, pkg_reset, pkg_get_arr);

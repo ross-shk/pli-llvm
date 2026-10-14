@@ -1,13 +1,13 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/include_dirs.sh — %INCLUDE search paths (ADR-078):
 # the including file's directory, repeatable -I (first wins),
-# PLIC_INCLUDE_PATH, and the executable-relative default dir; a missing
+# PLI_INCLUDE_PATH, and the executable-relative default dir; a missing
 # file still fails the compile. Runs from the repo root; fixtures live in
 # the gitignored out/ dir.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/include_dirs
 mkdir -p tests/driver/out/inc_a tests/driver/out/inc_b
 
@@ -56,20 +56,20 @@ cat > "$OUT.missing.pli" <<'EOF'
 EOF
 
 # -I finds inc_a; the env path finds inc_b; first -I wins for dup.inc.
-PLIC_INCLUDE_PATH=tests/driver/out/inc_b \
-  $PLIC -I tests/driver/out/inc_a -I tests/driver/out/inc_b \
+PLI_INCLUDE_PATH=tests/driver/out/inc_b \
+  $PLI -I tests/driver/out/inc_a -I tests/driver/out/inc_b \
   "$OUT.pli" -o "$OUT" || { echo "FAIL include-dirs: compile"; exit 1; }
 "$OUT" || { echo "FAIL include-dirs: run"; exit 1; }
 
 # A missing file still fails the compile.
-if $PLIC -I tests/driver/out/inc_a "$OUT.missing.pli" -o "$OUT.missing" 2>/dev/null; then
+if $PLI -I tests/driver/out/inc_a "$OUT.missing.pli" -o "$OUT.missing" 2>/dev/null; then
   echo "FAIL include-dirs: missing file compiled";
   exit 1;
 fi
 echo "PASS include-missing";
 
 # -v lists the executable-relative default dir.
-if $PLIC -v -fsyntax-only "$OUT.pli" 2>&1 | grep -q "share/plic/include"; then
+if $PLI -v -fsyntax-only "$OUT.pli" 2>&1 | grep -q "share/pli/include"; then
   echo "PASS include-default";
 else
   echo "FAIL include-dirs: default dir not listed";

@@ -1,7 +1,7 @@
  /* AREA + OFFSET: an arena pool with 
     reusable blocks. 
 
-    Run: plic area_offset.pli -o arena */
+    Run: pli area_offset.pli -o arena */
     
  arena: proc options(main);
    dcl region area(4096);

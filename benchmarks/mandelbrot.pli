@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Mandelbrot set: processor-bound float arithmetic in a tight double
    loop. z = z*z + c iteration with escape-radius check. Float literals
    use E0 notation so they are FLOAT, not FIXED DECIMAL, matching the C

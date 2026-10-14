@@ -3,7 +3,7 @@
 
     Build: 
       clang -c c_interop_helper.c 
-      plic c_interop.pli c_interop_helper.o -o cinterop 
+      pli c_interop.pli c_interop_helper.o -o cinterop 
       ./cinterop 
  */
  cdemo: proc options(main);

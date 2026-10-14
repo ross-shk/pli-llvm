@@ -1,11 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/sysparm.sh — SYSPARM builtin (rule (123)): sysparm()
 # returns the --sysparm option value baked in at compile time (empty when
 # none is given). Compiles one program with --sysparm HELLO and one without.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/sysparm
 mkdir -p tests/driver/out
 
@@ -41,8 +41,8 @@ cat > "$OUT.empty.pli" <<'EOF'
  end sysparm_empty;
 EOF
 
-$PLIC --sysparm HELLO "$OUT.pli" -o "$OUT" || { echo "FAIL sysparm: compile with flag"; exit 1; }
+$PLI --sysparm HELLO "$OUT.pli" -o "$OUT" || { echo "FAIL sysparm: compile with flag"; exit 1; }
 ( cd tests/driver/out && ./sysparm ) || exit 1
-$PLIC "$OUT.empty.pli" -o "$OUT.empty" || { echo "FAIL sysparm: compile default"; exit 1; }
+$PLI "$OUT.empty.pli" -o "$OUT.empty" || { echo "FAIL sysparm: compile default"; exit 1; }
 ( cd tests/driver/out && ./sysparm.empty ) || exit 1
 exit 0

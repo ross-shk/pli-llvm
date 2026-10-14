@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* EXPONENT built-in: EXPONENT(x) returns the binary exponent of x
     (the value e such that x = f * 2^e, 0.5 <= |f| < 1), or 0 for 0/NaN.
     rule (123) Appendix 1. */

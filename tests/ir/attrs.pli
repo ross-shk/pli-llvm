@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Runtime ABI attributes (OPTIMIZATION.md P0, §6): the pli_*
     declarations carry LLVM-only facts from runtimeFn's side table —
     noreturn aborts, alloc-family allocation, pure math, argmem string

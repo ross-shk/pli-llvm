@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* W4c: RANK, COLLATE, ISOCHAR — code-point operations.
    Edge cases: empty string (RANK->0), n mod 256 for COLLATE,
    ISOCHAR range lo>hi (zero fill), ISOCHAR range > dstcap (clip). */

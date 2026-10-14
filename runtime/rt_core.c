@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* rt_core.c — PL/I runtime library (libpli): lifecycle: init/fini/STOP. */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* rt_core.c — PL/I runtime library (pli_runtime): lifecycle: init/fini/STOP. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
 #include <stdio.h>
@@ -11,13 +11,13 @@
 #endif
 
 /* Version stamp for the bitcode runtime (OPTIMIZATION.md §10, P3): runtime.bc
- * is compiled by the same LLVM as plic, and IRGen checks this global before
+ * is compiled by the same LLVM as pli, and IRGen checks this global before
  * linking it into a module. A stale bitcode would silently mis-compile, so a
  * missing or mismatched stamp is diagnosed instead. */
-#ifndef PLIC_LLVM_VERSION
-#define PLIC_LLVM_VERSION "unknown"
+#ifndef PLI_LLVM_VERSION
+#define PLI_LLVM_VERSION "unknown"
 #endif
-const char plic_llvm_version[] = PLIC_LLVM_VERSION;
+const char pli_llvm_version[] = PLI_LLVM_VERSION;
 
 void pli_rt_init(void) {
   col = 0;

@@ -1,6 +1,6 @@
-# Built-in Functions — plic
+# Built-in Functions — pli
 
-Reference for every built-in function `plic` recognises. Built-in names are ordinary identifiers (not reserved words) — they are recognised by name after parsing, so `substr`, `SUBSTR`, or `Substr` are all the same call.
+Reference for every built-in function `pli` recognises. Built-in names are ordinary identifiers (not reserved words) — they are recognised by name after parsing, so `substr`, `SUBSTR`, or `Substr` are all the same call.
 
 Built-in names are case-insensitive. Some built-ins require a constant argument so the compiler can size the result at compile time; passing a non-constant in that position is reported as an error.
 

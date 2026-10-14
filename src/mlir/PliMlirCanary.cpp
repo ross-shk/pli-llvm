@@ -30,9 +30,9 @@
 #include "PliOps.h.inc"
 
 using namespace mlir;
-using namespace mlir::plic;
+using namespace mlir::pli;
 
-namespace mlir::plic {
+namespace mlir::pli {
 
 // Build a canary module: a function that copies 4096 bytes from src to dst.
 static ModuleOp buildCanaryModule(MLIRContext* ctx) {
@@ -99,19 +99,19 @@ bool runMlirCanary(llvm::raw_ostream& os) {
   // Build the canary module.
   auto mod = buildCanaryModule(&ctx);
   if (!mod) {
-    os << "plic: MLIR canary: failed to build module\n";
+    os << "pli: MLIR canary: failed to build module\n";
     return false;
   }
 
   // Verify original module.
   if (failed(verify(mod.getOperation()))) {
-    os << "plic: MLIR canary failed verification (pre-conversion)\n";
+    os << "pli: MLIR canary failed verification (pre-conversion)\n";
     return false;
   }
 
   // Run conversion pipeline.
   if (failed(runConversion(mod))) {
-    os << "plic: MLIR canary conversion failed\n";
+    os << "pli: MLIR canary conversion failed\n";
     return false;
   }
 
@@ -122,4 +122,4 @@ bool runMlirCanary(llvm::raw_ostream& os) {
   return true;
 }
 
-} // namespace mlir::plic
+} // namespace mlir::pli

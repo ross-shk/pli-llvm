@@ -244,7 +244,7 @@ at -O2/-O3. No regression detected (W7 guard: ✓).
   — falls back if privileges unavailable). Single-runner guaranteed by
   sequential execution in the harness.
 - Machine/LLVM metadata recorded in each JSON output: platform, CPU count,
-  plic version, LLVM version, clang version. Regression comparisons use only
+  pli version, LLVM version, clang version. Regression comparisons use only
   the `results` dict.
 - Trend chart in CI (deferred to CI infrastructure setup).
 

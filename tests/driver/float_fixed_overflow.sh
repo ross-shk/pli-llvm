@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/float_fixed_overflow.sh — QR1.2 FLOAT -> FIXED conversion
 # boundaries: an out-of-range float traps with an ERROR (FPToSI is UB there;
 # hard error until a CONVERSION/SIZE condition can route it); fitting edges,
@@ -13,7 +13,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
   *) EXE=; MATHLIB=-lm ;;
 esac
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/float_fixed_overflow
 mkdir -p tests/driver/out
 
@@ -28,7 +28,7 @@ EOF
 
 # Each overflow case must abort (rc != 0) with the overflow message.
 expect_abort() {
-  $PLIC --size-checks "$OUT.$1.pli" -o "$OUT.$1$EXE" 2>/dev/null || { echo "FAIL float-fixed-overflow: $1 compile"; exit 1; }
+  $PLI --size-checks "$OUT.$1.pli" -o "$OUT.$1$EXE" 2>/dev/null || { echo "FAIL float-fixed-overflow: $1 compile"; exit 1; }
   out=$("$OUT.$1$EXE" 2>&1); rc=$?
   case "$out" in
     *overflow*) ;;
@@ -71,7 +71,7 @@ cat > "$OUT.ok.pli" <<'EOF'
     put skip list(d);
  end float_fixed_overflow_ok;
 EOF
-$PLIC --size-checks "$OUT.ok.pli" -o "$OUT.ok$EXE" || { echo "FAIL float-fixed-overflow: ok compile"; exit 1; }
+$PLI --size-checks "$OUT.ok.pli" -o "$OUT.ok$EXE" || { echo "FAIL float-fixed-overflow: ok compile"; exit 1; }
 if [ "$("$OUT.ok$EXE" | tr -d '\r')" = "2147483647
 -2147483648
 999.99

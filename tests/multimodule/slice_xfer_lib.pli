@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rule (126): library side of slice_xfer.pli. The caller's
     structure is reached through a BASED view over the
     supplied POINTER; every slice write goes straight into

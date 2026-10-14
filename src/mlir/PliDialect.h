@@ -15,10 +15,10 @@
 #define GET_OP_DECL
 #include "PliOps.h.inc"
 
-namespace mlir::plic {
+namespace mlir::pli {
 
 void populatePliConversionPatterns(LLVMTypeConverter& converter, RewritePatternSet& patterns);
 
 bool runMlirCanary(llvm::raw_ostream& os);
 
-} // namespace mlir::plic
+} // namespace mlir::pli

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 """tests/run_tests.py — compile, run and check every test program, in parallel.
 
 Usage: tests/run_tests.py [group ... | <group>/<name>.pli ...]
@@ -37,20 +37,20 @@ IS_WINDOWS = sys.platform == "win32"
 EXE_EXT = ".exe" if IS_WINDOWS else ""
 
 
-def _default_plic():
-    # CTest passes PLIC explicitly ($<TARGET_FILE:plic>); this default only
+def _default_pli():
+    # CTest passes PLI explicitly ($<TARGET_FILE:pli>); this default only
     # matters for manual runs. Prefer the CMake layout (build/cmake) when it
     # exists, falling back to the legacy build/ path.
-    for cand in (ROOT / "build" / "cmake" / f"plic{EXE_EXT}",
-                 ROOT / "build" / f"plic{EXE_EXT}"):
+    for cand in (ROOT / "build" / "cmake" / f"pli{EXE_EXT}",
+                 ROOT / "build" / f"pli{EXE_EXT}"):
         if cand.exists():
             return str(cand)
-    return str(ROOT / "build" / "cmake" / f"plic{EXE_EXT}")
+    return str(ROOT / "build" / "cmake" / f"pli{EXE_EXT}")
 
 
 def _default_rtlib():
-    # Windows static lib is pli.lib (OUTPUT_NAME pli); Unix is libpli.a.
-    lib = "pli.lib" if IS_WINDOWS else "libpli.a"
+    # Windows static lib is pli_runtime.lib (OUTPUT_NAME pli_runtime); Unix is libpli_runtime.a.
+    lib = "pli_runtime.lib" if IS_WINDOWS else "libpli_runtime.a"
     for cand in (ROOT / "build" / "cmake" / lib,
                  ROOT / "build" / lib):
         if cand.exists():
@@ -58,8 +58,8 @@ def _default_rtlib():
     return str(ROOT / "build" / "cmake" / lib)
 
 
-PLIC = os.environ.get("PLIC", _default_plic())
-# RTLIB is legacy (kept for env compat): the driver links its embedded libpli.
+PLI = os.environ.get("PLI", _default_pli())
+# RTLIB is legacy (kept for env compat): the driver links its embedded pli_runtime.
 RTLIB = os.environ.get("RTLIB", _default_rtlib())
 CLANG = os.environ.get("CLANG", "clang")
 TYPES = ("driver", "exec", "diag", "ir")
@@ -194,9 +194,9 @@ class Runner:
         if sh is None:
             return f"FAIL {self.name} (sh not found: driver tests need a POSIX shell)\n", 1
         # Forward the resolved tool paths: driver scripts default to
-        # ./build/plic, so the env must carry the real (possibly .exe) path.
+        # ./build/cmake/pli, so the env must carry the real (possibly .exe) path.
         import os as _os
-        env = dict(_os.environ, PLIC=PLIC, RTLIB=RTLIB, CLANG=CLANG)
+        env = dict(_os.environ, PLI=PLI, RTLIB=RTLIB, CLANG=CLANG)
         try:
             with open(self.out / f"{self.name}.out", "wb") as fh:
                 proc = subprocess.Popen([sh, str(self.dir / f"{self.name}.sh")],
@@ -231,16 +231,16 @@ class Runner:
                 steps = []
                 if libsrc.exists():
                     objs.append(self.out / f"{self.name}_lib.pli.o")
-                    steps.append([PLIC, "--size-checks", str(libsrc), "-c", "-o", str(objs[-1])])
+                    steps.append([PLI, "--size-checks", str(libsrc), "-c", "-o", str(objs[-1])])
                 if (self.dir / f"{self.name}.c").exists():
                     objs.append(self.out / f"{self.name}.c.o")
                     steps.append([CLANG, "-c", str(self.dir / f"{self.name}.c"),
                                   "-o", str(objs[-1])])
                 objs.append(self.out / f"{self.name}.pli.o")
-                steps.append([PLIC, "--size-checks", str(src), "-c", "-o", str(objs[-1])])
-                # Link through the plic driver (embedded libpli): clang is
+                steps.append([PLI, "--size-checks", str(src), "-c", "-o", str(objs[-1])])
+                # Link through the pli driver (embedded pli_runtime): clang is
                 # only the `.c` compiler above, never the linker here.
-                steps.append([PLIC, "--size-checks"] + [str(o) for o in objs] +
+                steps.append([PLI, "--size-checks"] + [str(o) for o in objs] +
                                ["-o", str(self.out / (self.name + EXE_EXT))])
                 failed = None
                 for step in steps:
@@ -248,7 +248,7 @@ class Runner:
                         failed = "cross-unit build failed"
                         break
             else:
-                if subprocess.run([PLIC, "--size-checks", str(src), "-o", str(self.out / (self.name + EXE_EXT))],
+                if subprocess.run([PLI, "--size-checks", str(src), "-o", str(self.out / (self.name + EXE_EXT))],
                                   stdout=cfh, stderr=subprocess.STDOUT).returncode != 0:
                     failed = "compilation failed"
                 else:
@@ -263,7 +263,7 @@ class Runner:
 
     def diag(self):
         compilefile = self.out / f"{self.name}.compile"
-        rc = subprocess.run([PLIC, str(self.dir / f"{self.name}.pli"), "-fsyntax-only"],
+        rc = subprocess.run([PLI, str(self.dir / f"{self.name}.pli"), "-fsyntax-only"],
                             stdout=open(compilefile, "w"),
                             stderr=subprocess.STDOUT).returncode
         if rc == 0:
@@ -284,7 +284,7 @@ class Runner:
             flags = flagsfile.read_text(errors="replace").strip().split()
         with open(compilefile, "w") as cfh:
             rc = subprocess.run(
-                [PLIC, "--size-checks", *flags, str(self.dir / f"{self.name}.pli"),
+                [PLI, "--size-checks", *flags, str(self.dir / f"{self.name}.pli"),
                  "-emit-llvm", "-o", str(llfile)],
                 stdout=cfh, stderr=subprocess.STDOUT).returncode
         if rc != 0:

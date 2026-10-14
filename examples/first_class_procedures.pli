@@ -1,7 +1,7 @@
  /* First-class procedures: keep functions in variables, pass them 
     as callbacks. 
 
-    Run: plic first_class_procedures.pli -o f */
+    Run: pli first_class_procedures.pli -o f */
 
  firstcls: proc options(main);
    dcl on_get entry(fixed bin(31))

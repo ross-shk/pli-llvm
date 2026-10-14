@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* P1.3 MOD fast path: constant dividend and divisor that provably non-negative
    must not emit the adjust/select chain (modadj/modnz/modneg/mods). */
 MOD_LIT_IR: PROCEDURE OPTIONS(MAIN);

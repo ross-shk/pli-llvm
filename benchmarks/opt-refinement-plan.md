@@ -38,8 +38,8 @@ Global acceptance criteria (apply to every P0 fix and P2 addition):
 
 Harness facts checked: `BENCHMARKS_REQUIRING_MATH =
 {"math_functions", "matrix_float"}` exactly matches the two `.c` files that
-`#include <math.h>` — correct. `PLIC = .../build/plic` resolves (symlink to
-`build/cmake/plic`) — works. All 16 harness entries have both sources present.
+`#include <math.h>` — correct. `PLI = .../build/pli` resolves (symlink to
+`build/cmake/pli`) — works. All 16 harness entries have both sources present.
 
 ---
 
@@ -275,7 +275,7 @@ not "fix" the bare `RETURN`:
 ```python
 def compile_pli(bench_name, pli_file, opt, output):
     src = BENCHMARK_DIR / pli_file
-    cmd = [str(PLIC), str(src), "-o", str(output), opt]
+    cmd = [str(PLI), str(src), "-o", str(output), opt]
     rc, out, err = run_command(cmd)
     if rc != 0:
         print(f"  PL/I compile failed [{bench_name} {opt}]:\n{out}\n{err}")
@@ -402,7 +402,7 @@ EXTRA_PLIFLAGS = {
 
 def compile_pli(bench_name, pli_file, opt, output):
     src = BENCHMARK_DIR / pli_file
-    cmd = [str(PLIC), str(src), "-o", str(output), opt,
+    cmd = [str(PLI), str(src), "-o", str(output), opt,
            *EXTRA_PLIFLAGS.get(bench_name, [])]
     ...
 ```

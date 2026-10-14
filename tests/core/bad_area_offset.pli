@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* AREA/OFFSET errors (rules (20),(22),(88)): OFFSET must name an
     AREA, the IN target of ALLOCATE must be an AREA, and a STATIC
     AREA is not served. All are sema diagnostics, so they coexist. */

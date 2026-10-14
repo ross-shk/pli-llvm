@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* C baseline for file_io benchmark */
 /* Match = exact: both sides produce the same checksum integer. */
 #include <stdio.h>
@@ -8,7 +8,7 @@
 int main(void) {
     int i, n, val, checksum;
     FILE *f;
-    const char *path = "/tmp/plic_fileio_test";
+    const char *path = "/tmp/pli_fileio_test";
 
     n = 500000;
 

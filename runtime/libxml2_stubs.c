@@ -7,7 +7,7 @@
  * (deps/libxml2_stub) only re-exported 8 symbols while LLVM 23 needs 16,
  * besides requiring a libxml2.dll that does not exist at runtime.
  *
- * These stubs satisfy the link with static definitions so plic.exe starts
+ * These stubs satisfy the link with static definitions so pli.exe starts
  * and runs without any libxml2 DLL. They abort with a clear message if
  * manifest merging is ever actually reached (only inputs carrying Windows
  * manifests take that path; ordinary PL/I console programs never do).
@@ -20,7 +20,7 @@
 #include <stdlib.h>
 
 __declspec(noreturn) static void libxml2_missing(const char *fn) {
-    fprintf(stderr, "plic: %s requires real libxml2 (Windows manifest merging is not stubbed)\n", fn);
+    fprintf(stderr, "pli: %s requires real libxml2 (Windows manifest merging is not stubbed)\n", fn);
     abort();
 }
 

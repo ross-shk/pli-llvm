@@ -1,7 +1,7 @@
  /* Control flow: IF, DO, BEGIN, SELECT, 
     LEAVE/ITERATE, DO UNTIL, GO TO. 
 
-    Run: plic control_flow.pli -o flow */
+    Run: pli control_flow.pli -o flow */
 
  flow: proc options(main);
    dcl (score, total) fixed bin(31),

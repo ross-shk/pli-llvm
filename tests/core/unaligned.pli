@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* ADR-169: UNALIGNED packs a structure's members with no inter-member
     padding. This pins member read/write, whole-structure assignment,
     nested structures, arrays of unaligned structures, a LIKE copy of an

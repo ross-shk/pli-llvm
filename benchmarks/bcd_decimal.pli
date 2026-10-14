@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* BCD decimal arithmetic benchmark - FIXED DECIMAL(25,4) (>18 digits). */
 /* Partners decimal_ops (which stays within 18-digit i64 DECIMAL). */
 /* Match = ~ by design: PL/I exact BCD decimal vs C double (see §8 non-goal). */

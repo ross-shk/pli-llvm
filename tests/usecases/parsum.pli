@@ -1,5 +1,5 @@
 /* parsum.pli - parallel sum using two async task events (rules (79),(82),(88),(90)). */
-/* See plic README for the full example. */
+/* See pli README for the full example. */
 parrallel_sum: proc options(main);
     dcl i fixed bin(31);
     dcl heap pointer,

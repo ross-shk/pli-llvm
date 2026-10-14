@@ -1,4 +1,4 @@
-# Native Linux build+test env for plic (glibc, matches --triple *-unknown-linux-gnu).
+# Native Linux build+test env for pli (glibc, matches --triple *-unknown-linux-gnu).
 FROM debian:trixie-slim
 # Build deps per README (C++20, LLVM >= 18, lld, CMake, Python).
 # Versioned LLVM 23: stock trixie ships LLVM 19 as default, which is too

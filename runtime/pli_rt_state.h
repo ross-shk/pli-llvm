@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* pli_rt_state.h — shared TU state for the split libpli sources.
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* pli_rt_state.h — shared TU state for the split pli_runtime sources.
  *
  * Each rt_*.c includes this header (via pli_rt.h) so the cross-file users
  * keep working exactly as in the single-file layout: put_raw/next_char for

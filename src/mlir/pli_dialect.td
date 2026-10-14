@@ -14,8 +14,8 @@ include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 // The `Pli` dialect — minimal, containing only the canary operation.
 def Pli_Dialect : Dialect {
   let name = "pli";
-  let cppNamespace = "::mlir::plic";
-  let summary = "Canary dialect for the plic MLIR integration spike";
+  let cppNamespace = "::mlir::pli";
+  let summary = "Canary dialect for the pli MLIR integration spike";
   let description = [{
     The Pli dialect is a narrow, experimental canary used only by P2 to
     exercise the MLIR helper integration boundary. It contains no production

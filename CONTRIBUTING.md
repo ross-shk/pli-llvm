@@ -1,4 +1,4 @@
-# Contributing to plic
+# Contributing to pli
 
 How to add a feature to the PL/I compiler. Written for humans and coding agents: the workflow is the same, the invariants are non-negotiable.
 
@@ -9,7 +9,7 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md `(what 
 ```bash
 # Canonical build (CMake + Ninja):
 cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-cmake --build build/cmake -j$(nproc)        # build/plic + build/cmake/libpli.a
+cmake --build build/cmake -j$(nproc)        # build/cmake/pli + build/cmake/libpli_runtime.a
 ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.pli
 ```
 
@@ -21,10 +21,10 @@ cmake --build build/cmake -j
 ctest --test-dir build/cmake
 ```
 
-Optional MLIR canary build (proves the `plic_mlir` bridge, lowers no PL/I operation — see ADR-192):
+Optional MLIR canary build (proves the `pli_mlir` bridge, lowers no PL/I operation — see ADR-192):
 
 ```bash
-cmake -G Ninja -S . -B build/mlir -DPLIC_ENABLE_MLIR=ON -DMLIR_DIR=<llvm-install>/lib/cmake/mlir
+cmake -G Ninja -S . -B build/mlir -DPLI_ENABLE_MLIR=ON -DMLIR_DIR=<llvm-install>/lib/cmake/mlir
 cmake --build build/mlir -j
 ```
 
@@ -49,7 +49,7 @@ One statement usually means five edits: AST kind → parse → check → emit �
 1. **Pick the rule or approved extension.** For standard PL/I, find the feature in `docs/GRAMMAR-COVERAGE.md` and note its rule number, e.g. `(104)-(109)` for stream I/O. For an extension, confirm it is listed in the relevant plan and follow its ADR and test requirements. Do not infer scope from another dialect.
 2. **Write the test first.** `tests/core/<feature>.pli`, lowercase PL/I, with a header comment naming the rules exercised. Add `tests/core/bad_<feature>.pli` if the feature has error cases. For IR-level checks, add a `tests/ir/<feature>.pli` with a `<feature>.check` FileCheck patterns file; supply per-test compiler flags via an optional `<feature>.flags` sidecar.
 3. **Implement across the layers** in the table above, smallest change that works (KISS). Diagnose what you do not implement — never accept silently.
-4. **Verify**: `ctest --test-dir build/cmake` (or `./tests/run_tests.py`). For a golden test, record the baseline: `./build/cmake/plic tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out` and read it before committing — it becomes the specification of behaviour, so a wrong line is a permanent wrong answer. A self-contained test needs no baseline: its `PASS` is the verdict. For a major edit run `cmake --build build/cmake --target check` — the analysis gate (`-Werror` build + clang-format drift + clang-tidy + scan-build) must stay green; `cmake --build build/cmake --target fmt` normalizes formatting first.
+4. **Verify**: `ctest --test-dir build/cmake` (or `./tests/run_tests.py`). For a golden test, record the baseline: `./build/cmake/pli tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out` and read it before committing — it becomes the specification of behaviour, so a wrong line is a permanent wrong answer. A self-contained test needs no baseline: its `PASS` is the verdict. For a major edit run `cmake --build build/cmake --target check` — the analysis gate (`-Werror` build + clang-format drift + clang-tidy + scan-build) must stay green; `cmake --build build/cmake --target fmt` normalizes formatting first.
 5. **Check the IR** for anything non-trivial: `-emit-llvm` and read it. Cheap, and catches silently-dropped work (see the worked example below).
 6. **Update docs**: flip the row in `docs/GRAMMAR-COVERAGE.md`; adjust `docs/ARCHITECTURE.md` §8 status and the README feature list if user-visible; add an ADR to `docs/DESIGN-DECISIONS.md` if you made a real decision (new number, never edit an existing ADR); note deviations from the spec.
 7. **Stage, do not commit.** `git add -A` and report what changed. Committing needs the maintainer's approval.

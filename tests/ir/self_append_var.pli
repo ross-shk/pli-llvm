@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* P6.1b-string litmus: X = X || V with a variable tail must append in
     place like the literal-tail peephole — no temp buffer, so no pli_alloc
     anywhere in the procedure. */

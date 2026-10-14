@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* AREA/OFFSET region allocation (rules (20),(22),(88),(90)): BASED
     records are allocated IN an area, freed out of order, and the
     region's storage is reused. An offset is a locator into the area. */

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* A bare BASED variable has no own locator, so FREE must name one
     with a locator qualifier (rules (90),(124)); the bare form is
     diagnosed. */

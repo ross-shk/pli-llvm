@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 #include "sema.h"
 #include <algorithm>
 #include <functional>
@@ -1133,7 +1133,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         }
         if (item.fileAttr) {
           // A FILE variable carries no runtime storage of its own: its identity
-          // is the compile-time slot that OPEN/CLOSE/FILE( f ) pass to libpli.
+          // is the compile-time slot that OPEN/CLOSE/FILE( f ) pass to pli_runtime.
           item.sym->fileAttr = true;
           item.sym->fileNonprint = item.nonprint;
           item.sym->fileSlot = nextFileSlot_++;

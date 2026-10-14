@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* GENERIC edge cases (rule 41): Generic selection allows multiple
    entry points with different parameter types. M8 feature - tests
    verify it is diagnosed as unimplemented. */

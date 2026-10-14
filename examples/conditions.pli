@@ -1,6 +1,6 @@
  /* Conditions: ON/SIGNAL/REVERT with resume. 
 
-    Run: plic conditions.pli -o conds */
+    Run: pli conditions.pli -o conds */
 
  conds: proc options(main);
    dcl a(5) fixed bin(31);

@@ -1,6 +1,6 @@
  /* DEFINED overlays + iSUB sliding views. 
    
-    Run: plic defined_isub.pli -o defd */
+    Run: pli defined_isub.pli -o defd */
 
  overlays: proc options(main);
    dcl x fixed bin(31);

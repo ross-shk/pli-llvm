@@ -1,10 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/get_decimal.sh — GET LIST into FIXED DECIMAL (QR1.2):
 # "12.5" reads 1250 into a dec(4,2); the program verifies itself.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/get_decimal
 mkdir -p tests/driver/out
 
@@ -23,7 +23,7 @@ cat > "$OUT.pli" <<'EOF'
  end get_decimal;
 EOF
 
-$PLIC "$OUT.pli" -o "$OUT" || \
+$PLI "$OUT.pli" -o "$OUT" || \
   { echo "FAIL get-decimal: compile"; exit 1; }
 printf '12.5\n' | "$OUT"
 exit 0

@@ -3,7 +3,7 @@
 //
 // The canary exercises the full MLIR pipeline without lowering any W1-W5
 // PL/I operation. All MLIR sources live under src/mlir/ and compile only when
-// PLIC_ENABLE_MLIR=ON (design-docs/mlir-runtime-migration-plan.md §P2 step 2).
+// PLI_ENABLE_MLIR=ON (design-docs/mlir-runtime-migration-plan.md §P2 step 2).
 
 #include "PliDialect.h"
 
@@ -19,7 +19,7 @@
 #define GET_OP_CLASSES
 #include "PliOps.cpp.inc"
 
-namespace mlir::plic {
+namespace mlir::pli {
 
 void PliDialect::initialize() { addOperations<BufferCopyOp>(); }
 
@@ -29,4 +29,4 @@ Attribute PliDialect::parseAttribute(DialectAsmParser& parser, Type type) const 
 
 void PliDialect::printAttribute(Attribute attr, DialectAsmPrinter& os) const {}
 
-} // namespace mlir::plic
+} // namespace mlir::pli

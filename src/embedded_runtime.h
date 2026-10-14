@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
-// embedded_runtime.h — the libpli bitcode bundle embedded as data.
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// embedded_runtime.h — the pli_runtime bitcode bundle embedded as data.
 //
-// Go/Zig embed their runtime/stdlib; plic embeds `libpli.bc` as a generated
-// byte array (see scripts/gen_embed.py), so no libpli.a/.bc ships at runtime.
+// Go/Zig embed their runtime/stdlib; pli embeds `pli_runtime.bc` as a generated
+// byte array (see scripts/gen_embed.py), so no libpli_runtime.a/.bc ships at runtime.
 #pragma once
 #include <cstddef>
 #include <string>
@@ -12,10 +12,10 @@
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/TargetParser/Triple.h"
 
-namespace plic {
-// The embedded libpli bitcode bundle as a bitcode buffer (no OS lookup).
+namespace pli {
+// The embedded pli_runtime bitcode bundle as a bitcode buffer (no OS lookup).
 llvm::MemoryBufferRef getEmbeddedLibPLI();
-// Byte size of the embedded bundle (reported by `plic version`).
+// Byte size of the embedded bundle (reported by `pli version`).
 size_t embeddedLibPLISize();
 
 // Per-target runtime blob for cross-compilation.
@@ -29,4 +29,4 @@ std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs();
 // Selects the appropriate runtime blob for the given target triple.
 // Falls back to the default (host) blob if no exact match.
 const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t);
-} // namespace plic
+} // namespace pli

@@ -1,6 +1,6 @@
  /* Procedures: nesting, RETURNS, RECURSIVE, OPTIONAL params, ENTRY.
 
-    Run: plic procedures_functions.pli -o p */
+    Run: pli procedures_functions.pli -o p */
 
  procs: proc options(main);
    dcl r fixed bin(31);

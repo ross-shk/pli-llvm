@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Rule (42): EXTERNAL scope - shared variables across modules.
    Build: two -c units linked together. */
 extvar: procedure options(main);

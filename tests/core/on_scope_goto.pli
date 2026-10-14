@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rules (81),(91): a local GO TO that leaves BEGIN blocks
     terminates them (Y33 "Activation and Termination of
     Blocks"), reverting the ON-units those blocks established;

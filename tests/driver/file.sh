@@ -1,12 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/file.sh — OPEN/CLOSE + FILE ( f ) (rules (100)-(103),(105)):
 # PUT FILE(f) writes list-directed output into a named file and GET FILE(f)
 # reads it back; the program verifies the values and prints PASS. It runs from
 # the gitignored out/ dir so the data file does not pollute the repo root.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/file
 mkdir -p tests/driver/out
 
@@ -40,7 +40,7 @@ cat > "$OUT.pli" <<'EOF'
  end file_test;
 EOF
 
-$PLIC "$OUT.pli" -o "$OUT" || { echo "FAIL file: compile"; exit 1; }
+$PLI "$OUT.pli" -o "$OUT" || { echo "FAIL file: compile"; exit 1; }
 ( cd tests/driver/out && ./file )
 rm -f tests/driver/out/filetest.dat
 exit 0

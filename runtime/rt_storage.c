@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* rt_storage.c — PL/I runtime library (libpli): heap: ALLOCATE/FREE. */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* rt_storage.c — PL/I runtime library (pli_runtime): heap: ALLOCATE/FREE. */
 #include "pli_rt.h"
 #include <stdlib.h>
 

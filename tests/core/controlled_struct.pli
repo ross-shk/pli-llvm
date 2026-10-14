@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
    /* rules (15),(23),(26),(87)-(90): a CONTROLLED structure is a generation
       unit — allocations push/pop the whole structure and each member's
       INITIAL is assigned with every allocation. Covers a scalar structure and

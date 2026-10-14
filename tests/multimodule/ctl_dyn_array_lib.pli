@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rules (15),(23),(87)-(90),(126): library side of ctl_dyn_array.pli.
     Each procedure owns a private CONTROLLED dynamic generation on its
     own slot key: scalar and (*) forms. No CONTROLLED dummy sharing. */

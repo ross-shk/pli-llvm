@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* W6 witness: aggregate/vector copy of a 10000-entry char(64) array,
    copied 1000 times, exercised in both runtime and LLVM modes. */
 w6_vector_test: procedure options(main);

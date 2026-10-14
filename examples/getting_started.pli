@@ -1,6 +1,6 @@
  /* Getting started: your first PL/I program. 
 
-    Run: plic getting_started.pli -o getting 
+    Run: pli getting_started.pli -o getting 
          ./getting */
 
  hello: proc options(main);

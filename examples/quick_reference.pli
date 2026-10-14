@@ -1,7 +1,7 @@
  /* Quick reference: one program touching each major feature. See 
     the per-topic examples for the full story. 
 
-    Run: plic quick_reference.pli -o quickref */
+    Run: pli quick_reference.pli -o quickref */
 
  quickref: proc options(main);
    /* types + expressions */

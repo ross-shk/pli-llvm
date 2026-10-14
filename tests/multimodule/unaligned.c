@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* ADR-169 proof: an UNALIGNED PL/I structure has the same layout as a C
    `__attribute__((packed))` struct, while the default ALIGNED structure
    matches an ordinary C struct. */

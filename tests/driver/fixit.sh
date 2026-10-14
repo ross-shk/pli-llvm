@@ -1,11 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/fixit.sh — diagnostics carry a fix-it: the suggested insertion
 # is rendered at the caret column. Exercises missing THEN, '=', PROCEDURE and
 # END. Rules (75),(86),(2),(7).
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/fixit
 mkdir -p "$OUT"
 ok=1
@@ -24,7 +24,7 @@ cat > "$OUT/miss_then.pli" <<'EOF'
    IF X = 1 PUT SKIP LIST('a');
  END MAIN;
 EOF
-"$PLIC" "$OUT/miss_then.pli" -fsyntax-only >"$OUT/miss_then.out" 2>&1
+"$PLI" "$OUT/miss_then.pli" -fsyntax-only >"$OUT/miss_then.out" 2>&1
 check_has "missing THEN" "$OUT/miss_then.out" "THEN "
 
 cat > "$OUT/miss_eq.pli" <<'EOF'
@@ -33,7 +33,7 @@ cat > "$OUT/miss_eq.pli" <<'EOF'
    X 1;
  END MAIN;
 EOF
-"$PLIC" "$OUT/miss_eq.pli" -fsyntax-only >"$OUT/miss_eq.out" 2>&1
+"$PLI" "$OUT/miss_eq.pli" -fsyntax-only >"$OUT/miss_eq.out" 2>&1
 check_has "missing =" "$OUT/miss_eq.out" "= "
 
 cat > "$OUT/miss_proc.pli" <<'EOF'
@@ -43,7 +43,7 @@ cat > "$OUT/miss_proc.pli" <<'EOF'
    PUT SKIP LIST(X);
  END MAIN;
 EOF
-"$PLIC" "$OUT/miss_proc.pli" -fsyntax-only >"$OUT/miss_proc.out" 2>&1
+"$PLI" "$OUT/miss_proc.pli" -fsyntax-only >"$OUT/miss_proc.out" 2>&1
 check_has "missing PROCEDURE" "$OUT/miss_proc.out" "PROCEDURE "
 
 cat > "$OUT/miss_end.pli" <<'EOF'
@@ -51,7 +51,7 @@ cat > "$OUT/miss_end.pli" <<'EOF'
    DECLARE X FIXED BINARY(31);
    X = 1;
 EOF
-"$PLIC" "$OUT/miss_end.pli" -fsyntax-only >"$OUT/miss_end.out" 2>&1
+"$PLI" "$OUT/miss_end.pli" -fsyntax-only >"$OUT/miss_end.out" 2>&1
 check_has "missing END" "$OUT/miss_end.out" "END MAIN;"
 
 [ "$ok" -eq 1 ] && echo PASS

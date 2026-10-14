@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 #include "preprocessor.h"
 
 #include <algorithm>
@@ -711,7 +711,7 @@ bool Preprocessor::handleInclude(const fs::path& input, const std::string& opera
 // expanded only the first time it is requested. The operand is a
 // comma-separated list; each item is a quoted string, a bare member name,
 // or a parenthesized name. Items resolve with the same search order as
-// %INCLUDE (including file's directory, -I, PLIC_INCLUDE_PATH, default).
+// %INCLUDE (including file's directory, -I, PLI_INCLUDE_PATH, default).
 bool Preprocessor::handleXInclude(const fs::path& input, const std::string& operand, int line,
                                   int col, std::string& output) {
   // Split on commas outside quotes and parens ('' is an escaped quote).

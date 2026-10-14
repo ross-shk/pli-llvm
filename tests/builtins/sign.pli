@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* SIGN built-in function: sign(x) returns -1, 0, or +1 for negative,
     zero, or positive numeric arguments; rule (123) Appendix 1. */
  sign_test: procedure options(main);

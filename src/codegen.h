@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 // codegen.h — in-process codegen + linking (LLVM MC + lld C++ API).
 //
 // Runtime-once rule (review §3, normative): user objects emit pure (no
-// runtime). The embedded libpli.bc materialises once per final link.
+// runtime). The embedded pli_runtime.bc materialises once per final link.
 #pragma once
 #include <memory>
 #include <string>
@@ -19,7 +19,7 @@ class TargetMachine;
 class raw_pwrite_stream;
 } // namespace llvm
 
-namespace plic {
+namespace pli {
 // Re-apply the audited P0 side-table facts (kRuntimeAttrs in irgen.cpp) to
 // one linked runtime definition whose declaration-time facts were lost at
 // link time. Unknown names (user functions) are left alone.
@@ -46,4 +46,4 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
                        llvm::raw_pwrite_stream& out, std::string& err);
 // Link object files + system libs into an executable in-process (needs lld).
 bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err);
-} // namespace plic
+} // namespace pli

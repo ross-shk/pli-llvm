@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 // codegen.cpp — in-process object emission + runtime-once helpers + lld link.
 #include "codegen.h"
 
@@ -13,7 +13,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
-#if PLIC_HAVE_LLD
+#if PLI_HAVE_LLD
 #include "lld/Common/Driver.h"
 // brew's lld ships only Common headers, so declare each driver's `link` entry
 // point with the public macro (no lld/ELF/Driver.h in the install).
@@ -22,7 +22,7 @@ LLD_HAS_DRIVER(macho)
 LLD_HAS_DRIVER(coff)
 #endif
 
-namespace plic {
+namespace pli {
 // Map the driver `-O` flag onto the LLVM pass-builder level.
 static llvm::OptimizationLevel toOptLevel(const std::string& s) {
   if (s == "-O0")
@@ -74,11 +74,11 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
   }
   // Parse against M's own context so Linker can merge directly.
   llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len),
-                            "libpli.bc");
+                            "pli_runtime.bc");
   llvm::Expected<std::unique_ptr<llvm::Module>> parsed =
       llvm::parseBitcodeFile(buf, M.getContext());
   if (!parsed) {
-    err = "cannot parse embedded libpli.bc";
+    err = "cannot parse embedded pli_runtime.bc";
     llvm::consumeError(parsed.takeError());
     return false;
   }
@@ -100,7 +100,7 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
   }
   // Pull in only referenced runtime functions (replaces ADR-079 dead-strip).
   if (llvm::Linker::linkModules(M, std::move(*parsed), llvm::Linker::LinkOnlyNeeded)) {
-    err = "cannot link embedded libpli.bc";
+    err = "cannot link embedded pli_runtime.bc";
     return false;
   }
   // Re-apply the audited P0 side-table facts (kRuntimeAttrs, irgen.cpp) on
@@ -124,10 +124,10 @@ std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTri
     return nullptr;
   }
   llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len),
-                            "libpli.bc");
+                            "pli_runtime.bc");
   auto modOrErr = llvm::parseBitcodeFile(buf, ctx);
   if (!modOrErr) {
-    err = "cannot parse embedded libpli.bc";
+    err = "cannot parse embedded pli_runtime.bc";
     llvm::consumeError(modOrErr.takeError());
     return nullptr;
   }
@@ -157,7 +157,7 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
 }
 
 bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err) {
-#if PLIC_HAVE_LLD
+#if PLI_HAVE_LLD
   // `args` are exactly the argv lld would receive (program name, then inputs).
   // `exitEarly=false` keeps the driver alive after a failed link; diagnostics
   // go to stderr (disableOutput=false).
@@ -179,4 +179,4 @@ bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& e
   return false;
 #endif
 }
-} // namespace plic
+} // namespace pli

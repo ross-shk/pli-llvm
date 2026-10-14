@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rules (123),(126): ADDR on array elements. Each addr(a(i)) is */
  /* a scaled POINTER into the array, for fixed, CONTROLLED dyn, */
  /* BASED fixed and runtime-(n) overlays, locator form, 2-D. A */

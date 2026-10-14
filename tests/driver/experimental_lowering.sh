@@ -1,12 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/experimental_lowering.sh — `--experimental-lowering` dispatches
 # assign_char/index between runtime and LLVM paths. In P0 the table is empty
 # so all modes must fall back to the pli_* runtime and produce identical output.
 # P1 flips the flag; this test catches any mode divergence before it ships.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=tests/driver/out/experimental_lowering
 mkdir -p "$OUT"
 
@@ -40,7 +40,7 @@ EOF
 
 # Detect MLIR support: a non-MLIR build diagnoses --experimental-lowering=mlir.
 mlir_modes=""
-if $PLIC --experimental-lowering=mlir -fsyntax-only "$OUT.witness.pli" 2>/dev/null; then
+if $PLI --experimental-lowering=mlir -fsyntax-only "$OUT.witness.pli" 2>/dev/null; then
   mlir_modes="mlir"
 fi
 
@@ -49,7 +49,7 @@ ok=1
 ref=""
 for mode in $modes; do
   bin="$OUT.witness.$mode"
-  if ! $PLIC --experimental-lowering="$mode" "$OUT.witness.pli" -o "$bin" 2>/dev/null; then
+  if ! $PLI --experimental-lowering="$mode" "$OUT.witness.pli" -o "$bin" 2>/dev/null; then
     echo "FAIL: mode=$mode compile failed"
     ok=0
     continue

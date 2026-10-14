@@ -1,6 +1,6 @@
  /* Storage: BASED views, CONTROLLED stack, heap ALLOCATE/FREE. 
     
-    Run: plic storage_based_controlled.pli */
+    Run: pli storage_based_controlled.pli */
 
  storage: proc options(main);
    dcl 1 target,

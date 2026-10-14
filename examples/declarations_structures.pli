@@ -1,6 +1,6 @@
  /* Structures: group fields, nest them, reuse shapes with LIKE. 
 
-    Run: plic declarations_structures.pli -o d */
+    Run: pli declarations_structures.pli -o d */
 
  dcls: proc options(main);
    dcl 1 employee,

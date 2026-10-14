@@ -1,6 +1,6 @@
  /* Preprocessor: shared header, shorthand, conditional code. 
 
-    Run: plic preprocessor.pli -o pp */
+    Run: pli preprocessor.pli -o pp */
 
  %include 'preprocessor_defs.inc';
 

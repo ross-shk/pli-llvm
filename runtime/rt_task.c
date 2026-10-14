@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
-/* rt_task.c — PL/I runtime library (libpli): multitasking: EVENT/WAIT/DELAY/TASK. */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* rt_task.c — PL/I runtime library (pli_runtime): multitasking: EVENT/WAIT/DELAY/TASK. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-#include "sync/plic_thread.h"
+#include "sync/pli_thread.h"
 
 /* Multitasking (rules (79),(82),(83), QR2.8): EVENT flags are i32 words owned
  * by PL/I variables (0 incomplete, 1 complete), serialised behind one

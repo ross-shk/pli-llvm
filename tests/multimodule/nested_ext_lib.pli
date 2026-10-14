@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Rule (42): External procedure callback across modules.
    Companion to nested_ext.pli. */
 nestedlib: package exports(lib_call_cb, lib_set_cb, lib_invoke_cb);

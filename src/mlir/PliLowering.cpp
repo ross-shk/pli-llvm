@@ -15,7 +15,7 @@
 #define GET_OP_CLASSES
 #include "PliOps.h.inc"
 
-namespace mlir::plic {
+namespace mlir::pli {
 
 struct BufferCopyOpLowering : public ConvertOpToLLVMPattern<BufferCopyOp> {
   BufferCopyOpLowering(const LLVMTypeConverter& converter)
@@ -39,4 +39,4 @@ void populatePliConversionPatterns(LLVMTypeConverter& converter, RewritePatternS
   patterns.add<BufferCopyOpLowering>(converter);
 }
 
-} // namespace mlir::plic
+} // namespace mlir::pli

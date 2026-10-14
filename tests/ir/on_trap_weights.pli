@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rules (91)-(94): the ZERODIVIDE trap edge is cold (~1% taken),
     so its branch carries !prof branch_weights favouring the
     hot resume edge; the no-handler edge in the dispatch does

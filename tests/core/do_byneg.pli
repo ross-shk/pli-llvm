@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* P1.1: one-branch DO loop — BY -1 (negative constant) counts
     down, omitted BY and BY 1 count up. The sema-folded byNegConst
     flag lets emitDoIter skip the runtime sign test and emit a

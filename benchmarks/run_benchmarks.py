@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 """
 PL/I Compiler Benchmark Harness
 
 Compiles and runs benchmarks with different optimization levels, comparing
 generated PL/I code performance against C baselines. Each benchmark has a
-`.pli` source (compiled with `plic`) and a `baseline/<name>_c.c` source
+`.pli` source (compiled with `pli`) and a `baseline/<name>_c.c` source
 (compiled with `clang`), all implementing the same algorithm.
 """
 import os
@@ -31,16 +31,16 @@ def _default_cc() -> str:
     return found or "clang"
 
 
-def _find_plic() -> Path:
-    """Locate the plic binary: newest of `build/plic[.exe]`, `build/cmake/...`."""
+def _find_pli() -> Path:
+    """Locate the pli binary: newest of `build/pli[.exe]`, `build/cmake/...`."""
     here = BENCHMARK_DIR.parent / "build"
     cands = [
-        here / ("plic.exe" if os.name == "nt" else "plic"),
-        here / "plic",
-        here / "plic.exe",
-        here / "cmake" / ("plic.exe" if os.name == "nt" else "plic"),
-        here / "cmake" / "plic",
-        here / "cmake" / "plic.exe",
+        here / ("pli.exe" if os.name == "nt" else "pli"),
+        here / "pli",
+        here / "pli.exe",
+        here / "cmake" / ("pli.exe" if os.name == "nt" else "pli"),
+        here / "cmake" / "pli",
+        here / "cmake" / "pli.exe",
     ]
     found = [c for c in cands if c.is_file()]
     if found:
@@ -48,7 +48,7 @@ def _find_plic() -> Path:
     return cands[0]
 
 
-PLIC = Path(os.environ.get("PLIC", str(_find_plic())))
+PLI = Path(os.environ.get("PLI", str(_find_pli())))
 CC = os.environ.get("CC", _default_cc())
 IS_MACOS = platform.system() == "Darwin"
 RESULTS_DIR = BENCHMARK_DIR / "results"
@@ -141,16 +141,16 @@ def get_machine_info() -> Dict:
         "cpu_count": os.cpu_count(),
     }
     try:
-        rc, out, _ = run_command([str(PLIC), "--version"])
+        rc, out, _ = run_command([str(PLI), "--version"])
         if rc == 0:
             first = out.strip().split('\n')[0]
-            info["plic_version"] = first
-            # Extract LLVM version from parenthetical: "plic v... (LLVM 23.1.2, ...)"
+            info["pli_version"] = first
+            # Extract LLVM version from parenthetical: "pli v... (LLVM 23.1.2, ...)"
             import re
             m = re.search(r'\(LLVM\s+([\d.]+)', first)
             info["llvm_version"] = m.group(1) if m else "unknown"
     except Exception:
-        info["plic_version"] = "unknown"
+        info["pli_version"] = "unknown"
         info["llvm_version"] = "unknown"
     try:
         rc, out, _ = run_command([CC, "--version"])
@@ -211,12 +211,12 @@ def _arch_flags() -> List[str]:
 
 def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
                 extra_flags: Optional[List[str]] = None) -> bool:
-    """Compile a PL/I benchmark with plic at the given optimization level.
+    """Compile a PL/I benchmark with pli at the given optimization level.
 
     If *extra_flags* is None, the bench-level EXTRA_PLIFLAGS are used (P1.6).
     """
     src = BENCHMARK_DIR / pli_file
-    cmd = [str(PLIC), str(src), "-o", str(output), opt]
+    cmd = [str(PLI), str(src), "-o", str(output), opt]
     cmd.extend(_stack_flags())
     cmd.extend(extra_flags if extra_flags is not None
                else EXTRA_PLIFLAGS.get(bench_name, []))
@@ -370,8 +370,8 @@ def main():
     parser.add_argument("--cc", type=str, default=None,
                         help="C compiler to use (overrides CC env var, "
                              "default: clang on Unix/macOS, clang.exe on Windows)")
-    parser.add_argument("--plic", type=str, default=None,
-                        help="plic binary to use (overrides PLIC env var)")
+    parser.add_argument("--pli", type=str, default=None,
+                        help="pli binary to use (overrides PLI env var)")
     parser.add_argument("--force", action="store_true",
                         help="recompile every benchmark even if the binary "
                              "is newer than the source (use after a compiler "
@@ -380,15 +380,15 @@ def main():
 
     # Use --cc argument if provided, otherwise fall back to env var, then default
     cc_cmd = args.cc or os.environ.get("CC", _default_cc())
-    plic_cmd = args.plic or os.environ.get("PLIC", str(_find_plic()))
-    global PLIC
-    PLIC = Path(plic_cmd)
+    pli_cmd = args.pli or os.environ.get("PLI", str(_find_pli()))
+    global PLI
+    PLI = Path(pli_cmd)
 
     print("PL/I Compiler Benchmark Harness")
     print("=" * 70)
 
-    if not PLIC.exists():
-        print(f"Error: plic not found at {PLIC}")
+    if not PLI.exists():
+        print(f"Error: pli not found at {PLI}")
         print("Build first: cmake -G Ninja -S . -B build/cmake && "
               "cmake --build build/cmake -j$(nproc)")
         return 1

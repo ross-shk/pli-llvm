@@ -1,4 +1,4 @@
-# plic — PL/I -> LLVM compiler (CMake + Ninja build, ADR-002: LLVM C++ API).
+# pli — PL/I -> LLVM compiler (CMake + Ninja build, ADR-002: LLVM C++ API).
 #
 # CMake + Ninja is the canonical build. The Makefile is a thin convenience
 # wrapper that delegates to this CMake build. Requires an LLVM installation
@@ -8,7 +8,7 @@
 #   cmake --build build/cmake -j$(nproc)
 # Quality gate: cmake --build build/cmake --target check
 cmake_minimum_required(VERSION 3.20)
-project(plic CXX C)
+project(pli CXX C)
 
 include(GNUInstallDirs)
 
@@ -17,7 +17,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
-option(PLIC_WERROR "Treat compiler warnings as errors" OFF)
+option(PLI_WERROR "Treat compiler warnings as errors" OFF)
 
 find_package(LLVM REQUIRED CONFIG)
 # Prebuilt LLVM 23 on Windows was compiled with ZLIB, zstd, and LibXml2 support
@@ -28,17 +28,17 @@ find_package(LLVM REQUIRED CONFIG)
 # ZSTD_compress2, ...), so the empty INTERFACE fallbacks below only satisfy
 # configure — without real libs the link fails with undefined symbols.
 # LibXml2 is the exception: manifest merging is covered by in-tree stubs
-# (runtime/libxml2_stubs.c, added to plic sources below).
+# (runtime/libxml2_stubs.c, added to pli sources below).
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # Drop the old dev-machine hint var (replaced by the *_ROOT vars below).
-  unset(PLIC_LLVM_DEPS_DIR CACHE)
-  set(PLIC_ZLIB_ROOT "" CACHE PATH "Optional zlib install prefix (contains lib/)")
-  set(PLIC_ZSTD_ROOT "" CACHE PATH "Optional zstd install prefix (contains lib/)")
-  set(PLIC_VCPKG_ROOT "C:/vcpkg/installed/x64-windows" CACHE PATH "Optional vcpkg triplet root")
+  unset(PLI_LLVM_DEPS_DIR CACHE)
+  set(PLI_ZLIB_ROOT "" CACHE PATH "Optional zlib install prefix (contains lib/)")
+  set(PLI_ZSTD_ROOT "" CACHE PATH "Optional zstd install prefix (contains lib/)")
+  set(PLI_VCPKG_ROOT "C:/vcpkg/installed/x64-windows" CACHE PATH "Optional vcpkg triplet root")
   # ZLIB (prefer static: the import lib would add a zlib.dll startup dependency)
   if(NOT TARGET ZLIB::ZLIB)
     find_file(ZLIB_LIB NAMES zlibstatic.lib zlib.lib
-      HINTS ${PLIC_ZLIB_ROOT}/lib ${PLIC_VCPKG_ROOT}/lib
+      HINTS ${PLI_ZLIB_ROOT}/lib ${PLI_VCPKG_ROOT}/lib
       NO_DEFAULT_PATH)
     if(ZLIB_LIB)
       add_library(ZLIB::ZLIB STATIC IMPORTED)
@@ -46,13 +46,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
       message(STATUS "ZLIB: ${ZLIB_LIB}")
     else()
       add_library(ZLIB::ZLIB INTERFACE IMPORTED)
-      message(WARNING "ZLIB not found (set PLIC_ZLIB_ROOT or install via vcpkg) — link will fail with undefined zlib symbols")
+      message(WARNING "ZLIB not found (set PLI_ZLIB_ROOT or install via vcpkg) — link will fail with undefined zlib symbols")
     endif()
   endif()
   # zstd
   if(NOT TARGET zstd::libzstd_static)
     find_file(ZSTD_LIB NAMES libzstd_static.lib zstd.lib
-      HINTS ${PLIC_ZSTD_ROOT}/lib ${PLIC_VCPKG_ROOT}/lib
+      HINTS ${PLI_ZSTD_ROOT}/lib ${PLI_VCPKG_ROOT}/lib
       NO_DEFAULT_PATH)
     if(ZSTD_LIB)
       add_library(zstd::libzstd_static STATIC IMPORTED)
@@ -60,27 +60,27 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
       message(STATUS "zstd: ${ZSTD_LIB}")
     else()
       add_library(zstd::libzstd_static INTERFACE IMPORTED)
-      message(WARNING "zstd not found (set PLIC_ZSTD_ROOT or install via vcpkg) — link will fail with undefined zstd symbols")
+      message(WARNING "zstd not found (set PLI_ZSTD_ROOT or install via vcpkg) — link will fail with undefined zstd symbols")
     endif()
   endif()
   # LibXml2: the prebuilt LLVM expects libxml2 (WindowsManifest merging) but
   # ships no binaries, and the old import-lib stub only covered 8 of the 16
   # symbols LLVM 23 needs (besides requiring a nonexistent libxml2.dll at
   # startup). Use an empty target and provide static abort-stubs in-tree
-  # (runtime/libxml2_stubs.c, added to plic sources below) instead.
+  # (runtime/libxml2_stubs.c, added to pli sources below) instead.
   if(NOT TARGET LibXml2::LibXml2)
     add_library(LibXml2::LibXml2 INTERFACE IMPORTED)
     message(STATUS "LibXml2: in-tree stubs (runtime/libxml2_stubs.c)")
   endif()
 endif()
 if(LLVM_PACKAGE_VERSION VERSION_LESS 23)
-  message(FATAL_ERROR "plic requires LLVM 23 or newer (found ${LLVM_PACKAGE_VERSION})")
+  message(FATAL_ERROR "pli requires LLVM 23 or newer (found ${LLVM_PACKAGE_VERSION})")
 endif()
 find_package(Clang REQUIRED CONFIG)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
 
-if(PLIC_ENABLE_MLIR)
+if(PLI_ENABLE_MLIR)
   find_package(MLIR REQUIRED CONFIG)
   message(STATUS "Using MLIR from ${MLIR_DIR}")
   # Verify LLVM and MLIR share the same installation prefix and version.
@@ -102,7 +102,7 @@ add_definitions(${LLVM_DEFINITIONS})
 set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
 set(CMAKE_C_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES})
 
-set(PLIC_SOURCES
+set(PLI_SOURCES
   src/main.cpp
   src/diag.cpp
   src/explain.cpp
@@ -117,10 +117,10 @@ set(PLIC_SOURCES
   src/embedded_runtime.cpp
 )
 
-# P2: MLIR canary dialect sources (compiled only with PLIC_ENABLE_MLIR=ON).
+# P2: MLIR canary dialect sources (compiled only with PLI_ENABLE_MLIR=ON).
 # The canary is a synthetic operation that exercises the full MLIR pipeline
 # without lowering any W1-W5 PL/I operation.
-if(PLIC_ENABLE_MLIR)
+if(PLI_ENABLE_MLIR)
   set(LLVM_TARGET_DEFINITIONS src/mlir/pli_dialect.td)
   mlir_tablegen(PliDialect.h.inc -gen-dialect-decls -dialect=pli
     EXTRA_INCLUDES ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
@@ -130,7 +130,7 @@ if(PLIC_ENABLE_MLIR)
     EXTRA_INCLUDES ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
   mlir_tablegen(PliOps.cpp.inc -gen-op-defs -dialect=pli
     EXTRA_INCLUDES ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
-  add_library(plic_mlir STATIC
+  add_library(pli_mlir STATIC
     src/mlir/PliDialect.cpp
     src/mlir/PliLowering.cpp
     src/mlir/PliMlirCanary.cpp
@@ -138,12 +138,12 @@ if(PLIC_ENABLE_MLIR)
     ${CMAKE_CURRENT_BINARY_DIR}/PliOps.h.inc
     ${CMAKE_CURRENT_BINARY_DIR}/PliDialect.cpp.inc
     ${CMAKE_CURRENT_BINARY_DIR}/PliOps.cpp.inc)
-   target_include_directories(plic_mlir PUBLIC
+   target_include_directories(pli_mlir PUBLIC
     ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${MLIR_INCLUDE_DIRS})
   # MLIR shared library provides all needed MLIR symbols (MLIR_LINK_MLIR_DYLIB=1).
-  target_link_libraries(plic_mlir PUBLIC MLIR)
-  target_compile_features(plic_mlir PRIVATE cxx_std_20)
+  target_link_libraries(pli_mlir PUBLIC MLIR)
+  target_compile_features(pli_mlir PRIVATE cxx_std_20)
 endif()
 
 set(RT_SRCS
@@ -152,7 +152,7 @@ set(RT_SRCS
   runtime/rt_storage.c runtime/rt_get.c runtime/rt_file.c
   runtime/rt_edit.c runtime/rt_task.c)
 
-# lld detection (review S1): in-process link gates on PLIC_HAVE_LLD.
+# lld detection (review S1): in-process link gates on PLI_HAVE_LLD.
 # Prerequisite: stock brew `llvm` ships no lld; fail configure with install hint.
 # Check both the LLVM prefix and the separate lld formula (brew install lld).
 find_path(LLD_INCLUDE_DIR lld/Common/Driver.h
@@ -171,7 +171,7 @@ endif()
 if(NOT LLD_INCLUDE_DIR)
   message(FATAL_ERROR "lld headers not found. Install lld (e.g., 'brew install lld') and ensure LLVM_DIR points to an LLVM with lld.")
 endif()
-set(PLIC_HAVE_LLD 1)
+set(PLI_HAVE_LLD 1)
 message(STATUS "lld headers found: ${LLD_INCLUDE_DIR}")
 
 # Find lld library directory (Homebrew puts dylibs in /opt/homebrew/opt/lld/lib)
@@ -187,55 +187,55 @@ find_library(LLD_COMMON_LIB NAMES lldCommon)
 set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_COMMON_LIB})
 message(STATUS "lld libraries: ${LLD_LIBRARIES}")
 
-add_library(plic_rules STATIC ${CMAKE_BINARY_DIR}/rules.cpp)
-target_include_directories(plic_rules PUBLIC ${CMAKE_SOURCE_DIR}/src)
+add_library(pli_rules STATIC ${CMAKE_BINARY_DIR}/rules.cpp)
+target_include_directories(pli_rules PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
-# Embedded version for `plic version` (Go/Zig style build info).
+# Embedded version for `pli version` (Go/Zig style build info).
 execute_process(COMMAND git describe --tags --always --dirty
-  OUTPUT_VARIABLE PLIC_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-if(NOT PLIC_VERSION)
-  set(PLIC_VERSION "unknown")
+  OUTPUT_VARIABLE PLI_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT PLI_VERSION)
+  set(PLI_VERSION "unknown")
 endif()
 
-add_executable(plic ${PLIC_SOURCES})
-target_include_directories(plic PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
+add_executable(pli ${PLI_SOURCES})
+target_include_directories(pli PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
 # LLVM/Clang headers as SYSTEM to suppress their warnings under -Werror.
-target_include_directories(plic SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
+target_include_directories(pli SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
 
 # Get the default target triple from LLVM for consistent bitcode generation.
 # Use clang (not CMAKE_C_COMPILER) for triple detection and bitcode generation
 # since GCC doesn't support -print-effective-triple or -emit-llvm -target.
-set(PLIC_TARGET_TRIPLE "" CACHE STRING "Target triple for runtime bitcode generation")
-if(NOT PLIC_TARGET_TRIPLE)
+set(PLI_TARGET_TRIPLE "" CACHE STRING "Target triple for runtime bitcode generation")
+if(NOT PLI_TARGET_TRIPLE)
   execute_process(
     COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -print-effective-triple
-    OUTPUT_VARIABLE PLIC_HOST_TRIPLE
+    OUTPUT_VARIABLE PLI_HOST_TRIPLE
     OUTPUT_STRIP_TRAILING_WHITESPACE)
-  set(PLIC_TARGET_TRIPLE ${PLIC_HOST_TRIPLE})
+  set(PLI_TARGET_TRIPLE ${PLI_HOST_TRIPLE})
 endif()
-message(STATUS "Target triple for bitcode: ${PLIC_TARGET_TRIPLE}")
+message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
-target_compile_definitions(plic PRIVATE
-  PLIC_RUNTIME_LIB="$<TARGET_FILE:libpli>"
-  PLIC_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_FILE_NAME:libpli>"
-  PLIC_RUNTIME_BC="${CMAKE_BINARY_DIR}/runtime.bc"
-  PLIC_INSTALL_RUNTIME_BC="${CMAKE_INSTALL_FULL_LIBDIR}/runtime.bc"
-  PLIC_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
-  PLIC_VERSION="${PLIC_VERSION}"
-  PLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
-  PLIC_HAVE_LLD=${PLIC_HAVE_LLD}
-  PLIC_TARGETS_TO_BUILD="host"
-  PLIC_TARGET_TRIPLE="${PLIC_TARGET_TRIPLE}"
-  PLIC_HAVE_LINUX_X86_64_RUNTIME=1
-  PLIC_HAVE_LINUX_AARCH64_RUNTIME=1
-  PLIC_HAVE_WINDOWS_X86_64_RUNTIME=1
-  PLIC_HAVE_WINDOWS_AARCH64_RUNTIME=1)
+target_compile_definitions(pli PRIVATE
+  PLI_RUNTIME_LIB="$<TARGET_FILE:pli_runtime>"
+  PLI_INSTALL_RUNTIME_LIB="${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_FILE_NAME:pli_runtime>"
+  PLI_RUNTIME_BC="${CMAKE_BINARY_DIR}/runtime.bc"
+  PLI_INSTALL_RUNTIME_BC="${CMAKE_INSTALL_FULL_LIBDIR}/runtime.bc"
+  PLI_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
+  PLI_VERSION="${PLI_VERSION}"
+  PLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
+  PLI_HAVE_LLD=${PLI_HAVE_LLD}
+  PLI_TARGETS_TO_BUILD="host"
+  PLI_TARGET_TRIPLE="${PLI_TARGET_TRIPLE}"
+  PLI_HAVE_LINUX_X86_64_RUNTIME=1
+  PLI_HAVE_LINUX_AARCH64_RUNTIME=1
+  PLI_HAVE_WINDOWS_X86_64_RUNTIME=1
+  PLI_HAVE_WINDOWS_AARCH64_RUNTIME=1)
 
-# P2: wire MLIR canary library into plic when MLIR is enabled.
-if(PLIC_ENABLE_MLIR)
-  target_compile_definitions(plic PRIVATE PLIC_ENABLE_MLIR)
-  target_link_libraries(plic PRIVATE plic_mlir)
-  # plic_mlir is PUBLIC-linked, so MLIR_INCLUDE_DIRS propagates transitively.
+# P2: wire MLIR canary library into pli when MLIR is enabled.
+if(PLI_ENABLE_MLIR)
+  target_compile_definitions(pli PRIVATE PLI_ENABLE_MLIR)
+  target_link_libraries(pli PRIVATE pli_mlir)
+  # pli_mlir is PUBLIC-linked, so MLIR_INCLUDE_DIRS propagates transitively.
 endif()
 
 # Link LLVM components needed for in-process codegen + linking.
@@ -276,13 +276,13 @@ if(LLD_LIBRARIES AND NOT "${LLD_LIBRARIES}" STREQUAL "lldELF lldMachO lldCOFF ll
 endif()
 
 # Use Clang imported targets directly
-target_link_libraries(plic PRIVATE plic_rules
+target_link_libraries(pli PRIVATE pli_rules
   ${llvm_libs_lld} ${llvm_libs_mc} ${llvm_libs_core}
   clangFrontend clangParse clangLex clangBasic clangAST)
 
 # P2: link MLIR targets when MLIR is enabled.
-if(PLIC_ENABLE_MLIR)
-  target_link_libraries(plic PRIVATE plic_mlir)
+if(PLI_ENABLE_MLIR)
+  target_link_libraries(pli PRIVATE pli_mlir)
 endif()
 
 # compiler-rt provides __divti3 (128-bit division) needed for i128 arithmetic
@@ -293,7 +293,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     NAMES clang_rt.builtins-x86_64.lib clang_rt.builtins-aarch64.lib
     HINTS ${CMAKE_PREFIX_PATH}/lib/clang/${_LLVM_MAJOR}/lib/windows)
   if(CLANG_RT_BUILTINS)
-    target_link_libraries(plic PRIVATE ${CLANG_RT_BUILTINS})
+    target_link_libraries(pli PRIVATE ${CLANG_RT_BUILTINS})
     message(STATUS "compiler-rt builtins: ${CLANG_RT_BUILTINS}")
   else()
     message(WARNING "compiler-rt builtins not found (clang_rt.builtins) — 128-bit division may fail to link")
@@ -301,10 +301,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 endif()
 
 # clang-cl + lld-link: CMake doesn't auto-detect MSVC C++ stdlib (IMPLICIT_LINK_LIBRARIES is empty).
-# The prebuilt LLVM 23 libraries use /MT (static CRT), so plic must use /MT too to avoid
+# The prebuilt LLVM 23 libraries use /MT (static CRT), so pli must use /MT too to avoid
 # RuntimeLibrary mismatch (MT_StaticRelease vs MD_DynamicRelease).
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  set_property(TARGET plic PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+  set_property(TARGET pli PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
   # CMake already invokes lld-link.exe directly for the clang-cl+Ninja link
   # (see CMAKE_LINKER); passing -fuse-ld=lld here would forward a driver-only
   # flag to lld-link ("ignoring unknown argument"). The -fuse-ld=lld flag is
@@ -313,14 +313,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
   # /DEFAULTLIB:libcmt.lib pulls in the MT-variant CRT and C++ stdlib objects
   # (provides __std_remove_8, __std_replace_8, ___chkstk_ms, etc.) without a
   # RuntimeLibrary mismatch. MSVC libs must come after LLVM/lld libs on the link line.
-  target_link_options(plic PRIVATE /DEFAULTLIB:libcmt.lib)
-  target_link_libraries(plic PRIVATE
+  target_link_options(pli PRIVATE /DEFAULTLIB:libcmt.lib)
+  target_link_libraries(pli PRIVATE
     kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib
     advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib)
   # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
   # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
   # Compiled from runtime/stl_stubs.c as part of the build.
-  target_sources(plic PRIVATE
+  target_sources(pli PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c)
   # Silence expected clang warnings for the __std_*/xml* helper stubs
@@ -336,17 +336,17 @@ endif()
 # Force-include lld + host target so their symbols survive static dead-stripping.
 # Homebrew lld only provides dynamic libraries, so use those directly.
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  target_link_options(plic PRIVATE
+  target_link_options(pli PRIVATE
     -Wl,-force_load,${LLD_ELF_LIB}
     -Wl,-force_load,${LLD_MACHO_LIB}
     -Wl,-force_load,${LLD_COFF_LIB})
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  target_link_options(plic PRIVATE
+  target_link_options(pli PRIVATE
     /WHOLEARCHIVE:${LLD_ELF_LIB}
     /WHOLEARCHIVE:${LLD_MACHO_LIB}
     /WHOLEARCHIVE:${LLD_COFF_LIB})
 else()
-  target_link_options(plic PRIVATE
+  target_link_options(pli PRIVATE
     -Wl,--whole-archive
     ${LLD_ELF_LIB}
     ${LLD_MACHO_LIB}
@@ -355,8 +355,8 @@ else()
 endif()
 
 # Static C++ runtime for portability.
-# Windows: plic itself uses /MT (MSVC_RUNTIME_LIBRARY=MultiThreaded, set above)
-# to match the prebuilt LLVM 23 libs; libpli stays on the /MD default so user
+# Windows: pli itself uses /MT (MSVC_RUNTIME_LIBRARY=MultiThreaded, set above)
+# to match the prebuilt LLVM 23 libs; pli_runtime stays on the /MD default so user
 # programs link against the dynamic CRT (see src/main.cpp linkCrtFlag).
 # CRT selection is a per-target compile property, not a link option
 # (passing /MD//MT to lld-link warns LNK4044), so no link options here.
@@ -365,42 +365,42 @@ if(APPLE)
 elseif(WIN32)
   # No link options needed (see above).
 else()
-  target_link_options(plic PRIVATE -static-libstdc++ -static-libgcc)
+  target_link_options(pli PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
 # Cross-compilation bitcode generation (Phase 2+): requires sysroots.
-option(PLIC_CROSS_BITCODE "Generate bitcode for cross-targets (needs sysroots)" OFF)
+option(PLI_CROSS_BITCODE "Generate bitcode for cross-targets (needs sysroots)" OFF)
 
 # P2: optional MLIR support for the canary dialect spike. Off by default;
 # an MLIR-enabled build must link against the matching LLVM/MLIR package.
-option(PLIC_ENABLE_MLIR "Build the experimental MLIR canary dialect (P2)" OFF)
+option(PLI_ENABLE_MLIR "Build the experimental MLIR canary dialect (P2)" OFF)
 
-# libpli runtime (C11). One source per section so the archive strips unused
+# pli runtime (C11). One source per section so the archive strips unused
 # pieces (ADR-079); the same sources feed both runtime paths below.
-add_library(libpli STATIC ${RT_SRCS})
-set_target_properties(libpli PROPERTIES OUTPUT_NAME pli)
+add_library(pli_runtime STATIC ${RT_SRCS})
+set_target_properties(pli_runtime PROPERTIES OUTPUT_NAME pli_runtime)
 
-# Warnings: -Wall -Wextra on the C++ driver (libpli is C11 with its own style).
+# Warnings: -Wall -Wextra on the C++ driver (pli_runtime is C11 with its own style).
 # Use Clang compiler ID check FIRST: clang-cl defines the Clang ID but also
 # sets MSVC=TRUE in CMake. We want -Wall -Wextra for clang-cl, not /W3.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  target_compile_options(plic PRIVATE -Wall -Wextra)
-  if(PLIC_WERROR)
-    target_compile_options(plic PRIVATE -Werror)
+  target_compile_options(pli PRIVATE -Wall -Wextra)
+  if(PLI_WERROR)
+    target_compile_options(pli PRIVATE -Werror)
   endif()
 elseif(MSVC)
-  target_compile_options(plic PRIVATE /W3)
-  if(PLIC_WERROR)
-    target_compile_options(plic PRIVATE /WX)
+  target_compile_options(pli PRIVATE /W3)
+  if(PLI_WERROR)
+    target_compile_options(pli PRIVATE /WX)
   endif()
 endif()
 
 # Multi-target embedded runtime: generate bitcode for all supported targets.
-if(PLIC_CROSS_BITCODE)
-  set(PLIC_TARGETS "x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;x86_64-pc-windows-gnu;aarch64-pc-windows-gnu")
+if(PLI_CROSS_BITCODE)
+  set(PLI_TARGETS "x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;x86_64-pc-windows-gnu;aarch64-pc-windows-gnu")
 
   # Per-target bitcode generation and embedding.
-  foreach(target ${PLIC_TARGETS})
+  foreach(target ${PLI_TARGETS})
     string(REPLACE "-" "_" target_suffix "_${target}")
     set(TARGET_BC_DIR ${CMAKE_BINARY_DIR}/bc/${target})
     set(TARGET_RT_BCS "")
@@ -421,22 +421,22 @@ if(PLIC_CROSS_BITCODE)
       list(APPEND TARGET_RT_BCS ${TARGET_BC_DIR}/${base}.bc)
     endforeach()
     add_custom_command(
-      OUTPUT ${TARGET_BC_DIR}/libpli.bc
-      COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_RT_BCS} -o ${TARGET_BC_DIR}/libpli.bc
+      OUTPUT ${TARGET_BC_DIR}/pli_runtime.bc
+      COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_RT_BCS} -o ${TARGET_BC_DIR}/pli_runtime.bc
       DEPENDS ${TARGET_RT_BCS})
     add_custom_command(
       OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-              ${TARGET_BC_DIR}/libpli.bc ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
+              ${TARGET_BC_DIR}/pli_runtime.bc ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
               ${target_suffix}
-      DEPENDS ${TARGET_BC_DIR}/libpli.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-      COMMENT "embedding libpli.bc for ${target}")
+      DEPENDS ${TARGET_BC_DIR}/pli_runtime.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+      COMMENT "embedding pli_runtime.bc for ${target}")
     add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc)
-    add_dependencies(plic embedded_runtime_inc${target_suffix})
+    add_dependencies(pli embedded_runtime_inc${target_suffix})
   endforeach()
 else()
   # Define empty per-target blobs for non-cross builds (compiler still works)
-  # Target suffixes must match PLIC_TARGETS naming convention (full triple)
+  # Target suffixes must match PLI_TARGETS naming convention (full triple)
   foreach(target IN ITEMS x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu aarch64-pc-windows-gnu)
     string(REPLACE "-" "_" target_suffix "_${target}")
     add_custom_command(
@@ -447,12 +447,12 @@ else()
       DEPENDS ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
       COMMENT "stub embedding for ${target}")
     add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc)
-    add_dependencies(plic embedded_runtime_inc${target_suffix})
+    add_dependencies(pli embedded_runtime_inc${target_suffix})
   endforeach()
 endif()
 
 # Default target (host) bitcode for backward compatibility.
-set(DEFAULT_BC_DIR ${CMAKE_BINARY_DIR}/bc/${PLIC_TARGET_TRIPLE})
+set(DEFAULT_BC_DIR ${CMAKE_BINARY_DIR}/bc/${PLI_TARGET_TRIPLE})
 set(DEFAULT_RT_BCS "")
 foreach(src ${RT_SRCS})
   get_filename_component(base ${src} NAME_WE)
@@ -464,24 +464,24 @@ foreach(src ${RT_SRCS})
             -O2
             -ffunction-sections -fdata-sections
             $<$<PLATFORM_ID:Linux>:-fPIC>
-            -target ${PLIC_TARGET_TRIPLE}
+            -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src}
-    COMMENT "bitcode: ${base} for ${PLIC_TARGET_TRIPLE}")
+    COMMENT "bitcode: ${base} for ${PLI_TARGET_TRIPLE}")
   list(APPEND DEFAULT_RT_BCS ${DEFAULT_BC_DIR}/${base}.bc)
 endforeach()
 add_custom_command(
-  OUTPUT ${DEFAULT_BC_DIR}/libpli.bc
-  COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${DEFAULT_RT_BCS} -o ${DEFAULT_BC_DIR}/libpli.bc
+  OUTPUT ${DEFAULT_BC_DIR}/pli_runtime.bc
+  COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${DEFAULT_RT_BCS} -o ${DEFAULT_BC_DIR}/pli_runtime.bc
   DEPENDS ${DEFAULT_RT_BCS})
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime.inc
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-          ${DEFAULT_BC_DIR}/libpli.bc ${CMAKE_BINARY_DIR}/embedded_runtime.inc
-  DEPENDS ${DEFAULT_BC_DIR}/libpli.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-  COMMENT "embedding libpli.bc for default target ${PLIC_TARGET_TRIPLE}")
+          ${DEFAULT_BC_DIR}/pli_runtime.bc ${CMAKE_BINARY_DIR}/embedded_runtime.inc
+  DEPENDS ${DEFAULT_BC_DIR}/pli_runtime.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+  COMMENT "embedding pli_runtime.bc for default target ${PLI_TARGET_TRIPLE}")
 add_custom_target(embedded_runtime_inc_default DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc)
-add_dependencies(plic embedded_runtime_inc_default)
+add_dependencies(pli embedded_runtime_inc_default)
 
 # File-based bitcode runtime (OPTIMIZATION.md §10, P3): the same sources
 # compiled to LLVM IR with the matching clang and merged into runtime.bc with
@@ -490,7 +490,7 @@ add_dependencies(plic embedded_runtime_inc_default)
 # runtime.bc with the LLVM version, checked at load time so a stale bitcode
 # is diagnosed, not mis-linked. (The embedded blob above serves the
 # in-process path; this file serves --runtime-bc and the Makefile build.)
-set(PLIC_RUNTIME_BC ${CMAKE_BINARY_DIR}/runtime.bc)
+set(PLI_RUNTIME_BC ${CMAKE_BINARY_DIR}/runtime.bc)
 set(PLI_RUNTIME_BCS "")
 foreach(rt_src ${RT_SRCS})
   get_filename_component(rt_base ${rt_src} NAME_WE)
@@ -498,11 +498,11 @@ foreach(rt_src ${RT_SRCS})
   add_custom_command(
     OUTPUT ${rt_bc}
     COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c
-            -DPLIC_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
+            -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
             -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
             -O2 -ffunction-sections -fdata-sections
             $<$<PLATFORM_ID:Linux>:-fPIC>
-            -target ${PLIC_TARGET_TRIPLE}
+            -target ${PLI_TARGET_TRIPLE}
             ${CMAKE_SOURCE_DIR}/${rt_src} -o ${rt_bc}
     DEPENDS ${CMAKE_SOURCE_DIR}/${rt_src}
     COMMENT "Compiling ${rt_base}.c to bitcode"
@@ -511,14 +511,14 @@ foreach(rt_src ${RT_SRCS})
   list(APPEND PLI_RUNTIME_BCS ${rt_bc})
 endforeach()
 add_custom_command(
-  OUTPUT ${PLIC_RUNTIME_BC}
+  OUTPUT ${PLI_RUNTIME_BC}
   COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${PLI_RUNTIME_BCS}
-          -o ${PLIC_RUNTIME_BC}
+          -o ${PLI_RUNTIME_BC}
   DEPENDS ${PLI_RUNTIME_BCS}
   COMMENT "Merging the runtime bitcode (runtime.bc)"
   VERBATIM
 )
-add_custom_target(runtime_bc ALL DEPENDS ${PLIC_RUNTIME_BC})
+add_custom_target(runtime_bc ALL DEPENDS ${PLI_RUNTIME_BC})
 
 # Generated rules table for --explain (see scripts/gen_rules.py); the spec and
 # the generator are the source of truth, so regenerate on every build.
@@ -533,16 +533,16 @@ add_custom_command(
 )
 
 enable_testing()
-add_test(NAME plic-tests COMMAND ${Python3_EXECUTABLE}
+add_test(NAME pli-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/run_tests.py)
-set_tests_properties(plic-tests PROPERTIES
+set_tests_properties(pli-tests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  ENVIRONMENT "PLIC=$<TARGET_FILE:plic>;RTLIB=$<TARGET_FILE:libpli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
+  ENVIRONMENT "PLI=$<TARGET_FILE:pli>;RTLIB=$<TARGET_FILE:pli_runtime>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
 
-install(TARGETS plic libpli
+install(TARGETS pli pli_runtime
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES ${PLIC_RUNTIME_BC} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES ${PLI_RUNTIME_BC} DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 # --- Quality gate: formatting, static analysis, warnings-as-errors ---------------
 # The clang tooling is sought from the same LLVM installation as the compiler.
@@ -554,12 +554,12 @@ find_program(SCAN_BUILD_BIN NAMES scan-build scan-build-py
   HINTS ${LLVM_TOOLS_BINARY_DIR})
 
 # All project sources managed by clang-format / clang-tidy.
-  set(ALL_CPP_SOURCES ${PLIC_SOURCES})
+  set(ALL_CPP_SOURCES ${PLI_SOURCES})
   set(ALL_CPP_HEADERS
     src/ast.h src/codegen.h src/diag.h src/embedded_runtime.h src/explain.h
     src/hir.h src/irgen.h src/lexer.h src/parser.h src/preprocessor.h
     src/sema.h src/target.h src/token.h src/types.h)
-  if(PLIC_ENABLE_MLIR)
+  if(PLI_ENABLE_MLIR)
     list(APPEND ALL_CPP_SOURCES src/mlir/PliDialect.cpp src/mlir/PliLowering.cpp)
     list(APPEND ALL_CPP_HEADERS src/mlir/PliDialect.h)
   endif()
@@ -567,7 +567,7 @@ set(ALL_C_SOURCES ${RT_SRCS})
 set(ALL_C_HEADERS
   runtime/pli_rt.h runtime/pli_rt_state.h runtime/pli_rt_abi.def
   runtime/pli_wide128.h
-  runtime/sync/plic_thread.h)
+  runtime/sync/pli_thread.h)
 # clang-format scope: src/ only (ADR-042: src/ is clang-format-normalized).
 # The C runtime follows its own brace-less style; clang-tidy covers C++ only.
 set(ALL_FORMAT_SOURCES ${ALL_CPP_SOURCES} ${ALL_CPP_HEADERS})
@@ -592,23 +592,23 @@ add_custom_target(tidy
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "clang-tidy: analyzing C++ sources"
   VERBATIM)
-add_dependencies(tidy plic)
+add_dependencies(tidy pli)
 
-# werror: rebuild with -DPLIC_WERROR=ON to enforce warnings-as-errors.
+# werror: rebuild with -DPLI_WERROR=ON to enforce warnings-as-errors.
 add_custom_target(werror
-  COMMAND ${CMAKE_COMMAND} -S ${CMAKE_SOURCE_DIR} -B ${CMAKE_BINARY_DIR} -DPLIC_WERROR=ON
-  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target plic
-  COMMENT "Building plic with -Werror (PLIC_WERROR=ON)"
+  COMMAND ${CMAKE_COMMAND} -S ${CMAKE_SOURCE_DIR} -B ${CMAKE_BINARY_DIR} -DPLI_WERROR=ON
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target pli
+  COMMENT "Building pli with -Werror (PLI_WERROR=ON)"
   VERBATIM)
 
-# scan: run the clang static analyzer (scan-build) over the plic build.
+# scan: run the clang static analyzer (scan-build) over the pli build.
 add_custom_target(scan
   COMMAND ${SCAN_BUILD_BIN}
     --use-c++=${CMAKE_CXX_COMPILER}
     --use-cc=${CMAKE_C_COMPILER}
-    ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target plic
+    ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target pli
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "scan-build: static analyzer over plic"
+  COMMENT "scan-build: static analyzer over pli"
   VERBATIM)
 
 # check: full analysis gate — format check + static analysis + warnings-as-errors.
@@ -620,16 +620,16 @@ add_custom_target(check
   COMMENT "Running analysis gate (fmt-check + tidy + werror)"
   VERBATIM)
 
-# size-report: report the stripped size of the plic binary.
+# size-report: report the stripped size of the pli binary.
 # Use a portable CMake script for size reporting — stat/sh cannot be used
 # in CMake custom targets on Windows (cmd.exe context with Ninja).
 file(WRITE ${CMAKE_BINARY_DIR}/size_report.cmake
-  "if(NOT EXISTS \"${CMAKE_BINARY_DIR}/plic.strip\")\n"
-  "  message(FATAL_ERROR \"Stripped binary not found: ${CMAKE_BINARY_DIR}/plic.strip\")\n"
+  "if(NOT EXISTS \"${CMAKE_BINARY_DIR}/pli.strip\")\n"
+  "  message(FATAL_ERROR \"Stripped binary not found: ${CMAKE_BINARY_DIR}/pli.strip\")\n"
   "endif()\n"
-  "file(SIZE \"${CMAKE_BINARY_DIR}/plic.strip\" plic_size)\n"
-  "message(STATUS \"Stripped size of plic: \${plic_size} bytes (target: < 100 MB, hard cap 150 MB)\")\n"
-  "if(\${plic_size} GREATER 157286400)\n"
+  "file(SIZE \"${CMAKE_BINARY_DIR}/pli.strip\" pli_size)\n"
+  "message(STATUS \"Stripped size of pli: \${pli_size} bytes (target: < 100 MB, hard cap 150 MB)\")\n"
+  "if(\${pli_size} GREATER 157286400)\n"
   "  message(FATAL_ERROR \"Binary exceeds 150 MB limit\")\n"
   "endif()\n")
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -637,29 +637,29 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     HINTS ${CMAKE_PREFIX_PATH}/bin ${LLVM_TOOLS_BINARY_DIR})
   if(LLVM_OBJCOPY_BIN)
     add_custom_target(size-report
-      COMMAND ${LLVM_OBJCOPY_BIN} --strip-all -o ${CMAKE_BINARY_DIR}/plic.strip $<TARGET_FILE:plic>
+      COMMAND ${LLVM_OBJCOPY_BIN} --strip-all -o ${CMAKE_BINARY_DIR}/pli.strip $<TARGET_FILE:pli>
       COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/size_report.cmake
-      COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
+      COMMENT "Stripped size of pli (target: < 100 MB, hard cap 150 MB)")
   else()
     # No llvm-objcopy: report the raw binary size portably (same 150 MB gate).
     file(WRITE ${CMAKE_BINARY_DIR}/size_report_raw.cmake
-      "file(SIZE \"\${PLIC_BIN}\" plic_size)\n"
-      "message(STATUS \"Raw size of plic (no llvm-objcopy): \${plic_size} bytes (target: < 100 MB, hard cap 150 MB)\")\n"
-      "if(\${plic_size} GREATER 157286400)\n"
+      "file(SIZE \"\${PLI_BIN}\" pli_size)\n"
+      "message(STATUS \"Raw size of pli (no llvm-objcopy): \${pli_size} bytes (target: < 100 MB, hard cap 150 MB)\")\n"
+      "if(\${pli_size} GREATER 157286400)\n"
       "  message(FATAL_ERROR \"Binary exceeds 150 MB limit\")\n"
       "endif()\n")
     add_custom_target(size-report
-      COMMAND ${CMAKE_COMMAND} -DPLIC_BIN=$<TARGET_FILE:plic> -P ${CMAKE_BINARY_DIR}/size_report_raw.cmake
-      COMMENT "Raw plic size (target: < 100 MB, hard cap 150 MB)")
+      COMMAND ${CMAKE_COMMAND} -DPLI_BIN=$<TARGET_FILE:pli> -P ${CMAKE_BINARY_DIR}/size_report_raw.cmake
+      COMMENT "Raw pli size (target: < 100 MB, hard cap 150 MB)")
   endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   add_custom_target(size-report
-    COMMAND strip -o ${CMAKE_BINARY_DIR}/plic.strip $<TARGET_FILE:plic>
+    COMMAND strip -o ${CMAKE_BINARY_DIR}/pli.strip $<TARGET_FILE:pli>
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/size_report.cmake
-    COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
+    COMMENT "Stripped size of pli (target: < 100 MB, hard cap 150 MB)")
 else()
   add_custom_target(size-report
-    COMMAND strip $<TARGET_FILE:plic> -o ${CMAKE_BINARY_DIR}/plic.strip
+    COMMAND strip $<TARGET_FILE:pli> -o ${CMAKE_BINARY_DIR}/pli.strip
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/size_report.cmake
-    COMMENT "Stripped size of plic (target: < 100 MB, hard cap 150 MB)")
+    COMMENT "Stripped size of pli (target: < 100 MB, hard cap 150 MB)")
 endif()

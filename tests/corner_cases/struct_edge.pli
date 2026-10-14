@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Structure BY NAME and assignment edge cases (ADR-037, ADR-038, TR 25.084
    rules 11,86,124,125,127): BY NAME copies same-named members recursively,
    skipping absent names. Whole-structure assignment requires identical shape.

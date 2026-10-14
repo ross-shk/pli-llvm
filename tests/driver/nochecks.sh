@@ -1,11 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/nochecks.sh — (NOSUBSCRIPTRANGE) and (NOZERODIVIDE)
 # elide their traps (rules (60)-(63), ADR-112): the checks vanish
 # from the IR, and formerly-aborting programs complete.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=tests/driver/out/nochecks
 mkdir -p tests/driver/out
 
@@ -20,9 +20,9 @@ subdemo: procedure options(main);
    put skip list(v);
 end subdemo;
 EOF
-$PLIC "$OUT.sub.pli" -emit-llvm -o "$OUT.sub.ll" || { echo "FAIL nochecks: sub emit"; exit 1; }
+$PLI "$OUT.sub.pli" -emit-llvm -o "$OUT.sub.ll" || { echo "FAIL nochecks: sub emit"; exit 1; }
 if grep -qE "sub\.fail|pli_subscript_oob" "$OUT.sub.ll"; then echo "FAIL nochecks: subscript checks remain"; exit 1; fi
-$PLIC "$OUT.sub.pli" -o "$OUT.sub" || { echo "FAIL nochecks: sub compile"; exit 1; }
+$PLI "$OUT.sub.pli" -o "$OUT.sub" || { echo "FAIL nochecks: sub compile"; exit 1; }
 echo 9 | "$OUT.sub" >/dev/null 2>&1; rc=$?
 if [ "$rc" -ne 0 ]; then echo "FAIL nochecks: prefixed OOB aborted"; exit 1; fi
 echo 2 | "$OUT.sub" | grep -q 22 || { echo "FAIL nochecks: in-bounds wrong"; exit 1; }
@@ -38,9 +38,9 @@ zddemo: procedure options(main);
    put skip list('done');
 end zddemo;
 EOF
-$PLIC "$OUT.zd.pli" -emit-llvm -o "$OUT.zd.ll" || { echo "FAIL nochecks: zd emit"; exit 1; }
+$PLI "$OUT.zd.pli" -emit-llvm -o "$OUT.zd.ll" || { echo "FAIL nochecks: zd emit"; exit 1; }
 if grep -qE "zd\.trap|pli_zerodivide" "$OUT.zd.ll"; then echo "FAIL nochecks: zerodivide checks remain"; exit 1; fi
-$PLIC "$OUT.zd.pli" -o "$OUT.zd" || { echo "FAIL nochecks: zd compile"; exit 1; }
+$PLI "$OUT.zd.pli" -o "$OUT.zd" || { echo "FAIL nochecks: zd compile"; exit 1; }
 echo 0 | "$OUT.zd" >/dev/null 2>&1; rc=$?
 if [ "$rc" -ne 0 ]; then echo "FAIL nochecks: prefixed 7/0 aborted"; exit 1; fi
 echo 2 | "$OUT.zd" | grep -q done || { echo "FAIL nochecks: nonzero divide wrong"; exit 1; }

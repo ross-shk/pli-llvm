@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* SYSTEM built-in (rule (123)): invokes the system command processor with
     command string x and returns the exit code as FIXED BIN(31). */
  system_test: procedure options(main);

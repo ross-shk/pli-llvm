@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 // hir.h — high-level IR (ADR-005).
 //
 // HIR is PL/I with everything implicit made explicit, still structured. It
@@ -285,5 +285,5 @@ struct HProgram {
 // implicit-conversion site. Does not mutate the AST.
 HProgram lower(const Program& prog);
 
-// Print the HIR tree (for `plic --print-hir`).
+// Print the HIR tree (for `pli --print-hir`).
 void printHIR(const HProgram& p, std::ostream& os);

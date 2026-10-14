@@ -1,10 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/multimod.sh — multi-module PL/I programs (rules
 # (2),(38),(42)): a library module provides external procedures,
 # the MAIN module calls them across the link. Each unit compiles
-# with -c; cc links the objects with libpli. It runs from the
+# with -c; cc links the objects with pli_runtime. It runs from the
 # gitignored out/ dir so artifacts do not pollute the repo.
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
@@ -14,9 +14,9 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
   *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
 esac
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 CC=${CC:-${CLANG:-clang}}
-RTLIB=${RTLIB:-./build/libpli.a}
+RTLIB=${RTLIB:-./build/cmake/libpli_runtime.a}
 OUT=tests/driver/out/multimod
 mkdir -p tests/driver/out
 
@@ -55,9 +55,9 @@ cat > "$OUT.main.pli" <<'EOF'
  end multimain;
 EOF
 
-$PLIC "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL multimod: lib compile"; exit 1; }
-$PLIC "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL multimod: main compile"; exit 1; }
-# -lm after the archive: libpli needs libm on Linux (no-op on macOS).
+$PLI "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL multimod: lib compile"; exit 1; }
+$PLI "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL multimod: main compile"; exit 1; }
+# -lm after the archive: pli_runtime needs libm on Linux (no-op on macOS).
 $CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
 "$OUT$EXE"
 exit 0

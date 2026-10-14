@@ -53,7 +53,7 @@ C baseline `x =
                machine code(`- O3`, `main` = `ltmp0`, 0x0..0xef)
 
 `- emit - llvm` writes unoptimized IR; piped through `opt -O2`/`-O3` then `llc`
-(matching plic's `optimizeModule` + `TargetMachine` at arm64-apple-macosx15).
+(matching pli's `optimizeModule` + `TargetMachine` at arm64-apple-macosx15).
 
 ### 3.1 `-O2` and `-O3` `main` are byte-for-byte identical
 The entire hot loop (0x0-0xef) is the same at `-O2` and `-O3`. The ratio swing
@@ -114,7 +114,7 @@ Risk R1 (math_functions): `x = i * 0.01` (x is FLOAT). Exact DECIMAL ->
 `(double)i / 100.0`; C baseline is `i * 0.01` (double). These differ by <=1 ULP
 and break the 1.00x ✓ parity. Resolution (R1b): update the C baseline to
 `x = i / 100.0;` (baseline/decimal_ops is illustrative; `i/100.0` is the exact-
-PL/I-faithful computation; plic's DECIMAL->FLOAT convert at irgen.cpp:6015-6022
+PL/I-faithful computation; pli's DECIMAL->FLOAT convert at irgen.cpp:6015-6022
 already emits `(double)stored / 10^scale` = `i/100.0`, so the two match bit-for-
 bit). Gate this behind the same exact-decimal choice as P1 so math_functions
 parity is preserved by baseline alignment, not by keeping the slow path.
@@ -192,7 +192,7 @@ The harness already does 5-run median + stdev; no harness change needed.
 ### Decision point (P1): exact-`*` vs context rule  → CHOSE (A)
 Two ways to keep math_functions parity while speeding decimal_ops:
 - (A) **Exact `*` + align C baseline** (R1b): uniform PL/I semantics; 1-line
-  baseline change; plic IR/emitter unchanged beyond P1. **Recommended.**
+  baseline change; pli IR/emitter unchanged beyond P1. **Recommended.**
 - (B) **Context rule**: `*` -> FLOAT when the enclosing target/operand is FLOAT
   (math_functions) and exact DECIMAL otherwise (decimal_ops). Requires passing
   the destination type into `mulResultType` (sema doesn't currently see it),

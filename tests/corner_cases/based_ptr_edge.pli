@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* BASED/POINTER edge cases (ADR-064, ADR-143, rule 25):
    BASED variables addressed through POINTER. Locator-qualified form
    P -> X. POINTER can hold NULL, ADDR(x), or another pointer.

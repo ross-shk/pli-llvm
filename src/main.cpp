@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
-// main.cpp — plic driver.
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// main.cpp — pli driver.
 //
 // Pipeline: source -> preprocessor -> lexer -> parser -> sema -> LLVM IR ->
-// clang (assemble, optimize, link with libpli). See docs/ARCHITECTURE.md.
+// clang (assemble, optimize, link with pli_runtime). See docs/ARCHITECTURE.md.
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -29,7 +29,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "preprocessor.h"
-#if defined(PLIC_ENABLE_MLIR)
+#if defined(PLI_ENABLE_MLIR)
 #include "mlir/PliDialect.h"
 #endif
 #include "sema.h"
@@ -52,69 +52,69 @@
 #include "llvm/Support/Host.h"
 #endif
 
-#ifndef PLIC_RUNTIME_LIB
-#define PLIC_RUNTIME_LIB ""
+#ifndef PLI_RUNTIME_LIB
+#define PLI_RUNTIME_LIB ""
 #endif
 
-#ifndef PLIC_INSTALL_RUNTIME_LIB
-#define PLIC_INSTALL_RUNTIME_LIB ""
+#ifndef PLI_INSTALL_RUNTIME_LIB
+#define PLI_INSTALL_RUNTIME_LIB ""
 #endif
 
 // Path to the bitcode runtime (OPTIMIZATION.md §10, P3): build/runtime.bc,
-// baked in at build time like PLIC_RUNTIME_LIB. IRGen merges the pli_*
+// baked in at build time like PLI_RUNTIME_LIB. IRGen merges the pli_*
 // definitions from it into the MAIN unit so clang sees real bodies;
 // --no-bitcode-runtime restores the sectioned-archive path and --runtime-bc
 // overrides the location.
-#ifndef PLIC_RUNTIME_BC
-#define PLIC_RUNTIME_BC ""
+#ifndef PLI_RUNTIME_BC
+#define PLI_RUNTIME_BC ""
 #endif
 
-#ifndef PLIC_INSTALL_RUNTIME_BC
-#define PLIC_INSTALL_RUNTIME_BC ""
+#ifndef PLI_INSTALL_RUNTIME_BC
+#define PLI_INSTALL_RUNTIME_BC ""
 #endif
 
 // Version and LLVM identity baked in at build time (self-contained milestone:
-// `plic version` reports the toolchain without invoking sub-tools).
-#ifndef PLIC_VERSION
-#define PLIC_VERSION "unknown"
+// `pli version` reports the toolchain without invoking sub-tools).
+#ifndef PLI_VERSION
+#define PLI_VERSION "unknown"
 #endif
 
-#ifndef PLIC_LLVM_VERSION
-#define PLIC_LLVM_VERSION LLVM_VERSION_STRING
+#ifndef PLI_LLVM_VERSION
+#define PLI_LLVM_VERSION LLVM_VERSION_STRING
 #endif
 
-// The clang used to assemble/optimize/link the emitted IR. plic emits IR in the
+// The clang used to assemble/optimize/link the emitted IR. pli emits IR in the
 // syntax of the LLVM it was built against (e.g. the `memory(none)` attribute),
 // so the matching clang must be used; the build bakes its path in. Overridable
 // with --clang. Falls back to `clang` on PATH.
-#ifndef PLIC_CLANG
-#define PLIC_CLANG "clang"
+#ifndef PLI_CLANG
+#define PLI_CLANG "clang"
 #endif
 
-#ifndef PLIC_VERSION
-#define PLIC_VERSION "unknown"
+#ifndef PLI_VERSION
+#define PLI_VERSION "unknown"
 #endif
 
-#ifndef PLIC_LLVM_VERSION
-#define PLIC_LLVM_VERSION LLVM_VERSION_STRING
+#ifndef PLI_LLVM_VERSION
+#define PLI_LLVM_VERSION LLVM_VERSION_STRING
 #endif
 
 // In-process lld link gate (review S1): 1 when the build linked lld
 // (CMake defines it); the Makefile build leaves it 0 and uses clang.
-#ifndef PLIC_HAVE_LLD
-#define PLIC_HAVE_LLD 0
+#ifndef PLI_HAVE_LLD
+#define PLI_HAVE_LLD 0
 #endif
 
 namespace fs = std::filesystem;
 
 static void usage() {
   std::cout
-      << "plic — PL/I compiler (LLVM backend)\n"
+      << "pli — PL/I compiler (LLVM backend)\n"
          "\n"
-         "usage: plic [options] file.pli...\n"
+         "usage: pli [options] file.pli...\n"
          "\n"
          "Multiple inputs compile like cc: each file becomes an independent\n"
-         "relocatable object and they are linked together with libpli into one\n"
+         "relocatable object and they are linked together with pli_runtime into one\n"
          "output (-o names it). -c writes <base>.o per input and does not link.\n"
          "\n"
          "options:\n"
@@ -137,9 +137,9 @@ static void usage() {
          "  --release        maximum optimization + stripped binary (minimal size)\n"
          "  --debug          no optimization + debug info (-O0 -g)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
-         "  --runtime <lib>  path to libpli.a (default: baked in at build time)\n"
+         "  --runtime <lib>  path to libpli_runtime.a (default: baked in at build time)\n"
          "  --no-bitcode-runtime\n"
-         "                   link the sectioned libpli.a instead of merging the\n"
+         "                   link the sectioned libpli_runtime.a instead of merging the\n"
          "                   pli_* definitions from runtime.bc into the MAIN unit\n"
          "  --runtime-bc <f> path to runtime.bc (default: baked in at build time)\n"
          "  --flto=thin|full explicit ThinLTO / full LTO on the compile+link steps\n"
@@ -158,7 +158,7 @@ static void usage() {
          "  -shared -static  produce a shared / static binary\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
-         "  --version        print plic + LLVM versions and the host triple, then exit\n"
+         "  --version        print pli + LLVM versions and the host triple, then exit\n"
          "  -v               show the sub-commands being run\n"
          "  -h, --help       this message\n"
          "\n"
@@ -171,25 +171,25 @@ static void usage() {
          "  -emit-mlir       emit the pli MLIR helper module (MLIR-enabled builds only)\n"
          "\n"
          "  environment:\n"
-         "  $PLIC_INCLUDE_PATH  colon-separated %INCLUDE search dirs (after -I)\n"
-         "  $PLIC_LIB_PATH      colon-separated library search dirs (after -L)\n"
-         "  $PLIC_SYSPARM       value returned by the SYSPARM builtin ((123))\n"
+         "  $PLI_INCLUDE_PATH  colon-separated %INCLUDE search dirs (after -I)\n"
+         "  $PLI_LIB_PATH      colon-separated library search dirs (after -L)\n"
+         "  $PLI_SYSPARM       value returned by the SYSPARM builtin ((123))\n"
          "\n"
          "  library/include discovery:\n"
-         "  plic walks upward from the source root (cwd) and the plic executable\n"
+         "  pli walks upward from the source root (cwd) and the pli executable\n"
          "  directory, adding lib/ and lib/pli/ to library search paths and\n"
          "  include/ and inc/ to %INCLUDE search paths at each ancestor. On\n"
          "  Linux/macOS, /usr/lib, /usr/local/lib and the matching include paths\n"
          "  are added as static fallbacks.\n"
          "\n"
-         "  plic version     same as --version (Go/Zig style)\n";
+         "  pli version     same as --version (Go/Zig style)\n";
 }
 
 // Go/Zig-style toolchain report: no subprocess, all baked in or in-process.
 static void printVersion() {
   // Version/build info embedded at build time (Go/Zig style).
-  std::cout << "plic " << PLIC_VERSION << " (LLVM " << PLIC_LLVM_VERSION << ", "
-            << llvm::sys::getDefaultTargetTriple() << ", runtime " << plic::embeddedLibPLISize()
+  std::cout << "pli " << PLI_VERSION << " (LLVM " << PLI_LLVM_VERSION << ", "
+            << llvm::sys::getDefaultTargetTriple() << ", runtime " << pli::embeddedLibPLISize()
             << " bytes)\n";
 }
 
@@ -308,10 +308,10 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     return false;
 
   Sema sema(diags);
-  // SYSPARM: explicit --sysparm wins over $PLIC_SYSPARM (rule (123)).
+  // SYSPARM: explicit --sysparm wins over $PLI_SYSPARM (rule (123)).
   std::string effSysparm = sysparm;
   if (!sysparmExplicit)
-    if (const char* env = std::getenv("PLIC_SYSPARM"))
+    if (const char* env = std::getenv("PLI_SYSPARM"))
       effSysparm = env;
   sema.setSysparm(effSysparm);
   // In multi-input link mode every unit is a relocatable object like `-c`:
@@ -347,22 +347,22 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // input writes its own <base>.ll.
     std::string dest = output.empty() ? base + ".ll" : output;
     if (emitMlir) {
-#if defined(PLIC_ENABLE_MLIR)
+#if defined(PLI_ENABLE_MLIR)
       // P2: -emit-mlir prints the canary MLIR helper module, not PL/I IR.
       // The canary exercises the full MLIR pipeline without lowering W1-W5 ops.
-      if (!mlir::plic::runMlirCanary(llvm::outs()))
+      if (!mlir::pli::runMlirCanary(llvm::outs()))
         return false;
       if (verbose)
-        std::cerr << "plic: -emit-mlir emitted canary module (synthetic)\n";
+        std::cerr << "pli: -emit-mlir emitted canary module (synthetic)\n";
       return true;
 #else
-      std::cerr << "plic: -emit-mlir requires an MLIR-enabled build (-DPLIC_ENABLE_MLIR=ON)\n";
+      std::cerr << "pli: -emit-mlir requires an MLIR-enabled build (-DPLI_ENABLE_MLIR=ON)\n";
       return false;
 #endif
     }
     std::ofstream os(dest, std::ios::binary);
     if (!os) {
-      std::cerr << "plic: cannot write " << dest << "\n";
+      std::cerr << "pli: cannot write " << dest << "\n";
       return false;
     }
     os << ir;
@@ -390,22 +390,22 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
               linkBitcode, lowerMode, perOpOverrides);
     if (auto om = ipg.takeModule(hir)) {
       bool rtOk = true;
-#if PLIC_HAVE_LLD
+#if PLI_HAVE_LLD
       // Single-module fast path: runtime linked at BC level (never `-c`).
       // File-based bitcode (linkBitcode) already embedded the runtime via
       // IRGen, so the embedded blob is only used when it did not.
       if (linkRuntimeIn && !linkBitcode && !compileOnly) {
         std::string rtErr;
         llvm::Triple targetTriple(triple);
-        rtOk = plic::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr);
+        rtOk = pli::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr);
         if (!rtOk)
-          std::cerr << "plic: " << rtErr << "\n";
+          std::cerr << "pli: " << rtErr << "\n";
       }
 #endif
       if (rtOk) {
         // Create TargetMachine using the provided target triple.
         std::string tmErr;
-        if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
+        if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
           // The IRGen layout is approximate; the TargetMachine owns the truth
           // (llc behaviour — the clang fallback used -Wno-override-module).
           om->mod->setDataLayout(tm->createDataLayout());
@@ -414,30 +414,30 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
           om->mod->setTargetTriple(llvm::Triple(triple));
           // Mirror the clang backend: optimize the (runtime-linked) IR at the
           // requested -O level before codegen.
-          plic::optimizeModule(*om->mod, *tm, optLevel);
+          pli::optimizeModule(*om->mod, *tm, optLevel);
           std::error_code ec;
           llvm::raw_fd_ostream os(objPath.string(), ec, llvm::sys::fs::OF_None);
           std::string emErr;
-          if (!ec && plic::emitObject(*om->mod, *tm, os, emErr)) {
+          if (!ec && pli::emitObject(*om->mod, *tm, os, emErr)) {
             os.close();
             if (keepLL) {
               llvm::raw_fd_ostream llOs((keepLLDir / (base + ".ll")).string(), ec,
                                         llvm::sys::fs::OF_None);
               if (!ec) {
-                llOs << "; Generated by plic (PL/I -> LLVM)\n";
+                llOs << "; Generated by pli (PL/I -> LLVM)\n";
                 om->mod->print(llOs, nullptr);
               }
             }
             if (verbose)
-              std::cerr << "plic: emitted " << objPath.string() << " in-process\n";
+              std::cerr << "pli: emitted " << objPath.string() << " in-process\n";
             if (!compileOnly)
               *outObj = objPath.string();
             return true;
           }
           if (verbose)
-            std::cerr << "plic: in-process emit failed (" << emErr << "), using clang\n";
+            std::cerr << "pli: in-process emit failed (" << emErr << "), using clang\n";
         } else if (verbose) {
-          std::cerr << "plic: no target (" << tmErr << "), using clang\n";
+          std::cerr << "pli: no target (" << tmErr << "), using clang\n";
         }
       }
     } else if (!diags.ok()) {
@@ -458,7 +458,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   {
     std::ofstream os(llPath, std::ios::binary);
     if (!os) {
-      std::cerr << "plic: cannot write " << llPath << "\n";
+      std::cerr << "pli: cannot write " << llPath << "\n";
       return false;
     }
     os << ir;
@@ -474,7 +474,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     fs::remove(llPath, ec);
   }
   if (rc != 0) {
-    std::cerr << "plic: backend failed\n";
+    std::cerr << "pli: backend failed\n";
     return false;
   }
 
@@ -485,8 +485,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
 int main(int argc, char** argv) {
   std::vector<std::string> inputs;
-  std::string output, runtimeLib = PLIC_RUNTIME_LIB, runtimeBc = PLIC_RUNTIME_BC, triple;
-  std::string clangPath = PLIC_CLANG;
+  std::string output, runtimeLib = PLI_RUNTIME_LIB, runtimeBc = PLI_RUNTIME_BC, triple;
+  std::string clangPath = PLI_CLANG;
   std::string sysparm;
   bool sysparmExplicit = false;
   std::string optLevel = "-O2";
@@ -509,7 +509,7 @@ int main(int argc, char** argv) {
     std::string a = argv[i];
     auto next = [&](const char* what) -> std::string {
       if (i + 1 >= argc) {
-        std::cerr << "plic: missing argument for " << what << "\n";
+        std::cerr << "pli: missing argument for " << what << "\n";
         exit(2);
       }
       return argv[++i];
@@ -583,7 +583,7 @@ int main(int argc, char** argv) {
       char* end = nullptr;
       long v = strtol(n.c_str(), &end, 10);
       if (end == n.c_str() || *end != '\0' || v < 1 || v > 151) {
-        std::cerr << "plic: --explain needs a rule number 1..151\n";
+        std::cerr << "pli: --explain needs a rule number 1..151\n";
         return 2;
       }
       explain = (int)v;
@@ -608,12 +608,12 @@ int main(int argc, char** argv) {
       else if (modeStr == "mlir")
         parsed = LowerMode::MLIR;
       else {
-        std::cerr << "plic: --experimental-lowering expects auto|runtime|llvm|mlir, or op:mode\n";
+        std::cerr << "pli: --experimental-lowering expects auto|runtime|llvm|mlir, or op:mode\n";
         return 2;
       }
-#ifndef PLIC_ENABLE_MLIR
+#ifndef PLI_ENABLE_MLIR
       if (parsed == LowerMode::MLIR) {
-        std::cerr << "plic: --experimental-lowering=mlir requires an MLIR-enabled build (-DPLIC_ENABLE_MLIR=ON)\n";
+        std::cerr << "pli: --experimental-lowering=mlir requires an MLIR-enabled build (-DPLI_ENABLE_MLIR=ON)\n";
         return 2;
       }
 #endif
@@ -657,7 +657,7 @@ int main(int argc, char** argv) {
     else if (a == "--version" || a == "-V")
       wantVersion = true;
     else if (!a.empty() && a[0] == '-') {
-      std::cerr << "plic: unknown option " << a << "\n";
+      std::cerr << "pli: unknown option " << a << "\n";
       return 2;
     } else
       inputs.push_back(a);
@@ -666,13 +666,13 @@ int main(int argc, char** argv) {
   // `--explain` needs no input file: print the production and exit.
   if (explain) {
     if (!explainRule(explain)) {
-      std::cerr << "plic: no TR 25.084 rule (" << explain << ")\n";
+      std::cerr << "pli: no TR 25.084 rule (" << explain << ")\n";
       return 1;
     }
     return 0;
   }
 
-  // `plic version` / `plic --version`: no input file needed.
+  // `pli version` / `pli --version`: no input file needed.
   if (wantVersion || (inputs.size() == 1 && inputs[0] == "version")) {
     printVersion();
     return 0;
@@ -694,13 +694,13 @@ int main(int argc, char** argv) {
     (isPLISource(in) ? pliInputs : foreignObjs).push_back(in);
   if (!foreignObjs.empty() && (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir)) {
     std::cerr
-        << "plic: object inputs cannot be used with -c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir\n";
+        << "pli: object inputs cannot be used with -c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir\n";
     return 2;
   }
   const bool linkOnly = pliInputs.empty();
 
   // Upward filesystem walks (Zig-style) for include and library directories.
-  // Start from the source root (cwd) and the plic executable directory; at each
+  // Start from the source root (cwd) and the pli executable directory; at each
   // ancestor check for lib/, lib/pli/ (libraries) and include/, inc/ (headers).
   fs::path exeDir = executablePath(argv[0]).parent_path();
   fs::path srcRoot = fs::current_path();
@@ -738,9 +738,9 @@ int main(int argc, char** argv) {
       discoveredLibDirs.push_back(p);
   }
 #endif
-  // PLIC_LIB_PATH (colon-separated, like LIBRARY_PATH): searched after user -L,
+  // PLI_LIB_PATH (colon-separated, like LIBRARY_PATH): searched after user -L,
   // before the upward-walk and static system library dirs.
-  if (const char* env = std::getenv("PLIC_LIB_PATH")) {
+  if (const char* env = std::getenv("PLI_LIB_PATH")) {
     std::stringstream ss(env);
     std::string dir;
     while (std::getline(ss, dir, ':'))
@@ -753,15 +753,15 @@ int main(int argc, char** argv) {
     linkArgs.push_back("-L" + d.string());
 
   if (!runtimeExplicit && !runtimeLib.empty() && !fs::exists(runtimeLib)) {
-    fs::path installed = PLIC_INSTALL_RUNTIME_LIB;
+    fs::path installed = PLI_INSTALL_RUNTIME_LIB;
     if (installed.empty() || !fs::exists(installed)) {
       // Search the exe-dir upward walk for the runtime archive before the
       // hardcoded fallback. The archive name is platform-specific
-      // (pli.lib on Windows, libpli.a elsewhere).
+      // (pli_runtime.lib on Windows, libpli_runtime.a elsewhere).
 #ifdef _WIN32
-      static const char* kRtLibNames[] = {"pli.lib", "libpli.a"};
+      static const char* kRtLibNames[] = {"pli_runtime.lib", "libpli_runtime.a"};
 #else
-      static const char* kRtLibNames[] = {"libpli.a", "pli.lib"};
+      static const char* kRtLibNames[] = {"libpli_runtime.a", "pli_runtime.lib"};
 #endif
       bool found = false;
       for (const fs::path& d : exeLibDirs) {
@@ -790,7 +790,7 @@ int main(int argc, char** argv) {
   // build tree). --no-bitcode-runtime always selects the archive path.
   // Only search for runtime.bc when the bitcode runtime is actually used.
   if (useBitcode && !runtimeBcExplicit && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
-    fs::path installed = PLIC_INSTALL_RUNTIME_BC;
+    fs::path installed = PLI_INSTALL_RUNTIME_BC;
     if (installed.empty() || !fs::exists(installed)) {
       // Search the exe-dir upward walk for runtime.bc before the fallback.
       bool found = false;
@@ -810,11 +810,11 @@ int main(int argc, char** argv) {
   }
   if (useBitcode && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
     if (runtimeBcExplicit) {
-      std::cerr << "plic: no such runtime bitcode: " << runtimeBc << "\n";
+      std::cerr << "pli: no such runtime bitcode: " << runtimeBc << "\n";
       return 2;
     }
     if (verbose)
-      std::cerr << "plic: runtime.bc not found at " << runtimeBc
+      std::cerr << "pli: runtime.bc not found at " << runtimeBc
                 << "; falling back to the embedded runtime\n";
     runtimeBc.clear();
   }
@@ -824,7 +824,7 @@ int main(int argc, char** argv) {
     preprocessor.addIncludeDir(d);
   // Colon-separated like CPATH: searched after -I, before the default dir.
   bool hasEnvPath = false;
-  if (const char* env = std::getenv("PLIC_INCLUDE_PATH")) {
+  if (const char* env = std::getenv("PLI_INCLUDE_PATH")) {
     std::stringstream ss(env);
     std::string dir;
     while (std::getline(ss, dir, ':'))
@@ -839,31 +839,31 @@ int main(int argc, char** argv) {
     preprocessor.addIncludeDir(d);
   // Executable-relative default (mirrors the runtime-lib fallback below).
   std::string defaultInc =
-      (executablePath(argv[0]).parent_path().parent_path() / "share/plic/include").string();
+      (executablePath(argv[0]).parent_path().parent_path() / "share/pli/include").string();
   preprocessor.addIncludeDir(defaultInc);
   if (verbose) {
-    std::cerr << "plic: include search dirs:\n";
+    std::cerr << "pli: include search dirs:\n";
     for (const std::string& d : includeDirs)
-      std::cerr << "plic:   " << d << "\n";
+      std::cerr << "pli:   " << d << "\n";
     if (hasEnvPath)
-      std::cerr << "plic:   $PLIC_INCLUDE_PATH\n";
+      std::cerr << "pli:   $PLI_INCLUDE_PATH\n";
     for (const fs::path& d : discoveredIncDirs)
-      std::cerr << "plic:   " << d << "\n";
-    std::cerr << "plic:   " << defaultInc << "\n";
-    std::cerr << "plic: library search dirs:\n";
+      std::cerr << "pli:   " << d << "\n";
+    std::cerr << "pli:   " << defaultInc << "\n";
+    std::cerr << "pli: library search dirs:\n";
     for (const std::string& la : linkArgs)
       if (la.rfind("-L", 0) == 0)
-        std::cerr << "plic:   " << la << "\n";
+        std::cerr << "pli:   " << la << "\n";
   }
 
   // clang-matching guards: a single -o cannot name more than one output.
   const bool multi = pliInputs.size() > 1;
   if (compileOnly && multi && !output.empty()) {
-    std::cerr << "plic: cannot specify -o when generating multiple output files\n";
+    std::cerr << "pli: cannot specify -o when generating multiple output files\n";
     return 2;
   }
   if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir)) {
-    std::cerr << "plic: -o is ambiguous with a per-file mode and multiple inputs\n";
+    std::cerr << "pli: -o is ambiguous with a per-file mode and multiple inputs\n";
     return 2;
   }
 
@@ -904,7 +904,7 @@ int main(int argc, char** argv) {
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
   if (emitMlir && (lowerMode == LowerMode::Runtime || lowerMode == LowerMode::LLVM)) {
-    std::cerr << "plic: -emit-mlir conflicts with --experimental-lowering=runtime/llvm\n";
+    std::cerr << "pli: -emit-mlir conflicts with --experimental-lowering=runtime/llvm\n";
     return 2;
   }
   if (emitMlir)
@@ -927,7 +927,7 @@ int main(int argc, char** argv) {
   const bool needClangPipeline = pgoGenerate || !pgoUse.empty() || !ltoKind.empty();
   // Runtime-once fast path: one PL/I input becoming the executable directly.
   // Disabled for the archive path (!useBitcode: --no-bitcode-runtime links
-  // libpli.a instead) and for explicit PGO/LTO (clang pipeline above).
+  // libpli_runtime.a instead) and for explicit PGO/LTO (clang pipeline above).
   const bool singleModuleFinalLink = !compileOnly && !terminalMode && pliInputs.size() == 1 &&
                                      foreignObjs.empty() && useBitcode && !needClangPipeline;
   std::vector<std::string> objs = foreignObjs;
@@ -945,14 +945,14 @@ int main(int argc, char** argv) {
   if (terminalMode)
     return 0;
   if (linkOnly && objs.empty()) {
-    std::cerr << "plic: no input objects to link\n";
+    std::cerr << "pli: no input objects to link\n";
     return 2;
   }
 
   // --- link step ----------------------------------------------------------
   // In-process link first (no subprocess); the clang pipeline below is the
   // fallback until lld ships everywhere (review §1: brew llvm has no lld).
-  // Link the per-file objects with libpli. With the bitcode runtime the MAIN
+  // Link the per-file objects with pli_runtime. With the bitcode runtime the MAIN
   // object already defines the pli_* symbols, so the archive's members are
   // simply never pulled (no duplicates); --no-bitcode-runtime compiles every
   // unit against the archive as before. Drop unreferenced runtime sections
@@ -962,14 +962,14 @@ int main(int argc, char** argv) {
   if (triple.empty())
     triple = llvm::sys::getDefaultTargetTriple();
 
-#if PLIC_HAVE_LLD
+#if PLI_HAVE_LLD
   // Explicit PGO/LTO (needClangPipeline) and the archive path (!useBitcode)
   // always use the clang pipeline below so backendFlags reach the link step.
   if (!needClangPipeline && useBitcode) {
     llvm::Triple llt(triple);
-    const plic::TargetDesc& desc = plic::getTargetDesc(llt);
+    const pli::TargetDesc& desc = pli::getTargetDesc(llt);
     std::string tmErr;
-    if (auto tm = plic::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
+    if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
       // With the file-based bitcode runtime (linkBitcode) the MAIN object
       // already defines every pli_* symbol, so no separate runtime object
       // is emitted (it would duplicate them). Otherwise multi-input links
@@ -979,13 +979,13 @@ int main(int argc, char** argv) {
       bool haveRtObj = false;
       if (!singleModuleFinalLink && !linkBitcode) {
         rtObj =
-            (fs::temp_directory_path() / ("libpli-" + std::to_string(getpid()) + ".o")).string();
+            (fs::temp_directory_path() / ("pli_runtime-" + std::to_string(getpid()) + ".o")).string();
         std::error_code ec;
         llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
         std::string rtErr;
-        haveRtObj = !ec && plic::emitRuntimeObject(*tm, llt, os, rtErr);
+        haveRtObj = !ec && pli::emitRuntimeObject(*tm, llt, os, rtErr);
         if (!haveRtObj && verbose)
-          std::cerr << "plic: runtime object failed (" << rtErr << "), using clang\n";
+          std::cerr << "pli: runtime object failed (" << rtErr << "), using clang\n";
       }
       if (singleModuleFinalLink || haveRtObj || linkBitcode) {
         // Host startup/sysroot bridge (transitional; bundling is follow-up).
@@ -1060,7 +1060,7 @@ int main(int argc, char** argv) {
               if (llt.getArch() == llvm::Triple::x86_64 && fs::exists("/lib/ld-linux-x86-64.so.2"))
                 interp = "/lib/ld-linux-x86-64.so.2";
               else if (verbose)
-                std::cerr << "plic: interpreter " << interp << " not found\n";
+                std::cerr << "pli: interpreter " << interp << " not found\n";
             }
             argStore.push_back("-pie");
             argStore.push_back("--eh-frame-hdr");
@@ -1166,7 +1166,7 @@ int main(int argc, char** argv) {
             rtArch = "arm";
           if (!rtArch.empty()) {
             fs::path clangBin = fs::path(clangPath).parent_path();
-            std::string llvmVer = PLIC_LLVM_VERSION;
+            std::string llvmVer = PLI_LLVM_VERSION;
             auto dot = llvmVer.find('.');
             std::string major = dot == std::string::npos ? llvmVer : llvmVer.substr(0, dot);
             fs::path builtins = clangBin.parent_path() / "lib" / "clang" / major / "lib" /
@@ -1175,7 +1175,7 @@ int main(int argc, char** argv) {
             if (fs::exists(builtins, bsec))
               argStore.push_back(builtins.string());
             else if (verbose)
-              std::cerr << "plic: compiler-rt builtins not found (" << builtins.string()
+              std::cerr << "pli: compiler-rt builtins not found (" << builtins.string()
                         << "), 128-bit division may fail to link\n";
           }
           argStore.push_back("/out:" + output);
@@ -1193,7 +1193,7 @@ int main(int argc, char** argv) {
             std::cerr << " " << a;
           std::cerr << "\n";
         }
-        if (plic::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr)) {
+        if (pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr)) {
           for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
             std::error_code ec;
             fs::remove(objs[i], ec);
@@ -1205,22 +1205,22 @@ int main(int argc, char** argv) {
           return 0;
         }
         if (verbose)
-          std::cerr << "plic: in-process link failed (" << linkErr << "), using clang\n";
+          std::cerr << "pli: in-process link failed (" << linkErr << "), using clang\n";
         if (haveRtObj) {
           std::error_code ec;
           fs::remove(rtObj, ec);
         }
       }
     } else if (verbose) {
-      std::cerr << "plic: no target (" << tmErr << "), using clang\n";
+      std::cerr << "pli: no target (" << tmErr << "), using clang\n";
     }
   }
 #endif
 
-  // Fallback: link the per-file objects with libpli via the backend clang.
+  // Fallback: link the per-file objects with pli_runtime via the backend clang.
   // Drop unreferenced runtime sections (the archive is sectioned, ADR-079);
   // multitasking (QR2.8) runs on pthreads.
-  // Windows (clang-cl + lld-link): libpli is built with the dynamic CRT (/MD),
+  // Windows (clang-cl + lld-link): pli_runtime is built with the dynamic CRT (/MD),
   // so force user programs onto the dynamic CRT as well (drop any static
   // libcmt default, use msvcrt), route every link through lld-link (which
   // reads LLVM bitcode natively, unlike old MSVC link.exe/LNK1107), and use
@@ -1255,7 +1255,7 @@ int main(int argc, char** argv) {
   for (const std::string& la : linkArgs)
     cmd += " " + la; // link flags
 #if !defined(_WIN32) && !defined(__APPLE__)
-  // libpli's mathport needs libm (after the archive: ld resolves left to
+  // pli_runtime's mathport needs libm (after the archive: ld resolves left to
   // right); macOS bundles it in libSystem.
   cmd += " -lm";
 #endif
@@ -1269,7 +1269,7 @@ int main(int argc, char** argv) {
     fs::remove(objs[i], ec);
   }
   if (rc != 0) {
-    std::cerr << "plic: backend failed\n";
+    std::cerr << "pli: backend failed\n";
     return 1;
   }
   return 0;

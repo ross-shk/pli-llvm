@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 // target.cpp — multi-target target rows (cross rows added later).
 #include "target.h"
 
@@ -11,7 +11,7 @@
 #include "llvm/TargetParser/Host.h"
 #include <unordered_map>
 
-namespace plic {
+namespace pli {
 // Initialize all LLVM targets for cross-compilation support.
 void initializeAllTargets() {
   static const bool inited = [] {
@@ -99,4 +99,4 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
       ttm, cpu, features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));
 }
-} // namespace plic
+} // namespace pli

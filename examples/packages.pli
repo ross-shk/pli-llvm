@@ -1,6 +1,6 @@
  /* Packages: group code, export the public face. 
    
-    Run: plic packages.pli -o pkgs */
+    Run: pli packages.pli -o pkgs */
 
  mathlib: package exports(doubleit, is_even);
    doubleit: proc(x) returns(fixed bin(31));

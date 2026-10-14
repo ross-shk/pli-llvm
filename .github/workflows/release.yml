@@ -18,13 +18,13 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            asset: plic-linux-x86_64
+            asset: pli-linux-x86_64
             platdir: linux-x86_64
           - os: macos-latest
-            asset: plic-darwin-arm64
+            asset: pli-darwin-arm64
             platdir: darwin-arm64
           - os: windows-latest
-            asset: plic-windows-x86_64
+            asset: pli-windows-x86_64
             platdir: windows-x86_64
     runs-on: ${{ matrix.os }}
 
@@ -89,20 +89,20 @@ jobs:
       - name: Strip and pack into tarball (Unix)
         if: runner.os != 'Windows'
         run: |
-          strip -o build/cmake/plic.stripped build/cmake/plic
+          strip -o build/cmake/pli.stripped build/cmake/pli
           mkdir -p ${{ matrix.platdir }}
-          cp build/cmake/plic.stripped ${{ matrix.platdir }}/plic
-          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/plic
+          cp build/cmake/pli.stripped ${{ matrix.platdir }}/pli
+          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli
 
       - name: Pack into archives (Windows)
         if: runner.os == 'Windows'
         run: |
-          # plic.exe is self-contained (embedded runtime bitcode); the static
+          # pli.exe is self-contained (embedded runtime bitcode); the static
           # lib + bitcode are bundled for cross-unit (-c) workflows.
-          # Layout matches README: <platdir>/plic.exe + <platdir>/lib/... .
+          # Layout matches README: <platdir>/pli.exe + <platdir>/lib/... .
           mkdir -p ${{ matrix.platdir }}/lib
-          cp build/cmake/plic.exe ${{ matrix.platdir }}/plic.exe
-          cp build/cmake/pli.lib ${{ matrix.platdir }}/lib/pli.lib
+          cp build/cmake/pli.exe ${{ matrix.platdir }}/pli.exe
+          cp build/cmake/pli_runtime.lib ${{ matrix.platdir }}/lib/pli_runtime.lib
           cp build/cmake/runtime.bc ${{ matrix.platdir }}/lib/runtime.bc
           tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}
           powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}' -DestinationPath '${{ matrix.asset }}.zip'"
@@ -111,13 +111,13 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n   end smoke;\n' > /tmp/smoke.pli
-          ./build/cmake/plic.stripped /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+          ./build/cmake/pli.stripped /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         run: |
           printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n   end smoke;\n' > /tmp/smoke.pli
-          ./build/cmake/plic.exe /tmp/smoke.pli -o /tmp/smoke.exe && /tmp/smoke.exe
+          ./build/cmake/pli.exe /tmp/smoke.pli -o /tmp/smoke.exe && /tmp/smoke.exe
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'

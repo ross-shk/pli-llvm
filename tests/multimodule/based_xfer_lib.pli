@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Rule (25): BASED/POINTER cross-module scenarios.
    Companion to based_xfer.pli. */
 basedlib: package exports(create_rec, read_rec, write_rec, free_rec, create_two);

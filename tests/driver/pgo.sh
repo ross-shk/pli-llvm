@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/pgo.sh — explicit opt-in PGO (OPTIMIZATION.md §10, P3):
 # --fprofile-generate instruments the build, the instrumented binary writes
 # a profile, --fprofile-use= rebuilds with it; a stale profile for different
@@ -13,7 +13,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
   *) EXE=; MATHLIB=-lm ;;
 esac
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=tests/driver/out/pgo
 mkdir -p "$OUT"
 
@@ -43,14 +43,14 @@ EOF
 
 # Some LLVM builds omit the compiler-rt profile runtime: probe with the
 # exact phase-1 command and skip (not fail) when it cannot link.
-if ! $PLIC "$OUT.pli" -o "$OUT.probe$EXE" --fprofile-generate >/dev/null 2>&1; then
+if ! $PLI "$OUT.pli" -o "$OUT.probe$EXE" --fprofile-generate >/dev/null 2>&1; then
   echo "SKIP: clang_rt.profile runtime missing from this LLVM build"
   exit 0
 fi
 rm -f "$OUT.probe$EXE"
 
 # --- phase 1: instrument, run to collect the profile -------------------
-cmd=$($PLIC "$OUT.pli" -o "$OUT.gen$EXE" --fprofile-generate -v 2>&1) \
+cmd=$($PLI "$OUT.pli" -o "$OUT.gen$EXE" --fprofile-generate -v 2>&1) \
   || { echo "FAIL: pgo generate build"; ok=0; }
 printf '%s\n' "$cmd" | grep -q -- '-fprofile-generate' \
   || { echo "FAIL: -fprofile-generate not passed through"; ok=0; }
@@ -65,7 +65,7 @@ if [ -z "$PROFRAW" ]; then
   ok=0
 fi
 
-# llvm-profdata lives next to the clang plic bakes in (llvm-profdata is not
+# llvm-profdata lives next to the clang pli bakes in (llvm-profdata is not
 # assumed on PATH): recover its directory from a -v compile command.
 CLDIR=$(printf '%s\n' "$cmd" | grep -o "'[^']*bin/clang[^']*'" | head -1 | tr -d "'")
 [ -z "$CLDIR" ] && CLDIR=$(printf '%s\n' "$cmd" | grep -o '"[^"]*bin/clang[^"]*"' | head -1 | tr -d '"')
@@ -80,7 +80,7 @@ fi
   || { echo "FAIL: llvm-profdata merge"; ok=0; }
 
 # --- phase 2: rebuild using the profile --------------------------------
-$PLIC "$OUT.pli" -o "$OUT.use$EXE" --fprofile-use="$OUT.profdata" \
+$PLI "$OUT.pli" -o "$OUT.use$EXE" --fprofile-use="$OUT.profdata" \
   || { echo "FAIL: pgo use build"; ok=0; }
 check "phase2 run" "$($OUT.use$EXE)" "PASS pgo 500500"
 
@@ -91,7 +91,7 @@ cat > "$OUT.other.pli" <<'EOF'
     put skip list('PASS pgo other');
  end pgo_other;
 EOF
-$PLIC "$OUT.other.pli" -o "$OUT.mismatch$EXE" --fprofile-use="$OUT.profdata" \
+$PLI "$OUT.other.pli" -o "$OUT.mismatch$EXE" --fprofile-use="$OUT.profdata" \
   || { echo "FAIL: mismatch build"; ok=0; }
 check "mismatch run" "$($OUT.mismatch$EXE)" "PASS pgo other"
 

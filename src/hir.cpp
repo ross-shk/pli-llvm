@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 // hir.cpp — HIR lowering (ADR-005) and printing.
 //
 // `lower` mirrors a typed AST into HIR node-for-node, and marks every implicit
 // scalar conversion with an explicit `Convert` node. The set of sites matches
 // exactly where IRGen applies a conversion, so lowering changes no runtime
 // behaviour — it only makes the conversion visible in the HIR (and via
-// `plic --print-hir`). Character and aggregate semantics stay in codegen.
+// `pli --print-hir`). Character and aggregate semantics stay in codegen.
 #include "hir.h"
 
 #include <algorithm>

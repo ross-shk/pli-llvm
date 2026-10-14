@@ -1,4 +1,4 @@
-# plic — Architecture
+# pli — Architecture
 
 A modern PL/I compiler with an LLVM backend, specified against
 **TR 25.084, *Concrete Syntax of PL/I*** (IBM Laboratory Vienna, 1968) with
@@ -72,15 +72,15 @@ IRGen              builds an LLVM module with `llvm::IRBuilder`
     │     • W4b math with backend support (sqrt, exp, log, sin, cos, atan2, …) → LLVM intrinsics
     │     • W4c code-point ops (rank, collate, isochar) and W6 aggregate copy → direct LLVM IR
     │     • 8 math wrappers without backend support (atanh, erf, erfc, cbrt, sind/cosd/tand/atand) → `pli_*` calls
-    │     • I/O, conditions, allocation, tasking, host services → `pli_*` C runtime calls in `libpli`
+    │     • I/O, conditions, allocation, tasking, host services → `pli_*` C runtime calls in `pli_runtime`
     │
    ├── `-emit-llvm` ──► textual `.ll` file
    │
-   └── clang ──► object file ──► link with `libpli` ──► executable
+   └── clang ──► object file ──► link with `pli_runtime` ──► executable
 ```
 
-Given several input files, plic runs the pipeline once per file to an
-independent relocatable object and links them all with `libpli` into one
+Given several input files, pli runs the pipeline once per file to an
+independent relocatable object and links them all with `pli_runtime` into one
 executable (cc-style separate compilation, ADR-162). `-c` stops after the
 objects; `-emit-llvm` writes a `.ll` per input. External procedures and
 variables (rule (42)) resolve at the object link, so no cross-file semantic
@@ -148,8 +148,8 @@ include-once `%XINCLUDE a[, b...];` list form (quoted, bare, or
 parenthesized names; repeats skip). Members resolve relative
 to the containing source file; a name without an extension falls back to
 `.inc`. Quoted paths are also accepted. Include paths can be supplied with
-`-I` or `PLIC_INCLUDE_PATH`, or discovered automatically by an upward
-filesystem walk from the source root and the plic executable (ADR-188).
+`-I` or `PLI_INCLUDE_PATH`, or discovered automatically by an upward
+filesystem walk from the source root and the pli executable (ADR-188).
 Directives inside comments and strings are ignored;
 include cycles and missing members are diagnosed. The preprocessor also
 supports the directives listed in the grammar-coverage ledger; other Chapter 9
@@ -214,7 +214,7 @@ depend on declarations that appear later in the block:
 This is a conceptual summary, not a promise that every rule is implemented.
 The coverage ledger identifies unsupported declaration forms and conditions.
 
-### 3.6 Runtime interface (libpli)
+### 3.6 Runtime interface (pli_runtime)
 
 The compiler's LLVM module calls C runtime routines for operations that are not
 emitted inline. These routines form the internal `pli_*` ABI. The specific

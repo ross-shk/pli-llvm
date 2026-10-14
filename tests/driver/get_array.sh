@@ -1,11 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/get_array.sh — aggregate GET LIST items (rules (104)-(110)):
 # whole arrays and cross-sections read element-wise in row-major order.
 # The program verifies the read values itself and prints PASS.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/get_array
 mkdir -p tests/driver/out
 
@@ -30,6 +30,6 @@ cat > "$OUT.pli" <<'EOF'
  end get_array;
 EOF
 
-$PLIC "$OUT.pli" -o "$OUT" || { echo "FAIL get array: compile"; exit 1; }
+$PLI "$OUT.pli" -o "$OUT" || { echo "FAIL get array: compile"; exit 1; }
 printf '10 20 30 1 2\n' | "$OUT"
 exit 0

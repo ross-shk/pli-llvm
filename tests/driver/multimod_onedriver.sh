@@ -1,11 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/multimod_onedriver.sh — multi-file driver (rules (2),(38),(42)):
-# a single plic invocation compiles a MAIN unit and a library unit and links
+# a single pli invocation compiles a MAIN unit and a library unit and links
 # them, replacing the manual -c + clang link of multimod.sh.
 set -u
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 OUT=tests/driver/out/multimod_onedriver
 mkdir -p tests/driver/out
 
@@ -44,6 +44,6 @@ cat > "$OUT.main.pli" <<'EOF'
  end multimain;
 EOF
 
-$PLIC "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT" || { echo "FAIL multimod_onedriver: compile+link"; exit 1; }
+$PLI "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT" || { echo "FAIL multimod_onedriver: compile+link"; exit 1; }
 "$OUT"
 exit 0

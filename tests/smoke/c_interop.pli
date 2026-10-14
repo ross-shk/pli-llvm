@@ -1,9 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Smoke test port of examples/c_interop.pli: call C functions
     declared as ENTRY with LINKAGE(SYSTEM). The runner compiles the
     companion c_interop_helper.c with clang and links it through the
-    plic driver. Prints FAIL per violated check, PASS only if all
+    pli driver. Prints FAIL per violated check, PASS only if all
     hold. */
 
  cdemo: proc options(main);

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Dynamic array edge cases (ADR-050, ADR-058, ADR-059, ADR-054, ADR-055):
    AUTOMATIC arrays with runtime bounds, dynamic lower bounds, dynamic
    multi-axis, dynamic array parameters, * adjustable-extent parameters. */

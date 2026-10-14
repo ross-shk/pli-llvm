@@ -1,6 +1,6 @@
  /* I/O: LIST, STRING, EDIT, DATA, files. 
    
-    Run: plic input_output.pli -o io */
+    Run: pli input_output.pli -o io */
 
  io: proc options(main);
    /* list-directed to stdout */

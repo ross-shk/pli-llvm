@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* ADR-168 / rule (15): VARYINGZ is a CHARACTER attribute. Combining it
     with BIT must be rejected, never silently accepted. */
  bad_varyingz: procedure options(main);

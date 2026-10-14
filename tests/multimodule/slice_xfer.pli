@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
  /* Rule (126): slice assignment on a 2-D member array across
     modules. The library writes caller-owned storage through a
     BASED view; the caller keeps only the structure and reads

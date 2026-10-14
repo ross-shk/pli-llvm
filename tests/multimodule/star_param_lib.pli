@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Rule (18): adjustable CHAR(*) parameters cross-module.
    Companion to star_param.pli. */
 starlib: package exports(fill_buf, get_len, concat_buf, uppercase, get_content);

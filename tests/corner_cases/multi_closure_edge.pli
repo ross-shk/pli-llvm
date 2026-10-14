@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* Multiple closure edge cases (ADR-012, TR 25.084 §2.3.2.2, rule 7):
    END label closes all blocks up to and including the labelled one.
    Unlabelled END closes innermost. Tests deeply nested cases. */

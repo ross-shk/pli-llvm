@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 // irgen.h — LLVM IR generation.
 //
 // M1 generates IR with llvm::IRBuilder<> (ADR-002); `run` prints the built
@@ -47,7 +47,7 @@ public:
         bool noConvChecks = false, bool noSubChecks = false, std::string runtimeBc = "",
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
         std::map<std::string, LowerMode> perOpOverrides = {})
-      : d_(d), sema_(s), triple_(std::move(triple)), mod_("plic", ctx_), b_(ctx_),
+      : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
         noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
         noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode),
         lowerMode_(lowerMode), perOpOverrides_(std::move(perOpOverrides)) {}

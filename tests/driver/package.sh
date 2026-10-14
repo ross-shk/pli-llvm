@@ -1,10 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 # tests/driver/package.sh — PACKAGE blocks (extension, ADR-109): a
 # library package exports PUB while PRIV stays module-private; the
 # MAIN module calls PUB across the link. Each unit compiles with
-# -c; cc links the objects with libpli. Symbol visibility is
+# -c; cc links the objects with pli_runtime. Symbol visibility is
 # asserted with nm (T = global text, t = local).
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
@@ -14,9 +14,9 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
   *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
 esac
-PLIC=${PLIC:-./build/plic}
+PLI=${PLI:-./build/cmake/pli}
 CC=${CC:-${CLANG:-clang}}
-RTLIB=${RTLIB:-./build/libpli.a}
+RTLIB=${RTLIB:-./build/cmake/libpli_runtime.a}
 OUT=tests/driver/out/package
 mkdir -p tests/driver/out
 
@@ -45,13 +45,13 @@ cat > "$OUT.main.pli" <<'EOF'
  end packmain;
 EOF
 
-$PLIC "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL package: lib compile"; exit 1; }
-$PLIC "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL package: main compile"; exit 1; }
+$PLI "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL package: lib compile"; exit 1; }
+$PLI "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL package: main compile"; exit 1; }
 # Symbol prefix: ELF has none, Mach-O prepends _ (C calling convention).
 SYM_PREFIX=$([ "$(uname -s)" = "Darwin" ] && echo "_" || echo "")
 nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PUB" >/dev/null || { echo "FAIL package: ${SYM_PREFIX}PUB not exported"; exit 1; }
 if nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PRIV" >/dev/null; then echo "FAIL package: ${SYM_PREFIX}PRIV leaked"; exit 1; fi
-# -lm after the archive: libpli needs libm on Linux (no-op on macOS).
+# -lm after the archive: pli_runtime needs libm on Linux (no-op on macOS).
 $CC "$OUT.main.o" "$OUT.lib.o" "$RTLIB" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL package: link"; exit 1; }
 "$OUT$EXE"
 exit 0

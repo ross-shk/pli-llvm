@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* FIXED BINARY(63) arithmetic benchmark - widening, mixed 31x63 ops. */
 /* Partners scalar_arith (which stays in 31-bit range). */
 /*
