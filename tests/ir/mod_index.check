@@ -1,0 +1,5 @@
+CHECK: srem
+CHECK-NOT: modadj
+CHECK-NOT: modnz
+CHECK-NOT: modneg
+CHECK-NOT: mods

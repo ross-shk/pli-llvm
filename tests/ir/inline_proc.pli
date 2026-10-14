@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+/* P6.1 litmus: a small internal non-recursive procedure with plain scalar
+   params must be marked alwaysinline at -O2 (checks off). */
+INLINE_PROC_IR: PROCEDURE OPTIONS(MAIN);
+   DECLARE I FIXED BINARY(31);
+   DECLARE RESULT FIXED BINARY(63);
+   /* addval is internal (not MAIN/EXTERNAL), non-RECURSIVE, scalar param */
+   addval: PROCEDURE(N) RETURNS(FIXED BINARY(63));
+     DECLARE N FIXED BINARY(31);
+     RETURN(N + 1);
+   END addval;
+   RESULT = 0;
+   DO I = 1 TO 1000;
+     RESULT = RESULT + addval(I);
+   END;
+   PUT SKIP LIST(RESULT);
+END INLINE_PROC_IR;

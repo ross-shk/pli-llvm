@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Concat-temp litmus: T = A || B (head is not the target, so the generic
+    temp-buffer path applies) must free the fresh buffer once the assign
+    has copied it — otherwise every trip round a loop leaks one buffer. */
+ concat_free: procedure options(main);
+   declare r character(100) varying;
+   declare a character(100) varying;
+   declare b character(100) varying;
+   declare n fixed bin(31);
+   a = 'ab';
+   b = 'cd';
+   r = a || b;
+   n = length(r);
+   put skip list(n);
+ end concat_free;

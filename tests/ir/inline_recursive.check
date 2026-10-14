@@ -1,0 +1,2 @@
+CHECK: define internal i32 @.*RECURSIVE_PROC
+CHECK-NOT: alwaysinline

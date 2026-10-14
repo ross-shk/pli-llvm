@@ -83,6 +83,10 @@ private:
   // Every storage-owning symbol this frame can address directly (global,
   // local alloca, parameter, or a static link) to its address value.
   std::unordered_map<Symbol*, llvm::Value*> symAddr_;
+  // P6.1b (ADR-215): every internal-procedure parameter decided by-value
+  // (read-only scalar, address never taken) maps to true; absent or false
+  // keeps the by-reference address form. Filled by computeByValueParams.
+  std::unordered_map<Symbol*, char> byValParam_;
   // P2 alias facts (LICM/LAA): one domain per emitted function; each plain
   // AUTOMATIC local owns a scope in it. Scalar loads/stores stamp
   // !alias.scope={own} + !noalias={all other scopes}. Reset per function so
@@ -93,6 +97,14 @@ private:
   // Stamp !alias.scope/!noalias on one memory instruction for symbol s;
   // silently skips symbols without a scope (shared/aliased storage).
   void annotateAlias(llvm::Instruction* inst, Symbol* s);
+  // Stamp !range from a FIXED BINARY(p) declared precision on a load (P3b).
+  // Sound only when sizeChecks() is off — at -O2/-O3 the optimizer already
+  // assumes no signed overflow, and the range makes that explicit so LLVM
+  // can narrow the value and fold downstream overflow guards.
+  void stampFixedBinRange(llvm::LoadInst* load, const Type& ty);
+  // P3.3 loop metadata state (set in emitDoIter preheader, used on backedge).
+  llvm::MDNode* loopID_ = nullptr;
+  llvm::SmallVector<llvm::Metadata*, 4> loopMDs_;
   // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
   // bound value of its dynamic axis, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynUb_;
@@ -163,6 +175,10 @@ private:
   // Self-append peephole (rule (119), P4): X = X || lit... appends in place
   // for AUTOMATIC scalar VARYING targets; false for any other shape.
   bool emitSelfAppend(HStmt* s);
+  // Rule (119): a concat RHS evaluates into a fresh pli_alloc buffer; once
+  // an assignment has copied it into the target the buffer is dead. Free it
+  // unless the RHS is some other shape (no-op then).
+  void freeConcatTemp(HExpr* rhs, llvm::Value* buf);
   // libc scan declaration (memchr/memcmp) with audited facts for LICM (P4).
   llvm::Function* scanFn(const std::string& name, llvm::Type* ret,
                          llvm::ArrayRef<llvm::Type*> params);
@@ -246,6 +262,23 @@ private:
   // True when a parameter is an adjustable-length `CHAR(*)` (rule (18)); its
   // hidden argument is a character length, not an array extent.
   static bool isStarLen(const Type& t) { return t.isChar() && t.starLen; }
+  // P6.1: true for a small internal, non-recursive, single-entry procedure
+  // whose parameters are all plain scalars or fixed-size arrays — safe to
+  // mark AlwaysInline so hot call sites pay no frame setup at -O2.
+  bool inlineInternal(const HProc* p) const;
+  // P6.1b (ADR-215): read-only scalar parameters of eligible internal
+  // procedures ride by value. Decided once per program before declareProc;
+  // consulted by declareProc, emitPlainProc, and every call site.
+  void computeByValueParams(const HProgram& prog);
+  bool isByValueParam(Symbol* s) const {
+    auto it = byValParam_.find(s);
+    return it != byValParam_.end() && it->second;
+  }
+  // P6.1b (ADR-215) eligibility walk: any VarRef to s, address taken for s
+  // in e, and stores/address escapes for s in st (all true = keep by-ref).
+  bool exprMentions(HExpr* e, Symbol* s) const;
+  bool exprTakesAddr(HExpr* e, Symbol* s) const;
+  bool stmtTakesAddr(HStmt* st, Symbol* s) const;
   // Number of `*`-adjustable-extent parameters in `params` (each contributes a
   // hidden i64 extent argument after the by-reference pointers).
   size_t nAdjustable(const std::vector<Symbol*>& params) {
@@ -551,6 +584,9 @@ private:
                           llvm::Value* srcLen);
   // Direct LLVM lowering for INDEX (P1+): bytewise search loop.
   llvm::Value* emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
+  // P7.2: SIMD-accelerated INDEX for constant needles on ARM64 NEON.
+  llvm::Value* emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                                     llvm::Value* bLen, llvm::StringRef needleStr);
   // Direct LLVM lowering for assign_varying (P3): memmove + blank-pad + return n.
   llvm::Value* emitAssignVaryingLLVM(llvm::Value* dst, llvm::Value* cap, llvm::Value* src,
                                      llvm::Value* srcLen);
@@ -724,6 +760,16 @@ private:
   bool convChecks() const {
     return !noConvChecks_ && (checkStack_.empty() || !checkStack_.back().noConv);
   }
+  // P6.1: true when internal procedures should be marked AlwaysInline
+  // (checks off = -O2/-O3 default; at -O0 checks are on, no inliner runs).
+  bool inlineProcs() const {
+    return noSizeChecks_ && noSubChecks_ && (checkStack_.empty() ||
+            (!checkStack_.back().noSize && !checkStack_.back().noSub));
+  }
+  // P6.3: track DO control variables whose FROM is a non-negative constant
+  // so MOD(index, k) with positive k skips the sign-adjust chain.
+  std::unordered_set<Symbol*> nonNegDoIndices_;
+  bool isDerivedFromNonNegDoIndex(llvm::Value* v) const;
   // ON state (rules (91)-(94),(99)): condition key (0 = ERROR,
   // Stmt::kSizeCondKey = SIZE, else a rule (99) name) to handler
   // functions, ids dense from 1 within a key.

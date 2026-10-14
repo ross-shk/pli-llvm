@@ -5999,3 +5999,230 @@ as meaningless-but-harmless for binary records.
 `DECLARE`; only the runtime signature was missing. Tests:
 `tests/corner_cases/record_io_edge.pli`, `tests/driver/record.sh`.
 
+## ADR-212 — `!noalias`/`!alias.scope` on plain `AUTOMATIC` locals (P2)
+
+**Context.** PL/I `AUTOMATIC` variables declared in a procedure are disjoint
+unless the program explicitly aliases them — through `BASED` pointers
+(ADR-164), `DEFINED` overlays (rules (39)/(40)), by-reference parameters, or
+`CONTROLLED` generations. C pointers may always alias, so C compilers cannot
+hoist or vectorize memory operations through pointers that could overlap.
+PL/I's stronger locality fact is free knowledge the LLVM optimizer can exploit
+for loop invariant code motion (LICM) and LoopAA-based vectorization — but
+only if it is expressed as LLVM alias metadata.
+
+**Decision.** In `allocaLocals` (`src/irgen.cpp:3135`), every plain
+`AUTOMATIC` local `alloca` — non-`BASED`, non-`CONTROLLED`, non-`STATIC`,
+non-`DEFINED`-overlay, non-parameter, no address taken — is tagged with a
+per-function `!alias.scope` domain and `!noalias` against all sibling scopes.
+The matching `annotateAlias` helper (`src/irgen.cpp:7547`) stamps
+`!alias.scope={own}` + `!noalias={peers}` on the loads and stores for those
+symbols. `BASED`/`CONTROLLED`/`STATIC`/`DEFINED`/parameter/temporary accesses
+remain unannotated and fall back to BasicAA, which is always sound.
+
+Litmus tests (`tests/core/alias_noalias.pli`, `tests/core/alias_defined.pli`,
+`tests/core/alias_based.pli`):
+- Positive: two plain `AUTOMATIC` arrays in a loop — after P2 the allocas
+  carry `!noalias` and the loop vectorizes; output identical before/after.
+- Negative (DEFINED): `DEFINED` overlay pair — no `!noalias`, output identical.
+- Negative (BASED): `P->X(i)` store/load pair — no `!noalias`, output identical.
+
+**Consequences.** Enables LICM hoisting and LoopAA vectorization on the hot
+`matmul`/`sort`/`collatz` loops. The claim is narrow by construction: the
+no-go set excludes every construct that can alias (ADR-018/047/048/140,
+ADR-164/165), so the metadata is truthful, not approximate. All 21 benchmarks
+pass `--checks-forced` parity (traps on, facts off — output unchanged).
+
+---
+
+## ADR-213 — Target-aware optimization pipeline for auto-vectorization
+
+**Context.** At `-O2`/`-O3`, LLVM's loop vectorizer refuses to vectorize
+PL/I DO-loops even when the IR is in canonical SSA form (phi induction
+variable, `nsw` stepping, `!noalias` allocas, `!range` loads). Investigation
+revealed that DO-control-variable allocas ARE promoted to SSA by SROA — the
+control variable becomes a phi node (`lsr.iv`) in optimized IR. The real
+blocker is that `optimizeModule` (`src/codegen.cpp:48`) builds the
+`PassBuilder` without passing the `TargetMachine`, so
+`buildPerModuleDefaultPipeline` uses the default `TargetIRAnalysis` — a
+generic target that reports zero vector registers and no SIMD support. LLVM's
+loop vectorizer consults this TTI and silently skips every loop.
+
+Evidence: `opt -passes='default<O3>'` on the *same* plic-generated IR
+vectorizes the DO-loop (4-wide SIMD on arm64). Plic's own `optimizeModule`
+at the same `O3` level does not — the only difference is the missing
+`TargetMachine*` in the `PassBuilder` constructor.
+
+**Decision.** Pass the `TargetMachine` to the `PassBuilder` constructor so it
+registers the target-specific `TargetIRAnalysis` (NEON on arm64, SSE/AVX on
+x86). Change `optimizeModule` signature to accept `llvm::TargetMachine&` and
+forward it as `PB.getTM()` (or `TM->getTMTargetIRAnalysis()`). All call sites
+in `src/main.cpp` already hold a live `TargetMachine` before calling
+`optimizeModule`.
+
+**Consequences.** `-O2`/`-O3` loops that were scalar-only (e.g. `A(i) = A(i) + i`
+over a 1000-element array) now vectorize to 4-wide SIMD, matching clang's
+codegen. The `--march=native` flag already passes the host CPU to
+`createTargetMachine`, so the vector features are correct on the build host.
+`--checks-forced` parity is unaffected: vectorization is a code-quality gain,
+not a semantic change. `tests/ir/do_ssa.pli` pins a vectorized phi induction
+variable at `-O3`.
+
+**Rejected.** Manually emitting phi nodes in `emitDoIter` (complex, error-prone,
+duplicates what SROA already achieves); adding a separate `-passes=loop-vectorize`
+invocation after the default pipeline (the vectorizer needs TTI registered in
+the analysis manager, which `buildPerModuleDefaultPipeline` sets up only once).
+
+## ADR-214 — One-slot CONTROLLED generation freelist
+
+Rules (87)–(90): per-iteration `ALLOCATE`/`FREE` of the same size paid a
+full `malloc`/`free` plus generation bookkeeping every trip. The
+`controlled_stack` benchmark (1M push-fill-sum-pop cycles of 400 bytes) ran
+1.76x behind its C baseline at `-O3`.
+
+Evidence: per-outer-iteration call inventory vs C (`malloc` + `free` + 100
+stores) is `pli_ctl_alloc` (table scan + grow check + `malloc` + 3
+bookkeeping stores) + 2 hoisted `pli_ctl_addr`/`pli_ctl_len` reads + one
+`pli_ctl_addr` for the post-loop read + `pli_ctl_free` (scan + 2 frees +
+store). All runtime bodies stay `NoInline` (the dead-strip driver test
+relies on it), so none of this folds at the call site.
+
+**Decision.** Recycle the last freed 1-D generation buffer for the same
+key and size inside `rt_storage.c` (no ABI change — signatures and
+`pli_rt_abi.def` untouched). `pli_ctl_free` stashes the popped buffer in a
+one-slot cache instead of freeing it; `pli_ctl_alloc` reuses the slot on a
+same-key/same-size hit. Mismatch evicts first, so peak retention is one
+buffer (reclaimed by the OS at exit; no cross-file fini hook, keeping the
+diff to one file). N-D generations bypass the cache: anything with a
+nonzero rank (including 1-D generations that later gained extents via
+`pli_ctl_set_dim`) frees normally. `ALLOCATE(*)` reuse stays coherent
+without consulting the cache: it reads the live top generation through
+`pli_ctl_addr`/`pli_ctl_len`, which the cache can never alias (every
+stashed buffer came from a popped slot). Threading matches the existing
+table (process-global, not TLS). `tests/core/controlled_reuse.pli` pins
+the semantics: same-size churn, size-change evict, LIFO depth restore,
+cross-key separation, and the N-D `(*,*)` path.
+
+**Consequences.** Same-shape LIFO churn becomes a pointer handoff: no
+`malloc`/`free` on the hot path. Contents stay undefined per the language
+(the test always writes before reading), and live generations can never
+alias the slot. `pli_ctl_ensure` inherits the benefit via `pli_ctl_alloc`.
+
+**Rejected.** A multi-slot or per-key cache (unbounded retention, more
+bookkeeping than the one buffer it saves); teaching IRGen to elide the
+pair (needs escape/provenance analysis across calls — the runtime owns the
+table, so a local cache is the KISS fix); a `_Thread_local` slot (the
+table it mirrors is already process-global — matching existing practice
+instead of fixing threading here).
+
+
+
+## ADR-215 — By-value passing for read-only scalar internal parameters
+
+Rules (4),(34),(38): every internal parameter rode by reference (ptr), so
+even a bounded self-recursion like `factorial` kept 33M runtime calls at
+`-O2` while C folded the same shape to constants (2.97x). Marking the
+recursive procedure `AlwaysInline` changed nothing (Exp1: 2.95x) — the -O2
+inliner will not inline recursion through a pointer indirection. Passing
+the same parameter as an `i32` value folds the whole nest at `-O2` (Exp2:
+1.03x, in-tree: 1.04x).
+
+**Decision.** `computeByValueParams` decides every internal parameter's
+convention once per program, before `declareProc`. A parameter rides by
+value when the procedure is internal, single-entry, unnamed,
+never address-taken as an ENTRY value (ADR-171 uses the all-pointer
+convention), never called asynchronously (rule (79) packs addresses), and
+the `inlineProcs` gate holds (checks off); and when the parameter is a
+plain FIXED/FLOAT/POINTER scalar (mirroring `marshalArg`) that no body in
+its lexical subtree stores through or exposes the address of. The subtree
+walk covers assignment targets (including SUBSTR/EXPONENT/UNSPEC
+pseudo-variable targets and `ALLOCATE .. SET`), direct call arguments,
+`ADDR`/`BYADDR`/`OMITTED`/`PRESENT`, DO control variables, GET items, and
+nested-procedure bodies (static-link reads stay sound — only writes
+disqualify). Multi-entry procedures, OPTIONAL parameters, DEFINED-overlay
+bases, and any uncertainty keep by reference, which is always sound. The
+callee materializes a frame cell for the value, so static links, nested
+`argAddr` calls, and alias metadata keep working unchanged; call sites
+marshal through the existing `marshalArg` path. `tests/ir/byval_param.pli`
+pins `FACT(i32` vs `BUMP(ptr`; `tests/core/byval_semantics.pli` pins the
+preserved semantics (visible stores, nested capture, mixed conventions,
+OPTIONAL omission).
+
+**Consequences.** Bounded recursion with constant arguments now folds at
+`-O2` exactly like C (unroll + CGSCC inline/propagation cascade, unlocked
+by the SSA argument). Non-inlined calls keep one store/load pair that SROA
+removes after inlining; `--checks-forced` builds keep by reference via the
+shared gate, so forced-checks parity is unaffected.
+
+**Rejected.** Extending `AlwaysInline` to recursive procedures (measured
+no-op — the inliner still refuses); a whole-program "all scalars by
+value" switch (breaks ENTRY-variable and async conventions, needs the
+eligibility proof anyway); forwarding-argument refinement for wrapper
+procs (`g(x) { return f(x); }` stays by reference — documented future
+work, unneeded for the measured gap).
+
+## ADR-216 — Variable-tail in-place self-append for VARYING strings
+
+Rule (119): `result = result || temp` in a loop paid a fresh `pli_alloc`
+plus two full-buffer copies and a capacity-sized blank-pad per trip —
+O(n²) traffic that left `string_ops` at 7.33x behind C's `strcat` loop.
+The P4 `emitSelfAppend` peephole only fired for literal tails, so any
+variable tail fell through to the generic temp-buffer path.
+
+**Decision.** Extend `emitSelfAppend` to variable tails. A tail leaf is
+safe when it is a string literal (as before) or a `VarRef` to disjoint
+storage: a same-frame AUTOMATIC local (its frame alloca cannot overlap
+the target), or a by-value parameter (a private stable cell, ADR-215).
+By-reference parameters could alias the target through the caller, and
+BASED/CONTROLLED/STATIC/DEFINED cells carry no disjointness guarantee,
+so all of those keep the generic path. Self-concatenation (`X = X || X`)
+is safe: reads always span `[0, old)` while writes land at `[old, ...)`.
+Each leaf appends past the live length with the same
+`min(cap, total)` truncation the generic path computes, then stores the
+new length; the blank-pad stays skipped by the existing growth-only
+argument. `tests/ir/self_append_var.pli` pins the shape (no `pli_alloc`
+in the procedure); `tests/core/self_append.pli` pins the semantics
+(values, truncation, self-concat, loop growth).
+
+**Consequences.** Same-shape string churn drops from O(n²) to O(n):
+`string_ops` goes 7.33x → 0.18x (C still rescans with `strcat`; we copy
+only the new tail). The generic concat path is untouched, so every other
+shape behaves exactly as before.
+
+**Rejected.** Direct concat emission for `T = A || B...` (head ≠ target):
+unneeded once the hot append reaches 0.18x — the remaining temp churn is
+~3ms and shrinking it further is not worth a second lowering. Blank-pad
+elimination on the generic path: the hot path no longer pads, so the
+proof burden buys nothing measurable. Freeing the generic temp buffer:
+it would fix the RSS leak (unfreed temp per concat-assign) but not the
+traffic; recorded as a separate issue, not attempted here.
+
+## ADR-217 — Free the generic concat temp buffer at assignment
+
+Rule (119): the generic concat lowering evaluates into a fresh `pli_alloc`
+buffer, and every assignment path copied it into the target and dropped
+the pointer — one leaked buffer per evaluation. At `-O2` LLVM usually
+removes the dead pair itself, but at `-O0` 500000 `r = a || b` trips
+grow RSS to ~109MB (measured). Relying on the optimizer to take out the
+garbage is not a memory policy.
+
+**Decision.** `freeConcatTemp` frees the buffer after the consuming store
+at every assignment shape that can receive a concat RHS: plain and
+multi-target assignment, SUBSTR-target, array-element (including member
+and iSUB paths), and member/locator-target assignment. The predicate is
+the HIR shape (top node `Binary`/`Concat`, which the lowering always
+materializes fresh with no aliases), so any other RHS is a no-op; each
+temp is freed exactly once, after its last read.
+`tests/ir/concat_free.pli` pins the shape (`pli_alloc` paired with
+`pli_free`).
+
+**Consequences.** `-O0` RSS for the 500K-assign loop drops ~109MB → ~1MB
+with identical output; `-O2` timings are unchanged (`string_ops` 0.16x,
+`proc_calls` 1.02x — the pair folds as before). One-shot consumers
+(`PUT`/`CALL`/`RETURN`/compare temps) still leak their bounded buffer;
+they execute once per statement rather than per loop trip, so they stay
+as found.
+
+**Rejected.** Ownership tracking on `Val` (every consumer would need the
+same check — more sites for identical coverage); freeing one-shot temps
+(unmeasured, adds call noise where the optimizer currently folds
+cleanly).

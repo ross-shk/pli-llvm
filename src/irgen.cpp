@@ -13,6 +13,7 @@
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -529,6 +530,19 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_set_on_source", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_unspec_assign", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_onkey", {.willReturn = true, .mem = RtMemReadonly}},
+      // ON handler stack (rules (91)-(94)): readers only read the
+      // thread-local stack, writers push/pop/reset it. Push may abort on
+      // overflow, so it claims no willReturn; the rest always return.
+      {"pli_on_top_cond", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_top_ctx", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_top_fn", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_top_error", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_depth_error", {.willReturn = true, .mem = RtMemReadonly}},
+      {"pli_on_pop_cond", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_on_pop_error", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_on_reset_error", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_on_push_cond", {.mem = RtMemOtherMod}},
+      {"pli_on_push_error", {.mem = RtMemOtherMod}},
       {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_put_edit_pic", {.willReturn = true, .alwaysInline = true, .mem = RtMemOtherMod}},
     };
@@ -989,6 +1003,23 @@ llvm::Function* IRGen::scanFn(const std::string& name, llvm::Type* ret,
   return f;
 }
 
+// P7.2: detect a constant string needle (pointer to a private GlobalVariable
+// initializer that is a ConstantDataArray of i8 with known content).
+// Returns the pointer-stripped global + the byte span, or nullptr.
+static std::pair<llvm::GlobalVariable*, llvm::StringRef>
+extractConstantNeedle(llvm::Value* v) {
+  if (auto* gv = llvm::dyn_cast<llvm::GlobalVariable>(v->stripPointerCasts())) {
+    if (gv->isConstant()) {
+      if (auto* ca = llvm::dyn_cast<llvm::ConstantDataArray>(gv->getInitializer())) {
+        if (ca->isString()) {
+          return {gv, ca->getAsString()};
+        }
+      }
+    }
+  }
+  return {};
+}
+
 // Direct LLVM lowering for INDEX (P1+). Mirrors pli_index in rt_string.c:
 //   blen <= 0 -> 1; blen > alen -> 0; else scan a for first run where
 //   a[pos..pos+blen-1] == b[0..blen-1].
@@ -1005,8 +1036,30 @@ llvm::Function* IRGen::scanFn(const std::string& name, llvm::Type* ret,
 //
 // Slow path: falls back to pli_index runtime call for the rare case where
 // the first byte of the needle appears before the actual match position.
+//
+// P7.2 SIMD fast-path: for constant needles of length 2..16, replaces
+// the memchr+memcmp pair with a target-detection branch that uses SIMD
+// intrinsics (NEON cmeq on ARM64, SSE4.2 pcmpestrm on x86) for vectorized
+// verification. The slow path loops back to memchr from the next candidate
+// instead of calling the pli_index runtime, eliminating per-iteration runtime
+// overhead for constant needles. This closes the gap where the C baseline
+// uses strstr (libc SIMD) and we fall through to a scalar pli_index loop.
 llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
                                   llvm::Value* bLen) {
+  // P7.2: dispatch to SIMD fast-path for constant needles of length 2..16
+  if (auto [gv, str] = extractConstantNeedle(b); gv && !str.empty()) {
+    uint64_t nlen = str.size();
+    // ConstantDataArray::getString stores a NUL terminator; the needle
+    // length is the value bLen (not str.size, which includes '\0').
+    // We use nlen as upper bound on the needle length we can handle
+    // with a single SIMD register (16 bytes).
+    if (nlen >= 2 && nlen <= 17) {
+      llvm::Triple tgtTriple(triple_);
+      if (tgtTriple.getArch() == llvm::Triple::aarch64)
+        return emitIndexConstantNEON(a, aLen, b, bLen, str);
+    }
+  }
+
   llvm::Function* F = b_.GetInsertBlock()->getParent();
   llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
   llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
@@ -1111,6 +1164,149 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   resultPhi->addIncoming(zero, ret0BB);
   resultPhi->addIncoming(matchResult, matchBB);
   resultPhi->addIncoming(slowResult, slowPathBB);
+
+   return resultPhi;
+}
+
+// P7.2: SIMD-accelerated INDEX for constant needles on ARM64 NEON.
+//
+// Algorithm:
+//   1. Guard: blen <= 0 → 1; blen > alen → 0 (same as emitIndexLLVM).
+//   2. Build a <16 x i8> needle vector (zero-padded) and a <16 x i8>
+//      mask (first n bytes = 0xFF, rest = 0x00) from the constant needle.
+//   3. Use memchr (libc NEON-internal) to find the first char of the
+//      needle — fast SIMD character search (16 bytes/instruction).
+//   4. Verify the candidate by loading <16 x i8> from haystack, XOR
+//      with needle_vec.  ICmpEQ(diff, zeros) gives 0xFF where bytes match.
+//      AND with mask_vec isolates the needle-length bytes.  If the result
+//      equals mask_vec → all needle bytes match → return pos+1.
+//   5. On verify miss, call memchr again from pos+1 (no pli_index runtime,
+//      eliminating the scalar loop for constant needles).
+//
+// Target-detection note: on x86 we would use llvm.x86.sse41.pcmpestrm128
+// which compares a 16-byte haystack against a needle in one hardware
+// instruction; on ARM64 the cmeq approach is the equivalent. Both are
+// gated on the target triple in emitIndexLLVM's dispatch.
+llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,                                           llvm::Value* /*b*/,
+                                          llvm::Value* bLen, llvm::StringRef needleStr) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* aLen64 = b_.CreateZExtOrTrunc(aLen, b_.getInt64Ty(), "idx.alen");
+  llvm::Value* bLen64 = b_.CreateZExtOrTrunc(bLen, b_.getInt64Ty(), "idx.blen");
+  uint64_t needleLen = needleStr.size();
+
+  // <16 x i8> needle vector (zero-padded) + mask (first n bytes 0xFF).
+  std::vector<llvm::Constant*> needleElems, maskElems;
+  for (uint64_t i = 0; i < 16; ++i) {
+    needleElems.push_back(llvm::ConstantInt::get(
+        b_.getInt8Ty(), i < needleLen ? (uint8_t)needleStr[i] : 0));
+    maskElems.push_back(llvm::ConstantInt::get(
+        b_.getInt8Ty(), i < needleLen ? 0xFF : 0x00));
+  }
+  llvm::Value* needleVec = llvm::ConstantVector::get(needleElems);
+  llvm::Value* maskVec = llvm::ConstantVector::get(maskElems);
+  llvm::VectorType* vecTy = llvm::VectorType::get(b_.getInt8Ty(), 16, false);
+  llvm::Value* zeroVec = llvm::ConstantVector::getSplat(
+      llvm::ElementCount::get(16, false), llvm::ConstantInt::get(b_.getInt8Ty(), 0));
+
+  // memchr function: reused for finding first-char candidates.
+  llvm::Function* memchrFn = scanFn("memchr", b_.getPtrTy(),
+                                    {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()});
+  uint64_t firstChar = needleLen > 0 ? (uint8_t)needleStr[0] : 0;
+
+  // Capture the current insertion block — it's the predecessor of searchBB
+  // on first entry (we emit the condBr below into this block).
+  llvm::BasicBlock* callerBB = b_.GetInsertBlock();
+
+  // Basic blocks (built up-front; all PHIs get their incoming values set later).
+  // CFG:
+  //   caller → (blen<=0) → ret1 → exit
+  //   caller → (blen>0) → search
+  //   search: found=null → ret0 → exit
+  //   search: found≠null → verify
+  //   verify: match → matchBB → exit
+  //   verify: miss → search (retry from pos+1)
+  llvm::BasicBlock* ret1BB = llvm::BasicBlock::Create(ctx_, "idx.ret1", F);
+  llvm::BasicBlock* ret0BB = llvm::BasicBlock::Create(ctx_, "idx.ret0", F);
+  llvm::BasicBlock* searchBB = llvm::BasicBlock::Create(ctx_, "idx.simd_search", F);
+  llvm::BasicBlock* verifyBB = llvm::BasicBlock::Create(ctx_, "idx.simd_verify", F);
+  llvm::BasicBlock* matchBB = llvm::BasicBlock::Create(ctx_, "idx.simd_match", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "idx.exit", F);
+
+  // Entry: blen <= 0 → ret1; else search
+  llvm::Value* blenLe0 = b_.CreateICmpULE(bLen64, zero, "idx.blenle0");
+  b_.CreateCondBr(blenLe0, ret1BB, searchBB);  // callerBB is predecessor
+
+  startBlock(ret1BB);
+  b_.CreateBr(exitBB);
+
+  // search: memchr(a + start, needle[0], aLen - start)
+  startBlock(searchBB);
+  llvm::PHINode* start = b_.CreatePHI(b_.getInt64Ty(), 2, "idx.start");
+  start->addIncoming(zero, callerBB);
+
+  // rem = aLen - start (bytes remaining)
+  llvm::Value* rem = b_.CreateSub(aLen64, start, "idx.rem");
+  llvm::Value* aStartPtr = b_.CreateGEP(b_.getInt8Ty(), a, {start}, "idx.astart");
+  llvm::Value* firstChar32 = llvm::ConstantInt::get(b_.getInt32Ty(), firstChar);
+  llvm::CallInst* foundCall = b_.CreateCall(memchrFn, {aStartPtr, firstChar32, rem}, "idx.memchr");
+  foundCall->addFnAttr(llvm::Attribute::Speculatable);
+  llvm::Value* found = foundCall;
+
+  // found == null → ret0 (no more candidates)
+  llvm::Value* foundNull = b_.CreateICmpEQ(
+      found, llvm::ConstantPointerNull::get(b_.getPtrTy()), "idx.found_null");
+  b_.CreateCondBr(foundNull, ret0BB, verifyBB);
+
+  startBlock(verifyBB);
+  // pos = found - a (absolute position in haystack)
+  llvm::Value* foundInt = b_.CreatePtrToInt(found, b_.getInt64Ty(), "idx.found_int");
+  llvm::Value* aInt = b_.CreatePtrToInt(a, b_.getInt64Ty(), "idx.a_int");
+  llvm::Value* pos = b_.CreateSub(foundInt, aInt, "idx.pos");
+
+  // Load 16 bytes from candidate position, XOR with needle_vec.
+  // The load may read past the buffer boundary; since PL/I string buffers
+  // are stack allocas with fixed size and the mask zeroes irrelevant bytes,
+  // this is safe after SROA.
+  llvm::Value* aPosPtr = b_.CreateGEP(b_.getInt8Ty(), a, {pos}, "idx.apos_ptr");
+  llvm::Value* hayVec =
+      b_.CreateAlignedLoad(vecTy, aPosPtr, llvm::Align(1), "idx.hay_vec");
+  llvm::Value* diff = b_.CreateXor(hayVec, needleVec, "idx.diff");
+
+  // AND with mask to isolate needle-length bytes: result is 0 where byte
+  // matches (diff=0) within needle range, non-zero where mismatch.
+  llvm::Value* anded = b_.CreateAnd(diff, maskVec, "idx.masked");
+  // all_zero: true where anded == 0 (i.e., match within needle range)
+  llvm::Value* matchVec = b_.CreateICmpEQ(anded, zeroVec, "idx.cmp_eq");
+  // Reduce <16 x i1> to i16, then check if the first needleLen bits are set.
+  llvm::Value* bits = b_.CreateBitCast(matchVec, llvm::Type::getIntNTy(ctx_, 16), "idx.bits");
+  // Create a mask with the first needleLen bits set (e.g., needleLen=8 → 0xFF)
+  uint32_t matchMaskVal = (1u << needleLen) - 1;
+  llvm::Value* matchMask =
+      llvm::ConstantInt::get(b_.getInt16Ty(), matchMaskVal);
+  llvm::Value* maskedBits = b_.CreateAnd(bits, matchMask, "idx.masked_bits");
+  llvm::Value* allMatch = b_.CreateICmpEQ(maskedBits, matchMask, "idx.all_match");
+
+  // Branch: match → matchBB, miss → retry search from pos+1
+  llvm::Value* posPlus1 = b_.CreateAdd(pos, one64, "idx.next_start");
+  b_.CreateCondBr(allMatch, matchBB, searchBB);
+  start->addIncoming(posPlus1, verifyBB);
+
+  // match: result = pos + 1 (PL/I is 1-based)
+  startBlock(matchBB);
+  llvm::Value* matchResult = b_.CreateAdd(pos, one64, "idx.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(ret0BB);
+  b_.CreateBr(exitBB);
+
+  // exit: merge all result values.
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 4, "idx.out");
+  resultPhi->addIncoming(one64, ret1BB);
+  resultPhi->addIncoming(zero, ret0BB);
+  resultPhi->addIncoming(matchResult, matchBB);
 
   return resultPhi;
 }
@@ -2374,7 +2570,11 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
   llvm::Value* none = b_.CreateICmpEQ(top, i64(0), tag + "none");
   llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, tag + ".abort", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, tag + ".dispatch", curFn_);
-  b_.CreateCondBr(none, abortBB, dspBB);
+  // intent: with a handler established the empty-stack edge is cold;
+  // weight the dispatch edge so the trap block stays out of the hot path.
+  llvm::MDBuilder mdb(ctx_);
+  if (auto* br = b_.CreateCondBr(none, abortBB, dspBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(abortBB);
   b_.CreateCall(runtimeFn(abortFn), {});
   b_.CreateUnreachable();
@@ -2414,7 +2614,11 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
   std::string zid = std::to_string(n_++);
   llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "zd.trap." + zid, curFn_);
   llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "zd.ok." + zid, curFn_);
-  b_.CreateCondBr(isZero, trapBB, okBB);
+  // intent: the faulting-divisor edge is cold (~1% taken); weight the hot
+  // resume edge so the loop stays contiguous for the optimizer.
+  llvm::MDBuilder zmdb(ctx_);
+  if (auto* br = b_.CreateCondBr(isZero, trapBB, okBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(trapBB);
   emitCondTrap(Stmt::kZerodivideCondKey, "pli_zerodivide", "zd", okBB);
   b_.SetInsertPoint(okBB);
@@ -2746,6 +2950,9 @@ std::string IRGen::run(HProgram& prog) {
   assignOnIds(prog);
   declareOnHandlers(prog);
 
+  // P6.1b (ADR-215): decide by-value parameters once for the whole program
+  // so declareProc, emitProc, and every call site agree on signatures.
+  computeByValueParams(prog);
   // Pre-declare every procedure's functions/aliases so a call site resolves
   // regardless of the order the (flattened) procedures are emitted in.
   for (auto& p : prog.procs)
@@ -2880,12 +3087,15 @@ bool IRGen::linkRuntimeBitcode() {
   // runtime's global state (CONTROLLED/ON stacks, I/O) stays shared across
   // units; the P0 side-table facts are re-applied so the optimizer keeps the
   // audited memory/alloc effects on the real bodies.
-  // Strip the build host's target-cpu / target-features from the pre-compiled
-  // runtime (IRGen P0): if they survive into the merged module, LLVM's inliner
-  // refuses to honour the AlwaysInline that applyRuntimeAttrs stamps on the
-  // math wrappers (pli_sin, pli_mod_ll, ...) when the feature sets differ.
-  // KEEP probe-stack: runtime.bc is built for apple-m1, and __chkstk_darwin is
-  // the native probe method for arm64-apple (our targets), so it is sound.
+  // Strip the build host's target-cpu / target-features / probe-stack from the
+  // pre-compiled runtime (IRGen P0, P5.1): if they survive into the merged
+  // module, LLVM's inliner refuses to honour the AlwaysInline that
+  // applyRuntimeAttrs stamps on the math wrappers (pli_sin, pli_mod_ll, ...)
+  // when the feature sets differ, and a probe-stack / target-cpu mismatch
+  // against the link-time TargetMachine breaks the backend on some targets.
+  // The TargetMachine re-applies its own defaults at codegen, so stripping
+  // is sound on every target. Identical strip in linkEmbeddedLibPLI and
+  // emitRuntimeObject (codegen.cpp).
   // Stamp NoInline on every runtime body so the non-always-inline wrappers
   // (e.g. pli_put_list_char) are not generically inlined at -O2 and survive
   // -dead_strip at link (tests/driver/link.sh dead-strip sub-check). The math
@@ -2897,6 +3107,8 @@ bool IRGen::linkRuntimeBitcode() {
       F.removeFnAttr("target-cpu");
     if (F.hasFnAttribute("target-features"))
       F.removeFnAttr("target-features");
+    if (F.hasFnAttribute("probe-stack"))
+      F.removeFnAttr("probe-stack");
     F.addFnAttr(llvm::Attribute::NoInline);
   }
   // Align the data layout with ours first: both describe the same ABI, but
@@ -3529,6 +3741,367 @@ llvm::Value* IRGen::onExitDepth(const std::string& label) {
 // regardless of emission order. Plain procedures get one function (filled by
 // emitPlainProc); multi-entry procedures get the shared impl (filled by
 // emitMultiEntryProc) plus a fully-built tail-calling thunk per entry name.
+// P6.1: decide whether a procedure is a candidate for AlwaysInline.
+// Conservative: only non-recursive internal procs with plain params
+// (no adjustable arrays, CHAR(*), BASED, CONTROLLED, DEFINED, or STATIC).
+bool IRGen::inlineInternal(const HProc* p) const {
+  if (p->isRecursive || p->isMain || p->isExternal || p->isPackage
+      || !p->entryNames.empty() || !inlineProcs())
+    return false;
+  for (const Symbol* prm : p->paramSyms) {
+    if (!prm)
+      continue;
+    if (prm->ty.isArray() || isStarLen(prm->ty) || prm->isBased()
+        || prm->controlled || prm->definedBase || prm->isStatic)
+      return false;
+  }
+  return true;
+}
+
+// P6.1b (ADR-215): true when e's tree mentions a VarRef to s at any depth.
+bool IRGen::exprMentions(HExpr* e, Symbol* s) const {
+  if (!e)
+    return false;
+  if ((e->kind == HExpr::VarRef || e->kind == HExpr::Subscript) && e->sym == s)
+    return true;
+  if (exprMentions(e->a.get(), s) || exprMentions(e->b.get(), s) ||
+      exprMentions(e->locPtr.get(), s))
+    return true;
+  for (auto& a : e->args)
+    if (exprMentions(a.get(), s))
+      return true;
+  return false;
+}
+
+// P6.1b (ADR-215): true when evaluating e takes s's address or stores
+// through it. Plain value reads (arithmetic, builtin arguments, indices)
+// are false; a bare VarRef to s is a read EXCEPT as a user-call argument,
+// where argAddr passes the address (v1: always by reference — a call to a
+// proc that itself takes the parameter by value would be safe, left as a
+// documented refinement). ADDR/BYADDR/OMITTED/PRESENT expose the address
+// in any position.
+bool IRGen::exprTakesAddr(HExpr* e, Symbol* s) const {
+  if (!e)
+    return false;
+  if (e->kind == HExpr::Subscript && e->sym == s)
+    return true; // a scalar parameter is never subscripted; defensive
+  if (e->kind == HExpr::VarRef && e->sym == s)
+    return !e->memberPath.empty() || (bool)e->locPtr; // qualified refs need an address
+  if (e->kind == HExpr::Call && (e->name == "ADDR" || e->name == "BYADDR" ||
+                                 e->name == "OMITTED" || e->name == "PRESENT")) {
+    for (auto& a : e->args)
+      if (exprMentions(a.get(), s))
+        return true;
+    return false;
+  }
+  if (e->kind == HExpr::Call && e->sym &&
+      (e->sym->proc || e->sym->isEntry || e->sym->isEntryVar)) {
+    // A user, external-entry, or entry-variable call: a bare VarRef argument
+    // rides by reference (argAddr), so the address escapes there.
+    for (auto& a : e->args) {
+      HExpr* arg = a.get();
+      if (arg && arg->kind == HExpr::VarRef && arg->sym == s)
+        return true;
+      if (exprTakesAddr(arg, s))
+        return true;
+    }
+    return false;
+  }
+  if (exprTakesAddr(e->a.get(), s) || exprTakesAddr(e->b.get(), s) ||
+      exprTakesAddr(e->locPtr.get(), s))
+    return true;
+  for (auto& a : e->args)
+    if (exprTakesAddr(a.get(), s))
+      return true;
+  return false;
+}
+
+// P6.1b (ADR-215): true when st stores through s or exposes s's address.
+// `target` (Assign/Read INTO) is a write; pseudo-variable targets
+// (SUBSTR/EXPONENT/UNSPEC calls) write their variable anywhere inside.
+// GET items and PUT STRING targets write; everything else reads.
+bool IRGen::stmtTakesAddr(HStmt* st, Symbol* s) const {
+  if (!st)
+    return false;
+  auto targetTakes = [&](HExpr* t) {
+    if (!t)
+      return false;
+    if (t->kind == HExpr::Call)
+      return exprMentions(t, s); // pseudo-variable assignment writes inside
+    if (t->kind == HExpr::VarRef && t->sym == s)
+      return true;
+    return exprTakesAddr(t, s);
+  };
+  if (targetTakes(st->target.get()))
+    return true;
+  for (auto& t : st->extraTargets)
+    if (targetTakes(t.get()))
+      return true;
+  if (st->kind == HStmt::DoIter && st->sym == s)
+    return true; // the control variable is stepped in place
+  if (st->fileSym == s)
+    return true; // a FILE handle is passed by reference; defensive
+  if (st->kind == HStmt::Get) {
+    for (auto& it : st->items)
+      if (targetTakes(it.get()))
+        return true;
+  } else {
+    for (auto& it : st->items)
+      if (exprTakesAddr(it.get(), s))
+        return true;
+  }
+  if (st->stringTarget &&
+      ((st->kind == HStmt::Put && targetTakes(st->stringTarget.get())) ||
+       (st->kind != HStmt::Put && exprTakesAddr(st->stringTarget.get(), s))))
+    return true;
+  for (auto& a : st->args) {
+    HExpr* arg = a.get();
+    if (arg && arg->kind == HExpr::VarRef && arg->sym == s)
+      return true; // v1: any direct call argument keeps by reference
+    if (exprTakesAddr(arg, s))
+      return true;
+  }
+  // CALL task/event handles and WAIT events are references, not values.
+  if (exprMentions(st->taskRef.get(), s) || exprMentions(st->eventRef.get(), s))
+    return true;
+  for (auto& w : st->waitEvents)
+    if (exprMentions(w.get(), s))
+      return true;
+  if (exprTakesAddr(st->value.get(), s) || exprTakesAddr(st->cond.get(), s) ||
+      exprTakesAddr(st->from.get(), s) || exprTakesAddr(st->to.get(), s) ||
+      exprTakesAddr(st->by.get(), s) || exprTakesAddr(st->gotoTarget.get(), s) ||
+      exprTakesAddr(st->skipCount.get(), s) || exprTakesAddr(st->waitCount.get(), s) ||
+      exprTakesAddr(st->priorityExpr.get(), s) || exprTakesAddr(st->oncodeExpr.get(), s))
+    return true;
+  for (auto& f : st->formats)
+    if (exprTakesAddr(f.w.get(), s) || exprTakesAddr(f.d.get(), s) ||
+        exprTakesAddr(f.s.get(), s))
+      return true;
+  for (auto& b : st->allocBase)
+    if (exprTakesAddr(b.get(), s))
+      return true;
+  for (auto& al : st->allocSet)
+    if (targetTakes(al.get())) // ALLOCATE .. SET(p) points p elsewhere
+      return true;
+  for (auto& ar : st->allocArea)
+    if (exprTakesAddr(ar.get(), s))
+      return true;
+  for (auto& bb : st->allocBounds)
+    for (auto& bnd : bb)
+      if (exprTakesAddr(bnd.lb.get(), s) || exprTakesAddr(bnd.ub.get(), s))
+        return true;
+  for (auto& l : st->allocCharLen)
+    if (exprTakesAddr(l.get(), s))
+      return true;
+  for (auto& f : st->freeBase)
+    if (exprTakesAddr(f.get(), s))
+      return true;
+  for (auto& f : st->freeArea)
+    if (exprTakesAddr(f.get(), s))
+      return true;
+  for (auto& d : st->decls)
+    for (auto& bnd : d.dynBounds)
+      if (exprTakesAddr(bnd.get(), s))
+        return true;
+  for (auto& d : st->decls)
+    for (auto& bnd : d.dynLbBounds)
+      if (exprTakesAddr(bnd.get(), s))
+        return true;
+  for (auto& d : st->decls)
+    for (auto& bnd : d.dynMemberBounds)
+      if (exprTakesAddr(bnd.get(), s))
+        return true;
+  for (auto& d : st->decls)
+    if (exprTakesAddr(d.dynLenBound.get(), s) || exprTakesAddr(d.init.get(), s) ||
+        exprTakesAddr(d.initCall.get(), s))
+      return true;
+  if (stmtTakesAddr(st->thenS.get(), s) || stmtTakesAddr(st->elseS.get(), s) ||
+      stmtTakesAddr(st->unit.get(), s))
+    return true;
+  for (auto& b : st->body)
+    if (stmtTakesAddr(b.get(), s))
+      return true;
+  return false;
+}
+
+// P6.1b (ADR-215): decide every internal parameter's convention once per
+// program. A parameter rides by value when (a) the procedure is eligible —
+// internal, single-entry, unnamed, inline-procs gate on (checks off), never
+// address-taken as an ENTRY value, never called asynchronously — and (b)
+// the parameter is a plain FIXED/FLOAT/POINTER scalar that no body in its
+// lexical subtree stores through or exposes the address of. By reference
+// is always sound, so every uncertainty keeps by reference.
+void IRGen::computeByValueParams(const HProgram& prog) {
+  byValParam_.clear();
+  // Lexical children for the subtree walk (nested bodies can reference an
+  // outer parameter through a static link). HProc::src points back at the
+  // AST procedure, which is what Symbol::proc references.
+  std::unordered_map<const HProc*, std::vector<const HProc*>> kids;
+  std::unordered_map<const void*, const HProc*> bySrc;
+  for (auto& p : prog.procs) {
+    if (p->parent)
+      kids[p->parent].push_back(p.get());
+    if (p->src)
+      bySrc[(const void*)p->src] = p.get();
+  }
+  auto hprocOf = [&](const void* src) -> const HProc* {
+    auto it = bySrc.find(src);
+    return it != bySrc.end() ? it->second : nullptr;
+  };
+  // Whole-program facts: address-taken procedures (ENTRY values use the
+  // all-pointer convention) and asynchronously-called procedures (the task
+  // context packs addresses).
+  std::unordered_set<const HProc*> addrTaken, asyncCalled;
+  std::function<void(HExpr*)> scanExpr;
+  scanExpr = [&](HExpr* e) {
+    if (!e)
+      return;
+    if (e->kind == HExpr::VarRef && e->sym && e->sym->kind == Symbol::ProcName && e->sym->proc)
+      if (const HProc* hp = hprocOf(e->sym->proc))
+        addrTaken.insert(hp);
+    scanExpr(e->a.get());
+    scanExpr(e->b.get());
+    scanExpr(e->locPtr.get());
+    for (auto& a : e->args)
+      scanExpr(a.get());
+  };
+  std::function<void(HStmt*)> scan;
+  scan = [&](HStmt* st) {
+    if (!st)
+      return;
+    if ((st->kind == HStmt::CallS) && (st->hasTaskOpt || st->eventRef || st->priorityExpr) &&
+        st->sym && st->sym->proc)
+      if (const HProc* hp = hprocOf(st->sym->proc))
+        asyncCalled.insert(hp);
+    scanExpr(st->target.get());
+    scanExpr(st->value.get());
+    scanExpr(st->cond.get());
+    scanExpr(st->from.get());
+    scanExpr(st->to.get());
+    scanExpr(st->by.get());
+    for (auto& t : st->extraTargets)
+      scanExpr(t.get());
+    for (auto& it : st->items)
+      scanExpr(it.get());
+    scanExpr(st->stringTarget.get());
+    scanExpr(st->gotoTarget.get());
+    scanExpr(st->skipCount.get());
+    scanExpr(st->waitCount.get());
+    scanExpr(st->priorityExpr.get());
+    scanExpr(st->taskRef.get());
+    scanExpr(st->eventRef.get());
+    for (auto& w : st->waitEvents)
+      scanExpr(w.get());
+    scanExpr(st->oncodeExpr.get());
+    for (auto& a : st->args)
+      scanExpr(a.get());
+    for (auto& b : st->allocBase)
+      scanExpr(b.get());
+    for (auto& al : st->allocSet)
+      scanExpr(al.get());
+    for (auto& ar : st->allocArea)
+      scanExpr(ar.get());
+    for (auto& bb : st->allocBounds) {
+      for (auto& bnd : bb) {
+        scanExpr(bnd.lb.get());
+        scanExpr(bnd.ub.get());
+      }
+    }
+    for (auto& l : st->allocCharLen)
+      scanExpr(l.get());
+    for (auto& f : st->freeBase)
+      scanExpr(f.get());
+    for (auto& f : st->freeArea)
+      scanExpr(f.get());
+    for (auto& f : st->formats) {
+      scanExpr(f.w.get());
+      scanExpr(f.d.get());
+      scanExpr(f.s.get());
+    }
+    for (auto& d : st->decls) {
+      for (auto& bnd : d.dynBounds)
+        scanExpr(bnd.get());
+      for (auto& bnd : d.dynLbBounds)
+        scanExpr(bnd.get());
+      for (auto& bnd : d.dynMemberBounds)
+        scanExpr(bnd.get());
+      scanExpr(d.dynLenBound.get());
+      scanExpr(d.init.get());
+      scanExpr(d.initCall.get());
+    }
+    scan(st->thenS.get());
+    scan(st->elseS.get());
+    scan(st->unit.get());
+    for (auto& b : st->body)
+      scan(b.get());
+  };
+  for (auto& p : prog.procs) {
+    for (auto& st : p->body)
+      scan(st.get());
+  }
+  // A DEFINED overlay stores through its base's cell, so a parameter that
+  // is any overlay's base keeps by reference.
+  std::unordered_set<Symbol*> overlayBase;
+  for (Symbol* sym : sema_.storage())
+    if (sym && sym->definedBase)
+      overlayBase.insert(sym->definedBase);
+  for (auto& p : prog.procs) {
+    HProc* proc = p.get();
+    bool eligible = !proc->isMain && !proc->isExternal && !proc->isPackage &&
+                    proc->entryNames.empty() && inlineProcs() &&
+                    !addrTaken.count(proc) && !asyncCalled.count(proc);
+    if (eligible)
+      for (auto& st : proc->body)
+        if (st && st->kind == HStmt::Entry) {
+          eligible = false; // multi-entry thunks marshal pointers
+          break;
+        }
+    // The lexical subtree: this body plus every nested procedure body.
+    std::vector<const HProc*> subtree{proc};
+    for (size_t i = 0; i < subtree.size(); ++i) {
+      auto it = kids.find(subtree[i]);
+      if (it != kids.end())
+        subtree.insert(subtree.end(), it->second.begin(), it->second.end());
+    }
+    for (Symbol* prm : proc->paramSyms) {
+      bool byVal = eligible && prm && !prm->ty.isArray() && !isStarLen(prm->ty) &&
+                   !prm->isBased() && !prm->controlled && !prm->isStatic && !prm->definedBase &&
+                   !prm->isOptional && !overlayBase.count(prm) &&
+                   (prm->ty.isFixed() || prm->ty.k == TK::Float || prm->ty.isPointer()) &&
+                   !isAdjustable(prm);
+      if (byVal)
+        for (const HProc* q : subtree)
+          for (auto& st : q->body)
+            if (stmtTakesAddr(st.get(), prm)) {
+              byVal = false;
+              break;
+            }
+      byValParam_[prm] = byVal ? 1 : 0;
+    }
+  }
+}
+
+// P6.3: strip through cast instructions (sext/trunc/zext) to find whether v
+// traces back to a load from a non-negative DO index's alloca.
+bool IRGen::isDerivedFromNonNegDoIndex(llvm::Value* v) const {
+  while (auto* inst = llvm::dyn_cast<llvm::Instruction>(v)) {
+    if (auto* li = llvm::dyn_cast<llvm::LoadInst>(inst)) {
+      llvm::Value* ptr = li->getPointerOperand();
+      for (Symbol* s : nonNegDoIndices_) {
+        auto it = symAddr_.find(s);
+        if (it != symAddr_.end() && it->second == ptr)
+          return true;
+      }
+      return false;
+    }
+    if (inst->getNumOperands() >= 1)
+      v = inst->getOperand(0);
+    else
+      return false;
+  }
+  return false;
+}
+
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
@@ -3555,7 +4128,10 @@ void IRGen::declareProc(HProc* p) {
     if (sret)
       pt.push_back(b_.getPtrTy()); // hidden result pointer (rule 127)
     for (size_t i = 0; i < p->paramSyms.size(); ++i)
-      pt.push_back(b_.getPtrTy());
+      // P6.1b (ADR-215): read-only scalar params ride by value so the
+      // optimizer sees SSA arguments (const-prop folds bounded recursion).
+      pt.push_back(isByValueParam(p->paramSyms[i]) ? llvmTy(p->paramSyms[i]->ty)
+                                                   : b_.getPtrTy());
     for (Symbol* s : p->paramSyms)
       if (isAdjustable(s))
         pt.push_back(b_.getInt64Ty()); // hidden `*` extent / CHAR(*) length args
@@ -3706,6 +4282,14 @@ static bool procEstablishesOn(HProc* p) {
 void IRGen::emitProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
+  // P6.1: mark small internal non-recursive procs for inlining so hot call
+  // sites pay no frame setup at -O2 (LLVM inlines at -O3 already).
+  if (inlineInternal(p)) {
+    if (llvm::Function* fn = mod_.getFunction(p->irName.substr(1))) {
+      fn->removeFnAttr(llvm::Attribute::NoInline);
+      fn->addFnAttr(llvm::Attribute::AlwaysInline);
+    }
+  }
   curProc_ = p;
   labelBlocks_.clear();
   labelBeginChain_.clear();
@@ -3779,6 +4363,19 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
     symAddr_[p->env[i]] = fn->getArg(ai++);
 
   b_.SetInsertPoint(entry);
+
+  // P6.1b (ADR-215): a by-value parameter keeps a frame cell holding the
+  // entry value, so every address-taking path (static links, argAddr of a
+  // nested call, DEFINED-free reads) keeps working unchanged. No store to
+  // the cell exists anywhere (proven by computeByValueParams), so reads see
+  // the entry value and the inliner sees an SSA argument after SROA.
+  for (Symbol* s : p->paramSyms) {
+    if (!isByValueParam(s))
+      continue;
+    llvm::AllocaInst* cell = entryAlloca(llvmTy(s->ty), s->name + ".bv");
+    b_.CreateStore(symAddr_[s], cell);
+    symAddr_[s] = cell;
+  }
 
   // CONTROLLED dummy association (rule (15)): -1 (non-controlled actual)
   // keeps the dummy's own slot; any other value is the caller's key.
@@ -4426,14 +5023,19 @@ void IRGen::emitStmt(HStmt* s) {
 
 // Self-append peephole (rule (119), P4): X = X || L1 || ... || Ln where X is
 // an AUTOMATIC scalar VARYING target and every tail leaf is a string
-// literal. Appends each literal in place past the live length, truncating at
-// capacity exactly like the generic temp-buffer + assign path (which copies
-// the temp's first min(cap, total) bytes back), then stores the new length.
-// Skips the temp buffer (pli_alloc + double copy) and the blank-pad, whose
-// extent is provably empty here: the live length only grows, so the new tail
-// [n, cap) sits inside the already-blank old tail [old, cap). Literal
-// globals cannot overlap X and carry no side effects, so in-place evaluation
-// order is unobservable. Returns false for any other shape.
+// literal or a safe variable. Appends each leaf in place past the live
+// length, truncating at capacity exactly like the generic temp-buffer +
+// assign path (which copies the temp's first min(cap, total) bytes back),
+// then stores the new length. Skips the temp buffer (pli_alloc + double
+// copy) and the blank-pad, whose extent is provably empty here: the live
+// length only grows, so the new tail [n, cap) sits inside the already-blank
+// old tail [old, cap). Literal globals cannot overlap X and carry no side
+// effects; a variable tail is safe when it is a same-frame AUTOMATIC local
+// (a disjoint frame alloca — never a parameter that could alias X, never
+// BASED/CONTROLLED/STATIC/DEFINED storage) or a by-value parameter (a
+// private stable cell, ADR-215), so in-place evaluation order is
+// unobservable. Reads of X itself always span [0, old) while writes land
+// at [old, ...), so X = X || X is safe too. Returns false otherwise.
 bool IRGen::emitSelfAppend(HStmt* s) {
   if (!s->extraTargets.empty())
     return false;
@@ -4469,9 +5071,32 @@ bool IRGen::emitSelfAppend(HStmt* s) {
   if (order.empty() || order[0]->kind != HExpr::VarRef || order[0]->sym != sym ||
       !order[0]->memberPath.empty() || order[0]->locPtr)
     return false;
-  for (size_t i = 1; i < order.size(); ++i)
-    if (order[i]->kind != HExpr::CharLit)
+  // A variable tail must read disjoint storage: a same-frame AUTOMATIC
+  // local (its frame alloca cannot overlap X) or a by-value parameter (a
+  // private stable cell, ADR-215). By-reference parameters could alias X
+  // through the caller, and BASED/CONTROLLED/STATIC/DEFINED cells have no
+  // such guarantee, so they keep the generic path.
+  auto varTailOk = [&](HExpr* leaf) {
+    if (leaf->kind != HExpr::VarRef || !leaf->sym || !leaf->memberPath.empty() || leaf->locPtr)
       return false;
+    Symbol* ls = leaf->sym;
+    if (!ls->ty.isChar() || ls->ty.isArray() || !ls->ty.varying || ls->ty.starLen)
+      return false;
+    if (ls->isBased() || ls->controlled || ls->isStatic || ls->definedBase)
+      return false;
+    if (isByValueParam(ls))
+      return true;
+    for (const HProc* q = curProc_; q; q = q->parent)
+      if (std::find(q->paramSyms.begin(), q->paramSyms.end(), ls) != q->paramSyms.end())
+        return false;
+    return true;
+  };
+  for (size_t i = 1; i < order.size(); ++i) {
+    if (order[i]->kind == HExpr::CharLit)
+      continue;
+    if (!varTailOk(order[i]))
+      return false;
+  }
   llvm::Value* stor = addressOf(sym);
   if (!stor)
     return false;
@@ -4484,20 +5109,51 @@ bool IRGen::emitSelfAppend(HStmt* s) {
   // underflow; every writer stores min(cap, total), so this never fires.
   off = b_.CreateSelect(b_.CreateICmpULT(off, cap, "sa.inrange"), off, cap, "sa.clamp");
   for (size_t i = 1; i < order.size(); ++i) {
-    const std::string& lit = order[i]->sval;
-    if (lit.empty())
-      continue;
-    llvm::Value* llen = i64((long long)lit.size());
+    // One leaf's source bytes: a literal's global, or a variable tail's
+    // live [0, len) window. Reads always precede the writes below in
+    // program order per leaf, and every write lands at [off, ...) past all
+    // previously-read bytes, so in-place order is unobservable.
+    llvm::Value* srcp;
+    llvm::Value* srclen;
+    if (order[i]->kind == HExpr::CharLit) {
+      const std::string& lit = order[i]->sval;
+      if (lit.empty())
+        continue;
+      srcp = globalString(lit);
+      srclen = i64((long long)lit.size());
+    } else {
+      Symbol* ls = order[i]->sym;
+      llvm::Value* stor = addressOf(ls);
+      if (!stor)
+        return false;
+      llvm::Value* lp =
+          b_.CreateStructGEP(llvmTy(ls->ty), stor, 0, "sa.vlenp");
+      llvm::Value* dp =
+          b_.CreateStructGEP(llvmTy(ls->ty), stor, 1, "sa.vdata");
+      srcp = dp;
+      srclen = b_.CreateZExt(b_.CreateLoad(b_.getInt32Ty(), lp, "sa.vlen"), b_.getInt64Ty(),
+                             "sa.vlen64");
+    }
     llvm::Value* rem = b_.CreateSub(cap, off, "sa.rem");
     llvm::Value* take =
-        b_.CreateSelect(b_.CreateICmpULT(llen, rem, "sa.fits"), llen, rem, "sa.take");
+        b_.CreateSelect(b_.CreateICmpULT(srclen, rem, "sa.fits"), srclen, rem, "sa.take");
     llvm::Value* dstp = b_.CreateGEP(b_.getInt8Ty(), dp, {off}, "sa.dstp");
-    b_.CreateMemMove(dstp, llvm::MaybeAlign(), globalString(lit), llvm::MaybeAlign(), take,
-                     false);
+    b_.CreateMemMove(dstp, llvm::MaybeAlign(), srcp, llvm::MaybeAlign(), take, false);
     off = b_.CreateAdd(off, take, "sa.off");
   }
   b_.CreateStore(b_.CreateTrunc(off, b_.getInt32Ty(), "sa.len"), lp);
   return true;
+}
+
+// Rule (119): a concat RHS evaluates into a fresh pli_alloc buffer; once an
+// assignment has copied it into the target the buffer is dead. Free it so
+// repeated assignment in a loop does not grow RSS without bound (the -O2
+// pipeline often removes the pair on its own, but -O0 must not OOM). The
+// buffer is fresh per evaluation with no aliases, and every call site runs
+// after the consuming store completes. Any other RHS shape is a no-op.
+void IRGen::freeConcatTemp(HExpr* rhs, llvm::Value* buf) {
+  if (rhs && rhs->kind == HExpr::Binary && rhs->op == Tok::Concat && buf)
+    b_.CreateCall(runtimeFn("pli_free"), {buf});
 }
 
 void IRGen::emitAssign(HStmt* s) {
@@ -4549,6 +5205,8 @@ void IRGen::emitAssign(HStmt* s) {
     storeOne(s->target.get());
     for (auto& t : s->extraTargets)
       storeOne(t.get());
+    // Every store above copied the RHS; a concat temp is dead now.
+    freeConcatTemp(s->value.get(), v.ptr);
     return;
   }
   // BY NAME assignment (rule 86): S = T BY NAME copies each same-named member
@@ -4612,9 +5270,11 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 0, "vlenp");
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(sym->ty), stor, 1, "vdata");
       emitSubstrAssignVarying(dp, cap, lp, toI64(start), toI64(len), rhs.ptr, rhs.len);
+      freeConcatTemp(s->value.get(), rhs.ptr);
       return;
     }
     emitSubstrAssign(sv.ptr, cap, toI64(start), toI64(len), rhs.ptr, rhs.len);
+    freeConcatTemp(s->value.get(), rhs.ptr);
     return;
   }
   // EXPONENT pseudo-variable (rule (123)): exponent(fvar) = n decomposes fvar
@@ -4706,6 +5366,7 @@ void IRGen::emitAssign(HStmt* s) {
           storeCharTo(addr, el, v, s->loc, packed);
         else
           storeScalarTo(addr, el, convert(v, el, s->loc), packed);
+        freeConcatTemp(s->value.get(), v.ptr);
         return;
       }
       // A subscripted member array S.A(i) = e (rules 124,126): store through
@@ -4721,6 +5382,7 @@ void IRGen::emitAssign(HStmt* s) {
         storeCharTo(addr, el, v, s->loc, packed);
       else
         storeScalarTo(addr, el, convert(v, el, s->loc), packed);
+      freeConcatTemp(s->value.get(), v.ptr);
       return;
     }
     // An iSUB-DEFINED array target Y(k) (rule 134) has no storage of its own:
@@ -4728,9 +5390,11 @@ void IRGen::emitAssign(HStmt* s) {
     if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
       llvm::Value* addr = definedSubElementAddr(t->sym, t->args, s->loc);
       storeScalarTo(addr, t->ty, convert(v, t->ty, s->loc));
+      freeConcatTemp(s->value.get(), v.ptr);
       return;
     }
     storeArrayElement(t->sym, t->args, v, s->loc, t->locPtr.get());
+    freeConcatTemp(s->value.get(), v.ptr);
     return;
   }
   // Whole-structure assignment S = T (rule 127): copy the source structure's
@@ -4875,6 +5539,7 @@ void IRGen::emitAssign(HStmt* s) {
       storeCharTo(addr, leaf, v, s->loc, packed);
     else
       storeScalarTo(addr, leaf, convert(v, leaf, s->loc), packed);
+    freeConcatTemp(s->value.get(), v.ptr);
     return;
   }
   if (s->target->kind != HExpr::VarRef || !s->target->sym)
@@ -4885,6 +5550,7 @@ void IRGen::emitAssign(HStmt* s) {
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
+  freeConcatTemp(s->value.get(), v.ptr);
 }
 
 // Implicit ALLOCATE for CONTROLLED variables (IBM Enterprise PL/I): push a
@@ -5669,6 +6335,17 @@ void IRGen::emitDoIter(HStmt* s) {
   Val from = emitExpr(s->from.get());
   storeTo(ctl, from, s->loc);
 
+  // P6.3: track DO control vars whose FROM is a non-negative constant and BY
+  // is ascending (absent or positive) — the index stays >= FROM >= 0, so MOD
+  // (index, k) with positive k can skip the sign-adjust chain. FROM is checked
+  // against the emitted constant (sema may promote the literal to a TypeTag
+  // HExpr for a wider control var, so HExpr::IntLit alone is unreliable).
+  bool nonNegDo = false;
+  if (!s->byNegConst && from.reg &&
+      llvm::isa<llvm::ConstantInt>(from.reg) &&
+      !llvm::cast<llvm::ConstantInt>(from.reg)->getValue().isNegative())
+    nonNegDo = true;
+
   // P1, Task 8: hoist loop-invariant TO and BY as SSA values instead of
   // storing to an alloca and reloading every iteration — the per-iteration
   // loads block LLVM's loop-invariant-sinking / LSR on the bounds (collatz,
@@ -5693,6 +6370,64 @@ void IRGen::emitDoIter(HStmt* s) {
   llvm::BasicBlock* downL = nullptr;
   llvm::BasicBlock* testL =
       s->to ? llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_) : nullptr;
+
+
+  // P3c+P3.3: emit a preheader block before the loop header (condL). condL is the
+  // loop header (target of the backedge from stepL), so the preheader runs once
+  // before the first iteration — the right place for trip-count assumes and loop
+  // metadata setup.
+  llvm::BasicBlock* preL =
+      llvm::BasicBlock::Create(ctx_, "do.pre." + id, curFn_);
+  branch(preL);
+  startBlock(preL);
+
+  // P3c: llvm.assume trip-count hint when FROM, TO, and BY are all compile-time
+  // constants — gives the optimizer an explicit trip count instead of forcing it
+  // to infer from phi+icmp. Sound because PL/I DO semantics are defined: BY=0
+  // is diagnosed in sema (rule (86)).
+  if (s->from && s->to &&
+      s->from->kind == HExpr::IntLit && s->to->kind == HExpr::IntLit &&
+      llvm::isa<llvm::ConstantInt>(by.reg)) {
+    int64_t fromVal = s->from->ival;
+    int64_t toVal = s->to->ival;
+    int64_t byVal = llvm::cast<llvm::ConstantInt>(by.reg)->getSExtValue();
+    int64_t maxTrip = 0;
+    if (byVal > 0 && toVal >= fromVal)
+      maxTrip = (toVal - fromVal) / byVal + 1;
+    else if (byVal < 0 && fromVal >= toVal)
+      maxTrip = (fromVal - toVal) / (-byVal) + 1;
+    if (maxTrip > 0) {
+      // intent: trip = ceil(|to-from| / |by|) + 1, computed from LLVM values;
+      // constant-folded for const bounds, but the @llvm.assume still records
+      // the trip-count bound for passes like LoopVectorize.
+      llvm::Value* span64 = b_.CreateSub(
+          b_.CreateSExt(tv.reg, b_.getInt64Ty(), "trip.tv64"),
+          b_.CreateSExt(from.reg, b_.getInt64Ty(), "trip.from64"),
+          "trip.span");
+      llvm::Value* absStep = b_.CreateSelect(
+          b_.CreateICmpSGE(span64, b_.getInt64(0), "step.is"),
+          b_.CreateNeg(by.reg, "step.abs"), by.reg, "trip.step");
+      absStep = b_.CreateSExt(absStep, b_.getInt64Ty(), "step64");
+      llvm::Value* absSpan =
+          b_.CreateSelect(b_.CreateICmpSGE(span64, b_.getInt64(0), "span.pos"),
+                           span64, b_.CreateNeg(span64, "span.neg"), "trip.absspan");
+      llvm::Value* sm1 =
+          b_.CreateSub(absStep, b_.getInt64(1), "trip.sm1");
+      llvm::Value* q = b_.CreateUDiv(
+          b_.CreateAdd(absSpan, sm1, "trip.adj"), absStep, "trip.q");
+      llvm::Value* trip = b_.CreateAdd(q, b_.getInt64(1), "trip");
+      b_.CreateAssumption(b_.CreateICmpULE(trip, b_.getInt64(maxTrip)));
+    }
+  }
+
+  // P3.3: build loop ID metadata for mustprogress; parallel_access added on the
+  // backedge only when P2 proved the body disjoint (see aliasScopeOf_).
+  // The self-referential node is completed and attached at the backedge.
+  llvm::MDBuilder mdb(ctx_);
+  llvm::SmallVector<llvm::Metadata*, 4> loopProps;
+  loopProps.push_back(mdb.createString("llvm.loop.mustprogress"));
+  loopID_ = llvm::MDNode::getDistinct(ctx_, {});
+  loopMDs_ = loopProps;
 
   // Loop-invariant CONTROLLED bases hoist here (after FROM/TO/BY, before the
   // loop): one addr+len per used stack serves the whole body. A body with
@@ -5751,11 +6486,15 @@ void IRGen::emitDoIter(HStmt* s) {
     branch(bodyL);
   }
 
+  if (nonNegDo)
+    nonNegDoIndices_.insert(ctl);
   startBlock(bodyL);
   loopStack_.push_back({s->labels, endL, stepL});
   for (auto& b : s->body)
     emitStmt(b.get());
   loopStack_.pop_back();
+  if (nonNegDo)
+    nonNegDoIndices_.erase(ctl);
   branch(stepL);
 
   startBlock(stepL);
@@ -5775,7 +6514,19 @@ void IRGen::emitDoIter(HStmt* s) {
   nv.ty = ct;
   nv.reg = nx;
   storeTo(ctl, nv, s->loc);
-  branch(condL);
+
+  // P3.3: attach llvm.loop metadata to the backedge (header->latch->header).
+  // The loop ID is self-referential: MDNode with itself as operand 0.
+  llvm::UncondBrInst* backedge = b_.CreateBr(condL);
+  if (loopID_) {
+    llvm::SmallVector<llvm::Metadata*, 4> ops;
+    ops.push_back(loopID_); // self-reference slot
+    for (llvm::Metadata* prop : loopMDs_)
+      ops.push_back(prop);
+    llvm::MDNode* loopID = llvm::MDNode::getDistinct(ctx_, ops);
+    loopID->replaceOperandWith(0, loopID);
+    backedge->setMetadata(llvm::LLVMContext::MD_loop, loopID);
+  }
 
   startBlock(endL);
   for (Symbol* h : ctlHoisted) {
@@ -6468,8 +7219,16 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     return dst;
   }
   bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
-                a->sym->ty.k == pty.k && a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
+                a->memberPath.empty() && a->sym->ty.k == pty.k &&
+                a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
                 a->sym->ty.varying == pty.varying;
+  // P4.1: a member leaf with identical layout rides by reference too — same
+  // type, aligned, addressable — skipping the dummy copy (rules (34),(38)).
+  // Locator-qualified, DEFINED-overlay and struct leaves keep the old paths.
+  bool memberDirect =
+      !pty.isStruct() && !(pty.isChar() && pty.starLen) && a->kind == HExpr::VarRef && a->sym &&
+      a->sym->kind != Symbol::ProcName && !a->memberPath.empty() && !a->locPtr &&
+      !a->sym->definedBase && a->ty == pty && !packedMemberPath(a->sym->ty, a->memberPath);
   if (pty.isChar() && pty.starLen) {
     // An adjustable-length `CHAR(*)` parameter (rule (18)) takes the caller's
     // character variable directly by reference (no copy): the callee's length
@@ -6527,6 +7286,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   }
   if (direct)
     return addressOf(a->sym);
+  if (memberDirect)
+    return memberAddr(a->sym, a->memberPath, a->loc);
   llvm::Value* addr = entryAlloca(llvmTy(pty), "dummy");
   Val av = emitExpr(a);
   if (pty.isChar()) {
@@ -6883,8 +7644,11 @@ void IRGen::emitCall(HStmt* s) {
       args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
       continue;
     }
-    // A by-value C entry (rules (34),(38)) takes scalar/pointer values.
+    // A by-value C entry (rules (34),(38)) takes scalar/pointer values, as
+    // does a by-value internal parameter (P6.1b, ADR-215).
     if (calleeSym->entryByValue)
+      args.push_back(marshalArg(a, pty, s->loc));
+    else if (i < calleeParams.size() && isByValueParam(calleeParams[i]))
       args.push_back(marshalArg(a, pty, s->loc));
     else
       args.push_back(argAddr(a, pty));
@@ -7497,6 +8261,27 @@ void IRGen::annotateAlias(llvm::Instruction* inst, Symbol* s) {
   }
 }
 
+// Stamp !range on a FIXED BINARY(p) load (P3b): the declared precision bounds
+// the value to a signed p-bit range, narrower than the i32/i64 storage. LLVM
+// can then fold downstream overflow checks and narrow induction variables.
+// Guard: only when sizeChecks() is off — at -O2/-O3 the optimizer already
+// assumes no signed overflow, making the range fact consistent; with traps on
+// the trap blocks own overflow control and the range would be unsound.
+void IRGen::stampFixedBinRange(llvm::LoadInst* load, const Type& ty) {
+  if (!load || ty.k != TK::FixedBin || sizeChecks())
+    return;
+  unsigned typeWidth = load->getType()->getIntegerBitWidth();
+  unsigned prec = ty.prec;
+  if (prec <= 0 || prec >= typeWidth)
+    return; // range fills the type — no narrowing
+  // Signed p-bit range: [-(2^(p-1)), 2^(p-1)-1]; LLVM range is half-open.
+  llvm::APInt lo = llvm::APInt::getSignedMinValue(prec).sextOrTrunc(typeWidth);
+  llvm::APInt hi = llvm::APInt::getSignedMaxValue(prec).sextOrTrunc(typeWidth);
+  hi += 1; // half-open upper bound, widened before increment to avoid prec-bit overflow
+  llvm::MDBuilder mdb(load->getContext());
+  load->setMetadata(llvm::LLVMContext::MD_range, mdb.createRange(lo, hi));
+}
+
 Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   Val v;
   v.ty = ty;
@@ -7526,8 +8311,9 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     }
     return v;
   }
-  llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
+   llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
   annotateAlias(r, sym);
+  stampFixedBinRange(r, ty);
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is the {double,double} struct itself.
     v.cpx = r;
@@ -7889,13 +8675,14 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   llvm::Value* addr =
       arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
                        dynLb_.count(sym) ? dynLb_[sym] : nullptr);
-  llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
-  if (el.isBit() && el.len == 1)
-    v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
-  else
-    v.reg = r;
-  return v;
-}
+     llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
+     stampFixedBinRange(cast<llvm::LoadInst>(r), el);
+     if (el.isBit() && el.len == 1)
+       v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
+     else
+       v.reg = r;
+      return v;
+   }
 
 // Store one array element (rule 126): convert to the element type, then store
 // through the bounds-checked element address.
@@ -8039,6 +8826,34 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   } else {
     sv = build(x);
     srcArrTy = llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(*sv.arr));
+  }
+
+  // P4.2 bulk fast path: both views walk a trailing-axis run with the same
+  // total, so the gather is one contiguous copy (rules (12),(126)). memmove
+  // stays overlap-safe for self/overlaying slices; LLVM expands it inline.
+  auto suffixRun = [](const View& vw) {
+    const size_t n = vw.arr->dims.size();
+    if (vw.stars.size() > n)
+      return false;
+    const size_t off = n - vw.stars.size();
+    for (size_t j = 0; j < vw.stars.size(); ++j)
+      if (vw.stars[j] != off + j)
+        return false;
+    return true;
+  };
+  if (!broadcast && tv.total == sv.total && tv.stars.size() == sv.stars.size() &&
+      suffixRun(tv) && suffixRun(sv) && sv.arr->elementType() == el && !el.isChar() &&
+      !el.isStruct() && !tv.arr->isDynamic() && !sv.arr->isDynamic() && !tv.packed &&
+      !sv.packed && !t->locPtr && !x->locPtr && t->sym && x->sym && !t->sym->controlled &&
+      !x->sym->controlled) {
+    llvm::Value* dstPtr =
+        b_.CreateInBoundsGEP(tgtArrTy, tv.base, {i64(0), tv.fixedFlat}, "csd");
+    llvm::Value* srcPtr =
+        b_.CreateInBoundsGEP(srcArrTy, sv.base, {i64(0), sv.fixedFlat}, "css");
+    llvm::Value* nbytes = b_.CreateMul(
+        i64(total), i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "csn");
+    b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), srcPtr, llvm::MaybeAlign(), nbytes);
+    return;
   }
 
   llvm::AllocaInst* ctr = entryAlloca(b_.getInt64Ty(), "cs.i." + std::to_string(n_++));
@@ -8725,6 +9540,7 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::LoadInst* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
       if (packed)
         r->setAlignment(llvm::Align(1));
+      stampFixedBinRange(r, leaf);
       v.reg = leaf.isBit() && leaf.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
@@ -8884,7 +9700,12 @@ Val IRGen::emitExpr(HExpr* e) {
         args.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
         continue;
       }
-      args.push_back(argAddr(a, pty));
+      // P6.1b (ADR-215): a by-value internal parameter marshals like a
+      // by-value C entry; anything else keeps the address form.
+      if (i < calleeParams.size() && isByValueParam(calleeParams[i]))
+        args.push_back(marshalArg(a, pty, e->loc));
+      else
+        args.push_back(argAddr(a, pty));
     }
     // Trailing omitted OPTIONALs pad with nulls to the full signature.
     for (size_t i = e->args.size(); i < calleeParams.size(); ++i)
@@ -9373,6 +10194,12 @@ Val IRGen::emitExpr(HExpr* e) {
     break;
   }
   case Tok::Power:
+    // P4 fast path: x**2 with a constant integer exponent 2 is a single fmul,
+    // exact for every finite base (a negative base still squares positive).
+    if (e->b->kind == HExpr::IntLit && e->b->ival == 2) {
+      r = b_.CreateFMul(av.reg, av.reg, "sq");
+      break;
+    }
     r = b_.CreateCall(
         intrinsicFn("llvm.pow.f64", b_.getDoubleTy(), {b_.getDoubleTy(), b_.getDoubleTy()}),
         {av.reg, bv.reg}, "bin");
@@ -9862,14 +10689,17 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
           // srem already yields the correct non-negative result — skip the
           // adjust/select chain entirely (P1.3).
           llvm::SimplifyQuery SQ(mod_.getDataLayout());
-          // intent: isKnownNonNegative with no DominatorTree/AssumptionCache
-          // cannot see through load(sext) at IRGen time. Check if the dividend
-          // is a constant (common for MOD(literal, k)) for the fast path.
-          bool avNonNeg = false;
-          if (auto* avConst = llvm::dyn_cast<llvm::ConstantInt>(avi))
-            avNonNeg = !avConst->getValue().isNegative();
-          else
-            avNonNeg = llvm::isKnownNonNegative(avi, SQ);
+           // intent: isKnownNonNegative with no DominatorTree/AssumptionCache
+           // cannot see through load(sext) at IRGen time. Check if the dividend
+           // is a constant, or derived from a DO index whose FROM is known
+           // non-negative (P6.3). Otherwise fall back to isKnownNonNegative.
+           bool avNonNeg = false;
+           if (auto* avConst = llvm::dyn_cast<llvm::ConstantInt>(avi))
+             avNonNeg = !avConst->getValue().isNegative();
+            else if (isDerivedFromNonNegDoIndex(avi))
+              avNonNeg = true;
+            else
+              avNonNeg = llvm::isKnownNonNegative(avi, SQ);
           if (avNonNeg && cv.isStrictlyPositive()) {
             // intent: for a non-negative dividend and positive divisor, the
             // remainder is already correct. If the divisor is a power of two,

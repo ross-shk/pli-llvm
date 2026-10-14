@@ -271,9 +271,13 @@ def median_result(times: List[float]) -> Optional[float]:
     return statistics.median(times)
 
 
-def needs_recompile(src: Path, exe: Path) -> bool:
-    """Skip recompilation if the executable is newer than the source (P1.5)."""
-    if not exe.exists():
+def needs_recompile(src: Path, exe: Path, force: bool = False) -> bool:
+    """Skip recompilation if the executable is newer than the source (P1.5).
+
+    *force* recompiles unconditionally: the skip only compares source and
+    binary mtimes, so a compiler rebuild otherwise times stale binaries.
+    """
+    if force or not exe.exists():
         return True
     return src.stat().st_mtime > exe.stat().st_mtime
 
@@ -364,10 +368,14 @@ def main():
     parser.add_argument("--runs", type=int, default=RUNS_PER_BENCH,
                         help="timed runs per benchmark (default: %(default)s)")
     parser.add_argument("--cc", type=str, default=None,
-                         help="C compiler to use (overrides CC env var, "
-                              "default: clang)")
+                        help="C compiler to use (overrides CC env var, "
+                             "default: clang on Unix/macOS, clang.exe on Windows)")
     parser.add_argument("--plic", type=str, default=None,
                         help="plic binary to use (overrides PLIC env var)")
+    parser.add_argument("--force", action="store_true",
+                        help="recompile every benchmark even if the binary "
+                             "is newer than the source (use after a compiler "
+                             "rebuild, otherwise stale binaries are timed)")
     args = parser.parse_args()
 
     # Use --cc argument if provided, otherwise fall back to env var, then default
@@ -463,12 +471,12 @@ def main():
             flags_str = " ".join(default_flags) if default_flags else "(default)"
 
             # Compile PL/I (skip if up-to-date)
-            if needs_recompile(src_pli, pli_exe):
+            if needs_recompile(src_pli, pli_exe, args.force):
                 if not compile_pli(bench_name, pli_file, opt, pli_exe):
                     print(f"{bench_name:<20} {opt:<6} PL/I COMPILE FAILED")
                     results[bench_name][opt] = {"error": "pli_compile_failed"}
                     continue
-            if needs_recompile(src_c, c_exe):
+            if needs_recompile(src_c, c_exe, args.force):
                 if not compile_c(bench_name, c_file, opt, c_exe,
                                  compiler=cc_cmd):
                     print(f"{bench_name:<20} {opt:<6} C COMPILE FAILED")

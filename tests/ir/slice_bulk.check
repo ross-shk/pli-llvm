@@ -1,0 +1,3 @@
+CHECK: llvm.memmove
+CHECK-NOT: cs.body
+CHECK: ret void

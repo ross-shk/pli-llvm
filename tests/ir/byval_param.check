@@ -1,0 +1,2 @@
+CHECK-LABEL: define internal i32 {{.*}}FACT{{.*}}\(i32
+CHECK-LABEL: define internal i32 {{.*}}BUMP{{.*}}\(ptr

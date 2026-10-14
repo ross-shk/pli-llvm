@@ -1,0 +1,5 @@
+CHECK: icmp sle
+CHECK: add nsw i32
+CHECK: !noalias
+CHECK: !llvm.loop
+CHECK: mustprogress

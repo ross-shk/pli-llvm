@@ -27,7 +27,11 @@ void applyRuntimeFnAttrs(llvm::Function& f);
 // Run the IR optimization pipeline for the driver `-O` level (`-O0`..`-O3`,
 // `-Os`). The clang backend this replaces optimized at the same level; without
 // this the in-process path would emit unoptimized IR (behaviour + perf drift).
-void optimizeModule(llvm::Module& M, const std::string& optLevel);
+// ADR-213: the TargetMachine is forwarded to the PassBuilder so the pipeline
+// uses target-specific TargetIRAnalysis (NEON/SSE/AVX) — without it the loop
+// vectorizer sees a default target with zero vector registers.
+void optimizeModule(llvm::Module& M, llvm::TargetMachine& TM,
+                    const std::string& optLevel);
 // Emit a fully-relocatable object for `M` in memory (integrated assembler).
 bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,
                 std::string& err);

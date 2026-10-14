@@ -1,0 +1,44 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* Variable-tail self-append must match the generic path exactly:
+    values, truncation at capacity, self-concatenation, and growth. */
+ self_append: procedure options(main);
+   declare fails fixed bin(31);
+   declare i fixed bin(31);
+   declare r character(10) varying;
+   declare t character(10) varying;
+   declare e character(10) varying;
+   fails = 0;
+   r = 'a';
+   t = 'bc';
+   e = '';
+   /* Simple variable tail. */
+   r = r || t;
+   if r ^= 'abc' then fails = fails + 1;
+   if length(r) ^= 3 then fails = fails + 1;
+   /* Mixed literal and variable tails. */
+   r = r || '-' || t || '!';
+   if r ^= 'abc-bc!' then fails = fails + 1;
+   /* Self-concatenation reads the old content while growing. */
+   r = 'xy';
+   r = r || r;
+   if r ^= 'xyxy' then fails = fails + 1;
+   /* Truncation at capacity, exactly like the generic path. */
+   r = '12345678';
+   r = r || t;
+   if r ^= '12345678bc' then fails = fails + 1;
+   r = r || t;
+   if length(r) ^= 10 then fails = fails + 1;
+   if r ^= '12345678bc' then fails = fails + 1;
+   /* Empty tail changes nothing. */
+   r = 'q' || e;
+   if r ^= 'q' then fails = fails + 1;
+   /* Growth across loop iterations. */
+   r = '';
+   do i = 1 to 5;
+     r = r || t;
+   end;
+   if r ^= 'bcbcbcbcbc' then fails = fails + 1;
+   if fails = 0 then put skip list('PASS self_append');
+   else put skip list('FAIL self_append: fails =', fails);
+ end self_append;

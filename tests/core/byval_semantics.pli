@@ -1,0 +1,59 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - plic: a PL/I compiler targeting LLVM */
+ /* P6.1b: by-value params must preserve PL/I by-reference semantics —
+    recursion, visible param stores, nested capture, mixed conventions,
+    and OPTIONAL omission must all behave exactly as before. */
+ byval_semantics: procedure options(main);
+   declare fails fixed bin(31);
+   declare (y, y2) fixed bin(31);
+   declare r fixed bin(63);
+   fails = 0;
+   fact: procedure(n) recursive returns(fixed bin(31));
+     declare n fixed bin(31);
+     if n <= 1 then return(1);
+     return(n * fact(n - 1));
+   end fact;
+   /* A stored-to param stays by reference: the caller must observe it. */
+   bump: procedure(x) returns(fixed bin(31));
+     declare x fixed bin(31);
+     x = x + 10;
+     return(x);
+   end bump;
+   /* A param captured by a nested procedure stays by reference. */
+   outer: procedure(q) returns(fixed bin(31));
+     declare q fixed bin(31);
+     inner: procedure() returns(fixed bin(31));
+       return(q * 2);
+     end inner;
+     return(inner() + q);
+   end outer;
+   /* Mixed convention: a stays by value, b stays by reference. */
+   mix: procedure(a, b) returns(fixed bin(31));
+     declare a fixed bin(31);
+     declare b fixed bin(31);
+     b = b + 1;
+     return(a + b);
+   end mix;
+   /* An OPTIONAL param stays by reference so omission still works. */
+   maybe: procedure(v) returns(fixed bin(31));
+     declare v fixed bin(31) optional;
+     if omitted(v) then return(-1);
+     return(v);
+   end maybe;
+   if fact(10) ^= 3628800 then fails = fails + 1;
+   if fact(0) ^= 1 then fails = fails + 1;
+   if fact(1) ^= 1 then fails = fails + 1;
+   y = 5;
+   r = bump(y);
+   if r ^= 15 then fails = fails + 1;
+   if y ^= 15 then fails = fails + 1;
+   if outer(21) ^= 63 then fails = fails + 1;
+   y2 = 5;
+   r = mix(100, y2);
+   if r ^= 106 then fails = fails + 1;
+   if y2 ^= 6 then fails = fails + 1;
+   if maybe(7) ^= 7 then fails = fails + 1;
+   if maybe(*) ^= -1 then fails = fails + 1;
+   if fails = 0 then put skip list('PASS byval_semantics');
+   else put skip list('FAIL byval_semantics: fails =', fails);
+ end byval_semantics;
