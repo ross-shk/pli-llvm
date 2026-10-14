@@ -1,0 +1,6 @@
+ /* line-number attribution across %include (ADR-219) */
+ badppinc: procedure options(main);
+    declare rootgood fixed bin(31);
+    %include 'pp_line.inc';
+    declare rootgood fixed bin(31);
+ end badppinc;

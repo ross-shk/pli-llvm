@@ -1,0 +1,2 @@
+CHECK: pp_line.inc:3:{{[0-9]+}}: error:
+CHECK: bad_pp_inc_line.pli:5:{{[0-9]+}}: error:

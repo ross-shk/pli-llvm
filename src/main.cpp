@@ -291,6 +291,11 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   Diags diags(input);
   diags.setSource(&src);
+  // Map flat (post-preprocessor) lines back to the original source file:line so
+  // diagnostics stay accurate across %include (ADR-219).
+  diags.setLineMap(&preprocessor.lineMap());
+  diags.setFileSources(&preprocessor.fileSrc());
+  diags.setRootPath(preprocessor.rootCanonical());
 
   // --- front end ---------------------------------------------------------
   Lexer lexer(src, diags);

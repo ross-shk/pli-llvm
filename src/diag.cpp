@@ -9,33 +9,45 @@ void Diags::emit(const char* level, SourceLoc loc, const std::string& msg, const
   std::string suffix;
   if (!rule.empty())
     suffix = "  [TR 25.084 rule " + rule + "]";
-  if (loc.line > 0)
-    fprintf(stderr, "%s:%d:%d: %s: %s%s\n", file_.c_str(), loc.line, loc.col, level, msg.c_str(),
+
+  // Translate the flat (in-the-concatenated-source) location back to the real
+  // source file/line so includes don't shift or misfile diagnostics (ADR-219).
+  const FileLoc* fl = resolveFileLoc(loc);
+  const std::string* source = src_;
+  if (fl && fileSrc_ && fileSrc_->count(fl->path))
+    source = &fileSrc_->at(fl->path);
+  std::string name = (fl && fl->path == rootCanon_) ? file_
+                     : (fl ? fl->path : file_);
+  int lineNum = fl ? fl->line : loc.line;
+  int col = loc.col;
+
+  if (lineNum > 0)
+    fprintf(stderr, "%s:%d:%d: %s: %s%s\n", name.c_str(), lineNum, col, level, msg.c_str(),
             suffix.c_str());
   else
-    fprintf(stderr, "%s: %s: %s%s\n", file_.c_str(), level, msg.c_str(), suffix.c_str());
+    fprintf(stderr, "%s: %s: %s%s\n", name.c_str(), level, msg.c_str(), suffix.c_str());
 
   // Echo the source line plus a caret, clang-style; rendered ASCII-safe so
   // the UTF-8 not sign reads as '^' on any terminal and the caret aligns.
-  if (src_ && loc.line > 0) {
-    std::istringstream is(*src_);
-    std::string line;
-    for (int i = 0; i < loc.line && std::getline(is, line); ++i) {
+  if (source && lineNum > 0) {
+    std::istringstream is(*source);
+    std::string ln;
+    for (int i = 0; i < lineNum && std::getline(is, ln); ++i) {
     }
-    if (!line.empty() || loc.line > 0) {
-      int target = loc.col > 0 ? loc.col - 1 : 0;
+    if (!ln.empty() || lineNum > 0) {
+      int target = col > 0 ? col - 1 : 0;
       int d = 0;
-      for (int j = 0; j < target && j < (int)line.size(); ++j) {
-        unsigned char b = (unsigned char)line[j];
-        if (b == 0xC2 && j + 1 < (int)line.size() && (unsigned char)line[j + 1] == 0xAC)
+      for (int j = 0; j < target && j < (int)ln.size(); ++j) {
+        unsigned char b = (unsigned char)ln[j];
+        if (b == 0xC2 && j + 1 < (int)ln.size() && (unsigned char)ln[j + 1] == 0xAC)
           ++j; // two bytes, one display column
         ++d;
       }
       std::string show, caret(d, ' ');
       caret += '^';
-      for (size_t j = 0; j < line.size(); ++j) {
-        unsigned char b = (unsigned char)line[j];
-        if (b == 0xC2 && j + 1 < line.size() && (unsigned char)line[j + 1] == 0xAC) {
+      for (size_t j = 0; j < ln.size(); ++j) {
+        unsigned char b = (unsigned char)ln[j];
+        if (b == 0xC2 && j + 1 < ln.size() && (unsigned char)ln[j + 1] == 0xAC) {
           show += '^';
           ++j;
         } else if (b >= 0x80) {
@@ -55,6 +67,14 @@ void Diags::emit(const char* level, SourceLoc loc, const std::string& msg, const
       }
     }
   }
+}
+
+const FileLoc* Diags::resolveFileLoc(SourceLoc loc) const {
+  if (!lineMap_ || loc.line <= 0)
+    return nullptr;
+  if (loc.line > (int)lineMap_->size())
+    return nullptr;
+  return &(*lineMap_)[loc.line - 1];
 }
 
 void Diags::error(SourceLoc loc, const std::string& msg, const std::string& rule,

@@ -2,6 +2,8 @@
 // Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
 #pragma once
 
+#include "diag.h" // FileLoc
+
 #include <filesystem>
 #include <map>
 #include <set>
@@ -68,4 +70,20 @@ private:
   std::map<std::string, long long> ppVars_;
   // Activated variables (extension, ADR-113): only these expand as %NAME.
   std::set<std::string> ppActive_;
+  // Flat-line source map (ADR-219): lineMap_[n-1] gives the canonical file path
+  // and 1-based line within that file for flat output line n, so a flat line
+  // reported by the lexer maps back to the original source location across
+  // %include flattening.
+  std::vector<FileLoc> lineMap_;
+  // Verbatim source text per canonical path, for echoing the cited line; the
+  // root file is keyed by rootCanon_ (see below).
+  std::map<std::string, std::string> fileSrc_;
+  // Canonical path of the root file passed to run(); kept so Diags can render
+  // root locations with the original `file_` spelling.
+  std::string rootCanon_;
+
+public:
+  const std::vector<FileLoc>& lineMap() const { return lineMap_; }
+  const std::map<std::string, std::string>& fileSrc() const { return fileSrc_; }
+  const std::string& rootCanonical() const { return rootCanon_; }
 };

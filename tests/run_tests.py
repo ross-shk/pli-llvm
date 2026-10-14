@@ -254,8 +254,17 @@ class Runner:
         rc = subprocess.run([PLI, str(self.dir / f"{self.name}.pli"), "-fsyntax-only"],
                             stdout=open(compilefile, "w"),
                             stderr=subprocess.STDOUT).returncode
+        text = compilefile.read_text(errors="replace") if compilefile.exists() else ""
         if rc == 0:
-            return f"FAIL {self.name} (expected diagnostics, compiled cleanly)", 1
+            return f"FAIL {self.name} (expected diagnostics, compiled cleanly)\n\n{indented(text)}", 1
+        # Optional FileCheck-style assertion over the combined compiler output
+        # (reuses the ir matcher). Lets a diag test pin source location lines
+        # such as file:line:col without asserting message wording.
+        checkfile = self.dir / "expected" / f"{self.name}.check"
+        if checkfile.exists():
+            ok, reason = ir_match(text, checkfile.read_text(errors="replace"))
+            if not ok:
+                return f"FAIL {self.name} (check: {reason})\n\n{indented(text)}", 1
         return f"PASS {self.name} (rejected as expected)", 0
 
     def ir_test(self):

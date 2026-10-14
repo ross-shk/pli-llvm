@@ -38,7 +38,12 @@ bool Preprocessor::run(const fs::path& input, std::string& output) {
   active_.clear();
   included_.clear();
   ppVars_.clear();
+  ppActive_.clear();
   output.clear();
+  lineMap_.clear();
+  fileSrc_.clear();
+  rootCanon_.clear();
+  rootCanon_ = normalized(input).string();
   return expand(input, output);
 }
 
@@ -610,6 +615,8 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
   buffer << stream.rdbuf();
   std::string source = buffer.str();
   active_.push_back(path);
+  // Keep verbatim source per file so Diags can echo the real line (ADR-219).
+  fileSrc_[path.string()] = source;
 
   int line = 1;
   int col = 1;
@@ -667,32 +674,34 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
         active_.pop_back();
         return false;
       }
-      // Preserve directive newlines so following root-source diagnostics remain useful.
+      // Preserve directive newlines so following root-source diagnostics remain
+      // useful; advance line/col in lockstep with recording so each directive
+      // line maps to its real source line, including multi-line directives (ADR-219).
       for (size_t j = start; j < next; ++j) {
-        if (source[j] == '\n')
+        if (source[j] == '\n') {
           output += '\n';
-      }
-      while (i < next) {
-        if (source[i] == '\n') {
+          lineMap_.push_back({path.string(), line});
           ++line;
           col = 1;
         } else {
           ++col;
         }
-        ++i;
       }
+      i = next;
       continue;
     } else {
       output += c;
     }
 
-    ++i;
-    if (c == '\n') {
-      ++line;
-      col = 1;
-    } else {
-      ++col;
-    }
+     ++i;
+     if (c == '\n') {
+       // Record the source line that just closed (ADR-219).
+       lineMap_.push_back({path.string(), line});
+       ++line;
+       col = 1;
+     } else {
+       ++col;
+     }
   }
 
   active_.pop_back();

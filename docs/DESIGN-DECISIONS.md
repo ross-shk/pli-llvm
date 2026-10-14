@@ -6252,3 +6252,33 @@ file keeps its original wording (ADRs are immutable).
 `PLIC_*` cache entries); `pli version` plus the full `ctest` suite pass
 after the rename. `rg -w plic` is empty outside this file's history.
 Driver fallbacks move to the canonical `./build/cmake/pli` path.
+
+## ADR-219 — Source-line attribution through `%include`
+
+**Context.** `%INCLUDE` is expanded in place into one flattened source string
+(ADR-071) before lexing, so the lexer counts a single linear `line_`. `Diags`
+held only the root filename and echoed the flattened source by flat line
+(`src/diag.cpp`), so a diagnostic inside an included file was reported against the
+root file at a shifted line, and diagnostics after an include were shifted
+forward by every line the include contributed. `loc.line`/`loc.col` are consumed
+only by `Diags::emit`; `LINENO(x)` is the runtime I/O line counter (out of
+scope).
+
+**Decision.** The preprocessor records, per output newline, the canonical file
+path and 1-based line within that file (`lineMap_`, `src/preprocessor.{h,cpp}`) plus
+each file's verbatim text (`fileSrc_`). `Diags::emit` (`src/diag.cpp`) translates
+a flat `loc.line` back to the real `FileLoc` and echoes that file's cited line,
+keeping the root file's original spelling. `SourceLoc` stays `{line, col}` (flat)
+and the lexer/parser/sema/IRGen are untouched. The mapping is exact: the lexer
+input is exactly the preprocessor `output`, and both count newlines 1:1; columns
+are already correct because included text begins at column 1 of its first output
+line and root text is copied verbatim. The directive-newline preservation loop
+was restructured to advance `line`/`col` in lockstep with recording, so multi-line
+directives map each line to its real source line.
+
+**Consequences.** `bad_pp_inc_line.pli` (`.check` FileCheck) pins an in-include
+error to `pp_line.inc:3:` and a post-include root error to
+`bad_pp_inc_line.pli:5:` (not the flattened `:8:`). Non-include diagnostics are
+unchanged (flat line == root file-local line, root path matches `rootCanon_`).
+No golden `.out` pinned diagnostic wording (none existed), so zero churn outside
+include cases.
