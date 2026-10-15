@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 // target.h — data-driven target knowledge (host now, additive later).
 //
 // Adding a cross target = adding a row + a bundled libc/startup lookup,

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* C baseline for bcd_decimal benchmark */
 /* Match = ~ by design: C double has ~15-16 significant digits; */
 /* PL/I DECIMAL(25,4) is exact to 25 digits. */

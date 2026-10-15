@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/bitcode_runtime.sh — OPTIMIZATION.md §10 (P3): the bitcode
 # runtime. IRGen merges the pli_* definitions from the embedded blob into the
 # MAIN unit (full merge, ADR-179 — library units reference symbols the MAIN

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* AREA is a storage attribute (rule (20)): it cannot be combined
     with a computational attribute, nor can AREA and OFFSET coexist. */
  bad_area_attr: procedure options(main);

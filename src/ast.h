@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 // ast.h — abstract syntax tree.
 //
 // WIREFRAME NOTE: M0 uses two "wide" node structs (Expr, Stmt) with a kind tag

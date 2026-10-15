@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* PACKAGE / EXPORTS (ADR-109): cross-module package with shared data.
    Build: two -c units linked together. */
 pkgxfer: procedure options(main);

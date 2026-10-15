@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Rules (3),(56): Multiple entry names and ENTRY statement cross-module.
    Companion to multi_entry.pli. */
 multient: package exports(lib_main, lib_entry_a, lib_entry_b, lib_reset, lib_get_cnt);

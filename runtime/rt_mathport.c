@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* rt_mathport.c -- self-contained port of musl double-precision math.
  *
  * Every symbol is prefixed \`pli_m_\` to avoid collision with libc.

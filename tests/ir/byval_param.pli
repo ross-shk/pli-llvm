@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* P6.1b litmus: a read-only scalar param of an internal procedure must
     pass by value at -O2 (checks off), even when RECURSIVE; a param the
     body stores to keeps the by-reference address form. */

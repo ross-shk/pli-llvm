@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
    /* Fixed CHARACTER arrays (rules (12),(18)) stay diagnosed where an
       element needs a descriptor or a static layout: VARYING elements,
       adjustable lengths, CONTROLLED storage, and dynamic extents. */

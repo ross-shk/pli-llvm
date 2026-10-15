@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* BYADDR limits (rule (123)): one structure argument, and only
     as a direct call argument. */
  bad_byaddr: procedure options(main);

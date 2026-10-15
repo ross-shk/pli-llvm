@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* VARYING string edge cases (ADR-007, ADR-024): CHARACTER(n) VARYING has
    inline length prefix + data. SUBSTR pseudo-variable (rule 86) overwrites
    in place. Tests cover length changes, boundary conditions, VARYING target

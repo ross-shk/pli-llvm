@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* P4.1 dummy audit (rules (34),(38)): a member leaf whose layout
     matches the parameter rides by reference, so callee writes
     reach the caller just like a plain variable actual. */

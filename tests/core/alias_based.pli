@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* P2 litmus: BASED pointer access. P->X(i) aliases through a hidden
     pointer (ADR-164): the pointed-to memory may be shared. Must NOT
     be marked noalias — output identical before/after P2. */

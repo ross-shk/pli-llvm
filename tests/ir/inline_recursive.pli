@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* P6.1 negative litmus: a RECURSIVE internal procedure must NOT be marked
    alwaysinline, even at -O2 with checks off — recursion requires a real call. */
 INLINE_RECURSIVE_IR: PROCEDURE OPTIONS(MAIN);

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* ADD/SUBTRACT built-ins: ADD(a,b[,p[,s]]) and SUBTRACT(a,b[,p[,s])
     return the sum/difference in the common arithmetic type, or in
     FIXED BINARY(p,s) when precision/scale override is given.

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Rules (15),(18),(23),(87)-(90): lib module for ctl_xfer2.pli -
    cross-module CONTROLLED operations on caller's generation stack. */
 ctlx2: package exports(grow, trim_free, alloc_free, double_gen);

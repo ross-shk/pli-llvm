@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Lane B3 stub: a Unix-domain socketpair standing in for a real link.
  * The PL/I side reaches it only through ENTRY ... EXTERNAL (ADR-021). */
 #include <sys/socket.h>

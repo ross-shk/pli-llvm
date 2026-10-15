@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* CONTROLLED variable descriptor operations inside a library-like
      internal procedure.  Tests that the spare=buf / free buf /
      buf=spare||... cycle works correctly both for locals and when

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
   /* Multi-axis '*' parameters (rules (12),
      (13),(34)): a parameter `x(*, 3)`
      takes its first-axis extent from the

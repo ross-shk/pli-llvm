@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Diagnostic test: SYSTEM takes exactly one argument and it must be
     character or numeric (not a POINTER). */
  bad_system: procedure options(main);

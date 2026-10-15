@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 // types.h — PL/I data attributes reduced to a compiler type.
 //
 // The full attribute lattice of TR 25.084 rules (14)-(43) is much larger than

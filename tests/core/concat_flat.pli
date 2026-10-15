@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Concatenation chains flatten into one buffer (P2, OPTIMIZATION §7.4);
    behaviour is unchanged from left-leaning lowering. Rule (119). */
  concat_flat: procedure options(main);

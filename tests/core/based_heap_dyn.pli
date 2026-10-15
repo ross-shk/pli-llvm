@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
   /* Dynamic BASED heap arrays (rules (25),
      (89)): ALLOCATE x SET(p) sizes the
      block from the live DECLARE bounds;

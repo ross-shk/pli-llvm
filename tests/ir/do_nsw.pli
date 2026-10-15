@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* P5.3 / P3.1 litmus: at -O2 with checks off, the DO step add must
    carry the nsw flag (rule (86): DO overflow is trapped by SIZE
    condition when checks are on; at -O2 without traps nsw is safe). */

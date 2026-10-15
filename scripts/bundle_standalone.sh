@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # scripts/bundle_standalone.sh — make a self-contained release directory.
 # Usage: bundle_standalone.sh <built-pli-binary> <destdir>
 # Result: <destdir>/pli + <destdir>/lib/<shared LLVM closure>.

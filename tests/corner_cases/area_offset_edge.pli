@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* AREA/OFFSET edge cases (rules (20),(22),(88),(90)): a region is a
     pool for BASED allocations; OFFSET values are locators within it.
     Covers the default area size, an unassociated OFFSET, ALLOCATE

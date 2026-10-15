@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Rule (119): non-character operands in || are implicitly converted to
    CHAR(24) before concatenation, mirroring the CHAR builtin. Numeric
    operands are placed at the end so trim() can strip trailing blanks.

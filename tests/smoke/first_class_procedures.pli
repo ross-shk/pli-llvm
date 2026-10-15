@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Smoke test port of examples/first_class_procedures.pli: functions
     kept in variables and passed as callbacks. Prints FAIL per violated
     check, PASS only if all hold. */

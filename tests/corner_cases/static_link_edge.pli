@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Static link and recursive procedure edge cases (ADR-027, ADR-010):
    Internal procedures access enclosing AUTOMATIC variables via static links.
    Recursive procedures must have RECURSIVE option. Tests cover reentrancy,

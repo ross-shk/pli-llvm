@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/multimod_onedriver.sh — multi-file driver (rules (2),(38),(42)):
 # a single pli invocation compiles a MAIN unit and a library unit and links
 # them, replacing the manual -c + clang link of multimod.sh.

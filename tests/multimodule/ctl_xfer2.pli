@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Rules (15),(18),(23),(87)-(90): cross-module CONTROLLED with
    ALLOCATE in caller, FREE in callee, and vice versa.
    Build: two -c units linked together. */

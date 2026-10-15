@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Keyword ambiguity tests (ADR-004, TR 25.084 §2.3): PL/I has no reserved
    words. Keywords are recognized by position (statement-initial after labels
    and condition prefixes) and bounded lookahead. Tests cover the IF(3)=5 vs

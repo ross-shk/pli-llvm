@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* P6.3: MOD(DO_index, k) must produce the same result as MOD(literal, k)
    for all indices, including sign-of-divisor correctness. */
 mod_index: procedure options(main);

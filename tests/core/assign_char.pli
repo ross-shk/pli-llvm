@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* CHAR(n) assignment semantics (rule (85)): copy min(src,dst) bytes
    via memmove, blank-fill the tail. Boundary cases: empty source,
    short source, long source (clipping), self-overlap. Tests both

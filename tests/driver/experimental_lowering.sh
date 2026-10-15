@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/experimental_lowering.sh — `--experimental-lowering` dispatches
 # assign_char/index between runtime and LLVM paths. In P0 the table is empty
 # so all modes must fall back to the pli_* runtime and produce identical output.

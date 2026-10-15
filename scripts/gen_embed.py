@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 """scripts/gen_embed.py — turn a runtime .bc into a C++ byte array.
 
 Mirrors how gen_rules.py generates sources; python is already a build dep,

@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/multiemit.sh — `pli -emit-llvm a.pli b.pli` writes a .ll per
 # input (cc-like per-file mode), and rejects -o with multiple inputs. Runs from
 # the gitignored out/ dir so the .ll artifacts stay out of the repo.

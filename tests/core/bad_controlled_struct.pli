@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
    /* rules (12),(13),(23),(26): CONTROLLED forms that stay diagnosed — an
       array of structures with a runtime extent, a dynamic lower bound, and a
       top-level array INITIAL itemlist. */

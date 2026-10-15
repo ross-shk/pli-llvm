@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* PICTURE edge cases (rules 146-148): Picture specifications for
    numeric and character formatting. D1 feature (compiled, not
    interpreted per ADR-017). Tests verify diagnosis. */

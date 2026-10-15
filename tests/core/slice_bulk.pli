@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* P4.2 bulk copies (rules (12),(126)): a contiguous slice (a row)
     copies whole; a strided slice (a column) keeps the element
     loop; an overlapping row-to-row copy stays exact. */

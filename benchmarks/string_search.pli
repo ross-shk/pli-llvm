@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* String search benchmark - INDEX scan over a 76KB buffer. */
 /* One byte is poked per iteration so the scan stays loop-variant */
 /* and every search genuinely executes; complements string_ops. */

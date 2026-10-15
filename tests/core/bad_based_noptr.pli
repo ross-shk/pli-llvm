@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* A bare BASED variable is unconnected (rule (25)): a reference
     without an explicit locator qualifier is diagnosed (rule (124)),
     never silently addressed through a null locator. */

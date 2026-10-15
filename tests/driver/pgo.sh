@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/pgo.sh — explicit opt-in PGO (OPTIMIZATION.md §10, P3):
 # --fprofile-generate instruments the build, the instrumented binary writes
 # a profile, --fprofile-use= rebuilds with it; a stale profile for different

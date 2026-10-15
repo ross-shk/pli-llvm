@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/multic.sh — `pli -c a.pli b.pli` writes <base>.o per input in
 # the cwd (cc behavior), and rejects -o with multiple inputs. Runs from the
 # gitignored out/ dir so the .o artifacts stay out of the repo; links the two

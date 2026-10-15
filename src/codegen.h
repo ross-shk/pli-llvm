@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 // codegen.h — in-process codegen + linking (LLVM MC + lld C++ API).
 //
 // Runtime-once rule (review §3, normative): user objects emit pure (no

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* runtime/rt_plat_default.c — default platform TU: the host half of the split
  * runtime. Implements every symbol declared in pli_rt_plat.h against the host
  * libc/pthreads (or Win32), so the portable TUs stay branch-free. Bodies are

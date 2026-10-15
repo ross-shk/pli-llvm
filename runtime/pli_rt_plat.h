@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* runtime/pli_rt_plat.h — the platform seam: everything the portable runtime
  * imports from the host. Successor to pli_rt_port.h (ADR-221): where the port
  * header hid each platform branch behind a static inline, this header declares

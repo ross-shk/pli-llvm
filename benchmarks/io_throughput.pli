@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* I/O throughput benchmark: emits 1000 lines of formatted output via
    PUT SKIP LIST (rules (104)-(105)) — exercising the list-directed
    output path — plus a final integer checksum. Both PL/I and C produce

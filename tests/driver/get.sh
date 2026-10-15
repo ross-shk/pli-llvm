@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/get.sh — GET LIST (rules 104-109): list-directed input reads
 # numeric and character values from SYSIN (stdin) into variables. The program
 # verifies the read values itself and prints PASS.

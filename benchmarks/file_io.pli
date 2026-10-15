@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* File I/O benchmark - sequential WRITE then READ of 10000 records */
 /* through a temp file. Stdout is a checksum only (never timing) so */
 /* the harness match logic works unchanged. Partners io_throughput. */

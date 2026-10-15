@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* ADR-168 / rule (34): a VARYINGZ return value would ride the hidden
     varying result buffer instead of a C `char *`. Stay diagnosed rather
     than emit a mismatched ABI. */

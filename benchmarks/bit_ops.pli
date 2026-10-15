@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Bit string operations benchmark - AND, OR, NOT on BIT values */
 test_bitops: PROCEDURE OPTIONS(MAIN);
    DECLARE (i, sum, hash) FIXED BINARY(63);

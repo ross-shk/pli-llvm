@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* W6 IR golden: aggregate/char array copy must lower to llvm.memmove,
    not pli_assign_char. */
 w6_vector_llvm: procedure options(main);

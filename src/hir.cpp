@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 // hir.cpp — HIR lowering (ADR-005) and printing.
 //
 // `lower` mirrors a typed AST into HIR node-for-node, and marks every implicit

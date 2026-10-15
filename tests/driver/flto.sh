@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/flto.sh — explicit opt-in LTO (OPTIMIZATION.md §10, P3):
 # --flto=thin / --flto=full are forwarded to both the compile and the link
 # step, single- and multi-unit.

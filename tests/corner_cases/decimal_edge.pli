@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* FIXED DECIMAL edge cases (ADR-006, TR 25.084 rules 16,17,135): 
    Precision/scale arithmetic, overflow, rounding, conversions.
    Stored as scaled binary integers (i64 for p<=18, i128 for p<=38). */

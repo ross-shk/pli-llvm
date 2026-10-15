@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
    /* rules (13),(23),(87)-(90),(123),(126): a CONTROLLED array with a non-'*'
       runtime DECLARE extent A(n) sizes its implicit entry generation at block
       entry, and a bare ALLOCATE pushes another generation of the same declared

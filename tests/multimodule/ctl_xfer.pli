@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (15),(18),(87)-(90): a CHAR(*) VARYING CONTROLLED dummy of a
     procedure compiled in a different module (ctl_xfer_lib.pli) grows,
     trims and tops up the caller's generation stack through the hidden

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Bad (*) ENTRY descriptors (rules (13),(36)): only a single-axis
     '*' is served; fixed bounds and multi-axis extents stay
     diagnosed, never silently accepted. */

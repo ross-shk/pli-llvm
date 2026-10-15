@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* rule (91): an ON-unit runs off the establishing frame's
     call chain, so a GO TO inside it cannot reach a procedure
     label; non-local transfer stays diagnosed. */

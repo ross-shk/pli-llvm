@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/package.sh — PACKAGE blocks (extension, ADR-109): a
 # library package exports PUB while PRIV stays module-private; the
 # MAIN module calls PUB across the link. Each unit compiles with

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Concat-temp litmus: T = A || B (head is not the target, so the generic
     temp-buffer path applies) must free the fresh buffer once the assign
     has copied it — otherwise every trip round a loop leaks one buffer. */

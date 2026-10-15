@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Smoke test port of examples/input_output.pli: LIST, STRING, EDIT,
     DATA and file round-trip. The file is written to the gitignored
     scratch dir so the test leaves no litter in the repo root. Prints

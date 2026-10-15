@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (25),(126): dimensioned BASED arrays. A fixed 1-D BASED
     array overlays caller storage through its POINTER; a runtime
     (n) overlay in a callee takes its bound from the length

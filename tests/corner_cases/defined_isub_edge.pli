@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* DEFINED and iSUB overlay edge cases (ADR-018, TR 25.084 rules 24, 134):
    DEFINED overlays one variable on another's storage. iSUB defines a
    subscript transformation (affine overlay of one axis). Tests cover

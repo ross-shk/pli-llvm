@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* W4c IR golden (llvm mode): RANK/COLLATE/ISOCHAR must use direct LLVM,
    not pli_* runtime calls. */
 w4c_codepoint_llvm: procedure options(main);

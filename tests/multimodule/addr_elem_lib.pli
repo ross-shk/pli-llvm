@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (25),(123),(126): library side of addr_elem.pli. Each */
  /* entry takes a caller element address (addr(buf(i))) and */
  /* reaches it through a scalar BASED cell or a runtime-(n) */

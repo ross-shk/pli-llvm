@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (91)-(94): a local GO TO out of a BEGIN block
     reverts the ON-unit the block established; the enclosing
     handler is top again. The condition is raised across the

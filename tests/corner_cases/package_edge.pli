@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* PACKAGE/EXPORTS edge cases (ADR-109): PACKAGE groups procedures under
    one scope. EXPORTS lists externally visible members. Package-level data
    (static, controlled, based, LIKE) supported as module-scope globals.

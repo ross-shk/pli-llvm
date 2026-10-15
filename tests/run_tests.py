@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 """tests/run_tests.py — compile, run and check every test program, in parallel.
 
 Usage: tests/run_tests.py [group ... | <group>/<name>.pli ...]

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (15),(23),(25),(123),(126): cross-module ADDR on array */
  /* elements. Caller passes addr(buf(i)) / addr(fds(1)) to the */
  /* library; the library pokes/peeks via a scalar BASED view */

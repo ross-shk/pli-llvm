@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+// Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 // embedded_runtime.h — the pli_runtime bitcode bundle embedded as data.
 //
 // Go/Zig embed their runtime/stdlib; pli embeds `pli_runtime.bc` as a generated

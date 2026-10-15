@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* ADR-168 / rule (18): VARYINGZ is a NUL-terminated varying
     CHARACTER string (IBM Enterprise PL/I extension). Inside PL/I
     it behaves like VARYING (live length, blank-padded truncation);

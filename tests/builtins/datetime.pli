@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* DATE and TIME built-in functions: date() returns the current date as a
    CHARACTER(8) 'YYYYMMDD' string, time() the time as a CHARACTER(6) 'HHMMSS'
    string, datetime() as a CHARACTER(14) 'YYYYMMDDHHMMSS' string. */

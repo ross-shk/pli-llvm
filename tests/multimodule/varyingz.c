@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* VARYINGZ proof (ADR-168): the C side receives a NUL-terminated `char *`
    with no explicit length, so it can use ordinary string scans. */
 #include <stddef.h>

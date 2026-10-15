@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Condition handling edge cases (ADR-009, TR 25.084 rules 91-99):
    ON unit establishment, SIGNAL, REVERT, handler stack, ONCODE,
    nested ON units, RETURN from ON unit, condition prefixes. */

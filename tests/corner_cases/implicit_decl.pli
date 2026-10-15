@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* Implicit declaration tests (ADR-011, Y33-6003): Undeclared identifiers get
    implicit attributes based on initial letter: I-N -> FIXED BINARY(31),
    otherwise -> FLOAT DECIMAL(6). This is required for legacy code but warns

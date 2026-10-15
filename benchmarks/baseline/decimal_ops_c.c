@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* C baseline for decimal_ops benchmark.
  * Mirrors decimal_ops.pli: bounded per-iteration values so the
  * accumulator stays in range (see the .pli header comment). */

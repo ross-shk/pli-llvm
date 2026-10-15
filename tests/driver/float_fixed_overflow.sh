@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/float_fixed_overflow.sh — QR1.2 FLOAT -> FIXED conversion
 # boundaries: an out-of-range float traps with an ERROR (FPToSI is UB there;
 # hard error until a CONVERSION/SIZE condition can route it); fitting edges,

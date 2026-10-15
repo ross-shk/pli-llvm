@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* extension (ADR-109): package-level data — DECLARE in a PACKAGE body
     creates static storage visible to all member procedures. */
  mathlib: package exports(adder);

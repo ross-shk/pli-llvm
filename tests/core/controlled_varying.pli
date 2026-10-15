@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Adjustable CONTROLLED varying strings (rules (13),(18),(89)):
     DCL TEXT CHAR(*) VARYING CONTROLLED sizes each generation
     from ALLOCATE (n) CHARACTER VARYING or CHAR(n) VARYING;

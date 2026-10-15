@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* ADR-213 litmus: a canonical DO-loop over an array must emit IRGen patterns
    that LLVM's loop vectorizer can promote to SIMD when the target-aware
    pipeline (PassBuilder with TargetMachine) is active:

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (25),(126): BASED arrays cross-module. The library owns
     heap blocks behind fixed BASED arrays; the caller views its
     own storage through runtime-(n) overlays in library

@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (91)-(94): a BEGIN block inside an iterative DO scopes an
     ON-unit established on every iteration; each iteration arms a fresh
     handler and the block exit disarms it. The condition is raised

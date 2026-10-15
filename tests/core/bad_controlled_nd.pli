@@ -1,5 +1,5 @@
   /* SPDX-License-Identifier: Apache-2.0 */
-  /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
   /* N-D CONTROLLED ALLOCATE limits (rules (13),(89)): arity must
      match the DECLARE rank, a (*) axis needs an explicit bound,
      lb:ub pairs in ALLOCATE stay diagnosed, and a scalar takes

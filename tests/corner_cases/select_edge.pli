@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* SELECT/WHEN/OTHERWISE edge cases (ADR-104, TR 25.084 extension):
    SELECT [(expr)]; WHEN ...; [OTHERWISE ...] END;
    Desugars to IF chain. Tests cover bare predicates, value lists,

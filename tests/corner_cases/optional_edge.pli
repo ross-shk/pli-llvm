@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* OPTIONAL parameter edge cases (ADR-119): Enterprise PL/I form.
    DECLARE p ... OPTIONAL on parameter; callers pass * or omit trailing
    OPTIONAL args. OMITTED(p)/PRESENT(p) test argument presence.

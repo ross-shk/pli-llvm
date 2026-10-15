@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/rt_platform.sh — the split runtime: the portable pli_runtime.bc
 # plus a swappable platform TU (--rt-platform). A custom platform file that
 # includes the default TU links and runs identically (its marker symbol proves

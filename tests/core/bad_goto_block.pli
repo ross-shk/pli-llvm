@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* rule (77): a GO TO may not pass control into an inactive
     block (Y33 "Activation and Termination of Blocks"); the
     label's BEGIN block is not active at the GO TO site. */

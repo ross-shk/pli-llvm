@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/decimal_overflow.sh — QR1.2 FIXED DECIMAL precision overflow:
 # add/mul and narrowing conversions trap to SIZE; with no ON SIZE handler
 # established the trap is a hard ERROR that aborts (a handler resumes with the

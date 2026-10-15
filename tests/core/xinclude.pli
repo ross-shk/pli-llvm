@@ -1,5 +1,5 @@
   /* SPDX-License-Identifier: Apache-2.0 */
-  /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
   /* IBM Enterprise %XINCLUDE (ADR-157):
      include-once list with quoted, bare,
      parenthesized names; repeats skip. */

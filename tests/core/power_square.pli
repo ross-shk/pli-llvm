@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* P4 power fast path (rule 121): x**2 with a constant integer
     exponent 2 is a single fmul. A negative base still squares
     positive; other exponents keep llvm.pow. */

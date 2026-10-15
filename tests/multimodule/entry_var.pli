@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* ADR-171: ENTRY variables cross the module boundary. The caller
     declares a library ENTRY whose parameter is itself an ENTRY
     descriptor and passes a callback either as a procedure name or

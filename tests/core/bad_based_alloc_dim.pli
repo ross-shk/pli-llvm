@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rule (89): a BASED heap cell cannot take a per-ALLOCATE
     dimension; the dimension lives on the DECLARE overlay. */
  bad_based_alloc_dim: procedure options(main);

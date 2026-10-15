@@ -1,5 +1,5 @@
  /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
    /* Slice assignment (rule 126): a cross-section A(i, *) on the
       left of '=' denotes a reduced-rank view that is written
       element-wise. Covers a numeric row and column, a 3-D
