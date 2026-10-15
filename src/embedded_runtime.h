@@ -29,4 +29,9 @@ std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs();
 // Selects the appropriate runtime blob for the given target triple.
 // Falls back to the default (host) blob if no exact match.
 const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t);
+// Default platform blob (host pli_rtplat.bc) and per-target platform blobs.
+// selectPlatformForTarget mirrors selectRuntimeForTarget, including the host
+// fallback; it returns nullptr only when no platform blob was embedded.
+std::vector<RuntimeBlob> getEmbeddedPlatformBlobs();
+const RuntimeBlob* selectPlatformForTarget(const llvm::Triple& t);
 } // namespace pli

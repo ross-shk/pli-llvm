@@ -3,7 +3,8 @@
 /* rt_task.c — PL/I runtime library (pli_runtime): multitasking: EVENT/WAIT/DELAY/TASK. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-#include "sync/pli_thread.h"
+/* Threading arrives via pli_rt_plat.h (the platform seam): mutexes, conds,
+ * spawn and sleep are platform-TU definitions now. */
 
 /* Multitasking (rules (79),(82),(83), QR2.8): EVENT flags are i32 words owned
  * by PL/I variables (0 incomplete, 1 complete), serialised behind one

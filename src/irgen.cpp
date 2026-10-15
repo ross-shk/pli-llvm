@@ -3038,6 +3038,14 @@ std::string IRGen::run(HProgram& prog) {
 // references resolve to this one shared copy and the runtime's global state
 // stays shared. An empty runtimeBc_ selects the embedded blob.
 bool IRGen::linkRuntimeBitcode() {
+  // Split runtime: --runtime-bc replaces the whole runtime (portable and
+  // platform alike), so it cannot combine with --rt-platform.
+  if (!runtimeBc_.empty() && !platformBc_.empty()) {
+    d_.error({}, "cannot combine --runtime-bc with --rt-platform (--runtime-bc replaces the "
+                 "whole runtime, including the platform TU)",
+             "");
+    return false;
+  }
   // Load the runtime from disk (--runtime-bc) or from the embedded blob.
   std::unique_ptr<llvm::Module> rt;
   std::string rtName;
@@ -3149,6 +3157,33 @@ bool IRGen::linkRuntimeBitcode() {
   for (llvm::Function& f : mod_.functions())
     if (!f.isDeclaration() && sigs.count(f.getName().str()))
       applyRuntimeAttrs(&f);
+  // Split runtime: merge the platform TU the same way when the portable blob
+  // came from the embedded bundle (with --runtime-bc the file already holds
+  // the whole runtime). Its definitions satisfy the portable blob's
+  // pli_plat_*/thread references; anything still undefined afterwards is an
+  // incomplete custom platform, diagnosed by name.
+  if (runtimeBc_.empty()) {
+    std::string platErr;
+    std::unique_ptr<llvm::Module> plat =
+        pli::loadPlatformModule(ctx_, llvm::Triple(triple_), platformBc_, platErr);
+    if (!plat) {
+      d_.error({}, "internal error: " + (platErr.empty() ? "no embedded platform runtime for target '" +
+                                                                   triple_ + "'"
+                                                         : platErr),
+               "");
+      return false;
+    }
+    if (!mod_.getDataLayoutStr().empty())
+      plat->setDataLayout(mod_.getDataLayoutStr());
+    if (llvm::Linker::linkModules(mod_, std::move(plat), llvm::Linker::None)) {
+      d_.error({}, "internal error: linking the platform runtime into the module failed", "");
+      return false;
+    }
+    if (std::string seamErr = pli::checkPlatformSeamComplete(mod_); !seamErr.empty()) {
+      d_.error({}, seamErr, "");
+      return false;
+    }
+  }
   return true;
 }
 

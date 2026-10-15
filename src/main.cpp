@@ -136,8 +136,13 @@ static void usage() {
          "                   keep pli_* references external and resolve them at link\n"
          "                   from the embedded runtime instead of merging the\n"
          "                   definitions into the MAIN unit\n"
-         "  --runtime-bc <f> path to an external runtime bitcode file (default: none;\n"
-         "                   the embedded runtime blob is merged instead)\n"
+  "  --runtime-bc <f> path to an external runtime bitcode file (default: none;\n"
+  "                   the embedded runtime blob is merged instead)\n"
+  "  --rt-platform <f>\n"
+  "                   path to a custom platform bitcode file implementing\n"
+  "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
+  "                   pli_rtplat.bc is merged instead). Composes only with\n"
+  "                   the embedded portable runtime, not with --runtime-bc.\n"
          "  --flto=thin|full explicit ThinLTO / full LTO on the compile+link steps\n"
          "  --fprofile-generate  instrument the build for PGO (writes a profile)\n"
          "  --fprofile-use=<d>   rebuild using a merged profile (llvm-profdata out)\n"
@@ -279,7 +284,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        LowerMode lowerMode = LowerMode::Auto,
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
                        bool linkRuntimeIn = false, bool forceClangPipeline = false,
-                       bool marchNative = false) {
+                       bool marchNative = false, const std::string& platformBc = "") {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -388,7 +393,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // backendFlags reach the compile step (the in-process path takes none).
   if (!forceClangPipeline) {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
-              linkBitcode, lowerMode, perOpOverrides);
+              linkBitcode, lowerMode, perOpOverrides, platformBc);
     if (auto om = ipg.takeModule(hir)) {
       bool rtOk = true;
 #if PLI_HAVE_LLD
@@ -398,7 +403,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       if (linkRuntimeIn && !linkBitcode && !compileOnly) {
         std::string rtErr;
         llvm::Triple targetTriple(triple);
-        rtOk = pli::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr);
+        rtOk = pli::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr, platformBc);
         if (!rtOk)
           std::cerr << "pli: " << rtErr << "\n";
       }
@@ -448,7 +453,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   // Fallback: textual IR assembled by the backend clang.
   IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
-              linkBitcode, lowerMode, perOpOverrides);
+              linkBitcode, lowerMode, perOpOverrides, platformBc);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return false;
@@ -487,6 +492,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 int main(int argc, char** argv) {
   std::vector<std::string> inputs;
   std::string output, runtimeLib = PLI_RUNTIME_LIB, runtimeBc = PLI_RUNTIME_BC, triple;
+  // Split runtime: custom platform TU (--rt-platform); empty selects the
+  // embedded pli_rtplat.bc. Always explicit (no baked-in default path).
+  std::string platformBc;
   std::string clangPath = PLI_CLANG;
   std::string sysparm;
   bool sysparmExplicit = false;
@@ -538,6 +546,10 @@ int main(int argc, char** argv) {
     else if (a == "--runtime-bc") {
       runtimeBc = next("--runtime-bc");
       runtimeBcExplicit = true;
+    } else if (a == "--rt-platform") {
+      platformBc = next("--rt-platform");
+    } else if (a.rfind("--rt-platform=", 0) == 0) {
+      platformBc = a.substr(14);
     } else if (a == "--flto=thin" || a == "--flto=full")
       ltoKind = a.substr(7);
     else if (a == "--fprofile-generate")
@@ -773,6 +785,13 @@ int main(int argc, char** argv) {
                 << "; falling back to the embedded runtime\n";
     runtimeBc.clear();
   }
+  // Split runtime: a custom platform file must exist; unlike --runtime-bc
+  // there is no baked-in path to fall back to, so a missing file is always
+  // a user error. The embedded pli_rtplat.bc covers the empty case.
+  if (!platformBc.empty() && !fs::exists(platformBc)) {
+    std::cerr << "pli: no such platform runtime: " << platformBc << "\n";
+    return 2;
+  }
 
   Preprocessor preprocessor;
   for (const std::string& d : includeDirs)
@@ -877,7 +896,8 @@ int main(int argc, char** argv) {
   // archive stays on the link line, where it is never pulled once the symbols
   // are defined by that embedded copy (runtime globals must stay shared).
   // An empty runtimeBc selects the embedded blob, so the merge needs no
-  // runtime files on disk.
+  // runtime files on disk. An empty platformBc likewise selects the embedded
+  // pli_rtplat.bc; --rt-platform names a custom platform TU instead.
   const bool linkBitcode = useBitcode && !emitLLVM;
   // Explicit PGO/LTO must reach the backend clang verbatim on both steps, so
   // those builds always take the clang pipeline, never the in-process paths
@@ -896,7 +916,8 @@ int main(int argc, char** argv) {
                     compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, keepLL, verbose,
                     noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel, backendFlags,
                     keepLLDir, (int)i, &outObj, runtimeBc, linkBitcode, lowerMode, perOpOverrides,
-                    singleModuleFinalLink, needClangPipeline))
+                    singleModuleFinalLink, needClangPipeline,
+                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -944,7 +965,7 @@ int main(int argc, char** argv) {
         std::error_code ec;
         llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
         std::string rtErr;
-        haveRtObj = !ec && pli::emitRuntimeObject(*tm, llt, os, rtErr);
+        haveRtObj = !ec && pli::emitRuntimeObject(*tm, llt, os, rtErr, platformBc);
         if (!haveRtObj && verbose)
           std::cerr << "pli: runtime object failed (" << rtErr << "), using clang\n";
       }
@@ -1241,7 +1262,7 @@ int main(int argc, char** argv) {
     llvm::raw_fd_ostream os(fallbackRtObj, ec, llvm::sys::fs::OF_None);
     std::string rtErr;
     llvm::Triple llt(triple);
-    if (ec || !pli::emitRuntimeObject(*tm, llt, os, rtErr)) {
+    if (ec || !pli::emitRuntimeObject(*tm, llt, os, rtErr, platformBc)) {
       std::cerr << "pli: cannot materialise the embedded runtime (" << rtErr << ")\n";
       if (!fallbackRtObj.empty()) {
         std::error_code rmEc;

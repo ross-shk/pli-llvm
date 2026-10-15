@@ -146,11 +146,18 @@ if(PLI_ENABLE_MLIR)
   target_compile_features(pli_mlir PRIVATE cxx_std_20)
 endif()
 
-set(RT_SRCS
+# Split runtime: portable TUs (pure standard C, no platform branches) embed as
+# pli_runtime.bc; the platform TU (host calls behind pli_rt_plat.h) embeds as
+# pli_rtplat.bc and is swappable via --rt-platform. RT_SRCS stays the union
+# for the quality-gate source lists below.
+set(RT_PORTABLE_SRCS
   runtime/rt_core.c runtime/rt_stream.c runtime/rt_string.c
   runtime/rt_math.c runtime/rt_mathport.c runtime/rt_cond.c
   runtime/rt_storage.c runtime/rt_get.c runtime/rt_file.c
   runtime/rt_edit.c runtime/rt_task.c)
+set(RT_PLATFORM_SRCS
+  runtime/rt_plat_default.c)
+set(RT_SRCS ${RT_PORTABLE_SRCS} ${RT_PLATFORM_SRCS})
 
 # lld detection (review S1): in-process link gates on PLI_HAVE_LLD.
 # Prerequisite: stock brew `llvm` ships no lld; fail configure with install hint.
@@ -396,19 +403,20 @@ endif()
 if(PLI_CROSS_BITCODE)
   set(PLI_TARGETS "x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;x86_64-pc-windows-gnu;aarch64-pc-windows-gnu")
 
-  # Per-target bitcode generation and embedding.
+  # Per-target bitcode generation and embedding: portable sources link into
+  # pli_runtime.bc, the platform TU into pli_rtplat.bc (swappable at link).
   foreach(target ${PLI_TARGETS})
     string(REPLACE "-" "_" target_suffix "_${target}")
     set(TARGET_BC_DIR ${CMAKE_BINARY_DIR}/bc/${target})
     set(TARGET_RT_BCS "")
-    foreach(src ${RT_SRCS})
+    foreach(src ${RT_PORTABLE_SRCS})
       get_filename_component(base ${src} NAME_WE)
       add_custom_command(
         OUTPUT ${TARGET_BC_DIR}/${base}.bc
         COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
         COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
                 -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
-                -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
+                -I${CMAKE_SOURCE_DIR}/runtime
                 -O2
                 -ffunction-sections -fdata-sections
                 $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
@@ -419,18 +427,48 @@ if(PLI_CROSS_BITCODE)
         VERBATIM)
       list(APPEND TARGET_RT_BCS ${TARGET_BC_DIR}/${base}.bc)
     endforeach()
+    set(TARGET_PLAT_BCS "")
+    foreach(src ${RT_PLATFORM_SRCS})
+      get_filename_component(base ${src} NAME_WE)
+      add_custom_command(
+        OUTPUT ${TARGET_BC_DIR}/${base}.bc
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
+        COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+                -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
+                -I${CMAKE_SOURCE_DIR}/runtime
+                -O2
+                -ffunction-sections -fdata-sections
+                $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
+                -target ${target}
+                -o ${TARGET_BC_DIR}/${base}.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/${src}
+        COMMENT "bitcode: ${base} for ${target}"
+        VERBATIM)
+      list(APPEND TARGET_PLAT_BCS ${TARGET_BC_DIR}/${base}.bc)
+    endforeach()
     add_custom_command(
       OUTPUT ${TARGET_BC_DIR}/pli_runtime.bc
       COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_RT_BCS} -o ${TARGET_BC_DIR}/pli_runtime.bc
       DEPENDS ${TARGET_RT_BCS})
     add_custom_command(
+      OUTPUT ${TARGET_BC_DIR}/pli_rtplat.bc
+      COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_PLAT_BCS} -o ${TARGET_BC_DIR}/pli_rtplat.bc
+      DEPENDS ${TARGET_PLAT_BCS})
+    add_custom_command(
       OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
               ${TARGET_BC_DIR}/pli_runtime.bc ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
-              ${target_suffix}
+              pli_embedded_runtime_bc ${target_suffix}
       DEPENDS ${TARGET_BC_DIR}/pli_runtime.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
       COMMENT "embedding pli_runtime.bc for ${target}")
-    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc)
+    add_custom_command(
+      OUTPUT ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+              ${TARGET_BC_DIR}/pli_rtplat.bc ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
+              pli_embedded_rtplat_bc ${target_suffix}
+      DEPENDS ${TARGET_BC_DIR}/pli_rtplat.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+      COMMENT "embedding pli_rtplat.bc for ${target}")
+    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc)
     add_dependencies(pli embedded_runtime_inc${target_suffix})
   endforeach()
 else()
@@ -442,25 +480,33 @@ else()
       OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
               /dev/null ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
-              ${target_suffix}
+              pli_embedded_runtime_bc ${target_suffix}
       DEPENDS ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
       COMMENT "stub embedding for ${target}")
-    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc)
+    add_custom_command(
+      OUTPUT ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+              /dev/null ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
+              pli_embedded_rtplat_bc ${target_suffix}
+      DEPENDS ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+      COMMENT "stub platform embedding for ${target}")
+    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc)
     add_dependencies(pli embedded_runtime_inc${target_suffix})
   endforeach()
 endif()
 
-# Default target (host) bitcode for backward compatibility.
+# Default target (host) bitcode for backward compatibility: portable sources
+# link into pli_runtime.bc, the platform TU into pli_rtplat.bc.
 set(DEFAULT_BC_DIR ${CMAKE_BINARY_DIR}/bc/${PLI_TARGET_TRIPLE})
 set(DEFAULT_RT_BCS "")
-foreach(src ${RT_SRCS})
+foreach(src ${RT_PORTABLE_SRCS})
   get_filename_component(base ${src} NAME_WE)
   add_custom_command(
     OUTPUT ${DEFAULT_BC_DIR}/${base}.bc
       COMMAND ${CMAKE_COMMAND} -E make_directory ${DEFAULT_BC_DIR}
         COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
             -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
-            -I${CMAKE_SOURCE_DIR}/runtime -I${CMAKE_SOURCE_DIR}/runtime/sync
+            -I${CMAKE_SOURCE_DIR}/runtime
             -O2
             -ffunction-sections -fdata-sections
             $<$<PLATFORM_ID:Linux>:-fPIC>
@@ -471,17 +517,47 @@ foreach(src ${RT_SRCS})
     VERBATIM)
   list(APPEND DEFAULT_RT_BCS ${DEFAULT_BC_DIR}/${base}.bc)
 endforeach()
+set(DEFAULT_PLAT_BCS "")
+foreach(src ${RT_PLATFORM_SRCS})
+  get_filename_component(base ${src} NAME_WE)
+  add_custom_command(
+    OUTPUT ${DEFAULT_BC_DIR}/${base}.bc
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${DEFAULT_BC_DIR}
+        COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+            -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
+            -I${CMAKE_SOURCE_DIR}/runtime
+            -O2
+            -ffunction-sections -fdata-sections
+            $<$<PLATFORM_ID:Linux>:-fPIC>
+            -target ${PLI_TARGET_TRIPLE}
+            -o ${DEFAULT_BC_DIR}/${base}.bc
+    DEPENDS ${CMAKE_SOURCE_DIR}/${src}
+    COMMENT "bitcode: ${base} for ${PLI_TARGET_TRIPLE}"
+    VERBATIM)
+  list(APPEND DEFAULT_PLAT_BCS ${DEFAULT_BC_DIR}/${base}.bc)
+endforeach()
 add_custom_command(
   OUTPUT ${DEFAULT_BC_DIR}/pli_runtime.bc
   COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${DEFAULT_RT_BCS} -o ${DEFAULT_BC_DIR}/pli_runtime.bc
   DEPENDS ${DEFAULT_RT_BCS})
+add_custom_command(
+  OUTPUT ${DEFAULT_BC_DIR}/pli_rtplat.bc
+  COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${DEFAULT_PLAT_BCS} -o ${DEFAULT_BC_DIR}/pli_rtplat.bc
+  DEPENDS ${DEFAULT_PLAT_BCS})
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime.inc
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
           ${DEFAULT_BC_DIR}/pli_runtime.bc ${CMAKE_BINARY_DIR}/embedded_runtime.inc
   DEPENDS ${DEFAULT_BC_DIR}/pli_runtime.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
   COMMENT "embedding pli_runtime.bc for default target ${PLI_TARGET_TRIPLE}")
-add_custom_target(embedded_runtime_inc_default DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc)
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/embedded_rtplat.inc
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+          ${DEFAULT_BC_DIR}/pli_rtplat.bc ${CMAKE_BINARY_DIR}/embedded_rtplat.inc
+          pli_embedded_rtplat_bc
+  DEPENDS ${DEFAULT_BC_DIR}/pli_rtplat.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+  COMMENT "embedding pli_rtplat.bc for default target ${PLI_TARGET_TRIPLE}")
+add_custom_target(embedded_runtime_inc_default DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc ${CMAKE_BINARY_DIR}/embedded_rtplat.inc)
 add_dependencies(pli embedded_runtime_inc_default)
 
 # Generated rules table for --explain (see scripts/gen_rules.py); the spec and
@@ -531,8 +607,7 @@ find_program(SCAN_BUILD_BIN NAMES scan-build scan-build-py
 set(ALL_C_SOURCES ${RT_SRCS})
 set(ALL_C_HEADERS
   runtime/pli_rt.h runtime/pli_rt_state.h runtime/pli_rt_abi.def
-  runtime/pli_wide128.h
-  runtime/sync/pli_thread.h)
+  runtime/pli_rt_plat.h runtime/pli_wide128.h)
 # clang-format scope: src/ only (ADR-042: src/ is clang-format-normalized).
 # The C runtime follows its own brace-less style; clang-tidy covers C++ only.
 set(ALL_FORMAT_SOURCES ${ALL_CPP_SOURCES} ${ALL_CPP_HEADERS})

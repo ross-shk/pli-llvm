@@ -3,19 +3,18 @@
 /* rt_cond.c — PL/I runtime library (pli_runtime): conditions: signal, ON stack/ONCODE, traps. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-/* stderr printing routes through pli_fprintf (ADR-221); stdio arrives via
- * pli_rt_port.h. */
+/* stderr printing routes through pli_plat_fprintf (the platform seam). */
 
 void pli_signal_error(const char *msg) {
   pli_rt_fini();
-  pli_fprintf(stderr, "ERROR condition raised: %s\n", msg ? msg : "(unspecified)");
+  pli_plat_fprintf(stderr, "ERROR condition raised: %s\n", msg ? msg : "(unspecified)");
   pli_exit(8);
 }
 
 /* Centralised abort path (Phase 6): flush runtime output, print msg, exit 8. */
 void pli_abort(const char *msg) {
   pli_rt_fini();
-  pli_fprintf(stderr, "%s\n", msg ? msg : "(unspecified)");
+  pli_plat_fprintf(stderr, "%s\n", msg ? msg : "(unspecified)");
   pli_exit(8);
 }
 

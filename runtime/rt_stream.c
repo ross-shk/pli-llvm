@@ -3,9 +3,9 @@
 /* rt_stream.c — PL/I runtime library (pli_runtime): stream output: SKIP/PAGE, DISPLAY, PUT LIST/PUT DATA. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-/* stdio/stdarg arrive via pli_rt_port.h (ADR-221); raw fwrite/getc/getchar
- * below route through pli_fwrite/pli_fgetc/pli_getchar. The fputc_ helper
- * further down is the internal formatter sink, unrelated to stdio fputc. */
+/* Buffered output routes through pli_plat_fwrite/pli_plat_fgetc/pli_plat_getchar
+ * (the platform seam). The fputc_ helper further down is the internal
+ * formatter sink, unrelated to stdio fputc. */
 
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
@@ -53,14 +53,14 @@ static size_t rt_stdout_pos = 0;
 
 void rt_flush_stdout(void) {
   if (rt_stdout_pos > 0) {
-    pli_fwrite(rt_stdout_buf, 1, rt_stdout_pos, stdout);
+    pli_plat_fwrite(rt_stdout_buf, 1, rt_stdout_pos, stdout);
     rt_stdout_pos = 0;
   }
 }
 
 void rt_put_raw(const char *p, size_t n) {
   if (rt_out_f) {
-    pli_fwrite(p, 1, n, rt_out_f);
+    pli_plat_fwrite(p, 1, n, rt_out_f);
     rt_col += (int)n;
     return;
   }
@@ -79,7 +79,7 @@ void rt_put_raw(const char *p, size_t n) {
     rt_stdout_pos += n;
   } else {
     rt_flush_stdout();
-    pli_fwrite(p, 1, n, stdout);
+    pli_plat_fwrite(p, 1, n, stdout);
   }
   rt_col += (int)n;
 }
@@ -89,11 +89,11 @@ void rt_put_raw(const char *p, size_t n) {
 int rt_next_char(void) {
   int c;
   if (rt_in_f)
-    c = pli_fgetc(rt_in_f);
+    c = pli_plat_fgetc(rt_in_f);
   else if (rt_in_buf)
     c = rt_in_pos < rt_in_len ? (unsigned char)rt_in_buf[rt_in_pos++] : EOF;
   else
-    c = pli_getchar();
+    c = pli_plat_getchar();
   if (c == EOF)
     return c;
   if (c == '\n')

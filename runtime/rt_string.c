@@ -3,8 +3,7 @@
 /* rt_string.c — PL/I runtime library (pli_runtime): string semantics + helpers. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-/* time.h arrives via pli_rt_port.h (ADR-221); localtime_r/localtime_s hide
- * in pli_localtime. */
+/* Calendar time routes through pli_plat_localtime (the platform seam). */
 
 void pli_assign_char(char *dst, long long dstlen, const char *src, long long srclen) {
   long long n = srclen < dstlen ? srclen : dstlen;
@@ -192,7 +191,7 @@ void pli_low(char *dst, long long n) { pli_memset(dst, 0x00, (size_t)n); }
 void pli_date(char *buf, long long cap) {
   time_t now = time(NULL);
   struct tm tmv;
-  pli_localtime(&now, &tmv);
+  pli_plat_localtime(&now, &tmv);
   char tmp[16];
   int n = pli_snprintf(tmp, sizeof tmp, "%04d%02d%02d",
                    tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
@@ -205,7 +204,7 @@ void pli_date(char *buf, long long cap) {
 void pli_time(char *buf, long long cap) {
   time_t now = time(NULL);
   struct tm tmv;
-  pli_localtime(&now, &tmv);
+  pli_plat_localtime(&now, &tmv);
   char tmp[16];
   int n = pli_snprintf(tmp, sizeof tmp, "%02d%02d%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
   long long i = 0;
@@ -217,7 +216,7 @@ void pli_time(char *buf, long long cap) {
 void pli_datetime(char *buf, long long cap) {
   time_t now = time(NULL);
   struct tm tmv;
-  pli_localtime(&now, &tmv);
+  pli_plat_localtime(&now, &tmv);
   char tmp[32];
   int n = pli_snprintf(tmp, sizeof tmp, "%04d%02d%02d%02d%02d%02d",
                        tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,

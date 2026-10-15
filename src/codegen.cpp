@@ -7,8 +7,10 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
@@ -66,7 +68,102 @@ bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_strea
   return true;
 }
 
-bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::string& err) {
+// Split runtime: arch + OS-family match for a platform TU (mirrors the
+// irgen.cpp portable check; LLVM 23 splits Darwin/MacOSX, same ABI family).
+static bool platformTripleMatches(const llvm::Module& mod, const llvm::Triple& target) {
+  llvm::Triple modTriple(mod.getTargetTriple());
+  auto osKey = [](llvm::Triple::OSType os) -> int {
+    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
+                                                                      : (int)os;
+  };
+  return modTriple.getArch() == target.getArch() && osKey(modTriple.getOS()) == osKey(target.getOS());
+}
+
+// Strip the build host's target-cpu / target-features / probe-stack (same
+// three as the portable paths). No NoInline stamp: platform wrappers stay
+// inlinable into their portable callers, as when they were header-inline.
+static void stripPlatformAttrs(llvm::Module& mod) {
+  for (auto& F : mod) {
+    if (F.hasFnAttribute("target-cpu"))
+      F.removeFnAttr("target-cpu");
+    if (F.hasFnAttribute("target-features"))
+      F.removeFnAttr("target-features");
+    if (F.hasFnAttribute("probe-stack"))
+      F.removeFnAttr("probe-stack");
+  }
+}
+
+std::unique_ptr<llvm::Module> loadPlatformModule(llvm::LLVMContext& ctx,
+                                                 const llvm::Triple& targetTriple,
+                                                 const std::string& platformBc, std::string& err) {
+  std::unique_ptr<llvm::Module> plat;
+  std::string platName;
+  if (!platformBc.empty()) {
+    llvm::SMDiagnostic smErr;
+    plat = llvm::parseIRFile(platformBc, smErr, ctx);
+    if (!plat) {
+      err = "cannot load the platform runtime '" + platformBc + "': " + smErr.getMessage().str();
+      return nullptr;
+    }
+    platName = platformBc;
+    // A platform TU carries no LLVM stamp (only the portable blob has
+    // pli_llvm_version); the triple match is the compatibility check, so a
+    // file built by a nearby clang for the same target links cleanly.
+    if (!platformTripleMatches(*plat, targetTriple)) {
+      err = "platform runtime target '" + plat->getTargetTriple().str() + "' does not match '" +
+            targetTriple.getTriple() + "' — rebuild it for the target";
+      return nullptr;
+    }
+  } else {
+    const RuntimeBlob* blob = selectPlatformForTarget(targetTriple);
+    if (!blob)
+      return nullptr; // no embedded platform: caller reports per-path
+    llvm::MemoryBufferRef buf(
+        llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "pli_rtplat.bc");
+    llvm::Expected<std::unique_ptr<llvm::Module>> parsed = llvm::parseBitcodeFile(buf, ctx);
+    if (!parsed) {
+      err = "cannot parse embedded pli_rtplat.bc";
+      llvm::consumeError(parsed.takeError());
+      return nullptr;
+    }
+    plat = std::move(*parsed);
+    platName = "embedded pli_rtplat.bc";
+  }
+  stripPlatformAttrs(*plat);
+  return plat;
+}
+
+bool isPlatformSeamSymbol(const std::string& name) {
+  // pli_plat_* plus the threading backend (same names as the old header).
+  static const char* const kThreadSeam[] = {
+      "pli_mutex_init",     "pli_mutex_lock",      "pli_mutex_unlock",  "pli_cond_init",
+      "pli_cond_wait",      "pli_cond_signal",     "pli_cond_broadcast", "pli_call_once",
+      "pli_spawn",          "pli_spawn_detached",  "pli_thread_detach", "pli_sleep_ms",
+  };
+  if (name.rfind("pli_plat_", 0) == 0)
+    return true;
+  for (const char* t : kThreadSeam)
+    if (name == t)
+      return true;
+  return false;
+}
+
+std::string checkPlatformSeamComplete(const llvm::Module& M) {
+  std::string missing;
+  for (const auto& F : M)
+    if (F.isDeclaration() && isPlatformSeamSymbol(F.getName().str())) {
+      if (!missing.empty())
+        missing += ", ";
+      missing += F.getName().str();
+    }
+  if (missing.empty())
+    return "";
+  return "incomplete platform runtime, still undefined: " + missing +
+         " — implement all of runtime/pli_rt_plat.h (or drop --rt-platform)";
+}
+
+bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::string& err,
+                        const std::string& platformBc) {
   const RuntimeBlob* blob = selectRuntimeForTarget(targetTriple);
   if (!blob) {
     err = "no embedded runtime for target: " + targetTriple.getTriple();
@@ -103,6 +200,24 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
     err = "cannot link embedded pli_runtime.bc";
     return false;
   }
+  // Split runtime: the portable blob's pli_plat_*/thread references resolve
+  // from the platform TU (default embedded blob or a custom --rt-platform
+  // file), linked the same LinkOnlyNeeded way so unused pieces still drop.
+  std::unique_ptr<llvm::Module> plat =
+      loadPlatformModule(M.getContext(), targetTriple, platformBc, err);
+  if (!plat) {
+    if (err.empty())
+      err = "no embedded platform runtime for target: " + targetTriple.getTriple();
+    return false;
+  }
+  if (llvm::Linker::linkModules(M, std::move(plat), llvm::Linker::LinkOnlyNeeded)) {
+    err = "cannot link the platform runtime into the module";
+    return false;
+  }
+  if (std::string seamErr = checkPlatformSeamComplete(M); !seamErr.empty()) {
+    err = seamErr;
+    return false;
+  }
   // Re-apply the audited P0 side-table facts (kRuntimeAttrs, irgen.cpp) on
   // the now-defined runtime functions. Linking replaces our declarations
   // (which carried applyRuntimeAttrs facts) with bitcode definitions carrying
@@ -135,7 +250,8 @@ std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTri
 }
 
 bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple,
-                       llvm::raw_pwrite_stream& out, std::string& err) {
+                       llvm::raw_pwrite_stream& out, std::string& err,
+                       const std::string& platformBc) {
   llvm::LLVMContext ctx;
   auto rt = parseEmbeddedRuntime(targetTriple, ctx, err);
   if (!rt)
@@ -151,6 +267,19 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
     if (F.hasFnAttribute("probe-stack"))
       F.removeFnAttr("probe-stack");
     F.addFnAttr(llvm::Attribute::NoInline);
+  }
+  // Split runtime: merge the platform TU (default embedded blob or a custom
+  // --rt-platform file) so the object defines the seam too; unresolved seam
+  // symbols would otherwise surface only as native link errors.
+  std::unique_ptr<llvm::Module> plat = loadPlatformModule(ctx, targetTriple, platformBc, err);
+  if (!plat) {
+    if (err.empty())
+      err = "no embedded platform runtime for target: " + targetTriple.getTriple();
+    return false;
+  }
+  if (llvm::Linker::linkModules(*rt, std::move(plat), llvm::Linker::LinkOnlyNeeded)) {
+    err = "cannot link the platform runtime into the runtime object";
+    return false;
   }
   rt->setDataLayout(TM.createDataLayout());
   return emitObject(*rt, TM, out, err);

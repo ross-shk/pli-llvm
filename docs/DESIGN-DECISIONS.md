@@ -6357,3 +6357,61 @@ free wrapper); split `pli_thread_win32.c`/`pli_thread_posix.c` backends
 `windows.h`/`unistd.h` in the port header (nothing there needs them —
 `Sleep`/`nanosleep` live in `pli_thread.h` — and `windows.h` risks macro
 pollution in every TU).
+
+---
+
+## ADR-222 — Split runtime: portable blob plus swappable platform TU
+
+**Context.** ADR-221 centralised every platform branch behind `pli_rt_port.h`,
+but the seam was `static inline`: header-baked, un-overridable, and identical
+in every TU. A custom runtime (freestanding target, alternate libc, or a
+platform without `popen`/threads such as wasm) still meant reimplementing the
+whole ~7,200-line runtime, even though only ~350 lines of it touch the host.
+Meanwhile the driver already had whole-blob override (`--runtime-bc`), which
+is the wrong granularity: it forces the author to re-supply the portable
+half too.
+
+**Decision.** Split the seam into real symbols. New contract header
+`runtime/pli_rt_plat.h` declares everything the portable TUs import from the
+host: 19 `pli_plat_*` functions (allocation, FILE I/O, `popen`/`pclose`,
+`localtime`, exit/abort raw ends) plus the 13-function threading backend
+(same names as before, now out-of-line). New `runtime/rt_plat_default.c`
+implements them against host libc/pthreads (or Win32); `pli_rt_port.h` and
+`sync/pli_thread.h` are deleted. CMake builds two blobs per triple —
+`pli_runtime.bc` (portable, unchanged name) and `pli_rtplat.bc` — both
+embedded via `gen_embed.py` (gained an `array_base` argument, ordered before
+the suffix so CMake's empty-arg dropping can never shift the stem). New
+driver flag `--rt-platform <file>` merges a custom platform TU instead of
+the default; `--runtime-bc` with `--rt-platform` is a diagnosed conflict.
+`loadPlatformModule` / `isPlatformSeamSymbol` / `checkPlatformSeamComplete`
+(`src/codegen.{h,cpp}`, reused by IRGen) triple-check the file and name every
+still-undefined seam symbol instead of failing at the native link. Layering
+rule, verified with `llvm-nm`: portable defines zero seam symbols, platform
+references zero portable symbols — calls go strictly down. `pli_alloc` /
+`pli_free` / `pli_exit` / `pli_abort` stay portable ABI entry points; only
+their raw ends (`pli_plat_free`, `pli_plat_exit`, `pli_plat_abort`) are seam.
+`time()` stays a direct call (branch-free standard C, no seam needed).
+`tests/driver/rt_platform.sh` pins the contract: identical output under the
+default and a custom platform, a marker function proving the custom TU runs,
+the archive path, by-name rejection of an incomplete platform, the flag
+conflict, and the missing-file error.
+
+**Consequences.** Custom platforms implement 32 documented symbols instead of
+the full runtime; the default path is behavior-identical (full suite green,
+including the new test). The extra call layer on per-character I/O paths
+costs nothing measurable: `io_throughput` at `-O2` is 0.84x vs the 0.83x
+ADR-220 baseline (second run; a first run read 0.94x inside the run's own
+±10% min/max spread — machine noise, bulk `fwrite` dominates). Platform
+functions deliberately skip the portable blob's `NoInline` stamp so they stay
+inlinable into portable callers, as when they were header-inline. Cross
+targets without `PLI_CROSS_BITCODE` keep the existing host-blob fallback,
+now for both blobs.
+
+**Rejected.** `--rt-port-header` source redirect (needs runtime sources plus
+a clang invocation at user-compile time — far more moving parts than linking
+a second blob); weak-symbol overrides (COFF `/alternatename` fragility, and
+half-overrides would fail silently where whole-blob swap names the missing
+symbol); moving `pli_alloc`/`pli_free`/`pli_exit`/`pli_abort` into the
+platform TU (would make platform code call back up into portable helpers —
+the seam stays strictly one-directional); `NoInline` on platform functions
+(would forbid the inlining the old header-inline world had for free).

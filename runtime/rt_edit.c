@@ -3,7 +3,7 @@
 /* rt_edit.c — PL/I runtime library (pli_runtime): edit-directed PUT/GET. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-/* Output routes through rt_put_raw and pli_snprintf (ADR-221); no direct
+/* Output routes through rt_put_raw and pli_snprintf; no direct
  * stdio use remains, so no system header is included here. */
 
 static void put_field(const char *p, size_t n, long long w) {
