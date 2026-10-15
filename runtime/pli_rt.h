@@ -15,6 +15,14 @@
 
 #include "pli_wide128.h"
 
+/* Shared TU state + platform seam. Included BEFORE the .def type macros
+ * below: pli_rt_state.h -> pli_rt_plat.h pulls in system headers
+ * (<windows.h> on Win, <pthread.h> elsewhere), which must never be
+ * preprocessed while VOID/I64/I32/I8/DOUBLE/PTR/CPTR/IPTR are macros
+ * (windows.h breaks: winnt.h cascade 'unknown type name CHAR/LONG/...'). */
+
+#include "pli_rt_state.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,7 +30,8 @@ extern "C" {
 /* Expand the .def's type tokens to C types. Wide (>18 digit) DECIMAL values
  * cross the ABI as (lo, hi) I64 halves (see pli_rt_abi.def); the portable
  * 128-bit integer below is for arithmetic/formatting inside the runtime only
- * (MSVC lacks __int128; clang-cl supports it natively). */
+ * (MSVC lacks __int128; clang-cl supports it natively).
+ * Scope is tightly limited to the pli_rt_abi.def inclusion below. */
 #define VOID    void
 #define I64     long long
 #define I32     int
@@ -32,8 +41,6 @@ extern "C" {
 #define CPTR    const char *
 #define IPTR    int *
 #define PLI_FN(name, ret, args) ret name args;
-
-#include "pli_rt_state.h"
 
 #include "pli_rt_abi.def"
 

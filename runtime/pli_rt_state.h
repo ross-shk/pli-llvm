@@ -179,8 +179,6 @@ void rt_flush_stdout(void);
 #define put_raw rt_put_raw
 #define next_char rt_next_char
 
-#endif /* PLI_RT_STATE_H */
-
 /* Intra-runtime helpers shared across TUs (single definitions named). */
 void rt_separate(void);
 void rt_display_begin(void);
@@ -210,3 +208,5 @@ void pli_exit(int code);
 #define pli_on_push rt_pli_on_push
 #define pli_on_top rt_pli_on_top
 #define pli_on_pop rt_pli_on_pop
+
+#endif /* PLI_RT_STATE_H */

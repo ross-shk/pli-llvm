@@ -158,6 +158,15 @@ set(RT_PORTABLE_SRCS
 set(RT_PLATFORM_SRCS
   runtime/rt_plat_default.c)
 set(RT_SRCS ${RT_PORTABLE_SRCS} ${RT_PLATFORM_SRCS})
+# Bitcode embeds must rebuild when any runtime header changes (the .c TUs
+# all include pli_rt.h -> pli_rt_state.h -> pli_rt_plat.h; without this a
+# header-only fix leaves stale .bc embedded in the binary).
+set(RT_HEADERS
+  ${CMAKE_SOURCE_DIR}/runtime/pli_rt.h
+  ${CMAKE_SOURCE_DIR}/runtime/pli_rt_state.h
+  ${CMAKE_SOURCE_DIR}/runtime/pli_rt_plat.h
+  ${CMAKE_SOURCE_DIR}/runtime/pli_rt_abi.def
+  ${CMAKE_SOURCE_DIR}/runtime/pli_wide128.h)
 
 # lld detection (review S1): in-process link gates on PLI_HAVE_LLD.
 # Prerequisite: stock brew `llvm` ships no lld; fail configure with install hint.
@@ -422,7 +431,7 @@ if(PLI_CROSS_BITCODE)
                 $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
                 -target ${target}
                 -o ${TARGET_BC_DIR}/${base}.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/${src}
+        DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS} ${RT_HEADERS}
         COMMENT "bitcode: ${base} for ${target}"
         VERBATIM)
       list(APPEND TARGET_RT_BCS ${TARGET_BC_DIR}/${base}.bc)
@@ -441,7 +450,7 @@ if(PLI_CROSS_BITCODE)
                 $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
                 -target ${target}
                 -o ${TARGET_BC_DIR}/${base}.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/${src}
+        DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS} ${RT_HEADERS}
         COMMENT "bitcode: ${base} for ${target}"
         VERBATIM)
       list(APPEND TARGET_PLAT_BCS ${TARGET_BC_DIR}/${base}.bc)
@@ -512,7 +521,7 @@ foreach(src ${RT_PORTABLE_SRCS})
             $<$<PLATFORM_ID:Linux>:-fPIC>
             -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/${src}
+    DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS}
     COMMENT "bitcode: ${base} for ${PLI_TARGET_TRIPLE}"
     VERBATIM)
   list(APPEND DEFAULT_RT_BCS ${DEFAULT_BC_DIR}/${base}.bc)
@@ -531,7 +540,7 @@ foreach(src ${RT_PLATFORM_SRCS})
             $<$<PLATFORM_ID:Linux>:-fPIC>
             -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/${src}
+    DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS}
     COMMENT "bitcode: ${base} for ${PLI_TARGET_TRIPLE}"
     VERBATIM)
   list(APPEND DEFAULT_PLAT_BCS ${DEFAULT_BC_DIR}/${base}.bc)
