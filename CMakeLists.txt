@@ -381,7 +381,7 @@ option(PLI_ENABLE_MLIR "Build the experimental MLIR canary dialect (P2)" OFF)
 # pli runtime (C11). One source per section so the link drops unused pieces
 # (ADR-079); the sources feed only the embedded bitcode below — no archive or
 # runtime.bc file is built or installed (single-binary distribution). The
-# --runtime / --runtime-bc flags still accept user-supplied external files,
+# --runtime flag still accepts a user-supplied external archive,
 # and --no-bitcode-runtime materialises the link input from the embedded blob.
 
 # Warnings: -Wall -Wextra on the C++ driver (pli_runtime is C11 with its own style).

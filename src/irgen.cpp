@@ -2998,8 +2998,8 @@ std::string IRGen::run(HProgram& prog) {
   // I/O state) must be shared across units, so every other unit keeps
   // external pli_* references that the embedded copy satisfies.
   // -emit-llvm keeps the raw module (its IR goldens pin compiler output, not
-  // the runtime); the driver passes linkBitcode_ = false there. An empty
-  // runtimeBc_ selects the embedded blob; --runtime-bc names an external file.
+  // the runtime); the driver passes linkBitcode_ = false there. The embedded
+  // blob is always the source; --rt-platform swaps only the platform TU.
   if (linkBitcode_ && prog.mainProc)
     if (!linkRuntimeBitcode())
       return "";
@@ -3036,47 +3036,26 @@ std::string IRGen::run(HProgram& prog) {
 // as pli, and a stale bitcode would mis-compile silently. The whole runtime
 // is merged into the MAIN unit with external linkage, so every unit's pli_*
 // references resolve to this one shared copy and the runtime's global state
-// stays shared. An empty runtimeBc_ selects the embedded blob.
+// stays shared. The portable blob always comes from the embedded bundle
+// (single-binary distribution: no external runtime file is accepted).
 bool IRGen::linkRuntimeBitcode() {
-  // Split runtime: --runtime-bc replaces the whole runtime (portable and
-  // platform alike), so it cannot combine with --rt-platform.
-  if (!runtimeBc_.empty() && !platformBc_.empty()) {
-    d_.error({}, "cannot combine --runtime-bc with --rt-platform (--runtime-bc replaces the "
-                 "whole runtime, including the platform TU)",
-             "");
+  // Parse the embedded bundle for this target.
+  std::unique_ptr<llvm::Module> rt;
+  const pli::RuntimeBlob* blob = pli::selectRuntimeForTarget(llvm::Triple(triple_));
+  if (!blob) {
+    d_.error({}, "internal error: no embedded runtime for target '" + triple_ + "'", "");
     return false;
   }
-  // Load the runtime from disk (--runtime-bc) or from the embedded blob.
-  std::unique_ptr<llvm::Module> rt;
-  std::string rtName;
-  if (runtimeBc_.empty()) {
-    // Single-binary fallback: parse the embedded bundle for this target.
-    const pli::RuntimeBlob* blob = pli::selectRuntimeForTarget(llvm::Triple(triple_));
-    if (!blob) {
-      d_.error({}, "internal error: no embedded runtime for target '" + triple_ + "'", "");
-      return false;
-    }
-    llvm::MemoryBufferRef buf(
-        llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "pli_runtime.bc");
-    auto modOrErr = llvm::parseBitcodeFile(buf, ctx_);
-    if (!modOrErr) {
-      d_.error({}, "internal error: cannot parse the embedded runtime bitcode", "");
-      llvm::consumeError(modOrErr.takeError());
-      return false;
-    }
-    rt = std::move(*modOrErr);
-    rtName = "embedded pli_runtime.bc";
-  } else {
-    llvm::SMDiagnostic err;
-    rt = llvm::parseIRFile(runtimeBc_, err, ctx_);
-    if (!rt) {
-      d_.error({}, "internal error: cannot load the runtime bitcode '" + runtimeBc_ +
-                       "': " + err.getMessage().str(),
-               "");
-      return false;
-    }
-    rtName = runtimeBc_;
+  llvm::MemoryBufferRef buf(
+      llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "pli_runtime.bc");
+  auto modOrErr = llvm::parseBitcodeFile(buf, ctx_);
+  if (!modOrErr) {
+    d_.error({}, "internal error: cannot parse the embedded runtime bitcode", "");
+    llvm::consumeError(modOrErr.takeError());
+    return false;
   }
+  rt = std::move(*modOrErr);
+  const std::string rtName = "embedded pli_runtime.bc";
   // A missing or mismatched stamp means a foreign or stale runtime.bc: the
   // emitted IR syntax is tied to the LLVM pli was built against.
   std::string stamp = "unknown";
@@ -3157,12 +3136,11 @@ bool IRGen::linkRuntimeBitcode() {
   for (llvm::Function& f : mod_.functions())
     if (!f.isDeclaration() && sigs.count(f.getName().str()))
       applyRuntimeAttrs(&f);
-  // Split runtime: merge the platform TU the same way when the portable blob
-  // came from the embedded bundle (with --runtime-bc the file already holds
-  // the whole runtime). Its definitions satisfy the portable blob's
-  // pli_plat_*/thread references; anything still undefined afterwards is an
-  // incomplete custom platform, diagnosed by name.
-  if (runtimeBc_.empty()) {
+  // Split runtime: merge the platform TU the same way (custom --rt-platform
+  // file or the embedded default). Its definitions satisfy the portable
+  // blob's pli_plat_*/thread references; anything still undefined afterwards
+  // is an incomplete custom platform, diagnosed by name.
+  {
     std::string platErr;
     std::unique_ptr<llvm::Module> plat =
         pli::loadPlatformModule(ctx_, llvm::Triple(triple_), platformBc_, platErr);

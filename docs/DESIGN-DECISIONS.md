@@ -6382,7 +6382,9 @@ implements them against host libc/pthreads (or Win32); `pli_rt_port.h` and
 embedded via `gen_embed.py` (gained an `array_base` argument, ordered before
 the suffix so CMake's empty-arg dropping can never shift the stem). New
 driver flag `--rt-platform <file>` merges a custom platform TU instead of
-the default; `--runtime-bc` with `--rt-platform` is a diagnosed conflict.
+the default; the portable blob always comes from the embedded bundle — the
+old whole-blob `--runtime-bc` override is removed in the same change, leaving
+`--rt-platform` the single substitution point.
 `loadPlatformModule` / `isPlatformSeamSymbol` / `checkPlatformSeamComplete`
 (`src/codegen.{h,cpp}`, reused by IRGen) triple-check the file and name every
 still-undefined seam symbol instead of failing at the native link. Layering

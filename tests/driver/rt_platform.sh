@@ -5,7 +5,7 @@
 # plus a swappable platform TU (--rt-platform). A custom platform file that
 # includes the default TU links and runs identically (its marker symbol proves
 # the file is what got linked); an incomplete platform is rejected by name;
-# --runtime-bc and --rt-platform conflict; a missing platform file is an error.
+# a missing platform file is an error.
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
@@ -107,16 +107,6 @@ else
     || { echo "FAIL: missing 'incomplete platform runtime' diagnostic"; ok=0; }
   grep -q "pli_plat_free" "$OUT.empty.err" \
     || { echo "FAIL: diagnostic does not name a missing seam symbol"; ok=0; }
-fi
-
-# --- --runtime-bc and --rt-platform conflict ----------------------------------
-if $PLI "$OUT.pli" -o "$OUT.conflict$EXE" --runtime-bc "$OUT.plat.bc" \
-    --rt-platform "$OUT.plat.bc" 2> "$OUT.conflict.err"; then
-  echo "FAIL: --runtime-bc + --rt-platform unexpectedly accepted"
-  ok=0
-else
-  grep -q "cannot combine --runtime-bc with --rt-platform" "$OUT.conflict.err" \
-    || { echo "FAIL: missing flag-conflict diagnostic"; ok=0; }
 fi
 
 # --- missing platform file is a user error -----------------------------------
