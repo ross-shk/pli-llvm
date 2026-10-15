@@ -500,9 +500,26 @@ private:
                     llvm::BasicBlock* okBB);
   // Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94).
   llvm::Value* clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub);
-  // ZERODIVIDE value trap (rule 94): branch on `isZero`; the trap block
-  // routes through the ZERODIVIDE dispatch (abort when unhandled) and
-  // rejoins, resuming with `zero` instead of `computed`.
+  // ZERODIVIDE value trap (rule 94): branch before the division so the
+  // hot path has no safe-divisor select or resume select. beginZerodivide
+  // emits the cold/zero branch and returns the compute + join blocks; the
+  // caller emits the division in the compute block; endZerodivide emits
+  // the trap dispatch and a phi that resumes with `zero` on the faulting
+  // path and `computed` on the clean path.
+  struct ZdivCheck {
+    llvm::BasicBlock* trapBB = nullptr;
+    llvm::BasicBlock* computeBB = nullptr;
+    llvm::BasicBlock* okBB = nullptr;
+    llvm::Value* zero = nullptr;
+    int key = 0;
+    std::string tag;
+    bool active() const { return computeBB != nullptr; }
+  };
+  ZdivCheck beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
+                            int key, const std::string& tag);
+  llvm::Value* endZerodivide(ZdivCheck z, llvm::Value* computed);
+  // Constant-zero divisor fast path (rule 94): emit the trap directly and
+  // return `zero`, no phi or dead compute block.
   llvm::Value* zerodivideResume(llvm::Value* isZero, llvm::Value* computed, llvm::Value* zero);
   int ovSeq_ = 0; // disambiguates overflow trap blocks within a function
 

@@ -79,9 +79,10 @@ static bool platformTripleMatches(const llvm::Module& mod, const llvm::Triple& t
   return modTriple.getArch() == target.getArch() && osKey(modTriple.getOS()) == osKey(target.getOS());
 }
 
-// Strip the build host's target-cpu / target-features / probe-stack (same
-// three as the portable paths). No NoInline stamp: platform wrappers stay
-// inlinable into their portable callers, as when they were header-inline.
+// Strip the build host's target-cpu / target-features / probe-stack /
+// tune-cpu (same four as the portable paths). No NoInline stamp: platform
+// wrappers stay inlinable into their portable callers, as when they were
+// header-inline.
 static void stripPlatformAttrs(llvm::Module& mod) {
   for (auto& F : mod) {
     if (F.hasFnAttribute("target-cpu"))
@@ -90,6 +91,8 @@ static void stripPlatformAttrs(llvm::Module& mod) {
       F.removeFnAttr("target-features");
     if (F.hasFnAttribute("probe-stack"))
       F.removeFnAttr("probe-stack");
+    if (F.hasFnAttribute("tune-cpu"))
+      F.removeFnAttr("tune-cpu");
   }
 }
 
@@ -183,9 +186,12 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
   // linking. The bitcode is compiled for apple-m1 with probe-stack=__chkstk_darwin;
   // LLVM 23's AArch64 backend mis-handles these when a function has a large
   // stack frame ("Unsupported stack probing method"). Removing target-cpu,
-  // target-features, and probe-stack forces codegen to use only the
-  // TargetMachine's defaults. Mark them noinline so they stay as distinct,
-  // linkable runtime symbols (the dead-strip driver test relies on this).
+  // target-features, probe-stack, and tune-cpu forces codegen to use only the
+  // TargetMachine's defaults. Without stripping tune-cpu, LLVM's inliner
+  // refuses to honour AlwaysInline on the runtime wrappers (the host's
+  // tune-cpu differs from the link-time target). Mark them noinline so they
+  // stay as distinct, linkable runtime symbols (the dead-strip driver test
+  // relies on this).
   for (auto& F : **parsed) {
     if (F.hasFnAttribute("target-cpu"))
       F.removeFnAttr("target-cpu");
@@ -193,6 +199,8 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
       F.removeFnAttr("target-features");
     if (F.hasFnAttribute("probe-stack"))
       F.removeFnAttr("probe-stack");
+    if (F.hasFnAttribute("tune-cpu"))
+      F.removeFnAttr("tune-cpu");
     F.addFnAttr(llvm::Attribute::NoInline);
   }
   // Pull in only referenced runtime functions (replaces ADR-079 dead-strip).
@@ -257,8 +265,9 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
   if (!rt)
     return false;
   // Strip the same per-function attributes that break LLVM 23 codegen
-  // (see linkEmbeddedLibPLI): target-cpu/target-features/probe-stack from
-  // the apple-m1-compiled runtime trigger "Unsupported stack probing method".
+  // (see linkEmbeddedLibPLI): target-cpu/target-features/probe-stack/tune-cpu
+  // from the apple-m1-compiled runtime trigger "Unsupported stack probing
+  // method" and defeat AlwaysInline honoring by the inliner.
   for (auto& F : *rt) {
     if (F.hasFnAttribute("target-cpu"))
       F.removeFnAttr("target-cpu");
@@ -266,6 +275,8 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
       F.removeFnAttr("target-features");
     if (F.hasFnAttribute("probe-stack"))
       F.removeFnAttr("probe-stack");
+    if (F.hasFnAttribute("tune-cpu"))
+      F.removeFnAttr("tune-cpu");
     F.addFnAttr(llvm::Attribute::NoInline);
   }
   // Split runtime: merge the platform TU (default embedded blob or a custom

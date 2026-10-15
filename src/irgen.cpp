@@ -535,10 +535,14 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       // ON handler stack (rules (91)-(94)): readers only read the
       // thread-local stack, writers push/pop/reset it. Push may abort on
       // overflow, so it claims no willReturn; the rest always return.
-      {"pli_on_top_cond", {.willReturn = true, .mem = RtMemReadonly}},
-      {"pli_on_top_ctx", {.willReturn = true, .mem = RtMemReadonly}},
-      {"pli_on_top_fn", {.willReturn = true, .mem = RtMemReadonly}},
-      {"pli_on_top_error", {.willReturn = true, .mem = RtMemReadonly}},
+      // T2a: mark readers always-inline so LLVM folds the inlined scan into
+      // the trap block; T2b: the pair functions replace the two-scan dispatch.
+      {"pli_on_top_cond", {.willReturn = true, .alwaysInline = true, .mem = RtMemReadonly}},
+      {"pli_on_top_ctx", {.willReturn = true, .alwaysInline = true, .mem = RtMemReadonly}},
+      {"pli_on_top_fn", {.willReturn = true, .alwaysInline = true, .mem = RtMemReadonly}},
+      {"pli_on_top_pair", {.willReturn = true, .alwaysInline = true, .mem = RtMemArgReadWrite}},
+      {"pli_on_top_fn_pair", {.willReturn = true, .alwaysInline = true, .mem = RtMemArgReadWrite}},
+      {"pli_on_top_error", {.willReturn = true, .alwaysInline = true, .mem = RtMemReadonly}},
       {"pli_on_depth_error", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_on_pop_cond", {.willReturn = true, .mem = RtMemOtherMod}},
       {"pli_on_pop_error", {.willReturn = true, .mem = RtMemOtherMod}},
@@ -2565,10 +2569,13 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
     return;
   }
   const std::vector<llvm::Function*>& handlers = it->second;
+  // T2b: a single combined scan replaces the pli_on_top_cond + pli_on_top_ctx
+  // pair — one alloca + one call + one load instead of two noinline scans.
+  llvm::Value* ctxSlot =
+      b_.CreateAlloca(b_.getPtrTy(), nullptr, tag + ".ctxslot");
   llvm::Value* top =
-      b_.CreateCall(runtimeFn("pli_on_top_cond"), {i64((long long)key)}, tag + "top");
-  llvm::Value* topCtx =
-      b_.CreateCall(runtimeFn("pli_on_top_ctx"), {i64((long long)key)}, tag + "ctx");
+      b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot}, tag + "top");
+  llvm::Value* topCtx = b_.CreateLoad(b_.getPtrTy(), ctxSlot, tag + "ctx");
   llvm::Value* none = b_.CreateICmpEQ(top, i64(0), tag + "none");
   llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, tag + ".abort", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, tag + ".dispatch", curFn_);
@@ -2606,9 +2613,51 @@ llvm::Value* IRGen::clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub)
   return b_.CreateSelect(b_.CreateICmpSGT(lo, ub, "chi"), ub, lo, "cidx");
 }
 
-// ZERODIVIDE value trap (rule 94): branch on `isZero`; the trap block routes
-// through the ZERODIVIDE dispatch (abort when unhandled) and rejoins,
-// resuming with `zero` instead of `computed`.
+// ZERODIVIDE dispatch (rule 94): two-phase API that branches before the
+// division so the hot path carries no safe-divisor select or resume select.
+// beginZerodivide emits the isZero branch with cold weighting and switches the
+// insert point to the compute block; the caller emits the division there.
+// endZerodivide emits the trap dispatch (reusing emitCondTrap) and a phi at the
+// join that resumes with `zero` on every faulting path and `computed` on the
+// clean path. When checks are off, beginZerodivide returns an inactive handle
+// and endZerodivide returns `computed` untouched.
+IRGen::ZdivCheck IRGen::beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
+                                 int key, const std::string& tag) {
+  if (!zdivChecks())
+    return ZdivCheck{}; // (NOZERODIVIDE): the raw result stands (rules (60)-(63), ADR-112)
+  std::string zid = std::to_string(n_++);
+  llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "zd.trap." + zid, curFn_);
+  llvm::BasicBlock* computeBB = llvm::BasicBlock::Create(ctx_, "zd.compute." + zid, curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "zd.ok." + zid, curFn_);
+  // intent: the faulting-divisor edge is cold (~1% taken); weight the hot
+  // compute edge so the loop stays contiguous for the optimizer.
+  llvm::MDBuilder zmdb(ctx_);
+  if (auto* br = b_.CreateCondBr(isZero, trapBB, computeBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
+  b_.SetInsertPoint(computeBB);
+  return ZdivCheck{trapBB, computeBB, okBB, zero, key, tag};
+}
+llvm::Value* IRGen::endZerodivide(ZdivCheck z, llvm::Value* computed) {
+  if (!z.computeBB)
+    return computed; // (NOZERODIVIDE): the raw result stands (rules (60)-(63), ADR-112)
+  // intent: close the compute block and dispatch the trap. emitCondTrap creates
+  // handler blocks that branch to okBB; when no handler exists for `key` it
+  // emits abort+unreachable and okBB keeps only computeBB as a predecessor, so
+  // the phi trivially resolves to `computed`.
+  b_.CreateBr(z.okBB);
+  b_.SetInsertPoint(z.trapBB);
+  emitCondTrap(z.key, "pli_zerodivide", z.tag, z.okBB);
+  b_.SetInsertPoint(z.okBB);
+  llvm::PHINode* phi = b_.CreatePHI(computed->getType(), 1, "zdiv.r");
+  phi->addIncoming(computed, z.computeBB);
+  for (llvm::BasicBlock* pred : llvm::predecessors(z.okBB))
+    if (pred != z.computeBB)
+      phi->addIncoming(z.zero, pred);
+  return phi;
+}
+
+// Constant-zero divisor fast path (rule 94): emit the trap directly and
+// return `zero` — no phi or dead compute block.
 llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
                                      llvm::Value* zero) {
   if (!zdivChecks())
@@ -2616,8 +2665,6 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
   std::string zid = std::to_string(n_++);
   llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "zd.trap." + zid, curFn_);
   llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "zd.ok." + zid, curFn_);
-  // intent: the faulting-divisor edge is cold (~1% taken); weight the hot
-  // resume edge so the loop stays contiguous for the optimizer.
   llvm::MDBuilder zmdb(ctx_);
   if (auto* br = b_.CreateCondBr(isZero, trapBB, okBB))
     br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
@@ -3099,12 +3146,13 @@ bool IRGen::linkRuntimeBitcode() {
   // runtime's global state (CONTROLLED/ON stacks, I/O) stays shared across
   // units; the P0 side-table facts are re-applied so the optimizer keeps the
   // audited memory/alloc effects on the real bodies.
-  // Strip the build host's target-cpu / target-features / probe-stack from the
-  // pre-compiled runtime (IRGen P0, P5.1): if they survive into the merged
-  // module, LLVM's inliner refuses to honour the AlwaysInline that
-  // applyRuntimeAttrs stamps on the math wrappers (pli_sin, pli_mod_ll, ...)
-  // when the feature sets differ, and a probe-stack / target-cpu mismatch
-  // against the link-time TargetMachine breaks the backend on some targets.
+  // Strip the build host's target-cpu / target-features / probe-stack /
+  // tune-cpu from the pre-compiled runtime (IRGen P0, P5.1): if they survive
+  // into the merged module, LLVM's inliner refuses to honour the AlwaysInline
+  // that applyRuntimeAttrs stamps on the math wrappers (pli_sin, pli_mod_ll, ...)
+  // and the pair functions (pli_on_top_pair, pli_on_top_fn_pair) — tune-cpu
+  // differs between the build host and the link-time target and blocks inlining.
+  // A probe-stack / target-cpu mismatch also breaks the backend on some targets.
   // The TargetMachine re-applies its own defaults at codegen, so stripping
   // is sound on every target. Identical strip in linkEmbeddedLibPLI and
   // emitRuntimeObject (codegen.cpp).
@@ -3121,6 +3169,8 @@ bool IRGen::linkRuntimeBitcode() {
       F.removeFnAttr("target-features");
     if (F.hasFnAttribute("probe-stack"))
       F.removeFnAttr("probe-stack");
+    if (F.hasFnAttribute("tune-cpu"))
+      F.removeFnAttr("tune-cpu");
     F.addFnAttr(llvm::Attribute::NoInline);
   }
   // Align the data layout with ours first: both describe the same ABI, but
@@ -4671,7 +4721,12 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
     onHandlers_[keyId.first].push_back(
         llvm::Function::Create(ft, llvm::Function::InternalLinkage, name, &mod_));
-  }
+    // T1b (rule 94): mark handler functions AlwaysInline when checks are
+    // off (-O2/-O3 default) so trivial inline handlers fold into the trap
+    // block, eliminating call/ret overhead on the faulting path.
+    if (inlineProcs())
+      onHandlers_[keyId.first].back()->addFnAttr(llvm::Attribute::AlwaysInline);
+   }
 }
 
 // Fill every handler function body. A handler runs without the establishing
@@ -4770,8 +4825,11 @@ void IRGen::emitSignal(HStmt* s) {
     Val c = convert(code, Type::fixedBin(31, 0), s->loc);
     b_.CreateCall(runtimeFn("pli_set_oncode"), {c.reg});
   }
-  llvm::Value* fn = b_.CreateCall(runtimeFn("pli_on_top_fn"), {i64(s->condKey)}, "ontopfn");
-  llvm::Value* ctx = b_.CreateCall(runtimeFn("pli_on_top_ctx"), {i64(s->condKey)}, "ontopctx");
+  // T4: single combined scan replaces pli_on_top_fn + pli_on_top_ctx.
+  llvm::Value* fnSlot = b_.CreateAlloca(b_.getPtrTy(), nullptr, "on.ctxslot");
+  llvm::Value* fn =
+      b_.CreateCall(runtimeFn("pli_on_top_fn_pair"), {i64(s->condKey), fnSlot}, "ontopfn");
+  llvm::Value* ctx = b_.CreateLoad(b_.getPtrTy(), fnSlot, "ontopctx");
   llvm::Value* none =
       b_.CreateICmpEQ(fn, llvm::Constant::getNullValue(b_.getPtrTy()), "onnosystem");
   llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
@@ -9363,14 +9421,12 @@ Val IRGen::emitExpr(HExpr* e) {
             q = b_.CreateSDiv(ai, bi, "bin");
           }
         } else {
-          // UB-safe: sdiv by zero is UB, so the raw sdiv must not execute
-          // with a zero divisor even speculatively — LLVM would otherwise
-          // assume dz==false and delete the trap. Divide by a safe divisor
-          // (1 when dz) and discard via the resume select.
+          // Branch-then-compute: sdiv only runs in computeBB where bi != 0,
+          // eliminating the safe-divisor select from the hot path (T1a).
           llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-          llvm::Value* safe = b_.CreateSelect(dz, i64(1), bi, "zdiv.safe");
-          q = b_.CreateSDiv(ai, safe, "bin");
-          q = zerodivideResume(dz, q, i64(0));
+          ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey, "zd");
+          q = b_.CreateSDiv(ai, bi, "bin");
+          q = endZerodivide(zd, q);
         }
         v.reg = convert(Val{Type::fixedBin(63, 0), q}, e->convTo, e->loc).reg;
         return v;
@@ -10184,15 +10240,17 @@ Val IRGen::emitExpr(HExpr* e) {
       // FLOAT division (ADR-014): fdiv, zero-divide resumes with 0.0.
       llvm::Value* fzero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
       llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, fzero, "zdiv");
+      ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey, "zd");
       llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
-      r = zerodivideResume(dz, div, fzero);
+      r = endZerodivide(zd, div);
     } else {
       // Integer division (P3, ADR-190): sdiv truncates toward zero, matching
       // PL/I's FIXED division semantics (rule 121). Operands widened so
       // CreateSDiv is well-defined (32-bit sdiv has narrower range); widened to
       // i64 normally, i128 for a wide (>18 digit) DECIMAL common (ADR-191).
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0 — guarded
-      // to avoid CreateSDiv UB (LLVM: sdiv by zero is UB).
+      // by branching before the sdiv so the divisor is provably non-zero in the
+      // compute block (no safe-divisor select on the hot path, rule 94).
       bool wide = common.intBits() == 128; // ADR-191
       // Operands widened to the division width (i64, or i128 for a wide
       // >18-digit DECIMAL common) so CreateSDiv is well-defined and so the ICmp
@@ -10215,14 +10273,12 @@ Val IRGen::emitExpr(HExpr* e) {
           q = b_.CreateSDiv(ai, bi, "bin");
         }
       } else {
-        // UB-safe (see Convert fast path above): never sdiv by a possibly-
-        // zero divisor; use a safe divisor and discard via resume select.
-        // Wide-aware (ADR-191): guard compares z0 and safe-one matches width.
+        // Branch-then-compute: sdiv only runs when the divisor is non-zero,
+        // eliminating the safe-divisor select from the hot path (T1a).
         llvm::Value* dz = b_.CreateICmpEQ(bi, z0, "zdiv");
-        llvm::Value* one = wide ? i128(1) : i64(1);
-        llvm::Value* safe = b_.CreateSelect(dz, one, bi, "zdiv.safe");
-        q = b_.CreateSDiv(ai, safe, "bin");
-        q = zerodivideResume(dz, q, z0);
+        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey, "zd");
+        q = b_.CreateSDiv(ai, bi, "bin");
+        q = endZerodivide(zd, q);
       }
       if (wide)
         r = q; // already at common's i128 width and scale
@@ -10704,8 +10760,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     if (common.k == TK::Float) {
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
       llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
+      ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey, "mod_zd");
       llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_dd"), {av.reg, bv.reg}, "mod");
-      v.reg = zerodivideResume(dz, m, flt(0.0));
+      v.reg = endZerodivide(zd, m);
     } else {
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
       llvm::Value* avi = toI64(av);
@@ -10760,13 +10817,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             m = b_.CreateSelect(nz, b_.CreateSelect(needAdj, adj, r), r, "mods");
           }
         }
-      } else {
+        } else {
         // General path: pli_mod_ll is AlwaysInline (Task 5), so LLVM can
         // inline and fold the body when the divisor is known at -O2+.
         llvm::Value* bi = toI64(bv);
         llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
+        ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey, "mod_zd");
         m = b_.CreateCall(runtimeFn("pli_mod_ll"), {avi, bi});
-        m = zerodivideResume(dz, m, i64(0));
+        m = endZerodivide(zd, m);
       }
       llvm::Value* m64 = b_.CreateTrunc(m, b_.getInt32Ty(), "mod32");
       // Keep the value's LLVM width in sync with e->ty for later compares.
@@ -10811,8 +10869,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     v.ty = common;
     // ZERODIVIDE (rule 94): as for `/`, a zero divisor traps, resuming with 0.
     llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
+    ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey, "div_zd");
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
-    v.reg = zerodivideResume(dz, div, flt(0.0));
+    v.reg = endZerodivide(zd, div);
     result = v;
     return true;
   }

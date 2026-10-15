@@ -154,6 +154,8 @@ PLI_FN(pli_set_oncode, VOID, (I32))
 PLI_FN(pli_on_push_cond, VOID, (I64, I64, PTR, PTR)) /* ON CONDITION: key, id, handler fn, capture ctx */
 PLI_FN(pli_on_pop_cond, VOID, (I64))       /* REVERT CONDITION: drop topmost key */
 PLI_FN(pli_on_top_cond, I64, (I64))        /* SIGNAL dispatch: topmost key id */
+PLI_FN(pli_on_top_pair, I64, (I64, PTR))   /* T2b: combined id + ctx scan (emitCondTrap) */
+PLI_FN(pli_on_top_fn_pair, PTR, (I64, PTR)) /* T2b/T4: combined fn + ctx scan (emitSignal) */
 
 PLI_FN(pli_alloc, PTR, (I64))                         /* ALLOCATE (87) */
 PLI_FN(pli_free, VOID, (PTR))                         /* FREE (90) */

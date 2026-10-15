@@ -48,7 +48,9 @@ void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
     pli_abort("ON ERROR stack overflow");
   }
 }
-/* Topmost id for a key, or 0 when none (or SYSTEM) is established for it. */
+/* Topmost id for a key, or 0 when none (or SYSTEM) is established for it.
+ * T2a: static inline so the scan folds into the ABI wrapper at C-compile time. */
+static inline __attribute__((always_inline))
 long long rt_pli_on_top(long long key) {
   for (int i = pli_err_sp - 1; i >= 0; --i)
     if (pli_err_stack[i].key == key)
@@ -56,6 +58,7 @@ long long rt_pli_on_top(long long key) {
   return 0;
 }
 /* Topmost handler address for a key, or NULL when none (or SYSTEM). */
+static inline __attribute__((always_inline))
 void *rt_pli_on_top_fn(long long key) {
   for (int i = pli_err_sp - 1; i >= 0; --i)
     if (pli_err_stack[i].key == key)
@@ -63,6 +66,7 @@ void *rt_pli_on_top_fn(long long key) {
   return NULL;
 }
 /* Capture context of the topmost handler for a key (NULL when none). */
+static inline __attribute__((always_inline))
 void *rt_pli_on_top_ctx(long long key) {
   for (int i = pli_err_sp - 1; i >= 0; --i)
     if (pli_err_stack[i].key == key)
@@ -78,6 +82,31 @@ void rt_pli_on_pop(long long key) {
       --pli_err_sp;
       return;
     }
+}
+/* T2b: combined scan — return the top id for `key` and write its capture
+ * context through `ctx_out` in a single pass, halving the per-fault stack
+ * walks versus the separate pli_on_top_cond + pli_on_top_ctx pair. */
+long long pli_on_top_pair(long long key, char *ctx_out) {
+  for (int i = pli_err_sp - 1; i >= 0; --i)
+    if (pli_err_stack[i].key == key) {
+      *(void **)ctx_out = pli_err_stack[i].ctx;
+      return pli_err_stack[i].id;
+    }
+  *(void **)ctx_out = NULL;
+  return 0;
+}
+/* T2b/T4: combined scan — return the top handler address for `key` and
+ * write its capture context through `ctx_out` in a single pass, halving
+ * the per-SIGNAL stack walks versus the separate pli_on_top_fn +
+ * pli_on_top_ctx pair. */
+char *pli_on_top_fn_pair(long long key, char *ctx_out) {
+  for (int i = pli_err_sp - 1; i >= 0; --i)
+    if (pli_err_stack[i].key == key) {
+      *(void **)ctx_out = pli_err_stack[i].ctx;
+      return (char *)pli_err_stack[i].fn;
+    }
+  *(void **)ctx_out = NULL;
+  return NULL;
 }
 void pli_on_push_error(long long id, char *fn, char *ctx) {
   pli_on_push(0, id, (void*)fn, (void*)ctx);
