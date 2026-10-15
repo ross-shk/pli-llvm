@@ -92,10 +92,18 @@ jobs:
       - name: Strip and pack into tarball (Unix)
         if: runner.os != 'Windows'
         run: |
+          # Bundle the LLVM closure (lld + libLLVM + libz3 + libzstd) into the
+          # tarball so the release runs standalone where LLVM isn't installed;
+          # brew/apt ship those shared-only, so a single-file static link is
+          # impossible from packages (scripts/bundle_standalone.sh).
+          case "${{ runner.os }}" in
+            macOS) which patchelf >/dev/null 2>&1 || true ;;
+            Linux) sudo apt-get install -y patchelf ;;
+          esac
           strip -o build/cmake/pli.stripped build/cmake/pli
           mkdir -p ${{ matrix.platdir }}
-          cp build/cmake/pli.stripped ${{ matrix.platdir }}/pli
-          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli
+          sh scripts/bundle_standalone.sh build/cmake/pli.stripped ${{ matrix.platdir }}
+          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}
 
       - name: Pack into archives (Windows)
         if: runner.os == 'Windows'
@@ -111,7 +119,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n   end smoke;\n' > /tmp/smoke.pli
-          ./build/cmake/pli.stripped /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+          ./${{ matrix.platdir }}/pli /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'

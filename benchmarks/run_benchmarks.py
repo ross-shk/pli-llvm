@@ -159,7 +159,7 @@ def get_machine_info() -> Dict:
     except Exception:
         info["clang_version"] = "unknown"
     # Compiler identity for apples-to-apples regression comparison: the
-    # baked-in `plic --version` string does NOT change across rebuilds, so
+    # baked-in `pli --version` string does NOT change across rebuilds, so
     # record the git hash plus the actual binary mtime. A differing id in
     # the previous run means deltas mix compiler changes with noise.
     try:
@@ -169,10 +169,10 @@ def get_machine_info() -> Dict:
     except Exception:
         git_hash = "unknown"
     try:
-        plic_mtime = PLI.stat().st_mtime_ns
+        pli_mtime = PLI.stat().st_mtime_ns
     except OSError:
-        plic_mtime = 0
-    info["compiler_id"] = f"{git_hash}:{plic_mtime}"
+        pli_mtime = 0
+    info["compiler_id"] = f"{git_hash}:{pli_mtime}"
     return info
 
 

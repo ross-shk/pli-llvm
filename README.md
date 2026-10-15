@@ -2,18 +2,18 @@
 
 A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). Currently supports about 80% of **TR 25.084** features with some features added from IBM Enterprise PL/I.
 
-**Single-binary distribution** (like Go/Zig) — `pli` embeds the PL/I runtime bitcode (`pli_runtime.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a [release](https://github.com/ross-shk/pli-llvm/releases/tag/v0.1.0) archive, extract the `pli` binary and put it in the executable path, on the Mac (Apple Silicon):
+**Single-command distribution** (like Go/Zig) — `pli` embeds the PL/I runtime bitcode (`pli_runtime.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a [release](https://github.com/ross-shk/pli-llvm/releases/tag/v0.1.0) archive, extract it and put the whole directory in the executable path, on the Mac (Apple Silicon):
 
 ```sh
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-darwin-arm64.tar.gz \
-  | tar xzf - && sudo mv darwin-arm64/pli /usr/local/bin/
+  | tar xzf - && sudo mv darwin-arm64 /usr/local/pli && sudo ln -s /usr/local/pli/pli /usr/local/bin/
 ```
 
 or on Linux (x86_64):
 
 ```
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-linux-x86_64.tar.gz \
-  | tar xzf - && sudo mv linux-x86_64/pli /usr/local/bin/
+  | tar xzf - && sudo mv linux-x86_64 /usr/local/pli && sudo ln -s /usr/local/pli/pli /usr/local/bin/
 ```
 
 or on Windows (x86_64):
@@ -21,10 +21,10 @@ or on Windows (x86_64):
 ```bat
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -o pli.zip
 tar -xf pli.zip
-move windows-x86_64\pli.exe %USERPROFILE%\bin\
+move windows-x86_64 %USERPROFILE%\pli
 ```
 
-The Windows ZIP contains just `pli.exe` (self-contained, with embedded runtime bitcode). `curl` and `tar` ship with Windows 10+.
+Keep `pli` and the `lib/` folder it ships with together. On Unix the archive bundles the LLVM closure (`libLLVM`, `liblld`, `libz3`, `libzstd`) that brew/apt ship shared-only, so the release runs standalone where LLVM isn't installed; `lib/` must stay next to the `pli` binary. The Windows ZIP contains just `pli.exe` (fully self-contained). `curl` and `tar` ship with Windows 10+.
 
 A "Hello, world!" program:
 
