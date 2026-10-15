@@ -6304,3 +6304,116 @@ declared in `pli_rt_state.h` so `rt_core.c` and `rt_file.c` can call it.
 than C, which still pays `printf` format-parse overhead per call). All 589
 tests pass; `--checks-forced` parity is exact across every target benchmark;
 the `-O2` geomean improves as a direct result.
+
+---
+
+## ADR-221 — Runtime portability layer (`pli_rt_port.h`)
+
+**Context.** The runtime (`runtime/rt_*.c`) carried platform conditionals at
+every call site: `popen`/`pclose` plus the `WIFEXITED`/`WEXITSTATUS` dance in
+`rt_core.c`, `localtime_r`/`localtime_s` (3 sites) in `rt_string.c`, bare
+`malloc`/`free`/`calloc`/`realloc` in `rt_storage.c`, and raw
+`fopen`/`fclose`/`fread`/`fwrite`/`getc`/`getchar`/`fputc`/`fflush`/`fprintf`
+in `rt_stream.c`/`rt_file.c`/`rt_cond.c`, with a per-function `#ifdef _WIN32`
+in every body of `sync/pli_thread.h`. New runtime code had to remember both
+branches, and the single-bitcode-blob embedding model (all `.c` files compile
+to one `pli_runtime.bc` per target triple) rewards one branching point, since
+`-target <triple>` predefines `_WIN32` for Windows targets and each `.bc`
+inlines the correct branch. This completes the runtime-reduction plan's
+remaining phases: 5 (allocation), 7 (time), 8 (process I/O), 9 (FILE I/O).
+
+**Decision.** New header `runtime/pli_rt_port.h`, in the spirit of the
+`pli_rt_state.h` libc ports (Phases 1 & 4): `static inline` wrappers
+(`pli_malloc`, `pli_calloc`, `pli_realloc`, `pli_popen`, `pli_pclose`,
+`pli_localtime`, `pli_fopen`, `pli_fclose`, `pli_fread`, `pli_fwrite`,
+`pli_fgetc`, `pli_getchar`, `pli_fputc`, `pli_fflush`, `pli_ferror`,
+`pli_fprintf`), each with one platform branch at its definition site. Every
+`rt_*.c` reaches it transitively via `pli_rt.h`/`pli_rt_state.h` and includes
+no system header of its own. `sync/pli_thread.h` keeps its `static inline` /
+no-link-time-footprint property but collapses the per-function `#ifdef`s into
+a single `#if`/`#else` block (Windows section, POSIX section, then shared
+platform-independent wrappers). `pli_fopen` is a single forward — record
+files already pass `"rb"`/`"wb"` and stream files `"r"`/`"w"`, so mode choice
+stays with the callers. `pli_fprintf` forwards via `vfprintf` (no
+`__builtin_va_list` ABI exposure in bitcode). `pli_pclose` maps `pclose`'s
+`-1` through before touching `WIFEXITED`.
+
+**Consequences.** Zero `#ifdef` in any `rt_*.c` outside the port header (the
+only remaining `#if`s are the `PLI_LLVM_VERSION` fallback in `rt_core.c` and
+the musl float-model guards in `rt_mathport.c`, neither platform-specific);
+`_WIN32` appears exactly once in `pli_thread.h`. The two sanctioned raw calls
+are the wrapper bodies themselves: `exit()` in `pli_exit` (`rt_core.c`) and
+`free()` in `pli_free` (`rt_storage.c`) — self-wrapping either would recurse.
+No CMake change: `runtime/` was already on the bitcode include path. Full
+suite green; the Windows branches are byte-identical to the previously inline
+code, syntax-checked against stub headers since no Windows SDK is present
+locally (CI covers clang-cl).
+
+**Rejected.** A `pli_exit_proc` wrapper duplicating `pli_exit` (one exit path
+is enough); a `pli_free` in the port header (collides with the ABI's
+`pli_free(char *)` for `FREE`, rule (90) — the ABI function is the single
+free wrapper); split `pli_thread_win32.c`/`pli_thread_posix.c` backends
+(out-of-line symbols would break the single-bitcode-blob embedding);
+`windows.h`/`unistd.h` in the port header (nothing there needs them —
+`Sleep`/`nanosleep` live in `pli_thread.h` — and `windows.h` risks macro
+pollution in every TU).
+
+---
+
+## ADR-222 — Split runtime: portable blob plus swappable platform TU
+
+**Context.** ADR-221 centralised every platform branch behind `pli_rt_port.h`,
+but the seam was `static inline`: header-baked, un-overridable, and identical
+in every TU. A custom runtime (freestanding target, alternate libc, or a
+platform without `popen`/threads such as wasm) still meant reimplementing the
+whole ~7,200-line runtime, even though only ~350 lines of it touch the host.
+Meanwhile the driver already had whole-blob override (`--runtime-bc`), which
+is the wrong granularity: it forces the author to re-supply the portable
+half too.
+
+**Decision.** Split the seam into real symbols. New contract header
+`runtime/pli_rt_plat.h` declares everything the portable TUs import from the
+host: 19 `pli_plat_*` functions (allocation, FILE I/O, `popen`/`pclose`,
+`localtime`, exit/abort raw ends) plus the 13-function threading backend
+(same names as before, now out-of-line). New `runtime/rt_plat_default.c`
+implements them against host libc/pthreads (or Win32); `pli_rt_port.h` and
+`sync/pli_thread.h` are deleted. CMake builds two blobs per triple —
+`pli_runtime.bc` (portable, unchanged name) and `pli_rtplat.bc` — both
+embedded via `gen_embed.py` (gained an `array_base` argument, ordered before
+the suffix so CMake's empty-arg dropping can never shift the stem). New
+driver flag `--rt-platform <file>` merges a custom platform TU instead of
+the default; the portable blob always comes from the embedded bundle — the
+old whole-blob `--runtime-bc` override is removed in the same change, leaving
+`--rt-platform` the single substitution point.
+`loadPlatformModule` / `isPlatformSeamSymbol` / `checkPlatformSeamComplete`
+(`src/codegen.{h,cpp}`, reused by IRGen) triple-check the file and name every
+still-undefined seam symbol instead of failing at the native link. Layering
+rule, verified with `llvm-nm`: portable defines zero seam symbols, platform
+references zero portable symbols — calls go strictly down. `pli_alloc` /
+`pli_free` / `pli_exit` / `pli_abort` stay portable ABI entry points; only
+their raw ends (`pli_plat_free`, `pli_plat_exit`, `pli_plat_abort`) are seam.
+`time()` stays a direct call (branch-free standard C, no seam needed).
+`tests/driver/rt_platform.sh` pins the contract: identical output under the
+default and a custom platform, a marker function proving the custom TU runs,
+the archive path, by-name rejection of an incomplete platform, the flag
+conflict, and the missing-file error.
+
+**Consequences.** Custom platforms implement 32 documented symbols instead of
+the full runtime; the default path is behavior-identical (full suite green,
+including the new test). The extra call layer on per-character I/O paths
+costs nothing measurable: `io_throughput` at `-O2` is 0.84x vs the 0.83x
+ADR-220 baseline (second run; a first run read 0.94x inside the run's own
+±10% min/max spread — machine noise, bulk `fwrite` dominates). Platform
+functions deliberately skip the portable blob's `NoInline` stamp so they stay
+inlinable into portable callers, as when they were header-inline. Cross
+targets without `PLI_CROSS_BITCODE` keep the existing host-blob fallback,
+now for both blobs.
+
+**Rejected.** `--rt-port-header` source redirect (needs runtime sources plus
+a clang invocation at user-compile time — far more moving parts than linking
+a second blob); weak-symbol overrides (COFF `/alternatename` fragility, and
+half-overrides would fail silently where whole-blob swap names the missing
+symbol); moving `pli_alloc`/`pli_free`/`pli_exit`/`pli_abort` into the
+platform TU (would make platform code call back up into portable helpers —
+the seam stays strictly one-directional); `NoInline` on platform functions
+(would forbid the inlining the old header-inline world had for free).

@@ -15,6 +15,9 @@
 #include <stdio.h>
 
 #include "pli_wide128.h" /* PliI128 for the wide DECIMAL helpers below */
+#include "pli_rt_plat.h" /* platform seam: every TU gets the pli_plat_* and
+                           * threading declarations, so rt_*.c files include
+                           * no system headers of their own. */
 
 /* ---------------------------------------------------------------------------
  * Ported libc primitives (runtime-reduction plan, Phases 1 & 4).

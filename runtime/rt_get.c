@@ -3,7 +3,8 @@
 /* rt_get.c — PL/I runtime library (pli_runtime): list/data-directed input. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-#include <stdio.h>
+/* EOF/size_t arrive via the platform seam headers; input itself routes
+ * through rt_next_char, so no stdio calls remain here. */
 
 /* List-directed input (rule 109): read the next whitespace/comma-delimited
  * token from SYSIN (stdin) into buf (nul-terminated). A ';' also terminates

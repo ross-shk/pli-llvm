@@ -7,9 +7,9 @@
 # unit never calls, so a LinkOnlyNeeded pull would duplicate them); an
 # explicit --runtime archive stays on the link line, never pulled once the
 # symbols are defined; --no-bitcode-runtime keeps every unit's references
-# external, resolved at link from the embedded blob; an external bitcode file
-# not built by this LLVM is diagnosed at load time; a missing explicitly
-# named runtime.bc is an error.
+# external, resolved at link from the embedded blob. The embedded bundle is
+# the only source: there is no external-runtime-file option (a custom
+# platform TU goes through --rt-platform, covered by rt_platform.sh).
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
@@ -78,27 +78,6 @@ EOF
 $PLI "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi$EXE" \
   || { echo "FAIL: multi-unit bitcode link"; ok=0; }
 check "multi-unit run" "$($OUT.multi$EXE | tr -d '\r\n')" "lib unitPASS bitcode_runtime"
-
-# --- a runtime.bc that this pli did not build is rejected at load -----
-cat > "$OUT.fake.ll" <<'EOF'
-define void @not_pli_runtime() {
-  ret void
-}
-EOF
-if $PLI "$OUT.pli" -o "$OUT.stamp" --runtime-bc "$OUT.fake.ll" \
-     >/dev/null 2>"$OUT.stamp.err"; then
-  echo "FAIL: unstamped runtime.bc not diagnosed"
-  ok=0
-else
-  grep -q "LLVM" "$OUT.stamp.err" || { echo "FAIL: version-stamp diagnostic missing"; ok=0; }
-fi
-
-# --- an explicitly named runtime.bc that does not exist is an error ----
-if $PLI "$OUT.pli" -o "$OUT.missing" --runtime-bc "$OUTDIR/nope.bc" \
-     >/dev/null 2>"$OUT.missing.err"; then
-  echo "FAIL: missing --runtime-bc not diagnosed"
-  ok=0
-fi
 
 [ "$ok" -eq 1 ] && echo PASS
 exit 0

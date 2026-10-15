@@ -44,13 +44,14 @@ struct Val {
 class IRGen {
 public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
-        bool noConvChecks = false, bool noSubChecks = false, std::string runtimeBc = "",
+        bool noConvChecks = false, bool noSubChecks = false,
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
-        std::map<std::string, LowerMode> perOpOverrides = {})
+        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "")
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
         noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
-        noConvChecks_(noConvChecks), runtimeBc_(std::move(runtimeBc)), linkBitcode_(linkBitcode),
-        lowerMode_(lowerMode), perOpOverrides_(std::move(perOpOverrides)) {}
+        noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
+        platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
+        perOpOverrides_(std::move(perOpOverrides)) {}
 
   std::string run(HProgram& prog);
 
@@ -798,19 +799,20 @@ private:
   // AUTOMATIC AREA variables of the procedure being emitted (rule (20)): the
   // runtime region is created at entry and destroyed on every exit path.
   std::vector<Symbol*> areaLocals_;
-  // Bitcode runtime (OPTIMIZATION.md §10, P3): runtimeBc_ names an external
-  // bitcode file (--runtime-bc; empty selects the embedded blob);
-  // linkBitcode_ requests linking its pli_* definitions
-  // into the module. Only the MAIN unit embeds (runtime globals must stay
-  // shared across units); an explicit --runtime archive stays on the final
-  // link line where its members are simply never pulled once the symbols are
-  // defined.
-  std::string runtimeBc_;
+  // Bitcode runtime (OPTIMIZATION.md §10, P3): the embedded blob's pli_*
+  // definitions merge into the module when linkBitcode_ requests it. Only
+  // the MAIN unit embeds (runtime globals must stay shared across units);
+  // an explicit --runtime archive stays on the final link line where its
+  // members are simply never pulled once the symbols are defined.
   bool linkBitcode_ = false;
+  // Split runtime: platformBc_ names a custom platform TU (--rt-platform;
+  // empty selects the embedded pli_rtplat.bc), merged alongside the portable
+  // blob so its pli_plat_*/thread definitions resolve in one step.
+  std::string platformBc_;
   LowerMode lowerMode_;
   std::map<std::string, LowerMode> perOpOverrides_;
-  // Parse the runtime bitcode (or the embedded blob when runtimeBc_ is empty), check
-  // its LLVM stamp and target triple, merge the whole
+  // Parse the embedded runtime blob, check its LLVM stamp and target triple,
+  // merge the whole
   // runtime into the module, and re-apply the P0 side-table facts to the real
   // bodies. The embedded definitions keep their external linkage so every
   // unit's pli_* references resolve to this one shared copy (runtime globals

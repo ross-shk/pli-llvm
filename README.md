@@ -101,7 +101,7 @@ See [Programming Guide](./guides/programming.md) for guidance and more examples,
 - **macOS** (Intel, Apple Silicon): clang
 - **Windows** (x86_64, ARM64): clang-cl + lld-link + Ninja
 
-Threading is abstracted in `runtime/sync/pli_thread.h` (POSIX pthreads on Linux/macOS, Win32 primitives on Windows).
+Threading is abstracted in the platform seam (`runtime/pli_rt_plat.h`, implemented by `runtime/rt_plat_default.c`: POSIX pthreads on Linux/macOS, Win32 primitives on Windows; replaceable via `--rt-platform`).
 
 ### Requirements
 
@@ -270,7 +270,7 @@ Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *
 | Path                          | Contents                                                                                                                |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `src/`                        | Compiler: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target, codegen, embedded runtime                 |
-| `runtime/`                    | `pli_runtime` (I/O, strings, conditions, storage, math, tasks) + `sync/pli_thread.h` threading abstraction              |
+| `runtime/`                    | `pli_runtime` (I/O, strings, conditions, storage, math, tasks) + `pli_rt_plat.h` platform seam              |
 | `tests/`                      | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`, `preprocessor`, `multimodule`, `corner_cases`) |
 | `CMakeLists.txt`              | Canonical build: LLVM C++ API + `lld`, embedded runtime bitcode                                                         |
 | `docs/` / `guides/`           | Architecture, ADRs, grammar coverage, compliance report, programming guides                                             |

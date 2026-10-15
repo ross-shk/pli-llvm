@@ -56,14 +56,10 @@
 #define PLI_RUNTIME_LIB ""
 #endif
 
-// Bitcode runtime source (OPTIMIZATION.md §10, P3): empty by default, which
-// selects the embedded blob. IRGen merges the pli_* definitions from it into
-// the MAIN unit so clang sees real bodies; --no-bitcode-runtime keeps every
-// unit's references external for the link step, and --runtime-bc supplies an
-// external bitcode file instead.
-#ifndef PLI_RUNTIME_BC
-#define PLI_RUNTIME_BC ""
-#endif
+// Bitcode runtime source (OPTIMIZATION.md §10, P3): always the embedded
+// blob. IRGen merges the pli_* definitions from it into the MAIN unit so
+// clang sees real bodies; --no-bitcode-runtime keeps every unit's references
+// external for the link step instead.
 
 // Version and LLVM identity baked in at build time (self-contained milestone:
 // `pli version` reports the toolchain without invoking sub-tools).
@@ -136,8 +132,10 @@ static void usage() {
          "                   keep pli_* references external and resolve them at link\n"
          "                   from the embedded runtime instead of merging the\n"
          "                   definitions into the MAIN unit\n"
-         "  --runtime-bc <f> path to an external runtime bitcode file (default: none;\n"
-         "                   the embedded runtime blob is merged instead)\n"
+  "  --rt-platform <f>\n"
+  "                   path to a custom platform bitcode file implementing\n"
+  "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
+  "                   pli_rtplat.bc is merged instead)\n"
          "  --flto=thin|full explicit ThinLTO / full LTO on the compile+link steps\n"
          "  --fprofile-generate  instrument the build for PGO (writes a profile)\n"
          "  --fprofile-use=<d>   rebuild using a merged profile (llvm-profdata out)\n"
@@ -275,11 +273,11 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool keepLL, bool verbose, bool noSizeChecks, bool noZdivChecks,
                        bool noConvChecks, bool noSubChecks, const std::string& optLevel,
                        const std::string& backendFlags, const fs::path& keepLLDir, int fileIndex,
-                       std::string* outObj, const std::string& runtimeBc, bool linkBitcode,
+                       std::string* outObj, bool linkBitcode,
                        LowerMode lowerMode = LowerMode::Auto,
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
                        bool linkRuntimeIn = false, bool forceClangPipeline = false,
-                       bool marchNative = false) {
+                       bool marchNative = false, const std::string& platformBc = "") {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -340,7 +338,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   if (emitLLVM || emitMlir) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                runtimeBc, false, lowerMode, perOpOverrides);
+                false, lowerMode, perOpOverrides);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -387,18 +385,18 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // Explicit PGO/LTO (forceClangPipeline) always uses the clang pipeline so
   // backendFlags reach the compile step (the in-process path takes none).
   if (!forceClangPipeline) {
-    IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
-              linkBitcode, lowerMode, perOpOverrides);
+    IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
+              linkBitcode, lowerMode, perOpOverrides, platformBc);
     if (auto om = ipg.takeModule(hir)) {
       bool rtOk = true;
 #if PLI_HAVE_LLD
       // Single-module fast path: runtime linked at BC level (never `-c`).
-      // Bitcode (linkBitcode, embedded or --runtime-bc) already merged the
-      // runtime via IRGen, so the embedded blob is only linked when it did not.
+      // Bitcode (linkBitcode) already merged the runtime via IRGen, so the
+      // embedded blob is only linked when it did not.
       if (linkRuntimeIn && !linkBitcode && !compileOnly) {
         std::string rtErr;
         llvm::Triple targetTriple(triple);
-        rtOk = pli::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr);
+        rtOk = pli::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr, platformBc);
         if (!rtOk)
           std::cerr << "pli: " << rtErr << "\n";
       }
@@ -447,8 +445,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
 
   // Fallback: textual IR assembled by the backend clang.
-  IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, runtimeBc,
-              linkBitcode, lowerMode, perOpOverrides);
+  IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
+              linkBitcode, lowerMode, perOpOverrides, platformBc);
   std::string ir = irgen.run(hir);
   if (!diags.ok())
     return false;
@@ -486,7 +484,10 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
 int main(int argc, char** argv) {
   std::vector<std::string> inputs;
-  std::string output, runtimeLib = PLI_RUNTIME_LIB, runtimeBc = PLI_RUNTIME_BC, triple;
+  std::string output, runtimeLib = PLI_RUNTIME_LIB, triple;
+  // Split runtime: custom platform TU (--rt-platform); empty selects the
+  // embedded pli_rtplat.bc. Always explicit (no baked-in default path).
+  std::string platformBc;
   std::string clangPath = PLI_CLANG;
   std::string sysparm;
   bool sysparmExplicit = false;
@@ -498,7 +499,7 @@ int main(int argc, char** argv) {
   bool marchNative = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
-  bool runtimeBcExplicit = false, useBitcode = true, pgoGenerate = false;
+  bool useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
   // Experimental lowering mode (design-docs/mlir-runtime-migration-plan.md §5.2).
@@ -535,9 +536,10 @@ int main(int argc, char** argv) {
       runtimeExplicit = true;
     } else if (a == "--no-bitcode-runtime")
       useBitcode = false;
-    else if (a == "--runtime-bc") {
-      runtimeBc = next("--runtime-bc");
-      runtimeBcExplicit = true;
+    else if (a == "--rt-platform") {
+      platformBc = next("--rt-platform");
+    } else if (a.rfind("--rt-platform=", 0) == 0) {
+      platformBc = a.substr(14);
     } else if (a == "--flto=thin" || a == "--flto=full")
       ltoKind = a.substr(7);
     else if (a == "--fprofile-generate")
@@ -754,24 +756,18 @@ int main(int argc, char** argv) {
     linkArgs.push_back("-L" + d.string());
 
   // Single-binary distribution: the runtime ships embedded in the binary,
-  // so there is no installed-runtime lookup. runtimeLib/runtimeBc are either
-  // the baked-in build-tree defaults (development) or explicit --runtime /
-  // --runtime-bc paths (external option). A missing default falls back to
-  // the embedded blob below; a missing explicit path is a user error.
-  // Bitcode runtime (OPTIMIZATION.md §10, P3): by default IRGen merges the
-  // pli_* definitions out of runtime.bc into the MAIN unit (lib units keep
-  // external references resolved by that one shared copy).
+  // so there is no installed-runtime lookup. runtimeLib is either the
+  // baked-in build-tree default (development) or an explicit --runtime path
+  // (external option). Bitcode runtime (OPTIMIZATION.md §10, P3): by default
+  // IRGen merges the pli_* definitions out of the embedded blob into the
+  // MAIN unit (lib units keep external references resolved by that one
+  // shared copy).
   // --no-bitcode-runtime always selects the archive path.
-  // Only consider runtime.bc when the bitcode runtime is actually used.
-  if (useBitcode && !runtimeBc.empty() && !fs::exists(runtimeBc)) {
-    if (runtimeBcExplicit) {
-      std::cerr << "pli: no such runtime bitcode: " << runtimeBc << "\n";
-      return 2;
-    }
-    if (verbose)
-      std::cerr << "pli: runtime.bc not found at " << runtimeBc
-                << "; falling back to the embedded runtime\n";
-    runtimeBc.clear();
+  // Split runtime: a custom platform file must exist; there is no baked-in
+  // a user error. The embedded pli_rtplat.bc covers the empty case.
+  if (!platformBc.empty() && !fs::exists(platformBc)) {
+    std::cerr << "pli: no such platform runtime: " << platformBc << "\n";
+    return 2;
   }
 
   Preprocessor preprocessor;
@@ -873,11 +869,12 @@ int main(int argc, char** argv) {
     keepLLDir = ".";
   // Runtime-once fast path: one PL/I input becoming the executable directly.
   // Bitcode runtime: the MAIN unit embeds the pli_* definitions from the
-  // embedded blob (or an explicit --runtime-bc file); an explicit --runtime
+  // embedded blob; an explicit --runtime
   // archive stays on the link line, where it is never pulled once the symbols
   // are defined by that embedded copy (runtime globals must stay shared).
-  // An empty runtimeBc selects the embedded blob, so the merge needs no
-  // runtime files on disk.
+  // The embedded blob is always selected, so the merge needs no
+  // runtime files on disk. An empty platformBc likewise selects the embedded
+  // pli_rtplat.bc; --rt-platform names a custom platform TU instead.
   const bool linkBitcode = useBitcode && !emitLLVM;
   // Explicit PGO/LTO must reach the backend clang verbatim on both steps, so
   // those builds always take the clang pipeline, never the in-process paths
@@ -895,8 +892,9 @@ int main(int argc, char** argv) {
     if (!compileOne(preprocessor, pliInputs[i], output, triple, clangPath, sysparm, sysparmExplicit,
                     compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, keepLL, verbose,
                     noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel, backendFlags,
-                    keepLLDir, (int)i, &outObj, runtimeBc, linkBitcode, lowerMode, perOpOverrides,
-                    singleModuleFinalLink, needClangPipeline))
+                    keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
+                    singleModuleFinalLink, needClangPipeline,
+                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -930,7 +928,7 @@ int main(int argc, char** argv) {
     const pli::TargetDesc& desc = pli::getTargetDesc(llt);
     std::string tmErr;
     if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
-      // With the bitcode runtime (linkBitcode, embedded or --runtime-bc) the
+      // With the bitcode runtime (linkBitcode) the
       // MAIN object already defines every pli_* symbol, so no separate
       // runtime object is emitted (it would duplicate them). Otherwise
       // multi-input links carry the runtime as its own object (runtime-once);
@@ -944,7 +942,7 @@ int main(int argc, char** argv) {
         std::error_code ec;
         llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
         std::string rtErr;
-        haveRtObj = !ec && pli::emitRuntimeObject(*tm, llt, os, rtErr);
+        haveRtObj = !ec && pli::emitRuntimeObject(*tm, llt, os, rtErr, platformBc);
         if (!haveRtObj && verbose)
           std::cerr << "pli: runtime object failed (" << rtErr << "), using clang\n";
       }
@@ -1241,7 +1239,7 @@ int main(int argc, char** argv) {
     llvm::raw_fd_ostream os(fallbackRtObj, ec, llvm::sys::fs::OF_None);
     std::string rtErr;
     llvm::Triple llt(triple);
-    if (ec || !pli::emitRuntimeObject(*tm, llt, os, rtErr)) {
+    if (ec || !pli::emitRuntimeObject(*tm, llt, os, rtErr, platformBc)) {
       std::cerr << "pli: cannot materialise the embedded runtime (" << rtErr << ")\n";
       if (!fallbackRtObj.empty()) {
         std::error_code rmEc;
