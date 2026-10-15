@@ -2,10 +2,13 @@
 /* Copyright 2026 Ross S. - pli: a PL/I compiler targeting LLVM */
 /* rt_storage.c — PL/I runtime library (pli_runtime): heap: ALLOCATE/FREE. */
 #include "pli_rt.h"
-#include <stdlib.h>
+/* <stdlib.h> arrives via pli_rt_port.h (ADR-221); allocation below routes
+ * through pli_malloc/pli_calloc/pli_realloc/pli_free, except pli_free
+ * itself, whose body names raw free() (it IS the free wrapper: a pli_free
+ * call here would recurse). */
 
 char *pli_alloc(long long n) {
-  char *p = (char *)malloc((size_t)(n < 0 ? 0 : n));
+  char *p = (char *)pli_malloc((size_t)(n < 0 ? 0 : n));
   if (!p)
     pli_abort("ALLOCATION: out of memory");
   return p;
@@ -43,7 +46,7 @@ static CtlVar *ctlFind(long long key, int create) {
       return &ctlVars[i];
   if (!create)
     return NULL;
-  CtlVar *nv = (CtlVar *)realloc(ctlVars, (size_t)(ctlCount + 1) * sizeof(CtlVar));
+  CtlVar *nv = (CtlVar *)pli_realloc(ctlVars, (size_t)(ctlCount + 1) * sizeof(CtlVar));
   if (!nv)
     pli_signal_error("CONTROLLED table out of memory");
   ctlVars = nv;
@@ -63,16 +66,16 @@ static void ctlGrow(CtlVar *v) {
   if (v->depth < v->cap)
     return;
   long long ncap = v->cap ? v->cap * 2 : 4;
-  char **ng = (char **)realloc(v->gens, (size_t)ncap * sizeof(char *));
+  char **ng = (char **)pli_realloc(v->gens, (size_t)ncap * sizeof(char *));
   if (!ng)
     pli_signal_error("CONTROLLED generation stack out of memory");
-  long long *nl = (long long *)realloc(v->lens, (size_t)ncap * sizeof(long long));
+  long long *nl = (long long *)pli_realloc(v->lens, (size_t)ncap * sizeof(long long));
   if (!nl)
     pli_signal_error("CONTROLLED generation stack out of memory");
-  long long *nr = (long long *)realloc(v->ranks, (size_t)ncap * sizeof(long long));
+  long long *nr = (long long *)pli_realloc(v->ranks, (size_t)ncap * sizeof(long long));
   if (!nr)
     pli_signal_error("CONTROLLED generation stack out of memory");
-  long long **nd = (long long **)realloc(v->dimss, (size_t)ncap * sizeof(long long *));
+  long long **nd = (long long **)pli_realloc(v->dimss, (size_t)ncap * sizeof(long long *));
   if (!nd)
     pli_signal_error("CONTROLLED generation stack out of memory");
   v->gens = ng;
@@ -125,7 +128,7 @@ void pli_ctl_alloc_dims(long long key, long long n, long long rank) {
   v->gens[v->depth] = pli_alloc(n);
   v->lens[v->depth] = n;
   v->ranks[v->depth] = rank;
-  v->dimss[v->depth] = rank ? (long long *)calloc((size_t)rank, sizeof(long long)) : NULL;
+  v->dimss[v->depth] = rank ? (long long *)pli_calloc((size_t)rank, sizeof(long long)) : NULL;
   if (rank && !v->dimss[v->depth])
     pli_signal_error("CONTROLLED generation stack out of memory");
   ++v->depth;
@@ -140,7 +143,7 @@ void pli_ctl_set_dim(long long key, long long axis, long long extent) {
     return;
   if (axis >= v->ranks[v->depth - 1]) {
     long long nrank = axis + 1;
-    long long *nd = (long long *)realloc(v->dimss[v->depth - 1], (size_t)nrank * sizeof(long long));
+    long long *nd = (long long *)pli_realloc(v->dimss[v->depth - 1], (size_t)nrank * sizeof(long long));
     if (!nd)
       pli_signal_error("CONTROLLED generation stack out of memory");
     for (long long k = v->ranks[v->depth - 1]; k < nrank; ++k)
@@ -184,7 +187,7 @@ void pli_ctl_free(long long key) {
   if (!v || v->depth <= 0)
     pli_signal_error("FREE of empty CONTROLLED stack");
   --v->depth;
-  free(v->dimss[v->depth]);
+  pli_free((char *)v->dimss[v->depth]);
   v->dimss[v->depth] = NULL;
   // intent: stash 1-D buffers for the next same-shape ALLOCATE; evict a
   // stale entry first so retention stays one buffer. N-D generations
@@ -195,16 +198,16 @@ void pli_ctl_free(long long key) {
     long long n = v->lens[v->depth];
     if (ctlCache.bytes) {
       if (ctlCache.key == key && ctlCache.len == n) {
-        free(buf); // slot already serves this shape: drop the duplicate
+        pli_free(buf); // slot already serves this shape: drop the duplicate
         return;
       }
-      free(ctlCache.bytes); // evict stale entry before stashing
+      pli_free(ctlCache.bytes); // evict stale entry before stashing
     }
     ctlCache.key = key;
     ctlCache.bytes = buf;
     ctlCache.len = n;
   } else {
-    free(buf);
+    pli_free(buf);
   }
 }
 
@@ -248,7 +251,7 @@ typedef struct {
 } PliArea;
 
 char *pli_area_create(long long n) {
-  PliArea *a = (PliArea *)malloc(sizeof(PliArea));
+  PliArea *a = (PliArea *)pli_malloc(sizeof(PliArea));
   if (!a)
     pli_abort("AREA: out of memory");
   a->size = n > 0 ? n : 0;
@@ -263,10 +266,10 @@ void pli_area_destroy(char *ap) {
     return;
   for (PliBlock *b = a->blocks; b;) {
     PliBlock *next = b->next;
-    free(b);
+    pli_free((char *)b);
     b = next;
   }
-  free(a);
+  pli_free((char *)a);
 }
 
 char *pli_area_alloc(char *ap, long long n) {
@@ -276,7 +279,7 @@ char *pli_area_alloc(char *ap, long long n) {
   long long need = n < 0 ? 0 : n;
   if (a->used + need > a->size)
     pli_signal_error("AREA: area overflow");
-  PliBlock *b = (PliBlock *)malloc((size_t)need + sizeof(PliBlock));
+  PliBlock *b = (PliBlock *)pli_malloc((size_t)need + sizeof(PliBlock));
   if (!b)
     pli_abort("AREA: out of memory");
   b->size = need;
@@ -300,5 +303,5 @@ void pli_area_free(char *ap, char *p) {
       *link = b->next;
     a->used -= b->size;
   }
-  free(b);
+  pli_free((char *)b);
 }

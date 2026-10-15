@@ -3,7 +3,8 @@
 /* rt_file.c — PL/I runtime library (pli_runtime): named files + SEQUENTIAL RECORD. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-#include <stdio.h>
+/* stdio arrives via pli_rt_port.h (ADR-221); fopen/fclose/fread/fwrite below
+ * route through pli_fopen/pli_fclose/pli_fread/pli_fwrite. */
 
 void pli_string_put_open(char *buf, long long cap) {
   rt_out_buf = buf;
@@ -53,12 +54,12 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   pli_memcpy(buf, name, n);
   buf[n] = '\0';
   if (rt_pli_files[slot])
-    fclose(rt_pli_files[slot]);
+    pli_fclose(rt_pli_files[slot]);
   if (nonprint) {
     rt_pli_files[slot] = NULL;
     rt_pli_nonprint[slot] = 1;
   } else {
-    rt_pli_files[slot] = fopen(buf, mode ? "w" : "r");
+    rt_pli_files[slot] = pli_fopen(buf, mode ? "w" : "r");
     rt_pli_nonprint[slot] = 0;
   }
 }
@@ -68,7 +69,7 @@ void pli_file_close(long long slot) {
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   if (rt_pli_files[slot]) {
-    fclose(rt_pli_files[slot]);
+    pli_fclose(rt_pli_files[slot]);
     rt_pli_files[slot] = NULL;
   }
 }
@@ -120,14 +121,14 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
   pli_memcpy(buf, name, n);
   buf[n] = '\0';
   if (rt_pli_files[slot])
-    fclose(rt_pli_files[slot]);
+    pli_fclose(rt_pli_files[slot]);
   if (nonprint) {
     rt_pli_files[slot] = NULL;
     rt_pli_nonprint[slot] = 1;
     return;
   }
   rt_pli_nonprint[slot] = 0;
-  rt_pli_files[slot] = fopen(buf, mode ? "wb" : "rb");
+  rt_pli_files[slot] = pli_fopen(buf, mode ? "wb" : "rb");
 }
 
 static FILE *rec_file(long long slot, const char *what) {
@@ -143,7 +144,7 @@ void pli_record_write_fixed(long long slot, long long v) {
   FILE *f = rec_file(slot, "WRITE");
   if (!f)
     return;
-  if (fwrite(&v, sizeof v, 1, f) != 1)
+  if (pli_fwrite(&v, sizeof v, 1, f) != 1)
     pli_signal_error("WRITE to record file failed");
 }
 
@@ -151,7 +152,7 @@ void pli_record_write_float(long long slot, double v) {
   FILE *f = rec_file(slot, "WRITE");
   if (!f)
     return;
-  if (fwrite(&v, sizeof v, 1, f) != 1)
+  if (pli_fwrite(&v, sizeof v, 1, f) != 1)
     pli_signal_error("WRITE to record file failed");
 }
 
@@ -159,7 +160,7 @@ void pli_record_write_char(long long slot, char *p, long long len) {
   FILE *f = rec_file(slot, "WRITE");
   if (!f || len <= 0)
     return;
-  if (fwrite(p, 1, (size_t)len, f) != (size_t)len)
+  if (pli_fwrite(p, 1, (size_t)len, f) != (size_t)len)
     pli_signal_error("WRITE to record file failed");
 }
 
@@ -167,7 +168,7 @@ void pli_record_write_bit(long long slot, unsigned char v) {
   FILE *f = rec_file(slot, "WRITE");
   if (!f)
     return;
-  if (fwrite(&v, sizeof v, 1, f) != 1)
+  if (pli_fwrite(&v, sizeof v, 1, f) != 1)
     pli_signal_error("WRITE to record file failed");
 }
 
@@ -176,7 +177,7 @@ long long pli_record_read_fixed(long long slot) {
   long long v = 0;
   if (!f)
     return 0;
-  if (fread(&v, sizeof v, 1, f) != 1)
+  if (pli_fread(&v, sizeof v, 1, f) != 1)
     pli_signal_error("ENDFILE on record file: no more records");
   return v;
 }
@@ -186,7 +187,7 @@ double pli_record_read_float(long long slot) {
   double v = 0;
   if (!f)
     return 0;
-  if (fread(&v, sizeof v, 1, f) != 1)
+  if (pli_fread(&v, sizeof v, 1, f) != 1)
     pli_signal_error("ENDFILE on record file: no more records");
   return v;
 }
@@ -195,7 +196,7 @@ void pli_record_read_char(long long slot, char *p, long long len) {
   FILE *f = rec_file(slot, "READ");
   if (!f || len <= 0)
     return;
-  if (fread(p, 1, (size_t)len, f) != (size_t)len)
+  if (pli_fread(p, 1, (size_t)len, f) != (size_t)len)
     pli_signal_error("ENDFILE on record file: no more records");
 }
 
@@ -204,7 +205,7 @@ unsigned char pli_record_read_bit(long long slot) {
   unsigned char v = 0;
   if (!f)
     return 0;
-  if (fread(&v, sizeof v, 1, f) != 1)
+  if (pli_fread(&v, sizeof v, 1, f) != 1)
     pli_signal_error("ENDFILE on record file: no more records");
   return v;
 }

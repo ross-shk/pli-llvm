@@ -3,12 +3,8 @@
 /* rt_core.c — PL/I runtime library (pli_runtime): lifecycle: init/fini/STOP. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#if !defined(_WIN32)
-#include <sys/wait.h>
-#endif
+/* System headers arrive via pli_rt_port.h (ADR-221): allocation, process
+ * I/O, and stdio all route through the pli_* wrappers below. */
 
 /* Version stamp for the bitcode runtime (OPTIMIZATION.md §10, P3): runtime.bc
  * is compiled by the same LLVM as pli, and IRGen checks this global before
@@ -32,13 +28,15 @@ void pli_rt_fini(void) {
    * the final newline lands after the buffered content, not before it. */
   rt_flush_stdout();
   if (col > 0) {
-    fputc('\n', stdout);
+    pli_fputc('\n', stdout);
     col = 0;
   }
-  fflush(stdout);
+  pli_fflush(stdout);
 }
 
-/* Centralised process exit (Phase 6). */
+/* Centralised process exit (Phase 6): the one exit path; the raw exit() call
+ * lives here so no other TU names it (its declaration comes from the
+ * <stdlib.h> included by pli_rt_port.h). */
 void pli_exit(int code) { exit(code); }
 
 void pli_stop(void) {
@@ -47,27 +45,19 @@ void pli_stop(void) {
 }
 
 int pli_system(const char *cmd, long long len) {
-  char *buf = (char *)malloc((size_t)len + 1);
+  char *buf = (char *)pli_malloc((size_t)len + 1);
   if (!buf) {
     return -1;
   }
-  memcpy(buf, cmd, (size_t)len);
+  pli_memcpy(buf, cmd, (size_t)len);
   buf[len] = '\0';
-#if defined(_WIN32)
-  FILE *fp = _popen(buf, "r");
-#else
-  FILE *fp = popen(buf, "r");
-#endif
+  /* Platform popen/pclose plus the wait-status dance hide in pli_pclose. */
+  FILE *fp = pli_popen(buf, "r");
   int status = -1;
   if (fp) {
-#if defined(_WIN32)
-    status = _pclose(fp);
-#else
-    int raw = pclose(fp);
-    status = WIFEXITED(raw) ? WEXITSTATUS(raw) : -1;
-#endif
+    status = pli_pclose(fp);
   }
-  free(buf);
+  pli_free(buf);
   return status;
 }
 

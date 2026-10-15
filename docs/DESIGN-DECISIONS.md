@@ -6304,3 +6304,56 @@ declared in `pli_rt_state.h` so `rt_core.c` and `rt_file.c` can call it.
 than C, which still pays `printf` format-parse overhead per call). All 589
 tests pass; `--checks-forced` parity is exact across every target benchmark;
 the `-O2` geomean improves as a direct result.
+
+---
+
+## ADR-221 — Runtime portability layer (`pli_rt_port.h`)
+
+**Context.** The runtime (`runtime/rt_*.c`) carried platform conditionals at
+every call site: `popen`/`pclose` plus the `WIFEXITED`/`WEXITSTATUS` dance in
+`rt_core.c`, `localtime_r`/`localtime_s` (3 sites) in `rt_string.c`, bare
+`malloc`/`free`/`calloc`/`realloc` in `rt_storage.c`, and raw
+`fopen`/`fclose`/`fread`/`fwrite`/`getc`/`getchar`/`fputc`/`fflush`/`fprintf`
+in `rt_stream.c`/`rt_file.c`/`rt_cond.c`, with a per-function `#ifdef _WIN32`
+in every body of `sync/pli_thread.h`. New runtime code had to remember both
+branches, and the single-bitcode-blob embedding model (all `.c` files compile
+to one `pli_runtime.bc` per target triple) rewards one branching point, since
+`-target <triple>` predefines `_WIN32` for Windows targets and each `.bc`
+inlines the correct branch. This completes the runtime-reduction plan's
+remaining phases: 5 (allocation), 7 (time), 8 (process I/O), 9 (FILE I/O).
+
+**Decision.** New header `runtime/pli_rt_port.h`, in the spirit of the
+`pli_rt_state.h` libc ports (Phases 1 & 4): `static inline` wrappers
+(`pli_malloc`, `pli_calloc`, `pli_realloc`, `pli_popen`, `pli_pclose`,
+`pli_localtime`, `pli_fopen`, `pli_fclose`, `pli_fread`, `pli_fwrite`,
+`pli_fgetc`, `pli_getchar`, `pli_fputc`, `pli_fflush`, `pli_ferror`,
+`pli_fprintf`), each with one platform branch at its definition site. Every
+`rt_*.c` reaches it transitively via `pli_rt.h`/`pli_rt_state.h` and includes
+no system header of its own. `sync/pli_thread.h` keeps its `static inline` /
+no-link-time-footprint property but collapses the per-function `#ifdef`s into
+a single `#if`/`#else` block (Windows section, POSIX section, then shared
+platform-independent wrappers). `pli_fopen` is a single forward — record
+files already pass `"rb"`/`"wb"` and stream files `"r"`/`"w"`, so mode choice
+stays with the callers. `pli_fprintf` forwards via `vfprintf` (no
+`__builtin_va_list` ABI exposure in bitcode). `pli_pclose` maps `pclose`'s
+`-1` through before touching `WIFEXITED`.
+
+**Consequences.** Zero `#ifdef` in any `rt_*.c` outside the port header (the
+only remaining `#if`s are the `PLI_LLVM_VERSION` fallback in `rt_core.c` and
+the musl float-model guards in `rt_mathport.c`, neither platform-specific);
+`_WIN32` appears exactly once in `pli_thread.h`. The two sanctioned raw calls
+are the wrapper bodies themselves: `exit()` in `pli_exit` (`rt_core.c`) and
+`free()` in `pli_free` (`rt_storage.c`) — self-wrapping either would recurse.
+No CMake change: `runtime/` was already on the bitcode include path. Full
+suite green; the Windows branches are byte-identical to the previously inline
+code, syntax-checked against stub headers since no Windows SDK is present
+locally (CI covers clang-cl).
+
+**Rejected.** A `pli_exit_proc` wrapper duplicating `pli_exit` (one exit path
+is enough); a `pli_free` in the port header (collides with the ABI's
+`pli_free(char *)` for `FREE`, rule (90) — the ABI function is the single
+free wrapper); split `pli_thread_win32.c`/`pli_thread_posix.c` backends
+(out-of-line symbols would break the single-bitcode-blob embedding);
+`windows.h`/`unistd.h` in the port header (nothing there needs them —
+`Sleep`/`nanosleep` live in `pli_thread.h` — and `windows.h` risks macro
+pollution in every TU).

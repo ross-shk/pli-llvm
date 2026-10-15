@@ -15,6 +15,10 @@
 #include <stdio.h>
 
 #include "pli_wide128.h" /* PliI128 for the wide DECIMAL helpers below */
+#include "pli_rt_port.h" /* platform/ABI surface (ADR-221): every TU gets the
+                           * pli_malloc/pli_popen/pli_localtime/pli_fopen/...
+                           * wrappers, so rt_*.c files include no system
+                           * headers of their own. */
 
 /* ---------------------------------------------------------------------------
  * Ported libc primitives (runtime-reduction plan, Phases 1 & 4).
