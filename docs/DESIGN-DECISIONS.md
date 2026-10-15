@@ -6304,3 +6304,56 @@ declared in `pli_rt_state.h` so `rt_core.c` and `rt_file.c` can call it.
 than C, which still pays `printf` format-parse overhead per call). All 589
 tests pass; `--checks-forced` parity is exact across every target benchmark;
 the `-O2` geomean improves as a direct result.
+
+## ADR-221 — Combined on-top condition dispatch (T2b/T4)
+
+**Context.** `emitCondTrap` (all computational-condition traps: ZERODIVIDE,
+SIZE, SUBSCRIPTRANGE, CONVERSION) called `pli_on_top_cond` and `pli_on_top_ctx`
+as two separate `noinline` runtime calls, each a linear scan of the
+thread-local handler stack in `rt_cond.c`. `emitSignal` made the same two-scan
+pattern with `pli_on_top_fn` + `pli_on_top_ctx`. At a 1% fault rate the double
+scan is the dominant cost of the faulting path.
+
+**Decision.** Add two ABI entries that each perform the scan once and return
+both the handler id (or address) and the capture context:
+
+- `pli_on_top_pair(key, ctx_out) -> id` — replaces `pli_on_top_cond` +
+  `pli_on_top_ctx` in `emitCondTrap` (irgen.cpp).
+- `pli_on_top_fn_pair(key, ctx_out) -> fn` — replaces `pli_on_top_fn` +
+  `pli_on_top_ctx` in `emitSignal` (irgen.cpp:4754).
+
+Both use an out-pointer (`char *ctx_out`, LLVM `ptr`) for the capture context
+rather than a `{i64, ptr}` struct return. This sidesteps the Windows x86_64
+MSVC ABI mismatch where clang lowers a by-value `{i64, ptr}` struct return
+through a hidden `sret` pointer that disagrees with the runtime body's C
+return convention — the same portability discipline documented in ADR-032 for
+>18-digit `FIXED DECIMAL` (lo, hi) halves.
+
+`emitCondTrap`/`emitSignal` emit a stack `alloca` for `ctx_out` once, call the
+pair function, then `load` the out-pointer — one call replaces two.
+
+Both pair functions are `alwaysInline` in `kRuntimeAttrs()` (T2a sets the
+precedent for the individual readers). The pre-existing `pli_on_top_cond`,
+`pli_on_top_ctx`, and `pli_on_top_fn` symbols remain in the ABI and runtime
+unchanged — they are simply no longer emitted by the compiler. `pli_on_top_pair`
+and `pli_on_top_fn_pair` are self-contained (no internal `rt_pli_on_*`
+helpers) and defined directly in `runtime/rt_cond.c`.
+
+**Consequences.** Halves the per-fault stack walks on both the computational
+trap path (`emitCondTrap`) and the SIGNAL dispatch path (`emitSignal`). With
+T2a inlining the scan into the trap block at `-O2`/`-O3`, the entire dispatch
+collapses to a single inlined loop.
+
+**Root-cause note (post-hoc).** The `alwaysinline` attributes on the pair
+functions were initially observed NOT to fire during in-process optimization
+(`buildPerModuleDefaultPipeline(O3)` in codegen.cpp). Investigation found the
+runtime bitcode carries a `tune-cpu` attribute (stamped by the macOS clang that
+built it for `apple-m1`); LLVM's inliner refuses to honor `alwaysinline` when
+the function's `tune-cpu` differs from the link-time target. The `tune-cpu`
+attribute is now stripped in all three runtime link paths
+(`IRGen::linkRuntimeBitcode`, `Codegen::linkEmbeddedLibPLI`,
+`Codegen::emitRuntimeObject`), restoring inlining at -O2 and -O3. The
+`RtMemArgReadWrite` memory attribute (vs `RtMemReadonly`) was also required:
+the pair functions write to their out-pointer argument, and the optimizer
+previously eliminated the `load` from the caller's `alloca` because it believed
+nothing could write to that memory.
