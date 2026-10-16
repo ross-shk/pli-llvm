@@ -1,9 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
-# tests/driver/flto.sh — explicit opt-in LTO (OPTIMIZATION.md §10, P3):
-# --flto=thin / --flto=full are forwarded to both the compile and the link
-# step, single- and multi-unit.
+# tests/driver/flto.sh — explicit opt-in LTO (OPTIMIZATION.md §10, P3),
+# fully in-process (ADR-225): --flto=thin/full emit LTO bitcode objects that
+# in-process lld optimizes at link. No clang anywhere: -v output must never
+# mention it.
+#
+# Environment note: in-process LTO executes LLVM passes inside lld, which
+# needs a single LLVM instance. Package-manager builds that mix static LLVM
+# archives with libLLVM/liblld shared libraries (brew) crash or mislink
+# there; the full link+run is gated on --assert-static and skipped (not
+# failed) elsewhere. The -c emission checks run everywhere.
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
@@ -27,6 +34,29 @@ check() {
     ok=0
   fi
 }
+no_clang() {
+  # The -v transcript must never INVOKE clang. Library paths (lib/clang/...)
+  # and data files (clang_rt.*, libclang_rt.*.a lld inputs) are files, not
+  # processes, so drop those lines first; any clang left on a '+' command
+  # line is a subprocess.
+  stripped=$(printf '%s\n' "$2" | grep -v 'lib/clang/' | grep -v 'clang_rt')
+  if printf '%s\n' "$stripped" | grep -q '^\+.*clang'; then
+    echo "FAIL: $1 invokes clang (must be fully in-process)"
+    ok=0
+  fi
+}
+is_bitcode() {
+  # An LTO object is LLVM bitcode, not a native object.
+  if command -v llvm-bcanalyzer >/dev/null 2>&1; then
+    llvm-bcanalyzer --dump "$1" >/dev/null 2>&1 \
+      || { echo "FAIL: $2 is not LLVM bitcode"; ok=0; }
+  elif command -v file >/dev/null 2>&1; then
+    file "$1" | grep -qi "bitcode" \
+      || { echo "FAIL: $2 is not LLVM bitcode"; ok=0; }
+  else
+    echo "SKIP: no llvm-bcanalyzer/file to inspect $2"
+  fi
+}
 
 cat > "$OUT.pli" <<'EOF'
  flto_main: procedure options(main);
@@ -34,34 +64,53 @@ cat > "$OUT.pli" <<'EOF'
  end flto_main;
 EOF
 
-# --- ThinLTO: flag reaches both steps, binary runs ----------------------
-cmd=$($PLI "$OUT.pli" -o "$OUT.thin$EXE" --flto=thin -v 2>&1) \
-  || { echo "FAIL: thin-lto compile+link"; ok=0; }
-printf '%s\n' "$cmd" | grep -q -- '-flto=thin' \
-  || { echo "FAIL: -flto=thin not passed through"; ok=0; }
-check "thin run" "$($OUT.thin$EXE)" "PASS flto"
+# --- ThinLTO object emission (runs everywhere) -------------------------
+cmd=$($PLI "$OUT.pli" -c -o "$OUT.thin.o" --flto=thin -v 2>&1) \
+  || { echo "FAIL: thin-lto compile"; ok=0; }
+no_clang "thin-lto -v" "$cmd"
+is_bitcode "$OUT.thin.o" "thin-lto object"
 
-# --- full LTO ------------------------------------------------------------
-$PLI "$OUT.pli" -o "$OUT.full$EXE" --flto=full \
-  || { echo "FAIL: full-lto compile+link"; ok=0; }
-check "full run" "$($OUT.full$EXE)" "PASS flto"
+# --- full-LTO object emission (runs everywhere) -------------------------
+cmd=$($PLI "$OUT.pli" -c -o "$OUT.full.o" --flto=full -v 2>&1) \
+  || { echo "FAIL: full-lto compile"; ok=0; }
+no_clang "full-lto -v" "$cmd"
+is_bitcode "$OUT.full.o" "full-lto object"
 
-# --- multi-unit ThinLTO across two pli inputs in one driver call ------
-cat > "$OUT.lib.pli" <<'EOF'
+# --- PGO+LTO combined is rejected (link-time PGO is out of scope) --------
+if $PLI "$OUT.pli" -o "$OUT.combo$EXE" --flto=thin --fprofile-generate >/dev/null 2>&1; then
+  echo "FAIL: --flto + --fprofile-generate should be rejected"
+  ok=0
+fi
+
+# --- full link+run (pure-static builds only; see header) ----------------
+if sh scripts/bundle_standalone.sh --assert-static "$PLI" >/dev/null 2>&1; then
+  cmd=$($PLI "$OUT.pli" -o "$OUT.thin$EXE" --flto=thin -v 2>&1) \
+    || { echo "FAIL: thin-lto compile+link"; ok=0; }
+  no_clang "thin-lto link -v" "$cmd"
+  check "thin run" "$($OUT.thin$EXE)" "PASS flto"
+
+  $PLI "$OUT.pli" -o "$OUT.full$EXE" --flto=full \
+    || { echo "FAIL: full-lto compile+link"; ok=0; }
+  check "full run" "$($OUT.full$EXE)" "PASS flto"
+
+  cat > "$OUT.lib.pli" <<'EOF'
  flto_lib: procedure(x) returns(fixed bin(31));
     declare x fixed bin(31);
     return(x * 2);
  end flto_lib;
 EOF
-cat > "$OUT.main.pli" <<'EOF'
+  cat > "$OUT.main.pli" <<'EOF'
  flto_main2: procedure options(main);
     declare flto_lib entry(fixed bin(31)) returns(fixed bin(31)) external;
     put skip list('PASS flto', flto_lib(21));
  end flto_main2;
 EOF
-$PLI "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi$EXE" --flto=thin \
-  || { echo "FAIL: multi-unit thin-lto"; ok=0; }
-check "multi thin run" "$($OUT.multi$EXE)" "PASS flto 42"
+  $PLI "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi$EXE" --flto=thin \
+    || { echo "FAIL: multi-unit thin-lto"; ok=0; }
+  check "multi thin run" "$($OUT.multi$EXE)" "PASS flto 42"
+else
+  echo "SKIP: in-process LTO link needs a pure-static pli (LLVM-instance duplication on mixed builds)"
+fi
 
 [ "$ok" -eq 1 ] && echo PASS
 exit 0

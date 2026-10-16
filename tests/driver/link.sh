@@ -3,13 +3,16 @@
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/link.sh — the driver's link-step flags (-c, -L/-l, -Wl,
 # --linker, -shared, --extra) and a cross-unit link against a C unit.
+# All links are in-process lld (ADR-225): the C unit still needs a C compiler
+# (CLANG, user-side tool for C sources), but the final link always goes
+# through pli itself, never a clang driver.
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
-# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+# EXE is empty and stripping CR is a no-op.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
-  *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe ;;
+  *) EXE= ;;
 esac
 PLI=${PLI:-./build/cmake/pli}
 CLANG=${CLANG:-clang}
@@ -44,21 +47,36 @@ EOF
 
 $PLI "$OUT.pli" -c -o "$OUT.pli.o" || { echo "FAIL: pli -c failed"; ok=0; }
 $CLANG -c "$OUT.c" -o "$OUT.c.o" || { echo "FAIL: clang -c failed"; ok=0; }
-# Link pli object and C object into one binary (the -c MAIN object already
-# carries the merged runtime definitions, so no runtime archive is needed).
-# (-lm after the objects: the merged runtime's ROUND/mathport refs need libm
-# on Linux; harmless on macOS where libm is in libSystem.)
-$CLANG "$OUT.pli.o" "$OUT.c.o" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL: cross-unit link failed"; ok=0; }
+# Link pli object and C object into one binary with pli itself (in-process
+# lld; the -c MAIN object already carries the merged runtime definitions, so
+# no runtime archive is needed). pli adds -lm on ELF itself.
+$PLI "$OUT.pli.o" "$OUT.c.o" -o "$OUT$EXE" || { echo "FAIL: cross-unit link failed"; ok=0; }
 check "cross-unit run" "$($OUT$EXE)" "pli: 42"
 
 # -Wl/--linker/-shared/nm probe Unix link behavior; skip on Windows.
 if [ -n "$EXE" ]; then
   echo "SKIP: Unix-only link checks (-Wl, --linker, -shared, nm)"
 else
-# --- -Wl and --linker surface in the backend command (via -v) ---------------
-cmd=$($PLI "$OUT.pli" -o "$OUT.wl" -Wl,-no_pie --linker ld64.lld -v 2>&1)
-printf '%s\n' "$cmd" | grep -q -- '-Wl,-no_pie' || { echo "FAIL: -Wl flag not passed through"; ok=0; }
-printf '%s\n' "$cmd" | grep -q -- '-fuse-ld=ld64.lld' || { echo "FAIL: --linker not passed through"; ok=0; }
+# --- -Wl reaches in-process lld (via -v), in platform spelling ------------
+# (ELF lld wants -no-pie with a hyphen; Mach-O wants -no_pie).
+# Uses the self-contained hello fixture below (link.pli needs its C unit).
+cat > "$OUT.flag.pli" <<'EOF'
+ hello_flag: procedure options(main);
+    put skip list('hello');
+ end hello_flag;
+EOF
+cmd=$($PLI "$OUT.flag.pli" -o "$OUT.wl" -Wl,-no_pie -v 2>&1) \
+  || { echo "FAIL: -Wl build failed"; ok=0; }
+case "$(uname -s)" in
+  Darwin) want=-no_pie ;;
+  *) want=-no-pie ;;
+esac
+printf '%s\n' "$cmd" | grep -q -- "$want" || { echo "FAIL: -Wl flag not passed through"; ok=0; }
+# --- --linker is accepted with a warning (in-process lld is the only link) --
+warn=$($PLI "$OUT.flag.pli" -o "$OUT.wl2" --linker ld64.lld 2>&1) \
+  || { echo "FAIL: --linker build failed"; ok=0; }
+printf '%s\n' "$warn" | grep -q 'in-process lld is the only linker' \
+  || { echo "FAIL: --linker warning missing"; ok=0; }
 
 # --- -shared produces a shared artifact (self-contained, no external C) -----
 cat > "$OUT.shared.pli" <<'EOF'

@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
+# CI: build the hermetic static LLVM toolchain ONCE per platform and stash it
+# on the llvm-deps release. Manual (workflow_dispatch) only — normal CI and
+# dev machines fetch the stash via scripts/fetch_llvm_static.sh and never
+# compile LLVM. After a run, paste the printed sha256s into
+# scripts/llvm_static.pins and commit pins + stash together.
+name: llvm-deps
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-deps:
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            plat: linux-x86_64
+          - os: ubuntu-24.04-arm
+            plat: linux-aarch64
+          - os: macos-latest
+            plat: darwin-arm64
+          - os: windows-latest
+            plat: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain build prereqs (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zstd curl python3 xz-utils
+
+      - name: Install toolchain build prereqs (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja zstd xz python3
+
+      - name: Set up MSVC env (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install toolchain build prereqs (Windows)
+        if: runner.os == 'Windows'
+        run: choco install zstd -y
+
+      - name: Build + pack static toolchain (cold; hours)
+        run: |
+          LLVM_VER=$(awk -F= '/^LLVM_VER=/{print $2; exit}' scripts/llvm_static.pins)
+          DEPS_TAG=$(awk -F= '/^DEPS_TAG=/{print $2; exit}' scripts/llvm_static.pins)
+          ASSET=llvm-static-$LLVM_VER-${{ matrix.plat }}.tar.zst
+          sh scripts/build_llvm_static.sh --prefix "$HOME/pli-deps" --pack "$ASSET"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+          echo "DEPS_TAG=$DEPS_TAG" >> "$GITHUB_ENV"
+
+      - name: Upload stash to llvm-deps release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.DEPS_TAG }}
+          files: ${{ env.ASSET }}

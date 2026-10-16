@@ -6,9 +6,11 @@
 // runtime). The embedded pli_runtime.bc materialises once per final link.
 #pragma once
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/PGOOptions.h"
 #include "llvm/TargetParser/Triple.h"
 
 namespace llvm {
@@ -30,11 +32,18 @@ void applyRuntimeFnAttrs(llvm::Function& f);
 // ADR-213: the TargetMachine is forwarded to the PassBuilder so the pipeline
 // uses target-specific TargetIRAnalysis (NEON/SSE/AVX) — without it the loop
 // vectorizer sees a default target with zero vector registers.
-void optimizeModule(llvm::Module& M, llvm::TargetMachine& TM,
-                    const std::string& optLevel);
+// ADR-225: `pgo` carries in-process PGO (IRInstr/IRUse); nullopt means no PGO.
+void optimizeModule(llvm::Module& M, llvm::TargetMachine& TM, const std::string& optLevel,
+                    const std::optional<llvm::PGOOptions>& pgo = std::nullopt);
 // Emit a fully-relocatable object for `M` in memory (integrated assembler).
 bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,
                 std::string& err);
+// Emit `M` as an LTO bitcode object for in-process lld (`--flto=thin|full`):
+// runs the matching LTO pre-link pipeline (mirrors clang -flto) and writes
+// bitcode with the module summary lld needs. lld runs its built-in LTO at
+// link time, no plugin, no clang.
+bool emitLTOObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,
+                   bool thin, const std::string& optLevel, std::string& err);
 // Single-module fast path only: link the embedded runtime into `M` at BC
 // level (LinkOnlyNeeded). Never for `-c`, never per-module of multi-input.
 bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::string& err,

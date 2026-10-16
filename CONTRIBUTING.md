@@ -9,6 +9,9 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md `(what 
 ```bash
 # Canonical build (CMake + Ninja):
 cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+# ... or hermetic static (releases, ADR-224): fetch first, then configure with
+# -DPLI_LLVM_STATIC_PREFIX=~/pli-deps instead of CMAKE_PREFIX_PATH:
+# sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps
 cmake --build build/cmake -j$(nproc)        # build/cmake/pli (runtime embedded)
 ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.pli
 ```

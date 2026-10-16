@@ -34,42 +34,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM + lld (Ubuntu)
+      - name: Fetch static LLVM stash (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget gnupg lsb-release
-          wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/$(. /etc/os-release && echo $VERSION_CODENAME)/ llvm-toolchain-$(. /etc/os-release && echo $VERSION_CODENAME)-23 main" | sudo tee /etc/apt/sources.list.d/llvm.list
-          sudo apt-get update
-          sudo apt-get install -y clang-23 lld-23 llvm-23 llvm-23-dev libclang-23-dev liblld-23-dev libpolly-23-dev libclang-rt-23-dev ninja-build cmake python3 git
-          sudo ln -sf /usr/bin/clang-23 /usr/bin/clang && sudo ln -sf /usr/bin/clang++-23 /usr/bin/clang++
-          echo "CMAKE_PREFIX_PATH=/usr/lib/llvm-23" >> "$GITHUB_ENV"
+          sudo apt-get update && sudo apt-get install -y zstd curl
+          sh scripts/fetch_llvm_static.sh --prefix "$HOME/pli-deps"
 
-      - name: Install LLVM + lld (macOS)
+      - name: Fetch static LLVM stash (macOS)
         if: runner.os == 'macOS'
-        run: brew install llvm lld ninja cmake
+        run: |
+          brew install zstd
+          sh scripts/fetch_llvm_static.sh --prefix "$HOME/pli-deps"
 
       - name: Set up MSVC env (Windows SDK only)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install LLVM 23 (Windows)
+      - name: Fetch static LLVM stash (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install llvm --version=23.1.3 -y
-          choco install ninja -y
-          echo "CMAKE_PREFIX_PATH=C:/Program Files/LLVM" >> "$GITHUB_ENV"
-          echo "C:/Program Files/LLVM/bin" >> "$GITHUB_PATH"
+          choco install zstd -y
+          sh scripts/fetch_llvm_static.sh --prefix "$HOME/pli-deps"
+          echo "$(cygpath -w "$HOME/pli-deps/bin")" >> "$GITHUB_PATH"
 
-      - name: Configure (CMake + Ninja)
+      - name: Configure (CMake + Ninja, static prefix)
         run: |
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-          elif [ "${{ runner.os }}" = "Windows" ]; then
-            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+          # Prerequisite: the llvm-deps stash must be promoted first
+          # (.github/workflows/llvm-deps.yml, workflow_dispatch); the pins
+          # carry its checksums (scripts/llvm_static.pins).
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
           else
-            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23
+            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps"
           fi
 
       - name: Build
@@ -89,31 +85,31 @@ jobs:
             ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
           fi
 
-      - name: Strip and pack into tarball (Unix)
+      - name: Strip, assert static, and pack (Unix)
         if: runner.os != 'Windows'
         run: |
-          # Bundle the LLVM closure (lld + libLLVM + libz3 + libzstd) into the
-          # tarball so the release runs standalone where LLVM isn't installed;
-          # brew/apt ship those shared-only, so a single-file static link is
-          # impossible from packages (scripts/bundle_standalone.sh).
-          case "${{ runner.os }}" in
-            macOS) which patchelf >/dev/null 2>&1 || true ;;
-            Linux) sudo apt-get install -y patchelf ;;
-          esac
+          # Static-prefix build ships no lib/ dir: assert zero toolchain refs
+          # and tar pli + its sibling clang (exe-relative resolution).
           strip -o build/cmake/pli.stripped build/cmake/pli
           mkdir -p ${{ matrix.platdir }}
-          sh scripts/bundle_standalone.sh build/cmake/pli.stripped ${{ matrix.platdir }}
+          cp build/cmake/pli.stripped ${{ matrix.platdir }}/pli
+          sh scripts/bundle_standalone.sh --assert-static ${{ matrix.platdir }}/pli
+          sh scripts/bundle_standalone.sh --ship-clang "$HOME/pli-deps/bin" ${{ matrix.platdir }}
           tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}
 
       - name: Pack into archives (Windows)
         if: runner.os == 'Windows'
         run: |
-          # pli.exe is self-contained (embedded runtime bitcode): the archive
-          # ships the binary alone, matching the Unix tarballs.
+          # pli.exe is self-contained (embedded runtime bitcode + /MT): ship
+          # it with its sibling clang.exe (exe-relative resolution). The
+          # compiler-rt builtins resource dir is a promotion-time check: if a
+          # user link needs __divti3 and the stash lacks builtins, pli
+          # diagnoses it (main.cpp) instead of failing silently.
           mkdir -p ${{ matrix.platdir }}
           cp build/cmake/pli.exe ${{ matrix.platdir }}/pli.exe
-          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli.exe
-          powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}/pli.exe' -DestinationPath '${{ matrix.asset }}.zip'"
+          cp "$HOME/pli-deps/bin/clang.exe" ${{ matrix.platdir }}/clang.exe
+          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli.exe ${{ matrix.platdir }}/clang.exe
+          powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}/pli.exe','${{ matrix.platdir }}/clang.exe' -DestinationPath '${{ matrix.asset }}.zip'"
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows'

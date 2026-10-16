@@ -4,12 +4,15 @@
 #include "codegen.h"
 
 #include "embedded_runtime.h"
+#include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/PGOOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -36,8 +39,8 @@ static llvm::OptimizationLevel toOptLevel(const std::string& s) {
   return llvm::OptimizationLevel::O2;
 }
 
-void optimizeModule(llvm::Module& M, llvm::TargetMachine& TM,
-                    const std::string& optLevel) {
+void optimizeModule(llvm::Module& M, llvm::TargetMachine& TM, const std::string& optLevel,
+                    const std::optional<llvm::PGOOptions>& pgo) {
   llvm::LoopAnalysisManager LAM;
   llvm::FunctionAnalysisManager FAM;
   llvm::CGSCCAnalysisManager CGAM;
@@ -46,7 +49,9 @@ void optimizeModule(llvm::Module& M, llvm::TargetMachine& TM,
   // registers target-specific TargetIRAnalysis (SIMD features). Without TM,
   // the default TTI reports zero vector registers and the loop vectorizer
   // silently skips every loop.
-  llvm::PassBuilder PB(&TM);
+  // ADR-225: PGOOptions ride the PassBuilder constructor (IRInstr/IRUse);
+  // nullopt is byte-identical to the old no-PGO pipeline.
+  llvm::PassBuilder PB(&TM, llvm::PipelineTuningOptions(), pgo);
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);
@@ -257,6 +262,39 @@ std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTri
   return std::move(*modOrErr);
 }
 
+bool emitLTOObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,
+                   bool thin, const std::string& optLevel, std::string& err) {
+  // Run the LTO pre-link pipeline (mirrors clang -flto): per-module LTO phase
+  // plus, for ThinLTO, the summary the linker needs. A bare ThinLTO module
+  // flag with no summary mislinks (silent empty link / backend crash).
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB(&TM);
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+  llvm::ModulePassManager MPM = thin ? PB.buildThinLTOPreLinkDefaultPipeline(toOptLevel(optLevel))
+                                     : PB.buildLTOPreLinkDefaultPipeline(toOptLevel(optLevel));
+  MPM.run(M, MAM);
+  // Write the bitcode object lld consumes natively; ThinLTO embeds the
+  // module summary the linker needs (FullLTO carries the whole module).
+  if (thin) {
+    const llvm::ModuleSummaryIndex& index = MAM.getResult<llvm::ModuleSummaryIndexAnalysis>(M);
+    llvm::WriteBitcodeToFile(M, out, /*ShouldPreserveUseListOrder=*/false, &index);
+  } else {
+    llvm::WriteBitcodeToFile(M, out);
+  }
+  out.flush();
+  // Write errors surface at open time (caller's error_code) and close; the
+  // stream itself exposes none. Nothing fallible remains here.
+  (void)err;
+  return true;
+}
+
 bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple,
                        llvm::raw_pwrite_stream& out, std::string& err,
                        const std::string& platformBc) {
@@ -297,7 +335,9 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
 }
 
 bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err) {
-#if PLI_HAVE_LLD
+#if !PLI_HAVE_LLD
+#error "in-process lld is mandatory (ADR-225): configure against an LLVM that ships lld"
+#endif
   // `args` are exactly the argv lld would receive (program name, then inputs).
   // `exitEarly=false` keeps the driver alive after a failed link; diagnostics
   // go to stderr (disableOutput=false).
@@ -312,11 +352,5 @@ bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& e
     err = "unsupported object format";
     return false;
   }
-#else
-  (void)args;
-  (void)objFmt;
-  err = "in-process link needs lld (brew install lld), falling back to clang link";
-  return false;
-#endif
 }
 } // namespace pli

@@ -19,6 +19,14 @@ set(CMAKE_C_STANDARD 11)
 
 option(PLI_WERROR "Treat compiler warnings as errors" OFF)
 
+# Hermetic static toolchain (scripts/fetch_llvm_static.sh + llvm_static.pins):
+# a source-built LLVM/clang/lld install with static archives only. Empty keeps
+# the distro LLVM (fast dev iteration); standalone releases always set it.
+set(PLI_LLVM_STATIC_PREFIX "" CACHE PATH "Source-built static LLVM install prefix")
+if(PLI_LLVM_STATIC_PREFIX)
+  list(PREPEND CMAKE_PREFIX_PATH "${PLI_LLVM_STATIC_PREFIX}")
+endif()
+
 find_package(LLVM REQUIRED CONFIG)
 # Prebuilt LLVM 23 on Windows was compiled with ZLIB, zstd, and LibXml2 support
 # but doesn't ship those libraries. Provide them as linkable targets.
@@ -76,6 +84,20 @@ endif()
 if(LLVM_PACKAGE_VERSION VERSION_LESS 23)
   message(FATAL_ERROR "pli requires LLVM 23 or newer (found ${LLVM_PACKAGE_VERSION})")
 endif()
+if(PLI_LLVM_STATIC_PREFIX)
+  # The stash pins one LLVM per release; a stale prefix fails loudly here
+  # instead of mixing headers/libs across versions.
+  file(STRINGS "${CMAKE_SOURCE_DIR}/scripts/llvm_static.pins" _pins_line REGEX "^LLVM_VER=")
+  string(REGEX MATCH "[0-9.]+" _pins_ver "${_pins_line}")
+  if(NOT LLVM_PACKAGE_VERSION VERSION_EQUAL _pins_ver)
+    message(FATAL_ERROR "static LLVM is ${LLVM_PACKAGE_VERSION} but llvm_static.pins requires ${_pins_ver} — re-run fetch_llvm_static.sh")
+  endif()
+  # Pure-static guard: never mix shared libLLVM with static component
+  # archives (duplicated LLVM globals crash flakily at exit on ARM64).
+  if(LLVM_LINK_LLVM_DYLIB)
+    message(FATAL_ERROR "PLI_LLVM_STATIC_PREFIX points at a shared-LLVM build — refusing to mix")
+  endif()
+endif()
 find_package(Clang REQUIRED CONFIG)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
@@ -115,6 +137,8 @@ set(PLI_SOURCES
   src/target.cpp
   src/codegen.cpp
   src/embedded_runtime.cpp
+  src/hostcrt.cpp
+  src/pgo.cpp
 )
 
 # P2: MLIR canary dialect sources (compiled only with PLI_ENABLE_MLIR=ON).
@@ -168,8 +192,9 @@ set(RT_HEADERS
   ${CMAKE_SOURCE_DIR}/runtime/pli_rt_abi.def
   ${CMAKE_SOURCE_DIR}/runtime/pli_wide128.h)
 
-# lld detection (review S1): in-process link gates on PLI_HAVE_LLD.
-# Prerequisite: stock brew `llvm` ships no lld; fail configure with install hint.
+# lld detection (ADR-225): in-process lld is the only link; missing lld is a
+# hard configure error. Prerequisite: stock brew `llvm` ships no lld; fail
+# configure with install hint.
 # Check both the LLVM prefix and the separate lld formula (brew install lld).
 find_path(LLD_INCLUDE_DIR lld/Common/Driver.h
   PATHS ${LLVM_INCLUDE_DIRS} /opt/homebrew/opt/lld/include
@@ -187,7 +212,6 @@ endif()
 if(NOT LLD_INCLUDE_DIR)
   message(FATAL_ERROR "lld headers not found. Install lld (e.g., 'brew install lld') and ensure LLVM_DIR points to an LLVM with lld.")
 endif()
-set(PLI_HAVE_LLD 1)
 message(STATUS "lld headers found: ${LLD_INCLUDE_DIR}")
 
 # Find lld library directory (Homebrew puts dylibs in /opt/homebrew/opt/lld/lib)
@@ -200,6 +224,14 @@ find_library(LLD_ELF_LIB NAMES lldELF)
 find_library(LLD_MACHO_LIB NAMES lldMachO)
 find_library(LLD_COFF_LIB NAMES lldCOFF)
 find_library(LLD_COMMON_LIB NAMES lldCommon)
+# ADR-225: in-process lld is the ONLY link — every lld driver library is a
+# hard requirement (the old soft gate + clang fallback are gone).
+foreach(_lld_lib LLD_ELF_LIB LLD_MACHO_LIB LLD_COFF_LIB LLD_COMMON_LIB)
+  if(NOT ${_lld_lib} OR "${${_lld_lib}}" MATCHES "-NOTFOUND$")
+    message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
+  endif()
+endforeach()
+set(PLI_HAVE_LLD 1)
 set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_COMMON_LIB})
 message(STATUS "lld libraries: ${LLD_LIBRARIES}")
 
@@ -231,8 +263,16 @@ if(NOT PLI_TARGET_TRIPLE)
 endif()
 message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
+# Toolchain prefix baked in as a data-file fallback (ADR-225): the profile
+# runtime / builtins probes try exe-relative first (release layout), then
+# $PLI_TOOLCHAIN_PREFIX, then this build-time prefix (dev machines).
+if(PLI_LLVM_STATIC_PREFIX)
+  set(PLI_TOOLCHAIN_PREFIX "${PLI_LLVM_STATIC_PREFIX}")
+else()
+  get_filename_component(PLI_TOOLCHAIN_PREFIX "${LLVM_TOOLS_BINARY_DIR}" DIRECTORY)
+endif()
 target_compile_definitions(pli PRIVATE
-  PLI_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
+  PLI_TOOLCHAIN_PREFIX="${PLI_TOOLCHAIN_PREFIX}"
   PLI_VERSION="${PLI_VERSION}"
   PLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
   PLI_HAVE_LLD=${PLI_HAVE_LLD}
@@ -255,28 +295,45 @@ endif()
 # shared libLLVM only. Mixing static component archives with the shared lib
 # (pulled in by the Clang targets below) duplicates LLVM globals and crashes
 # flakily at exit after O2 codegen on ARM64 (free(): invalid pointer).
-# Static builds and Apple keep the component archives as before.
-if(LLVM_LINK_LLVM_DYLIB AND NOT APPLE)
+# Static builds, Apple, and the hermetic static prefix (pure-static by
+# construction: no libLLVM.so exists there) keep the component archives.
+# Static zlib/zstd ride in transitively: LLVMConfig re-finds ZLIB::ZLIB and
+# zstd::libzstd_static from the prefix via CMAKE_PREFIX_PATH.
+if(LLVM_LINK_LLVM_DYLIB AND NOT APPLE AND NOT PLI_LLVM_STATIC_PREFIX)
   set(llvm_libs_core LLVM z zstd)
   set(llvm_libs_mc "")
 else()
   # Core/IR (superset of the old `core irreader support linker` set).
+  # ProfileData: InstrProfReader for in-process --fprofile-use (ADR-225).
   llvm_map_components_to_libnames(llvm_libs_core
-    Core IRReader Support BitReader BitWriter Linker)
-  # MC/Target (all targets — initializeAllTargets() needs them all).
-  llvm_map_components_to_libnames(llvm_libs_mc
-    MC MCParser MCDisassembler Object BinaryFormat TargetParser AsmParser AsmPrinter
-    CodeGen SelectionDAG GlobalISel Option
-    X86CodeGen X86AsmParser X86Disassembler X86Desc X86Info
-    AArch64CodeGen AArch64AsmParser AArch64Disassembler AArch64Desc AArch64Info
-    ARM ARMAsmParser ARMCodeGen ARMDesc ARMDisassembler ARMInfo
-    BPF BPFAsmParser BPFCodeGen BPFDesc BPFDisassembler BPFInfo
-    WebAssembly WebAssemblyAsmParser WebAssemblyCodeGen WebAssemblyDesc
-    WebAssemblyDisassembler WebAssemblyInfo
-    NVPTX NVPTXCodeGen NVPTXDesc NVPTXInfo
-    RISCV RISCVAsmParser RISCVCodeGen RISCVDesc RISCVInfo
-    WindowsManifest WindowsDriver LibDriver
-    Passes LTO DTLTO)
+    Core IRReader Support BitReader BitWriter Linker ProfileData)
+  # MC/Target: the distro prefix builds all targets (initializeAllTargets()
+  # needs them all); the hermetic static prefix only builds X86+AArch64, so
+  # map just those — other --triple values already diagnose "no target" at
+  # TargetMachine creation instead of failing configure.
+  if(PLI_LLVM_STATIC_PREFIX)
+    llvm_map_components_to_libnames(llvm_libs_mc
+      MC MCParser MCDisassembler Object BinaryFormat TargetParser AsmParser AsmPrinter
+      CodeGen SelectionDAG GlobalISel Option
+      X86CodeGen X86AsmParser X86Disassembler X86Desc X86Info
+      AArch64CodeGen AArch64AsmParser AArch64Disassembler AArch64Desc AArch64Info
+      WindowsManifest WindowsDriver LibDriver
+      Passes LTO DTLTO)
+  else()
+    llvm_map_components_to_libnames(llvm_libs_mc
+      MC MCParser MCDisassembler Object BinaryFormat TargetParser AsmParser AsmPrinter
+      CodeGen SelectionDAG GlobalISel Option
+      X86CodeGen X86AsmParser X86Disassembler X86Desc X86Info
+      AArch64CodeGen AArch64AsmParser AArch64Disassembler AArch64Desc AArch64Info
+      ARM ARMAsmParser ARMCodeGen ARMDesc ARMDisassembler ARMInfo
+      BPF BPFAsmParser BPFCodeGen BPFDesc BPFDisassembler BPFInfo
+      WebAssembly WebAssemblyAsmParser WebAssemblyCodeGen WebAssemblyDesc
+      WebAssemblyDisassembler WebAssemblyInfo
+      NVPTX NVPTXCodeGen NVPTXDesc NVPTXInfo
+      RISCV RISCVAsmParser RISCVCodeGen RISCVDesc RISCVInfo
+      WindowsManifest WindowsDriver LibDriver
+      Passes LTO DTLTO)
+  endif()
 endif()
 # lld
 llvm_map_components_to_libnames(llvm_libs_lld
@@ -319,9 +376,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
   set_property(TARGET pli PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
   # CMake already invokes lld-link.exe directly for the clang-cl+Ninja link
   # (see CMAKE_LINKER); passing -fuse-ld=lld here would forward a driver-only
-  # flag to lld-link ("ignoring unknown argument"). The -fuse-ld=lld flag is
-  # only needed when linking *through* the clang driver (see src/main.cpp,
-  # which shells out to clang for user programs).
+  # flag to lld-link ("ignoring unknown argument"). User programs link
+  # in-process through lld (ADR-225), never through a clang driver.
   # /DEFAULTLIB:libcmt.lib pulls in the MT-variant CRT and C++ stdlib objects
   # (provides __std_remove_8, __std_replace_8, ___chkstk_ms, etc.) without a
   # RuntimeLibrary mismatch. MSVC libs must come after LLVM/lld libs on the link line.

@@ -18,6 +18,39 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT*) echo "SKIP: windows exe already static"; exit 0 ;;
 esac
 
+# Assert mode: fail if the binary references any toolchain shared library.
+# The static-prefix build must ship no lib/ dir at all.
+if [ "${1:-}" = "--assert-static" ]; then
+  BIN=$2
+  if [ -z "${BIN:-}" ] || [ ! -f "$BIN" ]; then echo "FAIL: --assert-static needs a binary" >&2; exit 1; fi
+  case "$(uname -s)" in
+    Darwin)
+      if otool -L "$BIN" | grep -E "libLLVM|liblld|libclang|libz3|libzstd|libxml2|/opt/homebrew|/opt/local|/usr/local/(llvm|lld|zstd|z3)"; then
+        echo "FAIL: static binary still has toolchain dylib refs" >&2; exit 1
+      fi ;;
+    *)
+      if ldd "$BIN" | grep -E "libLLVM|liblld|libz3|libzstd|libxml2|/usr/lib/llvm|/opt/|not found"; then
+        echo "FAIL: static binary still has toolchain .so refs" >&2; exit 1
+      fi ;;
+  esac
+  echo "static: $BIN links no toolchain shared libraries"
+  exit 0
+fi
+
+# Ship mode (Unix-only; the Windows pack step copies what it needs directly):
+# copy the source-built clang next to pli so user compiles resolve it
+# exe-relative (main.cpp defaultClangPath) instead of a baked absolute path.
+if [ "${1:-}" = "--ship-clang" ]; then
+  LLVM_BIN=$2 DEST=$3
+  if [ -z "${LLVM_BIN:-}" ] || [ -z "${DEST:-}" ]; then echo "FAIL: --ship-clang <llvm-bindir> <destdir>" >&2; exit 1; fi
+  mkdir -p "$DEST"
+  cp "$LLVM_BIN/clang" "$DEST/clang" || { echo "FAIL: no clang in $LLVM_BIN" >&2; exit 1; }
+  chmod +x "$DEST/clang"
+  if command -v codesign >/dev/null 2>&1; then codesign --force --sign - "$DEST/clang" 2>/dev/null || true; fi
+  echo "shipped: $DEST/clang"
+  exit 0
+fi
+
 # Shared libs that belong to the LLVM toolchain (bundled, never system libc).
 match_bundle() {
   case "$(basename "$1")" in

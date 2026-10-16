@@ -24,7 +24,7 @@ tar -xf pli.zip
 move windows-x86_64 %USERPROFILE%\pli
 ```
 
-Keep `pli` and the `lib/` folder it ships with together. On Unix the archive bundles the LLVM closure (`libLLVM`, `liblld`, `libz3`, `libzstd`) that brew/apt ship shared-only, so the release runs standalone where LLVM isn't installed; `lib/` must stay next to the `pli` binary. The Windows ZIP contains just `pli.exe` (fully self-contained). `curl` and `tar` ship with Windows 10+.
+The archive is one file: `pli` links no LLVM shared libraries and shells out to nothing — compile and link happen in-process (ADR-225). Just download it and run `pli hello.pli -o hello`. You need a host C toolchain where it links (Linux: `build-essential`-style CRT files; macOS: Xcode CLT for the SDK path; Windows: MSVC Build Tools for the system libs); `pli` finds those itself. The Windows ZIP contains `pli.exe` (+ tiny `clang_rt.*.lib` helpers next to it). `curl` and `tar` ship with Windows 10+.
 
 A "Hello, world!" program:
 
@@ -115,11 +115,10 @@ Threading is abstracted in the platform seam (`runtime/pli_rt_plat.h`, implement
   <tr><td>Git</td><td>any recent</td><td>Optional; without it pli version reports unknown</td></tr>
 </table>
 
-LLVM sources:
+LLVM sources (two paths — distro for fast iteration, hermetic for releases):
 
-- **Linux:** distro `llvm`/`clang`/`lld` dev packages, or a self-built LLVM.
-- **macOS:** `brew install llvm lld ninja cmake` (note: stock `llvm` formula omits `lld`, so `lld` is a separate formula).
-- **Windows:** LLVM 23 prebuilt (`clang+llvm-23.1.3-x86_64-pc-windows-msvc.tar.xz`) ships clang-cl, lld-link, and llvm-objcopy. Extract it and point `CMAKE_PREFIX_PATH` at the install dir. Forward slashes work best in CMake paths (`C:/llvm-23`).
+- **Distro (default):** Linux distro `llvm`/`clang`/`lld` dev packages; macOS `brew install llvm lld ninja cmake` (stock `llvm` omits `lld`, separate formula); Windows LLVM 23 prebuilt (`clang+llvm-23.1.3-x86_64-pc-windows-msvc.tar.xz`, forward slashes in CMake paths).
+- **Hermetic static (releases, ADR-224):** fetch the prebuilt static toolchain instead of compiling LLVM — `sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps`, then add `-DPLI_LLVM_STATIC_PREFIX=~/pli-deps` to the configure line below. A source build happens only when bumping `scripts/llvm_static.pins` (`sh scripts/build_llvm_static.sh --prefix ~/pli-deps --pack out.tar.zst`, or the `llvm-deps` workflow). Release tarballs from this path contain just `pli` (ADR-225: no shipped clang, no `lib/`).
 
 ### Linux
 
@@ -159,21 +158,13 @@ The compiler itself is `clang-cl` (LLVM), not `cl.exe`.
 - Ninja must be on `PATH` (`pip install ninja`, or a Ninja release, or the VS-bundled copy).
 - Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `pli` itself — use clang-cl + lld-link.
 
-Building LLVM 23.x on Windows (one-time setup, Release, `X86;AArch64` only):
+Building the hermetic toolchain from source (only when bumping `scripts/llvm_static.pins`; all platforms, run from `bash` — on Windows, from a VS `vcvarsall.bat x64` shell):
 
-```bat
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
-
-cmake -G Ninja -S llvm-project/llvm -B llvm-build ^
-  -DCMAKE_BUILD_TYPE=Release ^
-  -DLLVM_ENABLE_PROJECTS="clang;lld" ^
-  -DLLVM_TARGETS_TO_BUILD="X86;AArch64" ^
-  -DCMAKE_INSTALL_PREFIX=C:/llvm-install
-
-cmake --build llvm-build -j --target install
+```sh
+sh scripts/build_llvm_static.sh --prefix ~/pli-deps --pack llvm-static.tar.zst
 ```
 
-Then build `pli` with `-DCMAKE_PREFIX_PATH=C:/llvm-install`.
+Then build `pli` with `-DPLI_LLVM_STATIC_PREFIX=~/pli-deps`. Paste the printed sha256 into the pins file; normal builds and CI fetch the stash instead (`fetch_llvm_static.sh`).
 
 ## Test
 

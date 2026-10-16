@@ -6471,3 +6471,94 @@ attribute is now stripped in all three runtime link paths
 the pair functions write to their out-pointer argument, and the optimizer
 previously eliminated the `load` from the caller's `alloca` because it believed
 nothing could write to that memory.
+
+## ADR-224 — Hermetic static toolchain: LLVM built once from source, stashed, never rebuilt
+
+**Context.** Release tarballs must run where LLVM is not installed. The
+`bundle_standalone.sh` approach (ship `libLLVM`/`liblld`/`libz3`/`libzstd`
+next to `pli` with rewritten rpaths) works but is fragile: Homebrew ships
+`lld` and `z3` shared-only, so a single static binary is unbuildable from
+packages, and every user compile additionally shells out to an external
+`clang` (`main.cpp`: backend fallback, link fallback, and the `-print-*`
+queries feeding the in-process lld link) whose path was baked in absolute at
+build time (`PLI_CLANG`).
+
+**Decision.** Build the toolchain once per platform from source
+(`scripts/build_llvm_static.sh`: zlib + zstd + LLVM/clang/lld 23.1.3, static
+archives only, targets `X86;AArch64`, `LLVM_ENABLE_Z3_SOLVER=OFF`,
+`LLVM_ENABLE_LIBXML2=OFF`) and stash the install prefix as a tarball on a
+versioned `llvm-deps` release. Normal CI and dev machines fetch the pinned,
+checksummed tarball (`scripts/fetch_llvm_static.sh` +
+`scripts/llvm_static.pins`) and configure with
+`-DPLI_LLVM_STATIC_PREFIX=<prefix>`; a source build happens only when a pin
+is bumped (`.github/workflows/llvm-deps.yml`, `workflow_dispatch`). `z3` and
+`libxml2` are compiled out rather than built: `src/` has zero references to
+either (both rode in transitively via `libLLVM.so`), LLVM uses z3 only for
+opt-in SMT analyses, and Windows manifest merging was already covered by
+in-tree stubs (`runtime/libxml2_stubs.c`). System libc/libm stay dynamic
+(macOS forbids static libc; glibc `-static` breaks NSS). The shipped `clang`
+is resolved exe-relative (`main.cpp:defaultClangPath`), falling back to the
+baked path and PATH; `--clang` still overrides everything.
+
+**Consequences.** Release tarballs become `pli` + `clang` with no `lib/` dir;
+`bundle_standalone.sh --assert-static` gates it in CI and in
+`tests/driver/bundle_standalone.sh`. The distro-LLVM path stays the default
+for fast local iteration. Cold toolchain builds (0.5–2 h by platform) happen
+once per LLVM version; per-PR cost is a minutes-long download.
+
+**Rejected.** Fully static libc (platform-hostile, breaks DNS); building z3
+and libxml2 from source to keep them enabled (cost for features pli never
+calls); `actions/cache` as the stash (10 GB cap, LRU eviction — fine as a
+speed layer, not the store of record); all-targets source build (2–3× build
+time for triples pli has no runtime bitcode for).
+
+## ADR-225 — Zero-subprocess driver: in-process codegen, link, LTO, and PGO
+
+**Context.** ADR-224 made releases `pli` + a shipped `clang`, but every user
+compile still shelled out: the backend fallback (`clang -c`), the link
+fallback, and — on the primary in-process path — `clang -print-file-name=`,
+`-print-search-dirs`, `-print-sysroot` to locate the host CRT, plus
+`--flto`/`--fprofile-*` forcing the whole clang pipeline. A shipped clang is
+a second toolchain to keep version-locked with the linked LLVM (IR syntax
+drift otherwise), and `-print-*` answers go stale the moment the user moves
+the binary. Zig proves the end state: one file, everything in-process.
+
+**Decision.** Delete every subprocess from the driver; `PLI_HAVE_LLD` is a
+hard configure requirement (not a gate with a fallback):
+- Host CRT discovery moves to `src/hostcrt.cpp`: per-arch recipe tables
+  probing stable distro locations (Debian-multiarch, Fedora `/usr/lib64`,
+  Arch `/usr/lib`), first-hit-wins, `$PLI_SYSROOT` redirect, and a
+  name-the-package diagnostic (`build-essential`) when CRT objects are
+  missing. Mach-O/COFF probe nothing (SDK libs / MSVC `LIB` env).
+- `--flto=thin|full` emits LTO bitcode in-process (`emitLTOObject`: the real
+  LTO pre-link pipeline + embedded module summary, exactly what clang
+  writes) and in-process lld runs its built-in LTO at link. A summary-less
+  ThinLTO stamp mislinks — learned the hard way, hence the pre-link run.
+- `--fprofile-generate/--fprofile-use=` ride `PassBuilder::PGOOptions`
+  (`src/pgo.cpp`): raw `.profraw` accepted directly (no `llvm-profdata`
+  merge step), the profile runtime links as a data file (exe-relative →
+  `$PLI_TOOLCHAIN_PREFIX` → baked build prefix), and use-mode validates
+  `pli;`-prefixed user-function records against the module (runtime-overlap
+  excluded via the embedded blob's symbol set) so stale profiles fail loudly
+  instead of silently optimizing nothing.
+- PGO+LTO combined is rejected (needs link-time PGO — out of scope).
+- `--clang` stays parsed but undocumented and uninvoked (hidden escape
+  hatch); `xcrun --show-sdk-path` stays on macOS until vendored SDK stubs
+  (Phase 4) — Apple tooling, not clang.
+
+**Consequences.** Release tarballs are just `pli` (Unix) / `pli.exe` + two
+tiny `clang_rt.*.lib` data files (Windows: builtins + profile runtime, copied
+from our own toolchain — no clang binary). `tests/driver/hostcrt.sh` shadows
+`clang` with a failing stub to prove independence; `flto.sh`/`pgo.sh` assert
+no clang in any `-v` transcript.
+
+**Known limits.** In-process LTO executes LLVM passes inside lld and needs a
+single LLVM instance: mixed static-archive + `libLLVM.so` dev builds (brew)
+crash there, so `flto.sh` gates its link half on `--assert-static` — green on
+pure-static builds, SKIP elsewhere. `--debug` is `-O0` without DWARF (no
+debug info is emitted yet). `--triple` for non-host triples diagnoses
+(host-only CRT recipes; use `-c`).
+
+**Rejected.** Keeping the clang fallbacks "just in case" (every fallback is a
+second behavior to test and a stale-toolchain hazard); fully static libc
+(ADR-224, unchanged); vendoring the macOS SDK now (license + drift — phased).

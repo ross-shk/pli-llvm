@@ -1,12 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
-# tests/driver/bundle_standalone.sh — RELEASE.md: the release tarball bundles
-# the LLVM closure (lld/libLLVM/libz3/libzstd) so the binary runs standalone
-# where LLVM isn't installed; brew/apt ship those shared-only, so the script
-# relocates them next to the binary and rewrites rpaths. Only meaningful on
-# platforms where the binary links LLVM dynamically (Unix); Windows is already
-# statically linked. Needs the tooling (install_name_tool/patchelf/codesign).
+# tests/driver/bundle_standalone.sh — standalone check: a static-prefix build
+# links no LLVM closure (--assert-static passes) and compiles+runs directly;
+# a package-manager build still exercises scripts/bundle_standalone.sh, which
+# relocates the shared closure next to the binary and rewrites rpaths.
+# Windows is already statically linked. The legacy path needs
+# install_name_tool/patchelf.
 set -u
 EXE=.exe
 case "$(uname -s)" in
@@ -18,6 +18,18 @@ OUT=tests/driver/out/bundle_standalone
 OUTDIR=tests/driver/out
 mkdir -p "$OUTDIR"
 BUNDLE=$OUTDIR/bundle
+
+# Static-prefix build: nothing to bundle — assert and run $PLI directly.
+if sh scripts/bundle_standalone.sh --assert-static "$PLI" >/dev/null 2>&1; then
+  cat > "$OUT.pli" <<'EOF'
+ bundle: proc options(main);
+    put skip list('PASS bundle_standalone (static, no lib/ needed)');
+ end bundle;
+EOF
+  "$PLI" "$OUT.pli" -o "$OUT.bin$EXE" || { echo "FAIL: static compile"; exit 1; }
+  [ "$("$OUT.bin$EXE")" = "PASS bundle_standalone (static, no lib/ needed)" ] && echo PASS && exit 0
+  echo "FAIL: static run"; exit 1
+fi
 
 # Linux needs patchelf; macOS needs install_name_tool. Skip when missing.
 if [ "$(uname -s)" = "Linux" ] && ! command -v patchelf >/dev/null 2>&1; then

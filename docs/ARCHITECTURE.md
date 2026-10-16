@@ -76,7 +76,7 @@ IRGen              builds an LLVM module with `llvm::IRBuilder`
     │
    ├── `-emit-llvm` ──► textual `.ll` file
    │
-   └── clang ──► object file ──► link with `pli_runtime` ──► executable
+   └── in-process object (integrated assembler; LTO bitcode with `--flto`) ──► in-process lld link with `pli_runtime` ──► executable
 ```
 
 Given several input files, pli runs the pipeline once per file to an
@@ -123,7 +123,7 @@ that passes described for MIR are present in the current compiler.
 
 | Component | Files | Responsibility |
 |---|---|---|
-| Driver | `src/main.cpp` | option parsing, phase sequencing, sub-process invocation |
+| Driver | `src/main.cpp` | option parsing, phase sequencing, in-process codegen/link (no subprocesses, ADR-225) |
 | Diagnostics | `src/diag.{h,cpp}` | locations, severity, rule citations, caret output |
 | Preprocessor | `src/preprocessor.{h,cpp}` | `%INCLUDE`/`%XINCLUDE` and supported preprocessor directives; diagnostics for unsupported forms |
 | Lexer | `src/lexer.{h,cpp}`, `src/token.h` | rules (130)–(151); comments; composite operators; not-symbol spellings |
