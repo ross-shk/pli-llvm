@@ -88,44 +88,48 @@ jobs:
       - name: Strip, assert static, and pack (Unix)
         if: runner.os != 'Windows'
         run: |
-          # Single-file release (ADR-225): assert zero toolchain refs and tar
-          # pli alone — no lib/ dir, no shipped clang. macOS additionally
-          # ships the vendored SDK stubs (ADR-226) so user links need no
-          # Xcode CLT; the release smoke test below exercises that path.
+          # Single-file release (ADR-225/227): assert zero toolchain refs and
+          # tar pli alone — no lib/ dir, no shipped clang, no sysroot dirs.
+          # The link sysroot is EMBEDDED in the binary (musl on Linux, SDK
+          # stubs on macOS); the smoke test below links against the embedded
+          # set. The embed must hold the target arch: populate platform/ from
+          # the arch-native packages before tagging an aarch64 release.
           strip -o build/cmake/pli.stripped build/cmake/pli
           mkdir -p ${{ matrix.platdir }}
           cp build/cmake/pli.stripped ${{ matrix.platdir }}/pli
           sh scripts/bundle_standalone.sh --assert-static ${{ matrix.platdir }}/pli
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            cp -R platform/darwin-sdk ${{ matrix.platdir }}/sdk
-          fi
-          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}
+          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli
 
       - name: Pack into archives (Windows)
         if: runner.os == 'Windows'
         run: |
-          # pli.exe is self-contained (embedded runtime bitcode + /MT): ship
-          # it with its sibling clang.exe (exe-relative resolution). The
-          # compiler-rt builtins resource dir is a promotion-time check: if a
-          # user link needs __divti3 and the stash lacks builtins, pli
-          # diagnoses it (main.cpp) instead of failing silently.
+          # Single-file release (ADR-225/227): pli.exe is self-contained
+          # (embedded runtime bitcode + embedded mingw sysroot + /MT) — ship
+          # the binary alone, no shipped clang, no mingw/ sidecar. The
+          # compiler-rt profile runtime (for --fprofile-generate) is resolved
+          # exe-relative first, then the toolchain resource dir.
           mkdir -p ${{ matrix.platdir }}
           cp build/cmake/pli.exe ${{ matrix.platdir }}/pli.exe
-          cp "$HOME/pli-deps/bin/clang.exe" ${{ matrix.platdir }}/clang.exe
-          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli.exe ${{ matrix.platdir }}/clang.exe
-          powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}/pli.exe','${{ matrix.platdir }}/clang.exe' -DestinationPath '${{ matrix.asset }}.zip'"
+          tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli.exe
+          powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}/pli.exe' -DestinationPath '${{ matrix.asset }}.zip'"
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows'
         run: |
           printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n   end smoke;\n' > /tmp/smoke.pli
           ./${{ matrix.platdir }}/pli /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+          # Self-containment proof (ADR-227): a bogus sysroot must not break
+          # the link — the embedded sysroot wins over the host recipe.
+          PLI_SYSROOT=/nonexistent-pli-test ./${{ matrix.platdir }}/pli /tmp/smoke.pli -o /tmp/smoke2 && /tmp/smoke2
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         run: |
           printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n   end smoke;\n' > /tmp/smoke.pli
           ./build/cmake/pli.exe /tmp/smoke.pli -o /tmp/smoke.exe && /tmp/smoke.exe
+          # Self-containment proof (ADR-227): an empty LIB must not break the
+          # link — the embedded mingw sysroot wins over MSVC.
+          env LIB= ./${{ matrix.platdir }}/pli.exe /tmp/smoke.pli -o /tmp/smoke2.exe && /tmp/smoke2.exe
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'

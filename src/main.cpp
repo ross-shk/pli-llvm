@@ -40,6 +40,7 @@
 
 #include "codegen.h"
 #include "embedded_runtime.h"
+#include "embedded_sysroot.h"
 #include "hostcrt.h"
 #include "pgo.h"
 #include "target.h"
@@ -182,7 +183,7 @@ static void printVersion() {
   // Version/build info embedded at build time (Go/Zig style).
   std::cout << "pli " << PLI_VERSION << " (LLVM " << PLI_LLVM_VERSION << ", "
             << llvm::sys::getDefaultTargetTriple() << ", runtime " << pli::embeddedLibPLISize()
-            << " bytes)\n";
+            << " bytes, sysroot " << pli::embeddedSysrootSize() << " bytes)\n";
 }
 
 static fs::path executablePath(const char* arg0) {
@@ -921,29 +922,119 @@ int main(int argc, char** argv) {
           std::cerr << "pli: runtime object failed (" << rtErr << "), using clang\n";
       }
       if (singleModuleFinalLink || haveRtObj || linkBitcode) {
+        // Single-file self-containment (ADR-227): the link sysroot is
+        // EMBEDDED in pli — release archives hold only the binary. An
+        // exe-relative musl//mingw/ dir is a dev override (iterate on
+        // sysroot files without rebuilding) and wins when complete; the
+        // embedded set is next. $PLI_SYSROOT never redirects either
+        // (self-contained already).
+        // -shared/-static-pie stay on the host recipe (a static sysroot
+        // cannot link them).
+        pli::VendoredSysroot vsys = pli::resolveVendoredSysroot(exeDir.string());
+        const bool muslOverride = vsys.haveMusl;
+        const bool mingwOverride = vsys.haveMingw;
+        // Lazily materialized below (once): avoided entirely when the
+        // override already satisfies the link, or for -c/emit flows.
+        pli::EmbeddedSysroot emb;
+        bool embTried = false;
+        auto ensureEmbedded = [&]() {
+          if (!embTried) {
+            embTried = true;
+            emb = pli::materializeEmbeddedSysroot();
+          }
+        };
+        if (!vsys.haveMusl && !vsys.haveMingw) {
+          ensureEmbedded();
+          if (emb.name == "musl" && !emb.dir.empty()) {
+            vsys.haveMusl = true;
+            vsys.muslDir = emb.dir;
+          } else if (emb.name == "mingw" && !emb.dir.empty()) {
+            vsys.haveMingw = true;
+            vsys.mingwDir = emb.dir;
+          }
+        }
+        bool wantStaticPIE = false;
+        for (const std::string& la : linkArgs) {
+          const std::string f = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
+          if (f == "-static-pie") {
+            wantStaticPIE = true;
+            break;
+          }
+        }
+        const bool useMusl = llt.getObjectFormat() == llvm::Triple::ELF && vsys.haveMusl &&
+                             !wantShared && !wantStaticPIE;
+        const bool useMingw = llt.getObjectFormat() == llvm::Triple::COFF && vsys.haveMingw &&
+                              !wantShared;
+        if (useMusl && verbose)
+          std::cerr << "pli: using vendored musl sysroot ("
+                    << (muslOverride ? "exe-relative override" : "embedded") << ": " << vsys.muslDir
+                    << ")\n";
+        if (useMingw && verbose)
+          std::cerr << "pli: using vendored mingw sysroot ("
+                    << (mingwOverride ? "exe-relative override" : "embedded") << ": "
+                    << vsys.mingwDir << ")\n";
         // Host C-runtime/sysroot recipe (hostcrt.cpp): stable filesystem
         // locations, first-hit-wins, $PLI_SYSROOT redirect. No subprocess.
+        // Skipped entirely on vendored paths (host independence proof: even
+        // a bogus $PLI_SYSROOT cannot break the link).
         std::string sysroot;
         if (const char* env = std::getenv("PLI_SYSROOT"))
           sysroot = env;
-        pli::HostCrt crt = pli::resolveHostCrt(llt, sysroot);
-        if (!crt.ok) {
-          std::cerr << "pli: " << crt.err << "\n";
-          return 1;
+        pli::HostCrt crt;
+        if (!useMusl && !useMingw) {
+          crt = pli::resolveHostCrt(llt, sysroot);
+          if (!crt.ok) {
+            std::cerr << "pli: " << crt.err << "\n";
+            return 1;
+          }
         }
         std::vector<std::string> argStore = {"ld.lld"};
+        if (useMingw) {
+          // MinGW driver (GNU-ld-compatible argv): crt2.o + crtbegin.o, the
+          // objects, fltused.o (MSVC _fltused marker clang emits), then the
+          // import libs + GCC helpers, then crtend.o. libgcc.a covers
+          // __udivti3/___chkstk_ms, so no compiler-rt builtins ride.
+          // -m i386pep is the x86_64 emulation (aarch64 ships its own
+          // sysroot + spelling when that target lands).
+          const std::string& md = vsys.mingwDir;
+          argStore.push_back("-m");
+          argStore.push_back("i386pep");
+          argStore.push_back(md + "/crt2.o");
+          argStore.push_back(md + "/crtbegin.o");
+        }
+        if (useMusl) {
+          // Static musl (matches musl-gcc -static): no interpreter, no host
+          // libdirs, no -lgcc — the binary needs only the kernel at runtime.
+          argStore.push_back("-static");
+          argStore.push_back(vsys.muslDir + "/crt1.o");
+          argStore.push_back(vsys.muslDir + "/crti.o");
+        }
         if (llt.getObjectFormat() == llvm::Triple::MachO) {
-          // Vendored SDK stubs (ADR-226): <exeDir>/sdk (release layout) wins;
-          // otherwise the Xcode CLT provides the syslibroot via xcrun
-          // (Apple tooling, not clang).
+          // Vendored SDK stubs (ADR-226/227): exe-relative <exeDir>/sdk is
+          // a dev override; the embedded stubs are next (single-file
+          // release); otherwise the Xcode CLT provides the syslibroot via
+          // xcrun (Apple tooling, not clang).
           std::string sdkPath;
+          bool sdkOverride = false;
           {
             std::error_code ec;
             fs::path stub = exeDir / "sdk";
-            if (fs::is_directory(stub, ec))
+            if (fs::is_directory(stub, ec)) {
               sdkPath = stub.string();
+              sdkOverride = true;
+            }
           }
           if (sdkPath.empty()) {
+            ensureEmbedded();
+            if (emb.name == "sdk" && !emb.dir.empty())
+              sdkPath = emb.dir;
+          }
+          if (!sdkPath.empty()) {
+            if (verbose)
+              std::cerr << "pli: using vendored SDK stubs ("
+                        << (sdkOverride ? "exe-relative override" : "embedded") << ": " << sdkPath
+                        << ")\n";
+          } else {
             if (FILE* f = popen("xcrun --show-sdk-path 2>/dev/null", "r")) {
               char buf[1024];
               while (fgets(buf, sizeof buf, f))
@@ -952,8 +1043,6 @@ int main(int argc, char** argv) {
             }
             while (!sdkPath.empty() && (sdkPath.back() == '\n' || sdkPath.back() == '\r'))
               sdkPath.pop_back();
-          } else if (verbose) {
-            std::cerr << "pli: using vendored SDK stubs (" << sdkPath << ")\n";
           }
           argStore.push_back("-arch");
           argStore.push_back(std::string(llt.getArchName()));
@@ -961,7 +1050,7 @@ int main(int argc, char** argv) {
             argStore.push_back("-syslibroot");
             argStore.push_back(sdkPath);
           }
-        } else if (llt.getObjectFormat() == llvm::Triple::ELF) {
+        } else if (llt.getObjectFormat() == llvm::Triple::ELF && !useMusl) {
           // PIE startup (matches clang): Scrt1.o + crtbeginS.o/crtendS.o with
           // -pie and an explicit interpreter, else a non-PIE EXEC segfaults.
           if (wantPIE) {
@@ -1012,11 +1101,12 @@ int main(int argc, char** argv) {
             argStore.push_back(runtimeLib);
           else if (runtimeExplicit) {
             std::cerr << "pli: runtime archive not found: " << runtimeLib << "\n";
+            pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           } else if (verbose && linkBitcode)
             std::cerr << "pli: runtime archive not found; MAIN already defines pli_* (embedded)\n";
         }
-        if (llt.getObjectFormat() == llvm::Triple::ELF) {
+        if (llt.getObjectFormat() == llvm::Triple::ELF && !useMusl) {
           if (!wantShared) {
             if (wantPIE) {
               for (const std::string& s : crt.endObjects)
@@ -1032,18 +1122,45 @@ int main(int argc, char** argv) {
           argStore.push_back("-lgcc_s");
           argStore.push_back("--no-as-needed");
         }
-        for (const std::string& s : desc.systemLibs)
-          argStore.push_back(s);
-        if (llt.getObjectFormat() == llvm::Triple::ELF) {
+        if (useMusl) {
+          // musl close: our builtins (128-bit helpers musl omits) + the libc
+          // archive (provides -lc/-lm/pthread) + crtn.o. -L points at the
+          // sysroot so user -l flags (e.g. -lm) resolve to its empty stubs,
+          // never to host libraries. Host -lgcc/system libs stay off: the
+          // binary is fully static.
+          argStore.push_back(vsys.muslDir + "/libpli_builtins-" +
+                             std::string(llt.getArchName()) + ".a");
+          argStore.push_back(vsys.muslDir + "/libc.a");
+          argStore.push_back(vsys.muslDir + "/crtn.o");
+          argStore.push_back("-L" + vsys.muslDir);
+        }
+        if (!useMusl && !useMingw) {
+          for (const std::string& s : desc.systemLibs)
+            argStore.push_back(s);
+        }
+        if (llt.getObjectFormat() == llvm::Triple::ELF && !useMusl) {
           // Trailing helpers (matches clang: -lc -lgcc --as-needed -lgcc_s).
           argStore.push_back("-lgcc");
           argStore.push_back("--as-needed");
           argStore.push_back("-lgcc_s");
           argStore.push_back("--no-as-needed");
         }
-        for (const std::string& f : desc.linkerFlags)
-          argStore.push_back(f);
+        if (!useMingw) {
+          for (const std::string& f : desc.linkerFlags)
+            argStore.push_back(f);
+        } else {
+          // MinGW driver: GNU-style close (crtend.o); the COFF
+          // /entry:/subsystem: flags are not valid here (crt2.o defaults).
+          argStore.push_back(vsys.mingwDir + "/crtend.o");
+        }
         for (const std::string& la : linkArgs) {
+          // Vendored musl dictates a static EXEC: pie-mode spellings would
+          // conflict with the -static above, so drop them (wantPIE is
+          // already off on this path; -static-pie routed to host earlier).
+          const std::string fwd = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
+          if (useMusl && (fwd == "-pie" || fwd == "-no-pie" || fwd == "-no_pie" ||
+                           fwd == "-nopie" || fwd == "-no-pic"))
+            continue;
           if (la.rfind("-Wl,", 0) == 0) {
             // lld takes the flag directly, but ELF lld uses -no-pie (hyphen),
             // not Mach-O's -no_pie (underscore).
@@ -1067,11 +1184,29 @@ int main(int argc, char** argv) {
           if (profRt.empty()) {
             std::cerr << "pli: --fprofile-generate needs the profile runtime (clang_rt.profile-"
                       << llt.getArchName().str() << ".a next to pli)\n";
+            pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           }
           argStore.push_back(profRt);
         }
-        if (llt.getObjectFormat() == llvm::Triple::COFF) {
+        if (useMingw) {
+          // fltused marker + import libs + GCC helpers (MinGW driver takes
+          // GNU -l names; -L points at the vendored dir). Order mirrors the
+          // mingw-gcc recipe: startup, objects, libs, crtend.o (added above).
+          const std::string& md = vsys.mingwDir;
+          argStore.push_back(md + "/fltused.o");
+          argStore.push_back(md + "/chkstk.o");
+          argStore.push_back("-L" + md);
+          // libkernel32.a repeats: one-pass GNU linking needs it again for
+          // symbols referenced by the later import libs.
+          for (const char* lib :
+               {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a", "libucrt.a",
+                "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a",
+                "libuser32.a", "libkernel32.a"})
+            argStore.push_back(std::string("-l:") + lib);
+          argStore.push_back("-o");
+          argStore.push_back(output);
+        } else if (llt.getObjectFormat() == llvm::Triple::COFF) {
           // compiler-rt builtins for 128-bit helpers (__udivti3, __divti3)
           // used by the runtime. Shipped next to pli.exe in the release
           // archive (copied from our own toolchain at pack time); the old
@@ -1107,7 +1242,11 @@ int main(int argc, char** argv) {
             std::cerr << " " << a;
           std::cerr << "\n";
         }
-        if (pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr)) {
+        // ADR-227: the vendored-mingw link runs the MinGW driver (GNU argv);
+        // every other link runs the object-format driver as before.
+        const bool linkOk = useMingw ? pli::linkMinGWExecutable(argv, linkErr)
+                                     : pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr);
+        if (linkOk) {
           for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
             std::error_code ec;
             fs::remove(objs[i], ec);
@@ -1116,6 +1255,7 @@ int main(int argc, char** argv) {
             std::error_code ec;
             fs::remove(rtObj, ec);
           }
+          pli::cleanupMaterializedSysroot(emb.dir);
           return 0;
         }
         std::cerr << "pli: in-process link failed (" << linkErr << ")\n";
@@ -1123,6 +1263,7 @@ int main(int argc, char** argv) {
           std::error_code ec;
           fs::remove(rtObj, ec);
         }
+        pli::cleanupMaterializedSysroot(emb.dir);
         return 1;
       }
     } else {

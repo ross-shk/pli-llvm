@@ -73,4 +73,7 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
                        const std::string& platformBc = "");
 // Link object files + system libs into an executable in-process (needs lld).
 bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err);
+// ADR-227: link via lld's MinGW driver (GNU-ld-compatible, handles mingw-w64
+// CRT objects the COFF driver rejects) for the vendored-mingw sysroot path.
+bool linkMinGWExecutable(llvm::ArrayRef<const char*> args, std::string& err);
 } // namespace pli

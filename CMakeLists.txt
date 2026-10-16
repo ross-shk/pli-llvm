@@ -223,16 +223,18 @@ endif()
 find_library(LLD_ELF_LIB NAMES lldELF)
 find_library(LLD_MACHO_LIB NAMES lldMachO)
 find_library(LLD_COFF_LIB NAMES lldCOFF)
+find_library(LLD_MINGW_LIB NAMES lldMinGW)
 find_library(LLD_COMMON_LIB NAMES lldCommon)
 # ADR-225: in-process lld is the ONLY link — every lld driver library is a
 # hard requirement (the old soft gate + clang fallback are gone).
-foreach(_lld_lib LLD_ELF_LIB LLD_MACHO_LIB LLD_COFF_LIB LLD_COMMON_LIB)
+# ADR-227 adds the MinGW driver (vendored-mingw sysroot links need it).
+foreach(_lld_lib LLD_ELF_LIB LLD_MACHO_LIB LLD_COFF_LIB LLD_MINGW_LIB LLD_COMMON_LIB)
   if(NOT ${_lld_lib} OR "${${_lld_lib}}" MATCHES "-NOTFOUND$")
     message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
   endif()
 endforeach()
 set(PLI_HAVE_LLD 1)
-set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_COMMON_LIB})
+set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_MINGW_LIB} ${LLD_COMMON_LIB})
 message(STATUS "lld libraries: ${LLD_LIBRARIES}")
 
 add_library(pli_rules STATIC ${CMAKE_BINARY_DIR}/rules.cpp)
@@ -337,10 +339,10 @@ else()
 endif()
 # lld
 llvm_map_components_to_libnames(llvm_libs_lld
-  lldELF lldMachO lldCOFF lldCommon)
+  lldELF lldMachO lldCOFF lldMinGW lldCommon)
 
 # Use dynamically found lld libraries if available
-if(LLD_LIBRARIES AND NOT "${LLD_LIBRARIES}" STREQUAL "lldELF lldMachO lldCOFF lldCommon lldDriver")
+if(LLD_LIBRARIES AND NOT "${LLD_LIBRARIES}" STREQUAL "lldELF lldMachO lldCOFF lldMinGW lldCommon lldDriver")
   set(llvm_libs_lld ${LLD_LIBRARIES})
 endif()
 
@@ -403,6 +405,8 @@ endif()
 
 # Force-include lld + host target so their symbols survive static dead-stripping.
 # Homebrew lld only provides dynamic libraries, so use those directly.
+# (No whole-archive for lldMinGW: its static initializers crash pli at
+# startup; the direct lld::mingw::link reference pulls what the link needs.)
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   target_link_options(pli PRIVATE
     -Wl,-force_load,${LLD_ELF_LIB}
@@ -625,6 +629,93 @@ add_custom_command(
 add_custom_target(embedded_runtime_inc_default DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc ${CMAKE_BINARY_DIR}/embedded_rtplat.inc)
 add_dependencies(pli embedded_runtime_inc_default)
 
+# Embedded link sysroot (ADR-227: single-binary distribution). Release
+# archives contain only pli(.exe): the link inputs under platform/ are
+# compiled in as byte arrays (scripts/gen_sysroot_embed.py, one TU per file
+# so large archives stay parallel) and materialized to a temp dir at link
+# time (src/hostcrt.cpp). Only the build host's OS set is embedded, and only
+# when the checked-in files match the build arch — an arch gap (or missing
+# sources) embeds an empty table with a warning, and the driver falls back
+# to the host toolchain. aarch64 releases populate the arch-native sysroot
+# dirs before tagging (see .github/workflows/release.yml).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  set(PLI_BUILD_ARCH x86_64)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|ARM64|arm64)$")
+  set(PLI_BUILD_ARCH aarch64)
+else()
+  set(PLI_BUILD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}")
+set(PLI_SYSROOT_SET_NAME "")
+set(PLI_SYSROOT_FILES "")
+set(PLI_SYSROOT_KNOWN_OS FALSE)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(PLI_SYSROOT_KNOWN_OS TRUE)
+  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/linux-musl")
+  set(PLI_SYSROOT_SET_NAME "musl")
+  if(PLI_BUILD_ARCH STREQUAL "x86_64")
+    set(PLI_SYSROOT_FILES crt1.o crti.o crtn.o libc.a libdl.a libm.a
+        libpthread.a librt.a "libpli_builtins-${PLI_BUILD_ARCH}.a")
+  endif()
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  set(PLI_SYSROOT_KNOWN_OS TRUE)
+  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/windows-mingw")
+  set(PLI_SYSROOT_SET_NAME "mingw")
+  if(PLI_BUILD_ARCH STREQUAL "x86_64")
+    set(PLI_SYSROOT_FILES crt2.o crtbegin.o crtend.o fltused.o chkstk.o
+        libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a
+        libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a)
+  endif()
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  # .tbd stubs are text symbol lists (arch-independent), so no arch gate.
+  set(PLI_SYSROOT_KNOWN_OS TRUE)
+  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/darwin-sdk")
+  set(PLI_SYSROOT_SET_NAME "sdk")
+  set(PLI_SYSROOT_FILES usr/lib/libm.tbd usr/lib/libSystem.tbd)
+endif()
+# Always generated (empty table on unknown OSes / arch gaps) so
+# src/embedded_sysroot.cpp compiles everywhere.
+set(PLI_SYSROOT_ABS "")
+set(PLI_SYSROOT_MISSING "")
+foreach(f ${PLI_SYSROOT_FILES})
+  if(EXISTS "${PLI_SYSROOT_SRC_DIR}/${f}")
+    list(APPEND PLI_SYSROOT_ABS "${PLI_SYSROOT_SRC_DIR}/${f}")
+  else()
+    list(APPEND PLI_SYSROOT_MISSING "${f}")
+  endif()
+endforeach()
+if(PLI_SYSROOT_KNOWN_OS AND NOT "${PLI_SYSROOT_MISSING}" STREQUAL "")
+  list(REMOVE_ITEM PLI_SYSROOT_FILES ${PLI_SYSROOT_MISSING})
+  message(WARNING "link sysroot incomplete under ${PLI_SYSROOT_SRC_DIR} (missing: ${PLI_SYSROOT_MISSING}) — embedding ${PLI_SYSROOT_FILES}; user links fall back to the host toolchain for the rest")
+elseif(PLI_SYSROOT_KNOWN_OS AND PLI_SYSROOT_FILES STREQUAL "")
+  message(WARNING "no embeddable link sysroot for ${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH} — user links use the host toolchain (populate platform/ from arch-native packages before tagging)")
+endif()
+# Generated TU per file (sanitize mirrors gen_sysroot_embed.py: every
+# non-alphanumeric run becomes '_'). "none" sentinel: an empty set name
+# would risk CMake empty-arg dropping shifting the script's argv.
+if(PLI_SYSROOT_SET_NAME STREQUAL "")
+  set(PLI_SYSROOT_SET_NAME "none")
+endif()
+set(PLI_SYSROOT_GEN_CPPS "")
+foreach(f ${PLI_SYSROOT_FILES})
+  string(REGEX REPLACE "[^0-9A-Za-z]+" "_" _stem "${f}")
+  string(REGEX REPLACE "^_+|_+$" "" _stem "${_stem}")
+  list(APPEND PLI_SYSROOT_GEN_CPPS "${CMAKE_BINARY_DIR}/sysroot_embed/${_stem}.cpp")
+endforeach()
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/embedded_sysroot.inc ${PLI_SYSROOT_GEN_CPPS}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_sysroot_embed.py
+          "${PLI_SYSROOT_SRC_DIR}" "${CMAKE_BINARY_DIR}/sysroot_embed" pli_sysroot_
+          ${CMAKE_BINARY_DIR}/embedded_sysroot.inc ${PLI_SYSROOT_SET_NAME} ${PLI_SYSROOT_FILES}
+  DEPENDS ${PLI_SYSROOT_ABS} ${CMAKE_SOURCE_DIR}/scripts/gen_sysroot_embed.py
+  COMMENT "embedding link sysroot (${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH})"
+  VERBATIM)
+add_custom_target(embedded_sysroot_inc
+  DEPENDS ${CMAKE_BINARY_DIR}/embedded_sysroot.inc ${PLI_SYSROOT_GEN_CPPS})
+add_dependencies(pli embedded_sysroot_inc)
+target_sources(pli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/embedded_sysroot.cpp
+                 ${PLI_SYSROOT_GEN_CPPS})
+
 # Generated rules table for --explain (see scripts/gen_rules.py); the spec and
 # the generator are the source of truth, so regenerate on every build.
 add_custom_command(
@@ -660,9 +751,9 @@ find_program(SCAN_BUILD_BIN NAMES scan-build scan-build-py
   HINTS ${LLVM_TOOLS_BINARY_DIR})
 
 # All project sources managed by clang-format / clang-tidy.
-  set(ALL_CPP_SOURCES ${PLI_SOURCES})
+  set(ALL_CPP_SOURCES ${PLI_SOURCES} src/embedded_sysroot.cpp)
   set(ALL_CPP_HEADERS
-    src/ast.h src/codegen.h src/diag.h src/embedded_runtime.h src/explain.h
+    src/ast.h src/codegen.h src/diag.h src/embedded_runtime.h src/embedded_sysroot.h src/explain.h
     src/hir.h src/irgen.h src/lexer.h src/parser.h src/preprocessor.h
     src/sema.h src/target.h src/token.h src/types.h)
   if(PLI_ENABLE_MLIR)

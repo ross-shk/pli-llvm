@@ -8,6 +8,7 @@
 // prepended so a non-root host link can be redirected.
 #include "hostcrt.h"
 
+#include "embedded_sysroot.h"
 // Host.h moved from Support to TargetParser in LLVM 19; support both.
 #if __has_include("llvm/TargetParser/Host.h")
 #include "llvm/TargetParser/Host.h"
@@ -16,7 +17,14 @@
 #endif
 #include "llvm/TargetParser/Triple.h"
 #include <filesystem>
+#include <fstream>
 #include <vector>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -64,7 +72,117 @@ std::vector<std::string> libDirsFromRoots(const std::vector<std::string>& roots,
 }
 
 bool isHost(const llvm::Triple& t) { return t.getTriple() == llvm::sys::getDefaultTargetTriple(); }
+
+// ADR-227: every file below must exist for the sysroot to count (mirrors the
+// release pack list; a partial dir falls back to the host recipe silently).
+bool allExist(const fs::path& dir, const std::vector<std::string>& names) {
+  for (const std::string& n : names) {
+    std::error_code ec;
+    if (!fs::is_regular_file(dir / n, ec))
+      return false;
+  }
+  return true;
+}
 } // namespace
+
+// The builtins archive is arch-specific (embedded per build arch): a
+// foreign-arch sysroot must not count — its link would fail later on the
+// missing arch file. Matches the CMake-embedded name (PLI_BUILD_ARCH).
+bool haveArchBuiltins(const fs::path& musl) {
+  const std::string want =
+      "libpli_builtins-" +
+      llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArchName().str() + ".a";
+  std::error_code ec;
+  return fs::is_regular_file(musl / want, ec);
+}
+
+// musl static (Linux): startup objects + the single libc archive + empty
+// libm/pthread/dl/rt stubs (separate files, so user -l flags resolve) +
+// our renamed builtins archive for 128-bit helpers (__udivti3 in
+// wide-decimal formatting, which musl omits; renamed so the hostcrt
+// clang-shadow check never trips on the filename).
+bool detectMusl(const fs::path& musl) {
+  return allExist(musl, {"crt1.o", "crti.o", "crtn.o", "libc.a"}) && haveArchBuiltins(musl);
+}
+
+// mingw-w64 (Windows): CRT startup + import libs + GCC helpers. fltused.o
+// is a one-word stub (int _fltused) for the MSVC-ABI marker clang emits;
+// chkstk.o is a jmp thunk (__chkstk -> ___chkstk_ms) for the GNU-named
+// stack probe of dynamic alloca frames; libgcc.a covers the MSVC-named
+// probe plus __udivti3/___chkstk_ms, so no compiler-rt builtins ride.
+bool detectMingw(const fs::path& mingw) {
+  return allExist(mingw, {"crt2.o", "crtbegin.o", "crtend.o", "fltused.o", "chkstk.o", "libgcc.a",
+                          "libkernel32.a", "libmsvcrt.a", "libmingw32.a", "libmingwex.a",
+                          "libmoldname.a", "libucrt.a", "libadvapi32.a", "libshell32.a",
+                          "libuser32.a"});
+}
+
+VendoredSysroot resolveVendoredSysroot(const std::string& exeDir) {
+  VendoredSysroot out;
+  if (exeDir.empty())
+    return out;
+  fs::path musl = fs::path(exeDir) / "musl";
+  fs::path mingw = fs::path(exeDir) / "mingw";
+  if (detectMusl(musl)) {
+    out.haveMusl = true;
+    out.muslDir = musl.string();
+  }
+  if (detectMingw(mingw)) {
+    out.haveMingw = true;
+    out.mingwDir = mingw.string();
+  }
+  return out;
+}
+
+EmbeddedSysroot materializeEmbeddedSysroot() {
+  EmbeddedSysroot out;
+  size_t n = 0;
+  const SysrootFile* files = embeddedSysrootFiles(&n);
+  const char* setName = embeddedSysrootName();
+  if (!files || n == 0 || !setName || !*setName)
+    return out;
+  std::error_code ec;
+  fs::path base = fs::temp_directory_path(ec);
+  if (ec)
+    return out;
+  // One link per invocation: pid-unique dir, started clean so a stale
+  // crash leftover can never mix with fresh blobs. (Relative paths inside
+  // the set, e.g. sdk's usr/lib/..., are recreated below.)
+  fs::path dir = base / ("pli-sysroot-" + std::to_string(getpid()));
+  fs::remove_all(dir, ec);
+  auto fail = [&]() {
+    std::error_code cec;
+    fs::remove_all(dir, cec);
+    return EmbeddedSysroot();
+  };
+  for (size_t i = 0; i < n; ++i) {
+    fs::path p = dir / files[i].path;
+    fs::create_directories(p.parent_path(), ec);
+    if (ec)
+      return fail();
+    std::ofstream os(p, std::ios::binary | std::ios::trunc);
+    if (!os)
+      return fail();
+    os.write(reinterpret_cast<const char*>(files[i].data),
+             static_cast<std::streamsize>(files[i].len));
+    os.close();
+    if (!os)
+      return fail();
+  }
+  out.name = setName;
+  out.dir = dir.string();
+  return out;
+}
+
+void cleanupMaterializedSysroot(const std::string& dir) {
+  if (dir.empty())
+    return;
+  // Only remove what materializeEmbeddedSysroot created (pid-scoped temp).
+  if (dir.find("pli-sysroot-") == std::string::npos)
+    return;
+  std::error_code ec;
+  fs::remove_all(fs::path(dir), ec);
+}
 
 HostCrt resolveHostCrt(const llvm::Triple& triple, const std::string& sysroot) {
   HostCrt out;

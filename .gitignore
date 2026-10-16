@@ -14,6 +14,11 @@ design-docs/
 
 # test baselines are source of truth, not build output
 !tests/*/expected/*.out
+# ADR-227: vendored sysroots are release data, not build output
+!platform/linux-musl/*.o
+!platform/linux-musl/*.a
+!platform/windows-mingw/*.o
+!platform/windows-mingw/*.a
 .DS_Store
 zapp.yaml
 docs/archive/

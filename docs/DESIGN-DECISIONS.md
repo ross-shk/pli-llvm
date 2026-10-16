@@ -6575,10 +6575,10 @@ mirroring the SDK layout): `libSystem.tbd` exporting the union of undefined
 symbols over the embedded runtime's objects plus compiler-builtin spillover
 (43 symbols: stdio, malloc, pthread, strings, stack protector, `__udivti3`,
 `__tlv_bootstrap`), and a defensive `libm.tbd`. The driver prefers
-`<exeDir>/sdk` (release tarballs ship it; `tests/driver/sdk_stubs.sh`
-proves a staged copy links with no Apple SDK path in the transcript) and
-falls back to `xcrun` otherwise — including all dev builds, which keep
-working exactly as before.
+`<exeDir>/sdk` and falls back to `xcrun` otherwise — including all dev
+builds, which keep working exactly as before. (ADR-227 later embeds the
+stubs in the binary for the one-file goal; the exe-relative dir stays as a
+dev override and `tests/driver/vendor_sysroot.sh` absorbs `sdk_stubs.sh`.)
 
 **Consequences.** macOS releases need no Xcode CLT for user compiles. A user
 program referencing a symbol outside the stub fails at link with lld's
@@ -6587,6 +6587,82 @@ must stay a subset of the real export list (superset links would fail at
 runtime on the host instead).
 
 **Rejected.** Copying Apple's `.tbd` files (redistribution restriction —
-hence hand-written); embedding the stubs in the binary (keeps the tarball
-layout obvious: `pli` + `sdk/`; embedding stays an option if single-file
-purity demands it); covering iOS/simulator targets (host-only recipes).
+hence hand-written); covering iOS/simulator targets (host-only recipes).
+(Embedding the stubs was deferred here and done in ADR-227.)
+
+## ADR-227 — Embedded sysroots: one file, link with nothing except the OS
+
+**Context.** ADR-225/226 left user links host-dependent everywhere but macOS:
+Linux needs build-essential CRT objects (`Scrt1.o`, `crti.o`,
+`crtbeginS.o`, …) probed from the filesystem (`src/hostcrt.cpp`), Windows
+needs MSVC system libs (`kernel32.lib`, `ucrt.lib`, …) via `LIB`
+(`src/target.cpp`). Zig proves the end state: the compiler ships its own
+CRT + libc and links in-process, so the machine that *runs* `pli` needs no
+C toolchain — only the OS. The distribution goal is one file: release
+archives hold only `pli`/`pli.exe` — no sidecar dirs. (Side finding: the
+host ELF recipe never searches GCC's libdir, so a stock-Ubuntu PIE link
+already fails on `crtbeginS.o`; the embedded path below fixes the default
+case. `-shared` stays host-routed.)
+
+**Decision.** Vendor three minimal sysroots under `platform/` as embed
+sources (provenance in `platform/README.md`) and compile them into the
+binary (`scripts/gen_sysroot_embed.py`, one TU per file — the same
+mechanism as the runtime bitcode, no binutils needed on any host):
+- Linux `musl` (MIT): musl static sysroot — `crt1.o`, `crti.o`, `crtn.o`,
+  `libc.a`, empty `libm.a`/`libpthread.a`/`libdl.a`/`librt.a` stubs (so user
+  `-l` flags resolve), plus `libpli_builtins-<arch>.a` (compiler-rt 128-bit
+  helpers musl omits, renamed so the hostcrt clang-shadow check never trips
+  on the filename). The driver links `-static` (no interpreter, no host
+  libdirs, no `-lgcc`, no `-lm`/`-lc`): the binary needs only the kernel.
+- Windows `mingw` (public domain/Zope + GCC Runtime Exception for
+  `libgcc.a`): mingw-w64 `crt2.o`, `crtbegin.o`/`crtend.o`, `fltused.o`
+  (one-word `int _fltused` stub for the MSVC-ABI marker clang emits),
+  `chkstk.o` (a `jmp ___chkstk_ms` thunk for the GNU-named stack probe of
+  dynamic-`alloca` frames), `libgcc.a` (covers `__udivti3`/`___chkstk_ms`,
+  so no compiler-rt builtins ride), and import libs `libkernel32.a`,
+  `libmsvcrt.a`, `libmingw32.a`, `libmingwex.a`, `libmoldname.a`,
+  `libucrt.a`, `libadvapi32.a`, `libshell32.a`, `libuser32.a`. The driver
+  links via lld's MinGW driver (`lld::mingw::link`, new
+  `linkMinGWExecutable` in `src/codegen.cpp` — the COFF driver rejects
+  mingw objects' GNU-isms like `.refptr.__image_base__`) with the
+  `mingw-gcc` recipe order. Runtime needs only OS DLLs.
+- macOS `sdk` (ADR-226's stubs, now embedded): `usr/lib/libm.tbd`,
+  `usr/lib/libSystem.tbd`, passed as the `-syslibroot`.
+At link time the driver materializes the embedded set to a temp dir
+(`materializeEmbeddedSysroot` in `src/hostcrt.{h,cpp}`, removed after the
+link) and routes there with `-v` naming the source; an exe-relative
+`musl/`/`mingw/`/`sdk/` dir next to the binary is a dev override (iterate
+without rebuilding) and wins when complete. The host recipe is skipped
+entirely on vendored paths — even a bogus `$PLI_SYSROOT` cannot break the
+link. `tests/driver/vendor_sysroot.sh` proves it in two phases — binary
+staged ALONE (embedded path) and with override dirs — host CRT hidden
+(Linux) / `LIB` scrubbed (Windows) / no Apple SDK leak (macOS), static
+output (Linux), no MSVC input (Windows); it absorbs `sdk_stubs.sh`, which
+is deleted. `lldMinGW` joins the hard-required lld libs in `CMakeLists.txt`
+(found in both the prebuilt and distro LLVM 23).
+
+**Consequences.** Release tarballs are one file: `pli` (Linux/macOS),
+`pli.exe` (Windows) — the binary grows ~3 MB (Linux), ~12 MB (Windows),
+~8 KB (macOS); `pli version` reports the embedded sysroot bytes. Full suites
+pass with no host toolchain (Windows 100%, Linux 590/594 with only
+`-shared` host-routed). Only the build host's OS set is embedded, and only
+when the checked-in files match the build arch (warns otherwise and falls
+back to host): x86_64 ships now; aarch64 releases populate the arch-native
+dirs before tagging (musl detection additionally requires the current
+arch's builtins file, so a foreign-arch dir never counts).
+
+**Known limits.** `-shared`/`-static-pie` stay on the host recipe (a static
+sysroot cannot link them); cross-`--triple` links stay `-c`-only (ADR-225);
+`--fprofile-generate` still needs its exe-relative profile runtime;
+materialization needs a writable temp dir (falls back to host otherwise).
+
+**Rejected.** Shipping exe-relative sidecar dirs (`musl/`, `mingw/`, `sdk/`
+in the tarballs — violates the one-file goal); vendoring glibc CRT objects
++ versioned `.so` stubs (LGPL redistribution + per-distro symbol-version
+drift — musl static sidesteps both); linking mingw objects with the COFF
+driver (rejects GNU-isms — hence the MinGW driver); `libgcc_eh.a`
+(unneeded: no C++ exceptions cross the link); aliasing `__chkstk` via
+`--defsym` (driver-dependent spelling — the one-instruction thunk is exact
+and portable); compressing the blobs (no decompressor dependency — raw
+arrays ride the existing embed mechanism); a stash release for the ~12 MB
+now (revisit if they grow — same evolution as ADR-224's LLVM stash).

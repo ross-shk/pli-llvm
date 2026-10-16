@@ -24,7 +24,7 @@ tar -xf pli.zip
 move windows-x86_64 %USERPROFILE%\pli
 ```
 
-The archive is one file: `pli` links no LLVM shared libraries and shells out to nothing — compile and link happen in-process. Just download it and run `pli hello.pli -o hello`. You need a host C toolchain where it links (Linux: `build-essential`-style CRT files; macOS: nothing — the tarball's `sdk/` stubs cover the link, Xcode CLT only as fallback; Windows: MSVC Build Tools for the system libs); `pli` finds those itself. The Windows ZIP contains `pli.exe` (+ tiny `clang_rt.*.lib` helpers next to it). `curl` and `tar` ship with Windows 10+.
+The archive is one file (`pli` / `pli.exe`, ADR-227): it links no LLVM shared libraries, shells out to nothing, and carries its link sysroot embedded — compile and link happen in-process with nothing except the OS installed. Just download it and run `pli hello.pli -o hello`. User links need no host toolchain: Linux binaries link musl static from the embedded sysroot (no build-essential), macOS links from the embedded SDK stubs (no Xcode CLT, Xcode only as fallback), Windows links from the embedded mingw sysroot (no MSVC Build Tools). An exe-relative `musl/`/`mingw/`/`sdk/` dir next to the binary overrides the embedded set (dev use); otherwise `pli` falls back to a host toolchain. (Tiny `clang_rt.*.lib` helpers may sit next to it, used only by the host-toolchain fallback and `--fprofile-generate` — the vendored link needs none of them.) `curl` and `tar` ship with Windows 10+.
 
 A "Hello, world!" program:
 

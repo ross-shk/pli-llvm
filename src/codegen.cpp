@@ -25,6 +25,7 @@
 LLD_HAS_DRIVER(elf)
 LLD_HAS_DRIVER(macho)
 LLD_HAS_DRIVER(coff)
+LLD_HAS_DRIVER(mingw)
 #endif
 
 namespace pli {
@@ -352,5 +353,16 @@ bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& e
     err = "unsupported object format";
     return false;
   }
+}
+
+// ADR-227: the MinGW driver links GNU mingw-w64 objects (crt2.o,
+// libmingw32.a with its .refptr.__image_base__ GNU-isms) that the COFF
+// driver rejects. Same Common-driver argv contract as linkExecutable.
+bool linkMinGWExecutable(llvm::ArrayRef<const char*> args, std::string& err) {
+#if !PLI_HAVE_LLD
+#error "in-process lld is mandatory (ADR-225): configure against an LLVM that ships lld"
+#endif
+  (void)err;
+  return lld::mingw::link(args, llvm::outs(), llvm::errs(), false, false);
 }
 } // namespace pli

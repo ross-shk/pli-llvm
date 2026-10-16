@@ -78,6 +78,13 @@ IRGen              builds an LLVM module with `llvm::IRBuilder`
    │
    └── in-process object (integrated assembler; LTO bitcode with `--flto`) ──► in-process lld link with `pli_runtime` ──► executable
 ```
+Self-containment (ADR-227): the link sysroot is embedded in the binary —
+`musl` (Linux, `-static`, needs only the kernel), `mingw` (Windows, MinGW
+driver, needs only OS DLLs), `sdk` (macOS stubs, ADR-226) — and materializes
+to a temp dir at link time, so release archives hold only `pli`/`pli.exe`.
+An exe-relative `musl/`/`mingw/`/`sdk/` dir overrides the embedded set (dev
+use); otherwise the driver falls back to the host toolchain (probed CRT
+recipes / MSVC `LIB` / `xcrun`). `-shared`/`-static-pie` stay host-routed.
 
 Given several input files, pli runs the pipeline once per file to an
 independent relocatable object and links them all with `pli_runtime` into one
