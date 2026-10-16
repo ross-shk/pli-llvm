@@ -24,7 +24,7 @@ tar -xf pli.zip
 move windows-x86_64 %USERPROFILE%\pli
 ```
 
-The archive is one file: `pli` links no LLVM shared libraries and shells out to nothing — compile and link happen in-process (ADR-225). Just download it and run `pli hello.pli -o hello`. You need a host C toolchain where it links (Linux: `build-essential`-style CRT files; macOS: Xcode CLT for the SDK path; Windows: MSVC Build Tools for the system libs); `pli` finds those itself. The Windows ZIP contains `pli.exe` (+ tiny `clang_rt.*.lib` helpers next to it). `curl` and `tar` ship with Windows 10+.
+The archive is one file: `pli` links no LLVM shared libraries and shells out to nothing — compile and link happen in-process. Just download it and run `pli hello.pli -o hello`. You need a host C toolchain where it links (Linux: `build-essential`-style CRT files; macOS: nothing — the tarball's `sdk/` stubs cover the link, Xcode CLT only as fallback; Windows: MSVC Build Tools for the system libs); `pli` finds those itself. The Windows ZIP contains `pli.exe` (+ tiny `clang_rt.*.lib` helpers next to it). `curl` and `tar` ship with Windows 10+.
 
 A "Hello, world!" program:
 

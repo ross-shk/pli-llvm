@@ -1,0 +1,17 @@
+--- !tapi-tbd
+# Hand-written minimal macOS SDK stub for pli (ADR-226). Same provenance and
+# rules as libSystem.tbd in this directory. On macOS libm is part of
+# libSystem; this stub exists so -lm resolves inside the stub sysroot. The
+# embedded runtime currently calls no libm entry points (math lives in
+# runtime/rt_mathport.c), so this lists the common ones defensively — all
+# present in the real libm.
+tbd-version:     4
+targets:         [ arm64-macos, x86_64-macos ]
+install-name:    '/usr/lib/libm.dylib'
+current-version: 1
+compatibility-version: 1
+exports:
+  - targets: [ arm64-macos, x86_64-macos ]
+    symbols: [ _ceil, _cos, _fabs, _floor, _fmod, _log, _log10, _pow, _sin,
+               _sqrt, _tan ]
+...

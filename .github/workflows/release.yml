@@ -88,13 +88,17 @@ jobs:
       - name: Strip, assert static, and pack (Unix)
         if: runner.os != 'Windows'
         run: |
-          # Static-prefix build ships no lib/ dir: assert zero toolchain refs
-          # and tar pli + its sibling clang (exe-relative resolution).
+          # Single-file release (ADR-225): assert zero toolchain refs and tar
+          # pli alone — no lib/ dir, no shipped clang. macOS additionally
+          # ships the vendored SDK stubs (ADR-226) so user links need no
+          # Xcode CLT; the release smoke test below exercises that path.
           strip -o build/cmake/pli.stripped build/cmake/pli
           mkdir -p ${{ matrix.platdir }}
           cp build/cmake/pli.stripped ${{ matrix.platdir }}/pli
           sh scripts/bundle_standalone.sh --assert-static ${{ matrix.platdir }}/pli
-          sh scripts/bundle_standalone.sh --ship-clang "$HOME/pli-deps/bin" ${{ matrix.platdir }}
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cp -R platform/darwin-sdk ${{ matrix.platdir }}/sdk
+          fi
           tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}
 
       - name: Pack into archives (Windows)

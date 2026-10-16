@@ -1,0 +1,26 @@
+--- !tapi-tbd
+# Hand-written minimal macOS SDK stub for pli (ADR-226). NOT copied from
+# Apple's SDK: only the linker's symbol names are listed (facts, one per
+# line), which is all in-process lld needs to resolve -lSystem at link time.
+# At runtime dyld loads the real libSystem from the host, so this file must
+# stay a subset of the real export list. Coverage: every undefined symbol of
+# the embedded pli runtime (see nm -u over runtime/*.o) plus compiler-builtin
+# spillover (memcpy/memmove, 128-bit helpers), on arm64 + x86_64.
+tbd-version:     4
+targets:         [ arm64-macos, x86_64-macos ]
+install-name:    '/usr/lib/libSystem.B.dylib'
+current-version: 1351
+compatibility-version: 1
+exports:
+  - targets: [ arm64-macos, x86_64-macos ]
+    symbols: [ ___error, ___stack_chk_fail, ___stack_chk_guard, ___stderrp,
+               ___stdinp, ___stdoutp, ___udivti3, ___umodti3,
+               __tlv_bootstrap, _abort, _calloc, _exit, _fclose, _ferror,
+               _fflush, _fgetc, _fopen, _fputc, _fread, _free, _fwrite,
+               _getchar, _localtime_r, _malloc, _memcmp, _memcpy, _memmove,
+               _memset, _nanosleep, _pclose, _popen, _pthread_cond_broadcast,
+               _pthread_cond_init, _pthread_cond_signal, _pthread_cond_wait,
+               _pthread_create, _pthread_detach, _pthread_mutex_init,
+               _pthread_mutex_lock, _pthread_mutex_unlock, _pthread_once,
+               _realloc, _strlen, _time, _vfprintf ]
+...

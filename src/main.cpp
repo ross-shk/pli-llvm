@@ -933,17 +933,28 @@ int main(int argc, char** argv) {
         }
         std::vector<std::string> argStore = {"ld.lld"};
         if (llt.getObjectFormat() == llvm::Triple::MachO) {
-          // Phase 4 replaces xcrun with vendored SDK stubs; until then the
-          // Xcode CLT provides the syslibroot (Apple tooling, not clang).
+          // Vendored SDK stubs (ADR-226): <exeDir>/sdk (release layout) wins;
+          // otherwise the Xcode CLT provides the syslibroot via xcrun
+          // (Apple tooling, not clang).
           std::string sdkPath;
-          if (FILE* f = popen("xcrun --show-sdk-path 2>/dev/null", "r")) {
-            char buf[1024];
-            while (fgets(buf, sizeof buf, f))
-              sdkPath += buf;
-            pclose(f);
+          {
+            std::error_code ec;
+            fs::path stub = exeDir / "sdk";
+            if (fs::is_directory(stub, ec))
+              sdkPath = stub.string();
           }
-          while (!sdkPath.empty() && (sdkPath.back() == '\n' || sdkPath.back() == '\r'))
-            sdkPath.pop_back();
+          if (sdkPath.empty()) {
+            if (FILE* f = popen("xcrun --show-sdk-path 2>/dev/null", "r")) {
+              char buf[1024];
+              while (fgets(buf, sizeof buf, f))
+                sdkPath += buf;
+              pclose(f);
+            }
+            while (!sdkPath.empty() && (sdkPath.back() == '\n' || sdkPath.back() == '\r'))
+              sdkPath.pop_back();
+          } else if (verbose) {
+            std::cerr << "pli: using vendored SDK stubs (" << sdkPath << ")\n";
+          }
           argStore.push_back("-arch");
           argStore.push_back(std::string(llt.getArchName()));
           if (!sdkPath.empty()) {

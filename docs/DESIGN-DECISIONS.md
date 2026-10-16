@@ -6562,3 +6562,31 @@ debug info is emitted yet). `--triple` for non-host triples diagnoses
 **Rejected.** Keeping the clang fallbacks "just in case" (every fallback is a
 second behavior to test and a stale-toolchain hazard); fully static libc
 (ADR-224, unchanged); vendoring the macOS SDK now (license + drift — phased).
+
+## ADR-226 — Vendored macOS SDK stubs: link with no Xcode
+
+**Context.** ADR-225 left one subprocess standing: `xcrun --show-sdk-path`
+for the Mach-O `-syslibroot`. Apple forbids redistributing the SDK, but only
+lld's symbol names are needed at link time (no headers — pli emits its own
+IR; no libraries — dyld loads the host's real libSystem at runtime).
+
+**Decision.** Hand-write minimal `.tbd` stubs (`platform/darwin-sdk/`,
+mirroring the SDK layout): `libSystem.tbd` exporting the union of undefined
+symbols over the embedded runtime's objects plus compiler-builtin spillover
+(43 symbols: stdio, malloc, pthread, strings, stack protector, `__udivti3`,
+`__tlv_bootstrap`), and a defensive `libm.tbd`. The driver prefers
+`<exeDir>/sdk` (release tarballs ship it; `tests/driver/sdk_stubs.sh`
+proves a staged copy links with no Apple SDK path in the transcript) and
+falls back to `xcrun` otherwise — including all dev builds, which keep
+working exactly as before.
+
+**Consequences.** macOS releases need no Xcode CLT for user compiles. A user
+program referencing a symbol outside the stub fails at link with lld's
+`undefined symbol` naming it — the stub then grows by one line. The stub
+must stay a subset of the real export list (superset links would fail at
+runtime on the host instead).
+
+**Rejected.** Copying Apple's `.tbd` files (redistribution restriction —
+hence hand-written); embedding the stubs in the binary (keeps the tarball
+layout obvious: `pli` + `sdk/`; embedding stays an option if single-file
+purity demands it); covering iOS/simulator targets (host-only recipes).
