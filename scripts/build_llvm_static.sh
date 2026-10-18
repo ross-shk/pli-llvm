@@ -73,8 +73,11 @@ if [ "$WITH_ZLIB" = "FORCE_ON" ]; then
   fetch "https://zlib.net/fossils/zlib-$ZLIB_VER.tar.gz" "zlib-$ZLIB_VER.tar.gz"
   [ -d "zlib-$ZLIB_VER" ] || tar -xf "zlib-$ZLIB_VER.tar.gz"
   if [ ! -f "$PREFIX/lib/libz.a" ]; then
-    (cd "zlib-$ZLIB_VER" && ./configure --static --prefix="$PREFIX" \
-      && make -j"$JOBS" && make install) \
+    # -fPIC: clang's libclang-cpp.so links this archive, and x86_64 refuses
+    # non-PIC relocations (R_X86_64_PC32) in a shared object. AArch64 and
+    # Apple code is PIC by default, so the failure only shows on Linux/x86_64.
+    (cd "zlib-$ZLIB_VER" && CFLAGS="${CFLAGS:--O3} -fPIC" ./configure --static \
+      --prefix="$PREFIX" && make -j"$JOBS" && make install) \
       || { echo "build_llvm_static.sh: zlib build failed" >&2; exit 1; }
   fi
 fi
@@ -86,6 +89,7 @@ fetch "https://github.com/facebook/zstd/releases/download/v$ZSTD_VER/zstd-$ZSTD_
 if [ ! -f "$PREFIX/lib/libzstd.a" ]; then
   cmake -S "zstd-$ZSTD_VER/build/cmake" -B zstd-build \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_STATIC=ON \
     -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF \
     || { echo "build_llvm_static.sh: zstd configure failed" >&2; exit 1; }
