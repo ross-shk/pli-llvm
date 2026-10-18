@@ -49,12 +49,19 @@ jobs:
 
       - name: Install toolchain build prereqs (Windows)
         if: runner.os == 'Windows'
-        # zstd ships preinstalled on windows-latest (C:\tools\zstd); the
-        # chocolatey package was removed from the community feed, so only
-        # fall back to choco if zstd is somehow missing.
+        # zstd ships preinstalled on windows-latest (C:\tools\zstd). The
+        # chocolatey zstd package was removed from the community feed, so the
+        # fallback grabs the official release binary instead of using choco.
         run: |
           if ! command -v zstd >/dev/null 2>&1; then
-            choco install zstd -y
+            ZSTD_VER=$(awk -F= '/^ZSTD_VER=/{print $2; exit}' scripts/llvm_static.pins)
+            ZDIR="$HOME/.pli-zstd"
+            mkdir -p "$ZDIR"
+            curl -fL --retry 3 -o "$ZDIR/zstd.zip" \
+              "https://github.com/facebook/zstd/releases/download/v$ZSTD_VER/zstd-v$ZSTD_VER-win64.zip"
+            powershell -NoProfile -Command \
+              "Expand-Archive -Force '$(cygpath -w "$ZDIR/zstd.zip")' '$(cygpath -w "$ZDIR")'"
+            echo "$(cygpath -w "$ZDIR/zstd-v$ZSTD_VER-win64")" >> "$GITHUB_PATH"
           fi
 
       - name: Build + pack static toolchain (cold; hours)
