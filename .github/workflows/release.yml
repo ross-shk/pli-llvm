@@ -86,7 +86,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
           else
-            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps"
+            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_BUILD_TYPE=Release
           fi
 
       - name: Build

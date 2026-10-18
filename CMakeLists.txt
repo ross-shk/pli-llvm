@@ -468,6 +468,18 @@ elseif(MSVC)
   endif()
 endif()
 
+# Match LLVM's RTTI setting. The hermetic static prefix is built with
+# LLVM_ENABLE_RTTI=OFF, so those archives carry no typeinfo for LLVM's
+# polymorphic classes; compiling the driver with RTTI on makes the linker
+# demand symbols that were never emitted.
+if(DEFINED LLVM_ENABLE_RTTI AND NOT LLVM_ENABLE_RTTI)
+  if(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(pli PRIVATE /GR-)
+  else()
+    target_compile_options(pli PRIVATE -fno-rtti)
+  endif()
+endif()
+
 # Multi-target embedded runtime: generate bitcode for all supported targets.
 if(PLI_CROSS_BITCODE)
   set(PLI_TARGETS "x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;x86_64-pc-windows-gnu;aarch64-pc-windows-gnu")
