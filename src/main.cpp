@@ -1154,12 +1154,13 @@ int main(int argc, char** argv) {
           argStore.push_back(vsys.mingwDir + "/crtend.o");
         }
         for (const std::string& la : linkArgs) {
-          // Vendored musl dictates a static EXEC: pie-mode spellings would
-          // conflict with the -static above, so drop them (wantPIE is
-          // already off on this path; -static-pie routed to host earlier).
+          // Vendored musl dictates a static EXEC: -pie conflicts with the
+          // -static above, and the GNU-named -nopie/-no-pic are not lld
+          // flags, so drop them (-static-pie routed to host earlier). The
+          // non-PIE spelling -no-pie/-no_pie agrees with static and reaches
+          // lld like any other -Wl flag.
           const std::string fwd = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
-          if (useMusl && (fwd == "-pie" || fwd == "-no-pie" || fwd == "-no_pie" ||
-                           fwd == "-nopie" || fwd == "-no-pic"))
+          if (useMusl && (fwd == "-pie" || fwd == "-nopie" || fwd == "-no-pic"))
             continue;
           if (la.rfind("-Wl,", 0) == 0) {
             // lld takes the flag directly, but ELF lld uses -no-pie (hyphen),

@@ -16,6 +16,7 @@
 #include "llvm/Support/Host.h"
 #endif
 #include "llvm/TargetParser/Triple.h"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -69,6 +70,25 @@ std::vector<std::string> libDirsFromRoots(const std::vector<std::string>& roots,
       dirs.push_back(base.string());
   }
   return dirs;
+}
+
+// Debian/Ubuntu/Fedora keep the GCC startup shims (crtbegin(S).o, crtendS.o)
+// and libgcc.a/libgcc_s.so only in GCC's private libdir, never the multiarch
+// dir. The recipe must search it or a stock host PIE / -shared link cannot
+// resolve crtbeginS.o. The GCC version is part of the path, so enumerate the
+// versioned subdirs (a missing dir simply appends nothing).
+void appendGccLibDirs(std::vector<std::string>& roots, const std::string& gnuTriple) {
+  const fs::path root = fs::path("/usr/lib/gcc") / gnuTriple;
+  std::error_code ec;
+  if (!fs::is_directory(root, ec))
+    return;
+  std::vector<std::string> vers;
+  for (const fs::directory_entry& e : fs::directory_iterator(root, ec))
+    if (e.is_directory(ec))
+      vers.push_back(e.path().filename().string());
+  std::sort(vers.begin(), vers.end());
+  for (const std::string& v : vers)
+    roots.push_back("/usr/lib/gcc/" + gnuTriple + "/" + v);
 }
 
 bool isHost(const llvm::Triple& t) { return t.getTriple() == llvm::sys::getDefaultTargetTriple(); }
@@ -200,9 +220,12 @@ HostCrt resolveHostCrt(const llvm::Triple& triple, const std::string& sysroot) {
   switch (triple.getObjectFormat()) {
   case llvm::Triple::ELF: {
     // Distro roots in preference order (Debian-multiarch first, then Fedora,
-    // then Arch). gcc's lib dir is added so -lgcc / -lgcc_s resolve.
-    s.roots = {"/usr/lib/" + std::string(triple.getArchName()) + "-linux-gnu", "/usr/lib64",
-               "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/usr/lib"};
+    // then Arch). GCC's versioned libdir is appended so crtbegin(S).o and
+    // -lgcc / -lgcc_s resolve on a stock host.
+    const std::string gnuTriple = std::string(triple.getArchName()) + "-linux-gnu";
+    s.roots = {"/usr/lib/" + gnuTriple, "/usr/lib64", "/usr/lib/x86_64-linux-gnu",
+               "/usr/lib/aarch64-linux-gnu", "/usr/lib"};
+    appendGccLibDirs(s.roots, gnuTriple);
     switch (triple.getArch()) {
     case llvm::Triple::x86_64:
       s.interp = "/lib64/ld-linux-x86-64.so.2";

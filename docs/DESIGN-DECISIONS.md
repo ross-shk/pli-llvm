@@ -6666,3 +6666,41 @@ driver (rejects GNU-isms — hence the MinGW driver); `libgcc_eh.a`
 and portable); compressing the blobs (no decompressor dependency — raw
 arrays ride the existing embed mechanism); a stash release for the ~12 MB
 now (revisit if they grow — same evolution as ADR-224's LLVM stash).
+
+## ADR-228 — Host CRT recipe searches GCC's libdir; `-Wl` non-PIE spellings reach lld
+
+**Context.** ADR-227 made the embedded sysroot the default link (static musl
+on Linux, mingw on Windows, SDK stubs on macOS) and left `-shared`/
+`-static-pie` on the host recipe. Two gaps surfaced once the whole suite ran
+on a stock Ubuntu/WSL host:
+- `resolveHostCrt` (`src/hostcrt.cpp`) carried the comment "gcc's lib dir is
+  added so -lgcc / -lgcc_s resolve" but the roots list never contained it.
+  On Debian/Ubuntu/Fedora the GCC startup shims (`crtbeginS.o`, `crtendS.o`)
+  and `libgcc.a`/`libgcc_s.so` live only under `/usr/lib/gcc/<triple>/<ver>/`,
+  never the multiarch dir, so a host PIE or `-shared` link failed with
+  "startup object 'crtbeginS.o' not found" (the side finding ADR-227 named
+  but did not fix).
+- The musl branch dropped every PIE spelling from the user `-Wl` stream,
+  including the *non*-PIE `-Wl,-no_pie`. That silently swallowed a flag that
+  agrees with `-static`, so the driver check "`-Wl` reaches in-process lld"
+  (`tests/driver/link.sh`) failed even though the link was correct.
+
+**Decision.** Enumerate GCC's versioned libdirs into the ELF recipe roots
+(`appendGccLibDirs`, `src/hostcrt.cpp`): the version is part of the path, so
+the directory is scanned and each existing subdir appended (first-hit-wins
+like the other roots; a missing GCC dir appends nothing). On the vendored
+musl path drop only the spellings that genuinely conflict or are not lld
+flags — `-pie`, `-nopie`, `-no-pic` — and forward `-no-pie`/`-no_pie`
+(hyphen-normalized) like any other `-Wl` argument (`src/main.cpp`).
+
+**Consequences.** `-shared` and host-routed PIE links work on a stock
+Ubuntu/WSL host with only the checked-in recipe; the full suite is green on
+WSL (593/593). Windows is untouched (the change is in the ELF recipe arm and
+the musl branch only). CMake still requires `liblldMinGW.a` at configure
+time, present in both the prebuilt and distro LLVM 23.
+
+**Rejected.** Hardcoding a GCC version (`13`) in the search list — breaks on
+the next toolchain; dropping the `-Wl` passthrough test as "expected" — the
+flag is valid and the test is the source of truth (change the compiler, not
+the test); forwarding `-nopie`/`-no-pic` to lld — not lld spellings, an
+explicit error would replace the old no-op.
