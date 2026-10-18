@@ -35,6 +35,9 @@ ZLIB_VER=$(pin ZLIB_VER) ZSTD_VER=$(pin ZSTD_VER)
 
 [ -n "$JOBS" ] || JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 [ -n "$WORKDIR" ] || WORKDIR=${TMPDIR:-/tmp}/pli-llvm-deps
+# --pack is relative to the directory the caller invoked us from (e.g. the CI
+# workspace), NOT the scratch build dir we cd into below.
+ORIG_DIR=$(pwd)
 mkdir -p "$WORKDIR" "$PREFIX"
 cd "$WORKDIR"
 
@@ -129,8 +132,10 @@ ls "$PREFIX/bin/clang" "$PREFIX/lib/cmake/llvm/LLVMConfig.cmake" \
 # Pack the prefix for the stash release; print the sha for llvm_static.pins.
 if [ -n "$PACK" ]; then
   command -v zstd >/dev/null 2>&1 || { echo "build_llvm_static.sh: zstd needed for --pack" >&2; exit 1; }
-  tar -C "$PREFIX" -cf - . | zstd -o "$PACK" \
+  # Pack from ORIG_DIR so a relative --pack name lands beside the checkout
+  # (where llvm-deps.yml's upload step looks), not in the scratch dir.
+  ( cd "$ORIG_DIR" && tar -C "$PREFIX" -cf - . | zstd -o "$PACK" ) \
     || { echo "build_llvm_static.sh: pack failed" >&2; exit 1; }
   echo "build_llvm_static.sh: packed $PACK"
-  echo "sha256: $(SHASUM "$PACK")"
+  echo "sha256: $(cd "$ORIG_DIR" && SHASUM "$PACK")"
 fi

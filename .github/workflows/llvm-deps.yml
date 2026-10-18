@@ -78,3 +78,6 @@ jobs:
         with:
           tag_name: ${{ env.DEPS_TAG }}
           files: ${{ env.ASSET }}
+          # A missing tarball must fail the job: a silent "matched nothing"
+          # upload leaves the release empty and breaks every consumer build.
+          fail_on_unmatched_files: true
