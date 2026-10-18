@@ -44,9 +44,22 @@ cd "$WORKDIR"
 # Windows (git-bash): no static zlib recipe (zlib has no CMakeLists and its
 # ./configure needs a POSIX cc), so LLVM is built with zlib OFF there; zstd
 # (real CMake project) is still static everywhere. Documented in the ADR.
+# The driver ships /MT (static CRT, CMakeLists MSVC_RUNTIME_LIBRARY), and
+# MSVC emits a /failifmismatch directive for the CRT: LLVM and zstd must be
+# built MultiThreaded too or linking pli fails (MT_StaticRelease vs
+# MD_DynamicRelease). zstd's CMakeLists predates CMP0091, so force the policy
+# NEW for its runtime property to take effect.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*|Windows_NT*) WITH_ZLIB=OFF ;;
-  *) WITH_ZLIB=FORCE_ON ;;
+  MINGW*|MSYS*|CYGWIN*|Windows_NT*)
+    WITH_ZLIB=OFF
+    LLVM_CRT_ARGS="-DLLVM_USE_CRT_RELEASE=MT"
+    ZSTD_CRT_ARGS="-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_POLICY_DEFAULT_CMP0091=NEW"
+    ;;
+  *)
+    WITH_ZLIB=FORCE_ON
+    LLVM_CRT_ARGS=""
+    ZSTD_CRT_ARGS=""
+    ;;
 esac
 
 fetch() { # fetch <url> <file>
@@ -92,6 +105,7 @@ if [ ! -f "$PREFIX/lib/libzstd.a" ]; then
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_STATIC=ON \
     -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF \
+    $ZSTD_CRT_ARGS \
     || { echo "build_llvm_static.sh: zstd configure failed" >&2; exit 1; }
   cmake --build zstd-build -j"$JOBS" --target install \
     || { echo "build_llvm_static.sh: zstd build failed" >&2; exit 1; }
@@ -124,6 +138,7 @@ cmake -G Ninja -S "llvm-project-$LLVM_VER.src/llvm" -B llvm-build \
   -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
   -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_ENABLE_ASSERTIONS=OFF \
   -DLLVM_BUILD_UTILS=OFF \
+  $LLVM_CRT_ARGS \
   ${CMAKE_EXTRA_FLAGS:-} \
   || { echo "build_llvm_static.sh: LLVM configure failed" >&2; exit 1; }
 cmake --build llvm-build -j"$JOBS" --target install \

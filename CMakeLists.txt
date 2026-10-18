@@ -265,6 +265,22 @@ if(NOT PLI_TARGET_TRIPLE)
 endif()
 message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
+# Apple host bitcode: a from-source clang ships no baked-in macOS SDK, so the
+# host-triple runtime compile must be given a sysroot explicitly or it cannot
+# find <stdio.h>. Resolve the active SDK once via xcrun (dev + CI runners).
+set(PLI_HOST_SYSROOT_FLAG "")
+if(APPLE)
+  execute_process(
+    COMMAND xcrun --show-sdk-path
+    OUTPUT_VARIABLE PLI_HOST_SDK
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if(PLI_HOST_SDK)
+    set(PLI_HOST_SYSROOT_FLAG -isysroot ${PLI_HOST_SDK})
+    message(STATUS "Host bitcode sysroot: ${PLI_HOST_SDK}")
+  endif()
+endif()
+
 # Toolchain prefix baked in as a data-file fallback (ADR-225): the profile
 # runtime / builtins probes try exe-relative first (release layout), then
 # $PLI_TOOLCHAIN_PREFIX, then this build-time prefix (dev machines).
@@ -591,6 +607,7 @@ foreach(src ${RT_PORTABLE_SRCS})
             -O2
             -ffunction-sections -fdata-sections
             $<$<PLATFORM_ID:Linux>:-fPIC>
+            ${PLI_HOST_SYSROOT_FLAG}
             -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS}
@@ -610,6 +627,7 @@ foreach(src ${RT_PLATFORM_SRCS})
             -O2
             -ffunction-sections -fdata-sections
             $<$<PLATFORM_ID:Linux>:-fPIC>
+            ${PLI_HOST_SYSROOT_FLAG}
             -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS}
