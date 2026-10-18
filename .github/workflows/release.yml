@@ -53,7 +53,11 @@ jobs:
       - name: Fetch static LLVM stash (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install zstd -y
+          # zstd ships preinstalled on windows-latest (C:\tools\zstd); only fall
+          # back to choco if it is somehow missing.
+          if ! command -v zstd >/dev/null 2>&1; then
+            choco install zstd -y
+          fi
           sh scripts/fetch_llvm_static.sh --prefix "$HOME/pli-deps"
           echo "$(cygpath -w "$HOME/pli-deps/bin")" >> "$GITHUB_PATH"
 

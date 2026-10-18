@@ -63,9 +63,11 @@ fetch "https://github.com/llvm/llvm-project/releases/download/$LLVM_TAG/llvm-pro
   || { echo "build_llvm_static.sh: LLVM tarball checksum mismatch" >&2; exit 1; }
 [ -d "llvm-project-$LLVM_VER.src" ] || tar -xf "llvm-project-$LLVM_VER.src.tar.xz"
 
-# zlib (static only; skipped on Windows, see above).
+# zlib (static only; skipped on Windows, see above). Use the /fossils archive:
+# zlib.net keeps only the current release at the root, so a pinned older
+# version 404s there but stays forever under fossils (version-pinned URL).
 if [ "$WITH_ZLIB" = "FORCE_ON" ]; then
-  fetch "https://zlib.net/zlib-$ZLIB_VER.tar.gz" "zlib-$ZLIB_VER.tar.gz"
+  fetch "https://zlib.net/fossils/zlib-$ZLIB_VER.tar.gz" "zlib-$ZLIB_VER.tar.gz"
   [ -d "zlib-$ZLIB_VER" ] || tar -xf "zlib-$ZLIB_VER.tar.gz"
   if [ ! -f "$PREFIX/lib/libz.a" ]; then
     (cd "zlib-$ZLIB_VER" && ./configure --static --prefix="$PREFIX" \

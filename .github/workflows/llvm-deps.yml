@@ -49,7 +49,13 @@ jobs:
 
       - name: Install toolchain build prereqs (Windows)
         if: runner.os == 'Windows'
-        run: choco install zstd -y
+        # zstd ships preinstalled on windows-latest (C:\tools\zstd); the
+        # chocolatey package was removed from the community feed, so only
+        # fall back to choco if zstd is somehow missing.
+        run: |
+          if ! command -v zstd >/dev/null 2>&1; then
+            choco install zstd -y
+          fi
 
       - name: Build + pack static toolchain (cold; hours)
         run: |
