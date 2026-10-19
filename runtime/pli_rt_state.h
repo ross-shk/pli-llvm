@@ -121,34 +121,34 @@ int pli_snprintf(char *buf, size_t cap, const char *fmt, ...);
 
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
-extern int rt_col;
-extern int rt_in_col;
-extern int rt_items_on_line;
+extern _Thread_local int rt_col;
+extern _Thread_local int rt_in_col;
+extern _Thread_local int rt_items_on_line;
 /* Data-directed output (rule (106), QR1.5): names emitted in the open DATA
  * list, and a flag suppressing the value's blank separator after NAME=. */
-extern int rt_data_items;
-extern int rt_data_value_next;
+extern _Thread_local int rt_data_items;
+extern _Thread_local int rt_data_value_next;
 /* Set when get_token terminates at ';' (data-directed pairs, rule (106)),
  * so pli_get_data_next ends the list there. */
-extern int rt_tok_semi;
+extern _Thread_local int rt_tok_semi;
 
 /* STRING (rule 105) sink/source: when out_buf is non-null, list-directed output
  * is written into it instead of stdout; when in_buf is non-null, list-directed
  * input is read from it instead of stdin. */
-extern char *rt_out_buf;
-extern size_t rt_out_cap, rt_out_len;
-extern const char *rt_in_buf;
-extern size_t rt_in_len, rt_in_pos;
+extern _Thread_local char *rt_out_buf;
+extern _Thread_local size_t rt_out_cap, rt_out_len;
+extern _Thread_local const char *rt_in_buf;
+extern _Thread_local size_t rt_in_len, rt_in_pos;
 
 /* Named files (rules 100-103, 105): a fixed table indexed by the compile-time
  * slot assigned to each FILE variable. out_f/in_f are the streams selected by
  * the FILE ( f ) option of a PUT/GET; when set they override stdout/stdin. */
 #define PLI_MAX_FILES 16
 extern FILE *rt_pli_files[PLI_MAX_FILES];
- extern FILE *rt_out_f;
-extern FILE *rt_in_f;
+ extern _Thread_local FILE *rt_out_f;
+extern _Thread_local FILE *rt_in_f;
 /* NONPRINT discard flag (ADR-204): when set, output goes nowhere instead of stdout. */
-extern int rt_out_discard;
+extern _Thread_local int rt_out_discard;
 /* NONPRINT flag per file slot (ADR-204): when set, output to that file is discarded. */
 extern int rt_pli_nonprint[PLI_MAX_FILES];
 /* Page counters per file slot (PLI PAGENO pseudo-variable). */

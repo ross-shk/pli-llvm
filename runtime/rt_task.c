@@ -95,7 +95,9 @@ void pli_delay(long long ms) { pli_sleep_ms(ms); }
 
 /* CALL ... TASK/EVENT/PRIORITY: run wrapper(ctx) on a detached thread. */
 void pli_task_spawn(char *fn, char *ctx) {
-  void *(*body)(void *) = (void *(*)(void *))(void *)fn;
+  /* The cast goes straight from the object pointer to the function pointer:
+   * going through void * is not a conforming conversion. */
+  void *(*body)(void *) = (void *(*)(void *))fn;
   if (pli_spawn_detached(body, ctx) != 0)
     pli_abort("TASK: could not create a thread");
 }

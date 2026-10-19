@@ -44,6 +44,10 @@ void pli_stop(void) {
 }
 
 int pli_system(const char *cmd, long long len) {
+  /* A negative length is a caller bug: the size_t cast would ask for a
+   * huge allocation and copy 2^64-1 bytes. */
+  if (len < 0)
+    return -1;
   char *buf = (char *)pli_plat_malloc((size_t)len + 1);
   if (!buf) {
     return -1;

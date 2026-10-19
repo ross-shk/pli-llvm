@@ -6,6 +6,10 @@
 /* Calendar time routes through pli_plat_localtime (the platform seam). */
 
 void pli_assign_char(char *dst, long long dstlen, const char *src, long long srclen) {
+  /* A negative length is a caller bug; clamp it, or the size_t cast below
+   * turns it into a huge count and the copy runs off the buffer. */
+  if (dstlen < 0) dstlen = 0;
+  if (srclen < 0) srclen = 0;
   long long n = srclen < dstlen ? srclen : dstlen;
   if (n > 0) pli_memmove(dst, src, (size_t)n);
   if (dstlen > n) pli_memset(dst + n, ' ', (size_t)(dstlen - n));
@@ -16,6 +20,8 @@ void pli_assign_char(char *dst, long long dstlen, const char *src, long long src
  * is blank-filled so a non-VARYING `CHAR(*)` overlay scanning for blanks
  * sees a clean terminator (rule (18)). */
 long long pli_assign_varying(char *dstdata, long long cap, const char *src, long long srclen) {
+  if (cap < 0) cap = 0;
+  if (srclen < 0) srclen = 0;
   long long n = srclen < cap ? srclen : cap;
   if (n > 0) pli_memmove(dstdata, src, (size_t)n);
   if (cap > n) pli_memset(dstdata + n, ' ', (size_t)(cap - n));
@@ -23,6 +29,8 @@ long long pli_assign_varying(char *dstdata, long long cap, const char *src, long
 }
 
 void pli_concat(char *dst, const char *a, long long alen, const char *b, long long blen) {
+  if (alen < 0) alen = 0;
+  if (blen < 0) blen = 0;
   if (alen > 0) pli_memmove(dst, a, (size_t)alen);
   if (blen > 0) pli_memmove(dst + alen, b, (size_t)blen);
 }
@@ -42,11 +50,15 @@ void pli_isochar(char *dst, long long dstlen, int lo, int hi) {
  * blanks (a real compiler would raise SUBSCRIPTRANGE, M3). */
 void pli_substr(char *dst, long long dstcap, const char *src, long long srclen,
                 long long start, long long len) {
+  /* The start position is 1-based. A position below 1 read before the source
+   * and left the destination untouched: the copy was skipped and so was the
+   * blank fill (n == take), so the result kept stale memory. */
+  if (start < 1) start = 1;
   long long n = len < dstcap ? len : dstcap;
   long long avail = srclen - (start - 1);
   if (avail < 0) avail = 0;
   long long take = avail < n ? avail : n;
-  if (take > 0 && start >= 1) pli_memmove(dst, src + (start - 1), (size_t)take);
+  if (take > 0) pli_memmove(dst, src + (start - 1), (size_t)take);
   if (n > take) pli_memset(dst + take, ' ', (size_t)(n - take));
 }
 

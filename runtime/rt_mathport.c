@@ -27,9 +27,30 @@ static inline double pli_m_fmin(double x,double y){return x<y?x:y;}
 #define predict_false(x) __builtin_expect((x),0)
 
 /* ---- musl libm.h bit helpers ------------------------------------------ */
-#define asuint(f)    ((union{float _f;uint32_t _i;}){f})._i
-#define asuint64(f)  ((union{double _f;uint64_t _i;}){f})._i
-#define asdouble(i)  ((union{uint64_t _i;double _f;}){i})._f
+/* The bit patterns are moved byte-wise: a union type-pun is not conforming
+ * ISO C (it reads an inactive member). The copy has a fixed size, so the
+ * compiler lowers it to a single load/store. */
+static inline uint32_t asuint(float f) {
+  uint32_t i;
+  unsigned char *d = (unsigned char *)&i;
+  const unsigned char *s = (const unsigned char *)&f;
+  for (int k = 0; k < 4; ++k) d[k] = s[k];
+  return i;
+}
+static inline uint64_t asuint64(double f) {
+  uint64_t i;
+  unsigned char *d = (unsigned char *)&i;
+  const unsigned char *s = (const unsigned char *)&f;
+  for (int k = 0; k < 8; ++k) d[k] = s[k];
+  return i;
+}
+static inline double asdouble(uint64_t i) {
+  double f;
+  unsigned char *d = (unsigned char *)&f;
+  const unsigned char *s = (const unsigned char *)&i;
+  for (int k = 0; k < 8; ++k) d[k] = s[k];
+  return f;
+}
 #define GET_HIGH_WORD(hi,d)  ((hi)=(uint32_t)(asuint64(d)>>32))
 #define GET_LOW_WORD(lo,d)   ((lo)=(uint32_t)asuint64(d))
 #define EXTRACT_WORDS(hi,lo,d){uint64_t __u=asuint64(d);(hi)=(uint32_t)(__u>>32);(lo)=(uint32_t)__u;}

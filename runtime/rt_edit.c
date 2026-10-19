@@ -12,44 +12,83 @@ static void put_field(const char *p, size_t n, long long w) {
   rt_put_raw(p, n);
 }
 
-/* F(w,d) on a FIXED value stored as value*10^scale: rescale to exactly d
- * fractional digits (rounding half away from zero on a downward rescale), then
- * right-justify the result in width w. */
+/* F(w,d) on a FIXED value stored as value*10^scale: print the value with
+ * exactly d fractional digits (rounding half away from zero on a downward
+ * rescale), right-justified in width w.
+ *
+ * The stored integer is split into its integer part and its `scale` fraction
+ * digits instead of being rescaled to 10^d: a picture may ask for more digits
+ * than the scale holds (10^d does not fit an i64 past d = 18), and forming
+ * 10^scale * 10^(d-scale) overflowed the value. */
 void pli_put_edit_fixed(long long v, long long scale, long long w, long long d) {
   if (d < 0) d = 0;
   if (d > 60) d = 60;
-  long long sc = scale - d;
-  if (sc > 0) { /* divide by 10^sc, rounding half away from zero */
-    long long f = 1, t = sc;
-    while (t--) f *= 10;
-    int neg = v < 0;
-    unsigned long long u = neg ? (unsigned long long)(-(v + 1)) + 1 : (unsigned long long)v;
-    unsigned long long q = u / (unsigned long long)f, r = u % (unsigned long long)f;
-    if (r * 2 >= (unsigned long long)f)
-      ++q;
-    v = neg ? -(long long)q : (long long)q;
-  } else if (sc < 0) {
-    long long f = 1, t = -sc;
-    while (t--) f *= 10;
-    v *= f;
+  if (scale < 0) scale = 0;
+  /* 10^scale: the largest power of ten an i64 holds is 10^18. */
+  unsigned long long sf = 1;
+  for (long long i = 0; i < scale && i < 18; ++i) sf *= 10;
+  int neg = v < 0;
+  unsigned long long u = neg ? (unsigned long long)(-(v + 1)) + 1 : (unsigned long long)v;
+  unsigned long long ip = u / sf;
+  unsigned long long fr = u % sf;
+  /* Round the fraction down to d digits, half away from zero. */
+  if (d < scale) {
+    unsigned long long df = 1; /* 10^(scale-d) */
+    for (long long i = 0; i < scale - d; ++i) df *= 10;
+    unsigned long long ten_d = 1; /* 10^d */
+    for (long long i = 0; i < d; ++i) ten_d *= 10;
+    unsigned long long q = fr / df, r = fr % df;
+    if (r * 2 >= df) ++q;
+    if (q >= ten_d) { /* the rounding carried into the integer part */
+      q = 0;
+      ++ip;
+    }
+    fr = q;
   }
-  char buf[96];
+  char buf[128];
   char *p = buf;
-  if (d > 0) {
-    long long f = 1, t = d;
-    while (t--) f *= 10;
-    long long ip = v / f, fr = v % f;
-    if (fr < 0) fr = -fr;
-    int n = pli_snprintf(p, (size_t)(buf + sizeof buf - p), "%lld", ip);
-    p += n;
-    *p++ = '.';
-    char frac[64];
-    int fn = pli_snprintf(frac, sizeof frac, "%0*lld", (int)d, fr);
-    for (int i = 0; i < fn; ++i) *p++ = frac[i];
-  } else {
-    int n = pli_snprintf(p, (size_t)(buf + sizeof buf - p), "%lld", v);
-    p += n;
+  size_t room = sizeof buf;
+  if (neg && (ip || fr)) {
+    *p++ = '-';
+    --room;
   }
+  {
+    char digits[24];
+    int n = 0;
+    unsigned long long t = ip;
+    do {
+      digits[n++] = (char)('0' + t % 10);
+      t /= 10;
+    } while (t);
+    while (n && room > 1) {
+      *p++ = digits[--n];
+      --room;
+    }
+  }
+  if (d > 0 && room > 1) {
+    *p++ = '.';
+    --room;
+    /* Exactly d fraction digits: the value's own scale digits, zero-padded. */
+    char frac[64];
+    long long ndig = d < (long long)sizeof frac ? d : (long long)sizeof frac;
+    for (long long i = 0; i < ndig; ++i) frac[i] = '0';
+    long long nfrom = scale < ndig ? scale : ndig;
+    unsigned long long t = fr;
+    /* The value's own fraction digits come first (most significant); the
+     * rest of the requested digits are zeros. */
+    unsigned long long df = 1;
+    for (long long i = 0; i + 1 < nfrom; ++i)
+      df *= 10;
+    for (long long i = 0; i < nfrom; ++i) {
+      frac[i] = (char)('0' + (t / df) % 10);
+      df /= 10;
+    }
+    for (long long i = 0; i < ndig && room > 1; ++i) {
+      *p++ = frac[i];
+      --room;
+    }
+  }
+  *p = '\0';
   put_field(buf, (size_t)(p - buf), w);
 }
 
@@ -289,9 +328,12 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
   long long val_int = ndig > scale ? ndig - scale : 0;
   long long val_frac = scale < ndig ? scale : 0;
 
-  /* Walk the picture, emitting characters. */
+  /* Walk the picture, emitting characters. The NUL terminator needs a slot
+   * of its own: ocap capped at sizeof(outbuf) would write one byte past the
+   * array when the picture is at least as long as the buffer. */
   char outbuf[128];
-  long long ocap = piclen < (long long)sizeof(outbuf) ? piclen : (long long)sizeof(outbuf);
+  long long ocap = piclen < (long long)sizeof(outbuf) - 1 ? piclen
+                                                          : (long long)sizeof(outbuf) - 1;
   for (long long i = 0; i < ocap; ++i) outbuf[i] = ' ';
   long long oi = 0;
   int led_zero = 1;

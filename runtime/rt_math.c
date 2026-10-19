@@ -42,19 +42,49 @@ double pli_mod_dd(double a, double b) {
   return r;
 }
 
-/* ROUND(x, n): round x to n fractional decimal digits (n may be negative). */
+/* Round half away from zero (the C99 round() semantics). Written out rather
+ * than using __builtin_round, so the runtime builds with any C compiler. */
+static double pli_round_to_nearest(double x) {
+  if (x != x || x > 9.0e18 || x < -9.0e18)
+    return x; /* NaN, or outside the range where the cast is exact */
+  double f = (double)(long long)x; /* truncates toward zero */
+  if (x >= 0.0)
+    return (x - f >= 0.5) ? f + 1.0 : f;
+  return (f - x >= 0.5) ? f - 1.0 : f;
+}
+
+/* Floor and ceiling without libm: truncate toward zero, then step. */
+static double pli_floor_to(double x) {
+  if (x != x || x > 9.0e18 || x < -9.0e18)
+    return x;
+  double f = (double)(long long)x;
+  return (x < 0.0 && f != x) ? f - 1.0 : f;
+}
+
+static double pli_ceil_to(double x) {
+  if (x != x || x > 9.0e18 || x < -9.0e18)
+    return x;
+  double f = (double)(long long)x;
+  return (x > 0.0 && f != x) ? f + 1.0 : f;
+}
+
+/* ROUND(x, n): round x to n fractional decimal digits (n may be negative).
+ * The digit count is bounded: a caller asking for a billion digits would
+ * spin in the loop below. */
 double pli_round(double x, long long n) {
+  if (n > 300) n = 300;
+  if (n < -300) n = -300;
   double factor = 1.0;
   for (long long i = 0; i < n; ++i) factor *= 10.0;
   for (long long i = 0; i > n; --i) factor /= 10.0;
-  return __builtin_round(x * factor) / factor;
+  return pli_round_to_nearest(x * factor) / factor;
 }
 
 /* Scalar math built-ins (QR2.7, <math.h> analogues): forward to the musl-port
  * implementations in rt_mathport.c so the compiler does not need to link -lm
  * for the standard transcendentals.  LOG is the natural logarithm. */
-double pli_floor(double x) { return __builtin_floor(x); }
-double pli_ceil(double x)  { return __builtin_ceil(x); }
+double pli_floor(double x) { return pli_floor_to(x); }
+double pli_ceil(double x)  { return pli_ceil_to(x); }
 double pli_sqrt(double x)  { return pli_math_sqrt(x); }
 double pli_exp(double x)   { return pli_math_exp(x); }
 double pli_log(double x)   { return pli_math_log(x); }

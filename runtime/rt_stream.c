@@ -9,24 +9,24 @@
 
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
-int rt_col = 0;
-int rt_in_col = 0;
-int rt_items_on_line = 0;
+_Thread_local int rt_col = 0;
+_Thread_local int rt_in_col = 0;
+_Thread_local int rt_items_on_line = 0;
 /* Data-directed output (rule (106), QR1.5): names emitted in the open DATA
  * list, and a flag suppressing the value's blank separator after NAME=. */
-int rt_data_items = 0;
-int rt_data_value_next = 0;
+_Thread_local int rt_data_items = 0;
+_Thread_local int rt_data_value_next = 0;
 /* Set when get_token terminates at ';' (data-directed pairs, rule (106)),
  * so pli_get_data_next ends the list there. */
-int rt_tok_semi = 0;
+_Thread_local int rt_tok_semi = 0;
 
 /* STRING (rule 105) sink/source: when rt_out_buf is non-null, list-directed output
  * is written into it instead of stdout; when rt_in_buf is non-null, list-directed
  * input is read from it instead of stdin. */
-char *rt_out_buf = NULL;
-size_t rt_out_cap = 0, rt_out_len = 0;
-const char *rt_in_buf = NULL;
-size_t rt_in_len = 0, rt_in_pos = 0;
+_Thread_local char *rt_out_buf = NULL;
+_Thread_local size_t rt_out_cap = 0, rt_out_len = 0;
+_Thread_local const char *rt_in_buf = NULL;
+_Thread_local size_t rt_in_len = 0, rt_in_pos = 0;
 
 /* Named files (rules 100-103, 105): a fixed table indexed by the compile-time
  * slot assigned to each FILE variable. rt_out_f/rt_in_f are the streams selected by
@@ -38,18 +38,18 @@ int rt_pli_nonprint[PLI_MAX_FILES] = {0};
    so the optimizer cannot see through the pli_set_pageno/pli_pageno wrappers
    and eliminate them as dead stores/loads when bitcode is merged at -O2. */
 volatile long long rt_pli_pages[PLI_MAX_FILES] = {0};
-FILE *rt_out_f = NULL;
-FILE *rt_in_f = NULL;
+_Thread_local FILE *rt_out_f = NULL;
+_Thread_local FILE *rt_in_f = NULL;
 /* NONPRINT flag (ADR-204): when rt_out_discard is set, output is discarded
    instead of falling through to stdout. Set by pli_put_select on a NONPRINT file. */
-int rt_out_discard = 0;
+_Thread_local int rt_out_discard = 0;
 
 /* Stdout write buffer (ADR-220): tiny fwrite calls dominate IO-throughput
  * (benchmarks/io_throughput.pli). Accumulate stdout writes in an 8 KiB slab
  * and drain with one fwrite per fill; flush the remainder at rt_fini. */
 #define RT_STDOUT_BUF 8192
-static char rt_stdout_buf[RT_STDOUT_BUF];
-static size_t rt_stdout_pos = 0;
+static _Thread_local char rt_stdout_buf[RT_STDOUT_BUF];
+static _Thread_local size_t rt_stdout_pos = 0;
 
 void rt_flush_stdout(void) {
   if (rt_stdout_pos > 0) {
@@ -241,12 +241,21 @@ long long pli_fixed_of_char(const char *s, long long slen, int *ok) {
   }
   long long v = 0;
   int sawDigit = 0;
+  int overflow = 0;
   while (i < slen && s[i] >= '0' && s[i] <= '9') {
-    v = v * 10 + (s[i] - '0');
+    unsigned d = (unsigned)(s[i] - '0');
+    /* The accumulator overflows past 19 digits: stop and report it, rather
+     * than wrapping silently (signed overflow is undefined). */
+    if (!overflow && (v > (0x7FFFFFFFFFFFFFFFLL - (long long)d) / 10)) {
+      overflow = 1;
+      v = 0x7FFFFFFFFFFFFFFFLL;
+    } else if (!overflow) {
+      v = v * 10 + (long long)d;
+    }
     ++i;
     sawDigit = 1;
   }
-  *ok = sawDigit;
+  *ok = sawDigit && !overflow;
   return neg ? -v : v;
 }
 
@@ -262,40 +271,79 @@ long long pli_fixed_of_float(double x) {
   return (long long)x;
 }
 
+/* Write the decimal digits of an unsigned magnitude into buf (at most 20
+ * digits) and return the count. */
+static size_t pli_fmt_u64(char *buf, unsigned long long v) {
+  char tmp[20];
+  int n = 0;
+  if (v == 0)
+    tmp[n++] = '0';
+  while (v && n < (int)sizeof tmp) {
+    tmp[n++] = (char)('0' + (v % 10));
+    v /= 10;
+  }
+  for (int i = 0; i < n; ++i)
+    buf[i] = tmp[n - 1 - i];
+  return (size_t)n;
+}
+
 /* FIXED DECIMAL output (QR1.2): the stored integer holds value * 10^q, so
- * print exactly q fraction digits. */
+ * print exactly q fraction digits. The buffer is caller-sized: the number of
+ * fraction digits is bounded by the room left, and 10^i is never formed past
+ * i = 18 (10^19 does not fit an i64). */
 void rt_format_decfixed(char *buf, size_t cap, long long v, long long q) {
   char *p = buf;
+  size_t room = cap;
+  /* Negate through an unsigned magnitude: -LLONG_MIN is undefined. */
+  unsigned long long mag = v < 0 ? (unsigned long long)(-(v + 1)) + 1ULL
+                                 : (unsigned long long)v;
   if (v < 0) {
+    if (room < 2)
+      goto done;
     *p++ = '-';
-    v = -v;
+    --room;
   }
-  long long factor = 1;
-  for (long long i = 0; i < q && i < 18; ++i)
-    factor *= 10;
-  int n = pli_snprintf(p, cap - (size_t)(p - buf), "%lld", v / factor);
-  p += n;
-  if (q > 0) {
-    *p++ = '.';
-    long long rem = v % factor;
-    for (long long i = q - 1; i >= 0; --i) {
-      long long digit = 1;
-      for (long long j = 0; j < i; ++j)
-        digit *= 10;
-      *p++ = (char)('0' + rem / digit);
-      rem %= digit;
+  {
+    /* 10^18 is the largest power of ten an i64 holds; a wider scale cannot
+     * be represented by the stored integer anyway. */
+    long long fdigits = q < 18 ? q : 18;
+    unsigned long long factor = 1;
+    for (long long i = 0; i < fdigits; ++i)
+      factor *= 10;
+    char digits[24];
+    size_t n = pli_fmt_u64(digits, mag / factor);
+    for (size_t i = 0; i < n && room > 1; ++i) {
+      *p++ = digits[i];
+      --room;
+    }
+    if (q > 0 && room > 1) {
+      *p++ = '.';
+      --room;
+      unsigned long long rem = mag % factor;
+      /* Build the fraction digits least-significant first, then reverse. */
+      char frac[20];
+      long long ndig = q < (long long)sizeof frac ? q : (long long)sizeof frac;
+      for (long long i = 0; i < ndig; ++i) {
+        frac[i] = (char)('0' + (rem % 10));
+        rem /= 10;
+      }
+      for (long long i = ndig - 1; i >= 0 && room > 1; --i) {
+        *p++ = frac[i];
+        --room;
+      }
     }
   }
+done:
   *p = '\0';
 }
 void pli_put_list_decfixed(long long v, long long q) {
-  char buf[64];
+  char buf[80];
   format_decfixed(buf, sizeof buf, v, q);
   separate();
   rt_put_raw(buf, pli_strlen(buf));
 }
 void pli_display_decfixed(long long v, long long q) {
-  char buf[64];
+  char buf[80];
   format_decfixed(buf, sizeof buf, v, q);
   display_begin();
   rt_put_raw(buf, pli_strlen(buf));
@@ -334,17 +382,30 @@ void rt_format_decfixed128(char *buf, size_t cap, PliI128 v, long long q) {
   long long i;
   if (pli_isneg_s(v))
     *p++ = '-';
-  for (i = 0; i < q; ++i)
+  /* 10^q must fit the 128-bit factor: 38 digits is the limit. */
+  for (i = 0; i < q && i < 38; ++i)
     factor = pli_mul_u(factor, ten);
   pli_divmod_u(mag, factor, &ip, &rem);
   p += pli_fmt128(p, cap - (size_t)(p - buf), ip);
   if (q > 0) {
-    char frac[32];
-    *p++ = '.';
-    for (i = 0; i < q; ++i)
-      frac[i] = (char)('0' + pli_divmod10(&rem));
-    for (i = q - 1; i >= 0; --i)
-      *p++ = frac[i];
+    /* The fraction digits must fit the caller's buffer: the integer part
+     * takes up to 39 digits and the '.' one more. */
+    size_t room = cap - (size_t)(p - buf);
+    if (room > 1) {
+      char frac[40];
+      *p++ = '.';
+      --room;
+      /* 10^q must fit the 128-bit factor: 38 digits is the limit. */
+      long long ndig = q < 38 ? q : 38;
+      if (ndig > (long long)sizeof frac)
+        ndig = (long long)sizeof frac;
+      for (i = 0; i < ndig; ++i)
+        frac[i] = (char)('0' + pli_divmod10(&rem));
+      for (i = ndig - 1; i >= 0 && room > 1; --i) {
+        *p++ = frac[i];
+        --room;
+      }
+    }
   }
   *p = '\0';
 }
@@ -353,20 +414,35 @@ void rt_format_decfixed128(char *buf, size_t cap, PliI128 v, long long q) {
  * as (lo, hi) halves (see pli_rt_abi.def): a by-value 128-bit parameter
  * would lower differently on each target (indirect on Windows x64). */
 void pli_put_list_decfixed128(long long lo, long long hi, long long q) {
-  char buf[64];
+  char buf[128];
   PliI128 v = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
   rt_format_decfixed128(buf, sizeof buf, v, q);
   separate();
   rt_put_raw(buf, pli_strlen(buf));
 }
 void pli_display_decfixed128(long long lo, long long hi, long long q) {
-  char buf[64];
+  char buf[128];
   PliI128 v = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
   rt_format_decfixed128(buf, sizeof buf, v, q);
   display_begin();
   rt_put_raw(buf, pli_strlen(buf));
   display_end();
 }
+
+/* r >> scale for the portable 128-bit type (scale < 64). */
+#ifdef PLI_WIDE128_PORTABLE
+static unsigned long long pli_shr128(PliU128 v, int scale) {
+  if (scale >= 64)
+    return 0;
+  if (scale == 0)
+    return v.lo;
+  return (v.hi << (64 - scale)) | (v.lo >> scale);
+}
+#else
+static unsigned long long pli_shr128(PliU128 v, int scale) {
+  return scale >= 128 ? 0ULL : (unsigned long long)(v >> scale);
+}
+#endif
 
 /* List-directed output of a scaled FIXED value (ADR-006): the stored integer v
  * holds the value * 2^scale, so print v / 2^scale exactly as a decimal. The
@@ -378,19 +454,28 @@ void pli_put_list_fixed_scaled(long long v, long long scale) {
     pli_put_list_fixed(v);
     return;
   }
+  /* 1LL << 63 is undefined; a binary scale above 62 cannot be represented
+   * by the stored integer anyway. */
+  if (scale > 62) scale = 62;
   if (v < 0) { *p++ = '-'; v = -v; }
-  long long factor = 1LL << scale;  /* 2^scale */
-  int n = pli_snprintf(p, sizeof buf - (size_t)(p - buf), "%lld", v / factor);
+  unsigned long long factor = 1ULL << (unsigned)scale;  /* 2^scale */
+  int n = pli_snprintf(p, sizeof buf - (size_t)(p - buf), "%lld", v / (long long)factor);
   p += n;
-  long long rem = v % factor;
+  unsigned long long rem = (unsigned long long)v % factor;
   if (rem != 0) {
     *p++ = '.';
     char digit[64];
     int cnt = 0;
+    /* The remainder is scaled by 10 in 128 bits: rem < 2^scale, and
+     * rem * 10 exceeds 64 bits for a scale above 59. */
     while (rem != 0 && cnt < 60) {
-      rem *= 10;
-      digit[cnt++] = (char)(rem >> scale);
-      rem &= (factor - 1);
+      PliU128 r = pli_mul_u(pli_u128(rem, 0u), pli_u128(10u, 0u));
+      digit[cnt++] = (char)(pli_shr128(r, (int)scale) & 9u);
+#ifdef PLI_WIDE128_PORTABLE
+      rem = r.lo & (factor - 1);
+#else
+      rem = (unsigned long long)r & (factor - 1);
+#endif
     }
     for (int i = 0; i < cnt; ++i) *p++ = '0' + digit[i];
   }
@@ -508,10 +593,19 @@ static double pow10_i(int e) {
   return r;
 }
 
+/* True when v is an infinity (its magnitude exceeds DBL_MAX). */
+static int is_inf(double v) {
+  return v > 1.7976931348623157e308 || v < -1.7976931348623157e308;
+}
+
 /* Decimal exponent E of v >= 0 such that 1 <= v*10^-E < 10 (E = floor(log10 v),
  * 0 for v == 0). This is the %g/%e exponent. */
 static int dec_exp(double v) {
   if (v == 0.0)
+    return 0;
+  /* An infinity never reaches 10^e: inf/10 is still inf, so the loop below
+   * would spin forever. A NaN fails every comparison. */
+  if (v != v || is_inf(v))
     return 0;
   int e = 0;
   if (v >= 1.0) {
@@ -710,6 +804,12 @@ static void fmt_fixed_signed(Fmt *f, double v, int p, int plus) {
     fputs_(f, "nan", 3);
     return;
   }
+  /* An infinity has no decimal expansion: printing one would spin in the
+   * exponent loop (inf / 10 is still inf). */
+  if (is_inf(v)) {
+    fputs_(f, v < 0 ? "-inf" : "inf", v < 0 ? 4 : 3);
+    return;
+  }
   if (is_neg(v)) {
     fputc_(f, '-');
     v = -v;
@@ -724,6 +824,12 @@ static void fmt_sci_signed(Fmt *f, double v, int p, int plus) {
     fputs_(f, "nan", 3);
     return;
   }
+  /* An infinity has no decimal expansion: printing one would spin in the
+   * exponent loop (inf / 10 is still inf). */
+  if (is_inf(v)) {
+    fputs_(f, v < 0 ? "-inf" : "inf", v < 0 ? 4 : 3);
+    return;
+  }
   if (is_neg(v)) {
     fputc_(f, '-');
     v = -v;
@@ -736,6 +842,12 @@ static void fmt_sci_signed(Fmt *f, double v, int p, int plus) {
 static void fmt_gen_signed(Fmt *f, double v, int P, int plus) {
   if (v != v) {
     fputs_(f, "nan", 3);
+    return;
+  }
+  /* An infinity has no decimal expansion: printing one would spin in the
+   * exponent loop (inf / 10 is still inf). */
+  if (is_inf(v)) {
+    fputs_(f, v < 0 ? "-inf" : "inf", v < 0 ? 4 : 3);
     return;
   }
   if (is_neg(v)) {

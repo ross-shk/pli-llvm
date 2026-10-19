@@ -30,6 +30,7 @@ void pli_abort(const char *msg) {
 #define PLI_ON_MAX 64
 static _Thread_local struct {
   long long key; /* 0 = ERROR, else the sema-assigned condition key */
+  long long src; /* the source condition key of the SIGNAL being handled */
   long long id;  /* handler id; 0 = the system action */
   void *fn;      /* compiled handler address; NULL = system action */
   void *ctx;     /* capture context; NULL when the unit touches no automatics */
@@ -40,6 +41,7 @@ static _Thread_local int pli_on_source_key = 0;
 void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
   if (pli_err_sp < PLI_ON_MAX) {
     pli_err_stack[pli_err_sp].key = key;
+    pli_err_stack[pli_err_sp].src = 0;
     pli_err_stack[pli_err_sp].id = id;
     pli_err_stack[pli_err_sp].fn = fn;
     pli_err_stack[pli_err_sp].ctx = ctx;
@@ -48,9 +50,16 @@ void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
     pli_abort("ON ERROR stack overflow");
   }
 }
+/* Always-inline, portable: MSVC has no __attribute__((always_inline)). */
+#if defined(_MSC_VER)
+#define PLI_ALWAYS_INLINE __forceinline
+#else
+#define PLI_ALWAYS_INLINE inline __attribute__((always_inline))
+#endif
+
 /* Topmost id for a key, or 0 when none (or SYSTEM) is established for it.
  * T2a: static inline so the scan folds into the ABI wrapper at C-compile time. */
-static inline __attribute__((always_inline))
+static PLI_ALWAYS_INLINE
 long long rt_pli_on_top(long long key) {
   for (int i = pli_err_sp - 1; i >= 0; --i)
     if (pli_err_stack[i].key == key)
@@ -58,7 +67,7 @@ long long rt_pli_on_top(long long key) {
   return 0;
 }
 /* Topmost handler address for a key, or NULL when none (or SYSTEM). */
-static inline __attribute__((always_inline))
+static PLI_ALWAYS_INLINE
 void *rt_pli_on_top_fn(long long key) {
   for (int i = pli_err_sp - 1; i >= 0; --i)
     if (pli_err_stack[i].key == key)
@@ -66,7 +75,7 @@ void *rt_pli_on_top_fn(long long key) {
   return NULL;
 }
 /* Capture context of the topmost handler for a key (NULL when none). */
-static inline __attribute__((always_inline))
+static PLI_ALWAYS_INLINE
 void *rt_pli_on_top_ctx(long long key) {
   for (int i = pli_err_sp - 1; i >= 0; --i)
     if (pli_err_stack[i].key == key)
@@ -156,16 +165,18 @@ int pli_onkey(void) {
    SIGNAL's source condition (0 = SYSTEM/none). */
 int pli_on_source(void) {
   if (pli_err_sp > 0)
-    return (int)pli_err_stack[pli_err_sp - 1].key;
+    return (int)pli_err_stack[pli_err_sp - 1].src;
   return pli_on_source_key;
 }
 
 /* ONSOURCE = key (TR 123, ADR-210): set the source condition key of the
    currently-handled SIGNAL. If inside an ON handler, sets the topmost stack
-   entry; otherwise stores a pending key for later ONSOURCE() reads. */
+   entry; otherwise stores a pending key for later ONSOURCE() reads. The
+   entry's own condition key is a separate field: overwriting it would make
+   the ERROR handler unfindable (pli_on_top / pli_on_pop match on it). */
 void pli_set_on_source(int key) {
   if (pli_err_sp > 0)
-    pli_err_stack[pli_err_sp - 1].key = (long long)key;
+    pli_err_stack[pli_err_sp - 1].src = (long long)key;
   else
     pli_on_source_key = key;
 }

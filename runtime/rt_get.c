@@ -17,6 +17,10 @@ int rt_get_token(char *buf, size_t cap) {
   } while (c != EOF && (c == ' ' || c == '\t' || c == '\n' || c == '\r'));
   if (c == EOF)
     return 0;
+  /* A zero or negative capacity is a caller bug: the cap comparison would
+   * wrap and the terminator would land outside the buffer. */
+  if (cap <= 0)
+    return 0;
   size_t n = 0;
   while (c != EOF && c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != ',' && c != ';') {
     if (n + 1 < cap)
@@ -45,7 +49,13 @@ double pli_get_list_float(void) {
 
 void pli_get_list_char(char *dst, long long cap) {
   char tok[256];
-  get_token(tok, sizeof tok);
+  /* get_token leaves the buffer untouched at EOF: check its result, or the
+   * copy below reads uninitialised stack. */
+  if (!get_token(tok, sizeof tok)) {
+    for (long long i = 0; i < cap; ++i)
+      dst[i] = ' ';
+    return;
+  }
   long long i = 0;
   for (; i < cap && tok[i]; ++i)
     dst[i] = tok[i];
@@ -225,7 +235,9 @@ long long pli_strtoll(const char *nptr, char **endptr, int base) {
     *endptr = (char *)(any ? s : nptr);
   if (!any)
     return 0;
-  return neg ? -(long long)acc : (long long)acc;
+  /* The negation is done in unsigned arithmetic: negating LLONG_MIN as a
+   * signed value overflows. */
+  return neg ? (long long)(0ULL - acc) : (long long)acc;
 }
 
 double pli_strtod(const char *nptr, char **endptr) {
@@ -262,8 +274,13 @@ double pli_strtod(const char *nptr, char **endptr) {
     }
     if (*t >= '0' && *t <= '9') {
       long long e10 = 0;
-      while (*t >= '0' && *t <= '9')
+      /* Bound the exponent: the digit loop below runs once per power of ten,
+       * so an unbounded exponent (1e99999999999999999999) would spin for
+       * ever, and e10 * 10 overflows a long long. */
+      while (*t >= '0' && *t <= '9' && e10 <= 400)
         e10 = e10 * 10 + (*t++ - '0');
+      while (*t >= '0' && *t <= '9')
+        ++t;
       if (eneg)
         e10 = -e10;
       s = t;

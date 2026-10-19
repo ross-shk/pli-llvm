@@ -50,6 +50,9 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   char buf[256];
+  /* A negative name length is a caller bug: the size_t cast would ask for a
+   * huge copy and overrun the buffer. */
+  if (namelen < 0) namelen = 0;
   size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
   pli_memcpy(buf, name, n);
   buf[n] = '\0';
@@ -61,6 +64,11 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   } else {
     rt_pli_files[slot] = pli_plat_fopen(buf, mode ? "w" : "r");
     rt_pli_nonprint[slot] = 0;
+    /* A failed OPEN must not be silent: the slot stays NULL, and the output
+     * routing would fall back to SYSPRINT, sending the file's data to the
+     * console instead of the named file. */
+    if (!rt_pli_files[slot])
+      pli_signal_error("OPEN failed: the file could not be opened");
   }
 }
 
@@ -117,6 +125,9 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   char buf[256];
+  /* A negative name length is a caller bug: the size_t cast would ask for a
+   * huge copy and overrun the buffer. */
+  if (namelen < 0) namelen = 0;
   size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
   pli_memcpy(buf, name, n);
   buf[n] = '\0';

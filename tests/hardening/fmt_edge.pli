@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Fixed-point output hardening: the decimal formatter must not run
+    past its buffer when the scale is wide, the F(w,d) edit must print
+    exactly d fraction digits (10^d does not fit an i64 past d = 18),
+    and an infinite FLOAT must print rather than spin in the exponent
+    loop (inf / 10 is still inf). The expected output is pinned in
+    expected/fmt_edge.out. */
+ fmt_edge: proc options(main);
+    declare d decimal(25, 2);
+    declare x float bin(53);
+    d = 12345.67;
+    /* a wide scale: every fraction digit must be printed */
+    put skip list('D', d);
+    /* F(w,d) with more digits than the scale holds */
+    put skip edit(d) (f(30, 20));
+    /* F(w,d) rounding to fewer digits than the scale holds */
+    put skip edit(d) (f(12, 1));
+    /* an infinite FLOAT prints instead of hanging */
+    x = 1.0E308 * 10.0;
+    put skip list('INF', x);
+ end fmt_edge;

@@ -257,6 +257,10 @@ static inline PliU128 pli_mag_s(PliI128 v) {
 }
 
 static inline PliI128 pli_sdiv(PliI128 a, PliI128 b) {
+  /* A zero divisor is a caller bug (the compiler diagnoses it); both paths
+   * must agree, or the native path traps where the portable one does not. */
+  if (pli_iszero_u(pli_to_u(b)))
+    return pli_to_s(pli_u128(0u, 0u));
 #ifdef PLI_WIDE128_PORTABLE
   /* Truncating division (C++/LLVM sdiv): divide magnitudes, fix the sign. */
   int neg = pli_isneg_s(a) ^ pli_isneg_s(b);

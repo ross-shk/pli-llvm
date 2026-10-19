@@ -276,7 +276,10 @@ char *pli_area_alloc(char *ap, long long n) {
   if (!a)
     pli_signal_error("AREA: allocation from a null area");
   long long need = n < 0 ? 0 : n;
-  if (a->used + need > a->size)
+  /* The block header is charged against the region too, and the check is
+   * written so it cannot overflow: a->used <= a->size always holds. */
+  long long hdr = (long long)sizeof(PliBlock);
+  if (need > a->size - a->used - hdr)
     pli_signal_error("AREA: area overflow");
   PliBlock *b = (PliBlock *)pli_plat_malloc((size_t)need + sizeof(PliBlock));
   if (!b)
@@ -284,7 +287,7 @@ char *pli_area_alloc(char *ap, long long n) {
   b->size = need;
   b->next = a->blocks;
   a->blocks = b;
-  a->used += need;
+  a->used += need + hdr;
   return (char *)(b + 1);
 }
 
@@ -294,13 +297,18 @@ void pli_area_free(char *ap, char *p) {
   PliArea *a = (PliArea *)ap;
   PliBlock *b = (PliBlock *)p - 1;
   if (a) {
-    /* Unlink the block from the region's live list. */
+    /* Unlink the block from the region's live list. A pointer that this
+     * region does not own is refused: freeing it would read a header from
+     * unrelated memory and leave another region's block dangling. */
     PliBlock **link = &a->blocks;
     while (*link && *link != b)
       link = &(*link)->next;
-    if (*link)
-      *link = b->next;
-    a->used -= b->size;
+    if (!*link) {
+      pli_signal_error("AREA: FREE of a pointer not allocated in this area");
+      return;
+    }
+    *link = b->next;
+    a->used -= b->size + (long long)sizeof(PliBlock);
   }
   pli_free((char *)b);
 }
