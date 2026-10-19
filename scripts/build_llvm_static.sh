@@ -149,6 +149,39 @@ echo "build_llvm_static.sh: static toolchain installed into $PREFIX"
 ls "$PREFIX/bin/clang" "$PREFIX/lib/cmake/llvm/LLVMConfig.cmake" \
   || { echo "build_llvm_static.sh: install looks incomplete" >&2; exit 1; }
 
+# Windows: the clang/lld-only stash ships no compiler-rt, but the driver needs
+# the 128-bit builtins (__divti3, ...) when linking through lld-link. Build just
+# the builtins with the freshly installed clang-cl (compiler-rt supports MSVC
+# for builtins) and install them into the prefix (lib/windows/).
+if [ "$WITH_ZLIB" = "OFF" ]; then
+  CRT_TARGET=$("$PREFIX/bin/clang.exe" -print-target-triple 2>/dev/null | tr -d '\r')
+  [ -n "$CRT_TARGET" ] || CRT_TARGET=x86_64-pc-windows-msvc
+  cmake -G Ninja -S "llvm-project-$LLVM_VER.src/compiler-rt" -B builtins-build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DLLVM_MAIN_SRC_DIR="$WORKDIR/llvm-project-$LLVM_VER.src/llvm" \
+    -DCMAKE_C_COMPILER="$PREFIX/bin/clang-cl.exe" \
+    -DCMAKE_CXX_COMPILER="$PREFIX/bin/clang-cl.exe" \
+    -DCMAKE_ASM_COMPILER="$PREFIX/bin/clang-cl.exe" \
+    -DCMAKE_C_COMPILER_TARGET="$CRT_TARGET" \
+    -DCMAKE_CXX_COMPILER_TARGET="$CRT_TARGET" \
+    -DCMAKE_ASM_COMPILER_TARGET="$CRT_TARGET" \
+    -DLLVM_CONFIG_PATH="$PREFIX/bin/llvm-config.exe" \
+    -DCOMPILER_RT_BUILD_BUILTINS=ON \
+    -DCOMPILER_RT_BUILD_SANITIZERS=OFF -DCOMPILER_RT_BUILD_XRAY=OFF \
+    -DCOMPILER_RT_BUILD_LIBFUZZER=OFF -DCOMPILER_RT_BUILD_PROFILE=OFF \
+    -DCOMPILER_RT_BUILD_CRT=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+    -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF \
+    -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
+    -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
+    $CRT_ARGS \
+    || { echo "build_llvm_static.sh: compiler-rt configure failed" >&2; exit 1; }
+  cmake --build builtins-build -j"$JOBS" --target install \
+    || { echo "build_llvm_static.sh: compiler-rt build failed" >&2; exit 1; }
+  ls "$PREFIX/lib/windows/"clang_rt.builtins-*.lib \
+    || { echo "build_llvm_static.sh: compiler-rt builtins missing" >&2; exit 1; }
+fi
+
 # Pack the prefix for the stash release; print the sha for llvm_static.pins.
 if [ -n "$PACK" ]; then
   command -v zstd >/dev/null 2>&1 || { echo "build_llvm_static.sh: zstd needed for --pack" >&2; exit 1; }

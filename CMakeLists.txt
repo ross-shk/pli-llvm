@@ -376,9 +376,12 @@ endif()
 # on Windows where the CRT doesn't include it.
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" _LLVM_MAJOR "${LLVM_PACKAGE_VERSION}")
+  # Prebuilt LLVM installs builtins under lib/clang/<ver>/lib/windows; the
+  # standalone compiler-rt build in the hermetic stash installs under lib/windows.
   find_file(CLANG_RT_BUILTINS
     NAMES clang_rt.builtins-x86_64.lib clang_rt.builtins-aarch64.lib
-    HINTS ${CMAKE_PREFIX_PATH}/lib/clang/${_LLVM_MAJOR}/lib/windows)
+    HINTS ${CMAKE_PREFIX_PATH}/lib/clang/${_LLVM_MAJOR}/lib/windows
+          ${CMAKE_PREFIX_PATH}/lib/windows)
   if(CLANG_RT_BUILTINS)
     target_link_libraries(pli PRIVATE ${CLANG_RT_BUILTINS})
     message(STATUS "compiler-rt builtins: ${CLANG_RT_BUILTINS}")
