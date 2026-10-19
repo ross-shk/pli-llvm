@@ -6503,17 +6503,20 @@ void IRGen::emitDoIter(HStmt* s) {
           b_.CreateSExt(tv.reg, b_.getInt64Ty(), "trip.tv64"),
           b_.CreateSExt(from.reg, b_.getInt64Ty(), "trip.from64"),
           "trip.span");
+      // The step magnitude is |by| — the sign of BY, not of the span. The
+      // select arms used to be swapped, which made the step always negative
+      // and the assumption trivially true (trip = 1) instead of tight.
+      llvm::Value* by64 = b_.CreateSExt(by.reg, b_.getInt64Ty(), "trip.by64");
       llvm::Value* absStep = b_.CreateSelect(
-          b_.CreateICmpSGE(span64, b_.getInt64(0), "step.is"),
-          b_.CreateNeg(by.reg, "step.abs"), by.reg, "trip.step");
-      absStep = b_.CreateSExt(absStep, b_.getInt64Ty(), "step64");
+          b_.CreateICmpSGE(by64, b_.getInt64(0), "step.is"), by64,
+          b_.CreateNeg(by64, "step.abs"), "trip.step");
       llvm::Value* absSpan =
           b_.CreateSelect(b_.CreateICmpSGE(span64, b_.getInt64(0), "span.pos"),
                            span64, b_.CreateNeg(span64, "span.neg"), "trip.absspan");
-      llvm::Value* sm1 =
-          b_.CreateSub(absStep, b_.getInt64(1), "trip.sm1");
-      llvm::Value* q = b_.CreateUDiv(
-          b_.CreateAdd(absSpan, sm1, "trip.adj"), absStep, "trip.q");
+      // trip = floor(|to - from| / |by|) + 1 — the number of times the DO
+      // runs, matching the maxTrip computed above. A ceiling here would
+      // overshoot by one and the assumption would be false.
+      llvm::Value* q = b_.CreateUDiv(absSpan, absStep, "trip.q");
       llvm::Value* trip = b_.CreateAdd(q, b_.getInt64(1), "trip");
       b_.CreateAssumption(b_.CreateICmpULE(trip, b_.getInt64(maxTrip)));
     }
@@ -6852,7 +6855,8 @@ void IRGen::emitGetDataItems(HStmt* s) {
     case TK::FixedDec:
       if (ty.k == TK::FixedDec && ty.scale > 0) {
         llvm::Value* raw = b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
-        v.reg = b_.CreateTrunc(raw, llvmTy(ty), "gdec");
+        // The reader returns an i64; a wide DECIMAL slot is i128.
+        v.reg = fitTo(raw, llvmTy(ty), "gdec");
         v.ty = ty;
       } else {
         v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
@@ -6927,7 +6931,8 @@ void IRGen::emitGet(HStmt* s) {
           // Already scaled by the reader; truncate to the target width
           // without rescaling, then the store passes it through.
           llvm::Value* raw = b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
-          v.reg = b_.CreateTrunc(raw, llvmTy(ty), "gdec");
+          // The reader returns an i64; a wide DECIMAL slot is i128.
+          v.reg = fitTo(raw, llvmTy(ty), "gdec");
           v.ty = ty;
         } else {
           v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
@@ -7309,6 +7314,18 @@ Val IRGen::materializeActual(HExpr* a) {
   return v;
 }
 
+// Fit an integer value to the destination integer type: widen with a sign
+// extension, narrow with a truncation. A direct SExt/Trunc is invalid IR when
+// the widths do not line up (an i64 runtime result into an i128 wide-DECIMAL
+// slot, or an i128 value into an i64 slot).
+llvm::Value* IRGen::fitTo(llvm::Value* v, llvm::Type* dst, const char* name) {
+  unsigned src = v->getType()->getIntegerBitWidth();
+  unsigned d = dst->getIntegerBitWidth();
+  if (src == d)
+    return v;
+  return d > src ? b_.CreateSExt(v, dst, name) : b_.CreateTrunc(v, dst, name);
+}
+
 // Address of one call argument for a by-reference parameter (rule 4).
 llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   // A whole-structure argument is passed BY VALUE (rule 127): the source's
@@ -7374,6 +7391,9 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
         b_.CreateStore(b_.CreateTrunc(srcLen, b_.getInt32Ty(), "vl32"), lp);
         llvm::Value* dp = b_.CreateStructGEP(st, tmp, 1, "vdp");
         b_.CreateMemCpy(dp, llvm::MaybeAlign(), av0.ptr, llvm::MaybeAlign(), srcLen);
+        // The concat's heap buffer has been copied: release it (the call
+        // argument path had no free, so every call leaked one buffer).
+        freeConcatTemp(a, av0.ptr);
         return tmp;
       }
     }
@@ -7388,6 +7408,9 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
       unsigned cap = av.ty.len > 0 ? (unsigned)av.ty.len : 1;
       llvm::AllocaInst* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
       b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
+      // The concat's heap buffer has been copied: release it (the call
+      // argument path had no free, so every call leaked one buffer).
+      freeConcatTemp(a, av.ptr);
       return buf;
     }
     d_.error(a->loc,
@@ -9359,6 +9382,10 @@ llvm::Value* IRGen::toI64(const Val& v, SourceLoc loc) {
                          : packBitValue(v.reg, v.ty.len, loc);
   if (v.ty.intBits() == 64)
     return v.reg;
+  // A wide DECIMAL (i128, ADR-191): narrow with a truncation. An SExt into
+  // i64 is invalid IR, and the value does not fit the 64-bit path anyway.
+  if (v.ty.intBits() == 128)
+    return b_.CreateTrunc(v.reg, b_.getInt64Ty(), "i64");
   return b_.CreateSExt(v.reg, b_.getInt64Ty(), "i64");
 }
 
@@ -10743,11 +10770,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       v.reg = b_.CreateSIToFP(i, b_.getDoubleTy(), "truncd");
     } else if (a.ty.k == TK::FixedDec && a.ty.scale > 0) {
       // Drop fractional digits toward zero: r = (r / 10^q) * 10^q (rule 135).
-      llvm::Value* i = toI64(a);
-      llvm::Value* p = i64(pliPow10(a.ty.scale));
-      llvm::Value* t = b_.CreateSDiv(i, p, "trunci");
+      // Compute in the value's own width: a wide DECIMAL is i128, and
+      // narrowing it to i64 first would drop the high digits (and an SExt
+      // into i64 is invalid IR).
+      llvm::Type* wt = llvmTy(a.ty);
+      llvm::Value* p = fitTo(i64(pliPow10(a.ty.scale)), wt, "truncp");
+      llvm::Value* t = b_.CreateSDiv(a.reg, p, "trunci");
       v.ty = a.ty;
-      v.reg = b_.CreateTrunc(b_.CreateMul(t, p, "truncd"), llvmTy(a.ty), "trunc");
+      v.reg = b_.CreateMul(t, p, "truncd");
     } else {
       v = a;
     }
@@ -10789,6 +10819,25 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
       ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey, "mod_zd");
       llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_dd"), {av.reg, bv.reg}, "mod");
+      v.reg = endZerodivide(zd, m);
+    } else if (common.intBits() == 128) {
+      // A wide DECIMAL (i128, ADR-191) keeps its own width: the i64 path
+      // below drops the high digits, and an SExt into i64 is invalid IR.
+      llvm::Type* wt = llvmTy(common);
+      llvm::Value* zero = llvm::Constant::getNullValue(wt);
+      llvm::Value* bi = bv.reg;
+      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
+      llvm::Value* dz = b_.CreateICmpEQ(bi, zero, "zdiv");
+      ZdivCheck zd = beginZerodivide(dz, zero, Stmt::kZerodivideCondKey, "mod_zd");
+      // PL/I MOD takes the sign of the divisor; srem gives the sign of the
+      // dividend, so add the divisor back when the signs differ.
+      llvm::Value* r = b_.CreateSRem(av.reg, bi, "mod");
+      llvm::Value* adj = b_.CreateAdd(r, bi, "modadj");
+      llvm::Value* nz = b_.CreateICmpNE(r, zero, "modnz");
+      llvm::Value* rNeg = b_.CreateICmpSLT(r, zero, "modneg");
+      llvm::Value* bNeg = b_.CreateICmpSLT(bi, zero, "modbneg");
+      llvm::Value* signDiff = b_.CreateICmpNE(rNeg, bNeg, "modsd");
+      llvm::Value* m = b_.CreateSelect(nz, b_.CreateSelect(signDiff, adj, r), r, "mods");
       v.reg = endZerodivide(zd, m);
     } else {
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
@@ -10853,9 +10902,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         m = b_.CreateCall(runtimeFn("pli_mod_ll"), {avi, bi});
         m = endZerodivide(zd, m);
       }
-      llvm::Value* m64 = b_.CreateTrunc(m, b_.getInt32Ty(), "mod32");
       // Keep the value's LLVM width in sync with e->ty for later compares.
-      v.reg = common.intBits() == 32 ? m64 : b_.CreateSExt(m64, llvmTy(common), "modw");
+      // The remainder must not be narrowed to 32 bits: a 64-bit common type
+      // can hold a remainder that needs the full width.
+      v.reg = common.intBits() == 32 ? b_.CreateTrunc(m, b_.getInt32Ty(), "mod32")
+                                     : fitTo(m, llvmTy(common), "modw");
     }
     result = v;
     return true;

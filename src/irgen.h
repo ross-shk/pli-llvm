@@ -247,6 +247,11 @@ private:
   // Evaluate a call actual once: reuse the value recorded for this call, or
   // evaluate and record it.
   Val materializeActual(HExpr* a);
+  // Fit an integer value to the destination integer type: widen with a sign
+  // extension, narrow with a truncation. A direct SExt/Trunc is invalid IR
+  // when the widths do not line up — an i64 runtime result into an i128
+  // wide-DECIMAL slot, or an i128 value into an i64 slot.
+  llvm::Value* fitTo(llvm::Value* v, llvm::Type* dst, const char* name);
   // A CHARACTER VARYING argument of a different declared length than the
   // parameter is marshalled into a parameter-sized dummy (see argAddr); after
   // the call the callee's result is copied back into the caller's variable,

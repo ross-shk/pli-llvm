@@ -55,13 +55,48 @@ HExprP lowerCallExpr(const Expr* e);
 HExprP lowerSubscriptExpr(const Expr* e);
 HExprP lowerExpr(const Expr* e);
 
+// Map an AST expression kind to its HIR counterpart. The two enums are not
+// in the same order (HIR has the HIR-only `Convert` kind), so a positional
+// cast would turn an AST `TypeTag` into an HIR `Convert`.
+static HExpr::Kind mapKind(Expr::Kind k) {
+  switch (k) {
+  case Expr::IntLit:
+    return HExpr::IntLit;
+  case Expr::FltLit:
+    return HExpr::FltLit;
+  case Expr::DecLit:
+    return HExpr::DecLit;
+  case Expr::CharLit:
+    return HExpr::CharLit;
+  case Expr::BitLit:
+    return HExpr::BitLit;
+  case Expr::VarRef:
+    return HExpr::VarRef;
+  case Expr::Binary:
+    return HExpr::Binary;
+  case Expr::Unary:
+    return HExpr::Unary;
+  case Expr::Call:
+    return HExpr::Call;
+  case Expr::Subscript:
+    return HExpr::Subscript;
+  case Expr::Star:
+    return HExpr::Star;
+  case Expr::ComplexLit:
+    return HExpr::ComplexLit;
+  case Expr::TypeTag:
+    return HExpr::TypeTag;
+  }
+  return HExpr::IntLit;
+}
+
 // Mirror an expression node without re-dispatching the Call case (Call is
 // handled by lowerCallExpr, which builds on this).
 HExprP lowerExprBase(const Expr* e) {
   if (!e)
     return nullptr;
   auto h = std::make_unique<HExpr>();
-  h->kind = static_cast<HExpr::Kind>(e->kind);
+  h->kind = mapKind(e->kind);
   h->loc = e->loc;
   h->ty = e->ty;
   h->ival = e->ival;

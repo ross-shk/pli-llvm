@@ -66,6 +66,13 @@ struct HExpr {
   bool isLabel = false;
 };
 
+// The AST and HIR expression kinds are not in the same order (HIR adds the
+// HIR-only `Convert` kind), so they are mapped explicitly in hir.cpp
+// (mapKind). This assertion catches a future insertion into either enum
+// that would silently break that mapping.
+static_assert(static_cast<int>(Expr::TypeTag) == static_cast<int>(HExpr::TypeTag) - 1,
+              "the AST and HIR expression kinds diverged — update mapKind in hir.cpp");
+
 struct HStmt;
 using HStmtP = std::unique_ptr<HStmt>;
 
