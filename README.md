@@ -1,4 +1,4 @@
-# pli — a PL/I compiler targeting LLVM
+# pli-llvm — a PL/I compiler targeting LLVM
 
 `pli` is a modern PL/I compiler built to **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). It implements roughly 80% of TR 25.084, plus selected IBM Enterprise PL/I extensions. It ships as a single self-contained binary, so compiling and linking user programs need no LLVM install, Xcode, build-essential, or MSVC.
 
@@ -173,4 +173,4 @@ Everything else is diagnosed with its TR 25.084 rule number — the diagnostic i
 
 ## License
 
-MIT — see `LICENSE`.
+Apache 2.0 — see `LICENSE`.
