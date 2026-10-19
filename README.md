@@ -2,7 +2,7 @@
 
 A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). Currently supports about 80% of **TR 25.084** features with some features added from IBM Enterprise PL/I.
 
-**Single-command distribution** (like Go/Zig) — `pli` embeds the PL/I runtime bitcode (`pli_runtime.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download a [release](https://github.com/ross-shk/pli-llvm/releases/tag/v0.1.0) archive, extract it and put the whole directory in the executable path, on the Mac (Apple Silicon):
+**Single-command distribution** (like Go/Zig) — `pli` embeds the PL/I runtime bitcode (`pli_runtime.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download the [latest release](https://github.com/ross-shk/pli-llvm/releases/latest) archive, extract it, and put `pli` on your `PATH`. On the Mac (Apple Silicon):
 
 ```sh
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-darwin-arm64.tar.gz \
@@ -11,9 +11,16 @@ curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-darwin
 
 or on Linux (x86_64):
 
-```
+```sh
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-linux-x86_64.tar.gz \
   | tar xzf - && sudo mv linux-x86_64 /usr/local/pli && sudo ln -s /usr/local/pli/pli /usr/local/bin/
+```
+
+or on Linux (aarch64):
+
+```sh
+curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-linux-aarch64.tar.gz \
+  | tar xzf - && sudo mv linux-aarch64 /usr/local/pli && sudo ln -s /usr/local/pli/pli /usr/local/bin/
 ```
 
 or on Windows (x86_64):
@@ -21,7 +28,8 @@ or on Windows (x86_64):
 ```bat
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -o pli.zip
 tar -xf pli.zip
-move windows-x86_64 %USERPROFILE%\pli
+mkdir %USERPROFILE%\pli
+move pli.exe %USERPROFILE%\pli\
 ```
 
 The archive is one file (`pli` / `pli.exe`, ADR-227): it links no LLVM shared libraries, shells out to nothing, and carries its link sysroot embedded — compile and link happen in-process with nothing except the OS installed. Just download it and run `pli hello.pli -o hello`. User links need no host toolchain: Linux binaries link musl static from the embedded sysroot (no build-essential), macOS links from the embedded SDK stubs (no Xcode CLT, Xcode only as fallback), Windows links from the embedded mingw sysroot (no MSVC Build Tools). An exe-relative `musl/`/`mingw/`/`sdk/` dir next to the binary overrides the embedded set (dev use); otherwise `pli` falls back to a host toolchain. (Tiny `clang_rt.*.lib` helpers may sit next to it, used only by the host-toolchain fallback and `--fprofile-generate` — the vendored link needs none of them.) `curl` and `tar` ship with Windows 10+.
