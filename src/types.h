@@ -323,7 +323,8 @@ inline Type& Type::operator=(Type&& o) noexcept = default;
 
 inline bool Type::operator==(const Type& o) const {
   if (k != o.k || prec != o.prec || scale != o.scale || len != o.len || varying != o.varying ||
-      starLen != o.starLen || unaligned != o.unaligned || isUnion != o.isUnion || dims != o.dims)
+      starLen != o.starLen || unaligned != o.unaligned || isUnion != o.isUnion ||
+      wideDec != o.wideDec || dims != o.dims)
     return false;
   if (members.size() != o.members.size())
     return false;

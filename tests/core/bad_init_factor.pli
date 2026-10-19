@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* An INITIAL iteration factor expands into one value per repetition
+    (rule 29): bound it against the declared element count. */
+ badinit: procedure options(main);
+    declare a(10) fixed bin(9) initial((200000000)1);
+    put skip list(a(1));
+ end badinit;

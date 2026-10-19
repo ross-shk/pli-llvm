@@ -59,6 +59,15 @@ struct PPCondParser {
   size_t pos = 0;
   const std::map<std::string, long long>& vars;
   std::string error;
+  // Parenthesis nesting: a deeply nested %IF expression is diagnosed
+  // instead of overflowing the compiler's stack.
+  int depth = 0;
+  static constexpr int kMaxDepth = 128;
+  struct DepthGuard {
+    int& d;
+    explicit DepthGuard(int& depth) : d(depth) { ++d; }
+    ~DepthGuard() { --d; }
+  };
 
   void skipWs() {
     while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r' ||
@@ -205,6 +214,11 @@ struct PPCondParser {
   long long parsePrimary() {
     skipWs();
     if (pos < text.size() && text[pos] == '(') {
+      if (depth >= kMaxDepth) {
+        error = "preprocessor expression nesting is too deep";
+        return 0;
+      }
+      DepthGuard g(depth);
       ++pos;
       long long v = parseOr();
       skipWs();
@@ -825,7 +839,20 @@ bool Preprocessor::handleDeclare(const fs::path& input, const std::string& opera
     // Check for VALUE clause: name VALUE(expr)
     long long initValue = 0;
     bool hasValue = false;
-    size_t valuePos = name.find("VALUE");
+    // The VALUE keyword must be a whole word: a name that merely contains
+    // it ("values") is not a VALUE clause.
+    size_t valuePos = std::string::npos;
+    for (size_t i = 0; i + 5 <= name.size(); ++i) {
+      if (name.compare(i, 5, "VALUE") != 0)
+        continue;
+      bool leftOk = i == 0 || name[i - 1] == ' ' || name[i - 1] == '\t';
+      bool rightOk = i + 5 == name.size() || name[i + 5] == ' ' || name[i + 5] == '\t' ||
+                     name[i + 5] == '(';
+      if (leftOk && rightOk) {
+        valuePos = i;
+        break;
+      }
+    }
     if (valuePos != std::string::npos) {
       // Extract name and VALUE expression
       std::string beforeValue = trim(name.substr(0, valuePos));

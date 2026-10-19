@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A replicated string constant is expanded at parse time (rule 129):
+    bound the result so a short source line cannot ask for gigabytes. */
+ badrepl: procedure options(main);
+    declare s char(20);
+    s = (2000000000)'A';
+    put skip list(s);
+ end badrepl;

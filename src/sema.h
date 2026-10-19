@@ -169,8 +169,10 @@ private:
   void processPackage(Proc* p);
   // Rules (94),(99): resolve a condition to its dispatch key
   // (0 means ERROR, negative Stmt::k*CondKey are the fixed conditions,
-  // else first-use order in prog_->condNames). A programmer-named name
-  // already declared as a variable, parameter, or procedure is diagnosed.
+  // else a hash of the condition name — the same name yields the same key
+  // across separately compiled objects, which an index into
+  // prog_->condNames would not). A programmer-named name already declared as
+  // a variable, parameter, or procedure is diagnosed.
   int resolveCondKey(Stmt* s, Scope* sc);
   // Validate the STRING ( reference ) stream option (rule 105): the target must
   // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only. A PUT
@@ -303,8 +305,11 @@ private:
   Expr* foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc);
   // Expand an INITIAL itemlist (rules (28)-(31)) into a flat sequence of folded
   // element values, expanding iteration factors and resolving '*'.
+  // `maxElems` bounds the expansion: an iteration factor larger than the
+  // declared element count is diagnosed instead of expanded (the expansion
+  // allocates one vector slot per element).
   void expandInitItems(const std::vector<InitItem>& items, const Type& elemTy, SourceLoc loc,
-                       std::vector<Expr*>& out);
+                       std::vector<Expr*>& out, long long maxElems = -1);
   // Total element count of an array type: the product of (ub - lb + 1) (rule 12).
   long long elementCount(const Type& ty);
   // Number of scalar leaf values a structure's INITIAL list must supply (rule
@@ -314,8 +319,10 @@ private:
   long long structureLeafCount(const Type& ty);
   // Flatten an INITIAL itemlist into raw (unfolded) values, expanding iteration
   // factors and '*' but not folding, so a heterogeneous structure can fold each
-  // value against its own member type later.
-  void flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc, std::vector<Expr*>& out);
+  // value against its own member type later. `maxElems` bounds the expansion
+  // the same way expandInitItems does.
+  void flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc, std::vector<Expr*>& out,
+                        long long maxElems = -1);
   // Fold raw INITIAL values against a structure's scalar leaves in order into
   // `out` (an index into `vals` advanced as leaves are consumed).
   void foldStructInit(const Type& ty, const std::vector<Expr*>& vals, size_t& idx, SourceLoc loc,

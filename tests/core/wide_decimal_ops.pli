@@ -1,0 +1,30 @@
+  /* SPDX-License-Identifier: Apache-2.0 */
+  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+   /* Wide (>18 digit) FIXED DECIMAL arithmetic (ADR-191): MOD and TRUNC
+      must compute in the value's own i128 width. Narrowing to i64 first
+      was invalid IR (an SExt into i64 is rejected by the verifier) and
+      dropped the high digits. A 64-bit MOD must also keep a remainder
+      wider than 32 bits. */
+   wide_decimal_ops: procedure options(main);
+      declare x fixed dec(25, 0);
+      declare y fixed dec(25, 0);
+      declare z fixed dec(25, 3);
+      declare a fixed bin(63);
+      declare b fixed bin(63);
+      declare fails fixed bin(31);
+      fails = 0;
+      x = 123456789012345678901234;
+      y = 1000;
+      z = 123456789012345678901234.567;
+      /* the remainder keeps every digit of the dividend */
+      if mod(x, y) ^= 234 then fails = fails + 1;
+      /* TRUNC drops the fraction, not the high digits */
+      if trunc(z) ^= 123456789012345678901234.000
+         then fails = fails + 1;
+      /* a 64-bit MOD keeps a remainder wider than 32 bits */
+      a = 1099511627776;
+      b = 8589934593;
+      if mod(a, b) ^= 8589934465 then fails = fails + 1;
+      if fails = 0 then put skip list('PASS');
+      else put skip list('FAIL wide-decimal-ops: fails =', fails);
+   end wide_decimal_ops;

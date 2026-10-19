@@ -2,6 +2,7 @@
 // Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 #include "sema.h"
 #include <algorithm>
+#include <climits>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -9,6 +10,11 @@
 // Empty ALLOCATE bound list for items beyond the vector (defensive; every
 // pushed item carries its own list, empty = bare ALLOCATE).
 static const std::vector<Stmt::AllocBound> emptyAllocBounds;
+
+// An INITIAL iteration factor expands into one vector slot per repetition:
+// cap it so a short source line cannot ask for gigabytes of memory. The
+// declared element count bounds it further where it is known.
+static const long long kMaxInitElems = 1LL << 20;
 
 // True when a structure type contains a dynamic (runtime-extent) array member
 // (rule 13); forward-declared here because resolveStructReturn (rule 127) and
@@ -1515,8 +1521,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             }
           } else if (!item.initItems.empty()) {
             std::vector<Expr*> elems;
-            expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
             long long n = elementCount(item.ty);
+            expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems, n);
             if ((long long)elems.size() != n)
               d_.error(item.loc,
                        "INITIAL supplies " + std::to_string(elems.size()) +
@@ -2045,7 +2051,7 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
 }
 
 void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemTy, SourceLoc loc,
-                           std::vector<Expr*>& out) {
+                           std::vector<Expr*>& out, long long maxElems) {
   for (const InitItem& it : items) {
     switch (it.kind) {
     case InitItem::Value:
@@ -2059,12 +2065,22 @@ void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemT
         out.push_back(out.back()); // repeat the last folded value
       break;
     case InitItem::Group:
-      expandInitItems(it.items, elemTy, loc, out);
+      expandInitItems(it.items, elemTy, loc, out, maxElems);
       break;
     case InitItem::Iter: {
       std::vector<Expr*> sub;
-      expandInitItems(it.items, elemTy, loc, sub);
-      for (long long k = 0; k < it.factor; ++k)
+      expandInitItems(it.items, elemTy, loc, sub, maxElems);
+      // An iteration factor is expanded into one vector slot per repetition:
+      // bound it before expanding, not after (the expansion is what allocates).
+      long long factor = it.factor;
+      if (factor < 0)
+        factor = 0;
+      long long limit = maxElems >= 0 ? maxElems : kMaxInitElems;
+      if (factor > limit) {
+        d_.error(loc, "an INITIAL repetition factor exceeds the number of elements", "(29)");
+        break;
+      }
+      for (long long k = 0; k < factor; ++k)
         for (Expr* s : sub)
           out.push_back(s);
       break;
@@ -2076,7 +2092,7 @@ void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemT
 long long Sema::elementCount(const Type& ty) {
   long long n = 1;
   for (const auto& d : ty.dims)
-    n *= (long long)(d.ub - d.lb + 1);
+    n *= (long long)d.ub - (long long)d.lb + 1; // the span is computed in 64 bits
   return n;
 }
 
@@ -2221,7 +2237,7 @@ long long Sema::structureLeafCount(const Type& ty) {
 }
 
 void Sema::flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc,
-                            std::vector<Expr*>& out) {
+                            std::vector<Expr*>& out, long long maxElems) {
   for (const InitItem& it : items) {
     switch (it.kind) {
     case InitItem::Value:
@@ -2234,12 +2250,21 @@ void Sema::flattenInitItems(const std::vector<InitItem>& items, SourceLoc loc,
         out.push_back(out.back()); // repeat the last raw value
       break;
     case InitItem::Group:
-      flattenInitItems(it.items, loc, out);
+      flattenInitItems(it.items, loc, out, maxElems);
       break;
     case InitItem::Iter: {
       std::vector<Expr*> sub;
-      flattenInitItems(it.items, loc, sub);
-      for (long long k = 0; k < it.factor; ++k)
+      flattenInitItems(it.items, loc, sub, maxElems);
+      // Bound the factor before expanding it (see expandInitItems).
+      long long factor = it.factor;
+      if (factor < 0)
+        factor = 0;
+      long long limit = maxElems >= 0 ? maxElems : kMaxInitElems;
+      if (factor > limit) {
+        d_.error(loc, "an INITIAL repetition factor exceeds the number of elements", "(29)");
+        break;
+      }
+      for (long long k = 0; k < factor; ++k)
         for (Expr* s : sub)
           out.push_back(s);
       break;
@@ -2320,7 +2345,8 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
         d_.error(s->loc, "'" + s->condName + "' is a variable, not a condition name", "(99)");
     }
   }
-  return (unsigned int)(fnv1a(s->condName.data(), s->condName.size())) + 1;
+  /* Mask off the top bit so the +1 cannot wrap to 0 (0 is the ERROR key). */
+  return (unsigned int)((fnv1a(s->condName.data(), s->condName.size()) & 0x7FFFFFFFU) + 1);
 }
 
 // Whole-array expressions (rules 86, 127; QR2.1): storage a DO desugar can
@@ -4543,16 +4569,19 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         e->ty = Type::flt(std::max(6, std::max(A.prec, B.prec)));
       }
       break;
-    case Tok::Concat:
-      if (A.isChar() && B.isChar()) {
-        e->ty = Type::chr(A.len + B.len);
-      } else {
-        // Rule (119): non-character operands are implicitly converted to
-        // CHAR (24) before concatenation, mirroring the CHAR builtin.
-        int len = (A.isChar() ? A.len : 24) + (B.isChar() ? B.len : 24);
-        e->ty = Type::chr(len);
+    case Tok::Concat: {
+      // The concatenated length is computed in 64 bits: A.len + B.len can
+      // overflow an int for two large character operands.
+      long long len = (A.isChar() ? (long long)A.len : 24) + (B.isChar() ? (long long)B.len : 24);
+      if (len > INT_MAX) {
+        d_.error(e->loc, "the concatenated character length is too large", "(119)");
+        len = INT_MAX;
       }
+      // Rule (119): non-character operands are implicitly converted to
+      // CHAR (24) before concatenation, mirroring the CHAR builtin.
+      e->ty = Type::chr((int)len);
       break;
+    }
     case Tok::Amp:
     case Tok::Bar:
       if ((!A.isBit() && !A.isNumeric()) || (!B.isBit() && !B.isNumeric())) {

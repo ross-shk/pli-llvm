@@ -159,9 +159,37 @@ private:
   // for the precision parenthesised group (16 for a declaration, 38 for a
   // descriptor parameter).
   bool parseScalarAttr(AttrBag& bag, const char* rule);
+  // The scale factor of a FIXED attribute must fit the precision (rule (16)):
+  // FIXED DECIMAL(p,q) takes q <= p decimal digits; FIXED BINARY(p,q) takes
+  // q < p binary digits (the sign bit takes one of the p).
+  static bool fixedScaleFits(const AttrBag& bag, bool binary);
+  // --- nesting depth guards ---------------------------------------------
+  // A deeply nested expression or block must be diagnosed, not crash the
+  // compiler with a stack overflow. The counters are RAII-guarded so every
+  // exit path decrements them.
+  int exprDepth_ = 0;
+  int blockDepth_ = 0;
+  static constexpr int kMaxExprDepth = 512;  // a parenthesised level costs two
+  static constexpr int kMaxBlockDepth = 128;
+  // A replicated string constant is expanded at parse time; 1 MiB of result
+  // is far beyond any real program and keeps a short source line from
+  // asking for gigabytes.
+  static constexpr long long kMaxReplicatedChars = 1 << 20;
+  // A structure level number is 1..49 (IBM PL/I); a deeper level builds a
+  // deeper member tree, which sema walks recursively.
+  static constexpr int kMaxStructureLevel = 49;
+  struct DepthGuard {
+    int& d;
+    explicit DepthGuard(int& depth) : d(depth) { ++d; }
+    ~DepthGuard() { --d; }
+  };
 
   // --- expressions (rules 115-129) ------------------------------------
   ExprP parseExpr(int minPrec = 1);
+  // parseExpr with a placeholder for a failed parse: the tree must not hold a
+  // null expression, because sema dereferences the expressions it walks (the
+  // diagnostic has already been reported, and the driver stops before sema).
+  ExprP parseExprOrPlaceholder();
   ExprP parseUnary();
   ExprP parsePower();
   ExprP parsePrimary();

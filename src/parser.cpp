@@ -22,6 +22,14 @@ static int boundedNonNeg(const std::string& text, SourceLoc loc, Diags& d, const
   return (int)v;
 }
 
+// A dimension bound must fit the int a Dim carries (rules (12),(13)): a
+// 64-bit bound truncated to int silently declared a zero-element array. The
+// bound itself may be negative (a(-3:3) is a valid axis); only the range
+// matters.
+static bool dimBoundFits(long long v) {
+  return v >= INT_MIN && v <= INT_MAX;
+}
+
 // Parse an integer literal (rule 135): a digit string with no point or
 // exponent. Sets ival via strtoll (saturating, as before — narrow paths keep
 // their exact historical behavior) and wideIval to the full value (ADR-191:
@@ -556,6 +564,11 @@ EndInfo Parser::parseProcBody(Proc* p) {
 // Implements multiple closure (TR §2.3.2.2): an END bearing a label that names
 // an enclosing block closes every block in between.
 EndInfo Parser::parseBody(Proc* owner, std::vector<StmtP>& body, const std::string& ownName) {
+  if (blockDepth_ >= kMaxBlockDepth) {
+    d_.error(cur().loc, "block nesting is too deep", "(68)");
+    return {};
+  }
+  DepthGuard g(blockDepth_);
   for (;;) {
     if (at(Tok::Eof)) {
       d_.error(cur().loc, "unexpected end of file: missing END for '" + ownName + "'", "(7)",
@@ -853,7 +866,7 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     advance();
     st->kind = Stmt::Return;
     if (eat(Tok::LParen)) { // RETURN(value) — function value, rule (81)
-      st->value = parseExpr();
+      st->value = parseExprOrPlaceholder();
       expect(Tok::RParen, "(81)");
     }
     expect(Tok::Semi, "(81)");
@@ -883,7 +896,7 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
        // GO TO ( expr ) — indirect jump through a LABEL variable (rule (77),
        // rule (21)): the operand is a label variable holding a block address.
        advance(); // (
-       st->gotoTarget = parseExpr();
+       st->gotoTarget = parseExprOrPlaceholder();
        expect(Tok::RParen, "(77)");
      } else
        d_.error(cur().loc, "expected a label after GO TO", "(77)");
@@ -901,7 +914,7 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
      advance();
    } else if (at(Tok::LParen)) {
      advance(); // (
-     st->gotoTarget = parseExpr();
+     st->gotoTarget = parseExprOrPlaceholder();
      expect(Tok::RParen, "(77)");
    } else
      d_.error(cur().loc, "expected a label after GOTO", "(77)");
@@ -1109,7 +1122,7 @@ StmtP Parser::parseSignal() {
       resync();
       return nullptr;
     }
-    st->oncodeExpr = parseExpr();
+    st->oncodeExpr = parseExprOrPlaceholder();
     if (!expect(Tok::RParen, "(93)")) {
       resync();
       return nullptr;
@@ -1184,6 +1197,17 @@ StmtP Parser::parseDeclare() {
   }
   expect(Tok::Semi, "(9)");
   return st;
+}
+
+// The scale factor of a FIXED attribute must fit the precision (rule (16)):
+// FIXED DECIMAL(p,q) takes q <= p decimal digits; FIXED BINARY(p,q) takes
+// q < p binary digits (the sign bit takes one of the p). A scale wider than
+// the precision cannot be represented, and the runtime's fixed-point
+// formatters sized their buffers from the scale alone.
+bool Parser::fixedScaleFits(const AttrBag& bag, bool binary) {
+  if (bag.prec <= 0)
+    return true;
+  return binary ? bag.scale < bag.prec : bag.scale <= bag.prec;
 }
 
 // Consume one scalar computational attribute word into `bag`. Shared by
@@ -1279,7 +1303,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
         // A runtime length `CHAR(expr)` (rule (18)): an adjustable length whose
         // value the caller supplies at call time, like `CHAR(*)`; the expr is
         // typed for validation in sema.
-        ExprP len = parseExpr();
+        ExprP len = parseExprOrPlaceholder();
         expect(Tok::RParen, rule);
         bag.slenExpr = std::move(len);
         bag.starLen = true;
@@ -1334,6 +1358,10 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
 bool Parser::parseDeclItem(DeclItem& item) {
   if (at(Tok::Number) && !cur().isFloat) {
     item.level = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+    if (item.level > kMaxStructureLevel) {
+      d_.error(cur().loc, "a level number must not exceed 49", "(11)");
+      item.level = 0;
+    }
     advance();
   }
   if (!at(Tok::Word)) {
@@ -1396,7 +1424,7 @@ void Parser::parseDeclTail(DeclItem& item) {
                       call->args.push_back(std::move(star));
                       advance();
                     } else {
-                      call->args.push_back(parseExpr());
+                      call->args.push_back(parseExprOrPlaceholder());
                     }
                     if (!eat(Tok::Comma))
                       break;
@@ -1765,7 +1793,7 @@ void Parser::parseDeclTail(DeclItem& item) {
             d_.error(cur().loc, "AREA(*) adjustable size is not implemented in this stage", "(20)");
             advance();
           } else {
-            bag.areaSize = parseExpr();
+            bag.areaSize = parseExprOrPlaceholder();
           }
           expect(Tok::RParen, "(20)");
         }
@@ -1966,7 +1994,13 @@ void Parser::parseDeclTail(DeclItem& item) {
   } else {
     // FIXED is the default scale attribute; DECIMAL the default base. The
     // scale factor q is kept as a static property (ADR-006, rule (16)).
-    if (bag.binary && !bag.decimal)
+    bool binary = bag.binary && !bag.decimal;
+    if (!fixedScaleFits(bag, binary))
+      d_.error(item.loc,
+               binary ? "a FIXED BINARY scale factor must be less than the precision"
+                      : "a FIXED DECIMAL scale factor must not exceed the precision",
+               "(16)");
+    if (binary)
       item.ty = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
     else
       item.ty = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
@@ -2039,6 +2073,11 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
       if (eat(Tok::Colon)) {
         anyColon = true;
         if (firstConst) {
+          if (!dimBoundFits(fv)) {
+            d_.error(first->loc, "a dimension bound is out of range", "(12)");
+            i_ = save;
+            return false;
+          }
           d.lb = (int)fv;
         } else {
           d.lbDyn = true; // runtime lower bound (rule (13)); lb is a placeholder
@@ -2051,6 +2090,11 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
           return false;
         }
         if (foldBound(ubE, uv)) {
+          if (!dimBoundFits(uv)) {
+            d_.error(ubE->loc, "a dimension bound is out of range", "(12)");
+            i_ = save;
+            return false;
+          }
           d.ub = (int)uv;
         } else {
           d.dyn = true;
@@ -2058,6 +2102,11 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
         }
       } else { // bare extent (ub): lower bound defaults to 1
         if (firstConst) {
+          if (!dimBoundFits(fv)) {
+            d_.error(first->loc, "a dimension bound is out of range", "(12)");
+            i_ = save;
+            return false;
+          }
           d.ub = (int)fv;
         } else {
           d.dyn = true;
@@ -2387,11 +2436,15 @@ bool Parser::parseDescriptorType(Type& out) {
       out.dims.push_back(d);
     out.controlled = bag.controlled;
   } else if (bag.binary) {
+    if (!fixedScaleFits(bag, true))
+      d_.error(cur().loc, "a FIXED BINARY scale factor must be less than the precision", "(16)");
     out = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
     for (const auto& d : starDims)
       out.dims.push_back(d);
     out.controlled = bag.controlled;
   } else {
+    if (!fixedScaleFits(bag, false))
+      d_.error(cur().loc, "a FIXED DECIMAL scale factor must not exceed the precision", "(16)");
     out = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
     for (const auto& d : starDims)
       out.dims.push_back(d);
@@ -2459,7 +2512,7 @@ StmtP Parser::parseSelect(Proc* owner) {
   advance(); // SELECT
   ExprP selExpr;
   if (eat(Tok::LParen)) {
-    selExpr = parseExpr();
+    selExpr = parseExprOrPlaceholder();
     if (!eat(Tok::RParen)) {
       d_.error(cur().loc, "expected ')' after the SELECT expression (ADR-104)", "");
       resync();
@@ -3918,7 +3971,24 @@ StmtP Parser::parseClose() {
 // ---------------------------------------------------------------------------
 // Expressions, rules (115)-(129).
 // ---------------------------------------------------------------------------
+ExprP Parser::parseExprOrPlaceholder() {
+  SourceLoc loc = cur().loc;
+  ExprP e = parseExpr();
+  if (e)
+    return e;
+  auto ph = std::make_unique<Expr>();
+  ph->kind = Expr::IntLit;
+  ph->loc = loc;
+  ph->ival = 0;
+  return ph;
+}
+
 ExprP Parser::parseExpr(int minPrec) {
+  if (exprDepth_ >= kMaxExprDepth) {
+    d_.error(cur().loc, "expression nesting is too deep", "(123)");
+    return nullptr;
+  }
+  DepthGuard g(exprDepth_);
   ExprP lhs = parseUnary();
   if (!lhs)
     return nullptr;
@@ -3946,6 +4016,11 @@ ExprP Parser::parseExpr(int minPrec) {
 // expression-one ::= primitive | {+|-|¬} expression-one
 //                  | primitive ** expression-one                   rule (122)
 ExprP Parser::parseUnary() {
+  if (exprDepth_ >= kMaxExprDepth) {
+    d_.error(cur().loc, "expression nesting is too deep", "(122)");
+    return nullptr;
+  }
+  DepthGuard g(exprDepth_);
   if (at(Tok::Plus) || at(Tok::Minus) || at(Tok::Not) ||
       (at(Tok::Word) && cur().text == "NOT" &&
        (peek().kind == Tok::Word || peek().kind == Tok::Number || peek().kind == Tok::LParen ||
@@ -4054,11 +4129,20 @@ ExprP Parser::parsePrimary() {
        peek(3).kind == Tok::HexLit)) {
     advance(); // (
     long long count = strtoll(cur().text.c_str(), nullptr, 10);
+    SourceLoc cl = cur().loc;
     advance(); // integer
     advance(); // )
     const Token& lit = cur();
     SourceLoc ll = lit.loc;
     advance(); // simple-string-constant
+    // A replicated constant is expanded at parse time: bound the result so a
+    // short source line cannot ask for gigabytes of memory.
+    if (count < 0 || count > kMaxReplicatedChars / std::max<size_t>(1, lit.sval.size())) {
+      d_.error(cl, "a replicated string constant is too large", "(129)");
+      e->kind = Expr::CharLit;
+      e->sval.clear();
+      return e;
+    }
     if (lit.kind == Tok::HexLit) {
       // Replicated hex (rule (129)+(143)): decode once, repeat the bytes.
       std::string one;
@@ -4097,6 +4181,8 @@ ExprP Parser::parsePrimary() {
       else
         e->fval = (double)strtoll(t.text.c_str(), nullptr, 10);
     } else if (t.isFloat) {
+      if (t.binaryRadix)
+        d_.error(e->loc, "a binary radix suffix is not valid on a fractional constant", "(136)");
       if (t.hasExp) { // exponent form is a FLOAT constant (rule 135)
         e->kind = Expr::FltLit;
         e->fval = strtod(t.text.c_str(), nullptr);

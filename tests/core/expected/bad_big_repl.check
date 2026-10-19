@@ -1,0 +1,1 @@
+CHECK: a replicated string constant is too large

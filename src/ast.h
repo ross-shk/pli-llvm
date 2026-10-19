@@ -360,8 +360,9 @@ struct Program {
   // File-scope DEFINE ALIAS statements (extension, ADR-114), in order.
   std::vector<StmtP> defines;
   Proc* mainProc = nullptr;
-  // Programmer-named conditions in first-use order (rule 99); a use-site key
-  // is its index + 1 (key 0 means ERROR, negative keys are the fixed
-  // conditions above).
+  // Programmer-named conditions in first-use order (rule 99). A use-site key
+  // is NOT the index into this list: the key is a hash of the name (see
+  // Sema::resolveCondKey), so it stays the same across separately compiled
+  // objects. Key 0 means ERROR, negative keys are the fixed conditions above.
   std::vector<std::string> condNames;
 };

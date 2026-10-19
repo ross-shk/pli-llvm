@@ -1,0 +1,1 @@
+CHECK: a FIXED DECIMAL scale factor must not exceed the precision
