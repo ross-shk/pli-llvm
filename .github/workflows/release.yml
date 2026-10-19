@@ -40,7 +40,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      # Dispatch rebuilds must use the requested tag, not the dispatch branch.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Fetch static LLVM stash (Ubuntu)
         if: runner.os == 'Linux'
