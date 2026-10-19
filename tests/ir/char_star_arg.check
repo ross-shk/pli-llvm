@@ -1,4 +1,4 @@
 CHECK-LABEL: define internal void {{.*}}CHAR_STAR_ARG
-CHECK-NOT: alloca [256 x i8]
-CHECK: alloca [2001 x i8]
+CHECK-NOT: alloca \[256 x i8\]
+CHECK: alloca \[2001 x i8\]
 CHECK: call void @llvm.memcpy
