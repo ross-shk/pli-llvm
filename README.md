@@ -1,40 +1,33 @@
-# A PL/I compiler targeting LLVM
+# pli — a PL/I compiler targeting LLVM
 
-A modern PL/I compiler built to the formal specification: **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). Currently supports about 80% of **TR 25.084** features with some features added from IBM Enterprise PL/I.
+`pli` is a modern PL/I compiler built to **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). It implements roughly 80% of TR 25.084, plus selected IBM Enterprise PL/I extensions. It ships as a single self-contained binary, so compiling and linking user programs need no LLVM install, Xcode, build-essential, or MSVC.
 
-**Single-command distribution** (like Go/Zig) — `pli` embeds the PL/I runtime bitcode (`pli_runtime.bc`) and links via in-process `lld`. No installer, no separate runtime to deploy. Download the [latest release](https://github.com/ross-shk/pli-llvm/releases/latest) archive, extract it, and put `pli` on your `PATH`. On the Mac (Apple Silicon):
+## Install
 
-```sh
-curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-darwin-arm64.tar.gz \
-  | tar xzf - && sudo mv darwin-arm64 /usr/local/pli && sudo ln -s /usr/local/pli/pli /usr/local/bin/
-```
+Download the [latest release](https://github.com/ross-shk/pli-llvm/releases/latest) and put `pli` on your `PATH`.
 
-or on Linux (x86_64):
+Linux (x86_64 or aarch64) and macOS (Apple Silicon):
 
 ```sh
-curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-linux-x86_64.tar.gz \
-  | tar xzf - && sudo mv linux-x86_64 /usr/local/pli && sudo ln -s /usr/local/pli/pli /usr/local/bin/
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+arch=$(uname -m)          # x86_64, aarch64, or arm64
+curl -L "https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-$os-$arch.tar.gz" \
+  | tar xzf - && sudo install -m 755 "$os-$arch/pli" /usr/local/bin/pli
 ```
 
-or on Linux (aarch64):
-
-```sh
-curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-linux-aarch64.tar.gz \
-  | tar xzf - && sudo mv linux-aarch64 /usr/local/pli && sudo ln -s /usr/local/pli/pli /usr/local/bin/
-```
-
-or on Windows (x86_64):
+Windows (x86_64):
 
 ```bat
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -o pli.zip
-tar -xf pli.zip
-mkdir %USERPROFILE%\pli
-move pli.exe %USERPROFILE%\pli\
+if not exist "%USERPROFILE%\pli" mkdir "%USERPROFILE%\pli"
+tar -xf pli.zip -C "%USERPROFILE%\pli"
 ```
 
-The archive is one file (`pli` / `pli.exe`, ADR-227): it links no LLVM shared libraries, shells out to nothing, and carries its link sysroot embedded — compile and link happen in-process with nothing except the OS installed. Just download it and run `pli hello.pli -o hello`. User links need no host toolchain: Linux binaries link musl static from the embedded sysroot (no build-essential), macOS links from the embedded SDK stubs (no Xcode CLT, Xcode only as fallback), Windows links from the embedded mingw sysroot (no MSVC Build Tools). An exe-relative `musl/`/`mingw/`/`sdk/` dir next to the binary overrides the embedded set (dev use); otherwise `pli` falls back to a host toolchain. (Tiny `clang_rt.*.lib` helpers may sit next to it, used only by the host-toolchain fallback and `--fprofile-generate` — the vendored link needs none of them.) `curl` and `tar` ship with Windows 10+.
+Then add `%USERPROFILE%\pli` to `PATH`.
 
-A "Hello, world!" program:
+Each archive contains just the compiler binary (`pli` or `pli.exe`); the runtime and platform link sysroot are embedded.
+
+## Hello, world
 
 ```pli
 hello: procedure options(main);
@@ -43,239 +36,140 @@ end hello;
 ```
 
 ```sh
-pli tests/core/hello.pli -o hello
+pli hello.pli -o hello
 ./hello
 ```
 
-A more practical taste — parallel sum with two tasks sharing a heap array. `ALLOCATE ... SET` takes a heap block, each `CALL ... EVENT` runs on its own thread, `WAIT` joins, and `FREE` releases the block:
+For a fuller tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are in the [Built-ins reference](guides/builtins.md).
 
-```pli
-parrallel_sum: proc options(main);
-  dcl i fixed bin(31);
-  dcl heap pointer,
-      data(100) fixed bin(31) based(heap);
-  dcl (ev1, ev2) event;
-  dcl (part1, part2) fixed bin(31);
+## Build from source
 
-  allocate data set(heap);
-  do i = 1 to 100;
-    data(i) = i;
-  end;
+Builds on Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), and Windows (x86_64).
 
-  part1 = 0; part2 = 0;
-  call sum_first event(ev1);
-  call sum_second event(ev2);
-  wait(ev1, ev2);
+| Requirement | Minimum | Notes |
+| --- | --- | --- |
+| C++20 compiler | gcc 12 / clang 15 / clang-cl 18+ | Windows also needs the Windows 10/11 SDK |
+| CMake | 3.20 | All platforms |
+| Ninja | recent | Canonical generator on all platforms |
+| LLVM + clang + lld | 23 | Development libraries and lld headers/libs |
+| Python | 3 | Build scripts and test runner |
+| Git | recent | Optional; without it `pli version` reports `unknown` |
 
-  put skip list('sum 1..100 =', part1 + part2);
-  free data;
+Use distro LLVM for development, or the pinned static toolchain for release builds.
 
-  sum_first: proc;
-    dcl (j, s) fixed bin(31);
-    s = 0;
-    do j = 1 to 50;
-      s = s + data(j);
-    end;
-    part1 = s;
-  end;
-
-sum_second: proc;
-  dcl (j, s) fixed bin(31);
-  s = 0;
-  do j = 51 to 100;
-    s = s + data(j);
-  end;
-  part2 = s;
-end;
-
-end;
-```
+### Linux / macOS
 
 ```sh
-pli parsum.pli -o parsum
-./parsum
-sum 1..100 =        5050
-```
-
-See [Programming Guide](./guides/programming.md) for guidance and more examples, and [built-ins](./guides/builtins.md) for the supported built-ins.
-
----
-
-## Build
-
-### Supported Platforms
-
-- **Linux** (x86_64, ARM64): gcc or clang
-- **macOS** (Intel, Apple Silicon): clang
-- **Windows** (x86_64, ARM64): clang-cl + lld-link + Ninja
-
-Threading is abstracted in the platform seam (`runtime/pli_rt_plat.h`, implemented by `runtime/rt_plat_default.c`: POSIX pthreads on Linux/macOS, Win32 primitives on Windows; replaceable via `--rt-platform`).
-
-### Requirements
-
-<table class="markdown-table">
-  <tr><th>Tool</th><th>Minimum</th><th>Notes</th></tr>
-  <tr><td>C++20 compiler</td><td>gcc 12 / clang 15 / clang-cl 18+</td><td>Plus a Windows 10/11 SDK on Windows (clang-cl uses MSVC ABI)</td></tr>
-  <tr><td>CMake</td><td>3.20</td><td>All platforms</td></tr>
-  <tr><td>Ninja</td><td>any recent</td><td>Canonical generator on all platforms, including Windows</td></tr>
-  <tr><td>LLVM + clang + lld</td><td>23</td><td>Dev libraries and lld headers/libs required; see below</td></tr>
-  <tr><td>Python</td><td>3</td><td>For scripts/gen_*.py and tests/run_tests.py</td></tr>
-  <tr><td>Git</td><td>any recent</td><td>Optional; without it pli version reports unknown</td></tr>
-</table>
-
-LLVM sources (two paths — distro for fast iteration, hermetic for releases):
-
-- **Distro (default):** Linux distro `llvm`/`clang`/`lld` dev packages; macOS `brew install llvm lld ninja cmake` (stock `llvm` omits `lld`, separate formula); Windows LLVM 23 prebuilt (`clang+llvm-23.1.3-x86_64-pc-windows-msvc.tar.xz`, forward slashes in CMake paths).
-- **Hermetic static (releases, ADR-224):** fetch the prebuilt static toolchain instead of compiling LLVM — `sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps`, then add `-DPLI_LLVM_STATIC_PREFIX=~/pli-deps` to the configure line below. A source build happens only when bumping `scripts/llvm_static.pins` (`sh scripts/build_llvm_static.sh --prefix ~/pli-deps --pack out.tar.zst`, or the `llvm-deps` workflow). Release tarballs from this path contain just `pli` (ADR-225: no shipped clang, no `lib/`).
-
-### Linux
-
-```sh
-cmake -G Ninja -S . -B build/cmake
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/path/to/llvm-23
 cmake --build build/cmake -j
 ```
 
-### macOS (Homebrew LLVM)
+On macOS, use `-DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"`. On Linux, the distro package is usually found automatically; otherwise point at `/usr/lib/llvm-23`.
 
-```sh
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"
-cmake --build build/cmake -j
-```
+### Windows
 
-### Windows (clang-cl + Ninja)
-
-Run from `cmd.exe` (not PowerShell, not MinGW):
+Run from `cmd.exe`, not PowerShell or a MinGW/MSYS shell:
 
 ```bat
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
 
 cmake -G Ninja -S C:/path/to/pli-llvm -B C:/path/to/pli-llvm/build/cmake ^
-  -DCMAKE_PREFIX_PATH=C:/path/to/llvm-install ^
+  -DCMAKE_PREFIX_PATH=C:/path/to/llvm-23 ^
   -DCMAKE_C_COMPILER=clang-cl ^
   -DCMAKE_CXX_COMPILER=clang-cl ^
   -DCMAKE_BUILD_TYPE=Release
-
 cmake --build C:/path/to/pli-llvm/build/cmake -j
 ```
 
-Notes:
+Use clang-cl + lld-link (not `cl.exe`, MinGW, MSYS2, Cygwin, or WSL), forward slashes in CMake paths, and make sure Ninja is on `PATH`.
 
-- `vcvarsall.bat x64` provides the Windows SDK environment (headers + CRT libs).  
-The compiler itself is `clang-cl` (LLVM), not `cl.exe`.
-- `CMAKE_PREFIX_PATH` must point at your LLVM **install** prefix (the directory containing `lib/cmake/llvm`). Use forward slashes.
-- Ninja must be on `PATH` (`pip install ninja`, or a Ninja release, or the VS-bundled copy).
-- Do not use MinGW, MSYS2, Cygwin, or WSL `cmake`/`ninja` to build `pli` itself — use clang-cl + lld-link.
+### Hermetic static (release builds)
 
-Building the hermetic toolchain from source (only when bumping `scripts/llvm_static.pins`; all platforms, run from `bash` — on Windows, from a VS `vcvarsall.bat x64` shell):
+Use the pinned static LLVM instead of a distro install:
 
 ```sh
-sh scripts/build_llvm_static.sh --prefix ~/pli-deps --pack llvm-static.tar.zst
+sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps
+cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=~/pli-deps
+cmake --build build/cmake -j
 ```
 
-Then build `pli` with `-DPLI_LLVM_STATIC_PREFIX=~/pli-deps`. Paste the printed sha256 into the pins file; normal builds and CI fetch the stash instead (`fetch_llvm_static.sh`).
-
-## Test
+Rebuild the toolchain only when bumping `scripts/llvm_static.pins`:
 
 ```sh
-ctest --test-dir build/cmake -j        # full suite (~450 tests)
-python3 tests/run_tests.py usecases    # one group
+sh scripts/build_llvm_static.sh --prefix ~/pli-deps --pack out.tar.zst
 ```
 
-Quality gate (format + static analysis + warnings-as-errors):
-
-```sh
-cmake --build build/cmake --target check
-```
-
----
-
-## Install
-
-After building, install to the default prefix (`/usr/local` on Linux/macOS, `C:/Program Files/pli` on Windows):
+### Install the build
 
 ```sh
 cmake --install build/cmake
 ```
 
-Override the prefix with `--prefix`:
+Add `--prefix /opt/pli` to install elsewhere. The default prefix may need `sudo` or an elevated shell.
+
+## Test
 
 ```sh
-cmake --install build/cmake --prefix /opt/pli      # Unix or --prefix C:/pli on Windows
+ctest --test-dir build/cmake -j              # full suite
+python3 tests/run_tests.py usecases          # one group
+cmake --build build/cmake --target check     # formatting + static analysis + -Werror
 ```
 
----
+## Cross-compilation
 
-## Use
-
-After build, make sure `pli` from `./build/cmake/pli` is in the executable path, compile for the host:
+Configure with `PLI_CROSS_BITCODE=ON` to embed all four runtime bitcodes:
 
 ```sh
-pli tests/core/hello.pli -o hello
-./hello
-```
-
-Cross-compile PL/I code with `--triple` (first build `pli` with `PLI_CROSS_BITCODE=ON` so all 4 runtime bitcodes are embedded):
-
-```sh
-cmake -G Ninja -S . -B build/cmake -DPLI_CROSS_BITCODE=ON   # + platform flags above
+cmake -G Ninja -S . -B build/cmake -DPLI_CROSS_BITCODE=ON   # plus platform flags
 cmake --build build/cmake -j
 
 ./build/cmake/pli --triple x86_64-unknown-linux-gnu program.pli -o program
 ./build/cmake/pli --triple x86_64-pc-windows-gnu program.pli -o program.exe
 ```
 
-Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. Without `PLI_CROSS_BITCODE=ON`, `--triple` falls back to the host runtime blob and only works when the target ABI matches the host.
-
----
+Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. Without `PLI_CROSS_BITCODE=ON`, `--triple` uses the host runtime and only works when the target ABI matches the host.
 
 ## What works today
 
-| Feature                           | Examples                                                                                                                                                                                                                                                                  |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Procedures & functions**        | `OPTIONS(MAIN)`, internal, `RETURNS`, `RECURSIVE`, `ENTRY` alternate entries, `PACKAGE`/`EXPORTS`                                                                                                                                                                         |
-| **Static link for nested scopes** | Internal procedures access enclosing automatics; externals stay reentrant                                                                                                                                                                                                 |
-| **C interop**                     | `ENTRY ... EXTERNAL`, `BYVALUE`, `BYADDR`, `LINKAGE(SYSTEM)`, `OPTIONAL`/`*` + `OMITTED`/`PRESENT`, `ENTRY VARIABLE` callbacks, `UNALIGNED` packed structs, `SYSTEM()`                                                                                                    |
-| **Data types**                    | `FIXED BIN/DEC(p,q)`, `FLOAT`, `COMPLEX`, `BIT(n)` packed, `CHAR/VARYING/VARYINGZ`, `POINTER`, `AREA`/`OFFSET`, `VALUE` constants, `DEFINE ALIAS`/`TYPE`                                                                                                                  |
-| **Arrays & structures**           | Dynamic/adjustable (`*`) extents, negative bounds, cross-sections `A(i,*)`, slice assignment, whole-array expressions, reductions `SUM`/`PROD`/`ANY`/`ALL`, arrays of structures, `LIKE`, `BY NAME`                                                                       |
-| **Storage**                       | `BASED`/`ALLOCATE/FREE` (+`IN(area)`), `CONTROLLED` stacks, `DEFINED` with `iSUB`, `ADDR`/`NULL`                                                                                                                                                                          |
-| **Conditions**                    | `ON`/`SIGNAL`/`REVERT` for `ERROR`, `SIZE`, `SUBSCRIPTRANGE`, `ZERODIVIDE`, `CONVERSION`, named conditions; `(NO...)` prefixes, `ONCODE()`, nested `ON`                                                                                                                   |
-| **Concurrency**                   | `TASK`/`EVENT`/`PRIORITY` async `CALL` with `WAIT`/`DELAY`, `EVENT()` poll                                                                                                                                                                                                |
-| **Control flow (extensions)**     | `SELECT`/`WHEN`/`OTHERWISE`, `LEAVE`/`ITERATE`, `DO UNTIL`, local `GO TO`, `//` comments                                                                                                                                                                                  |
-| **Stream I/O**                    | `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING` routing, `OPEN`/`CLOSE`, `FORMAT` + `R(label)`, `DISPLAY`                                                                                                                                                                 |
-| **Record I/O**                    | `WRITE`/`READ` sequential fixed-size binary records                                                                                                                                                                                                                       |
-| **Preprocessor**                  | `%INCLUDE`/`%XINCLUDE` (+`-I`, `PLI_INCLUDE_PATH`, upward-walk `include/`/`inc/` + system defaults), `%DECLARE`, `%IF/%THEN/%ELSE`, `%ACTIVATE`/`%DEACTIVATE`, `%REPLACE`                                                                                                 |
-| **Separate compilation & driver** | `EXTERNAL` linkage across units, multi-unit `pli` invocation, `-c`/`-emit-llvm`, `-I`, `-L`, `PLI_LIB_PATH`, `--sysparm`, `-v`                                                                                                                                            |
-| **Built-ins**                     | String (+`TRIM`/`TALLY`/`UPPERCASE`/`LOWERCASE`/`CENTER`/`SEARCH`/`RANK`/`COLLATE`/`HIGH`/`LOW`/`DATE`/`TIME`), `CHAR`/`FIXED`, math (+degree trig, `ATAN2`/`CBRT`/`ERF`), `COMPLEX`/`REAL`/`IMAG`/`CONJG`, `LBOUND`/`HBOUND`/`DIM`, `SYSPARM` (see `guides/builtins.md`) |
-| **No reserved words**             | `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` are ordinary variables                                                                                                                                                                                                           |
+- **Procedures & functions** — `OPTIONS(MAIN)`, internal/external procedures, `RETURNS`, `RECURSIVE`, `ENTRY`, `PACKAGE`/`EXPORTS`.
+- **Data types** — `FIXED BIN/DEC`, `FLOAT`, `COMPLEX`, `BIT`, `CHAR`/`VARYING`, `POINTER`, `AREA`/`OFFSET`, `VALUE`, `DEFINE ALIAS/TYPE`.
+- **Arrays & structures** — dynamic/adjustable bounds, negative bounds, cross-sections, whole-array expressions, reductions, arrays of structures, `LIKE`, `BY NAME`.
+- **Storage** — `BASED`/`ALLOCATE`/`FREE`, `CONTROLLED`, `DEFINED`/`iSUB`, `ADDR`/`NULL`.
+- **Conditions** — `ON`/`SIGNAL`/`REVERT`, standard and named conditions, `(NO...)`, `ONCODE()`, nested `ON`.
+- **Concurrency** — `TASK`/`EVENT`/`PRIORITY` async `CALL`, `WAIT`/`DELAY`, `EVENT()` polling.
+- **I/O** — `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING`, `OPEN`/`CLOSE`, `FORMAT`, sequential record I/O.
+- **Preprocessor** — `%INCLUDE`/`%XINCLUDE`, `%DECLARE`, `%IF`/`%THEN`/`%ELSE`, `%ACTIVATE`, `%REPLACE`.
+- **C interop** — `ENTRY ... EXTERNAL`, `BYVALUE`/`BYADDR`, `LINKAGE(SYSTEM)`, `OPTIONAL`/`OMITTED`, `ENTRY VARIABLE`, `UNALIGNED`, `SYSTEM()`.
+- **Toolchain** — separate compilation, multi-unit `pli` invocation, `-c`/`-emit-llvm`, `-I`/`-L`, `--sysparm`, `--triple`.
+- **Built-ins** — string, conversion, math, complex, and array-bound built-ins; full list in the [Built-ins reference](guides/builtins.md).
+- **Extensions** — `SELECT`/`WHEN`/`OTHERWISE`, `LEAVE`/`ITERATE`, `DO UNTIL`, `//` comments.
+- **No reserved words** — `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` can be ordinary variables.
 
-Everything else is diagnosed with its TR 25.084 rule number — the diagnostic *is* the to-do list. Larger examples live in `tests/usecases/` and `benchmarks/`.
-
----
+Everything else is diagnosed with its TR 25.084 rule number — the diagnostic is the to-do list. Larger examples live in `tests/usecases/` and `benchmarks/`.
 
 ## Documentation
 
-| Doc                                                         | Purpose                                                                  |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------ |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                          | How to add features: layer map, workflow, invariants                     |
-| [guides/programming.md](guides/programming.md)              | Feature guide: data types, arrays, storage, I/O, conditions, concurrency |
-| [guides/builtins.md](guides/builtins.md)                    | Built-in functions reference                                             |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md)                     | Pipeline, IR levels, data representation, ABI, runtime                   |
-| [GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md)             | Rule-by-rule implementation status                                       |
-| [SPEC-COMPLIANCE-REPORT.md](docs/SPEC-COMPLIANCE-REPORT.md) | TR 25.084 / Y33-6003 audit                                               |
-| [DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md)             | Historical design decisions (ADRs)                                       |
+| Doc | Purpose |
+| --- | --- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to add features: layer map, workflow, invariants |
+| [guides/programming.md](guides/programming.md) | Feature guide: data types, arrays, storage, I/O, conditions, concurrency |
+| [guides/builtins.md](guides/builtins.md) | Built-in functions reference |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Pipeline, IR levels, data representation, ABI, runtime |
+| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md) | Rule-by-rule implementation status |
+| [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) | Historical design decisions (ADRs) |
+| [TR25.084-concrete-syntax.md](TR25.084-concrete-syntax.md) | TR 25.084 concrete syntax, rules (1)–(151) |
 
 ## Layout
 
-| Path                          | Contents                                                                                                                |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `src/`                        | Compiler: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target, codegen, embedded runtime                 |
-| `runtime/`                    | `pli_runtime` (I/O, strings, conditions, storage, math, tasks) + `pli_rt_plat.h` platform seam              |
-| `tests/`                      | `run_tests.py` + groups (`core`, `builtins`, `usecases`, `driver`, `ir`, `preprocessor`, `multimodule`, `corner_cases`) |
-| `CMakeLists.txt`              | Canonical build: LLVM C++ API + `lld`, embedded runtime bitcode                                                         |
-| `docs/` / `guides/`           | Architecture, ADRs, grammar coverage, compliance report, programming guides                                             |
-| `TR25.084-concrete-syntax.md` | The spec: rules (1)–(151)                                                                                               |
-
----
+| Path | Contents |
+| --- | --- |
+| `src/` | Compiler pipeline: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target |
+| `runtime/` | PL/I runtime and platform seam |
+| `tests/` | Golden, self-checking, and driver tests |
+| `benchmarks/` | Benchmark programs |
+| `scripts/` | Build and code-generation helpers |
+| `docs/`, `guides/` | Architecture, ADRs, grammar coverage, user guides |
+| `CMakeLists.txt` | Canonical build: LLVM C++ API + lld, embedded runtime bitcode |
 
 ## License
 
