@@ -2540,7 +2540,7 @@ void IRGen::emitWideDecOut(const char* fn, llvm::Value* wideReg, long long scale
   llvm::Value* lo = b_.CreateTrunc(wideReg, b_.getInt64Ty(), "wdec.lo");
   llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(wideReg, (uint64_t)64, "wdec.shr"),
                                    b_.getInt64Ty(), "wdec.hi");
-  deferPut(fn, {lo, hi, i64(scale)});
+  deferCall(fn, {lo, hi, i64(scale)});
 }
 
 // Get (or create) an LLVM intrinsic with an explicit signature. Only used for
@@ -4972,14 +4972,14 @@ void IRGen::emitStmt(HStmt* s) {
     Val v = emitExpr(s->value.get());
     switch (v.ty.k) {
     case TK::Char:
-      deferPut("pli_display_char", {v.ptr, v.len});
+      deferCall("pli_display_char", {v.ptr, v.len});
       break;
     case TK::Float:
-      deferPut("pli_display_float", {v.reg});
+      deferCall("pli_display_float", {v.reg});
       break;
     case TK::Bit: {
       llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-      deferPut("pli_display_bit", {bit});
+      deferCall("pli_display_bit", {bit});
       break;
     }
     case TK::FixedBin:
@@ -4988,24 +4988,24 @@ void IRGen::emitStmt(HStmt* s) {
         if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
           emitWideDecOut("pli_display_decfixed128", v.reg, v.ty.scale);
         else
-          deferPut("pli_display_decfixed", {toI64(v), i64(v.ty.scale)});
+          deferCall("pli_display_decfixed", {toI64(v), i64(v.ty.scale)});
       } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
         emitWideDecOut("pli_display_decfixed128", v.reg, 0);
       } else {
-        deferPut("pli_display_fixed", {toI64(v)});
+        deferCall("pli_display_fixed", {toI64(v)});
       }
       break;
     case TK::Pointer:
       d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
       break;
     case TK::Complex:
-      deferPut("pli_display_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                                       b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+      deferCall("pli_display_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
+                                        b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
       break;
     default:
       break; // array/struct operands are diagnosed by sema
     }
-    endOutput();
+    flushCalls("pli_out_begin", "pli_out_end");
     break;
   }
   case HStmt::Get:
@@ -6686,7 +6686,7 @@ void IRGen::emitPutDataItems(HStmt* s) {
       emitPutDataScalar(t, t->sym->name);
     }
   }
-  deferPut("pli_put_data_end", {});
+  deferCall("pli_put_data_end", {});
 }
 
 void IRGen::emitPutDataStruct(HExpr* t, const std::string& prefix) {
@@ -6711,18 +6711,18 @@ void IRGen::emitPutDataStruct(HExpr* t, const std::string& prefix) {
 
 void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
   llvm::Value* nameVal = globalString(name);
-  deferPut("pli_put_data_name", {nameVal, i64((long long)name.size())});
+  deferCall("pli_put_data_name", {nameVal, i64((long long)name.size())});
   Val v = emitExpr(t);
   switch (v.ty.k) {
   case TK::Char:
-    deferPut("pli_put_list_char", {v.ptr, v.len});
+    deferCall("pli_put_list_char", {v.ptr, v.len});
     break;
   case TK::Float:
-    deferPut("pli_put_list_float", {v.reg});
+    deferCall("pli_put_list_float", {v.reg});
     break;
   case TK::Bit: {
     llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-    deferPut("pli_put_list_bit", {bit});
+    deferCall("pli_put_list_bit", {bit});
     break;
   }
   case TK::FixedBin:
@@ -6731,11 +6731,11 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
       if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
         emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
       else
-        deferPut("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
+        deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
     } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
       emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
     } else {
-      deferPut("pli_put_list_fixed", {toI64(v)});
+      deferCall("pli_put_list_fixed", {toI64(v)});
     }
     break;
   default:
@@ -6747,37 +6747,54 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
 // Output statements and the output lock (ADR-233)
 // ---------------------------------------------------------------------------
 
-// Record one output call. A program with a task defers it to the end of the
-// statement (so the whole record is written under one lock); a program
-// without one emits it in place.
-void IRGen::deferPut(const char* fn, std::vector<llvm::Value*> args, bool capture) {
+// Record one stream call. A program with a task defers it to the end of the
+// statement (so the whole record is written or read under one lock); a
+// program without one emits it in place.
+void IRGen::deferCall(const char* fn, std::vector<llvm::Value*> args, bool capture,
+                      std::function<void(const std::vector<llvm::Value*>&, size_t)> post) {
   llvm::Function* f = runtimeFn(fn);
   if (!hasAsync_) {
     llvm::Value* r = b_.CreateCall(f, args);
     if (capture)
       lastPutResult_ = r;
+    callResults_.push_back(r);
+    if (post)
+      post(callResults_, callResults_.size() - 1);
     return;
   }
-  pendingPuts_.push_back({f, std::move(args), capture});
+  pendingCalls_.push_back({f, std::move(args), capture, std::move(post)});
 }
 
-// Write the deferred calls of the statement under the output lock and release
-// it. The lock is taken here, after the statement's expressions have been
-// evaluated, so an item expression that blocks on another task never holds
-// it. Returns the result of the last captured call (the STRING close reports
-// the characters written).
-llvm::Value* IRGen::endOutput() {
-  if (!hasAsync_)
+// Write the deferred calls of the statement between the two bracket calls
+// (the lock) and run their post actions after it. The lock is taken here,
+// after the statement's expressions have been evaluated, so an item
+// expression that blocks on another task never holds it. Returns the result
+// of the last captured call (the STRING close reports the characters
+// written).
+llvm::Value* IRGen::flushCalls(const char* beginFn, const char* endFn) {
+  if (!hasAsync_) {
+    pendingCalls_.clear();
+    callResults_.clear();
     return lastPutResult_;
-  b_.CreateCall(runtimeFn("pli_out_begin"), {});
-  llvm::Value* last = nullptr;
-  for (auto& p : pendingPuts_) {
-    last = b_.CreateCall(p.fn, p.args);
-    if (p.capture)
-      lastPutResult_ = last;
   }
-  pendingPuts_.clear();
-  b_.CreateCall(runtimeFn("pli_out_end"), {});
+  b_.CreateCall(runtimeFn(beginFn), {});
+  std::vector<llvm::Value*> results;
+  results.reserve(pendingCalls_.size());
+  for (auto& p : pendingCalls_) {
+    llvm::Value* r = b_.CreateCall(p.fn, p.args);
+    results.push_back(r);
+    if (p.capture)
+      lastPutResult_ = r;
+  }
+  b_.CreateCall(runtimeFn(endFn), {});
+  // The post actions run after the lock is released: they store into the
+  // program's own variables, and their target expressions must not run while
+  // the lock is held.
+  for (size_t i = 0; i < pendingCalls_.size(); ++i)
+    if (pendingCalls_[i].post)
+      pendingCalls_[i].post(results, i);
+  pendingCalls_.clear();
+  callResults_.clear();
   return lastPutResult_;
 }
 
@@ -6790,16 +6807,16 @@ void IRGen::emitPut(HStmt* s) {
   // file's stream instead of SYSPRINT. Select before page/skip so all output
   // goes to the named file.
   if (s->fileSym)
-    deferPut("pli_put_select", {i64(s->fileSym->fileSlot)});
+    deferCall("pli_put_select", {i64(s->fileSym->fileSlot)});
   if (s->page)
-    deferPut("pli_put_page", {});
+    deferCall("pli_put_page", {});
   if (s->skip) {
     llvm::Value* n = i64(1);
     if (s->skipCount) {
       Val v = emitExpr(s->skipCount.get());
       n = toI64(v);
     }
-    deferPut("pli_put_skip", {n});
+    deferCall("pli_put_skip", {n});
   }
   // STRING (rule 105) sink: route the list-directed output into the character
   // variable instead of SYSPRINT.
@@ -6821,7 +6838,7 @@ void IRGen::emitPut(HStmt* s) {
           st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
       slen = i64(st->ty.len);
     }
-    deferPut("pli_string_put_open", {sdata, slen});
+    deferCall("pli_string_put_open", {sdata, slen});
   }
   if (s->edit) {
     emitPutEditItems(s);
@@ -6832,14 +6849,14 @@ void IRGen::emitPut(HStmt* s) {
       Val v = emitExpr(item.get());
       switch (v.ty.k) {
       case TK::Char:
-        deferPut("pli_put_list_char", {v.ptr, v.len});
+        deferCall("pli_put_list_char", {v.ptr, v.len});
         break;
       case TK::Float:
-        deferPut("pli_put_list_float", {v.reg});
+        deferCall("pli_put_list_float", {v.reg});
         break;
       case TK::Bit: {
         llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-        deferPut("pli_put_list_bit", {bit});
+        deferCall("pli_put_list_bit", {bit});
         break;
       }
       case TK::FixedBin:
@@ -6848,11 +6865,11 @@ void IRGen::emitPut(HStmt* s) {
           if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
             emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
           else
-            deferPut("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
+            deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
         } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
           emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
         } else {
-          deferPut("pli_put_list_fixed", {toI64(v)});
+          deferCall("pli_put_list_fixed", {toI64(v)});
         }
         break;
       case TK::Void:
@@ -6871,8 +6888,8 @@ void IRGen::emitPut(HStmt* s) {
         break;
       case TK::Complex:
         // Complex output (CM5): real, sign, imaginary magnitude, I.
-        deferPut("pli_put_list_complex",
-                 {b_.CreateExtractValue(v.cpx, 0, "cpx.re"), b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+        deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
+                                           b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
         break;
       case TK::Task:
       case TK::Event:
@@ -6886,11 +6903,11 @@ void IRGen::emitPut(HStmt* s) {
     }
   }
   if (s->stringTarget)
-    deferPut("pli_string_put_close", {sdata, slen}, /*capture=*/true);
+    deferCall("pli_string_put_close", {sdata, slen}, /*capture=*/true);
   if (s->fileSym)
-    deferPut("pli_put_unselect", {});
+    deferCall("pli_put_unselect", {});
   // Write the record: under the output lock when the program has a task.
-  llvm::Value* written = endOutput();
+  llvm::Value* written = flushCalls("pli_out_begin", "pli_out_end");
   if (s->stringTarget && isVarying) {
     // Store the actual length written into the varying string's length prefix
     b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), slenPrefix);
@@ -6976,6 +6993,9 @@ void IRGen::emitGetDataItems(HStmt* s) {
 // GET (rules 104-109): list-directed input reads each data-list reference from
 // SYSIN and stores the value, like an assignment target.
 void IRGen::emitGet(HStmt* s) {
+  // ADR-233: the statement's expressions are evaluated first and the reads are
+  // deferred, so the whole record is read under the input lock and a blocking
+  // item expression never holds it. The stores run after the lock is released.
   // STRING (rule 105) source: route the list-directed input from the character
   // variable instead of SYSIN.
   llvm::Value *sdata = nullptr, *slen = nullptr;
@@ -6984,76 +7004,119 @@ void IRGen::emitGet(HStmt* s) {
     sdata =
         st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
     slen = i64(st->ty.len);
-    b_.CreateCall(runtimeFn("pli_string_get_open"), {sdata, slen});
   }
   // FILE ( f ) (rule 105): route the list-directed input through the named
   // file's stream instead of SYSIN.
+  if (s->data) {
+    // The DATA form's reads drive its control flow (the name that comes next
+    // picks the item), so its calls cannot be deferred: the statement takes
+    // the input lock around the read loop instead.
+    if (hasAsync_)
+      b_.CreateCall(runtimeFn("pli_in_begin"), {});
+    if (s->stringTarget)
+      b_.CreateCall(runtimeFn("pli_string_get_open"), {sdata, slen});
+    if (s->fileSym)
+      b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
+    emitGetDataItems(s);
+    if (s->fileSym)
+      b_.CreateCall(runtimeFn("pli_get_unselect"), {});
+    if (s->stringTarget)
+      b_.CreateCall(runtimeFn("pli_string_get_close"), {});
+    if (hasAsync_)
+      b_.CreateCall(runtimeFn("pli_in_end"), {});
+    return;
+  }
+  if (s->stringTarget)
+    deferCall("pli_string_get_open", {sdata, slen});
   if (s->fileSym)
-    b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
+    deferCall("pli_get_select", {i64(s->fileSym->fileSlot)});
   if (s->edit) {
     emitGetEditItems(s);
-  } else if (s->data) {
-    emitGetDataItems(s);
   } else {
     for (auto& item : s->items) {
       HExpr* t = item.get();
       const Type& ty = t->ty;
-      Val v;
+      SourceLoc loc = s->loc;
       switch (ty.k) {
       case TK::FixedBin:
       case TK::FixedDec:
         if (ty.k == TK::FixedDec && ty.scale > 0) {
           // Already scaled by the reader; truncate to the target width
           // without rescaling, then the store passes it through.
-          llvm::Value* raw = b_.CreateCall(runtimeFn("pli_get_list_decfixed"), {i64(ty.scale)});
-          // The reader returns an i64; a wide DECIMAL slot is i128.
-          v.reg = fitTo(raw, llvmTy(ty), "gdec");
-          v.ty = ty;
+          deferCall("pli_get_list_decfixed", {i64(ty.scale)}, false,
+                    [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                      Val v;
+                      v.reg = fitTo(r[i], llvmTy(t->ty), "gdec");
+                      v.ty = t->ty;
+                      storeGetTarget(t, v, loc);
+                    });
         } else {
-          v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed"), {});
-          v.ty = Type::fixedBin(63, 0);
+          deferCall("pli_get_list_fixed", {}, false,
+                    [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                      Val v;
+                      v.reg = r[i];
+                      v.ty = Type::fixedBin(63, 0);
+                      storeGetTarget(t, v, loc);
+                    });
         }
         break;
       case TK::Float:
-        v.reg = b_.CreateCall(runtimeFn("pli_get_list_float"), {});
-        v.ty = Type::flt(6);
+        deferCall("pli_get_list_float", {}, false,
+                  [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                    Val v;
+                    v.reg = r[i];
+                    v.ty = Type::flt(6);
+                    storeGetTarget(t, v, loc);
+                  });
         break;
       case TK::Bit: {
-        llvm::Value* b = b_.CreateCall(runtimeFn("pli_get_list_bit"), {});
-        v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "gbit");
-        v.ty = Type::bit();
+        deferCall("pli_get_list_bit", {}, false,
+                  [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                    Val v;
+                    v.reg = b_.CreateTrunc(r[i], b_.getInt1Ty(), "gbit");
+                    v.ty = Type::bit();
+                    storeGetTarget(t, v, loc);
+                  });
         break;
       }
       case TK::Char: {
         // Read into a reusable entry buffer, then assign into the target.
         llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
-        b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
-        v.ptr = buf;
-        v.len = i64(ty.len);
-        v.ty = ty;
+        deferCall("pli_get_list_char", {buf, i64(ty.len)}, false,
+                  [this, t, buf, loc](const std::vector<llvm::Value*>&, size_t) {
+                    Val v;
+                    v.ptr = buf;
+                    v.len = i64(t->ty.len);
+                    v.ty = t->ty;
+                    storeGetTarget(t, v, loc);
+                  });
         break;
       }
       case TK::Complex: {
         // Read both parts through element pointers, then load the pair.
         llvm::Value* pair = entryAlloca(llvmTy(ty), "gcx");
-        b_.CreateCall(runtimeFn("pli_get_list_complex"),
-                      {b_.CreateStructGEP(llvmTy(ty), pair, 0, "gcxr"),
-                       b_.CreateStructGEP(llvmTy(ty), pair, 1, "gcxi")});
-        v.cpx = b_.CreateLoad(llvmTy(ty), pair, "gcx");
-        v.ty = ty;
+        deferCall("pli_get_list_complex",
+                  {b_.CreateStructGEP(llvmTy(ty), pair, 0, "gcxr"),
+                   b_.CreateStructGEP(llvmTy(ty), pair, 1, "gcxi")},
+                  false, [this, t, pair, loc](const std::vector<llvm::Value*>&, size_t) {
+                    Val v;
+                    v.cpx = b_.CreateLoad(llvmTy(t->ty), pair, "gcx");
+                    v.ty = t->ty;
+                    storeGetTarget(t, v, loc);
+                  });
         break;
       }
       default:
         d_.error(item->loc, "GET LIST of this type is not implemented in this stage", "(110)");
         continue;
       }
-      storeGetTarget(t, v, s->loc);
     }
   }
   if (s->stringTarget)
-    b_.CreateCall(runtimeFn("pli_string_get_close"), {});
+    deferCall("pli_string_get_close", {});
   if (s->fileSym)
-    b_.CreateCall(runtimeFn("pli_get_unselect"), {});
+    deferCall("pli_get_unselect", {});
+  flushCalls("pli_in_begin", "pli_in_end");
 }
 
 // Store an input value into a data-list reference (rules (109),(110)): the same
@@ -7107,34 +7170,34 @@ void IRGen::emitPutEditItems(HStmt* s) {
     if (sub.s)
       (void)toI64(emitExpr(sub.s.get())); // scale evaluated for effects (50)
     if (sub.kind == HFormatItem::E)
-      deferPut("pli_put_edit_float_e", {dbl, w, d});
+      deferCall("pli_put_edit_float_e", {dbl, w, d});
     else
-      deferPut("pli_put_edit_float", {dbl, w, d});
+      deferCall("pli_put_edit_float", {dbl, w, d});
   };
   for (auto& f : s->formats) {
     switch (f.kind) {
     case HFormatItem::X: {
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      deferPut("pli_put_edit_x", {w});
+      deferCall("pli_put_edit_x", {w});
       break;
     }
     case HFormatItem::Skip: {
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferPut("pli_put_edit_skip", {n});
+      deferCall("pli_put_edit_skip", {n});
       break;
     }
     case HFormatItem::Page:
-      deferPut("pli_put_edit_page", {});
+      deferCall("pli_put_edit_page", {});
       break;
     case HFormatItem::Line: {
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferPut("pli_put_edit_line", {n});
+      deferCall("pli_put_edit_line", {n});
       break;
     }
     case HFormatItem::Column: {
       // Column positioning (rule (48)): pad blanks to 1-based column n.
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferPut("pli_put_edit_column", {n});
+      deferCall("pli_put_edit_column", {n});
       break;
     }
     case HFormatItem::Remote:
@@ -7146,7 +7209,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      deferPut("pli_put_edit_char", {v.ptr, v.len, w});
+      deferCall("pli_put_edit_char", {v.ptr, v.len, w});
       break;
     }
     case HFormatItem::B: {
@@ -7172,7 +7235,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
         b_.CreateStore(v.reg, tmp);
       }
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
-      deferPut("pli_put_edit_bit", {ptr, i64(nbits), w});
+      deferCall("pli_put_edit_bit", {ptr, i64(nbits), w});
       break;
     }
     case HFormatItem::C: {
@@ -7202,10 +7265,10 @@ void IRGen::emitPutEditItems(HStmt* s) {
       if (f.s)
         (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
       if (v.ty.k == TK::Float) {
-        deferPut("pli_put_edit_float", {v.reg, w, d});
+        deferCall("pli_put_edit_float", {v.reg, w, d});
       } else {
         llvm::Value* scale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
-        deferPut("pli_put_edit_fixed", {toI64(v), scale, w, d});
+        deferCall("pli_put_edit_fixed", {toI64(v), scale, w, d});
       }
       break;
     }
@@ -7218,7 +7281,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
       llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
       if (f.s)
         (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
-      deferPut("pli_put_edit_float_e", {v.reg, w, d});
+      deferCall("pli_put_edit_float_e", {v.reg, w, d});
       break;
     }
     case HFormatItem::P: {
@@ -7234,15 +7297,15 @@ void IRGen::emitPutEditItems(HStmt* s) {
         // sign derived from the value: -1 if negative, +1 if non-negative.
         llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
         llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
-        deferPut("pli_put_edit_pic",
-                 {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
+        deferCall("pli_put_edit_pic",
+                  {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
       } else if (v.ty.k == TK::Float) {
         // Convert float to fixed-decimal via truncation.
         llvm::Value* val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
         llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picfsn");
         llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picfs");
-        deferPut("pli_put_edit_pic",
-                 {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
+        deferCall("pli_put_edit_pic",
+                  {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
       } else {
         d_.error(item->loc, "P edit item requires a numeric value", "(53)");
       }
@@ -7261,12 +7324,12 @@ void IRGen::emitGetEditItems(HStmt* s) {
     switch (f.kind) {
     case HFormatItem::X: {
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      b_.CreateCall(runtimeFn("pli_get_edit_x"), {w});
+      deferCall("pli_get_edit_x", {w});
       break;
     }
     case HFormatItem::Skip: {
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      b_.CreateCall(runtimeFn("pli_get_edit_skip"), {n});
+      deferCall("pli_get_edit_skip", {n});
       break;
     }
     case HFormatItem::Page:
@@ -7277,7 +7340,7 @@ void IRGen::emitGetEditItems(HStmt* s) {
       // Input positioning (rule (48)): skip forward to 1-based column n,
       // opening a fresh line first when already past n.
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      b_.CreateCall(runtimeFn("pli_get_edit_column"), {n});
+      deferCall("pli_get_edit_column", {n});
       break;
     }
     case HFormatItem::Remote:
@@ -7288,14 +7351,17 @@ void IRGen::emitGetEditItems(HStmt* s) {
         break;
       HExpr* t = s->items[di++].get();
       const Type& ty = t->ty;
+      SourceLoc loc = s->loc;
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gech");
-      b_.CreateCall(runtimeFn("pli_get_edit_char"), {buf, i64(ty.len), w});
-      Val v;
-      v.ptr = buf;
-      v.len = i64(ty.len);
-      v.ty = ty;
-      storeGetTarget(t, v, s->loc);
+      deferCall("pli_get_edit_char", {buf, i64(ty.len), w}, false,
+                [this, t, buf, loc](const std::vector<llvm::Value*>&, size_t) {
+                  Val v;
+                  v.ptr = buf;
+                  v.len = i64(t->ty.len);
+                  v.ty = t->ty;
+                  storeGetTarget(t, v, loc);
+                });
       break;
     }
     case HFormatItem::F:
@@ -7303,13 +7369,17 @@ void IRGen::emitGetEditItems(HStmt* s) {
       if (di >= s->items.size())
         break;
       HExpr* t = s->items[di++].get();
+      SourceLoc loc = s->loc;
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
       if (f.s)
         (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
-      Val v;
-      v.reg = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w});
-      v.ty = Type::flt(6);
-      storeGetTarget(t, v, s->loc);
+      deferCall("pli_get_edit_num", {w}, false,
+                [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                  Val v;
+                  v.reg = r[i];
+                  v.ty = Type::flt(6);
+                  storeGetTarget(t, v, loc);
+                });
       break;
     }
     case HFormatItem::B: {
@@ -7318,6 +7388,7 @@ void IRGen::emitGetEditItems(HStmt* s) {
       if (di >= s->items.size())
         break;
       HExpr* t = s->items[di++].get();
+      SourceLoc loc = s->loc;
       long long nbits = t->ty.isBit() && t->ty.len > 0 ? t->ty.len : 1;
       long long nbytes = (nbits + 7) / 8;
       llvm::Value* tmp =
@@ -7325,18 +7396,22 @@ void IRGen::emitGetEditItems(HStmt* s) {
       llvm::Value* ptr = b_.CreateInBoundsGEP(
           llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "gebitp");
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
-      b_.CreateCall(runtimeFn("pli_get_edit_bit"), {ptr, i64(nbits), w});
-      Val v;
-      v.ty = Type::bit((int)nbits);
-      if (nbits == 1) {
-        // The runtime packs into the top bit; BIT(1) travels as the low bit.
-        llvm::Value* byte = b_.CreateLoad(b_.getInt8Ty(), ptr, "gb8");
-        llvm::Value* low = b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
-        v.reg = b_.CreateTrunc(low, b_.getInt1Ty(), "gb1");
-      } else {
-        v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, "gb");
-      }
-      storeGetTarget(t, v, s->loc);
+      deferCall("pli_get_edit_bit", {ptr, i64(nbits), w}, false,
+                [this, t, tmp, ptr, nbits, nbytes, loc](const std::vector<llvm::Value*>&, size_t) {
+                  Val v;
+                  v.ty = Type::bit((int)nbits);
+                  if (nbits == 1) {
+                    // The runtime packs into the top bit; BIT(1) travels as the low bit.
+                    llvm::Value* byte = b_.CreateLoad(b_.getInt8Ty(), ptr, "gb8");
+                    llvm::Value* low =
+                        b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
+                    v.reg = b_.CreateTrunc(low, b_.getInt1Ty(), "gb1");
+                  } else {
+                    v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes),
+                                          tmp, "gb");
+                  }
+                  storeGetTarget(t, v, loc);
+                });
       break;
     }
     case HFormatItem::C: {
@@ -7345,6 +7420,7 @@ void IRGen::emitGetEditItems(HStmt* s) {
       if (di >= s->items.size())
         break;
       HExpr* t = s->items[di++].get();
+      SourceLoc loc = s->loc;
       if (f.subs.empty()) {
         d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
         break;
@@ -7357,15 +7433,18 @@ void IRGen::emitGetEditItems(HStmt* s) {
         (void)toI64(emitExpr(s1.s.get()));
       if (s2.s)
         (void)toI64(emitExpr(s2.s.get()));
-      llvm::Value* re = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w1});
-      llvm::Value* im = b_.CreateCall(runtimeFn("pli_get_edit_num"), {w2});
-      llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
-      cpx = b_.CreateInsertValue(cpx, re, 0, "cpx.re");
-      cpx = b_.CreateInsertValue(cpx, im, 1, "cpx.im");
-      Val v;
-      v.cpx = cpx;
-      v.ty = Type::complexTy();
-      storeGetTarget(t, v, s->loc);
+      // The two halves are read in order; the store waits for the second one.
+      deferCall("pli_get_edit_num", {w1});
+      deferCall("pli_get_edit_num", {w2}, false,
+                [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                  llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
+                  cpx = b_.CreateInsertValue(cpx, r[i - 1], 0, "cpx.re");
+                  cpx = b_.CreateInsertValue(cpx, r[i], 1, "cpx.im");
+                  Val v;
+                  v.cpx = cpx;
+                  v.ty = Type::complexTy();
+                  storeGetTarget(t, v, loc);
+                });
       break;
     }
     case HFormatItem::P:

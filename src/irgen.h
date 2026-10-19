@@ -7,6 +7,7 @@
 // unchanged. Everything the rest of the compiler sees is the IRGen/Val
 // interface below; parser and sema are untouched.
 #pragma once
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -188,26 +189,36 @@ private:
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
   void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
-  // ADR-233: the output calls of one statement, deferred so the whole record
-  // is written under the output lock. A program without a task emits the call
-  // in place - no deferral, no lock, no cost.
-  struct PendingPut {
+  // ADR-233: the stream calls of one statement, deferred so the whole record
+  // is written or read under the matching lock. A program without a task
+  // emits the call in place - no deferral, no lock, no cost.
+  struct PendingCall {
     llvm::Function* fn;
     std::vector<llvm::Value*> args;
     bool capture = false; // keep the call's result (the STRING close)
+    // Code emitted after the lock is released: the GET path stores the value
+    // the statement read. The results are the deferred calls' return values
+    // in order; idx is this call's index in that list.
+    std::function<void(const std::vector<llvm::Value*>&, size_t)> post;
   };
-  std::vector<PendingPut> pendingPuts_;
+  std::vector<PendingCall> pendingCalls_;
+  // The results of the deferred calls made so far in this statement: the
+  // post actions index into it. The inline path (a program without a task)
+  // keeps the same list, so an index means the same thing in both paths.
+  std::vector<llvm::Value*> callResults_;
   // True when the program has an asynchronous CALL (rule (79)): then every
-  // output statement is written under the output lock.
+  // stream statement is written or read under the matching lock.
   bool hasAsync_ = false;
-  // The result of the last captured output call.
+  // The result of the last captured stream call.
   llvm::Value* lastPutResult_ = nullptr;
-  // Record one output call; a program with a task writes it at the end of the
-  // statement, under the output lock, a program without one writes it in place.
-  void deferPut(const char* fn, std::vector<llvm::Value*> args, bool capture = false);
-  // Write the deferred calls of the statement under the output lock and
-  // release it. Returns the result of the last captured call.
-  llvm::Value* endOutput();
+  // Record one stream call; a program with a task writes it at the end of the
+  // statement, under the lock, a program without one writes it in place.
+  void deferCall(const char* fn, std::vector<llvm::Value*> args, bool capture = false,
+                 std::function<void(const std::vector<llvm::Value*>&, size_t)> post = nullptr);
+  // Write the deferred calls of the statement between the two bracket calls
+  // (the lock) and run their post actions after it. Returns the result of the
+  // last captured call.
+  llvm::Value* flushCalls(const char* beginFn, const char* endFn);
   // Edit-directed transmission (rule (108)): walk the format list, pairing each
   // data item with its A/F format and emitting the control (X/SKIP/PAGE/LINE)
   // items in order.

@@ -6795,15 +6795,16 @@ destroy the history. Deleting the duplicate entries — the decisions are still
 in force. Adding a disambiguation note to ADR-192/194 instead of renumbering —
 the number itself is the citation, so a note cannot fix a reference.
 
-## ADR-233 — Serialised stream output for programs with tasks (CALL ... TASK)
+## ADR-233 — Serialised stream access for programs with tasks (CALL ... TASK)
 
 **Context.** A `CALL ... TASK`/`EVENT` (rule (79)) runs its callee on another
 thread, and the stream state is process-global: the stdout write slab, the
-column, the item count, and the FILE/STRING routing. Two threads writing at
-once interleave their bytes in the slab and corrupt each other's records.
-Reproduced with four tasks writing 300 `PUT SKIP LIST` records each: 1653
-lines came out instead of 1200, with lines like `taskne 287`, `task 4 linet290`
-and `tae 300line 12`.
+column, the item count, the FILE/STRING routing, the input column, and the
+input token state. Two threads writing at once interleave their bytes in the
+slab and corrupt each other's records; two threads reading at once split each
+other's records between them. Reproduced with four tasks writing 300 `PUT SKIP
+LIST` records each: 1653 lines came out instead of 1200, with lines like
+`taskne 287`, `task 4 linet290` and `tae 300line 12`.
 
 The obvious fix — make the stream state thread-local — was tried and reverted
 (commit 7bd4f96). On Mach-O a thread-local access is a descriptor load plus an
@@ -6811,36 +6812,48 @@ indirect call to the TLS resolver, and the resolver call lands in the output
 path of every PUT: measured on `benchmarks/io_throughput.pli` at +69% (20.0 ms
 -> 33.9 ms for 200k PUTs). The cost is per *function* that touches the state,
 not per variable, so grouping the state into one structure does not help. The
-race was left open until a thread-safe output design that does not tax the
+race was left open until a thread-safe stream design that does not tax the
 common path existed.
 
-**Decision.** One recursive output mutex, taken only once the program has a
-task.
+**Decision.** One recursive mutex per direction, taken only once the program
+has a task.
 
-*Runtime.* `rt_out_mu` plus `volatile int rt_out_serialised`
-(`runtime/rt_stream.c`). `rt_out_enable_threads()` is called by
+*Runtime.* `rt_out_mu` and `rt_in_mu` plus `volatile int rt_tasks_active`
+(`runtime/rt_stream.c`). `rt_stream_enable_threads()` is called by
 `pli_task_spawn` **before** the thread is created. The flag is written exactly
 once — inside the one-time init, so no two threads ever write it — and the
 first spawn always comes from the main thread (no task can exist before it),
 so the transition carries no data race: the child reads the flag after its
 `pthread_create`, which orders that read after the write, and the main thread
-takes the locked path from then on. Until the flag is set, every output
+takes the locked path from then on. Until the flag is set, every stream
 operation costs one predictable branch and no lock.
 
-The lock is recursive (`pli_mutex_init_recursive`, a new platform-seam
+The locks are recursive (`pli_mutex_init_recursive`, a new platform-seam
 function): an item writer calls the byte writer, which locks on its own. Every
 public output entry point brackets its writes — the list-directed, DATA-
 directed and EDIT-directed writers, DISPLAY, SKIP/PAGE, the FILE and STRING
 routing, the stdout flush, and the program epilogue — so the slab, the column
-and the item count stay consistent.
+and the item count stay consistent. The input side is the same: the token
+reader, the DATA-directed name reader, the edit-directed readers, and the FILE
+and STRING input routing take the input lock, so a token and the column state
+it advances are read as a unit.
 
-*Compiler.* A whole output statement is written under one lock: the compiler
-defers the statement's runtime calls and emits them between `pli_out_begin`
-and `pli_out_end` (`runtime/pli_rt_abi.def`, `src/irgen.cpp`). The deferral
-also puts the statement's *expression evaluation* before the lock is taken, so
-an item expression that blocks on another task never holds the lock — without
-that, a task waiting for output while the waiting thread holds the lock would
-deadlock.
+The two locks are separate: a task waiting for input must not hold off another
+task's output (the classic prompt-then-read pattern would otherwise stall).
+
+*Compiler.* A whole stream statement runs under one lock: the compiler defers
+the statement's runtime calls and emits them between `pli_out_begin`/
+`pli_out_end` (or `pli_in_begin`/`pli_in_end` for a GET) — see
+`runtime/pli_rt_abi.def`, `src/irgen.cpp`. The deferral also puts the
+statement's *expression evaluation* before the lock is taken, so an item
+expression that blocks on another task never holds the lock — without that, a
+task waiting for output while the waiting thread holds the lock would
+deadlock. The GET path stores what it read *after* the lock is released, so the
+target expressions run unlocked too.
+
+The DATA-directed GET is the one form that cannot be deferred: the name that
+comes next picks the item, so its reads drive its own control flow. It takes
+the input lock around its read loop instead.
 
 The bracket is emitted only in a program that has an asynchronous CALL: a
 pre-pass over the HIR (`programHasAsync`) sets the flag. A program without one
@@ -6849,11 +6862,13 @@ the runtime's lock check is a branch.
 
 **Consequences.** The reproduction is clean: 1200 records, every one whole.
 `tests/hardening/task_output.pli` (four tasks write 200 records into a file,
-the program reads them back and checks every `(task, line)` pair) and
+the program reads them back and checks every `(task, line)` pair),
 `tests/driver/task_output.sh` (four tasks write 1000 records to SYSPRINT, the
-driver checks every line) both fail without the serialiser and pass with it.
-The common path is untouched: `io_throughput` stays at 0.80x the C baseline at
-`-O2`, and a program without tasks carries no bracket calls at all.
+driver checks every line) and `tests/hardening/task_input.pli` (two tasks read
+the same file, each record's two values must stay together) all fail without
+the serialiser and pass with it. The common path is untouched: `io_throughput`
+stays at 0.80x the C baseline at `-O2`, and a program without tasks carries no
+bracket calls at all.
 
 The platform seam grew by one function, so a custom `--rt-platform` TU must
 provide `pli_mutex_init_recursive` (the driver diagnoses it by name), and the
@@ -6867,10 +6882,12 @@ task's output through a program-owned FILE — the sink selection is
 process-global, so the same routing problem, and it changes the FILE semantics
 of the program. A lock per byte write without the statement bracket — the
 records of two tasks still interleave item by item, which reads as corruption
-just the same.
+just the same. One mutex for both directions — a task blocked on input would
+hold off every other task's output.
 
 **Known limitations.** The STRING sink and the FILE routing stay
 process-global: two tasks writing to a STRING sink share one buffer, so the
-bytes stay intact but the split between them does not. The input path (GET)
-has the same race and is not serialised yet — this entry closes the output
-race only.
+bytes stay intact but the split between them does not. The routing calls are
+inside the statement's lock, so a task's record does not land in another task's
+file — but a task that *selects* a file while another task's statement is open
+still changes the destination for the statements that follow.

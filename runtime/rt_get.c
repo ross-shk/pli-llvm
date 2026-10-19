@@ -9,18 +9,25 @@
 /* List-directed input (rule 109): read the next whitespace/comma-delimited
  * token from SYSIN (stdin) into buf (nul-terminated). A ';' also terminates
  * a token (for data-directed NAME=value pairs, rule (106)) and raises
- * rt_tok_semi for pli_get_data_next. Returns 0 at end of input. */
+ * rt_tok_semi for pli_get_data_next. Returns 0 at end of input.
+ * The input lock (ADR-233) is taken here: the token and the column state it
+ * advances are read as a unit, so two tasks do not split one token. */
 int rt_get_token(char *buf, size_t cap) {
+  rt_in_lock();
   int c;
   do {
     c = rt_next_char();
   } while (c != EOF && (c == ' ' || c == '\t' || c == '\n' || c == '\r'));
-  if (c == EOF)
+  if (c == EOF) {
+    rt_in_unlock();
     return 0;
+  }
   /* A zero or negative capacity is a caller bug: the cap comparison would
    * wrap and the terminator would land outside the buffer. */
-  if (cap <= 0)
+  if (cap <= 0) {
+    rt_in_unlock();
     return 0;
+  }
   size_t n = 0;
   while (c != EOF && c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != ',' && c != ';') {
     if (n + 1 < cap)
@@ -30,6 +37,7 @@ int rt_get_token(char *buf, size_t cap) {
   buf[n] = '\0';
   if (c == ';')
     rt_tok_semi = 1;
+  rt_in_unlock();
   return 1;
 }
 
@@ -151,17 +159,21 @@ int rt_data_namechar(int c) {
 }
 
 long long pli_get_data_next(char *buf, long long cap) {
+  rt_in_lock();
   for (;;) {
     if (rt_tok_semi) {
       rt_tok_semi = 0;
+      rt_in_unlock();
       return 0;
     }
     int c;
     do {
       c = rt_next_char();
     } while (c != EOF && (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ','));
-    if (c == EOF || c == ';')
+    if (c == EOF || c == ';') {
+      rt_in_unlock();
       return 0;
+    }
     size_t n = 0;
     while (c != EOF && data_namechar(c)) {
       if (n + 1 < (size_t)cap)
@@ -175,8 +187,10 @@ long long pli_get_data_next(char *buf, long long cap) {
       // Malformed pair without '=': skip to the next pair and retry.
       while (c != EOF && c != ',' && c != ';' && c != '\n')
         c = rt_next_char();
-      if (c == ';')
+      if (c == ';') {
+        rt_in_unlock();
         return 0;
+      }
       continue;
     }
     if (n == 0) {
@@ -185,6 +199,7 @@ long long pli_get_data_next(char *buf, long long cap) {
       get_token(tok, sizeof tok);
       continue;
     }
+    rt_in_unlock();
     return (long long)n;
   }
 }

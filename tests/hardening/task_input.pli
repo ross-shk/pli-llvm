@@ -1,0 +1,48 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82),(105),(109): the input of concurrent
+    tasks is serialised (ADR-233), so a task reads
+    whole records: the two values of a record belong
+    together even when two tasks read the same file.
+    The data file lands in the gitignored scratch
+    dir, so the test leaves no litter behind. */
+ tin: procedure options(main);
+    declare f file;
+    declare e1 event;
+    declare e2 event;
+    declare fails(2) fixed bin(31);
+    declare i fixed bin(31);
+
+    fails(1) = 0;
+    fails(2) = 0;
+    /* the file: 20000 records of "n n+1000" */
+    open file(f) title('tests/hardening/out/task_input.dat') output;
+    do i = 1 to 20000;
+       put file(f) skip list(i, i + 1000);
+    end;
+    close file(f);
+    /* two tasks read the same file: each record must stay whole */
+    open file(f) title('tests/hardening/out/task_input.dat') input;
+    call reader(1) event(e1);
+    call reader(2) event(e2);
+    wait(e1, e2);
+    close file(f);
+    if fails(1) + fails(2) = 0 then
+       put skip list('PASS task_input');
+    else
+       put skip list('FAIL task_input: fails =', fails(1) + fails(2));
+    reader: procedure(idx);
+       declare idx fixed bin(31);
+       declare j fixed bin(31);
+       /* 63-bit: a mangled read can carry a long digit string, and the
+          difference below must not overflow on it */
+       declare a fixed bin(63);
+       declare b fixed bin(63);
+       do j = 1 to 10000;
+          get file(f) list(a, b);
+          /* the two halves of a record must come from one reader */
+          if b - a ^= 1000 then
+             fails(idx) = fails(idx) + 1;
+       end;
+    end reader;
+ end tin;

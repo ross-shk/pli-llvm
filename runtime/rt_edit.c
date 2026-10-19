@@ -198,13 +198,16 @@ void pli_put_edit_line(long long n) {
   rt_out_unlock();
 }
 
-/* Edit-directed input (rules (108),(44)-(54)). */
+/* Edit-directed input (rules (108),(44)-(54)). The readers take the input
+ * lock (ADR-233): the field they read and the column state it advances
+ * belong together, so two tasks do not split one field. */
 
 /* F(w,d): read a fixed-width field of w characters and parse it as a number.
  * The caller converts the double to the target's type. */
 double pli_get_edit_num(long long w) {
   char field[128];
   long long i = 0;
+  rt_in_lock();
   for (; i < w && i < (long long)(sizeof field - 1); ++i) {
     int c = rt_next_char();
     if (c == EOF)
@@ -212,6 +215,7 @@ double pli_get_edit_num(long long w) {
     field[i] = (char)c;
   }
   field[i] = '\0';
+  rt_in_unlock();
   return pli_strtod(field, NULL);
 }
 
@@ -219,6 +223,7 @@ double pli_get_edit_num(long long w) {
  * wider than the target is truncated (the excess input is still consumed). */
 void pli_get_edit_char(char *dst, long long cap, long long w) {
   long long i = 0;
+  rt_in_lock();
   for (; i < w; ++i) {
     int c = rt_next_char();
     if (c == EOF)
@@ -228,11 +233,14 @@ void pli_get_edit_char(char *dst, long long cap, long long w) {
   }
   for (; i < cap; ++i)
     dst[i] = ' ';
+  rt_in_unlock();
 }
 
 /* X(w): skip w input characters. */
 void pli_get_edit_x(long long w) {
+  rt_in_lock();
   for (long long i = 0; i < w; ++i) rt_next_char();
+  rt_in_unlock();
 }
 
 /* B(w) output (rule (52)): nbits packed big-endian bits (first bit in the
@@ -263,6 +271,7 @@ void pli_get_edit_bit(char *dst, long long cap, long long w) {
   if (w < 0)
     w = 0;
   long long got = 0;
+  rt_in_lock();
   for (long long i = 0; i < w; ++i) {
     int c = rt_next_char();
     if (c == EOF)
@@ -273,6 +282,7 @@ void pli_get_edit_bit(char *dst, long long cap, long long w) {
       dst[got / 8] |= (char)((c - '0') << (7 - (got % 8)));
     ++got;
   }
+  rt_in_unlock();
 }
 
 /* COLUMN(n) on input (rule (48)): the next item starts at 1-based column n;
@@ -280,6 +290,7 @@ void pli_get_edit_bit(char *dst, long long cap, long long w) {
 void pli_get_edit_column(long long n) {
   if (n < 1)
     n = 1;
+  rt_in_lock();
   if (rt_in_col + 1 > (int)n) {
     int c;
     do {
@@ -293,12 +304,14 @@ void pli_get_edit_column(long long n) {
     if (c == EOF)
       break;
   }
+  rt_in_unlock();
 }
 
 /* SKIP(n): consume input up to and including the nth newline. */
 void pli_get_edit_skip(long long n) {
   if (n < 1) n = 1;
   int nl = 0;
+  rt_in_lock();
   while (nl < n) {
     int c = rt_next_char();
     if (c == EOF)
@@ -306,6 +319,7 @@ void pli_get_edit_skip(long long n) {
      if (c == '\n')
        ++nl;
   }
+  rt_in_unlock();
 }
 
 /* CALL ... EVENT(ev): mark the event incomplete before the task starts. */

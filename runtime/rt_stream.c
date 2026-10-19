@@ -63,37 +63,47 @@ static char rt_stdout_buf[RT_STDOUT_BUF];
 static size_t rt_stdout_pos = 0;
 
 /* ---------------------------------------------------------------------------
- * Output serialisation (ADR-233).
+ * Stream serialisation (ADR-233).
  *
- * One recursive mutex guards the whole output path once the program has a
- * task. The mutex is recursive because the item writers call the byte writer
- * (rt_put_raw), which is itself an internal helper under the caller's lock.
+ * One recursive mutex per direction guards the stream path once the program
+ * has a task. The mutexes are recursive because the item writers call the byte
+ * writer (rt_put_raw), which is itself an internal helper under the caller's
+ * lock.
  *
  * The serialiser stays off until the first task spawn: a program that never
- * spawns a task pays one predictable branch per write and no lock at all.
+ * spawns a task pays one predictable branch per access and no lock at all.
  * The flag is written exactly once, inside the one-time init, so no two
  * threads ever write it; the task threads read it after their pthread_create,
  * which orders the read after the write.
  * ------------------------------------------------------------------------- */
 pli_mutex rt_out_mu;
+pli_mutex rt_in_mu;
 static pli_once rt_out_once = PLI_ONCE_INIT;
-volatile int rt_out_serialised = 0;
+volatile int rt_tasks_active = 0;
 
-/* One-time init: the mutex first, then the flag that turns the serialiser on
- * (a lock attempt must never find an uninitialised mutex). */
+/* One-time init: the mutexes first, then the flag that turns the serialiser
+ * on (a lock attempt must never find an uninitialised mutex). */
 static void rt_out_init(void) {
   pli_mutex_init_recursive(&rt_out_mu);
-  rt_out_serialised = 1;
+  pli_mutex_init_recursive(&rt_in_mu);
+  rt_tasks_active = 1;
 }
 
 /* Called by the task spawn before the thread is created. */
-void rt_out_enable_threads(void) { pli_call_once(&rt_out_once, rt_out_init); }
+void rt_stream_enable_threads(void) { pli_call_once(&rt_out_once, rt_out_init); }
 
 /* One output statement under the lock (ADR-233): the compiler brackets a PUT
  * or DISPLAY statement with these, so the whole record reaches the stream
  * before another task's record does. No-ops until the program has a task. */
 void pli_out_begin(void) { rt_out_lock(); }
 void pli_out_end(void) { rt_out_unlock(); }
+
+/* One input statement under the lock (ADR-233): the compiler brackets a GET
+ * statement with these, so a task reads whole records. The input lock is
+ * separate from the output one: a task waiting for input must not hold off
+ * another task's output. */
+void pli_in_begin(void) { rt_in_lock(); }
+void pli_in_end(void) { rt_in_unlock(); }
 
 void rt_flush_stdout(void) {
   rt_out_lock();

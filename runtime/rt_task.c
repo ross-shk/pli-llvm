@@ -8,9 +8,10 @@
 
 /* Multitasking (rules (79),(82),(83), QR2.8): EVENT flags are i32 words owned
  * by PL/I variables (0 incomplete, 1 complete), serialised behind one
- * mutex+cond. Concurrent list-directed PUT is serialised by the output lock
- * (ADR-233): each output item is written whole, and the order in which the
- * items of different tasks appear is implementation-defined. */
+ * mutex+cond. Concurrent stream access is serialised by the stream locks
+ * (ADR-233): each output statement is written whole and each input statement
+ * reads whole records; the order in which the tasks' records appear is
+ * implementation-defined. */
 /* No static initializers: CRITICAL_SECTION/CONDITION_VARIABLE have none, so
  * both mutexes and the cond are created once via pli_once. */
 /* One-time init: MSVC and clang-cl both lack static mutex/cond initializers. */
@@ -99,11 +100,12 @@ void pli_task_spawn(char *fn, char *ctx) {
   /* The cast goes straight from the object pointer to the function pointer:
    * going through void * is not a conforming conversion. */
   void *(*body)(void *) = (void *(*)(void *))fn;
-  /* ADR-233: the callee writes to the same stream state as the main thread,
-   * so the output path is serialised from here on. The switch is flipped
-   * before the thread exists: the first spawn always comes from the main
-   * thread (no task can exist before it), so no two threads ever race on it. */
-  rt_out_enable_threads();
+  /* ADR-233: the callee reads and writes the same stream state as the main
+   * thread, so the stream path is serialised from here on. The switch is
+   * flipped before the thread exists: the first spawn always comes from the
+   * main thread (no task can exist before it), so no two threads ever race
+   * on it. */
+  rt_stream_enable_threads();
   if (pli_spawn_detached(body, ctx) != 0)
     pli_abort("TASK: could not create a thread");
 }

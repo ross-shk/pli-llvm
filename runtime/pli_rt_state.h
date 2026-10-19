@@ -165,36 +165,48 @@ int rt_next_char(void);
 void rt_flush_stdout(void);
 
 /* ---------------------------------------------------------------------------
- * Output serialisation (ADR-233).
+ * Stream serialisation (ADR-233).
  *
  * A CALL ... TASK (rule (79)) runs its callee on another thread, and the
- * stream state is process-global, so two threads writing at once interleave
- * their bytes in the stdout slab and corrupt each other's lines. The fix is
- * one recursive mutex around the output path - taken only once the program
- * has a task, so a program that never spawns one keeps the same code path
- * (one predictable branch per write, no lock).
+ * stream state is process-global: two threads writing at once interleave their
+ * bytes in the stdout slab and corrupt each other's lines, and two threads
+ * reading at once split each other's records. The fix is one recursive mutex
+ * per direction around the stream path - taken only once the program has a
+ * task, so a program that never spawns one keeps the same code path (one
+ * predictable branch per access, no lock).
  *
- * rt_out_serialised is 0 until the first task spawn; the flag is written
- * exactly once (inside the one-time init) and read after a pthread_create, so
- * the transition carries no data race. It is volatile so the optimiser cannot
+ * rt_tasks_active is 0 until the first task spawn; the flag is written exactly
+ * once (inside the one-time init) and read after a pthread_create, so the
+ * transition carries no data race. It is volatile so the optimiser cannot
  * cache the load across a loop.
  * ------------------------------------------------------------------------- */
 extern pli_mutex rt_out_mu;
-extern volatile int rt_out_serialised;
+extern pli_mutex rt_in_mu;
+extern volatile int rt_tasks_active;
 
 /* Take/release the output lock. Recursive: an item writer calls the byte
  * writer, which locks on its own. */
 static inline void rt_out_lock(void) {
-  if (rt_out_serialised)
+  if (rt_tasks_active)
     pli_mutex_lock(&rt_out_mu);
 }
 static inline void rt_out_unlock(void) {
-  if (rt_out_serialised)
+  if (rt_tasks_active)
     pli_mutex_unlock(&rt_out_mu);
 }
+/* Take/release the input lock. Recursive, like the output lock: a token
+ * reader is called from the record reader that already holds it. */
+static inline void rt_in_lock(void) {
+  if (rt_tasks_active)
+    pli_mutex_lock(&rt_in_mu);
+}
+static inline void rt_in_unlock(void) {
+  if (rt_tasks_active)
+    pli_mutex_unlock(&rt_in_mu);
+}
 /* Called by the task spawn before the thread is created: from then on every
- * output operation runs under the output lock. */
-void rt_out_enable_threads(void);
+ * stream operation runs under the matching lock. */
+void rt_stream_enable_threads(void);
 
 /* Compatibility aliases so split sources keep their original identifiers. */
 #define col rt_col
