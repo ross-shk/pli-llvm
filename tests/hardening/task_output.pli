@@ -1,0 +1,79 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82),(105): the output of concurrent
+    tasks is serialised (ADR-233), so each task's
+    record reaches the file whole: every record
+    reads back as a complete (task, line) pair.
+    The data file lands in the gitignored scratch
+    dir, so the test leaves no litter behind. */
+ tout: procedure options(main);
+    declare f file;
+    declare e1 event;
+    declare e2 event;
+    declare e3 event;
+    declare e4 event;
+    declare seen(4,50) fixed bin(31);
+    declare fails fixed bin(31);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare rec fixed bin(31);
+    declare w1 char(10) varying;
+    declare w2 char(10) varying;
+    declare k fixed bin(31);
+    declare n fixed bin(31);
+
+    fails = 0;
+    do i = 1 to 4;
+       do j = 1 to 50;
+          seen(i,j) = 0;
+       end;
+    end;
+
+    /* four tasks write fifty records each into one file */
+    open file(f) title('tests/hardening/out/task_output.dat') output;
+    call worker(1) event(e1);
+    call worker(2) event(e2);
+    call worker(3) event(e3);
+    call worker(4) event(e4);
+    wait(e1, e2, e3, e4);
+    close file(f);
+
+    /* read every record back: it must be a whole one */
+    open file(f) title('tests/hardening/out/task_output.dat') input;
+    do rec = 1 to 200;
+       get file(f) list(w1, k, w2, n);
+       if w1 ^= 'task' then fails = fails + 1;
+       if w2 ^= 'line' then fails = fails + 1;
+       if k < 1 then fails = fails + 1;
+       if k > 4 then fails = fails + 1;
+       if n < 1 then fails = fails + 1;
+       if n > 50 then fails = fails + 1;
+       if k >= 1 then
+          if k <= 4 then
+             if n >= 1 then
+                if n <= 50 then
+                   seen(k,n) = seen(k,n) + 1;
+    end;
+    close file(f);
+
+    /* every (task, line) pair appears exactly once: a garbled
+       record would show up as a missing or a doubled pair */
+    do i = 1 to 4;
+       do j = 1 to 50;
+          if seen(i,j) ^= 1 then fails = fails + 1;
+       end;
+    end;
+
+    if fails = 0 then
+       put skip list('PASS task_output');
+    else
+       put skip list('FAIL task_output: fails =', fails);
+
+    worker: procedure(idx);
+       declare idx fixed bin(31);
+       declare j fixed bin(31);
+       do j = 1 to 50;
+          put file(f) skip list('task', idx, 'line', j);
+       end;
+    end worker;
+ end tout;

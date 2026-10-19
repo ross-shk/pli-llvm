@@ -1,4 +1,9 @@
- /* Scratch: concurrent CALL ... TASK output (rules (79),(82)). */
+ /* Concurrent CALL ... TASK output (rules (79),(82)): four tasks write
+    records to SYSPRINT. The output path is serialised (ADR-233), so every
+    record reaches the stream whole; the order in which the tasks' records
+    appear is implementation-defined.
+
+    Run: pli task_output_race.pli -o taskrace */
  rtask: procedure options(main);
     declare e(4) event;
     declare i fixed bin(31);
