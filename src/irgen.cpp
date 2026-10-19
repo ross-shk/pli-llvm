@@ -3,6 +3,7 @@
 #include "irgen.h"
 #include "codegen.h" // pli::applyRuntimeFnAttrs declaration
 #include "embedded_runtime.h"
+#include "target.h"
 #include <algorithm>
 #include <cfloat>
 #include <set>
@@ -3099,8 +3100,15 @@ std::string IRGen::run(HProgram& prog) {
   // disabled explicitly in createTargetMachine.
   if (!triple_.empty()) {
     llvm::Triple t(triple_);
-    if (t.isMacOSX()) {
-      mod_.setTargetTriple(llvm::Triple("arm64-apple-macosx15.0"));
+    // A Darwin target (either spelling: "apple-darwin" or "apple-macosx")
+    // without a version gets the modern deployment target (15.0) and the
+    // target's own arch: "aarch64" is "arm64" on Apple. An object without a
+    // platform version would make lld emit the old-style lazy binding, which
+    // needs the dyld_stub_binder the vendored libSystem stub does not export.
+    const bool apple = t.getOS() == llvm::Triple::Darwin || t.getOS() == llvm::Triple::MacOSX;
+    if (apple) {
+      const std::string arch = pli::targetArchName(t) == "aarch64" ? "arm64" : "x86_64";
+      mod_.setTargetTriple(llvm::Triple(arch + "-apple-macosx15.0"));
     } else {
       mod_.setTargetTriple(t);
     }
@@ -3123,7 +3131,18 @@ bool IRGen::linkRuntimeBitcode() {
   std::unique_ptr<llvm::Module> rt;
   const pli::RuntimeBlob* blob = pli::selectRuntimeForTarget(llvm::Triple(triple_));
   if (!blob) {
-    d_.error({}, "internal error: no embedded runtime for target '" + triple_ + "'", "");
+    // No runtime for this ABI family: naming the embedded ones tells the user
+    // whether the build has cross support at all (ADR-234).
+    std::string have;
+    for (const std::string& t : pli::embeddedRuntimeTargets()) {
+      if (!have.empty())
+        have += ", ";
+      have += t;
+    }
+    d_.error({}, "no embedded runtime for target '" + triple_ + "'" +
+                     (have.empty() ? std::string() : " (this build embeds: " + have + ")") +
+                     " — rebuild with -DPLI_CROSS_BITCODE=ON, or compile for the host triple",
+              "");
     return false;
   }
   llvm::MemoryBufferRef buf(
@@ -3150,20 +3169,14 @@ bool IRGen::linkRuntimeBitcode() {
              "");
     return false;
   }
-  // A runtime built for another target must not be merged into this module.
-  // Compare arch + OS family, not the version-qualified triple string: Apple's
-  // darwin/macosx naming and the OS version differ between LLVM builds (e.g.
-  // arm64-apple-darwin25.6.0 vs arm64-apple-macosx26.0.0) yet are the same ABI.
+  // A runtime built for another target family must not be merged into this
+  // module. Compare the ABI family (arch + OS + Windows environment), not the
+  // version-qualified triple string: Apple's darwin/macosx naming and the OS
+  // version differ between LLVM builds (e.g. arm64-apple-darwin25.6.0 vs
+  // arm64-apple-macosx26.0.0) yet are the same ABI (ADR-234).
   llvm::Triple rtTriple(rt->getTargetTriple());
   llvm::Triple tgtTriple(triple_);
-  // LLVM 23 splits the Darwin family into Darwin and MacOSX OSType values;
-  // both are the same ABI family, so fold them onto one key.
-  auto osKey = [](llvm::Triple::OSType os) -> int {
-    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
-                                                                      : (int)os;
-  };
-  if (rtTriple.getArch() != tgtTriple.getArch() ||
-      osKey(rtTriple.getOS()) != osKey(tgtTriple.getOS())) {
+  if (pli::targetKey(rtTriple) != pli::targetKey(tgtTriple)) {
     d_.error({},
              "runtime bitcode target '" + rtTriple.str() + "' does not match '" + triple_ +
                  "' — rebuild it or pass --no-bitcode-runtime",

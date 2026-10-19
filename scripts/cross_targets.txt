@@ -1,0 +1,25 @@
+# Cross targets with a runtime bitcode and a link sysroot (ADR-234).
+#
+# One triple per line; blank lines and #-comments are ignored. This file is
+# the single source of truth: CMake reads it to build and embed the per-target
+# runtime bitcode, and the driver reads the generated copy (pli_cross_targets.inc)
+# for its diagnostics and `pli version`.
+#
+# A target needs:
+#   - a link sysroot (crt objects + libc + import libs) for the target ABI;
+#   - the PL/I runtime compiled for that target (runtime bitcode).
+# The sysroot comes from scripts/prepare_cross_sysroot.sh (a local cache);
+# the runtime bitcode is built by CMake when PLI_CROSS_BITCODE=ON.
+#
+# The Darwin target is different: the macOS SDK is not redistributable, so it
+# comes from the build host (xcrun --show-sdk-path) and only a macOS build
+# host can produce it. The link uses the vendored .tbd stubs, which serve
+# both Darwin arches.
+#
+# aarch64-pc-windows-gnu is NOT listed: mingw-w64 has no aarch64 port, so no
+# sysroot exists for it. The driver diagnoses it as an unsupported target.
+
+x86_64-unknown-linux-gnu
+aarch64-unknown-linux-gnu
+x86_64-pc-windows-gnu
+aarch64-apple-macosx15.0

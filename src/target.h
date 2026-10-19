@@ -27,6 +27,19 @@ struct TargetDesc {
 const TargetDesc& getTargetDesc(const llvm::Triple& t);
 // Initialize all LLVM targets (not just native) for cross-compilation.
 void initializeAllTargets();
+// Normalised ABI family of a triple: "linux-x86_64", "windows-x86_64",
+// "darwin-aarch64", ... Two triples with the same key share one runtime blob and
+// one link sysroot (ADR-234). The Windows GNU (MinGW) and MSVC ABIs are
+// separate families: their CRTs and calling conventions differ.
+std::string targetKey(const llvm::Triple& t);
+// Canonical arch name of a triple: "x86_64", "aarch64", ... LLVM's
+// getArchName() echoes the spelling the user typed ("arm64" vs "aarch64" for
+// the same Apple Silicon target), which would split one family in two.
+std::string targetArchName(const llvm::Triple& t);
+// The cross targets this compiler supports (scripts/cross_targets.txt).
+const std::vector<std::string>& crossTargetTriples();
+// True when `t` names the build host's family (the host link path applies).
+bool isHostTarget(const llvm::Triple& t);
 // TargetMachine for the given triple; null on failure with `err` set.
 // When *marchNative* is set, use the host CPU's feature set instead of
 // "generic" (opt-in for local hot runs; CI/baselines always use generic).

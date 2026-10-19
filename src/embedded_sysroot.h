@@ -8,6 +8,8 @@
 // At link time the driver materializes these blobs to a temp dir (hostcrt).
 #pragma once
 #include <cstddef>
+#include <string>
+#include <vector>
 
 namespace pli {
 // One sysroot file: sysroot-relative path (e.g. "crt1.o",
@@ -24,6 +26,10 @@ struct SysrootFile {
 const SysrootFile* embeddedSysrootFiles(size_t* n);
 // Which link path the set feeds: "musl", "mingw", or "sdk" ("" when none).
 const char* embeddedSysrootName();
+// The target keys the embedded set serves (ADR-234), e.g. "linux-x86_64".
+// Empty when the build embedded none. A cross link may use the embedded set
+// only for a key it lists.
+const std::vector<std::string>& embeddedSysrootTargetKeys();
 // Total embedded bytes (reported by `pli version`).
 size_t embeddedSysrootSize();
 } // namespace pli

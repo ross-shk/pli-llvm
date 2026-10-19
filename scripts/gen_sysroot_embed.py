@@ -12,11 +12,13 @@ blobs to a temp dir (src/hostcrt.cpp).
 
 Usage:
   gen_sysroot_embed.py <srcdir> <outdir> <array_prefix> <manifest.inc>
-      <set_name> [<relpath> ...]
+      <set_name> <target_keys> [<relpath> ...]
   Each <srcdir>/<relpath> becomes <outdir>/<sanitized>.cpp holding one
   `extern "C"` byte array; <manifest.inc> declares them and defines the
   kEmbeddedSysrootFiles table {(path, data, len)} plus kEmbeddedSysrootName
-  (<set_name>: "musl", "mingw", or "sdk" — which link path the set feeds).
+  (<set_name>: "musl", "mingw", or "sdk" — which link path the set feeds) and
+  kEmbeddedSysrootTargetKeys (the ABI families the set serves, comma
+  separated — ADR-234: a cross link may use the set only for a listed key).
   With no <relpath>s the manifest holds an empty table (arch mismatch /
   missing sources at build time: the driver falls back to the host
   toolchain).
@@ -48,7 +50,7 @@ def emit_array(f, array_name: str, data: bytes) -> None:
 
 
 def main(srcdir: str, outdir: str, prefix: str, manifest: str,
-         set_name: str, relpaths) -> None:
+         set_name: str, target_keys: str, relpaths) -> None:
     os.makedirs(outdir, exist_ok=True)
     entries = []
     for rel in relpaths:
@@ -74,12 +76,18 @@ def main(srcdir: str, outdir: str, prefix: str, manifest: str,
         f.write("static const size_t kEmbeddedSysrootFileCount = "
                 f"{len(entries)};\n")
         f.write(f'static const char kEmbeddedSysrootName[] = "{set_name}";\n')
+        keys = [k.strip() for k in target_keys.split(",") if k.strip()]
+        f.write("static const char* const kEmbeddedSysrootTargetKeys[] = {\n")
+        for k in keys:
+            f.write(f'  "{k}",\n')
+        f.write("  nullptr,\n};\n")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 6:
+    if len(sys.argv) < 7:
         print("Usage: gen_sysroot_embed.py <srcdir> <outdir> <array_prefix> "
-              "<manifest.inc> <set_name> [<relpath> ...]", file=sys.stderr)
+              "<manifest.inc> <set_name> <target_keys> [<relpath> ...]",
+              file=sys.stderr)
         sys.exit(1)
     main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],
-         sys.argv[6:])
+         sys.argv[6], sys.argv[7:])

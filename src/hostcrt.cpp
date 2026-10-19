@@ -9,6 +9,7 @@
 #include "hostcrt.h"
 
 #include "embedded_sysroot.h"
+#include "target.h"
 // Host.h moved from Support to TargetParser in LLVM 19; support both.
 #if __has_include("llvm/TargetParser/Host.h")
 #include "llvm/TargetParser/Host.h"
@@ -93,64 +94,96 @@ void appendGccLibDirs(std::vector<std::string>& roots, const std::string& gnuTri
 }
 
 bool isHost(const llvm::Triple& t) { return t.getTriple() == llvm::sys::getDefaultTargetTriple(); }
-
-// ADR-227: every file below must exist for the sysroot to count (mirrors the
-// release pack list; a partial dir falls back to the host recipe silently).
-bool allExist(const fs::path& dir, const std::vector<std::string>& names) {
-  for (const std::string& n : names) {
-    std::error_code ec;
-    if (!fs::is_regular_file(dir / n, ec))
-      return false;
-  }
-  return true;
-}
 } // namespace
 
-// The builtins archive is arch-specific (embedded per build arch): a
-// foreign-arch sysroot must not count — its link would fail later on the
-// missing arch file. Matches the CMake-embedded name (PLI_BUILD_ARCH).
-bool haveArchBuiltins(const fs::path& musl) {
-  const std::string want =
-      "libpli_builtins-" +
-      llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArchName().str() + ".a";
-  std::error_code ec;
-  return fs::is_regular_file(musl / want, ec);
-}
-
-// musl static (Linux): startup objects + the single libc archive + empty
-// libm/pthread/dl/rt stubs (separate files, so user -l flags resolve) +
-// our renamed builtins archive for 128-bit helpers (__udivti3 in
-// wide-decimal formatting, which musl omits; renamed so the hostcrt
-// clang-shadow check never trips on the filename).
-bool detectMusl(const fs::path& musl) {
-  return allExist(musl, {"crt1.o", "crti.o", "crtn.o", "libc.a"}) && haveArchBuiltins(musl);
-}
-
-// mingw-w64 (Windows): CRT startup + import libs + GCC helpers. fltused.o
-// is a one-word stub (int _fltused) for the MSVC-ABI marker clang emits;
-// chkstk.o is a jmp thunk (__chkstk -> ___chkstk_ms) for the GNU-named
-// stack probe of dynamic alloca frames; libgcc.a covers the MSVC-named
-// probe plus __udivti3/___chkstk_ms, so no compiler-rt builtins ride.
-bool detectMingw(const fs::path& mingw) {
-  return allExist(mingw, {"crt2.o", "crtbegin.o", "crtend.o", "fltused.o", "chkstk.o", "libgcc.a",
-                          "libkernel32.a", "libmsvcrt.a", "libmingw32.a", "libmingwex.a",
-                          "libmoldname.a", "libucrt.a", "libadvapi32.a", "libshell32.a",
-                          "libuser32.a"});
-}
-
-VendoredSysroot resolveVendoredSysroot(const std::string& exeDir) {
-  VendoredSysroot out;
-  if (exeDir.empty())
+// ADR-234: the link sysroot of a target. Probe a directory and let the
+// files decide the kind: a musl CRT (crt1.o + libc.a) or a mingw CRT
+// (crt2.o + crtbegin.o) marks a usable set; the macOS .tbd stubs are only
+// meaningful as a -syslibroot, so they are recognised by name.
+SysrootSet probeSysrootDir(const std::string& dir, const std::string& origin,
+                            const std::string& arch) {
+  SysrootSet out;
+  if (dir.empty())
     return out;
-  fs::path musl = fs::path(exeDir) / "musl";
-  fs::path mingw = fs::path(exeDir) / "mingw";
-  if (detectMusl(musl)) {
-    out.haveMusl = true;
-    out.muslDir = musl.string();
+  fs::path d(dir);
+  std::error_code ec;
+  if (!fs::is_directory(d, ec))
+    return out;
+  if (fs::exists(d / "crt2.o", ec) && fs::exists(d / "crtbegin.o", ec)) {
+    out.ok = true;
+    out.kind = "mingw";
+    out.dir = d.string();
+    out.origin = origin;
+    return out;
   }
-  if (detectMingw(mingw)) {
-    out.haveMingw = true;
-    out.mingwDir = mingw.string();
+  if (fs::exists(d / "crt1.o", ec) && fs::exists(d / "libc.a", ec)) {
+    // The builtins archive is arch-specific: a set that carries builtins for
+    // other arches does not serve this target (its link would fail on the
+    // missing arch file). A set without any builtins archive is accepted —
+    // the link then warns that 128-bit division may not resolve.
+    if (!arch.empty()) {
+      bool anyBuiltins = false;
+      bool wantHere = false;
+      for (const fs::directory_entry& e : fs::directory_iterator(d, ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.rfind("libpli_builtins-", 0) != 0)
+          continue;
+        anyBuiltins = true;
+        if (name == "libpli_builtins-" + arch + ".a")
+          wantHere = true;
+      }
+      if (anyBuiltins && !wantHere)
+        return out;
+    }
+    out.ok = true;
+    out.kind = "musl";
+    out.dir = d.string();
+    out.origin = origin;
+    return out;
+  }
+  if (fs::exists(d / "usr/lib/libSystem.tbd", ec)) {
+    out.ok = true;
+    out.kind = "sdk";
+    out.dir = d.string();
+    out.origin = origin;
+    return out;
+  }
+  return out;
+}
+
+std::string sysrootCacheRoot() {
+  if (const char* env = std::getenv("PLI_SYSROOT_DIR"))
+    if (*env)
+      return env;
+  std::error_code ec;
+  fs::path home = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "");
+  if (home.empty())
+    return "";
+  return (home / ".pli" / "sysroots").string();
+}
+
+// The prepared cache holds one directory per target (ADR-234). The user may
+// spell a target differently (x86_64-unknown-linux-musl vs -gnu), so the
+// canonical triples of the same ABI family are probed as well.
+std::vector<std::string> sysrootCacheCandidates(const llvm::Triple& t) {
+  std::vector<std::string> out;
+  std::string root = sysrootCacheRoot();
+  if (root.empty())
+    return out;
+  const std::string key = targetKey(t);
+  auto add = [&](const std::string& name) {
+    if (name.empty())
+      return;
+    std::string dir = (fs::path(root) / name / "lib").string();
+    for (const std::string& d : out)
+      if (d == dir)
+        return;
+    out.push_back(dir);
+  };
+  add(t.getTriple());
+  for (const std::string& canonical : crossTargetTriples()) {
+    if (targetKey(llvm::Triple(canonical)) == key)
+      add(canonical);
   }
   return out;
 }

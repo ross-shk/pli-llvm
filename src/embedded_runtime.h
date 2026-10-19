@@ -24,14 +24,20 @@ struct RuntimeBlob {
   size_t len;
   std::string target;
 };
-// Returns all embedded runtime blobs (one per supported target).
+// Returns all embedded runtime blobs (the host plus one per cross target).
 std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs();
-// Selects the appropriate runtime blob for the given target triple.
-// Falls back to the default (host) blob if no exact match.
+// Selects the runtime blob for the given target triple: an exact triple match
+// first, then the same ABI family (arch + OS + Windows environment — see
+// targetKey). A blob is never used for a different family, and an empty blob
+// (a build without PLI_CROSS_BITCODE) is never selected.
 const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t);
+// The triples this build embeds a runtime for (diagnostics, `pli version`).
+std::vector<std::string> embeddedRuntimeTargets();
 // Default platform blob (host pli_rtplat.bc) and per-target platform blobs.
-// selectPlatformForTarget mirrors selectRuntimeForTarget, including the host
+// selectPlatformForTarget mirrors selectRuntimeForTarget, including the family
 // fallback; it returns nullptr only when no platform blob was embedded.
 std::vector<RuntimeBlob> getEmbeddedPlatformBlobs();
 const RuntimeBlob* selectPlatformForTarget(const llvm::Triple& t);
+// The triples this build embeds a platform blob for.
+std::vector<std::string> embeddedPlatformTargets();
 } // namespace pli

@@ -35,24 +35,32 @@ struct HostCrt {
 // "host link only" diagnostic.
 HostCrt resolveHostCrt(const llvm::Triple& triple, const std::string& sysroot);
 
-// ADR-227: vendored sysroots (Zig-style self-containment). The link sysroot
-// is EMBEDDED in pli(.exe) — release archives hold only the binary — so user
-// links need no host toolchain (no build-essential CRT on Linux, no MSVC LIB
-// on Windows, no Xcode CLT on macOS). An exe-relative musl//mingw//sdk/ dir
-// next to the binary is a dev override (iterate on sysroot files without
-// rebuilding); it wins when complete. All-or-nothing per OS: a partial dir
-// falls back to the next source, then to the host recipe above.
-struct VendoredSysroot {
-  bool haveMusl = false;   // musl/{crt1.o,crti.o,crtn.o,libc.a,...}
-  bool haveMingw = false;  // mingw/{crt2.o,...,libkernel32.a,...}
-  std::string muslDir;     // set when haveMusl
-  std::string mingwDir;    // set when haveMingw
+// ADR-227/ADR-234: the link sysroot of a target — the directory holding the
+// CRT startup objects and the system libraries. Three kinds:
+//   "musl"  crt1.o crti.o crtn.o libc.a libpli_builtins-<arch>.a
+//   "mingw" crt2.o crtbegin.o crtend.o fltused.o chkstk.o lib*.a
+//   "sdk"   macOS .tbd stubs (usr/lib/libSystem.tbd), used as -syslibroot
+struct SysrootSet {
+  bool ok = false;
+  std::string kind;   // "musl" | "mingw" | "sdk"
+  std::string dir;    // directory holding the link inputs
+  std::string origin; // "explicit" | "override" | "embedded" | "cache"
 };
 
-// Probe exeDir (the pli executable's directory) for override sysroots.
-// Never fails: an empty dir or absent files mean absent sysroots, and the
-// caller falls back to the embedded set, then the host recipe.
-VendoredSysroot resolveVendoredSysroot(const std::string& exeDir);
+// Probe a directory for a link sysroot: the files present decide the kind.
+// A directory that holds neither a musl nor a mingw CRT is not a sysroot.
+// `arch` is the LLVM arch name of the target ("x86_64", "aarch64", ...): a
+// musl set that carries builtins archives must carry the target's.
+SysrootSet probeSysrootDir(const std::string& dir, const std::string& origin,
+                            const std::string& arch = "");
+
+// The prepared cross sysroot cache: $PLI_SYSROOT_DIR, else ~/.pli/sysroots,
+// then the per-target subdirectory <cache>/<targetKey>/lib.
+std::string sysrootCacheRoot();
+// The cache directories to probe for a target, in order: the triple as given,
+// then the canonical triples of the same ABI family (a target may be spelled
+// differently, e.g. x86_64-unknown-linux-musl vs -gnu).
+std::vector<std::string> sysrootCacheCandidates(const llvm::Triple& t);
 
 // The embedded sysroot (embedded_sysroot.h) materialized to a temp dir.
 // name is one of "musl", "mingw", "sdk" (which link path it feeds); dir is

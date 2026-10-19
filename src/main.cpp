@@ -140,6 +140,8 @@ static void usage() {
   "  --fprofile-generate  instrument for PGO (run the binary, it writes a profile)\n"
   "  --fprofile-use=<f>   rebuild using that profile (.profraw or .profdata)\n"
   "  --triple <t>     target triple (default: host triple, in-process)\n"
+  "  --sysroot <dir>  link sysroot of the target (crt objects + system libs);\n"
+  "                   overrides the vendored/embedded set (ADR-234)\n"
           "  --march=native   opt-in: use host CPU features (default: generic;\n"
           "                   CI/baselines always use generic; local hot runs only)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
@@ -470,6 +472,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 int main(int argc, char** argv) {
   std::vector<std::string> inputs;
   std::string output, runtimeLib = PLI_RUNTIME_LIB, triple;
+  // Link sysroot of the target (ADR-234): --sysroot <dir> overrides the
+  // exe-relative override, the prepared cache and the embedded set.
+  std::string sysrootArg;
   // Split runtime: custom platform TU (--rt-platform); empty selects the
   // embedded pli_rtplat.bc. Always explicit (no baked-in default path).
   std::string platformBc;
@@ -537,6 +542,8 @@ int main(int argc, char** argv) {
       clangPath = next("--clang");
     else if (a == "--triple")
       triple = next("--triple");
+    else if (a == "--sysroot")
+      sysrootArg = next("--sysroot");
     else if (a == "--march=native")
       marchNative = true;
     else if (a == "--sysparm") {
@@ -946,19 +953,42 @@ int main(int argc, char** argv) {
           std::cerr << "pli: runtime object failed (" << rtErr << "), using clang\n";
       }
       if (singleModuleFinalLink || haveRtObj || linkBitcode) {
-        // Single-file self-containment (ADR-227): the link sysroot is
-        // EMBEDDED in pli — release archives hold only the binary. An
-        // exe-relative musl//mingw/ dir is a dev override (iterate on
-        // sysroot files without rebuilding) and wins when complete; the
-        // embedded set is next. $PLI_SYSROOT never redirects either
-        // (self-contained already).
+        // The link sysroot of the TARGET (ADR-234), in probe order:
+        //   1. --sysroot <dir>            (explicit, clang-style)
+        //   2. <exeDir>/musl | <exeDir>/mingw  (dev override, ADR-227)
+        //   3. the prepared cache          ($PLI_SYSROOT_DIR, ~/.pli/sysroots)
+        //   4. the embedded set            (only when it serves this family)
+        // The host C-runtime recipe is the last resort and only for the host:
+        // a cross link without a sysroot is an error, never a host link.
         // -shared/-static-pie stay on the host recipe (a static sysroot
         // cannot link them).
-        pli::VendoredSysroot vsys = pli::resolveVendoredSysroot(exeDir.string());
-        const bool muslOverride = vsys.haveMusl;
-        const bool mingwOverride = vsys.haveMingw;
-        // Lazily materialized below (once): avoided entirely when the
-        // override already satisfies the link, or for -c/emit flows.
+        const std::string archName = pli::targetArchName(llt);
+        pli::SysrootSet vsys;
+        if (!sysrootArg.empty()) {
+          vsys = pli::probeSysrootDir(sysrootArg, "explicit", archName);
+          if (!vsys.ok) {
+            std::cerr << "pli: --sysroot " << sysrootArg
+                      << " has no link sysroot (expected crt1.o+libc.a or crt2.o+crtbegin.o)\n";
+            return 1;
+          }
+        } else {
+          // The exe-relative override follows the target's object format:
+          // a musl set for ELF, a mingw set for COFF.
+          const char* overrideName =
+              llt.getObjectFormat() == llvm::Triple::COFF ? "mingw" : "musl";
+          if (llt.getObjectFormat() != llvm::Triple::MachO) {
+            vsys = pli::probeSysrootDir((exeDir / overrideName).string(), "override", archName);
+          }
+        }
+        if (!vsys.ok) {
+          for (const std::string& d : pli::sysrootCacheCandidates(llt)) {
+            vsys = pli::probeSysrootDir(d, "cache", archName);
+            if (vsys.ok)
+              break;
+          }
+        }
+        // Lazily materialized below (once): avoided entirely when another
+        // source already satisfies the link, or for -c/emit flows.
         pli::EmbeddedSysroot emb;
         bool embTried = false;
         auto ensureEmbedded = [&]() {
@@ -967,14 +997,20 @@ int main(int argc, char** argv) {
             emb = pli::materializeEmbeddedSysroot();
           }
         };
-        if (!vsys.haveMusl && !vsys.haveMingw) {
+        if (!vsys.ok) {
           ensureEmbedded();
-          if (emb.name == "musl" && !emb.dir.empty()) {
-            vsys.haveMusl = true;
-            vsys.muslDir = emb.dir;
-          } else if (emb.name == "mingw" && !emb.dir.empty()) {
-            vsys.haveMingw = true;
-            vsys.mingwDir = emb.dir;
+          // The embedded set serves only the families it was built for
+          // (ADR-234): a macOS build's SDK stubs never link a Linux binary.
+          const std::string key = pli::targetKey(llt);
+          bool serves = false;
+          for (const std::string& k : pli::embeddedSysrootTargetKeys())
+            if (k == key)
+              serves = true;
+          if (serves && !emb.dir.empty()) {
+            vsys.ok = true;
+            vsys.kind = emb.name;
+            vsys.dir = emb.dir;
+            vsys.origin = "embedded";
           }
         }
         bool wantStaticPIE = false;
@@ -985,18 +1021,15 @@ int main(int argc, char** argv) {
             break;
           }
         }
-        const bool useMusl = llt.getObjectFormat() == llvm::Triple::ELF && vsys.haveMusl &&
-                             !wantShared && !wantStaticPIE;
-        const bool useMingw = llt.getObjectFormat() == llvm::Triple::COFF && vsys.haveMingw &&
-                              !wantShared;
-        if (useMusl && verbose)
-          std::cerr << "pli: using vendored musl sysroot ("
-                    << (muslOverride ? "exe-relative override" : "embedded") << ": " << vsys.muslDir
-                    << ")\n";
-        if (useMingw && verbose)
-          std::cerr << "pli: using vendored mingw sysroot ("
-                    << (mingwOverride ? "exe-relative override" : "embedded") << ": "
-                    << vsys.mingwDir << ")\n";
+        const bool useMusl = llt.getObjectFormat() == llvm::Triple::ELF && vsys.ok &&
+                             vsys.kind == "musl" && !wantShared && !wantStaticPIE;
+        const bool useMingw = llt.getObjectFormat() == llvm::Triple::COFF && vsys.ok &&
+                              vsys.kind == "mingw" && !wantShared;
+        const bool useSdk = llt.getObjectFormat() == llvm::Triple::MachO && vsys.ok &&
+                            vsys.kind == "sdk";
+        if (vsys.ok && verbose)
+          std::cerr << "pli: using " << vsys.kind << " sysroot (" << vsys.origin << ": "
+                    << vsys.dir << ")\n";
         // Host C-runtime/sysroot recipe (hostcrt.cpp): stable filesystem
         // locations, first-hit-wins, $PLI_SYSROOT redirect. No subprocess.
         // Skipped entirely on vendored paths (host independence proof: even
@@ -1005,7 +1038,16 @@ int main(int argc, char** argv) {
         if (const char* env = std::getenv("PLI_SYSROOT"))
           sysroot = env;
         pli::HostCrt crt;
-        if (!useMusl && !useMingw) {
+        if (!useMusl && !useMingw && !useSdk) {
+          // A cross target without a sysroot cannot be linked: the host CRT
+          // recipe describes the machine pli runs on, not the target.
+          if (!pli::isHostTarget(llt)) {
+            std::cerr << "pli: no link sysroot for target '" << llt.getTriple()
+                      << "' — pass --sysroot <dir>, or prepare one with "
+                         "scripts/prepare_cross_sysroot.sh " << llt.getTriple() << "\n";
+            pli::cleanupMaterializedSysroot(emb.dir);
+            return 1;
+          }
           crt = pli::resolveHostCrt(llt, sysroot);
           if (!crt.ok) {
             std::cerr << "pli: " << crt.err << "\n";
@@ -1023,7 +1065,7 @@ int main(int argc, char** argv) {
           // __udivti3/___chkstk_ms, so no compiler-rt builtins ride.
           // -m i386pep is the x86_64 emulation (aarch64 ships its own
           // sysroot + spelling when that target lands).
-          const std::string& md = vsys.mingwDir;
+          const std::string& md = vsys.dir;
           argStore.push_back("-m");
           argStore.push_back("i386pep");
           argStore.push_back(md + "/crt2.o");
@@ -1033,35 +1075,16 @@ int main(int argc, char** argv) {
           // Static musl (matches musl-gcc -static): no interpreter, no host
           // libdirs, no -lgcc — the binary needs only the kernel at runtime.
           argStore.push_back("-static");
-          argStore.push_back(vsys.muslDir + "/crt1.o");
-          argStore.push_back(vsys.muslDir + "/crti.o");
+          argStore.push_back(vsys.dir + "/crt1.o");
+          argStore.push_back(vsys.dir + "/crti.o");
         }
         if (llt.getObjectFormat() == llvm::Triple::MachO) {
-          // Vendored SDK stubs (ADR-226/227): exe-relative <exeDir>/sdk is
-          // a dev override; the embedded stubs are next (single-file
-          // release); otherwise the Xcode CLT provides the syslibroot via
-          // xcrun (Apple tooling, not clang).
-          std::string sdkPath;
-          bool sdkOverride = false;
-          {
-            std::error_code ec;
-            fs::path stub = exeDir / "sdk";
-            if (fs::is_directory(stub, ec)) {
-              sdkPath = stub.string();
-              sdkOverride = true;
-            }
-          }
+          // Vendored SDK stubs (ADR-226/227): the exe-relative <exeDir>/sdk
+          // override and the embedded stubs were resolved above; otherwise
+          // the Xcode CLT provides the syslibroot via xcrun (Apple tooling,
+          // not clang).
+          std::string sdkPath = useSdk ? vsys.dir : "";
           if (sdkPath.empty()) {
-            ensureEmbedded();
-            if (emb.name == "sdk" && !emb.dir.empty())
-              sdkPath = emb.dir;
-          }
-          if (!sdkPath.empty()) {
-            if (verbose)
-              std::cerr << "pli: using vendored SDK stubs ("
-                        << (sdkOverride ? "exe-relative override" : "embedded") << ": " << sdkPath
-                        << ")\n";
-          } else {
             if (FILE* f = popen("xcrun --show-sdk-path 2>/dev/null", "r")) {
               char buf[1024];
               while (fgets(buf, sizeof buf, f))
@@ -1072,7 +1095,12 @@ int main(int argc, char** argv) {
               sdkPath.pop_back();
           }
           argStore.push_back("-arch");
-          argStore.push_back(std::string(llt.getArchName()));
+          // lld-macho spells the Apple Silicon arch "arm64"; the canonical
+          // name (targetArchName) is "aarch64".
+          {
+            const std::string canon = pli::targetArchName(llt);
+            argStore.push_back(canon == "aarch64" ? std::string("arm64") : canon);
+          }
           if (!sdkPath.empty()) {
             argStore.push_back("-syslibroot");
             argStore.push_back(sdkPath);
@@ -1155,11 +1183,17 @@ int main(int argc, char** argv) {
           // sysroot so user -l flags (e.g. -lm) resolve to its empty stubs,
           // never to host libraries. Host -lgcc/system libs stay off: the
           // binary is fully static.
-          argStore.push_back(vsys.muslDir + "/libpli_builtins-" +
-                             std::string(llt.getArchName()) + ".a");
-          argStore.push_back(vsys.muslDir + "/libc.a");
-          argStore.push_back(vsys.muslDir + "/crtn.o");
-          argStore.push_back("-L" + vsys.muslDir);
+          const std::string builtins =
+              vsys.dir + "/libpli_builtins-" + archName + ".a";
+          std::error_code bec;
+          if (fs::exists(builtins, bec))
+            argStore.push_back(builtins);
+          else if (verbose)
+            std::cerr << "pli: " << builtins
+                      << " not found; 128-bit division may fail to link\n";
+          argStore.push_back(vsys.dir + "/libc.a");
+          argStore.push_back(vsys.dir + "/crtn.o");
+          argStore.push_back("-L" + vsys.dir);
         }
         if (!useMusl && !useMingw) {
           for (const std::string& s : desc.systemLibs)
@@ -1178,7 +1212,7 @@ int main(int argc, char** argv) {
         } else {
           // MinGW driver: GNU-style close (crtend.o); the COFF
           // /entry:/subsystem: flags are not valid here (crt2.o defaults).
-          argStore.push_back(vsys.mingwDir + "/crtend.o");
+          argStore.push_back(vsys.dir + "/crtend.o");
         }
         for (const std::string& la : linkArgs) {
           // Vendored musl dictates a static EXEC: -pie conflicts with the
@@ -1221,7 +1255,7 @@ int main(int argc, char** argv) {
           // fltused marker + import libs + GCC helpers (MinGW driver takes
           // GNU -l names; -L points at the vendored dir). Order mirrors the
           // mingw-gcc recipe: startup, objects, libs, crtend.o (added above).
-          const std::string& md = vsys.mingwDir;
+          const std::string& md = vsys.dir;
           argStore.push_back(md + "/fltused.o");
           argStore.push_back(md + "/chkstk.o");
           argStore.push_back("-L" + md);

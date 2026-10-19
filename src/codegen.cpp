@@ -176,7 +176,8 @@ bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::
                         const std::string& platformBc) {
   const RuntimeBlob* blob = selectRuntimeForTarget(targetTriple);
   if (!blob) {
-    err = "no embedded runtime for target: " + targetTriple.getTriple();
+    err = "no embedded runtime for target '" + targetTriple.getTriple() +
+          "' — rebuild with -DPLI_CROSS_BITCODE=ON, or compile for the host triple";
     return false;
   }
   // Parse against M's own context so Linker can merge directly.
