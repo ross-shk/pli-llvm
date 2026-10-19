@@ -228,6 +228,25 @@ private:
   // copied into a fresh dummy argument. Shared by emitCall and emitExpr so the
   // marshalling logic has a single home.
   llvm::Value* argAddr(HExpr* a, const Type& pty);
+  // Materialized call actuals, keyed by the expression node. argAddr evaluates
+  // an actual once and records it; argLen (the hidden CHAR(*) length argument)
+  // reads the record back, so an actual is evaluated exactly once per call
+  // (rule 78). Without the record the actual ran twice — once for the buffer
+  // and once for its length — and the two evaluations could disagree.
+  std::unordered_map<HExpr*, Val> actuals_;
+  // Saves and restores `actuals_` around a call, so a nested call does not
+  // clobber the outer call's entries (the outer scope is restored intact).
+  struct ActualScope {
+    IRGen& g;
+    std::unordered_map<HExpr*, Val> saved;
+    explicit ActualScope(IRGen& ir) : g(ir), saved(std::move(ir.actuals_)) {
+      ir.actuals_.clear();
+    }
+    ~ActualScope() { g.actuals_ = std::move(saved); }
+  };
+  // Evaluate a call actual once: reuse the value recorded for this call, or
+  // evaluate and record it.
+  Val materializeActual(HExpr* a);
   // A CHARACTER VARYING argument of a different declared length than the
   // parameter is marshalled into a parameter-sized dummy (see argAddr); after
   // the call the callee's result is copied back into the caller's variable,

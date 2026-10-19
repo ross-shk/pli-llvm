@@ -1,10 +1,17 @@
 --- !tapi-tbd
 # Hand-written minimal macOS SDK stub for pli (ADR-226). Same provenance and
 # rules as libSystem.tbd in this directory. On macOS libm is part of
-# libSystem; this stub exists so -lm resolves inside the stub sysroot. The
-# embedded runtime currently calls no libm entry points (math lives in
-# runtime/rt_mathport.c), so this lists the common ones defensively — all
-# present in the real libm.
+# libSystem; this stub exists so -lm resolves inside the stub sysroot.
+#
+# Coverage: the libm entry points the compiler's LLVM math intrinsics lower
+# to (llvm.floor/ceil/sqrt/exp/log/log2/log10/sin/cos/tan/atan/atan2/sinh/
+# cosh/tanh/asin/acos/frexp/ldexp) plus the common surface a C-interop
+# program may call. Every name here is a real macOS libSystem export.
+#
+# NOTE: `symbols:` is a YAML flow sequence — the entries MUST be
+# comma-separated. A missing comma silently folds the neighbouring names
+# into one bogus symbol, and the linker then reports them as undefined
+# even though they are present in this file.
 tbd-version:     4
 targets:         [ arm64-macos, x86_64-macos ]
 install-name:    '/usr/lib/libm.dylib'
@@ -12,6 +19,9 @@ current-version: 1
 compatibility-version: 1
 exports:
   - targets: [ arm64-macos, x86_64-macos ]
-    symbols: [ _ceil, _cos, _fabs, _floor, _fmod, _log, _log10, _pow, _sin,
-               _sqrt, _tan ]
+    symbols: [ _acos, _asin, _atan, _atan2, _cbrt, _ceil, _copysign, _cos,
+               _cosh, _erf, _erfc, _exp, _expm1, _fabs, _fmax, _fmin, _floor,
+               _fmod, _frexp, _hypot, _ldexp, _lgamma, _log, _log10, _log1p,
+               _log2, _nearbyint, _pow, _rint, _round, _sin, _sinh, _sqrt,
+               _tan, _tanh, _tgamma, _trunc ]
 ...

@@ -3,9 +3,23 @@
 # Apple's SDK: only the linker's symbol names are listed (facts, one per
 # line), which is all in-process lld needs to resolve -lSystem at link time.
 # At runtime dyld loads the real libSystem from the host, so this file must
-# stay a subset of the real export list. Coverage: every undefined symbol of
-# the embedded pli runtime (see nm -u over runtime/*.o) plus compiler-builtin
-# spillover (memcpy/memmove, 128-bit helpers), on arm64 + x86_64.
+# stay a subset of the real export list.
+#
+# Coverage, in three parts:
+#   1. the embedded pli runtime's libc calls (see nm --undefined-only over
+#      the O2-optimized runtime bitcode — the optimizer introduces libc
+#      calls that the C source never mentions, e.g. llvm.memset -> bzero);
+#   2. compiler-builtin spillover: the memcpy/memmove/memset/strlen family,
+#      the memset_pattern* variants the optimizer emits for a pattern fill,
+#      and memchr for the INDEX/SEARCH builtins;
+#   3. the POSIX surface a C-interop program (an ENTRY ... EXTERNAL calling
+#      into libc) may reference.
+# Every name here is a real macOS libSystem export.
+#
+# NOTE: `symbols:` is a YAML flow sequence — the entries MUST be
+# comma-separated. A missing comma silently folds the neighbouring names
+# into one bogus symbol, and the linker then reports them as undefined
+# even though they are present in this file.
 tbd-version:     4
 targets:         [ arm64-macos, x86_64-macos ]
 install-name:    '/usr/lib/libSystem.B.dylib'
@@ -13,14 +27,22 @@ current-version: 1351
 compatibility-version: 1
 exports:
   - targets: [ arm64-macos, x86_64-macos ]
-    symbols: [ ___error, ___stack_chk_fail, ___stack_chk_guard, ___stderrp,
-               ___stdinp, ___stdoutp, ___udivti3, ___umodti3,
-               __tlv_bootstrap, _abort, _calloc, _exit, _fclose, _ferror,
-               _fflush, _fgetc, _fopen, _fputc, _fread, _free, _fwrite,
-               _getchar, _localtime_r, _malloc, _memcmp, _memcpy, _memmove,
-               _memset, _nanosleep, _pclose, _popen, _pthread_cond_broadcast,
-               _pthread_cond_init, _pthread_cond_signal, _pthread_cond_wait,
-               _pthread_create, _pthread_detach, _pthread_mutex_init,
-               _pthread_mutex_lock, _pthread_mutex_unlock, _pthread_once,
-               _realloc, _strlen, _time, _vfprintf ]
+    symbols: [ ___error, ___sincos_stret, ___stack_chk_fail, ___stack_chk_guard,
+               ___stderrp, ___stdinp, ___stdoutp, ___udivti3, ___umodti3,
+               __tlv_bootstrap, _abort, _access, _abs, _atoi, _atof, _atol,
+               _bzero, _bsearch, _calloc, _close, _dup, _exit, _fclose,
+               _ferror, _fflush, _fgetc, _fopen, _fputc, _fread, _free,
+               _fwrite, _getchar, _getenv, _getpid, _gettimeofday, _isatty,
+               _kill, _labs, _llabs, _localtime_r, _malloc, _memchr, _memcmp,
+               _memcpy, _memmove, _memset, _memset_pattern4, _memset_pattern8,
+               _memset_pattern16, _nanosleep, _open, _pclose, _pipe, _popen,
+               _pthread_cond_broadcast, _pthread_cond_init, _pthread_cond_signal,
+               _pthread_cond_wait, _pthread_create, _pthread_detach,
+               _pthread_mutex_init, _pthread_mutex_lock, _pthread_mutex_unlock,
+               _pthread_once, _qsort, _read, _realloc, _setenv, _signal, _sleep,
+               _snprintf, _socketpair, _sprintf, _strcat, _strchr, _strcmp,
+               _strcpy, _strdup, _strerror, _strlen, _strncat, _strncmp,
+               _strncpy, _strndup, _strrchr, _strstr, _strtol, _strtoll, _strtoul,
+               _strtoull, _time, _unlink, _usleep, _vfprintf, _wait, _waitpid,
+               _write ]
 ...

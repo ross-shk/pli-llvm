@@ -1,0 +1,19 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A character expression passed to an adjustable-length CHAR(*)
+    parameter is copied into a temp buffer. The buffer must be sized
+    from the value's declared capacity: the live length is a runtime
+    value for a varying actual, and the old fixed 256-byte cap
+    overflowed the stack for a longer one. */
+ char_star_arg: procedure options(main);
+   declare t character(2000) varying;
+   declare n fixed bin(31);
+   t = 'ab';
+   n = show(t || 'c');
+   put skip list(n);
+ end char_star_arg;
+
+ show: procedure(s) returns(fixed bin(31));
+   declare s character(*);
+   return(length(s));
+ end show;

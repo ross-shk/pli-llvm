@@ -10,6 +10,13 @@
 # override path. Copies pli to a temp dir so the build tree stays clean.
 # The float program exercises libm linkage on every OS (musl stubs, mingw
 # import libs, .tbd stubs).
+#
+# The program is also the anti-drift gate for the vendored sysroot's symbol
+# set: it calls every math transcendental, the complex power (which reaches
+# exp/log/atan2/sincos), INDEX (memchr) and COPY (the memset_pattern family).
+# A stub set that does not export those symbols fails the link here — the
+# program used to do plain arithmetic, which constant-folds and needed no
+# libm symbol at all, so an incomplete stub set passed unnoticed.
 set -u
 PLI=${PLI:-./build/cmake/pli}
 PLI_DIR=$(dirname "$PLI")
@@ -20,12 +27,33 @@ cat > "$OUT.pli" <<'EOF'
   sysroot: proc options(main);
      declare x fixed bin(31);
      declare y float bin(53);
+     declare z float bin(53);
+     declare w float bin(53);
+     declare (r, c) complex;
+     declare s char(32);
+     declare t char(6);
+     declare ok fixed bin(31);
      x = 21;
      y = x * 2.0;
-     put skip list('PASS vendor_sysroot', x, y);
+     z = 0.5;
+     c = complex(1.0, 1.0);
+     r = c ** 2;
+     s = 'the quick brown fox';
+     t = copy('ab', 3);
+     w = floor(z) + ceil(z) + sqrt(z) + exp(z) + log(z);
+     w = w + sin(z) + cos(z) + tan(z) + log2(z) + log10(z);
+     w = w + atan(z) + sinh(z) + cosh(z) + tanh(z) + atanh(z);
+     w = w + erf(z) + erfc(z) + asin(z) + acos(z) + cbrt(z);
+     w = w + atan2(z, 1.0) + sind(z) + cosd(z) + tand(z) + atand(z);
+     ok = 0;
+     if abs(real(r)) < 1e-6
+        then if abs(imag(r) - 2.0) < 1e-6
+           then if w > -1000.0 then ok = 1;
+     put skip list('PASS vendor_sysroot', x, y, ok,
+                   index(s, 'quick'), length(t));
   end sysroot;
 EOF
-EXPECT="PASS vendor_sysroot 21 42"
+EXPECT="PASS vendor_sysroot 21 42 1 5 6"
 
 ok=1
 fail() { echo "FAIL: $1"; ok=0; }

@@ -6704,3 +6704,61 @@ the next toolchain; dropping the `-Wl` passthrough test as "expected" — the
 flag is valid and the test is the source of truth (change the compiler, not
 the test); forwarding `-nopie`/`-no-pic` to lld — not lld spellings, an
 explicit error would replace the old no-op.
+
+## ADR-229 — Vendored sysroot stubs cover the codegen's symbol surface, gated by a driver test
+
+**Context.** ADR-226 shipped hand-written macOS SDK stubs whose symbol list was
+derived by hand from `nm -u runtime/*.o` — the undefined symbols of the
+*unoptimized* runtime objects. That derivation misses two whole classes of
+symbol, and the tree went red with 29 of 593 tests failing:
+
+- The runtime ships as **bitcode optimized at link time**. The optimizer
+  introduces libc calls the C source never mentions: `llvm.memset(p, 0, n)`
+  lowers to `_bzero`, a pattern fill to `_memset_pattern4/8/16`, and
+  `llvm.memchr` to `_memchr`. `nm -u` over the runtime objects shows none of
+  them.
+- The **codegen** lowers its math builtins to LLVM intrinsics
+  (`llvm.exp.f64`, `llvm.atan2.f64`, `llvm.tanh.f64`, …), which the backend
+  turns into libm calls: `_exp _atan2 _tanh _acos _asin _tan _sin _cos`. These
+  come from the *user's* program, not the runtime, so no runtime-derived list
+  can contain them.
+- A C-interop program (`ENTRY ... EXTERNAL` into libc) references the POSIX
+  surface directly (`_socketpair _read _write _close`).
+
+A user program that links only against the vendored sysroot therefore failed
+to link, while the test that was supposed to catch it passed: the sysroot
+driver test's program did `x * 2.0`, which constant-folds and needs no libm
+symbol at all. The suite was structurally unable to detect an incomplete stub
+set.
+
+**Decision.** Treat the stub set as the union of three surfaces, and state it
+in the stub file's own header:
+
+1. the embedded runtime's libc calls (derived from the *optimized* bitcode, not
+   the unoptimized objects);
+2. the codegen's LLVM-intrinsic lowerings — the libm and mem-intrinsic entry
+   points the backend emits;
+3. the POSIX surface a C-interop program may reference.
+
+Enforce it with the driver test rather than a build-time script:
+`tests/driver/vendor_sysroot.sh` links against the vendored sysroot *only*
+(both the embedded and the exe-relative override path) and its program now
+calls every math transcendental, the complex power (`exp`/`log`/`atan2`/
+`sincos`), `INDEX` (`memchr`) and `COPY` (the `memset_pattern` family). A stub
+set missing any of those symbols fails the link there.
+
+**Consequences.** The suite is green again (593/593 on macOS, WSL and
+Windows). The stubs grow from 11 + 43 to 38 + 71 symbols — still a small text
+file, and still a strict subset of the real macOS libSystem export list, which
+the linker only consults for names. The test now also guards the *codegen's*
+symbol surface, so a future built-in that lowers to a new libm call fails the
+driver test instead of shipping a broken release binary.
+
+**Rejected.** A build-time script that derives the required set from the
+optimized runtime bitcode — it cannot see the codegen's symbols (those live in
+the user's program IR, so deriving them needs the compiler the script would
+guard) and would give false confidence; a hand-maintained manifest of the
+codegen's libm surface — it drifts exactly like the `nm -u` list did, and a
+manifest the compiler does not read is documentation, not a gate; listing
+*every* real libSystem export in the stub — the stub exists to stay a small
+curated subset of a 9 800-symbol export list.

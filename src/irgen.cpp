@@ -2905,6 +2905,9 @@ llvm::CallInst* IRGen::emitEntryCall(Symbol* sym, std::vector<HExprP>& args, Sou
       *sretPtr = buf;
     callArgs.push_back(buf);
   }
+  // Evaluate each actual once for this call: the scope keeps the materialized
+  // values alive across the argument loop and the hidden length arguments.
+  ActualScope scope(*this);
   for (size_t i = 0; i < args.size() && i < sym->entryParams.size(); ++i) {
     HExpr* a = args[i].get();
     const Type& pty = sym->entryParams[i];
@@ -7293,6 +7296,19 @@ void IRGen::emitGetEditItems(HStmt* s) {
   }
 }
 
+// Evaluate a call actual once (rule 78): reuse the value argAddr recorded for
+// this call site, or evaluate the expression and record it. The hidden
+// CHAR(*) length argument (argLen) reads the record back instead of running
+// the actual a second time.
+Val IRGen::materializeActual(HExpr* a) {
+  auto it = actuals_.find(a);
+  if (it != actuals_.end())
+    return it->second;
+  Val v = emitExpr(a);
+  actuals_.emplace(a, v);
+  return v;
+}
+
 // Address of one call argument for a by-reference parameter (rule 4).
 llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   // A whole-structure argument is passed BY VALUE (rule 127): the source's
@@ -7309,7 +7325,7 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   }
   if (pty.isStruct()) {
     llvm::Value* dst = entryAlloca(llvmTy(pty), "sv");
-    Val av = emitExpr(a);
+    Val av = materializeActual(a);
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(pty)));
     b_.CreateMemCpy(dst, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), sz);
     return dst;
@@ -7342,13 +7358,14 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     // into a temp varying struct so the callee's struct-path read sees a
     // length prefix; the hidden argument carries the same live length as max.
     if (pty.varying && pty.starLen) {
-      Val av0 = emitExpr(a);
+      Val av0 = materializeActual(a);
       if (av0.ty.isChar()) {
-        llvm::ConstantInt* capC =
-            llvm::dyn_cast<llvm::ConstantInt>(av0.len ? av0.len : i64(av0.ty.len));
-        int cap = capC ? static_cast<int>(capC->getZExtValue()) : 256;
-        if (cap <= 0)
-          cap = 1;
+        // The temp is a varying struct {i32 len, [cap x i8] data}. The data
+        // area must hold the live length, so size it from the value's
+        // DECLARED capacity (the data area a varying value carries): the live
+        // length never exceeds it. A fixed 256-byte cap overflowed the stack
+        // for a live length above it.
+        unsigned cap = av0.ty.len > 0 ? (unsigned)av0.ty.len : 1;
         llvm::Type* st = llvm::StructType::get(
             ctx_, {b_.getInt32Ty(), llvm::ArrayType::get(b_.getInt8Ty(), cap)});
         llvm::AllocaInst* tmp = entryAlloca(st, "vstar");
@@ -7363,14 +7380,12 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     // Non-variable character argument (expression/literal): evaluate the
     // expression into a temp buffer of the result's declared capacity, then
     // pass the buffer pointer and its live length via argLen().
-    Val av = emitExpr(a);
+    Val av = materializeActual(a);
     if (av.ty.isChar()) {
-      llvm::ConstantInt* capConst = llvm::dyn_cast<llvm::ConstantInt>(av.len);
-      int cap;
-      if (capConst)
-        cap = static_cast<int>(capConst->getZExtValue());
-      else
-        cap = 256; // fallback for dynamic-length expressions
+      // Size the temp from the value's declared capacity — the live length
+      // (a runtime value for a varying actual) never exceeds it. The old
+      // fixed 256-byte cap overflowed the stack for a longer actual.
+      unsigned cap = av.ty.len > 0 ? (unsigned)av.ty.len : 1;
       llvm::AllocaInst* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
       b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
       return buf;
@@ -7587,7 +7602,9 @@ llvm::Value* IRGen::argLen(HExpr* a, bool ptyVarying) {
     // A fixed char variable's declared length is the caller buffer's capacity.
     return i64(a->sym->ty.len);
   }
-  Val av = emitExpr(a);
+  // A character expression: reuse the value argAddr already materialized for
+  // this call, so the actual is evaluated exactly once (rule 78).
+  Val av = materializeActual(a);
   if (av.ty.isChar())
     return av.len ? av.len : i64(av.ty.len);
   return i64(0);
@@ -7720,6 +7737,10 @@ void IRGen::emitCall(HStmt* s) {
                 : (callee ? callee->retTy : Type::voidTy());
   if (rty.isStruct() || rty.isChar())
     args.push_back(rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret"));
+  // Evaluate each actual once for this call (rule 78): the scope keeps the
+  // materialized values alive across the argument loop and the hidden length
+  // arguments that follow it.
+  ActualScope scope(*this);
   for (size_t i = 0; i < s->args.size(); ++i) {
     HExpr* a = s->args[i].get();
     Type pty;
@@ -7849,6 +7870,8 @@ void IRGen::emitAsyncCall(HStmt* s) {
                 : (callee ? callee->retTy : Type::voidTy());
   if (rty.isStruct() || rty.isChar())
     callArgs.push_back(rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret"));
+  // Evaluate each actual once for this call (rule 78).
+  ActualScope scope(*this);
   for (size_t i = 0; i < s->args.size(); ++i) {
     HExpr* a = s->args[i].get();
     Type pty;
@@ -9703,6 +9726,8 @@ Val IRGen::emitExpr(HExpr* e) {
         sretPtr = sretAlloc(rty);
         args.push_back(sretPtr);
       }
+      // Evaluate each actual once for this call (rule 78).
+      ActualScope scope(*this);
       for (size_t i = 0; i < e->args.size() && i < e->sym->entryParams.size(); ++i) {
         HExpr* a = e->args[i].get();
         Type pty = e->sym->entryParams[i];
@@ -9782,6 +9807,8 @@ Val IRGen::emitExpr(HExpr* e) {
       sretPtr = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
       args.push_back(sretPtr);
     }
+    // Evaluate each actual once for this call (rule 78).
+    ActualScope scope(*this);
     for (size_t i = 0; i < e->args.size(); ++i) {
       HExpr* a = e->args[i].get();
       Type pty;
