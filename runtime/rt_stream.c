@@ -8,25 +8,37 @@
  * formatter sink, unrelated to stdio fputc. */
 
 /* SYSPRINT state. A full implementation tracks page/line/column against
- * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only. */
-_Thread_local int rt_col = 0;
-_Thread_local int rt_in_col = 0;
-_Thread_local int rt_items_on_line = 0;
+ * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only.
+ *
+ * The stream state below is process-global, not thread-local: a CALL ...
+ * TASK (rule (79)) runs its callee on another thread, and a concurrent PUT
+ * from two threads can interleave in the stdout slab. Making the state
+ * thread-local fixes that, but on Mach-O a thread-local access is a
+ * descriptor load plus an indirect call to the TLS resolver, and the
+ * resolver call lands in the output path of every PUT: measured on
+ * benchmarks/io_throughput.pli it costs +69% (20.0 ms -> 33.9 ms for
+ * 200k PUTs), and the cost is per function that touches the state, not
+ * per variable, so grouping the state into one structure does not help.
+ * The race is left as it was until a thread-safe output design that does
+ * not tax the common path exists. */
+int rt_col = 0;
+int rt_in_col = 0;
+int rt_items_on_line = 0;
 /* Data-directed output (rule (106), QR1.5): names emitted in the open DATA
  * list, and a flag suppressing the value's blank separator after NAME=. */
-_Thread_local int rt_data_items = 0;
-_Thread_local int rt_data_value_next = 0;
+int rt_data_items = 0;
+int rt_data_value_next = 0;
 /* Set when get_token terminates at ';' (data-directed pairs, rule (106)),
  * so pli_get_data_next ends the list there. */
-_Thread_local int rt_tok_semi = 0;
+int rt_tok_semi = 0;
 
 /* STRING (rule 105) sink/source: when rt_out_buf is non-null, list-directed output
  * is written into it instead of stdout; when rt_in_buf is non-null, list-directed
  * input is read from it instead of stdin. */
-_Thread_local char *rt_out_buf = NULL;
-_Thread_local size_t rt_out_cap = 0, rt_out_len = 0;
-_Thread_local const char *rt_in_buf = NULL;
-_Thread_local size_t rt_in_len = 0, rt_in_pos = 0;
+char *rt_out_buf = NULL;
+size_t rt_out_cap = 0, rt_out_len = 0;
+const char *rt_in_buf = NULL;
+size_t rt_in_len = 0, rt_in_pos = 0;
 
 /* Named files (rules 100-103, 105): a fixed table indexed by the compile-time
  * slot assigned to each FILE variable. rt_out_f/rt_in_f are the streams selected by
@@ -38,18 +50,18 @@ int rt_pli_nonprint[PLI_MAX_FILES] = {0};
    so the optimizer cannot see through the pli_set_pageno/pli_pageno wrappers
    and eliminate them as dead stores/loads when bitcode is merged at -O2. */
 volatile long long rt_pli_pages[PLI_MAX_FILES] = {0};
-_Thread_local FILE *rt_out_f = NULL;
-_Thread_local FILE *rt_in_f = NULL;
+FILE *rt_out_f = NULL;
+FILE *rt_in_f = NULL;
 /* NONPRINT flag (ADR-204): when rt_out_discard is set, output is discarded
    instead of falling through to stdout. Set by pli_put_select on a NONPRINT file. */
-_Thread_local int rt_out_discard = 0;
+int rt_out_discard = 0;
 
 /* Stdout write buffer (ADR-220): tiny fwrite calls dominate IO-throughput
  * (benchmarks/io_throughput.pli). Accumulate stdout writes in an 8 KiB slab
  * and drain with one fwrite per fill; flush the remainder at rt_fini. */
 #define RT_STDOUT_BUF 8192
-static _Thread_local char rt_stdout_buf[RT_STDOUT_BUF];
-static _Thread_local size_t rt_stdout_pos = 0;
+static char rt_stdout_buf[RT_STDOUT_BUF];
+static size_t rt_stdout_pos = 0;
 
 void rt_flush_stdout(void) {
   if (rt_stdout_pos > 0) {
@@ -799,7 +811,16 @@ static void fmt_gen(Fmt *f, double v, int P) {
   }
 }
 
-static void fmt_fixed_signed(Fmt *f, double v, int p, int plus) {
+/* Out of line: these three carry the infinity guard, and inlining them into
+ * the shared pli_vsnprintf grows the function that the integer output path
+ * also runs through (measured +4.9% on benchmarks/io_throughput.pli). */
+#if defined(_MSC_VER)
+#define PLI_NOINLINE __declspec(noinline)
+#else
+#define PLI_NOINLINE __attribute__((noinline))
+#endif
+
+PLI_NOINLINE static void fmt_fixed_signed(Fmt *f, double v, int p, int plus) {
   if (v != v) {
     fputs_(f, "nan", 3);
     return;
@@ -819,7 +840,7 @@ static void fmt_fixed_signed(Fmt *f, double v, int p, int plus) {
   fmt_fixed(f, v, p);
 }
 
-static void fmt_sci_signed(Fmt *f, double v, int p, int plus) {
+PLI_NOINLINE static void fmt_sci_signed(Fmt *f, double v, int p, int plus) {
   if (v != v) {
     fputs_(f, "nan", 3);
     return;
@@ -839,7 +860,7 @@ static void fmt_sci_signed(Fmt *f, double v, int p, int plus) {
   fmt_sci(f, v, p);
 }
 
-static void fmt_gen_signed(Fmt *f, double v, int P, int plus) {
+PLI_NOINLINE static void fmt_gen_signed(Fmt *f, double v, int P, int plus) {
   if (v != v) {
     fputs_(f, "nan", 3);
     return;
