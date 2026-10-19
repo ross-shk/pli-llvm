@@ -113,8 +113,8 @@ jobs:
           # tar pli alone — no lib/ dir, no shipped clang, no sysroot dirs.
           # The link sysroot is EMBEDDED in the binary (musl on Linux, SDK
           # stubs on macOS); the smoke test below links against the embedded
-          # set. The embed must hold the target arch: populate platform/ from
-          # the arch-native packages before tagging an aarch64 release.
+          # set. The embed holds the target arch from
+          # platform/linux-musl/<arch>/ (checked in for x86_64 and aarch64).
           strip -o build/cmake/pli.stripped build/cmake/pli
           mkdir -p ${{ matrix.platdir }}
           cp build/cmake/pli.stripped ${{ matrix.platdir }}/pli

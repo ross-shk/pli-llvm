@@ -100,7 +100,7 @@ case "$(uname -s)" in
     # --- Linux: musl static, no host CRT ---
     EXE=
     PLI_EXE=pli
-    SYSROOT=platform/linux-musl
+    SYSROOT=platform/linux-musl/$(uname -m)
     OVERRIDE_SRC=$SYSROOT
     OVERRIDE_DST=musl
     HOST_LEAK='/usr/lib.*Scrt1\.o|/usr/lib64'

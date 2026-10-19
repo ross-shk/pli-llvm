@@ -670,11 +670,10 @@ add_dependencies(pli embedded_runtime_inc_default)
 # archives contain only pli(.exe): the link inputs under platform/ are
 # compiled in as byte arrays (scripts/gen_sysroot_embed.py, one TU per file
 # so large archives stay parallel) and materialized to a temp dir at link
-# time (src/hostcrt.cpp). Only the build host's OS set is embedded, and only
-# when the checked-in files match the build arch — an arch gap (or missing
-# sources) embeds an empty table with a warning, and the driver falls back
-# to the host toolchain. aarch64 releases populate the arch-native sysroot
-# dirs before tagging (see .github/workflows/release.yml).
+# time (src/hostcrt.cpp). Only the build host's OS set is embedded; the
+# per-arch dirs under platform/linux-musl/<arch>/ hold the matching files.
+# An unsupported arch (or missing sources) embeds an empty table with a
+# warning, and the driver falls back to the host toolchain.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
   set(PLI_BUILD_ARCH x86_64)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|ARM64|arm64)$")
@@ -688,9 +687,9 @@ set(PLI_SYSROOT_FILES "")
 set(PLI_SYSROOT_KNOWN_OS FALSE)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(PLI_SYSROOT_KNOWN_OS TRUE)
-  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/linux-musl")
+  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/linux-musl/${PLI_BUILD_ARCH}")
   set(PLI_SYSROOT_SET_NAME "musl")
-  if(PLI_BUILD_ARCH STREQUAL "x86_64")
+  if(EXISTS "${PLI_SYSROOT_SRC_DIR}")
     set(PLI_SYSROOT_FILES crt1.o crti.o crtn.o libc.a libdl.a libm.a
         libpthread.a librt.a "libpli_builtins-${PLI_BUILD_ARCH}.a")
   endif()
@@ -725,7 +724,7 @@ if(PLI_SYSROOT_KNOWN_OS AND NOT "${PLI_SYSROOT_MISSING}" STREQUAL "")
   list(REMOVE_ITEM PLI_SYSROOT_FILES ${PLI_SYSROOT_MISSING})
   message(WARNING "link sysroot incomplete under ${PLI_SYSROOT_SRC_DIR} (missing: ${PLI_SYSROOT_MISSING}) — embedding ${PLI_SYSROOT_FILES}; user links fall back to the host toolchain for the rest")
 elseif(PLI_SYSROOT_KNOWN_OS AND PLI_SYSROOT_FILES STREQUAL "")
-  message(WARNING "no embeddable link sysroot for ${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH} — user links use the host toolchain (populate platform/ from arch-native packages before tagging)")
+  message(WARNING "no embeddable link sysroot for ${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH} — user links use the host toolchain (populate the arch-native sysroot dir)")
 endif()
 # Generated TU per file (sanitize mirrors gen_sysroot_embed.py: every
 # non-alphanumeric run becomes '_'). "none" sentinel: an empty set name
