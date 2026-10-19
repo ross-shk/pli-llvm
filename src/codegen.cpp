@@ -148,6 +148,7 @@ bool isPlatformSeamSymbol(const std::string& name) {
       "pli_mutex_init",     "pli_mutex_lock",      "pli_mutex_unlock",  "pli_cond_init",
       "pli_cond_wait",      "pli_cond_signal",     "pli_cond_broadcast", "pli_call_once",
       "pli_spawn",          "pli_spawn_detached",  "pli_thread_detach", "pli_sleep_ms",
+      "pli_mutex_init_recursive",
   };
   if (name.rfind("pli_plat_", 0) == 0)
     return true;

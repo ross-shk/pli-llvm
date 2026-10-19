@@ -2540,7 +2540,7 @@ void IRGen::emitWideDecOut(const char* fn, llvm::Value* wideReg, long long scale
   llvm::Value* lo = b_.CreateTrunc(wideReg, b_.getInt64Ty(), "wdec.lo");
   llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(wideReg, (uint64_t)64, "wdec.shr"),
                                    b_.getInt64Ty(), "wdec.hi");
-  b_.CreateCall(runtimeFn(fn), {lo, hi, i64(scale)});
+  deferPut(fn, {lo, hi, i64(scale)});
 }
 
 // Get (or create) an LLVM intrinsic with an explicit signature. Only used for
@@ -2949,6 +2949,32 @@ llvm::CallInst* IRGen::emitEntryCall(Symbol* sym, std::vector<HExprP>& args, Sou
 // ---------------------------------------------------------------------------
 // module
 // ---------------------------------------------------------------------------
+// True when the statement list holds an asynchronous CALL (rule (79)): the
+// same condition emitCall uses to route to emitAsyncCall.
+static bool stmtHasAsync(const HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::CallS && (s->hasTaskOpt || s->eventRef || s->priorityExpr))
+    return true;
+  if (stmtHasAsync(s->thenS.get()) || stmtHasAsync(s->elseS.get()) || stmtHasAsync(s->unit.get()))
+    return true;
+  for (const auto& st : s->body)
+    if (stmtHasAsync(st.get()))
+      return true;
+  return false;
+}
+
+// True when the program has an asynchronous CALL: then its output statements
+// are written under the output lock, so a task's record reaches the stream
+// whole (ADR-233).
+static bool programHasAsync(HProgram& prog) {
+  for (auto& p : prog.procs)
+    for (auto& st : p->body)
+      if (stmtHasAsync(st.get()))
+        return true;
+  return false;
+}
+
 std::string IRGen::run(HProgram& prog) {
   // Reject unsupported signatures before constructing a partial module.
   for (auto& p : prog.procs) {
@@ -3005,6 +3031,10 @@ std::string IRGen::run(HProgram& prog) {
   // P6.1b (ADR-215): decide by-value parameters once for the whole program
   // so declareProc, emitProc, and every call site agree on signatures.
   computeByValueParams(prog);
+  // ADR-233: a program with an asynchronous CALL (rule (79)) writes to the
+  // stream from more than one thread, so its output statements are bracketed
+  // with the output lock. A program without one keeps the plain path.
+  hasAsync_ = programHasAsync(prog);
   // Pre-declare every procedure's functions/aliases so a call site resolves
   // regardless of the order the (flattened) procedures are emitted in.
   for (auto& p : prog.procs)
@@ -4937,17 +4967,19 @@ void IRGen::emitStmt(HStmt* s) {
     break;
   case HStmt::Display: {
     // Rule (114): one scalar value plus a newline (REPLY stays diagnosed).
+    // ADR-233: the value is evaluated first, then written under the output
+    // lock when the program has a task.
     Val v = emitExpr(s->value.get());
     switch (v.ty.k) {
     case TK::Char:
-      b_.CreateCall(runtimeFn("pli_display_char"), {v.ptr, v.len});
+      deferPut("pli_display_char", {v.ptr, v.len});
       break;
     case TK::Float:
-      b_.CreateCall(runtimeFn("pli_display_float"), {v.reg});
+      deferPut("pli_display_float", {v.reg});
       break;
     case TK::Bit: {
       llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-      b_.CreateCall(runtimeFn("pli_display_bit"), {bit});
+      deferPut("pli_display_bit", {bit});
       break;
     }
     case TK::FixedBin:
@@ -4956,23 +4988,24 @@ void IRGen::emitStmt(HStmt* s) {
         if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
           emitWideDecOut("pli_display_decfixed128", v.reg, v.ty.scale);
         else
-          b_.CreateCall(runtimeFn("pli_display_decfixed"), {toI64(v), i64(v.ty.scale)});
+          deferPut("pli_display_decfixed", {toI64(v), i64(v.ty.scale)});
       } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
         emitWideDecOut("pli_display_decfixed128", v.reg, 0);
       } else {
-        b_.CreateCall(runtimeFn("pli_display_fixed"), {toI64(v)});
+        deferPut("pli_display_fixed", {toI64(v)});
       }
       break;
     case TK::Pointer:
       d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
       break;
     case TK::Complex:
-      b_.CreateCall(runtimeFn("pli_display_complex"), {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                                                       b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+      deferPut("pli_display_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
+                                       b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
       break;
     default:
       break; // array/struct operands are diagnosed by sema
     }
+    endOutput();
     break;
   }
   case HStmt::Get:
@@ -6653,7 +6686,7 @@ void IRGen::emitPutDataItems(HStmt* s) {
       emitPutDataScalar(t, t->sym->name);
     }
   }
-  b_.CreateCall(runtimeFn("pli_put_data_end"), {});
+  deferPut("pli_put_data_end", {});
 }
 
 void IRGen::emitPutDataStruct(HExpr* t, const std::string& prefix) {
@@ -6678,18 +6711,18 @@ void IRGen::emitPutDataStruct(HExpr* t, const std::string& prefix) {
 
 void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
   llvm::Value* nameVal = globalString(name);
-  b_.CreateCall(runtimeFn("pli_put_data_name"), {nameVal, i64((long long)name.size())});
+  deferPut("pli_put_data_name", {nameVal, i64((long long)name.size())});
   Val v = emitExpr(t);
   switch (v.ty.k) {
   case TK::Char:
-    b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
+    deferPut("pli_put_list_char", {v.ptr, v.len});
     break;
   case TK::Float:
-    b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
+    deferPut("pli_put_list_float", {v.reg});
     break;
   case TK::Bit: {
     llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-    b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
+    deferPut("pli_put_list_bit", {bit});
     break;
   }
   case TK::FixedBin:
@@ -6698,11 +6731,11 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
       if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
         emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
       else
-        b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
+        deferPut("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
     } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
       emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
     } else {
-      b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+      deferPut("pli_put_list_fixed", {toI64(v)});
     }
     break;
   default:
@@ -6710,21 +6743,63 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Output statements and the output lock (ADR-233)
+// ---------------------------------------------------------------------------
+
+// Record one output call. A program with a task defers it to the end of the
+// statement (so the whole record is written under one lock); a program
+// without one emits it in place.
+void IRGen::deferPut(const char* fn, std::vector<llvm::Value*> args, bool capture) {
+  llvm::Function* f = runtimeFn(fn);
+  if (!hasAsync_) {
+    llvm::Value* r = b_.CreateCall(f, args);
+    if (capture)
+      lastPutResult_ = r;
+    return;
+  }
+  pendingPuts_.push_back({f, std::move(args), capture});
+}
+
+// Write the deferred calls of the statement under the output lock and release
+// it. The lock is taken here, after the statement's expressions have been
+// evaluated, so an item expression that blocks on another task never holds
+// it. Returns the result of the last captured call (the STRING close reports
+// the characters written).
+llvm::Value* IRGen::endOutput() {
+  if (!hasAsync_)
+    return lastPutResult_;
+  b_.CreateCall(runtimeFn("pli_out_begin"), {});
+  llvm::Value* last = nullptr;
+  for (auto& p : pendingPuts_) {
+    last = b_.CreateCall(p.fn, p.args);
+    if (p.capture)
+      lastPutResult_ = last;
+  }
+  pendingPuts_.clear();
+  b_.CreateCall(runtimeFn("pli_out_end"), {});
+  return lastPutResult_;
+}
+
 void IRGen::emitPut(HStmt* s) {
+  // ADR-233: the statement's expressions are evaluated first and the writes
+  // are deferred to the end of the statement, so the whole record reaches the
+  // stream under one lock and a blocking item expression never holds it.
+  lastPutResult_ = nullptr;
   // FILE ( f ) (rule 105): route the list-directed output through the named
   // file's stream instead of SYSPRINT. Select before page/skip so all output
   // goes to the named file.
   if (s->fileSym)
-    b_.CreateCall(runtimeFn("pli_put_select"), {i64(s->fileSym->fileSlot)});
+    deferPut("pli_put_select", {i64(s->fileSym->fileSlot)});
   if (s->page)
-    b_.CreateCall(runtimeFn("pli_put_page"), {});
+    deferPut("pli_put_page", {});
   if (s->skip) {
     llvm::Value* n = i64(1);
     if (s->skipCount) {
       Val v = emitExpr(s->skipCount.get());
       n = toI64(v);
     }
-    b_.CreateCall(runtimeFn("pli_put_skip"), {n});
+    deferPut("pli_put_skip", {n});
   }
   // STRING (rule 105) sink: route the list-directed output into the character
   // variable instead of SYSPRINT.
@@ -6746,7 +6821,7 @@ void IRGen::emitPut(HStmt* s) {
           st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
       slen = i64(st->ty.len);
     }
-    b_.CreateCall(runtimeFn("pli_string_put_open"), {sdata, slen});
+    deferPut("pli_string_put_open", {sdata, slen});
   }
   if (s->edit) {
     emitPutEditItems(s);
@@ -6757,14 +6832,14 @@ void IRGen::emitPut(HStmt* s) {
       Val v = emitExpr(item.get());
       switch (v.ty.k) {
       case TK::Char:
-        b_.CreateCall(runtimeFn("pli_put_list_char"), {v.ptr, v.len});
+        deferPut("pli_put_list_char", {v.ptr, v.len});
         break;
       case TK::Float:
-        b_.CreateCall(runtimeFn("pli_put_list_float"), {v.reg});
+        deferPut("pli_put_list_float", {v.reg});
         break;
       case TK::Bit: {
         llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-        b_.CreateCall(runtimeFn("pli_put_list_bit"), {bit});
+        deferPut("pli_put_list_bit", {bit});
         break;
       }
       case TK::FixedBin:
@@ -6773,11 +6848,11 @@ void IRGen::emitPut(HStmt* s) {
           if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
             emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
           else
-            b_.CreateCall(runtimeFn("pli_put_list_decfixed"), {toI64(v), i64(v.ty.scale)});
+            deferPut("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
         } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
           emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
         } else {
-          b_.CreateCall(runtimeFn("pli_put_list_fixed"), {toI64(v)});
+          deferPut("pli_put_list_fixed", {toI64(v)});
         }
         break;
       case TK::Void:
@@ -6796,9 +6871,8 @@ void IRGen::emitPut(HStmt* s) {
         break;
       case TK::Complex:
         // Complex output (CM5): real, sign, imaginary magnitude, I.
-        b_.CreateCall(
-            runtimeFn("pli_put_list_complex"),
-            {b_.CreateExtractValue(v.cpx, 0, "cpx.re"), b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+        deferPut("pli_put_list_complex",
+                 {b_.CreateExtractValue(v.cpx, 0, "cpx.re"), b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
         break;
       case TK::Task:
       case TK::Event:
@@ -6811,15 +6885,16 @@ void IRGen::emitPut(HStmt* s) {
       }
     }
   }
-  if (s->stringTarget) {
-    llvm::Value* written = b_.CreateCall(runtimeFn("pli_string_put_close"), {sdata, slen});
-    if (isVarying) {
-      // Store the actual length written into the varying string's length prefix
-      b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), slenPrefix);
-    }
-  }
+  if (s->stringTarget)
+    deferPut("pli_string_put_close", {sdata, slen}, /*capture=*/true);
   if (s->fileSym)
-    b_.CreateCall(runtimeFn("pli_put_unselect"), {});
+    deferPut("pli_put_unselect", {});
+  // Write the record: under the output lock when the program has a task.
+  llvm::Value* written = endOutput();
+  if (s->stringTarget && isVarying) {
+    // Store the actual length written into the varying string's length prefix
+    b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), slenPrefix);
+  }
 }
 
 // GET DATA (rule (106), QR1.5): read NAME=value pairs in any order, storing
@@ -7032,34 +7107,34 @@ void IRGen::emitPutEditItems(HStmt* s) {
     if (sub.s)
       (void)toI64(emitExpr(sub.s.get())); // scale evaluated for effects (50)
     if (sub.kind == HFormatItem::E)
-      b_.CreateCall(runtimeFn("pli_put_edit_float_e"), {dbl, w, d});
+      deferPut("pli_put_edit_float_e", {dbl, w, d});
     else
-      b_.CreateCall(runtimeFn("pli_put_edit_float"), {dbl, w, d});
+      deferPut("pli_put_edit_float", {dbl, w, d});
   };
   for (auto& f : s->formats) {
     switch (f.kind) {
     case HFormatItem::X: {
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      b_.CreateCall(runtimeFn("pli_put_edit_x"), {w});
+      deferPut("pli_put_edit_x", {w});
       break;
     }
     case HFormatItem::Skip: {
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      b_.CreateCall(runtimeFn("pli_put_edit_skip"), {n});
+      deferPut("pli_put_edit_skip", {n});
       break;
     }
     case HFormatItem::Page:
-      b_.CreateCall(runtimeFn("pli_put_edit_page"), {});
+      deferPut("pli_put_edit_page", {});
       break;
     case HFormatItem::Line: {
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      b_.CreateCall(runtimeFn("pli_put_edit_line"), {n});
+      deferPut("pli_put_edit_line", {n});
       break;
     }
     case HFormatItem::Column: {
       // Column positioning (rule (48)): pad blanks to 1-based column n.
       llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      b_.CreateCall(runtimeFn("pli_put_edit_column"), {n});
+      deferPut("pli_put_edit_column", {n});
       break;
     }
     case HFormatItem::Remote:
@@ -7071,7 +7146,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      b_.CreateCall(runtimeFn("pli_put_edit_char"), {v.ptr, v.len, w});
+      deferPut("pli_put_edit_char", {v.ptr, v.len, w});
       break;
     }
     case HFormatItem::B: {
@@ -7097,7 +7172,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
         b_.CreateStore(v.reg, tmp);
       }
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
-      b_.CreateCall(runtimeFn("pli_put_edit_bit"), {ptr, i64(nbits), w});
+      deferPut("pli_put_edit_bit", {ptr, i64(nbits), w});
       break;
     }
     case HFormatItem::C: {
@@ -7127,10 +7202,10 @@ void IRGen::emitPutEditItems(HStmt* s) {
       if (f.s)
         (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
       if (v.ty.k == TK::Float) {
-        b_.CreateCall(runtimeFn("pli_put_edit_float"), {v.reg, w, d});
+        deferPut("pli_put_edit_float", {v.reg, w, d});
       } else {
         llvm::Value* scale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
-        b_.CreateCall(runtimeFn("pli_put_edit_fixed"), {toI64(v), scale, w, d});
+        deferPut("pli_put_edit_fixed", {toI64(v), scale, w, d});
       }
       break;
     }
@@ -7143,7 +7218,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
       llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
       if (f.s)
         (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
-      b_.CreateCall(runtimeFn("pli_put_edit_float_e"), {v.reg, w, d});
+      deferPut("pli_put_edit_float_e", {v.reg, w, d});
       break;
     }
     case HFormatItem::P: {
@@ -7159,15 +7234,15 @@ void IRGen::emitPutEditItems(HStmt* s) {
         // sign derived from the value: -1 if negative, +1 if non-negative.
         llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
         llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
-        b_.CreateCall(runtimeFn("pli_put_edit_pic"),
-                      {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
+        deferPut("pli_put_edit_pic",
+                 {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
       } else if (v.ty.k == TK::Float) {
         // Convert float to fixed-decimal via truncation.
         llvm::Value* val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
         llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picfsn");
         llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picfs");
-        b_.CreateCall(runtimeFn("pli_put_edit_pic"),
-                      {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
+        deferPut("pli_put_edit_pic",
+                 {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
       } else {
         d_.error(item->loc, "P edit item requires a numeric value", "(53)");
       }

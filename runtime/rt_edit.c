@@ -24,6 +24,7 @@ void pli_put_edit_fixed(long long v, long long scale, long long w, long long d) 
   if (d < 0) d = 0;
   if (d > 60) d = 60;
   if (scale < 0) scale = 0;
+  rt_out_lock();
   /* 10^scale: the largest power of ten an i64 holds is 10^18. */
   unsigned long long sf = 1;
   for (long long i = 0; i < scale && i < 18; ++i) sf *= 10;
@@ -90,6 +91,7 @@ void pli_put_edit_fixed(long long v, long long scale, long long w, long long d) 
   }
   *p = '\0';
   put_field(buf, (size_t)(p - buf), w);
+  rt_out_unlock();
 }
 
 /* F(w,d) on a FLOAT value: d fractional digits, right-justified in width w. */
@@ -98,7 +100,9 @@ void pli_put_edit_float(double v, long long w, long long d) {
   if (d > 60) d = 60;
   char buf[128];
   int n = pli_snprintf(buf, sizeof buf, "%.*f", (int)d, v);
+  rt_out_lock();
   put_field(buf, (size_t)n, w);
+  rt_out_unlock();
 }
 
 /* E(w,d) on a FLOAT value: scientific notation with one leading digit, d
@@ -113,11 +117,17 @@ void pli_put_edit_float_e(double v, long long w, long long d) {
   char buf[128];
   char *p = buf;
   const char *q = tmp;
+  rt_out_lock();
   if (*q == '-') { *p++ = *q++; }        /* sign */
   const char *dot = pli_strchr(q, 'e');
   size_t mant = (size_t)(dot ? dot - q : pli_strlen(q));
   pli_memcpy(p, q, mant); p += mant;          /* d.dddd mantissa */
-  if (!dot) { *p = '\0'; put_field(buf, (size_t)(p - buf), w); return; }
+  if (!dot) {
+    *p = '\0';
+    put_field(buf, (size_t)(p - buf), w);
+    rt_out_unlock();
+    return;
+  }
   const char *e = dot + 1;                /* e.g. "+04" or "-12" */
   int ex = (int)pli_strtoll(e, NULL, 10);
   int neg = ex < 0;
@@ -127,21 +137,26 @@ void pli_put_edit_float_e(double v, long long w, long long d) {
   if (ex < 10) *p++ = '0';
   p += pli_snprintf(p, (size_t)(buf + sizeof buf - p), "%d", ex);
   put_field(buf, (size_t)(p - buf), w);
+  rt_out_unlock();
 }
 
 /* A(w): a character value right-justified in width w, truncated on the right
  * when longer than the field. */
 void pli_put_edit_char(const char *p, long long len, long long w) {
   long long take = len < w ? len : w;
+  rt_out_lock();
   if (w > take)
     for (long long i = take; i < w; ++i) rt_put_raw(" ", 1);
   if (take > 0)
     rt_put_raw(p, (size_t)take);
+  rt_out_unlock();
 }
 
 /* X(w): w blank characters. */
 void pli_put_edit_x(long long w) {
+  rt_out_lock();
   for (long long i = 0; i < w; ++i) rt_put_raw(" ", 1);
+  rt_out_unlock();
 }
 
 /* COLUMN(n) (rule (48)): the next item starts at 1-based column n; pad
@@ -149,28 +164,38 @@ void pli_put_edit_x(long long w) {
 void pli_put_edit_column(long long n) {
   if (n < 1)
     n = 1;
+  rt_out_lock();
   if (rt_col > 0 && rt_col + 1 > (int)n) {
     rt_put_raw("\n", 1);
     rt_col = 0;
   }
   while (rt_col + 1 < (int)n)
     rt_put_raw(" ", 1);
+  rt_out_unlock();
 }
 
 /* SKIP(n): advance to the start of a line and then n-1 further lines. */
 void pli_put_edit_skip(long long n) {
   if (n < 1) n = 1;
+  rt_out_lock();
   for (long long i = 0; i < n; ++i) rt_put_raw("\n", 1);
+  rt_out_unlock();
 }
 
 /* PAGE: a form feed. */
-void pli_put_edit_page(void) { rt_put_raw("\f", 1); }
+void pli_put_edit_page(void) {
+  rt_out_lock();
+  rt_put_raw("\f", 1);
+  rt_out_unlock();
+}
 
 /* LINE(n): advance so the next item is on line n (1-based). A line counter is
  * not tracked, so this emits (n-1) newlines as an approximation. */
 void pli_put_edit_line(long long n) {
   if (n < 1) n = 1;
+  rt_out_lock();
   for (long long i = 1; i < n; ++i) rt_put_raw("\n", 1);
+  rt_out_unlock();
 }
 
 /* Edit-directed input (rules (108),(44)-(54)). */
@@ -217,6 +242,7 @@ void pli_put_edit_bit(const char *p, long long nbits, long long w) {
     nbits = 0;
   if (w < nbits)
     w = nbits;
+  rt_out_lock();
   for (long long i = nbits; i < w; ++i)
     rt_put_raw(" ", 1);
   for (long long i = 0; i < nbits; ++i) {
@@ -224,6 +250,7 @@ void pli_put_edit_bit(const char *p, long long nbits, long long w) {
     int bit = (byte >> (7 - (i % 8))) & 1;
     rt_put_raw(bit ? "1" : "0", 1);
   }
+  rt_out_unlock();
 }
 
 /* B(w) input (rule (52)): read a w-character field, collect '0'/'1' (leading
@@ -293,6 +320,7 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
     return;
   int isneg = sign < 0;
   long long av = isneg ? -val : val;
+  rt_out_lock();
 
   /* Decompose |val| into big-endian decimal digits. */
   long long digits[64];
@@ -401,5 +429,6 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
   }
   outbuf[ocap] = '\0';
   rt_put_raw(outbuf, oi);
+  rt_out_unlock();
 }
 

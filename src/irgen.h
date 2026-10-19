@@ -188,6 +188,26 @@ private:
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
   void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
+  // ADR-233: the output calls of one statement, deferred so the whole record
+  // is written under the output lock. A program without a task emits the call
+  // in place - no deferral, no lock, no cost.
+  struct PendingPut {
+    llvm::Function* fn;
+    std::vector<llvm::Value*> args;
+    bool capture = false; // keep the call's result (the STRING close)
+  };
+  std::vector<PendingPut> pendingPuts_;
+  // True when the program has an asynchronous CALL (rule (79)): then every
+  // output statement is written under the output lock.
+  bool hasAsync_ = false;
+  // The result of the last captured output call.
+  llvm::Value* lastPutResult_ = nullptr;
+  // Record one output call; a program with a task writes it at the end of the
+  // statement, under the output lock, a program without one writes it in place.
+  void deferPut(const char* fn, std::vector<llvm::Value*> args, bool capture = false);
+  // Write the deferred calls of the statement under the output lock and
+  // release it. Returns the result of the last captured call.
+  llvm::Value* endOutput();
   // Edit-directed transmission (rule (108)): walk the format list, pairing each
   // data item with its A/F format and emitting the control (X/SKIP/PAGE/LINE)
   // items in order.

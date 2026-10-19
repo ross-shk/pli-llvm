@@ -21,6 +21,12 @@ PLI_FN(pli_rt_init, VOID, (VOID))                     /* program prologue */
 PLI_FN(pli_rt_fini, VOID, (VOID))                     /* program epilogue */
 PLI_FN(pli_stop, VOID, (VOID))                        /* STOP, rule (85) */
 
+/* Output serialisation (ADR-233): the compiler brackets one output statement
+ * with these calls when the program has a task, so the whole record is
+ * written under the output lock. Both are no-ops without a task. */
+PLI_FN(pli_out_begin, VOID, (VOID))
+PLI_FN(pli_out_end, VOID, (VOID))
+
 PLI_FN(pli_put_skip, VOID, (I64))                     /* list-directed (104-109) */
 PLI_FN(pli_put_page, VOID, (VOID))
 PLI_FN(pli_put_list_char, VOID, (CPTR, I64))

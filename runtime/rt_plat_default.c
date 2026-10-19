@@ -87,6 +87,8 @@ int pli_plat_fprintf(FILE *fp, const char *fmt, ...) {
 void pli_mutex_init(pli_mutex *m) { InitializeCriticalSection(m); }
 void pli_mutex_lock(pli_mutex *m) { EnterCriticalSection(m); }
 void pli_mutex_unlock(pli_mutex *m) { LeaveCriticalSection(m); }
+/* Recursive mutex: a CRITICAL_SECTION is recursive by nature. */
+void pli_mutex_init_recursive(pli_mutex *m) { InitializeCriticalSection(m); }
 /* Condition broadcast/wait paired with the mutex above. */
 void pli_cond_init(pli_cond *c) { InitializeConditionVariable(c); }
 void pli_cond_wait(pli_cond *c, pli_mutex *m) { SleepConditionVariableCS(c, m, INFINITE); }
@@ -154,6 +156,14 @@ void pli_sleep_ms(long long ms) {
 void pli_mutex_init(pli_mutex *m) { pthread_mutex_init(m, NULL); }
 void pli_mutex_lock(pli_mutex *m) { pthread_mutex_lock(m); }
 void pli_mutex_unlock(pli_mutex *m) { pthread_mutex_unlock(m); }
+/* Recursive mutex: the output serialiser takes its lock nested. */
+void pli_mutex_init_recursive(pli_mutex *m) {
+  pthread_mutexattr_t attr;
+  pthread_mutexattr_init(&attr);
+  pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(m, &attr);
+  pthread_mutexattr_destroy(&attr);
+}
 /* Condition broadcast/wait paired with the mutex above. */
 void pli_cond_init(pli_cond *c) { pthread_cond_init(c, NULL); }
 void pli_cond_wait(pli_cond *c, pli_mutex *m) { pthread_cond_wait(c, m); }

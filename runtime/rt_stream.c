@@ -12,15 +12,14 @@
  *
  * The stream state below is process-global, not thread-local: a CALL ...
  * TASK (rule (79)) runs its callee on another thread, and a concurrent PUT
- * from two threads can interleave in the stdout slab. Making the state
- * thread-local fixes that, but on Mach-O a thread-local access is a
- * descriptor load plus an indirect call to the TLS resolver, and the
- * resolver call lands in the output path of every PUT: measured on
- * benchmarks/io_throughput.pli it costs +69% (20.0 ms -> 33.9 ms for
- * 200k PUTs), and the cost is per function that touches the state, not
- * per variable, so grouping the state into one structure does not help.
- * The race is left as it was until a thread-safe output design that does
- * not tax the common path exists. */
+ * from two threads can interleave in the stdout slab. The output serialiser
+ * below (ADR-233) fixes that with one recursive mutex around the output
+ * path. Making the state thread-local would fix it too, but on Mach-O a
+ * thread-local access is a descriptor load plus an indirect call to the TLS
+ * resolver, and the resolver call lands in the output path of every PUT:
+ * measured on benchmarks/io_throughput.pli it costs +69% (20.0 ms -> 33.9 ms
+ * for 200k PUTs), and the cost is per function that touches the state, not
+ * per variable, so grouping the state into one structure does not help. */
 int rt_col = 0;
 int rt_in_col = 0;
 int rt_items_on_line = 0;
@@ -63,13 +62,51 @@ int rt_out_discard = 0;
 static char rt_stdout_buf[RT_STDOUT_BUF];
 static size_t rt_stdout_pos = 0;
 
+/* ---------------------------------------------------------------------------
+ * Output serialisation (ADR-233).
+ *
+ * One recursive mutex guards the whole output path once the program has a
+ * task. The mutex is recursive because the item writers call the byte writer
+ * (rt_put_raw), which is itself an internal helper under the caller's lock.
+ *
+ * The serialiser stays off until the first task spawn: a program that never
+ * spawns a task pays one predictable branch per write and no lock at all.
+ * The flag is written exactly once, inside the one-time init, so no two
+ * threads ever write it; the task threads read it after their pthread_create,
+ * which orders the read after the write.
+ * ------------------------------------------------------------------------- */
+pli_mutex rt_out_mu;
+static pli_once rt_out_once = PLI_ONCE_INIT;
+volatile int rt_out_serialised = 0;
+
+/* One-time init: the mutex first, then the flag that turns the serialiser on
+ * (a lock attempt must never find an uninitialised mutex). */
+static void rt_out_init(void) {
+  pli_mutex_init_recursive(&rt_out_mu);
+  rt_out_serialised = 1;
+}
+
+/* Called by the task spawn before the thread is created. */
+void rt_out_enable_threads(void) { pli_call_once(&rt_out_once, rt_out_init); }
+
+/* One output statement under the lock (ADR-233): the compiler brackets a PUT
+ * or DISPLAY statement with these, so the whole record reaches the stream
+ * before another task's record does. No-ops until the program has a task. */
+void pli_out_begin(void) { rt_out_lock(); }
+void pli_out_end(void) { rt_out_unlock(); }
+
 void rt_flush_stdout(void) {
+  rt_out_lock();
   if (rt_stdout_pos > 0) {
     pli_plat_fwrite(rt_stdout_buf, 1, rt_stdout_pos, stdout);
     rt_stdout_pos = 0;
   }
+  rt_out_unlock();
 }
 
+/* The byte writer. The caller holds the output lock (rt_out_lock): every
+ * public output entry point brackets its writes, so the slab, the column and
+ * the item count stay consistent when a task writes concurrently. */
 void rt_put_raw(const char *p, size_t n) {
   if (rt_out_f) {
     pli_plat_fwrite(p, 1, n, rt_out_f);
@@ -116,11 +153,13 @@ int rt_next_char(void) {
 }
 
 void pli_put_skip(long long n) {
+  rt_out_lock();
   if (n < 1) n = 1;
   if (rt_out_f) {
     for (long long i = 0; i < n; ++i) rt_put_raw("\n", 1);
     rt_col = 0;
     rt_items_on_line = 0;
+    rt_out_unlock();
     return;
   }
   if (rt_col > 0) {
@@ -129,18 +168,22 @@ void pli_put_skip(long long n) {
   }
   for (long long i = 1; i < n; ++i) rt_put_raw("\n", 1);
   rt_items_on_line = 0;
+  rt_out_unlock();
 }
 
 void pli_put_page(void) {
+  rt_out_lock();
   if (rt_col > 0) rt_put_raw("\n", 1);
   rt_put_raw("\f", 1);
   rt_col = 0;
   rt_items_on_line = 0;
+  rt_out_unlock();
 }
 
 /* List-directed output separates successive items by a blank; character
  * values are written without enclosing quotation marks. After a DATA name
- * the value follows its '=' directly, with no blank. */
+ * the value follows its '=' directly, with no blank.
+ * The caller holds the output lock (ADR-233). */
 void rt_separate(void) {
   if (rt_data_value_next) {
     rt_data_value_next = 0;
@@ -152,12 +195,15 @@ void rt_separate(void) {
 }
 
 void pli_put_list_char(const char *p, long long len) {
+  rt_out_lock();
   separate();
   if (len > 0) rt_put_raw(p, (size_t)len);
+  rt_out_unlock();
 }
 
 /* DISPLAY (rule 114, ADR-081): one scalar value plus a newline, with the
- * same value formats as list-directed output but no item separator. */
+ * same value formats as list-directed output but no item separator.
+ * rt_display_begin/rt_display_end run under the caller's output lock. */
 void rt_display_end(void) {
   // The line is complete: reset the column and item count so fini and a
   // following PUT start clean.
@@ -175,42 +221,54 @@ void rt_display_begin(void) {
   rt_items_on_line = 0;
 }
 void pli_display_char(const char *p, long long len) {
+  rt_out_lock();
   display_begin();
   if (len > 0) rt_put_raw(p, (size_t)len);
   display_end();
+  rt_out_unlock();
 }
 void pli_display_fixed(long long v) {
   char buf[32];
   int n = pli_snprintf(buf, sizeof buf, "%lld", v);
+  rt_out_lock();
   display_begin();
   rt_put_raw(buf, (size_t)n);
   display_end();
+  rt_out_unlock();
 }
 void pli_display_float(double v) {
   char buf[64];
   int n = pli_snprintf(buf, sizeof buf, "%.6g", v);
+  rt_out_lock();
   display_begin();
   rt_put_raw(buf, (size_t)n);
   display_end();
+  rt_out_unlock();
 }
 void pli_display_bit(unsigned char b) {
+  rt_out_lock();
   display_begin();
   rt_put_raw(b ? "1" : "0", 1);
   display_end();
+  rt_out_unlock();
 }
 void pli_display_complex(double re, double im) {
   char buf[128];
   int n = pli_snprintf(buf, sizeof buf, "%.6g%+.6gI", re, im);
+  rt_out_lock();
   display_begin();
   rt_put_raw(buf, (size_t)n);
   display_end();
+  rt_out_unlock();
 }
 
 void pli_put_list_fixed(long long v) {
   char buf[32];
   int n = pli_snprintf(buf, sizeof buf, "%lld", v);
+  rt_out_lock();
   separate();
   rt_put_raw(buf, (size_t)n);
+  rt_out_unlock();
 }
 
 /* CHAR(fixed): decimal image of v, blank-padded to dstcap. */
@@ -351,15 +409,19 @@ done:
 void pli_put_list_decfixed(long long v, long long q) {
   char buf[80];
   format_decfixed(buf, sizeof buf, v, q);
+  rt_out_lock();
   separate();
   rt_put_raw(buf, pli_strlen(buf));
+  rt_out_unlock();
 }
 void pli_display_decfixed(long long v, long long q) {
   char buf[80];
   format_decfixed(buf, sizeof buf, v, q);
+  rt_out_lock();
   display_begin();
   rt_put_raw(buf, pli_strlen(buf));
   display_end();
+  rt_out_unlock();
 }
 
 /* Print a 128-bit magnitude into buf (caller ensures room); returns count.
@@ -429,16 +491,20 @@ void pli_put_list_decfixed128(long long lo, long long hi, long long q) {
   char buf[128];
   PliI128 v = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
   rt_format_decfixed128(buf, sizeof buf, v, q);
+  rt_out_lock();
   separate();
   rt_put_raw(buf, pli_strlen(buf));
+  rt_out_unlock();
 }
 void pli_display_decfixed128(long long lo, long long hi, long long q) {
   char buf[128];
   PliI128 v = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
   rt_format_decfixed128(buf, sizeof buf, v, q);
+  rt_out_lock();
   display_begin();
   rt_put_raw(buf, pli_strlen(buf));
   display_end();
+  rt_out_unlock();
 }
 
 /* r >> scale for the portable 128-bit type (scale < 64). */
@@ -474,6 +540,7 @@ void pli_put_list_fixed_scaled(long long v, long long scale) {
   int n = pli_snprintf(p, sizeof buf - (size_t)(p - buf), "%lld", v / (long long)factor);
   p += n;
   unsigned long long rem = (unsigned long long)v % factor;
+  rt_out_lock();
   if (rem != 0) {
     *p++ = '.';
     char digit[64];
@@ -493,44 +560,55 @@ void pli_put_list_fixed_scaled(long long v, long long scale) {
   }
   separate();
   rt_put_raw(buf, (size_t)(p - buf));
+  rt_out_unlock();
 }
 
 void pli_put_list_float(double v) {
   char buf[64];
   /* PL/I would use E-format for FLOAT; %.6g keeps the wireframe readable. */
   int n = pli_snprintf(buf, sizeof buf, "%.6g", v);
+  rt_out_lock();
   separate();
   rt_put_raw(buf, (size_t)n);
+  rt_out_unlock();
 }
 
 void pli_put_list_bit(unsigned char b) {
+  rt_out_lock();
   separate();
   rt_put_raw(b ? "1" : "0", 1);
+  rt_out_unlock();
 }
 
 /* Complex output (CM5, ADR-085): real part, sign, imaginary magnitude, I. */
 void pli_put_list_complex(double re, double im) {
   char buf[128];
   int n = pli_snprintf(buf, sizeof buf, "%.6g%+.6gI", re, im);
+  rt_out_lock();
   separate();
   rt_put_raw(buf, (size_t)n);
+  rt_out_unlock();
 }
 
 /* Data-directed output (rule (106), QR1.5): `NAME=` opens an item (", "
  * between items) and the value follows with no blank; `;` closes the list. */
 void pli_put_data_name(const char *p, long long len) {
+  rt_out_lock();
   if (rt_data_items > 0) rt_put_raw(", ", 2);
   if (len > 0) rt_put_raw(p, (size_t)len);
   rt_put_raw("=", 1);
   rt_data_items++;
   rt_data_value_next = 1;
+  rt_out_unlock();
 }
 
 void pli_put_data_end(void) {
+  rt_out_lock();
   rt_put_raw(";", 1);
   rt_items_on_line++;
   rt_data_items = 0;
   rt_data_value_next = 0;
+  rt_out_unlock();
 }
 
 /* ---------------------------------------------------------------------------

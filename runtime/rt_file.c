@@ -7,21 +7,25 @@
  * pli_plat_fread/pli_plat_fwrite (the platform seam). */
 
 void pli_string_put_open(char *buf, long long cap) {
+  rt_out_lock();
   rt_out_buf = buf;
   rt_out_cap = (size_t)cap;
   rt_out_len = 0;
   rt_items_on_line = 0;
+  rt_out_unlock();
 }
 
 /* End a STRING PUT: blank-pad the unused tail, then return to SYSPRINT.
  * Returns the number of characters written. */
 long long pli_string_put_close(char *buf, long long cap) {
   (void)buf;
+  rt_out_lock();
   size_t len = rt_out_len;
   if (rt_out_buf && rt_out_len < (size_t)cap)
     pli_memset(rt_out_buf + rt_out_len, ' ', (size_t)cap - rt_out_len);
   rt_out_buf = NULL;
   rt_out_cap = rt_out_len = 0;
+  rt_out_unlock();
   return (long long)len;
 }
 
@@ -88,6 +92,7 @@ void pli_put_select(long long slot) {
   /* ADR-220: drain any buffered stdout before routing to a named file so
    * output ordering stays correct. */
   rt_flush_stdout();
+  rt_out_lock();
   if (slot >= 0 && slot < PLI_MAX_FILES && !rt_pli_nonprint[slot])
     rt_out_f = rt_pli_files[slot];
   else
@@ -95,11 +100,14 @@ void pli_put_select(long long slot) {
   rt_out_discard = (slot >= 0 && slot < PLI_MAX_FILES && rt_pli_nonprint[slot]);
   rt_col = 0;
   rt_items_on_line = 0;
+  rt_out_unlock();
 }
 
 void pli_put_unselect(void) {
+  rt_out_lock();
   rt_out_f = NULL;
   rt_out_discard = 0;
+  rt_out_unlock();
 }
 
 /* FILE ( f ) input routing (rule 105): rt_next_char reads from the named file. */

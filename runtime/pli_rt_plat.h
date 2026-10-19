@@ -123,6 +123,11 @@ typedef pthread_t pli_thread;
 void pli_mutex_init(pli_mutex *m);
 void pli_mutex_lock(pli_mutex *m);
 void pli_mutex_unlock(pli_mutex *m);
+/* A recursive mutex: the same thread may take it twice. The output
+ * serialiser (ADR-233) nests its locks - an item writer calls the byte
+ * writer, which locks on its own - so it needs this, not pli_mutex_init.
+ * Single-threaded custom platforms: a no-op here, as for pli_mutex_init. */
+void pli_mutex_init_recursive(pli_mutex *m);
 /* Condition broadcast/wait paired with the mutex above. */
 void pli_cond_init(pli_cond *c);
 void pli_cond_wait(pli_cond *c, pli_mutex *m);

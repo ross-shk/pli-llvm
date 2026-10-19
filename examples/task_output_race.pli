@@ -1,0 +1,16 @@
+ /* Scratch: concurrent CALL ... TASK output (rules (79),(82)). */
+ rtask: procedure options(main);
+    declare e(4) event;
+    declare i fixed bin(31);
+    do i = 1 to 4;
+       call worker(i) event(e(i));
+    end;
+    wait(e(1), e(2), e(3), e(4));
+    worker: procedure(k);
+       declare k fixed bin(31);
+       declare j fixed bin(31);
+       do j = 1 to 300;
+          put skip list('task', k, 'line', j);
+       end;
+    end worker;
+ end rtask;

@@ -155,10 +155,46 @@ extern int rt_pli_nonprint[PLI_MAX_FILES];
 extern volatile long long rt_pli_pages[PLI_MAX_FILES];
 
 /* Stream helpers shared across TUs (defined in rt_stream.c). */
+/* rt_put_raw writes bytes into the active sink. The caller holds the output
+ * lock (rt_out_lock): every public output entry point brackets its writes,
+ * so the stdout slab and the line state stay consistent when a task writes
+ * concurrently with the main thread (ADR-233). */
 void rt_put_raw(const char *p, size_t n);
 int rt_next_char(void);
 /* ADR-220: flush the stdout write slab before program exit or FILE routing. */
 void rt_flush_stdout(void);
+
+/* ---------------------------------------------------------------------------
+ * Output serialisation (ADR-233).
+ *
+ * A CALL ... TASK (rule (79)) runs its callee on another thread, and the
+ * stream state is process-global, so two threads writing at once interleave
+ * their bytes in the stdout slab and corrupt each other's lines. The fix is
+ * one recursive mutex around the output path - taken only once the program
+ * has a task, so a program that never spawns one keeps the same code path
+ * (one predictable branch per write, no lock).
+ *
+ * rt_out_serialised is 0 until the first task spawn; the flag is written
+ * exactly once (inside the one-time init) and read after a pthread_create, so
+ * the transition carries no data race. It is volatile so the optimiser cannot
+ * cache the load across a loop.
+ * ------------------------------------------------------------------------- */
+extern pli_mutex rt_out_mu;
+extern volatile int rt_out_serialised;
+
+/* Take/release the output lock. Recursive: an item writer calls the byte
+ * writer, which locks on its own. */
+static inline void rt_out_lock(void) {
+  if (rt_out_serialised)
+    pli_mutex_lock(&rt_out_mu);
+}
+static inline void rt_out_unlock(void) {
+  if (rt_out_serialised)
+    pli_mutex_unlock(&rt_out_mu);
+}
+/* Called by the task spawn before the thread is created: from then on every
+ * output operation runs under the output lock. */
+void rt_out_enable_threads(void);
 
 /* Compatibility aliases so split sources keep their original identifiers. */
 #define col rt_col
