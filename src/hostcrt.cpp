@@ -16,6 +16,7 @@
 #include "llvm/Support/Host.h"
 #endif
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Support/FileSystem.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -165,11 +166,26 @@ EmbeddedSysroot materializeEmbeddedSysroot() {
   fs::path base = fs::temp_directory_path(ec);
   if (ec)
     return out;
-  // One link per invocation: pid-unique dir, started clean so a stale
-  // crash leftover can never mix with fresh blobs. (Relative paths inside
-  // the set, e.g. sdk's usr/lib/..., are recreated below.)
-  fs::path dir = base / ("pli-sysroot-" + std::to_string(getpid()));
-  fs::remove_all(dir, ec);
+  // One link per invocation: a unique directory under the temp dir. The name
+  // is random and the directory is created atomically (create_directory fails
+  // if the name exists), so neither a stale crash leftover nor a name planted
+  // in the temp dir can be mistaken for ours. A predictable
+  // "<tmp>/pli-sysroot-<pid>" path let a planted symlink redirect the writes
+  // below. (Relative paths inside the set, e.g. sdk's usr/lib/..., are
+  // recreated below.)
+  fs::path dir;
+  for (int attempt = 0; attempt < 8 && dir.empty(); ++attempt) {
+    llvm::SmallString<128> candBuf;
+    llvm::sys::fs::createUniquePath((base / "pli-sysroot-%%%%%%").string(), candBuf, false);
+    fs::path cand(candBuf.str().str());
+    std::error_code cec;
+    // create_directory returns false when the name is already taken.
+    if (!fs::create_directory(cand, cec))
+      continue; // the name was taken: try another
+    dir = cand;
+  }
+  if (dir.empty())
+    return out;
   auto fail = [&]() {
     std::error_code cec;
     fs::remove_all(dir, cec);
@@ -197,11 +213,28 @@ EmbeddedSysroot materializeEmbeddedSysroot() {
 void cleanupMaterializedSysroot(const std::string& dir) {
   if (dir.empty())
     return;
-  // Only remove what materializeEmbeddedSysroot created (pid-scoped temp).
-  if (dir.find("pli-sysroot-") == std::string::npos)
-    return;
+  // Only remove what materializeEmbeddedSysroot created: a directory directly
+  // under the temp dir whose name starts with the marker prefix. A substring
+  // test would also match a path like "/tmp/evil-pli-sysroot-x".
+  fs::path p(dir);
   std::error_code ec;
-  fs::remove_all(fs::path(dir), ec);
+  fs::path base = fs::temp_directory_path(ec);
+  if (ec)
+    return;
+  // The path comparison is element-wise, but the temp dir path may carry a
+  // trailing separator ("/var/.../T/"), which makes the native strings
+  // differ. Compare without it.
+  auto withoutTrailingSep = [](const fs::path& q) {
+    std::string s = q.string();
+    while (s.size() > 1 && (s.back() == '/' || s.back() == '\\'))
+      s.pop_back();
+    return s;
+  };
+  if (withoutTrailingSep(p.parent_path()) != withoutTrailingSep(base))
+    return;
+  if (p.filename().string().rfind("pli-sysroot-", 0) != 0)
+    return;
+  fs::remove_all(p, ec);
 }
 
 HostCrt resolveHostCrt(const llvm::Triple& triple, const std::string& sysroot) {

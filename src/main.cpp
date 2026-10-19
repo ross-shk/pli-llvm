@@ -186,6 +186,17 @@ static void printVersion() {
             << " bytes, sysroot " << pli::embeddedSysrootSize() << " bytes)\n";
 }
 
+// The platform's path-list separator: ';' on Windows, ':' elsewhere (the
+// PATH convention). A hard-coded ':' splits a Windows path list into
+// fragments that name no directory.
+static char pathListSeparator() {
+#ifdef _WIN32
+  return ';';
+#else
+  return ':';
+#endif
+}
+
 static fs::path executablePath(const char* arg0) {
   fs::path p(arg0);
   if (p.has_parent_path())
@@ -195,11 +206,7 @@ static fs::path executablePath(const char* arg0) {
     return p;
   std::stringstream dirs(path);
   std::string dir;
-#ifdef _WIN32
-  const char sep = ';';
-#else
-  const char sep = ':';
-#endif
+  const char sep = pathListSeparator();
   while (std::getline(dirs, dir, sep)) {
     fs::path candidate = fs::path(dir.empty() ? "." : dir) / p;
     if (fs::exists(candidate))
@@ -354,9 +361,22 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     objPath = output;
   else if (compileOnly)
     objPath = fs::path(base) += ".o";
-  else
-    objPath = fs::temp_directory_path() /
-              (base + "-" + std::to_string(getpid()) + "-" + std::to_string(fileIndex) + ".o");
+  else {
+    // Link mode: a unique temp object. The name is random and the file is
+    // created exclusively (O_EXCL), so a name planted in the temp dir cannot
+    // be mistaken for ours and redirect the write. A predictable
+    // "<tmp>/<base>-<pid>-<n>.o" could.
+    llvm::SmallString<128> tmpObj;
+    std::error_code fec = llvm::sys::fs::createUniqueFile(
+        (fs::temp_directory_path() /
+         (base + "-" + std::to_string(fileIndex) + "-%%%%%%.o")).string(),
+        tmpObj);
+    if (fec) {
+      std::cerr << "pli: cannot create a temporary object\n";
+      return false;
+    }
+    objPath = fs::path(tmpObj.str().str());
+  }
 
   // In-process codegen only (no subprocess, ADR-225): owned module ->
   // TargetMachine -> relocatable object, or LTO bitcode with --flto (in-process
@@ -710,12 +730,12 @@ int main(int argc, char** argv) {
       discoveredLibDirs.push_back(p);
   }
 #endif
-  // PLI_LIB_PATH (colon-separated, like LIBRARY_PATH): searched after user -L,
-  // before the upward-walk and static system library dirs.
+  // PLI_LIB_PATH (path-list separated, like LIBRARY_PATH): searched after
+  // user -L, before the upward-walk and static system library dirs.
   if (const char* env = std::getenv("PLI_LIB_PATH")) {
     std::stringstream ss(env);
     std::string dir;
-    while (std::getline(ss, dir, ':'))
+    while (std::getline(ss, dir, pathListSeparator()))
       if (!dir.empty())
         linkArgs.push_back("-L" + dir);
   }
@@ -742,12 +762,12 @@ int main(int argc, char** argv) {
   Preprocessor preprocessor;
   for (const std::string& d : includeDirs)
     preprocessor.addIncludeDir(d);
-  // Colon-separated like CPATH: searched after -I, before the default dir.
+  // Path-list separated like CPATH: searched after -I, before the default dir.
   bool hasEnvPath = false;
   if (const char* env = std::getenv("PLI_INCLUDE_PATH")) {
     std::stringstream ss(env);
     std::string dir;
-    while (std::getline(ss, dir, ':'))
+    while (std::getline(ss, dir, pathListSeparator()))
       if (!dir.empty()) {
         preprocessor.addIncludeDir(dir);
         hasEnvPath = true;
@@ -912,8 +932,12 @@ int main(int argc, char** argv) {
       std::string rtObj;
       bool haveRtObj = false;
       if (!singleModuleFinalLink && !linkBitcode) {
-        rtObj =
-            (fs::temp_directory_path() / ("pli_runtime-" + std::to_string(getpid()) + ".o")).string();
+        // A unique temp name, created exclusively (see the per-input object
+        // above): a predictable "<tmp>/pli_runtime-<pid>.o" could be planted.
+        llvm::SmallString<128> rtPath;
+        std::error_code fec = llvm::sys::fs::createUniqueFile(
+            (fs::temp_directory_path() / "pli_runtime-%%%%%%.o").string(), rtPath);
+        rtObj = rtPath.str().str();
         std::error_code ec;
         llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
         std::string rtErr;
@@ -985,6 +1009,9 @@ int main(int argc, char** argv) {
           crt = pli::resolveHostCrt(llt, sysroot);
           if (!crt.ok) {
             std::cerr << "pli: " << crt.err << "\n";
+            // The sysroot was already materialized above: release it before
+            // the early return, or the temp dir is left behind.
+            pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           }
         }
@@ -1260,6 +1287,13 @@ int main(int argc, char** argv) {
           return 0;
         }
         std::cerr << "pli: in-process link failed (" << linkErr << ")\n";
+        // Release every temp object, not just the runtime: the success path
+        // above removes them all, and a failed link left the per-input
+        // objects behind in the temp dir.
+        for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
+          std::error_code ec;
+          fs::remove(objs[i], ec);
+        }
         if (haveRtObj) {
           std::error_code ec;
           fs::remove(rtObj, ec);
