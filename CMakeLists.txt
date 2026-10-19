@@ -405,10 +405,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
     advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib)
   # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
   # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
-  # Compiled from runtime/stl_stubs.c as part of the build.
+  # Compiled from runtime/stl_stubs.c as part of the build. The hermetic stash
+  # is compiled with the runner's own toolset, so its libcpmt already exports
+  # these helpers; adding the stubs there produces duplicate symbols.
   target_sources(pli PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c)
+  if(NOT PLI_LLVM_STATIC_PREFIX)
+    target_sources(pli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c)
+  endif()
   # Silence expected clang warnings for the __std_*/xml* helper stubs
   # (reserved double-underscore names, pre-C99 declaration style).
   set_source_files_properties(
