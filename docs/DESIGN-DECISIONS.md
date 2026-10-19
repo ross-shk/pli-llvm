@@ -5915,7 +5915,7 @@ non-constant values, and reassignment. Known limits: no constant
 expressions (`OTHER + 1` is diagnosed — the same limit `VALUE` has);
 file-scope constants stay diagnosed.
 
-## ADR-192 — Optional MLIR helper bridge architecture (P2 spike)
+## ADR-230 — Optional MLIR helper bridge architecture (P2 spike)
 
 **Context.** ADR-002 keeps `IRGen` as the only LLVM-aware component; no
 `mlir/` header may enter the parser, sema, AST, or HIR layers. ADR-158
@@ -5949,11 +5949,11 @@ every HIR form and violates ADR-002); using `unrealized_conversion_cast` as the
 final bridge (the conversion target must reject it); shipping MLIR enabled by
 default (keeps P2 time-boxed and non-blocking for P3/P5).
 
-## ADR-194 — Production MLIR lowering rejected; direct LLVM IR is the migration target (P4 outcome)
+## ADR-231 — Production MLIR lowering rejected; direct LLVM IR is the migration target (P4 outcome)
 
 **Context.** The migration plan ended with P4 (lower migrated operations
 through the MLIR `pli` dialect) once P2 proved the integration boundary
-(ADR-192) and P3 delivered direct LLVM IR wave by wave (W1–W4c, W6). The
+(ADR-230) and P3 delivered direct LLVM IR wave by wave (W1–W4c, W6). The
 ADR-158 admission ticket gated production MLIR on a measured W6
 aggregate/vector win.
 
@@ -6762,3 +6762,35 @@ codegen's libm surface — it drifts exactly like the `nm -u` list did, and a
 manifest the compiler does not read is documentation, not a gate; listing
 *every* real libSystem export in the stub — the stub exists to stay a small
 curated subset of a 9 800-symbol export list.
+
+## ADR-232 — ADR numbers 192 and 194 were each used twice; the MLIR pair is renumbered 230/231
+
+**Context.** The ADR log had two entries numbered 192 and two numbered 194,
+covering unrelated decisions:
+
+- 192 — the `LABEL` attribute (rule (21)) and the optional MLIR helper bridge
+  architecture (P2 spike);
+- 194 — the `BOOL` built-in (rule (123), Appendix 1) and the rejection of
+  production MLIR lowering (P4 outcome).
+
+The ambiguity was live, not cosmetic: `docs/GRAMMAR-COVERAGE.md` cites ADR-192
+for the `LABEL` attribute, while `CONTRIBUTING.md` and the archived MLIR
+migration matrix cite the same number for the MLIR bridge. A reader following
+either reference could land on the wrong decision.
+
+**Decision.** Renumber the *later* MLIR entries — ADR-230 (helper bridge
+architecture) and ADR-231 (production MLIR lowering rejected) — and update the
+three referring sites (`CONTRIBUTING.md`, the archived migration matrix, and
+the cross-reference inside the MLIR rejection entry). The two earlier entries
+(192 `LABEL`, 194 `BOOL`) keep their numbers and their text: an ADR's decision
+is immutable, and the *later* duplicate is the one that moves.
+
+**Consequences.** Every ADR number now names exactly one decision, and the
+references resolve unambiguously. The renumbering touches no decision: only
+the headings of the two MLIR entries and the three citations that named them.
+
+**Rejected.** Editing the two earlier entries to fold the MLIR decisions into
+them — an ADR records one decision, and merging two unrelated ones would
+destroy the history. Deleting the duplicate entries — the decisions are still
+in force. Adding a disambiguation note to ADR-192/194 instead of renumbering —
+the number itself is the citation, so a note cannot fix a reference.

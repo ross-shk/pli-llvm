@@ -24,7 +24,7 @@ cmake --build build/cmake -j
 ctest --test-dir build/cmake
 ```
 
-Optional MLIR canary build (proves the `pli_mlir` bridge, lowers no PL/I operation — see ADR-192):
+Optional MLIR canary build (proves the `pli_mlir` bridge, lowers no PL/I operation — see ADR-230):
 
 ```bash
 cmake -G Ninja -S . -B build/mlir -DPLI_ENABLE_MLIR=ON -DMLIR_DIR=<llvm-install>/lib/cmake/mlir

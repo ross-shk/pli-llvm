@@ -8,7 +8,7 @@ semantics from the **Y33-6003** language specifications. Both are in
 This page describes the implementation that exists today. The target language
 is broader than current support; use `GRAMMAR-COVERAGE.md` for implemented and
 diagnosed forms. In particular, the planned machine-independent IR (MIR) in
-`OPTIMIZATION.md` does not exist yet: the current HIR lowers directly to LLVM
+`design-docs/OPTIMIZATION.md` does not exist yet: the current HIR lowers directly to LLVM
 IR.
 
 ## 1. Goals and non-goals
@@ -16,7 +16,7 @@ IR.
 **Design goal: generate efficient native code without changing PL/I behavior.**
 The current backend emits LLVM IR and delegates optimization and machine-code
 generation to clang. The more detailed HIR/MIR optimization strategy in
-`OPTIMIZATION.md` is planned work, not a description of passes already present.
+`design-docs/OPTIMIZATION.md` is planned work, not a description of passes already present.
 
 **Goals**
 
@@ -84,7 +84,9 @@ driver, needs only OS DLLs), `sdk` (macOS stubs, ADR-226) — and materializes
 to a temp dir at link time, so release archives hold only `pli`/`pli.exe`.
 An exe-relative `musl/`/`mingw/`/`sdk/` dir overrides the embedded set (dev
 use); otherwise the driver falls back to the host toolchain (probed CRT
-recipes / MSVC `LIB` / `xcrun`). `-shared`/`-static-pie` stay host-routed.
+recipes / MSVC `LIB` / `xcrun`). `-shared`/`-static-pie` need a dynamic host
+CRT, so they skip the vendored (static) sysroot and take the host recipe; the
+link itself is still in-process lld, never a subprocess.
 
 Given several input files, pli runs the pipeline once per file to an
 independent relocatable object and links them all with `pli_runtime` into one
@@ -112,7 +114,7 @@ erfc, cbrt, sind/cosd/tand/atand) stay runtime-only, as do `mod`/`round`
 (`AlwaysInline` bodies, no separate lowering). Complex `a**b` and complex
 `abs` reuse the same math gates. The runtime
 call remains the differential regression oracle throughout migration. See
-`docs/MLIR-RUNTIME-MIGRATION-MATRIX.md` for the full operation matrix and
+`design-docs/archive/MLIR-RUNTIME-MIGRATION-MATRIX.md` for the full operation matrix and
 `design-docs/mlir-runtime-migration-plan.md` for the phased plan.
 
 ### 2.2 Why separate AST, HIR, and LLVM IR
