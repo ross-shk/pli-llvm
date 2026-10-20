@@ -1,0 +1,5 @@
+CHECK-LABEL: define {{.*}}@PLI_LOOP_CONST_COND
+CHECK: do.cond.{{[0-9]+}}:
+CHECK: br i1 true
+CHECK-NOT: icmp
+CHECK: do.body.{{[0-9]+}}:

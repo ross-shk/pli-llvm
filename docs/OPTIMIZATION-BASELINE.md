@@ -420,3 +420,107 @@ ADR-244 is written, and ADR-244 stays reserved for it. When the language
 feature lands, the conversion becomes an exponent patch — `sitofp` followed by
 a multiply by 2^-q, exact over the whole range — and the decision is already
 recorded here.
+
+### 4.5 C7 — "test vs. move": **closed, already covered by LLVM**
+
+**The claim.** MULTICS had two machine forms for `VERIFY`/`SEARCH`: a cheap
+*test* that only sets the comparison flags, and a full *move* that produces the
+value. `compile_exp.pl1:494-496` picks the test form when the value is not
+needed:
+
+```pl1
+/* we can't use the "for_test" code sequences if result is needed elsewhere */
+		cg_stat$for_test_called = cg_stat$for_test_called & ref1 -> reference.ref_count <= 1;
+```
+
+LLVM has no flag-only form, but the idea survives as *the value is compared and
+the comparison is the branch*, and LLVM folds the value away when it is dead.
+
+**The verification.** `tests/ir/test_vs_move.pli` pins the two shapes in the
+compiler's own IR:
+
+| shape | the compiler's IR |
+|---|---|
+| the value is used only in a condition | `%tst = icmp ne i32 %ver32, 0` → `br i1 %tst` |
+| the value is needed elsewhere | `store i32 %srch32, ptr %X.addr` → the comparison reads the stored value |
+
+Optimizing that module (`clang -O2 -S -emit-llvm` over the compiler's
+`-emit-llvm` output, the same method ADR-243's finding used) shows what LLVM
+does with the two shapes:
+
+```llvm
+%vrf.si.pr = load i8, ptr %S.addr, align 1
+%.not  = icmp eq i8 %vrf.si.pr, 97      ; the verify: one comparison, no value
+%.mux  = zext i1 %.not to i64           ; the search: the value is needed, so it stays
+```
+
+The verify's *position* value is never materialized — the comparison **is** the
+test, which is MULTICS's flag-only form — while the search's value survives
+because something else needs it. That is MULTICS's `ref_count <= 1` guard,
+expressed as LLVM's SSA use count: LLVM removes the materialization exactly
+when the value has no other use.
+
+**The verdict.** Closed without a diff: the transformation is LLVM's, the
+guard is LLVM's, and the IR check pins the shape both rely on.
+
+### 4.6 C8 — the infinite loop's condition and the `NOT` of a `BIT(1)`: **closed, one case deferred**
+
+**The loop case.** The plan asks for "`CHECK-NOT` for a dead condition". The
+compiler does not even emit one: a constant `DO WHILE` condition is folded
+*before* the optimizer runs, so the loop's condition block is a branch on the
+constant with no comparison in it.
+
+```llvm
+do.cond.0:                                        ; preds = %if.end.1, %entry
+  br i1 true, label %do.body.0, label %do.end.0
+```
+
+`tests/ir/loop_const_cond.pli` pins that (`CHECK-NOT: icmp` between the
+condition block and the body). MULTICS's `jump_op.pl1:383-405` did the same
+thing by hand; here LLVM's `SimplifyCFG` would have done it anyway.
+
+**The `BIT(1)` case.** MULTICS's `jump_op.pl1:350-381` turns `IF ^ BIT(1)` into
+a complemented branch, but only when the value is a single, unshared bit — the
+guard is about PL/I's `BIT` padding, because the `NOT` of a padded value is
+not the machine's complement. The plan defers this to WS-D1 (the padding
+invariant) and asks first whether the compiler's `BIT` representation has
+padding semantics at all.
+
+It does not, for `BIT(1)`: the representation is an `i1` (`src/types.h` and the
+`loadSym` lowering), so the `NOT` is `xor i1 %b1, true` — the complement of the
+one bit, with no padding to get wrong. The program's value is right (`^'1'b` is
+false, `^'0'b` is true), and LLVM folds the `xor` into the branch:
+
+```llvm
+%not = xor i1 %b1, true
+br i1 %not, label %if.then.0, label %if.end.0
+```
+
+**The deferral.** For `BIT(n>1)` the `NOT` is byte-wise over the whole array,
+so the *padding* bits are complemented too. Nothing observes them today — every
+comparison of a `BIT` value drops the padding bits (`packBitValue` shifts them
+out) — but the model is not written down yet, so the item stays **deferred to
+WS-D1** as the plan says. The deferral costs nothing today; it is a note for
+the day WS-D1 models the padding.
+
+### 4.7 C9 — reference-count-driven temp elision: **closed, already covered by LLVM**
+
+**The claim.** MULTICS's `need_temp.pl1` and `state_man.pl1:1330-1354
+need_ref` walk the expression tree to decide whether a temporary is needed,
+and the `ref_count` of a reference decides whether a node's value is needed
+elsewhere.
+
+**The modern equivalent.** In LLVM a value's uses are its `ref_count`: an SSA
+value with one use is dead after that use, and `InstCombine`/`DSE` remove the
+computation that produced it. The repo's IR is SSA from the start, so the
+analogue is exact.
+
+**The verification.** The compiler's own IR shows the modern form of MULTICS's
+guard: a value that is used once is compared and the comparison is the branch
+(the `verify` case of §4.5), and a value that is used twice is materialized
+once and read back (the `search` case). LLVM then does exactly what MULTICS's
+`need_ref` did — remove the temporary whose value nobody needs.
+
+**The verdict.** Closed without a diff, and no IR check: the property is a
+property of SSA, not of this compiler's lowering. Nothing to guard, because
+nothing in the compiler decides whether a temporary is needed — LLVM does.

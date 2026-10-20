@@ -1,0 +1,5 @@
+CHECK-LABEL: define {{.*}}@PLI_TEST_VS_MOVE
+CHECK: %tst = icmp ne i32 %{{.*}}, 0
+CHECK: br i1 %tst
+CHECK: store i32 %{{.*}}, ptr %X.addr
+CHECK: %cmp = icmp sgt i32 %{{.*}}, 0

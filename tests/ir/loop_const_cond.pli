@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* An infinite loop's condition is a constant (WS-C8): the compiler folds
+    it, so the loop's condition block is a branch on the constant with no
+    comparison to remove. Rules (77),(78). */
+ loop_const_cond: procedure options(main);
+   declare i fixed bin(31);
+   i = 0;
+   do while ('1'b);
+      i = i + 1;
+      if i > 3 then leave;
+   end;
+   put skip list(i);
+ end loop_const_cond;
