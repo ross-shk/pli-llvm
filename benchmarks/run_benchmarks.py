@@ -69,6 +69,7 @@ LANG_BENCHMARKS = [
     ("concat_const",  "lang/concat_const.pli",  "lang/baseline/concat_const_c.c"),
     ("io_list",       "lang/io_list.pli",       "lang/baseline/io_list_c.c"),
     ("alias_scope",   "lang/alias_scope.pli",   "lang/baseline/alias_scope_c.c"),
+    ("pure_call",     "lang/pure_call.pli",     "lang/baseline/pure_call_c.c"),
 ]
 
 # Every benchmark, both categories.
@@ -85,6 +86,10 @@ PAIRS = [
     # "checks-on" build keeps them.
     ("checks_on", "check-free", [], "checks-on",
      ["--size-checks", "--subscript-checks"]),
+    # WS-A1 (ADR-264): what the inferred procedure memory effects are worth.
+    # The same program, once with the inference and once with
+    # --no-memory-effects, so every call keeps LLVM's default effects.
+    ("pure_call", "no-effects", ["--no-memory-effects"], "effects", []),
 ]
 
 

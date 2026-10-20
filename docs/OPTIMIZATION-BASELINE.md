@@ -102,3 +102,57 @@ inherits the same gap; it builds and runs at `-O1` and above.
 identically, so it is a separate piece of work rather than a side effect of
 the corpus.
 
+
+---
+
+## 3. WS-A: what the inferred memory effects are worth (P1c)
+
+`benchmarks/lang/pure_call.pli` calls a top-level helper in a hot loop. The
+paired comparison builds the same program twice — once with the inferred
+procedure memory effects (ADR-264) and once with `--no-memory-effects`,
+which leaves every call with LLVM's default effects:
+
+| build | median |
+|---|---|
+| no effects | 69.70 ms |
+| effects | 69.41 ms |
+
+**Ratio 1.00x — no measurable difference.** (An isolated run of the same
+pair measured 1.01x; the two builds sit inside each other's noise.) The
+PL/I-vs-C ratio at `-O2` is 0.41x, because clang keeps the twin's helper out
+of line while LLVM specializes the PL/I one.
+
+Nothing else moved: the C-parity corpus' geomean at `-O2` is **0.82x**,
+the same as the pre-P1c baseline, so the attributes cost the acceptance gate
+nothing.
+
+The reason is worth recording, because it decides what WS-A can be
+expected to deliver: **LLVM's inliner already absorbs the helper**. A
+promise that "this call writes no memory" only buys something when the
+call survives, and the optimizer removes exactly the calls the promise
+would have helped. The inference is still the right thing to emit — it is
+correct, it is cheap, and it is the only channel by which a PL/I fact can
+reach the optimizer — but its value is *latent* until a callee LLVM cannot
+inline exists.
+
+Two shapes were tried before settling on the witness, and both are recorded
+because they are the shapes a reader would try first:
+
+- A small helper with a loop in it: LLVM inlines it and then folds the
+  whole caller's loop into a constant, because after inlining the loop
+  becomes affine. The program runs in under 10 ms and measures nothing.
+- A helper large enough (300 statements) that LLVM leaves it out of line:
+  the call survives, but the caller's loop is then folded away anyway,
+  because the sum it computes has a closed form.
+
+So the witness uses the corpus's own trick — an array indexed by a modulo,
+which keeps the loop from folding (`checks_on` uses the same shape) — and
+accepts a 1.01x result.
+
+**What A4's gate found.** The plan's gate for the alias taxonomy was: "a
+loop that writes a local and reads a STATIC each iteration. If LLVM already
+keeps them apart, close without a diff and record the result." LLVM already
+keeps them apart: `opt -passes=aa-eval` reports **NoAlias** between an
+alloca and a global. The positive direction of A4 therefore closes without
+a diff; what remains is the taxonomy as one function (ADR-265) and the two
+litmus tests that guard it.

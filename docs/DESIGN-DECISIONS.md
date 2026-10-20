@@ -7131,3 +7131,216 @@ The million is well above the ~512k traps that overflow an 8 MB stack, and
 well above the ~64k that overflow the 1 MB stack Windows gives a thread, so
 the test fails on the old code on every platform.
 
+
+---
+
+## ADR-264 — Infer and export PL/I procedure memory effects
+
+**Context.** MULTICS's PL/I compiler carried a purity bit on every symbol
+(`symbol.reducible` / `symbol.irreducible`) and an `aliasable` bit beside it
+(`optimizer.pl1:212-232`), and used both to decide what an optimizer had to
+assume about a call. The IBM lineage reached the same place from the other
+side: a procedure that raises no condition, establishes no ON unit and
+escapes nowhere is safe to treat as a pure function
+(`zos:23423-23445`).
+
+LLVM has no such bit. Every call is opaque: the optimizer must assume it
+reads and writes all memory, so a load cannot cross it, a store cannot sink
+past it, and a local cannot be kept in a register across it. The PL/I facts
+that would relax that assumption are invisible to LLVM unless they are
+stamped onto the IR.
+
+**Decision.** The compiler now infers, for every internal PL/I procedure,
+what it can do to memory, and stamps the verdict on the function as an LLVM
+memory attribute.
+
+The analysis lives in `src/irgen_decisions.cpp` — outside `irgen.cpp`, per
+the plan's C2 — and returns a verdict, never IR. The verdict reaches LLVM
+only as a function attribute, per the plan's C1: there is no custom pass, and
+a PL/I-specific notion that LLVM cannot express as an attribute is dropped
+with a note in `--print-facts` rather than given a pass of its own.
+
+The verdict is one of five promises, from strongest to weakest:
+
+| verdict | LLVM attribute | meaning |
+|---|---|---|
+| `None` | `memory(none)` | touches no memory at all |
+| `ArgRead` | `memory(argmem: read)` | reads only memory reachable from its pointer arguments, writes none |
+| `ArgReadWrite` | `memory(argmem: readwrite)` | reads and writes only memory reachable from its pointer arguments |
+| `Read` | `memory(read)` | reads any memory, writes none |
+| `Unknown` | none | may read and write anything — no promise |
+
+**How the analysis decides.** Every access the procedure's body makes is
+classified by where it lands, seen from the caller:
+
+- *Frame* — the procedure's own automatic storage. Invisible outside the
+  call, so it constrains nothing. (LLVM's own attribute inference treats
+  allocas the same way: the LangRef says it is "always valid to read and
+  write allocas" under `memory(none)`.)
+- *Arg* — reachable from one of the procedure's pointer arguments: a
+  by-reference parameter, a static link, or the hidden result pointer of a
+  structure-valued function.
+- *Other* — everything else: a global, a `BASED` variable, a `DEFINED`
+  overlay, a `CONTROLLED` generation, a locator-qualified reference, or an
+  unknown call.
+
+A procedure that establishes an ON unit is opaque: the unit may run at any
+point and may write anything the establishing block can see. A procedure
+whose *name* is assigned or passed as an argument is opaque for the same
+reason MULTICS gave (`function.pl1:366`): it can then be called — or run as
+a handler — from a context the compiler cannot see.
+
+**Three corrections to the plan's sketch.** The plan's A1 sketch proposed
+`readnone` for a procedure that "reads only its own parameters and
+constants". That is unsound here, because PL/I parameters are by reference
+by default: reading a parameter is a read through a pointer argument, and
+`memory(none)` forbids exactly that. The ladder above is the sound version —
+`memory(none)` only where no pointer is read at all.
+
+The plan's A2 table stops at the procedure's own ON unit. It misses the
+*ancestor* case: a procedure called while its caller's ON unit is active can
+dispatch to that handler, and the handler may write outside its own frame.
+The analysis therefore tracks which conditions a procedure can raise, per
+condition key, gated on the checks the driver enabled — a check that is off
+cannot raise a condition, so it cannot dispatch to a handler. The trap path
+only matters when the unit establishes a handler for that key: with no
+handler, `emitCondTrap` emits an abort and `unreachable`, so the path never
+returns and says nothing about the function's effects when it does.
+
+The plan's A2 table also lists "the procedure is EXTERNAL" as opaque. Read
+literally that would make every top-level procedure opaque, since a
+top-level procedure in PL/I is externally linked. The MULTICS and IBM rows
+it cites (`symbol.external` → `aliasable`) are about *variables*: an
+EXTERNAL variable is module-wide storage and may alias anything. That is
+what the analysis implements — writing an EXTERNAL variable is an *Other*
+write. A procedure whose body is in this unit has knowable effects,
+whatever its linkage.
+
+**Consequences.** `--print-facts` now reports each procedure's verdict and
+the reason it is not stronger:
+
+```
+proc PURE
+  effect: none (touches no memory)
+proc READER
+  effect: argmem-read (reads its arguments)
+proc WRITER
+  effect: argmem-readwrite (writes its arguments)
+proc GUARDED
+  effect: unknown (establishes an ON unit)
+```
+
+`--no-memory-effects` turns the inference off, so every call keeps LLVM's
+default effects. It exists so a benchmark can measure what the inference is
+worth against the same program.
+
+`tests/ir/purity_attrs.pli` is the gate: the IR must carry
+`memory(none)`, `memory(argmem: read)` and `memory(argmem: readwrite)` on
+the three procedures that qualify, and the procedure that does I/O must
+carry none at all. `tests/core/purity.pli` asserts that the values the
+program computes do not change.
+
+**The measurement, and what it says.** `benchmarks/lang/pure_call.pli` calls
+a top-level helper in a hot loop. The paired comparison (the same program
+with and without `--no-memory-effects`) measures **1.00x** — no difference:
+69.70 ms without the inference, 69.41 ms with it. An isolated run of the
+same pair measured 1.01x; the two builds are within the run-to-run noise of
+each other.
+
+That is the plan's own gate outcome, and it is worth stating plainly:
+**LLVM's inliner already specializes the helper**, so the promise the
+attribute makes is redundant in exactly the shape the plan proposed as the
+witness. The inference is not free of value, but the value is *latent*: it
+matters for a callee LLVM does not inline, and the corpus has no such case
+today. The attribute is still the right thing to emit — it is correct, it is
+cheap, and it is the only channel by which a PL/I fact can reach the
+optimizer (C1) — but the honest verdict on the *witness* is that the
+optimization it was supposed to unlock is already delivered by the inliner.
+
+**What was deliberately not done.** `willreturn` and `nounwind` are not
+claimed. `willreturn` needs a termination analysis, and a PL/I procedure
+with an unbounded loop would make the claim false. `nounwind` would need
+the call graph to prove that no unknown external procedure is reachable;
+`emitCondTrap` aborts rather than unwinds, but the runtime's condition
+machinery and every external entry would have to be accounted for first.
+Both are recorded here as the next step rather than guessed at.
+
+---
+
+## ADR-265 — The PL/I alias taxonomy as the single source of `noalias` claims
+
+**Context.** ADR-212 gave a plain `AUTOMATIC` local a per-function
+`!alias.scope` / `!noalias` pair, so LLVM could hoist loads and vectorize
+loops over disjoint locals. The decision about *which* declarations qualify
+was an ad-hoc chain inside `allocaLocals`:
+
+```cpp
+if (!s->isBased() && !s->controlled && !s->isStatic &&
+    !s->definedBase && s->kind == Symbol::Var) {
+```
+
+That chain is a taxonomy written in the wrong place: it is a list of PL/I
+storage classes, spread across a condition that also has to be kept in step
+with every future construct that can alias. IBM's list is the normative one
+(`mvs:24678-24684`): an aliased variable is any variable whose value can be
+modified through a name other than its own — DEFINED overlays, the bases of
+DEFINED variables, parameters, arguments, based variables, and variables
+whose address an external procedure knows. MULTICS's `aliasable` bit
+(`optimizer.pl1:212-232`) says how the compiler detects them.
+
+**Decision.** The taxonomy is now one function, `pli::aliasClass`, in
+`src/irgen_decisions.cpp` — outside `irgen.cpp`, per the plan's C2 — and
+`allocaLocals` consults it instead of carrying its own list. Every future
+`noalias` claim is checked against the same function.
+
+The three classes are:
+
+- `Disjoint` — owns its storage; disjoint from every other declaration. Only
+  these get a `!alias.scope`.
+- `Shares` — may share storage with another declaration: a DEFINED overlay
+  (with its base), CONTROLLED storage (the generation stack), module-wide
+  storage (EXTERNAL, STATIC), a parameter (the caller's storage, or a copy),
+  a procedure name, and an ENTRY VARIABLE (a procedure value that can be
+  called from anywhere).
+- `Unknown` — may point anywhere: a BASED variable, whose storage is
+  wherever its locator points.
+
+**What changed.** One row: an ENTRY VARIABLE no longer gets a
+`!alias.scope`. The plan's table lists it among the things that alias
+everything, and the ad-hoc chain let it through because it is a `Symbol::Var`
+that is neither based, controlled, static nor a defined overlay. The cost is
+one lost scope; the gain is that the taxonomy and the code agree.
+
+**Two rows the plan lists that this compiler does not need.** A STATIC
+declaration is AUTOMATIC storage here (`sema.cpp:425` — "Explicit STATIC is
+accepted and treated as AUTOMATIC for now"), so the STATIC row of the
+taxonomy only ever fires for an EXTERNAL variable; `tests/core/
+alias_static.pli` guards the row for when STATIC becomes real storage.
+The plan also lists "the address of the variable is taken" as aliasing.
+It does not, for the claim ADR-212 makes: that claim is about *storage
+objects* — "this local's storage is not that local's storage" — and a
+local whose address is taken still owns its storage. What the address does
+is make the storage *reachable* from elsewhere, and the accesses made
+through it are not annotated at all (`storeScalarTo` is called without an
+alias symbol for a locator-qualified target), so LLVM keeps its default
+answer for them. An earlier draft of this analysis got this wrong in the
+opposite direction and claimed `memory(none)` for a procedure that read its
+by-reference parameter; the IR test caught it.
+
+**The gate, and what it found.** The plan's gate for A4 was: "a loop that
+writes a local and reads a STATIC each iteration. If LLVM already keeps them
+apart, close without a diff and record the result."
+
+LLVM already keeps them apart. `opt -passes=aa-eval` on a module with an
+alloca and a global reports **NoAlias** for the pair — the alloca's
+storage cannot be the global's. So the *positive* direction A4 was after, a
+local's `!noalias` scope covering the globals as well, buys nothing:
+BasicAA already answers the question. That part of A4 closes without a
+diff, and the result is recorded here.
+
+What remains is the taxonomy itself and the guards: `tests/core/
+alias_static.pli` and `tests/core/alias_entryvar.pli` are the litmus pair
+for the rows this compiler can express. Neither can fail today — a plain
+AUTOMATIC local really does own its storage — and that is the point: they
+are the tests that fail if a future change widens the `!noalias` claim past
+what the taxonomy allows.

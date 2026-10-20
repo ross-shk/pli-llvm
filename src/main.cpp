@@ -118,6 +118,8 @@ static void usage() {
          "                   and stop (ADR-260)\n"
          "  -fsyntax-only    parse and analyse each input only\n"
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
+         "  --no-memory-effects  do not infer procedure memory effects (ADR-264);\n"
+         "                   every call keeps LLVM's default effects\n"
          "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
          "                   cf. (NOSIZE), ADR-111)\n"
          "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
@@ -323,7 +325,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // (ADR-260), then stops — no object, no link.
   if (print_facts) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides);
+                false, lowerMode, perOpOverrides, "", noMemoryEffects);
     irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -339,7 +341,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   if (emitLLVM || emitMlir) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides);
+                false, lowerMode, perOpOverrides, "", noMemoryEffects);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -404,7 +406,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-              linkBitcode, lowerMode, perOpOverrides, platformBc);
+              linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects);
     auto om = ipg.takeModule(hir);
     if (!om) {
       if (diags.ok())
@@ -500,6 +502,7 @@ int main(int argc, char** argv) {
   bool marchNative = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
+  bool noMemoryEffects = false;
   bool useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
@@ -652,6 +655,8 @@ int main(int argc, char** argv) {
       // tests that use --size-checks get the checks they expect.
       noSubChecks = false;
       noSubChecksExplicit = true;
+    } else if (a == "--no-memory-effects") {
+      noMemoryEffects = true;
     } else if (a == "--no-zero-divide")
       noZdivChecks = true;
     else if (a == "--no-conversion")
@@ -899,7 +904,8 @@ int main(int argc, char** argv) {
                     keepLL, verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
-                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc))
+                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
+                    noMemoryEffects))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
