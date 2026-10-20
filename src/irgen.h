@@ -159,6 +159,8 @@ private:
   // inference is worth.
   bool noMemoryEffects_ = false;
   pli::MemEffect effectOf(const HProc* p) const;
+  // The control-flow verdict: can the procedure unwind, does it return?
+  void applyControlAttrs(llvm::Function* f, const HProc* p);
   void emitProc(HProc* p);
   void emitPlainProc(HProc* p, llvm::Type* retLLVM);
   void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM);

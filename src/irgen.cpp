@@ -4314,6 +4314,18 @@ pli::MemEffect IRGen::effectOf(const HProc* p) const {
   return it == effects_.end() ? pli::MemEffect::Unknown : it->second.effect;
 }
 
+// The control-flow verdict for a procedure (ADR-264): can it unwind, and does
+// it always return?
+void IRGen::applyControlAttrs(llvm::Function* f, const HProc* p) {
+  auto it = effects_.find(p);
+  if (it == effects_.end())
+    return;
+  if (it->second.nounwind)
+    f->addFnAttr(llvm::Attribute::NoUnwind);
+  if (it->second.willReturn)
+    f->addFnAttr(llvm::Attribute::WillReturn);
+}
+
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
@@ -4356,6 +4368,7 @@ void IRGen::declareProc(HProc* p) {
         p->isExternal ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
     llvm::Function* fn = llvm::Function::Create(ft, linkage, p->irName.substr(1), &mod_);
     applyMemoryEffect(fn, effectOf(p));
+    applyControlAttrs(fn, p);
     for (const auto& en : p->entryNames)
       aliasFor(en, fn);
     return;
@@ -4387,6 +4400,7 @@ void IRGen::declareProc(HProc* p) {
   llvm::Function* impl = llvm::Function::Create(ift, llvm::Function::InternalLinkage,
                                                 p->irName.substr(1) + ".impl", &mod_);
   applyMemoryEffect(impl, effectOf(p));
+  applyControlAttrs(impl, p);
 
   // A thunk marshals one entry's arguments and tail-calls the shared impl.
   // The impl carries one segment per entry point in body order; control must
@@ -4410,6 +4424,7 @@ void IRGen::declareProc(HProc* p) {
     llvm::Function* tf = llvm::Function::Create(tft, llvm::Function::InternalLinkage,
                                                 "entry.thunk." + std::to_string(thunkN++), &mod_);
     applyMemoryEffect(tf, effectOf(p));
+    applyControlAttrs(tf, p);
     llvm::BasicBlock* tb = llvm::BasicBlock::Create(ctx_, "entry", tf);
     b_.SetInsertPoint(tb);
     std::vector<llvm::Value*> args;
@@ -4513,8 +4528,10 @@ void IRGen::emitProc(HProc* p) {
   // --print-facts shows what the compiler claimed and why.
   {
     auto it = effects_.find(p);
-    if (it != effects_.end())
+    if (it != effects_.end()) {
       facts_.setEffect(p->name, effectName(it->second.effect), it->second.note);
+      facts_.setControl(p->name, it->second.nounwind, it->second.willReturn);
+    }
   }
   labelBlocks_.clear();
   labelBeginChain_.clear();

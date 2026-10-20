@@ -34,6 +34,8 @@ struct ProcFacts {
   std::string name;
   std::string effect;      // the memory-effect verdict (ADR-264), "" when none
   std::string effectNote;  // why the verdict is not stronger
+  bool nounwind = false;   // the procedure cannot unwind
+  bool willReturn = false; // the procedure always returns
   std::vector<BuiltinFact> builtins;
 };
 
@@ -50,6 +52,8 @@ public:
   void recordBuiltin(const std::string& op, const std::string& path);
   // The memory-effect verdict for a procedure (ADR-264).
   void setEffect(const std::string& name, const std::string& effect, const std::string& note);
+  // The control-flow verdict for a procedure (ADR-264).
+  void setControl(const std::string& name, bool nounwind, bool willReturn);
   // The report: one fact per line, module facts first.
   std::string report() const;
 
@@ -81,6 +85,8 @@ struct ProcEffects {
   bool mayRaise = false;    // can raise a PL/I condition
   bool hasOnUnit = false;   // establishes an ON unit (rule 91)
   bool nameEscapes = false; // its name is assigned or passed as an argument
+  bool nounwind = false;    // cannot unwind: every call it makes is known
+  bool willReturn = false;  // always returns when it is called
   std::string note;         // why the effect is not stronger, for the report
 };
 

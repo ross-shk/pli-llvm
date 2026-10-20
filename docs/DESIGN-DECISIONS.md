@@ -7222,6 +7222,7 @@ the reason it is not stronger:
 ```
 proc PURE
   effect: none (touches no memory)
+  control: nounwind willreturn
 proc READER
   effect: argmem-read (reads its arguments)
 proc WRITER
@@ -7240,12 +7241,34 @@ the three procedures that qualify, and the procedure that does I/O must
 carry none at all. `tests/core/purity.pli` asserts that the values the
 program computes do not change.
 
+**What was deliberately not done.** The plan's A1 sketch also proposed
+`willreturn` and `nounwind`. They are claimed now, under rules that keep
+them honest:
+
+- `nounwind` — the procedure makes no call whose unwinding the compiler
+  does not know. A built-in counts as an unknown call, because it may lower
+  to a runtime call and the runtime's unwinding is not part of the audited
+  side table. So does a call to an external entry, an entry variable, or a
+  task. A procedure that can raise a condition is excluded too: its trap
+  path calls the runtime.
+- `willreturn` — the procedure always returns. A `STOP` ends the program, a
+  `GO TO` can jump backwards, a `DO WHILE` has no bound, and a `DO` whose
+  increment can be zero at run time never reaches its limit; each of those
+  rules the promise out. A procedure that can raise a condition is excluded
+  for the same reason as `nounwind`: the trap path aborts, or dispatches to
+  a handler, and either way the call does not simply return.
+
+Together with a memory effect, the three attributes are what let LLVM
+speculate a call: `isSafeToSpeculativelyExecute` wants a call that only
+reads memory, cannot unwind and always returns. That is what lets the
+optimizer hoist a pure call out of a loop.
+
 **The measurement, and what it says.** `benchmarks/lang/pure_call.pli` calls
-a top-level helper in a hot loop. The paired comparison (the same program
-with and without `--no-memory-effects`) measures **1.00x** — no difference:
-69.70 ms without the inference, 69.41 ms with it. An isolated run of the
-same pair measured 1.01x; the two builds are within the run-to-run noise of
-each other.
+a top-level helper in a hot loop, with a loop-invariant argument so that the
+call is one the optimizer could hoist. The paired comparison (the same
+program with and without `--no-memory-effects`) measures **1.00x** — no
+difference: three isolated runs gave 60.78/60.87 ms, 60.03/60.01 ms and
+59.98/59.95 ms.
 
 That is the plan's own gate outcome, and it is worth stating plainly:
 **LLVM's inliner already specializes the helper**, so the promise the
@@ -7257,13 +7280,17 @@ cheap, and it is the only channel by which a PL/I fact can reach the
 optimizer (C1) — but the honest verdict on the *witness* is that the
 optimization it was supposed to unlock is already delivered by the inliner.
 
-**What was deliberately not done.** `willreturn` and `nounwind` are not
-claimed. `willreturn` needs a termination analysis, and a PL/I procedure
-with an unbounded loop would make the claim false. `nounwind` would need
-the call graph to prove that no unknown external procedure is reachable;
-`emitCondTrap` aborts rather than unwinds, but the runtime's condition
-machinery and every external entry would have to be accounted for first.
-Both are recorded here as the next step rather than guessed at.
+**Where the attribute would actually pay.** The reason the witness shows
+nothing is sharper than "the inliner absorbs it": **LLVM infers the memory
+effects of any callee whose body it can see**, from the body itself. For
+such a callee the compiler's own inference is redundant, however good it is.
+The inference is therefore only ever worth something for a callee whose
+body the optimizer *cannot* see — a procedure in another compilation unit,
+compiled separately, whose only description to the caller is the set of
+attributes on its definition. That is the shape MULTICS and IBM worked in
+(separately compiled modules), and it is the shape the next measurement
+should use. In a single-module program the attributes are a correctness
+statement and a diagnostic, not a speedup.
 
 ---
 

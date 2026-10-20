@@ -2,13 +2,16 @@
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Procedure memory effects (WS-A1, ADR-264). The helper is a top-level
     procedure, so it is externally linked and the compiler never marks it for
-    inlining; LLVM may still specialize it. The call sits in a hot loop whose
-    other operand comes from an array, so the loop cannot be folded away.
-    The paired build (--no-memory-effects) prices the inferred effect against
-    the same program compiled without it. */
+    inlining. Its argument is loop-invariant, so with the inferred effects
+    (the helper only reads its argument, cannot unwind and always returns)
+    LLVM may hoist the call out of the loop; without them it must call it
+    every iteration. The array read keeps the loop from being folded away.
+    The paired build (--no-memory-effects) prices the inference against the
+    same program compiled without it. */
  pure_call: procedure options(main);
    declare a(1000) fixed bin(31);
    declare (i, j, x) fixed bin(31);
+   declare k fixed bin(31) init(3);
    declare s fixed bin(63);
 
    do i = 1 to 1000;
@@ -19,7 +22,7 @@
    do i = 1 to 150000000;
       j = mod(i, 1000) + 1;
       x = a(j);
-      s = s + x + helper(i);
+      s = s + x + helper(k);
    end;
 
    put skip list(s);

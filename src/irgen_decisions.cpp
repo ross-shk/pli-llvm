@@ -50,6 +50,17 @@ void FactStore::setEffect(const std::string& name, const std::string& effect,
   procs_.push_back(ProcFacts{name, effect, note, {}});
 }
 
+// Record the control-flow verdict for a procedure (ADR-264).
+void FactStore::setControl(const std::string& name, bool nounwind, bool willReturn) {
+  for (auto& p : procs_)
+    if (p.name == name) {
+      p.nounwind = nounwind;
+      p.willReturn = willReturn;
+      return;
+    }
+  procs_.push_back(ProcFacts{name, "", "", nounwind, willReturn, {}});
+}
+
 // Record one built-in lowering decision, counting repeats of the same pair.
 void FactStore::recordBuiltin(const std::string& op, const std::string& path) {
   if (cur_ < 0)
@@ -83,6 +94,14 @@ std::string FactStore::report() const {
       out += "  effect: " + p.effect;
       if (!p.effectNote.empty())
         out += " (" + p.effectNote + ")";
+      out += "\n";
+    }
+    if (p.nounwind || p.willReturn) {
+      out += "  control:";
+      if (p.nounwind)
+        out += " nounwind";
+      if (p.willReturn)
+        out += " willreturn";
       out += "\n";
     }
     for (const auto& b : p.builtins)
@@ -190,13 +209,16 @@ struct Bits {
   bool opaque = false;     // effects unknown: nothing may be claimed
   bool io = false;         // does input or output
   bool hasOnUnit = false;  // establishes an ON unit (rule 91)
+  bool mayUnwind = false;  // makes a call whose unwinding is not known
+  bool mayNotReturn = false; // may not return: a stop, or an endless loop
   std::set<int> raiseKeys; // the conditions it can raise
   std::string note;        // why the effect is not stronger
 
   bool operator==(const Bits& o) const {
     return readsOther == o.readsOther && writesOther == o.writesOther &&
            readsArg == o.readsArg && writesArg == o.writesArg && opaque == o.opaque &&
-           io == o.io && hasOnUnit == o.hasOnUnit && raiseKeys == o.raiseKeys;
+           io == o.io && hasOnUnit == o.hasOnUnit && mayUnwind == o.mayUnwind &&
+           mayNotReturn == o.mayNotReturn && raiseKeys == o.raiseKeys;
   }
 };
 
@@ -369,9 +391,14 @@ void EffectWalker::walkCallExpr(HExpr* e, bool writeCtx) {
     // An indirect call through an entry variable, or a C entry: unknown.
     walkArgs(e->args);
     b_.opaque = true;
+    b_.mayUnwind = true;
     return;
   }
   walkArgs(e->args);
+  // A built-in may lower to a runtime call, and the runtime's unwinding is
+  // not part of the audited side table, so a built-in call is a call whose
+  // unwinding the compiler does not know.
+  b_.mayUnwind = true;
   switch (builtinEffect(e->name)) {
   case BuiltinEffect::Constant:
     break;
@@ -430,6 +457,7 @@ void EffectWalker::walkCallStmt(HStmt* st) {
   // An entry variable, an external C entry, or a task call: the target's
   // effects are not known here.
   b_.opaque = true;
+  b_.mayUnwind = true;
 }
 
 // Walk one expression. `writeCtx` marks the expression as the target of an
@@ -503,12 +531,18 @@ void EffectWalker::walkStmt(HStmt* st) {
     return;
   switch (st->kind) {
   case HStmt::Null:
-  case HStmt::Goto:
   case HStmt::Leave:
   case HStmt::Iterate:
   case HStmt::Format:
   case HStmt::Entry:
+    return;
   case HStmt::Stop:
+    // The program ends here: the procedure never returns to its caller.
+    b_.mayNotReturn = true;
+    return;
+  case HStmt::Goto:
+    // A GO TO can jump backwards, so the procedure may not return.
+    b_.mayNotReturn = true;
     return;
   case HStmt::Declare:
     for (auto& d : st->decls) {
@@ -537,11 +571,17 @@ void EffectWalker::walkStmt(HStmt* st) {
       walkStmt(b.get());
     return;
   case HStmt::DoWhile:
+    // A DO WHILE has no bound: it may never end.
+    b_.mayNotReturn = true;
     walkExpr(st->cond.get(), false);
     for (auto& b : st->body)
       walkStmt(b.get());
     return;
   case HStmt::DoIter:
+    // A DO loop ends unless its increment can be zero at run time: a zero
+    // increment never reaches the limit. An omitted BY is one.
+    if (st->by && !(st->by->kind == HExpr::IntLit && st->by->ival != 0))
+      b_.mayNotReturn = true;
     walkExpr(st->from.get(), false);
     walkExpr(st->to.get(), false);
     walkExpr(st->by.get(), false);
@@ -656,6 +696,10 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
         if (cb.writesArg)
           noteReach(next, reach, true);
         next.raiseKeys.insert(cb.raiseKeys.begin(), cb.raiseKeys.end());
+        if (cb.mayUnwind)
+          next.mayUnwind = true;
+        if (cb.mayNotReturn)
+          next.mayNotReturn = true;
       }
       if (!(next == bits[self])) {
         bits[self] = next;
@@ -704,6 +748,16 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
     else
       pe.effect = MemEffect::None;
     pe.note = effectNote(b);
+    // `nounwind`: the procedure cannot unwind. A trap path calls the
+    // runtime, whose unwinding is not part of the audited side table, so a
+    // procedure that can raise a condition is excluded; so is one whose
+    // effects are not known at all.
+    pe.nounwind = !b.opaque && !b.mayUnwind && b.raiseKeys.empty();
+    // `willreturn`: the procedure always returns. A trap path does not
+    // return either (it aborts, or dispatches to a handler), so the same
+    // exclusion applies; a procedure whose effects are unknown is excluded
+    // because the unknown call may not return.
+    pe.willReturn = !b.opaque && !b.mayNotReturn && b.raiseKeys.empty();
     out[p.get()] = pe;
   }
   return out;

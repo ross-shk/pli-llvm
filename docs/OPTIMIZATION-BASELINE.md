@@ -114,17 +114,34 @@ which leaves every call with LLVM's default effects:
 
 | build | median |
 |---|---|
-| no effects | 69.70 ms |
-| effects | 69.41 ms |
+| no effects | 60.78 ms |
+| effects | 60.87 ms |
 
-**Ratio 1.00x — no measurable difference.** (An isolated run of the same
-pair measured 1.01x; the two builds sit inside each other's noise.) The
-PL/I-vs-C ratio at `-O2` is 0.41x, because clang keeps the twin's helper out
-of line while LLVM specializes the PL/I one.
+**Ratio 1.00x — no measurable difference.** Three isolated runs of the pair
+gave 1.00x, 1.00x and 1.00x (60.78/60.87 ms, 60.03/60.01 ms,
+59.98/59.95 ms). The PL/I-vs-C ratio at `-O2` is 0.41x, because clang keeps
+the twin's helper out of line while LLVM specializes the PL/I one.
 
-Nothing else moved: the C-parity corpus' geomean at `-O2` is **0.82x**,
-the same as the pre-P1c baseline, so the attributes cost the acceptance gate
-nothing.
+Nothing else moved: the C-parity corpus' geomean at `-O2` is **0.78x**,
+against the 0.82x pre-P1c baseline — the same figure within the noise of a
+shared host, so the attributes cost the acceptance gate nothing.
+
+**Why the witness shows nothing, precisely.** It is not only that the
+inliner absorbs the helper. LLVM infers the memory effects of *any* callee
+whose body it can see, from the body itself — so for a same-module callee
+the compiler's own inference is redundant, however good it is. The
+inference is worth something only for a callee whose body the optimizer
+cannot see: **a procedure in another compilation unit**, whose only
+description to the caller is the set of attributes on its definition. That
+is the shape MULTICS and IBM worked in, and it is the shape the next
+measurement should use. In a single-module program the attributes are a
+correctness statement and a diagnostic, not a speedup.
+
+To make that claim testable the inference now also proves `nounwind` and
+`willreturn` (ADR-264): the three together are what let LLVM speculate a
+call and hoist it out of a loop. A driver-level check of the hoisting
+itself is the natural next gate, and a two-unit benchmark — one unit
+calling a procedure the other defines — is the natural next measurement.
 
 The reason is worth recording, because it decides what WS-A can be
 expected to deliver: **LLVM's inliner already absorbs the helper**. A

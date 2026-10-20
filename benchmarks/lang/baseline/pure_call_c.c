@@ -15,6 +15,7 @@ __attribute__((noinline)) static int32_t helper(int32_t *x) {
 
 int main(void) {
     static int32_t a[1000];
+    int32_t k = 3;
     long long s = 0;
 
     for (int32_t i = 1; i <= 1000; i++)
@@ -23,7 +24,7 @@ int main(void) {
     for (int32_t i = 1; i <= 150000000; i++) {
         int32_t j = i % 1000;
         int32_t x = a[j];
-        s += x + helper(&i);
+        s += x + helper(&k);
     }
 
     printf("%lld\n", (long long)s);
