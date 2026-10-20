@@ -1,0 +1,17 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-G2 (ADR-250): a whole-array assignment into a DEFINED overlay is not
+    a copy of a same-shaped array — the overlay shares storage with its
+    base, so the assignment stays element-wise. The compiler diagnoses the
+    case rather than compiling a copy that would break the aliasing. */
+ badarraydefined: procedure options(main);
+    declare base(10) fixed bin(31);
+    declare overlay(10) fixed bin(31) defined base;
+    declare b(10) fixed bin(31);
+    declare i fixed bin(31);
+    do i = 1 to 10;
+       b(i) = i;
+    end;
+    overlay = b;
+    put skip list(overlay(1));
+ end badarraydefined;

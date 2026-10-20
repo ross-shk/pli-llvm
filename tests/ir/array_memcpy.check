@@ -1,0 +1,4 @@
+CHECK-LABEL: define internal void @PLI_ARRAY_MEMCPY
+CHECK-NOT: phi
+CHECK: load \[10 x i32\]
+CHECK: store \[10 x i32\]

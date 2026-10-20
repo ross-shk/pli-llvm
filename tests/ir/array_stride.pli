@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-G1: a PL/I array's storage is contiguous, so its element address is
+    base plus a linear offset. With a non-unit lower bound the offset is
+    (i - lb), which is affine in the index: the lowering must not multiply
+    the index by a stride. */
+ array_stride: procedure options(main);
+   declare a(0:9) fixed bin(31);
+   declare i fixed bin(31);
+   declare s fixed bin(63);
+   s = 0;
+   do i = 0 to 9;
+      s = s + a(i);
+   end;
+   put skip list(s);
+ end array_stride;
