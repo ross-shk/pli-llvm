@@ -418,7 +418,7 @@ bool Sema::run(Program& prog, bool compileOnly) {
 // The expressions one statement names directly. Nested bodies are walked by the
 // caller so that a block's locals stay scoped to the block.
 template <class Fn>
-void eachStmtExpr(const Stmt* s, Fn&& f) {
+static void eachStmtExpr(const Stmt* s, Fn&& f) {
   auto e = [&](const ExprP& p) {
     if (p)
       f(p.get());
@@ -466,7 +466,7 @@ void eachStmtExpr(const Stmt* s, Fn&& f) {
 
 // A GO TO, a label or an alternate ENTRY breaks the linear walk: such a
 // procedure is skipped rather than guessed at.
-bool hasJump(const Stmt* s) {
+static bool hasJump(const Stmt* s) {
   if (!s)
     return false;
   if (!s->labels.empty() || s->kind == Stmt::Goto || s->kind == Stmt::Entry)
@@ -477,7 +477,7 @@ bool hasJump(const Stmt* s) {
   return hasJump(s->thenS.get()) || hasJump(s->elseS.get()) || hasJump(s->unit.get());
 }
 
-bool hasJump(const std::vector<StmtP>& body) {
+static bool hasJump(const std::vector<StmtP>& body) {
   for (const auto& s : body)
     if (hasJump(s.get()))
       return true;
@@ -486,7 +486,7 @@ bool hasJump(const std::vector<StmtP>& body) {
 
 // ADDR(x) hands x's address to code the walk cannot see — a callee may store
 // through it — so x is never reported.
-void collectAddrTaken(const Expr* e, std::set<const Symbol*>& out) {
+static void collectAddrTaken(const Expr* e, std::set<const Symbol*>& out) {
   if (!e)
     return;
   if (e->kind == Expr::Call && e->name == "ADDR")
@@ -499,7 +499,7 @@ void collectAddrTaken(const Expr* e, std::set<const Symbol*>& out) {
   collectAddrTaken(e->b.get(), out);
 }
 
-void collectAddrTaken(const Stmt* s, std::set<const Symbol*>& out) {
+static void collectAddrTaken(const Stmt* s, std::set<const Symbol*>& out) {
   if (!s)
     return;
   eachStmtExpr(s, [&](const Expr* e) { collectAddrTaken(e, out); });
@@ -509,7 +509,7 @@ void collectAddrTaken(const Stmt* s, std::set<const Symbol*>& out) {
   collectAddrTaken(s->elseS.get(), out);
 }
 
-void collectAddrTaken(const std::vector<StmtP>& body, std::set<const Symbol*>& out) {
+static void collectAddrTaken(const std::vector<StmtP>& body, std::set<const Symbol*>& out) {
   for (const auto& s : body)
     collectAddrTaken(s.get(), out);
 }
