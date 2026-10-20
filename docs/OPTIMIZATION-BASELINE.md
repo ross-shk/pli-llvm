@@ -290,3 +290,67 @@ A lesson worth keeping: a timeout that is a *symptom* of the host rather
 than of the code is worth distinguishing from a real failure, and the
 distinction is cheap to make — the same four tests, the same 60 s, and two
 completely different verdicts depending on the load.
+
+---
+
+## 4. WS-D: PL/I string semantics (P2)
+
+### 4.1 D1 — the padding invariant: the audit found no bug
+
+The gate asked for an audit before the item was proposed: *write a test that
+stores a `CHAR(3)`, reads it back as a wider load, and checks*.
+
+The answer is that the repository cannot produce the bug the gate was
+looking for. The representation is `[n x i8]` for a `CHARACTER(n)` and
+`ceil(n/8)` bytes for a `BIT(n)`, so there is no storage padding for a load
+to run into; a string is fetched as an address plus a length (`IRGen::loadSym`
+never loads one wider than the value); and every store is bounded by the
+declared extent (`IRGen::storeCharTo` copies `min(dstLen, srcLen)` bytes and
+fills `dstLen - n` bytes of tail). A BIT substring assignment — the one
+operation that could disturb a neighbour — is not implemented at all: it is
+diagnosed ("SUBSTR first argument must be a character string", rule (123)),
+not silently miscompiled.
+
+So D1 closes as the plan predicted: a documented invariant (ADR-245) and
+regression tests, not a fix.
+
+**How to reproduce.** `tests/core/string_padding.pli` (the values) and
+`tests/ir/string_extent.pli` (the IR: `[3 x i8]`, a three-byte copy, a
+zero-byte tail fill, a fetch that carries the length three).
+
+### 4.2 D3 — the lifetime markers: a stack-size win, and where it does not reach
+
+The plan's witness was "a loop that builds a VARYING string each iteration".
+It does not apply as written: a VARYING *variable* keeps its data inside its
+own alloca (`{i32, [n x i8]}`), so there is no separate buffer to mark and
+the slot is already reused — the loop writes the same storage every
+iteration.
+
+The buffer that does exist is the one a `CHAR(*) VARYING` parameter needs
+when the actual is not a VARYING value: a stack copy of the string. Marking
+it, together with the by-reference argument dummy and the character
+expression buffer, lets the temporaries of different calls share one slot.
+
+**The measurement** — three procedures called with a character expression, in
+a loop; the frame size of the emitted IR after `llc -O2`:
+
+| build | frame |
+|---|---|
+| without the markers | 112 bytes |
+| with the markers (ADR-246) | **80 bytes** |
+
+The PL/I-language benchmark corpus does not move: none of its programs passes
+a character expression to a procedure, so there is no dummy to share. The win
+is a stack-size win on programs that do, not a speed win — the slot was
+allocated once either way.
+
+**How to reproduce.** `benchmarks`-independent: compile a program with
+several character-expression arguments, emit the IR, and compare the frame
+size in the assembly with and without the `llvm.lifetime` calls.
+
+**The safety check.** A wrongly ended lifetime would let a buffer be reused
+while it is still live. The VARYING-string corpus and the task programs were
+run under AddressSanitizer — eleven string programs and four task programs,
+all clean — and `tests/driver/lifetime_asan.sh` keeps that a per-commit
+gate. The sanitizer runtime has to match the object, so the test uses the
+clang of the compiler's own LLVM and skips when it cannot find one.
