@@ -1,0 +1,11 @@
+; ADR-245 (WS-D1): the declared extent is the whole value. A CHARACTER(3)
+; occupies three bytes, its store writes three bytes and no more, and the
+; fetch that hands the string on carries the length three — so neither a
+; read nor a write can cross the declared extent.
+CHECK: alloca [3 x i8]
+; the store copies the three characters and blanks nothing: the tail fill
+; after a full-length copy is zero bytes.
+CHECK: @llvm.memmove.p0.p0.i64(ptr %S.addr, ptr %str.1, i64 3, i1 false)
+CHECK: @llvm.memset.p0.i64(ptr %{{.*}}, i8 32, i64 0, i1 false)
+; the fetch carries the declared length, so no read can run past it.
+CHECK: @pli_put_list_char(ptr %S.addr, i64 3)

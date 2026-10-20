@@ -174,10 +174,24 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   case TK::Bit:
     // BIT(1) is a single i8 in storage (`i1` in registers); wider strings
     // pack big-endian, ceil(n/8) bytes (rule (18), QR2.2).
+    //
+    // ADR-245 (the PL/I string padding invariant): the declared extent is
+    // the whole value. A BIT(n) is exactly ceil(n/8) bytes and the bits
+    // above n in the last byte are zero, so the MULTICS question "may this
+    // fetch read padding bits?" (padded_ref) answers "yes, and they are
+    // zero" — the value cannot depend on what sits next to it.
     if (t.len == 1)
       return b_.getInt8Ty();
     return llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)bitBytes(t.len));
   case TK::Char: {
+    // ADR-245: a CHARACTER(n) is exactly n bytes. There is no storage
+    // padding in the LLVM sense, so "may this fetch read padding bits?"
+    // (MULTICS padded_ref) answers "no" and "must this store zero the
+    // padding bits?" (padded_for_store_ref) answers "there are none".
+    // MULTICS conflated the two in 1980 and shipped a variable that was
+    // stored unpadded but fetched padded; keep the two questions apart —
+    // the fetch side is address+length (loadSym), the store side is
+    // bounded by the declared length (storeCharTo).
     if (t.varying) {
       llvm::Type* data = llvm::ArrayType::get(b_.getInt8Ty(), t.len);
       return llvm::StructType::get(b_.getInt32Ty(), data);
@@ -8782,6 +8796,9 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   v.ty = ty;
   llvm::Value* addr = addressOf(sym);
   if (ty.isChar()) {
+    // ADR-245: a fetch is an address plus a length, never a wider load —
+    // the value cannot depend on a byte outside the declared extent
+    // (MULTICS padded_ref).
     if (ty.varying) {
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(ty), addr, 1, "vdata");
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(ty), addr, 0, "vlenp");
@@ -8847,6 +8864,9 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool 
 
 void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceLoc loc,
                         bool packed) {
+  // ADR-245: the store is bounded by the declared extent — it writes the
+  // target's own length and not one byte more, so a neighbouring variable
+  // is untouched (MULTICS padded_for_store_ref).
   if (!v.ty.isChar()) {
     d_.error(loc,
              "conversion from " + v.ty.desc() + " to " + dt.desc() +
