@@ -284,6 +284,22 @@ reframe (§1.6 of the plan): a peephole is attempted only when the decision
 layer cannot express the transformation. That left four items — C1, C3, C4 and
 C5 — and each is recorded here with its own verdict.
 
+### 4.0 The differential check both peepholes share
+
+`tests/driver/peephole_fuzz.sh` generates random programs — concatenations of
+fixed-length variables and literals (empty literals and nested concatenations
+included, so the result is truncated and blank-padded) and masked bit tests on
+one value (disjoint 4-bit fields, which merge, and overlapping masks, which
+must not) — and compiles each one twice: once with the peepholes, once with
+`--experimental-lowering=concat_const:runtime --experimental-lowering=bit_merge:runtime`.
+The two runs must print the same thing. The seed is fixed, so the corpus is the
+same on every run, and the test takes about twenty seconds.
+
+The committed corpus is eight programs. A wider run of the same generator over
+790 random programs (390 during the review and 400 in the background) found
+**no divergence**, with 2554+ constant-offset concat stores and 594+ merged
+bit tests exercised — so the comparison was never vacuous.
+
 ### 4.1 C1 — constant-offset concatenation stores: **implemented**
 
 **The measurement** is the IR first, because the cost of the old lowering is

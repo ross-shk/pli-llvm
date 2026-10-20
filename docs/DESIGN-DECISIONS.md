@@ -7614,8 +7614,13 @@ The `-O2` build is 15.7x faster and now beats its C twin, because the
 allocation per iteration is gone rather than merely cheapened. The measurement
 is recorded in `docs/OPTIMIZATION-BASELINE.md` §4.1.
 
+`tests/driver/peephole_fuzz.sh` is the differential gate both peepholes
+share: it generates random programs, compiles each twice — once with the
+peepholes, once with the generic lowering — and requires the two runs to print
+the same thing.
+
 The gates are `tests/ir/concat_const.pli` (two constant-offset `memcpy`s at
-constant offsets, and no `pli_alloc` anywhere in the procedure) and
+constant offsets, and no `pli_alloc` anywhere in the procedure),
 `tests/core/concat_pad.pli` (the value the store must produce: blank padding,
 truncation to the leftmost characters, literal and empty leaves, and the two
 shapes the store declines — the target as a leaf and the target as the second
@@ -7724,13 +7729,21 @@ LLVM's heuristics happen to miss (a value in memory that LLVM cannot forward,
 a mask it cannot fold, a target without the loop's vectorizable form). The
 same argument decided ADR-266's picture fold, which also showed no `-O2` gain.
 
+**A chain of tests.** PL/I's `&` is left-associative, so `A & B & C` is
+`((A & B) & C)`: the merge applies to the *innermost* pair, and the rest of the
+chain keeps its own tests. A chain of three masked tests therefore merges two
+of them and compares the third separately — the value is unchanged either way,
+and `tests/core/bit_merge.pli` pins that.
+
 The gates are `tests/ir/combine_tests.pli` (one `icmp eq i32` against the
-merged expectation, and no second comparison) and `tests/core/bit_merge.pli`
+merged expectation, and no second comparison), `tests/core/bit_merge.pli`
 (the merged conjunction must equal the two tests taken separately over eight
 values, and the two shapes the merge must decline — overlapping masks, and two
 different values — must keep their own value). The witness in
 `tests/driver/experimental_lowering.sh` requires the merged and the separate
-lowering to agree in the `auto`, `runtime` and `llvm` modes.
+lowering to agree in the `auto`, `runtime` and `llvm` modes, and
+`tests/driver/peephole_fuzz.sh` is the differential gate the two WS-C
+peepholes share.
 
 **Rejected.** *Merging when the masks overlap.* The two tests are then not
 independent, and the merged expectation would demand bits neither test
