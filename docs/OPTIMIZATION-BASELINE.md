@@ -272,3 +272,59 @@ are target-independent by construction — a constant global and an indexed
 load, no new intrinsics, no ABI change — and the IR tests pin the shape on
 every platform CI builds.
 
+
+---
+
+## 4. WS-C — the IRGen peepholes (C1, C3, C4, C5)
+
+**The criterion.** The plan's standing rule applies to every item: a technique
+is not implemented until the IR shows the miss and a benchmark shows the gain.
+WS-C is *secondary* to the decision layer (WS-K) after the IBM-precedence
+reframe (§1.6 of the plan): a peephole is attempted only when the decision
+layer cannot express the transformation. That left four items — C1, C3, C4 and
+C5 — and each is recorded here with its own verdict.
+
+### 4.1 C1 — constant-offset concatenation stores: **implemented**
+
+**The measurement** is the IR first, because the cost of the old lowering is
+structural. `A = B || C` with a fixed-length `A(n)` and fixed-length `B`, `C`
+produced:
+
+| step | before | after |
+|---|---|---|
+| the result buffer | `call ptr @pli_alloc(i64 7)` — a heap allocation per evaluation | *gone* |
+| the leaf copies | `memcpy` with a runtime length, at a runtime offset | one `memcpy` of a constant size at a constant offset |
+| the assignment | `memmove` + `memset` with runtime lengths | *gone* — the leaves land in the target directly |
+| the buffer | `call void @pli_free(ptr %cbuf)` | *gone* |
+
+`tests/ir/concat_const.pli` pins that shape: two `llvm.memcpy` calls of
+constant size, the second at `getelementptr i8, ptr %C.addr, i64 10`, and no
+`pli_alloc` anywhere in the procedure.
+
+**The benchmark.** `benchmarks/lang/concat_const.pli` — two `CHAR(10)` values
+concatenated into a `CHAR(20)` target, four million times.
+`python3 benchmarks/run_benchmarks.py --only concat_const --runs 5 --force`
+(arm64 macOS, LLVM 23.1.2, after a rebuild); median of five:
+
+| build | PL/I | C twin | ratio |
+|---|---|---|---|
+| `-O0` before | 153.4 ms | 21.9 ms | 7.01x |
+| `-O0` after | 46.2 ms | 22.5 ms | 2.06x |
+| `-O1` before | 121.6 ms | 8.6 ms | 14.12x |
+| `-O1` after | 7.8 ms | 9.0 ms | 0.87x |
+| `-O2` before | 117.1 ms | 22.2 ms | 5.28x |
+| `-O2` after | **7.5 ms** | 8.8 ms | **0.85x** |
+| `-O3` before | 119.4 ms | 8.7 ms | 13.70x |
+| `-O3` after | 7.9 ms | 9.9 ms | 0.80x |
+
+The `-O2` build is **15.7x** faster and now beats its C twin. The win is the
+allocation, not the copy: the old path paid a `malloc`/`free` pair per
+iteration to move twenty bytes whose offsets were known at compile time.
+
+**The verdict.** The item closes, with ADR-242. The correctness gates are
+`tests/core/concat_pad.pli`: the value the store must produce (blank padding
+to the target's length, truncation to the leftmost characters, literal and
+empty leaves) and the two shapes the store *declines* — the target as a leaf
+and the target as the second leaf — where the concatenation must be read whole
+before anything is written. Those two cases are the aliasing hazard the
+transformation introduces, and they keep the generic path.

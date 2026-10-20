@@ -1,0 +1,15 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Two masked bit tests on the same value in one conjunction merge into one
+   masked test (ADR-243): the value is loaded once, masked once, and
+   compared once. Rules (115),(116),(117). */
+ main: procedure options(main);
+   declare w bit(32);
+   declare hits fixed bin(31);
+   w = fixed(305419896);
+   hits = 0;
+   if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
+      ((w & '00000000000000000000000011110000'b) = '00000000000000000000000000110000'b)
+   then hits = hits + 1;
+   put skip list(hits);
+ end main;

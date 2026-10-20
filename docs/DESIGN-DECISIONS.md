@@ -7524,3 +7524,108 @@ one implementation of each rule. *Folding before `emitExpr`.* The IR value is
 the right input: it is already the exact `(value, scale)` pair the runtime
 receives, including float truncation and wide-decimal narrowing, so the
 folder cannot disagree with the call it replaces.
+
+## ADR-242 — Constant-offset concatenation stores
+
+**Context.** WS-C1 is the first of the plan's WS-C peepholes. MULTICS's code
+generator had a family of peepholes that LLVM will never produce, because they
+are PL/I-shape-specific; `cat_op.pl1:140-167` is the concatenation one:
+
+```pl1
+/* If p2's length was able to be inserted directly into a descriptor, try to optimize by changing the constant offset of the target */
+     if p2 -> reference.length = null
+     then if p2 -> reference.c_length < 4096
+        then if ^ p2 -> reference.varying_ref then do;
+            ...
+            word_offset = divide(p2 -> reference.c_length,units_per_word(lunits),15,0)
+                  + p1_address.offset;
+            if word_offset < 16383
+            then do;
+                 p1 -> reference.c_f_offset = mod(p2 -> reference.c_length,units_per_word(lunits))
+                          + p1 -> reference.c_f_offset;
+                 ...
+```
+
+The insight is that `a || b`, when `b`'s length is a compile-time constant, is
+*one store at a constant offset* inside the result: no length computation, no
+temporary. The plan's framing is the same — "the offset is only constant if the
+destination's used length is also constant", so the case is a fixed-length
+`CHARACTER(n)` target whose leaves all have constant lengths.
+
+The repo lowered every concatenation the same way: the expression built the
+result into a fresh `pli_alloc` heap buffer (the length was the sum of the
+leaves' *live* lengths, so it was a runtime value), copied each leaf into it,
+and the assignment then copied the buffer into the target and freed it. A
+`CHAR(20)` target receiving `CHAR(10) || CHAR(10)` cost a heap allocation, two
+runtime-length copies into it, a third copy out of it, and a `free` — all to
+move twenty bytes whose offsets were known at compile time.
+
+**Decision.** A concatenation assigned to a fixed-length `CHARACTER(n)` target
+whose leaves all have compile-time-constant lengths is stored *directly into the
+target*, one constant-size store per leaf at a constant offset.
+
+`IRGen::emitConcatConstStore` recognises the shape and emits, for a target of
+capacity `n`:
+
+* one `llvm.memcpy` of a constant size per leaf, at `dst + off` where `off` is
+  the sum of the preceding leaves' constant lengths;
+* the last leaf is clipped to the target's capacity, so the result is the
+  leftmost `n` characters of the concatenation;
+* one `llvm.memset` of blanks for the bytes past the concatenation, so a short
+  result is blank-padded to `n` — the same padding the generic assign path
+  produces (rule (86)).
+
+There is no temporary buffer, no length arithmetic and no allocation.
+
+The transformation is only sound when the leaves cannot overlap the target,
+because the leaves are read while the target is written. The guard is
+deliberately conservative and mirrors the existing self-append peephole
+(ADR-216): a leaf is a string literal or a *whole* variable that
+
+* is not the target itself,
+* is not `BASED`, `CONTROLLED` or `DEFINED` storage (whose address another
+  reference can share), and
+* is not a by-reference parameter, whose storage is the caller's and could be
+  the target's; a by-value parameter is a private cell (ADR-215) and is fine.
+
+The target owns its storage for the same reason: a by-reference target keeps
+the generic path. Two distinct variables of one frame have disjoint storage and
+distinct frames are disjoint too, so a whole-variable leaf of any frame is
+disjoint from a whole-variable target of another frame, and the symbol-identity
+test covers the one frame.
+
+Anything else — a `VARYING` target, a leaf of unknown length, a member or
+array element, a call, a numeric operand (which the language converts to
+`CHAR(24)` at run time) — keeps the generic path.
+
+**Consequences.** The IR changes shape, and the change is measurable.
+`benchmarks/lang/concat_const.pli` concatenates two `CHAR(10)` values into a
+`CHAR(20)` target four million times; on arm64 macOS (LLVM 23.1.2), median of
+five runs:
+
+| build | PL/I | C twin | ratio |
+|---|---|---|---|
+| `-O0` before | 153.4 ms | 21.9 ms | 7.01x |
+| `-O0` after | 46.2 ms | 22.5 ms | 2.06x |
+| `-O2` before | 117.1 ms | 22.2 ms | 5.28x |
+| `-O2` after | **7.5 ms** | 8.8 ms | **0.85x** |
+
+The `-O2` build is 15.7x faster and now beats its C twin, because the
+allocation per iteration is gone rather than merely cheapened. The measurement
+is recorded in `docs/OPTIMIZATION-BASELINE.md` §4.1.
+
+The gates are `tests/ir/concat_const.pli` (two constant-offset `memcpy`s at
+constant offsets, and no `pli_alloc` anywhere in the procedure) and
+`tests/core/concat_pad.pli` (the value the store must produce: blank padding,
+truncation to the leftmost characters, literal and empty leaves, and the two
+shapes the store declines — the target as a leaf and the target as the second
+leaf, where the concatenation must be read whole before the store).
+
+**Rejected.** *Writing into the target for a `VARYING` target.* The length slot
+would also have to be written with a constant, and the data area's tail is
+blank-filled by the generic path, so the shape is larger for a rarer case; it
+is left for a follow-up. *A stack temporary instead of the heap buffer.* It
+would remove the allocation but keep the double copy, and it needs the
+concat-temp's ownership (`freeConcatTemp`) to change. *Merging the leaves into
+one copy.* Only a single leaf may be a literal; a variable leaf's bytes are not
+contiguous with the next leaf's, so there is nothing to merge.

@@ -1,0 +1,15 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Constant-offset concatenation (ADR-242): a fixed-length target and
+   fixed-length leaves put every store at a constant offset, so the
+   concatenation needs no temporary buffer and no length arithmetic.
+   Rule (119). */
+ main: procedure options(main);
+   declare a char(10);
+   declare b char(10);
+   declare c char(20);
+   a = '0123456789';
+   b = 'abcdefghij';
+   c = a || b;
+   put skip list(c);
+ end main;

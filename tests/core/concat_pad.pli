@@ -1,0 +1,51 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Concatenation into a fixed-length CHARACTER target (rules (86),(119)):
+   the result is the leftmost characters of the concatenation, blank-padded
+   to the target's length. ADR-242 stores the concatenation at constant
+   offsets; the cases below pin the value it must produce, including the
+   shapes the constant-offset store declines (a target that is also a leaf). */
+ concat_pad: procedure options(main);
+   declare a char(6);
+   declare b char(2);
+   declare c char(4);
+   declare d char(8);
+   declare e char(3);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   /* Shorter than the target: blank-padded to the target's length. */
+   b = 'ab';
+   c = 'cd';
+   a = b || c;
+   if a ^= 'abcd  ' then fails = fails + 1;
+
+   /* Exactly the target's length: no padding, no truncation. */
+   d = 'abcdefgh';
+   a = d;
+   if a ^= 'abcdef' then fails = fails + 1;
+
+   /* Longer than the target: the leftmost characters survive. */
+   a = d || b;
+   if a ^= 'abcdef' then fails = fails + 1;
+
+   /* A literal leaf and an empty literal leaf. */
+   a = 'ab' || 'cd';
+   if a ^= 'abcd  ' then fails = fails + 1;
+   a = 'ab' || '';
+   if a ^= 'ab    ' then fails = fails + 1;
+
+   /* The target is also a leaf: the old value is read before the store. */
+   e = 'xyz';
+   e = e || 'ab';
+   if e ^= 'xyz' then fails = fails + 1;
+
+   /* The target is the second leaf: the concatenation is read whole first. */
+   e = 'xyz';
+   a = 'ab' || e;
+   if a ^= 'abxyz ' then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS concat_pad');
+   else put skip list('FAIL concat_pad: fails =', fails);
+ end concat_pad;

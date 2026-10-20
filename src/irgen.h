@@ -188,6 +188,17 @@ private:
   // Self-append peephole (rule (119), P4): X = X || lit... appends in place
   // for AUTOMATIC scalar VARYING targets; false for any other shape.
   bool emitSelfAppend(HStmt* s);
+  // Constant-offset concatenation store (rule (119), ADR-242): A = B || C
+  // into a fixed-length CHARACTER target stores every leaf at a constant
+  // offset, with no temporary buffer; false for any other shape.
+  bool emitConcatConstStore(HStmt* s);
+  // Merge two masked bit tests on the same value into one masked test
+  // (ADR-243): (X & M1) = E1 & (X & M2) = E2 is one test on X. False for
+  // any other shape, and when the two tests may not be merged.
+  bool emitCombinedBitTest(HExpr* e, Val& out);
+  // True when `s` is a parameter of the current procedure or of one of its
+  // enclosing procedures: such a symbol's storage may be the caller's.
+  bool isParamOfScope(Symbol* s) const;
   // Rule (119): a concat RHS evaluates into a fresh pli_alloc buffer; once
   // an assignment has copied it into the target the buffer is dead. Free it
   // unless the RHS is some other shape (no-op then).

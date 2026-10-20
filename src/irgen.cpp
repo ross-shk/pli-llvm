@@ -3,6 +3,7 @@
 #include "irgen.h"
 #include "codegen.h" // pli::applyRuntimeFnAttrs declaration
 #include "embedded_runtime.h"
+#include "irgen_decisions.h" // pli:: the PL/I-specific decisions (ADR-260)
 #include <algorithm>
 #include <cfloat>
 #include <set>
@@ -691,6 +692,9 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"pli_rank", true},
       {"pli_collate", true},
       {"pli_isochar", true},
+      // WS-C: the shape peepholes (the generic lowering is the fallback)
+      {"concat_const", true},
+      {"bit_merge", true},
   };
   return table;
 }
@@ -756,6 +760,11 @@ static const std::set<std::string>& kLLVMLowerings() {
       "pli_rank",
       "pli_collate",
       "pli_isochar",
+      // WS-C: the shape peepholes. Their "runtime" path is the generic
+      // lowering — the concatenation's temporary buffer and the two separate
+      // bit tests — so the differential oracle can compare the two shapes.
+      "concat_const",
+      "bit_merge",
   };
   return table;
 }
@@ -5594,6 +5603,249 @@ void IRGen::freeConcatTemp(HExpr* rhs, llvm::Value* buf) {
     b_.CreateCall(runtimeFn("pli_free"), {buf});
 }
 
+// True when `s` is a parameter of the current procedure or of one of its
+// enclosing procedures: such a symbol's storage is the caller's.
+bool IRGen::isParamOfScope(Symbol* s) const {
+  for (const HProc* q = curProc_; q; q = q->parent)
+    if (std::find(q->paramSyms.begin(), q->paramSyms.end(), s) != q->paramSyms.end())
+      return true;
+  return false;
+}
+
+// Constant-offset concatenation store (rule (119), ADR-242): A = B || C
+// where A is a fixed-length CHARACTER(n) and every leaf of the
+// concatenation has a compile-time-constant length. The result is the
+// leftmost n characters of the concatenation, blank-padded to n, so each
+// leaf is stored straight into A at a constant offset — no temporary
+// buffer, no length arithmetic, no allocation. Mirrors MULTICS
+// cat_op.pl1:140-167, which folds a constant tail length into the
+// target's constant offset.
+//
+// Safety: the leaves are read while A is written, so a leaf must read
+// storage that cannot overlap A's. A leaf is therefore a literal or a
+// whole variable that is not A, is not BASED/CONTROLLED/DEFINED storage,
+// and is not a by-reference parameter (its storage is the caller's, and
+// the caller may have passed A itself); a by-value parameter is a private
+// cell (ADR-215). Two distinct variables of one frame have disjoint
+// storage, and distinct frames are disjoint too. The target owns its
+// storage for the same reason: a by-reference target keeps the generic
+// path. Returns false when the shape does not qualify, and the caller
+// then runs the generic concat-and-assign path.
+bool IRGen::emitConcatConstStore(HStmt* s) {
+  if (!s->extraTargets.empty())
+    return false;
+  HExpr* t = s->target.get();
+  HExpr* rhs = s->value.get();
+  if (!t || !rhs || t->kind != HExpr::VarRef || !t->sym)
+    return false;
+  if (!t->memberPath.empty() || t->locPtr)
+    return false;
+  Symbol* dst = t->sym;
+  // The target must own a fixed-length character buffer of known size.
+  if (!dst->ty.isChar() || dst->ty.varying || dst->ty.starLen || dst->ty.isArray())
+    return false;
+  if (dst->ty.len <= 0)
+    return false;
+  if (dst->isBased() || dst->controlled || dst->definedBase)
+    return false;
+  // A by-reference target's storage is the caller's, which may be the very
+  // variable a leaf reads.
+  if (isParamOfScope(dst) && !isByValueParam(dst))
+    return false;
+  if (rhs->kind != HExpr::Binary || rhs->op != Tok::Concat)
+    return false;
+  // Flatten the spine (as the generic concat lowering does): the leaves come
+  // out in source order.
+  std::vector<HExpr*> leaves;
+  std::vector<HExpr*> stack{rhs};
+  while (!stack.empty()) {
+    HExpr* ex = stack.back();
+    stack.pop_back();
+    if (ex->kind == HExpr::Binary && ex->op == Tok::Concat) {
+      stack.push_back(ex->b.get());
+      stack.push_back(ex->a.get());
+      continue;
+    }
+    leaves.push_back(ex);
+  }
+  struct LeafSrc {
+    llvm::Value* ptr;
+    long long len;
+  };
+  std::vector<LeafSrc> srcs;
+  for (HExpr* leaf : leaves) {
+    if (leaf->kind == HExpr::CharLit) {
+      if (leaf->sval.empty())
+        continue; // an empty literal contributes no bytes
+      srcs.push_back({globalString(leaf->sval), (long long)leaf->sval.size()});
+      continue;
+    }
+    if (leaf->kind != HExpr::VarRef || !leaf->sym)
+      return false;
+    Symbol* ls = leaf->sym;
+    if (!leaf->memberPath.empty() || leaf->locPtr)
+      return false;
+    if (!ls->ty.isChar() || ls->ty.varying || ls->ty.starLen || ls->ty.isArray())
+      return false;
+    if (ls == dst)
+      return false;
+    if (ls->isBased() || ls->controlled || ls->definedBase)
+      return false;
+    // A by-reference parameter's storage is the caller's and could be the
+    // target's; a by-value parameter is a private cell (ADR-215).
+    if (isParamOfScope(ls) && !isByValueParam(ls))
+      return false;
+    llvm::Value* addr = addressOf(ls);
+    if (!addr)
+      return false;
+    srcs.push_back({addr, ls->ty.len});
+  }
+  llvm::Value* dstAddr = addressOf(dst);
+  if (!dstAddr)
+    return false;
+  // The lowering policy wins (ADR-260): with
+  // --experimental-lowering=concat_const:runtime the generic path is kept,
+  // so the differential oracle can compare the two lowerings.
+  if (runtimePath("concat_const")) {
+    facts_.recordBuiltin("concat_const", "runtime");
+    return false;
+  }
+  facts_.recordBuiltin("concat_const", "llvm");
+  // The store plan — how many bytes each leaf contributes and how many blanks
+  // follow them — is a decision (the plan's C2), so it lives in
+  // src/irgen_decisions.cpp.
+  std::vector<long long> leafLen;
+  leafLen.reserve(srcs.size());
+  for (const LeafSrc& l : srcs)
+    leafLen.push_back(l.len);
+  pli::ConcatStorePlan plan = pli::planConcatStore(leafLen, dst->ty.len);
+  if (!plan.ok)
+    return false;
+  // One store per leaf at a constant offset; the bytes past the
+  // concatenation are blanks, exactly as the generic assign path leaves
+  // them (rule (86)).
+  long long off = 0;
+  for (size_t i = 0; i < srcs.size(); ++i) {
+    const long long take = plan.sizes[i];
+    if (take > 0) {
+      llvm::Value* at = b_.CreateGEP(b_.getInt8Ty(), dstAddr, {b_.getInt64(off)}, "cc.at");
+      b_.CreateMemCpy(at, llvm::MaybeAlign(), srcs[i].ptr, llvm::MaybeAlign(),
+                      llvm::ConstantInt::get(b_.getInt64Ty(), take));
+      off += take;
+    }
+  }
+  if (plan.pad > 0)
+    b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dstAddr, {b_.getInt64(off)}, "cc.pad"),
+                    b_.getInt8(' '), llvm::ConstantInt::get(b_.getInt64Ty(), plan.pad),
+                    llvm::MaybeAlign(), false);
+  return true;
+}
+
+// Merge two masked bit tests on the same value into one masked test
+// (ADR-243): `(X & M1) = E1 & (X & M2) = E2` is `(X & (M1|M2)) = (E1|E2)`,
+// when the masks are disjoint and each expectation lies inside its own
+// mask. Mirrors MULTICS combine_tests.pl1:159-300, which requires the two
+// tests to read the same storage word of the same top-level object.
+//
+// The win is one masked test instead of two: the value is loaded once, the
+// mask is applied once, and the branch is one. LLVM cannot do this itself,
+// because PL/I's bit strings are bit-granular inside a byte array, so the
+// masks only exist at the PL/I level.
+//
+// The decision — whether the two tests may be merged, and what the merged
+// mask and expectation are — is pli::mergeBitTests (the plan's C2); what
+// stays here is the matching of the expression's shape and the emission.
+bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
+  // One side of the conjunction: (X & M) = E, with X the tested value, M a
+  // constant mask and E the constant expectation.
+  struct Side {
+    HExpr* var = nullptr;
+    std::string mask;
+    std::string want;
+    int nbits = 0;
+  };
+  auto parseSide = [](HExpr* t, Side& s) -> bool {
+    if (!t || t->kind != HExpr::Binary || t->op != Tok::Eq)
+      return false;
+    HExpr* masked = t->a.get();
+    HExpr* want = t->b.get();
+    if (!masked || masked->kind != HExpr::Binary || masked->op != Tok::Amp)
+      return false;
+    if (!want || want->kind != HExpr::BitLit)
+      return false;
+    HExpr* var = masked->a.get();
+    HExpr* mask = masked->b.get();
+    if (!var || var->kind != HExpr::VarRef || !var->sym)
+      return false;
+    if (!mask || mask->kind != HExpr::BitLit)
+      return false;
+    // A one-bit value's `&` is a logical conjunction, not a mask.
+    if (!var->ty.isBit() || var->ty.len <= 1)
+      return false;
+    // The mask and the expectation must have the tested value's length, so
+    // they select the same bits.
+    if (mask->ty.len != var->ty.len || want->ty.len != var->ty.len)
+      return false;
+    if ((int)mask->sval.size() != var->ty.len || (int)want->sval.size() != var->ty.len)
+      return false;
+    s.var = var;
+    s.mask = mask->sval;
+    s.want = want->sval;
+    s.nbits = var->ty.len;
+    return true;
+  };
+  Side s1, s2;
+  if (!parseSide(e->a.get(), s1) || !parseSide(e->b.get(), s2))
+    return false;
+  // The two tests must read the same value (MULTICS's `same_word`: the same
+  // storage object of the same top-level symbol).
+  if (s1.var->sym != s2.var->sym || s1.var->memberPath != s2.var->memberPath ||
+      (bool)s1.var->locPtr != (bool)s2.var->locPtr)
+    return false;
+  if (s1.nbits != s2.nbits)
+    return false;
+  // The merge itself: disjoint masks, each expectation inside its mask.
+  pli::BitTestMerge merge =
+      pli::mergeBitTests(s1.mask, s1.want, s2.mask, s2.want);
+  if (!merge.ok)
+    return false;
+  // The lowering policy wins (ADR-260): with
+  // --experimental-lowering=bit_merge:runtime the two tests stay separate,
+  // so the differential oracle can compare the two lowerings.
+  if (runtimePath("bit_merge")) {
+    facts_.recordBuiltin("bit_merge", "runtime");
+    return false;
+  }
+  facts_.recordBuiltin("bit_merge", "llvm");
+  // One load of the value, masked with the merged constant mask.
+  Val x = emitExpr(s1.var);
+  if (!x.ty.isBit() || x.ty.len != s1.nbits || !x.reg)
+    return false;
+  const int B = bitBytes(s1.nbits);
+  std::vector<unsigned char> maskBytes = packBitLiteral(merge.mask, s1.nbits);
+  std::vector<unsigned char> wantBytes = packBitLiteral(merge.want, s1.nbits);
+  llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+  llvm::Value* masked = llvm::UndefValue::get(arrTy);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* xb = b_.CreateExtractValue(x.reg, (unsigned)k, "bt.x");
+    llvm::Value* mb = llvm::ConstantInt::get(b_.getInt8Ty(), maskBytes[k]);
+    masked = b_.CreateInsertValue(masked, b_.CreateAnd(xb, mb, "bt.and"), (unsigned)k);
+  }
+  // The comparison is the one the two separate tests would make: the masked
+  // value against the merged expectation, as numbers (rule (117)).
+  Val mv;
+  mv.ty = Type::bit(s1.nbits);
+  mv.reg = masked;
+  Val wv;
+  wv.ty = Type::bit(s1.nbits);
+  wv.reg = llvm::ConstantDataArray::get(ctx_, wantBytes);
+  Val mi = convert(mv, Type::fixedBin(31, 0), e->loc);
+  Val wi = convert(wv, Type::fixedBin(31, 0), e->loc);
+  out.ty = Type::bit(1);
+  out.reg = b_.CreateICmpEQ(mi.reg, wi.reg, "bt.cmp");
+  return true;
+}
+
 void IRGen::emitAssign(HStmt* s) {
   if (!s->target)
     return;
@@ -5985,6 +6237,11 @@ void IRGen::emitAssign(HStmt* s) {
   // Self-append peephole first: X = X || lit... appends in place when the
   // target qualifies; anything else falls through to generic concat+assign.
   if (emitSelfAppend(s))
+    return;
+  // Constant-offset concatenation store: A = B || C into a fixed-length
+  // target stores each leaf at a constant offset, with no temporary buffer
+  // (ADR-242).
+  if (emitConcatConstStore(s))
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
@@ -10478,6 +10735,10 @@ Val IRGen::emitExpr(HExpr* e) {
   }
 
   if (op == Tok::Amp || op == Tok::Bar) { // rules (116),(115)
+    // A conjunction of two masked bit tests on the same value is one masked
+    // test (ADR-243); the merge is tried before the two tests are emitted.
+    if (op == Tok::Amp && emitCombinedBitTest(e, v))
+      return v;
     Val a = emitExpr(e->a.get());
     Val b = emitExpr(e->b.get());
     if (a.ty.isBit() && b.ty.isBit() && (a.ty.len > 1 || b.ty.len > 1)) {

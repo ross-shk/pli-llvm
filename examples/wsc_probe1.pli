@@ -1,0 +1,10 @@
+ main: procedure options(main);
+   declare a char(5);
+   declare b char(3);
+   declare c char(4);
+   a = 'hello';
+   b = 'abc';
+   c = 'defg';
+   a = b || c;
+   put skip list(a);
+ end main;

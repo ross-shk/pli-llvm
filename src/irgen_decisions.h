@@ -98,4 +98,32 @@ PictureSpec classifyPicture(const std::string& pic);
 // or the value cannot be represented, leaving the caller on the runtime path.
 bool foldPictureConversion(long long value, int scale, const PictureSpec& spec, std::string& out);
 
+// WS-C1: the constant-offset store plan for one concatenation (ADR-242). A
+// concatenation assigned to a fixed-length CHARACTER target of `cap` bytes
+// holds the leftmost `cap` characters of the concatenation, blank-padded to
+// `cap` when it is shorter. The plan says how many bytes each leaf
+// contributes and how many blanks follow them, so the decision needs no
+// backend. `leafLen` is each leaf's compile-time-constant length.
+struct ConcatStorePlan {
+  bool ok = false;               // the plan applies
+  std::vector<long long> sizes;  // the bytes each leaf contributes
+  long long used = 0;            // the bytes the leaves occupy
+  long long pad = 0;             // the blank padding past the leaves
+};
+ConcatStorePlan planConcatStore(const std::vector<long long>& leafLen, long long cap);
+
+// WS-C3: the merged masked test for two bit tests on one value (ADR-243).
+// `(X & M1) = E1` and `(X & M2) = E2` are one test `(X & (M1|M2)) = (E1|E2)`
+// when the masks are disjoint and each expectation lies inside its own mask:
+// then every bit of the conjunction is decided by the merged mask alone. The
+// masks and expectations are PL/I bit strings, so the decision needs no
+// backend. `ok` is false when the two tests may not be merged.
+struct BitTestMerge {
+  bool ok = false;   // the two tests may be merged
+  std::string mask;  // the merged mask
+  std::string want;  // the merged expectation
+};
+BitTestMerge mergeBitTests(const std::string& mask1, const std::string& want1,
+                            const std::string& mask2, const std::string& want2);
+
 } // namespace pli

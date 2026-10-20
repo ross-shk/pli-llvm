@@ -66,6 +66,7 @@ LANG_BENCHMARKS = [
     ("on_dispatch",   "lang/on_dispatch.pli",   "lang/baseline/on_dispatch_c.c"),
     ("decimal_scale", "lang/decimal_scale.pli", "lang/baseline/decimal_scale_c.c"),
     ("bit_fields",    "lang/bit_fields.pli",    "lang/baseline/bit_fields_c.c"),
+    ("bit_merge",     "lang/bit_merge.pli",     "lang/baseline/bit_merge_c.c"),
     ("concat_const",  "lang/concat_const.pli",  "lang/baseline/concat_const_c.c"),
     ("io_list",       "lang/io_list.pli",       "lang/baseline/io_list_c.c"),
     ("alias_scope",   "lang/alias_scope.pli",   "lang/baseline/alias_scope_c.c"),
@@ -91,6 +92,15 @@ PAIRS = [
     # override isolates the picture lowering from the rest of the pipeline.
     ("picture_fold", "folded", [], "runtime",
      ["--experimental-lowering=picture:runtime"]),
+    # WS-C3 (ADR-243): two masked bit tests on one value in one conjunction
+    # merge into one masked test; the other side keeps the two tests, so the
+    # pair prices the merge itself.
+    ("bit_merge", "merged", [], "separate",
+     ["--experimental-lowering=bit_merge:runtime"]),
+    # WS-C1 (ADR-242): a concatenation with constant-length leaves is stored
+    # at constant offsets; the other side keeps the temporary buffer.
+    ("concat_const", "constant-offset", [], "buffer",
+     ["--experimental-lowering=concat_const:runtime"]),
 ]
 
 

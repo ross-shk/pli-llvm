@@ -359,4 +359,59 @@ bool foldPictureConversion(long long value, int scale, const PictureSpec& spec, 
   return true;
 }
 
+// WS-C1 (ADR-242): the constant-offset store plan. The result of the
+// concatenation is the leftmost `cap` characters of the leaves laid end to
+// end, blank-padded to `cap` when they are shorter. Each leaf therefore
+// contributes min(its length, the room left in the target).
+ConcatStorePlan planConcatStore(const std::vector<long long>& leafLen, long long cap) {
+  ConcatStorePlan plan;
+  if (cap <= 0)
+    return plan;
+  for (long long l : leafLen)
+    if (l < 0)
+      return plan;
+  plan.sizes.reserve(leafLen.size());
+  for (long long l : leafLen) {
+    long long room = cap - plan.used;
+    long long take = l < room ? l : room;
+    plan.sizes.push_back(take);
+    plan.used += take;
+  }
+  plan.pad = cap - plan.used;
+  plan.ok = true;
+  return plan;
+}
+
+// WS-C3 (ADR-243): the merged masked test. Two tests on the same value merge
+// when the masks are disjoint and each expectation lies inside its own mask:
+// then the conjunction holds exactly when the masked value equals the merged
+// expectation. Overlapping masks would let one test decide a bit the other
+// also decides, and an expectation outside its mask can never hold, so both
+// keep the two separate tests.
+BitTestMerge mergeBitTests(const std::string& mask1, const std::string& want1,
+                            const std::string& mask2, const std::string& want2) {
+  BitTestMerge merge;
+  if (mask1.size() != mask2.size() || mask1.size() != want1.size() ||
+      mask1.size() != want2.size())
+    return merge;
+  std::string mask(mask1.size(), '0');
+  std::string want(mask1.size(), '0');
+  for (size_t i = 0; i < mask1.size(); ++i) {
+    const bool m1 = mask1[i] == '1';
+    const bool m2 = mask2[i] == '1';
+    const bool w1 = want1[i] == '1';
+    const bool w2 = want2[i] == '1';
+    if (m1 && m2)
+      return merge; // the masks overlap: the tests are not independent
+    if ((w1 && !m1) || (w2 && !m2))
+      return merge; // an expectation outside its mask: the test never holds
+    mask[i] = (m1 || m2) ? '1' : '0';
+    want[i] = (w1 || w2) ? '1' : '0';
+  }
+  merge.ok = true;
+  merge.mask = std::move(mask);
+  merge.want = std::move(want);
+  return merge;
+}
+
 } // namespace pli
