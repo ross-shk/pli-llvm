@@ -47,7 +47,9 @@ void pli_event_complete(char *ev) {
   pli_call_once(&pli_rt_once, pli_rt_init_sync);
   rt_lock_acquire(&pli_ev_mu);
   *(int *)ev = 1;
-  rt_cond_broadcast(&pli_ev_cv);
+  /* Signal this event, not the whole table: a program with many events
+   * would otherwise wake every waiter for every task that ends. */
+  rt_cond_signal_key(&pli_ev_cv, ev);
   rt_lock_release(&pli_ev_mu);
 }
 
@@ -58,7 +60,7 @@ void pli_event_wait(char *ev) {
   pli_call_once(&pli_rt_once, pli_rt_init_sync);
   rt_lock_acquire(&pli_ev_mu);
   while (*(int *)ev == 0)
-    rt_cond_wait(&pli_ev_cv, &pli_ev_mu);
+    rt_cond_wait_keyed(&pli_ev_cv, &pli_ev_mu, ev);
   rt_lock_release(&pli_ev_mu);
 }
 

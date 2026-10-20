@@ -61,6 +61,17 @@ static _Thread_local pli_task_local rt_tls_local;
 
 /* The workers. Worker 0 is the thread that starts the program. */
 #define RT_WORKERS_MAX 64
+/* How long a worker looks for work before it parks. The spin is what
+ * keeps a task that arrives right after the worker ran out of work from
+ * costing an OS thread wake-up. */
+#define RT_PARK_SPIN 2000
+#if defined(__i386__) || defined(__x86_64__)
+/* The pause hint: it tells the CPU the spin loop is hot, so it yields the
+ * pipeline instead of burning it. */
+#define RT_SPIN_PAUSE() __builtin_ia32_pause()
+#else
+#define RT_SPIN_PAUSE() ((void)0)
+#endif
 
 typedef struct rt_worker {
   _Atomic(pli_fiber *) local; /* the worker's LIFO run queue */
@@ -71,6 +82,7 @@ typedef struct rt_worker {
   pli_mutex mu;               /* the worker's own lock */
   pli_cond cv;                /* the worker's own condvar */
   _Atomic int parked;         /* 1 while the worker waits on the condvar */
+  int ran_recently;           /* 1 while the worker still expects work */
   int id;
 } rt_worker;
 
@@ -83,6 +95,7 @@ PLI_NOINLINE static pli_fiber *rt_cur_get(void) { return rt_cur; }
 PLI_NOINLINE static rt_worker *rt_self_get(void) { return rt_self; }
 
 /* The program's main task: the fiber the MAIN procedure runs on. */
+long long rt_dbg_body_us = 0, rt_dbg_switch_us = 0;
 static pli_fiber *rt_main_fib = NULL;
 static _Atomic int rt_main_done = 0;
 
@@ -439,7 +452,12 @@ static void rt_wake_any(void) {
 }
 
 /* Nothing to run: park on the worker's own condvar until a task arrives or
- * the earliest DELAY matures. */
+ * the earliest DELAY matures.
+ *
+ * The worker spins first, but only when it has just run out of work: a
+ * task that arrives right then is picked up without an OS thread wake-up
+ * (microseconds), and a worker that has been idle for a while does not
+ * burn the core waiting for work that may never come. */
 static void rt_worker_park(rt_worker *w) {
   long long deadline = rt_timer_next_deadline();
   long long timeout = -1; /* wait forever */
@@ -448,6 +466,20 @@ static void rt_worker_park(rt_worker *w) {
     timeout = deadline - now;
     if (timeout < 0)
       timeout = 0;
+  }
+  /* Spin: look for work before sleeping. The ready list and the global
+   * queue are the ones a waker pushes to, and they are published with a
+   * release store, so a load here sees the task. */
+  if (w->ran_recently) {
+    for (int spin = 0; spin < RT_PARK_SPIN; ++spin) {
+      if (atomic_load_explicit(&w->ready, memory_order_acquire) ||
+          atomic_load_explicit(&w->local, memory_order_acquire) ||
+          atomic_load_explicit(&rt_global_head, memory_order_acquire))
+        return;
+      /* A short pause: the other workers need the core. */
+      for (int pause = 0; pause < 16; ++pause)
+        RT_SPIN_PAUSE();
+    }
   }
   pli_mutex_lock(&w->mu);
   /* Re-check under the lock: a task may have arrived while we looked for
@@ -460,6 +492,8 @@ static void rt_worker_park(rt_worker *w) {
     atomic_store_explicit(&w->parked, 1, memory_order_release);
     pli_cond_timedwait(&w->cv, &w->mu, timeout);
     atomic_store_explicit(&w->parked, 0, memory_order_release);
+    /* The worker slept: it was idle, so the next spin would be wasted. */
+    w->ran_recently = 0;
   }
   pli_mutex_unlock(&w->mu);
 }
@@ -486,6 +520,7 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
   f->state = PLI_FIB_RUNNABLE;
   f->next = NULL;
   f->wait_next = NULL;
+  f->wait_key = NULL;
   f->deadline = 0;
   /* A recycled fiber carries the previous task's state: the new task starts
    * with an empty ON stack (QR2.8) and no CONTROLLED generations. The
@@ -621,6 +656,9 @@ static void rt_worker_loop(rt_worker *w) {
     }
     f->state = PLI_FIB_RUNNING;
     rt_cur = f;
+    /* The worker has work: it expects more, so the next time it runs out
+     * it looks for work before it parks. */
+    w->ran_recently = 1;
     pli_fiber_switch(w->sched_ctx, f);
     /* Resumed: the task yielded, parked or finished. The worker is not a
      * task, so its per-task state is the thread's own again. */

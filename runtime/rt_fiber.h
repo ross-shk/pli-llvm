@@ -56,6 +56,7 @@ struct pli_fiber {
   int state;           /* PLI_FIB_RUNNABLE / RUNNING / WAITING / DEAD        */
   pli_fiber *next;     /* the run-queue link                                */
   pli_fiber *wait_next;/* the wait-queue link (a lock or a condition)       */
+  const void *wait_key;/* what the task waits for (a condition's key)      */
   long long deadline;  /* the DELAY deadline (ms since an arbitrary origin) */
   long long id;        /* the task id (the TASK variable's handle)          */
   void *(*entry_fn)(void *);   /* the task body, set by the scheduler          */

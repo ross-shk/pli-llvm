@@ -6982,8 +6982,8 @@ variant is not written yet, so the legacy model is the default there).
 **The gate is not met.** The requirement was to beat Go's goroutines by at
 least 10 %; the measurement says the fiber model is 2.52x Go's time on the
 task lifecycle. The goalposts do not move, so this ADR records the
-measured ratio. The gap is not in the switch — the switch alone is 7x
-faster than Go's goroutine spawn — but in the wait path around it: the
+measured ratio. The gap is not in the switch â€” the switch alone is 7x
+faster than Go's goroutine spawn â€” but in the wait path around it: the
 fiber-mode lock still protects its state with an OS mutex
 (`runtime/rt_sync.c`), and a *contended* Windows `CRITICAL_SECTION` costs
 1-2 us, which is most of the 2510 ns. The next step is the hot-path diet
@@ -7001,7 +7001,7 @@ contended lock never enters the kernel. Until then, the model is still
 * The `DELAY` timer is a heap, not a thread per sleeper.
 * The POSIX side has the lazy stack through `mmap`; the clean
   "task stack overflow" diagnostic on POSIX (a `SIGSEGV` handler with a
-  per-worker `sigaltstack`) is not written yet — on POSIX an overflow is
+  per-worker `sigaltstack`) is not written yet â€” on POSIX an overflow is
   still a plain `SIGSEGV`.
 * The AArch64 fiber backend is not written; the legacy model is the
   default there.
@@ -7079,3 +7079,78 @@ a time never pays this: the fiber pool recycles the stack.
 * A task that is live at the same time as thousands of others still costs
   a stack reservation on Windows; a Go-style small stack that is copied
   when it grows is the way to close that gap, and it is not written.
+
+## ADR-236 - Keyed condition variables, a stack arena, and a lock-free fiber lock (amends ADR-234, ADR-235)
+
+**Context.** ADR-235 brought the fiber model's task lifecycle to 0.50x
+Go's time - the gate holds - but three things were left over, and all
+three showed up in the same measurement: the *fan-out* benchmark (twenty
+thousand tasks alive at once) was 12.8x Go's time, the *event table* woke
+every waiter for every task that ended, and the lock that guards the
+event table was an OS mutex.
+
+**Decision.** Three changes, each measured.
+
+*Keyed condition variables.* The event table has one condition for all
+the events, and a plain broadcast wakes every waiter: a program with
+twenty thousand events paid 19732 wakeups for 20000 tasks, nearly all of
+them useless. A waiter now says what it waits for, and a signal wakes
+only the waiters that said so (`rt_cond_wait_keyed`, `rt_cond_signal_key`);
+the key is the event's address. A waiter with a NULL key waits for
+anything, which is what a task that watches a whole set of events
+(WAIT(evs)(k)) needs. The spurious wakeups fell from 19732 to 1.
+
+*The stack arena.* A fiber stack was its own `VirtualAlloc`, and a
+reservation is a kernel call: twenty thousand tasks meant twenty thousand
+of them. The stacks now come from an *arena* - one reservation carved
+into slots - and a slot's guard page sits below its usable region, so a
+stack that runs out lands in its own guard and is reported as an
+overflow. The slots are equal-sized, so the vectored handler names the
+slot by arithmetic instead of searching a list. Two rules the arena
+brought with it, both learned the hard way: the *commit window* must
+cover the vectored handler's own frame (the handler runs on the stack
+that faulted, so a stack that is not committed below the fault makes the
+handler fault too - a 4 KiB window turned every task into a crash), and
+the slot's layout must put the guard page *below* the usable region,
+because a stack grows downward.
+
+*The fiber lock.* The lock that guards the event table was an OS mutex,
+and a contended Windows critical section is a kernel wait - about a
+microsecond - on a lock that every task start and every task end takes.
+In the fiber mode the lock's state is now guarded by a test-and-set spin
+lock instead: the critical section is a handful of instructions, it is
+never held across a park, and it never enters the kernel. The OS mutex
+is still there for the legacy model.
+
+*The park spin.* A worker that runs out of work looks for more before it
+sleeps, but only when it has just run a task: a task that arrives in that
+window is picked up without an OS thread wake-up, and a worker that has
+been idle does not burn the core.
+
+**Measurements** (Windows x64, 20 000 tasks, median;
+`benchmarks/run_tasking_bench.py`):
+
+| Workload | PL/I (fibers) | C (OS threads) | Go (goroutines) | PL/I / Go |
+|---|---|---|---|---|
+| the task lifecycle (spawn, switch, join) | 470.8 ns/task | 50 659.1 ns/task | 981.3 ns/task | **0.48x** |
+| fan-out / fan-in (20 000 tasks live at once) | 9 667.7 ns/task | 25 447.3 ns/task | 631.4 ns/task | **15.31x** |
+
+The lifecycle is now twice as fast as Go's goroutines. The fan-out is
+still behind Go, and the reason is the stack: twenty thousand live tasks
+mean twenty thousand live stacks, and a stack costs a commit of its top
+window whether or not the task uses it. Go gives a goroutine a 2 KiB
+stack out of a per-processor cache and copies it when it grows; the fiber
+model reserves the ceiling up front, because a stack that cannot grow
+cannot be moved either. The arena made the *reservation* cheap; the
+*commit* is what remains.
+
+**Consequences.**
+
+* `tests/core/task_keyed.pli` is the regression test for the keyed
+  signal: a task that waits for one event must not be released by
+  another event's completion.
+* The platform seam gained `pli_plat_now_us`, a monotonic microsecond
+  clock.
+* The fan-out still costs a stack per live task on Windows; a Go-style
+  small stack that is copied when it grows is the way to close that gap,
+  and it is not written.

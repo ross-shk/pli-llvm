@@ -76,6 +76,7 @@ int pli_plat_fprintf(FILE *fp, const char *fmt, ...);
 const char *pli_plat_getenv(const char *name); /* "" when unset */
 int pli_plat_cpu_count(void);                  /* >= 1 */
 long long pli_plat_now_ms(void);               /* monotonic milliseconds */
+long long pli_plat_now_us(void);               /* monotonic microseconds */
 size_t pli_plat_page_size(void);               /* the guard page size */
 /* Reserve a fiber stack: `size` usable bytes, lazily committed, with one
  * guard page below. Returns 0 on success and writes the usable base to

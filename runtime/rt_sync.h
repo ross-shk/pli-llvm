@@ -18,6 +18,7 @@
 #define PLI_RT_SYNC_H
 
 #include "pli_rt_plat.h"
+#include <stdatomic.h>
 
 /* The fiber is opaque here: this layer only holds pointers to fibers. */
 struct pli_fiber;
@@ -30,6 +31,7 @@ struct pli_fiber;
  * condition wait would not be fully released, which can deadlock. */
 typedef struct {
   pli_mutex os;               /* the OS mode's mutex */
+  _Atomic int meta;           /* the FIBER mode's metadata lock */
   struct pli_fiber *owner;    /* the FIBER mode's holder */
   struct pli_fiber *waiters;  /* the FIBER mode's wait queue */
   long depth;                 /* the recursion depth */
@@ -61,7 +63,24 @@ void rt_lock_release(rt_lock *l);
  * caller must hold the lock; on return the caller holds it again. */
 void rt_cond_wait(rt_cond *c, rt_lock *l);
 
+/* Wait for one specific thing.
+ *
+ * A plain condition variable wakes every waiter, so a program with many
+ * waiters on one condition pays for the wakeups it did not need: the
+ * event table has one condition for all the events, and a task that ends
+ * would wake every task that waits for another event. A keyed wait names
+ * what the waiter waits for, and a keyed signal wakes only the waiters
+ * that named it.
+ *
+ * `key` is the thing waited for; a NULL key means "anything", which is
+ * what a waiter that watches a whole set of events uses. */
+void rt_cond_wait_keyed(rt_cond *c, rt_lock *l, const void *key);
+
 /* Wake every waiter of a condition. The caller must hold the lock. */
 void rt_cond_broadcast(rt_cond *c);
+
+/* Wake the waiters that wait for `key` (and the waiters that wait for
+ * anything). The caller must hold the lock. */
+void rt_cond_signal_key(rt_cond *c, const void *key);
 
 #endif /* PLI_RT_SYNC_H */

@@ -97,6 +97,12 @@ int pli_plat_cpu_count(void) {
   return (int)si.dwNumberOfProcessors;
 }
 long long pli_plat_now_ms(void) { return (long long)GetTickCount64(); }
+long long pli_plat_now_us(void) {
+  LARGE_INTEGER f, t;
+  QueryPerformanceFrequency(&f);
+  QueryPerformanceCounter(&t);
+  return (long long)(t.QuadPart * 1000000 / f.QuadPart);
+}
 size_t pli_plat_page_size(void) {
   SYSTEM_INFO si;
   GetSystemInfo(&si);
@@ -114,15 +120,23 @@ size_t pli_plat_page_size(void) {
  * in the guard page below the stack is a stack overflow, and it is
  * reported as one.
  *
- * The stacks are listed in a lock-free list: the handler may run at any
+ * The stacks come from an *arena*: one reservation, carved into slots.
+ * A program with twenty thousand tasks would otherwise make twenty
+ * thousand reservations, and the reservation itself is a kernel call
+ * that costs about a microsecond each. One arena costs one call. The
+ * slots are handed out from a free list, and a slot's guard page sits
+ * between it and the next one, so a stack that runs out faults into its
+ * own guard and is reported as an overflow.
+ *
+ * The arena is listed in a lock-free list: the handler may run at any
  * moment, so it takes no lock. The list only grows — a stack that is
  * released stays in the list, and committing a released stack fails, which
  * leaves the fault to the default handler (a real crash, reported as
  * such). */
 #define RT_STACK_WINDOW (64u * 1024u) /* the commit granularity */
 #define RT_STACK_MARGIN (64u * 1024u) /* committed below the fault, for the
-                                       * handler's own frame */
-
+                                        * handler's own frame */
+#define RT_ARENA_SLOTS 64              /* slots per arena reservation */
 typedef struct RtStack {
   struct RtStack *next;
   char *base;  /* the usable base; the guard page is the page below it */
@@ -134,13 +148,71 @@ static RtStack *rt_stacks = NULL;
 static INIT_ONCE rt_stacks_once = INIT_ONCE_STATIC_INIT;
 static PVOID rt_veh = NULL;
 
+/* The arena: one reservation, carved into slots.
+ *
+ * A program with twenty thousand tasks would otherwise make twenty thousand
+ * reservations, and a reservation is a kernel call that costs about a
+ * microsecond. One arena costs one call, and the slots come out of it
+ * without one.
+ *
+ * The arena is only used for stacks of one size at a time: the first stack
+ * of a given size creates the arena, and later stacks of that size take
+ * slots from it. The arena's slots are equal-sized, so a faulting address
+ * names its slot by arithmetic - the handler searches no list.
+ *
+ * A slot is laid out from its bottom up, because that is the direction a
+ * stack grows:
+ *
+ *     +----------------------+  slot_base + slot
+ *     |  the stack's top     |  the fiber starts here
+ *     |  (grows downward)    |
+ *     |                      |
+ *     |  the usable region  |
+ *     +----------------------+  slot_base + page
+ *     |  the guard page      |  a stack that runs out lands here
+ *     +----------------------+  slot_base
+ *
+ * The guard page is the slot's first page, below the usable region: a
+ * stack that runs out of room lands there, and it never reaches into the
+ * next slot. The usable part is committed from the top down, in windows,
+ * as the stack grows into it.
+ *
+ * The free list is shared by the workers, so it is guarded by a spin lock:
+ * the critical section is a couple of instructions, and a stack allocation
+ * is not the hot path (the fiber pool reuses the stacks). */
+typedef struct RtArena {
+  struct RtArena *next;
+  char *base;        /* the reservation */
+  size_t bytes;      /* its size */
+  size_t slot;       /* the slot size: the usable size plus the guard page */
+  size_t usable;     /* the usable size of a slot */
+  size_t page;       /* the guard page size */
+  volatile LONG *free_slots; /* the free slot indices, LIFO */
+  char **lows;       /* per slot: the lowest committed address */
+  int free_top;      /* how many are on the free list */
+  int free_count;    /* the free list's capacity */
+  volatile LONG lock; /* the free list's spin lock */
+} RtArena;
+
+static RtArena *rt_arenas = NULL;
+static INIT_ONCE rt_arena_once = INIT_ONCE_STATIC_INIT;
+static volatile LONG rt_arena_lock = 0;
+
 static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep);
 
 static BOOL CALLBACK rt_stacks_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) {
   (void)o;
   (void)p;
   (void)c;
+
   rt_veh = AddVectoredExceptionHandler(1, rt_stack_veh);
+  return TRUE;
+}
+
+static BOOL CALLBACK rt_arena_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) {
+  (void)o;
+  (void)p;
+  (void)c;
   return TRUE;
 }
 
@@ -156,6 +228,28 @@ static int rt_stack_commit(RtStack *s, char *from, char *to) {
   return 0;
 }
 
+/* The arena that holds the faulting address, or NULL. The slots are
+ * equal-sized, so the slot is found by arithmetic. */
+static RtArena *rt_arena_of(char *addr) {
+  for (RtArena *a = rt_arenas; a; a = a->next) {
+    if (addr >= a->base && addr < a->base + a->bytes)
+      return a;
+  }
+  return NULL;
+}
+
+/* The stack that owns the faulting address, or NULL. */
+static RtStack *rt_stack_of(char *addr) {
+  RtArena *a = rt_arena_of(addr);
+  if (!a)
+    return NULL;
+  size_t off = (size_t)(addr - a->base);
+  size_t idx = off / a->slot;
+  char *slot_base = a->base + idx * a->slot;
+  /* The slot's guard page sits at its low end, the usable stack above it. */
+  return (RtStack *)(void *)(a->base + idx * a->slot + a->page);
+}
+
 static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep) {
   EXCEPTION_RECORD *r = ep->ExceptionRecord;
   if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
@@ -164,63 +258,186 @@ static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep) {
    * actually accessed is the first extra information field. */
   char *fault = (char *)r->ExceptionInformation[1];
   size_t page = pli_plat_page_size();
-  for (RtStack *s = rt_stacks; s; s = s->next) {
-    if (fault >= s->base && fault < s->base + s->size) {
-      /* A touch inside the stack: commit the gap down to the fault, and a
-       * margin below it: the handler itself runs on this stack, so its own
-       * frame has to be in committed memory too. */
+  RtArena *a = rt_arena_of(fault);
+  if (a) {
+    size_t idx = (size_t)(fault - a->base) / a->slot;
+    char *slot_base = a->base + idx * a->slot;
+    char *usable = slot_base + a->page;
+    if (fault >= usable && fault < usable + a->usable) {
+      /* A touch inside the stack. The committed region is [low, top) and
+       * the stack grows down from the top, so the faulting page is below
+       * it: commit the gap [grow, low), which covers the fault and a
+       * margin below it - the handler itself runs on this stack, so its own
+       * frame has to be in committed memory too. The margin is clipped to
+       * the slot, so the commit never reaches into the next slot. */
       char *from = (char *)((uintptr_t)fault & ~(uintptr_t)(page - 1));
+      char *low = a->lows[idx]; /* the lowest committed address */
       char *grow = from - (long)RT_STACK_MARGIN;
-      if (grow < s->base)
-        grow = s->base;
-      if (rt_stack_commit(s, grow, s->low) != 0)
-        return EXCEPTION_CONTINUE_SEARCH;
+      if (grow < usable)
+        grow = usable;   /* the slot's floor: the guard page is below it */
+      if (grow > from)
+        grow = from;     /* the faulting page must be in the commit */
+      if (grow < low) {
+        if (!VirtualAlloc(grow, (size_t)(low - grow), MEM_COMMIT, PAGE_READWRITE))
+          return EXCEPTION_CONTINUE_SEARCH;
+        a->lows[idx] = grow;
+      }
       return EXCEPTION_CONTINUE_EXECUTION;
     }
-    if (fault >= s->base - (long)page && fault < s->base) {
+    if (fault >= slot_base && fault < slot_base + a->page) {
       /* The guard page: the task's stack ran out. */
       fprintf(stderr, "TASK: stack overflow (the task's stack ran out)\n");
       fflush(stderr);
       return EXCEPTION_CONTINUE_SEARCH;
     }
+    return EXCEPTION_CONTINUE_SEARCH;
   }
   return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* The arena that holds stacks of this size, or NULL. The list is guarded by
+ * a spin lock: creating an arena is rare, and the lock is held for a few
+ * instructions. */
+static RtArena *rt_arena_new(size_t usable, size_t page) {
+  size_t slot = usable + page;
+  size_t bytes = slot * RT_ARENA_SLOTS;
+  char *base = (char *)VirtualAlloc(NULL, bytes, MEM_RESERVE, PAGE_NOACCESS);
+  if (!base)
+    return NULL;
+  RtArena *a = (RtArena *)malloc(sizeof(RtArena));
+  if (!a) {
+    VirtualFree(base, 0, MEM_RELEASE);
+    return NULL;
+  }
+  a->free_slots = (volatile LONG *)malloc(sizeof(LONG) * RT_ARENA_SLOTS);
+  a->lows = (char **)malloc(sizeof(char *) * RT_ARENA_SLOTS);
+  if (!a->free_slots || !a->lows) {
+    free(a->free_slots);
+    free(a->lows);
+    free(a);
+    VirtualFree(base, 0, MEM_RELEASE);
+    return NULL;
+  }
+  a->base = base;
+  a->bytes = bytes;
+  a->slot = slot;
+  a->usable = usable;
+  a->page = page;
+  /* Every slot starts free, with nothing committed yet. The watermark of a
+   * slot is the top of its usable region: the stack grows down from there. */
+  for (int i = 0; i < RT_ARENA_SLOTS; ++i) {
+    a->free_slots[i] = i;
+    a->lows[i] = base + (size_t)(i + 1) * slot;
+  }
+  a->free_top = RT_ARENA_SLOTS;
+  a->free_count = RT_ARENA_SLOTS;
+  a->lock = 0;
+  while (InterlockedCompareExchange(&rt_arena_lock, 1, 0) != 0)
+    Sleep(0);
+  a->next = rt_arenas;
+  rt_arenas = a;
+  InterlockedExchange(&rt_arena_lock, 0);
+  return a;
+}
+
+/* The newest arena that holds stacks of this size, or NULL. The list is
+ * guarded by a spin lock: creating an arena is rare, and the lock is held
+ * for a few instructions. */
+static RtArena *rt_arena_get(size_t usable, size_t page) {
+  (void)page;
+  while (InterlockedCompareExchange(&rt_arena_lock, 1, 0) != 0)
+    Sleep(0);
+  RtArena *found = NULL;
+  for (RtArena *a = rt_arenas; a; a = a->next) {
+    if (a->usable == usable) {
+      found = a;
+      break;
+    }
+  }
+  InterlockedExchange(&rt_arena_lock, 0);
+  return found;
+}
+
+/* Take a free slot from the arena, or -1 when it is full. */
+static long rt_arena_take(RtArena *a) {
+  while (InterlockedCompareExchange(&a->lock, 1, 0) != 0)
+    Sleep(0);
+  long index = -1;
+  if (a->free_top > 0) {    index = (long)a->free_slots[--a->free_top];
+  }
+  InterlockedExchange(&a->lock, 0);
+  return index;
+}
+
+/* Take a slot from an arena of this size, making a new arena when they are
+ * all full. The arenas are searched newest first: the newest one is the one
+ * most likely to have room, and the others are tried in turn. */
+static long rt_arena_take_slot(size_t usable, size_t page, RtArena **out_arena) {
+  RtArena *a = rt_arena_get(usable, page);
+  if (a) {
+    long index = rt_arena_take(a);
+    if (index >= 0) {
+      *out_arena = a;
+      return index;
+    }
+  }
+  /* Every arena of this size is full: make another one. */
+  a = rt_arena_new(usable, page);
+  if (!a)
+    return -1;
+  long index = rt_arena_take(a);
+  if (index < 0)
+    return -1;
+  *out_arena = a;
+  return index;
+}
+
+/* Give a slot back to its arena. */
+static void rt_arena_give(RtArena *a, size_t index) {
+  while (InterlockedCompareExchange(&a->lock, 1, 0) != 0)
+    Sleep(0);
+  if (a->free_top < a->free_count)
+    a->free_slots[a->free_top++] = (LONG)index;
+  InterlockedExchange(&a->lock, 0);
 }
 
 int pli_plat_stack_alloc(size_t size, void **out_base) {
   size_t page = pli_plat_page_size();
   size = (size + page - 1) & ~(page - 1);
   InitOnceExecuteOnce(&rt_stacks_once, rt_stacks_init_cb, NULL, NULL);
-  /* Reserve the ceiling: no commit charge, so the cost of an idle task is
-   * address space, not memory. */
-  char *p = (char *)VirtualAlloc(NULL, size + page, MEM_RESERVE, PAGE_NOACCESS);
-  if (!p)
+  InitOnceExecuteOnce(&rt_arena_once, rt_arena_init_cb, NULL, NULL);
+  /* The arena holds the stacks: one reservation, many slots. A new arena
+   * is made when the current one is full. */
+  RtArena *a = NULL;
+  long index = rt_arena_take_slot(size, page, &a);
+  if (index < 0)
     return -1;
-  RtStack *s = (RtStack *)malloc(sizeof(RtStack));
-  if (!s) {
-    VirtualFree(p, 0, MEM_RELEASE);
-    return -1;
-  }
-  s->base = p + page;
-  s->size = size;
-  s->low = s->base + size;
-  /* Commit the top window: the fiber starts there. */
+  char *slot_base = a->base + (size_t)index * a->slot;
+  /* The usable region sits above the slot's guard page, so the fiber's
+   * stack (which starts at its top and grows down) stays inside the slot:
+   * the top is at the slot's end, and the guard page is below the usable
+   * region. */
+  char *usable = slot_base + a->page;
   size_t window = RT_STACK_WINDOW < size ? RT_STACK_WINDOW : size;
-  if (rt_stack_commit(s, s->low - window, s->low) != 0) {
-    VirtualFree(p, 0, MEM_RELEASE);
-    free(s);
+  if (!VirtualAlloc(usable + size - window, window, MEM_COMMIT, PAGE_READWRITE))
     return -1;
-  }
-  s->next = rt_stacks;
-  rt_stacks = s;
-  *out_base = s->base;
+  a->lows[index] = usable + size - window;
+  *out_base = usable;
   return 0;
 }
 void pli_plat_stack_free(void *base, size_t size) {
   (void)size;
   if (!base)
     return;
-  VirtualFree((char *)base - pli_plat_page_size(), 0, MEM_RELEASE);
+  /* The slot goes back to its arena's free list; the pages stay committed,
+   * so the next task that takes the slot does not pay for them again. */
+  char *bp = (char *)base;
+  for (RtArena *a = rt_arenas; a; a = a->next) {
+    if (bp >= a->base && bp < a->base + a->bytes) {
+      rt_arena_give(a, (size_t)(bp - a->base) / a->slot);
+      return;
+    }
+  }
 }
 /* Mutual exclusion around one shared EVENT/task table. */
 void pli_mutex_init(pli_mutex *m) { InitializeCriticalSection(m); }
@@ -313,6 +530,12 @@ long long pli_plat_now_ms(void) {
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     return 0;
   return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+long long pli_plat_now_us(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0;
+  return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 size_t pli_plat_page_size(void) {
   long p = sysconf(_SC_PAGESIZE);
