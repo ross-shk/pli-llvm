@@ -7400,3 +7400,67 @@ for the rows this compiler can express. Neither can fail today — a plain
 AUTOMATIC local really does own its storage — and that is the point: they
 are the tests that fail if a future change widens the `!noalias` claim past
 what the taxonomy allows.
+
+---
+
+## ADR-266 — An opt-in, flow-sensitive "used before set" warning
+
+**Context.** MULTICS diagnosed a variable that no assignment anywhere in the
+program stores to (error 307, `assign_storage.pl1:277-302`). Its `symbol.set`
+bit is set by any store, wherever it appears, so the check is
+flow-insensitive: a store on one branch silences a read after the merge, which
+is exactly the mistake the diagnostic exists to catch. IBM has no equivalent
+(`RULES(NOUNREF…)` reports the opposite direction, ADR-238 in the plan), so
+this is a quality feature, not a performance one — the plan's WS-A5.
+
+**Decision.** `--warn-unset` runs a definite-assignment walk over each
+procedure's AST after sema, in `src/sema.cpp` next to the other whole-body
+checks. A read is reported when a path can reach it with no store; the
+variable is then treated as set, so one mistake gives one diagnostic. Branch
+joins intersect the two branch states, and a branch that does not fall
+through (a `RETURN` or `STOP`) contributes nothing to the join. A `DO` body is
+walked once, so a read that is reachable on a first iteration is reported, and
+a zero-trip loop leaves the entry state alone; `DO UNTIL` runs its body at
+least once. A block's automatics are dropped at `END`, because they are
+created on entry.
+
+What counts as a store besides an assignment:
+
+- a bare variable passed to a call — it may be an output parameter; MULTICS
+  sets `passed_as_arg` for the same reason;
+- `GET`/`READ INTO` targets, and `PUT STRING(x)` for `x`;
+- `ALLOCATE` for the variable it creates.
+
+The variables checked are AUTOMATIC locals with no initializer. Parameters,
+STATIC and EXTERNAL storage, CONTROLLED, BASED, DEFINED, structures, FILE,
+ENTRY VARIABLE, CONDITION, VALUE and implicit declarations are skipped, as is
+a variable whose address is taken with `ADDR(x)` (a callee can write through
+the pointer where the walk cannot see it). A procedure containing a `GO TO`, a
+label or an alternate `ENTRY` is skipped entirely: the walk has no CFG to join
+on, and a warning is better withheld than wrong.
+
+**Consequences.** The check is off by default, because the corpus is not
+warning-clean, and a warning does not fail the build (only errors do). Four
+conservative answers are accepted:
+
+- a read guarded by a first-iteration test (`if i > 1 then put list(x);` before
+  `x = 1` in the same loop) is reported although no execution reaches it
+  unset — the analysis is per-iteration, not a per-statement fixed point;
+- a whole array is one variable, so a store to one element silences reads of
+  any other element;
+- a `STATIC` declaration is reported today: this compiler stores STATIC as
+  AUTOMATIC (ADR-265 records the same gap), so the warning describes what the
+  code actually does, and the existing filter stops it the day STATIC becomes
+  real storage;
+- `ADDR(x)` suppresses the diagnostic for `x` outright rather than tracking
+  what the pointer is passed to.
+
+**Test.** `tests/driver/uninit.sh` — the warning is absent without the flag,
+appears with it, and stays quiet for the storage and call shapes above; the
+one-branch case warns and the two-branch case does not.
+
+**Rejected.** A flow-insensitive check (MULTICS's form — it misses the
+one-branch case). Extending LLVM's `-Wuninitialized` (it sees IRGen's allocas,
+not PL/I's storage classes, and the mapping is the whole problem). Reporting
+every uninitialized read path separately (one diagnostic per variable is what
+a programmer acts on).

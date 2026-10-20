@@ -176,6 +176,20 @@ alloca and a global. The positive direction of A4 therefore closes without
 a diff; what remains is the taxonomy as one function (ADR-265) and the two
 litmus tests that guard it.
 
+**What A3's gate found.** The plan's gate for subobject identity was: "a
+program that reads `SUBSTR(S,1,3)` and `S(1:3)` of the same string in one
+expression. If LLVM already CSEs them, close without a diff." The second
+spelling does not exist in this compiler: a substring reference `S(1:3)` is
+not in TR 25.084 (the document has no substring syntax at all) and the parser
+diagnoses it — `expected ')', found ':'` — so the two spellings can never
+coexist. The reachable witness is the same builtin twice, and LLVM already
+folds it: `opt -passes=default<O2>` over the emitted module reduces
+`substr(s,1,3) = substr(s,1,3)` to the constant `1`, with no `memmove` and
+no comparison loop left. A3 therefore closes without a diff: the identity the
+plan wanted to give the PL/I subobject is already the identity LLVM gives the
+load, and the one spelling that would have needed a canonical form is not in
+the language.
+
 ### 2.4 The suite's driver budget is wall-clock, and this host is shared
 
 Twice during the P1c work, `ctest` reported four driver tests as timed out
