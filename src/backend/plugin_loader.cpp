@@ -54,6 +54,8 @@ bool loadBackendPlugin(const std::string& path, std::string& err) {
     err = "cannot load backend plugin '" + path + "': " + libError();
     return false;
   }
+  // The library is never closed: the descriptor below points into it, and the
+  // plugin stays usable for the lifetime of the process.
   void* sym = symOf(handle, PLI_BACKEND_ENTRY_SYMBOL_NAME);
   if (!sym) {
     err = "backend plugin '" + path + "' does not export " PLI_BACKEND_ENTRY_SYMBOL_NAME;
@@ -98,23 +100,12 @@ bool loadBackendPlugin(const std::string& path, std::string& err) {
   backend.name = plugin->name ? plugin->name : "unnamed";
   backend.description = plugin->description ? plugin->description : "";
   backend.path = path;
-  backend.handle = handle;
   backend.plugin = plugin;
   registry().push_back(backend);
   return true;
 }
 
 const std::vector<LoadedBackend>& loadedBackends() { return registry(); }
-
-std::string backendNames() {
-  std::string out;
-  for (const LoadedBackend& b : registry()) {
-    if (!out.empty())
-      out += ", ";
-    out += b.name;
-  }
-  return out;
-}
 
 bool runBackendTransform(const std::string& name, const std::string& moduleIr,
                          const std::string& targetTriple, const std::string& optLevel,

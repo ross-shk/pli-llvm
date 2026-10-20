@@ -44,17 +44,14 @@ double macosDeploymentVersion(const llvm::Triple& t);
 const std::vector<std::string>& crossTargetTriples();
 // True when `t` names the build host's family (the host link path applies).
 bool isHostTarget(const llvm::Triple& t);
-// What this build has for a target (ADR-236). The profile decides the output
-// mode: a self-contained build (runtime + sysroot), an object with external
-// runtime references (an LLVM backend but no runtime), or portable bitcode
-// (no backend at all).
+// What this build can emit for a target (ADR-236). The driver asks the
+// profile one question — does this build have a backend for it? A target
+// without one can only be produced as portable bitcode, which the user's own
+// toolchain compiles and links. The other facts (an embedded runtime, a link
+// sysroot, the host recipe) are asked where they are needed: by the runtime
+// merge and by the link path (ADR-237).
 struct TargetProfile {
-  std::string triple;       // as the user spelled it
-  std::string key;          // the ABI family (targetKey)
   bool llvmBackend = false; // LLVM has a backend for this architecture
-  bool haveRuntime = false; // an embedded runtime bitcode exists for it
-  bool haveSysroot = false; // a link sysroot (embedded or prepared) exists
-  bool isHost = false;      // the host CRT recipe applies
   bool portable = false;    // only portable bitcode can be emitted
 };
 // The profile of a target in this build.

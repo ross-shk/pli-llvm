@@ -188,23 +188,6 @@ std::vector<std::string> sysrootCacheCandidates(const llvm::Triple& t) {
   return out;
 }
 
-// ADR-236: the sysroot questions the target profile asks.
-bool embeddedSysrootServes(const std::string& key) {
-  for (const std::string& k : embeddedSysrootTargetKeys())
-    if (k == key)
-      return true;
-  return false;
-}
-
-bool sysrootCacheHas(const llvm::Triple& t) {
-  for (const std::string& d : sysrootCacheCandidates(t)) {
-    std::error_code ec;
-    if (fs::is_directory(fs::path(d), ec))
-      return true;
-  }
-  return false;
-}
-
 EmbeddedSysroot materializeEmbeddedSysroot() {
   EmbeddedSysroot out;
   size_t n = 0;

@@ -9,12 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/TargetParser/Triple.h"
 
 namespace pli {
-// The embedded pli_runtime bitcode bundle as a bitcode buffer (no OS lookup).
-llvm::MemoryBufferRef getEmbeddedLibPLI();
 // Byte size of the embedded bundle (reported by `pli version`).
 size_t embeddedLibPLISize();
 
@@ -35,9 +32,7 @@ const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t);
 std::vector<std::string> embeddedRuntimeTargets();
 // Default platform blob (host pli_rtplat.bc) and per-target platform blobs.
 // selectPlatformForTarget mirrors selectRuntimeForTarget, including the family
-// fallback; it returns nullptr only when no platform blob was embedded.
+// scoping (ADR-234): a platform blob never crosses an ABI family.
 std::vector<RuntimeBlob> getEmbeddedPlatformBlobs();
 const RuntimeBlob* selectPlatformForTarget(const llvm::Triple& t);
-// The triples this build embeds a platform blob for.
-std::vector<std::string> embeddedPlatformTargets();
 } // namespace pli

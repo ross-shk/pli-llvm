@@ -7057,3 +7057,49 @@ the user compiles it with the compiler that knows their target. *Failing
 instead of degrading* — a user with a vendor toolchain would be stuck at the
 first step; the artifact plus a recipe is strictly more useful, and
 `--no-portable` restores the strict behaviour.
+
+## ADR-237 — The target profile answers one question, not five
+
+**Context.** ADR-236 gave every target a **profile** describing what a build
+has for it — an LLVM backend, an embedded runtime, a link sysroot, the host
+recipe — and the driver was to pick the output mode from it (the table of
+three modes). The implementation grew differently. The driver asks the
+profile two questions (`llvmBackend`, and `portable` derived from it), while
+the other facts are asked where they are needed: the runtime merge asks the
+runtime table (`selectRuntimeForTarget`), the link path asks the sysroot
+sources (`probeSysrootDir`, the prepared cache, the embedded set's target
+keys), and the host recipe is chosen by the link path's own host test.
+
+The five other fields of the profile were therefore written and never read:
+`triple`, `key`, `haveRuntime`, `haveSysroot`, `isHost`. Two of them cost
+real work on every call — `selectRuntimeForTarget` builds the blob table,
+`sysrootCacheHas` probes the filesystem — to answer a question nobody asked.
+`isHost` duplicated the driver's own host test, and `haveSysroot` duplicated
+the link path's check that the embedded set serves the target's ABI family
+(which the link path does inline, over `embeddedSysrootTargetKeys()`). The
+two helpers that fed those fields (`embeddedSysrootServes`,
+`sysrootCacheHas`) had no other caller.
+
+**Decision.** The profile carries only what the driver reads: whether this
+build has an LLVM backend for the target, and whether the target can only be
+produced as portable bitcode. The five dead fields and the two helpers that
+fed them are removed; the questions themselves keep their answers where they
+are asked. The profile is no longer a description of "what the build has" but
+a statement of "what this build can emit for this target".
+
+**Consequences.** Less API surface to keep in step with the implementation,
+and no filesystem probing on a path that only needed to know the backend.
+The mode table of ADR-236 still describes what the user gets; it is now
+assembled from three separate decisions (the backend, the runtime merge, the
+link path) rather than from one profile.
+
+**Rejected.** *Keeping the fields "for the future"* — an unread field is a
+promise no code keeps, and the mode table was never driven by them. *Folding
+the mode selection into the profile* (letting it choose between
+self-contained, external-runtime and portable) — that is a new feature, not a
+cleanup; the two modes the driver does not choose between are already chosen
+by the runtime merge and by the user's flags. *Deleting the profile
+altogether* — the backend question is asked from two places (the portable
+fallback and the `--data-layout` conflict check), and one named answer is
+cheaper than two lookups.
+

@@ -3,9 +3,6 @@
 // target.cpp — multi-target target rows (cross rows added later).
 #include "target.h"
 
-#include "embedded_runtime.h"
-#include "hostcrt.h"
-
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/TargetSelect.h"
@@ -256,22 +253,16 @@ bool isHostTarget(const llvm::Triple& t) {
   return targetKey(t) == targetKey(llvm::Triple(llvm::sys::getDefaultTargetTriple()));
 }
 
-// ADR-236: what this build has for a target. The driver picks the output
-// mode from it: a self-contained build (runtime + sysroot), an object with
-// external runtime references (a backend but no runtime), or portable bitcode
-// (no backend at all).
+// ADR-236: what this build can emit for a target. The driver picks the
+// output mode from it: with a backend an object (or an executable), without
+// one only portable bitcode (ADR-237).
 TargetProfile describeTarget(const llvm::Triple& t) {
   // The registry must hold the targets before they can be looked up (the
   // initialization is idempotent).
   initializeAllTargets();
   TargetProfile p;
-  p.triple = t.getTriple();
-  p.key = targetKey(t);
   std::string lookupErr;
   p.llvmBackend = llvm::TargetRegistry::lookupTarget(t, lookupErr) != nullptr;
-  p.haveRuntime = selectRuntimeForTarget(t) != nullptr;
-  p.haveSysroot = embeddedSysrootServes(p.key) || sysrootCacheHas(t);
-  p.isHost = isHostTarget(t);
   p.portable = !p.llvmBackend;
   return p;
 }

@@ -213,8 +213,16 @@ static void printVersion() {
       std::cout << " " << t;
     std::cout << "\n";
   }
-  if (!pli::loadedBackends().empty())
-    std::cout << "backend plugins: " << pli::backendNames() << "\n";
+  // The backend plugins this run loaded (ADR-235): the name, the one-line
+  // description the plugin gives, and the shared object it came from.
+  if (!pli::loadedBackends().empty()) {
+    std::cout << "backend plugins:\n";
+    for (const pli::LoadedBackend& b : pli::loadedBackends()) {
+      std::cout << "  " << b.name << ": "
+                << (b.description.empty() ? "(no description)" : b.description) << " (" << b.path
+                << ")\n";
+    }
+  }
 }
 
 // The platform's path-list separator: ';' on Windows, ':' elsewhere (the

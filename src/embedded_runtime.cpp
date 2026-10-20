@@ -3,7 +3,6 @@
 // embedded_runtime.cpp — materialise the embedded pli_runtime.bc as a buffer.
 #include "embedded_runtime.h"
 
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -29,13 +28,6 @@ static const pli::RuntimeBlob kTargetPlatformBlobs[] = {
 #undef PLI_RUNTIME_PLATFORM_BLOB
 
 namespace pli {
-
-llvm::MemoryBufferRef getEmbeddedLibPLI() {
-  return llvm::MemoryBufferRef(
-      llvm::StringRef(reinterpret_cast<const char*>(pli_embedded_runtime_bc),
-                      pli_embedded_runtime_bc_len),
-      "pli_runtime.bc");
-}
 
 size_t embeddedLibPLISize() { return pli_embedded_runtime_bc_len; }
 
@@ -108,11 +100,6 @@ static std::vector<std::string> targetsOf(const std::vector<RuntimeBlob>& blobs)
 
 std::vector<std::string> embeddedRuntimeTargets() {
   static const std::vector<std::string> targets = targetsOf(getEmbeddedRuntimeBlobs());
-  return targets;
-}
-
-std::vector<std::string> embeddedPlatformTargets() {
-  static const std::vector<std::string> targets = targetsOf(getEmbeddedPlatformBlobs());
   return targets;
 }
 

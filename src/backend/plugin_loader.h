@@ -15,9 +15,8 @@ namespace pli {
 // One loaded backend.
 struct LoadedBackend {
   std::string name;
-  std::string description;
-  std::string path;
-  const void* handle = nullptr; // the shared object handle
+  std::string description; // one line, shown by `pli version`
+  std::string path;        // the shared object it came from
   const void* plugin = nullptr; // the PliBackendPlugin descriptor
 };
 
@@ -27,8 +26,6 @@ struct LoadedBackend {
 bool loadBackendPlugin(const std::string& path, std::string& err);
 // The plugins loaded so far, in load order.
 const std::vector<LoadedBackend>& loadedBackends();
-// The names of the loaded plugins, for diagnostics.
-std::string backendNames();
 // Run the transform hook of the backend named `name`. `moduleIr` is the
 // unit's IR; `outIr` receives the IR the plugin returned. False with a
 // diagnostic in `err` when the plugin is unknown or fails.

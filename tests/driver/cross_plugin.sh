@@ -67,7 +67,12 @@ else
   fi
 fi
 
-# 3. An unknown backend name is diagnosed, with the available ones listed.
+# 3. `pli version` lists the loaded plugin with its description and its file.
+if ! $PLI --backend-plugin "$PLUGIN" version 2>/dev/null | grep -q "test plugin"; then
+  fail "the plugin's description is missing from 'pli version'"
+fi
+
+# 4. An unknown backend name is diagnosed, with the available ones listed.
 if $PLI --backend-plugin "$PLUGIN" --backend nosuch -fsyntax-only "$OUT.witness.pli" \
      >"$OUT.err" 2>&1; then
   fail "an unknown backend was accepted"
@@ -76,7 +81,7 @@ elif ! grep -q "unknown backend" "$OUT.err"; then
   cat "$OUT.err"
 fi
 
-# 4. A missing plugin file is diagnosed.
+# 5. A missing plugin file is diagnosed.
 if $PLI --backend-plugin "$OUT/does-not-exist.so" -fsyntax-only "$OUT.witness.pli" \
      >"$OUT.err" 2>&1; then
   fail "a missing plugin was accepted"
@@ -85,7 +90,7 @@ elif ! grep -q "cannot load backend plugin" "$OUT.err"; then
   cat "$OUT.err"
 fi
 
-# 5. A plugin with a wrong ABI version is rejected by the handshake.
+# 6. A plugin with a wrong ABI version is rejected by the handshake.
 cat > "$OUT/bad_abi.c" <<'EOF'
 #include "backend/plugin_abi.h"
 static char* transform(const char* ir, const PliBackendOptions* o, char** e) {

@@ -6,8 +6,9 @@ nothing about your architecture.
 
 ## The three modes
 
-Every target has a **profile**: what this build has for it — an LLVM backend,
-an embedded runtime, a link sysroot. The profile picks the output mode:
+What a target gets depends on what this build has for it — an LLVM backend
+(then pli can code for it), an embedded runtime and a link sysroot (then the
+link can be self-contained) — and the output mode follows:
 
 | Mode | You get | You supply |
 | --- | --- | --- |

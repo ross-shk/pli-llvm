@@ -115,9 +115,12 @@ the result, so the plugin cannot feed invalid IR into the pipeline. The
 boundary is deliberately textual: no C++ and no LLVM types cross it, so the
 plugin stays independent of the compiler's build.
 
-Every target has a **profile** (`TargetProfile`: an LLVM backend, an embedded
-runtime, a link sysroot), and the profile picks the output mode (ADR-234,
-ADR-236):
+A target's **profile** (`TargetProfile`) says what this build can emit for it:
+whether LLVM has a backend for the architecture, and therefore whether the
+output can be an object or only portable bitcode (ADR-236, ADR-237). The
+other facts — an embedded runtime, a link sysroot, the host recipe — are
+asked where they are needed: by the runtime merge and by the link path
+(ADR-234, ADR-236).
 
 | Mode | Output | The user supplies |
 | --- | --- | --- |
