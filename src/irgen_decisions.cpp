@@ -247,8 +247,10 @@ PictureSpec classifyPicture(const std::string& pic) {
       break;
     }
 
-  bool foldable = s.numeric && !s.hasRepeat && !s.hasScale && s.width > 0 && s.width <= 127 &&
-                  s.intDigits + s.fracDigits > 0;
+  // The runtime walks at most 127 picture characters (its output buffer), so
+  // an expanded picture past that cap cannot be reproduced exactly.
+  bool foldable = s.numeric && !s.hasRepeat && !s.hasScale && s.width > 0 &&
+                  s.expanded.size() <= 127 && s.intDigits + s.fracDigits > 0;
   for (char c : s.expanded)
     if (!isFoldablePictureChar(c))
       foldable = false;
@@ -257,8 +259,7 @@ PictureSpec classifyPicture(const std::string& pic) {
   return s;
 }
 
-bool foldPictureConversion(long long value, int scale, const PictureSpec& spec,
-                           std::string& out) {
+bool foldPictureConversion(long long value, int scale, const PictureSpec& spec, std::string& out) {
   if (!spec.valid || !spec.foldable || scale < 0)
     return false;
   // The runtime negates in signed arithmetic, so LLONG_MIN has no magnitude

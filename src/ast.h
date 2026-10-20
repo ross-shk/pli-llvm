@@ -98,7 +98,7 @@ struct DefinedSub {
 // FORMAT statement (rule (55)). F(w,d[,p]): w = field width, d =
 // fractional digits, p = scale factor (evaluated, then formatting uses
 // (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
-// formats for the real/imaginary parts; P stays diagnosed (D1 pictures).
+// formats for the real/imaginary parts; P carries a picture string (rule 53).
 struct FormatItem {
   enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P } kind = A;
   ExprP w;                      // field width

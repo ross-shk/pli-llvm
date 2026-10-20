@@ -7619,9 +7619,8 @@ void IRGen::emitPutEditItems(HStmt* s) {
           std::string text;
           if (pli::foldPictureConversion(ci->getSExtValue(), scale, spec, text)) {
             facts_.recordBuiltin("picture", "llvm");
-            deferCall("pli_put_edit_char",
-                      {globalString(text), i64((long long)text.size()),
-                       i64((long long)text.size())});
+            deferCall("pli_put_edit_char", {globalString(text), i64((long long)text.size()),
+                                            i64((long long)text.size())});
             break;
           }
         }

@@ -7436,3 +7436,91 @@ lookup, and no `pli_translate` call or `tr.inptr` scan left), and the
 `translate` assertions in `tests/driver/experimental_lowering.sh`, which run
 the same witness under `auto`, `runtime` and `llvm` and require identical
 output.
+
+## ADR-266 — A picture classifier, and constant P-item folding
+
+*(ADR-265 belongs to the memory-effect branch; this is the next free number
+across the two branches.)*
+
+**Context.** B4 is the last WS-B technique: *picture conversion folding*. The
+plan gates it on the WS-K3 picture classifier, because a picture string is a
+small program (digit positions, zero suppression, signs, an assumed point,
+insertion characters, a scaling factor, repetition factors — rules (146)-(148))
+and the compiler cannot decide whether a conversion is foldable without first
+parsing that program. The classifier did not exist.
+
+The only reachable picture conversion today is the `P('picstr')` edit item.
+It always called `pli_put_edit_pic`, the runtime interpreter, even when the
+data item and the picture were both constants. ADR-017 already says pictures
+are compiled, not interpreted, and B4's observation is the same one B1 and B3
+made: a constant conversion should not survive into the IR.
+
+**Decision.** Three pieces.
+
+* `pli::classifyPicture()` in `irgen_decisions.cpp` — the classifier lives
+  outside IRGen, so it is readable without a backend (the plan's C2). It
+  validates the picture-character set, expands rule-(147) repetition factors
+  `(n)c`, separates the trailing rule-(146) scaling factor `F(±n)`, and
+  records the output width, the assumed-point index, the integer and
+  fractional digit counts, and whether the picture is numeric or character.
+  It also marks a `foldable` subset: numeric pictures made only of `9`, `Z`,
+  `V`, `.`, `+`, `-`, `S`, `X`, `A`, with no repetition, no `F(±n)`, and at
+  most 127 expanded characters (the runtime's output window).
+* `pli::foldPictureConversion()` — the folder reproduces the runtime
+  interpreter for that subset, including zero suppression, right-alignment,
+  fractional zero padding and the sign/blank positions. It returns the exact
+  text the runtime would write, or `false` so the caller keeps the runtime
+  path. It refuses `LLONG_MIN`, whose magnitude the runtime's signed negation
+  cannot represent either.
+* `IRGen`'s `P` case computes the value and scale once, then asks the folder
+  only when the value is an LLVM `ConstantInt` and the lowering policy has not
+  forced the runtime. A folded item is written with `pli_put_edit_char` and
+  recorded as `picture -> llvm`; every other item records `picture -> runtime`
+  and calls `pli_put_edit_pic` exactly as before.
+
+The operation name `picture` was added to both lowering tables, so
+`--experimental-lowering=picture:runtime` keeps the interpreter while the rest
+of the pipeline stays on `auto`. That is the differential oracle: the same
+source, two lowerings, one required output.
+
+**Consequences.** The fold is a real win where the runtime is not optimized
+away. 1,000,000 conversions of `123.45` through `'ZZ9.99'` on arm64 macOS
+(LLVM 23.1.2) take **112.4 ms** on the runtime path and **24.6 ms** on the
+folded path at `-O0` (4.6x). At `-O2` the two are inside noise (16.3 ms
+runtime, 17.6 ms folded): `pli_put_edit_pic` is `alwaysinline` and LLVM folds
+the constant-argument call itself. The value of B4 is therefore the *shape* of
+the IR — the conversion is gone before the optimizer sees it, instead of
+depending on an inliner to remove it — plus the unoptimized builds where the
+interpreter is the whole cost. This is recorded in
+`docs/OPTIMIZATION-BASELINE.md` §3.4.
+
+The classifier is deliberately wider than the folder. Repetition factors and
+`F(±n)` are classified and exposed for the future `PICTURE` variable type, but
+they stay on the runtime path for folding: the runtime formatter does not
+expand repetition, and duplicating its full picture grammar in a second
+interpreter is not justified without a witness. Pictures outside the foldable
+set (`,` currency, exponent, sterling, CR/DB, binary digits) keep the runtime,
+so no output changes.
+
+**Gates.** `tests/core/picture_fold.pli` formats each value twice — a literal
+through the folded path and a variable through the interpreter — and requires
+the texts to agree, for positive, negative, zero, explicit/blank signs, `X`
+insertion, `V`, float truncation, and a non-foldable comma picture.
+`tests/ir/picture_fold.pli` pins the IR: the constant item is a
+`pli_put_edit_char` call, a variable item still calls `pli_put_edit_pic`, and
+a non-foldable picture still calls the interpreter with its constant value.
+`tests/driver/experimental_lowering.sh` runs the picture witness under `auto`,
+`runtime` and `llvm` and requires identical output.
+`benchmarks/lang/picture_fold.pli` is the B4 benchmark and its pair compares
+`folded` with `picture:runtime`.
+
+**Rejected.** *Specializing a runtime value through a constant picture.* That
+is a lowering of the interpreter, not constant folding; it needs a code
+generator per picture shape and a much larger gate. *Folding the full picture
+grammar.* It would duplicate `pli_put_edit_pic` in C++ and change the output of
+pictures the runtime currently handles differently (for example `,` currently
+prints as `.`); keeping those on the runtime preserves behaviour and leaves
+one implementation of each rule. *Folding before `emitExpr`.* The IR value is
+the right input: it is already the exact `(value, scale)` pair the runtime
+receives, including float truncation and wide-decimal narrowing, so the
+folder cannot disagree with the call it replaces.

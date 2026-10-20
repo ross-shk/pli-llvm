@@ -104,7 +104,7 @@ the corpus.
 
 ---
 
-## 3. PL/I constant folding — WS-B (B1, B2, B3)
+## 3. PL/I constant folding — WS-B (B1, B2, B3, B4)
 
 **The criterion.** The plan's standing rule (`OPTIMIZATION.md` §6.4): *a
 technique is not implemented until IR demonstrates the miss and benchmarks show
@@ -212,12 +212,63 @@ agree exactly — and the latter still passes under
 sides), and `tests/ir/translate_table.pli` + `tests/core/translate_const.pli`
 for `TRANSLATE` (ADR-264).
 
-**Not measured, and not claimed.** B4 (picture conversion folding) is gated on
-the plan's WS-K3 picture classifier, which is not built; it does not start
-here. The plan's `RESEXP` opt-in (WS-K9) is likewise untouched. The plan's B3
-gate also asks for the measurement on both targets; no x86 host was available,
-so the numbers above are arm64 only. The change is target-independent by
-construction — a 256-byte constant global and an indexed load, no new
-intrinsics, no ABI change — and the IR tests pin the shape on every platform
-CI builds.
+### 3.4 B4 — picture conversion folding
+
+**The gate.** B4 was blocked on the plan's WS-K3 picture classifier, and that
+classifier did not exist. It now does: `pli::classifyPicture()` in
+`src/irgen_decisions.cpp` validates a picture (rules (146)-(148)), expands
+repetition factors, separates a trailing `F(±n)`, and records the width, the
+assumed point and the integer/fractional digit positions. `foldable` marks the
+numeric subset the constant folder can reproduce with the runtime's exact
+output: `9 Z V . + - S X A`, no repetition, no scaling factor.
+
+**The IR.** The folded item no longer reaches the interpreter:
+
+| item / picture | before | after |
+|---|---|---|
+| constant `123.45`, `P('ZZ9.99')` | `call @pli_put_edit_pic(i64 12345, ...)` | `call @pli_put_edit_char(ptr @str, i64 6, i64 6)` with the literal text `123.45` |
+| variable `v`, `P('ZZ9.99')` | `call @pli_put_edit_pic(...)` | unchanged |
+| constant item, non-foldable `P('ZZ9,99')` | `call @pli_put_edit_pic(...)` | unchanged |
+
+`tests/ir/picture_fold.pli` pins all three rows, so the fold is guarded on
+every target and the fallback cannot silently disappear.
+
+**The measurement.** `benchmarks/lang/picture_fold.pli` performs 1,000,000
+conversions of a constant value through `'ZZ9.99'` into a `STRING` buffer and
+checksums the first byte. The pair compiles the same source twice at `-O2`,
+once on the folded path and once with
+`--experimental-lowering=picture:runtime`; the same two lowerings were built at
+`-O0` for the table. Median of nine interleaved direct runs (arm64 macOS,
+LLVM 23.1.2):
+
+| build | `-O0` | `-O2` |
+|---|---|---|
+| folded | 24.6 ms | 17.6 ms |
+| runtime interpreter | 112.4 ms | 16.3 ms |
+| ratio (runtime / folded) | **4.6x** | 0.93x (noise) |
+
+At `-O0` the fold removes the interpreter and the benefit is unambiguous. At
+`-O2` there is nothing left to win: `pli_put_edit_pic` is `alwaysinline`, its
+arguments are constants, and LLVM folds the inlined formatter itself. The
+nine-run harness pair at `-O2` reports 0.95x; an earlier five-run pair
+reported 0.92x — both inside the noise floor — so **no `-O2` speedup is
+claimed**. The durable result is the IR shape: the conversion is gone *before*
+the optimizer runs instead of depending on an inliner to remove it, and the
+unoptimized path gets the 4.6x.
+
+**The verdict.** B4 closes. The gates are `tests/core/picture_fold.pli`
+(folded literal vs runtime variable, covering signs, zero, `X`, `V`, float
+truncation and a non-foldable fallback), `tests/ir/picture_fold.pli` (the
+three rows above), the picture witness in
+`tests/driver/experimental_lowering.sh` (identical output under `auto`,
+`runtime` and `llvm`), and the benchmark pair above. Repetition factors and
+`F(±n)` are classified but deliberately stay on the runtime path for folding;
+the full picture grammar, `PICTURE` variables and `GET EDIT P` remain D1.
+
+**Still not measured, and not claimed.** The plan's `RESEXP` opt-in (WS-K9) is
+untouched. The B3 and B4 gates also ask for the measurement on both targets;
+no x86 host was available, so the numbers above are arm64 only. Both changes
+are target-independent by construction — a constant global and an indexed
+load, no new intrinsics, no ABI change — and the IR tests pin the shape on
+every platform CI builds.
 
