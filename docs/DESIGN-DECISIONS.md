@@ -7788,3 +7788,65 @@ backend to lay out away from the hot code.
 function calls the dispatch, the dispatch holds the scan, the handler call
 and the abort, and it is `cold`. `tests/ir/on_trap_weights.check` still
 pins that the dispatch's empty-stack edge is weighted cold.
+
+---
+
+## ADR-271 — A by-ref array parameter's storage is not a compile-time-known object
+
+**Context.** WS-G3 proposed describing a PL/I array parameter's shape to
+LLVM, so that LLVM could widen the loads it makes through the parameter and
+vectorize a loop over it. The repository had no `addParamAttr` call at all,
+so the plan's claim was that the description was missing.
+
+The description was implemented and measured: the base pointer of a by-ref
+array parameter with a static shape was given
+`dereferenceable(declared bytes)`, the parameter's own extent deciding the
+size, with `--no-param-attrs` to price it.
+
+**The measurement.** The optimized IR is *identical* with and without the
+attribute, and the linked objects are byte-identical. The paired
+PL/I-vs-PL/I benchmark measures 0.99x — noise. The reason is structural:
+within one compilation unit LLVM sees the call site and the alloca, so it
+already knows the shape; and the attribute cannot reach across a module
+boundary either, because the ENTRY descriptor grammar accepts only a `*`
+dimension, so a fixed-size array parameter cannot cross a compilation unit in
+this stage at all. There is no shape for LLVM to be told.
+
+**The soundness reason for the revert.** `dereferenceable` implies
+non-null, and PL/I does not give the compiler the guarantee the attribute
+would assert. A BASED actual may have a null locator, and the compiler checks
+neither the null-ness of a BASED base nor the conformance of an actual with
+its dummy: a ten-element actual passed to a four-thousand-element dummy
+compiles clean. The declared extent of the dummy is a fact about the
+*dummy*, not about the storage behind the pointer.
+
+**Decision.** No shape is claimed for a by-ref array parameter. The rule to
+carry forward: **a PL/I array parameter's storage is not a compile-time-known
+object** — its extent belongs to the dummy, while the object behind the
+pointer belongs to the actual, and the language does not make the second
+conform to the first. A future implementation that wants the claim must
+first check conformance (and reject a null-based actual), and then only for
+the shapes it has checked.
+
+**What this closes.** The two other WS-G items were already in the tree, and
+the plan's account of them was stale:
+
+- **G1 (contiguous-array detection)** — the compiler already lowers an
+  array subscript to an affine offset: a `CHARACTER(10)` array with bounds
+  `0:9` gives `%off = sub i64 %i64, 0` and a single
+  `getelementptr inbounds [10 x i32], ptr %A.addr, i64 0, i64 %off`, with no
+  multiply. The storage is contiguous by construction, so there was nothing
+  to detect.
+- **G2 (whole-array assignment as a copy)** — `Sema::expandWholeArrayAssign`
+  returns early for identical static plain shapes ("Identical static plain
+  shapes ride the aggregate-copy path"), and the IR is a whole-aggregate
+  load and store, not a loop. IBM's four conditions are implemented by
+  `Sema::wholeArrayStorageOk`, which excludes DEFINED overlays, BASED
+  storage, CONTROLLED arrays and dynamic members.
+
+**Test.** `tests/ir/array_stride.pli` + `.check` pins the affine offset and
+the absence of a multiply; `tests/ir/array_memcpy.pli` + `.check` pins the
+whole-aggregate copy and the absence of a loop;
+`tests/core/bad_array_assign_defined.pli` pins the negative case — a
+whole-array assignment into a DEFINED overlay is *diagnosed*, not compiled
+into a copy that would break the aliasing.

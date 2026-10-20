@@ -396,3 +396,56 @@ call on a path that runs once in a hundred iterations is invisible.
 **How to reproduce.** `python3 benchmarks/run_benchmarks.py --only on_dispatch
 --runs 5`, and `llvm-objdump -d` on the linked binary for the function
 boundaries.
+
+---
+
+## 6. WS-G: PL/I aggregates and arrays (P3)
+
+### 6.1 G1 and G2 — already in the tree
+
+The plan's account of WS-G was stale on both counts, and the gates close
+without a diff:
+
+- **G1 (contiguous-array detection).** The compiler already lowers an array
+  subscript to an affine offset — a `CHARACTER(10)` array with bounds
+  `0:9` gives `%off = sub i64 %i64, 0` and one
+  `getelementptr inbounds [10 x i32], ptr %A.addr, i64 0, i64 %off`, with
+  **no multiply**. The storage is contiguous by construction, so there was
+  nothing to detect.
+- **G2 (whole-array assignment as a copy).** `Sema::expandWholeArrayAssign`
+  returns early for identical static plain shapes, and the IR is a
+  whole-aggregate load and store — not a loop. IBM's four conditions are
+  implemented by `Sema::wholeArrayStorageOk` (no DEFINED overlay, no BASED
+  storage, no CONTROLLED array, no dynamic member).
+
+`tests/ir/array_stride.pli`, `tests/ir/array_memcpy.pli` and
+`tests/core/bad_array_assign_defined.pli` pin all three facts.
+
+### 6.2 G3 — the shape of an array parameter: measured, and reverted
+
+The attribute was implemented (`dereferenceable` on the base pointer of a
+by-ref array parameter with a static shape) and priced with a paired
+PL/I-vs-PL/I benchmark.
+
+| build | median |
+|---|---|
+| without the attribute | 52.86 ms |
+| with the attribute | 52.53 ms |
+
+**0.99x — noise.** The optimized IR is identical with and without the
+attribute, and the linked objects are byte-identical. The reason is
+structural: within one compilation unit LLVM sees the call site and the
+alloca, so it already knows the shape; and the ENTRY descriptor grammar
+accepts only a `*` dimension, so a fixed-size array parameter cannot cross
+a compilation unit in this stage — the attribute has no place to act.
+
+The revert is also a soundness decision. `dereferenceable` implies non-null,
+and PL/I does not give the compiler that guarantee: a BASED actual may have
+a null locator, and the compiler checks neither that nor the conformance of
+an actual with its dummy (a ten-element actual for a four-thousand-element
+dummy compiles clean). The dummy's extent is a fact about the dummy, not
+about the storage behind the pointer. ADR-271 records the rule.
+
+**How to reproduce.** `python3 benchmarks/run_benchmarks.py --only array_param
+--runs 5` with the attribute and with `--no-param-attrs`, and
+`cmp` on the two linked objects.

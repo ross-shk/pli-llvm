@@ -49,13 +49,12 @@ public:
         bool noConvChecks = false, bool noSubChecks = false,
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
         std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
-        bool noMemoryEffects = false, bool noParamAttrs = false)
+        bool noMemoryEffects = false)
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
         noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
         noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
         platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
-        perOpOverrides_(std::move(perOpOverrides)), noMemoryEffects_(noMemoryEffects),
-        noParamAttrs_(noParamAttrs) {}
+        perOpOverrides_(std::move(perOpOverrides)), noMemoryEffects_(noMemoryEffects) {}
 
   std::string run(HProgram& prog);
 
@@ -178,9 +177,6 @@ private:
   // default effects. The escape hatch that lets a benchmark measure what the
   // inference is worth.
   bool noMemoryEffects_ = false;
-  // ADR-271: --no-param-attrs drops the array parameter's shape description,
-  // so the paired benchmark can price it against the same program without.
-  bool noParamAttrs_ = false;
   pli::MemEffect effectOf(const HProc* p) const;
   // The control-flow verdict: can the procedure unwind, does it return?
   void applyControlAttrs(llvm::Function* f, const HProc* p);
@@ -623,13 +619,6 @@ private:
   // the abort path, established runs the matching handler then branches to
   // okBB, where the caller resumes with its own recovery value.
   void emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB);
-  // ADR-271: describe the shape of a by-ref array parameter to LLVM. The
-  // dummy's declared extent is known at compile time, so the base pointer
-  // addresses at least that many elements and LLVM may widen the loads it
-  // makes through it. Only a static shape qualifies: an adjustable or
-  // runtime-bounded array has no compile-time size to describe.
-  void applyArrayParamAttrs(llvm::Function* f, const std::vector<Symbol*>& params,
-                             unsigned firstArg);
   // WS-F1 (ADR-249): the ON dispatch — the stack scan, the handler calls and
   // the abort — lives in a cold function of its own, so the hot function
   // carries only the branch and the call. One function per condition key:

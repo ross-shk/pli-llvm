@@ -4468,41 +4468,6 @@ void IRGen::applyControlAttrs(llvm::Function* f, const HProc* p) {
 // conformable with the dummy (rule (34)), so it carries at least the
 // dummy's elements. It says nothing about alignment — a BASED actual's base
 // pointer carries no alignment guarantee — so `align` is not claimed.
-void IRGen::applyArrayParamAttrs(llvm::Function* f, const std::vector<Symbol*>& params,
-                                  unsigned firstArg) {
-  for (size_t i = 0; i < params.size(); ++i) {
-    Symbol* sym = params[i];
-    if (!sym || !sym->ty.isArray() || isByValueParam(sym))
-      continue;
-    const Type& t = sym->ty;
-    // An adjustable (`*`) or runtime-bounded array has no compile-time size.
-    if (t.isDynamic() || isAdjustable(sym))
-      continue;
-    const Type& el = t.elementType();
-    if (el.isDynamic())
-      continue; // a dynamic member makes the element size a run-time value
-    uint64_t count = 1;
-    bool empty = false;
-    for (const Dim& d : t.dims) {
-      if (d.ub < d.lb) {
-        empty = true; // an empty array: nothing to describe
-        break;
-      }
-      count *= (uint64_t)(d.ub - d.lb + 1);
-    }
-    if (empty)
-      continue;
-    llvm::Type* elTy = llvmTy(el);
-    uint64_t bytes = mod_.getDataLayout().getTypeAllocSize(elTy).getFixedValue() * count;
-    if (bytes == 0)
-      continue;
-    if (noParamAttrs_)
-      continue;
-    f->addParamAttr(firstArg + (unsigned)i,
-                    llvm::Attribute::get(ctx_, llvm::Attribute::Dereferenceable, bytes));
-  }
-}
-
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
@@ -4546,9 +4511,6 @@ void IRGen::declareProc(HProc* p) {
     llvm::Function* fn = llvm::Function::Create(ft, linkage, p->irName.substr(1), &mod_);
     applyMemoryEffect(fn, effectOf(p));
     applyControlAttrs(fn, p);
-    // ADR-271: the shape of a by-ref array parameter, for LLVM to widen the
-    // loads it makes through the pointer.
-    applyArrayParamAttrs(fn, p->paramSyms, sret ? 1 : 0);
     for (const auto& en : p->entryNames)
       aliasFor(en, fn);
     return;
