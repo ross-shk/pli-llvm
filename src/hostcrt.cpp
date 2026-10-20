@@ -101,7 +101,7 @@ bool isHost(const llvm::Triple& t) { return t.getTriple() == llvm::sys::getDefau
 // (crt2.o + crtbegin.o) marks a usable set; the macOS .tbd stubs are only
 // meaningful as a -syslibroot, so they are recognised by name.
 SysrootSet probeSysrootDir(const std::string& dir, const std::string& origin,
-                            const std::string& arch) {
+                           const std::string& arch) {
   SysrootSet out;
   if (dir.empty())
     return out;

@@ -3152,8 +3152,8 @@ bool IRGen::linkRuntimeBitcode() {
     d_.error({}, "no embedded runtime for target '" + triple_ + "'" +
                      (have.empty() ? std::string() : " (this build embeds: " + have + ")") +
                      " — rebuild with -DPLI_CROSS_BITCODE=ON, or use "
-                     "--no-bitcode-runtime (an object with external runtime references) / "
-                     "--emit-bitcode (portable bitcode), or compile for the host triple",
+                  "--no-bitcode-runtime (an object with external runtime references) / "
+                  "--emit-bitcode (portable bitcode), or compile for the host triple",
               "");
     return false;
   }

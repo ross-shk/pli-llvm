@@ -36,9 +36,9 @@
 #include "sema.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
@@ -147,14 +147,15 @@ static void usage() {
          "  --fprofile-use=<f>   rebuild using that profile (.profraw or .profdata)\n"
          "  --triple <t>     target triple (default: host triple, in-process)\n"
          "  --sysroot <dir>  link sysroot of the target (crt objects + system libs);\n"
+         "                   overrides the vendored/embedded set (ADR-234)\n"
          "  --emit-bitcode   write portable bitcode (.bc) instead of an object;\n"
          "                   the runtime is not merged, so link your own (ADR-236)\n"
          "  --data-layout <dl>\n"
-         "                   data layout the module is built with (an architecture\n"
-         "                   pli does not know: the ABI is yours; default: LP64)\n"
+         "                   the ABI of an architecture pli does not know: pli lays\n"
+         "                   the aggregates out with it (default: LP64); the\n"
+         "                   consumer's toolchain still applies its own layout\n"
          "  --no-portable    fail instead of falling back to portable bitcode\n"
          "                   when the target has no LLVM backend (ADR-236)\n"
-         "                   overrides the vendored/embedded set (ADR-234)\n"
          "  --backend-plugin <path>\n"
          "                   load a code-generation backend plugin (ADR-235); the\n"
          "                   plugin must export pli_backend_plugin_v1\n"
@@ -286,8 +287,8 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
 // layout (the consumer's toolchain applies the target's own) and no runtime
 // (the pli_* symbols stay undefined: the user links the runtime they built
 // for their target).
-static bool emitPortableBitcode(llvm::Module& M, const std::string& dest,
-                                 const std::string& triple, std::string& err) {
+static bool emitPortableBitcode(llvm::Module& M, const std::string& dest, const std::string& triple,
+                                std::string& err) {
   M.setDataLayout("");
   M.setTargetTriple(llvm::Triple(triple));
   std::error_code ec;
@@ -300,16 +301,20 @@ static bool emitPortableBitcode(llvm::Module& M, const std::string& dest,
   return true;
 }
 
+// The portable notice is printed once per run (the mode is a run-level fact,
+// the file name is per unit).
+static bool gPortableNoticePrinted = false;
+
 // The recipe the user needs to finish a portable build.
-static std::string portableHint(const std::string& triple) {
+static std::string portableHint(const std::string& triple, const std::string& bcName) {
   return "  the runtime symbols stay undefined — build the runtime for your target and link it:\n"
          "    clang -target " +
          triple +
          " -O2 -c runtime/rt_*.c\n"
          "    ar crs libpli_runtime.a rt_*.o\n"
          "    clang -target " +
-         triple +
-         " prog.bc libpli_runtime.a -o prog\n"
+         triple + " " + bcName +
+         " libpli_runtime.a -o prog\n"
          "  (use --emit-llvm for textual IR; see guides/cross-compilation.md)";
 }
 
@@ -570,12 +575,22 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // bitcode instead of an object. No codegen, no runtime: the user's own
     // toolchain finishes the job.
     if (portableMode) {
-      std::string dest = output.empty() ? base + ".bc"
-                                    : (bitcodeExplicit ? output : output + ".bc");
+      std::string dest =
+          output.empty() ? base + ".bc" : (bitcodeExplicit ? output : output + ".bc");
       std::string bcErr;
       if (!emitPortableBitcode(*om->mod, dest, triple, bcErr)) {
         std::cerr << "pli: " << bcErr << "\n";
         return false;
+      }
+      if (!gPortableNoticePrinted) {
+        gPortableNoticePrinted = true;
+        if (bitcodeExplicit)
+          std::cerr << "pli: wrote portable bitcode '" << dest
+                    << "' (the runtime is not merged; the pli_* symbols are undefined)\n";
+        else
+          std::cerr << "pli: no LLVM backend for '" << triple
+                    << "' in this build: writing portable bitcode '" << dest << "'\n"
+                    << portableHint(triple, dest) << "\n";
       }
       if (verbose)
         std::cerr << "pli: wrote portable bitcode " << dest << "\n";
@@ -588,7 +603,10 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       std::cerr << "pli: no target (" << tmErr << ")\n";
       return false;
     }
-    // The IRGen layout is approximate; the TargetMachine owns the truth.
+    // The IRGen layout is approximate; the TargetMachine owns the truth. An
+    // explicit --data-layout is meant for an architecture this compiler does
+    // not know (ADR-236); the driver has already checked that it does not
+    // contradict the target's pointer width.
     om->mod->setDataLayout(tm->createDataLayout());
     // Also set module target triple to ensure consistent
     // feature handling during codegen (module triple affects some defaults).
@@ -920,8 +938,7 @@ int main(int argc, char** argv) {
   // The host's static system directories describe the machine pli runs on.
   // A cross link must not see them: they would let the linker pull host
   // libraries into a target binary (ADR-234).
-  const bool hostTarget =
-      triple.empty() || pli::isHostTarget(llvm::Triple(triple));
+  const bool hostTarget = triple.empty() || pli::isHostTarget(llvm::Triple(triple));
 
   // Upward filesystem walks (Zig-style) for include and library directories.
   // Start from the source root (cwd) and the pli executable directory; at each
@@ -1028,6 +1045,37 @@ int main(int argc, char** argv) {
         std::cerr << "pli:   " << la << "\n";
   }
 
+  // The output mode for the requested target (ADR-236): a target with no LLVM
+  // backend in this build can only be produced as portable bitcode, which
+  // the user's own toolchain compiles and links. --emit-bitcode asks for the
+  // same output for a target this build does know.
+  if (triple.empty())
+    triple = llvm::sys::getDefaultTargetTriple();
+  const pli::TargetProfile profile = pli::describeTarget(llvm::Triple(triple));
+  if (profile.portable && noPortable) {
+    std::cerr << "pli: no LLVM backend for '" << triple
+              << "' in this build (and --no-portable was given)\n";
+    return 1;
+  }
+  const bool portableMode = emitBitcode || profile.portable;
+  // An explicit --data-layout states the ABI of an architecture this compiler
+  // does not know (ADR-236). For a target the backend knows, the pointer
+  // width must agree, or the module would not verify — say so plainly
+  // instead of letting the module verifier report it.
+  if (!dataLayout.empty() && profile.llvmBackend) {
+    std::string tmErr;
+    if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
+      const unsigned userPtr = llvm::DataLayout(dataLayout).getPointerSize();
+      const unsigned targetPtr = tm->createDataLayout().getPointerSize();
+      if (userPtr != targetPtr) {
+        std::cerr << "pli: --data-layout (" << dataLayout
+                  << ") contradicts the target's pointer width (" << targetPtr
+                  << " bytes) — it is meant for an architecture this compiler does not know\n";
+        return 1;
+      }
+    }
+  }
+
   // clang-matching guards: a single -o cannot name more than one output.
   const bool multi = pliInputs.size() > 1;
   if (compileOnly && multi && !output.empty()) {
@@ -1035,7 +1083,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   if (multi && !output.empty() &&
-      (emitLLVM || emitMlir || emitBitcode || syntaxOnly || print_hir)) {
+      (emitLLVM || emitMlir || emitBitcode || syntaxOnly || print_hir || portableMode)) {
     std::cerr << "pli: -o is ambiguous with a per-file mode and multiple inputs\n";
     return 2;
   }
@@ -1071,29 +1119,11 @@ int main(int argc, char** argv) {
   else if (!pgoUse.empty())
     pgoMode = pli::PgoMode::Use;
 
-  // The output mode for the requested target (ADR-236): a target with no LLVM
-  // backend in this build can only be produced as portable bitcode, which
-  // the user's own toolchain compiles and links. --emit-bitcode asks for the
-  // same output for a target this build does know.
-  if (triple.empty())
-    triple = llvm::sys::getDefaultTargetTriple();
-  const pli::TargetProfile profile = pli::describeTarget(llvm::Triple(triple));
-  if (profile.portable && noPortable) {
-    std::cerr << "pli: no LLVM backend for '" << triple
-              << "' in this build (and --no-portable was given)\n";
-    return 1;
-  }
-  const bool portableMode = emitBitcode || profile.portable;
-  if (profile.portable) {
-    std::cerr << "pli: no LLVM backend for '" << triple << "' in this build: writing portable "
-                 "bitcode\n"
-              << portableHint(triple) << "\n";
-  }
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled. The
   // portable output stops too: there is no object to link.
-  const bool terminalMode = compileOnly || emitLLVM || emitMlir || emitBitcode || syntaxOnly ||
-                            print_hir || portableMode;
+  const bool terminalMode =
+      compileOnly || emitLLVM || emitMlir || emitBitcode || syntaxOnly || print_hir || portableMode;
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.

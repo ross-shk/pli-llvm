@@ -121,14 +121,20 @@ prepare_download() {
         echo "pli: cannot find the llvm-mingw release" >&2
         exit 1
       }
-      root=llvm-mingw
       ;;
   esac
   echo "downloading $url"
   archive="$work/toolchain"
   curl -sSL --max-time 1800 -o "$archive" "$url"
   case "$url" in
-    *.zip) (cd "$work" && unzip -q "$archive") ;;
+    *.zip)
+      # unzip is not everywhere; python3 is (it is a build dependency).
+      if command -v unzip >/dev/null 2>&1; then
+        (cd "$work" && unzip -q "$archive")
+      else
+        (cd "$work" && python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall()" "$archive")
+      fi
+      ;;
     *) (cd "$work" && tar xf "$archive") ;;
   esac
   case "$TARGET" in
@@ -154,13 +160,18 @@ prepare_download() {
     x86_64-pc-windows-gnu)
       base=$(find "$work" -maxdepth 2 -type d -name 'x86_64-w64-mingw32' | head -1)
       [ -n "$base" ] || base=$(find "$work" -maxdepth 3 -type d -name 'x86_64-w64-mingw32' | head -1)
+      [ -n "$base" ] || {
+        echo "pli: the llvm-mingw archive has no x86_64-w64-mingw32 directory" >&2
+        exit 1
+      }
       cp -r "$base/include/." "$OUT/include/"
-      for f in crt2.o crtbegin.o crtend.o; do
-        [ -f "$base/lib/$f" ] && cp -f "$base/lib/$f" "$OUT/lib/"
-      done
-      for l in libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a libmoldname.a \
-               libucrt.a libadvapi32.a libshell32.a libuser32.a libgcc.a; do
-        [ -f "$base/lib/$l" ] && cp -f "$base/lib/$l" "$OUT/lib/"
+      # A missing file is skipped, not fatal (the set differs per release).
+      for f in crt2.o crtbegin.o crtend.o libkernel32.a libmsvcrt.a libmingw32.a \
+               libmingwex.a libmoldname.a libucrt.a libadvapi32.a libshell32.a \
+               libuser32.a libgcc.a; do
+        if [ -f "$base/lib/$f" ]; then
+          cp -f "$base/lib/$f" "$OUT/lib/"
+        fi
       done
       # The two CRT build products the distribution does not ship: the host
       # clang cross-compiles them (their sources are in platform/windows-mingw).

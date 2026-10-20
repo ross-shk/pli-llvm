@@ -339,6 +339,12 @@ endif()
 if(LLVM_LINK_LLVM_DYLIB AND NOT APPLE AND NOT PLI_LLVM_STATIC_PREFIX)
   set(llvm_libs_core LLVM z zstd)
   set(llvm_libs_mc "")
+  # A shared libLLVM registers its targets itself, but the initializers are
+  # called here too (ADR-234): the calls are idempotent, and they make the
+  # behaviour identical to the static builds.
+  set(PLI_LLVM_TARGET_INIT
+    "X86:TargetInfo Target TargetMC AsmParser AsmPrinter Disassembler"
+    "AArch64:TargetInfo Target TargetMC AsmParser AsmPrinter Disassembler")
 else()
   # Core/IR (superset of the old `core irreader support linker` set).
   # ProfileData: InstrProfReader for in-process --fprofile-use (ADR-225).

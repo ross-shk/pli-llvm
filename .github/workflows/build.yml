@@ -119,6 +119,8 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/$(. /etc/os-release && echo $VERSION_CODENAME)/ llvm-toolchain-$(. /etc/os-release && echo $VERSION_CODENAME)-23 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
           sudo apt-get install -y clang-23 lld-23 llvm-23 llvm-23-dev libclang-23-dev liblld-23-dev libpolly-23-dev libclang-rt-23-dev ninja-build cmake python3 git
+          # The aarch64 cross binary is run through qemu (the runner is amd64).
+          sudo apt-get install -y qemu-user-static binfmt-support
           sudo ln -sf /usr/bin/clang-23 /usr/bin/clang && sudo ln -sf /usr/bin/clang++-23 /usr/bin/clang++
           echo "CMAKE_PREFIX_PATH=/usr/lib/llvm-23" >> "$GITHUB_ENV"
       - name: Prepare the cross sysroots

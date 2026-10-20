@@ -52,7 +52,7 @@ struct SysrootSet {
 // `arch` is the LLVM arch name of the target ("x86_64", "aarch64", ...): a
 // musl set that carries builtins archives must carry the target's.
 SysrootSet probeSysrootDir(const std::string& dir, const std::string& origin,
-                            const std::string& arch = "");
+                           const std::string& arch = "");
 
 // The prepared cross sysroot cache: $PLI_SYSROOT_DIR, else ~/.pli/sysroots,
 // then the per-target subdirectory <cache>/<targetKey>/lib.

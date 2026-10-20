@@ -144,6 +144,11 @@ pli --triple e2k-unknown-linux-gnu --data-layout "e-m:o-p:32:32-i64:64-i128:128-
     prog.pli -o prog
 ```
 
+`--data-layout` tells *pli* how to lay the aggregates out while lowering; the
+portable artifact still carries no layout, so your toolchain applies its own.
+The two must agree: for a target the backend knows, a layout that contradicts
+the target's pointer width is rejected with a diagnostic.
+
 ### Bitcode or text?
 
 LLVM **bitcode is version-locked**: a newer LLVM reads older bitcode, but an
