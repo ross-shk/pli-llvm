@@ -602,6 +602,17 @@ scale-up) and `sdiv i64 %rn, 10` (the rounding scale-down), with **no call**.
 Every rescale already carries its factor as a compile-time constant, so there
 is nothing to fold.
 
+**The gate.** The plan's own test for E1 — *a table of decimal operations with
+different operand scales, whose results must be exact, scale and precision
+included* — did not exist, so it is written now:
+`tests/core/decimal_scale.pli` is a golden test whose expected output is the
+table itself, so the *declared scale* of every result is visible in the
+snapshot (`3.75` at scale 2, `2.6250` at scale 4), and every value is also
+checked against a hand-computed expectation. It covers the common scale of
+`+` and `-`, the sum of the scales in a product, the rounding of an assignment
+to a narrower scale (half away from zero), the comparison's rescale, and a
+wide product that keeps its digits.
+
 **The verdict.** Closed without a diff, per the gate. The residual — a
 *semantically required* rounding of a scale-8 product down to scale 4 — cannot
 be removed by a compile-time reconciliation: PL/I rounds the product, not the
