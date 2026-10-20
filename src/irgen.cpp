@@ -7753,6 +7753,7 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
         llvm::Type* st = llvm::StructType::get(
             ctx_, {b_.getInt32Ty(), llvm::ArrayType::get(b_.getInt8Ty(), cap)});
         llvm::AllocaInst* tmp = entryAlloca(st, "vstar");
+        markTempLifetime(tmp);
         llvm::Value* lp = b_.CreateStructGEP(st, tmp, 0, "vlp");
         llvm::Value* srcLen = av0.len ? av0.len : i64(av0.ty.len);
         b_.CreateStore(b_.CreateTrunc(srcLen, b_.getInt32Ty(), "vl32"), lp);
@@ -7774,6 +7775,7 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
       // fixed 256-byte cap overflowed the stack for a longer actual.
       unsigned cap = av.ty.len > 0 ? (unsigned)av.ty.len : 1;
       llvm::AllocaInst* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
+      markTempLifetime(buf);
       b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
       // The concat's heap buffer has been copied: release it (the call
       // argument path had no free, so every call leaked one buffer).
@@ -7790,6 +7792,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   if (memberDirect)
     return memberAddr(a->sym, a->memberPath, a->loc);
   llvm::Value* addr = entryAlloca(llvmTy(pty), "dummy");
+  // ADR-246: the dummy is live only until the call returns.
+  markTempLifetime(addr);
   Val av = emitExpr(a);
   if (pty.isChar()) {
     Val cv = av;
@@ -7820,6 +7824,25 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
 // a callee or a transitive call may free / allocate on this variable's slot,
 // invalidating the data pointer cached by `addressOf` at call-site time.
 // Reload the latest-generation pointer so the write-back hits live memory.
+// ADR-246: mark a stack buffer live from this point. The marker goes in the
+// block that uses the buffer — the alloca itself stays in the entry block,
+// but a marker there would describe a range that ends before the loop's
+// next iteration uses the buffer.
+void IRGen::markTempLifetime(llvm::Value* buf) {
+  // LLVM 23's lifetime intrinsics take the pointer alone (the size is
+  // inferred from the allocation): @llvm.lifetime.start.p0(ptr %buf).
+  b_.CreateIntrinsic(llvm::Intrinsic::lifetime_start, {b_.getPtrTy()}, {buf});
+  pendingTempLifetimes_.push_back(buf);
+}
+
+// ADR-246: end the marked lifetimes — the buffers are dead after this point,
+// so LLVM's stack colouring can give them one shared slot.
+void IRGen::endTempLifetimes() {
+  for (llvm::Value* buf : pendingTempLifetimes_)
+    b_.CreateIntrinsic(llvm::Intrinsic::lifetime_end, {b_.getPtrTy()}, {buf});
+  pendingTempLifetimes_.clear();
+}
+
 void IRGen::flushVarWrites() {
   for (const PendingVarWrite& w : pendingVarWrites_) {
     const Type& cty = w.sym->ty;
@@ -7860,6 +7883,9 @@ void IRGen::flushVarWrites() {
     }
   }
   pendingVarWrites_.clear();
+  // ADR-246: the argument buffers are dead once the call has returned and
+  // the copy-backs are done, so their stack slots are free again.
+  endTempLifetimes();
 }
 
 // VARYINGZ argument for a by-value C entry (ADR-168): copy the actual's
@@ -7889,6 +7915,8 @@ llvm::Value* IRGen::cstrArg(HExpr* a, const Type& pty, SourceLoc loc) {
     cap = 0;
   llvm::AllocaInst* buf =
       entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)cap + 1), "zstr");
+  // ADR-246: the NUL-terminated copy is live only until the call returns.
+  markTempLifetime(buf);
   b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
   llvm::Value* z = b_.CreateGEP(b_.getInt8Ty(), buf, {av.len}, "zterm");
   b_.CreateStore(b_.getInt8(0), z);
@@ -8348,6 +8376,10 @@ void IRGen::emitAsyncCall(HStmt* s) {
   llvm::Value* fnPtr = b_.CreateBitCast(wrap, b_.getPtrTy(), "twrap");
   b_.CreateCall(runtimeFn("pli_task_spawn"), {fnPtr, ctxRaw});
   pendingVarWrites_.clear(); // no sync point to copy a varying arg back
+  // ADR-246: the argument buffers stay live — the task reads them from the
+  // caller's frame after the call returns, so their slots must not be
+  // reused. Drop the markers without ending them.
+  dropTempLifetimes();
 }
 
 void IRGen::emitWait(HStmt* s) {

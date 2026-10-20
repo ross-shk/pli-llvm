@@ -1,0 +1,19 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-D3 (ADR-246): a stack buffer that lives only until the call returns
+    is marked, so LLVM's stack colouring can give the temporaries of
+    different calls one shared slot instead of one slot each. */
+ lifetime_attrs: procedure options(main);
+   declare i fixed bin(31);
+   declare s char(8);
+
+   do i = 1 to 4;
+     call takes_char('abc');
+   end;
+   put skip list(s);
+
+   takes_char: procedure(c);
+      declare c char(8);
+      c = 'x';
+   end takes_char;
+ end lifetime_attrs;

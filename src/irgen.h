@@ -331,6 +331,21 @@ private:
   };
   std::vector<PendingVarWrite> pendingVarWrites_;
   void flushVarWrites();
+  // ADR-246: the stack buffers that live only until the call returns — the
+  // argument dummies, the character-expression buffer and the NUL-terminated
+  // copy. Each is an entry-block alloca, so without a lifetime marker every
+  // one of them owns a stack slot for the whole procedure; with one, LLVM's
+  // stack colouring can give them the same slot.
+  std::vector<llvm::Value*> pendingTempLifetimes_;
+  // Mark the buffer live from here: the marker goes in the block that uses
+  // the buffer, not in the entry block, or a loop would end the lifetime
+  // before the next iteration's use.
+  void markTempLifetime(llvm::Value* buf);
+  // End the marked lifetimes (the buffers are dead after this point).
+  void endTempLifetimes();
+  // Drop the marked lifetimes without ending them: the buffers outlive the
+  // call, so their slots must stay reserved.
+  void dropTempLifetimes() { pendingTempLifetimes_.clear(); }
   // Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
   // FLOAT scalars convert to the parameter type and ride as values, POINTERs
   // ride as the pointer itself; anything else keeps the argAddr form. A

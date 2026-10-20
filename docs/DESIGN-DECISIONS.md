@@ -7595,3 +7595,112 @@ the subprocess on purpose. Linking lld statically where the distribution
 ships only shared lld: not possible. Checking for the mixed case at run time
 and diagnosing instead of crashing: the mix is a property of the link, and the
 link is under the build's control.
+
+---
+
+## ADR-245 — PL/I string padding invariant: the declared extent is the whole value
+
+**Context.** MULTICS tracked *two* padding predicates (`prepare_operand.pl1:250-305`):
+
+- `padded_ref` — "may this fetch read padding bits?" A fetch of the whole
+  declared object may; a fetch of a substring may not, because there may be
+  more non-zero bits to the right in the full generation of the string.
+- `padded_for_store_ref` — "must this store zero the padding bits?" A store
+  of a substring must not, or it would destroy the neighbouring bytes; a store
+  of the whole object must.
+
+They are different questions, and MULTICS used the same bits for both until
+30 March 1980, when a variable could be stored unpadded but fetched padded.
+The modern risk is LLVM's `undef`/`poison` and its freedom to widen loads: a
+`load i64` from a three-byte string may read a byte the program never wrote,
+and if the program later compares the whole word the result is undefined.
+
+**Decision.** The declared extent is the whole value, and the two questions
+stay apart:
+
+- A `CHARACTER(n)` is exactly `n` bytes — `[n x i8]`, with no storage padding
+  in the LLVM sense. So "may this fetch read padding bits?" answers *no*, and
+  "must this store zero the padding bits?" answers *there are none*.
+- A `BIT(n)` is exactly `ceil(n/8)` bytes, and the bits above `n` in the last
+  byte are zero. So the fetch question answers *yes, and they are zero* — the
+  value cannot depend on what sits next to it.
+- The **fetch** side is an address plus a length, never a wider load
+  (`IRGen::loadSym`): a string value is fetched by reference, so every read
+  is bounded by the value's own length.
+- The **store** side is bounded by the declared extent
+  (`IRGen::storeCharTo` → `emitAssignCharLLVM`): the copy is
+  `min(dstLen, srcLen)` bytes and the tail fill is `dstLen - n` bytes, so a
+  store writes the target's length and not one byte more, and a neighbouring
+  variable is untouched.
+
+**Audit (the plan's gate asked for one).** The repo was already correct: the
+representation is `[n x i8]`, no code path loads a string wider than its
+declared extent, and every store is bounded by the declared length. A BIT
+substring *assignment* is not implemented at all — it is diagnosed
+("SUBSTR first argument must be a character string", rule (123)), not
+silently miscompiled. So the item closes as the plan predicted: a documented
+invariant plus regression tests, not a fix.
+
+**Consequences.** The invariant is stated where it can be broken: at the type
+lowering (`IRGen::llvmTy`), at the fetch (`loadSym`) and at the store
+(`storeCharTo`). A future change that widens a string load, or that stores
+into a buffer without a length, now contradicts a named rule rather than
+silently changing what a PL/I value means.
+
+**Test.** `tests/core/string_padding.pli` (adjacent strings, a substring, a
+string inside a structure, a BIT value) and `tests/ir/string_extent.pli` +
+`.check`, which pins the extent in the IR: `[3 x i8]`, a three-byte copy, a
+zero-byte tail fill, and a fetch that carries the length three.
+
+---
+
+## ADR-246 — Lifetime markers for the string temporaries that die at the call
+
+**Context.** MULTICS's `string_temp` reused or extended a previously
+allocated stack temporary instead of allocating a new one
+(`bound_pl1_.4.s.archive/string_temp.pl1`, quoted in the plan §3.5). The
+modern form of that idea is `llvm.lifetime.start`/`llvm.lifetime.end`: an
+alloca in the entry block owns its stack slot for the whole procedure unless
+a lifetime marker says otherwise, so without markers every temporary owns a
+slot even when the temporaries of different calls are never live at the same
+time.
+
+The repo had **no** lifetime marker anywhere. The plan's witness — "a loop
+that builds a VARYING string each iteration" — does not apply as written: a
+VARYING *variable* keeps its data inside its own alloca (`{i32, [n x i8]}`),
+so there is no separate buffer to mark and the slot is already reused. The
+temporary that does exist is the one a `CHAR(*) VARYING` parameter needs when
+the actual is not a VARYING value: a stack copy of the string.
+
+**Decision.** Mark the stack buffers whose live range ends at the call:
+
+- the by-reference argument dummy (`IRGen::argAddr`),
+- the character-expression argument buffer (`cbuf`),
+- the `CHAR(*) VARYING` argument copy (`vstar`),
+- the NUL-terminated copy a VARYINGZ argument needs (`cstrArg`).
+
+The start marker goes in the block that *uses* the buffer, not in the entry
+block: a marker in the entry block would describe a range that ends before
+the loop's next iteration uses the buffer. The end marker goes after the
+call and after the copy-back of a VARYING argument into the caller's variable
+(`IRGen::flushVarWrites`).
+
+**The asynchronous call is excluded.** An async call stores the *addresses* of
+the arguments in a heap context and the task reads them from the caller's
+frame after the call has returned, so those slots must stay reserved: the
+async path drops the markers without ending them (`dropTempLifetimes`).
+
+**Consequences.** The temporaries of different calls share one stack slot.
+On the witness — three procedures called with a character expression, in a
+loop — the frame shrinks from **112 bytes to 80** (measured with `llc -O2` on
+the emitted IR). The PL/I-language benchmark corpus does not move: none of
+those programs passes a character expression to a procedure, so there is no
+dummy to share. The risk is a use-after-free, so the VARYING-string corpus
+and the task programs were run under AddressSanitizer (`-c` plus
+`clang -fsanitize=address`): eleven string programs and four task programs,
+all clean.
+
+**Test.** `tests/ir/lifetime.pli` + `.check` pins the marker pair around an
+argument dummy; `tests/core/varying_param.pli` and
+`tests/core/starchar_varying_param.pli` cover the VARYING copy-back path the
+markers must not cut short.
