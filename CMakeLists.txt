@@ -615,8 +615,19 @@ if(PLI_CROSS_BITCODE)
       set(target_sysroot "${PLI_CROSS_SYSROOT_DIR}/${target}")
     endif()
     # A sysroot holds its headers in include/ (musl, mingw); the macOS SDK
-    # keeps them in usr/include.
-    if(NOT EXISTS "${target_sysroot}/include" AND NOT EXISTS "${target_sysroot}/usr/include")
+    # keeps them in usr/include. The C headers are what make it a sysroot:
+    # an empty directory (a half-prepared cache — an interrupted download)
+    # must degrade to "this target is unsupported in this build", not break
+    # the build on the first #include.
+    set(target_sysroot_ok FALSE)
+    if(EXISTS "${target_sysroot}/include/stdio.h")
+      set(target_sysroot_inc "-isystem" "${target_sysroot}/include")
+      set(target_sysroot_ok TRUE)
+    elseif(EXISTS "${target_sysroot}/usr/include/stdio.h")
+      set(target_sysroot_inc "-isysroot" "${target_sysroot}")
+      set(target_sysroot_ok TRUE)
+    endif()
+    if(NOT target_sysroot_ok)
       if(PLI_CROSS_REQUIRE_ALL)
         message(FATAL_ERROR
           "no sysroot for cross target '${target}' (expected headers in ${target_sysroot}/include).\n"
@@ -654,12 +665,8 @@ if(PLI_CROSS_BITCODE)
     list(APPEND PLI_CROSS_TARGETS_READY "${target}")
     # How the target's headers are found: a sysroot in the musl/mingw layout
     # keeps them in include/ (clang's -isysroot would look in usr/include),
-    # while the macOS SDK is a real sysroot and is passed as one.
-    if(EXISTS "${target_sysroot}/include")
-      set(target_sysroot_inc "-isystem" "${target_sysroot}/include")
-    else()
-      set(target_sysroot_inc "-isysroot" "${target_sysroot}")
-    endif()
+    # while the macOS SDK is a real sysroot and is passed as one. The flags
+    # were chosen above, when the headers were found.
     set(TARGET_RT_BCS "")
     foreach(src ${RT_PORTABLE_SRCS})
       get_filename_component(base ${src} NAME_WE)
