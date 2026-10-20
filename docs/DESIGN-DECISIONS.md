@@ -7985,3 +7985,87 @@ constant, and the conversion already does the rounding. *Rounding a decimal
 through a double.* That is the bug. *Rounding to a negative digit count
 exactly.* The count rounds to tens, hundreds and beyond, which is not a scale
 the decimal type can carry; that shape keeps the float path.
+
+## ADR-252 — The range fact is independent of the check decision, and the check must enforce it
+
+**Context.** WS-I1 asks for range-based check elision with the checks **on**:
+the plan's `stampFixedBinRange` early-returns when `sizeChecks()` is set, so
+with the traps enabled no range metadata is emitted at all, and the plan's
+design is to emit it *always* and let LLVM elide the checks it can prove dead.
+M7's exit criterion is the ratio between the check-free and the checks-on
+builds of `benchmarks/lang/checks_on.pli`: within 1.5x.
+
+The plan's framing follows IBM (ADR-252's §1.6 rule): *both* halves matter —
+the absence of a check is one win, and the cost of the check that must stay is
+another (WS-K7, folded into this item). IBM's half is the SUBSCRIPTRANGE
+check becoming "twice as fast" by replacing a library call with an inline
+range check (`zos:2089-2090`).
+
+**The measurement.** The pair, re-measured with the current compiler
+(arm64 macOS, LLVM 23.1.2, median of five): **1.93x** — the criterion is *not*
+met (it was 1.82x when the corpus was built).
+
+**What the IR says.** Reading the *optimized* checks-on module settles what the
+checks cost:
+
+* The **SUBSCRIPTRANGE** check is **already gone**. The index is
+  `mod(i, 1000) + 1` and LLVM proves the value lies in `[1, 1000]`, so the
+  bounds comparison folds away and the array access is unconditional. IBM's
+  half of the item — make the surviving check cheap — needs nothing here: the
+  check is already inline, and LLVM removes it.
+* The **SIZE** overflow checks are what remain: five `llvm.*.with.overflow`
+  intrinsics per iteration of the hot loop (the `mod + 1`, the `* 3`, the
+  `+ 1`, and the two 64-bit accumulations).
+
+**Why the range fact cannot elide them.** The plan's design is sound only if
+the range fact is an invariant. It is not, today, for `FIXED BINARY`:
+
+* The `SIZE` check the compiler emits is the **storage width** check — an i32
+  or i64 overflow — not the **declared precision** check. A `FIXED BINARY(31)`
+  value may therefore hold anything in the i32 range, and the declared
+  31-bit range is *not* an invariant of the storage.
+* The range metadata `stampFixedBinRange` states the declared range. With the
+  checks off, that is the NOSIZE convention (the program asked for wrapped
+  values). With the checks on, the compiler would be asserting a range it does
+  not enforce: `x = x + x` with `x` near `2^30` stores `2^31 - 2`, which is
+  inside the i32 and outside the declared precision — and the next load would
+  be telling LLVM the opposite.
+
+That is exactly what the guard in `stampFixedBinRange` says ("with traps on the
+trap blocks own overflow control and the range would be unsound"), and the
+guard stays.
+
+**Decision.** The range fact and the check decision are separate, and the
+*ordering* is: **the check must enforce the fact before the fact is emitted.**
+So:
+
+* The precision enforcement comes first, and it is a *conformance* change in
+  its own right: PL/I raises SIZE when a `FIXED BINARY(p)` value exceeds its
+  declared precision (rules (60)-(63), (86)), and the repo checks the storage
+  width instead. The `FIXED DECIMAL` path already checks the declared
+  precision; the binary path does not.
+* The range metadata follows, and then the storage-width checks become
+  unreachable (the declared range is inside the storage range) and LLVM folds
+  them away.
+
+The elision this buys is bounded, and the bound is worth stating: the values in
+`checks_on.pli` are bounded at run time but not at compile time, so the checks
+that remain are *provably live* — `x * 3` with `x` in the declared 31-bit
+range overflows the i32, and the two 64-bit accumulations overflow the i64.
+The range facts can remove the *storage* checks; the *precision* checks stay,
+and they cost about what the storage checks cost. The M7 ratio therefore
+improves by the width of the check, not by its absence.
+
+**Consequences.** Nothing in the compiler changes here: the guard on
+`stampFixedBinRange` stays, and no metadata is emitted with the checks on. What
+is recorded is the *ordering* the item needs, and the measurement that says
+where the checks actually are (the bounds checks are free; the SIZE checks are
+live) — so the next attempt at the ratio starts from the right place.
+
+**Rejected.** *Emitting the range metadata with the checks on, as the plan
+writes it.* It is unsound here: the compiler does not enforce the declared
+precision, so the fact would be a lie in exactly the programs the checks exist
+for. *Dropping the SIZE checks and trusting the range.* That is what NOSIZE
+does, and it is a different mode (rules (60)-(63), ADR-110). *Making the
+precision check cheap instead of eliding the storage check.* The two cost the
+same, so it buys nothing.

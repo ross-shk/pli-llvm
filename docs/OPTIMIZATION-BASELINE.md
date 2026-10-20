@@ -655,3 +655,54 @@ benchmark shows a gap on the target. On x86-64 the expected gain is ~0; on a
 32-bit or embedded target it is real. **Defer** — record as gated on a
 target-specific measurement." The corpus has no narrow-integer benchmark and
 the repo's `intBits()` already picks the narrowest of i32/i64/i128 ✓ → **deferred** ✓, gated on a target-specific measurement ✓.
+
+---
+
+## 6. WS-I — check cost with the checks on (I1, I2)
+
+### 6.1 I1 — range-based check elision with checks ON: **not closed; the ordering is now recorded** (ADR-252)
+
+**The measurement.** The pair, re-measured with the current compiler (arm64
+macOS, LLVM 23.1.2, median of five): **1.93x** — M7's criterion (within 1.5x)
+is **not met**.
+
+**Where the checks actually are.** Reading the *optimized* checks-on module:
+
+| check | cost |
+|---|---|
+| SUBSCRIPTRANGE (the array read) | **free** — LLVM proves `mod(i,1000)+1` is in `[1,1000]` and folds the comparison away; the check is already inline, so IBM's half of the item (WS-K7) needs nothing here |
+| SIZE overflow (`mod+1`, `*3`, `+1`, two 64-bit accumulations) | five `llvm.*.with.overflow` intrinsics per hot iteration — the whole remaining difference |
+
+**Why the range fact cannot remove them.** The plan's design — emit the range
+metadata always — is sound only if the range is an invariant. For
+`FIXED BINARY` it is not: the compiler's SIZE check is the **storage width**
+check (an i32/i64 overflow), not the **declared precision** check, so a
+`FIXED BINARY(31)` value may hold anything in the i32 range. Emitting the
+declared range with the checks on would assert a bound the compiler does not
+enforce (`x = x + x` near `2^30` stores a value inside the i32 and outside the
+declared precision). The guard in `stampFixedBinRange` stays.
+
+**The ordering the item needs** (ADR-252): the check must enforce the fact
+before the fact is emitted. So the work is:
+
+1. **the precision enforcement** — PL/I raises SIZE when a `FIXED BINARY(p)`
+   value exceeds its declared precision (rules (60)-(63),(86)); the
+   `FIXED DECIMAL` path already checks the declared precision and the binary
+   path checks the storage width. This is a conformance change in its own
+   right;
+2. **then the range metadata**, after which the storage-width checks become
+   unreachable and LLVM folds them away.
+
+**What it can buy.** The values in `checks_on.pli` are bounded at run time but
+not at compile time, so the remaining checks are *provably live* (`x * 3`
+overflows the i32; the two 64-bit accumulations overflow the i64). The range
+facts remove the *storage* checks; the *precision* checks stay and cost about
+the same. The ratio improves by the width of a check, not by its absence — so
+the 1.5x criterion needs the checks to be *cheaper*, not merely fewer.
+
+### 6.2 I2 — loop fusion: **deferred**
+
+The plan defers it: it needs a dependence analysis, LLVM's loop-fusion pass is
+not in the default pipeline, and the repo has no measured multi-pass array
+workload. Recorded as gated on a benchmark showing the pattern; not built
+speculatively.
