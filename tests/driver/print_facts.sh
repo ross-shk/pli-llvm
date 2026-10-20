@@ -49,5 +49,35 @@ rm -f "$OUT.ll"
 $PLI --print-facts -emit-llvm "$OUT.pli" -o "$OUT.ll" >/dev/null 2>&1
 [ -f "$OUT.ll" ] && fail "--print-facts still wrote an output file"
 
+# --- the effect and control verdicts follow the body (ADR-264) --------------
+# A handled condition lets a handler run inside the raising procedure's frame,
+# so the handler's writes reach the raiser's callers too.
+cat > "$OUT.on.pli" <<'EOF'
+pfon: procedure options(main);
+   declare v fixed bin(31);
+   on size;
+   call outer(v);
+   put skip list(v);
+ outer: procedure(x);
+   declare x fixed bin(31);
+   x = x + 1;
+ end outer;
+end pfon;
+EOF
+sed '/on size;/d' "$OUT.on.pli" > "$OUT.free.pli"
+
+# The block of one procedure in a facts dump.
+block() { printf '%s\n' "$1" | awk -v p="proc $2" '$0 == p { f = 1; next } /^proc / { f = 0 } f'; }
+
+handled=$($PLI --print-facts --size-checks "$OUT.on.pli" 2>&1) || fail "handler dump failed"
+block "$handled" OUTER | grep -q 'writes memory outside its arguments' ||
+  fail "a handled condition did not reach the caller"
+block "$handled" OUTER | grep -q 'control:' &&
+  fail "a procedure that can dispatch to a handler still claimed a control verdict"
+
+plain=$($PLI --print-facts --size-checks "$OUT.free.pli" 2>&1) || fail "plain dump failed"
+block "$plain" OUTER | grep -q 'control: nounwind' ||
+  fail "no control verdict for a procedure with no handler in scope"
+
 echo "PASS print-facts"
 exit 0

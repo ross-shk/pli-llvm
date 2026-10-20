@@ -724,9 +724,19 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
         visit(p.get());
   }
 
+  // A procedure whose name escapes may be called from anywhere, so nothing may
+  // be claimed about it — and its callers inherit that, so the mark goes in
+  // before the fixpoint, not after it.
+  for (const HProc* e : escaped)
+    bits[e].opaque = true;
+
   // The whole-program fixpoint: a procedure's effect includes what the
-  // procedures it calls do. Every bit is monotone, so this terminates.
-  for (size_t round = 0; round <= prog.procs.size(); ++round) {
+  // procedures it calls do, and what the handlers it can dispatch to do.
+  // Every bit is monotone, so this terminates. The handler rule runs inside
+  // each round for the same reason as the escape mark: a handler runs in the
+  // raising procedure's frame, so its effects are that procedure's effects,
+  // and the callers must see them too.
+  for (size_t round = 0; round <= prog.procs.size() + 1; ++round) {
     bool changed = false;
     for (const auto& p : prog.procs) {
       const HProc* self = p.get();
@@ -757,28 +767,28 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
         changed = true;
       }
     }
+    // A procedure that can raise a condition the unit handles may dispatch to
+    // that handler: whatever the handler does to memory, or to control flow,
+    // the procedure does too. ON ERROR catches every condition, so it covers
+    // them all.
+    for (auto& [proc, b] : bits) {
+      (void)proc;
+      for (int k : b.raiseKeys)
+        if (handlerKeys.count(k) || handlerKeys.count(0)) {
+          if (!b.writesOther) {
+            b.writesOther = true;
+            changed = true;
+          }
+          if (!b.mayUnwind) {
+            b.mayUnwind = true;
+            changed = true;
+          }
+          break;
+        }
+    }
     if (!changed)
       break;
   }
-
-  // A procedure that can raise a condition the unit handles may dispatch to
-  // that handler, and the handler runs inside the procedure's frame: whatever
-  // the handler does — write memory, or unwind — the procedure does too.
-  // ON ERROR catches every condition, so it covers them all.
-  for (auto& [proc, b] : bits) {
-    (void)proc;
-    for (int k : b.raiseKeys)
-      if (handlerKeys.count(k) || handlerKeys.count(0)) {
-        b.writesOther = true;
-        b.mayUnwind = true;
-        break;
-      }
-  }
-
-  // A procedure whose name escapes may be called from anywhere, so nothing may
-  // be claimed about it.
-  for (const HProc* e : escaped)
-    bits[e].opaque = true;
 
   // The verdict: the strongest promise the facts support.
   std::map<const HProc*, ProcEffects> out;
