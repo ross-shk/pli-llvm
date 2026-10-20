@@ -25,6 +25,69 @@ from typing import Dict, List, Tuple, Optional
 BENCHMARK_DIR = Path(__file__).parent
 
 
+# Two benchmark categories (ADR-262):
+#
+#   ir/   the C-parity corpus. Generic workloads whose PL/I and C twins do
+#         the same thing, so the ratio measures the LLVM pipeline's output
+#         against equivalent C. Its geomean is the project's acceptance gate.
+#
+#   lang/ the PL/I-language corpus. Workloads that exercise PL/I semantics a
+#         C program cannot express: range checks, ON-unit dispatch, decimal
+#         scale, bit fields, constant concatenation, list-directed output,
+#         aliasing. Each still has a C twin for reference, but the gates the
+#         optimization plan sets on them are paired PL/I-vs-PL-I comparisons
+#         (see PAIRS), because a C twin cannot price a PL/I-only cost.
+IR_BENCHMARKS = [
+    ("scalar_arith",      "ir/scalar_arith.pli",      "ir/baseline/scalar_arith_c.c"),
+    ("array_matmul",      "ir/array_matmul.pli",      "ir/baseline/array_matmul_c.c"),
+    ("string_ops",        "ir/string_ops.pli",        "ir/baseline/string_ops_c.c"),
+    ("decimal_ops",       "ir/decimal_ops.pli",       "ir/baseline/decimal_ops_c.c"),
+    ("condition_ops",     "ir/condition_ops.pli",     "ir/baseline/condition_ops_c.c"),
+    ("proc_calls",        "ir/proc_calls.pli",        "ir/baseline/proc_calls_c.c"),
+    ("math_functions",    "ir/math_functions.pli",    "ir/baseline/math_functions_c.c"),
+    ("bit_ops",           "ir/bit_ops.pli",           "ir/baseline/bit_ops_c.c"),
+    ("array_sort",        "ir/array_sort.pli",        "ir/baseline/array_sort_c.c"),
+    ("linked_list",       "ir/linked_list.pli",       "ir/baseline/linked_list_c.c"),
+    ("collatz",           "ir/collatz.pli",           "ir/baseline/collatz_c.c"),
+    ("controlled_stack",  "ir/controlled_stack.pli",  "ir/baseline/controlled_stack_c.c"),
+    ("on_conditions",     "ir/on_conditions.pli",     "ir/baseline/on_conditions_c.c"),
+    ("matrix_float",      "ir/matrix_float.pli",      "ir/baseline/matrix_float_c.c"),
+    ("mandelbrot",        "ir/mandelbrot.pli",        "ir/baseline/mandelbrot_c.c"),
+    ("io_throughput",     "ir/io_throughput.pli",     "ir/baseline/io_throughput_c.c"),
+    ("division",          "ir/division.pli",          "ir/baseline/division_c.c"),
+    ("fixed_bin63",       "ir/fixed_bin63.pli",       "ir/baseline/fixed_bin63_c.c"),
+    ("bcd_decimal",       "ir/bcd_decimal.pli",       "ir/baseline/bcd_decimal_c.c"),
+    ("string_search",     "ir/string_search.pli",     "ir/baseline/string_search_c.c"),
+    ("file_io",           "ir/file_io.pli",           "ir/baseline/file_io_c.c"),
+]
+
+LANG_BENCHMARKS = [
+    ("checks_on",     "lang/checks_on.pli",     "lang/baseline/checks_on_c.c"),
+    ("on_dispatch",   "lang/on_dispatch.pli",   "lang/baseline/on_dispatch_c.c"),
+    ("decimal_scale", "lang/decimal_scale.pli", "lang/baseline/decimal_scale_c.c"),
+    ("bit_fields",    "lang/bit_fields.pli",    "lang/baseline/bit_fields_c.c"),
+    ("concat_const",  "lang/concat_const.pli",  "lang/baseline/concat_const_c.c"),
+    ("io_list",       "lang/io_list.pli",       "lang/baseline/io_list_c.c"),
+    ("alias_scope",   "lang/alias_scope.pli",   "lang/baseline/alias_scope_c.c"),
+]
+
+# Every benchmark, both categories.
+BENCHMARKS = IR_BENCHMARKS + LANG_BENCHMARKS
+
+# Paired PL/I-vs-PL/I comparisons (ADR-262): the same source compiled two
+# ways, so the ratio prices a PL/I-specific cost a C twin cannot show.
+# Each entry is (benchmark, label_a, flags_a, label_b, flags_b); the runner
+# reports the B/A median time ratio at -O2 and requires both builds to print
+# the same output.
+PAIRS = [
+    # M7's criterion: check-heavy code within 1.5x of check-free code. The
+    # default -O2 build elides the SIZE and SUBSCRIPTRANGE traps; the
+    # "checks-on" build keeps them.
+    ("checks_on", "check-free", [], "checks-on",
+     ["--size-checks", "--subscript-checks"]),
+]
+
+
 def _default_cc() -> str:
     """C compiler default: plain `clang` (found via PATH on every OS)."""
     found = shutil.which("clang")
@@ -68,30 +131,6 @@ EXTRA_PLIFLAGS = {
     "condition_ops": ["--subscript-checks"],
 }
 
-BENCHMARKS = [
-    ("scalar_arith",      "scalar_arith.pli",      "baseline/scalar_arith_c.c"),
-    ("array_matmul",      "array_matmul.pli",      "baseline/array_matmul_c.c"),
-    ("string_ops",        "string_ops.pli",        "baseline/string_ops_c.c"),
-    ("decimal_ops",       "decimal_ops.pli",       "baseline/decimal_ops_c.c"),
-    ("condition_ops",     "condition_ops.pli",     "baseline/condition_ops_c.c"),
-    ("proc_calls",        "proc_calls.pli",        "baseline/proc_calls_c.c"),
-    ("math_functions",    "math_functions.pli",    "baseline/math_functions_c.c"),
-    ("bit_ops",           "bit_ops.pli",           "baseline/bit_ops_c.c"),
-    ("array_sort",        "array_sort.pli",        "baseline/array_sort_c.c"),
-    ("linked_list",       "linked_list.pli",       "baseline/linked_list_c.c"),
-    ("collatz",           "collatz.pli",           "baseline/collatz_c.c"),
-    ("controlled_stack",  "controlled_stack.pli",  "baseline/controlled_stack_c.c"),
-    ("on_conditions",     "on_conditions.pli",     "baseline/on_conditions_c.c"),
-    ("matrix_float",      "matrix_float.pli",      "baseline/matrix_float_c.c"),
-    ("mandelbrot",        "mandelbrot.pli",        "baseline/mandelbrot_c.c"),
-    ("io_throughput",     "io_throughput.pli",     "baseline/io_throughput_c.c"),
-    ("division",          "division.pli",          "baseline/division_c.c"),
-    ("fixed_bin63",       "fixed_bin63.pli",       "baseline/fixed_bin63_c.c"),
-    ("bcd_decimal",       "bcd_decimal.pli",       "baseline/bcd_decimal_c.c"),
-    ("string_search",     "string_search.pli",     "baseline/string_search_c.c"),
-    ("file_io",           "file_io.pli",           "baseline/file_io_c.c"),
-]
-
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3"]
 RUNS_PER_BENCH = 5
 
@@ -128,6 +167,15 @@ CHECKS = {
     "bcd_decimal":      {"min_ms_O2": 50, "float_tol": False},  # expected ~: BCD decimal vs double
     "string_search":    {"min_ms_O2": 50, "float_tol": False},
     "file_io":          {"min_ms_O2": 50, "float_tol": False},
+    # The PL/I-language corpus: exact parity with the C twin (both are
+    # exact integer or fixed-point arithmetic, never floating point).
+    "checks_on":        {"min_ms_O2": 50, "float_tol": False},
+    "on_dispatch":      {"min_ms_O2": 50, "float_tol": False},
+    "decimal_scale":    {"min_ms_O2": 50, "float_tol": False},
+    "bit_fields":       {"min_ms_O2": 50, "float_tol": False},
+    "concat_const":     {"min_ms_O2": 50, "float_tol": False},
+    "io_list":          {"min_ms_O2": 50, "float_tol": False},
+    "alias_scope":      {"min_ms_O2": 50, "float_tol": False},
 }
 
 
@@ -329,6 +377,60 @@ def median_result(times: List[float]) -> Optional[float]:
     return statistics.median(times)
 
 
+def run_pair_comparisons(benches, opt: str, runs: int) -> Dict:
+    """Run the PAIRS table: one PL/I source compiled two ways.
+
+    A pair prices a PL/I-specific cost that a C twin cannot show, by
+    comparing two builds of the same program. The two builds must print the
+    same output — a pair whose builds disagree is a bug, not a measurement.
+    """
+    results: Dict = {}
+    if not PAIRS:
+        return results
+    selected = {b[0] for b in benches}
+    src_of = {b[0]: b[1] for b in BENCHMARKS}
+    tag = opt.replace("-", "")
+    print(f"\n=== Paired PL/I-vs-PL/I comparisons ({opt}) ===")
+    print(f"{'Benchmark':<16} {'A':<14} {'B':<14} "
+          f"{'A (med)':>10} {'B (med)':>10} {'B/A':>8} {'Same':>6}")
+    print("-" * 84)
+    for bench, label_a, flags_a, label_b, flags_b in PAIRS:
+        if bench not in src_of or bench not in selected:
+            continue
+        # The bench-level flags apply to both sides of the pair.
+        extra_a = list(flags_a) + EXTRA_PLIFLAGS.get(bench, [])
+        extra_b = list(flags_b) + EXTRA_PLIFLAGS.get(bench, [])
+        exe_a = BIN_DIR / f"{bench}_pair_{label_a}_{tag}{EXE_SUFFIX}"
+        exe_b = BIN_DIR / f"{bench}_pair_{label_b}_{tag}{EXE_SUFFIX}"
+        if not compile_pli(bench, src_of[bench], opt, exe_a, extra_flags=extra_a):
+            print(f"{bench:<16} {label_a:<14} PL/I COMPILE FAILED")
+            results[bench] = {"error": "pli_compile_failed"}
+            continue
+        if not compile_pli(bench, src_of[bench], opt, exe_b, extra_flags=extra_b):
+            print(f"{bench:<16} {label_b:<14} PL/I COMPILE FAILED")
+            results[bench] = {"error": "pli_compile_failed"}
+            continue
+        times_a, out_a = run_benchmark(exe_a, runs=runs)
+        times_b, out_b = run_benchmark(exe_b, runs=runs)
+        med_a = median_result(times_a)
+        med_b = median_result(times_b)
+        if not med_a or not med_b:
+            print(f"{bench:<16} RUN FAILED")
+            results[bench] = {"error": "pli_run_failed"}
+            continue
+        same = "✓" if out_a.strip() == out_b.strip() else "✗"
+        ratio = round(med_b / med_a, 4) if med_a > 0 else float("inf")
+        results[bench] = {
+            "a": {"label": label_a, "flags": extra_a, "median": med_a},
+            "b": {"label": label_b, "flags": extra_b, "median": med_b},
+            "ratio": ratio,
+            "same_output": same,
+        }
+        print(f"{bench:<16} {label_a:<14} {label_b:<14} "
+              f"{med_a*1000:>10.2f} {med_b*1000:>10.2f} {ratio:>7.2f}x {same:>6}")
+    return results
+
+
 def needs_recompile(src: Path, exe: Path, force: bool = False) -> bool:
     """Skip recompilation if the executable is newer than the source (P1.5).
 
@@ -439,7 +541,7 @@ def main():
     parser.add_argument("--only", type=str, default=None, metavar="BENCHES",
                         help="comma-separated subset of benchmarks to run "
                              "(e.g. --only proc_calls,string_ops); "
-                             "default: all 21")
+                             "default: all 28 (21 in ir/, 7 in lang/)")
     args = parser.parse_args()
 
     # Use --cc argument if provided, otherwise fall back to env var, then default
@@ -611,11 +713,17 @@ def main():
                   f"{pli_min*1000:>10.2f} {pli_median*1000:>10.2f} "
                   f"{c_median*1000:>10.2f} {ratio:>7.2f}x {out_match:>6}")
 
+    # The paired PL/I-vs-PL-I comparisons: one source compiled two ways.
+    # They are a -O2 measurement (the gate the optimization plan sets), so
+    # they run once, not at every optimization level.
+    pairs = run_pair_comparisons(benches, "-O2", args.runs)
+
     # Save JSON with machine metadata (P3)
     json_file = RESULTS_DIR / f"benchmark_results_{ts}.json"
     machine_info = get_machine_info()
     with open(json_file, "w", encoding="utf-8") as f:
-        json.dump({"machine": machine_info, "results": results}, f, indent=2)
+        json.dump({"machine": machine_info, "results": results,
+                   "pairs": pairs}, f, indent=2)
 
     # Save CSV (P1.5)
     csv_file = RESULTS_DIR / f"summary_{ts}.csv"
@@ -687,22 +795,31 @@ def main():
                 row += f" {'-':>8}"
         print(row)
 
-    # Average ratio by optimization level
-    print("\nAverage PL/I vs C ratio by optimization level:")
-    for opt in OPT_LEVELS:
-        ratios = []
-        for bench_name, _, _ in benches:
-            data = results.get(bench_name, {}).get(opt, {})
-            if "ratio" in data:
-                ratios.append(data["ratio"])
-        if ratios:
-            avg = statistics.mean(ratios)
-            # The acceptance gate is a geomean (<0.90x) — print it, not just
-            # the arithmetic mean, which one outlier can drag.
-            finite = [r for r in ratios if math.isfinite(r) and r > 0]
-            geo = math.exp(sum(math.log(r) for r in finite) / len(finite)) if finite else float('nan')
-            print(f"  {opt}: avg ratio = {avg:.2f}x geomean = {geo:.2f}x "
-                  f"(min={min(ratios):.2f}x, max={max(ratios):.2f}x)")
+    # Average ratio by optimization level, per category. The ir corpus's
+    # geomean is the project's acceptance gate, so the lang corpus — whose
+    # benchmarks price PL/I-only costs — is reported on its own and never
+    # dilutes or inflates that gate.
+    ir_names = {b[0] for b in benches if b[1].startswith("ir/")}
+    lang_names = {b[0] for b in benches if b[1].startswith("lang/")}
+    for label, names in (("ir (C parity — the acceptance gate)", ir_names),
+                          ("lang (PL/I-specific)", lang_names)):
+        if not names:
+            continue
+        print(f"\nAverage PL/I vs C ratio by optimization level [{label}]:")
+        for opt in OPT_LEVELS:
+            ratios = []
+            for bench_name in names:
+                data = results.get(bench_name, {}).get(opt, {})
+                if "ratio" in data:
+                    ratios.append(data["ratio"])
+            if ratios:
+                avg = statistics.mean(ratios)
+                # The acceptance gate is a geomean (<0.90x) — print it, not just
+                # the arithmetic mean, which one outlier can drag.
+                finite = [r for r in ratios if math.isfinite(r) and r > 0]
+                geo = math.exp(sum(math.log(r) for r in finite) / len(finite)) if finite else float('nan')
+                print(f"  {opt}: avg ratio = {avg:.2f}x geomean = {geo:.2f}x "
+                      f"(min={min(ratios):.2f}x, max={max(ratios):.2f}x)")
 
     # Timing + parity validation (W7)
     print("\n=== Timing & Parity Checks (W7) ===")

@@ -6891,3 +6891,243 @@ bytes stay intact but the split between them does not. The routing calls are
 inside the statement's lock, so a task's record does not land in another task's
 file — but a task that *selects* a file while another task's statement is open
 still changes the destination for the statements that follow.
+
+## ADR-260 — A PL/I-specific decision layer, reported by `--print-facts`
+
+**Context.** The PL/I compiler makes decisions that no C compiler makes: which
+built-in is lowered inline against which `pli_*` library call, whether a range
+check is proved away or kept, whether a procedure is pure enough to be
+`readnone`, which variables the ON-unit can reach. Those decisions are the
+whole subject of the optimization plan, and until now they were *invisible*: the
+IR showed the consequence but never the reason, so a reviewer could not tell a
+missed optimization from a deliberately rejected one.
+
+The repo already had a reporting gap it could not fill: `--experimental-lowering`
+selects a lowering per operation, but there was no way to ask "which path did
+this program actually take?" — the answer had to be read out of the IR by hand.
+
+The repo's own layering made the gap worse. `IRGen` is the only LLVM-aware
+component (ADR-002), so every PL/I-specific decision lands in `src/irgen.cpp`
+— already 12,185 lines. Adding the decision logic there would make it worse,
+and the plan's constraint C2 ("no custom LLVM passes; decisions live outside
+`irgen.cpp`") says a fact must reach LLVM as an attribute, metadata, or a
+call-site hint, never as a pass.
+
+**Decision.** Two parts.
+
+*One.* The decision layer is its own translation unit, `src/irgen_decisions.{h,cpp}`,
+holding the `pli::FactStore`: a record of what the compiler decided, and the
+report `--print-facts` prints. It is pure data — no LLVM types, no IR — so a
+decision can be read in a test without a backend. `IRGen` holds the store and
+*records* into it; it does not decide anything the store then reports, so the
+report always agrees with the code that produced it.
+
+*Two.* `--print-facts` runs the front end and the lowering, prints the report,
+and stops — no object, no link, exactly like `--print-hir`. The report is one
+fact per line:
+
+```
+; pli facts
+module
+  lowering: auto
+  checks: size off subscript off zerodivide on conversion on
+proc PFACTS
+  builtin index -> llvm x1
+```
+
+The module block states the lowering policy (the base mode plus any
+per-operation override) and the check state. Each procedure block lists the
+built-ins it called and the path each took, counted per call site.
+
+**Consequences.** The decision layer is now inspectable from the command line,
+which is what the plan's "measure, then act" culture needs: a claim like "the
+inline form is never chosen" is checkable with one command instead of an IR
+diff. `tests/driver/print_facts.sh` is the gate — it asserts that the dump
+follows the flags, so the report cannot drift from the behaviour it describes.
+
+The report is deliberately *sparse*: a fact appears only once the compiler
+computes it. At this point that means the lowering policy, the check state, and
+the built-in paths; purity verdicts, alias classes, folded subobject
+identities, decimal result types, and elided checks arrive with the workstreams
+that compute them (the plan's WS-A, WS-B, WS-E, WS-I). An empty section is
+therefore never printed — the absence of a fact is the absence of the analysis,
+not a zero.
+
+The store lives outside `irgen.cpp` so that the plan's later extraction of a
+LLVM-free fact/decision module is a file *move*, not a refactor. The numbering
+skips 234-259: the optimization plan allocates those to its own techniques, and
+an ADR number is never reused.
+
+**Rejected.** *Printing the facts from `irgen.cpp`.* It would have been a few
+lines shorter, but the report is not IR generation, and putting it in the one
+LLVM-aware file makes the monolith the constraint was written to prevent.
+*Recording a reason string per call site now.* The reason belongs to the
+per-call-site predicate the plan's WS-K2 introduces; inventing a placeholder
+reason here would be a field with one useless value. *Emitting the facts as
+LLVM metadata.* They would then only be visible in the IR, which is exactly
+where the reader is not looking.
+
+
+## ADR-261 — The struct-mirror gate: PL/I and C structures must agree on layout
+
+**Context.** PL/I structures are passed to C by pointer, so the two layouts
+must agree byte for byte: a member at a different offset, or a structure of a
+different size, is a silent data corruption, not a compile error. The repo
+had one layout test — `tests/multimodule/unaligned.*`, which pins the
+UNALIGNED layout against a packed C struct — but nothing that pins the
+*default* ALIGNED layout, and nothing that would catch a change to the
+layout rules themselves.
+
+`design-docs/OPTIMIZATION.md` §4.3 called for a struct-mirror gate: *"This is
+the parity gate for every layout-affecting change."* It was still open, and
+the optimization plan makes it urgent — three of its workstreams change the
+layout or the aliasing of a structure (the padding invariant, the whole-array
+memcpy, the alias taxonomy), and each of them must be able to say "the layout
+did not change".
+
+Asking the compiler directly was not possible: PL/I's `SIZE` attribute (the
+offset of a member within its structure) is not implemented, and `DECLARESIZE`
+returns the *sum* of the member sizes (ADR-207), which is 17 bytes for a
+structure whose real — and C `sizeof` — size is 20. So neither enquiry can
+be the oracle.
+
+**Decision.** `tests/driver/struct_mirror.sh` asserts three things about one
+deliberately padded structure (`{i32, i8, i32, [8 x i8]}`, size 20, with a
+hole between the byte member and the word that follows it):
+
+1. **Layout.** The LLVM type of the PL/I structure and the type of the C
+   structure must be the same. Both go through LLVM's layout algorithm on the
+   same data layout, so identical types mean identical size *and* identical
+   member offsets — the whole layout contract in one comparison, and it needs
+   no PL/I enquiry at all.
+2. **Interop.** C writes every member at its own offsets and PL/I reads them
+   back at its own, and the other way round. A layout change shows up as a
+   wrong value rather than as a matching string, so the gate cannot be
+   satisfied by a coincidence in the type spelling.
+3. **Vectorization.** The `-O2` loop over the structure must vectorize in the
+   PL/I build exactly when it vectorizes in the C build. The PL/I IR comes
+   from `--keep-ll`, which writes the module *after* the optimization
+   pipeline has run, so both sides are compared as optimized IR.
+
+**Consequences.** The gate is a per-commit check for every layout-affecting
+change. It needs no compiler change: `--keep-ll` already emits the optimized
+IR, and the C side is plain `clang -emit-llvm`.
+
+It also produced a finding rather than a closure: `DECLARESIZE` reports 17
+for the mirrored structure where the storage is 20 bytes, because
+`staticStoreBytes` sums the member sizes without the alignment padding
+(ADR-207). That gap is **not** fixed here — it is a question of PL/I
+semantics for a different ADR, and the plan's rule is to fix one thing at a
+time. The gate does not depend on it: the IR type gives the exact size, and
+the interop gives the exact offsets.
+
+The mirrored structure has a hole on purpose. A structure whose members need
+no padding would agree with C whatever the compiler did with the padding
+rules, so the gate would prove nothing about the rule it exists to protect.
+
+The array in the gate holds **512** elements, and that number is a finding
+rather than a choice: an array of the padded structure cannot be vectorized
+(stride 20), so the optimizer fully unrolls the loop and then splits the
+array into per-member slices — and the result is a **quadratic** compile. The
+same program with 4096 elements took 25 seconds and with 20000 took seven
+minutes; 512 elements compiles in two. The gate needs only enough elements
+for the vectorizer to engage on the compact structure, so it stays small. The
+quadratic behaviour itself is a separate matter and is not fixed here.
+
+## ADR-262 — Two benchmark categories, and paired PL/I-vs-PL/I comparisons
+
+**Context.** The benchmark corpus had one measure and one question: is the
+PL/I program faster than the equivalent C program? That question answers the
+C-parity campaign and nothing else. The optimization plan's workstreams are
+about costs a C program does not have — the price of a range check, of an
+ON-unit dispatch, of decimal scale reconciliation, of a bit-field test, of a
+constant-offset concatenation, of list-directed item marshalling, of alias
+uncertainty. A C twin cannot price any of them: the C program simply does
+not have the feature.
+
+So the corpus needed a second kind of measurement, and the plan's gates are
+stated in those terms: *"check-heavy code within 1.5x of check-free code"*,
+*"the ratio improved or the item is closed with the profile recorded"*.
+
+**Decision.** Two things.
+
+*One.* The corpus is split into two categories, by directory:
+
+- `benchmarks/ir/` — the C-parity corpus. Generic workloads with an
+  equivalent C program; the ratio measures the LLVM pipeline's output. Its
+  **geomean is the project's acceptance gate**, and it is now computed and
+  reported over the `ir` corpus alone.
+- `benchmarks/lang/` — the PL/I-language corpus. Seven benchmarks that
+  exercise PL/I semantics, each with a C twin for reference. Their ratios are
+  reported on their own and never enter the `ir` geomean.
+
+The split is a directory split, so the category is visible in the tree and in
+every path, not a tag in a table.
+
+*Two.* The harness gains **paired comparisons**: the same PL/I source
+compiled two ways, compared against each other. `PAIRS` names a benchmark, a
+label and a flag set for each side; the runner compiles both at `-O2`, runs
+both, and reports the B/A median ratio. The two builds must print identical
+output — a pair whose builds disagree is a bug, not a measurement.
+
+**Consequences.** A PL/I-only cost can now be priced directly, and the
+acceptance gate keeps its meaning: adding PL/I-specific benchmarks to the
+`ir` corpus would have moved the geomean for reasons that have nothing to do
+with C parity.
+
+The first pair is the M7 criterion — `checks_on` compiled with and without
+`--size-checks --subscript-checks`. The measurement is recorded in
+`docs/OPTIMIZATION-BASELINE.md`: **1.82x**, so check-heavy code is
+*not* within 1.5x of check-free code and the plan's WS-I1 stays open.
+
+The mechanism is the general one: a later pair can compare two *passes*
+rather than two flag sets, which is what the plan's "with vs. without a pass"
+calls for.
+
+**Paths.** The corpus moved, so a path that named a benchmark file now names
+it one directory deeper (`benchmarks/collatz.pli` is
+`benchmarks/ir/collatz.pli`). The working documents that carry runnable
+commands were updated. ADR-233's text still says
+`benchmarks/io_throughput.pli`, and it stays: an ADR is immutable, so the
+correction is recorded here rather than by editing the ADR — the same rule
+that applies to ADR-231's `PLIC_ENABLE_MLIR` name drift.
+
+
+## ADR-263 — The ON-unit context slot is allocated in the entry block
+
+**Context.** A program whose condition traps inside a loop crashed with a
+segmentation fault — but only at `-O0`, `-O1` and `-O3`, never at `-O2`. The
+optimizer hid it, which is why it survived: `emitCondTrap` allocated the
+slot the ON-unit dispatch reads its context pointer from with an `alloca`
+*in the trap block*:
+
+```llvm
+zd.trap.1:
+  %zd.ctxslot = alloca ptr, align 8
+```
+
+An `alloca` in a block that runs more than once grows the stack without
+bound — LLVM's backend does not release it until the function returns. Every
+trap leaked 16 bytes, so a loop trapping 600k times asked for 9.6 MB and
+overflowed the default 8 MB stack. At `-O2` mem2reg promoted the slot to a
+register and the leak disappeared, which is why the bug looked like an
+optimization-level quirk rather than a defect.
+
+It was not new: `benchmarks/ir/on_conditions.pli` had been failing at `-O0`
+in every benchmark run, reported as `PL/I RUN FAILED`, and nobody had read
+the line.
+
+**Decision.** The slot is allocated in the function's entry block, using the
+`entryAlloca` helper the rest of IRGen already uses for the same reason.
+
+**Consequences.** A trapping loop now behaves the same at every optimization
+level, and `on_conditions` runs at `-O0` as it always should. The fix costs
+nothing at runtime: the slot is still one pointer-sized stack slot per
+function, and it is now allocated once instead of once per trap.
+
+`tests/driver/on_trap_loop.sh` is the gate: it traps a million times at
+`-O0`, `-O1`, `-O2` and `-O3` and requires the same answer at every level.
+The million is well above the ~512k traps that overflow an 8 MB stack, and
+well above the ~64k that overflow the 1 MB stack Windows gives a thread, so
+the test fails on the old code on every platform.
+

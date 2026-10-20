@@ -1,0 +1,29 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ON-unit dispatch cost (WS-F1). Every hundredth division traps, so the
+    handler runs 1% of the time; the handler body is a few statements, so
+    the trap path is real work that the hot loop has to carry. The C twin
+    replaces the trap with an explicit test. */
+ on_dispatch: procedure options(main);
+   declare (i, d, q) fixed bin(31);
+   declare (s, hits) fixed bin(63);
+   declare t char(16);
+
+   on zerodivide begin;
+      hits = hits + 1;
+      t = 'recovered';
+      s = s + 1;
+      return;
+   end;
+
+   s = 0;
+   hits = 0;
+   do i = 1 to 60000000;
+      d = mod(i, 100);
+      q = 1000000 / d;
+      s = s + q;
+   end;
+
+   put skip list(s);
+   put skip list(hits);
+ end on_dispatch;

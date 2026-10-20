@@ -760,29 +760,49 @@ static const std::set<std::string>& kLLVMLowerings() {
 
 bool IRGen::hasLLVMLowering(const std::string& op) { return kLLVMLowerings().count(op) > 0; }
 
+// The lowering policy as --print-facts prints it: the base mode, then any
+// per-operation override (ADR-260).
+static std::string loweringModeName(LowerMode mode,
+                                    const std::map<std::string, LowerMode>& perOp) {
+  auto name = [](LowerMode m) -> const char* {
+    switch (m) {
+    case LowerMode::Runtime: return "runtime";
+    case LowerMode::LLVM: return "llvm";
+    case LowerMode::MLIR: return "mlir";
+    case LowerMode::Auto: return "auto";
+    }
+    return "auto";
+  };
+  std::string out = name(mode);
+  for (const auto& kv : perOp)
+    out += " (" + kv.first + "=" + name(kv.second) + ")";
+  return out;
+}
+
 bool IRGen::useRuntimeCall(const std::string& op) {
   LowerMode mode = lowerMode_;
   auto oit = perOpOverrides_.find(op);
   if (oit != perOpOverrides_.end())
     mode = oit->second;
+  bool useRuntime = true;
   switch (mode) {
   case LowerMode::Runtime:
-    return true;
+    break;
   case LowerMode::MLIR:
     // MLIR not compiled in this build (P2+ gates it). Fall back to runtime.
-    return true;
+    break;
   case LowerMode::LLVM:
-    if (hasLLVMLowering(op))
-      return false;
-    return true;
+    useRuntime = !hasLLVMLowering(op);
+    break;
   case LowerMode::Auto: {
     auto dit = kRuntimeDefault().find(op);
-    if (dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op))
-      return false;
-    return true;
+    useRuntime = !(dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op));
+    break;
   }
   }
-  return true;
+  // Record the decision so --print-facts can show it (ADR-260).
+  facts_.recordBuiltin(op, useRuntime ? "runtime" : "llvm");
+  return useRuntime;
 }
 
 // --- P0/P1 pilot dispatch wrappers (design-docs/mlir-runtime-migration-plan.md) ===
@@ -2571,8 +2591,10 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
   const std::vector<llvm::Function*>& handlers = it->second;
   // T2b: a single combined scan replaces the pli_on_top_cond + pli_on_top_ctx
   // pair — one alloca + one call + one load instead of two noinline scans.
-  llvm::Value* ctxSlot =
-      b_.CreateAlloca(b_.getPtrTy(), nullptr, tag + ".ctxslot");
+  // The slot is allocated in the entry block, not here: this block runs once
+  // per trap, and an alloca inside a loop grows the stack without bound — a
+  // loop trapping 600k times overflowed it at -O0/-O1/-O3.
+  llvm::Value* ctxSlot = entryAlloca(b_.getPtrTy(), tag + ".ctxslot");
   llvm::Value* top =
       b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot}, tag + "top");
   llvm::Value* topCtx = b_.CreateLoad(b_.getPtrTy(), ctxSlot, tag + "ctx");
@@ -3021,6 +3043,14 @@ std::string IRGen::run(HProgram& prog) {
   }
 
   emitGlobals();
+
+  // Module-level facts for --print-facts (ADR-260): the lowering policy and
+  // which checks the driver enabled.
+  facts_.setLoweringMode(loweringModeName(lowerMode_, perOpOverrides_));
+  facts_.setCheck("size", !noSizeChecks_);
+  facts_.setCheck("subscript", !noSubChecks_);
+  facts_.setCheck("zerodivide", !noZdivChecks_);
+  facts_.setCheck("conversion", !noConvChecks_);
 
   // ON ERROR handlers (rules (91)-(94)): number the established units, then
   // pre-create their functions so SIGNAL dispatch resolves regardless of
@@ -4412,6 +4442,9 @@ void IRGen::emitProc(HProc* p) {
     }
   }
   curProc_ = p;
+  // Open the procedure's fact block so --print-facts groups the decisions by
+  // procedure (ADR-260).
+  facts_.beginProc(p->name);
   labelBlocks_.clear();
   labelBeginChain_.clear();
   onScopes_.clear();

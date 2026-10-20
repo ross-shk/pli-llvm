@@ -134,6 +134,7 @@ set(PLI_SOURCES
   src/preprocessor.cpp
   src/sema.cpp
   src/irgen.cpp
+  src/irgen_decisions.cpp
   src/target.cpp
   src/codegen.cpp
   src/embedded_runtime.cpp

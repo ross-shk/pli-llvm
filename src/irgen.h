@@ -22,6 +22,7 @@
 #include "ast.h"
 #include "diag.h"
 #include "hir.h"
+#include "irgen_decisions.h"
 #include "sema.h"
 
 // Experimental lowering modes (design-docs/mlir-runtime-migration-plan.md §5.2).
@@ -55,6 +56,10 @@ public:
         perOpOverrides_(std::move(perOpOverrides)) {}
 
   std::string run(HProgram& prog);
+
+  // The facts the compiler computed while lowering (ADR-260); --print-facts
+  // dumps them. The store lives in irgen_decisions.cpp, outside this file.
+  const pli::FactStore& facts() const { return facts_; }
 
   // Module ownership for the in-process backend (review §4): reuses run()
   // (so `-emit-llvm` stays byte-identical) then re-parses the IR into a fresh
@@ -883,6 +888,9 @@ private:
   std::string platformBc_;
   LowerMode lowerMode_;
   std::map<std::string, LowerMode> perOpOverrides_;
+  // The PL/I-specific decisions made while lowering, and the report
+  // --print-facts prints (ADR-260).
+  pli::FactStore facts_;
   // Parse the embedded runtime blob, check its LLVM stamp and target triple,
   // merge the whole
   // runtime into the module, and re-apply the P0 side-table facts to the real

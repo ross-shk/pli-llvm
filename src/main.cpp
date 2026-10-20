@@ -113,6 +113,9 @@ static void usage() {
          "  -c               compile each input to a relocatable object (no linking)\n"
          "  -emit-llvm       write LLVM IR per input and stop\n"
          "  --print-hir      lower to HIR and print it per input, then stop\n"
+         "  --print-facts    print the compiler's PL/I-specific decisions\n"
+         "                   (lowering policy, check state, built-in paths)\n"
+         "                   and stop (ADR-260)\n"
          "  -fsyntax-only    parse and analyse each input only\n"
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
          "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
@@ -255,7 +258,7 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
 static bool compileOne(Preprocessor& preprocessor, const std::string& input, std::string& output,
                        std::string& triple, const std::string& sysparm, bool sysparmExplicit,
                        bool compileOnly, bool semaCompileOnly, bool emitLLVM, bool emitMlir,
-                       bool syntaxOnly, bool print_hir, bool keepLL, bool verbose,
+                       bool syntaxOnly, bool print_hir, bool print_facts, bool keepLL, bool verbose,
                        bool noSizeChecks, bool noZdivChecks, bool noConvChecks, bool noSubChecks,
                        const std::string& optLevel, const fs::path& keepLLDir, int fileIndex,
                        std::string* outObj, bool linkBitcode, LowerMode lowerMode = LowerMode::Auto,
@@ -312,6 +315,18 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   HProgram hir = lower(*prog);
   if (print_hir) {
     printHIR(hir, std::cout);
+    return true;
+  }
+
+  // `--print-facts` lowers once and reports the decisions the compiler made
+  // (ADR-260), then stops — no object, no link.
+  if (print_facts) {
+    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
+                false, lowerMode, perOpOverrides);
+    irgen.run(hir);
+    if (!diags.ok())
+      return false;
+    std::cout << irgen.facts().report();
     return true;
   }
 
@@ -480,7 +495,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> linkArgs;    // extra args appended to the link step
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
-  bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
+  bool runtimeExplicit = false, print_hir = false, print_facts = false, release = false, debug = false;
   bool marchNative = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
@@ -512,6 +527,8 @@ int main(int argc, char** argv) {
       emitLLVM = true;
     else if (a == "--print-hir")
       print_hir = true;
+    else if (a == "--print-facts")
+      print_facts = true;
     else if (a == "-fsyntax-only")
       syntaxOnly = true;
     else if (a == "--keep-ll")
@@ -684,9 +701,10 @@ int main(int argc, char** argv) {
   std::vector<std::string> pliInputs, foreignObjs;
   for (const std::string& in : inputs)
     (isPLISource(in) ? pliInputs : foreignObjs).push_back(in);
-  if (!foreignObjs.empty() && (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir)) {
-    std::cerr
-        << "pli: object inputs cannot be used with -c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir\n";
+  if (!foreignObjs.empty() &&
+      (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts)) {
+    std::cerr << "pli: object inputs cannot be used with "
+                 "-c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir/--print-facts\n";
     return 2;
   }
   const bool linkOnly = pliInputs.empty();
@@ -802,7 +820,7 @@ int main(int argc, char** argv) {
     std::cerr << "pli: cannot specify -o when generating multiple output files\n";
     return 2;
   }
-  if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir)) {
+  if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts)) {
     std::cerr << "pli: -o is ambiguous with a per-file mode and multiple inputs\n";
     return 2;
   }
@@ -840,7 +858,7 @@ int main(int argc, char** argv) {
 
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
-  const bool terminalMode = compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir;
+  const bool terminalMode = compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts;
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
@@ -876,8 +894,8 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < pliInputs.size(); ++i) {
     std::string outObj;
     if (!compileOne(preprocessor, pliInputs[i], output, triple, sysparm, sysparmExplicit,
-                    compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, keepLL,
-                    verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
+                    compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, print_facts,
+                    keepLL, verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc))
