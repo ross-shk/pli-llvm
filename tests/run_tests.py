@@ -31,7 +31,17 @@ TIMEOUT = 10  # seconds per exec run step
 # starves them under parallel load (the overflow drivers timed out cold);
 # they get their own budget while single-binary runs stay tight enough to
 # catch genuine hangs quickly.
-DRIVER_TIMEOUT = 60  # seconds per driver test
+#
+# The budget is generous because the driver tests are the slowest in the
+# suite: the linking ones (multic, multimod, package, struct_mirror) take
+# 1.5-6s on an idle machine, and struct_mirror compiles an array of a
+# padded structure, which the optimizer unrolls quadratically (see
+# docs/OPTIMIZATION-BASELINE.md §2.2). On a shared host whose load average
+# is several times the core count, that turns into minutes of wall time
+# with almost no CPU time — the process waits, it does not hang. 180s
+# leaves room for that while still bounding a genuine hang: the whole
+# suite runs in a couple of minutes.
+DRIVER_TIMEOUT = 180  # seconds per driver test
 ROOT = Path(__file__).resolve().parent.parent
 IS_WINDOWS = sys.platform == "win32"
 EXE_EXT = ".exe" if IS_WINDOWS else ""
