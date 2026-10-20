@@ -7629,3 +7629,189 @@ would remove the allocation but keep the double copy, and it needs the
 concat-temp's ownership (`freeConcatTemp`) to change. *Merging the leaves into
 one copy.* Only a single leaf may be a literal; a variable leaf's bytes are not
 contiguous with the next leaf's, so there is nothing to merge.
+
+## ADR-243 — Merge bit tests within one storage object
+
+**Context.** WS-C3 is the peephole the plan calls the clearest example of one
+LLVM structurally cannot do: MULTICS's `combine_tests.pl1:159-300` merges two
+bit tests that read the same 36-bit word of the same top-level object into one
+masked test.
+
+```pl1
+/* combine_tests.pl1:176-208 */
+     if r(1) -> reference.offset = r(2) -> reference.offset
+      & r(1) -> reference.qualifier = r(2) -> reference.qualifier
+     then do;
+    do i = 1 to 2;
+         wo(i) = divide(r(i) -> reference.c_offset,units_per_word(r(i) -> reference.units),18,0);
+         cfo(i) = mod(r(i) -> reference.c_offset * convert_offset(r(i) -> reference.units), bits_per_word);
+         ...
+         do a = r(i) -> reference.symbol repeat a -> symbol.father while (a -> symbol.father ^= null); end;
+         adam(i) = a;
+ end;
+    if wo(1) = wo(2) & adam(1) = adam(2) then return("1"b);
+```
+
+The plan's reading is that PL/I's bit strings are bit-granular inside a word, so
+the masks only exist at the PL/I level and LLVM cannot see the two tests as one.
+The repo holds a `BIT(n)` value as a `[ceil(n/8) x i8]` byte array, so a bit
+test is a byte-wise mask followed by a comparison of the packed value — and
+`(X & M) = E` is how PL/I code expresses "the field selected by `M` has the
+value `E`".
+
+**Decision.** Two masked bit tests on the same value in one conjunction are
+merged into one masked test:
+
+```
+(X & M1) = E1  &  (X & M2) = E2      ->      (X & (M1|M2)) = (E1|E2)
+```
+
+The merge is valid exactly when the two masks are **disjoint** and each
+expectation lies **inside its own mask**:
+
+* disjoint masks — otherwise one test decides a bit the other also decides, and
+  the conjunction is not the merged test;
+* an expectation inside its mask — otherwise that test can never hold (the
+  masked value has zeroes outside the mask), and the merged expectation would
+  carry a bit no mask selects.
+
+With both conditions the equivalence is exact: every bit of the conjunction is
+decided by the merged mask alone. The two tests must also read the *same*
+value — the same symbol, member path and locator — which is this compiler's
+form of MULTICS's `same_word` rule.
+
+`pli::mergeBitTests` in `src/irgen_decisions.cpp` holds that rule: it takes the
+two masks and the two expectations as PL/I bit strings and returns the merged
+mask and expectation, or refuses. The rule is a decision, so it lives outside
+`irgen.cpp` (the plan's C2) and needs no backend to read. `IRGen` matches the
+expression's shape and emits: one load of the value, one mask with the merged
+constant, and one comparison — against the merged expectation as a constant.
+
+The merge is a lowering decision like any other: `bit_merge` is registered in
+the lowering tables, so `--experimental-lowering=bit_merge:runtime` keeps the
+two tests separate and the differential oracle can compare the two lowerings
+(ADR-260).
+
+**Consequences.** The IR changes shape: one load, one mask and one comparison
+replace two of each.
+
+**The measurement is the interesting part, and it is a negative one.** The
+benchmark `benchmarks/lang/bit_merge.pli` tests two masked fields of one
+32-bit word in one conjunction, 300 million times (arm64 macOS, LLVM 23.1.2):
+
+| build | merged | separate | ratio |
+|---|---|---|---|
+| `-O0` | 2.63 s | 3.64 s | **1.38x** |
+| `-O2` | 70.2 ms | 70.4 ms | 1.00x |
+
+At `-O0` the merge is worth 28%: the unoptimized code does the mask, the pack
+and the comparison once instead of twice. At `-O2` there is nothing left to
+win — and the reason is worth recording: **LLVM's own optimizer already
+performs this merge.** The two `-O2` builds' optimized IR is the same code:
+`and <4 x i32> %x, splat (i32 13056)` followed by `icmp eq <4 x i32> …,
+splat (i32 13056)`, once per vectorized lane. LLVM's `instcombine` sees that
+`(x & a) == a && (x & b) == b` with disjoint `a` and `b` is the merged test and
+rewrites it.
+
+So the honest verdict is the plan's own: the win at `-O2` is under 1%, and the
+decision is recorded either way. **The code is kept**, for two reasons. The
+first is the plan's: the transformation is small, and the `-O0` build — the
+build the repo's own `--experimental-lowering` oracle and the driver tests
+exercise — is 1.38x faster with it. The second is that the compiler no longer
+*depends* on LLVM discovering the merge: the merge is in the IR before the
+optimizer runs, so it holds at every optimization level and for every shape
+LLVM's heuristics happen to miss (a value in memory that LLVM cannot forward,
+a mask it cannot fold, a target without the loop's vectorizable form). The
+same argument decided ADR-266's picture fold, which also showed no `-O2` gain.
+
+The gates are `tests/ir/combine_tests.pli` (one `icmp eq i32` against the
+merged expectation, and no second comparison) and `tests/core/bit_merge.pli`
+(the merged conjunction must equal the two tests taken separately over eight
+values, and the two shapes the merge must decline — overlapping masks, and two
+different values — must keep their own value). The witness in
+`tests/driver/experimental_lowering.sh` requires the merged and the separate
+lowering to agree in the `auto`, `runtime` and `llvm` modes.
+
+**Rejected.** *Merging when the masks overlap.* The two tests are then not
+independent, and the merged expectation would demand bits neither test
+requires: `(X & 0x0F) = 0x03 & (X & 0x03) = 0x01` is false, while the merged
+form `(X & 0x0F) = 0x03` would be true. `tests/core/bit_merge.pli` pins that
+case. *Merging a `^=` (not equal) test.* The negation of a conjunction is not
+the conjunction of the negations, so only `=` merges. *Merging tests on two
+different values.* They share no storage word, which is exactly what MULTICS's
+`same_word` check refuses. *Merging tests whose masks or expectations are
+variables.* The disjointness and the subset relation cannot be known at compile
+time, and a runtime check would cost more than the merge saves.
+
+## ADR-269 — A synthesized control-flow edge re-materializes the values it crosses
+
+*(ADR-264 to ADR-268 belong to the picture, translation and memory-effect
+branches; this is the next free number across the two branches. ADR-242,
+ADR-243 and ADR-244 are the plan's WS-C numbers, and ADR-244 is reserved for
+the deferred C5.)*
+
+**Context.** WS-C4 is the plan's `optimize_if` peephole, and it is two things.
+The transformation is MULTICS's `optimize_if.pl1:20-36`:
+
+```
+   jump_true(target,or_bits(a,b)) -> jump_true(target,a), jump_true(target,b)
+   jump_true(target,and_bits(a,b)) -> jump_false(next,a), jump_true(target,b)
+   jump_true(target,not_bits(a)) -> jump_false(target,a)
+   jump_false(target,and_bits(a,b)) -> jump_false(target,a), jump_false(target,b)
+   jump_false(target,or_bits(a,b)) -> jump_true(next,a), jump_false(target,b)
+   jump_false(target,not_bits(a)) -> jump_true(target,a)
+```
+
+with a **cross-phase contract** at `optimize_if.pl1:215-218`:
+
+```pl1
+/* optimizer didn't know about this label, so make sure all temps
+   are saved before anyone jumps here */
+         next -> statement.save_temps = "1"b;
+```
+
+The transformation branches on the *comparison flags* and never materializes the
+0/1. LLVM has no flag-only branch: `icmp` produces a value, and `InstCombine`
+folds that value into the branch — the same effect, arrived at differently. So
+the transformation itself is **not ported**.
+
+The contract, though, is a real constraint on any transformation that creates a
+control-flow edge the analysis did not see: the values that were live must be
+re-materialized at the new edge, or the edge reads a stale value.
+
+**Decision.** The contract is recorded as a standing invariant of the code
+generator, and the one place in the compiler where a *cached* value crosses a
+*synthesized* edge already honours it.
+
+The invariant: **an IRGen transformation that creates a new basic block or a
+new join point must re-materialize every value it cached across that edge.**
+Two things make it cheap here. IRGen is SSA-from-the-start — a PL/I value
+lives in an `alloca` that `mem2reg` promotes, so a value that crosses an edge
+is re-loaded by construction, not by a spill. And the compiler has no
+value cache that a jump could invalidate: the symbol addresses (`symAddr_`) are
+fixed for the frame, and the CONTROLLED generation addresses are re-read
+wherever the generation can change.
+
+The one place where a cached pointer does cross a synthesized join is the
+CONTROLLED generation expansion in `storeTo` (rules (15),(18)): the store may
+free a too-small generation and allocate a replacement, which is a new
+`mergeBB` join, and the address the store writes through changes on one arm.
+The code already re-reads the address and the length *after* the join
+("Always reload fresh addr+len — may have changed in expBB"), which is exactly
+the contract. The comment there now says so, so the next transformation does
+not have to rediscover it.
+
+**Consequences.** The item closes as an invariant rather than as a technique:
+no code changes behaviour, and the constraint is written down where a future
+transformation will meet it. The plan's WS-A3 (a canonical subobject identity
+with a cache) is the transformation this guards: a cached subobject pointer
+would have to be invalidated at any synthesized edge, and the invariant says so
+before that work starts.
+
+**Rejected.** *Porting `optimize_if`.* LLVM's `InstCombine` already folds the
+`icmp` into the branch, so the transformation would be a rewrite with no
+effect — and LLVM's version is the one that also handles the phis and the
+undefs. *Adding an `invalidateSubobjects()` call.* There is no subobject
+cache in the compiler (WS-A3 is not implemented), so the call would have
+nothing to invalidate; the invariant names the obligation instead, which is
+what survives until the cache exists.

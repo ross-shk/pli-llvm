@@ -5798,9 +5798,11 @@ bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
   if (!parseSide(e->a.get(), s1) || !parseSide(e->b.get(), s2))
     return false;
   // The two tests must read the same value (MULTICS's `same_word`: the same
-  // storage object of the same top-level symbol).
+  // storage object of the same top-level symbol). A locator-qualified
+  // reference reads through a runtime pointer, and two different locators are
+  // different storage, so only a plain reference qualifies.
   if (s1.var->sym != s2.var->sym || s1.var->memberPath != s2.var->memberPath ||
-      (bool)s1.var->locPtr != (bool)s2.var->locPtr)
+      s1.var->locPtr || s2.var->locPtr)
     return false;
   if (s1.nbits != s2.nbits)
     return false;
@@ -6941,6 +6943,12 @@ void IRGen::collectCtlLoopInfo(HStmt* s, std::unordered_set<Symbol*>& uses,
 // that the body reuses via the hoist maps. Element stores write the data
 // buffer, never the stack metadata, so the hoist is sound. Callers erase the
 // returned symbols from the maps on loop exit.
+//
+// The hoist is the compiler's answer to the MULTICS save_temps contract
+// (ADR-269): a value cached across a control-flow edge is sound here only
+// because the analysis proved the generation cannot change inside the loop —
+// no call, no ALLOCATE, no FREE. A transformation that adds a call to the
+// body must drop the hoist.
 void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
                                 std::vector<Symbol*>& hoisted,
                                 std::vector<std::pair<Symbol*, size_t>>& hoistedExt) {
@@ -9317,7 +9325,11 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
         b_.SetInsertPoint(copyBB);
         b_.CreateBr(mergeBB);
         b_.SetInsertPoint(mergeBB);
-        // Always reload fresh addr+len — may have changed in expBB
+        // Always reload fresh addr+len — may have changed in expBB. This is
+        // the MULTICS save_temps contract (ADR-269): a transformation that
+        // creates a new join must re-materialize the values it cached
+        // across that edge, and the generation's address is the one value
+        // here that can change.
         llvm::Value* faddr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "fraddr");
         llvm::Value* flen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "flen");
         emitAssignChar(faddr, flen, v.ptr, v.len);

@@ -328,3 +328,95 @@ empty leaves) and the two shapes the store *declines* — the target as a leaf
 and the target as the second leaf — where the concatenation must be read whole
 before anything is written. Those two cases are the aliasing hazard the
 transformation introduces, and they keep the generic path.
+
+### 4.2 C3 — merge bit tests within one storage object: **implemented, kept**
+
+**The measurement** is the IR, and the benchmark. `benchmarks/lang/bit_merge.pli`
+tests two masked fields of one 32-bit word in a single conjunction, 300
+million times; the C twin tests the same two fields.
+
+The merge is `(X & M1) = E1 & (X & M2) = E2` → `(X & (M1|M2)) = (E1|E2)`, which
+is valid exactly when the masks are disjoint and each expectation lies inside
+its own mask. The rule is `pli::mergeBitTests` in `src/irgen_decisions.cpp` —
+a decision, so it lives outside `irgen.cpp` (the plan's C2). The IR loses one
+load, one mask, one pack and one comparison.
+
+The benchmark (arm64 macOS, LLVM 23.1.2):
+
+| build | merged | separate | ratio |
+|---|---|---|---|
+| `-O0` | 2.63 s | 3.64 s | **1.38x** |
+| `-O2` (pair, 7 runs) | 70.2 ms | 70.4 ms | 1.00x |
+
+**The finding is the interesting part: at `-O2` LLVM already does this merge.**
+The two builds' optimized IR is the same code — `and <4 x i32> %x, splat (i32
+13056)` and `icmp eq <4 x i32> %x, splat (i32 13056)`, once per vectorized lane
+— because LLVM's `instcombine` rewrites `(x & a) == a && (x & b) == b` with
+disjoint `a` and `b` into the merged test on its own.
+
+**The verdict.** The plan's gate says the decision is recorded either way: the
+`-O2` win is under 1%. **The code is kept** — the `-O0` build is 1.38x faster
+with it, and the merge is in the IR before the optimizer runs, so it holds at
+every level and for every shape LLVM's heuristics miss. This is the same
+argument that kept ADR-266's picture fold, which also showed no `-O2` gain.
+
+The gates are `tests/ir/combine_tests.pli` (one `icmp eq i32` against the
+merged expectation, and no second comparison), `tests/core/bit_merge.pli` (the
+merged conjunction equals the two tests taken separately over eight values, and
+the two shapes the merge must decline — overlapping masks, and two different
+values — keep their own value), and the witness in
+`tests/driver/experimental_lowering.sh` (the merged and the separate lowering
+agree in the `auto`, `runtime` and `llvm` modes).
+
+### 4.3 C4 — the `optimize_if` contract: **closed as an invariant**
+
+**The transformation is not ported.** MULTICS branched on the comparison flags
+and never materialized the 0/1; LLVM has no flag-only branch, and
+`InstCombine` folds the `icmp` into the branch anyway. The plan says so
+("Do not port the transformation itself").
+
+**The contract is recorded.** MULTICS's `optimize_if.pl1:215-218` sets
+`save_temps` on a label the optimizer did not know about: a transformation that
+synthesizes a new basic block or a new join must re-materialize the values it
+cached across that edge. ADR-269 states that as an invariant of the code
+generator, and the comment at the one place where a cached pointer does cross a
+synthesized join — the CONTROLLED generation expansion in `storeTo`, whose
+`mergeBB` join may have a new address on one arm — now says so. The other
+cached value, the CONTROLLED address hoist in a DO loop, is sound because the
+analysis proved the generation cannot change inside the loop; that comment
+names the obligation too.
+
+No behaviour changed, so there is nothing to benchmark: the item's cost was a
+constraint to be written down, and the constraint is now written down.
+
+### 4.4 C5 — the exponent patch for a scaled `FIXED BINARY`: **deferred**
+
+**The gate.** The plan's C5 says: *"If the repo does not support binary scale
+at all, **defer** — check `Type` for a binary-scale field first."* The field
+exists — `Type::scale` carries it for `FIXED BINARY(p,q)` — but nothing uses
+it:
+
+| where | what a binary scale would need | what the compiler does |
+|---|---|---|
+| a literal assigned to a scaled `FIXED BINARY` | the literal scaled by 2^q | stored unscaled (only `FIXED DECIMAL` is rescaled, ADR-240) |
+| `+` between two different binary scales | the operands rescaled to a common scale | the raw integers added (sema takes the larger scale, irgen does not rescale) |
+| conversion to `FLOAT` | the value divided by 2^q | the raw integer converted (`sitofp` only) |
+| list-directed output | the 2^q point printed | the integer printed |
+
+`docs/GRAMMAR-COVERAGE.md` (16),(17) says it plainly: *"`FIXED BINARY(p,q)`
+stays 2-based (unscaled)"*, and `tests/core/scaled.pli` pins that behaviour: a
+scale-2 variable assigned the literal `5` holds `5` (not `20`), two scale-2
+values multiply to their raw product, and a scaled value prints as an integer.
+So the compiler's own test suite asserts the unscaled model — the exponent
+patch would contradict it.
+
+**The verdict.** The exponent patch cannot be ported on its own: multiplying
+by 2^-q in the float conversion alone would disagree with every other path
+that treats a binary-scaled value as unscaled. The prerequisite is the
+*language feature* — `FIXED BINARY(p,q)` semantics — which is rules (16),(17)
+work, not an IRGen peephole, and which would need its own ADR and its own
+rule-coverage rows. The plan's gate therefore applies: **C5 is deferred**, no
+ADR-244 is written, and ADR-244 stays reserved for it. When the language
+feature lands, the conversion becomes an exponent patch — `sitofp` followed by
+a multiply by 2^-q, exact over the whole range — and the decision is already
+recorded here.

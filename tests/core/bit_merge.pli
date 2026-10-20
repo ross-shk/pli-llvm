@@ -7,6 +7,11 @@
  bit_merge: procedure options(main);
    declare w bit(32);
    declare x bit(32);
+   declare cell bit(32) based(p);
+   declare p pointer;
+   declare q pointer;
+   declare buf1 bit(32);
+   declare buf2 bit(32);
    declare m1 bit(32);
    declare m2 bit(32);
    declare e1 bit(32);
@@ -56,6 +61,18 @@
    both = 0;
    if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
       ((x & '00000000000000000000000011110000'b) = '00000000000000000000000000110000'b)
+   then both = 1;
+   if both ^= 1 then fails = fails + 1;
+
+   /* Two different locators for the same based variable are two different
+      storages, so the two tests must not be merged either. */
+   p = addr(buf1);
+   q = addr(buf2);
+   buf1 = fixed(13056);
+   buf2 = fixed(768);
+   both = 0;
+   if ((p->cell & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
+      ((q->cell & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b)
    then both = 1;
    if both ^= 1 then fails = fails + 1;
 
