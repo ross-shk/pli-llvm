@@ -35,8 +35,8 @@
 #endif
 #include "sema.h"
 #include "llvm/AsmParser/Parser.h"
-#include "llvm/Config/llvm-config.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/SourceMgr.h"

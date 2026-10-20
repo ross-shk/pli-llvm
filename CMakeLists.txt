@@ -1009,7 +1009,7 @@ find_program(SCAN_BUILD_BIN NAMES scan-build scan-build-py
   set(ALL_CPP_SOURCES ${PLI_SOURCES} src/embedded_sysroot.cpp)
   set(ALL_CPP_HEADERS
     src/ast.h src/codegen.h src/diag.h src/embedded_runtime.h src/embedded_sysroot.h src/explain.h
-    src/hir.h src/irgen.h src/lexer.h src/parser.h src/preprocessor.h
+    src/hir.h src/hostcrt.h src/irgen.h src/lexer.h src/parser.h src/preprocessor.h
     src/sema.h src/target.h src/token.h src/types.h
     src/backend/plugin_abi.h src/backend/plugin_loader.h)
   if(PLI_ENABLE_MLIR)

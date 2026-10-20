@@ -332,7 +332,6 @@ HostCrt resolveHostCrt(const llvm::Triple& triple, const std::string& sysroot) {
   }
 
   // Resolve the mandatory startup objects; any missing -> clear diagnostic.
-  std::string found;
   for (const std::string& n : s.startObjects) {
     std::string p = findInRoots(s.roots, {n}, sysroot);
     if (p.empty()) {

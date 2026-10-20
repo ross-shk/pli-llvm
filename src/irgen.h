@@ -45,15 +45,14 @@ struct Val {
 class IRGen {
 public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
-        bool noConvChecks = false, bool noSubChecks = false,
-        bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
-        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
-        std::string dataLayout = "")
+        bool noConvChecks = false, bool noSubChecks = false, bool linkBitcode = false,
+        LowerMode lowerMode = LowerMode::Auto, std::map<std::string, LowerMode> perOpOverrides = {},
+        std::string platformBc = "", std::string dataLayout = "")
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
         noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
-        noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
-        platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
-        perOpOverrides_(std::move(perOpOverrides)), dataLayout_(std::move(dataLayout)) {}
+        noConvChecks_(noConvChecks), linkBitcode_(linkBitcode), platformBc_(std::move(platformBc)),
+        lowerMode_(lowerMode), perOpOverrides_(std::move(perOpOverrides)),
+        dataLayout_(std::move(dataLayout)) {}
 
   std::string run(HProgram& prog);
 

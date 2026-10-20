@@ -15,8 +15,8 @@ namespace pli {
 // One loaded backend.
 struct LoadedBackend {
   std::string name;
-  std::string description; // one line, shown by `pli version`
-  std::string path;        // the shared object it came from
+  std::string description;      // one line, shown by `pli version`
+  std::string path;             // the shared object it came from
   const void* plugin = nullptr; // the PliBackendPlugin descriptor
 };
 
