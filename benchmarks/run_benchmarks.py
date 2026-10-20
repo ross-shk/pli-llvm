@@ -69,6 +69,7 @@ LANG_BENCHMARKS = [
     ("concat_const",  "lang/concat_const.pli",  "lang/baseline/concat_const_c.c"),
     ("io_list",       "lang/io_list.pli",       "lang/baseline/io_list_c.c"),
     ("alias_scope",   "lang/alias_scope.pli",   "lang/baseline/alias_scope_c.c"),
+    ("picture_fold",  "lang/picture_fold.pli",  "lang/baseline/picture_fold_c.c"),
 ]
 
 # Every benchmark, both categories.
@@ -85,6 +86,11 @@ PAIRS = [
     # "checks-on" build keeps them.
     ("checks_on", "check-free", [], "checks-on",
      ["--size-checks", "--subscript-checks"]),
+    # B4 (ADR-266): a constant P item through a constant picture is folded
+    # to text; the other side keeps the runtime interpreter. The per-op
+    # override isolates the picture lowering from the rest of the pipeline.
+    ("picture_fold", "folded", [], "runtime",
+     ["--experimental-lowering=picture:runtime"]),
 ]
 
 
@@ -176,6 +182,7 @@ CHECKS = {
     "concat_const":     {"min_ms_O2": 50, "float_tol": False},
     "io_list":          {"min_ms_O2": 50, "float_tol": False},
     "alias_scope":      {"min_ms_O2": 50, "float_tol": False},
+    "picture_fold":     {"min_ms_O2": 50, "float_tol": False},
 }
 
 

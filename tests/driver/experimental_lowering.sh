@@ -18,6 +18,7 @@ witness: procedure options(main);
    declare x fixed bin(31);
    declare alpha char(10) init('0123456789');
    declare vowels char(5) init('aeiou');
+   declare picbuf char(10);
    declare fails fixed bin(31);
    fails = 0;
    v = 'AB';
@@ -40,6 +41,9 @@ witness: procedure options(main);
    /* WS-B/ADR-264: TRANSLATE pads `out` with blanks to the length of `in` */
    if translate('abcxyz', 'XYQ', 'abc') ^= 'XYQxyz' then fails = fails + 1;
    if translate('abcxyz', 'XY', 'abc') ^= 'XY xyz' then fails = fails + 1;
+   /* WS-B/ADR-266: the folded and runtime picture paths must agree */
+   put string(picbuf) edit(123.45) (P('ZZ9.99'));
+   if substr(picbuf,1,6) ^= '123.45' then fails = fails + 1;
    /* W4: FIXED(float) and FIXED(char) differential check */
    f = 3.14;
    x = fixed(f);

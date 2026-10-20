@@ -8,6 +8,8 @@
 #include "irgen_decisions.h"
 
 #include <algorithm>
+#include <cctype>
+#include <limits>
 
 namespace pli {
 
@@ -115,6 +117,245 @@ std::string translateTableBytes(const std::string& out, const std::string& in) {
     bytes[c] = j < out.size() ? out[j] : ' ';
   }
   return bytes;
+}
+
+namespace {
+
+// The picture characters of rule (148). The classifier validates against this
+// set before it looks at the layout, so a malformed string cannot reach the
+// folder.
+bool isPictureChar(char c) {
+  static const std::string chars = "ABCDEGHIKMPSTVYZ$.,*/1236789XFR+-";
+  return chars.find(c) != std::string::npos;
+}
+
+// The characters that make a picture numeric rather than character. A picture
+// with none of them is a character picture (A/X), which P output cannot use.
+bool isNumericPictureChar(char c) {
+  static const std::string chars = "9Z123V.,$+-SY*EK";
+  return chars.find(c) != std::string::npos;
+}
+
+// The subset the constant folder reproduces byte for byte: the digits, the
+// assumed decimal point, the signs, and the A/X blank positions. Everything
+// else (repetition, F(n), currency, exponent, sterling, CR/DB) stays on the
+// runtime interpreter.
+bool isFoldablePictureChar(char c) {
+  static const std::string chars = "9ZV.+-SXA";
+  return chars.find(c) != std::string::npos;
+}
+
+} // namespace
+
+PictureSpec classifyPicture(const std::string& pic) {
+  PictureSpec s;
+  if (pic.empty())
+    return s;
+
+  for (size_t i = 0; i < pic.size();) {
+    long long repeat = 1;
+    bool repeated = false;
+    // rule (147): "(integer) picture-character" repeats the character; n = 0
+    // ignores it.
+    if (pic[i] == '(') {
+      size_t j = i + 1;
+      long long n = 0;
+      bool digits = false;
+      while (j < pic.size() && std::isdigit(static_cast<unsigned char>(pic[j]))) {
+        digits = true;
+        n = n * 10 + (pic[j] - '0');
+        if (n > 1000000)
+          return s; // a picture this large is not a picture we want to expand
+        ++j;
+      }
+      if (!digits || j >= pic.size() || pic[j] != ')')
+        return s;
+      repeat = n;
+      repeated = true;
+      i = j + 1;
+      if (i >= pic.size())
+        return s;
+    }
+
+    char c = pic[i];
+    // rule (146): the trailing F(+n)/F(-n) scaling factor moves the assumed
+    // decimal point; it emits no character.
+    if (c == 'F') {
+      if (repeated || i + 1 >= pic.size() || pic[i + 1] != '(')
+        return s;
+      size_t j = i + 2;
+      int sign = 1;
+      if (j < pic.size() && (pic[j] == '+' || pic[j] == '-')) {
+        if (pic[j] == '-')
+          sign = -1;
+        ++j;
+      }
+      long long n = 0;
+      bool digits = false;
+      while (j < pic.size() && std::isdigit(static_cast<unsigned char>(pic[j]))) {
+        digits = true;
+        n = n * 10 + (pic[j] - '0');
+        if (n > 1000000)
+          return s;
+        ++j;
+      }
+      if (!digits || j >= pic.size() || pic[j] != ')' || j + 1 != pic.size())
+        return s;
+      s.hasScale = true;
+      s.scale = sign * static_cast<int>(n);
+      i = j + 1;
+      continue;
+    }
+
+    if (!isPictureChar(c))
+      return s;
+    if (repeated)
+      s.hasRepeat = true;
+    // Expand the repetition now: every later step (width, digit positions,
+    // folding) sees one character per output position.
+    for (long long k = 0; k < repeat; ++k) {
+      s.expanded.push_back(c);
+      if (c != 'V')
+        ++s.width;
+    }
+    ++i;
+  }
+
+  if (s.expanded.empty())
+    return s;
+
+  // The first V or '.' is the assumed decimal point; digits after it are
+  // fractional positions (the rule the runtime formatter uses).
+  for (size_t i = 0; i < s.expanded.size(); ++i)
+    if (s.expanded[i] == 'V' || s.expanded[i] == '.') {
+      s.point = static_cast<int>(i);
+      break;
+    }
+  for (size_t i = 0; i < s.expanded.size(); ++i) {
+    char c = s.expanded[i];
+    if (c != '9' && c != 'Z')
+      continue;
+    if (s.point >= 0 && static_cast<int>(i) > s.point)
+      ++s.fracDigits;
+    else
+      ++s.intDigits;
+  }
+
+  for (char c : s.expanded)
+    if (isNumericPictureChar(c)) {
+      s.numeric = true;
+      break;
+    }
+
+  bool foldable = s.numeric && !s.hasRepeat && !s.hasScale && s.width > 0 && s.width <= 127 &&
+                  s.intDigits + s.fracDigits > 0;
+  for (char c : s.expanded)
+    if (!isFoldablePictureChar(c))
+      foldable = false;
+  s.foldable = foldable;
+  s.valid = true;
+  return s;
+}
+
+bool foldPictureConversion(long long value, int scale, const PictureSpec& spec,
+                           std::string& out) {
+  if (!spec.valid || !spec.foldable || scale < 0)
+    return false;
+  // The runtime negates in signed arithmetic, so LLONG_MIN has no magnitude
+  // there either; keep that value on the runtime path rather than disagree.
+  if (value == std::numeric_limits<long long>::min())
+    return false;
+
+  const bool isneg = value < 0;
+  unsigned long long av = isneg ? static_cast<unsigned long long>(-(value + 1)) + 1
+                                : static_cast<unsigned long long>(value);
+  long long digits[64];
+  long long ndig = 0;
+  if (av == 0) {
+    digits[0] = 0;
+    ndig = 1;
+  } else {
+    while (av > 0 && ndig < 64) {
+      digits[ndig++] = static_cast<long long>(av % 10);
+      av /= 10;
+    }
+    for (long long i = 0; i < ndig / 2; ++i) {
+      long long t = digits[i];
+      digits[i] = digits[ndig - 1 - i];
+      digits[ndig - 1 - i] = t;
+    }
+  }
+
+  const long long val_int = ndig > scale ? ndig - scale : 0;
+  const long long val_frac = scale < ndig ? scale : 0;
+  std::string text;
+  text.reserve(static_cast<size_t>(spec.width));
+  int led_zero = 1;
+  long long frac_idx = 0;
+
+  for (size_t pi = 0; pi < spec.expanded.size(); ++pi) {
+    char c = spec.expanded[pi];
+    const bool is_fractional = spec.point >= 0 && static_cast<long long>(pi) > spec.point;
+
+    if (c == 'V')
+      continue; // no output character
+
+    if (c == '9' || c == 'Z') {
+      if (is_fractional) {
+        if (frac_idx < val_frac) {
+          text.push_back(static_cast<char>('0' + digits[val_int + frac_idx]));
+          led_zero = 0;
+        } else {
+          text.push_back('0'); // zero-pad if the value has fewer fractional digits
+        }
+        ++frac_idx;
+      } else {
+        long long int_idx = 0;
+        for (size_t j = 0; j < pi; ++j)
+          if (spec.expanded[j] == 'Z' || spec.expanded[j] == '9')
+            ++int_idx;
+        long long src_idx = int_idx - (spec.intDigits - val_int);
+        if (src_idx < 0) {
+          text.push_back(c == '9' ? '0' : ' '); // Z -> blank, 9 -> zero
+        } else if (src_idx < val_int) {
+          char d = static_cast<char>('0' + digits[src_idx]);
+          if (c == 'Z' && d == '0' && led_zero) {
+            text.push_back(' '); // leading zero suppression
+          } else {
+            led_zero = 0;
+            text.push_back(d);
+          }
+        } else {
+          text.push_back(c == '9' ? '0' : ' ');
+        }
+      }
+      continue;
+    }
+    if (c == '.') {
+      text.push_back('.');
+      continue;
+    }
+    if (c == '+') {
+      text.push_back(isneg ? '-' : '+');
+      continue;
+    }
+    if (c == '-' || c == 'S') {
+      text.push_back(isneg ? '-' : ' ');
+      continue;
+    }
+    if (c == 'X' || c == 'A') {
+      text.push_back(' ');
+      continue;
+    }
+    text.push_back(c); // unreachable for a foldable picture
+  }
+
+  // The width is the contract the runtime writes; a mismatch means the
+  // classifier and the formatter disagree, so keep the runtime path.
+  if (static_cast<int>(text.size()) != spec.width)
+    return false;
+  out = std::move(text);
+  return true;
 }
 
 } // namespace pli

@@ -656,6 +656,7 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"substr_assign_varying", true},
       {"repeat", true},
       {"translate", true},
+      {"picture", true},
       {"trim", true},
       // P5 flip: W4 scalar math and conversions default to LLVM
       {"fixed_of_float", true},
@@ -720,6 +721,7 @@ static const std::set<std::string>& kLLVMLowerings() {
       "substr_assign_varying",
       "repeat",
       "translate",
+      "picture",
       "trim",
       // W4 scalar conversions
       "fixed_of_float",
@@ -7595,24 +7597,41 @@ void IRGen::emitPutEditItems(HStmt* s) {
         break;
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
+      llvm::Value* val = nullptr;
+      int scale = 0;
       if (v.ty.isFixed()) {
-        llvm::Value* val = toI64(v);
-        llvm::Value* scale = i64(v.ty.scale);
-        // sign derived from the value: -1 if negative, +1 if non-negative.
-        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
-        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
-        deferCall("pli_put_edit_pic",
-                  {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
+        val = toI64(v);
+        scale = v.ty.scale;
       } else if (v.ty.k == TK::Float) {
         // Convert float to fixed-decimal via truncation.
-        llvm::Value* val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
-        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picfsn");
-        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picfs");
-        deferCall("pli_put_edit_pic",
-                  {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
+        val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
       } else {
         d_.error(item->loc, "P edit item requires a numeric value", "(53)");
+        break;
       }
+      // B4: a constant value through a foldable constant picture is formatted
+      // at compile time (rules (146)-(148)); the lowering policy still wins,
+      // so --experimental-lowering=picture:runtime keeps the interpreter and
+      // the differential oracle keeps both sides (ADR-266).
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      if (!runtimePath("picture") && spec.foldable) {
+        if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(val)) {
+          std::string text;
+          if (pli::foldPictureConversion(ci->getSExtValue(), scale, spec, text)) {
+            facts_.recordBuiltin("picture", "llvm");
+            deferCall("pli_put_edit_char",
+                      {globalString(text), i64((long long)text.size()),
+                       i64((long long)text.size())});
+            break;
+          }
+        }
+      }
+      facts_.recordBuiltin("picture", "runtime");
+      // sign derived from the value: -1 if negative, +1 if non-negative.
+      llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
+      llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
+      deferCall("pli_put_edit_pic",
+                {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
       break;
     }
     }

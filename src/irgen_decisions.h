@@ -69,4 +69,34 @@ std::string searchTableBytes(const std::string& alphabet);
 // from `in` maps to itself. The first occurrence in `in` decides.
 std::string translateTableBytes(const std::string& out, const std::string& in);
 
+// WS-K3: the classification of one PICTURE specification (rules (146)-(148)).
+// The classifier expands repetition factors (rule (147)) and separates the
+// trailing F(n) scaling factor (rule (146)); `foldable` is true only for the
+// numeric subset the constant folder below reproduces, so every other picture
+// keeps the runtime interpreter.
+struct PictureSpec {
+  bool valid = false;      // parses as a picture specification
+  bool numeric = false;    // numeric rather than character picture
+  bool foldable = false;   // the simple numeric subset B4 folds
+  bool hasRepeat = false;  // a repetition factor was expanded
+  bool hasScale = false;   // a trailing F(n) scaling factor was present
+  int width = 0;           // output positions (V and F(n) emit none)
+  int intDigits = 0;       // 9/Z positions before the decimal point
+  int fracDigits = 0;      // 9/Z positions after the decimal point
+  int point = -1;          // expanded index of V/., -1 when none
+  int scale = 0;           // F(n) scaling factor
+  std::string expanded;    // repetition factors expanded, F(n) removed
+};
+
+// Classify a picture string: expand repetitions, record the digit layout and
+// the scaling factor, and decide whether the constant folder can reproduce it.
+PictureSpec classifyPicture(const std::string& pic);
+
+// B4: format a constant numeric value through a classified picture at compile
+// time. `value` is scaled by 10^`scale`, exactly the pair the runtime
+// `pli_put_edit_pic` receives. Returns false when the picture is not foldable
+// or the value cannot be represented, leaving the caller on the runtime path.
+bool foldPictureConversion(long long value, int scale, const PictureSpec& spec,
+                           std::string& out);
+
 } // namespace pli

@@ -1,0 +1,137 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (53),(146)-(148): B4 folds a constant P edit item through a
+    constant, foldable picture. Each case formats the same value twice:
+    once as a literal (the folded path) and once through a variable (the
+    runtime interpreter), and requires the two texts to agree. ADR-266. */
+ picture_fold: procedure options(main);
+    declare fails fixed bin(31);
+    declare a char(40);
+    declare b char(40);
+    declare v fixed dec(7,2);
+    declare fl float dec(6);
+    fails = 0;
+
+    /* positive decimal, leading zeros suppressed */
+    v = 123.45;
+    put string(a) edit(123.45) (P('ZZ9.99'));
+    put string(b) edit(v) (P('ZZ9.99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       fails = fails + 1;
+       put skip list('FAIL pos agree', substr(a,1,6), substr(b,1,6));
+    end;
+    if substr(a,1,6) ^= '123.45' then do;
+       fails = fails + 1;
+       put skip list('FAIL pos exact', substr(a,1,6));
+    end;
+
+    /* negative value, S sign position */
+    v = -6.78;
+    put string(a) edit(-6.78) (P('SZZ9.99'));
+    put string(b) edit(v) (P('SZZ9.99'));
+    if substr(a,1,7) ^= substr(b,1,7) then do;
+       fails = fails + 1;
+       put skip list('FAIL neg agree', substr(a,1,7), substr(b,1,7));
+    end;
+    if substr(a,1,7) ^= '-  6.78' then do;
+       fails = fails + 1;
+       put skip list('FAIL neg exact', substr(a,1,7));
+    end;
+
+    /* zero still fills every fractional position */
+    v = 0.0;
+    put string(a) edit(0.0) (P('ZZ9.99'));
+    put string(b) edit(v) (P('ZZ9.99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       fails = fails + 1;
+       put skip list('FAIL zero agree', substr(a,1,6), substr(b,1,6));
+    end;
+    if substr(a,1,6) ^= '  0.00' then do;
+       fails = fails + 1;
+       put skip list('FAIL zero exact', substr(a,1,6));
+    end;
+
+    /* explicit plus sign, and the blank minus sign */
+    v = 42.5;
+    put string(a) edit(42.5) (P('+Z9.99'));
+    put string(b) edit(v) (P('+Z9.99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       fails = fails + 1;
+       put skip list('FAIL plus agree', substr(a,1,6), substr(b,1,6));
+    end;
+    if substr(a,1,6) ^= '+42.50' then do;
+       fails = fails + 1;
+       put skip list('FAIL plus exact', substr(a,1,6));
+    end;
+    put string(a) edit(42.5) (P('-Z9.99'));
+    put string(b) edit(v) (P('-Z9.99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       fails = fails + 1;
+       put skip list('FAIL blank agree', substr(a,1,6), substr(b,1,6));
+    end;
+    if substr(a,1,6) ^= ' 42.50' then do;
+       fails = fails + 1;
+       put skip list('FAIL blank exact', substr(a,1,6));
+    end;
+    v = -42.5;
+    put string(a) edit(-42.5) (P('-Z9.99'));
+    put string(b) edit(v) (P('-Z9.99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       fails = fails + 1;
+       put skip list('FAIL minus agree', substr(a,1,6), substr(b,1,6));
+    end;
+    if substr(a,1,6) ^= '-42.50' then do;
+       fails = fails + 1;
+       put skip list('FAIL minus exact', substr(a,1,6));
+    end;
+
+    /* insertion blanks and the V assumed point */
+    v = 42.5;
+    put string(a) edit(42.5) (P('ZZX9.99'));
+    put string(b) edit(v) (P('ZZX9.99'));
+    if substr(a,1,7) ^= substr(b,1,7) then do;
+       fails = fails + 1;
+       put skip list('FAIL ins agree', substr(a,1,7), substr(b,1,7));
+    end;
+    if substr(a,1,7) ^= ' 4 2.50' then do;
+       fails = fails + 1;
+       put skip list('FAIL ins exact', substr(a,1,7));
+    end;
+    v = 123.45;
+    put string(a) edit(123.45) (P('ZZ9V99'));
+    put string(b) edit(v) (P('ZZ9V99'));
+    if substr(a,1,5) ^= substr(b,1,5) then do;
+       fails = fails + 1;
+       put skip list('FAIL V agree', substr(a,1,5), substr(b,1,5));
+    end;
+    if substr(a,1,5) ^= '12345' then do;
+       fails = fails + 1;
+       put skip list('FAIL V exact', substr(a,1,5));
+    end;
+
+    /* a float literal truncates to fixed before the picture */
+    fl = 123.45;
+    put string(a) edit(123.45e0) (P('ZZ9.99'));
+    put string(b) edit(fl) (P('ZZ9.99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       fails = fails + 1;
+       put skip list('FAIL flt agree', substr(a,1,6), substr(b,1,6));
+    end;
+    if substr(a,1,6) ^= '123.00' then do;
+       fails = fails + 1;
+       put skip list('FAIL flt exact', substr(a,1,6));
+    end;
+
+    /* a picture outside the foldable subset keeps the runtime path; the
+       two spellings must still agree */
+    v = 123.45;
+    put string(a) edit(123.45) (P('ZZ9,99'));
+    put string(b) edit(v) (P('ZZ9,99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       fails = fails + 1;
+       put skip list('FAIL comma agree', substr(a,1,6), substr(b,1,6));
+    end;
+
+    if fails = 0 then put skip list('PASS picture_fold');
+    else put skip list('FAIL picture_fold: fails =', fails);
+ end picture_fold;
