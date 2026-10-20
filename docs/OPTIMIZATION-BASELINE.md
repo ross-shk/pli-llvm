@@ -102,3 +102,90 @@ inherits the same gap; it builds and runs at `-O1` and above.
 identically, so it is a separate piece of work rather than a side effect of
 the corpus.
 
+---
+
+## 3. PL/I constant folding — WS-B (B1, B2, B3)
+
+**The criterion.** The plan's standing rule (`OPTIMIZATION.md` §6.4): *a
+technique is not implemented until IR demonstrates the miss and benchmarks show
+end-to-end benefit*. Each WS-B technique has its own gate, and B1's gate is
+explicit: *"Witness: an array loop with a constant lower bound. If LLVM's SCEV
+already collapses the induction variable, close without a diff."*
+
+### 3.1 B1 — constant offset folding: closed without a diff
+
+**The measurement** is the IR, because the technique's cost is the *absence* of
+work in the IR. For every PL/I subscript shape, the displacement the plan asks
+for is already one constant:
+
+| PL/I shape | displacement | emitted IR |
+|---|---|---|
+| `a(3)`, `a(0:9)` | `(3-0) * 1` | `getelementptr inbounds [10 x i32], ptr %A.addr, i64 0, i64 3` |
+| `b(-1)`, `b(-3:7)` | `(-1+3) * 1` | `getelementptr inbounds [11 x i32], ptr %B.addr, i64 0, i64 2` |
+| `c(2,3)`, `c(0:9,0:9)` | `2*10 + 3` | `getelementptr inbounds [100 x i32], ptr %C.addr, i64 0, i64 23` |
+| `st.m(2)`, member array | member GEP + `(2-0)` | `getelementptr inbounds [4 x i32], ptr %mem, i64 0, i64 2` |
+| `arr(2).x`, array of structures | `(2-1) * 1` | `getelementptr inbounds [3 x { i32 }], ptr %ARR.addr, i64 0, i64 1` |
+
+The compile-time half is there too: a constant out-of-range subscript is
+*diagnosed* at compile time (rule (126)), so its SUBSCRIPTRANGE check is
+statically dead.
+
+**The verdict: the item closes with no code change**, which is what the
+plan's gate says to do. What is added is `tests/ir/const_offset.pli`, whose
+`.check` pins the three displacements, so the property is now guarded.
+
+### 3.2 B2 — typed constant folding for `FIXED DECIMAL`
+
+**The measurement.** Two things changed, and both are visible without a
+benchmark:
+
+* A *capability*: `DECLARE a FIXED DECIMAL(9,2) INITIAL(99.99 + 0.01)` was
+  rejected with *"INITIAL requires a constant in this stage"*; it now folds to
+  `100.00`. The folded value equals the runtime computation exactly, scale
+  included — `INITIAL(1.5 * 2.25)` gives `3.38` in both.
+* A *conformance fix*: `DECLARE a FIXED DECIMAL(5,2) INITIAL(5)` stored
+  `0.05`; it now stores `5.00`. The assignment path was already correct; the
+  INITIAL path did not rescale the literal to the declared scale.
+
+The fold of a general expression is **IR-neutral**: `1.5 + 2.25` produced
+`store i32 375` before the change and produces `store i32 375` after it — the
+runtime path and the compile-time path agree bit for bit, which is the
+property the type-directed rules exist to guarantee.
+
+**The verdict.** The item closes. The gate is `tests/core/decimal_const.pli`,
+which also carries the plan's negative test: `1.0 / 0.0` must still raise
+ZERODIVIDE, which fails if a division is ever folded.
+
+### 3.3 B3 — constant-argument built-in lowering
+
+**The measurement.** The cost of the old lowering is structural, so it is read
+off the IR rather than timed:
+
+| operation | before | after |
+|---|---|---|
+| `VERIFY(s, '0123456789')` | `O(n·m)` double loop (`vrf.outer`/`vrf.inner`/`vrf.check_byte`) | `O(n)`: one lookup in a 256-entry `@pli_search_table` per character |
+| `SEARCH(s, '0123456789', 1)` | `O(n·m)` double loop (`srch.*`) | `O(n)`: the same table |
+| `REPEAT('x', 5)` | a five-iteration loop, one `llvm.memmove` per character | one `llvm.memmove` from the constant `@str.5 = "xxxxx"` |
+| `VERIFY(s, v)` where `v` is a `VALUE` constant | reads the constant's alloca (`%V.addr`) | reads the literal's global — *identical IR* to `VERIFY(s, '0123456789')` |
+
+**The benchmark.** `python3 benchmarks/run_benchmarks.py --force --runs 3`
+(arm64 macOS, LLVM 23.1.2) — the C-parity geomean is **0.83x at `-O2`** and
+**0.84x at `-O3`**, against the plan's baseline of 0.8181x / 0.8230x. The
+difference is inside the run-to-run noise, and the harness reports *"No
+material deterioration detected at -O2 vs previous run"*. The corpus does not
+exercise a constant alphabet or a constant `REPEAT` heavily, so the expected
+end-to-end effect of B3 is small; the win is in the *shape* of the lowering,
+which the IR records.
+
+**The verdict.** The item closes. The gates are `tests/ir/search_table.pli`
+(the table global, and no `pli_verify`/`pli_search` call left),
+`tests/ir/value_const_equiv.pli` (the `VALUE` form never reads `%V.addr`),
+and `tests/core/search_const.pli` (the table path and the byte-scan path
+agree exactly — and the latter still passes under
+`--experimental-lowering=runtime`, so the differential oracle keeps both
+sides).
+
+**Not measured, and not claimed.** B4 (picture conversion folding) is gated on
+the plan's WS-K3 picture classifier, which is not built; it does not start
+here. The plan's `RESEXP` opt-in (WS-K9) is likewise untouched.
+

@@ -1,0 +1,5 @@
+CHECK: @pli_search_table = private
+CHECK: vrf.check_byte
+CHECK-NOT: ptr %V.addr
+CHECK: getelementptr i8, ptr @pli_search_table
+CHECK: getelementptr i8, ptr @pli_search_table

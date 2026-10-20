@@ -1,0 +1,5 @@
+CHECK: @pli_search_table = private
+CHECK: getelementptr i8, ptr @pli_search_table
+CHECK-NOT: call.*@pli_verify
+CHECK-NOT: call.*@pli_search
+CHECK: ret void

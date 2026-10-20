@@ -1,8 +1,0 @@
- /* scratch: VALUE constant vs literal IR equivalence */
- bi_test: procedure options(main);
-    declare s char(10) init('hello');
-    declare v char(10) value('0123456789');
-    declare n fixed bin(31);
-    n = verify(s, v);
-    put skip list('n=', n);
- end bi_test;

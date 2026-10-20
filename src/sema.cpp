@@ -2035,21 +2035,14 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
       lit->kind != Expr::FltLit && lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
     // Not a bare literal: a constant *expression* folds to one (ADR-240). The
     // value keeps the scale its operands imply; codegen rescales it to the
-    // declared type's scale, which is the type-directed step.
+    // declared type's scale, which is the type-directed step. A leading
+    // unary sign folds with the expression, so it needs no separate case.
     ConstNum num;
     if (!constNumOf(lit, num) ||
         !foldConstExpr(lit, Type::fixedDec(num.prec, num.scale), num.scale)) {
       d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
       return nullptr;
     }
-    lit = e;
-  }
-  if (lit->kind == Expr::Unary && lit->op == Tok::Minus) {
-    lit = lit->a.get();
-    // apply the leading unary minus once
-    lit->ival = -lit->ival;
-    lit->wideIval = -lit->wideIval;
-    lit->fval = -lit->fval;
   }
   // A FIXED DECIMAL target carries a scale, so an integer literal must be
   // rescaled to it: the constant is expressed as a DECIMAL literal and

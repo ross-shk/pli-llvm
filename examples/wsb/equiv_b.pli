@@ -1,7 +1,0 @@
- /* scratch B: VERIFY with the literal */
- bi_test: procedure options(main);
-    declare s char(10) init('hello');
-    declare n fixed bin(31);
-    n = verify(s, '0123456789');
-    put skip list('n=', n);
- end bi_test;

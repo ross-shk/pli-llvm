@@ -1,9 +1,0 @@
- /* scratch: INITIAL scale probe */
- dec_test: procedure options(main);
-    declare a fixed dec(5,2) init(5);
-    declare b fixed dec(5,2) init(-5);
-    declare c fixed dec(5,2) init(5.0);
-    put skip list('a=', a);
-    put skip list('b=', b);
-    put skip list('c=', c);
- end dec_test;

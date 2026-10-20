@@ -1,7 +1,0 @@
- /* scratch: decimal runtime rescale structure */
- dec_test: procedure options(main);
-    declare x fixed dec(9,1) init(1.5);
-    declare d fixed dec(9,2);
-    d = x + 2.25;
-    put skip list('d=', d);
- end dec_test;

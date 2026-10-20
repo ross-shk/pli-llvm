@@ -6892,6 +6892,238 @@ inside the statement's lock, so a task's record does not land in another task's
 file — but a task that *selects* a file while another task's statement is open
 still changes the destination for the statements that follow.
 
+## ADR-239 — A constant subscript is already one constant GEP displacement
+
+**Context.** The optimization plan's WS-B1 asks the compiler to fold a constant
+subscript, a member displacement and an array's lower bound into a single
+constant displacement, so that a reference is addressable by one base plus one
+constant offset. MULTICS did the arithmetic in the front end
+(`bound_pl1_.2.s.archive/simplify_offset.pl1:110-122`, the documented
+transformation set `c`, `exp + c`, `exp - c`, `c + exp`, `c1 * c2`,
+`c1 * (exp + c2)`, …) and kept a unit-conversion table beside it
+(`simplify_offset.pl1:41`: 36, 1, 4.5, 9, 18, 36 units per word).
+
+PL/I makes this arithmetic non-trivial where C does not: an array may have *any*
+lower bound (`A(-3:7)`), an axis has a stride, and a multi-dimensional array's
+element is addressed by a row-major offset. So the displacement is
+`(index - lower bound) * stride` summed over the axes — not the index.
+
+**Decision.** The port is *closed without a code change*: the property the plan
+asks for is already delivered, by LLVM's own constant folding, and the plan's
+own gate anticipated this ("Witness: an array loop with a constant lower bound.
+If LLVM's SCEV already collapses the induction variable, close without a
+diff"). The measurement, taken against the compiler at this commit:
+
+| PL/I shape | displacement | emitted IR |
+|---|---|---|
+| `a(3)`, `a(0:9)` | `(3-0) * 1` | `getelementptr inbounds [10 x i32], ptr %A.addr, i64 0, i64 3` |
+| `b(-1)`, `b(-3:7)` | `(-1+3) * 1` | `getelementptr inbounds [11 x i32], ptr %B.addr, i64 0, i64 2` |
+| `c(2,3)`, `c(0:9,0:9)` | `2*10 + 3` | `getelementptr inbounds [100 x i32], ptr %C.addr, i64 0, i64 23` |
+| `st.m(2)`, member array | member GEP + `(2-0)` | `getelementptr inbounds [4 x i32], ptr %mem, i64 0, i64 2` |
+| `arr(2).x`, array of structures | `(2-1) * 1` | `getelementptr inbounds [3 x { i32 }], ptr %ARR.addr, i64 0, i64 1` |
+
+`IRGen::arrayElementAddr` computes the offset as `Σ (i_k - lb_k) * stride_k`
+(`src/irgen.cpp:8294-8306`) and emits it as the GEP displacement; with a
+constant index and constant bounds, every term is a constant, and LLVM folds
+the whole expression. The compile-time half of the plan's rule 1 — a constant
+subscript that is out of range is *diagnosed*, not trapped — is already there
+too: `Sema::checkSubscriptBoundsDims` (`src/sema.cpp:4045-4062`) rejects a
+constant out-of-range subscript at compile time under rule (126), so the
+SUBSCRIPTRANGE check for such a reference is statically dead.
+
+**Consequences.** Nothing in the compiler changes, and the plan's ADR-239 is
+recorded as *porting nothing*, which §19 of the plan explicitly allows. What
+is added is the **regression test** `tests/ir/const_offset.pli`, whose
+`.check` pins the three displacements above: the property is now guarded, so a
+future change to the offset computation that broke it would fail the suite
+rather than pass silently.
+
+The one case the plan mentions that is *not* folded is a **dynamic** lower
+bound, where `(i - L)` cannot be a constant. That case is left alone: the
+emitted code is already affine in the induction variable, which is what the
+plan says the fold is for ("what makes an array loop affine, which is the
+precondition for LLVM's vectorizer and SCEV").
+
+**Rejected.** *Folding the subscript in sema into a new `HExpr` field.* It
+would duplicate what LLVM already computes, add a field to the HIR that the
+IRGen would then have to honour, and — because the compiler would then own
+the displacement arithmetic — make the *runtime* path and the *constant* path
+two implementations of the same rule, with the risk that they disagree. The
+plan's "close without a diff" is the cheaper and safer outcome.
+*Folding only the lower bound.* `sub i64 %i, 0` is folded by instcombine and
+`sub i64 %i, -3` becomes `add i64 %i, 3`; both are already affine.
+
+
+## ADR-240 — Type-directed constant folding for `FIXED DECIMAL`
+
+**Context.** A PL/I `FIXED DECIMAL(p,q)` stores an exact decimal: an integer
+scaled by `10^q`, with `p` significant digits in the type. Arithmetic on it is
+therefore *typed* — the scale and precision of the operands decide the scale
+and precision of the result — and the compiler must not fold an expression
+whose folding would change an observable condition.
+
+MULTICS folded exactly three operators of constant operands, and only for
+`FIXED BINARY` of scale 0 (`bound_pl1_.2.s.archive/simplify_expression.pl1:28-53`:
+"if `s->symbol.constant` … `if `s->symbol.scale = 0` …" and "if
+`tree->operator.op_code^=add & …^=sub & …^=mult` then return"), because a
+`FIXED DECIMAL` has a scale and a precision that participate in the result
+type, so folding it needs type-directed arithmetic — which MULTICS did
+elsewhere (`decimal_op.pl1:156-190`). IBM folds `A+B` and `A*B` of constant
+operands (`mvs:24317-24319`).
+
+The repo had the *representation* — an exact `DEC` literal with `decScale` and
+`decPrec` (`src/hir.h:53-54`) and exact decimal arithmetic (ADR-189/190/191) —
+but no *folder*. Two consequences:
+
+1. A constant expression was not a constant. `DECLARE a FIXED DECIMAL(9,2)
+   INITIAL(99.99 + 0.01)` was rejected with *"INITIAL requires a constant in
+   this stage"* (rule (26)), because `Sema::foldInitialConstant` accepted only
+   a bare literal.
+2. An integer literal was not rescaled to the declared type's scale.
+   `DECLARE a FIXED DECIMAL(5,2) INITIAL(5)` stored `0.05`, not `5.00`: the
+   INITIAL path read the literal's raw value while the assignment path (which
+   converts to the target type) was already correct.
+
+**Decision.** A typed constant folder, `src/constfold.{h,cpp}`, computes a
+constant numeric expression exactly and folds it.
+
+*What folds.* `+`, `-` and `*` of constant operands — the three MULTICS folded,
+and the two IBM folds — plus a leading unary sign. A division never folds: PL/I
+raises ZERODIVIDE when the divisor is zero, and folding would remove that
+condition. This is the plan's rule 2 and MULTICS's reason for it.
+
+*Type-directed.* The value is computed at the scale the operands imply — the
+larger of the operand scales for `+` and `-`, the sum of them for `*`
+(ADR-006) — which is exactly the scale of the expression's result type, so the
+folded constant is the value the runtime path produces. The rescale rounds
+half away from zero, the rule the runtime rescale uses
+(`src/irgen.cpp:9511`, Y33-6003).
+
+*Never removes a condition.* A value that does not fit the result type's
+precision, or that does not fit its storage width, is not folded: the runtime
+path stays, and the SIZE condition it would raise still fires. The same guard
+covers the operands, because the runtime path converts each operand to the
+common type and traps when one does not fit.
+
+*Where it is used.* `Sema::typeExpr` folds a constant `+`, `-` or `*` in any
+expression; `Sema::foldInitialConstant` accepts a constant *expression* for
+`INITIAL` and `VALUE`, and expresses an integer literal as a `DEC` literal
+when the target type carries a scale, so the declared scale is applied.
+
+**Consequences.** `INITIAL` and `VALUE` now accept constant expressions, which
+is what PL/I rule (26) asks for and what the plan's B2 was for. The
+integer-literal scale bug is fixed: `INITIAL(5)` into `FIXED DECIMAL(5,2)`
+now stores `5.00`. The fold of a general expression is *IR-neutral* — the
+runtime path computed the same value with the same width, and LLVM folded it
+identically — so the change adds a capability, not a new code shape.
+
+The result type's *precision* is deliberately **not** the plan's rule
+(`max(p1-q1, p2-q2) + max(q1,q2) + 1` for `+`/`-`, `p1+p2` for `*`). The
+repo's `arithResultType` uses a precision as a *storage hint* (15 or 31), not
+as a declared precision, and the plan's rule would narrow an intermediate below
+the width the runtime path uses — `99999999.99 + 0.01` has a plan precision of
+9, whose raw value overflows the i32 the repo would allocate for it. The
+scale rule, which is the part that decides the *value*, is adopted as is.
+
+`tests/core/decimal_const.pli` is the gate: it compares each folded value with
+the runtime computation of the same expression, checks the scale of the stored
+value, checks the integer-literal rescale, and — the negative test the plan
+asks for — requires `1.0 / 0.0` still to raise ZERODIVIDE, which fails if the
+division is ever folded.
+
+
+## ADR-241 — Constant-argument built-in lowering: search tables, constant `REPEAT`, and `VALUE`-constant equivalence
+
+**Context.** The plan's WS-B3 asks for the *constant* case of the string
+built-ins. IBM states the conditions per call site, not per built-in: `VERIFY`
+takes the first argument fixed-length and the second constant, `TRANSLATE` the
+first fixed-length and the second and third constant, `REPEAT` the second
+argument constant (`mvs:26023-26045`), and a `VALUE` constant and the literal
+it stands for must produce *identical object code* (`zos:23492-23505`).
+MULTICS's implementation of the same idea is a compile-time translate table for
+`VERIFY`/`SEARCH` with a constant third argument
+(`bound_pl1_.4.s.archive/compile_exp.pl1:1348-1380`) and the recognition of
+`REPEAT(x,'c')` so the size is known at compile time (`compile_exp.pl1:482-485`).
+
+The repo lowered `VERIFY` and `SEARCH` to a byte-at-a-time double loop — an
+`O(n·m)` scan — and `REPEAT` to a loop that copies one character per
+iteration. It also kept a `VALUE` constant's *storage*: `verify(s, v)` read
+the constant's alloca while `verify(s, '0123456789')` read a global, so the
+two forms of the same value produced different code.
+
+**Decision.** Three changes, all in the lowering of a *constant* argument.
+
+*One — the membership table.* `VERIFY` and `SEARCH` whose alphabet argument is
+a character literal lower to a 256-entry table: entry `c` is 1 when the
+character code `c` is in the alphabet. The scan of the alphabet becomes one
+lookup per character, so the cost is `O(n)` rather than `O(n·m)`. The table is
+a module-level constant named `pli_search_table`, one per distinct alphabet
+and reused by every call site that uses it — the same shape MULTICS built at
+compile time.
+
+*Two — the constant `REPEAT`.* A constant string repeated a constant number of
+times is itself a constant string: the text is built at compile time, so the
+result is a constant instead of a runtime loop with a buffer. This covers the
+plan's case (a constant character, which the plan proposed to lower to
+`llvm.memset`) and more: a constant fold needs no memset at all, because
+there is no run-time copy to make.
+
+*Three — the `VALUE`-constant equivalence.* A use of a `VALUE` constant lowers
+to the value it stands for, so a use of the constant and a use of the literal
+produce the same code. The substitution is only made when the constant holds
+*exactly* the literal: a character or bit string of the declared length, so
+the stored value is the literal's text with no padding. A `CHAR(20)
+VALUE('abc')` holds 'abc' blank-padded to twenty characters, which is not the
+literal 'abc', so it keeps its storage.
+
+**Consequences.** `verify(s, v)` and `verify(s, '0123456789')` now produce
+identical IR — measured, not asserted: the two lowerings are byte-identical
+once the value numbering is normalised away. A `VERIFY` against a constant
+alphabet is `O(n)` instead of `O(n·m)`, and a constant `REPEAT` is a constant
+instead of a loop.
+
+Two guards keep the plan's architectural constraints intact.
+
+*The differential oracle survives.* Every one of the three is gated on the
+lowering policy, so `--experimental-lowering=runtime` still reaches the
+library path and the two paths can still be compared. This is why the
+constant `REPEAT` was **not** folded in the HIR lowering, where it would have
+bypassed the policy: the first attempt did exactly that and broke
+`tests/ir/w3_clipping_rt`, whose whole purpose is to assert that the runtime
+call is still made. The fold therefore lives in the inline lowering path, and
+the policy is consulted there.
+
+*Decisions stay outside `irgen.cpp`.* The text-building decision for the
+constant `REPEAT` lives in `src/irgen_decisions.cpp` (`pli::foldRepeatText`),
+which is the module ADR-260 created for exactly this purpose.
+
+The `VALUE` substitution is deliberately narrow — character and bit strings
+whose declared length matches the literal. A numeric `VALUE` constant is not
+substituted: its declared precision and the literal's differ, so the two forms
+would not produce the same code, which is the property IBM requires. A
+`VALUE` constant passed as a *by-reference* argument also keeps its storage:
+the callee can write to it, and substituting the value would turn that write
+into a write to a module-level constant.
+
+`tests/ir/search_table.pli` asserts the table global and that no
+`pli_verify`/`pli_search` call remains; `tests/ir/value_const_equiv.pli`
+asserts that the scan never reads the constant's storage and that both forms
+share one table; `tests/core/search_const.pli` checks that the table path and
+the byte-scan path (a variable alphabet) agree exactly, and passes unchanged
+under `--experimental-lowering=runtime`.
+
+**Rejected.** *Folding the constant `REPEAT` in the HIR lowering.* It is the
+natural place for a fold, but it sits below the lowering policy, so it would
+remove the library path from the oracle — and it did, until the fold was moved
+into the inline path. *A membership table for `TRANSLATE`.* `TRANSLATE` maps
+each character through a 256-entry table already; a constant alphabet would
+only let the table be built at compile time, and the win is smaller than for
+the search operations, whose inner loop is the whole cost.
+*Substituting a numeric `VALUE` constant.* Its declared precision and the
+literal's differ, so the substitution would not deliver the identical-code
+property it exists for.
+
+
 ## ADR-260 — A PL/I-specific decision layer, reported by `--print-facts`
 
 **Context.** The PL/I compiler makes decisions that no C compiler makes: which
