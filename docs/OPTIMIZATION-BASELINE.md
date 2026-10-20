@@ -540,3 +540,106 @@ once and read back (the `search` case). LLVM then does exactly what MULTICS's
 **The verdict.** Closed without a diff, and no IR check: the property is a
 property of SSA, not of this compiler's lowering. Nothing to guard, because
 nothing in the compiler decides whether a temporary is needed — LLVM does.
+
+---
+
+## 5. WS-E — PL/I decimal (E1, E2, E3, E4, E5)
+
+**The order the plan fixes.** E3 is the *measurement* change — "it must land
+**before** WS-E1 so WS-E1 has a real signal" — and E1's own gate says
+"**Measure first.** If < 2%, close without a diff". So E3 went first, and E1
+was then decided by its gate rather than by an assumption.
+
+### 5.1 E3 — an exact-decimal baseline for `bcd_decimal`: **implemented** (ADR-248)
+
+**The measurement.** The old C baseline computed the benchmark in `double`,
+which cannot represent the values exactly, so the two programs were not
+computing the same function: the ratio measured the difference between two
+numeric models. The new baseline computes the same function exactly, with
+`__int128` scaled arithmetic (the PL/I statements map to the scaled integers
+one for one — `i * 19999` at scale 4, the integer division rescaled by 10^4,
+the scale-8 products rounded back to scale 4 half away from zero).
+
+| build | ratio before | ratio after |
+|---|---|---|
+| `-O1` | 2.26x | 0.86x |
+| `-O2` | 2.26x | **0.79x** |
+| `-O3` | 2.26x | 0.74x |
+
+The corpus moves with it: the C-parity geomean at `-O2` is **0.77x** (it was
+0.82x with the artifact in it), and `bcd_decimal`'s parity check is now an
+exact match the harness enforces.
+
+**The verdict.** The "accepted floor" is **retired**: the PL/I decimal code is
+faster than the *exact* C twin, so there is no gap to close. The parity check
+became a gate — the two programs print `579971282735858875227.5000`, byte for
+byte, and `bcd_decimal` left the harness's "decimal-vs-FP, by design" list,
+so a future divergence fails the run.
+
+### 5.2 E1 — compile-time scale reconciliation: **closed without a diff**
+
+**The gate, applied.** E1 asks for a compile-time decimal scale reconciliation
+so the rescale can be folded into the magic multiplier. Its witness was the
+ratio against the C baseline — and after E3, `bcd_decimal` is **0.79x** and
+`decimal_ops` **0.58x**: the PL/I decimal code is already faster than the
+exact C twin, so the technique has no gap to close.
+
+**The premise, checked.** The port's premise is that a *runtime* rescale can
+be folded into the magic multiplier. There is no such runtime rescale in this
+compiler: the IR of the decimal hot loop is call-free —
+
+```llvm
+%bin = mul i128 %cvt, 19999          ; price = i * 1.9999
+%bin10 = mul i128 %ld8, %ld9         ; price * qty, at scale 8
+%adj = mul i128 5000, %0             ; the rounding adjust
+%rn = add i128 %bin10, %adj
+%res11 = sdiv i128 %rn, 10000        ; rescaled to scale 4
+```
+
+— and the mixed-scale case is just as call-free: `decimal(9,2) +
+decimal(9,4)` into `decimal(9,3)` lowers to `mul i64 %res, 100` (the exact
+scale-up) and `sdiv i64 %rn, 10` (the rounding scale-down), with **no call**.
+Every rescale already carries its factor as a compile-time constant, so there
+is nothing to fold.
+
+**The verdict.** Closed without a diff, per the gate. The residual — a
+*semantically required* rounding of a scale-8 product down to scale 4 — cannot
+be removed by a compile-time reconciliation: PL/I rounds the product, not the
+operands.
+
+### 5.3 E2, E4, E5 — closed, deferred, and one premise that did not hold
+
+**E2 — decimal precision tightening.** The plan includes it "only if E1's
+measurement shows a gap; otherwise close" ✓. E1's measurement shows no gap ✓
+→ **closed** ✓.
+
+**E4 — `ROUND` with a dynamic digit count.** The plan says "nothing to port —
+the repo already matches. Record as verified-equal." **The verification does
+not confirm that**, and the difference is worth recording:
+
+* MULTICS's `decimal_op_.pl1:283-300` moves `len1 = p1 - i + n + 1` digits of
+  a *decimal* — an exact, digit-wise rounding ✓.
+* The repo's `ROUND` converts its argument to **FLOAT** (`src/irgen.cpp`) and
+  calls `pli_round(double, n)`, which rounds a double ✓.
+
+So the two are not the same algorithm, and the difference is observable on a
+wide decimal:
+
+```pli
+x = 1234567890123456.7891;   /* DECIMAL(20,4) */
+y = round(x, 2);
+```
+
+The exact answer is `1234567890123456.79`; the compiler prints
+`1234567890123456.80`, because the value passed through a double. The
+consequence is bounded — a value that fits a double's 15–16 significant digits
+rounds exactly ✓ — but it is a conformance gap for wide decimals ✓ (rule (123),
+QR2.2), not the equality the plan assumed ✓. It is recorded here and left
+unfixed: an exact decimal `ROUND` is a runtime digit-move plus a builtin
+change, which is its own piece of work.
+
+**E5 — narrow-type codegen.** The plan defers it: "only if a narrow-integer
+benchmark shows a gap on the target. On x86-64 the expected gain is ~0; on a
+32-bit or embedded target it is real. **Defer** — record as gated on a
+target-specific measurement." The corpus has no narrow-integer benchmark and
+the repo's `intBits()` already picks the narrowest of i32/i64/i128 ✓ → **deferred** ✓, gated on a target-specific measurement ✓.

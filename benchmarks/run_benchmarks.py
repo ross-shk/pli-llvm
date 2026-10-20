@@ -869,9 +869,11 @@ def main():
             else:
                 print(f"  ✗ parity (float mismatch)")
                 all_checks_ok = False
-        elif bench_name in ("decimal_ops", "bcd_decimal"):
-            # decimal_ops/bcd_decimal use exact decimal arithmetic; C uses double —
-            # expected ~ mismatch (see DECIMAL-PERF-PLAN.md §8 non-goal)
+        elif bench_name == "decimal_ops":
+            # decimal_ops uses exact decimal arithmetic; its C baseline uses
+            # double — expected ~ mismatch (see DECIMAL-PERF-PLAN.md §8 non-goal).
+            # bcd_decimal is NOT here: WS-E3 (ADR-248) gave it an exact
+            # __int128 baseline, so its output must match exactly.
             if pli_out.strip() == c_out.strip():
                 print(f"  ✓ parity (exact)")
             else:

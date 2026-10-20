@@ -7828,3 +7828,65 @@ undefs. *Adding an `invalidateSubobjects()` call.* There is no subobject
 cache in the compiler (WS-A3 is not implemented), so the call would have
 nothing to invalidate; the invariant names the obligation instead, which is
 what survives until the cache exists.
+
+## ADR-248 — An exact-decimal benchmark baseline for `bcd_decimal`
+
+**Context.** WS-E3 is the plan's most honest item. The `bcd_decimal` benchmark
+measured **2.26x** against its C twin and the number was filed as an "accepted
+floor" — but the recorded reason was *"i128 BCD vs C double"*. That is a
+**metric artifact**: the C baseline used `double`, which cannot represent the
+values exactly, so the two programs were not computing the same function. The
+ratio measured the difference between two numeric models, not the compiler.
+
+The PL/I program computes with `FIXED DECIMAL(25,4)`: every value is an exact
+decimal scaled by 10^4, and each assignment rounds to that scale (ADR-006). The
+old baseline computed the same arithmetic in `double` and printed `%.4f`, so
+even the *text* differed:
+
+```
+PL/I (exact)   579971282735858875227.5000
+C (double)     579971282735879946240.0000
+```
+
+**Decision.** The C baseline computes the same function exactly, with
+`__int128` scaled arithmetic, and prints the same text.
+
+* The PL/I statements map to the scaled integers exactly: `price = i * 1.9999`
+  is `i * 19999` at scale 4 (the raw scaled integers of a scale-0 and a
+  scale-4 operand multiply directly); `qty = i / 10 + 1` is an integer
+  division (both operands have scale 0) that the assignment rescales by 10^4;
+  `total = price * qty` is a scale-8 product that the assignment rounds back
+  to scale 4; `tax = total * rate` is the same with `rate = 0.0875`.
+* The rounding is PL/I's: half away from zero, which is what `rescale4()`
+  does.
+* The value is printed the way the PL/I program prints it — the integer part
+  (which needs more than 64 bits, so `print_i128` writes it digit by digit)
+  and four fractional digits.
+
+The harness changes with it: `bcd_decimal` leaves the "decimal-vs-FP, by
+design" list, so its output must now match the PL/I program's **exactly**,
+and a mismatch fails the run. `decimal_ops` stays in that list — its C twin
+still uses `double` ✓.
+
+**Consequences.** The measurement is real now, and it is a different number:
+
+| build | before | after |
+|---|---|---|
+| `-O1` | 2.26x | 0.86x |
+| `-O2` | 2.26x | **0.79x** |
+| `-O3` | 2.26x | 0.74x |
+
+The PL/I decimal code is **faster than the exact C twin**, so the "accepted
+floor" is retired — the plan's action item 4 (≤ 1.15x) is met, and WS-E1's
+premise (a real gap to close) is gone. The parity check also became a gate:
+the two programs print the same text, byte for byte.
+
+This is what makes the rest of the decimal work measurable at all: a benchmark
+that measures the difference between two numeric models is not measuring the
+compiler.
+
+**Rejected.** *Making the PL/I program use `double`.* That would delete the
+exactness the benchmark exists to exercise (and the wide-decimal path with it).
+*Keeping the `≈` parity for `bcd_decimal`.* The outputs now match exactly, so
+the tolerance would hide a future divergence between the two programs — which
+is precisely the signal the benchmark is for.
