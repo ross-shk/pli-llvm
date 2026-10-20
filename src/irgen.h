@@ -620,6 +620,14 @@ private:
   // okBB, where the caller resumes with its own recovery value.
   void emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
                     llvm::BasicBlock* okBB);
+  // WS-F1 (ADR-249): the ON dispatch — the stack scan, the handler calls and
+  // the abort — lives in a cold function of its own, so the hot function
+  // carries only the branch and the call. One function per condition key:
+  // the handlers of a key are known before any procedure body is emitted
+  // (declareOnHandlers), so the dispatch can be shared by every trap site
+  // of that key.
+  llvm::Function* onTrapDispatch(int key, const std::string& abortFn);
+  std::map<int, llvm::Function*> trapDispatch_;
   // Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94).
   llvm::Value* clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub);
   // ZERODIVIDE value trap (rule 94): branch before the division so the

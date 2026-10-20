@@ -7741,3 +7741,50 @@ reaches the caller even when a later argument is a call.
 `tests/ir/lifetime_nested.pli` + `.check` (the bracket: the end marker must
 follow the outer call). Both fail on the unscoped code and pass on the
 scoped one.
+
+---
+
+## ADR-249 — Outline the ON dispatch into a cold function
+
+**Context.** A raised condition is dispatched in two places. With no handler
+for the condition, the trap block is already as small as it can be: a call to
+a runtime entry that is declared `noreturn` and `cold`, followed by
+`unreachable`. With a handler, the trap block carried the whole dispatch — the
+ON stack scan, the switch over the handlers and the handler calls — inline in
+the procedure, so the hot function's body carried code that runs once in a
+hundred iterations.
+
+MULTICS kept the two apart: `cg_error.pl1` puts the condition path in its own
+code, separate from the normal path. The plan's F1 asks for the same shape
+here, and `advanced-optimizations` item 7 asks for the trap landing pads to
+be split hot from cold. The branch weights that keep the loop contiguous
+(B16) were already landed; the split itself was not.
+
+**Decision.** The dispatch of a condition key lives in a function of its own —
+one per key, `cold` and `noinline` — and the hot function carries the branch
+and the call, and nothing else. The function holds the ON stack scan, the
+switch over the handlers, the handler calls and the abort.
+
+One function per key is enough because the handlers of a key are all known
+before any procedure body is emitted: `declareOnHandlers` declares them in
+its own pass, so the dispatch can be shared by every trap site of that key.
+The capture-context slot moves with the dispatch, so the caller's frame no
+longer carries it.
+
+**Consequences.** The hot function's body shrinks: on `on_dispatch.pli` (the
+ON dispatch benchmark — the handler runs 1% of the time) the function goes
+from **432 bytes to 244**, a 44% reduction, and the trap code leaves the hot
+function entirely. The timing does not move: the paired PL/I-vs-C ratio is
+**0.95x at `-O2`** before and after, which is what the plan's gate expected —
+the trap path is one iteration in a hundred, and one more call on it is
+invisible. What the split buys is density, not speed: the hot function's
+body is the code the loop actually runs through, and it is now half the
+size.
+
+The cost is a call on the faulting path, and a `cold` function for the
+backend to lay out away from the hot code.
+
+**Test.** `tests/ir/trap_outline.pli` + `.check` pins the shape: the hot
+function calls the dispatch, the dispatch holds the scan, the handler call
+and the abort, and it is `cold`. `tests/ir/on_trap_weights.check` still
+pins that the dispatch's empty-stack edge is weighted cold.

@@ -354,3 +354,45 @@ run under AddressSanitizer — eleven string programs and four task programs,
 all clean — and `tests/driver/lifetime_asan.sh` keeps that a per-commit
 gate. The sanitizer runtime has to match the object, so the test uses the
 clang of the compiler's own LLVM and skips when it cannot find one.
+
+---
+
+## 5. WS-F: ON dispatch (P3)
+
+### 5.1 The static handler resolution (Tier 3) is closed by measurement
+
+The `.kilo` plan's Tier 3 — static handler resolution — deferred itself
+*"until the measured impact of T1+T2 is known"*, and attributed up to ~25 ms
+of a ~39 ms overhead to it. T1 and T2 landed (ADR-223) and the measured
+`on_conditions` ratio went from **1.52x to 1.02x**: the overhead that
+remained is ~2%, not 25%. Tier 3 is therefore not worth its risk, and it is
+**not** implemented. This is the plan's §14 verdict, recorded here because
+the plan's rule is that a phase closes with a number.
+
+### 5.2 F1 — the ON dispatch is outlined into a cold function
+
+The trap dispatch — the ON stack scan, the switch over the handlers and the
+handler calls — was inline in the procedure, so the hot function's body
+carried code that runs once in a hundred iterations. ADR-249 moves it into a
+`cold`, `noinline` function of its own, one per condition key.
+
+**The measurement** — `benchmarks/lang/on_dispatch.pli` (the handler runs 1%
+of the time), the paired PL/I-vs-C ratio and the hot function's size in the
+linked binary:
+
+| build | ratio at `-O2` | `_PLI_ON_DISPATCH` |
+|---|---|---|
+| before (ADR-223) | 0.95x | 432 bytes |
+| after (ADR-249) | 0.95x | **244 bytes** |
+
+**The timing does not move, and that is the finding.** The plan's gate
+expected the timing delta to be in the noise and asked for the code density
+to be measured instead: the hot function's body — the code the loop runs
+through — is **44% smaller**, and the trap code is no longer in it at all.
+The `__text` section is unchanged in size (10128 → 10152 bytes): the code
+moved rather than shrank, which is exactly what the split is for. One more
+call on a path that runs once in a hundred iterations is invisible.
+
+**How to reproduce.** `python3 benchmarks/run_benchmarks.py --only on_dispatch
+--runs 5`, and `llvm-objdump -d` on the linked binary for the function
+boundaries.

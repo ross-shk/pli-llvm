@@ -1,0 +1,20 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-F1 (ADR-249): the ON dispatch — the stack scan, the handler calls and
+    the abort — is a cold function of its own, so the hot function carries
+    only the branch and the call. Mirrors MULTICS cg_error.pl1, where the
+    condition path is separate from the normal path. */
+ trap_outline: procedure options(main);
+   declare i fixed bin(31);
+   declare s fixed bin(63);
+   declare q fixed bin(31);
+   s = 0;
+   on zerodivide begin;
+      return;
+   end;
+   do i = 1 to 50;
+      q = 1000000 / mod(i, 100);
+      s = s + q;
+   end;
+   put skip list(s);
+ end trap_outline;

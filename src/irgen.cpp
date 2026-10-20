@@ -2707,29 +2707,40 @@ llvm::Function* IRGen::intrinsicFn(const std::string& name, llvm::Type* ret,
 // the stack — empty takes the abort path, established runs the matching
 // handler then branches to okBB, where the caller resumes with its own
 // recovery value.
-void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
-                         llvm::BasicBlock* okBB) {
-  auto it = onHandlers_.find(key);
-  if (it == onHandlers_.end()) {
-    b_.CreateCall(runtimeFn(abortFn), {});
-    b_.CreateUnreachable();
-    return;
-  }
-  const std::vector<llvm::Function*>& handlers = it->second;
-  // T2b: a single combined scan replaces the pli_on_top_cond + pli_on_top_ctx
-  // pair — one alloca + one call + one load instead of two noinline scans.
-  // The slot is allocated in the entry block, not here: this block runs once
-  // per trap, and an alloca inside a loop grows the stack without bound — a
-  // loop trapping 600k times overflowed it at -O0/-O1/-O3.
-  llvm::Value* ctxSlot = entryAlloca(b_.getPtrTy(), tag + ".ctxslot");
-  llvm::Value* top =
-      b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot}, tag + "top");
-  llvm::Value* topCtx = b_.CreateLoad(b_.getPtrTy(), ctxSlot, tag + "ctx");
-  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), tag + "none");
-  llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, tag + ".abort", curFn_);
-  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, tag + ".dispatch", curFn_);
-  // intent: with a handler established the empty-stack edge is cold;
-  // weight the dispatch edge so the trap block stays out of the hot path.
+// WS-F1 (ADR-249): the ON dispatch of one condition key, as a cold function
+// of its own. The dispatch is the stack scan, the handler calls and the
+// abort — everything a raised condition needs, and nothing the hot path
+// needs. Keeping it in its own function keeps the hot function's body small
+// and gives the backend a cold function to put out of line. Mirrors MULTICS
+// cg_error.pl1, where the condition path is separate from the normal path.
+llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
+  auto cached = trapDispatch_.find(key);
+  if (cached != trapDispatch_.end())
+    return cached->second;
+  const std::vector<llvm::Function*>& handlers = onHandlers_[key];
+  llvm::Function* F = llvm::Function::Create(
+      llvm::FunctionType::get(b_.getVoidTy(), false), llvm::GlobalValue::InternalLinkage,
+      "pli_on_trap." + std::to_string(key), &mod_);
+  F->addFnAttr(llvm::Attribute::Cold);
+  F->addFnAttr(llvm::Attribute::NoInline);
+  trapDispatch_[key] = F;
+
+  // Build the body with the builder pointed at the dispatch function.
+  llvm::BasicBlock* savedBB = b_.GetInsertBlock();
+  llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", F);
+  b_.SetInsertPoint(entry);
+  // The scan: the top handler for this condition and its capture context.
+  // The slot lives in this function's entry block, so a trap in a loop does
+  // not grow the caller's stack (ADR-263).
+  llvm::AllocaInst* ctxSlot = b_.CreateAlloca(b_.getPtrTy(), nullptr, "on.ctxslot");
+  llvm::Value* top = b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot},
+                                    "on.top");
+  llvm::Value* topCtx = b_.CreateLoad(b_.getPtrTy(), ctxSlot, "on.ctx");
+  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "on.none");
+  llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, "on.abort", F);
+  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", F);
+  // The empty-stack edge is cold; weight it so the dispatch stays out of the
+  // way of the handler path.
   llvm::MDBuilder mdb(ctx_);
   if (auto* br = b_.CreateCondBr(none, abortBB, dspBB))
     br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
@@ -2737,15 +2748,36 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
   b_.CreateCall(runtimeFn(abortFn), {});
   b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
-  llvm::SwitchInst* sw = b_.CreateSwitch(top, okBB, handlers.size());
+  llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.ret", F);
+  llvm::SwitchInst* sw = b_.CreateSwitch(top, retBB, handlers.size());
   for (size_t i = 0; i < handlers.size(); ++i) {
     llvm::BasicBlock* hbb =
-        llvm::BasicBlock::Create(ctx_, tag + ".handle." + std::to_string(i + 1), curFn_);
+        llvm::BasicBlock::Create(ctx_, "on.handle." + std::to_string(i + 1), F);
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
     b_.SetInsertPoint(hbb);
     b_.CreateCall(handlers[i], {topCtx});
-    b_.CreateBr(okBB);
+    b_.CreateBr(retBB);
   }
+  b_.SetInsertPoint(retBB);
+  b_.CreateRetVoid();
+  b_.SetInsertPoint(savedBB);
+  return F;
+}
+
+void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
+                         llvm::BasicBlock* okBB) {
+  auto it = onHandlers_.find(key);
+  if (it == onHandlers_.end()) {
+    // No handler for this condition: the abort is already a call to a cold,
+    // noreturn runtime entry, so the trap block is as small as it can be.
+    b_.CreateCall(runtimeFn(abortFn), {});
+    b_.CreateUnreachable();
+    return;
+  }
+  // WS-F1 (ADR-249): the dispatch is a cold function of its own; the hot
+  // path carries the branch and the call, and nothing else.
+  b_.CreateCall(onTrapDispatch(key, abortFn), {});
+  b_.CreateBr(okBB);
 }
 
 // SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
