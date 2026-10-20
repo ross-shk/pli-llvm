@@ -122,9 +122,11 @@ gave 1.00x, 1.00x and 1.00x (60.78/60.87 ms, 60.03/60.01 ms,
 59.98/59.95 ms). The PL/I-vs-C ratio at `-O2` is 0.41x, because clang keeps
 the twin's helper out of line while LLVM specializes the PL/I one.
 
-Nothing else moved: the C-parity corpus' geomean at `-O2` is **0.78x**,
-against the 0.82x pre-P1c baseline — the same figure within the noise of a
-shared host, so the attributes cost the acceptance gate nothing.
+Nothing else moved: the C-parity corpus' geomean at `-O2` is **0.78x**, and
+0.80x on a second full run, against the 0.82x pre-P1c baseline — the same
+figure within the noise of a shared host. The warning the runner prints
+("previous run used compiler …") is about that noise, not a change: the
+regression check found no deterioration at `-O2`.
 
 **Why the witness shows nothing, precisely.** It is not only that the
 inliner absorbs the helper. LLVM infers the memory effects of *any* callee

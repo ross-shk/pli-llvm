@@ -48,4 +48,20 @@
          call pure();
       end;
    end looper;
+
+   /* a comparison computes no new value: it cannot overflow, so this one
+      still always returns */
+   chooser: procedure(x) returns(fixed bin(31));
+      declare x fixed bin(31);
+      if x > 0 then
+         return(x);
+      return(0);
+   end chooser;
+
+   /* recursion has no proven bound: it may never return */
+   down: procedure(x) recursive;
+      declare x fixed bin(31);
+      if x > 0 then
+         call down(x);
+   end down;
  end purity_attrs;

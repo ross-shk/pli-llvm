@@ -7241,27 +7241,50 @@ the three procedures that qualify, and the procedure that does I/O must
 carry none at all. `tests/core/purity.pli` asserts that the values the
 program computes do not change.
 
-**What was deliberately not done.** The plan's A1 sketch also proposed
-`willreturn` and `nounwind`. They are claimed now, under rules that keep
-them honest:
+**`nounwind` and `willreturn`, and the rules that keep them honest.** The
+plan's A1 sketch proposed both; they are claimed now:
 
-- `nounwind` — the procedure makes no call whose unwinding the compiler
-  does not know. A built-in counts as an unknown call, because it may lower
-  to a runtime call and the runtime's unwinding is not part of the audited
-  side table. So does a call to an external entry, an entry variable, or a
-  task. A procedure that can raise a condition is excluded too: its trap
-  path calls the runtime.
+- `nounwind` — the procedure makes no call whose unwinding the compiler does
+  not know. A built-in counts as an unknown call, because it may lower to a
+  runtime call. So does a call to an external entry, an entry variable or a
+  task, and so does a conversion, which can lower to a char-to-fixed helper.
+  A condition that some ON unit in the program handles counts too: the
+  handler runs inside the raising procedure's frame, so its unwinding would
+  be that procedure's. A trap that no handler catches does *not* disqualify
+  it — the abort functions are `noreturn` runtime functions and the dispatch
+  functions are in the audited table.
 - `willreturn` — the procedure always returns. A `STOP` ends the program, a
-  `GO TO` can jump backwards, a `DO WHILE` has no bound, and a `DO` whose
-  increment can be zero at run time never reaches its limit; each of those
-  rules the promise out. A procedure that can raise a condition is excluded
-  for the same reason as `nounwind`: the trap path aborts, or dispatches to
-  a handler, and either way the call does not simply return.
+  `GO TO` can jump backwards, a `DO WHILE` or `DO UNTIL` has no bound, a
+  `DO` whose increment can be zero at run time never reaches its limit, and
+  a procedure that can reach itself has no proven bound; each of those rules
+  the promise out. A procedure that can raise a condition is excluded too:
+  with no handler established the trap aborts, so the call does not return.
+
+The analysis also has to say *which* operations can raise. Only the
+arithmetic operators raise SIZE (a comparison or a logical operation emits
+no trap), negation of a fixed value raises it (the most negative value
+overflows), and a character assignment raises it (truncation). Being
+conservative here is not free: treating every binary operator as arithmetic
+would cost the promise for every procedure that contains an `if`.
 
 Together with a memory effect, the three attributes are what let LLVM
 speculate a call: `isSafeToSpeculativelyExecute` wants a call that only
 reads memory, cannot unwind and always returns. That is what lets the
 optimizer hoist a pure call out of a loop.
+
+**A review pass found four holes, all closed.** The first version claimed
+the two attributes from a walker that (1) ignored a procedure that calls
+itself — an unbounded recursion returns no more often than an endless loop;
+(2) ignored a conversion, which can lower to a runtime helper; (3) treated
+every binary operator as arithmetic, so a comparison raised SIZE that no
+trap backs; and (4) missed the SIZE trap that negation of a fixed value
+emits. It also had no fallback for an HIR kind it did not model. The walker
+now marks every procedure on a call-graph cycle as "may not return", treats
+a conversion as an unknown call, raises SIZE only for the operators the
+code generator traps on (and for negation), and marks any unmodelled
+statement or expression opaque instead of ignoring it.
+`tests/ir/purity_attrs.pli` pins each verdict, including a recursive
+procedure that keeps `nounwind` but loses `willreturn`.
 
 **The measurement, and what it says.** `benchmarks/lang/pure_call.pli` calls
 a top-level helper in a hot loop, with a loop-invariant argument so that the
@@ -7324,13 +7347,19 @@ The three classes are:
 
 - `Disjoint` — owns its storage; disjoint from every other declaration. Only
   these get a `!alias.scope`.
-- `Shares` — may share storage with another declaration: a DEFINED overlay
-  (with its base), CONTROLLED storage (the generation stack), module-wide
-  storage (EXTERNAL, STATIC), a parameter (the caller's storage, or a copy),
-  a procedure name, and an ENTRY VARIABLE (a procedure value that can be
-  called from anywhere).
+- `Shares` — may share storage with another declaration: a DEFINED overlay,
+  CONTROLLED storage (the generation stack), module-wide storage (EXTERNAL,
+  STATIC), a parameter (the caller's storage, or a copy), a procedure name,
+  and an ENTRY VARIABLE (a procedure value that can be called from anywhere).
 - `Unknown` — may point anywhere: a BASED variable, whose storage is
   wherever its locator points.
+
+The *base* of a DEFINED variable is not marked, though IBM's list names it:
+the base is a plain AUTOMATIC that owns its storage, and every access made
+through the overlay carries no `!alias.scope`, so the metadata never says
+anything about those accesses — an access without a scope may alias any
+access, which is LLVM's default answer. Marking the base as well would cost
+a scope and buy nothing.
 
 **What changed.** One row: an ENTRY VARIABLE no longer gets a
 `!alias.scope`. The plan's table lists it among the things that alias

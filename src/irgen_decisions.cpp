@@ -11,6 +11,7 @@
 #include "sema.h"
 
 #include <algorithm>
+#include <functional>
 #include <set>
 
 namespace pli {
@@ -38,27 +39,24 @@ void FactStore::beginProc(const std::string& name) {
   cur_ = static_cast<int>(procs_.size()) - 1;
 }
 
-// Record the memory-effect verdict for a procedure (ADR-264).
-void FactStore::setEffect(const std::string& name, const std::string& effect,
-                          const std::string& note) {
+// Record a procedure's verdict (ADR-264).
+void FactStore::setEffects(const std::string& name, const std::string& effect,
+                           const std::string& note, bool nounwind, bool willReturn) {
   for (auto& p : procs_)
     if (p.name == name) {
       p.effect = effect;
       p.effectNote = note;
-      return;
-    }
-  procs_.push_back(ProcFacts{name, effect, note, {}});
-}
-
-// Record the control-flow verdict for a procedure (ADR-264).
-void FactStore::setControl(const std::string& name, bool nounwind, bool willReturn) {
-  for (auto& p : procs_)
-    if (p.name == name) {
       p.nounwind = nounwind;
       p.willReturn = willReturn;
       return;
     }
-  procs_.push_back(ProcFacts{name, "", "", nounwind, willReturn, {}});
+  ProcFacts f;
+  f.name = name;
+  f.effect = effect;
+  f.effectNote = note;
+  f.nounwind = nounwind;
+  f.willReturn = willReturn;
+  procs_.push_back(std::move(f));
 }
 
 // Record one built-in lowering decision, counting repeats of the same pair.
@@ -161,6 +159,11 @@ Reach wider(Reach a, Reach b) {
   if (a == Reach::Arg || b == Reach::Arg)
     return Reach::Arg;
   return Reach::Frame;
+}
+
+// The operators that compute a new fixed-point value and can overflow.
+bool isArithOp(Tok op) {
+  return op == Tok::Plus || op == Tok::Minus || op == Tok::Star || op == Tok::Power;
 }
 
 // What a built-in call does to memory.
@@ -496,8 +499,14 @@ void EffectWalker::walkExpr(HExpr* e, bool writeCtx) {
   case HExpr::Subscript:
     for (auto& a : e->args)
       walkExpr(a.get(), false);
-    if (e->sym)
+    if (e->locPtr) {
+      // A locator-qualified subscript reaches through the locator, which
+      // points anywhere (as for a plain locator-qualified reference).
+      walkExpr(e->locPtr.get(), false);
+      note(Reach::Other, writeCtx);
+    } else if (e->sym) {
       note(reachOf(e->sym), writeCtx);
+    }
     if (opts_->subscriptChecks)
       b_.raiseKeys.insert(Stmt::kSubscriptrangeCondKey);
     return;
@@ -505,24 +514,35 @@ void EffectWalker::walkExpr(HExpr* e, bool writeCtx) {
     walkExpr(e->a.get(), false);
     walkExpr(e->b.get(), false);
     // Fixed-point arithmetic can overflow (SIZE); a division can divide by
-    // zero (ZERODIVIDE).
-    if (e->a && e->a->ty.isFixed())
+    // zero (ZERODIVIDE). A comparison or a logical operation computes no new
+    // value, so it cannot overflow — the code generator emits no trap for it.
+    if (e->a && e->a->ty.isFixed() && isArithOp(e->op))
       raiseSize();
     if (e->op == Tok::Slash && opts_->zerodivideChecks)
       b_.raiseKeys.insert(Stmt::kZerodivideCondKey);
     return;
   case HExpr::Unary:
     walkExpr(e->a.get(), false);
+    // Negating the most negative value overflows.
+    if (e->a && e->a->ty.isFixed() && e->op == Tok::Minus)
+      raiseSize();
     return;
   case HExpr::Convert:
     walkExpr(e->a.get(), false);
     if (opts_->conversionChecks)
       b_.raiseKeys.insert(Stmt::kConversionCondKey);
+    // A conversion may lower to a runtime helper (char to fixed does), whose
+    // unwinding is not part of the audited side table.
+    b_.mayUnwind = true;
     return;
   case HExpr::Call:
     walkCallExpr(e, writeCtx);
     return;
   }
+  // An expression kind this walker does not model: claim nothing about it.
+  b_.opaque = true;
+  b_.mayUnwind = true;
+  b_.mayNotReturn = true;
 }
 
 // Walk one statement.
@@ -631,6 +651,10 @@ void EffectWalker::walkStmt(HStmt* st) {
     b_.opaque = true;
     return;
   }
+  // A statement kind this walker does not model: claim nothing about it.
+  b_.opaque = true;
+  b_.mayUnwind = true;
+  b_.mayNotReturn = true;
 }
 
 // The body of one procedure.
@@ -673,6 +697,33 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
     escaped.insert(w.escaped().begin(), w.escaped().end());
   }
 
+  // A procedure that can reach itself may never return: a recursion has no
+  // proven bound. Mark the procedures on a cycle; the fixpoint below carries
+  // the mark to their callers. A back edge always lands on a procedure that
+  // is still being visited, so marking that one is enough to mark the cycle.
+  {
+    std::map<const HProc*, std::vector<const HProc*>> edges;
+    for (const auto& p : prog.procs)
+      for (const auto& [callee, reach] : calls[p.get()])
+        edges[p.get()].push_back(callee);
+    enum Colour { White, Grey, Black };
+    std::map<const HProc*, Colour> colour;
+    std::function<void(const HProc*)> visit = [&](const HProc* n) {
+      colour[n] = Grey;
+      for (const HProc* c : edges[n]) {
+        Colour& cc = colour[c];
+        if (cc == Grey)
+          bits[c].mayNotReturn = true; // a back edge: c is on the cycle
+        else if (cc == White)
+          visit(c);
+      }
+      colour[n] = Black;
+    };
+    for (const auto& p : prog.procs)
+      if (colour[p.get()] == White)
+        visit(p.get());
+  }
+
   // The whole-program fixpoint: a procedure's effect includes what the
   // procedures it calls do. Every bit is monotone, so this terminates.
   for (size_t round = 0; round <= prog.procs.size(); ++round) {
@@ -711,13 +762,15 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
   }
 
   // A procedure that can raise a condition the unit handles may dispatch to
-  // that handler, and the handler may write outside the procedure's frame.
+  // that handler, and the handler runs inside the procedure's frame: whatever
+  // the handler does — write memory, or unwind — the procedure does too.
   // ON ERROR catches every condition, so it covers them all.
   for (auto& [proc, b] : bits) {
     (void)proc;
     for (int k : b.raiseKeys)
       if (handlerKeys.count(k) || handlerKeys.count(0)) {
         b.writesOther = true;
+        b.mayUnwind = true;
         break;
       }
   }
@@ -732,9 +785,6 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
   for (const auto& p : prog.procs) {
     const Bits& b = bits[p.get()];
     ProcEffects pe;
-    pe.hasOnUnit = b.hasOnUnit;
-    pe.mayRaise = !b.raiseKeys.empty();
-    pe.nameEscapes = escaped.count(p.get()) > 0;
     if (b.opaque)
       pe.effect = MemEffect::Unknown;
     else if (b.writesOther)
@@ -748,15 +798,16 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
     else
       pe.effect = MemEffect::None;
     pe.note = effectNote(b);
-    // `nounwind`: the procedure cannot unwind. A trap path calls the
-    // runtime, whose unwinding is not part of the audited side table, so a
-    // procedure that can raise a condition is excluded; so is one whose
-    // effects are not known at all.
-    pe.nounwind = !b.opaque && !b.mayUnwind && b.raiseKeys.empty();
-    // `willreturn`: the procedure always returns. A trap path does not
-    // return either (it aborts, or dispatches to a handler), so the same
-    // exclusion applies; a procedure whose effects are unknown is excluded
-    // because the unknown call may not return.
+    // `nounwind`: the procedure cannot unwind. Every call it makes must be one
+    // whose unwinding is known. The trap path does not disqualify it: the
+    // condition machinery is part of the audited runtime table, the abort
+    // functions are `noreturn`, and a condition that is handled is treated as
+    // an unwinding call above, because the handler runs inside this frame.
+    pe.nounwind = !b.opaque && !b.mayUnwind;
+    // `willreturn`: the procedure always returns. A trap path does not return
+    // when no handler is established — it aborts — so a procedure that can
+    // raise a condition is excluded. So is a procedure whose effects are
+    // unknown: the unknown call may not return.
     pe.willReturn = !b.opaque && !b.mayNotReturn && b.raiseKeys.empty();
     out[p.get()] = pe;
   }

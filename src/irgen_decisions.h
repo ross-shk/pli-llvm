@@ -50,10 +50,9 @@ public:
   // Per-procedure facts: beginProc opens a procedure, recordBuiltin adds to it.
   void beginProc(const std::string& name);
   void recordBuiltin(const std::string& op, const std::string& path);
-  // The memory-effect verdict for a procedure (ADR-264).
-  void setEffect(const std::string& name, const std::string& effect, const std::string& note);
-  // The control-flow verdict for a procedure (ADR-264).
-  void setControl(const std::string& name, bool nounwind, bool willReturn);
+  // The verdict for a procedure: memory effect, unwinding, return (ADR-264).
+  void setEffects(const std::string& name, const std::string& effect,
+                  const std::string& note, bool nounwind, bool willReturn);
   // The report: one fact per line, module facts first.
   std::string report() const;
 
@@ -82,12 +81,9 @@ enum class MemEffect {
 // The verdict for one procedure.
 struct ProcEffects {
   MemEffect effect = MemEffect::Unknown;
-  bool mayRaise = false;    // can raise a PL/I condition
-  bool hasOnUnit = false;   // establishes an ON unit (rule 91)
-  bool nameEscapes = false; // its name is assigned or passed as an argument
-  bool nounwind = false;    // cannot unwind: every call it makes is known
-  bool willReturn = false;  // always returns when it is called
-  std::string note;         // why the effect is not stronger, for the report
+  bool nounwind = false;   // cannot unwind: every call it makes is known
+  bool willReturn = false; // always returns when it is called
+  std::string note;        // why the effect is not stronger, for the report
 };
 
 // Which checks the driver enabled. A check that is off cannot raise a

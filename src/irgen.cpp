@@ -4529,8 +4529,8 @@ void IRGen::emitProc(HProc* p) {
   {
     auto it = effects_.find(p);
     if (it != effects_.end()) {
-      facts_.setEffect(p->name, effectName(it->second.effect), it->second.note);
-      facts_.setControl(p->name, it->second.nounwind, it->second.willReturn);
+      facts_.setEffects(p->name, effectName(it->second.effect), it->second.note,
+                        it->second.nounwind, it->second.willReturn);
     }
   }
   labelBlocks_.clear();
