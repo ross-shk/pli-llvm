@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-264: TRANSLATE with constant out/in strings lowers to a
+    256-entry translation table, so the scan of `in` becomes one lookup
+    per character. The .check asserts the table global, the lookup loop,
+    and that no pli_translate call is left. */
+ translate_table: procedure options(main);
+    declare s char(9) init('abcabcabc');
+    declare d char(9);
+    d = translate(s, 'XYQ', 'abc');
+ end translate_table;

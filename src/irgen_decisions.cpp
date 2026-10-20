@@ -86,4 +86,35 @@ std::string foldRepeatText(const std::string& src, long long count) {
   return text;
 }
 
+// The membership table of a constant alphabet (ADR-241). A byte is a
+// character code in PL/I, so the table is indexed by the full 256-value range
+// and the scan it replaces is exactly "is this byte in the alphabet".
+std::string searchTableBytes(const std::string& alphabet) {
+  std::string bytes(256, '\0');
+  for (unsigned char c : alphabet)
+    bytes[c] = 1;
+  return bytes;
+}
+
+// The translate table of constant `out`/`in` strings (ADR-264). The inline
+// scan walks `in` for the first occurrence of the character and answers with
+// `out` at that index, a blank when the index is past the end of `out`, and
+// the character itself when it does not occur — the table below is that
+// function evaluated once per byte value.
+std::string translateTableBytes(const std::string& out, const std::string& in) {
+  std::string bytes(256, '\0');
+  bool mapped[256] = {false};
+  for (int c = 0; c < 256; ++c)
+    bytes[(size_t)c] = static_cast<char>(c);
+  for (size_t j = 0; j < in.size(); ++j) {
+    unsigned char c = static_cast<unsigned char>(in[j]);
+    // The first occurrence decides, which is where the scan stops.
+    if (mapped[c])
+      continue;
+    mapped[c] = true;
+    bytes[c] = j < out.size() ? out[j] : ' ';
+  }
+  return bytes;
+}
+
 } // namespace pli

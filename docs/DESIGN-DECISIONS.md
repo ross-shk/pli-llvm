@@ -7363,3 +7363,76 @@ The million is well above the ~512k traps that overflow an 8 MB stack, and
 well above the ~64k that overflow the 1 MB stack Windows gives a thread, so
 the test fails on the old code on every platform.
 
+
+## ADR-264 — A constant `TRANSLATE` folds to a table, and both paths pad the result
+
+**Context.** This closes the last rule (123) built-in the plan's B3 names and
+records two defects the work uncovered.
+
+`TRANSLATE(s, out, in)` had one lowering for every argument shape: an
+`O(n·m)` scan that searched `in` for each character of `s`. When `out` and
+`in` are both literals the mapping is a compile-time constant — the same
+observation that produced the `VERIFY`/`SEARCH` table in ADR-241 — so it
+should cost one load per character.
+
+The differential oracle then earned its keep. `--experimental-lowering=runtime`
+and the inline path disagreed on `TRANSLATE('abcxyz', 'XY', 'abc')`: the inline
+path produced `XY xyz`, the runtime path `XYcxyz`. The runtime function only
+replaced a character when the match fell inside `out` and let it pass through
+otherwise; the inline path blanked it. PL/I defines the result as a character
+string of the source's length, so a match with no replacement character in
+`out` yields a blank — the runtime was wrong.
+
+Running the new `tests/core/translate_const.pli` under the runtime mode then
+found a second, worse divergence: a source shorter than the result field left
+the tail of the result *uninitialized*. `charTemp()` is a plain `alloca`, so
+`TRANSLATE(v, 'XY', 'abc')` with `v` `CHAR(10) VARYING` wrote three characters
+and copied seven bytes of stack residue into the target. The inline path only
+passed because the stack happened to hold blanks; the runtime build, with a
+different frame, printed `XY ` followed by residue. Both paths were wrong: a
+fixed-length string result is blank-padded to its declared length, the rule
+`pli_trim`, `pli_substr` and the assignment path already follow.
+
+**Decision.** Three changes:
+
+* `pli::translateTableBytes(out, in)` builds the 256-byte map in
+  `src/irgen_decisions.cpp` — outside IRGen, so the decision stays testable
+  without LLVM (C2). A match at index `j` of `in` maps to `out[j]`, or to a
+  blank when `j` is past the end of `out` — that is, `out` is padded with blanks
+  to `length(in)` first, which is where the rule is stated once.
+  `IRGen::translateTable()`
+  builds, deduplicates and caches the global; `IRGen::emitTranslateTable()`
+  applies it with one indexed load per character.
+* `IRGen` dispatches to the table only when both `out` and `in` are literals and
+  the `translate` operation is not forced onto the runtime path by
+  `--experimental-lowering`. The source may itself be `VARYING` — sema types
+  the result as the fixed `CHAR(length(s))` and the copy reads only the live
+  length — so the table serves more call sites than IBM's fixed-length-only
+  rule asks for, never fewer.
+* Both inline lowerings and `pli_translate` blank-fill the destination from the
+  copied length to `dstcap`.
+
+**Consequences.** The table path matches the scan path on every case the tests
+cover — values, the blank-pad rule, first-occurrence-wins, `VARYING` and empty
+sources — and the runtime mode now agrees with it, so the oracle stays honest.
+The table costs a 256-byte read-only global per distinct `(out, in)` pair,
+cached by the pair, and removes the inner scan from the loop.
+
+Two B3 items the plan lists needed no code, and the ADR records why so nobody
+re-opens them:
+
+* `REPEAT(x, n)` with a *dynamic* `n` cannot reach IRGen: sema rejects it with
+  *"REPEAT count must be a constant in this stage"*, rule (123). The plan's
+  "constant character, dynamic count → `memset`" case therefore has no
+  witness, and the constant-string fold (ADR-241) covers every reachable
+  `REPEAT` of constants.
+* `LENGTH('abc')` was already constant: it lowers to `trunc i64 3`, which LLVM
+  folds. There is nothing for sema to do that the backend does not already do.
+
+**Gates.** `tests/core/translate_const.pli` (table vs variable scan, the
+blank-pad rule, first-occurrence, `VARYING`, empty source),
+`tests/ir/translate_table.pli` (the `@pli_translate_table` global, the indexed
+lookup, and no `pli_translate` call or `tr.inptr` scan left), and the
+`translate` assertions in `tests/driver/experimental_lowering.sh`, which run
+the same witness under `auto`, `runtime` and `llvm` and require identical
+output.

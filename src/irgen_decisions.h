@@ -56,4 +56,17 @@ private:
 // not a foldable constant.
 std::string foldRepeatText(const std::string& src, long long count);
 
+// The bytes of the membership table of a constant character alphabet (ADR-241):
+// entry c is 1 when the byte value c occurs in the alphabet, 0 otherwise. The
+// table replaces a scan of the alphabet, so building it is a decision, not
+// codegen — it lives here (the plan's C2).
+std::string searchTableBytes(const std::string& alphabet);
+
+// The bytes of the translation table of constant `out`/`in` strings (ADR-264):
+// entry c is the character that a byte with value c maps to. `out` is padded
+// with blanks to the length of `in`, the PL/I rule the inline scan already
+// uses, so a match past the end of `out` maps to a blank; a character absent
+// from `in` maps to itself. The first occurrence in `in` decides.
+std::string translateTableBytes(const std::string& out, const std::string& in);
+
 } // namespace pli

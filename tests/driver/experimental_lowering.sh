@@ -16,6 +16,8 @@ witness: procedure options(main);
    declare v char(8) varying;
    declare f float(6);
    declare x fixed bin(31);
+   declare alpha char(10) init('0123456789');
+   declare vowels char(5) init('aeiou');
    declare fails fixed bin(31);
    fails = 0;
    v = 'AB';
@@ -27,6 +29,17 @@ witness: procedure options(main);
    if index('hello', 'll') ^= 3 then fails = fails + 1;
    if index('hi', 'hello') ^= 0 then fails = fails + 1;
    if index('hello', '') ^= 1 then fails = fails + 1;
+   /* WS-B/ADR-241: the constant table and the variable scan must agree */
+   if verify('12a3', '0123456789') ^= 3 then fails = fails + 1;
+   if verify('12a3', alpha) ^= 3 then fails = fails + 1;
+   if verify('ab c', 'ab ') ^= 4 then fails = fails + 1;
+   if search('hello', 'aeiou', 1) ^= 2 then fails = fails + 1;
+   if search('hello', vowels, 1) ^= 2 then fails = fails + 1;
+   if search('hello', 'aeiou', 4) ^= 5 then fails = fails + 1;
+   if repeat('ab', 3) ^= 'ababab' then fails = fails + 1;
+   /* WS-B/ADR-264: TRANSLATE pads `out` with blanks to the length of `in` */
+   if translate('abcxyz', 'XYQ', 'abc') ^= 'XYQxyz' then fails = fails + 1;
+   if translate('abcxyz', 'XY', 'abc') ^= 'XY xyz' then fails = fails + 1;
    /* W4: FIXED(float) and FIXED(char) differential check */
    f = 3.14;
    x = fixed(f);

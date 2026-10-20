@@ -132,7 +132,10 @@ statically dead.
 
 **The verdict: the item closes with no code change**, which is what the
 plan's gate says to do. What is added is `tests/ir/const_offset.pli`, whose
-`.check` pins the three displacements, so the property is now guarded.
+`.check` pins the three displacements, so the property is now guarded, and
+`tests/core/lower_bound.pli`, the plan's own witness program — `A(-3:7)`,
+`B(0:9)` and `C(1:10)` over the same sequence — which requires the three
+spellings to agree value for value.
 
 ### 3.2 B2 — typed constant folding for `FIXED DECIMAL`
 
@@ -154,7 +157,19 @@ property the type-directed rules exist to guarantee.
 
 **The verdict.** The item closes. The gate is `tests/core/decimal_const.pli`,
 which also carries the plan's negative test: `1.0 / 0.0` must still raise
-ZERODIVIDE, which fails if a division is ever folded.
+ZERODIVIDE, which fails if a division is ever folded. Its positive cases
+compute the same expression twice, once from literals and once from variables,
+and require the two results to be equal — so the test proves the fold agrees
+with the runtime, not that a constant equals itself.
+
+**The plan's second negative test has no witness.** A fold whose result would
+not fit the declared `PRECISION` is refused, but nothing in the repository can
+reach that refusal: every decimal result type the front end computes is wide
+enough by construction (`arithResultType` gives 31 digits of storage, and
+`mulResultType` widens the product to 128 bits when the operand precisions add
+up past 18), and a declared precision is not enforced on assignment anywhere —
+a pre-existing gap, unchanged here. The guard stays as a safety net; the
+observable negative test is ZERODIVIDE.
 
 ### 3.3 B3 — constant-argument built-in lowering
 
@@ -167,6 +182,16 @@ off the IR rather than timed:
 | `SEARCH(s, '0123456789', 1)` | `O(n·m)` double loop (`srch.*`) | `O(n)`: the same table |
 | `REPEAT('x', 5)` | a five-iteration loop, one `llvm.memmove` per character | one `llvm.memmove` from the constant `@str.5 = "xxxxx"` |
 | `VERIFY(s, v)` where `v` is a `VALUE` constant | reads the constant's alloca (`%V.addr`) | reads the literal's global — *identical IR* to `VERIFY(s, '0123456789')` |
+| `TRANSLATE(s, 'XY', 'abc')` | `O(n·m)` double loop (`tr.inptr`/`tr.kptr`) | `O(n)`: one lookup in a 256-entry `@pli_translate_table` per character |
+
+**The differential oracle found two defects.** `TRANSLATE('abcxyz', 'XY',
+'abc')` printed `XYcxyz` under `--experimental-lowering=runtime` and `XY xyz`
+inline: the runtime let a match past the end of `out` pass through, where PL/I
+blanks it. Fixing that exposed a second, worse one — the result temporary is a
+plain `alloca`, and neither lowering wrote the field past the copied text, so a
+short source left stack residue in a fixed-length result. Both are fixed
+(ADR-264); the oracle is what made them visible, which is the argument for
+keeping it a *true* differential rather than a second copy of the same code.
 
 **The benchmark.** `python3 benchmarks/run_benchmarks.py --force --runs 3`
 (arm64 macOS, LLVM 23.1.2) — the C-parity geomean is **0.83x at `-O2`** and
@@ -180,12 +205,18 @@ which the IR records.
 **The verdict.** The item closes. The gates are `tests/ir/search_table.pli`
 (the table global, and no `pli_verify`/`pli_search` call left),
 `tests/ir/value_const_equiv.pli` (the `VALUE` form never reads `%V.addr`),
-and `tests/core/search_const.pli` (the table path and the byte-scan path
+`tests/core/search_const.pli` (the table path and the byte-scan path
 agree exactly — and the latter still passes under
 `--experimental-lowering=runtime`, so the differential oracle keeps both
-sides).
+sides), and `tests/ir/translate_table.pli` + `tests/core/translate_const.pli`
+for `TRANSLATE` (ADR-264).
 
 **Not measured, and not claimed.** B4 (picture conversion folding) is gated on
 the plan's WS-K3 picture classifier, which is not built; it does not start
-here. The plan's `RESEXP` opt-in (WS-K9) is likewise untouched.
+here. The plan's `RESEXP` opt-in (WS-K9) is likewise untouched. The plan's B3
+gate also asks for the measurement on both targets; no x86 host was available,
+so the numbers above are arm64 only. The change is target-independent by
+construction — a 256-byte constant global and an indexed load, no new
+intrinsics, no ABI change — and the IR tests pin the shape on every platform
+CI builds.
 

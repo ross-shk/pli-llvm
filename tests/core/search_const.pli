@@ -1,11 +1,15 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* rules (123): VERIFY and SEARCH with a constant alphabet lower to a
-    membership table (ADR-241). The table path must agree exactly with the
-    byte-at-a-time scan the variable-alphabet form uses. */
+    membership table (ADR-241). The table path must agree exactly with
+    the byte-at-a-time scan the variable-alphabet form uses — for
+    every case, so each check compares a literal alphabet with the same
+    text in a variable. */
  search_const: procedure options(main);
     declare s char(20) init('hello world');
-    declare alpha char(10) init('0123456789');
+    declare t char(5) init('aeiou');
+    declare digits char(10) init('0123456789');
+    declare mixed char(3) init('ab ');
     declare v1 fixed bin(31);
     declare v2 fixed bin(31);
     declare s1 fixed bin(31);
@@ -15,30 +19,49 @@
 
     /* VERIFY: the constant alphabet and the variable alphabet agree */
     v1 = verify(s, '0123456789');
-    v2 = verify(s, alpha);
+    v2 = verify(s, digits);
     if v1 ^= v2 then do;
        fails = fails + 1;
        put skip list('FAIL verify', v1, v2);
     end;
     /* VERIFY with a start position */
     v1 = verify(s, '0123456789', 3);
-    v2 = verify(s, alpha, 3);
+    v2 = verify(s, digits, 3);
     if v1 ^= v2 then do;
        fails = fails + 1;
        put skip list('FAIL verify from', v1, v2);
     end;
     /* SEARCH: the first character of s that is in the alphabet */
-    s1 = search(s, 'o', 1);
-    s2 = search(s, 'o', 1);
+    s1 = search(s, 'aeiou', 1);
+    s2 = search(s, t, 1);
     if s1 ^= s2 then do;
        fails = fails + 1;
        put skip list('FAIL search', s1, s2);
+    end;
+    /* SEARCH with a start past the first match */
+    s1 = search(s, 'aeiou', 4);
+    s2 = search(s, t, 4);
+    if s1 ^= s2 then do;
+       fails = fails + 1;
+       put skip list('FAIL search from', s1, s2);
     end;
     /* a character that is not in the alphabet is not found */
     s1 = search(s, 'xyz', 1);
     if s1 ^= 0 then do;
        fails = fails + 1;
        put skip list('FAIL search absent', s1);
+    end;
+    /* an alphabet with a blank set member: the literal is padded to
+       its declared length, so the blank is in the set in both forms */
+    v1 = verify('ab c', 'ab ');
+    v2 = verify('ab c', mixed);
+    if v1 ^= v2 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify blank', v1, v2);
+    end;
+    if v1 ^= 4 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify blank pos', v1);
     end;
     /* VERIFY reports the first character outside the alphabet */
     v1 = verify('abc', '0123456789');

@@ -130,6 +130,9 @@ private:
   // The membership table of each constant character alphabet used by
   // VERIFY/SEARCH (ADR-241), keyed by the alphabet's text.
   std::map<std::string, llvm::GlobalVariable*> searchTables_;
+  // The translate table of each constant (out, in) pair used by TRANSLATE
+  // (ADR-264), keyed by `out` + NUL + `in`.
+  std::map<std::string, llvm::GlobalVariable*> translateTables_;
   // Dynamic array member (rule 13) runtime bound values, keyed by (structure
   // symbol, member field path), recorded once at block entry.
   struct MemberDyn {
@@ -711,6 +714,14 @@ private:
   // The 256-entry membership table for a constant character alphabet; one
   // global per distinct alphabet, reused across call sites.
   llvm::GlobalVariable* searchTable(const std::string& alphabet);
+  // TRANSLATE with constant `out`/`in` strings (ADR-264): a 256-entry
+  // translation table turns the inner scan of `in` into one lookup per
+  // character (MULTICS compile_exp.pl1:1392-1440).
+  void emitTranslateTable(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                          llvm::Value* table);
+  // The 256-entry translation table for a constant (out, in) pair; one global
+  // per distinct pair, reused across call sites.
+  llvm::GlobalVariable* translateTable(const std::string& out, const std::string& in);
   // Direct LLVM lowering for VERIFY(s,t,from) (P3): same as verify but
   // starting at position `start` (1-based, clamped to 1).
   llvm::Value* emitVerifyFromLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,

@@ -926,14 +926,36 @@ llvm::GlobalVariable* IRGen::searchTable(const std::string& alphabet) {
   auto it = searchTables_.find(alphabet);
   if (it != searchTables_.end())
     return it->second;
-  std::vector<unsigned char> bytes(256, 0);
-  for (unsigned char c : alphabet)
-    bytes[c] = 1;
-  llvm::Constant* data = llvm::ConstantDataArray::get(ctx_, bytes);
+  // The table's bytes are a LLVM-free decision (ADR-241, the plan's C2).
+  std::string bytes = pli::searchTableBytes(alphabet);
+  llvm::Constant* data = llvm::ConstantDataArray::get(
+      ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
   auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
                                       llvm::GlobalValue::PrivateLinkage, data, "pli_search_table");
   g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
   searchTables_[alphabet] = g;
+  return g;
+}
+
+// The translate table of a constant (out, in) pair (ADR-264): entry c is the
+// character a byte with value c maps to, so the scan of `in` becomes one
+// lookup per character.
+llvm::GlobalVariable* IRGen::translateTable(const std::string& out, const std::string& in) {
+  std::string key = out;
+  key += '\0';
+  key += in;
+  auto it = translateTables_.find(key);
+  if (it != translateTables_.end())
+    return it->second;
+  // The table's bytes are a LLVM-free decision (ADR-264, the plan's C2).
+  std::string bytes = pli::translateTableBytes(out, in);
+  llvm::Constant* data = llvm::ConstantDataArray::get(
+      ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
+                                      llvm::GlobalValue::PrivateLinkage, data,
+                                      "pli_translate_table");
+  g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  translateTables_[key] = g;
   return g;
 }
 
@@ -2333,6 +2355,58 @@ void IRGen::emitTranslateLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value
   b_.CreateBr(loopBB);
 
   startBlock(doneBB);
+  // The result is a fixed string, so the field past the copied text is blank:
+  // the rule the other string built-ins use (ADR-264). Without it the tail of
+  // the temporary is uninitialized and the two lowerings disagree.
+  llvm::Value* copyLen =
+      b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.copy_len");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {copyLen}, "tr.padptr"), blank,
+                  b_.CreateSub(dstcap64, copyLen, "tr.padlen"), llvm::MaybeAlign(), false);
+}
+
+// translate(dst, dstcap, s, slen, table): as emitTranslateLLVM, but `table` is
+// the compile-time translation table of a constant (out, in) pair, so the
+// scan of `in` becomes one lookup per character (ADR-264). Mirrors MULTICS's
+// inline translate sequence (compile_exp.pl1:1392-1440).
+void IRGen::emitTranslateTable(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s,
+                               llvm::Value* sLen, llvm::Value* table) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "tr.slen");
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "tr.dstcap");
+  // The copy stops at the shorter of the source and the destination, the
+  // bound both the scan and the runtime call use.
+  llvm::Value* n =
+      b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.n");
+
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "tr.loop", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "tr.done", F);
+
+  b_.CreateCondBr(b_.CreateICmpULE(n, zero, "tr.empty"), doneBB, loopBB);
+
+  llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+  startBlock(loopBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tr.i");
+  iPhi->addIncoming(zero, preLoopBB);
+  llvm::Value* si =
+      b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "tr.siptr"), "tr.si");
+  // The character code is the byte value (0..255), which indexes the table.
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "tr.code");
+  llvm::Value* mapped = b_.CreateLoad(
+      b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), table, {code}, "tr.tbl_ptr"), "tr.mapped");
+  b_.CreateStore(mapped, b_.CreateGEP(b_.getInt8Ty(), dst, {iPhi}, "tr.dstptr"), false);
+  // One index per character; the back edge feeds the phi from this block.
+  llvm::Value* iNext = b_.CreateAdd(iPhi, one, "tr.i_next");
+  iPhi->addIncoming(iNext, loopBB);
+  b_.CreateCondBr(b_.CreateICmpULT(iNext, n, "tr.more"), loopBB, doneBB);
+
+  startBlock(doneBB);
+  // The field past the copied text is blank, as in the scan lowering above.
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {n}, "tr.padptr"), blank,
+                  b_.CreateSub(dstcap64, n, "tr.padlen"), llvm::MaybeAlign(), false);
 }
 
 // trim(dst, dstcap, s, slen, pad, padlen): copy s minus leading/trailing pad
@@ -11397,7 +11471,6 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   }
   if (e->name == "VERIFY") {
     Val s = emitExpr(e->args[0].get());
-    Val t = emitExpr(e->args[1].get());
     llvm::Value* r;
     // A constant alphabet uses the membership table instead of a scan of the
     // alphabet (ADR-241). The lowering policy still wins: a forced runtime
@@ -11412,11 +11485,15 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       } else {
         r = emitVerifyTable(s.ptr, s.len, tbl);
       }
-    } else if (e->args.size() == 3) {
-      Val st = emitExpr(e->args[2].get());
-      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
     } else {
-      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
+      // The alphabet is only materialized when the scan needs it.
+      Val t = emitExpr(e->args[1].get());
+      if (e->args.size() == 3) {
+        Val st = emitExpr(e->args[2].get());
+        r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
+      } else {
+        r = emitVerify(s.ptr, s.len, t.ptr, t.len);
+      }
     }
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
@@ -11424,6 +11501,22 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "TRANSLATE") {
+    // A constant (out, in) pair becomes a 256-byte table at compile time
+    // (ADR-264): one lookup per character instead of a scan of `in`. The
+    // lowering policy still wins, so the differential oracle keeps both sides.
+    HExpr* outArg = e->args[1].get();
+    HExpr* inArg = e->args[2].get();
+    if (outArg->kind == HExpr::CharLit && inArg->kind == HExpr::CharLit &&
+        !runtimePath("translate")) {
+      Val s = emitExpr(e->args[0].get());
+      Val dst = charTemp(e->ty.len);
+      emitTranslateTable(dst.ptr, dst.len, s.ptr, s.len,
+                         translateTable(outArg->sval, inArg->sval));
+      facts_.recordBuiltin("translate", "llvm");
+      dst.len = i64(e->ty.len);
+      result = dst;
+      return true;
+    }
     Val s = emitExpr(e->args[0].get());
     Val out = emitExpr(e->args[1].get());
     Val in = emitExpr(e->args[2].get());
