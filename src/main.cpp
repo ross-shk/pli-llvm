@@ -34,10 +34,16 @@
 #include "mlir/PliDialect.h"
 #endif
 #include "sema.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include "backend/plugin_loader.h"
 #include "codegen.h"
 #include "embedded_runtime.h"
 #include "embedded_sysroot.h"
@@ -123,8 +129,8 @@ static void usage() {
          "  --no-subscript    elide SUBSCRIPTRANGE checks (default at -O2/-O3;\n"
          "                   cf. (NOSUBSCRIPTRANGE), ADR-111)\n"
          "  --subscript-checks  force SUBSCRIPTRANGE checks (overrides -O2/-O3 default)\n"
-  "  --release        maximum optimization + stripped binary (minimal size)\n"
-  "  --debug          no optimization (-O0; no DWARF emitted yet)\n"
+         "  --release        maximum optimization + stripped binary (minimal size)\n"
+         "  --debug          no optimization (-O0; no DWARF emitted yet)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --runtime <lib>  path to an external runtime archive (default: none;\n"
          "                   the embedded runtime is used instead)\n"
@@ -132,18 +138,29 @@ static void usage() {
          "                   keep pli_* references external and resolve them at link\n"
          "                   from the embedded runtime instead of merging the\n"
          "                   definitions into the MAIN unit\n"
-  "  --rt-platform <f>\n"
-  "                   path to a custom platform bitcode file implementing\n"
-  "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
-  "                   pli_rtplat.bc is merged instead)\n"
-  "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
-  "  --fprofile-generate  instrument for PGO (run the binary, it writes a profile)\n"
-  "  --fprofile-use=<f>   rebuild using that profile (.profraw or .profdata)\n"
-  "  --triple <t>     target triple (default: host triple, in-process)\n"
-  "  --sysroot <dir>  link sysroot of the target (crt objects + system libs);\n"
-  "                   overrides the vendored/embedded set (ADR-234)\n"
-          "  --march=native   opt-in: use host CPU features (default: generic;\n"
-          "                   CI/baselines always use generic; local hot runs only)\n"
+         "  --rt-platform <f>\n"
+         "                   path to a custom platform bitcode file implementing\n"
+         "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
+         "                   pli_rtplat.bc is merged instead)\n"
+         "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
+         "  --fprofile-generate  instrument for PGO (run the binary, it writes a profile)\n"
+         "  --fprofile-use=<f>   rebuild using that profile (.profraw or .profdata)\n"
+         "  --triple <t>     target triple (default: host triple, in-process)\n"
+         "  --sysroot <dir>  link sysroot of the target (crt objects + system libs);\n"
+         "  --emit-bitcode   write portable bitcode (.bc) instead of an object;\n"
+         "                   the runtime is not merged, so link your own (ADR-236)\n"
+         "  --data-layout <dl>\n"
+         "                   data layout the module is built with (an architecture\n"
+         "                   pli does not know: the ABI is yours; default: LP64)\n"
+         "  --no-portable    fail instead of falling back to portable bitcode\n"
+         "                   when the target has no LLVM backend (ADR-236)\n"
+         "                   overrides the vendored/embedded set (ADR-234)\n"
+         "  --backend-plugin <path>\n"
+         "                   load a code-generation backend plugin (ADR-235); the\n"
+         "                   plugin must export pli_backend_plugin_v1\n"
+         "  --backend <name> select a loaded backend (default: llvm, the built-in one)\n"
+         "  --march=native   opt-in: use host CPU features (default: generic;\n"
+         "                   CI/baselines always use generic; local hot runs only)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
@@ -186,6 +203,17 @@ static void printVersion() {
   std::cout << "pli " << PLI_VERSION << " (LLVM " << PLI_LLVM_VERSION << ", "
             << llvm::sys::getDefaultTargetTriple() << ", runtime " << pli::embeddedLibPLISize()
             << " bytes, sysroot " << pli::embeddedSysrootSize() << " bytes)\n";
+  // The cross targets this build can compile for (ADR-234) and the backend
+  // plugins it loaded (ADR-235).
+  std::vector<std::string> targets = pli::embeddedRuntimeTargets();
+  if (targets.size() > 1) {
+    std::cout << "cross targets:";
+    for (const std::string& t : targets)
+      std::cout << " " << t;
+    std::cout << "\n";
+  }
+  if (!pli::loadedBackends().empty())
+    std::cout << "backend plugins: " << pli::backendNames() << "\n";
 }
 
 // The platform's path-list separator: ';' on Windows, ':' elsewhere (the
@@ -254,6 +282,90 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
 // Per-file terminal modes (-emit-llvm, --print-hir, -fsyntax-only) apply to
 // this unit and return without linking. In link mode `outObj` receives the
 // object path for the caller to link. Returns false on any failure.
+// ADR-236: write the module as portable bitcode. The module carries no data
+// layout (the consumer's toolchain applies the target's own) and no runtime
+// (the pli_* symbols stay undefined: the user links the runtime they built
+// for their target).
+static bool emitPortableBitcode(llvm::Module& M, const std::string& dest,
+                                 const std::string& triple, std::string& err) {
+  M.setDataLayout("");
+  M.setTargetTriple(llvm::Triple(triple));
+  std::error_code ec;
+  llvm::raw_fd_ostream os(dest, ec, llvm::sys::fs::OF_None);
+  if (ec) {
+    err = "cannot write " + dest;
+    return false;
+  }
+  llvm::WriteBitcodeToFile(M, os);
+  return true;
+}
+
+// The recipe the user needs to finish a portable build.
+static std::string portableHint(const std::string& triple) {
+  return "  the runtime symbols stay undefined — build the runtime for your target and link it:\n"
+         "    clang -target " +
+         triple +
+         " -O2 -c runtime/rt_*.c\n"
+         "    ar crs libpli_runtime.a rt_*.o\n"
+         "    clang -target " +
+         triple +
+         " prog.bc libpli_runtime.a -o prog\n"
+         "  (use --emit-llvm for textual IR; see guides/cross-compilation.md)";
+}
+
+// Remove the data layout line from an IR text (ADR-236): the portable form
+// must not commit to a layout — the consumer's toolchain applies the
+// target's own.
+static void stripDataLayout(std::string& ir) {
+  const std::string key = "target datalayout";
+  size_t pos = ir.find(key);
+  if (pos == std::string::npos)
+    return;
+  size_t start = ir.rfind('\n', pos);
+  start = (start == std::string::npos) ? 0 : start + 1;
+  size_t end = ir.find('\n', pos);
+  if (end == std::string::npos)
+    end = ir.size();
+  else
+    ++end;
+  ir.erase(start, end - start);
+}
+
+// The backend plugin selected for this run (ADR-235): empty means the
+// built-in "llvm" backend. Set once from the command line.
+static std::string gBackendPlugin;
+
+// Run the selected backend plugin over an IR string (ADR-235). The result is
+// parsed and verified, so invalid plugin IR never reaches the optimizer or
+// the object writer. A no-op when no plugin is selected.
+static bool applyBackendPlugin(const std::string& ir, const std::string& triple,
+                               const std::string& optLevel, bool isMainUnit, std::string& outIr) {
+  if (gBackendPlugin.empty()) {
+    outIr = ir;
+    return true;
+  }
+  std::string err;
+  if (!pli::runBackendTransform(gBackendPlugin, ir, triple, optLevel, isMainUnit, outIr, err)) {
+    std::cerr << "pli: " << err << "\n";
+    return false;
+  }
+  // Verify the returned IR in a scratch context.
+  llvm::LLVMContext scratch;
+  llvm::SMDiagnostic smd;
+  llvm::MemoryBufferRef pluginIr(llvm::StringRef(outIr), "backend-plugin");
+  std::unique_ptr<llvm::Module> check = llvm::parseAssembly(pluginIr, smd, scratch);
+  if (!check) {
+    std::cerr << "pli: backend '" << gBackendPlugin
+              << "' returned unparsable IR: " << smd.getMessage().str() << "\n";
+    return false;
+  }
+  if (llvm::verifyModule(*check, &llvm::errs())) {
+    std::cerr << "pli: backend '" << gBackendPlugin << "' returned invalid IR\n";
+    return false;
+  }
+  return true;
+}
+
 static bool compileOne(Preprocessor& preprocessor, const std::string& input, std::string& output,
                        std::string& triple, const std::string& sysparm, bool sysparmExplicit,
                        bool compileOnly, bool semaCompileOnly, bool emitLLVM, bool emitMlir,
@@ -264,7 +376,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
                        bool linkRuntimeIn = false, const std::string& ltoKind = "",
                        pli::PgoMode pgoMode = pli::PgoMode::None, const std::string& pgoUse = "",
-                       bool marchNative = false, const std::string& platformBc = "") {
+                       bool marchNative = false, const std::string& platformBc = "",
+                       bool portableMode = false, const std::string& dataLayout = "",
+                       bool bitcodeExplicit = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -324,11 +438,15 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM || emitMlir) {
-    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides);
+    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, false,
+                lowerMode, perOpOverrides, "", dataLayout);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
+    // The portable textual form carries no data layout either: the
+    // consumer's toolchain applies the target's own (ADR-236).
+    if (portableMode)
+      stripDataLayout(ir);
     // -o is restricted to a single input (checked in main); otherwise each
     // input writes its own <base>.ll.
     std::string dest = output.empty() ? base + ".ll" : output;
@@ -351,7 +469,12 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       std::cerr << "pli: cannot write " << dest << "\n";
       return false;
     }
-    os << ir;
+    // The backend plugin hook (ADR-235) also applies to the IR output: the
+    // plugin sees the unit's IR and returns the IR to compile.
+    std::string outIr = ir;
+    if (!applyBackendPlugin(ir, triple, optLevel, false, outIr))
+      return false;
+    os << outIr;
     return true;
   }
 
@@ -370,8 +493,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // "<tmp>/<base>-<pid>-<n>.o" could.
     llvm::SmallString<128> tmpObj;
     std::error_code fec = llvm::sys::fs::createUniqueFile(
-        (fs::temp_directory_path() /
-         (base + "-" + std::to_string(fileIndex) + "-%%%%%%.o")).string(),
+        (fs::temp_directory_path() / (base + "-" + std::to_string(fileIndex) + "-%%%%%%.o"))
+            .string(),
         tmpObj);
     if (fec) {
       std::cerr << "pli: cannot create a temporary object\n";
@@ -390,7 +513,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-              linkBitcode, lowerMode, perOpOverrides, platformBc);
+              linkBitcode, lowerMode, perOpOverrides, platformBc, dataLayout);
     auto om = ipg.takeModule(hir);
     if (!om) {
       if (diags.ok())
@@ -400,13 +523,63 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // Single-module fast path: runtime linked at BC level (never `-c`).
     // Bitcode (linkBitcode) already merged the runtime via IRGen, so the
     // embedded blob is only linked when it did not.
-    if (linkRuntimeIn && !linkBitcode && !compileOnly) {
+    // The portable output carries no runtime either (ADR-236): the pli_*
+    // symbols stay undefined and the user links the runtime they built for
+    // their target.
+    if (linkRuntimeIn && !linkBitcode && !compileOnly && !portableMode) {
       std::string rtErr;
       llvm::Triple targetTriple(triple);
       if (!pli::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr, platformBc)) {
         std::cerr << "pli: " << rtErr << "\n";
         return false;
       }
+    }
+    // Backend plugin hook (ADR-235): the plugin sees the unit's IR — after
+    // the runtime merge, so it sees the whole program — and returns the IR
+    // to compile. The result is parsed and verified, so invalid plugin IR
+    // never reaches the optimizer or the object writer.
+    if (!gBackendPlugin.empty()) {
+      std::string ir;
+      {
+        llvm::raw_string_ostream os(ir);
+        om->mod->print(os, nullptr);
+      }
+      // The MAIN unit is the one that carries the runtime definitions.
+      bool isMain = false;
+      for (const llvm::Function& f : *om->mod)
+        if (!f.isDeclaration() && f.getName().starts_with("pli_")) {
+          isMain = true;
+          break;
+        }
+      std::string outIr;
+      if (!applyBackendPlugin(ir, triple, optLevel, isMain, outIr))
+        return false;
+      llvm::SMDiagnostic smd;
+      llvm::MemoryBufferRef pluginIr(llvm::StringRef(outIr), "backend-plugin");
+      std::unique_ptr<llvm::Module> newMod =
+          llvm::parseAssembly(pluginIr, smd, om->mod->getContext());
+      if (!newMod) {
+        std::cerr << "pli: backend '" << gBackendPlugin
+                  << "' returned unparsable IR: " << smd.getMessage().str() << "\n";
+        return false;
+      }
+      om->mod = std::move(newMod);
+    }
+    // Portable output (ADR-236): the target has no backend in this build (or
+    // the user asked for bitcode), so the module is written as portable
+    // bitcode instead of an object. No codegen, no runtime: the user's own
+    // toolchain finishes the job.
+    if (portableMode) {
+      std::string dest = output.empty() ? base + ".bc"
+                                    : (bitcodeExplicit ? output : output + ".bc");
+      std::string bcErr;
+      if (!emitPortableBitcode(*om->mod, dest, triple, bcErr)) {
+        std::cerr << "pli: " << bcErr << "\n";
+        return false;
+      }
+      if (verbose)
+        std::cerr << "pli: wrote portable bitcode " << dest << "\n";
+      return true;
     }
     // Create TargetMachine using the provided target triple.
     std::string tmErr;
@@ -475,6 +648,16 @@ int main(int argc, char** argv) {
   // Link sysroot of the target (ADR-234): --sysroot <dir> overrides the
   // exe-relative override, the prepared cache and the embedded set.
   std::string sysrootArg;
+  // Backend plugin (ADR-235): --backend-plugin loads a shared object,
+  // --backend selects the loaded one (default: the built-in "llvm").
+  std::vector<std::string> backendPluginPaths;
+  std::string backendName = "llvm";
+  // Portable output (ADR-236): --emit-bitcode writes portable bitcode,
+  // --data-layout states the ABI of an architecture pli does not know, and
+  // --no-portable turns the automatic fallback into an error.
+  bool emitBitcode = false;
+  bool noPortable = false;
+  std::string dataLayout;
   // Split runtime: custom platform TU (--rt-platform); empty selects the
   // embedded pli_rtplat.bc. Always explicit (no baked-in default path).
   std::string platformBc;
@@ -544,6 +727,16 @@ int main(int argc, char** argv) {
       triple = next("--triple");
     else if (a == "--sysroot")
       sysrootArg = next("--sysroot");
+    else if (a == "--emit-bitcode")
+      emitBitcode = true;
+    else if (a == "--no-portable")
+      noPortable = true;
+    else if (a == "--data-layout")
+      dataLayout = next("--data-layout");
+    else if (a == "--backend-plugin")
+      backendPluginPaths.push_back(next("--backend-plugin"));
+    else if (a == "--backend")
+      backendName = next("--backend");
     else if (a == "--march=native")
       marchNative = true;
     else if (a == "--sysparm") {
@@ -567,8 +760,7 @@ int main(int argc, char** argv) {
       // to select. Warn (don't error: old build scripts pass it) and drop it.
       std::cerr << "pli: warning: --linker '" + next("--linker") +
                        "' ignored (in-process lld is the only linker)\n";
-    }
-    else if (a == "-shared" || a == "-static")
+    } else if (a == "-shared" || a == "-static")
       linkArgs.push_back(a);
     else if (a == "--extra") {
       // Comma-separated extra backend args, e.g. --extra -mllvm,-print-after-all.
@@ -612,7 +804,8 @@ int main(int argc, char** argv) {
       }
 #ifndef PLI_ENABLE_MLIR
       if (parsed == LowerMode::MLIR) {
-        std::cerr << "pli: --experimental-lowering=mlir requires an MLIR-enabled build (-DPLI_ENABLE_MLIR=ON)\n";
+        std::cerr << "pli: --experimental-lowering=mlir requires an MLIR-enabled build "
+                     "(-DPLI_ENABLE_MLIR=ON)\n";
         return 2;
       }
 #endif
@@ -662,6 +855,31 @@ int main(int argc, char** argv) {
       inputs.push_back(a);
   }
 
+  // Backend plugins (ADR-235): load them, then check the selection. The
+  // built-in "llvm" backend is always available; a plugin backend needs its
+  // plugin loaded.
+  for (const std::string& path : backendPluginPaths) {
+    std::string pluginErr;
+    if (!pli::loadBackendPlugin(path, pluginErr)) {
+      std::cerr << "pli: " << pluginErr << "\n";
+      return 1;
+    }
+  }
+  if (backendName != "llvm") {
+    bool found = false;
+    for (const pli::LoadedBackend& b : pli::loadedBackends())
+      if (b.name == backendName)
+        found = true;
+    if (!found) {
+      std::cerr << "pli: unknown backend '" << backendName << "' (available: llvm";
+      for (const pli::LoadedBackend& b : pli::loadedBackends())
+        std::cerr << ", " << b.name;
+      std::cerr << ")\n";
+      return 1;
+    }
+    gBackendPlugin = backendName;
+  }
+
   // `--explain` needs no input file: print the production and exit.
   if (explain) {
     if (!explainRule(explain)) {
@@ -691,12 +909,19 @@ int main(int argc, char** argv) {
   std::vector<std::string> pliInputs, foreignObjs;
   for (const std::string& in : inputs)
     (isPLISource(in) ? pliInputs : foreignObjs).push_back(in);
-  if (!foreignObjs.empty() && (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir)) {
-    std::cerr
-        << "pli: object inputs cannot be used with -c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir\n";
+  if (!foreignObjs.empty() &&
+      (compileOnly || emitLLVM || emitMlir || emitBitcode || syntaxOnly || print_hir)) {
+    std::cerr << "pli: object inputs cannot be used with "
+                 "-c/-emit-llvm/-emit-mlir/-emit-bitcode/-fsyntax-only/--print-hir\n";
     return 2;
   }
   const bool linkOnly = pliInputs.empty();
+
+  // The host's static system directories describe the machine pli runs on.
+  // A cross link must not see them: they would let the linker pull host
+  // libraries into a target binary (ADR-234).
+  const bool hostTarget =
+      triple.empty() || pli::isHostTarget(llvm::Triple(triple));
 
   // Upward filesystem walks (Zig-style) for include and library directories.
   // Start from the source root (cwd) and the pli executable directory; at each
@@ -728,7 +953,7 @@ int main(int argc, char** argv) {
   }
   const std::vector<std::string> staticLibDirs = {"/usr/lib", "/usr/lib/pli", "/usr/local/lib",
                                                   "/usr/local/lib/pli"};
-  for (const std::string& d : staticLibDirs) {
+  for (const std::string& d : hostTarget ? staticLibDirs : std::vector<std::string>{}) {
     std::error_code ec;
     fs::path p = fs::weakly_canonical(d, ec);
     if (ec)
@@ -809,7 +1034,8 @@ int main(int argc, char** argv) {
     std::cerr << "pli: cannot specify -o when generating multiple output files\n";
     return 2;
   }
-  if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir)) {
+  if (multi && !output.empty() &&
+      (emitLLVM || emitMlir || emitBitcode || syntaxOnly || print_hir)) {
     std::cerr << "pli: -o is ambiguous with a per-file mode and multiple inputs\n";
     return 2;
   }
@@ -845,9 +1071,29 @@ int main(int argc, char** argv) {
   else if (!pgoUse.empty())
     pgoMode = pli::PgoMode::Use;
 
+  // The output mode for the requested target (ADR-236): a target with no LLVM
+  // backend in this build can only be produced as portable bitcode, which
+  // the user's own toolchain compiles and links. --emit-bitcode asks for the
+  // same output for a target this build does know.
+  if (triple.empty())
+    triple = llvm::sys::getDefaultTargetTriple();
+  const pli::TargetProfile profile = pli::describeTarget(llvm::Triple(triple));
+  if (profile.portable && noPortable) {
+    std::cerr << "pli: no LLVM backend for '" << triple
+              << "' in this build (and --no-portable was given)\n";
+    return 1;
+  }
+  const bool portableMode = emitBitcode || profile.portable;
+  if (profile.portable) {
+    std::cerr << "pli: no LLVM backend for '" << triple << "' in this build: writing portable "
+                 "bitcode\n"
+              << portableHint(triple) << "\n";
+  }
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
-  // --print-hir, -fsyntax-only) stop after all inputs are handled.
-  const bool terminalMode = compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir;
+  // --print-hir, -fsyntax-only) stop after all inputs are handled. The
+  // portable output stops too: there is no object to link.
+  const bool terminalMode = compileOnly || emitLLVM || emitMlir || emitBitcode || syntaxOnly ||
+                            print_hir || portableMode;
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
@@ -872,7 +1118,9 @@ int main(int argc, char** argv) {
   // The embedded blob is always selected, so the merge needs no
   // runtime files on disk. An empty platformBc likewise selects the embedded
   // pli_rtplat.bc; --rt-platform names a custom platform TU instead.
-  const bool linkBitcode = useBitcode && !emitLLVM;
+  // The portable output carries no runtime: the pli_* symbols stay undefined
+  // and the user links the runtime they built for their target.
+  const bool linkBitcode = useBitcode && !emitLLVM && !portableMode;
   // Runtime-once fast path: one PL/I input becoming the executable directly.
   // Disabled for the archive path (!useBitcode: --no-bitcode-runtime keeps
   // external references for the link step). PGO/LTO stay on the in-process
@@ -887,7 +1135,8 @@ int main(int argc, char** argv) {
                     verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
-                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc))
+                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
+                    portableMode, dataLayout, emitBitcode))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -973,12 +1222,12 @@ int main(int argc, char** argv) {
           }
         } else {
           // The exe-relative override follows the target's object format:
-          // a musl set for ELF, a mingw set for COFF.
-          const char* overrideName =
-              llt.getObjectFormat() == llvm::Triple::COFF ? "mingw" : "musl";
-          if (llt.getObjectFormat() != llvm::Triple::MachO) {
-            vsys = pli::probeSysrootDir((exeDir / overrideName).string(), "override", archName);
-          }
+          // a musl set for ELF, a mingw set for COFF, the SDK stubs for
+          // Mach-O.
+          const char* overrideName = llt.getObjectFormat() == llvm::Triple::COFF    ? "mingw"
+                                     : llt.getObjectFormat() == llvm::Triple::MachO ? "sdk"
+                                                                                    : "musl";
+          vsys = pli::probeSysrootDir((exeDir / overrideName).string(), "override", archName);
         }
         if (!vsys.ok) {
           for (const std::string& d : pli::sysrootCacheCandidates(llt)) {
@@ -1025,11 +1274,34 @@ int main(int argc, char** argv) {
                              vsys.kind == "musl" && !wantShared && !wantStaticPIE;
         const bool useMingw = llt.getObjectFormat() == llvm::Triple::COFF && vsys.ok &&
                               vsys.kind == "mingw" && !wantShared;
-        const bool useSdk = llt.getObjectFormat() == llvm::Triple::MachO && vsys.ok &&
-                            vsys.kind == "sdk";
-        if (vsys.ok && verbose)
-          std::cerr << "pli: using " << vsys.kind << " sysroot (" << vsys.origin << ": "
-                    << vsys.dir << ")\n";
+        const bool useSdk =
+            llt.getObjectFormat() == llvm::Triple::MachO && vsys.ok && vsys.kind == "sdk";
+        // The vendored libSystem stub covers the codegen's symbol surface for
+        // a modern macOS: an older deployment target makes lld emit the
+        // classic lazy binding, which needs the dyld_stub_binder symbol the
+        // stub does not export. Say so instead of failing with a bare
+        // "undefined symbol" from the linker.
+        if (useSdk) {
+          const double ver = pli::macosDeploymentVersion(llt);
+          if (ver < 14.0) {
+            std::cerr << "pli: warning: the vendored libSystem stub needs a deployment "
+                         "target of macOS 14.0 or newer (got "
+                      << ver << ")\n";
+          }
+        }
+        if (vsys.ok && verbose) {
+          // The wording is the anti-drift gate of tests/driver/vendor_sysroot.sh:
+          // "vendored <kind> ... <origin>" tells which set served the link.
+          const std::string label = vsys.kind == "sdk"     ? "SDK stubs"
+                                    : vsys.kind == "mingw" ? "mingw sysroot"
+                                                           : "musl sysroot";
+          const std::string origin = vsys.origin == "embedded"   ? "embedded"
+                                     : vsys.origin == "override" ? "exe-relative override"
+                                     : vsys.origin == "explicit" ? "--sysroot"
+                                                                 : "prepared cache";
+          std::cerr << "pli: using " << (vsys.origin == "explicit" ? "" : "vendored ") << label
+                    << " (" << origin << ": " << vsys.dir << ")\n";
+        }
         // Host C-runtime/sysroot recipe (hostcrt.cpp): stable filesystem
         // locations, first-hit-wins, $PLI_SYSROOT redirect. No subprocess.
         // Skipped entirely on vendored paths (host independence proof: even
@@ -1044,7 +1316,8 @@ int main(int argc, char** argv) {
           if (!pli::isHostTarget(llt)) {
             std::cerr << "pli: no link sysroot for target '" << llt.getTriple()
                       << "' — pass --sysroot <dir>, or prepare one with "
-                         "scripts/prepare_cross_sysroot.sh " << llt.getTriple() << "\n";
+                         "scripts/prepare_cross_sysroot.sh "
+                      << llt.getTriple() << "\n";
             pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           }
@@ -1183,14 +1456,12 @@ int main(int argc, char** argv) {
           // sysroot so user -l flags (e.g. -lm) resolve to its empty stubs,
           // never to host libraries. Host -lgcc/system libs stay off: the
           // binary is fully static.
-          const std::string builtins =
-              vsys.dir + "/libpli_builtins-" + archName + ".a";
+          const std::string builtins = vsys.dir + "/libpli_builtins-" + archName + ".a";
           std::error_code bec;
           if (fs::exists(builtins, bec))
             argStore.push_back(builtins);
           else if (verbose)
-            std::cerr << "pli: " << builtins
-                      << " not found; 128-bit division may fail to link\n";
+            std::cerr << "pli: " << builtins << " not found; 128-bit division may fail to link\n";
           argStore.push_back(vsys.dir + "/libc.a");
           argStore.push_back(vsys.dir + "/crtn.o");
           argStore.push_back("-L" + vsys.dir);
@@ -1261,10 +1532,9 @@ int main(int argc, char** argv) {
           argStore.push_back("-L" + md);
           // libkernel32.a repeats: one-pass GNU linking needs it again for
           // symbols referenced by the later import libs.
-          for (const char* lib :
-               {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a", "libucrt.a",
-                "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a",
-                "libuser32.a", "libkernel32.a"})
+          for (const char* lib : {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
+                                  "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
+                                  "libshell32.a", "libuser32.a", "libkernel32.a"})
             argStore.push_back(std::string("-l:") + lib);
           argStore.push_back("-o");
           argStore.push_back(output);
@@ -1306,8 +1576,9 @@ int main(int argc, char** argv) {
         }
         // ADR-227: the vendored-mingw link runs the MinGW driver (GNU argv);
         // every other link runs the object-format driver as before.
-        const bool linkOk = useMingw ? pli::linkMinGWExecutable(argv, linkErr)
-                                     : pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr);
+        const bool linkOk = useMingw
+                                ? pli::linkMinGWExecutable(argv, linkErr)
+                                : pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr);
         if (linkOk) {
           for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
             std::error_code ec;

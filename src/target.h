@@ -36,14 +36,34 @@ std::string targetKey(const llvm::Triple& t);
 // getArchName() echoes the spelling the user typed ("arm64" vs "aarch64" for
 // the same Apple Silicon target), which would split one family in two.
 std::string targetArchName(const llvm::Triple& t);
+// The macOS deployment target of a Darwin triple, as a comparable number
+// (15.0, 14.0, ...). A triple without a version gets the default (15.0),
+// which matches the module triple IRGen stamps.
+double macosDeploymentVersion(const llvm::Triple& t);
 // The cross targets this compiler supports (scripts/cross_targets.txt).
 const std::vector<std::string>& crossTargetTriples();
 // True when `t` names the build host's family (the host link path applies).
 bool isHostTarget(const llvm::Triple& t);
+// What this build has for a target (ADR-236). The profile decides the output
+// mode: a self-contained build (runtime + sysroot), an object with external
+// runtime references (an LLVM backend but no runtime), or portable bitcode
+// (no backend at all).
+struct TargetProfile {
+  std::string triple;       // as the user spelled it
+  std::string key;          // the ABI family (targetKey)
+  bool llvmBackend = false; // LLVM has a backend for this architecture
+  bool haveRuntime = false; // an embedded runtime bitcode exists for it
+  bool haveSysroot = false; // a link sysroot (embedded or prepared) exists
+  bool isHost = false;      // the host CRT recipe applies
+  bool portable = false;    // only portable bitcode can be emitted
+};
+// The profile of a target in this build.
+TargetProfile describeTarget(const llvm::Triple& t);
 // TargetMachine for the given triple; null on failure with `err` set.
 // When *marchNative* is set, use the host CPU's feature set instead of
 // "generic" (opt-in for local hot runs; CI/baselines always use generic).
-std::unique_ptr<llvm::TargetMachine>
-createTargetMachine(const std::string& triple, const std::string& optLevel,
-                    std::string& err, bool marchNative = false);
+std::unique_ptr<llvm::TargetMachine> createTargetMachine(const std::string& triple,
+                                                         const std::string& optLevel,
+                                                         std::string& err,
+                                                         bool marchNative = false);
 } // namespace pli

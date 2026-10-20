@@ -19,3 +19,26 @@ with programs); musl is MIT; mingw-w64 runtime is public domain/Zope.
 Per-arch releases carry the matching arch's files from
 `platform/linux-musl/<arch>/`; the build embeds only the matching arch and
 warns when the arch is missing.
+
+## Prepared cross sysroots (ADR-234)
+
+The dirs above are the **host** link sysroots: they are embedded in the
+binary and make a host link need nothing but the OS. A *cross* target needs
+its own sysroot, and the target's headers are needed too (to compile the
+PL/I runtime for that target), which the dirs above do not carry.
+
+`scripts/prepare_cross_sysroot.sh <target>` builds one in a container and
+installs it in a local cache (`$PLI_SYSROOT_DIR`, else `~/.pli/sysroots`):
+
+| Target | Container | Provenance |
+| --- | --- | --- |
+| `x86_64-unknown-linux-gnu` | `debian:trixie-slim` | `musl-tools` + `musl-dev` 1.2.4 (`/usr/lib/x86_64-linux-musl/`) + LLVM compiler-rt builtins (renamed) |
+| `aarch64-unknown-linux-gnu` | `ubuntu:24.04` (`--platform linux/arm64`) | `musl-dev` (`/usr/lib/aarch64-linux-musl/`) + LLVM compiler-rt builtins (renamed) |
+| `x86_64-pc-windows-gnu` | `debian:trixie-slim` | `mingw-w64` (`/usr/x86_64-w64-mingw32/`) + `gcc-mingw-w64-x86-64` (`libgcc.a`); `fltused.o`/`chkstk.o` are cross-built from the sources in this dir |
+
+The cache is not committed: it is a build input, like a package cache, and
+the prepared tree is large (the Linux targets need the musl headers, the
+Windows one the mingw-w64 headers). The macOS SDK is neither cached nor
+vendored — it is not redistributable, so a Darwin target uses the SDK of the
+build host (`xcrun --show-sdk-path`) and only a macOS build host can target
+macOS.

@@ -6891,3 +6891,169 @@ bytes stay intact but the split between them does not. The routing calls are
 inside the statement's lock, so a task's record does not land in another task's
 file — but a task that *selects* a file while another task's statement is open
 still changes the destination for the statements that follow.
+
+## ADR-234 — Cross-target model: per-target runtime, per-target link sysroot
+
+**Context.** The README claimed cross-compilation worked for four triples,
+but nothing did. Reproduced on an arm64 macOS host:
+
+- `pli --triple x86_64-unknown-linux-gnu prog.pli` failed with *"runtime
+  bitcode target 'arm64-apple-macosx26.0.0' does not match"* — the embedded
+  runtime blob was host-only, and the fallback served the host's runtime
+  whenever the guard could not see the mismatch.
+- `cmake -DPLI_CROSS_BITCODE=ON` could not build: the cross rules compiled
+  the runtime with `-target <triple>` and no sysroot, so the runtime's
+  `#include <stdio.h>` failed ("file not found").
+- The link refused every non-host triple ("host C-runtime link is
+  host-only"), and the vendored link sysroots were embedded for the *build
+  host's* OS only, never selected by target.
+- `aarch64-pc-windows-gnu` was listed, but mingw-w64 has no aarch64 port:
+  no sysroot exists for it.
+
+**Decision.** One target model, keyed by the **ABI family** of a triple
+(`targetKey()`: OS family + canonical arch + the Windows gnu/msvc
+distinction), not by the triple string.
+
+- The runtime and the platform bitcode are embedded **per target**. The
+  target list lives in `scripts/cross_targets.txt`; CMake reads it to build
+  and embed the per-target runtime, and the driver reads the generated copy
+  for its diagnostics, so the two cannot drift.
+- A blob is selected by exact triple first, then by ABI family. A different
+  family never matches, and an empty blob (a build without
+  `PLI_CROSS_BITCODE`) is never selected: a missing runtime is a
+  diagnostic, not a silent fallback to the host's.
+- The link sysroot of the *target* is resolved in this order: `--sysroot
+  <dir>`, the exe-relative override, the prepared cache
+  (`$PLI_SYSROOT_DIR`, else `~/.pli/sysroots/<target>`), then the embedded
+  set — and only when the embedded set serves that family. The host C-runtime
+  recipe is the last resort and only for the host.
+- The prepared sysroots come from `scripts/prepare_cross_sysroot.sh`
+  (a container builds the target toolchain; the result is a local cache, not
+  a committed tree). A Darwin target uses the macOS SDK of the build host
+  instead: the SDK is not redistributable, so it cannot be cached or
+  vendored, and only a macOS build host has one.
+- `aarch64-pc-windows-gnu` is dropped from the supported list; the compiler
+  diagnoses it like any other target without a runtime.
+
+**Consequences.** The README claim becomes true for the three supported
+targets, and the "no embedded runtime for target X" diagnostic replaces a
+silent host-ABI runtime in a foreign object. The macOS deployment target
+follows the triple (15.0 when it carries none), which keeps the objects and
+the link line in agreement; the vendored `libSystem` stub needs macOS 14.0
+or newer, and the driver says so before the linker does. A build without
+`PLI_CROSS_BITCODE=ON` still compiles and links for the host, and
+`PLI_CROSS_REQUIRE_ALL=ON` turns a missing sysroot into a configure error
+(CI prepares every sysroot).
+
+**Rejected.** Embedding every cross sysroot in the binary (+18 MB, and the
+release archives are per-OS) — the prepared cache plus `--sysroot` covers
+the same ground without the size. A musl-style "freestanding" runtime build
+without the target headers — the runtime's libc surface (FILE, pthread,
+`struct tm`) is too ABI-sensitive to hand-declare. A "linux-gnu" target
+linked against glibc — the vendored and prepared sysroots are musl, and musl
+is the ABI we can reproduce exactly.
+
+## ADR-235 — Runtime-loaded code-generation backend plugins
+
+**Context.** The MLIR spike (ADR-230) proved a narrow, optional backend
+boundary, but it was an in-tree library behind a build option: a backend had
+to be compiled into `pli`. The maintainer asked for a *custom, pluggable*
+backend that a user can drop in without rebuilding the compiler.
+
+**Decision.** A backend plugin is a shared object loaded at run time
+(`dlopen` / `LoadLibrary`), selected with `--backend-plugin <path>` and
+`--backend <name>`.
+
+- The boundary is a stable C ABI (`src/backend/plugin_abi.h`): no C++ and no
+  LLVM types cross it. The plugin receives the unit's LLVM IR **as text** and
+  returns the IR it wants compiled, also as text. The compiler re-parses and
+  verifies the result, so invalid plugin IR never reaches the optimizer or
+  the object writer, and the plugin cannot change the pipeline's shape.
+- The handshake rejects a plugin that speaks another ABI version, has
+  another descriptor size, or was built against another LLVM version.
+- The hook runs after the runtime bitcode is merged and before the
+  optimization pipeline, once per compiled unit; the plugin is told whether
+  the unit is the MAIN one (the carrier of the runtime).
+- A plugin is arbitrary code inside the compiler process: loading one is a
+  trust decision, and the driver says so in the documentation.
+
+**Consequences.** A user can plug in a backend without a rebuild, and the
+compiler stays a single self-contained binary (ADR-227) — a plugin is an
+*addition*, never a requirement. The cost is that the boundary is textual:
+a plugin works on LLVM IR, not on PL/I. A backend that wants to own the
+PL/I-to-LLVM lowering needs a versioned HIR format, which does not exist
+yet (the `--print-hir` dump is a debug view, not a contract).
+
+**Rejected.** Passing `llvm::Module*` across the boundary — it pins the
+plugin to one LLVM build and one C++ ABI, which is exactly what the version
+handshake avoids. A plugin that lowers PL/I — it would need the front-end
+types, breaking ADR-002's layering and the single-binary distribution.
+Front-end plugins (a custom parser or sema) — out of scope: the boundary is
+the code generator, and the front end stays the compiler's own.
+
+## ADR-236 — Portable bitcode for architectures this compiler does not know
+
+**Context.** ADR-234 gave every *known* target a profile: an embedded runtime
+bitcode, a link sysroot, and an LLVM backend. For everything else the
+compiler was a dead end:
+
+```
+$ pli --triple e2k-unknown-linux-gnu prog.pli -o prog
+pli: no target (cannot find target for triple 'e2k-unknown-linux-gnu': ...)
+```
+
+The user got nothing they could finish with their own toolchain. That is a
+poor answer for a vendor toolchain (Elbrus e2k and the like), where the
+vendor's LLVM has the backend and the user only needs the *program*.
+
+The front end is target-independent: PL/I → HIR → LLVM IR depends on the
+target only through the data layout it lays aggregates out with. So the
+compiler can emit a module for an architecture it cannot code for.
+
+**Decision.** A **target profile** (`TargetProfile`) describes what a build
+has for a target — an LLVM backend, an embedded runtime, a link sysroot — and
+the driver picks the best output mode the profile allows:
+
+| Mode | Output | The user supplies |
+| --- | --- | --- |
+| self-contained | an object or an executable | nothing |
+| object + external runtime | an `.o` with undefined `pli_*` | a runtime, their linker |
+| portable bitcode | a `.bc` / `.ll`, no codegen | their toolchain, their runtime |
+
+The portable mode (ADR-236's new part):
+
+- **The module carries no data layout.** The consumer's toolchain applies the
+  target's own; clang replaces an empty layout silently and warns only when
+  the module carries a *different* one. IRGen still needs a layout while
+  lowering, so it uses the neutral one it already had — and an architecture
+  this compiler does not know is assumed **64-bit** (LP64), because a custom
+  processor's ABI is far more often LP64 than ILP32. `--data-layout` states
+  the ABI outright for everything else.
+- **The runtime is not merged**, so the `pli_*` symbols stay undefined. The
+  user compiles `runtime/rt_*.c` — exactly the runtime TUs — with their own
+  toolchain (`scripts/build_runtime_for.sh` does it in one command) and links
+  it. A custom OS replaces the platform TU through the existing
+  `--rt-platform`.
+- **No optimization**: the pipeline needs a target machine (target-specific
+  passes, ADR-213), so the portable output is unoptimized and the consumer's
+  toolchain optimizes it.
+- **The fallback is automatic**: a target with no LLVM backend produces
+  `<output>.bc` and a diagnostic with the exact recipe, and the driver exits
+  0 — an artifact was produced. `--no-portable` turns it into an error, and
+  `--emit-bitcode` asks for the same output for a target this build does
+  know.
+
+**Consequences.** The compiler is useful for an architecture it knows nothing
+about: the program is ready, only the toolchain is missing. The cost is
+honest and stated: the LP64 assumption (escapable with `--data-layout`), the
+unoptimized output, and the runtime the user must build.
+
+**Rejected.** *Embedding a foreign runtime* — the runtime's ABI is
+target-specific, so a runtime built for another ABI would be wrong; the
+recipe is one command. *Emitting the runtime's IR for a target whose ABI
+matches an embedded one* — the same ABI assumption, with no way to check it.
+*A "portable C" output mode* — the C runtime **is** the portable artifact, and
+the user compiles it with the compiler that knows their target. *Failing
+instead of degrading* — a user with a vendor toolchain would be stuck at the
+first step; the artifact plus a recipe is strictly more useful, and
+`--no-portable` restores the strict behaviour.

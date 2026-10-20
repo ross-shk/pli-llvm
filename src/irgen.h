@@ -47,12 +47,13 @@ public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
         bool noConvChecks = false, bool noSubChecks = false,
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
-        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "")
+        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
+        std::string dataLayout = "")
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
         noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
         noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
         platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
-        perOpOverrides_(std::move(perOpOverrides)) {}
+        perOpOverrides_(std::move(perOpOverrides)), dataLayout_(std::move(dataLayout)) {}
 
   std::string run(HProgram& prog);
 
@@ -883,6 +884,10 @@ private:
   std::string platformBc_;
   LowerMode lowerMode_;
   std::map<std::string, LowerMode> perOpOverrides_;
+  // The data layout the module is built with (--data-layout). Empty selects
+  // the neutral layout for the target: LP64 for a 64-bit or an unknown
+  // architecture, ILP32 for a known 32-bit one (ADR-236).
+  std::string dataLayout_;
   // Parse the embedded runtime blob, check its LLVM stamp and target triple,
   // merge the whole
   // runtime into the module, and re-apply the P0 side-table facts to the real

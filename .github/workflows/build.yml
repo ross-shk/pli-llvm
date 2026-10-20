@@ -101,3 +101,46 @@ jobs:
         with:
           name: pli-${{ matrix.os }}
           path: build/cmake/pli.exe
+
+  # Cross-compilation (ADR-234): the per-target runtime bitcode and the
+  # target link sysroots. The sysroots are prepared in containers (docker is
+  # available on the runner), then the cross-enabled compiler is built and
+  # the produced binaries are executed.
+  cross:
+    name: cross
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM + lld (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/$(. /etc/os-release && echo $VERSION_CODENAME)/ llvm-toolchain-$(. /etc/os-release && echo $VERSION_CODENAME)-23 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clang-23 lld-23 llvm-23 llvm-23-dev libclang-23-dev liblld-23-dev libpolly-23-dev libclang-rt-23-dev ninja-build cmake python3 git
+          sudo ln -sf /usr/bin/clang-23 /usr/bin/clang && sudo ln -sf /usr/bin/clang++-23 /usr/bin/clang++
+          echo "CMAKE_PREFIX_PATH=/usr/lib/llvm-23" >> "$GITHUB_ENV"
+      - name: Prepare the cross sysroots
+        run: |
+          sh scripts/prepare_cross_sysroot.sh x86_64-unknown-linux-gnu
+          sh scripts/prepare_cross_sysroot.sh aarch64-unknown-linux-gnu
+          sh scripts/prepare_cross_sysroot.sh x86_64-pc-windows-gnu
+      - name: Configure (cross bitcode)
+        run: |
+          cmake -G Ninja -S . -B build/cmake -DPLI_CROSS_BITCODE=ON -DPLI_CROSS_REQUIRE_ALL=ON -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23
+      - name: Build
+        run: cmake --build build/cmake -j$(nproc)
+      - name: Cross driver tests
+        run: python3 tests/run_tests.py driver
+      - name: Cross binaries run (Linux)
+        run: |
+          ./build/cmake/pli --triple x86_64-unknown-linux-gnu tests/core/hello.pli -o /tmp/hello-linux-x86_64
+          ./build/cmake/pli --triple aarch64-unknown-linux-gnu tests/core/hello.pli -o /tmp/hello-linux-aarch64
+          docker run --rm -v /tmp:/t debian:trixie-slim /t/hello-linux-x86_64
+          docker run --rm --platform linux/arm64 -v /tmp:/t debian:trixie-slim /t/hello-linux-aarch64
+      - name: Cross binary under Wine (Windows)
+        run: |
+          ./build/cmake/pli --triple x86_64-pc-windows-gnu tests/core/hello.pli -o /tmp/hello-windows-x86_64.exe
+          docker build -f docker/Dockerfile.wine-test -t pli-wine-test docker
+          docker run --rm -v /tmp:/t pli-wine-test wine64 /t/hello-windows-x86_64.exe

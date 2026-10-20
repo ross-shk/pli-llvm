@@ -23,6 +23,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -3013,12 +3014,21 @@ std::string IRGen::run(HProgram& prog) {
   // The module needs a data layout so aggregate store sizes (used by
   // whole-structure assignment's memcpy, rule 127) match the target. Pick by
   // pointer/aggregate width from the target triple; the OS mangling does not
-  // affect type sizes.
+  // affect type sizes. ADR-236: an architecture this compiler does not know
+  // is assumed 64-bit (a custom processor's ABI is far more often LP64 than
+  // ILP32), and --data-layout overrides the choice outright.
   if (!triple_.empty()) {
-    if (llvm::Triple(triple_).isArch64Bit())
-      mod_.setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128");
-    else
-      mod_.setDataLayout("e-m:o-p:32:32-i64:64-i128:128-n32:64-S128");
+    if (!dataLayout_.empty()) {
+      mod_.setDataLayout(dataLayout_);
+    } else {
+      const llvm::Triple t(triple_);
+      std::string lookupErr;
+      const bool unknownArch = !llvm::TargetRegistry::lookupTarget(t, lookupErr);
+      if (t.isArch64Bit() || unknownArch)
+        mod_.setDataLayout("e-m:o-i64:64-i128:128-n32:64-S128");
+      else
+        mod_.setDataLayout("e-m:o-p:32:32-i64:64-i128:128-n32:64-S128");
+    }
   }
 
   emitGlobals();
@@ -3141,7 +3151,9 @@ bool IRGen::linkRuntimeBitcode() {
     }
     d_.error({}, "no embedded runtime for target '" + triple_ + "'" +
                      (have.empty() ? std::string() : " (this build embeds: " + have + ")") +
-                     " — rebuild with -DPLI_CROSS_BITCODE=ON, or compile for the host triple",
+                     " — rebuild with -DPLI_CROSS_BITCODE=ON, or use "
+                     "--no-bitcode-runtime (an object with external runtime references) / "
+                     "--emit-bitcode (portable bitcode), or compile for the host triple",
               "");
     return false;
   }

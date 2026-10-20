@@ -61,6 +61,10 @@ std::string sysrootCacheRoot();
 // then the canonical triples of the same ABI family (a target may be spelled
 // differently, e.g. x86_64-unknown-linux-musl vs -gnu).
 std::vector<std::string> sysrootCacheCandidates(const llvm::Triple& t);
+// True when the embedded sysroot set serves this ABI family.
+bool embeddedSysrootServes(const std::string& targetKey);
+// True when a prepared sysroot for this target is in the cache.
+bool sysrootCacheHas(const llvm::Triple& t);
 
 // The embedded sysroot (embedded_sysroot.h) materialized to a temp dir.
 // name is one of "musl", "mingw", "sdk" (which link path it feeds); dir is

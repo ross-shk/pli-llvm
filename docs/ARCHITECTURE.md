@@ -76,6 +76,9 @@ IRGen              builds an LLVM module with `llvm::IRBuilder`
     │
    ├── `-emit-llvm` ──► textual `.ll` file
    │
+   ├── backend plugin hook (ADR-235, optional): the unit's IR (text) goes to
+   │     the loaded plugin, the plugin's IR comes back and is verified here
+   │
    └── in-process object (integrated assembler; LTO bitcode with `--flto`) ──► in-process lld link with `pli_runtime` ──► executable
 ```
 Self-containment (ADR-227): the link sysroot is embedded in the binary —
@@ -87,6 +90,48 @@ use); otherwise the driver falls back to the host toolchain (probed CRT
 recipes / MSVC `LIB` / `xcrun`). `-shared`/`-static-pie` need a dynamic host
 CRT, so they skip the vendored (static) sysroot and take the host recipe; the
 link itself is still in-process lld, never a subprocess.
+
+Cross-compilation (ADR-234) uses the same pipeline with a different target.
+The target is keyed by its **ABI family** (`targetKey()`: OS family +
+canonical arch + the Windows gnu/msvc distinction), not by the triple string,
+because LLVM spells one target several ways (`arm64-apple-darwin25.6.0` vs
+`arm64-apple-macosx26.0.0`, `x86_64-pc-windows-gnu` vs
+`x86_64-w64-windows-gnu`):
+
+- the runtime and the platform bitcode are embedded **per target** (the list
+  is `scripts/cross_targets.txt`; the build embeds them with
+  `-DPLI_CROSS_BITCODE=ON`, which needs a prepared sysroot per target);
+- a blob is selected by exact triple, then by family — a different family
+  never matches, so an MSVC request cannot pick the MinGW runtime, and a
+  target without a runtime is diagnosed, never served with the host's;
+- the link uses the **target's** sysroot: `--sysroot <dir>`, the exe-relative
+  override, the prepared cache (`~/.pli/sysroots/<target>`), or the embedded
+  set when it serves that family. The host CRT recipe is host-only.
+
+A backend plugin (ADR-235) is a shared object loaded at run time
+(`--backend-plugin <path>`, `--backend <name>`). It receives the unit's LLVM
+IR as text and returns the IR to compile; the compiler re-parses and verifies
+the result, so the plugin cannot feed invalid IR into the pipeline. The
+boundary is deliberately textual: no C++ and no LLVM types cross it, so the
+plugin stays independent of the compiler's build.
+
+Every target has a **profile** (`TargetProfile`: an LLVM backend, an embedded
+runtime, a link sysroot), and the profile picks the output mode (ADR-234,
+ADR-236):
+
+| Mode | Output | The user supplies |
+| --- | --- | --- |
+| self-contained | an object or an executable | nothing |
+| object + external runtime | an `.o` with undefined `pli_*` | a runtime, their linker |
+| portable bitcode | a `.bc` / `.ll`, no codegen | their toolchain, their runtime |
+
+A target with no LLVM backend in this build still gets a program: the module
+is written as portable bitcode — no data layout (the consumer's toolchain
+applies the target's own), no runtime merged (the `pli_*` symbols stay
+undefined), unoptimized (the pipeline needs a target machine) — together with
+the recipe for finishing it with the user's own toolchain. `--no-portable`
+turns that fallback into an error; `--emit-bitcode` asks for the same output
+for a target this build does know.
 
 Given several input files, pli runs the pipeline once per file to an
 independent relocatable object and links them all with `pli_runtime` into one
