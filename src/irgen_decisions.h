@@ -50,4 +50,10 @@ private:
   int cur_ = -1;
 };
 
+// The text of a REPEAT of a constant string a constant number of times
+// (ADR-241): the repeated text is a compile-time constant, so the result
+// needs neither a runtime buffer nor a copy. Empty when the repetition is
+// not a foldable constant.
+std::string foldRepeatText(const std::string& src, long long count);
+
 } // namespace pli

@@ -1,0 +1,78 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (26),(121),(135): a constant expression folds to its value at
+    compile time (ADR-240). The folded value must agree exactly with the
+    runtime computation, scale included, and a division by zero must still
+    raise ZERODIVIDE — folding never removes an observable condition. */
+ decimal_const: procedure options(main);
+    declare a fixed dec(9,2) init(99.99 + 0.01);
+    declare b fixed dec(9,2) init(1.5 * 2.25);
+    declare c fixed dec(9,2) value(10.0 + 2.5);
+    declare d fixed dec(9,2);
+    declare e fixed dec(9,2);
+    declare f fixed dec(9,2);
+    declare g fixed dec(9,2);
+    declare z fixed dec(9,2) init(2.0);
+    declare q fixed dec(9,2);
+    declare caught fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    /* the folded INITIAL agrees with the runtime computation */
+    d = 99.99 + 0.01;
+    if a ^= d then do;
+       fails = fails + 1;
+       put skip list('FAIL a', a);
+    end;
+    e = 1.5 * 2.25;
+    if b ^= e then do;
+       fails = fails + 1;
+       put skip list('FAIL b', b);
+    end;
+    f = 10.0 + 2.5;
+    if c ^= f then do;
+       fails = fails + 1;
+       put skip list('FAIL c', c);
+    end;
+
+    /* the scale of the target type is the scale of the stored value */
+    if a ^= 100.00 then do;
+       fails = fails + 1;
+       put skip list('FAIL scale a', a);
+    end;
+    if b ^= 3.38 then do;
+       fails = fails + 1;
+       put skip list('FAIL scale b', b);
+    end;
+    if c ^= 12.50 then do;
+       fails = fails + 1;
+       put skip list('FAIL scale c', c);
+    end;
+
+    /* an integer literal is rescaled to the declared scale */
+    declare h fixed dec(9,2) init(5);
+    if h ^= 5.00 then do;
+       fails = fails + 1;
+       put skip list('FAIL init int', h);
+    end;
+
+    /* a division is never folded: the divisor may be zero */
+    caught = 0;
+    on zerodivide caught = 1;
+    q = 1.0 / 0.0;
+    revert zerodivide;
+    if caught = 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL no zerodivide');
+    end;
+
+    /* a division by a non-zero constant still computes */
+    g = z * 3.0;
+    if g ^= 6.00 then do;
+       fails = fails + 1;
+       put skip list('FAIL g', g);
+    end;
+
+    if fails = 0 then put skip list('PASS decimal_const');
+    else put skip list('FAIL decimal_const: fails =', fails);
+ end decimal_const;

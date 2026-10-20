@@ -127,6 +127,9 @@ private:
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynLb_;
+  // The membership table of each constant character alphabet used by
+  // VERIFY/SEARCH (ADR-241), keyed by the alphabet's text.
+  std::map<std::string, llvm::GlobalVariable*> searchTables_;
   // Dynamic array member (rule 13) runtime bound values, keyed by (structure
   // symbol, member field path), recorded once at block entry.
   struct MemberDyn {
@@ -603,6 +606,9 @@ private:
   // have no implementation fall back to runtime and report the fallback
   // under -v (design-docs/mlir-runtime-migration-plan.md §5.2, §6.5).
   bool useRuntimeCall(const std::string& op);
+  // The lowering policy for `op` without recording the decision: used where
+  // the caller has already asked for it (ADR-260).
+  bool runtimePath(const std::string& op);
   // True when a direct LLVM lowering exists for `op` (populated in P1+).
   bool hasLLVMLowering(const std::string& op);
   // Dispatch wrappers for the P0/P1 pilot operations. Each checks the
@@ -690,6 +696,21 @@ private:
   // Direct LLVM lowering for VERIFY (P3): bytewise scan for first char
   // absent from the delimiter set, 1-based result.
   llvm::Value* emitVerifyLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen);
+  // VERIFY with a constant alphabet (ADR-241): a 256-entry membership table
+  // replaces the inner scan, so each character costs one lookup instead of a
+  // scan of the whole alphabet (MULTICS compile_exp.pl1:1348-1380).
+  llvm::Value* emitVerifyTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table);
+  // VERIFY(s,t,from) with a constant alphabet: as above, starting at
+  // position `start` (1-based, clamped to 1).
+  llvm::Value* emitVerifyFromTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                   llvm::Value* start);
+  // SEARCH with a constant alphabet: the first char present in the set,
+  // 1-based, starting at `start` (clamped to 1).
+  llvm::Value* emitSearchTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                               llvm::Value* start);
+  // The 256-entry membership table for a constant character alphabet; one
+  // global per distinct alphabet, reused across call sites.
+  llvm::GlobalVariable* searchTable(const std::string& alphabet);
   // Direct LLVM lowering for VERIFY(s,t,from) (P3): same as verify but
   // starting at position `start` (1-based, clamped to 1).
   llvm::Value* emitVerifyFromLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,

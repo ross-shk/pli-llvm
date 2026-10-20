@@ -69,4 +69,21 @@ std::string FactStore::report() const {
   return out;
 }
 
+// The text of a REPEAT of a constant string a constant number of times
+// (ADR-241). The decision lives here, outside irgen.cpp (the plan's C2), so
+// it can be read without a backend.
+std::string foldRepeatText(const std::string& src, long long count) {
+  if (src.empty() || count <= 0)
+    return {};
+  // The result type is the source length times the count (sema sized it), so
+  // the two agree; the guard only keeps the text bounded.
+  if (count > (1LL << 20) || (long long)src.size() * count > (1LL << 20))
+    return {};
+  std::string text;
+  text.reserve(src.size() * (size_t)count);
+  for (long long k = 0; k < count; ++k)
+    text += src;
+  return text;
+}
+
 } // namespace pli

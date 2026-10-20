@@ -1,0 +1,58 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (123): VERIFY and SEARCH with a constant alphabet lower to a
+    membership table (ADR-241). The table path must agree exactly with the
+    byte-at-a-time scan the variable-alphabet form uses. */
+ search_const: procedure options(main);
+    declare s char(20) init('hello world');
+    declare alpha char(10) init('0123456789');
+    declare v1 fixed bin(31);
+    declare v2 fixed bin(31);
+    declare s1 fixed bin(31);
+    declare s2 fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    /* VERIFY: the constant alphabet and the variable alphabet agree */
+    v1 = verify(s, '0123456789');
+    v2 = verify(s, alpha);
+    if v1 ^= v2 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify', v1, v2);
+    end;
+    /* VERIFY with a start position */
+    v1 = verify(s, '0123456789', 3);
+    v2 = verify(s, alpha, 3);
+    if v1 ^= v2 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify from', v1, v2);
+    end;
+    /* SEARCH: the first character of s that is in the alphabet */
+    s1 = search(s, 'o', 1);
+    s2 = search(s, 'o', 1);
+    if s1 ^= s2 then do;
+       fails = fails + 1;
+       put skip list('FAIL search', s1, s2);
+    end;
+    /* a character that is not in the alphabet is not found */
+    s1 = search(s, 'xyz', 1);
+    if s1 ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL search absent', s1);
+    end;
+    /* VERIFY reports the first character outside the alphabet */
+    v1 = verify('abc', '0123456789');
+    if v1 ^= 1 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify pos', v1);
+    end;
+    /* VERIFY of a string entirely inside the alphabet reports 0 */
+    v1 = verify('123', '0123456789');
+    if v1 ^= 0 then do;
+       fails = fails + 1;
+       put skip list('FAIL verify none', v1);
+    end;
+
+    if fails = 0 then put skip list('PASS search_const');
+    else put skip list('FAIL search_const: fails =', fails);
+ end search_const;

@@ -779,27 +779,29 @@ static std::string loweringModeName(LowerMode mode,
   return out;
 }
 
-bool IRGen::useRuntimeCall(const std::string& op) {
+bool IRGen::runtimePath(const std::string& op) {
   LowerMode mode = lowerMode_;
   auto oit = perOpOverrides_.find(op);
   if (oit != perOpOverrides_.end())
     mode = oit->second;
-  bool useRuntime = true;
   switch (mode) {
   case LowerMode::Runtime:
-    break;
+    return true;
   case LowerMode::MLIR:
     // MLIR not compiled in this build (P2+ gates it). Fall back to runtime.
-    break;
+    return true;
   case LowerMode::LLVM:
-    useRuntime = !hasLLVMLowering(op);
-    break;
+    return !hasLLVMLowering(op);
   case LowerMode::Auto: {
     auto dit = kRuntimeDefault().find(op);
-    useRuntime = !(dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op));
-    break;
+    return !(dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op));
   }
   }
+  return true;
+}
+
+bool IRGen::useRuntimeCall(const std::string& op) {
+  bool useRuntime = runtimePath(op);
   // Record the decision so --print-facts can show it (ADR-260).
   facts_.recordBuiltin(op, useRuntime ? "runtime" : "llvm");
   return useRuntime;
@@ -915,6 +917,201 @@ llvm::Value* IRGen::emitCmpChar(llvm::Value* a, llvm::Value* aLen, llvm::Value* 
 
 // --- W2 dispatch wrappers (search/scan operations) ---
 
+// The membership table of a constant character alphabet: entry c is 1 when
+// the character code c is in the alphabet, 0 otherwise. The table is a
+// module-level constant, one per distinct alphabet, reused by every call
+// site that uses it (MULTICS compile_exp.pl1:1348-1380 built the same table
+// at compile time).
+llvm::GlobalVariable* IRGen::searchTable(const std::string& alphabet) {
+  auto it = searchTables_.find(alphabet);
+  if (it != searchTables_.end())
+    return it->second;
+  std::vector<unsigned char> bytes(256, 0);
+  for (unsigned char c : alphabet)
+    bytes[c] = 1;
+  llvm::Constant* data = llvm::ConstantDataArray::get(ctx_, bytes);
+  auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
+                                      llvm::GlobalValue::PrivateLinkage, data, "pli_search_table");
+  g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  searchTables_[alphabet] = g;
+  return g;
+}
+
+// VERIFY with a constant alphabet: the first character of `s` that is *not*
+// in the alphabet, 1-based; 0 when every character is in it. The table
+// replaces the inner scan of the alphabet (ADR-241).
+llvm::Value* IRGen::emitVerifyTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "vrf.outer.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(zero, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  // The character code is the byte value (0..255), which indexes the table.
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "vrf.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "vrf.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "vrf.in_set");
+  llvm::Value* notIn =
+      b_.CreateICmpEQ(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "vrf.not_in");
+  b_.CreateCondBr(notIn, foundBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1), "vrf.i_next"),
+                    latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(foundBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1),
+                                           "vrf.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, foundBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// VERIFY(s,t,from) with a constant alphabet: as emitVerifyTable, but the
+// scan starts at position `start` (1-based, clamped to 1).
+llvm::Value* IRGen::emitVerifyFromTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                        llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "vrf.start");
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "vrf.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "vrf.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "vrf.outer.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "vrf.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "vrf.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "vrf.in_set");
+  llvm::Value* notIn =
+      b_.CreateICmpEQ(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "vrf.not_in");
+  b_.CreateCondBr(notIn, foundBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "vrf.i_next"), latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(foundBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "vrf.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, foundBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// SEARCH with a constant alphabet: the first character of `s` that *is* in
+// the alphabet, 1-based, starting at `start` (clamped to 1); 0 when there is
+// none (ADR-241).
+llvm::Value* IRGen::emitSearchTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                    llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "srch.slen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "srch.start");
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "srch.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "srch.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "srch.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "srch.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "srch.outer.latch", F);
+  llvm::BasicBlock* matchedBB = llvm::BasicBlock::Create(ctx_, "srch.matched", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "srch.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "srch.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "srch.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "srch.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "srch.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "srch.si");
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "srch.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "srch.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "srch.in_set");
+  llvm::Value* isIn =
+      b_.CreateICmpNE(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "srch.is_in");
+  b_.CreateCondBr(isIn, matchedBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "srch.i_next"), latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(matchedBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "srch.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.out");
+  resultPhi->addIncoming(matchResult, matchedBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// verify(s, t[, start]): the first character of s that is absent from the
+// alphabet t, 1-based. A constant alphabet uses the membership table.
 llvm::Value* IRGen::emitVerify(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
                                llvm::Value* tLen) {
   if (useRuntimeCall("verify")) {
@@ -11170,6 +11367,26 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "REPEAT") {
+    // A constant string repeated a constant number of times is itself a
+    // constant string (ADR-241): the text is built at compile time, so the
+    // result is a constant instead of a runtime loop. The lowering policy
+    // still wins: a forced runtime call keeps the library path, so the
+    // differential oracle keeps both sides.
+    HExpr* src = e->args[0].get();
+    HExpr* cnt = e->args[1].get();
+    if (src->kind == HExpr::CharLit && cnt->kind == HExpr::IntLit && cnt->ival > 0 &&
+        !runtimePath("repeat")) {
+      std::string text = pli::foldRepeatText(src->sval, cnt->ival);
+      if (!text.empty() && (long long)text.size() == (long long)e->ty.len) {
+        facts_.recordBuiltin("repeat", "llvm");
+        Val out;
+        out.ty = e->ty;
+        out.ptr = globalString(text);
+        out.len = i64(text.size());
+        result = out;
+        return true;
+      }
+    }
     Val s = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val out = charTemp(e->ty.len);
@@ -11182,7 +11399,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val t = emitExpr(e->args[1].get());
     llvm::Value* r;
-    if (e->args.size() == 3) {
+    // A constant alphabet uses the membership table instead of a scan of the
+    // alphabet (ADR-241). The lowering policy still wins: a forced runtime
+    // call keeps the library path.
+    const char* op = e->args.size() == 3 ? "verify_from" : "verify";
+    HExpr* alpha = e->args[1].get();
+    if (alpha->kind == HExpr::CharLit && !useRuntimeCall(op)) {
+      llvm::Value* tbl = searchTable(alpha->sval);
+      if (e->args.size() == 3) {
+        Val st = emitExpr(e->args[2].get());
+        r = emitVerifyFromTable(s.ptr, s.len, tbl, toI64(st));
+      } else {
+        r = emitVerifyTable(s.ptr, s.len, tbl);
+      }
+    } else if (e->args.size() == 3) {
       Val st = emitExpr(e->args[2].get());
       r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
     } else {
@@ -11269,24 +11499,16 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val t = emitExpr(e->args[1].get());
     Val st = emitExpr(e->args[2].get());
-    llvm::Value* r = emitSearch(s.ptr, s.len, t.ptr, t.len, toI64(st));
+    // A constant alphabet uses the membership table instead of a scan of the
+    // alphabet (ADR-241).
+    llvm::Value* r;
+    HExpr* alpha = e->args[1].get();
+    if (alpha->kind == HExpr::CharLit && !useRuntimeCall("search"))
+      r = emitSearchTable(s.ptr, s.len, searchTable(alpha->sval), toI64(st));
+    else
+      r = emitSearch(s.ptr, s.len, t.ptr, t.len, toI64(st));
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "srch32");
-    result = v;
-    return true;
-  }
-  if (e->name == "VERIFY") {
-    Val s = emitExpr(e->args[0].get());
-    Val t = emitExpr(e->args[1].get());
-    llvm::Value* r;
-    if (e->args.size() == 3) {
-      Val st = emitExpr(e->args[2].get());
-      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
-    } else {
-      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
-    }
-    v.ty = e->ty;
-    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
     result = v;
     return true;
   }

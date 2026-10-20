@@ -94,26 +94,31 @@ static HExpr::Kind mapKind(Expr::Kind k) {
 //
 // IBM requires the same object code for a use of a VALUE constant and a use
 // of the literal it stands for (zos:23492-23505), so a VALUE constant is
-// lowered to its value at every use that cannot write to it (ADR-241). The
-// substitution is only exact when the constant's declared type *is* the
-// literal's type: a `CHAR(20) VALUE('abc')` holds 'abc' blank-padded to 20
-// characters, which is not the literal 'abc', so it keeps its storage.
+// lowered to its value at every use that cannot write to it (ADR-241).
+//
+// The substitution is only exact when the constant holds *exactly* the
+// literal: a character or bit string of the declared length, so the stored
+// value is the literal's text with no padding or truncation. A
+// `CHAR(20) VALUE('abc')` holds 'abc' blank-padded to 20 characters, which
+// is not the literal 'abc', so it keeps its storage.
 HExprP lowerValueConst(const Expr* e) {
   Symbol* sym = e->sym;
   if (!sym || !sym->isValue || !sym->initExpr)
     return nullptr;
   const Expr* init = sym->initExpr;
-  if (init->ty != sym->ty)
+  if (init->kind != Expr::CharLit && init->kind != Expr::BitLit)
+    return nullptr;
+  const bool isChar = init->kind == Expr::CharLit;
+  if (isChar ? !sym->ty.isChar() : !sym->ty.isBit())
+    return nullptr;
+  if (sym->ty.varying || sym->ty.varyingz)
+    return nullptr;
+  if (sym->ty.len != (int)init->sval.size())
     return nullptr;
   auto h = std::make_unique<HExpr>();
-  h->kind = mapKind(init->kind);
+  h->kind = isChar ? HExpr::CharLit : HExpr::BitLit;
   h->loc = e->loc;
   h->ty = sym->ty;
-  h->ival = init->ival;
-  h->wideIval = init->wideIval;
-  h->fval = init->fval;
-  h->decScale = init->decScale;
-  h->decPrec = init->decPrec;
   h->sval = init->sval;
   return h;
 }
