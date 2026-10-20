@@ -628,6 +628,46 @@ void pli::applyRuntimeFnAttrs(llvm::Function& f) {
   applyRuntimeAttrs(&f);
 }
 
+// The name of a memory effect, for the --print-facts report.
+static const char* effectName(pli::MemEffect e) {
+  switch (e) {
+  case pli::MemEffect::None:
+    return "none";
+  case pli::MemEffect::ArgRead:
+    return "argmem-read";
+  case pli::MemEffect::ArgReadWrite:
+    return "argmem-readwrite";
+  case pli::MemEffect::Read:
+    return "read";
+  case pli::MemEffect::Unknown:
+    break;
+  }
+  return "unknown";
+}
+
+// Stamp the memory effect the decision layer computed for a procedure
+// (ADR-264). The attribute is the only channel: a PL/I-specific notion that
+// LLVM cannot express as an attribute gets dropped with a note in
+// --print-facts, not a custom pass (the plan's C1).
+static void applyMemoryEffect(llvm::Function* f, pli::MemEffect e) {
+  switch (e) {
+  case pli::MemEffect::None:
+    f->setMemoryEffects(llvm::MemoryEffects::none());
+    break;
+  case pli::MemEffect::ArgRead:
+    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref));
+    break;
+  case pli::MemEffect::ArgReadWrite:
+    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef));
+    break;
+  case pli::MemEffect::Read:
+    f->setMemoryEffects(llvm::MemoryEffects::readOnly());
+    break;
+  case pli::MemEffect::Unknown:
+    break; // no promise: the function keeps LLVM's default
+  }
+}
+
 // --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) ---
 
 // P0 policy: every operation defaults to runtime. P5 flips entries one wave at
@@ -3061,6 +3101,22 @@ std::string IRGen::run(HProgram& prog) {
   // P6.1b (ADR-215): decide by-value parameters once for the whole program
   // so declareProc, emitProc, and every call site agree on signatures.
   computeByValueParams(prog);
+  // WS-A1 (ADR-264): what each procedure can do to memory. The decision layer
+  // computes it (the plan's C2); the verdict reaches LLVM only as a function
+  // attribute (the plan's C1).
+  {
+    std::unordered_set<const Symbol*> byValue;
+    for (const auto& kv : byValParam_)
+      if (kv.second) // the map holds every parameter; only the true ones ride by value
+        byValue.insert(kv.first);
+    pli::EffectOptions eopts;
+    eopts.sizeChecks = sizeChecks();
+    eopts.subscriptChecks = subChecks();
+    eopts.zerodivideChecks = zdivChecks();
+    eopts.conversionChecks = convChecks();
+    if (!noMemoryEffects_)
+      effects_ = pli::analyzeEffects(prog, byValue, eopts);
+  }
   // ADR-233: a program with an asynchronous CALL (rule (79)) writes to the
   // stream from more than one thread, so its output statements are bracketed
   // with the output lock. A program without one keeps the plain path.
@@ -3513,12 +3569,11 @@ void IRGen::allocaLocals(HProc* p) {
      // P2: tag plain AUTOMATIC allocas with alias-disjoint facts so LLVM
      // knows loads through this pointer cannot be clobbered by calls or
      // stores via unrelated pointers (exercises LICM + LAA). Only plain
-     // automatic locals qualify — no aliases may be taken (definedBase,
-     // based, controlled, static, or params). All scopes share one domain
-     // per function so the facts compare; scalar loads/stores stamp the
-     // matching !alias.scope/!noalias via annotateAlias. (ADR-002: IRGen only.)
-     if (!s->isBased() && !s->controlled && !s->isStatic &&
-         !s->definedBase && s->kind == Symbol::Var) {
+     // automatic locals qualify — the alias taxonomy (ADR-265) decides which
+     // those are, in one place. All scopes share one domain per function so
+     // the facts compare; scalar loads/stores stamp the matching
+     // !alias.scope/!noalias via annotateAlias. (ADR-002: IRGen only.)
+     if (pli::aliasClass(s) == pli::AliasClass::Disjoint) {
        if (!aliasDomain_)
          aliasDomain_ = mdb.createAnonymousAliasScopeDomain("pli");
        llvm::MDNode* scope = mdb.createAnonymousAliasScope(aliasDomain_, "plain-automatic");
@@ -4253,6 +4308,12 @@ bool IRGen::isDerivedFromNonNegDoIndex(llvm::Value* v) const {
   return false;
 }
 
+// The memory-effect verdict for a procedure (ADR-264).
+pli::MemEffect IRGen::effectOf(const HProc* p) const {
+  auto it = effects_.find(p);
+  return it == effects_.end() ? pli::MemEffect::Unknown : it->second.effect;
+}
+
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
@@ -4294,6 +4355,7 @@ void IRGen::declareProc(HProc* p) {
     auto linkage =
         p->isExternal ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
     llvm::Function* fn = llvm::Function::Create(ft, linkage, p->irName.substr(1), &mod_);
+    applyMemoryEffect(fn, effectOf(p));
     for (const auto& en : p->entryNames)
       aliasFor(en, fn);
     return;
@@ -4324,6 +4386,7 @@ void IRGen::declareProc(HProc* p) {
   llvm::FunctionType* ift = llvm::FunctionType::get(implRet, pt, false);
   llvm::Function* impl = llvm::Function::Create(ift, llvm::Function::InternalLinkage,
                                                 p->irName.substr(1) + ".impl", &mod_);
+  applyMemoryEffect(impl, effectOf(p));
 
   // A thunk marshals one entry's arguments and tail-calls the shared impl.
   // The impl carries one segment per entry point in body order; control must
@@ -4346,6 +4409,7 @@ void IRGen::declareProc(HProc* p) {
     llvm::FunctionType* tft = llvm::FunctionType::get(trty, sig, false);
     llvm::Function* tf = llvm::Function::Create(tft, llvm::Function::InternalLinkage,
                                                 "entry.thunk." + std::to_string(thunkN++), &mod_);
+    applyMemoryEffect(tf, effectOf(p));
     llvm::BasicBlock* tb = llvm::BasicBlock::Create(ctx_, "entry", tf);
     b_.SetInsertPoint(tb);
     std::vector<llvm::Value*> args;
@@ -4445,6 +4509,13 @@ void IRGen::emitProc(HProc* p) {
   // Open the procedure's fact block so --print-facts groups the decisions by
   // procedure (ADR-260).
   facts_.beginProc(p->name);
+  // The memory-effect promise made about this procedure (ADR-264), so
+  // --print-facts shows what the compiler claimed and why.
+  {
+    auto it = effects_.find(p);
+    if (it != effects_.end())
+      facts_.setEffect(p->name, effectName(it->second.effect), it->second.note);
+  }
   labelBlocks_.clear();
   labelBeginChain_.clear();
   onScopes_.clear();

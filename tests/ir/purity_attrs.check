@@ -1,0 +1,7 @@
+CHECK: define internal i32 @"PLI_PURITY_ATTRS\$PURE"\(\) #{{[0-9]+}} \{
+CHECK: define internal i32 @"PLI_PURITY_ATTRS\$READER"\(ptr %0\) #{{[0-9]+}} \{
+CHECK: define internal void @"PLI_PURITY_ATTRS\$WRITER"\(ptr %0\) #{{[0-9]+}} \{
+CHECK: define internal void @"PLI_PURITY_ATTRS\$IO_PROC"\(ptr %0\) \{$
+CHECK: attributes #{{[0-9]+}} = \{ memory\(none\) \}
+CHECK: attributes #{{[0-9]+}} = \{ memory\(argmem: read\) \}
+CHECK: attributes #{{[0-9]+}} = \{ memory\(argmem: readwrite\) \}

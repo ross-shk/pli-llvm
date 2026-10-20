@@ -1,0 +1,61 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-A1 (ADR-264): the memory-effect attributes must not change what the
+    program computes. Each procedure here gets a different promise — none,
+    argmem-read, argmem-readwrite, or none at all — and the values the
+    program produces must be the same as before the attributes existed. */
+ purity_test: procedure options(main);
+   declare i fixed bin(31);
+   declare v fixed bin(31);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   /* a procedure that touches no memory at all */
+   i = pure();
+   if i ^= 7 then fails = fails + 1;
+
+   /* a procedure that reads its argument and writes nothing */
+   v = 41;
+   i = reader(v);
+   if i ^= 42 then fails = fails + 1;
+   if v ^= 41 then fails = fails + 1;
+
+   /* a procedure that writes its argument */
+   v = 41;
+   call writer(v);
+   if v ^= 42 then fails = fails + 1;
+
+   /* a procedure that does I/O: nothing is promised about it */
+   v = 5;
+   call io_proc(v);
+   if v ^= 5 then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS purity');
+   else put skip list('FAIL purity: fails =', fails);
+
+   /* touches no memory at all */
+   pure: procedure returns(fixed bin(31));
+      declare y fixed bin(31);
+      y = 7;
+      return(y);
+   end pure;
+
+   /* reads its argument and writes nothing */
+   reader: procedure(x) returns(fixed bin(31));
+      declare x fixed bin(31);
+      return(x + 1);
+   end reader;
+
+   /* writes its argument */
+   writer: procedure(x);
+      declare x fixed bin(31);
+      x = x + 1;
+   end writer;
+
+   /* does I/O: nothing may be promised */
+   io_proc: procedure(x);
+      declare x fixed bin(31);
+      put skip list(x);
+   end io_proc;
+ end purity_test;

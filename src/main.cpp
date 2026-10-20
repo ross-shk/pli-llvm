@@ -265,7 +265,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
                        bool linkRuntimeIn = false, const std::string& ltoKind = "",
                        pli::PgoMode pgoMode = pli::PgoMode::None, const std::string& pgoUse = "",
-                       bool marchNative = false, const std::string& platformBc = "") {
+                       bool marchNative = false, const std::string& platformBc = "",
+                       bool noMemoryEffects = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.

@@ -8,9 +8,16 @@
 // LLVM, so a decision can be read in a test without a backend.
 #pragma once
 
+#include <map>
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
+
+struct HProc;
+struct HProgram;
+struct Symbol;
 
 namespace pli {
 
@@ -25,6 +32,8 @@ struct BuiltinFact {
 // The facts the compiler computed for one procedure.
 struct ProcFacts {
   std::string name;
+  std::string effect;      // the memory-effect verdict (ADR-264), "" when none
+  std::string effectNote;  // why the verdict is not stronger
   std::vector<BuiltinFact> builtins;
 };
 
@@ -39,6 +48,8 @@ public:
   // Per-procedure facts: beginProc opens a procedure, recordBuiltin adds to it.
   void beginProc(const std::string& name);
   void recordBuiltin(const std::string& op, const std::string& path);
+  // The memory-effect verdict for a procedure (ADR-264).
+  void setEffect(const std::string& name, const std::string& effect, const std::string& note);
   // The report: one fact per line, module facts first.
   std::string report() const;
 
@@ -49,5 +60,62 @@ private:
   // Index into procs_ of the procedure being lowered; -1 when none is open.
   int cur_ = -1;
 };
+
+// --- WS-A1: what a PL/I procedure can do to memory (ADR-264) ---------------
+//
+// The verdict is computed here, outside irgen.cpp, and reaches LLVM only as
+// function attributes — no custom pass (the plan's C1). Each effect value is a
+// promise the optimizer may rely on; Unknown is the absence of a promise and
+// leaves the function exactly as it was before this work.
+enum class MemEffect {
+  Unknown,      // may read and write anything — no attribute
+  Read,         // may read any memory, writes none
+  ArgRead,      // reads only memory reachable from its pointer arguments
+  ArgReadWrite, // reads and writes only memory reachable from its pointer arguments
+  None,         // touches no memory at all
+};
+
+// The verdict for one procedure.
+struct ProcEffects {
+  MemEffect effect = MemEffect::Unknown;
+  bool mayRaise = false;    // can raise a PL/I condition
+  bool hasOnUnit = false;   // establishes an ON unit (rule 91)
+  bool nameEscapes = false; // its name is assigned or passed as an argument
+  std::string note;         // why the effect is not stronger, for the report
+};
+
+// Which checks the driver enabled. A check that is off cannot raise a
+// condition, so the procedure cannot dispatch to an ON handler either.
+struct EffectOptions {
+  bool sizeChecks = true;
+  bool subscriptChecks = true;
+  bool zerodivideChecks = true;
+  bool conversionChecks = true;
+};
+
+// Analyze every procedure in the program. `byValue` names the parameters that
+// ride by value (ADR-215): their storage is the callee's own frame, so they
+// are not pointer arguments.
+std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
+                                                    const std::unordered_set<const Symbol*>& byValue,
+                                                    const EffectOptions& opts);
+
+// --- WS-A4: the PL/I alias taxonomy (ADR-265) ------------------------------
+//
+// IBM's list is the normative one (mvs:24678-24684): an aliased variable is
+// any variable whose value can be modified through a name other than its own
+// — DEFINED overlays, the bases of DEFINED variables, parameters, arguments,
+// based variables, and variables whose address an external procedure knows.
+// MULTICS's `aliasable` bit (optimizer.pl1:212-232) says how the compiler
+// detects them. This is that detection, in one place, so every alias claim the
+// compiler makes is checked against the same list.
+enum class AliasClass {
+  Disjoint, // owns its storage; disjoint from every other declaration
+  Shares,   // may share storage with another declaration
+  Unknown,  // may point anywhere: a locator, an overlay, an escaped address
+};
+
+// The alias class of one declaration's storage.
+AliasClass aliasClass(const Symbol* s);
 
 } // namespace pli

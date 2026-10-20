@@ -1,0 +1,42 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-A1 (ADR-264): the memory effects a PL/I procedure promises to LLVM.
+    A procedure that touches no memory gets memory(none); one that only
+    reads its arguments gets memory(argmem: read); one that writes them
+    gets memory(argmem: readwrite); one that does I/O gets no promise at
+    all, because an unknown call may set anything. */
+ purity_attrs: procedure options(main);
+   declare i fixed bin(31);
+   declare v fixed bin(31);
+
+   i = pure();
+   v = reader(i);
+   call writer(v);
+   call io_proc(v);
+   put skip list(i);
+
+   /* touches no memory at all */
+   pure: procedure returns(fixed bin(31));
+      declare y fixed bin(31);
+      y = 7;
+      return(y);
+   end pure;
+
+   /* reads its argument and writes nothing */
+   reader: procedure(x) returns(fixed bin(31));
+      declare x fixed bin(31);
+      return(x + 1);
+   end reader;
+
+   /* writes its argument */
+   writer: procedure(x);
+      declare x fixed bin(31);
+      x = x + 1;
+   end writer;
+
+   /* does I/O: nothing may be promised */
+   io_proc: procedure(x);
+      declare x fixed bin(31);
+      put skip list(x);
+   end io_proc;
+ end purity_attrs;

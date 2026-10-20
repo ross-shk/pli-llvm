@@ -1,0 +1,32 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-A4 (ADR-265) litmus: a STATIC declaration beside plain AUTOMATIC
+    locals. The taxonomy says a STATIC may share storage with the other
+    statics, so it must not be given the plain-local disjointness claim; the
+    program must compute the same answer either way. In this compiler a
+    STATIC is AUTOMATIC storage (sema.cpp:425), so the row is exercised
+    through a STATIC that holds the address of a local. */
+ alias_static: procedure options(main);
+    declare i fixed bin(31);
+    declare sum fixed bin(31);
+    declare a(10) fixed bin(31);
+    declare p pointer;
+    declare s static pointer;
+
+    do i = 1 to 10;
+       a(i) = i * i;
+    end;
+
+    /* the address of a local travels through a STATIC */
+    p = addr(a(1));
+    s = p;
+
+    /* the local is written after the address was handed out */
+    a(1) = 100;
+
+    sum = 0;
+    do i = 1 to 10;
+       sum = sum + a(i);
+    end;
+    put skip list(sum);
+ end alias_static;

@@ -48,12 +48,13 @@ public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
         bool noConvChecks = false, bool noSubChecks = false,
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
-        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "")
+        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
+        bool noMemoryEffects = false)
       : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
         noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
         noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
         platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
-        perOpOverrides_(std::move(perOpOverrides)) {}
+        perOpOverrides_(std::move(perOpOverrides)), noMemoryEffects_(noMemoryEffects) {}
 
   std::string run(HProgram& prog);
 
@@ -149,6 +150,15 @@ private:
   std::unordered_map<MemberDyn, MemberBounds, MemberDyn::Hash> memberDyn_;
   void emitGlobals();
   void declareProc(HProc* p); // pre-create a proc's functions/aliases so calls resolve
+  // WS-A1 (ADR-264): what each procedure can do to memory, computed by the
+  // decision layer before any function is declared, so the promise can be
+  // stamped on the function itself.
+  std::map<const HProc*, pli::ProcEffects> effects_;
+  // --no-memory-effects: skip the inference, so every call keeps LLVM's
+  // default effects. The escape hatch that lets a benchmark measure what the
+  // inference is worth.
+  bool noMemoryEffects_ = false;
+  pli::MemEffect effectOf(const HProc* p) const;
   void emitProc(HProc* p);
   void emitPlainProc(HProc* p, llvm::Type* retLLVM);
   void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM);
