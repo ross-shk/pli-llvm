@@ -18,6 +18,8 @@
 #include "pli_rt_plat.h" /* platform seam: every TU gets the pli_plat_* and
                            * threading declarations, so rt_*.c files include
                            * no system headers of their own. */
+#include "rt_sync.h"     /* the runtime's lock layer (ADR-234): the tasking
+                           * and stream code lock through rt_lock/rt_cond. */
 
 /* ---------------------------------------------------------------------------
  * Ported libc primitives (runtime-reduction plan, Phases 1 & 4).
@@ -180,29 +182,29 @@ void rt_flush_stdout(void);
  * transition carries no data race. It is volatile so the optimiser cannot
  * cache the load across a loop.
  * ------------------------------------------------------------------------- */
-extern pli_mutex rt_out_mu;
-extern pli_mutex rt_in_mu;
+extern rt_lock rt_out_mu;
+extern rt_lock rt_in_mu;
 extern volatile int rt_tasks_active;
 
 /* Take/release the output lock. Recursive: an item writer calls the byte
  * writer, which locks on its own. */
 static inline void rt_out_lock(void) {
   if (rt_tasks_active)
-    pli_mutex_lock(&rt_out_mu);
+    rt_lock_acquire(&rt_out_mu);
 }
 static inline void rt_out_unlock(void) {
   if (rt_tasks_active)
-    pli_mutex_unlock(&rt_out_mu);
+    rt_lock_release(&rt_out_mu);
 }
 /* Take/release the input lock. Recursive, like the output lock: a token
  * reader is called from the record reader that already holds it. */
 static inline void rt_in_lock(void) {
   if (rt_tasks_active)
-    pli_mutex_lock(&rt_in_mu);
+    rt_lock_acquire(&rt_in_mu);
 }
 static inline void rt_in_unlock(void) {
   if (rt_tasks_active)
-    pli_mutex_unlock(&rt_in_mu);
+    rt_lock_release(&rt_in_mu);
 }
 /* Called by the task spawn before the thread is created: from then on every
  * stream operation runs under the matching lock. */

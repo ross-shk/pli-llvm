@@ -79,10 +79,51 @@ int pli_plat_fprintf(FILE *fp, const char *fmt, ...) {
   return n;
 }
 
+/* --- the tasking model (ADR-234): the environment, the machine, the clock */
+const char *pli_plat_getenv(const char *name) {
+  const char *v = getenv(name);
+  return v ? v : "";
+}
+
 /* --- threading backends (single selection block; bodies ex pli_thread.h) */
 #if defined(_WIN32)
 /* Windows backend (first half). */
 #include <process.h>
+/* The tasking model (ADR-234): the machine size, a monotonic clock, the
+ * page size, and a lazily committed fiber stack with a guard page below. */
+int pli_plat_cpu_count(void) {
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  return (int)si.dwNumberOfProcessors;
+}
+long long pli_plat_now_ms(void) { return (long long)GetTickCount64(); }
+size_t pli_plat_page_size(void) {
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  return (size_t)si.dwPageSize;
+}
+int pli_plat_stack_alloc(size_t size, void **out_base) {
+  size_t page = pli_plat_page_size();
+  size = (size + page - 1) & ~(page - 1);
+  char *p = (char *)VirtualAlloc(NULL, size + page, MEM_RESERVE | MEM_COMMIT,
+                                 PAGE_READWRITE);
+  if (!p)
+    return -1;
+  /* The guard page sits below the usable region: a fiber stack grows down
+   * into it, so an overflow lands on an inaccessible page. */
+  DWORD old = 0;
+  if (!VirtualProtect(p, page, PAGE_NOACCESS, &old)) {
+    VirtualFree(p, 0, MEM_RELEASE);
+    return -1;
+  }
+  *out_base = p + page;
+  return 0;
+}
+void pli_plat_stack_free(void *base, size_t size) {
+  size_t page = pli_plat_page_size();
+  size = (size + page - 1) & ~(page - 1);
+  VirtualFree((char *)base - page, 0, MEM_RELEASE);
+}
 /* Mutual exclusion around one shared EVENT/task table. */
 void pli_mutex_init(pli_mutex *m) { InitializeCriticalSection(m); }
 void pli_mutex_lock(pli_mutex *m) { EnterCriticalSection(m); }
@@ -152,6 +193,50 @@ void pli_sleep_ms(long long ms) {
 /* POSIX backend (second half). */
 #include <errno.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#if defined(__APPLE__) && !defined(MAP_ANONYMOUS)
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+/* The tasking model (ADR-234): the machine size, a monotonic clock, the
+ * page size, and a lazily committed fiber stack with a guard page below. */
+int pli_plat_cpu_count(void) {
+  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  return n > 0 ? (int)n : 1;
+}
+long long pli_plat_now_ms(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0;
+  return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+size_t pli_plat_page_size(void) {
+  long p = sysconf(_SC_PAGESIZE);
+  return p > 0 ? (size_t)p : 4096;
+}
+int pli_plat_stack_alloc(size_t size, void **out_base) {
+  size_t page = pli_plat_page_size();
+  size = (size + page - 1) & ~(page - 1);
+  /* PROT_READ|PROT_WRITE over an anonymous mapping: the pages are
+   * demand-paged, so the reservation costs address space, not memory, and
+   * the fiber stack grows into it without ever moving. */
+  void *p = mmap(NULL, size + page, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (p == MAP_FAILED)
+    return -1;
+  /* The guard page sits below the usable region: a fiber stack grows down
+   * into it, so an overflow lands on an inaccessible page. */
+  if (mprotect(p, page, PROT_NONE) != 0) {
+    munmap(p, size + page);
+    return -1;
+  }
+  *out_base = (char *)p + page;
+  return 0;
+}
+void pli_plat_stack_free(void *base, size_t size) {
+  size_t page = pli_plat_page_size();
+  size = (size + page - 1) & ~(page - 1);
+  munmap((char *)base - page, size + page);
+}
 /* Mutual exclusion around one shared EVENT/task table. */
 void pli_mutex_init(pli_mutex *m) { pthread_mutex_init(m, NULL); }
 void pli_mutex_lock(pli_mutex *m) { pthread_mutex_lock(m); }

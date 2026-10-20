@@ -76,16 +76,16 @@ static size_t rt_stdout_pos = 0;
  * threads ever write it; the task threads read it after their pthread_create,
  * which orders the read after the write.
  * ------------------------------------------------------------------------- */
-pli_mutex rt_out_mu;
-pli_mutex rt_in_mu;
+rt_lock rt_out_mu;
+rt_lock rt_in_mu;
 static pli_once rt_out_once = PLI_ONCE_INIT;
 volatile int rt_tasks_active = 0;
 
 /* One-time init: the mutexes first, then the flag that turns the serialiser
  * on (a lock attempt must never find an uninitialised mutex). */
 static void rt_out_init(void) {
-  pli_mutex_init_recursive(&rt_out_mu);
-  pli_mutex_init_recursive(&rt_in_mu);
+  rt_lock_init_recursive(&rt_out_mu);
+  rt_lock_init_recursive(&rt_in_mu);
   rt_tasks_active = 1;
 }
 

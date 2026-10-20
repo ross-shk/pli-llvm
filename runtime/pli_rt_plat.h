@@ -58,6 +58,32 @@ int pli_plat_fflush(FILE *fp);
 int pli_plat_ferror(FILE *fp);
 int pli_plat_fprintf(FILE *fp, const char *fmt, ...);
 
+/* --- the tasking model (ADR-234)
+ *
+ * The fiber scheduler (runtime/rt_sched.c) needs four things the portable
+ * blob may not name itself: the environment (the PLI_TASK_* knobs), the
+ * machine size (the worker count), a monotonic clock (the DELAY timer
+ * heap), and a lazily committed stack region with a guard page below it
+ * (a fiber stack - the pages are demand-paged, so the reservation costs
+ * address space, not memory, and the stack grows into it without ever
+ * moving).
+ *
+ * A fiber stack is allocated as `size` usable bytes plus one guard page
+ * below; the returned base is page-aligned and the guard sits in
+ * [base - pli_plat_page_size(), base). A stack that runs off its end
+ * therefore lands on an inaccessible page instead of a neighbouring
+ * allocation. */
+const char *pli_plat_getenv(const char *name); /* "" when unset */
+int pli_plat_cpu_count(void);                  /* >= 1 */
+long long pli_plat_now_ms(void);               /* monotonic milliseconds */
+size_t pli_plat_page_size(void);               /* the guard page size */
+/* Reserve a fiber stack: `size` usable bytes, lazily committed, with one
+ * guard page below. Returns 0 on success and writes the usable base to
+ * *out_base (page-aligned). */
+int pli_plat_stack_alloc(size_t size, void **out_base);
+/* Release a stack obtained from pli_plat_stack_alloc (same base and size). */
+void pli_plat_stack_free(void *base, size_t size);
+
 /* --- threading backend (one backend per platform TU; single-threaded custom
  * platforms: mutex/cond as no-ops over a non-shared state, spawn as
  * synchronous call or an error return — see the contract on each function) */
