@@ -122,6 +122,9 @@ static void usage() {
          "                   every call keeps LLVM's default effects\n"
          "  --warn-unset     warn when an AUTOMATIC variable may be used before\n"
          "                   it is set (ADR-266; off by default)\n"
+         "  --emit-effects=FILE  publish the effects this module's external\n"
+         "                   procedures promise, for another module to use\n"
+         "  --effects=FILE  use the effects another module published (ADR-267)\n"
          "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
          "                   cf. (NOSIZE), ADR-111)\n"
          "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
@@ -253,6 +256,60 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
   return results;
 }
 
+// --- WS-A2 (ADR-267): the published-effects file ---------------------------
+//
+// A module publishes what its external procedures promise, so a module that
+// calls them can attach that promise to its declarations: the caller's
+// optimizer cannot see the callee's body, so this description is all it has.
+
+// Read the effects another module published. A malformed line is an error, not
+// a silent skip: a promise that is dropped must not look like one that was
+// never made.
+static bool readPublishedEffects(const std::string& path,
+                                  std::map<std::string, pli::ProcEffects>& out) {
+  std::ifstream in(path);
+  if (!in) {
+    std::cerr << "pli: cannot read " << path << "\n";
+    return false;
+  }
+  std::string line;
+  int lineno = 0;
+  while (std::getline(in, line)) {
+    ++lineno;
+    size_t start = line.find_first_not_of(" \t\r");
+    if (start == std::string::npos || line[start] == '#')
+      continue; // blank or comment
+    std::string name;
+    pli::ProcEffects e;
+    if (!pli::parseEffectLine(line, name, e)) {
+      std::cerr << "pli: " << path << ":" << lineno << ": malformed effect line\n";
+      return false;
+    }
+    out[name] = e;
+  }
+  return true;
+}
+
+// Write what this module's external procedures promise.
+static bool writePublishedEffects(const std::string& path, const HProgram& hir,
+                                  const std::map<const HProc*, pli::ProcEffects>& effects) {
+  std::ofstream os(path);
+  if (!os) {
+    std::cerr << "pli: cannot write " << path << "\n";
+    return false;
+  }
+  os << "# pli published effects v1\n";
+  for (const auto& p : hir.procs) {
+    if (!p || !p->isExternal)
+      continue; // only what another module can call
+    auto it = effects.find(p.get());
+    if (it == effects.end())
+      continue;
+    os << pli::formatEffectLine(p->name, it->second) << "\n";
+  }
+  return true;
+}
+
 // Compile one translation unit through the full pipeline (preprocessor ->
 // lexer -> parser -> sema -> HIR -> IRGen) and assemble it to a relocatable
 // object with the backend clang. Multi-input drivers call this once per file.
@@ -270,7 +327,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool linkRuntimeIn = false, const std::string& ltoKind = "",
                        pli::PgoMode pgoMode = pli::PgoMode::None, const std::string& pgoUse = "",
                        bool marchNative = false, const std::string& platformBc = "",
-                       bool noMemoryEffects = false, bool warnUnset = false) {
+                       bool noMemoryEffects = false, bool warnUnset = false,
+                       const std::string& effectsFile = "",
+                       const std::string& emitEffectsFile = "") {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -307,6 +366,11 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       effSysparm = env;
   sema.setSysparm(effSysparm);
   sema.setWarnUnset(warnUnset);
+  // WS-A2 (ADR-267): the effects another module published for the external
+  // procedures this unit calls.
+  std::map<std::string, pli::ProcEffects> published;
+  if (!effectsFile.empty() && !readPublishedEffects(effectsFile, published))
+    return false;
   // In multi-input link mode every unit is a relocatable object like `-c`:
   // no MAIN fallback promotion, so a library module with no OPTIONS(MAIN)
   // compiles cleanly and only its external procedures are emitted.
@@ -329,6 +393,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   if (print_facts) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
                 false, lowerMode, perOpOverrides, "", noMemoryEffects);
+    irgen.setPublishedEffects(published);
     irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -345,6 +410,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   if (emitLLVM || emitMlir) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
                 false, lowerMode, perOpOverrides, "", noMemoryEffects);
+    irgen.setPublishedEffects(published);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -410,12 +476,17 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
               linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects);
+    ipg.setPublishedEffects(published);
     auto om = ipg.takeModule(hir);
     if (!om) {
       if (diags.ok())
         std::cerr << "pli: codegen failed for " << input << "\n";
       return false;
     }
+    // WS-A2 (ADR-267): publish what this module's external procedures promise,
+    // so a module that calls them can attach the promise to its declarations.
+    if (!emitEffectsFile.empty() && !writePublishedEffects(emitEffectsFile, hir, ipg.procEffects()))
+      return false;
     // Single-module fast path: runtime linked at BC level (never `-c`).
     // Bitcode (linkBitcode) already merged the runtime via IRGen, so the
     // embedded blob is only linked when it did not.
@@ -507,6 +578,8 @@ int main(int argc, char** argv) {
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
   bool noMemoryEffects = false;
   bool warnUnset = false; // --warn-unset: WS-A5 "used before set" (ADR-266)
+  // WS-A2 (ADR-267): the published-effects file, in both directions.
+  std::string effectsFile, emitEffectsFile;
   bool useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
@@ -661,6 +734,10 @@ int main(int argc, char** argv) {
       noSubChecksExplicit = true;
     } else if (a == "--no-memory-effects") {
       noMemoryEffects = true;
+    } else if (a.rfind("--emit-effects=", 0) == 0) {
+      emitEffectsFile = a.substr(15);
+    } else if (a.rfind("--effects=", 0) == 0) {
+      effectsFile = a.substr(10);
     } else if (a == "--warn-unset") {
       warnUnset = true;
     } else if (a == "--no-zero-divide")
@@ -911,7 +988,7 @@ int main(int argc, char** argv) {
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
-                    noMemoryEffects, warnUnset))
+                    noMemoryEffects, warnUnset, effectsFile, emitEffectsFile))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);

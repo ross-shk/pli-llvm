@@ -102,6 +102,19 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
                                                     const std::unordered_set<const Symbol*>& byValue,
                                                     const EffectOptions& opts);
 
+// --- WS-A2: publishing a procedure's effects across a compilation unit ------
+//
+// The inference is worth something only where the optimizer cannot see the
+// callee's body: there, the callee's attributes are the only description of it
+// the caller has. These two functions carry that description from the module
+// that compiled the callee to the module that calls it (ADR-267).
+//
+// The format is one line per procedure: the name, then the flags.
+//   PURE_HELPER argmem-read nounwind willreturn
+std::string formatEffectLine(const std::string& name, const ProcEffects& e);
+// Parse one line; false when the line is malformed or names an unknown flag.
+bool parseEffectLine(const std::string& line, std::string& name, ProcEffects& e);
+
 // --- WS-A4: the PL/I alias taxonomy (ADR-265) ------------------------------
 //
 // IBM's list is the normative one (mvs:24678-24684): an aliased variable is

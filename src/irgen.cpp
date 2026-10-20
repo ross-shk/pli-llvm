@@ -668,6 +668,24 @@ static void applyMemoryEffect(llvm::Function* f, pli::MemEffect e) {
   }
 }
 
+// WS-A2 (ADR-267): stamp on an external declaration the promise another
+// module published for it. The caller cannot see the callee's body, so this
+// description is all its optimizer has; without it the call keeps LLVM's
+// default effects and cannot be hoisted or speculated.
+void IRGen::applyPublishedEffect(llvm::Function* f, const Symbol* sym) {
+  if (!sym)
+    return;
+  auto it = published_.find(sym->name);
+  if (it == published_.end())
+    return;
+  const pli::ProcEffects& e = it->second;
+  applyMemoryEffect(f, e.effect);
+  if (e.nounwind)
+    f->setDoesNotThrow();
+  if (e.willReturn)
+    f->setWillReturn();
+}
+
 // --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) ---
 
 // P0 policy: every operation defaults to runtime. P5 flips entries one wave at
@@ -2894,11 +2912,16 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
       std::vector<llvm::Type*> pt2 = pt;
       pt2.insert(pt2.begin(), b_.getPtrTy());
       llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
-      return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+      llvm::Function* decl =
+          llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+      applyPublishedEffect(decl, sym);
+      return decl;
     }
     llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy();
     llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
-    return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+    llvm::Function* decl = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+    applyPublishedEffect(decl, sym);
+    return decl;
   }
   for (const Type& t : sym->entryParams) {
     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)

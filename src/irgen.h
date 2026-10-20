@@ -58,6 +58,16 @@ public:
 
   std::string run(HProgram& prog);
 
+  // WS-A2 (ADR-267): the effects another module published for the external
+  // procedures this unit calls, read from a published-effects file.
+  void setPublishedEffects(std::map<std::string, pli::ProcEffects> e) {
+    published_ = std::move(e);
+  }
+
+  // WS-A2 (ADR-267): what this module's own procedures promise, for publishing
+  // to the modules that call them.
+  const std::map<const HProc*, pli::ProcEffects>& procEffects() const { return effects_; }
+
   // The facts the compiler computed while lowering (ADR-260); --print-facts
   // dumps them. The store lives in irgen_decisions.cpp, outside this file.
   const pli::FactStore& facts() const { return facts_; }
@@ -154,6 +164,12 @@ private:
   // decision layer before any function is declared, so the promise can be
   // stamped on the function itself.
   std::map<const HProc*, pli::ProcEffects> effects_;
+  // WS-A2 (ADR-267): the effects another module published for the external
+  // procedures this unit calls. A caller that cannot see the callee's body
+  // has this description and nothing else.
+  std::map<std::string, pli::ProcEffects> published_;
+  // Stamp a published promise on an external declaration.
+  void applyPublishedEffect(llvm::Function* f, const Symbol* sym);
   // --no-memory-effects: skip the inference, so every call keeps LLVM's
   // default effects. The escape hatch that lets a benchmark measure what the
   // inference is worth.

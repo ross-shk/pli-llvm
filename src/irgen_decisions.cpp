@@ -7,6 +7,8 @@
 // with the code that produced it.
 #include "irgen_decisions.h"
 
+#include <sstream>
+
 #include "hir.h"
 #include "sema.h"
 
@@ -829,6 +831,78 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
     out[p.get()] = pe;
   }
   return out;
+}
+
+// --- WS-A2: the published-effects file (ADR-267) ----------------------------
+//
+// The file is the only channel that carries a procedure's promise to a caller
+// that cannot see its body. The format is deliberately dull: one line per
+// procedure, the name, then the flags — a name, a memory-effect token, and
+// the two control promises. A line the reader does not understand is an
+// error, not a silent skip: a promise that is dropped must not look like one
+// that was never made.
+
+// The token for each rung of ADR-264's ladder.
+static const char* effectToken(MemEffect e) {
+  switch (e) {
+  case MemEffect::None:
+    return "none";
+  case MemEffect::ArgRead:
+    return "argmem-read";
+  case MemEffect::ArgReadWrite:
+    return "argmem-readwrite";
+  case MemEffect::Read:
+    return "read";
+  case MemEffect::Unknown:
+    break;
+  }
+  return "readwrite"; // may read and write any memory: no promise at all
+}
+
+std::string formatEffectLine(const std::string& name, const ProcEffects& e) {
+  std::string out = name;
+  out += ' ';
+  out += effectToken(e.effect);
+  if (e.nounwind)
+    out += " nounwind";
+  if (e.willReturn)
+    out += " willreturn";
+  return out;
+}
+
+bool parseEffectLine(const std::string& line, std::string& name, ProcEffects& e) {
+  std::istringstream in(line);
+  std::string tok;
+  if (!(in >> tok) || tok.empty())
+    return false;
+  name = tok;
+  e = ProcEffects();
+  bool sawEffect = false;
+  while (in >> tok) {
+    if (tok == "none") {
+      e.effect = MemEffect::None;
+      sawEffect = true;
+    } else if (tok == "argmem-read") {
+      e.effect = MemEffect::ArgRead;
+      sawEffect = true;
+    } else if (tok == "argmem-readwrite") {
+      e.effect = MemEffect::ArgReadWrite;
+      sawEffect = true;
+    } else if (tok == "read") {
+      e.effect = MemEffect::Read;
+      sawEffect = true;
+    } else if (tok == "readwrite") {
+      e.effect = MemEffect::Unknown;
+      sawEffect = true;
+    } else if (tok == "nounwind") {
+      e.nounwind = true;
+    } else if (tok == "willreturn") {
+      e.willReturn = true;
+    } else {
+      return false; // an unknown flag: the line is not a promise we can keep
+    }
+  }
+  return sawEffect;
 }
 
 } // namespace pli
