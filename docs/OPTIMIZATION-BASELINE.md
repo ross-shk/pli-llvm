@@ -156,3 +156,29 @@ keeps them apart: `opt -passes=aa-eval` reports **NoAlias** between an
 alloca and a global. The positive direction of A4 therefore closes without
 a diff; what remains is the taxonomy as one function (ADR-265) and the two
 litmus tests that guard it.
+
+### 2.4 The suite's driver budget is wall-clock, and this host is shared
+
+Twice during the P1c work, `ctest` reported four driver tests as timed out
+after 60 s — `multic`, `multimod`, `package`, `struct_mirror` — while the
+same suite run directly passed 613 of 613. The four are the same every time,
+and they are the heaviest drivers: each links a program and runs it.
+
+The cause is not the compiler. This machine is shared, and a second copy of
+the project (`~/Development/Parallelized/PLI/pli-llvm`) was running its own
+test suite at the same moment; the load average reached **156 on 8 cores**.
+The runner's driver budget is wall-clock, so a test that is merely slow on
+a saturated host exceeds it. Reproduced deliberately: with the load above
+100 the same four fail, and with the load below 40 they pass — nine
+consecutive `ctest` runs, all green.
+
+**Fixed** in `tests/run_tests.py`: the driver budget now scales with the
+host's load average (`driver_timeout()`), sampled once at start-up. On an
+idle host it stays at 60 s, so a genuine hang is still caught quickly; on a
+busy one it grows with the contention, up to 300 s. The exec tests keep
+their tight 10 s budget, which a single binary never needs.
+
+A lesson worth keeping: a timeout that is a *symptom* of the host rather
+than of the code is worth distinguishing from a real failure, and the
+distinction is cheap to make — the same four tests, the same 60 s, and two
+completely different verdicts depending on the load.
