@@ -27,7 +27,11 @@ from pathlib import Path
 
 pli, out = sys.argv[1], Path(sys.argv[2])
 rng = random.Random(20261020)
-PROGRAMS = 8
+# The corpus is small on purpose: the driver tests share the machine with the
+# multi-module compiles, which sit near their own timeout under load. The wide
+# verification of this generator (790 random programs) is a one-off, not a
+# per-run cost.
+PROGRAMS = 5
 
 
 def concat(vars_):

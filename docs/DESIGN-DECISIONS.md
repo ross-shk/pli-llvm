@@ -7960,6 +7960,14 @@ keeps its exactness:
 So the exact rounding is not a new algorithm: it is the decimal conversion
 the compiler already performs, aimed at the scale `ROUND` asks for.
 
+**The three layers must agree.** The first attempt typed the result as a
+decimal but left the HIR lowering converting the argument to `FLOAT` (the old
+code forced it), so the float path produced a *double* for a value typed as a
+decimal, and the assignment stored the double's bits raw into the decimal's
+slot. The HIR now converts the argument to the *result's* type, and the float
+path types its value as a `FLOAT` whatever the expression's type says — a
+mismatch can now cost a conversion, never a raw store.
+
 **Consequences.** `ROUND` on a decimal is exact for every value a `double`
 cannot hold, and its result carries the requested scale (`ROUND(x, 1)` on a
 scale-4 decimal prints one fraction digit). The float path is unchanged for

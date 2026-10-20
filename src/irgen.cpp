@@ -11741,7 +11741,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val x = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val xd = convert(x, Type::flt(6), e->loc);
-    v.ty = e->ty;
+    // The float path always produces a FLOAT, whatever the expression's type
+    // says: a value typed as a decimal would be stored raw (ADR-271).
+    v.ty = Type::flt(6);
     v.reg = b_.CreateCall(runtimeFn("pli_round"), {xd.reg, toI64(n)}, "round");
     result = v;
     return true;
