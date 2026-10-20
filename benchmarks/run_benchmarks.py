@@ -20,7 +20,7 @@ import csv
 import math
 import statistics
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Set, Tuple, Optional
 
 BENCHMARK_DIR = Path(__file__).parent
 
@@ -75,11 +75,19 @@ LANG_BENCHMARKS = [
 # Every benchmark, both categories.
 BENCHMARKS = IR_BENCHMARKS + LANG_BENCHMARKS
 
+# Two-unit benchmarks: one program split across two compilation units, so the
+# caller's optimizer never sees the callee's body. WS-A1's measurement needs
+# exactly that shape (docs/OPTIMIZATION-BASELINE.md §3).
+MULTI_BENCHMARKS = [
+    ("pure_call_split", ["lang/pure_call_split.pli", "lang/pure_call_lib.pli"]),
+]
+
 # Paired PL/I-vs-PL/I comparisons (ADR-262): the same source compiled two
 # ways, so the ratio prices a PL/I-specific cost a C twin cannot show.
 # Each entry is (benchmark, label_a, flags_a, label_b, flags_b); the runner
 # reports the B/A median time ratio at -O2 and requires both builds to print
-# the same output.
+# the same output. An entry may add a sixth element, the sources for side B,
+# when the two sides are different programs.
 PAIRS = [
     # M7's criterion: check-heavy code within 1.5x of check-free code. The
     # default -O2 build elides the SIZE and SUBSCRIPTRANGE traps; the
@@ -90,6 +98,15 @@ PAIRS = [
     # The same program, once with the inference and once with
     # --no-memory-effects, so every call keeps LLVM's default effects.
     ("pure_call", "no-effects", ["--no-memory-effects"], "effects", []),
+    # The same measurement with the callee in another compilation unit: the
+    # caller's optimizer cannot see the callee's body, so it cannot infer the
+    # callee's effects either, and the promise on the definition reaches
+    # nobody. The ratio prices the inference where it cannot travel.
+    ("pure_call_split", "no-effects", ["--no-memory-effects"], "effects", []),
+    # What the split costs: the same program with the callee in the caller's
+    # own unit is the reference, and the gap between the two is what a promise
+    # that reached the caller would be worth.
+    ("pure_call_split", "split", [], "same-unit", [], ["lang/pure_call.pli"]),
 ]
 
 
@@ -318,14 +335,17 @@ def _arch_flags() -> List[str]:
     return []
 
 
-def compile_pli(bench_name: str, pli_file: str, opt: str, output: Path,
+def compile_pli(bench_name: str, pli_file, opt: str, output: Path,
                 extra_flags: Optional[List[str]] = None) -> bool:
     """Compile a PL/I benchmark with pli at the given optimization level.
 
+    *pli_file* is one source, or a list of sources for a program split across
+    compilation units: the driver compiles and links them in one invocation.
+
     If *extra_flags* is None, the bench-level EXTRA_PLIFLAGS are used (P1.6).
     """
-    src = BENCHMARK_DIR / pli_file
-    cmd = [str(PLI), str(src), "-o", str(output), opt]
+    srcs = [pli_file] if isinstance(pli_file, str) else list(pli_file)
+    cmd = [str(PLI)] + [str(BENCHMARK_DIR / s) for s in srcs] + ["-o", str(output), opt]
     cmd.extend(_stack_flags())
     cmd.extend(extra_flags if extra_flags is not None
                else EXTRA_PLIFLAGS.get(bench_name, []))
@@ -382,24 +402,29 @@ def median_result(times: List[float]) -> Optional[float]:
     return statistics.median(times)
 
 
-def run_pair_comparisons(benches, opt: str, runs: int) -> Dict:
+def run_pair_comparisons(selected: Set[str], opt: str, runs: int) -> Dict:
     """Run the PAIRS table: one PL/I source compiled two ways.
 
     A pair prices a PL/I-specific cost that a C twin cannot show, by
     comparing two builds of the same program. The two builds must print the
     same output — a pair whose builds disagree is a bug, not a measurement.
+    A pair may name different sources for its two sides, which is how the
+    two-unit measurement compares a program split across compilation units
+    with the same program in one unit.
     """
     results: Dict = {}
     if not PAIRS:
         return results
-    selected = {b[0] for b in benches}
     src_of = {b[0]: b[1] for b in BENCHMARKS}
+    src_of.update({b[0]: b[1] for b in MULTI_BENCHMARKS})
     tag = opt.replace("-", "")
     print(f"\n=== Paired PL/I-vs-PL/I comparisons ({opt}) ===")
     print(f"{'Benchmark':<16} {'A':<14} {'B':<14} "
           f"{'A (med)':>10} {'B (med)':>10} {'B/A':>8} {'Same':>6}")
     print("-" * 84)
-    for bench, label_a, flags_a, label_b, flags_b in PAIRS:
+    for entry in PAIRS:
+        bench, label_a, flags_a, label_b, flags_b = entry[:5]
+        src_b = entry[5] if len(entry) > 5 else None
         if bench not in src_of or bench not in selected:
             continue
         # The bench-level flags apply to both sides of the pair.
@@ -409,11 +434,12 @@ def run_pair_comparisons(benches, opt: str, runs: int) -> Dict:
         exe_b = BIN_DIR / f"{bench}_pair_{label_b}_{tag}{EXE_SUFFIX}"
         if not compile_pli(bench, src_of[bench], opt, exe_a, extra_flags=extra_a):
             print(f"{bench:<16} {label_a:<14} PL/I COMPILE FAILED")
-            results[bench] = {"error": "pli_compile_failed"}
+            results[f"{bench}:{label_a}"] = {"error": "pli_compile_failed"}
             continue
-        if not compile_pli(bench, src_of[bench], opt, exe_b, extra_flags=extra_b):
+        if not compile_pli(bench, src_b if src_b else src_of[bench], opt, exe_b,
+                           extra_flags=extra_b):
             print(f"{bench:<16} {label_b:<14} PL/I COMPILE FAILED")
-            results[bench] = {"error": "pli_compile_failed"}
+            results[f"{bench}:{label_b}"] = {"error": "pli_compile_failed"}
             continue
         times_a, out_a = run_benchmark(exe_a, runs=runs)
         times_b, out_b = run_benchmark(exe_b, runs=runs)
@@ -421,11 +447,13 @@ def run_pair_comparisons(benches, opt: str, runs: int) -> Dict:
         med_b = median_result(times_b)
         if not med_a or not med_b:
             print(f"{bench:<16} RUN FAILED")
-            results[bench] = {"error": "pli_run_failed"}
+            results[f"{bench}:{label_a}"] = {"error": "pli_run_failed"}
             continue
         same = "✓" if out_a.strip() == out_b.strip() else "✗"
         ratio = round(med_b / med_a, 4) if med_a > 0 else float("inf")
-        results[bench] = {
+        key = f"{bench}:{label_a}->{label_b}"
+        results[key] = {
+            "benchmark": bench,
             "a": {"label": label_a, "flags": extra_a, "median": med_a},
             "b": {"label": label_b, "flags": extra_b, "median": med_b},
             "ratio": ratio,
@@ -577,16 +605,21 @@ def main():
     # --only subset (the plan docs invoke --only throughout; running one
     # witness at a time keeps the 5-run ritual fast and the noise down).
     benches = BENCHMARKS
+    multi_names = {b[0] for b in MULTI_BENCHMARKS}
     if args.only:
         wanted = [b.strip() for b in args.only.split(",") if b.strip()]
-        known = {b[0] for b in BENCHMARKS}
+        known = {b[0] for b in BENCHMARKS} | multi_names
         unknown = [b for b in wanted if b not in known]
         if unknown:
             print(f"Error: unknown benchmark(s): {', '.join(unknown)}")
             print(f"Known: {', '.join(sorted(known))}")
             return 2
         benches = [b for b in BENCHMARKS if b[0] in wanted]
-        print(f"Running subset: {', '.join(b[0] for b in benches)}")
+        pair_names = {b[0] for b in benches} | (multi_names & set(wanted))
+        picked = [b[0] for b in benches] + sorted(multi_names & set(wanted))
+        print(f"Running subset: {', '.join(picked)}")
+    else:
+        pair_names = {b[0] for b in BENCHMARKS} | multi_names
 
     for bench_name, pli_file, c_file in benches:
         results[bench_name] = {}
@@ -721,7 +754,7 @@ def main():
     # The paired PL/I-vs-PL-I comparisons: one source compiled two ways.
     # They are a -O2 measurement (the gate the optimization plan sets), so
     # they run once, not at every optimization level.
-    pairs = run_pair_comparisons(benches, "-O2", args.runs)
+    pairs = run_pair_comparisons(pair_names, "-O2", args.runs)
 
     # Save JSON with machine metadata (P3)
     json_file = RESULTS_DIR / f"benchmark_results_{ts}.json"

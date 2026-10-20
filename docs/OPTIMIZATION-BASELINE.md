@@ -190,6 +190,51 @@ plan wanted to give the PL/I subobject is already the identity LLVM gives the
 load, and the one spelling that would have needed a canonical form is not in
 the language.
 
+### 3.1 The two-unit measurement: what the promise is worth when it cannot travel
+
+`benchmarks/lang/pure_call_split.pli` is `pure_call.pli` with the helper moved
+into its own compilation unit (`pure_call_lib.pli`); the caller declares it as
+an external entry (rule 42). The caller's optimizer never sees the callee's
+body, so it cannot infer the callee's effects either — the only description
+of the callee it has is its declaration.
+
+| build | median |
+|---|---|
+| split, no effects | 186.77 ms |
+| split, effects | 186.03 ms |
+| same unit (the callee visible) | 60.86 ms |
+
+**Ratio 1.00x for the inference across the unit boundary; 0.33x for the split
+itself.** Two independent runs gave 1.00x and 1.01x for the first pair, and
+0.32x and 0.33x for the second; both builds of both pairs print the same
+value.
+
+The reading is precise: **the promise does not travel.** The attributes are on
+the *definition*, in another object file; the caller's declaration carries
+none, so the call keeps LLVM's default effects and cannot be hoisted out of
+the loop. The third row is the size of the prize: the same program with the
+callee in the caller's own unit runs three times faster, because there the
+optimizer sees the body — and infers the very same facts by itself, which is
+why the same-unit pair measures 1.00x.
+
+So A1's inference is a correctness statement and a diagnostic in every shape
+measured so far, and a speedup only where the promise is delivered to a caller
+that cannot see the body. Delivering it needs a channel the plan does not
+have: PL/I's answer is a *declared* promise in the module interface (IBM's
+`REDUCIBLE`/`IRREDUCIBLE`, `zos:23423-23445`), and MULTICS's answer was
+whole-program inference, which separate compilation cannot be. A
+compiler-generated interface — the callee publishing the attributes it
+inferred, the caller attaching them to its declaration — is the mechanism
+that would close the threefold gap; that is a new feature with its own ADR,
+not a refinement of this one.
+
+The LTO leg of the measurement could not be taken on this host: in-process LTO
+executes LLVM's passes inside lld and needs a single LLVM instance, so the
+link crashes on a package-manager build that mixes static archives with shared
+libraries (`tests/driver/flto.sh` skips the link for that reason). The
+emission side works; only the link is unavailable here.
+
+
 ### 2.4 The suite's driver budget is wall-clock, and this host is shared
 
 Twice during the P1c work, `ctest` reported four driver tests as timed out

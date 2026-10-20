@@ -1,0 +1,31 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* The split pure-call benchmark (WS-A1, ADR-264): the same program as
+    pure_call.pli, but the helper lives in another compilation unit
+    (pure_call_lib.pli) and is declared here as an external entry. The
+    caller's optimizer cannot see the callee's body, so it cannot infer
+    the callee's effects, hoist the call out of the loop, or speculate
+    it — the only description of the callee it has is its declaration.
+    The paired build (--no-memory-effects) prices the inference against
+    the same program compiled without it. */
+ pure_split: procedure options(main);
+   declare a(1000) fixed bin(31);
+   declare (i, j, x) fixed bin(31);
+   declare k fixed bin(31) init(3);
+   declare s fixed bin(63);
+   declare pure_helper entry(fixed bin(31))
+      returns(fixed bin(31)) external;
+
+   do i = 1 to 1000;
+      a(i) = i * 7 - 3;
+   end;
+
+   s = 0;
+   do i = 1 to 150000000;
+      j = mod(i, 1000) + 1;
+      x = a(j);
+      s = s + x + pure_helper(k);
+   end;
+
+   put skip list(s);
+ end pure_split;

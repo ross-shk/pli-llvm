@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* The callee of the split pure-call benchmark (WS-A1, ADR-264), in its
+    own compilation unit. The caller's optimizer never sees this body,
+    so the promise the compiler infers here can only reach the caller
+    through the definition's attributes — which is what the measurement
+    prices. The body is the same as the same-unit benchmark's helper,
+    so the two measurements differ only in where the callee lives. */
+ pure_helper: procedure(x) returns(fixed bin(31));
+   declare x fixed bin(31);
+   declare y fixed bin(31);
+   y = x * 3 + 1;
+   return(y);
+ end pure_helper;
