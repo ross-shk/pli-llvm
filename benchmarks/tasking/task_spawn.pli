@@ -1,0 +1,20 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-234 benchmark W1: fan-out / fan-in.
+    The lightest possible task: start N tasks that do nothing, then join
+    all N. The same work runs in the Go and the C baselines
+    (task_spawn.go, task_spawn_c.c). The harness measures the wall time of
+    the whole program on both sides. */
+ task_spawn: procedure options(main);
+    declare e(20000) event;
+    declare i fixed binary(31);
+    do i = 1 to 20000;
+       call worker event(e(i));
+    end;
+    do i = 1 to 20000;
+       wait(e(i));
+    end;
+    put skip list('done');
+    worker: procedure;
+    end worker;
+ end task_spawn;

@@ -6891,3 +6891,117 @@ bytes stay intact but the split between them does not. The routing calls are
 inside the statement's lock, so a task's record does not land in another task's
 file â€” but a task that *selects* a file while another task's statement is open
 still changes the destination for the statements that follow.
+
+## ADR-234 - Go-style lightweight threading for PL/I tasking (the fiber model)
+
+**Context.** ADR-016 chose the OS-thread model: one `CALL ... TASK` (rule (79))
+is one OS thread, and `WAIT`/`DELAY` block it. A task therefore costs a
+thread creation (~50 us on this host) and a program with a thousand tasks
+costs a thousand threads. The requirement behind this ADR is a Go-style
+model: a task costs a context switch, and a program with many tasks uses a
+bounded number of OS threads.
+
+The grammar does not change. TR 25.084 is a *syntax* standard: it has no
+word for concurrency (the 48-character operator set of TR 2.3.3 has no
+`THREAD`, `CTHREAD` or `MONITOR`), and rules (79), (82) and (83) describe
+what a task *is* (a call with an event), not how it is scheduled. A
+compiler change is therefore not required, and none was made: the whole
+change lives in the runtime. The two call sites in `src/irgen.cpp` are the
+only compiler-side edits (the MAIN procedure is run through the scheduler).
+
+ADR-016 is **superseded** by this ADR. It is not edited.
+
+**Decision.** A task is a *fiber*: a stack plus the registers that switch it.
+The runtime runs the fibers on a small pool of OS workers.
+
+*Assembly.* `runtime/rt_fiber_asm.c` carries the context switch as a
+module-asm block, so it travels inside the runtime's bitcode blob (the
+driver links the runtime in-process; there is no separate object to link
+in). Two variants are selected by the preprocessor: x86-64 SysV and x86-64
+Win64. The switch saves the platform's callee-saved set (SysV: RBX RBP
+R12-R15; Win64: RBX RBP RDI RSI R12-R15 plus XMM6-XMM15), the stack
+pointer and the resume address, and restores the target's. The saved stack
+pointer is the switch's *entry* stack pointer, and the word at that address
+is the resume address, so the restore ends with a `RET`. Two rules the
+assembly must obey, both learned the hard way: a hand-written function may
+only touch the *volatile* registers (the Win64 `pli_fiber_start` first
+clobbered RSI, which is callee-saved, and the scheduler lost its own
+pointer to the worker's context), and the switch must save *every*
+callee-saved register of the suspended context (the first Win64 variant
+omitted RSI, so a fiber that parked and resumed read the previous worker's
+thread-local state).
+
+*Scheduler.* `runtime/rt_sched.c`. Each worker owns a lock-free LIFO run
+queue (the head is an atomic pointer; a push publishes the link with a
+compare-and-swap, because a stealer may detach the list at any moment). A
+worker with an empty queue steals half of a peer's queue, then takes a
+matured `DELAY` from the timer heap, then parks on the scheduler's
+condvar. The worker count is `min(cores, 8)` and `PLI_TASK_WORKERS`
+overrides it; the extra workers are created when the first task appears, so
+a program without tasks never pays for them.
+
+A parked task belongs to the worker that parked it, and only that worker
+may run it again. The reason is a window: between "the task decided to
+sleep" and "the task's registers are saved", another worker that ran the
+task would restore a half-saved context. So an unpark hands the task to its
+owner's *ready* list, which is not stealable, and the owner picks it up
+when it comes back from the switch. The same rule applies to a matured
+`DELAY`.
+
+*Per-task state.* QR2.8 gives every task its own ON-unit stack and ONCODE,
+and the CONTROLLED generation stacks belong to the task that allocated
+them. Under the OS-thread model that state was thread-local; under the
+fiber model it follows the *fiber* (`runtime/rt_fiber.h`:
+`struct pli_task_local`), because a worker runs many tasks in turn. The
+copy is allocated on first use, so a task that touches neither pays
+nothing. `runtime/rt_cond.c` and `runtime/rt_storage.c` are the only two
+files that changed.
+
+*Stacks.* A fiber stack is a *reservation* with a guard page below it
+(`runtime/rt_plat_default.c`): the pages are committed as the stack grows
+into them, by a vectored handler that recognises a fault inside a fiber
+stack, commits the next window below the committed part and resumes the
+faulting instruction. A fault in the guard page is a stack overflow and is
+reported as one. The ceiling is `PLI_TASK_STACK` bytes (8 MiB by default),
+so an idle task costs one page, not the whole ceiling.
+
+*The model.* The fiber model is the default. `PLI_TASK_MODEL=os` selects the
+legacy OS-thread model, for A/B runs and for the platforms that have no
+fiber backend yet (the assembly exists for x86-64 only; the AArch64
+variant is not written yet, so the legacy model is the default there).
+
+**Measurements** (Windows x64, 20 000 tasks, 9 runs, median;
+`benchmarks/run_tasking_bench.py`):
+
+| Workload | PL/I (fibers) | C (OS threads) | Go (goroutines) | PL/I / Go |
+|---|---|---|---|---|
+| the task lifecycle (spawn, switch, join) | 2510.6 ns/task | 50 007.5 ns/task | 995.9 ns/task | **2.52x** |
+| fan-out / fan-in (20 000 tasks live at once) | 8351.5 ns/task | 40 042.2 ns/task | 793.6 ns/task | **10.52x** |
+| the context switch alone (`benchmarks/tasking/fiber_floor.c`) | 28.0 ns/start+join | - | ~210 ns | 0.13x |
+
+**The gate is not met.** The requirement was to beat Go's goroutines by at
+least 10 %; the measurement says the fiber model is 2.52x Go's time on the
+task lifecycle. The goalposts do not move, so this ADR records the
+measured ratio. The gap is not in the switch — the switch alone is 7x
+faster than Go's goroutine spawn — but in the wait path around it: the
+fiber-mode lock still protects its state with an OS mutex
+(`runtime/rt_sync.c`), and a *contended* Windows `CRITICAL_SECTION` costs
+1-2 us, which is most of the 2510 ns. The next step is the hot-path diet
+the plan describes: an atomic owner with a lock-free waiter queue, so a
+contended lock never enters the kernel. Until then, the model is still
+**20x faster than the OS-thread model it replaces** (2510.6 ns against
+50 007.5 ns per task), which is the win ADR-016 gave up.
+
+**Consequences.**
+
+* The runtime grows a scheduler, a lock layer, a fiber backend and a
+  per-task state; the compiler grows two call sites.
+* `WAIT` and `DELAY` no longer block an OS thread, so a program with many
+  waiting tasks uses a bounded number of OS threads.
+* The `DELAY` timer is a heap, not a thread per sleeper.
+* The POSIX side has the lazy stack through `mmap`; the clean
+  "task stack overflow" diagnostic on POSIX (a `SIGSEGV` handler with a
+  per-worker `sigaltstack`) is not written yet — on POSIX an overflow is
+  still a plain `SIGSEGV`.
+* The AArch64 fiber backend is not written; the legacy model is the
+  default there.

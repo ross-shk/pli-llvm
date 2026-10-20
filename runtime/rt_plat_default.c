@@ -102,27 +102,125 @@ size_t pli_plat_page_size(void) {
   GetSystemInfo(&si);
   return (size_t)si.dwPageSize;
 }
+
+/* The fiber stack: address space, not memory.
+ *
+ * The ceiling is reserved, not committed: a task that never touches its
+ * stack costs one page, not the whole ceiling, so a program with ten
+ * thousand tasks still fits in a small address space. The pages are
+ * committed as the stack grows into them, by the vectored handler below:
+ * it recognises a fault inside a fiber stack, commits the next window
+ * below the committed part and resumes the faulting instruction. A fault
+ * in the guard page below the stack is a stack overflow, and it is
+ * reported as one.
+ *
+ * The stacks are listed in a lock-free list: the handler may run at any
+ * moment, so it takes no lock. The list only grows — a stack that is
+ * released stays in the list, and committing a released stack fails, which
+ * leaves the fault to the default handler (a real crash, reported as
+ * such). */
+#define RT_STACK_WINDOW (64u * 1024u) /* the commit granularity */
+#define RT_STACK_MARGIN (64u * 1024u) /* committed below the fault, for the
+                                       * handler's own frame */
+
+typedef struct RtStack {
+  struct RtStack *next;
+  char *base;  /* the usable base; the guard page is the page below it */
+  size_t size; /* the usable size */
+  char *low;   /* the lowest committed address */
+} RtStack;
+
+static RtStack *rt_stacks = NULL;
+static INIT_ONCE rt_stacks_once = INIT_ONCE_STATIC_INIT;
+static PVOID rt_veh = NULL;
+
+static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep);
+
+static BOOL CALLBACK rt_stacks_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) {
+  (void)o;
+  (void)p;
+  (void)c;
+  rt_veh = AddVectoredExceptionHandler(1, rt_stack_veh);
+  return TRUE;
+}
+
+/* Commit [from, to) of the stack and remember the new low watermark. */
+static int rt_stack_commit(RtStack *s, char *from, char *to) {
+  if (to <= from)
+    return 0;
+  /* MEM_COMMIT at a given address commits the reserved pages there. */
+  void *p = VirtualAlloc(from, (size_t)(to - from), MEM_COMMIT, PAGE_READWRITE);
+  if (!p)
+    return -1;
+  s->low = from;
+  return 0;
+}
+
+static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep) {
+  EXCEPTION_RECORD *r = ep->ExceptionRecord;
+  if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+    return EXCEPTION_CONTINUE_SEARCH;
+  /* ExceptionAddress is the faulting *instruction*; the address that was
+   * actually accessed is the first extra information field. */
+  char *fault = (char *)r->ExceptionInformation[1];
+  size_t page = pli_plat_page_size();
+  for (RtStack *s = rt_stacks; s; s = s->next) {
+    if (fault >= s->base && fault < s->base + s->size) {
+      /* A touch inside the stack: commit the gap down to the fault, and a
+       * margin below it: the handler itself runs on this stack, so its own
+       * frame has to be in committed memory too. */
+      char *from = (char *)((uintptr_t)fault & ~(uintptr_t)(page - 1));
+      char *grow = from - (long)RT_STACK_MARGIN;
+      if (grow < s->base)
+        grow = s->base;
+      if (rt_stack_commit(s, grow, s->low) != 0)
+        return EXCEPTION_CONTINUE_SEARCH;
+      return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (fault >= s->base - (long)page && fault < s->base) {
+      /* The guard page: the task's stack ran out. */
+      fprintf(stderr, "TASK: stack overflow (the task's stack ran out)\n");
+      fflush(stderr);
+      return EXCEPTION_CONTINUE_SEARCH;
+    }
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
 int pli_plat_stack_alloc(size_t size, void **out_base) {
   size_t page = pli_plat_page_size();
   size = (size + page - 1) & ~(page - 1);
-  char *p = (char *)VirtualAlloc(NULL, size + page, MEM_RESERVE | MEM_COMMIT,
-                                 PAGE_READWRITE);
+  InitOnceExecuteOnce(&rt_stacks_once, rt_stacks_init_cb, NULL, NULL);
+  /* Reserve the ceiling: no commit charge, so the cost of an idle task is
+   * address space, not memory. */
+  char *p = (char *)VirtualAlloc(NULL, size + page, MEM_RESERVE, PAGE_NOACCESS);
   if (!p)
     return -1;
-  /* The guard page sits below the usable region: a fiber stack grows down
-   * into it, so an overflow lands on an inaccessible page. */
-  DWORD old = 0;
-  if (!VirtualProtect(p, page, PAGE_NOACCESS, &old)) {
+  RtStack *s = (RtStack *)malloc(sizeof(RtStack));
+  if (!s) {
     VirtualFree(p, 0, MEM_RELEASE);
     return -1;
   }
-  *out_base = p + page;
+  s->base = p + page;
+  s->size = size;
+  s->low = s->base + size;
+  /* Commit the top window: the fiber starts there. */
+  size_t window = RT_STACK_WINDOW < size ? RT_STACK_WINDOW : size;
+  if (rt_stack_commit(s, s->low - window, s->low) != 0) {
+    VirtualFree(p, 0, MEM_RELEASE);
+    free(s);
+    return -1;
+  }
+  s->next = rt_stacks;
+  rt_stacks = s;
+  *out_base = s->base;
   return 0;
 }
 void pli_plat_stack_free(void *base, size_t size) {
-  size_t page = pli_plat_page_size();
-  size = (size + page - 1) & ~(page - 1);
-  VirtualFree((char *)base - page, 0, MEM_RELEASE);
+  (void)size;
+  if (!base)
+    return;
+  VirtualFree((char *)base - pli_plat_page_size(), 0, MEM_RELEASE);
 }
 /* Mutual exclusion around one shared EVENT/task table. */
 void pli_mutex_init(pli_mutex *m) { InitializeCriticalSection(m); }
@@ -133,6 +231,11 @@ void pli_mutex_init_recursive(pli_mutex *m) { InitializeCriticalSection(m); }
 /* Condition broadcast/wait paired with the mutex above. */
 void pli_cond_init(pli_cond *c) { InitializeConditionVariable(c); }
 void pli_cond_wait(pli_cond *c, pli_mutex *m) { SleepConditionVariableCS(c, m, INFINITE); }
+int pli_cond_timedwait(pli_cond *c, pli_mutex *m, long long timeout_ms) {
+  if (timeout_ms < 0)
+    timeout_ms = 0;
+  return SleepConditionVariableCS(c, m, (DWORD)timeout_ms) ? 1 : 0;
+}
 void pli_cond_signal(pli_cond *c) { WakeConditionVariable(c); }
 void pli_cond_broadcast(pli_cond *c) { WakeAllConditionVariable(c); }
 /* One-time initialisation for mutexes/conds that have no static initializer. */
@@ -252,6 +355,17 @@ void pli_mutex_init_recursive(pli_mutex *m) {
 /* Condition broadcast/wait paired with the mutex above. */
 void pli_cond_init(pli_cond *c) { pthread_cond_init(c, NULL); }
 void pli_cond_wait(pli_cond *c, pli_mutex *m) { pthread_cond_wait(c, m); }
+int pli_cond_timedwait(pli_cond *c, pli_mutex *m, long long timeout_ms) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_sec += (time_t)(timeout_ms / 1000);
+  ts.tv_nsec += (long)((timeout_ms % 1000) * 1000000L);
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_nsec -= 1000000000L;
+    ts.tv_sec += 1;
+  }
+  return pthread_cond_timedwait(c, m, &ts) == 0 ? 1 : 0;
+}
 void pli_cond_signal(pli_cond *c) { pthread_cond_signal(c); }
 void pli_cond_broadcast(pli_cond *c) { pthread_cond_broadcast(c); }
 /* One-time initialisation for mutexes/conds that have no static initializer. */

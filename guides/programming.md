@@ -831,7 +831,11 @@ Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconvers
 
 ## Concurrency: TASK, EVENT, WAIT, DELAY
 
-`call ... event(e)` runs a procedure on a background thread. `wait(e)` blocks until it's done; `event(e)` polls it. Think goroutines + `WaitGroup`, or Python threads + `join()`.
+`call ... event(e)` runs a procedure as a *task*: a lightweight execution
+context (a fiber) that the runtime multiplexes on a small pool of OS
+threads, the way Go runs a goroutine. `wait(e)` blocks until it's done;
+`event(e)` polls it. Think goroutines + `WaitGroup`, or Python threads +
+`join()`.
 
 ```pli
  dcl done event;
@@ -881,9 +885,25 @@ Also: `call ... task[(t)]` requests an async task (`priority(p)` is accepted but
 
 > **Go friends:** `call f event(e); ... wait(e);` is `go f(); ... wg.Wait()`. `event(e)` polling is a non-blocking channel check.
 
+### The knobs
+
+The runtime reads three environment variables, all optional:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PLI_TASK_MODEL` | `fiber` | `fiber` (the default) or `os` — the legacy model, one OS thread per task |
+| `PLI_TASK_WORKERS` | `min(cores, 8)` | how many OS threads run the tasks |
+| `PLI_TASK_STACK` | `8388608` | the task stack ceiling in bytes (the pages are committed on demand) |
+
+`PLI_TASK_MODEL=os` is the escape hatch: it restores the old behaviour
+(one OS thread per task) for A/B runs and for the platforms that have no
+fiber backend yet.
+
 **Not yet**
 
 - You must `wait` before the block exits, or the event's storage may vanish while the task still runs. External and function-async tasks are diagnosed.
+- The fiber backend exists for x86-64; other architectures still use the
+  OS-thread model.
 
 > **Run the full example:** [`examples/concurrency.pli`](../examples/concurrency.pli) — `pli concurrency.pli -o conc && ./conc`.
 

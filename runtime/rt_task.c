@@ -5,8 +5,9 @@
 #include "pli_rt.h"
 /* Threading arrives via rt_sync.h (the runtime's lock layer, ADR-234): the
  * mutexes, conds, spawn and sleep are platform-TU definitions now, reached
- * through the layer that will carry the fiber mode. */
+ * through the layer that carries the fiber mode. */
 #include "rt_sync.h"
+#include "rt_sched.h"
 
 /* Multitasking (rules (79),(82),(83), QR2.8): EVENT flags are i32 words owned
  * by PL/I variables (0 incomplete, 1 complete), serialised behind one
@@ -94,10 +95,22 @@ unsigned char pli_event_status(char *ev) {
   return (unsigned char)(done ? 1 : 0);
 }
 
-/* DELAY(n): suspend for n milliseconds; n <= 0 is a no-op. */
-void pli_delay(long long ms) { pli_sleep_ms(ms); }
+/* DELAY(n): suspend for n milliseconds. Under the fiber model this parks
+ * the task with a timer deadline, so the worker runs other tasks while it
+ * waits; under the legacy model it sleeps the OS thread. */
+void pli_delay(long long ms) {
+  if (ms <= 0)
+    return;
+  if (!rt_sched_fiber_mode() || !rt_sched_current()) {
+    pli_sleep_ms(ms);
+    return;
+  }
+  rt_sched_park_until(pli_plat_now_ms() + ms);
+}
 
-/* CALL ... TASK/EVENT/PRIORITY: run wrapper(ctx) on a detached thread. */
+/* CALL ... TASK/EVENT/PRIORITY: start the callee. Under the fiber model it
+ * runs as a task on the scheduler; under the legacy model it gets a
+ * detached OS thread. */
 void pli_task_spawn(char *fn, char *ctx) {
   /* The cast goes straight from the object pointer to the function pointer:
    * going through void * is not a conforming conversion. */
@@ -108,6 +121,11 @@ void pli_task_spawn(char *fn, char *ctx) {
    * main thread (no task can exist before it), so no two threads ever race
    * on it. */
   rt_stream_enable_threads();
+  if (rt_sched_fiber_mode()) {
+    if (rt_sched_spawn(body, ctx) != 0)
+      pli_abort("TASK: could not create a task");
+    return;
+  }
   if (pli_spawn_detached(body, ctx) != 0)
     pli_abort("TASK: could not create a thread");
 }

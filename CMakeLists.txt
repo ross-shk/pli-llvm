@@ -178,7 +178,8 @@ set(RT_PORTABLE_SRCS
   runtime/rt_core.c runtime/rt_stream.c runtime/rt_string.c
   runtime/rt_math.c runtime/rt_mathport.c runtime/rt_cond.c
   runtime/rt_storage.c runtime/rt_get.c runtime/rt_file.c
-  runtime/rt_edit.c runtime/rt_task.c runtime/rt_sync.c)
+  runtime/rt_edit.c runtime/rt_task.c runtime/rt_sync.c
+  runtime/rt_sched.c runtime/rt_fiber_asm.c)
 set(RT_PLATFORM_SRCS
   runtime/rt_plat_default.c)
 set(RT_SRCS ${RT_PORTABLE_SRCS} ${RT_PLATFORM_SRCS})
@@ -191,6 +192,8 @@ set(RT_HEADERS
   ${CMAKE_SOURCE_DIR}/runtime/pli_rt_plat.h
   ${CMAKE_SOURCE_DIR}/runtime/pli_rt_abi.def
   ${CMAKE_SOURCE_DIR}/runtime/rt_sync.h
+  ${CMAKE_SOURCE_DIR}/runtime/rt_sched.h
+  ${CMAKE_SOURCE_DIR}/runtime/rt_fiber.h
   ${CMAKE_SOURCE_DIR}/runtime/pli_wide128.h)
 
 # lld detection (ADR-225): in-process lld is the only link; missing lld is a

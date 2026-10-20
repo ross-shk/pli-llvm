@@ -3,6 +3,7 @@
 /* rt_core.c — PL/I runtime library (pli_runtime): lifecycle: init/fini/STOP. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
+#include "rt_sched.h" /* the tasking model and the scheduler (ADR-234) */
 /* System headers arrive via pli_rt_plat.h (the platform seam): allocation,
  * process I/O, and stdio all route through the pli_plat_* wrappers below. */
 
@@ -21,6 +22,9 @@ void pli_rt_init(void) {
   data_items = 0;
   data_value_next = 0;
   tok_semi = 0;
+  /* ADR-234: pick the tasking model and size the task stacks before any
+   * task exists, so a lock object never sees both models. */
+  rt_sched_init();
 }
 
 void pli_rt_fini(void) {

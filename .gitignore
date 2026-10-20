@@ -23,6 +23,8 @@ design-docs/
 zapp.yaml
 docs/archive/
 benchmarks/results/
+benchmarks/out/
+benchmarks/tasking/out/
 *.lib
 
 # runtime-generated test data files

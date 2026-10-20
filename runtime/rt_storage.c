@@ -2,6 +2,9 @@
 /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* rt_storage.c — PL/I runtime library (pli_runtime): heap: ALLOCATE/FREE. */
 #include "pli_rt.h"
+/* The CONTROLLED table is per-task (ADR-234): rt_sched.h hands out the copy
+ * that belongs to the running task. */
+#include "rt_sched.h"
 /* Allocation routes through pli_plat_malloc/pli_plat_calloc/pli_plat_realloc
  * (the platform seam), except pli_free itself, whose body names
  * pli_plat_free (the seam free: a pli_free call here would recurse). */
@@ -27,29 +30,34 @@ typedef struct {
   long long **dimss;
   long long depth, cap;
 } CtlVar;
-/* Thread-local per ADR-016 (multitasking design): each task owns its
- * CONTROLLED generation stacks, mirroring the thread-local ON-handler stack
+/* Per-task (ADR-016's multitasking design, ADR-234): each task owns its
+ * CONTROLLED generation stacks, mirroring the per-task ON-handler stack
  * in rt_cond.c. Workers calling CALL ... EVENT therefore allocate and free
  * their own generations without racing the main task or each other through
- * this table (see tests/hardening/task_alloc_combo.pli). */
-static _Thread_local CtlVar *ctlVars = NULL;
-static _Thread_local long long ctlCount = 0;
+ * this table (see tests/hardening/task_alloc_combo.pli). Under the fiber
+ * model the table follows the fiber, not the OS thread. */
+static CtlVar *ctlVars(pli_task_local *st) { return (CtlVar *)st->ctl_vars; }
+static long long ctlCount(pli_task_local *st) { return st->ctl_count; }
 
 /* Find (or, when create is set, append) the generation stack for a variable.
  * Keys are the sema-assigned FNV-1a name hashes, so unrelated CONTROLLED
  * variables in different object files never share a slot. The variable count
  * is tiny, so a linear scan beats a hash table. */
 static CtlVar *ctlFind(long long key, int create) {
-  for (long long i = 0; i < ctlCount; ++i)
-    if (ctlVars[i].key == key)
-      return &ctlVars[i];
+  pli_task_local *st = rt_task_local();
+  CtlVar *vars = ctlVars(st);
+  long long count = ctlCount(st);
+  for (long long i = 0; i < count; ++i)
+    if (vars[i].key == key)
+      return &vars[i];
   if (!create)
     return NULL;
-  CtlVar *nv = (CtlVar *)pli_plat_realloc(ctlVars, (size_t)(ctlCount + 1) * sizeof(CtlVar));
+  CtlVar *nv = (CtlVar *)pli_plat_realloc(vars, (size_t)(count + 1) * sizeof(CtlVar));
   if (!nv)
     pli_signal_error("CONTROLLED table out of memory");
-  ctlVars = nv;
-  CtlVar *v = &ctlVars[ctlCount++];
+  st->ctl_vars = nv;
+  st->ctl_count = count + 1;
+  CtlVar *v = &nv[count];
   v->key = key;
   v->gens = NULL;
   v->lens = NULL;
@@ -92,22 +100,17 @@ static void ctlGrow(CtlVar *v) {
  * generations (rank 0) enter the cache; the N-D path bypasses it. The cache
  * never aliases a live generation: every stashed buffer came from a popped
  * depth slot and leaves the cache on the next same-shape alloc. The cache
- * is thread-local with the table: a process-global slot would hand one
- * worker's freed buffer to another worker holding the same key. */
-typedef struct {
-  long long key;
-  char *bytes;
-  long long len;
-} CtlCache;
-static _Thread_local CtlCache ctlCache = {.key = -1, .bytes = NULL, .len = 0};
-
+ * is per-task, like the table: a process-global slot would hand one worker's
+ * freed buffer to another worker holding the same key. The three fields live
+ * in the task's own state (rt_fiber.h), so they follow the fiber. */
 void pli_ctl_alloc(long long key, long long n) {
+  pli_task_local *st = rt_task_local();
   CtlVar *v = ctlFind(key, 1);
   ctlGrow(v);
   // intent: same-key/same-size LIFO churn reuses the cached buffer.
-  if (ctlCache.bytes && ctlCache.key == key && ctlCache.len == n) {
-    v->gens[v->depth] = ctlCache.bytes;
-    ctlCache.bytes = NULL;
+  if (st->ctl_cache_bytes && st->ctl_cache_key == key && st->ctl_cache_len == n) {
+    v->gens[v->depth] = (char *)st->ctl_cache_bytes;
+    st->ctl_cache_bytes = NULL;
   } else {
     v->gens[v->depth] = pli_alloc(n);
   }
@@ -182,6 +185,7 @@ long long pli_ctl_depth(long long key) {
 }
 
 void pli_ctl_free(long long key) {
+  pli_task_local *st = rt_task_local();
   CtlVar *v = ctlFind(key, 0);
   if (!v || v->depth <= 0)
     pli_signal_error("FREE of empty CONTROLLED stack");
@@ -195,16 +199,16 @@ void pli_ctl_free(long long key) {
   v->gens[v->depth] = NULL;
   if (v->ranks[v->depth] == 0) {
     long long n = v->lens[v->depth];
-    if (ctlCache.bytes) {
-      if (ctlCache.key == key && ctlCache.len == n) {
+    if (st->ctl_cache_bytes) {
+      if (st->ctl_cache_key == key && st->ctl_cache_len == n) {
         pli_free(buf); // slot already serves this shape: drop the duplicate
         return;
       }
-      pli_free(ctlCache.bytes); // evict stale entry before stashing
+      pli_free((char *)st->ctl_cache_bytes); // evict stale entry before stashing
     }
-    ctlCache.key = key;
-    ctlCache.bytes = buf;
-    ctlCache.len = n;
+    st->ctl_cache_key = key;
+    st->ctl_cache_bytes = buf;
+    st->ctl_cache_len = n;
   } else {
     pli_free(buf);
   }

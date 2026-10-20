@@ -3,6 +3,9 @@
 /* rt_cond.c — PL/I runtime library (pli_runtime): conditions: signal, ON stack/ONCODE, traps. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
+/* The ON state is per-task (QR2.8): rt_sched.h hands out the copy that
+ * belongs to the running task (ADR-234). */
+#include "rt_sched.h"
 /* stderr printing routes through pli_plat_fprintf (the platform seam). */
 
 void pli_signal_error(const char *msg) {
@@ -26,30 +29,8 @@ void pli_abort(const char *msg) {
  * addresses of automatics the unit touches, or NULL when the unit touches
  * none. A SIGNAL runs the topmost handler established for its own condition
  * — wherever it was pushed, including another object file — then resumes.
- * Thread-local (QR2.8): each task owns its handler stack and ONCODE. */
-#define PLI_ON_MAX 64
-static _Thread_local struct {
-  long long key; /* 0 = ERROR, else the sema-assigned condition key */
-  long long src; /* the source condition key of the SIGNAL being handled */
-  long long id;  /* handler id; 0 = the system action */
-  void *fn;      /* compiled handler address; NULL = system action */
-  void *ctx;     /* capture context; NULL when the unit touches no automatics */
-} pli_err_stack[PLI_ON_MAX];
-static _Thread_local int pli_err_sp = 0;
-static _Thread_local int pli_oncode_val = 0;
-static _Thread_local int pli_on_source_key = 0;
-void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
-  if (pli_err_sp < PLI_ON_MAX) {
-    pli_err_stack[pli_err_sp].key = key;
-    pli_err_stack[pli_err_sp].src = 0;
-    pli_err_stack[pli_err_sp].id = id;
-    pli_err_stack[pli_err_sp].fn = fn;
-    pli_err_stack[pli_err_sp].ctx = ctx;
-    ++pli_err_sp;
-  } else {
-    pli_abort("ON ERROR stack overflow");
-  }
-}
+ * Per-task (QR2.8): each task owns its handler stack and ONCODE. Under the
+ * fiber model the state follows the fiber, not the OS thread (ADR-234). */
 /* Always-inline, portable: MSVC has no __attribute__((always_inline)). */
 #if defined(_MSC_VER)
 #define PLI_ALWAYS_INLINE __forceinline
@@ -57,38 +38,60 @@ void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
 #define PLI_ALWAYS_INLINE inline __attribute__((always_inline))
 #endif
 
+/* The ON state of the running task. */
+static PLI_ALWAYS_INLINE pli_task_local *on_state(void) { return rt_task_local(); }
+
+void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
+  pli_task_local *st = on_state();
+  if (st->on_sp < PLI_ON_MAX) {
+    st->on_stack[st->on_sp].key = key;
+    st->on_stack[st->on_sp].src = 0;
+    st->on_stack[st->on_sp].id = id;
+    st->on_stack[st->on_sp].fn = fn;
+    st->on_stack[st->on_sp].ctx = ctx;
+    ++st->on_sp;
+  } else {
+    pli_abort("ON ERROR stack overflow");
+  }
+}
+/* Always-inline, portable: MSVC has no __attribute__((always_inline)). */
+
 /* Topmost id for a key, or 0 when none (or SYSTEM) is established for it.
  * T2a: static inline so the scan folds into the ABI wrapper at C-compile time. */
 static PLI_ALWAYS_INLINE
 long long rt_pli_on_top(long long key) {
-  for (int i = pli_err_sp - 1; i >= 0; --i)
-    if (pli_err_stack[i].key == key)
-      return pli_err_stack[i].id;
+  pli_task_local *st = on_state();
+  for (int i = st->on_sp - 1; i >= 0; --i)
+    if (st->on_stack[i].key == key)
+      return st->on_stack[i].id;
   return 0;
 }
 /* Topmost handler address for a key, or NULL when none (or SYSTEM). */
 static PLI_ALWAYS_INLINE
 void *rt_pli_on_top_fn(long long key) {
-  for (int i = pli_err_sp - 1; i >= 0; --i)
-    if (pli_err_stack[i].key == key)
-      return pli_err_stack[i].fn;
+  pli_task_local *st = on_state();
+  for (int i = st->on_sp - 1; i >= 0; --i)
+    if (st->on_stack[i].key == key)
+      return st->on_stack[i].fn;
   return NULL;
 }
 /* Capture context of the topmost handler for a key (NULL when none). */
 static PLI_ALWAYS_INLINE
 void *rt_pli_on_top_ctx(long long key) {
-  for (int i = pli_err_sp - 1; i >= 0; --i)
-    if (pli_err_stack[i].key == key)
-      return pli_err_stack[i].ctx;
+  pli_task_local *st = on_state();
+  for (int i = st->on_sp - 1; i >= 0; --i)
+    if (st->on_stack[i].key == key)
+      return st->on_stack[i].ctx;
   return NULL;
 }
 /* Drop the topmost entry for a key; a no-op when none is established. */
 void rt_pli_on_pop(long long key) {
-  for (int i = pli_err_sp - 1; i >= 0; --i)
-    if (pli_err_stack[i].key == key) {
-      for (int j = i; j < pli_err_sp - 1; ++j)
-        pli_err_stack[j] = pli_err_stack[j + 1];
-      --pli_err_sp;
+  pli_task_local *st = on_state();
+  for (int i = st->on_sp - 1; i >= 0; --i)
+    if (st->on_stack[i].key == key) {
+      for (int j = i; j < st->on_sp - 1; ++j)
+        st->on_stack[j] = st->on_stack[j + 1];
+      --st->on_sp;
       return;
     }
 }
@@ -96,10 +99,11 @@ void rt_pli_on_pop(long long key) {
  * context through `ctx_out` in a single pass, halving the per-fault stack
  * walks versus the separate pli_on_top_cond + pli_on_top_ctx pair. */
 long long pli_on_top_pair(long long key, char *ctx_out) {
-  for (int i = pli_err_sp - 1; i >= 0; --i)
-    if (pli_err_stack[i].key == key) {
-      *(void **)ctx_out = pli_err_stack[i].ctx;
-      return pli_err_stack[i].id;
+  pli_task_local *st = on_state();
+  for (int i = st->on_sp - 1; i >= 0; --i)
+    if (st->on_stack[i].key == key) {
+      *(void **)ctx_out = st->on_stack[i].ctx;
+      return st->on_stack[i].id;
     }
   *(void **)ctx_out = NULL;
   return 0;
@@ -109,10 +113,11 @@ long long pli_on_top_pair(long long key, char *ctx_out) {
  * the per-SIGNAL stack walks versus the separate pli_on_top_fn +
  * pli_on_top_ctx pair. */
 char *pli_on_top_fn_pair(long long key, char *ctx_out) {
-  for (int i = pli_err_sp - 1; i >= 0; --i)
-    if (pli_err_stack[i].key == key) {
-      *(void **)ctx_out = pli_err_stack[i].ctx;
-      return (char *)pli_err_stack[i].fn;
+  pli_task_local *st = on_state();
+  for (int i = st->on_sp - 1; i >= 0; --i)
+    if (st->on_stack[i].key == key) {
+      *(void **)ctx_out = st->on_stack[i].ctx;
+      return (char *)st->on_stack[i].fn;
     }
   *(void **)ctx_out = NULL;
   return NULL;
@@ -142,31 +147,33 @@ char *pli_on_top_ctx(long long key) {
   return (char*)rt_pli_on_top_ctx(key);
 }
 long long pli_on_depth_error(void) {
-  return pli_err_sp;
+  return on_state()->on_sp;
 }
 void pli_on_reset_error(long long d) {
-  if (d >= 0 && d <= pli_err_sp)
-    pli_err_sp = (int)d;
+  pli_task_local *st = on_state();
+  if (d >= 0 && d <= st->on_sp)
+    st->on_sp = (int)d;
 }
 int pli_oncode(void) {
-  return pli_oncode_val;
+  return on_state()->oncode;
 }
 void pli_set_oncode(int c) {
-  pli_oncode_val = c;
+  on_state()->oncode = c;
 }
 
 /* ONKEY() (rule (123), Appendix 1): returns BIT(1) = 1 if a SIGNAL is
    currently being handled (i.e. we're inside an ON handler unit). */
 int pli_onkey(void) {
-  return pli_err_sp > 0 ? 1 : 0;
+  return on_state()->on_sp > 0 ? 1 : 0;
 }
 
 /* ONSOURCE() (rule (123), Appendix 1): returns the key of the current
    SIGNAL's source condition (0 = SYSTEM/none). */
 int pli_on_source(void) {
-  if (pli_err_sp > 0)
-    return (int)pli_err_stack[pli_err_sp - 1].src;
-  return pli_on_source_key;
+  pli_task_local *st = on_state();
+  if (st->on_sp > 0)
+    return (int)st->on_stack[st->on_sp - 1].src;
+  return st->on_source;
 }
 
 /* ONSOURCE = key (TR 123, ADR-210): set the source condition key of the
@@ -175,10 +182,11 @@ int pli_on_source(void) {
    entry's own condition key is a separate field: overwriting it would make
    the ERROR handler unfindable (pli_on_top / pli_on_pop match on it). */
 void pli_set_on_source(int key) {
-  if (pli_err_sp > 0)
-    pli_err_stack[pli_err_sp - 1].src = (long long)key;
+  pli_task_local *st = on_state();
+  if (st->on_sp > 0)
+    st->on_stack[st->on_sp - 1].src = (long long)key;
   else
-    pli_on_source_key = key;
+    st->on_source = key;
 }
 
 /* ONFILE() (rule (123), Appendix 1): the file of the current I/O condition.

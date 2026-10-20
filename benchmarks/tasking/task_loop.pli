@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-234 benchmark W1b: the task lifecycle, one task at a time.
+    Start a task that does nothing and join it, N times over. The fiber
+    pool recycles the stack, so this measures the tasking model itself:
+    the spawn, the switch and the join. The same work runs in the Go and
+    the C baselines (task_loop.go, task_loop_c.c). */
+ task_loop: procedure options(main);
+    declare e(20000) event;
+    declare i fixed binary(31);
+    do i = 1 to 20000;
+       call worker event(e(i));
+       wait(e(i));
+    end;
+    put skip list('done');
+    worker: procedure;
+    end worker;
+ end task_loop;

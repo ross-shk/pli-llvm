@@ -157,6 +157,10 @@ void pli_mutex_init_recursive(pli_mutex *m);
 /* Condition broadcast/wait paired with the mutex above. */
 void pli_cond_init(pli_cond *c);
 void pli_cond_wait(pli_cond *c, pli_mutex *m);
+/* Wait with a timeout in milliseconds: returns 1 when the condition was
+ * signalled, 0 on timeout. The scheduler parks an idle worker on it, so the
+ * worker can re-check the DELAY timers without a dedicated timer thread. */
+int pli_cond_timedwait(pli_cond *c, pli_mutex *m, long long timeout_ms);
 void pli_cond_signal(pli_cond *c);
 void pli_cond_broadcast(pli_cond *c);
 /* One-time initialisation for mutexes/conds with no static initializer. */

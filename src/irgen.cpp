@@ -457,6 +457,9 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       // Runtime init/fini: touch global state, always return.
       {"pli_rt_init", {.willReturn = true, .mem = RtMemOtherMod}},
       {"pli_rt_fini", {.willReturn = true, .mem = RtMemOtherMod}},
+      // ADR-234: the MAIN procedure runs as a task, so this calls
+      // arbitrary PL/I code: it must never be memory(none).
+      {"pli_sched_main", {.willReturn = true, .mem = RtMemOtherMod}},
       // CONTROLLED / ON / AREA readers: read global state, never write (ADR-111).
       {"pli_ctl_addr", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_ctl_len", {.willReturn = true, .mem = RtMemReadonly}},
@@ -3066,8 +3069,13 @@ std::string IRGen::run(HProgram& prog) {
      // call boundary preserves correct control flow through pli_rt_fini.
      mfn->addFnAttr(llvm::Attribute::NoInline);
      b_.SetInsertPoint(bb);
-    b_.CreateCall(mfn, {});
-    b_.CreateCall(runtimeFn("pli_rt_fini"), {});
+     // ADR-234: the MAIN procedure runs as a task on worker 0, so the
+     // scheduler can multiplex it with the program's tasks. In the legacy
+     // pthread model pli_sched_main calls the entry directly and nothing
+     // changes.
+     b_.CreateCall(runtimeFn("pli_sched_main"), {b_.CreateBitCast(mfn, b_.getPtrTy())});
+     b_.CreateCall(runtimeFn("pli_rt_fini"), {});
+
     b_.CreateRet(i32(0));
   }
 

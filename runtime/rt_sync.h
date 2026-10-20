@@ -5,21 +5,22 @@
  * One API for the whole runtime: the tasking code (rt_task.c) and the
  * stream serialiser (rt_stream.c) lock through rt_lock/rt_cond instead of
  * naming the platform seam's pli_mutex/pli_cond directly. The seam stays
- * the host's; this layer is what the fiber scheduler will sit on.
+ * the host's; this layer is what the fiber scheduler sits on.
  *
- * Why a layer at all: under the fiber model a lock holder parks its *task*
- * rather than its OS thread, so the lock must know about fibers. Keeping
- * that knowledge here means the tasking and stream code never mentions a
- * fiber, and the port to the fiber model touches this file only.
- *
- * This phase forwards to the OS primitives, so the behaviour is identical
- * to the code it replaces. The fiber mode (a holder that parks its task)
- * is added later without changing this API.
+ * Two modes, fixed once at pli_rt_init before any lock is taken, so a
+ * lock object never sees both:
+ *   OS    — the legacy path: the lock is the platform's mutex and a
+ *           contended wait blocks the OS thread;
+ *   FIBER — the lock is a state word plus a wait queue, and a contended
+ *           wait parks the *task*, so the worker runs other tasks.
  */
 #ifndef PLI_RT_SYNC_H
 #define PLI_RT_SYNC_H
 
 #include "pli_rt_plat.h"
+
+/* The fiber is opaque here: this layer only holds pointers to fibers. */
+struct pli_fiber;
 
 /* A lock. Two flavours, matching the two uses in the runtime:
  *   plain      — the EVENT/task tables; nobody takes them twice;
@@ -28,13 +29,17 @@
  * The distinction is kept because a recursive mutex held twice across a
  * condition wait would not be fully released, which can deadlock. */
 typedef struct {
-  pli_mutex os; /* the OS mutex behind the lock */
+  pli_mutex os;               /* the OS mode's mutex */
+  struct pli_fiber *owner;    /* the FIBER mode's holder */
+  struct pli_fiber *waiters;  /* the FIBER mode's wait queue */
+  long depth;                 /* the recursion depth */
   int inited;
 } rt_lock;
 
 /* A condition variable, paired with an rt_lock. */
 typedef struct {
-  pli_cond os; /* the OS condvar behind the condition */
+  pli_cond os;                /* the OS mode's condvar */
+  struct pli_fiber *waiters;  /* the FIBER mode's wait queue */
   int inited;
 } rt_cond;
 
