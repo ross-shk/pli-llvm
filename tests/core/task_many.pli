@@ -1,0 +1,29 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82): many tasks at once. A fan-out of 100 tasks, all live
+    at the same time, joined with one WAIT. The scheduler runs the tasks on
+    its worker pool, so this exercises the paths that only show up with
+    more than one worker: the work stealing, the park and unpark, and the
+    end of the program when the MAIN procedure is not the last task to
+    run (ADR-234). The program must finish; before the per-worker condvars
+    and the runnext slot it hung. */
+ task_many: procedure options(main);
+    declare ev(100) event;
+    declare i fixed binary(31);
+    declare total fixed binary(31);
+    total = 0;
+    do i = 1 to 100;
+       call worker event(ev(i));
+    end;
+    wait(ev);
+    do i = 1 to 100;
+       if event(ev(i)) then
+          total = total + 1;
+    end;
+    if total = 100 then
+       put skip list('PASS');
+    else
+       put skip list('FAIL completed', total, 'of 100');
+    worker: procedure;
+    end worker;
+ end task_many;

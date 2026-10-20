@@ -65,8 +65,11 @@ static _Thread_local pli_task_local rt_tls_local;
 typedef struct rt_worker {
   _Atomic(pli_fiber *) local; /* the worker's LIFO run queue */
   _Atomic(pli_fiber *) ready; /* the fibers unparked while they slept here */
+  pli_fiber *runnext;         /* the next task to run: never stolen */
   pli_fiber *cur;             /* the fiber running on this worker */
   pli_fiber *sched_ctx;       /* the worker's own context (its OS stack) */
+  pli_mutex mu;               /* the worker's own lock */
+  pli_cond cv;                /* the worker's own condvar */
   _Atomic int parked;         /* 1 while the worker waits on the condvar */
   int id;
 } rt_worker;
@@ -87,11 +90,9 @@ static _Atomic int rt_main_done = 0;
  * is guarded by an OS lock. The fiber-mode lock in rt_sync.c guards *tasks*,
  * not the workers. */
 static pli_mutex rt_sched_mu;
-static pli_cond rt_sched_cv;
 
-/* The global queue: the tasks pushed by a thread that is not a worker. */
-static pli_fiber *rt_global_head = NULL;
-
+/* The global queue: the tasks pushed by a thread that is not a worker. It
+ * lives with the other lock-free queues, further down. */
 /* The timers: the fibers parked until a deadline (DELAY), a min-heap. */
 static pli_fiber **rt_timer_heap = NULL;
 static int rt_timer_count = 0;
@@ -148,8 +149,11 @@ void rt_sched_init(void) {
 
   if (rt_model_fiber) {
     pli_mutex_init(&rt_sched_mu);
-    pli_cond_init(&rt_sched_cv);
-    rt_workers[0].id = 0;
+    for (int i = 0; i < RT_WORKERS_MAX; ++i) {
+      pli_mutex_init(&rt_workers[i].mu);
+      pli_cond_init(&rt_workers[i].cv);
+      rt_workers[i].id = i;
+    }
     rt_self = &rt_workers[0];
   }
 }
@@ -261,28 +265,19 @@ static pli_fiber *rt_queue_steal(_Atomic(pli_fiber *) *head) {
   return list; /* the newer half: the thief's */
 }
 
-/* --- the global queue and the timers (the scheduler's OS lock) --- */
+/* --- the global queue and the timers --- */
 
 static void rt_wake_one(rt_worker *w);
+static void rt_wake_any(void);
 
-/* The tasks pushed by a thread that is not a worker. */
-static pli_fiber *rt_take_global(void) {
-  pli_mutex_lock(&rt_sched_mu);
-  pli_fiber *f = rt_global_head;
-  if (f)
-    rt_global_head = f->next;
-  pli_mutex_unlock(&rt_sched_mu);
-  if (f)
-    f->next = NULL;
-  return f;
-}
+/* The tasks pushed by a thread that is not a worker. The queue is
+ * lock-free, like the per-worker queues: a worker that parks must be able
+ * to look at it without taking a lock that another worker may hold. */
+static _Atomic(pli_fiber *) rt_global_head = NULL;
 
-static void rt_push_global(pli_fiber *f) {
-  pli_mutex_lock(&rt_sched_mu);
-  f->next = rt_global_head;
-  rt_global_head = f;
-  pli_mutex_unlock(&rt_sched_mu);
-}
+static pli_fiber *rt_take_global(void) { return rt_queue_pop(&rt_global_head); }
+
+static void rt_push_global(pli_fiber *f) { rt_queue_push(&rt_global_head, f); }
 
 /* The timer heap: the fibers parked until a deadline, ordered by it. */
 static void rt_timer_push(pli_fiber *f) {
@@ -359,17 +354,29 @@ static pli_fiber *rt_take_expired_timer(void) {
     rt_wake_one(home);
   } else {
     rt_push_global(f);
-    rt_wake_one(NULL);
+    rt_wake_any();
   }
   return NULL;
 }
 
 /* --- the workers --- */
 
-/* The next runnable task: the worker's own queue, then the global queue,
- * then a steal from a peer, then a matured DELAY. */
+/* The next runnable task: the worker's runnext slot, then the worker's own
+ * queue, then the global queue, then a steal from a peer, then a matured
+ * DELAY.
+ *
+ * The runnext slot comes first and is not stealable: a task that a program
+ * has just spawned is usually the one it waits for next, so it should run on
+ * the worker that spawned it. If a stealer took it, the spawner's WAIT
+ * would have to be woken by the OS — a thread wake-up, microseconds — and
+ * the worker's own queue would have to be searched for it. */
 static pli_fiber *rt_next_runnable(rt_worker *w) {
-  pli_fiber *f = rt_queue_pop(&w->local);
+  pli_fiber *f = w->runnext;
+  if (f) {
+    w->runnext = NULL;
+    return f;
+  }
+  f = rt_queue_pop(&w->local);
   if (f)
     return f;
   f = rt_take_global();
@@ -386,19 +393,52 @@ static pli_fiber *rt_next_runnable(rt_worker *w) {
   return rt_take_expired_timer();
 }
 
-/* Wake a parked worker, if there is one. The lock is taken only when the
- * worker is actually idle, so a busy scheduler never pays for it — and the
- * check is per worker: a task that unparks a task on a busy worker must not
- * wake the whole pool. */
+/* Wake a worker that may be asleep.
+ *
+ * Each worker has its own condvar, so a wakeup costs one thread, not the
+ * whole pool. The check is made under the worker's own lock, which is what
+ * makes the wakeup safe: the worker decides to sleep while holding that
+ * lock, and the wait releases it atomically, so a waker either sees the
+ * worker before it sleeps (and the worker's own re-check finds the task)
+ * or wakes it from the wait. A wakeup can therefore not be lost.
+ *
+ * The signal is sent only when the worker is asleep: a worker that is
+ * running finds the task in its own queue when it next looks, and the
+ * signal would be a kernel call for nothing. */
 static void rt_wake_one(rt_worker *w) {
-  if (!w || !atomic_load_explicit(&w->parked, memory_order_relaxed))
+  if (!w)
     return;
-  pli_mutex_lock(&rt_sched_mu);
-  pli_cond_broadcast(&rt_sched_cv);
-  pli_mutex_unlock(&rt_sched_mu);
+  /* The worker that is running right now is not asleep: it finds the task
+   * in its own queue when it next looks, so a signal would be a kernel call
+   * for nothing. This is the common case — a task that is unparked by the
+   * worker that ran it. */
+  if (w == rt_self_get())
+    return;
+  pli_mutex_lock(&w->mu);
+  if (atomic_load_explicit(&w->parked, memory_order_relaxed))
+    pli_cond_signal(&w->cv);
+  pli_mutex_unlock(&w->mu);
 }
 
-/* Nothing to run: park on the scheduler's condvar until a task arrives or
+/* Wake one worker: the global queue holds work that any worker may take,
+ * so any sleeping worker will do. The workers are tried in turn, starting
+ * after the last one woken, so the load is spread. */
+static int rt_wake_rr = 0;
+
+static void rt_wake_any(void) {
+  for (int i = 0; i < rt_worker_count; ++i) {
+    rt_worker *w = &rt_workers[(rt_wake_rr + i) % rt_worker_count];
+    if (atomic_load_explicit(&w->parked, memory_order_relaxed)) {
+      rt_wake_rr = (rt_wake_rr + i + 1) % rt_worker_count;
+      rt_wake_one(w);
+      return;
+    }
+  }
+  /* Nobody is parked: the workers are busy, and one of them will find the
+   * task in the global queue. */
+}
+
+/* Nothing to run: park on the worker's own condvar until a task arrives or
  * the earliest DELAY matures. */
 static void rt_worker_park(rt_worker *w) {
   long long deadline = rt_timer_next_deadline();
@@ -409,14 +449,19 @@ static void rt_worker_park(rt_worker *w) {
     if (timeout < 0)
       timeout = 0;
   }
-  pli_mutex_lock(&rt_sched_mu);
-  /* Re-check under the lock: a task may have arrived while we waited for it. */
-  if (!atomic_load_explicit(&w->local, memory_order_acquire) && !rt_global_head) {
+  pli_mutex_lock(&w->mu);
+  /* Re-check under the lock: a task may have arrived while we looked for
+   * one. The ready list counts: a task unparked to this worker while it
+   * was on its way to sleep would otherwise wait for a wakeup that never
+   * comes. */
+  if (!w->runnext && !atomic_load_explicit(&w->local, memory_order_acquire) &&
+      !atomic_load_explicit(&w->ready, memory_order_acquire) &&
+      !atomic_load_explicit(&rt_global_head, memory_order_acquire)) {
     atomic_store_explicit(&w->parked, 1, memory_order_release);
-    pli_cond_timedwait(&rt_sched_cv, &rt_sched_mu, timeout);
+    pli_cond_timedwait(&w->cv, &w->mu, timeout);
     atomic_store_explicit(&w->parked, 0, memory_order_release);
   }
-  pli_mutex_unlock(&rt_sched_mu);
+  pli_mutex_unlock(&w->mu);
 }
 
 /* The fiber trampoline. The assembly jumps to it, so it takes no register
@@ -532,7 +577,7 @@ void rt_sched_unpark(pli_fiber *f) {
     rt_wake_one(home);
   } else {
     rt_push_global(f);
-    rt_wake_one(NULL);
+    rt_wake_any();
   }
 }
 
@@ -582,11 +627,13 @@ static void rt_worker_loop(rt_worker *w) {
     rt_cur = NULL;
     if (f->state == PLI_FIB_DEAD) {
       if (f == rt_main_fib) {
-        /* The MAIN procedure is done: the program ends with it. */
+        /* The MAIN procedure is done: the program ends with it. The main
+         * thread is worker 0, and the main task may have run on another
+         * worker (a stealer may have taken it), so every worker is woken:
+         * worker 0 returns from its loop, and the program ends. */
         atomic_store_explicit(&rt_main_done, 1, memory_order_release);
-        pli_mutex_lock(&rt_sched_mu);
-        pli_cond_broadcast(&rt_sched_cv);
-        pli_mutex_unlock(&rt_sched_mu);
+        for (int i = 0; i < rt_worker_count; ++i)
+          rt_wake_one(&rt_workers[i]);
         return;
       }
       rt_fiber_put(f);
@@ -655,7 +702,7 @@ void rt_sched_main(void (*entry)(void)) {
   }
   rt_main_fib = &main_fib;
   /* The main program is the first task the worker runs. */
-  rt_queue_push(&w->local, &main_fib);
+  w->runnext = &main_fib;
   rt_worker_loop(w);
 }
 
@@ -673,7 +720,14 @@ int rt_sched_spawn(void *(*fn)(void *), void *arg) {
     rt_fiber_put(f);
     return -1;
   }
-  rt_queue_push(&w->local, f);
+  /* The new task goes into the worker's runnext slot, which no stealer may
+   * touch. A worker that already had a runnext task pushes it back to the
+   * run queue: the program spawned two tasks in a row, and the older one
+   * waits its turn. */
+  pli_fiber *old = w->runnext;
+  w->runnext = f;
+  if (old)
+    rt_queue_push(&w->local, old);
   rt_wake_one(w);
   return 0;
 }

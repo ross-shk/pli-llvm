@@ -7005,3 +7005,77 @@ contended lock never enters the kernel. Until then, the model is still
   still a plain `SIGSEGV`.
 * The AArch64 fiber backend is not written; the legacy model is the
   default there.
+
+## ADR-235 - The fiber scheduler's locality and parking (amends ADR-234)
+
+**Context.** ADR-234 put the PL/I task on a fiber and measured the result:
+a task lifecycle cost 2510.6 ns against Go's 995.9 ns, so the fiber model
+was 2.52x Go's time and the requirement (at least 10 % faster than Go's
+goroutines) was not met. The context switch was not the problem - the
+switch alone costs 28.0 ns, seven times less than a Go goroutine spawn.
+The cost was in the *scheduler around* the switch, and the measurements
+pointed at two places: a task that was stolen by another worker made its
+waiter pay an OS thread wake-up, and the idle workers were not really
+asleep.
+
+**Decision.** Four changes to `runtime/rt_sched.c` and the platform seam.
+
+*Locality: the runnext slot.* A worker keeps the task it spawned last in a
+slot that no stealer may touch, and runs it before anything else. A
+program that spawns a task and waits for it therefore keeps both on one
+worker: the task is not stolen, and the join is a queue push instead of a
+wake-up of a sleeping worker. Before the slot, the cost of a task
+depended on the worker count (548 ns with one worker, 2418 ns with eight);
+after it, it does not (about 650 ns with one worker and with eight).
+
+*Parking: one condvar per worker.* Each worker has its own lock and its
+own condvar, so a wake-up costs one thread and not the pool. The worker
+decides to sleep while holding that lock, and the wait releases it
+atomically, so a waker either finds the worker before it sleeps - and the
+worker's own re-check finds the task - or wakes it from the wait. A
+wake-up cannot be lost. (The first cut of ADR-234 woke the whole pool
+through one condvar and re-checked only the worker's run queue, so a task
+unparked to a worker that was on its way to sleep waited for a wake-up
+that never came.)
+
+*Waiting forever.* `pli_cond_timedwait` took a negative timeout to mean
+"zero", so a worker that parked without a pending DELAY returned at once
+and spun: seven workers burned seven cores while the program waited. A
+negative timeout now waits forever, on Windows and on POSIX.
+
+*The end of the program.* The program ends with the MAIN procedure, and the
+MAIN procedure is a task: it may run on any worker, because a stealer may
+take it. The worker that ran it therefore wakes every worker, the main
+thread included - it is worker 0, and without that wake-up it slept
+through the end of the program and the process never exited.
+
+**Measurements** (Windows x64, 20 000 tasks, 9 runs, median;
+`benchmarks/run_tasking_bench.py`):
+
+| Workload | PL/I (fibers) | C (OS threads) | Go (goroutines) | PL/I / Go |
+|---|---|---|---|---|
+| the task lifecycle (spawn, switch, join) | 644.7 ns/task | 67 287.6 ns/task | 1291.5 ns/task | **0.50x** |
+| fan-out / fan-in (20 000 tasks live at once) | 11 865.8 ns/task | 51 833.2 ns/task | 927.2 ns/task | **12.80x** |
+| the context switch alone (`benchmarks/tasking/fiber_floor.c`) | 28.0 ns/start+join | - | ~210 ns | 0.13x |
+
+**The requirement now holds.** The fiber model needs *half* of Go's time on
+the task lifecycle, against the 2.52x ADR-234 measured, and it is two
+orders of magnitude away from the OS-thread model it replaces. ADR-234's
+numbers are the record of the first cut, not of the model as it stands.
+
+The fan-out is still behind Go, and the reason is the stack, not the
+tasking: on Windows a fiber stack is a `VirtualAlloc` reservation of the
+ceiling (8 MiB by default) and a reservation costs a few microseconds,
+while Go hands a goroutine a 2 KiB stack from a per-processor cache and
+copies it when it grows. A program that starts and joins its tasks one at
+a time never pays this: the fiber pool recycles the stack.
+
+**Consequences.**
+
+* `tests/core/task_many.pli` is the regression test: a fan-out that hangs
+  without the per-worker condvars and the end-of-program wake-up.
+* The platform seam gained a rule: a negative timeout on
+  `pli_cond_timedwait` means "wait forever".
+* A task that is live at the same time as thousands of others still costs
+  a stack reservation on Windows; a Go-style small stack that is copied
+  when it grows is the way to close that gap, and it is not written.

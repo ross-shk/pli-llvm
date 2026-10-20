@@ -232,8 +232,10 @@ void pli_mutex_init_recursive(pli_mutex *m) { InitializeCriticalSection(m); }
 void pli_cond_init(pli_cond *c) { InitializeConditionVariable(c); }
 void pli_cond_wait(pli_cond *c, pli_mutex *m) { SleepConditionVariableCS(c, m, INFINITE); }
 int pli_cond_timedwait(pli_cond *c, pli_mutex *m, long long timeout_ms) {
+  /* A negative timeout waits forever: the scheduler parks an idle worker
+   * with one, and a zero timeout would turn the park into a spin. */
   if (timeout_ms < 0)
-    timeout_ms = 0;
+    return SleepConditionVariableCS(c, m, INFINITE) ? 1 : 0;
   return SleepConditionVariableCS(c, m, (DWORD)timeout_ms) ? 1 : 0;
 }
 void pli_cond_signal(pli_cond *c) { WakeConditionVariable(c); }
@@ -356,6 +358,10 @@ void pli_mutex_init_recursive(pli_mutex *m) {
 void pli_cond_init(pli_cond *c) { pthread_cond_init(c, NULL); }
 void pli_cond_wait(pli_cond *c, pli_mutex *m) { pthread_cond_wait(c, m); }
 int pli_cond_timedwait(pli_cond *c, pli_mutex *m, long long timeout_ms) {
+  /* A negative timeout waits forever: the scheduler parks an idle worker
+   * with one, and a deadline in the past would turn the park into a spin. */
+  if (timeout_ms < 0)
+    return pthread_cond_wait(c, m) == 0 ? 1 : 0;
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   ts.tv_sec += (time_t)(timeout_ms / 1000);
