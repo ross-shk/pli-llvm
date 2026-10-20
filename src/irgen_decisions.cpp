@@ -212,6 +212,7 @@ struct Bits {
   bool opaque = false;     // effects unknown: nothing may be claimed
   bool io = false;         // does input or output
   bool hasOnUnit = false;  // establishes an ON unit (rule 91)
+  bool nameEscapes = false; // its name is assigned or passed as an argument
   bool mayUnwind = false;  // makes a call whose unwinding is not known
   bool mayNotReturn = false; // may not return: a stop, or an endless loop
   std::set<int> raiseKeys; // the conditions it can raise
@@ -220,8 +221,9 @@ struct Bits {
   bool operator==(const Bits& o) const {
     return readsOther == o.readsOther && writesOther == o.writesOther &&
            readsArg == o.readsArg && writesArg == o.writesArg && opaque == o.opaque &&
-           io == o.io && hasOnUnit == o.hasOnUnit && mayUnwind == o.mayUnwind &&
-           mayNotReturn == o.mayNotReturn && raiseKeys == o.raiseKeys;
+           io == o.io && hasOnUnit == o.hasOnUnit && nameEscapes == o.nameEscapes &&
+           mayUnwind == o.mayUnwind && mayNotReturn == o.mayNotReturn &&
+           raiseKeys == o.raiseKeys;
   }
 };
 
@@ -245,6 +247,8 @@ void noteReach(Bits& b, Reach r, bool isWrite) {
 std::string effectNote(const Bits& b) {
   if (b.hasOnUnit)
     return "establishes an ON unit";
+  if (b.nameEscapes)
+    return "its name escapes";
   if (b.io)
     return "does input or output";
   if (b.opaque)
@@ -726,9 +730,12 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
 
   // A procedure whose name escapes may be called from anywhere, so nothing may
   // be claimed about it — and its callers inherit that, so the mark goes in
-  // before the fixpoint, not after it.
-  for (const HProc* e : escaped)
+  // before the fixpoint, not after it. The separate flag keeps the reported
+  // reason honest: the procedure itself calls nothing.
+  for (const HProc* e : escaped) {
     bits[e].opaque = true;
+    bits[e].nameEscapes = true;
+  }
 
   // The whole-program fixpoint: a procedure's effect includes what the
   // procedures it calls do, and what the handlers it can dispatch to do.

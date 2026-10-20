@@ -79,5 +79,46 @@ plain=$($PLI --print-facts --size-checks "$OUT.free.pli" 2>&1) || fail "plain du
 block "$plain" OUTER | grep -q 'control: nounwind' ||
   fail "no control verdict for a procedure with no handler in scope"
 
+# --- an ON unit makes the callee, and so its callers, opaque (ADR-264) ------
+cat > "$OUT.chain.pli" <<'EOF'
+pfchain: procedure options(main);
+   declare v fixed bin(31);
+   call helper(v);
+ helper: procedure(x);
+   declare x fixed bin(31);
+   on size;
+   x = x + 1;
+ end helper;
+end pfchain;
+EOF
+sed '/on size;/d' "$OUT.chain.pli" > "$OUT.chain2.pli"
+
+chain=$($PLI --print-facts "$OUT.chain.pli" 2>&1) || fail "ON chain dump failed"
+block "$chain" HELPER | grep -q 'establishes an ON unit' ||
+  fail "the ON-bearing procedure kept an effect"
+block "$chain" PFCHAIN | grep -q 'calls something whose effects are unknown' ||
+  fail "the caller of an ON-bearing procedure kept a claim"
+
+free=$($PLI --print-facts "$OUT.chain2.pli" 2>&1) || fail "plain chain dump failed"
+block "$free" PFCHAIN | grep -q 'touches no memory' ||
+  fail "the caller lost its claim without an ON unit"
+
+# --- a name that escapes says so, not blaming a call it never makes ---------
+cat > "$OUT.esc.pli" <<'EOF'
+pfesc: procedure options(main);
+   declare e entry (fixed bin(31)) variable;
+   declare v fixed bin(31);
+   e = pure;
+   call e(v);
+ pure: procedure(x);
+   declare x fixed bin(31);
+   x = x + 1;
+ end pure;
+end pfesc;
+EOF
+esc=$($PLI --print-facts "$OUT.esc.pli" 2>&1) || fail "escape dump failed"
+block "$esc" PURE | grep -q 'its name escapes' ||
+  fail "an escaped name blamed a call it does not make"
+
 echo "PASS print-facts"
 exit 0
