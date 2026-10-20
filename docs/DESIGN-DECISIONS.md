@@ -7464,3 +7464,65 @@ one-branch case). Extending LLVM's `-Wuninitialized` (it sees IRGen's allocas,
 not PL/I's storage classes, and the mapping is the whole problem). Reporting
 every uninitialized read path separately (one diagnostic per variable is what
 a programmer acts on).
+
+---
+
+## ADR-267 — A procedure's promise travels to the module that calls it
+
+**Context.** ADR-264 infers what a PL/I procedure can do to memory, and
+proves `nounwind` and `willreturn` beside it. The measurement in
+`docs/OPTIMIZATION-BASELINE.md` §3.1 says exactly how much that is worth: in
+a single module, **1.00x** — where the optimizer can see the callee's body it
+infers the same facts itself — and across a compilation unit, **1.00x** again,
+because the attributes sit on the *definition*, in another object file, and
+the caller's declaration carries none. The same program with the callee in the
+caller's own unit runs **three times faster**. So the promise is worth 3x and
+reaches nobody.
+
+PL/I has an answer for this, and it is not inference. IBM's module interface
+carries a *declared* promise — `REDUCIBLE`/`IRREDUCIBLE`
+(`zos:23423-23445`) — and MULTICS's compiler, which inferred the same fact
+whole-program (`symbol.reducible`/`symbol.irreducible`), could afford to
+because it compiled everything at once. Separate compilation needs a
+channel.
+
+**Decision.** A module publishes what its external procedures promise, and the
+module that calls them consumes the publication:
+
+- `--emit-effects=FILE` writes the verdict for every external procedure of
+  the module: one line per procedure, the name, the memory-effect token
+  (`none`, `argmem-read`, `argmem-readwrite`, `read`, `readwrite`), and the
+  control promises (`nounwind`, `willreturn`).
+- `--effects=FILE` reads such a file and attaches the promise to every
+  external declaration in the unit whose name matches. The declaration then
+  carries `memory(argmem: read) nounwind willreturn` and the caller's
+  optimizer can hoist the call out of a loop, exactly as it would if it could
+  see the body.
+
+The promise is *proved*, not declared: the file is written by the compiler
+that read the callee's body, so nothing is asked of the programmer and
+nothing can be promised wrongly. A malformed line is an error, never a silent
+skip — a promise that is dropped must not look like one that was never made.
+A caller that consumes no file keeps LLVM's default effects: no promise, no
+risk.
+
+**What changed.** One file format and two flags; the promise reaches the
+caller's declarations, and the optimizer hoists the call. The third pair of
+the split benchmark measures it: **189.46 ms → 62.74 ms (0.33x)**, which is
+the same speed as the same-unit build (62.09 ms) — the published promise
+captures the whole prize.
+
+**Consequences.** The file is a build artifact: a caller that consumes a
+stale file gets a stale promise, so the library must be rebuilt before the
+caller is. The file is keyed by the PL/I name, so a caller must declare the
+procedure under the name the library published. Nothing is published for a
+procedure the compiler could not analyse, and nothing is published for a
+nested procedure: only what another module can link against.
+
+**Rejected.** A `REDUCIBLE` attribute on the declaration (an extension to
+TR 25.084): the programmer would have to promise what the compiler already
+proves, and a wrong promise is a miscompile rather than a warning. An
+LTO-only answer: LTO exposes the body, which is a different mechanism, and
+it needs a single LLVM instance to link. Promising through the object file:
+an object file describes a definition, and what is missing here is a
+description of a *declaration*.

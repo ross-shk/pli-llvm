@@ -72,6 +72,14 @@ LANG_BENCHMARKS = [
     ("pure_call",     "lang/pure_call.pli",     "lang/baseline/pure_call_c.c"),
 ]
 
+# WS-A2 (ADR-267): a benchmark whose callee lives in another compilation unit
+# publishes the effects that callee promises, so the caller's build can
+# consume them. The value is the library source; the file is where the
+# published effects land (in the results directory, not the source tree).
+PUBLISH_EFFECTS = {
+    "pure_call_split": ("lang/pure_call_lib.pli", "pure_call_split.eff"),
+}
+
 # Every benchmark, both categories.
 BENCHMARKS = IR_BENCHMARKS + LANG_BENCHMARKS
 
@@ -103,6 +111,11 @@ PAIRS = [
     # callee's effects either, and the promise on the definition reaches
     # nobody. The ratio prices the inference where it cannot travel.
     ("pure_call_split", "no-effects", ["--no-memory-effects"], "effects", []),
+    # WS-A2 (ADR-267): the same split program, with the callee publishing its
+    # promise and the caller consuming it. This is the shape the promise was
+    # for: the callee's body is invisible, so the published description is
+    # all the caller's optimizer has.
+    ("pure_call_split", "no-promise", [], "published", ["@effects"]),
     # What the split costs: the same program with the callee in the caller's
     # own unit is the reference, and the gap between the two is what a promise
     # that reached the caller would be worth.
@@ -335,6 +348,27 @@ def _arch_flags() -> List[str]:
     return []
 
 
+def publish_effects(bench_name: str) -> Optional[Path]:
+    """WS-A2 (ADR-267): publish the effects a benchmark's library unit promises.
+
+    The library module is compiled on its own with --emit-effects, so the
+    caller can consume the promise with --effects. Returns the file, or None
+    when the benchmark has no library unit or the publish failed.
+    """
+    entry = PUBLISH_EFFECTS.get(bench_name)
+    if not entry:
+        return None
+    src, out = entry
+    eff = BIN_DIR / out
+    cmd = [str(PLI), str(BENCHMARK_DIR / src), f"--emit-effects={eff}", "-c",
+           "-o", str(BIN_DIR / f"{bench_name}_lib.o")]
+    rc, sout, serr = run_command(cmd)
+    if rc != 0:
+        print(f"  effects publish failed [{bench_name}]:\n{sout}\n{serr}")
+        return None
+    return eff
+
+
 def compile_pli(bench_name: str, pli_file, opt: str, output: Path,
                 extra_flags: Optional[List[str]] = None) -> bool:
     """Compile a PL/I benchmark with pli at the given optimization level.
@@ -428,8 +462,14 @@ def run_pair_comparisons(selected: Set[str], opt: str, runs: int) -> Dict:
         if bench not in src_of or bench not in selected:
             continue
         # The bench-level flags apply to both sides of the pair.
-        extra_a = list(flags_a) + EXTRA_PLIFLAGS.get(bench, [])
-        extra_b = list(flags_b) + EXTRA_PLIFLAGS.get(bench, [])
+        # "@effects" stands for the flag that consumes the file the library
+        # unit published.
+        eff_file = publish_effects(bench)
+        eff_flag = f"--effects={eff_file}" if eff_file else "@effects"
+        extra_a = [(eff_flag if f == "@effects" else f) for f in flags_a] + \
+            EXTRA_PLIFLAGS.get(bench, [])
+        extra_b = [(eff_flag if f == "@effects" else f) for f in flags_b] + \
+            EXTRA_PLIFLAGS.get(bench, [])
         exe_a = BIN_DIR / f"{bench}_pair_{label_a}_{tag}{EXE_SUFFIX}"
         exe_b = BIN_DIR / f"{bench}_pair_{label_b}_{tag}{EXE_SUFFIX}"
         if not compile_pli(bench, src_of[bench], opt, exe_a, extra_flags=extra_a):

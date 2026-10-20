@@ -219,14 +219,33 @@ why the same-unit pair measures 1.00x.
 
 So A1's inference is a correctness statement and a diagnostic in every shape
 measured so far, and a speedup only where the promise is delivered to a caller
-that cannot see the body. Delivering it needs a channel the plan does not
-have: PL/I's answer is a *declared* promise in the module interface (IBM's
-`REDUCIBLE`/`IRREDUCIBLE`, `zos:23423-23445`), and MULTICS's answer was
-whole-program inference, which separate compilation cannot be. A
-compiler-generated interface — the callee publishing the attributes it
-inferred, the caller attaching them to its declaration — is the mechanism
-that would close the threefold gap; that is a new feature with its own ADR,
-not a refinement of this one.
+that cannot see the body. That delivery now exists (ADR-267): the module
+that defines the callee publishes what it promises (`--emit-effects=FILE`),
+and the module that calls it consumes the publication (`--effects=FILE`) and
+attaches the promise to its declaration.
+
+**What the published promise is worth.** The third pair of the same table,
+with the publication in place:
+
+| build | median |
+|---|---|
+| split, no promise | 189.46 ms |
+| split, the promise published and consumed | 62.74 ms |
+| same unit (the callee visible) | 62.09 ms |
+
+**Ratio 0.33x — the promise captures the whole prize.** The caller cannot see
+the callee's body, yet with the published promise its optimizer hoists the
+call out of the loop and the program runs at the same speed as the same-unit
+build. The optimized IR shows the difference directly: without the promise
+the call sits inside the hot loop, with it the call is hoisted into the
+preheader and the 150 million calls become one.
+
+So the three measurements together say the whole story: the inference is
+worth nothing where LLVM can see the body (it infers the same facts), it is
+worth nothing where the body is hidden (the promise does not travel on its
+own), and it is worth **3x** once there is a channel that carries it. That
+channel is a file the defining module writes and the calling module reads —
+the modern form of the module interface PL/I already had.
 
 The LTO leg of the measurement could not be taken on this host: in-process LTO
 executes LLVM's passes inside lld and needs a single LLVM instance, so the
