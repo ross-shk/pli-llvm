@@ -110,6 +110,8 @@ public:
   explicit Sema(Diags& d) : d_(d) {}
   void setSysparm(std::string v) { sysparm_ = std::move(v); }
   const std::string& sysparm() const { return sysparm_; }
+  // WS-A5 (ADR-266): opt-in warning for an AUTOMATIC read before it is set.
+  void setWarnUnset(bool v) { warnUnset_ = v; }
   bool run(Program& prog, bool compileOnly = false);
 
   // Symbols that require storage, in declaration order.
@@ -140,6 +142,9 @@ private:
   // Runs after all bodies are typed so CALL and function-reference callees
   // are resolved; reports one error at each non-recursive cycle member.
   void checkRecursion();
+  // WS-A5 (ADR-266): warn where an AUTOMATIC local is read before the walk can
+  // prove it is set on every path. Runs last: every reference is resolved.
+  void checkUnset(Program& prog);
   void collectCallees(const std::vector<StmtP>& body, std::vector<Proc*>& out);
   void collectStmtCallees(const Stmt* s, std::vector<Proc*>& out);
   void collectExprCallees(const Expr* e, std::vector<Proc*>& out);
@@ -331,6 +336,7 @@ private:
   Diags& d_;
   Program* prog_ = nullptr;
   std::string sysparm_; // SYSPARM option value (rule (123)): SYSPARM() returns it
+  bool warnUnset_ = false; // --warn-unset: run the WS-A5 check (ADR-266)
   std::vector<std::unique_ptr<Symbol>> owned_;
   std::vector<std::unique_ptr<Scope>> scopes_;
   std::unordered_map<Proc*, Scope*> procScopes_;

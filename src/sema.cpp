@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <climits>
 #include <functional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -396,7 +397,385 @@ bool Sema::run(Program& prog, bool compileOnly) {
                "(1)");
     }
   }
+  // WS-A5 (ADR-266): the opt-in "used before set" walk. It runs last because
+  // it needs every reference resolved to its Symbol.
+  if (warnUnset_)
+    checkUnset(prog);
   return d_.ok();
+}
+
+// --- WS-A5 (ADR-266): "used before set", flow-sensitive --------------------
+//
+// MULTICS reported a variable that no assignment anywhere in the program stores
+// to (error 307, `assign_storage.pl1:277`). That check is flow-insensitive, so
+// it misses the common mistake: a store on one branch and a read after the
+// merge. This walk is a definite-assignment analysis over the AST: a read is
+// reported when a path can reach it with no store. It is opt-in because the
+// corpus is not warning-clean, and it is conservative: a procedure with a GO TO,
+// a label or an alternate ENTRY is skipped, since the walk has no CFG to join on
+// and a warning is better withheld than wrong.
+
+// The expressions one statement names directly. Nested bodies are walked by the
+// caller so that a block's locals stay scoped to the block.
+template <class Fn>
+void eachStmtExpr(const Stmt* s, Fn&& f) {
+  auto e = [&](const ExprP& p) {
+    if (p)
+      f(p.get());
+  };
+  e(s->target);
+  e(s->value);
+  e(s->cond);
+  e(s->from);
+  e(s->to);
+  e(s->by);
+  for (const auto& p : s->extraTargets)
+    e(p);
+  for (const auto& p : s->items)
+    e(p);
+  e(s->stringTarget);
+  for (const auto& p : s->args)
+    e(p);
+  e(s->gotoTarget);
+  for (const auto& p : s->waitEvents)
+    e(p);
+  e(s->waitCount);
+  e(s->taskRef);
+  e(s->eventRef);
+  e(s->priorityExpr);
+  e(s->oncodeExpr);
+  e(s->skipCount);
+  for (const auto& p : s->allocBase)
+    e(p);
+  for (const auto& p : s->allocSet)
+    e(p);
+  for (const auto& p : s->allocArea)
+    e(p);
+  for (const auto& v : s->allocBounds)
+    for (const auto& b : v) {
+      e(b.lb);
+      e(b.ub);
+    }
+  for (const auto& p : s->allocCharLen)
+    e(p);
+  for (const auto& p : s->freeBase)
+    e(p);
+  for (const auto& p : s->freeArea)
+    e(p);
+}
+
+// A GO TO, a label or an alternate ENTRY breaks the linear walk: such a
+// procedure is skipped rather than guessed at.
+bool hasJump(const Stmt* s) {
+  if (!s)
+    return false;
+  if (!s->labels.empty() || s->kind == Stmt::Goto || s->kind == Stmt::Entry)
+    return true;
+  for (const auto& b : s->body)
+    if (hasJump(b.get()))
+      return true;
+  return hasJump(s->thenS.get()) || hasJump(s->elseS.get()) || hasJump(s->unit.get());
+}
+
+bool hasJump(const std::vector<StmtP>& body) {
+  for (const auto& s : body)
+    if (hasJump(s.get()))
+      return true;
+  return false;
+}
+
+// ADDR(x) hands x's address to code the walk cannot see — a callee may store
+// through it — so x is never reported.
+void collectAddrTaken(const Expr* e, std::set<const Symbol*>& out) {
+  if (!e)
+    return;
+  if (e->kind == Expr::Call && e->name == "ADDR")
+    for (const auto& a : e->args)
+      if (a->kind == Expr::VarRef && a->sym)
+        out.insert(a->sym);
+  for (const auto& a : e->args)
+    collectAddrTaken(a.get(), out);
+  collectAddrTaken(e->a.get(), out);
+  collectAddrTaken(e->b.get(), out);
+}
+
+void collectAddrTaken(const Stmt* s, std::set<const Symbol*>& out) {
+  if (!s)
+    return;
+  eachStmtExpr(s, [&](const Expr* e) { collectAddrTaken(e, out); });
+  for (const auto& b : s->body)
+    collectAddrTaken(b.get(), out);
+  collectAddrTaken(s->thenS.get(), out);
+  collectAddrTaken(s->elseS.get(), out);
+}
+
+void collectAddrTaken(const std::vector<StmtP>& body, std::set<const Symbol*>& out) {
+  for (const auto& s : body)
+    collectAddrTaken(s.get(), out);
+}
+
+// One procedure's definite-assignment walk.
+class UnsetWalk {
+public:
+  UnsetWalk(Diags& d, std::set<const Symbol*> cand) : d_(d), cand_(std::move(cand)) {}
+
+  void run(const std::vector<StmtP>& body) { list(body); }
+
+private:
+  // A reference the walk can track: a whole variable, not a member of one and
+  // not a based access through a locator.
+  bool tracked(const Expr* e) const {
+    return e && (e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->path.empty() &&
+           !e->locPtr && e->sym && cand_.count(e->sym) != 0;
+  }
+
+  // A read: report it when this path has not stored the variable yet, then
+  // count it as set so one mistake gives one diagnostic.
+  void use(const Symbol* s, SourceLoc loc) {
+    if (set_.count(s))
+      return;
+    if (warned_.insert(s).second)
+      d_.warn(loc, "variable '" + s->name + "' may be used before it is set");
+    set_.insert(s);
+  }
+
+  void store(const Expr* e) {
+    if (tracked(e))
+      set_.insert(e->sym);
+  }
+
+  void read(const Expr* e) {
+    if (!e)
+      return;
+    if (tracked(e))
+      use(e->sym, e->loc);
+    if (e->kind == Expr::Call) {
+      // A by-reference argument may be written by the callee, so a bare
+      // variable argument is a store, not a read (MULTICS `passed_as_arg`).
+      for (const auto& a : e->args)
+        argument(a.get());
+      return;
+    }
+    for (const auto& a : e->args)
+      read(a.get());
+    read(e->a.get());
+    read(e->b.get());
+  }
+
+  // One call argument: a variable may be an output parameter, so passing it
+  // counts as initializing it; anything else is read normally.
+  void argument(const Expr* e) {
+    if (!e)
+      return;
+    if (tracked(e)) {
+      for (const auto& a : e->args)
+        read(a.get());
+      set_.insert(e->sym);
+      return;
+    }
+    read(e);
+  }
+
+  // The subscripts of an assignment target are read, the target is stored.
+  void assign(const Expr* e) {
+    if (!e)
+      return;
+    for (const auto& a : e->args)
+      read(a.get());
+    store(e);
+  }
+
+  bool list(const std::vector<StmtP>& b) {
+    for (const auto& st : b)
+      if (st && !stmt(st.get()))
+        return false;
+    return true;
+  }
+
+  // Returns false when the path ends here (RETURN, STOP, GO TO).
+  bool stmt(const Stmt* s) {
+    switch (s->kind) {
+    case Stmt::Null:
+    case Stmt::Declare:
+    case Stmt::Format:
+    case Stmt::DefineAlias:
+    case Stmt::DefineConstant:
+    case Stmt::Revert:
+    case Stmt::Leave:
+    case Stmt::Iterate:
+    case Stmt::Entry:
+    case Stmt::Open:
+    case Stmt::Close:
+    case Stmt::On: // the unit runs later; it cannot reach an AUTOMATIC (rule 91)
+      return true;
+    case Stmt::Assign:
+      read(s->value.get());
+      assign(s->target.get());
+      for (const auto& t : s->extraTargets)
+        assign(t.get());
+      return true;
+    case Stmt::If: {
+      read(s->cond.get());
+      const std::set<const Symbol*> entry = set_;
+      const bool thenFalls = s->thenS ? stmt(s->thenS.get()) : true;
+      const std::set<const Symbol*> thenSet = set_;
+      set_ = entry;
+      const bool elseFalls = s->elseS ? stmt(s->elseS.get()) : true;
+      const std::set<const Symbol*> elseSet = set_;
+      // A branch that does not fall through contributes no facts to the join.
+      if (!elseFalls)
+        set_ = thenSet;
+      else if (!thenFalls)
+        set_ = elseSet;
+      else {
+        // Only what both paths set is definitely set after the merge.
+        set_ = thenSet;
+        for (auto it = set_.begin(); it != set_.end();)
+          it = elseSet.count(*it) ? std::next(it) : set_.erase(it);
+      }
+      return thenFalls || elseFalls;
+    }
+    case Stmt::Group:
+      return list(s->body);
+    case Stmt::Begin: {
+      // A block's AUTOMATIC is created on entry and dies at END: its facts must
+      // not leak into the enclosing path, and a re-entry starts unset again.
+      const bool falls = list(s->body);
+      for (const auto& d : s->decls)
+        if (d.sym)
+          set_.erase(d.sym);
+      return falls;
+    }
+    case Stmt::DoWhile:
+    case Stmt::DoIter: {
+      // The head reads the test and a DO's bounds; the control variable is
+      // assigned before the first test. The body is walked once: a read it
+      // reports is reachable on a first iteration, which is the point.
+      read(s->cond.get());
+      read(s->from.get());
+      read(s->to.get());
+      read(s->by.get());
+      const std::set<const Symbol*> entry = set_;
+      if (s->sym)
+        set_.insert(s->sym);
+      list(s->body);
+      // A zero-trip loop stores nothing; DO UNTIL runs its body at least once.
+      if (!s->until) {
+        set_ = entry;
+        if (s->sym)
+          set_.insert(s->sym);
+      }
+      return true;
+    }
+    case Stmt::Put:
+      read(s->skipCount.get());
+      for (const auto& it : s->items)
+        read(it.get());
+      if (s->stringTarget)
+        store(s->stringTarget.get());
+      return true;
+    case Stmt::Get:
+      if (s->stringTarget)
+        read(s->stringTarget.get());
+      for (const auto& it : s->items)
+        assign(it.get());
+      return true;
+    case Stmt::CallS:
+      for (const auto& a : s->args)
+        argument(a.get());
+      return true;
+    case Stmt::Return:
+      read(s->value.get());
+      return false;
+    case Stmt::Stop:
+      read(s->value.get());
+      return false;
+    case Stmt::Goto:
+      return false;
+    case Stmt::Read:
+      assign(s->target.get());
+      return true;
+    case Stmt::Write:
+    case Stmt::Display:
+    case Stmt::Delay:
+      read(s->value.get());
+      return true;
+    case Stmt::Signal:
+      read(s->oncodeExpr.get());
+      return true;
+    case Stmt::Wait:
+      for (const auto& e : s->waitEvents)
+        read(e.get());
+      read(s->waitCount.get());
+      return true;
+    case Stmt::Allocate:
+      for (const auto& b : s->allocBase) {
+        read(b.get());
+        store(b.get());
+      }
+      for (const auto& p : s->allocSet)
+        store(p.get());
+      for (const auto& p : s->allocArea)
+        read(p.get());
+      for (const auto& v : s->allocBounds)
+        for (const auto& b : v) {
+          read(b.lb.get());
+          read(b.ub.get());
+        }
+      for (const auto& p : s->allocCharLen)
+        read(p.get());
+      return true;
+    case Stmt::Free:
+      for (const auto& p : s->freeBase)
+        read(p.get());
+      for (const auto& p : s->freeArea)
+        read(p.get());
+      return true;
+    }
+    // An unmodelled statement: assume everything it names is stored, so the
+    // check never warns on a construct it does not understand.
+    eachStmtExpr(s, [&](const Expr* e) {
+      if (e->sym && (e->kind == Expr::VarRef || e->kind == Expr::Subscript))
+        set_.insert(e->sym);
+    });
+    return true;
+  }
+
+  Diags& d_;
+  std::set<const Symbol*> cand_;   // the variables worth tracking
+  std::set<const Symbol*> set_;    // definitely assigned on this path
+  std::set<const Symbol*> warned_; // one diagnostic per variable
+};
+
+void Sema::checkUnset(Program& prog) {
+  for (const auto& p : prog.procs) {
+    if (!p || p->isPackage || hasJump(p->body))
+      continue;
+    std::set<const Symbol*> escaped;
+    collectAddrTaken(p->body, escaped);
+    std::set<const Symbol*> cand;
+    for (const Symbol* s : p->localSyms) {
+      if (!s || s->kind != Symbol::Var)
+        continue;
+      // Storage that is not an uninitialized AUTOMATIC of this procedure, or
+      // that the language initializes, is not a candidate.
+      if (s->isStatic || s->external || s->controlled || s->isBased() || s->definedBase)
+        continue;
+      if (s->initExpr || s->initCall || !s->initElems.empty())
+        continue;
+      if (s->isValue || s->fileAttr || s->isEntryVar || s->isCond || s->implicit)
+        continue;
+      // A structure is diagnosed member by member by no one (MULTICS skips
+      // them too), and an escaped address defeats the walk.
+      if (s->ty.isStruct() || escaped.count(s))
+        continue;
+      cand.insert(s);
+    }
+    if (cand.empty())
+      continue;
+    UnsetWalk walk(d_, std::move(cand));
+    walk.run(p->body);
+  }
 }
 
 // True when a declaration subtree carries a per-member INITIAL (rule (26)):

@@ -120,6 +120,8 @@ static void usage() {
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
          "  --no-memory-effects  do not infer procedure memory effects (ADR-264);\n"
          "                   every call keeps LLVM's default effects\n"
+         "  --warn-unset     warn when an AUTOMATIC variable may be used before\n"
+         "                   it is set (ADR-266; off by default)\n"
          "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
          "                   cf. (NOSIZE), ADR-111)\n"
          "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
@@ -268,7 +270,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool linkRuntimeIn = false, const std::string& ltoKind = "",
                        pli::PgoMode pgoMode = pli::PgoMode::None, const std::string& pgoUse = "",
                        bool marchNative = false, const std::string& platformBc = "",
-                       bool noMemoryEffects = false) {
+                       bool noMemoryEffects = false, bool warnUnset = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -304,6 +306,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     if (const char* env = std::getenv("PLI_SYSPARM"))
       effSysparm = env;
   sema.setSysparm(effSysparm);
+  sema.setWarnUnset(warnUnset);
   // In multi-input link mode every unit is a relocatable object like `-c`:
   // no MAIN fallback promotion, so a library module with no OPTIONS(MAIN)
   // compiles cleanly and only its external procedures are emitted.
@@ -503,6 +506,7 @@ int main(int argc, char** argv) {
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
   bool noMemoryEffects = false;
+  bool warnUnset = false; // --warn-unset: WS-A5 "used before set" (ADR-266)
   bool useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
@@ -657,6 +661,8 @@ int main(int argc, char** argv) {
       noSubChecksExplicit = true;
     } else if (a == "--no-memory-effects") {
       noMemoryEffects = true;
+    } else if (a == "--warn-unset") {
+      warnUnset = true;
     } else if (a == "--no-zero-divide")
       noZdivChecks = true;
     else if (a == "--no-conversion")
@@ -905,7 +911,7 @@ int main(int argc, char** argv) {
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
-                    noMemoryEffects))
+                    noMemoryEffects, warnUnset))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
