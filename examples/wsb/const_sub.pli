@@ -1,0 +1,13 @@
+ /* scratch: constant subscript folding witness */
+ array_test: procedure options(main);
+    declare a(0:9) fixed bin(31);
+    declare b(-3:7) fixed bin(31);
+    declare i fixed bin(31);
+    a(3) = 1;
+    b(-1) = 2;
+    do i = 1 to 10 by 1;
+       a(i) = a(i) + 1;
+    end;
+    put skip list('a3=', a(3));
+    put skip list('b-1=', b(-1));
+ end array_test;

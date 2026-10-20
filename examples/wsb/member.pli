@@ -1,0 +1,13 @@
+ /* scratch: member array / 2-D constant subscripts */
+ array_test: procedure options(main);
+    declare 1 st,
+           2 m(0:3) fixed bin(31);
+    declare 1 arr(3),
+           2 x fixed bin(31);
+    declare a(0:9, 0:9) fixed bin(31);
+    a(2, 3) = 1;
+    st.m(2) = 5;
+    arr(2).x = 9;
+    put skip list('a=', a(2, 3));
+    put skip list('m=', st.m(2));
+ end array_test;
