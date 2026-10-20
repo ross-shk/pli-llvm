@@ -1,0 +1,32 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A VARYING argument copied back into the caller after the call, with a
+    nested call in a later argument. The nested call must copy back only
+    its own arguments: if it also copied the outer call's back, the copy
+    would happen before the outer call had run and the callee's append
+    would never reach the caller. */
+ varying_nested: procedure options(main);
+    declare v char(32) varying;
+    declare fails fixed bin(31);
+    fails = 0;
+
+    v = 'abc';
+    call grow2(v, inner('x'));
+    if length(v) ^= 8 then fails = fails + 1;
+    if v ^= 'abchello' then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS varying_nested');
+    else put skip list('FAIL varying_nested: fails =', fails);
+
+    grow2: procedure(buf, junk);
+       declare buf char(4096) varying;
+       declare junk char(10);
+       buf = buf || 'hello';
+    end grow2;
+
+    inner: procedure(y) returns(char(10));
+       declare y char(10);
+       y = 'I';
+       return(y);
+    end inner;
+ end varying_nested;

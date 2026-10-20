@@ -301,24 +301,6 @@ private:
   // (rule 78). Without the record the actual ran twice — once for the buffer
   // and once for its length — and the two evaluations could disagree.
   std::unordered_map<HExpr*, Val> actuals_;
-  // Saves and restores `actuals_` around a call, so a nested call does not
-  // clobber the outer call's entries (the outer scope is restored intact).
-  struct ActualScope {
-    IRGen& g;
-    std::unordered_map<HExpr*, Val> saved;
-    explicit ActualScope(IRGen& ir) : g(ir), saved(std::move(ir.actuals_)) {
-      ir.actuals_.clear();
-    }
-    ~ActualScope() { g.actuals_ = std::move(saved); }
-  };
-  // Evaluate a call actual once: reuse the value recorded for this call, or
-  // evaluate and record it.
-  Val materializeActual(HExpr* a);
-  // Fit an integer value to the destination integer type: widen with a sign
-  // extension, narrow with a truncation. A direct SExt/Trunc is invalid IR
-  // when the widths do not line up — an i64 runtime result into an i128
-  // wide-DECIMAL slot, or an i128 value into an i64 slot.
-  llvm::Value* fitTo(llvm::Value* v, llvm::Type* dst, const char* name);
   // A CHARACTER VARYING argument of a different declared length than the
   // parameter is marshalled into a parameter-sized dummy (see argAddr); after
   // the call the callee's result is copied back into the caller's variable,
@@ -329,6 +311,40 @@ private:
     Symbol* sym = nullptr;        // the caller's varying-char variable
     Type pty;                     // the parameter (dummy) type, for layout
   };
+  // Saves and restores `actuals_` around a call, so a nested call does not
+  // clobber the outer call's entries (the outer scope is restored intact).
+  // The lifetime markers and the pending VARYING copy-backs are scoped the
+  // same way: a nested call ends only its own buffers' lifetimes and copies
+  // back only its own arguments — otherwise the outer buffer's lifetime
+  // would end before the outer call had even filled it, and the outer
+  // call's copy-back would happen before the outer call had run.
+  struct ActualScope {
+    IRGen& g;
+    std::unordered_map<HExpr*, Val> saved;
+    std::vector<llvm::Value*> savedLifetimes;
+    std::vector<PendingVarWrite> savedVarWrites;
+    explicit ActualScope(IRGen& ir)
+        : g(ir), saved(std::move(ir.actuals_)),
+          savedLifetimes(std::move(ir.pendingTempLifetimes_)),
+          savedVarWrites(std::move(ir.pendingVarWrites_)) {
+      ir.actuals_.clear();
+      ir.pendingTempLifetimes_.clear();
+      ir.pendingVarWrites_.clear();
+    }
+    ~ActualScope() {
+      g.actuals_ = std::move(saved);
+      g.pendingTempLifetimes_ = std::move(savedLifetimes);
+      g.pendingVarWrites_ = std::move(savedVarWrites);
+    }
+  };
+  // Evaluate a call actual once: reuse the value recorded for this call, or
+  // evaluate and record it.
+  Val materializeActual(HExpr* a);
+  // Fit an integer value to the destination integer type: widen with a sign
+  // extension, narrow with a truncation. A direct SExt/Trunc is invalid IR
+  // when the widths do not line up — an i64 runtime result into an i128
+  // wide-DECIMAL slot, or an i128 value into an i64 slot.
+  llvm::Value* fitTo(llvm::Value* v, llvm::Type* dst, const char* name);
   std::vector<PendingVarWrite> pendingVarWrites_;
   void flushVarWrites();
   // ADR-246: the stack buffers that live only until the call returns — the

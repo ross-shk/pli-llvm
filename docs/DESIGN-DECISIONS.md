@@ -7704,3 +7704,40 @@ all clean.
 argument dummy; `tests/core/varying_param.pli` and
 `tests/core/starchar_varying_param.pli` cover the VARYING copy-back path the
 markers must not cut short.
+
+---
+
+## ADR-270 — A call's pending effects belong to that call
+
+**Context.** Two mechanisms in the call path defer work to just after the
+call: the lifetime markers that end a stack buffer's life (ADR-246), and the
+copy-back of a VARYING argument into the caller's variable
+(`IRGen::flushVarWrites`). Both were kept in one list on the compiler, and
+both lists were flushed by *every* call.
+
+That is wrong as soon as one argument is itself a call. The argument
+evaluation happens between the outer call's buffer allocation and the outer
+call itself, so the nested call's flush sees the outer call's pending work:
+the outer buffer's lifetime ended before the outer call had even filled it,
+and the outer call's VARYING copy-back ran before the outer call had run —
+the callee's append never reached the caller. The review of ADR-246 found
+the first; the second turned out to predate it.
+
+**Decision.** The pending work is scoped to the call that created it. The
+scope is the one the argument evaluation already needs — `IRGen::ActualScope`
+saves and restores the materialized actuals around a call so that a nested
+call does not clobber the outer call's entries — and it now saves and
+restores the pending lifetimes and the pending copy-backs the same way. A
+nested call ends only its own buffers' lifetimes and copies back only its own
+arguments; the outer call's entries survive it and are flushed after the
+outer call, where they belong.
+
+**Consequences.** A buffer's lifetime bracket is now exactly the call that
+owns it, which is what the markers claim. The VARYING copy-back happens
+after the call that produced it, so a callee that appends to its argument
+reaches the caller even when a later argument is a call.
+
+**Test.** `tests/core/varying_nested.pli` (the copy-back) and
+`tests/ir/lifetime_nested.pli` + `.check` (the bracket: the end marker must
+follow the outer call). Both fail on the unscoped code and pass on the
+scoped one.
