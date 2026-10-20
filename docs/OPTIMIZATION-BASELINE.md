@@ -194,11 +194,12 @@ short source left stack residue in a fixed-length result. Both are fixed
 keeping it a *true* differential rather than a second copy of the same code.
 
 **The benchmark.** `python3 benchmarks/run_benchmarks.py --force --runs 3`
-(arm64 macOS, LLVM 23.1.2) — the C-parity geomean is **0.83x at `-O2`** and
-**0.84x at `-O3`**, against the plan's baseline of 0.8181x / 0.8230x. The
-difference is inside the run-to-run noise, and the harness reports *"No
-material deterioration detected at -O2 vs previous run"*. The corpus does not
-exercise a constant alphabet or a constant `REPEAT` heavily, so the expected
+(arm64 macOS, LLVM 23.1.2, after a full rebuild) — the C-parity geomean is
+**0.81x at `-O2`** and **0.83x at `-O3`**, against the plan's baseline of
+0.8181x / 0.8230x. The movement from the previous run (0.83x / 0.84x) is inside
+the run-to-run noise, and the harness reports *"No material deterioration
+detected at -O2 vs previous run"*. No benchmark in the corpus calls `TRANSLATE`
+and none leans on a constant alphabet or a constant `REPEAT`, so the expected
 end-to-end effect of B3 is small; the win is in the *shape* of the lowering,
 which the IR records.
 
