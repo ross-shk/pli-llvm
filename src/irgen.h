@@ -60,13 +60,16 @@ public:
 
   // WS-A2 (ADR-267): the effects another module published for the external
   // procedures this unit calls, read from a published-effects file.
-  void setPublishedEffects(std::map<std::string, pli::ProcEffects> e) {
+  void setPublishedEffects(std::map<std::string, pli::PublishedEffect> e) {
     published_ = std::move(e);
   }
 
   // WS-A2 (ADR-267): what this module's own procedures promise, for publishing
   // to the modules that call them.
   const std::map<const HProc*, pli::ProcEffects>& procEffects() const { return effects_; }
+  // The digest of a procedure's PL/I signature: the promise is published for
+  // it, and a consumer only uses a promise published for the same signature.
+  std::string definitionDigest(const HProc* p) const;
 
   // The facts the compiler computed while lowering (ADR-260); --print-facts
   // dumps them. The store lives in irgen_decisions.cpp, outside this file.
@@ -167,7 +170,7 @@ private:
   // WS-A2 (ADR-267): the effects another module published for the external
   // procedures this unit calls. A caller that cannot see the callee's body
   // has this description and nothing else.
-  std::map<std::string, pli::ProcEffects> published_;
+  std::map<std::string, pli::PublishedEffect> published_;
   // Stamp a published promise on an external declaration.
   void applyPublishedEffect(llvm::Function* f, const Symbol* sym);
   // --no-memory-effects: skip the inference, so every call keeps LLVM's

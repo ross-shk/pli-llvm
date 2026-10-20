@@ -7490,14 +7490,22 @@ channel.
 module that calls them consumes the publication:
 
 - `--emit-effects=FILE` writes the verdict for every external procedure of
-  the module: one line per procedure, the name, the memory-effect token
-  (`none`, `argmem-read`, `argmem-readwrite`, `read`, `readwrite`), and the
-  control promises (`nounwind`, `willreturn`).
+  the module: one line per procedure, the name, the digest of the signature
+  the promise was published for, the memory-effect token (`none`,
+  `argmem-read`, `argmem-readwrite`, `read`, `readwrite`), and the control
+  promises (`nounwind`, `willreturn`).
 - `--effects=FILE` reads such a file and attaches the promise to every
-  external declaration in the unit whose name matches. The declaration then
-  carries `memory(argmem: read) nounwind willreturn` and the caller's
-  optimizer can hoist the call out of a loop, exactly as it would if it could
-  see the body.
+  external declaration in the unit whose name matches **and whose signature
+  digest matches**. The declaration then carries
+  `memory(argmem: read) nounwind willreturn` and the caller's optimizer can
+  hoist the call out of a loop, exactly as it would if it could see the body.
+
+The digest is over the *PL/I* types, not the LLVM ones, so it survives the
+other module being rebuilt with a different compiler version. It is what
+makes the promise safe to consume: a promise published for a different
+signature is not a promise for this call, and the consumer drops it rather
+than trusting it. The file carries a versioned header, and a reader that does
+not know the version refuses the file instead of guessing at it.
 
 The promise is *proved*, not declared: the file is written by the compiler
 that read the callee's body, so nothing is asked of the programmer and
@@ -7515,9 +7523,17 @@ captures the whole prize.
 **Consequences.** The file is a build artifact: a caller that consumes a
 stale file gets a stale promise, so the library must be rebuilt before the
 caller is. The file is keyed by the PL/I name, so a caller must declare the
-procedure under the name the library published. Nothing is published for a
-procedure the compiler could not analyse, and nothing is published for a
-nested procedure: only what another module can link against.
+procedure under the name the library published — and the digest must agree,
+so a caller whose declaration has drifted from the library's gets no promise
+at all. Nothing is published for a procedure the compiler could not analyse,
+and nothing is published for a nested procedure: only what another module
+can link against.
+
+**Test.** `tests/driver/effects_file.sh` pins the publication, the consumption,
+the absence of the promise without the file, the dropping of a promise
+published for another signature, the refusal of a file that is not a
+published-effects file, the program's answer, and the malformed-line
+diagnostic.
 
 **Rejected.** A `REDUCIBLE` attribute on the declaration (an extension to
 TR 25.084): the programmer would have to promise what the compiler already
@@ -7526,3 +7542,4 @@ LTO-only answer: LTO exposes the body, which is a different mechanism, and
 it needs a single LLVM instance to link. Promising through the object file:
 an object file describes a definition, and what is missing here is a
 description of a *declaration*.
+

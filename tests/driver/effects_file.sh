@@ -31,10 +31,11 @@ EOF
 
 # --- the callee publishes what it promises ---------------------------------
 # The default build has no size checks, so the helper cannot trap: it reads
-# its argument, writes nothing, never unwinds and always returns.
+# its argument, writes nothing, never unwinds and always returns. The line
+# carries the digest of the signature the promise was published for.
 $PLI "$OUT.lib.pli" --emit-effects="$OUT.eff" -c -o "$OUT.lib.o" ||
   fail "the publishing compile failed"
-grep -q '^EFFLIB argmem-read nounwind willreturn$' "$OUT.eff" ||
+grep -q '^EFFLIB [0-9a-f]\{16\} argmem-read nounwind willreturn$' "$OUT.eff" ||
   fail "the published file does not carry the promise"
 
 # --- the caller attaches the promise to its declaration --------------------
@@ -48,14 +49,29 @@ $PLI "$OUT.main.pli" -emit-llvm -o "$OUT.plain.ll" || fail "the plain compile fa
 grep -q 'memory(argmem: read)' "$OUT.plain.ll" &&
   fail "the promise appeared without the published file"
 
+# --- a promise published for another signature is not a promise here -------
+sed 's/^EFFLIB [0-9a-f]\{16\}/EFFLIB 0000000000000000/' "$OUT.eff" > "$OUT.othersig.eff"
+$PLI "$OUT.main.pli" --effects="$OUT.othersig.eff" -emit-llvm -o "$OUT.othersig.ll" ||
+  fail "the mismatched-signature compile failed"
+grep -q 'memory(argmem: read)' "$OUT.othersig.ll" &&
+  fail "a promise published for another signature was used"
+
+# --- a file that is not a published-effects file is refused ----------------
+printf 'EFFLIB argmem-read nounwind willreturn\n' > "$OUT.nohdr.eff"
+if $PLI "$OUT.main.pli" --effects="$OUT.nohdr.eff" -c -o "$OUT.nohdr.o" 2>"$OUT.nohdr.log"; then
+  fail "a file without the header was accepted"
+fi
+grep -q 'not a published-effects file' "$OUT.nohdr.log" ||
+  fail "no diagnostic for a file without the header"
+
 # --- the program still computes the right answer ---------------------------
 $PLI "$OUT.main.pli" "$OUT.lib.pli" --effects="$OUT.eff" -o "$OUT.exe" ||
   fail "the two-unit link failed"
 out=$("$OUT.exe") || fail "the program did not run"
 [ "$out" = "effects 64" ] || fail "the program printed '$out'"
 
-# --- a malformed file is an error, not a silent skip -----------------------
-echo 'BOGUS not-a-flag' > "$OUT.bad.eff"
+# --- a malformed line is an error, not a silent skip -----------------------
+{ head -1 "$OUT.eff"; echo 'BOGUS not-a-flag'; } > "$OUT.bad.eff"
 if $PLI "$OUT.main.pli" --effects="$OUT.bad.eff" -c -o "$OUT.bad.o" 2>"$OUT.bad.log"; then
   fail "a malformed effects file was accepted"
 fi

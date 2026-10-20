@@ -859,8 +859,13 @@ static const char* effectToken(MemEffect e) {
   return "readwrite"; // may read and write any memory: no promise at all
 }
 
-std::string formatEffectLine(const std::string& name, const ProcEffects& e) {
+const char* const kPublishedEffectsHeader = "# pli published effects v1";
+
+std::string formatEffectLine(const std::string& name, const ProcEffects& e,
+                              const std::string& digest) {
   std::string out = name;
+  out += ' ';
+  out += digest;
   out += ' ';
   out += effectToken(e.effect);
   if (e.nounwind)
@@ -870,12 +875,16 @@ std::string formatEffectLine(const std::string& name, const ProcEffects& e) {
   return out;
 }
 
-bool parseEffectLine(const std::string& line, std::string& name, ProcEffects& e) {
+bool parseEffectLine(const std::string& line, std::string& name, ProcEffects& e,
+                     std::string& digest) {
   std::istringstream in(line);
   std::string tok;
   if (!(in >> tok) || tok.empty())
     return false;
   name = tok;
+  if (!(in >> tok) || tok.empty())
+    return false;
+  digest = tok; // the signature the promise was published for
   e = ProcEffects();
   bool sawEffect = false;
   while (in >> tok) {

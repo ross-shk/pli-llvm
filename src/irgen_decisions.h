@@ -109,11 +109,26 @@ std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
 // the caller has. These two functions carry that description from the module
 // that compiled the callee to the module that calls it (ADR-267).
 //
-// The format is one line per procedure: the name, then the flags.
-//   PURE_HELPER argmem-read nounwind willreturn
-std::string formatEffectLine(const std::string& name, const ProcEffects& e);
+// The format is one line per procedure: the name, the signature digest the
+// promise was published for, then the flags.
+//   PURE_HELPER 3f2a1c9d argmem-read nounwind willreturn
+//
+// The digest is what makes the promise safe to consume: a promise published
+// for a different signature is not a promise for this call, so the consumer
+// drops it rather than trusting it.
+struct PublishedEffect {
+  ProcEffects effects;
+  std::string digest; // the PL/I signature the promise was published for
+};
+
+std::string formatEffectLine(const std::string& name, const ProcEffects& e,
+                              const std::string& digest);
 // Parse one line; false when the line is malformed or names an unknown flag.
-bool parseEffectLine(const std::string& line, std::string& name, ProcEffects& e);
+bool parseEffectLine(const std::string& line, std::string& name, ProcEffects& e,
+                     std::string& digest);
+// The file's header line; a reader that does not know the version must refuse
+// the file rather than guess at it.
+extern const char* const kPublishedEffectsHeader;
 
 // --- WS-A4: the PL/I alias taxonomy (ADR-265) ------------------------------
 //

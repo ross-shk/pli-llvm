@@ -264,9 +264,10 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
 
 // Read the effects another module published. A malformed line is an error, not
 // a silent skip: a promise that is dropped must not look like one that was
-// never made.
+// never made. The header names the format version; a reader that does not
+// know it refuses the file rather than guess at it.
 static bool readPublishedEffects(const std::string& path,
-                                  std::map<std::string, pli::ProcEffects>& out) {
+                                  std::map<std::string, pli::PublishedEffect>& out) {
   std::ifstream in(path);
   if (!in) {
     std::cerr << "pli: cannot read " << path << "\n";
@@ -274,38 +275,59 @@ static bool readPublishedEffects(const std::string& path,
   }
   std::string line;
   int lineno = 0;
+  bool sawHeader = false;
   while (std::getline(in, line)) {
     ++lineno;
     size_t start = line.find_first_not_of(" \t\r");
-    if (start == std::string::npos || line[start] == '#')
-      continue; // blank or comment
-    std::string name;
+    if (start == std::string::npos)
+      continue; // blank
+    if (!sawHeader) {
+      sawHeader = true;
+      if (line.compare(0, std::string(pli::kPublishedEffectsHeader).size(),
+                       pli::kPublishedEffectsHeader) != 0) {
+        std::cerr << "pli: " << path << ": not a published-effects file (expected the header \""
+                  << pli::kPublishedEffectsHeader << "\")\n";
+        return false;
+      }
+      continue;
+    }
+    if (line[start] == '#')
+      continue; // comment
+    std::string name, digest;
     pli::ProcEffects e;
-    if (!pli::parseEffectLine(line, name, e)) {
+    if (!pli::parseEffectLine(line, name, e, digest)) {
       std::cerr << "pli: " << path << ":" << lineno << ": malformed effect line\n";
       return false;
     }
-    out[name] = e;
+    pli::PublishedEffect pub;
+    pub.effects = e;
+    pub.digest = digest;
+    out[name] = pub;
+  }
+  if (!sawHeader) {
+    std::cerr << "pli: " << path << ": empty published-effects file\n";
+    return false;
   }
   return true;
 }
 
 // Write what this module's external procedures promise.
 static bool writePublishedEffects(const std::string& path, const HProgram& hir,
-                                  const std::map<const HProc*, pli::ProcEffects>& effects) {
+                                  const std::map<const HProc*, pli::ProcEffects>& effects,
+                                  const IRGen& irgen) {
   std::ofstream os(path);
   if (!os) {
     std::cerr << "pli: cannot write " << path << "\n";
     return false;
   }
-  os << "# pli published effects v1\n";
+  os << pli::kPublishedEffectsHeader << "\n";
   for (const auto& p : hir.procs) {
     if (!p || !p->isExternal)
       continue; // only what another module can call
     auto it = effects.find(p.get());
     if (it == effects.end())
       continue;
-    os << pli::formatEffectLine(p->name, it->second) << "\n";
+    os << pli::formatEffectLine(p->name, it->second, irgen.definitionDigest(p.get())) << "\n";
   }
   return true;
 }
@@ -368,7 +390,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   sema.setWarnUnset(warnUnset);
   // WS-A2 (ADR-267): the effects another module published for the external
   // procedures this unit calls.
-  std::map<std::string, pli::ProcEffects> published;
+  std::map<std::string, pli::PublishedEffect> published;
   if (!effectsFile.empty() && !readPublishedEffects(effectsFile, published))
     return false;
   // In multi-input link mode every unit is a relocatable object like `-c`:
@@ -485,7 +507,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     }
     // WS-A2 (ADR-267): publish what this module's external procedures promise,
     // so a module that calls them can attach the promise to its declarations.
-    if (!emitEffectsFile.empty() && !writePublishedEffects(emitEffectsFile, hir, ipg.procEffects()))
+    if (!emitEffectsFile.empty() &&
+        !writePublishedEffects(emitEffectsFile, hir, ipg.procEffects(), ipg))
       return false;
     // Single-module fast path: runtime linked at BC level (never `-c`).
     // Bitcode (linkBitcode) already merged the runtime via IRGen, so the

@@ -668,21 +668,76 @@ static void applyMemoryEffect(llvm::Function* f, pli::MemEffect e) {
   }
 }
 
-// WS-A2 (ADR-267): stamp on an external declaration the promise another
-// module published for it. The caller cannot see the callee's body, so this
-// description is all its optimizer has; without it the call keeps LLVM's
-// default effects and cannot be hoisted or speculated.
+// --- WS-A2 (ADR-267): the digest of a PL/I signature ----------------------
+//
+// A published promise names the signature it was published for. The digest is
+// over the PL/I types, not the LLVM ones, so it survives the other module
+// being rebuilt with a different compiler version.
+static std::string digestOf(const std::vector<Type>& params, bool isFunction, const Type& retTy) {
+  uint64_t h = 1469598103934665603ULL; // FNV-1a
+  auto mix = [&](uint64_t v) {
+    for (int i = 0; i < 8; ++i) {
+      h ^= (v >> (i * 8)) & 0xff;
+      h *= 1099511628211ULL;
+    }
+  };
+  auto mixType = [&](const Type& t) {
+    mix(static_cast<uint64_t>(t.k));
+    mix(static_cast<uint64_t>(t.prec));
+    mix(static_cast<uint64_t>(t.scale));
+    mix(static_cast<uint64_t>(t.len));
+    mix(t.varying ? 1 : 0);
+    mix(t.starLen ? 1 : 0);
+    mix(t.dims.size());
+    for (const auto& d : t.dims) {
+      mix(static_cast<uint64_t>(d.lb));
+      mix(static_cast<uint64_t>(d.ub));
+      mix(d.dyn ? 1 : 0);
+      mix(d.lbDyn ? 1 : 0);
+      mix(d.adj ? 1 : 0);
+    }
+  };
+  mix(isFunction ? 1 : 0);
+  mix(params.size());
+  for (const auto& t : params)
+    mixType(t);
+  mixType(retTy);
+  char buf[17];
+  snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
+  return buf;
+}
+
+// The digest of a definition's signature: the promise is published for it.
+std::string IRGen::definitionDigest(const HProc* p) const {
+  std::vector<Type> params;
+  for (const Symbol* s : p->paramSyms)
+    params.push_back(s->ty);
+  return digestOf(params, p->isFunction, p->retTy);
+}
+
+// The digest of a declaration's signature: the promise is consumed for it.
+static std::string declarationDigest(const Symbol& sym) {
+  return digestOf(sym.entryParams, sym.entryIsFunction, sym.entryRetTy);
+}
+
+// WS-A2 (ADR-267): apply a published promise to an external declaration.
+// The caller's optimizer cannot see the callee's body, so this description is
+// all it has; without it the call keeps LLVM's default effects and cannot be
+// hoisted or speculated. The promise is used only when it was published for
+// this signature: a promise for a different procedure is not a promise here.
 void IRGen::applyPublishedEffect(llvm::Function* f, const Symbol* sym) {
   if (!sym)
     return;
   auto it = published_.find(sym->name);
   if (it == published_.end())
     return;
-  const pli::ProcEffects& e = it->second;
-  applyMemoryEffect(f, e.effect);
-  if (e.nounwind)
+  const pli::PublishedEffect& pub = it->second;
+  if (pub.digest != declarationDigest(*sym))
+    return; // published for a different signature: claim nothing
+  applyMemoryEffect(f, pub.effects.effect);
+  if (pub.effects.nounwind)
     f->setDoesNotThrow();
-  if (e.willReturn)
+  if (pub.effects.willReturn)
     f->setWillReturn();
 }
 
