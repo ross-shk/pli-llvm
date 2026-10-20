@@ -119,6 +119,7 @@ static void usage() {
          "  -fsyntax-only    parse and analyse each input only\n"
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
          "  --no-memory-effects  do not infer procedure memory effects (ADR-264);\n"
+         "  --no-param-attrs     do not describe array parameters' shape to LLVM (ADR-271);\n"
          "                   every call keeps LLVM's default effects\n"
          "  --warn-unset     warn when an AUTOMATIC variable may be used before\n"
          "                   it is set (ADR-266; off by default)\n"
@@ -350,6 +351,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        pli::PgoMode pgoMode = pli::PgoMode::None, const std::string& pgoUse = "",
                        bool marchNative = false, const std::string& platformBc = "",
                        bool noMemoryEffects = false, bool warnUnset = false,
+                       bool noParamAttrs = false,
                        const std::string& effectsFile = "",
                        const std::string& emitEffectsFile = "") {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
@@ -414,7 +416,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // (ADR-260), then stops — no object, no link.
   if (print_facts) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides, "", noMemoryEffects);
+                false, lowerMode, perOpOverrides, "", noMemoryEffects, noParamAttrs);
     irgen.setPublishedEffects(published);
     irgen.run(hir);
     if (!diags.ok())
@@ -431,7 +433,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   if (emitLLVM || emitMlir) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides, "", noMemoryEffects);
+                false, lowerMode, perOpOverrides, "", noMemoryEffects, noParamAttrs);
     irgen.setPublishedEffects(published);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
@@ -497,7 +499,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-              linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects);
+              linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects,
+              noParamAttrs);
     ipg.setPublishedEffects(published);
     auto om = ipg.takeModule(hir);
     if (!om) {
@@ -600,6 +603,7 @@ int main(int argc, char** argv) {
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
   bool noMemoryEffects = false;
+  bool noParamAttrs = false;
   bool warnUnset = false; // --warn-unset: WS-A5 "used before set" (ADR-266)
   // WS-A2 (ADR-267): the published-effects file, in both directions.
   std::string effectsFile, emitEffectsFile;
@@ -757,6 +761,8 @@ int main(int argc, char** argv) {
       noSubChecksExplicit = true;
     } else if (a == "--no-memory-effects") {
       noMemoryEffects = true;
+    } else if (a == "--no-param-attrs") {
+      noParamAttrs = true;
     } else if (a.rfind("--emit-effects=", 0) == 0) {
       emitEffectsFile = a.substr(15);
     } else if (a.rfind("--effects=", 0) == 0) {
@@ -1011,7 +1017,7 @@ int main(int argc, char** argv) {
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
-                    noMemoryEffects, warnUnset, effectsFile, emitEffectsFile))
+                    noMemoryEffects, warnUnset, noParamAttrs, effectsFile, emitEffectsFile))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);

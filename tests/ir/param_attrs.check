@@ -1,0 +1,2 @@
+CHECK-LABEL: define internal i64 @"PLI_PARAM_ATTRS\$TOTAL"
+CHECK: ptr dereferenceable\(64\)

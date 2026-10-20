@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-G3 (ADR-271): the negative litmus. A parameter whose extent is only
+    known at run time has no shape to describe, so the compiler must not
+    claim one: an adjustable array's storage may be shorter than the
+    dummy's declared shape would suggest. */
+ param_attrs_star: procedure options(main);
+   declare a(16) fixed bin(31);
+   declare s fixed bin(63);
+   s = total(a);
+   put skip list(s);
+
+   total: procedure(x) returns(fixed bin(63));
+      declare x(*) fixed bin(31);
+      declare i fixed bin(31);
+      declare t fixed bin(63);
+      t = 0;
+      do i = 1 to 16;
+         t = t + x(i);
+      end;
+      return(t);
+   end total;
+ end param_attrs_star;
