@@ -2717,10 +2717,14 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
   auto cached = trapDispatch_.find(key);
   if (cached != trapDispatch_.end())
     return cached->second;
-  const std::vector<llvm::Function*>& handlers = onHandlers_[key];
+  auto it = onHandlers_.find(key);
+  if (it == onHandlers_.end())
+    return nullptr; // no handler: the caller aborts inline
+  const std::vector<llvm::Function*>& handlers = it->second;
   llvm::Function* F = llvm::Function::Create(
       llvm::FunctionType::get(b_.getVoidTy(), false), llvm::GlobalValue::InternalLinkage,
-      "pli_on_trap." + std::to_string(key), &mod_);
+      "pli_on_trap." + (abortFn.compare(0, 4, "pli_") == 0 ? abortFn.substr(4) : abortFn),
+      &mod_);
   F->addFnAttr(llvm::Attribute::Cold);
   F->addFnAttr(llvm::Attribute::NoInline);
   trapDispatch_[key] = F;
@@ -2764,8 +2768,7 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
   return F;
 }
 
-void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
-                         llvm::BasicBlock* okBB) {
+void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB) {
   auto it = onHandlers_.find(key);
   if (it == onHandlers_.end()) {
     // No handler for this condition: the abort is already a call to a cold,
@@ -2776,14 +2779,21 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
   }
   // WS-F1 (ADR-249): the dispatch is a cold function of its own; the hot
   // path carries the branch and the call, and nothing else.
-  b_.CreateCall(onTrapDispatch(key, abortFn), {});
+  llvm::Function* dispatch = onTrapDispatch(key, abortFn);
+  if (!dispatch) {
+    // No dispatch could be built (no handler for the key): abort inline.
+    b_.CreateCall(runtimeFn(abortFn), {});
+    b_.CreateUnreachable();
+    return;
+  }
+  b_.CreateCall(dispatch, {});
   b_.CreateBr(okBB);
 }
 
 // SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
 // block; the computational-trap shape with the SIZE key and abort call.
 void IRGen::emitSizeTrap(llvm::BasicBlock* okBB) {
-  emitCondTrap(Stmt::kSizeCondKey, "pli_fixed_overflow", "size", okBB);
+  emitCondTrap(Stmt::kSizeCondKey, "pli_fixed_overflow", okBB);
 }
 
 // Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94): the
@@ -2802,8 +2812,7 @@ llvm::Value* IRGen::clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub)
 // join that resumes with `zero` on every faulting path and `computed` on the
 // clean path. When checks are off, beginZerodivide returns an inactive handle
 // and endZerodivide returns `computed` untouched.
-IRGen::ZdivCheck IRGen::beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
-                                 int key, const std::string& tag) {
+IRGen::ZdivCheck IRGen::beginZerodivide(llvm::Value* isZero, llvm::Value* zero, int key) {
   if (!zdivChecks())
     return ZdivCheck{}; // (NOZERODIVIDE): the raw result stands (rules (60)-(63), ADR-112)
   std::string zid = std::to_string(n_++);
@@ -2816,7 +2825,7 @@ IRGen::ZdivCheck IRGen::beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
   if (auto* br = b_.CreateCondBr(isZero, trapBB, computeBB))
     br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(computeBB);
-  return ZdivCheck{trapBB, computeBB, okBB, zero, key, tag};
+  return ZdivCheck{trapBB, computeBB, okBB, zero, key};
 }
 llvm::Value* IRGen::endZerodivide(ZdivCheck z, llvm::Value* computed) {
   if (!z.computeBB)
@@ -2827,7 +2836,7 @@ llvm::Value* IRGen::endZerodivide(ZdivCheck z, llvm::Value* computed) {
   // the phi trivially resolves to `computed`.
   b_.CreateBr(z.okBB);
   b_.SetInsertPoint(z.trapBB);
-  emitCondTrap(z.key, "pli_zerodivide", z.tag, z.okBB);
+  emitCondTrap(z.key, "pli_zerodivide", z.okBB);
   b_.SetInsertPoint(z.okBB);
   llvm::PHINode* phi = b_.CreatePHI(computed->getType(), 1, "zdiv.r");
   phi->addIncoming(computed, z.computeBB);
@@ -2850,7 +2859,7 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
   if (auto* br = b_.CreateCondBr(isZero, trapBB, okBB))
     br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(trapBB);
-  emitCondTrap(Stmt::kZerodivideCondKey, "pli_zerodivide", "zd", okBB);
+  emitCondTrap(Stmt::kZerodivideCondKey, "pli_zerodivide", okBB);
   b_.SetInsertPoint(okBB);
   return b_.CreateSelect(isZero, zero, computed, "zdiv.r");
 }
@@ -5883,7 +5892,7 @@ void IRGen::emitAssign(HStmt* s) {
       // A shape mismatch has no index to clamp: a handled trap notifies the
       // handler, then aborts (rule 94).
       llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "dcp.abort." + id, curFn_);
-      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", abL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", abL);
       b_.SetInsertPoint(abL);
       b_.CreateUnreachable();
       startBlock(okL);
@@ -8512,7 +8521,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
       llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
       b_.CreateCondBr(oob, failL, okL);
       startBlock(failL);
-      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
       startBlock(okL);
     }
     return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "aelem");
@@ -8557,7 +8566,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     b_.CreateCondBr(oob, failL, okL);
 
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
 
     startBlock(okL);
   }
@@ -8716,7 +8725,7 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
         // A shape mismatch has no index to clamp: a handled trap notifies
         // the handler, then aborts (rule 94).
         llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "bnm.abort." + id, curFn_);
-        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", abL);
+        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", abL);
         b_.SetInsertPoint(abL);
         b_.CreateUnreachable();
         startBlock(okL);
@@ -9110,7 +9119,7 @@ llvm::Value* IRGen::ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& id
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
     startBlock(okL);
   }
   (void)loc;
@@ -9182,7 +9191,7 @@ llvm::Value* IRGen::ctlNDElementAddr(Symbol* sym, const std::vector<HExprP>& idx
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
     startBlock(okL);
   }
   (void)loc;
@@ -9371,7 +9380,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
         llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "cs.ok." + fid, curFn_);
         b_.CreateCondBr(oob, failL, okL);
         startBlock(failL);
-        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
         startBlock(okL);
       }
       v.fixedFlat = b_.CreateAdd(
@@ -9529,7 +9538,7 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
     startBlock(okL);
   }
 
@@ -9911,7 +9920,7 @@ Val IRGen::emitExpr(HExpr* e) {
           // Branch-then-compute: sdiv only runs in computeBB where bi != 0,
           // eliminating the safe-divisor select from the hot path (T1a).
           llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-          ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey, "zd");
+          ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey);
           q = b_.CreateSDiv(ai, bi, "bin");
           q = endZerodivide(zd, q);
         }
@@ -10731,7 +10740,7 @@ Val IRGen::emitExpr(HExpr* e) {
       // FLOAT division (ADR-014): fdiv, zero-divide resumes with 0.0.
       llvm::Value* fzero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
       llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, fzero, "zdiv");
-      ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey, "zd");
+      ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey);
       llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
       r = endZerodivide(zd, div);
     } else {
@@ -10767,7 +10776,7 @@ Val IRGen::emitExpr(HExpr* e) {
         // Branch-then-compute: sdiv only runs when the divisor is non-zero,
         // eliminating the safe-divisor select from the hot path (T1a).
         llvm::Value* dz = b_.CreateICmpEQ(bi, z0, "zdiv");
-        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey, "zd");
+        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey);
         q = b_.CreateSDiv(ai, bi, "bin");
         q = endZerodivide(zd, q);
       }
@@ -11254,7 +11263,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     if (common.k == TK::Float) {
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
       llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
-      ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey, "mod_zd");
+      ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey);
       llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_dd"), {av.reg, bv.reg}, "mod");
       v.reg = endZerodivide(zd, m);
     } else if (common.intBits() == 128) {
@@ -11265,7 +11274,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* bi = bv.reg;
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
       llvm::Value* dz = b_.CreateICmpEQ(bi, zero, "zdiv");
-      ZdivCheck zd = beginZerodivide(dz, zero, Stmt::kZerodivideCondKey, "mod_zd");
+      ZdivCheck zd = beginZerodivide(dz, zero, Stmt::kZerodivideCondKey);
       // PL/I MOD takes the sign of the divisor; srem gives the sign of the
       // dividend, so add the divisor back when the signs differ.
       llvm::Value* r = b_.CreateSRem(av.reg, bi, "mod");
@@ -11335,7 +11344,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         // inline and fold the body when the divisor is known at -O2+.
         llvm::Value* bi = toI64(bv);
         llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-        ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey, "mod_zd");
+        ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey);
         m = b_.CreateCall(runtimeFn("pli_mod_ll"), {avi, bi});
         m = endZerodivide(zd, m);
       }
@@ -11384,7 +11393,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     v.ty = common;
     // ZERODIVIDE (rule 94): as for `/`, a zero divisor traps, resuming with 0.
     llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
-    ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey, "div_zd");
+    ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey);
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
     v.reg = endZerodivide(zd, div);
     result = v;
@@ -11623,7 +11632,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
         b_.CreateCondBr(fail, trapBB, okBB);
         b_.SetInsertPoint(trapBB);
-        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
         b_.SetInsertPoint(okBB);
       }
       v.ty = e->ty;
@@ -11675,7 +11684,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
         b_.CreateCondBr(fail, trapBB, okBB);
         b_.SetInsertPoint(trapBB);
-        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
         b_.SetInsertPoint(okBB);
       }
       Val fixed;

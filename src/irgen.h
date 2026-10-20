@@ -618,8 +618,7 @@ private:
   // unconditional `abortFn` call; otherwise consult the stack — empty takes
   // the abort path, established runs the matching handler then branches to
   // okBB, where the caller resumes with its own recovery value.
-  void emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
-                    llvm::BasicBlock* okBB);
+  void emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB);
   // WS-F1 (ADR-249): the ON dispatch — the stack scan, the handler calls and
   // the abort — lives in a cold function of its own, so the hot function
   // carries only the branch and the call. One function per condition key:
@@ -642,11 +641,9 @@ private:
     llvm::BasicBlock* okBB = nullptr;
     llvm::Value* zero = nullptr;
     int key = 0;
-    std::string tag;
     bool active() const { return computeBB != nullptr; }
   };
-  ZdivCheck beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
-                            int key, const std::string& tag);
+  ZdivCheck beginZerodivide(llvm::Value* isZero, llvm::Value* zero, int key);
   llvm::Value* endZerodivide(ZdivCheck z, llvm::Value* computed);
   // Constant-zero divisor fast path (rule 94): emit the trap directly and
   // return `zero`, no phi or dead compute block.
