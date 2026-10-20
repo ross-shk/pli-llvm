@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 #include "sema.h"
+#include "constfold.h"
 #include <algorithm>
 #include <climits>
 #include <functional>
@@ -2030,17 +2031,35 @@ void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
 
 Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
   Expr* lit = e;
-  if (lit->kind == Expr::Unary && lit->op == Tok::Minus)
-    lit = lit->a.get();
-  if (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
-      lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
-    d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
-    return nullptr;
+  if (lit && lit->kind != Expr::IntLit && lit->kind != Expr::DecLit &&
+      lit->kind != Expr::FltLit && lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
+    // Not a bare literal: a constant *expression* folds to one (ADR-240). The
+    // value keeps the scale its operands imply; codegen rescales it to the
+    // declared type's scale, which is the type-directed step.
+    ConstNum num;
+    if (!constNumOf(lit, num) ||
+        !foldConstExpr(lit, Type::fixedDec(num.prec, num.scale), num.scale)) {
+      d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
+      return nullptr;
+    }
+    lit = e;
   }
-  if (lit != e) { // apply the leading unary minus once
+  if (lit->kind == Expr::Unary && lit->op == Tok::Minus) {
+    lit = lit->a.get();
+    // apply the leading unary minus once
     lit->ival = -lit->ival;
     lit->wideIval = -lit->wideIval;
     lit->fval = -lit->fval;
+  }
+  // A FIXED DECIMAL target carries a scale, so an integer literal must be
+  // rescaled to it: the constant is expressed as a DECIMAL literal and
+  // codegen applies the declared scale (ADR-240).
+  if (lit->kind == Expr::IntLit && ty.k == TK::FixedDec && ty.scale > 0) {
+    lit->kind = Expr::DecLit;
+    lit->decScale = 0;
+    lit->decPrec = constDigits(lit->wideIval);
+    lit->ty = Type::fixedDec(lit->decPrec, 0);
+    lit->folded = true;
   }
   bool strInit = lit->kind == Expr::CharLit;
   if (ty.isChar() != strInit) {
@@ -4112,7 +4131,10 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     break;
   }
   case Expr::DecLit:
-    e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
+    // A folded constant (ADR-240) carries the result type it was folded to;
+    // a literal from the source keeps the type its digits describe.
+    if (!e->folded)
+      e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
     break;
   case Expr::FltLit:
     e->ty = Type::flt(6);
@@ -4633,6 +4655,13 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       e->ty = Type::fixedBin(31, 0);
       break;
     }
+    // A constant `+`, `-` or `*` folds to its value at compile time (ADR-240).
+    // The fold is type-directed: the value is computed at the scale of the
+    // result type, so it is exactly the value the runtime path produces. A
+    // division is never folded — ZERODIVIDE must still fire.
+    if ((e->op == Tok::Plus || e->op == Tok::Minus || e->op == Tok::Star) &&
+        e->ty.k == TK::FixedDec)
+      foldConstExpr(e, e->ty, e->ty.scale);
     break;
   }
   }

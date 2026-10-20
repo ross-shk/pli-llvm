@@ -1,0 +1,14 @@
+ /* scratch: VALUE constant passed by reference */
+ val_test: procedure options(main);
+    declare v char(10) value('abc');
+    declare fails fixed bin(31);
+    fails = 0;
+    call takes_ref(v);
+    if v ^= 'abc' then fails = fails + 1;
+    put skip list('v=', v);
+ end val_test;
+
+ takes_ref: procedure (x);
+    declare x char(10);
+    x = 'xyz';
+ end takes_ref;

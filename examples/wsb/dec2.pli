@@ -1,0 +1,12 @@
+ /* scratch: decimal constant folding — precision/scale/condition probes */
+ dec_test: procedure options(main);
+    declare a fixed dec(3,2) init(99.99 + 0.01);
+    declare b fixed dec(5,2) init(1.5 + 2.25);
+    declare c fixed dec(5,2) init(10.0 / 4.0);
+    declare d fixed dec(5,2) init(1.0 / 0.0);
+    declare e fixed dec(9,2);
+    put skip list('a=', a);
+    put skip list('b=', b);
+    put skip list('c=', c);
+    put skip list('e=', e);
+ end dec_test;

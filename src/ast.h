@@ -56,6 +56,10 @@ struct Expr {
   // An unconnected BASED variable may be named there without a locator.
   bool allocBaseRef = false;
   bool isLabel = false;
+  // The node was rewritten in place by the constant folder (ADR-240): its
+  // `ty` is the result type the expression was folded to, not the type its
+  // digits describe, so typing must not re-derive it.
+  bool folded = false;
   Tok op = Tok::Eof; // Binary / Unary operator
   ExprP a, b;
   std::vector<ExprP> args; // Call
