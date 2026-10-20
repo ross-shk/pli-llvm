@@ -1,0 +1,34 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A BIT comparison compares every bit (ADR-270): the packed value of a
+    BIT wider than 32 bits is compared as a 64-bit integer, so two values
+    that differ only in their high bits are not equal. Rule (117). */
+ bit_wide: procedure options(main);
+   declare x bit(40);
+   declare y bit(40);
+   declare z bit(40);
+   declare hits fixed bin(31);
+   declare fails fixed bin(31);
+
+   fails = 0;
+   hits = 0;
+
+   /* The high eight bits differ: the values are not equal. */
+   x = '1111111111111111111111111111111111111111'b;
+   y = '0000000011111111111111111111111111111111'b;
+   if x = y then hits = hits + 1;
+   if x ^= y then hits = hits + 1;
+   if not (x = y) then hits = hits + 1;
+
+   /* The high bits agree: the values are equal. */
+   z = '0000000011111111111111111111111111111111'b;
+   if z = y then hits = hits + 1;
+   if z ^= y then hits = hits + 1;
+
+   /* Every hit is the expected one: not-equal, unequal, not-equal, equal,
+      not-equal. */
+   if hits ^= 3 then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS bit_wide');
+   else put skip list('FAIL bit_wide: fails =', fails);
+ end bit_wide;

@@ -624,30 +624,31 @@ operands.
 measurement shows a gap; otherwise close" ✓. E1's measurement shows no gap ✓
 → **closed** ✓.
 
-**E4 — `ROUND` with a dynamic digit count.** The plan says "nothing to port —
-the repo already matches. Record as verified-equal." **The verification does
-not confirm that**, and the difference is worth recording:
-
-* MULTICS's `decimal_op_.pl1:283-300` moves `len1 = p1 - i + n + 1` digits of
-  a *decimal* — an exact, digit-wise rounding ✓.
-* The repo's `ROUND` converts its argument to **FLOAT** (`src/irgen.cpp`) and
-  calls `pli_round(double, n)`, which rounds a double ✓.
-
-So the two are not the same algorithm, and the difference is observable on a
-wide decimal:
+**E4 — `ROUND` with a dynamic digit count: implemented (ADR-271).** The plan
+says "nothing to port — the repo already matches. Record as verified-equal."
+**The verification did not confirm that**: MULTICS's `decimal_op_.pl1:283-300`
+moves `len1 = p1 - i + n + 1` digits of a *decimal*, exactly, while the repo's
+`ROUND` converted its argument to **FLOAT** and called `pli_round(double, n)`.
+The difference was observable on a wide decimal:
 
 ```pli
 x = 1234567890123456.7891;   /* DECIMAL(20,4) */
 y = round(x, 2);
 ```
 
-The exact answer is `1234567890123456.79`; the compiler prints
-`1234567890123456.80`, because the value passed through a double. The
-consequence is bounded — a value that fits a double's 15–16 significant digits
-rounds exactly ✓ — but it is a conformance gap for wide decimals ✓ (rule (123),
-QR2.2), not the equality the plan assumed ✓. It is recorded here and left
-unfixed: an exact decimal `ROUND` is a runtime digit-move plus a builtin
-change, which is its own piece of work.
+The exact answer is `1234567890123456.79`; the compiler printed
+`1234567890123456.80`, because the value passed through a double.
+
+**The fix.** A `FIXED DECIMAL` argument rounded to a *constant* digit count
+keeps its exactness: the result is a decimal with that scale, and the rounding
+is the conversion the compiler already performs — the same half-away-from-zero
+rescale an assignment uses ✓. The count must be constant (a runtime count
+keeps the float path, because the scale of a runtime-rounded value is not
+known at compile time) ✓, and the argument must be a decimal ✓.
+`tests/core/round_decimal.pli` is the gate: the wide decimal above now prints
+`1234567890123456.79` ✓, half away from zero holds in both directions ✓, the
+result carries the requested scale ✓, and the runtime count still takes the
+float path ✓.
 
 **E5 — narrow-type codegen.** The plan defers it: "only if a narrow-integer
 benchmark shows a gap on the target. On x86-64 the expected gain is ~0; on a

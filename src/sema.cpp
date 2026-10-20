@@ -5408,7 +5408,11 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
     return true;
   }
-  // ROUND built-in (M2): round(x, n) — the result is a FLOAT value.
+  // ROUND built-in (M2): round(x, n). A FIXED DECIMAL argument rounded to a
+  // constant digit count keeps its exactness: the result is a FIXED DECIMAL
+  // with that scale, and the conversion does the rounding (ADR-006, ADR-271).
+  // Every other shape — a FLOAT or FIXED BINARY argument, a runtime digit
+  // count, a negative count — is a FLOAT, the library rounding.
   if (e->name == "ROUND") {
     if (e->args.size() != 2) {
       d_.error(e->loc, "ROUND expects 2 arguments", "(123)");
@@ -5421,6 +5425,21 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::flt(6);
+    const Expr* xa = e->args[0].get();
+    const Expr* na = e->args[1].get();
+    // The digit count must be a constant integer. The folder may have
+    // rewritten the literal as a decimal one (ADR-240), so both spellings
+    // count as long as it has no fraction digits.
+    const bool countIsInt = na->kind == Expr::IntLit ||
+                            (na->kind == Expr::DecLit && na->decScale == 0);
+    if (xa->ty.k == TK::FixedDec && countIsInt && na->ival >= 0) {
+      // The result keeps the source's precision, widened by the extra
+      // fraction digits when the count asks for more of them (the 31-digit
+      // maximum is the ceiling; beyond it the float path takes over).
+      long long prec = xa->ty.prec + std::max<long long>(0, na->ival - xa->ty.scale);
+      if (prec <= 31)
+        e->ty = Type::fixedDec((int)prec, (int)na->ival);
+    }
     return true;
   }
   // REPEAT built-in (M2): repeat(s, n) — s repeated n times; the length

@@ -7890,3 +7890,90 @@ exactness the benchmark exists to exercise (and the wide-decimal path with it).
 *Keeping the `≈` parity for `bcd_decimal`.* The outputs now match exactly, so
 the tolerance would hide a future divergence between the two programs — which
 is precisely the signal the benchmark is for.
+
+## ADR-270 — A `BIT` comparison compares every bit
+
+**Context.** A `BIT(n)` value is a byte array (`[ceil(n/8) x i8]`, big-endian).
+The comparison path converted both operands to a *number* before comparing
+them, and the number it chose was `FIXED BINARY(31)` — 32 bits. For a `BIT`
+wider than 32 bits that conversion **truncates**, so the comparison saw only
+the low 32 bits:
+
+```pli
+x = '1111111111111111111111111111111111111111'b;   /* BIT(40) */
+y = '0000000011111111111111111111111111111111'b;
+if x = y then ...        /* TRUE — the high eight bits were dropped */
+```
+
+The `IDENTICAL` built-in (ADR-199) never had the bug: it compares wide `BIT`
+scalars byte by byte.
+
+**Decision.** A `BIT` operand is compared as a 64-bit integer, not a 32-bit
+one: the packed value of a `BIT(n)` up to 64 bits fits, and the comparison is
+then exact bit for bit. Above 64 bits the conversion is *diagnosed* (the
+packing helper refuses it), so the case is never silently wrong.
+
+**Consequences.** `x = y` for two `BIT(40)` values now reports the truth. The
+change is one comparison's common type; the values compared for a `BIT` of 32
+bits or fewer are unchanged (the same numbers, compared in a wider register).
+
+The gate is `tests/core/bit_wide.pli`: two `BIT(40)` values that differ only
+in their high eight bits must compare unequal, the same values with equal
+high bits must compare equal, and the `^=` form must agree.
+
+**Rejected.** *Comparing `BIT` values byte by byte, as `IDENTICAL` does.* It
+is exact for any width, but it would be a second spelling of the same
+comparison in a different place, and the 64-bit form covers every width the
+compiler can pack.
+
+## ADR-271 — An exact decimal `ROUND`
+
+**Context.** WS-E4 is the plan's item for `ROUND` with a runtime digit count,
+and the plan's premise was that "the repo already matches" MULTICS's digit
+move. It does not: MULTICS's `decimal_op_.pl1:283-300` moves
+`len1 = p1 - i + n + 1` digits of a *decimal*, exactly, while the repo's
+`ROUND` converted its argument to **FLOAT** and called `pli_round(double, n)`.
+The difference is observable:
+
+```pli
+x = 1234567890123456.7891;   /* DECIMAL(20,4) */
+y = round(x, 2);
+```
+
+The exact answer is `1234567890123456.79`; the compiler printed
+`1234567890123456.80`, because the value passed through a double.
+
+**Decision.** A `FIXED DECIMAL` argument rounded to a **constant** digit count
+keeps its exactness:
+
+* **Sema** types the result as a `FIXED DECIMAL` with that scale — the
+  source's precision, widened by the extra fraction digits when the count asks
+  for more of them (the 31-digit maximum is the ceiling). Every other shape — a
+  `FLOAT` or `FIXED BINARY` argument, a runtime digit count, a negative count
+  — stays a `FLOAT`, the library rounding.
+* **HIR** converts the argument to the *result's* type, so the decimal
+  argument stays a decimal (the old code forced it to `FLOAT`).
+* **IRGen** lowers the decimal case as the **conversion** to the result's
+  type — the same rescale, and the same half-away-from-zero rounding, that an
+  assignment uses (ADR-006). The wide case rides the existing i128 path.
+
+So the exact rounding is not a new algorithm: it is the decimal conversion
+the compiler already performs, aimed at the scale `ROUND` asks for.
+
+**Consequences.** `ROUND` on a decimal is exact for every value a `double`
+cannot hold, and its result carries the requested scale (`ROUND(x, 1)` on a
+scale-4 decimal prints one fraction digit). The float path is unchanged for
+every other shape, and the runtime digit count still returns a `FLOAT` — the
+scale of a runtime-rounded value is not known at compile time.
+
+The gate is `tests/core/round_decimal.pli`: a wide decimal rounded to two
+digits, half away from zero in both directions, the scale of the result, and
+the runtime-count float path.
+
+**Rejected.** *A runtime digit-move in the runtime library.* MULTICS's
+formulation needs the decimal's descriptor (the digits and the scale) at run
+time; the compiler has the scale at compile time whenever the count is
+constant, and the conversion already does the rounding. *Rounding a decimal
+through a double.* That is the bug. *Rounding to a negative digit count
+exactly.* The count rounds to tens, hundreds and beyond, which is not a scale
+the decimal type can carry; that shape keeps the float path.

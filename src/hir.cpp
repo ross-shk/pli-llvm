@@ -211,8 +211,11 @@ HExprP lowerCallExpr(const Expr* e, bool substValue) {
     if (!he->args.empty())
       he->args[0] = convIf(std::move(he->args[0]), e->ty);
   } else if (n == "ROUND") {
+    // The argument is converted to the result's type: a FLOAT result converts
+    // it to FLOAT (the library rounding), while a FIXED DECIMAL result keeps
+    // the argument exact (ADR-271).
     if (!he->args.empty())
-      he->args[0] = convIf(std::move(he->args[0]), Type::flt(6));
+      he->args[0] = convIf(std::move(he->args[0]), e->ty);
   } else if (e->sym && e->sym->proc) {
     // A user-defined function call: coerce each argument to its parameter type.
     for (size_t i = 0; i < he->args.size() && i < e->sym->proc->paramSyms.size(); ++i)

@@ -10851,8 +10851,11 @@ Val IRGen::emitExpr(HExpr* e) {
     return v;
   }
 
-  Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
-                                        b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
+  // A BIT operand is compared as a 64-bit integer, not a 32-bit one: the
+  // packed value of a BIT(n) wider than 32 bits does not fit in 32, and
+  // truncating it would compare only the low 32 bits (ADR-270).
+  Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(63, 0) : a.ty,
+                                        b.ty.isBit() ? Type::fixedBin(63, 0) : b.ty)
                       : e->ty;
   // Power always promotes to FLOAT (rule 121, CM5). Division stays in the
   // type sema chose: FIXED for integer-valued operands (P3, ADR-190 — sdiv),
@@ -11723,6 +11726,18 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "ROUND") {
+    // A FIXED DECIMAL argument rounded to a constant digit count stays exact:
+    // the result is a decimal with that scale, and the conversion rounds half
+    // away from zero (ADR-006) — the same rounding an assignment uses, and
+    // the same one MULTICS's digit move produces (ADR-271).
+    if (e->args[0]->ty.k == TK::FixedDec && e->ty.k == TK::FixedDec) {
+      Val x = emitExpr(e->args[0].get());
+      Val r = convert(x, e->ty, e->loc);
+      v.ty = e->ty;
+      v.reg = r.reg;
+      result = v;
+      return true;
+    }
     Val x = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val xd = convert(x, Type::flt(6), e->loc);
