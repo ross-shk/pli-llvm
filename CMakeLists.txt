@@ -250,8 +250,12 @@ endif()
 
 add_executable(pli ${PLI_SOURCES})
 target_include_directories(pli PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR})
-# LLVM/Clang headers as SYSTEM to suppress their warnings under -Werror.
-target_include_directories(pli SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
+# LLVM/Clang/lld headers as SYSTEM to suppress their warnings under -Werror.
+# LLD_INCLUDE_DIR is found above but is not part of LLVM_INCLUDE_DIRS: brew
+# ships the lld headers in the separate lld formula, so without it codegen.cpp
+# cannot find lld/Common/Driver.h.
+target_include_directories(pli SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS}
+                           ${LLD_INCLUDE_DIR})
 
 # Get the default target triple from LLVM for consistent bitcode generation.
 # Use clang (not CMAKE_C_COMPILER) for triple detection and bitcode generation
@@ -310,16 +314,36 @@ if(PLI_ENABLE_MLIR)
 endif()
 
 # Link LLVM components needed for in-process codegen + linking.
-# Shared-LLVM builds (Debian LLVM 22 sets LLVM_LINK_LLVM_DYLIB): link the
-# shared libLLVM only. Mixing static component archives with the shared lib
-# (pulled in by the Clang targets below) duplicates LLVM globals and crashes
-# flakily at exit after O2 codegen on ARM64 (free(): invalid pointer).
-# Static builds, Apple, and the hermetic static prefix (pure-static by
-# construction: no libLLVM.so exists there) keep the component archives.
-# Static zlib/zstd ride in transitively: LLVMConfig re-finds ZLIB::ZLIB and
-# zstd::libzstd_static from the prefix via CMAKE_PREFIX_PATH.
-if(LLVM_LINK_LLVM_DYLIB AND NOT APPLE AND NOT PLI_LLVM_STATIC_PREFIX)
-  set(llvm_libs_core LLVM z zstd)
+#
+# ONE LLVM instance, or the in-process LTO link crashes. A shared lld brings
+# the shared libLLVM with it, and the compiler's own symbols must come from
+# that same instance: LLVM's weak template instantiations coalesce across the
+# two, so lld ends up calling the executable's copy of
+# AnalysisManager<Module>::getResultImpl with the dylib's objects, and the
+# proxy pointer it loads is garbage (SIGSEGV in the LTO link). The hermetic
+# static toolchain has a static lld and a static LLVM, so it keeps the
+# component archives; everything else links the shared libLLVM, which exports
+# the C++ API the compiler uses.
+set(PLI_SHARED_LLVM_LINK OFF)
+if(LLVM_LINK_LLVM_DYLIB)
+  set(PLI_SHARED_LLVM_LINK ON)
+endif()
+if(LLD_ELF_LIB)
+  get_filename_component(_lld_ext "${LLD_ELF_LIB}" EXT)
+  if(_lld_ext MATCHES "\\.(so|dylib)")
+    set(PLI_SHARED_LLVM_LINK ON) # a shared lld drags the shared libLLVM in
+  endif()
+endif()
+if(PLI_LLVM_STATIC_PREFIX)
+  # Pure-static by construction: no libLLVM.so exists there, and mixing the
+  # shared lib with static component archives is the crash this guards.
+  set(PLI_SHARED_LLVM_LINK OFF)
+endif()
+
+if(PLI_SHARED_LLVM_LINK AND TARGET LLVM)
+  # The dylib carries its own zlib/zstd; naming them here would need a
+  # keg-only path on macOS.
+  set(llvm_libs_core LLVM)
   set(llvm_libs_mc "")
 else()
   # Core/IR (superset of the old `core irreader support linker` set).

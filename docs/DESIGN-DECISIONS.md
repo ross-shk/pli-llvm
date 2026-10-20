@@ -7543,3 +7543,55 @@ it needs a single LLVM instance to link. Promising through the object file:
 an object file describes a definition, and what is missing here is a
 description of a *declaration*.
 
+---
+
+## ADR-268 — One LLVM instance in the process, or the in-process LTO link crashes
+
+**Context.** ADR-225 moved the link in-process: the compiler emits objects and
+calls lld itself, with no clang subprocess. The lld driver libraries, however,
+are *shared* on a package-manager installation (`liblldELF.dylib` and its
+siblings, each linked against the shared `libLLVM`), while the compiler linked
+LLVM's **static** component archives. The process therefore held two LLVMs.
+
+That is usually survivable and occasionally fatal, because LLVM's weak
+template instantiations coalesce across the boundary: the executable's copy of
+a template and the dylib's copy are the same symbol, so lld ended up calling
+the *executable's* `AnalysisManager<Module>::getResultImpl` with objects the
+dylib had laid out. The analysis manager loads a proxy function pointer from
+the object it was handed; the pointer came from the other instance, so it was
+garbage, and the in-process LTO link died with SIGSEGV. The compiler was
+crashing, not diagnosing — the worst failure mode there is.
+
+**Decision.** The link contains exactly one LLVM, and which one is decided by
+the lld the build links:
+
+- a **shared** lld brings the shared `libLLVM` with it, so the compiler's own
+  symbols come from the shared library too;
+- a **static** lld (the hermetic static toolchain) keeps the static component
+  archives, which are the same instance lld was built against.
+
+The macOS exclusion that predated this is gone: brew's `libLLVM.dylib`
+exports the C++ API the compiler uses, so the shared path works there too.
+The build decides from the lld library it found and from `LLVM_LINK_LLVM_DYLIB`,
+and `scripts/bundle_standalone.sh` (the release path) keeps using the hermetic
+static toolchain, where the answer is the same by construction.
+
+**Consequences.** The compiler binary is small again (2 MB against 120 MB),
+because it no longer carries a second LLVM. The in-process LTO link works on
+every supported configuration, so `tests/driver/flto.sh` runs the link+run
+legs everywhere instead of skipping them unless the build was pure-static. A
+build that mixes the two on purpose still crashes — the decision is the
+build's, not the compiler's — so the rule is written where the choice is
+made.
+
+**A second bug, found by the first.** `LLD_INCLUDE_DIR` was found by the
+configure step but never added to the include path, so `codegen.cpp` could not
+find `lld/Common/Driver.h`. It compiled only because the object was older
+than the last change to the lld formula; any rebuild of that file failed. The
+include directory is now on the target.
+
+**Rejected.** Running the LTO link in a clang subprocess: ADR-225 removed
+the subprocess on purpose. Linking lld statically where the distribution
+ships only shared lld: not possible. Checking for the mixed case at run time
+and diagnosing instead of crashing: the mix is a property of the link, and the
+link is under the build's control.

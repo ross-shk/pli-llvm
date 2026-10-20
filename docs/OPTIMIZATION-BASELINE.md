@@ -247,11 +247,22 @@ own), and it is worth **3x** once there is a channel that carries it. That
 channel is a file the defining module writes and the calling module reads —
 the modern form of the module interface PL/I already had.
 
-The LTO leg of the measurement could not be taken on this host: in-process LTO
-executes LLVM's passes inside lld and needs a single LLVM instance, so the
-link crashes on a package-manager build that mixes static archives with shared
-libraries (`tests/driver/flto.sh` skips the link for that reason). The
-emission side works; only the link is unavailable here.
+The LTO leg of the measurement — what the caller gets when the optimizer can
+see the body — is now measurable on this host, because the build no longer
+mixes two LLVM instances (ADR-268): the in-process LTO link used to crash
+there. It measures the same as the published promise:
+
+| build | user time |
+|---|---|
+| split, nothing | ~0.19 s |
+| split, the promise published and consumed | ~0.05 s |
+| split, whole-program LTO (the body visible) | ~0.05 s |
+
+**The promise is worth exactly what whole-program visibility is worth** —
+about 3x on this witness — and it does not need LTO, a shared build, or the
+body: a file the defining module writes and the calling module reads is
+enough. That is the whole of WS-A1's value story, and it took a channel to
+realise it.
 
 
 ### 2.4 The suite's driver budget is wall-clock, and this host is shared
