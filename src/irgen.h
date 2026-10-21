@@ -60,6 +60,9 @@ public:
 
   // WS-A2 (ADR-267): the effects another module published for the external
   // procedures this unit calls, read from a published-effects file.
+  // The library-call remark (ADR-254): every built-in that hands a
+  // conversion to the library routine reports it.
+  void setRemarkLibraryCalls(bool on) { remarkLibraryCalls_ = on; }
   void setPublishedEffects(std::map<std::string, pli::PublishedEffect> e) {
     published_ = std::move(e);
   }
@@ -183,6 +186,12 @@ private:
   // default effects. The escape hatch that lets a benchmark measure what the
   // inference is worth.
   bool noMemoryEffects_ = false;
+  // The library-call remark (ADR-254): --remark-library-calls makes every
+  // library-path built-in report the conversion it hands to the routine.
+  bool remarkLibraryCalls_ = false;
+  // The source location of the statement or built-in call being lowered, for
+  // that remark.
+  SourceLoc curLoc_;
   pli::MemEffect effectOf(const HProc* p) const;
   // The control-flow verdict: can the procedure unwind, does it return?
   void applyControlAttrs(llvm::Function* f, const HProc* p);
@@ -690,6 +699,10 @@ private:
   // The lowering policy for `op` without recording the decision: used where
   // the caller has already asked for it (ADR-260).
   bool runtimePath(const std::string& op);
+  // The lowering decision for one call site (ADR-254): the path and the
+  // reason. The decision layer owns the policy (constraint C2); the
+  // --experimental-lowering override wins over it (constraint C3).
+  pli::InlineDecision inlineDecision(const std::string& op, const pli::CallSite& site);
   // True when a direct LLVM lowering exists for `op` (populated in P1+).
   bool hasLLVMLowering(const std::string& op);
   // Dispatch wrappers for the P0/P1 pilot operations. Each checks the

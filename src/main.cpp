@@ -122,6 +122,8 @@ static void usage() {
          "                   every call keeps LLVM's default effects\n"
          "  --warn-unset     warn when an AUTOMATIC variable may be used before\n"
          "                   it is set (ADR-266; off by default)\n"
+         "  --remark-library-calls  remark when a built-in hands a conversion to\n"
+         "                   the library routine (ADR-254; off by default)\n"
          "  --emit-effects=FILE  publish the effects this module's external\n"
          "                   procedures promise, for another module to use\n"
          "  --effects=FILE  use the effects another module published (ADR-267)\n"
@@ -351,7 +353,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool marchNative = false, const std::string& platformBc = "",
                        bool noMemoryEffects = false, bool warnUnset = false,
                        const std::string& effectsFile = "",
-                       const std::string& emitEffectsFile = "") {
+                       const std::string& emitEffectsFile = "",
+                       bool remarkLibraryCalls = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -416,6 +419,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
                 false, lowerMode, perOpOverrides, "", noMemoryEffects);
     irgen.setPublishedEffects(published);
+    irgen.setRemarkLibraryCalls(remarkLibraryCalls);
     irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -433,6 +437,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
                 false, lowerMode, perOpOverrides, "", noMemoryEffects);
     irgen.setPublishedEffects(published);
+    irgen.setRemarkLibraryCalls(remarkLibraryCalls);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -499,6 +504,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
               linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects);
     ipg.setPublishedEffects(published);
+    ipg.setRemarkLibraryCalls(remarkLibraryCalls);
     auto om = ipg.takeModule(hir);
     if (!om) {
       if (diags.ok())
@@ -601,6 +607,8 @@ int main(int argc, char** argv) {
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
   bool noMemoryEffects = false;
   bool warnUnset = false; // --warn-unset: WS-A5 "used before set" (ADR-266)
+  // --remark-library-calls: WS-K4, the library-call conversion remark (ADR-254).
+  bool remarkLibraryCalls = false;
   // WS-A2 (ADR-267): the published-effects file, in both directions.
   std::string effectsFile, emitEffectsFile;
   bool useBitcode = true, pgoGenerate = false;
@@ -633,6 +641,8 @@ int main(int argc, char** argv) {
       print_hir = true;
     else if (a == "--print-facts")
       print_facts = true;
+    else if (a == "--remark-library-calls")
+      remarkLibraryCalls = true;
     else if (a == "-fsyntax-only")
       syntaxOnly = true;
     else if (a == "--keep-ll")
@@ -1011,7 +1021,8 @@ int main(int argc, char** argv) {
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
-                    noMemoryEffects, warnUnset, effectsFile, emitEffectsFile))
+                    noMemoryEffects, warnUnset, effectsFile, emitEffectsFile,
+                    remarkLibraryCalls))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);

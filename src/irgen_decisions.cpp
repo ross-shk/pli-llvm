@@ -64,16 +64,21 @@ void FactStore::setEffects(const std::string& name, const std::string& effect,
 }
 
 // Record one built-in lowering decision, counting repeats of the same pair.
-void FactStore::recordBuiltin(const std::string& op, const std::string& path) {
+// The reason is why the path was taken (ADR-254): the facts dump and the
+// remark quote the same string.
+void FactStore::recordBuiltin(const std::string& op, const std::string& path,
+                              const std::string& reason) {
   if (cur_ < 0)
     return;
   ProcFacts& p = procs_[static_cast<size_t>(cur_)];
   for (auto& b : p.builtins)
     if (b.op == op && b.path == path) {
       b.count++;
+      if (b.reason.empty())
+        b.reason = reason;
       return;
     }
-  p.builtins.push_back(BuiltinFact{op, path, 1});
+  p.builtins.push_back(BuiltinFact{op, path, 1, reason});
 }
 
 // Record an automatic an ON unit can read, so it stays in storage at the
@@ -124,8 +129,12 @@ std::string FactStore::report() const {
         out += " willreturn";
       out += "\n";
     }
-    for (const auto& b : p.builtins)
-      out += "  builtin " + b.op + " -> " + b.path + " x" + std::to_string(b.count) + "\n";
+    for (const auto& b : p.builtins) {
+      out += "  builtin " + b.op + " -> " + b.path + " x" + std::to_string(b.count);
+      if (!b.reason.empty())
+        out += " (" + b.reason + ")";
+      out += "\n";
+    }
   }
   return out;
 }
@@ -695,7 +704,196 @@ Bits EffectWalker::run() {
   return b_;
 }
 
+// --- WS-K2: the inline-vs-library decision layer (ADR-254) -------------------
+//
+// The lowering policy: which operations have an LLVM expansion, and which
+// prefer it. The tables are seeded with IBM's (Tables 41/42/43,
+// mvs:25226-26045) and they live here, not in irgen.cpp — the plan's C2
+// says the decision logic does not live in the LLVM-aware component.
+//
+// The decision is per *call site*: the same operation can take different
+// paths at different sites (a constant alphabet becomes a membership table,
+// ADR-241; a constant picture folds to text, ADR-274). The call-site
+// predicates are pure — they inspect the site and return a verdict, and
+// emit no IR.
+
+// P0 policy: every operation defaults to runtime. P5 flips entries one wave at
+// a time as lowerings land. The table is operation-name -> prefers direct LLVM.
+// P5 flips: W1, W2, W3, W4 default is now LLVM (was runtime).
+const std::map<std::string, bool>& runtimeDefaultTable() {
+  static const std::map<std::string, bool> table = {
+      {"assign_char", true},
+      {"index", true},
+      {"assign_varying", true},
+      {"high", true},
+      {"low", true},
+      {"uppercase", true},
+      {"lowercase", true},
+      {"reverse", true},
+      {"center", true},
+      {"cmp_char", true},
+      // P5 flip: W2 default is now LLVM (was runtime)
+      {"verify", true},
+      {"verify_from", true},
+      {"search", true},
+      {"tally", true},
+      // P5 flip: W3 default is now LLVM (was runtime)
+      {"substr", true},
+      {"substr_assign", true},
+      {"substr_assign_varying", true},
+      {"repeat", true},
+      {"translate", true},
+      {"picture", true},
+      {"trim", true},
+      // P5 flip: W4 scalar math and conversions default to LLVM
+      {"fixed_of_float", true},
+      {"fixed_of_char", true},
+      {"char_of_fixed", true},
+      {"char_of_float", true},
+      // P5 flip: W4b math transcendentals default to LLVM (intrinsics vs pli_* musl-port)
+      {"pli_sqrt", true},
+      {"pli_exp", true},
+      {"pli_log", true},
+      {"pli_sin", true},
+      {"pli_cos", true},
+      {"pli_tan", true},
+      {"pli_log2", true},
+      {"pli_log10", true},
+      {"pli_atan", true},
+      {"pli_sinh", true},
+      {"pli_cosh", true},
+      {"pli_tanh", true},
+      {"pli_atanh", true},
+      {"pli_erf", true},
+      {"pli_erfc", true},
+      {"pli_sind", true},
+      {"pli_cosd", true},
+      {"pli_tand", true},
+      {"pli_atand", true},
+      {"pli_asin", true},
+      {"pli_acos", true},
+      {"pli_cbrt", true},
+      {"pli_atan2", true},
+      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
+      {"pli_rank", true},
+      {"pli_collate", true},
+      {"pli_isochar", true},
+      // WS-C: the shape peepholes (the generic lowering is the fallback)
+      {"concat_const", true},
+      {"bit_merge", true},
+  };
+  return table;
+}
+
+// --- end lowering policy ---
+
+// Operations with a direct LLVM lowering implemented (populated P1+).
+const std::set<std::string>& llvmLoweringOps() {
+  static const std::set<std::string> table = {
+      "assign_char",
+      "index",
+      "assign_varying",
+      "high",
+      "low",
+      "uppercase",
+      "lowercase",
+      "reverse",
+      "center",
+      "cmp_char",
+      // W2 search/scan operations
+      "verify",
+      "verify_from",
+      "search",
+      "tally",
+      // W3 clipping, padding, capacity operations
+      "substr",
+      "substr_assign",
+      "substr_assign_varying",
+      "repeat",
+      "translate",
+      "picture",
+      "trim",
+      // W4 scalar conversions
+      "fixed_of_float",
+      "fixed_of_char",
+      "char_of_fixed",
+      "char_of_float",
+      // W4b math transcendentals (intrinsics)
+      "pli_sqrt",
+      "pli_exp",
+      "pli_log",
+      "pli_sin",
+      "pli_cos",
+      "pli_tan",
+      "pli_log2",
+      "pli_log10",
+      "pli_atan",
+      "pli_sinh",
+      "pli_cosh",
+      "pli_tanh",
+      "pli_atanh",
+      "pli_erf",
+      "pli_erfc",
+      "pli_sind",
+      "pli_cosd",
+      "pli_tand",
+      "pli_atand",
+      "pli_asin",
+      "pli_acos",
+      "pli_cbrt",
+      "pli_atan2",
+      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
+      "pli_rank",
+      "pli_collate",
+      "pli_isochar",
+      // WS-C: the shape peepholes. Their "runtime" path is the generic
+      // lowering — the concatenation's temporary buffer and the two separate
+      // bit tests — so the differential oracle can compare the two shapes.
+      "concat_const",
+      "bit_merge",
+  };
+  return table;
+}
+
 } // namespace
+
+// The per-operation policy (ADR-254).
+bool hasLLVMLowering(const std::string& op) { return llvmLoweringOps().count(op) > 0; }
+
+// True when the operation prefers the compiler's own expansion over the
+// library call.
+bool prefersLLVMLowering(const std::string& op) {
+  auto dit = runtimeDefaultTable().find(op);
+  return dit != runtimeDefaultTable().end() && dit->second;
+}
+
+// The call-site decision (ADR-254). Pure: it inspects the call site and
+// returns a verdict; it emits no IR.
+InlineDecision decideInline(const std::string& op, const CallSite& site) {
+  InlineDecision d;
+  if (!hasLLVMLowering(op)) {
+    d.path = InlinePath::Library;
+    d.reason = "no inline expansion for this operation";
+    return d;
+  }
+  // A constant argument that the operation can fold into a compile-time
+  // table wins over both paths (ADR-241, ADR-273).
+  if (site.constantArg && op != "picture") {
+    d.path = InlinePath::ConstantTable;
+    d.reason = std::string("a constant ") + (site.what ? site.what : "argument") +
+               " becomes a compile-time table";
+    return d;
+  }
+  if (prefersLLVMLowering(op)) {
+    d.path = InlinePath::LLVM;
+    d.reason = "the inline expansion is the default for this operation";
+    return d;
+  }
+  d.path = InlinePath::Library;
+  d.reason = "the library call is the default for this operation";
+  return d;
+}
+
 
 // The text of a REPEAT of a constant string a constant number of times
 // (ADR-241). The decision lives here, outside irgen.cpp (the plan's C2), so

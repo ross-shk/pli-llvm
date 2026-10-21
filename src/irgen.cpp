@@ -758,145 +758,7 @@ void IRGen::applyPublishedEffect(llvm::Function* f, const Symbol* sym) {
 
 // --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) ---
 
-// P0 policy: every operation defaults to runtime. P5 flips entries one wave at
-// a time as lowerings land. The table is operation-name -> prefers direct LLVM.
-// P5 flips: W1, W2, W3, W4 default is now LLVM (was runtime).
-static const std::map<std::string, bool>& kRuntimeDefault() {
-  static const std::map<std::string, bool> table = {
-      {"assign_char", true},
-      {"index", true},
-      {"assign_varying", true},
-      {"high", true},
-      {"low", true},
-      {"uppercase", true},
-      {"lowercase", true},
-      {"reverse", true},
-      {"center", true},
-      {"cmp_char", true},
-      // P5 flip: W2 default is now LLVM (was runtime)
-      {"verify", true},
-      {"verify_from", true},
-      {"search", true},
-      {"tally", true},
-      // P5 flip: W3 default is now LLVM (was runtime)
-      {"substr", true},
-      {"substr_assign", true},
-      {"substr_assign_varying", true},
-      {"repeat", true},
-      {"translate", true},
-      {"picture", true},
-      {"trim", true},
-      // P5 flip: W4 scalar math and conversions default to LLVM
-      {"fixed_of_float", true},
-      {"fixed_of_char", true},
-      {"char_of_fixed", true},
-      {"char_of_float", true},
-      // P5 flip: W4b math transcendentals default to LLVM (intrinsics vs pli_* musl-port)
-      {"pli_sqrt", true},
-      {"pli_exp", true},
-      {"pli_log", true},
-      {"pli_sin", true},
-      {"pli_cos", true},
-      {"pli_tan", true},
-      {"pli_log2", true},
-      {"pli_log10", true},
-      {"pli_atan", true},
-      {"pli_sinh", true},
-      {"pli_cosh", true},
-      {"pli_tanh", true},
-      {"pli_atanh", true},
-      {"pli_erf", true},
-      {"pli_erfc", true},
-      {"pli_sind", true},
-      {"pli_cosd", true},
-      {"pli_tand", true},
-      {"pli_atand", true},
-      {"pli_asin", true},
-      {"pli_acos", true},
-      {"pli_cbrt", true},
-      {"pli_atan2", true},
-      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
-      {"pli_rank", true},
-      {"pli_collate", true},
-      {"pli_isochar", true},
-      // WS-C: the shape peepholes (the generic lowering is the fallback)
-      {"concat_const", true},
-      {"bit_merge", true},
-  };
-  return table;
-}
-
-// --- end lowering policy ---
-
-// Operations with a direct LLVM lowering implemented (populated P1+).
-static const std::set<std::string>& kLLVMLowerings() {
-  static const std::set<std::string> table = {
-      "assign_char",
-      "index",
-      "assign_varying",
-      "high",
-      "low",
-      "uppercase",
-      "lowercase",
-      "reverse",
-      "center",
-      "cmp_char",
-      // W2 search/scan operations
-      "verify",
-      "verify_from",
-      "search",
-      "tally",
-      // W3 clipping, padding, capacity operations
-      "substr",
-      "substr_assign",
-      "substr_assign_varying",
-      "repeat",
-      "translate",
-      "picture",
-      "trim",
-      // W4 scalar conversions
-      "fixed_of_float",
-      "fixed_of_char",
-      "char_of_fixed",
-      "char_of_float",
-      // W4b math transcendentals (intrinsics)
-      "pli_sqrt",
-      "pli_exp",
-      "pli_log",
-      "pli_sin",
-      "pli_cos",
-      "pli_tan",
-      "pli_log2",
-      "pli_log10",
-      "pli_atan",
-      "pli_sinh",
-      "pli_cosh",
-      "pli_tanh",
-      "pli_atanh",
-      "pli_erf",
-      "pli_erfc",
-      "pli_sind",
-      "pli_cosd",
-      "pli_tand",
-      "pli_atand",
-      "pli_asin",
-      "pli_acos",
-      "pli_cbrt",
-      "pli_atan2",
-      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
-      "pli_rank",
-      "pli_collate",
-      "pli_isochar",
-      // WS-C: the shape peepholes. Their "runtime" path is the generic
-      // lowering — the concatenation's temporary buffer and the two separate
-      // bit tests — so the differential oracle can compare the two shapes.
-      "concat_const",
-      "bit_merge",
-  };
-  return table;
-}
-
-bool IRGen::hasLLVMLowering(const std::string& op) { return kLLVMLowerings().count(op) > 0; }
+bool IRGen::hasLLVMLowering(const std::string& op) { return pli::hasLLVMLowering(op); }
 
 // The lowering policy as --print-facts prints it: the base mode, then any
 // per-operation override (ADR-260).
@@ -917,31 +779,58 @@ static std::string loweringModeName(LowerMode mode,
   return out;
 }
 
-bool IRGen::runtimePath(const std::string& op) {
+// The lowering decision for one call site (ADR-254): the path, and the
+// reason. The user's --experimental-lowering override wins — it is the
+// differential oracle (constraint C3) — otherwise the decision layer's
+// policy decides (constraint C2).
+pli::InlineDecision IRGen::inlineDecision(const std::string& op, const pli::CallSite& site) {
+  pli::InlineDecision d = pli::decideInline(op, site);
   LowerMode mode = lowerMode_;
   auto oit = perOpOverrides_.find(op);
   if (oit != perOpOverrides_.end())
     mode = oit->second;
   switch (mode) {
   case LowerMode::Runtime:
-    return true;
+    d.path = pli::InlinePath::Library;
+    d.reason = "the lowering mode forces the library path";
+    break;
   case LowerMode::MLIR:
     // MLIR not compiled in this build (P2+ gates it). Fall back to runtime.
-    return true;
+    d.path = pli::InlinePath::Library;
+    d.reason = "the lowering mode is MLIR, which this build does not have";
+    break;
   case LowerMode::LLVM:
-    return !hasLLVMLowering(op);
-  case LowerMode::Auto: {
-    auto dit = kRuntimeDefault().find(op);
-    return !(dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op));
+    // A compile-time table is an inline path, so the forced mode keeps it.
+    if (d.path != pli::InlinePath::ConstantTable) {
+      if (pli::hasLLVMLowering(op)) {
+        d.path = pli::InlinePath::LLVM;
+        d.reason = "the lowering mode forces the inline path";
+      } else {
+        d.path = pli::InlinePath::Library;
+        d.reason = "no inline expansion for this operation";
+      }
+    }
+    break;
+  case LowerMode::Auto:
+    break;
   }
-  }
-  return true;
+  return d;
+}
+
+bool IRGen::runtimePath(const std::string& op) {
+  return inlineDecision(op, {}).library();
 }
 
 bool IRGen::useRuntimeCall(const std::string& op) {
-  bool useRuntime = runtimePath(op);
-  // Record the decision so --print-facts can show it (ADR-260).
-  facts_.recordBuiltin(op, useRuntime ? "runtime" : "llvm");
+  pli::InlineDecision d = inlineDecision(op, {});
+  bool useRuntime = d.library();
+  // Record the decision so --print-facts can show it (ADR-260), with the
+  // reason the decision layer gave (ADR-254).
+  facts_.recordBuiltin(op, useRuntime ? "runtime" : "llvm", d.reason);
+  // The library-call remark (ADR-254): IBM flags every conversion a library
+  // routine does (zos:23609-23610), so the user can find the hot spots.
+  if (useRuntime && remarkLibraryCalls_)
+    d_.remark(curLoc_, "the library routine does this conversion: " + op + " (" + d.reason + ")");
   return useRuntime;
 }
 
@@ -5448,6 +5337,9 @@ void IRGen::emitSignal(HStmt* s) {
 // statements
 // ---------------------------------------------------------------------------
 void IRGen::emitStmt(HStmt* s) {
+  // The current source location, for a remark raised inside a built-in
+  // lowering (ADR-254).
+  curLoc_ = s->loc;
   if (!s)
     return;
   if (!s->labels.empty()) {
@@ -7533,8 +7425,13 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
     if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
       if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
         emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
-      else
+      else {
+        // The library routine does the conversion (ADR-254): the scaled
+        // decimal becomes the runtime's fixed-point form.
+        if (remarkLibraryCalls_)
+          d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
         deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
+      }
     } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
       emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
     } else {
@@ -7667,8 +7564,12 @@ void IRGen::emitPut(HStmt* s) {
         if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
           if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
             emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
-          else
+          else {
+            // The library routine does the conversion (ADR-254).
+            if (remarkLibraryCalls_)
+              d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
             deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
+          }
         } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
           emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
         } else {
@@ -8122,7 +8023,12 @@ void IRGen::emitPutEditItems(HStmt* s) {
           }
         }
       }
-      facts_.recordBuiltin("picture", "runtime");
+      facts_.recordBuiltin("picture", "runtime",
+                           "the picture conversion needs the library routine");
+      // The library-call remark (ADR-254): the picture conversion is done by
+      // the library routine, so the user is told where it happens.
+      if (remarkLibraryCalls_)
+        d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
       // sign derived from the value: -1 if negative, +1 if non-negative.
       llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
       llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
@@ -11403,6 +11309,9 @@ llvm::Value* IRGen::emitBinaryMath(const std::string& plifn, const std::string& 
 // Extracted from the emitExpr Call case so each built-in is a
 // self-contained block.
 bool IRGen::emitBuiltin(HExpr* e, Val& result) {
+  // The call site's location, for a remark raised inside this lowering
+  // (ADR-254).
+  curLoc_ = e->loc;
   // Names matching none of these are user function procedures.
   Val v;
   if (e->name == "BYADDR") {

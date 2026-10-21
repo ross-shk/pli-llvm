@@ -95,6 +95,14 @@ void Diags::warn(SourceLoc loc, const std::string& msg, const std::string& rule,
   emit("warning", loc, msg, rule, replace);
 }
 
+// A remark: printed, but not counted — it is not a warning, and the
+// compiler's exit code does not depend on it (ADR-254).
+void Diags::remark(SourceLoc loc, const std::string& msg, const std::string& rule) {
+  if (muted())
+    return;
+  emit("remark", loc, msg, rule, "");
+}
+
 void Diags::note(SourceLoc loc, const std::string& msg) {
   if (muted())
     return;

@@ -27,6 +27,31 @@ struct BuiltinFact {
   std::string op;   // "assign_char"
   std::string path; // "llvm" | "runtime"
   unsigned count = 0;
+  std::string reason; // why the path was taken (ADR-254)
+};
+
+// Which path a built-in call site takes (ADR-254).
+enum class InlinePath {
+  Library,       // the pli_* runtime call
+  LLVM,          // the compiler's own LLVM expansion
+  ConstantTable, // a compile-time table built from a constant argument
+};
+
+// The decision for one built-in call site (ADR-254): the path, and the
+// reason — the same string --print-facts prints and the remark quotes.
+struct InlineDecision {
+  InlinePath path = InlinePath::Library;
+  std::string reason;
+
+  // True when the call goes to the library routine.
+  bool library() const { return path == InlinePath::Library; }
+};
+
+// What the call site looks like to the decision (ADR-254): the shape facts
+// the predicates need. The default is the plain shape.
+struct CallSite {
+  bool constantArg = false;    // an argument is a compile-time constant
+  const char* what = nullptr;  // what the constant is ("alphabet", "picture")
 };
 
 // The facts the compiler computed for one procedure.
@@ -42,6 +67,18 @@ struct ProcFacts {
   std::vector<std::string> pinned;
 };
 
+// --- WS-K2: the inline-vs-library decision (ADR-254) ------------------------
+
+// The per-operation policy: which operations have an LLVM expansion, and
+// which prefer it. The tables are seeded with IBM's (Tables 41/42/43,
+// mvs:25226-26045).
+bool hasLLVMLowering(const std::string& op);
+bool prefersLLVMLowering(const std::string& op);
+
+// The call-site decision (ADR-254). Pure: it inspects the call site and
+// returns a verdict; it emits no IR.
+InlineDecision decideInline(const std::string& op, const CallSite& site);
+
 // The compiler's fact store: filled while lowering, printed by --print-facts.
 // A fact is a decision the compiler already made, not a new decision — the
 // decisions themselves stay where the plan put them.
@@ -52,7 +89,8 @@ public:
   void setCheck(const std::string& kind, bool on);
   // Per-procedure facts: beginProc opens a procedure, recordBuiltin adds to it.
   void beginProc(const std::string& name);
-  void recordBuiltin(const std::string& op, const std::string& path);
+  void recordBuiltin(const std::string& op, const std::string& path,
+                     const std::string& reason = "");
   // An automatic an ON unit can read: it is pinned in storage (ADR-253).
   void recordPinned(const std::string& name);
   // The verdict for a procedure: memory effect, unwinding, return (ADR-264).

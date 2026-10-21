@@ -33,6 +33,9 @@ public:
   void warn(SourceLoc loc, const std::string& msg, const std::string& rule = "",
             const std::string& replace = "");
   void note(SourceLoc loc, const std::string& msg);
+  // A remark: informational, off unless the user asks for it, and not
+  // counted as a warning (ADR-254).
+  void remark(SourceLoc loc, const std::string& msg, const std::string& rule = "");
 
   int errorCount() const { return nerr_; }
   int warnCount() const { return nwarn_; }

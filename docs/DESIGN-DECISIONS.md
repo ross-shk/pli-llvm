@@ -9002,3 +9002,72 @@ code path is added. What the plan asked for and the tree did not have is the
 * A user-facing `ORDER`/`REORDER` attribute remains out of scope: it is a
   language extension, and the plan's §21 rejects it for this plan. The
   conservative behaviour is the default, and the analysis is now visible.
+
+## ADR-254 — Inline-vs-library decisions are per-call-site predicates, and the library-call conversions are flagged
+
+**Context.** The plan's WS-K2 asks for IBM's per-call-site decision layer
+(Tables 41/42/43, `mvs:25226-26045`) instead of the repo's per-operation
+boolean, and its WS-K4 asks for the cheapest performance diagnostic IBM has:
+*"the compiler generates a message whenever a conversion is done by a library
+routine"* (`zos:23609-23610`, `zos:2085-2086`).
+
+The decision is worth a great deal. The pair `string_search:inline->library`
+compiles the same program on both paths: the inline expansion (memchr +
+memcmp) takes **110.1 ms** and the library routine (`pli_index`) takes
+**2482.1 ms** — **22.55x**.
+
+**What the repo had.** The per-operation tables (`kRuntimeDefault`,
+`kLLVMLowerings`) lived in `src/irgen.cpp` — the plan's constraint **C2** says
+the decision logic does not live in the LLVM-aware component ✗. Two
+per-call-site refinements had already landed with the folding branch (a
+constant alphabet becomes a membership table, ADR-241; a constant picture
+folds to text, ADR-274), but their *decisions* were also made in
+`irgen.cpp` ✗.
+
+**Decision.**
+
+1. **The decision layer owns the policy.** The per-operation tables and the
+   per-call-site predicates move to `src/irgen_decisions.cpp` — the same
+   constraint C2 that put the membership table there ✓. The lowering asks
+   the layer; it does not decide.
+2. **The decision is one struct**, so the facts dump and the remark quote the
+   same words:
+
+   ```cpp
+   struct InlineDecision {
+     InlinePath path;    // Library | LLVM | ConstantTable
+     std::string reason; // why
+   };
+   ```
+
+   The path is decided *per call site*: a constant alphabet becomes a
+   compile-time table, and everything else follows the per-operation policy.
+3. **The user's override still wins.** `--experimental-lowering=…` overrides
+   the layer's verdict — it is the differential oracle (constraint C3) ✓.
+4. **The remark** is a new diagnostic severity, off unless asked for:
+
+   ```
+   pli: remark: the library routine does this conversion: the picture conversion
+   ```
+
+   It fires where the compiler hands a conversion to a library routine — the
+   picture conversion (ADR-274's runtime interpreter) and the list-directed
+   output of a scaled decimal. The **same** `InlineDecision` produces the
+   remark and the facts line, so they cannot disagree.
+
+**Consequences.**
+
+* The C2 violation is fixed: the tables and the predicates are in the
+  decision layer ✓, and the lowering consults them.
+* `--print-facts` now says *why* a path was taken, not only which:
+  `builtin pli_sin -> llvm x1 (the inline expansion is the default for this
+  operation)` ✓.
+* The remark is quiet by default — IBM's diagnostic is a remark too — and
+  `--remark-library-calls` turns it on ✓. It does not change the program's
+  behaviour ✓ (`tests/driver/remarks.sh` checks that the output is the same
+  with and without it ✓).
+* The per-call-site refinement for the *other* built-ins is still open: the
+  framework and two refinements are in place, and each remaining operation
+  needs its own predicate and its own witness. The measurement that would
+  promote one: a call site where the per-operation policy picks the wrong
+  path.
