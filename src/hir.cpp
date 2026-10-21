@@ -51,9 +51,9 @@ HExprP convIf(HExprP e, const Type& dst) {
   return c;
 }
 
-HExprP lowerCallExpr(const Expr* e);
-HExprP lowerSubscriptExpr(const Expr* e);
-HExprP lowerExpr(const Expr* e);
+HExprP lowerCallExpr(const Expr* e, bool substValue);
+HExprP lowerSubscriptExpr(const Expr* e, bool substValue);
+HExprP lowerExpr(const Expr* e, bool substValue = true);
 
 // Map an AST expression kind to its HIR counterpart. The two enums are not
 // in the same order (HIR has the HIR-only `Convert` kind), so a positional
@@ -90,9 +90,42 @@ static HExpr::Kind mapKind(Expr::Kind k) {
   return HExpr::IntLit;
 }
 
+// The value a VALUE constant (ADR-108) stands for, as an HIR literal.
+//
+// IBM requires the same object code for a use of a VALUE constant and a use
+// of the literal it stands for (zos:23492-23505), so a VALUE constant is
+// lowered to its value at every use that cannot write to it (ADR-241).
+//
+// The substitution is only exact when the constant holds *exactly* the
+// literal: a character or bit string of the declared length, so the stored
+// value is the literal's text with no padding or truncation. A
+// `CHAR(20) VALUE('abc')` holds 'abc' blank-padded to 20 characters, which
+// is not the literal 'abc', so it keeps its storage.
+HExprP lowerValueConst(const Expr* e) {
+  Symbol* sym = e->sym;
+  if (!sym || !sym->isValue || !sym->initExpr)
+    return nullptr;
+  const Expr* init = sym->initExpr;
+  if (init->kind != Expr::CharLit && init->kind != Expr::BitLit)
+    return nullptr;
+  const bool isChar = init->kind == Expr::CharLit;
+  if (isChar ? !sym->ty.isChar() : !sym->ty.isBit())
+    return nullptr;
+  if (sym->ty.varying || sym->ty.varyingz)
+    return nullptr;
+  if (sym->ty.len != (int)init->sval.size())
+    return nullptr;
+  auto h = std::make_unique<HExpr>();
+  h->kind = isChar ? HExpr::CharLit : HExpr::BitLit;
+  h->loc = e->loc;
+  h->ty = sym->ty;
+  h->sval = init->sval;
+  return h;
+}
+
 // Mirror an expression node without re-dispatching the Call case (Call is
 // handled by lowerCallExpr, which builds on this).
-HExprP lowerExprBase(const Expr* e) {
+HExprP lowerExprBase(const Expr* e, bool substValue) {
   if (!e)
     return nullptr;
   auto h = std::make_unique<HExpr>();
@@ -109,30 +142,36 @@ HExprP lowerExprBase(const Expr* e) {
   h->path = e->path;
   h->memberPath = e->memberPath;
   h->sym = e->sym;
-  h->locPtr = lowerExpr(e->locPtr.get());
+  h->locPtr = lowerExpr(e->locPtr.get(), substValue);
   h->op = e->op;
-  h->a = lowerExpr(e->a.get());
-  h->b = lowerExpr(e->b.get());
+  h->a = lowerExpr(e->a.get(), substValue);
+  h->b = lowerExpr(e->b.get(), substValue);
   for (const auto& a : e->args)
-    h->args.push_back(lowerExpr(a.get()));
+    h->args.push_back(lowerExpr(a.get(), substValue));
   h->isLabel = e->isLabel;
   return h;
 }
 
-HExprP lowerExpr(const Expr* e) {
+HExprP lowerExpr(const Expr* e, bool substValue) {
   if (!e)
     return nullptr;
+  // A VALUE constant is a compile-time constant: its use lowers to the value
+  // it stands for, so a use of the constant and a use of the literal produce
+  // the same code (ADR-241).
+  if (substValue && e->kind == Expr::VarRef)
+    if (HExprP c = lowerValueConst(e))
+      return c;
   if (e->kind == Expr::Call)
-    return lowerCallExpr(e);
+    return lowerCallExpr(e, substValue);
   if (e->kind == Expr::Subscript)
-    return lowerSubscriptExpr(e);
-  return lowerExprBase(e);
+    return lowerSubscriptExpr(e, substValue);
+  return lowerExprBase(e, substValue);
 }
 
 // Mirror a subscripted array reference A(i) (rule 126). The base symbol and
 // element type come from sema; lowerExprBase already lowers the index args.
-HExprP lowerSubscriptExpr(const Expr* e) {
-  auto h = lowerExprBase(e);
+HExprP lowerSubscriptExpr(const Expr* e, bool substValue) {
+  auto h = lowerExprBase(e, substValue);
   h->kind = HExpr::Subscript;
   return h;
 }
@@ -140,8 +179,13 @@ HExprP lowerSubscriptExpr(const Expr* e) {
 // Lower a function-call expression, wrapping each argument that needs an
 // implicit conversion to its parameter type. Built-ins get their operand
 // conversions to the result/common type, mirroring IRGen's `convert` calls.
-HExprP lowerCallExpr(const Expr* e) {
-  auto h = lowerExprBase(e);
+HExprP lowerCallExpr(const Expr* e, bool substValue) {
+  // A built-in reads its arguments by value; a procedure parameter is by
+  // reference unless the ENTRY declares BYVALUE. A by-reference argument can
+  // be written by the callee, so a VALUE constant passed that way keeps its
+  // storage instead of being replaced by its value.
+  bool byValue = !e->sym || e->sym->entryByValue;
+  auto h = lowerExprBase(e, substValue && byValue);
   HExpr* he = h.get();
   const std::string& n = e->name;
 
@@ -167,8 +211,11 @@ HExprP lowerCallExpr(const Expr* e) {
     if (!he->args.empty())
       he->args[0] = convIf(std::move(he->args[0]), e->ty);
   } else if (n == "ROUND") {
+    // The argument is converted to the result's type: a FLOAT result converts
+    // it to FLOAT (the library rounding), while a FIXED DECIMAL result keeps
+    // the argument exact (ADR-276).
     if (!he->args.empty())
-      he->args[0] = convIf(std::move(he->args[0]), Type::flt(6));
+      he->args[0] = convIf(std::move(he->args[0]), e->ty);
   } else if (e->sym && e->sym->proc) {
     // A user-defined function call: coerce each argument to its parameter type.
     for (size_t i = 0; i < he->args.size() && i < e->sym->proc->paramSyms.size(); ++i)

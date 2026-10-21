@@ -6892,6 +6892,238 @@ inside the statement's lock, so a task's record does not land in another task's
 file — but a task that *selects* a file while another task's statement is open
 still changes the destination for the statements that follow.
 
+## ADR-239 — A constant subscript is already one constant GEP displacement
+
+**Context.** The optimization plan's WS-B1 asks the compiler to fold a constant
+subscript, a member displacement and an array's lower bound into a single
+constant displacement, so that a reference is addressable by one base plus one
+constant offset. MULTICS did the arithmetic in the front end
+(`bound_pl1_.2.s.archive/simplify_offset.pl1:110-122`, the documented
+transformation set `c`, `exp + c`, `exp - c`, `c + exp`, `c1 * c2`,
+`c1 * (exp + c2)`, …) and kept a unit-conversion table beside it
+(`simplify_offset.pl1:41`: 36, 1, 4.5, 9, 18, 36 units per word).
+
+PL/I makes this arithmetic non-trivial where C does not: an array may have *any*
+lower bound (`A(-3:7)`), an axis has a stride, and a multi-dimensional array's
+element is addressed by a row-major offset. So the displacement is
+`(index - lower bound) * stride` summed over the axes — not the index.
+
+**Decision.** The port is *closed without a code change*: the property the plan
+asks for is already delivered, by LLVM's own constant folding, and the plan's
+own gate anticipated this ("Witness: an array loop with a constant lower bound.
+If LLVM's SCEV already collapses the induction variable, close without a
+diff"). The measurement, taken against the compiler at this commit:
+
+| PL/I shape | displacement | emitted IR |
+|---|---|---|
+| `a(3)`, `a(0:9)` | `(3-0) * 1` | `getelementptr inbounds [10 x i32], ptr %A.addr, i64 0, i64 3` |
+| `b(-1)`, `b(-3:7)` | `(-1+3) * 1` | `getelementptr inbounds [11 x i32], ptr %B.addr, i64 0, i64 2` |
+| `c(2,3)`, `c(0:9,0:9)` | `2*10 + 3` | `getelementptr inbounds [100 x i32], ptr %C.addr, i64 0, i64 23` |
+| `st.m(2)`, member array | member GEP + `(2-0)` | `getelementptr inbounds [4 x i32], ptr %mem, i64 0, i64 2` |
+| `arr(2).x`, array of structures | `(2-1) * 1` | `getelementptr inbounds [3 x { i32 }], ptr %ARR.addr, i64 0, i64 1` |
+
+`IRGen::arrayElementAddr` computes the offset as `Σ (i_k - lb_k) * stride_k`
+(`src/irgen.cpp:8294-8306`) and emits it as the GEP displacement; with a
+constant index and constant bounds, every term is a constant, and LLVM folds
+the whole expression. The compile-time half of the plan's rule 1 — a constant
+subscript that is out of range is *diagnosed*, not trapped — is already there
+too: `Sema::checkSubscriptBoundsDims` (`src/sema.cpp:4045-4062`) rejects a
+constant out-of-range subscript at compile time under rule (126), so the
+SUBSCRIPTRANGE check for such a reference is statically dead.
+
+**Consequences.** Nothing in the compiler changes, and the plan's ADR-239 is
+recorded as *porting nothing*, which §19 of the plan explicitly allows. What
+is added is the **regression test** `tests/ir/const_offset.pli`, whose
+`.check` pins the three displacements above: the property is now guarded, so a
+future change to the offset computation that broke it would fail the suite
+rather than pass silently.
+
+The one case the plan mentions that is *not* folded is a **dynamic** lower
+bound, where `(i - L)` cannot be a constant. That case is left alone: the
+emitted code is already affine in the induction variable, which is what the
+plan says the fold is for ("what makes an array loop affine, which is the
+precondition for LLVM's vectorizer and SCEV").
+
+**Rejected.** *Folding the subscript in sema into a new `HExpr` field.* It
+would duplicate what LLVM already computes, add a field to the HIR that the
+IRGen would then have to honour, and — because the compiler would then own
+the displacement arithmetic — make the *runtime* path and the *constant* path
+two implementations of the same rule, with the risk that they disagree. The
+plan's "close without a diff" is the cheaper and safer outcome.
+*Folding only the lower bound.* `sub i64 %i, 0` is folded by instcombine and
+`sub i64 %i, -3` becomes `add i64 %i, 3`; both are already affine.
+
+
+## ADR-240 — Type-directed constant folding for `FIXED DECIMAL`
+
+**Context.** A PL/I `FIXED DECIMAL(p,q)` stores an exact decimal: an integer
+scaled by `10^q`, with `p` significant digits in the type. Arithmetic on it is
+therefore *typed* — the scale and precision of the operands decide the scale
+and precision of the result — and the compiler must not fold an expression
+whose folding would change an observable condition.
+
+MULTICS folded exactly three operators of constant operands, and only for
+`FIXED BINARY` of scale 0 (`bound_pl1_.2.s.archive/simplify_expression.pl1:28-53`:
+"if `s->symbol.constant` … `if `s->symbol.scale = 0` …" and "if
+`tree->operator.op_code^=add & …^=sub & …^=mult` then return"), because a
+`FIXED DECIMAL` has a scale and a precision that participate in the result
+type, so folding it needs type-directed arithmetic — which MULTICS did
+elsewhere (`decimal_op.pl1:156-190`). IBM folds `A+B` and `A*B` of constant
+operands (`mvs:24317-24319`).
+
+The repo had the *representation* — an exact `DEC` literal with `decScale` and
+`decPrec` (`src/hir.h:53-54`) and exact decimal arithmetic (ADR-189/190/191) —
+but no *folder*. Two consequences:
+
+1. A constant expression was not a constant. `DECLARE a FIXED DECIMAL(9,2)
+   INITIAL(99.99 + 0.01)` was rejected with *"INITIAL requires a constant in
+   this stage"* (rule (26)), because `Sema::foldInitialConstant` accepted only
+   a bare literal.
+2. An integer literal was not rescaled to the declared type's scale.
+   `DECLARE a FIXED DECIMAL(5,2) INITIAL(5)` stored `0.05`, not `5.00`: the
+   INITIAL path read the literal's raw value while the assignment path (which
+   converts to the target type) was already correct.
+
+**Decision.** A typed constant folder, `src/constfold.{h,cpp}`, computes a
+constant numeric expression exactly and folds it.
+
+*What folds.* `+`, `-` and `*` of constant operands — the three MULTICS folded,
+and the two IBM folds — plus a leading unary sign. A division never folds: PL/I
+raises ZERODIVIDE when the divisor is zero, and folding would remove that
+condition. This is the plan's rule 2 and MULTICS's reason for it.
+
+*Type-directed.* The value is computed at the scale the operands imply — the
+larger of the operand scales for `+` and `-`, the sum of them for `*`
+(ADR-006) — which is exactly the scale of the expression's result type, so the
+folded constant is the value the runtime path produces. The rescale rounds
+half away from zero, the rule the runtime rescale uses
+(`src/irgen.cpp:9511`, Y33-6003).
+
+*Never removes a condition.* A value that does not fit the result type's
+precision, or that does not fit its storage width, is not folded: the runtime
+path stays, and the SIZE condition it would raise still fires. The same guard
+covers the operands, because the runtime path converts each operand to the
+common type and traps when one does not fit.
+
+*Where it is used.* `Sema::typeExpr` folds a constant `+`, `-` or `*` in any
+expression; `Sema::foldInitialConstant` accepts a constant *expression* for
+`INITIAL` and `VALUE`, and expresses an integer literal as a `DEC` literal
+when the target type carries a scale, so the declared scale is applied.
+
+**Consequences.** `INITIAL` and `VALUE` now accept constant expressions, which
+is what PL/I rule (26) asks for and what the plan's B2 was for. The
+integer-literal scale bug is fixed: `INITIAL(5)` into `FIXED DECIMAL(5,2)`
+now stores `5.00`. The fold of a general expression is *IR-neutral* — the
+runtime path computed the same value with the same width, and LLVM folded it
+identically — so the change adds a capability, not a new code shape.
+
+The result type's *precision* is deliberately **not** the plan's rule
+(`max(p1-q1, p2-q2) + max(q1,q2) + 1` for `+`/`-`, `p1+p2` for `*`). The
+repo's `arithResultType` uses a precision as a *storage hint* (15 or 31), not
+as a declared precision, and the plan's rule would narrow an intermediate below
+the width the runtime path uses — `99999999.99 + 0.01` has a plan precision of
+9, whose raw value overflows the i32 the repo would allocate for it. The
+scale rule, which is the part that decides the *value*, is adopted as is.
+
+`tests/core/decimal_const.pli` is the gate: it compares each folded value with
+the runtime computation of the same expression, checks the scale of the stored
+value, checks the integer-literal rescale, and — the negative test the plan
+asks for — requires `1.0 / 0.0` still to raise ZERODIVIDE, which fails if the
+division is ever folded.
+
+
+## ADR-241 — Constant-argument built-in lowering: search tables, constant `REPEAT`, and `VALUE`-constant equivalence
+
+**Context.** The plan's WS-B3 asks for the *constant* case of the string
+built-ins. IBM states the conditions per call site, not per built-in: `VERIFY`
+takes the first argument fixed-length and the second constant, `TRANSLATE` the
+first fixed-length and the second and third constant, `REPEAT` the second
+argument constant (`mvs:26023-26045`), and a `VALUE` constant and the literal
+it stands for must produce *identical object code* (`zos:23492-23505`).
+MULTICS's implementation of the same idea is a compile-time translate table for
+`VERIFY`/`SEARCH` with a constant third argument
+(`bound_pl1_.4.s.archive/compile_exp.pl1:1348-1380`) and the recognition of
+`REPEAT(x,'c')` so the size is known at compile time (`compile_exp.pl1:482-485`).
+
+The repo lowered `VERIFY` and `SEARCH` to a byte-at-a-time double loop — an
+`O(n·m)` scan — and `REPEAT` to a loop that copies one character per
+iteration. It also kept a `VALUE` constant's *storage*: `verify(s, v)` read
+the constant's alloca while `verify(s, '0123456789')` read a global, so the
+two forms of the same value produced different code.
+
+**Decision.** Three changes, all in the lowering of a *constant* argument.
+
+*One — the membership table.* `VERIFY` and `SEARCH` whose alphabet argument is
+a character literal lower to a 256-entry table: entry `c` is 1 when the
+character code `c` is in the alphabet. The scan of the alphabet becomes one
+lookup per character, so the cost is `O(n)` rather than `O(n·m)`. The table is
+a module-level constant named `pli_search_table`, one per distinct alphabet
+and reused by every call site that uses it — the same shape MULTICS built at
+compile time.
+
+*Two — the constant `REPEAT`.* A constant string repeated a constant number of
+times is itself a constant string: the text is built at compile time, so the
+result is a constant instead of a runtime loop with a buffer. This covers the
+plan's case (a constant character, which the plan proposed to lower to
+`llvm.memset`) and more: a constant fold needs no memset at all, because
+there is no run-time copy to make.
+
+*Three — the `VALUE`-constant equivalence.* A use of a `VALUE` constant lowers
+to the value it stands for, so a use of the constant and a use of the literal
+produce the same code. The substitution is only made when the constant holds
+*exactly* the literal: a character or bit string of the declared length, so
+the stored value is the literal's text with no padding. A `CHAR(20)
+VALUE('abc')` holds 'abc' blank-padded to twenty characters, which is not the
+literal 'abc', so it keeps its storage.
+
+**Consequences.** `verify(s, v)` and `verify(s, '0123456789')` now produce
+identical IR — measured, not asserted: the two lowerings are byte-identical
+once the value numbering is normalised away. A `VERIFY` against a constant
+alphabet is `O(n)` instead of `O(n·m)`, and a constant `REPEAT` is a constant
+instead of a loop.
+
+Two guards keep the plan's architectural constraints intact.
+
+*The differential oracle survives.* Every one of the three is gated on the
+lowering policy, so `--experimental-lowering=runtime` still reaches the
+library path and the two paths can still be compared. This is why the
+constant `REPEAT` was **not** folded in the HIR lowering, where it would have
+bypassed the policy: the first attempt did exactly that and broke
+`tests/ir/w3_clipping_rt`, whose whole purpose is to assert that the runtime
+call is still made. The fold therefore lives in the inline lowering path, and
+the policy is consulted there.
+
+*Decisions stay outside `irgen.cpp`.* The text-building decision for the
+constant `REPEAT` lives in `src/irgen_decisions.cpp` (`pli::foldRepeatText`),
+which is the module ADR-260 created for exactly this purpose.
+
+The `VALUE` substitution is deliberately narrow — character and bit strings
+whose declared length matches the literal. A numeric `VALUE` constant is not
+substituted: its declared precision and the literal's differ, so the two forms
+would not produce the same code, which is the property IBM requires. A
+`VALUE` constant passed as a *by-reference* argument also keeps its storage:
+the callee can write to it, and substituting the value would turn that write
+into a write to a module-level constant.
+
+`tests/ir/search_table.pli` asserts the table global and that no
+`pli_verify`/`pli_search` call remains; `tests/ir/value_const_equiv.pli`
+asserts that the scan never reads the constant's storage and that both forms
+share one table; `tests/core/search_const.pli` checks that the table path and
+the byte-scan path (a variable alphabet) agree exactly, and passes unchanged
+under `--experimental-lowering=runtime`.
+
+**Rejected.** *Folding the constant `REPEAT` in the HIR lowering.* It is the
+natural place for a fold, but it sits below the lowering policy, so it would
+remove the library path from the oracle — and it did, until the fold was moved
+into the inline path. *A membership table for `TRANSLATE`.* `TRANSLATE` maps
+each character through a 256-entry table already; a constant alphabet would
+only let the table be built at compile time, and the win is smaller than for
+the search operations, whose inner loop is the whole cost.
+*Substituting a numeric `VALUE` constant.* Its declared precision and the
+literal's differ, so the substitution would not deliver the identical-code
+property it exists for.
+
+
 ## ADR-260 — A PL/I-specific decision layer, reported by `--print-facts`
 
 **Context.** The PL/I compiler makes decisions that no C compiler makes: which
@@ -7924,3 +8156,723 @@ compiler as embedded bitcode, and `git checkout`/`git stash pop` can restore
 a source file with an mtime *older* than the bitcode it produced — so the
 build skips it and the binary does not reflect the tree. When a runtime
 change appears to have no effect, `touch runtime/*.c` and rebuild.
+
+## ADR-273 — A constant `TRANSLATE` folds to a table, and both paths pad the result
+
+*(ADR number: this decision was ADR-264 on the branch that grew it; the memory-effect branch had already taken ADR-264 for a different decision, so it is renumbered here to ADR-273. ADR-232 did the same for a duplicated pair.)*
+
+**Context.** This closes the last rule (123) built-in the plan's B3 names and
+records two defects the work uncovered.
+
+`TRANSLATE(s, out, in)` had one lowering for every argument shape: an
+`O(n·m)` scan that searched `in` for each character of `s`. When `out` and
+`in` are both literals the mapping is a compile-time constant — the same
+observation that produced the `VERIFY`/`SEARCH` table in ADR-241 — so it
+should cost one load per character.
+
+The differential oracle then earned its keep. `--experimental-lowering=runtime`
+and the inline path disagreed on `TRANSLATE('abcxyz', 'XY', 'abc')`: the inline
+path produced `XY xyz`, the runtime path `XYcxyz`. The runtime function only
+replaced a character when the match fell inside `out` and let it pass through
+otherwise; the inline path blanked it. PL/I defines the result as a character
+string of the source's length, so a match with no replacement character in
+`out` yields a blank — the runtime was wrong.
+
+Running the new `tests/core/translate_const.pli` under the runtime mode then
+found a second, worse divergence: a source shorter than the result field left
+the tail of the result *uninitialized*. `charTemp()` is a plain `alloca`, so
+`TRANSLATE(v, 'XY', 'abc')` with `v` `CHAR(10) VARYING` wrote three characters
+and copied seven bytes of stack residue into the target. The inline path only
+passed because the stack happened to hold blanks; the runtime build, with a
+different frame, printed `XY ` followed by residue. Both paths were wrong: a
+fixed-length string result is blank-padded to its declared length, the rule
+`pli_trim`, `pli_substr` and the assignment path already follow.
+
+**Decision.** Three changes:
+
+* `pli::translateTableBytes(out, in)` builds the 256-byte map in
+  `src/irgen_decisions.cpp` — outside IRGen, so the decision stays testable
+  without LLVM (C2). A match at index `j` of `in` maps to `out[j]`, or to a
+  blank when `j` is past the end of `out` — that is, `out` is padded with blanks
+  to `length(in)` first, which is where the rule is stated once.
+  `IRGen::translateTable()`
+  builds, deduplicates and caches the global; `IRGen::emitTranslateTable()`
+  applies it with one indexed load per character.
+* `IRGen` dispatches to the table only when both `out` and `in` are literals and
+  the `translate` operation is not forced onto the runtime path by
+  `--experimental-lowering`. The source may itself be `VARYING` — sema types
+  the result as the fixed `CHAR(length(s))` and the copy reads only the live
+  length — so the table serves more call sites than IBM's fixed-length-only
+  rule asks for, never fewer.
+* Both inline lowerings and `pli_translate` blank-fill the destination from the
+  copied length to `dstcap`.
+
+**Consequences.** The table path matches the scan path on every case the tests
+cover — values, the blank-pad rule, first-occurrence-wins, `VARYING` and empty
+sources — and the runtime mode now agrees with it, so the oracle stays honest.
+The table costs a 256-byte read-only global per distinct `(out, in)` pair,
+cached by the pair, and removes the inner scan from the loop.
+
+Two B3 items the plan lists needed no code, and the ADR records why so nobody
+re-opens them:
+
+* `REPEAT(x, n)` with a *dynamic* `n` cannot reach IRGen: sema rejects it with
+  *"REPEAT count must be a constant in this stage"*, rule (123). The plan's
+  "constant character, dynamic count → `memset`" case therefore has no
+  witness, and the constant-string fold (ADR-241) covers every reachable
+  `REPEAT` of constants.
+* `LENGTH('abc')` was already constant: it lowers to `trunc i64 3`, which LLVM
+  folds. There is nothing for sema to do that the backend does not already do.
+
+**Gates.** `tests/core/translate_const.pli` (table vs variable scan, the
+blank-pad rule, first-occurrence, `VARYING`, empty source),
+`tests/ir/translate_table.pli` (the `@pli_translate_table` global, the indexed
+lookup, and no `pli_translate` call or `tr.inptr` scan left), and the
+`translate` assertions in `tests/driver/experimental_lowering.sh`, which run
+the same witness under `auto`, `runtime` and `llvm` and require identical
+output.
+
+
+## ADR-274 — A picture classifier, and constant P-item folding
+
+*(ADR number: this decision was ADR-266 on the branch that grew it; the memory-effect branch had already taken ADR-266 for a different decision, so it is renumbered here to ADR-274. ADR-232 did the same for a duplicated pair.)*
+
+**Context.** B4 is the last WS-B technique: *picture conversion folding*. The
+plan gates it on the WS-K3 picture classifier, because a picture string is a
+small program (digit positions, zero suppression, signs, an assumed point,
+insertion characters, a scaling factor, repetition factors — rules (146)-(148))
+and the compiler cannot decide whether a conversion is foldable without first
+parsing that program. The classifier did not exist.
+
+The only reachable picture conversion today is the `P('picstr')` edit item.
+It always called `pli_put_edit_pic`, the runtime interpreter, even when the
+data item and the picture were both constants. ADR-017 already says pictures
+are compiled, not interpreted, and B4's observation is the same one B1 and B3
+made: a constant conversion should not survive into the IR.
+
+**Decision.** Three pieces.
+
+* `pli::classifyPicture()` in `irgen_decisions.cpp` — the classifier lives
+  outside IRGen, so it is readable without a backend (the plan's C2). It
+  validates the picture-character set, expands rule-(147) repetition factors
+  `(n)c`, separates the trailing rule-(146) scaling factor `F(±n)`, and
+  records the output width, the assumed-point index, the integer and
+  fractional digit counts, and whether the picture is numeric or character.
+  It also marks a `foldable` subset: numeric pictures made only of `9`, `Z`,
+  `V`, `.`, `+`, `-`, `S`, `X`, `A`, with no repetition, no `F(±n)`, and at
+  most 127 expanded characters (the runtime's output window).
+* `pli::foldPictureConversion()` — the folder reproduces the runtime
+  interpreter for that subset, including zero suppression, right-alignment,
+  fractional zero padding and the sign/blank positions. It returns the exact
+  text the runtime would write, or `false` so the caller keeps the runtime
+  path. It refuses `LLONG_MIN`, whose magnitude the runtime's signed negation
+  cannot represent either.
+* `IRGen`'s `P` case computes the value and scale once, then asks the folder
+  only when the value is an LLVM `ConstantInt` and the lowering policy has not
+  forced the runtime. A folded item is written with `pli_put_edit_char` and
+  recorded as `picture -> llvm`; every other item records `picture -> runtime`
+  and calls `pli_put_edit_pic` exactly as before.
+
+The operation name `picture` was added to both lowering tables, so
+`--experimental-lowering=picture:runtime` keeps the interpreter while the rest
+of the pipeline stays on `auto`. That is the differential oracle: the same
+source, two lowerings, one required output.
+
+**Consequences.** The fold is a real win where the runtime is not optimized
+away. 1,000,000 conversions of `123.45` through `'ZZ9.99'` on arm64 macOS
+(LLVM 23.1.2) take **112.4 ms** on the runtime path and **24.6 ms** on the
+folded path at `-O0` (4.6x). At `-O2` the two are inside noise (16.3 ms
+runtime, 17.6 ms folded): `pli_put_edit_pic` is `alwaysinline` and LLVM folds
+the constant-argument call itself. The value of B4 is therefore the *shape* of
+the IR — the conversion is gone before the optimizer sees it, instead of
+depending on an inliner to remove it — plus the unoptimized builds where the
+interpreter is the whole cost. This is recorded in
+`docs/OPTIMIZATION-BASELINE.md` §3.4.
+
+The classifier is deliberately wider than the folder. Repetition factors and
+`F(±n)` are classified and exposed for the future `PICTURE` variable type, but
+they stay on the runtime path for folding: the runtime formatter does not
+expand repetition, and duplicating its full picture grammar in a second
+interpreter is not justified without a witness. Pictures outside the foldable
+set (`,` currency, exponent, sterling, CR/DB, binary digits) keep the runtime,
+so no output changes.
+
+**Gates.** `tests/core/picture_fold.pli` formats each value twice — a literal
+through the folded path and a variable through the interpreter — and requires
+the texts to agree, for positive, negative, zero, explicit/blank signs, `X`
+insertion, `V`, float truncation, and a non-foldable comma picture.
+`tests/ir/picture_fold.pli` pins the IR: the constant item is a
+`pli_put_edit_char` call, a variable item still calls `pli_put_edit_pic`, and
+a non-foldable picture still calls the interpreter with its constant value.
+`tests/driver/experimental_lowering.sh` runs the picture witness under `auto`,
+`runtime` and `llvm` and requires identical output.
+`benchmarks/lang/picture_fold.pli` is the B4 benchmark and its pair compares
+`folded` with `picture:runtime`.
+
+**Rejected.** *Specializing a runtime value through a constant picture.* That
+is a lowering of the interpreter, not constant folding; it needs a code
+generator per picture shape and a much larger gate. *Folding the full picture
+grammar.* It would duplicate `pli_put_edit_pic` in C++ and change the output of
+pictures the runtime currently handles differently (for example `,` currently
+prints as `.`); keeping those on the runtime preserves behaviour and leaves
+one implementation of each rule. *Folding before `emitExpr`.* The IR value is
+the right input: it is already the exact `(value, scale)` pair the runtime
+receives, including float truncation and wide-decimal narrowing, so the
+folder cannot disagree with the call it replaces.
+
+
+## ADR-242 — Constant-offset concatenation stores
+
+**Context.** WS-C1 is the first of the plan's WS-C peepholes. MULTICS's code
+generator had a family of peepholes that LLVM will never produce, because they
+are PL/I-shape-specific; `cat_op.pl1:140-167` is the concatenation one:
+
+```pl1
+/* If p2's length was able to be inserted directly into a descriptor, try to optimize by changing the constant offset of the target */
+     if p2 -> reference.length = null
+     then if p2 -> reference.c_length < 4096
+        then if ^ p2 -> reference.varying_ref then do;
+            ...
+            word_offset = divide(p2 -> reference.c_length,units_per_word(lunits),15,0)
+                  + p1_address.offset;
+            if word_offset < 16383
+            then do;
+                 p1 -> reference.c_f_offset = mod(p2 -> reference.c_length,units_per_word(lunits))
+                          + p1 -> reference.c_f_offset;
+                 ...
+```
+
+The insight is that `a || b`, when `b`'s length is a compile-time constant, is
+*one store at a constant offset* inside the result: no length computation, no
+temporary. The plan's framing is the same — "the offset is only constant if the
+destination's used length is also constant", so the case is a fixed-length
+`CHARACTER(n)` target whose leaves all have constant lengths.
+
+The repo lowered every concatenation the same way: the expression built the
+result into a fresh `pli_alloc` heap buffer (the length was the sum of the
+leaves' *live* lengths, so it was a runtime value), copied each leaf into it,
+and the assignment then copied the buffer into the target and freed it. A
+`CHAR(20)` target receiving `CHAR(10) || CHAR(10)` cost a heap allocation, two
+runtime-length copies into it, a third copy out of it, and a `free` — all to
+move twenty bytes whose offsets were known at compile time.
+
+**Decision.** A concatenation assigned to a fixed-length `CHARACTER(n)` target
+whose leaves all have compile-time-constant lengths is stored *directly into the
+target*, one constant-size store per leaf at a constant offset.
+
+`IRGen::emitConcatConstStore` recognises the shape and emits, for a target of
+capacity `n`:
+
+* one `llvm.memcpy` of a constant size per leaf, at `dst + off` where `off` is
+  the sum of the preceding leaves' constant lengths;
+* the last leaf is clipped to the target's capacity, so the result is the
+  leftmost `n` characters of the concatenation;
+* one `llvm.memset` of blanks for the bytes past the concatenation, so a short
+  result is blank-padded to `n` — the same padding the generic assign path
+  produces (rule (86)).
+
+There is no temporary buffer, no length arithmetic and no allocation.
+
+The transformation is only sound when the leaves cannot overlap the target,
+because the leaves are read while the target is written. The guard is
+deliberately conservative and mirrors the existing self-append peephole
+(ADR-216): a leaf is a string literal or a *whole* variable that
+
+* is not the target itself,
+* is not `BASED`, `CONTROLLED` or `DEFINED` storage (whose address another
+  reference can share), and
+* is not a by-reference parameter, whose storage is the caller's and could be
+  the target's; a by-value parameter is a private cell (ADR-215) and is fine.
+
+The target owns its storage for the same reason: a by-reference target keeps
+the generic path. Two distinct variables of one frame have disjoint storage and
+distinct frames are disjoint too, so a whole-variable leaf of any frame is
+disjoint from a whole-variable target of another frame, and the symbol-identity
+test covers the one frame.
+
+Anything else — a `VARYING` target, a leaf of unknown length, a member or
+array element, a call, a numeric operand (which the language converts to
+`CHAR(24)` at run time) — keeps the generic path.
+
+**Consequences.** The IR changes shape, and the change is measurable.
+`benchmarks/lang/concat_const.pli` concatenates two `CHAR(10)` values into a
+`CHAR(20)` target four million times; on arm64 macOS (LLVM 23.1.2), median of
+five runs:
+
+| build | PL/I | C twin | ratio |
+|---|---|---|---|
+| `-O0` before | 153.4 ms | 21.9 ms | 7.01x |
+| `-O0` after | 46.2 ms | 22.5 ms | 2.06x |
+| `-O2` before | 117.1 ms | 22.2 ms | 5.28x |
+| `-O2` after | **7.5 ms** | 8.8 ms | **0.85x** |
+
+The `-O2` build is 15.7x faster and now beats its C twin, because the
+allocation per iteration is gone rather than merely cheapened. The measurement
+is recorded in `docs/OPTIMIZATION-BASELINE.md` §4.1.
+
+`tests/driver/peephole_fuzz.sh` is the differential gate both peepholes
+share: it generates random programs, compiles each twice — once with the
+peepholes, once with the generic lowering — and requires the two runs to print
+the same thing.
+
+The gates are `tests/ir/concat_const.pli` (two constant-offset `memcpy`s at
+constant offsets, and no `pli_alloc` anywhere in the procedure),
+`tests/core/concat_pad.pli` (the value the store must produce: blank padding,
+truncation to the leftmost characters, literal and empty leaves, and the two
+shapes the store declines — the target as a leaf and the target as the second
+leaf, where the concatenation must be read whole before the store).
+
+**Rejected.** *Writing into the target for a `VARYING` target.* The length slot
+would also have to be written with a constant, and the data area's tail is
+blank-filled by the generic path, so the shape is larger for a rarer case; it
+is left for a follow-up. *A stack temporary instead of the heap buffer.* It
+would remove the allocation but keep the double copy, and it needs the
+concat-temp's ownership (`freeConcatTemp`) to change. *Merging the leaves into
+one copy.* Only a single leaf may be a literal; a variable leaf's bytes are not
+contiguous with the next leaf's, so there is nothing to merge.
+
+
+## ADR-243 — Merge bit tests within one storage object
+
+**Context.** WS-C3 is the peephole the plan calls the clearest example of one
+LLVM structurally cannot do: MULTICS's `combine_tests.pl1:159-300` merges two
+bit tests that read the same 36-bit word of the same top-level object into one
+masked test.
+
+```pl1
+/* combine_tests.pl1:176-208 */
+     if r(1) -> reference.offset = r(2) -> reference.offset
+      & r(1) -> reference.qualifier = r(2) -> reference.qualifier
+     then do;
+    do i = 1 to 2;
+         wo(i) = divide(r(i) -> reference.c_offset,units_per_word(r(i) -> reference.units),18,0);
+         cfo(i) = mod(r(i) -> reference.c_offset * convert_offset(r(i) -> reference.units), bits_per_word);
+         ...
+         do a = r(i) -> reference.symbol repeat a -> symbol.father while (a -> symbol.father ^= null); end;
+         adam(i) = a;
+ end;
+    if wo(1) = wo(2) & adam(1) = adam(2) then return("1"b);
+```
+
+The plan's reading is that PL/I's bit strings are bit-granular inside a word, so
+the masks only exist at the PL/I level and LLVM cannot see the two tests as one.
+The repo holds a `BIT(n)` value as a `[ceil(n/8) x i8]` byte array, so a bit
+test is a byte-wise mask followed by a comparison of the packed value — and
+`(X & M) = E` is how PL/I code expresses "the field selected by `M` has the
+value `E`".
+
+**Decision.** Two masked bit tests on the same value in one conjunction are
+merged into one masked test:
+
+```
+(X & M1) = E1  &  (X & M2) = E2      ->      (X & (M1|M2)) = (E1|E2)
+```
+
+The merge is valid exactly when the two masks are **disjoint** and each
+expectation lies **inside its own mask**:
+
+* disjoint masks — otherwise one test decides a bit the other also decides, and
+  the conjunction is not the merged test;
+* an expectation inside its mask — otherwise that test can never hold (the
+  masked value has zeroes outside the mask), and the merged expectation would
+  carry a bit no mask selects.
+
+With both conditions the equivalence is exact: every bit of the conjunction is
+decided by the merged mask alone. The two tests must also read the *same*
+value — the same symbol, member path and locator — which is this compiler's
+form of MULTICS's `same_word` rule.
+
+`pli::mergeBitTests` in `src/irgen_decisions.cpp` holds that rule: it takes the
+two masks and the two expectations as PL/I bit strings and returns the merged
+mask and expectation, or refuses. The rule is a decision, so it lives outside
+`irgen.cpp` (the plan's C2) and needs no backend to read. `IRGen` matches the
+expression's shape and emits: one load of the value, one mask with the merged
+constant, and one comparison — against the merged expectation as a constant.
+
+The merge is a lowering decision like any other: `bit_merge` is registered in
+the lowering tables, so `--experimental-lowering=bit_merge:runtime` keeps the
+two tests separate and the differential oracle can compare the two lowerings
+(ADR-260).
+
+**Consequences.** The IR changes shape: one load, one mask and one comparison
+replace two of each.
+
+**The measurement is the interesting part, and it is a negative one.** The
+benchmark `benchmarks/lang/bit_merge.pli` tests two masked fields of one
+32-bit word in one conjunction, 300 million times (arm64 macOS, LLVM 23.1.2):
+
+| build | merged | separate | ratio |
+|---|---|---|---|
+| `-O0` | 2.63 s | 3.64 s | **1.38x** |
+| `-O2` | 70.2 ms | 70.4 ms | 1.00x |
+
+At `-O0` the merge is worth 28%: the unoptimized code does the mask, the pack
+and the comparison once instead of twice. At `-O2` there is nothing left to
+win — and the reason is worth recording: **LLVM's own optimizer already
+performs this merge.** The two `-O2` builds' optimized IR is the same code:
+`and <4 x i32> %x, splat (i32 13056)` followed by `icmp eq <4 x i32> …,
+splat (i32 13056)`, once per vectorized lane. LLVM's `instcombine` sees that
+`(x & a) == a && (x & b) == b` with disjoint `a` and `b` is the merged test and
+rewrites it.
+
+So the honest verdict is the plan's own: the win at `-O2` is under 1%, and the
+decision is recorded either way. **The code is kept**, for two reasons. The
+first is the plan's: the transformation is small, and the `-O0` build — the
+build the repo's own `--experimental-lowering` oracle and the driver tests
+exercise — is 1.38x faster with it. The second is that the compiler no longer
+*depends* on LLVM discovering the merge: the merge is in the IR before the
+optimizer runs, so it holds at every optimization level and for every shape
+LLVM's heuristics happen to miss (a value in memory that LLVM cannot forward,
+a mask it cannot fold, a target without the loop's vectorizable form). The
+same argument decided ADR-274's picture fold, which also showed no `-O2` gain.
+
+**A chain of tests.** PL/I's `&` is left-associative, so `A & B & C` is
+`((A & B) & C)`: the merge applies to the *innermost* pair, and the rest of the
+chain keeps its own tests. A chain of three masked tests therefore merges two
+of them and compares the third separately — the value is unchanged either way,
+and `tests/core/bit_merge.pli` pins that.
+
+The gates are `tests/ir/combine_tests.pli` (one `icmp eq i32` against the
+merged expectation, and no second comparison), `tests/core/bit_merge.pli`
+(the merged conjunction must equal the two tests taken separately over eight
+values, and the two shapes the merge must decline — overlapping masks, and two
+different values — must keep their own value). The witness in
+`tests/driver/experimental_lowering.sh` requires the merged and the separate
+lowering to agree in the `auto`, `runtime` and `llvm` modes, and
+`tests/driver/peephole_fuzz.sh` is the differential gate the two WS-C
+peepholes share.
+
+**Rejected.** *Merging when the masks overlap.* The two tests are then not
+independent, and the merged expectation would demand bits neither test
+requires: `(X & 0x0F) = 0x03 & (X & 0x03) = 0x01` is false, while the merged
+form `(X & 0x0F) = 0x03` would be true. `tests/core/bit_merge.pli` pins that
+case. *Merging a `^=` (not equal) test.* The negation of a conjunction is not
+the conjunction of the negations, so only `=` merges. *Merging tests on two
+different values.* They share no storage word, which is exactly what MULTICS's
+`same_word` check refuses. *Merging tests whose masks or expectations are
+variables.* The disjointness and the subset relation cannot be known at compile
+time, and a runtime check would cost more than the merge saves.
+
+
+## ADR-269 — A synthesized control-flow edge re-materializes the values it crosses
+
+*(ADR-242, ADR-243 and ADR-244 are the plan's WS-C numbers, and ADR-244
+is reserved for the deferred C5. The picture, translation, bit-comparison
+and decimal-ROUND decisions that grew alongside them were renumbered to
+ADR-273 to ADR-276, because the memory-effect branch had already taken
+ADR-264, ADR-266, ADR-270 and ADR-271.)*
+
+**Context.** WS-C4 is the plan's `optimize_if` peephole, and it is two things.
+The transformation is MULTICS's `optimize_if.pl1:20-36`:
+
+```
+   jump_true(target,or_bits(a,b)) -> jump_true(target,a), jump_true(target,b)
+   jump_true(target,and_bits(a,b)) -> jump_false(next,a), jump_true(target,b)
+   jump_true(target,not_bits(a)) -> jump_false(target,a)
+   jump_false(target,and_bits(a,b)) -> jump_false(target,a), jump_false(target,b)
+   jump_false(target,or_bits(a,b)) -> jump_true(next,a), jump_false(target,b)
+   jump_false(target,not_bits(a)) -> jump_true(target,a)
+```
+
+with a **cross-phase contract** at `optimize_if.pl1:215-218`:
+
+```pl1
+/* optimizer didn't know about this label, so make sure all temps
+   are saved before anyone jumps here */
+         next -> statement.save_temps = "1"b;
+```
+
+The transformation branches on the *comparison flags* and never materializes the
+0/1. LLVM has no flag-only branch: `icmp` produces a value, and `InstCombine`
+folds that value into the branch — the same effect, arrived at differently. So
+the transformation itself is **not ported**.
+
+The contract, though, is a real constraint on any transformation that creates a
+control-flow edge the analysis did not see: the values that were live must be
+re-materialized at the new edge, or the edge reads a stale value.
+
+**Decision.** The contract is recorded as a standing invariant of the code
+generator, and the one place in the compiler where a *cached* value crosses a
+*synthesized* edge already honours it.
+
+The invariant: **an IRGen transformation that creates a new basic block or a
+new join point must re-materialize every value it cached across that edge.**
+Two things make it cheap here. IRGen is SSA-from-the-start — a PL/I value
+lives in an `alloca` that `mem2reg` promotes, so a value that crosses an edge
+is re-loaded by construction, not by a spill. And the compiler has no
+value cache that a jump could invalidate: the symbol addresses (`symAddr_`) are
+fixed for the frame, and the CONTROLLED generation addresses are re-read
+wherever the generation can change.
+
+The one place where a cached pointer does cross a synthesized join is the
+CONTROLLED generation expansion in `storeTo` (rules (15),(18)): the store may
+free a too-small generation and allocate a replacement, which is a new
+`mergeBB` join, and the address the store writes through changes on one arm.
+The code already re-reads the address and the length *after* the join
+("Always reload fresh addr+len — may have changed in expBB"), which is exactly
+the contract. The comment there now says so, so the next transformation does
+not have to rediscover it.
+
+**Consequences.** The item closes as an invariant rather than as a technique:
+no code changes behaviour, and the constraint is written down where a future
+transformation will meet it. The plan's WS-A3 (a canonical subobject identity
+with a cache) is the transformation this guards: a cached subobject pointer
+would have to be invalidated at any synthesized edge, and the invariant says so
+before that work starts.
+
+**Rejected.** *Porting `optimize_if`.* LLVM's `InstCombine` already folds the
+`icmp` into the branch, so the transformation would be a rewrite with no
+effect — and LLVM's version is the one that also handles the phis and the
+undefs. *Adding an `invalidateSubobjects()` call.* There is no subobject
+cache in the compiler (WS-A3 is not implemented), so the call would have
+nothing to invalidate; the invariant names the obligation instead, which is
+what survives until the cache exists.
+
+
+## ADR-248 — An exact-decimal benchmark baseline for `bcd_decimal`
+
+**Context.** WS-E3 is the plan's most honest item. The `bcd_decimal` benchmark
+measured **2.26x** against its C twin and the number was filed as an "accepted
+floor" — but the recorded reason was *"i128 BCD vs C double"*. That is a
+**metric artifact**: the C baseline used `double`, which cannot represent the
+values exactly, so the two programs were not computing the same function. The
+ratio measured the difference between two numeric models, not the compiler.
+
+The PL/I program computes with `FIXED DECIMAL(25,4)`: every value is an exact
+decimal scaled by 10^4, and each assignment rounds to that scale (ADR-006). The
+old baseline computed the same arithmetic in `double` and printed `%.4f`, so
+even the *text* differed:
+
+```
+PL/I (exact)   579971282735858875227.5000
+C (double)     579971282735879946240.0000
+```
+
+**Decision.** The C baseline computes the same function exactly, with
+`__int128` scaled arithmetic, and prints the same text.
+
+* The PL/I statements map to the scaled integers exactly: `price = i * 1.9999`
+  is `i * 19999` at scale 4 (the raw scaled integers of a scale-0 and a
+  scale-4 operand multiply directly); `qty = i / 10 + 1` is an integer
+  division (both operands have scale 0) that the assignment rescales by 10^4;
+  `total = price * qty` is a scale-8 product that the assignment rounds back
+  to scale 4; `tax = total * rate` is the same with `rate = 0.0875`.
+* The rounding is PL/I's: half away from zero, which is what `rescale4()`
+  does.
+* The value is printed the way the PL/I program prints it — the integer part
+  (which needs more than 64 bits, so `print_i128` writes it digit by digit)
+  and four fractional digits.
+
+The harness changes with it: `bcd_decimal` leaves the "decimal-vs-FP, by
+design" list, so its output must now match the PL/I program's **exactly**,
+and a mismatch fails the run. `decimal_ops` stays in that list — its C twin
+still uses `double` ✓.
+
+**Consequences.** The measurement is real now, and it is a different number:
+
+| build | before | after |
+|---|---|---|
+| `-O1` | 2.26x | 0.86x |
+| `-O2` | 2.26x | **0.79x** |
+| `-O3` | 2.26x | 0.74x |
+
+The PL/I decimal code is **faster than the exact C twin**, so the "accepted
+floor" is retired — the plan's action item 4 (≤ 1.15x) is met, and WS-E1's
+premise (a real gap to close) is gone. The parity check also became a gate:
+the two programs print the same text, byte for byte.
+
+This is what makes the rest of the decimal work measurable at all: a benchmark
+that measures the difference between two numeric models is not measuring the
+compiler.
+
+**Rejected.** *Making the PL/I program use `double`.* That would delete the
+exactness the benchmark exists to exercise (and the wide-decimal path with it).
+*Keeping the `≈` parity for `bcd_decimal`.* The outputs now match exactly, so
+the tolerance would hide a future divergence between the two programs — which
+is precisely the signal the benchmark is for.
+
+
+## ADR-275 — A `BIT` comparison compares every bit
+
+*(ADR number: this decision was ADR-270 on the branch that grew it; the memory-effect branch had already taken ADR-270 for a different decision, so it is renumbered here to ADR-275. ADR-232 did the same for a duplicated pair.)*
+
+**Context.** A `BIT(n)` value is a byte array (`[ceil(n/8) x i8]`, big-endian).
+The comparison path converted both operands to a *number* before comparing
+them, and the number it chose was `FIXED BINARY(31)` — 32 bits. For a `BIT`
+wider than 32 bits that conversion **truncates**, so the comparison saw only
+the low 32 bits:
+
+```pli
+x = '1111111111111111111111111111111111111111'b;   /* BIT(40) */
+y = '0000000011111111111111111111111111111111'b;
+if x = y then ...        /* TRUE — the high eight bits were dropped */
+```
+
+The `IDENTICAL` built-in (ADR-199) never had the bug: it compares wide `BIT`
+scalars byte by byte.
+
+**Decision.** A `BIT` operand is compared as a 64-bit integer, not a 32-bit
+one: the packed value of a `BIT(n)` up to 64 bits fits, and the comparison is
+then exact bit for bit. Above 64 bits the conversion is *diagnosed* (the
+packing helper refuses it), so the case is never silently wrong.
+
+**Consequences.** `x = y` for two `BIT(40)` values now reports the truth. The
+change is one comparison's common type; the values compared for a `BIT` of 32
+bits or fewer are unchanged (the same numbers, compared in a wider register).
+
+The gate is `tests/core/bit_wide.pli`: two `BIT(40)` values that differ only
+in their high eight bits must compare unequal, the same values with equal
+high bits must compare equal, and the `^=` form must agree.
+
+**Rejected.** *Comparing `BIT` values byte by byte, as `IDENTICAL` does.* It
+is exact for any width, but it would be a second spelling of the same
+comparison in a different place, and the 64-bit form covers every width the
+compiler can pack.
+
+
+## ADR-276 — An exact decimal `ROUND`
+
+*(ADR number: this decision was ADR-271 on the branch that grew it; the memory-effect branch had already taken ADR-271 for a different decision, so it is renumbered here to ADR-276. ADR-232 did the same for a duplicated pair.)*
+
+**Context.** WS-E4 is the plan's item for `ROUND` with a runtime digit count,
+and the plan's premise was that "the repo already matches" MULTICS's digit
+move. It does not: MULTICS's `decimal_op_.pl1:283-300` moves
+`len1 = p1 - i + n + 1` digits of a *decimal*, exactly, while the repo's
+`ROUND` converted its argument to **FLOAT** and called `pli_round(double, n)`.
+The difference is observable:
+
+```pli
+x = 1234567890123456.7891;   /* DECIMAL(20,4) */
+y = round(x, 2);
+```
+
+The exact answer is `1234567890123456.79`; the compiler printed
+`1234567890123456.80`, because the value passed through a double.
+
+**Decision.** A `FIXED DECIMAL` argument rounded to a **constant** digit count
+keeps its exactness:
+
+* **Sema** types the result as a `FIXED DECIMAL` with that scale — the
+  source's precision, widened by the extra fraction digits when the count asks
+  for more of them (the 31-digit maximum is the ceiling). Every other shape — a
+  `FLOAT` or `FIXED BINARY` argument, a runtime digit count, a negative count
+  — stays a `FLOAT`, the library rounding.
+* **HIR** converts the argument to the *result's* type, so the decimal
+  argument stays a decimal (the old code forced it to `FLOAT`).
+* **IRGen** lowers the decimal case as the **conversion** to the result's
+  type — the same rescale, and the same half-away-from-zero rounding, that an
+  assignment uses (ADR-006). The wide case rides the existing i128 path.
+
+So the exact rounding is not a new algorithm: it is the decimal conversion
+the compiler already performs, aimed at the scale `ROUND` asks for.
+
+**The three layers must agree.** The first attempt typed the result as a
+decimal but left the HIR lowering converting the argument to `FLOAT` (the old
+code forced it), so the float path produced a *double* for a value typed as a
+decimal, and the assignment stored the double's bits raw into the decimal's
+slot. The HIR now converts the argument to the *result's* type, and the float
+path types its value as a `FLOAT` whatever the expression's type says — a
+mismatch can now cost a conversion, never a raw store.
+
+**Consequences.** `ROUND` on a decimal is exact for every value a `double`
+cannot hold, and its result carries the requested scale (`ROUND(x, 1)` on a
+scale-4 decimal prints one fraction digit). The float path is unchanged for
+every other shape, and the runtime digit count still returns a `FLOAT` — the
+scale of a runtime-rounded value is not known at compile time.
+
+The gate is `tests/core/round_decimal.pli`: a wide decimal rounded to two
+digits, half away from zero in both directions, the scale of the result, and
+the runtime-count float path.
+
+**Rejected.** *A runtime digit-move in the runtime library.* MULTICS's
+formulation needs the decimal's descriptor (the digits and the scale) at run
+time; the compiler has the scale at compile time whenever the count is
+constant, and the conversion already does the rounding. *Rounding a decimal
+through a double.* That is the bug. *Rounding to a negative digit count
+exactly.* The count rounds to tens, hundreds and beyond, which is not a scale
+the decimal type can carry; that shape keeps the float path.
+
+
+## ADR-252 — The range fact is independent of the check decision, and the check must enforce it
+
+**Context.** WS-I1 asks for range-based check elision with the checks **on**:
+the plan's `stampFixedBinRange` early-returns when `sizeChecks()` is set, so
+with the traps enabled no range metadata is emitted at all, and the plan's
+design is to emit it *always* and let LLVM elide the checks it can prove dead.
+M7's exit criterion is the ratio between the check-free and the checks-on
+builds of `benchmarks/lang/checks_on.pli`: within 1.5x.
+
+The plan's framing follows IBM (ADR-252's §1.6 rule): *both* halves matter —
+the absence of a check is one win, and the cost of the check that must stay is
+another (WS-K7, folded into this item). IBM's half is the SUBSCRIPTRANGE
+check becoming "twice as fast" by replacing a library call with an inline
+range check (`zos:2089-2090`).
+
+**The measurement.** The pair, re-measured with the current compiler
+(arm64 macOS, LLVM 23.1.2, median of five): **1.93x** — the criterion is *not*
+met (it was 1.82x when the corpus was built).
+
+**What the IR says.** Reading the *optimized* checks-on module settles what the
+checks cost:
+
+* The **SUBSCRIPTRANGE** check is **already gone**. The index is
+  `mod(i, 1000) + 1` and LLVM proves the value lies in `[1, 1000]`, so the
+  bounds comparison folds away and the array access is unconditional. IBM's
+  half of the item — make the surviving check cheap — needs nothing here: the
+  check is already inline, and LLVM removes it.
+* The **SIZE** overflow checks are what remain: five `llvm.*.with.overflow`
+  intrinsics per iteration of the hot loop (the `mod + 1`, the `* 3`, the
+  `+ 1`, and the two 64-bit accumulations).
+
+**Why the range fact cannot elide them.** The plan's design is sound only if
+the range fact is an invariant. It is not, today, for `FIXED BINARY`:
+
+* The `SIZE` check the compiler emits is the **storage width** check — an i32
+  or i64 overflow — not the **declared precision** check. A `FIXED BINARY(31)`
+  value may therefore hold anything in the i32 range, and the declared
+  31-bit range is *not* an invariant of the storage.
+* The range metadata `stampFixedBinRange` states the declared range. With the
+  checks off, that is the NOSIZE convention (the program asked for wrapped
+  values). With the checks on, the compiler would be asserting a range it does
+  not enforce: `x = x + x` with `x` near `2^30` stores `2^31 - 2`, which is
+  inside the i32 and outside the declared precision — and the next load would
+  be telling LLVM the opposite.
+
+That is exactly what the guard in `stampFixedBinRange` says ("with traps on the
+trap blocks own overflow control and the range would be unsound"), and the
+guard stays.
+
+**Decision.** The range fact and the check decision are separate, and the
+*ordering* is: **the check must enforce the fact before the fact is emitted.**
+So:
+
+* The precision enforcement comes first, and it is a *conformance* change in
+  its own right: PL/I raises SIZE when a `FIXED BINARY(p)` value exceeds its
+  declared precision (rules (60)-(63), (86)), and the repo checks the storage
+  width instead. The `FIXED DECIMAL` path already checks the declared
+  precision; the binary path does not.
+* The range metadata follows, and then the storage-width checks become
+  unreachable (the declared range is inside the storage range) and LLVM folds
+  them away.
+
+The elision this buys is bounded, and the bound is worth stating: the values in
+`checks_on.pli` are bounded at run time but not at compile time, so the checks
+that remain are *provably live* — `x * 3` with `x` in the declared 31-bit
+range overflows the i32, and the two 64-bit accumulations overflow the i64.
+The range facts can remove the *storage* checks; the *precision* checks stay,
+and they cost about what the storage checks cost. The M7 ratio therefore
+improves by the width of the check, not by its absence.
+
+**Consequences.** Nothing in the compiler changes here: the guard on
+`stampFixedBinRange` stays, and no metadata is emitted with the checks on. What
+is recorded is the *ordering* the item needs, and the measurement that says
+where the checks actually are (the bounds checks are free; the SIZE checks are
+live) — so the next attempt at the ratio starts from the right place.
+
+**Rejected.** *Emitting the range metadata with the checks on, as the plan
+writes it.* It is unsound here: the compiler does not enforce the declared
+precision, so the fact would be a lie in exactly the programs the checks exist
+for. *Dropping the SIZE checks and trusting the range.* That is what NOSIZE
+does, and it is a different mode (rules (60)-(63), ADR-110). *Making the
+precision check cheap instead of eliding the storage check.* The two cost the
+same, so it buys nothing.

@@ -117,6 +117,15 @@ call remains the differential regression oracle throughout migration. See
 `design-docs/archive/MLIR-RUNTIME-MIGRATION-MATRIX.md` for the full operation matrix and
 `design-docs/mlir-runtime-migration-plan.md` for the phased plan.
 
+The policy table also carries the *shape* peepholes of WS-C, whose fallback is
+not a runtime call but the generic lowering: `concat_const` (a concatenation
+with constant-length leaves stored at constant offsets, ADR-242) and
+`bit_merge` (two masked bit tests on one value merged into one, ADR-243). Their
+`runtime` mode keeps the generic shape — the concatenation's temporary buffer
+and the two separate tests — so `--experimental-lowering=concat_const:runtime`
+and `--experimental-lowering=bit_merge:runtime` lower the same program the
+other way, and the differential oracle compares the two.
+
 ### 2.2 Why separate AST, HIR, and LLVM IR
 
 The AST records source syntax. HIR is a typed, lower-level representation that

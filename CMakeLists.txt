@@ -126,6 +126,7 @@ set(CMAKE_C_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES}
 
 set(PLI_SOURCES
   src/main.cpp
+  src/constfold.cpp
   src/diag.cpp
   src/explain.cpp
   src/hir.cpp

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 #include "sema.h"
+#include "constfold.h"
 #include <algorithm>
 #include <climits>
 #include <functional>
@@ -2409,17 +2410,28 @@ void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
 
 Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
   Expr* lit = e;
-  if (lit->kind == Expr::Unary && lit->op == Tok::Minus)
-    lit = lit->a.get();
-  if (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
-      lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
-    d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
-    return nullptr;
+  if (lit && lit->kind != Expr::IntLit && lit->kind != Expr::DecLit &&
+      lit->kind != Expr::FltLit && lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
+    // Not a bare literal: a constant *expression* folds to one (ADR-240). The
+    // value keeps the scale its operands imply; codegen rescales it to the
+    // declared type's scale, which is the type-directed step. A leading
+    // unary sign folds with the expression, so it needs no separate case.
+    ConstNum num;
+    if (!constNumOf(lit, num) ||
+        !foldConstExpr(lit, Type::fixedDec(num.prec, num.scale), num.scale)) {
+      d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
+      return nullptr;
+    }
   }
-  if (lit != e) { // apply the leading unary minus once
-    lit->ival = -lit->ival;
-    lit->wideIval = -lit->wideIval;
-    lit->fval = -lit->fval;
+  // A FIXED DECIMAL target carries a scale, so an integer literal must be
+  // rescaled to it: the constant is expressed as a DECIMAL literal and
+  // codegen applies the declared scale (ADR-240).
+  if (lit->kind == Expr::IntLit && ty.k == TK::FixedDec && ty.scale > 0) {
+    lit->kind = Expr::DecLit;
+    lit->decScale = 0;
+    lit->decPrec = constDigits(lit->wideIval);
+    lit->ty = Type::fixedDec(lit->decPrec, 0);
+    lit->folded = true;
   }
   bool strInit = lit->kind == Expr::CharLit;
   if (ty.isChar() != strInit) {
@@ -4491,7 +4503,10 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     break;
   }
   case Expr::DecLit:
-    e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
+    // A folded constant (ADR-240) carries the result type it was folded to;
+    // a literal from the source keeps the type its digits describe.
+    if (!e->folded)
+      e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
     break;
   case Expr::FltLit:
     e->ty = Type::flt(6);
@@ -5012,6 +5027,13 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       e->ty = Type::fixedBin(31, 0);
       break;
     }
+    // A constant `+`, `-` or `*` folds to its value at compile time (ADR-240).
+    // The fold is type-directed: the value is computed at the scale of the
+    // result type, so it is exactly the value the runtime path produces. A
+    // division is never folded — ZERODIVIDE must still fire.
+    if ((e->op == Tok::Plus || e->op == Tok::Minus || e->op == Tok::Star) &&
+        e->ty.k == TK::FixedDec)
+      foldConstExpr(e, e->ty, e->ty.scale);
     break;
   }
   }
@@ -5765,7 +5787,11 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
     return true;
   }
-  // ROUND built-in (M2): round(x, n) — the result is a FLOAT value.
+  // ROUND built-in (M2): round(x, n). A FIXED DECIMAL argument rounded to a
+  // constant digit count keeps its exactness: the result is a FIXED DECIMAL
+  // with that scale, and the conversion does the rounding (ADR-006, ADR-276).
+  // Every other shape — a FLOAT or FIXED BINARY argument, a runtime digit
+  // count, a negative count — is a FLOAT, the library rounding.
   if (e->name == "ROUND") {
     if (e->args.size() != 2) {
       d_.error(e->loc, "ROUND expects 2 arguments", "(123)");
@@ -5778,6 +5804,21 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::flt(6);
+    const Expr* xa = e->args[0].get();
+    const Expr* na = e->args[1].get();
+    // The digit count must be a constant integer. The folder may have
+    // rewritten the literal as a decimal one (ADR-240), so both spellings
+    // count as long as it has no fraction digits.
+    const bool countIsInt = na->kind == Expr::IntLit ||
+                            (na->kind == Expr::DecLit && na->decScale == 0);
+    if (xa->ty.k == TK::FixedDec && countIsInt && na->ival >= 0) {
+      // The result keeps the source's precision, widened by the extra
+      // fraction digits when the count asks for more of them (the 31-digit
+      // maximum is the ceiling; beyond it the float path takes over).
+      long long prec = xa->ty.prec + std::max<long long>(0, na->ival - xa->ty.scale);
+      if (prec <= 31)
+        e->ty = Type::fixedDec((int)prec, (int)na->ival);
+    }
     return true;
   }
   // REPEAT built-in (M2): repeat(s, n) — s repeated n times; the length

@@ -66,11 +66,13 @@ LANG_BENCHMARKS = [
     ("on_dispatch",   "lang/on_dispatch.pli",   "lang/baseline/on_dispatch_c.c"),
     ("decimal_scale", "lang/decimal_scale.pli", "lang/baseline/decimal_scale_c.c"),
     ("bit_fields",    "lang/bit_fields.pli",    "lang/baseline/bit_fields_c.c"),
+    ("bit_merge",     "lang/bit_merge.pli",     "lang/baseline/bit_merge_c.c"),
     ("concat_const",  "lang/concat_const.pli",  "lang/baseline/concat_const_c.c"),
     ("io_list",       "lang/io_list.pli",       "lang/baseline/io_list_c.c"),
     ("alias_scope",   "lang/alias_scope.pli",   "lang/baseline/alias_scope_c.c"),
     ("pure_call",     "lang/pure_call.pli",     "lang/baseline/pure_call_c.c"),
     ("array_param",   "lang/array_param.pli",   "lang/baseline/array_param_c.c"),
+    ("picture_fold",  "lang/picture_fold.pli",  "lang/baseline/picture_fold_c.c"),
 ]
 
 # WS-A2 (ADR-267): a benchmark whose callee lives in another compilation unit
@@ -124,6 +126,20 @@ PAIRS = [
     # own unit is the reference, and the gap between the two is what a promise
     # that reached the caller would be worth.
     ("pure_call_split", "split", [], "same-unit", [], ["lang/pure_call.pli"]),
+    # B4 (ADR-274): a constant P item through a constant picture is folded
+    # to text; the other side keeps the runtime interpreter. The per-op
+    # override isolates the picture lowering from the rest of the pipeline.
+    ("picture_fold", "folded", [], "runtime",
+     ["--experimental-lowering=picture:runtime"]),
+    # WS-C3 (ADR-243): two masked bit tests on one value in one conjunction
+    # merge into one masked test; the other side keeps the two tests, so the
+    # pair prices the merge itself.
+    ("bit_merge", "merged", [], "separate",
+     ["--experimental-lowering=bit_merge:runtime"]),
+    # WS-C1 (ADR-242): a concatenation with constant-length leaves is stored
+    # at constant offsets; the other side keeps the temporary buffer.
+    ("concat_const", "constant-offset", [], "buffer",
+     ["--experimental-lowering=concat_const:runtime"]),
 ]
 
 
@@ -215,6 +231,7 @@ CHECKS = {
     "concat_const":     {"min_ms_O2": 50, "float_tol": False},
     "io_list":          {"min_ms_O2": 50, "float_tol": False},
     "alias_scope":      {"min_ms_O2": 50, "float_tol": False},
+    "picture_fold":     {"min_ms_O2": 50, "float_tol": False},
 }
 
 
@@ -934,9 +951,11 @@ def main():
             else:
                 print(f"  ✗ parity (float mismatch)")
                 all_checks_ok = False
-        elif bench_name in ("decimal_ops", "bcd_decimal"):
-            # decimal_ops/bcd_decimal use exact decimal arithmetic; C uses double —
-            # expected ~ mismatch (see DECIMAL-PERF-PLAN.md §8 non-goal)
+        elif bench_name == "decimal_ops":
+            # decimal_ops uses exact decimal arithmetic; its C baseline uses
+            # double — expected ~ mismatch (see DECIMAL-PERF-PLAN.md §8 non-goal).
+            # bcd_decimal is NOT here: WS-E3 (ADR-248) gave it an exact
+            # __int128 baseline, so its output must match exactly.
             if pli_out.strip() == c_out.strip():
                 print(f"  ✓ parity (exact)")
             else:

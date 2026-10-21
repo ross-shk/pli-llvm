@@ -3,6 +3,7 @@
 #include "irgen.h"
 #include "codegen.h" // pli::applyRuntimeFnAttrs declaration
 #include "embedded_runtime.h"
+#include "irgen_decisions.h" // pli:: the PL/I-specific decisions (ADR-260)
 #include <algorithm>
 #include <cfloat>
 #include <set>
@@ -783,6 +784,7 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"substr_assign_varying", true},
       {"repeat", true},
       {"translate", true},
+      {"picture", true},
       {"trim", true},
       // P5 flip: W4 scalar math and conversions default to LLVM
       {"fixed_of_float", true},
@@ -817,6 +819,9 @@ static const std::map<std::string, bool>& kRuntimeDefault() {
       {"pli_rank", true},
       {"pli_collate", true},
       {"pli_isochar", true},
+      // WS-C: the shape peepholes (the generic lowering is the fallback)
+      {"concat_const", true},
+      {"bit_merge", true},
   };
   return table;
 }
@@ -847,6 +852,7 @@ static const std::set<std::string>& kLLVMLowerings() {
       "substr_assign_varying",
       "repeat",
       "translate",
+      "picture",
       "trim",
       // W4 scalar conversions
       "fixed_of_float",
@@ -881,6 +887,11 @@ static const std::set<std::string>& kLLVMLowerings() {
       "pli_rank",
       "pli_collate",
       "pli_isochar",
+      // WS-C: the shape peepholes. Their "runtime" path is the generic
+      // lowering — the concatenation's temporary buffer and the two separate
+      // bit tests — so the differential oracle can compare the two shapes.
+      "concat_const",
+      "bit_merge",
   };
   return table;
 }
@@ -906,27 +917,29 @@ static std::string loweringModeName(LowerMode mode,
   return out;
 }
 
-bool IRGen::useRuntimeCall(const std::string& op) {
+bool IRGen::runtimePath(const std::string& op) {
   LowerMode mode = lowerMode_;
   auto oit = perOpOverrides_.find(op);
   if (oit != perOpOverrides_.end())
     mode = oit->second;
-  bool useRuntime = true;
   switch (mode) {
   case LowerMode::Runtime:
-    break;
+    return true;
   case LowerMode::MLIR:
     // MLIR not compiled in this build (P2+ gates it). Fall back to runtime.
-    break;
+    return true;
   case LowerMode::LLVM:
-    useRuntime = !hasLLVMLowering(op);
-    break;
+    return !hasLLVMLowering(op);
   case LowerMode::Auto: {
     auto dit = kRuntimeDefault().find(op);
-    useRuntime = !(dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op));
-    break;
+    return !(dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op));
   }
   }
+  return true;
+}
+
+bool IRGen::useRuntimeCall(const std::string& op) {
+  bool useRuntime = runtimePath(op);
   // Record the decision so --print-facts can show it (ADR-260).
   facts_.recordBuiltin(op, useRuntime ? "runtime" : "llvm");
   return useRuntime;
@@ -1042,6 +1055,223 @@ llvm::Value* IRGen::emitCmpChar(llvm::Value* a, llvm::Value* aLen, llvm::Value* 
 
 // --- W2 dispatch wrappers (search/scan operations) ---
 
+// The membership table of a constant character alphabet: entry c is 1 when
+// the character code c is in the alphabet, 0 otherwise. The table is a
+// module-level constant, one per distinct alphabet, reused by every call
+// site that uses it (MULTICS compile_exp.pl1:1348-1380 built the same table
+// at compile time).
+llvm::GlobalVariable* IRGen::searchTable(const std::string& alphabet) {
+  auto it = searchTables_.find(alphabet);
+  if (it != searchTables_.end())
+    return it->second;
+  // The table's bytes are a LLVM-free decision (ADR-241, the plan's C2).
+  std::string bytes = pli::searchTableBytes(alphabet);
+  llvm::Constant* data = llvm::ConstantDataArray::get(
+      ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
+                                      llvm::GlobalValue::PrivateLinkage, data, "pli_search_table");
+  g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  searchTables_[alphabet] = g;
+  return g;
+}
+
+// The translate table of a constant (out, in) pair (ADR-273): entry c is the
+// character a byte with value c maps to, so the scan of `in` becomes one
+// lookup per character.
+llvm::GlobalVariable* IRGen::translateTable(const std::string& out, const std::string& in) {
+  std::string key = out;
+  key += '\0';
+  key += in;
+  auto it = translateTables_.find(key);
+  if (it != translateTables_.end())
+    return it->second;
+  // The table's bytes are a LLVM-free decision (ADR-273, the plan's C2).
+  std::string bytes = pli::translateTableBytes(out, in);
+  llvm::Constant* data = llvm::ConstantDataArray::get(
+      ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
+                                      llvm::GlobalValue::PrivateLinkage, data,
+                                      "pli_translate_table");
+  g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  translateTables_[key] = g;
+  return g;
+}
+
+// VERIFY with a constant alphabet: the first character of `s` that is *not*
+// in the alphabet, 1-based; 0 when every character is in it. The table
+// replaces the inner scan of the alphabet (ADR-241).
+llvm::Value* IRGen::emitVerifyTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "vrf.outer.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(zero, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  // The character code is the byte value (0..255), which indexes the table.
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "vrf.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "vrf.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "vrf.in_set");
+  llvm::Value* notIn =
+      b_.CreateICmpEQ(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "vrf.not_in");
+  b_.CreateCondBr(notIn, foundBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1), "vrf.i_next"),
+                    latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(foundBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1),
+                                           "vrf.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, foundBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// VERIFY(s,t,from) with a constant alphabet: as emitVerifyTable, but the
+// scan starts at position `start` (1-based, clamped to 1).
+llvm::Value* IRGen::emitVerifyFromTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                        llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "vrf.start");
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "vrf.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "vrf.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "vrf.outer.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "vrf.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "vrf.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "vrf.in_set");
+  llvm::Value* notIn =
+      b_.CreateICmpEQ(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "vrf.not_in");
+  b_.CreateCondBr(notIn, foundBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "vrf.i_next"), latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(foundBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "vrf.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, foundBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// SEARCH with a constant alphabet: the first character of `s` that *is* in
+// the alphabet, 1-based, starting at `start` (clamped to 1); 0 when there is
+// none (ADR-241).
+llvm::Value* IRGen::emitSearchTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                    llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "srch.slen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "srch.start");
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "srch.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "srch.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "srch.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "srch.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "srch.outer.latch", F);
+  llvm::BasicBlock* matchedBB = llvm::BasicBlock::Create(ctx_, "srch.matched", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "srch.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "srch.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "srch.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "srch.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "srch.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "srch.si");
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "srch.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "srch.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "srch.in_set");
+  llvm::Value* isIn =
+      b_.CreateICmpNE(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "srch.is_in");
+  b_.CreateCondBr(isIn, matchedBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "srch.i_next"), latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(matchedBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "srch.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.out");
+  resultPhi->addIncoming(matchResult, matchedBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// verify(s, t[, start]): the first character of s that is absent from the
+// alphabet t, 1-based. A constant alphabet uses the membership table.
 llvm::Value* IRGen::emitVerify(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
                                llvm::Value* tLen) {
   if (useRuntimeCall("verify")) {
@@ -2263,6 +2493,58 @@ void IRGen::emitTranslateLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value
   b_.CreateBr(loopBB);
 
   startBlock(doneBB);
+  // The result is a fixed string, so the field past the copied text is blank:
+  // the rule the other string built-ins use (ADR-273). Without it the tail of
+  // the temporary is uninitialized and the two lowerings disagree.
+  llvm::Value* copyLen =
+      b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.copy_len");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {copyLen}, "tr.padptr"), blank,
+                  b_.CreateSub(dstcap64, copyLen, "tr.padlen"), llvm::MaybeAlign(), false);
+}
+
+// translate(dst, dstcap, s, slen, table): as emitTranslateLLVM, but `table` is
+// the compile-time translation table of a constant (out, in) pair, so the
+// scan of `in` becomes one lookup per character (ADR-273). Mirrors MULTICS's
+// inline translate sequence (compile_exp.pl1:1392-1440).
+void IRGen::emitTranslateTable(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s,
+                               llvm::Value* sLen, llvm::Value* table) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "tr.slen");
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "tr.dstcap");
+  // The copy stops at the shorter of the source and the destination, the
+  // bound both the scan and the runtime call use.
+  llvm::Value* n =
+      b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.n");
+
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "tr.loop", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "tr.done", F);
+
+  b_.CreateCondBr(b_.CreateICmpULE(n, zero, "tr.empty"), doneBB, loopBB);
+
+  llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+  startBlock(loopBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tr.i");
+  iPhi->addIncoming(zero, preLoopBB);
+  llvm::Value* si =
+      b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "tr.siptr"), "tr.si");
+  // The character code is the byte value (0..255), which indexes the table.
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "tr.code");
+  llvm::Value* mapped = b_.CreateLoad(
+      b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), table, {code}, "tr.tbl_ptr"), "tr.mapped");
+  b_.CreateStore(mapped, b_.CreateGEP(b_.getInt8Ty(), dst, {iPhi}, "tr.dstptr"), false);
+  // One index per character; the back edge feeds the phi from this block.
+  llvm::Value* iNext = b_.CreateAdd(iPhi, one, "tr.i_next");
+  iPhi->addIncoming(iNext, loopBB);
+  b_.CreateCondBr(b_.CreateICmpULT(iNext, n, "tr.more"), loopBB, doneBB);
+
+  startBlock(doneBB);
+  // The field past the copied text is blank, as in the scan lowering above.
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {n}, "tr.padptr"), blank,
+                  b_.CreateSub(dstcap64, n, "tr.padlen"), llvm::MaybeAlign(), false);
 }
 
 // trim(dst, dstcap, s, slen, pad, padlen): copy s minus leading/trailing pad
@@ -5551,6 +5833,251 @@ void IRGen::freeConcatTemp(HExpr* rhs, llvm::Value* buf) {
     b_.CreateCall(runtimeFn("pli_free"), {buf});
 }
 
+// True when `s` is a parameter of the current procedure or of one of its
+// enclosing procedures: such a symbol's storage is the caller's.
+bool IRGen::isParamOfScope(Symbol* s) const {
+  for (const HProc* q = curProc_; q; q = q->parent)
+    if (std::find(q->paramSyms.begin(), q->paramSyms.end(), s) != q->paramSyms.end())
+      return true;
+  return false;
+}
+
+// Constant-offset concatenation store (rule (119), ADR-242): A = B || C
+// where A is a fixed-length CHARACTER(n) and every leaf of the
+// concatenation has a compile-time-constant length. The result is the
+// leftmost n characters of the concatenation, blank-padded to n, so each
+// leaf is stored straight into A at a constant offset — no temporary
+// buffer, no length arithmetic, no allocation. Mirrors MULTICS
+// cat_op.pl1:140-167, which folds a constant tail length into the
+// target's constant offset.
+//
+// Safety: the leaves are read while A is written, so a leaf must read
+// storage that cannot overlap A's. A leaf is therefore a literal or a
+// whole variable that is not A, is not BASED/CONTROLLED/DEFINED storage,
+// and is not a by-reference parameter (its storage is the caller's, and
+// the caller may have passed A itself); a by-value parameter is a private
+// cell (ADR-215). Two distinct variables of one frame have disjoint
+// storage, and distinct frames are disjoint too. The target owns its
+// storage for the same reason: a by-reference target keeps the generic
+// path. Returns false when the shape does not qualify, and the caller
+// then runs the generic concat-and-assign path.
+bool IRGen::emitConcatConstStore(HStmt* s) {
+  if (!s->extraTargets.empty())
+    return false;
+  HExpr* t = s->target.get();
+  HExpr* rhs = s->value.get();
+  if (!t || !rhs || t->kind != HExpr::VarRef || !t->sym)
+    return false;
+  if (!t->memberPath.empty() || t->locPtr)
+    return false;
+  Symbol* dst = t->sym;
+  // The target must own a fixed-length character buffer of known size.
+  if (!dst->ty.isChar() || dst->ty.varying || dst->ty.starLen || dst->ty.isArray())
+    return false;
+  if (dst->ty.len <= 0)
+    return false;
+  if (dst->isBased() || dst->controlled || dst->definedBase)
+    return false;
+  // A by-reference target's storage is the caller's, which may be the very
+  // variable a leaf reads.
+  if (isParamOfScope(dst) && !isByValueParam(dst))
+    return false;
+  if (rhs->kind != HExpr::Binary || rhs->op != Tok::Concat)
+    return false;
+  // Flatten the spine (as the generic concat lowering does): the leaves come
+  // out in source order.
+  std::vector<HExpr*> leaves;
+  std::vector<HExpr*> stack{rhs};
+  while (!stack.empty()) {
+    HExpr* ex = stack.back();
+    stack.pop_back();
+    if (ex->kind == HExpr::Binary && ex->op == Tok::Concat) {
+      stack.push_back(ex->b.get());
+      stack.push_back(ex->a.get());
+      continue;
+    }
+    leaves.push_back(ex);
+  }
+  struct LeafSrc {
+    llvm::Value* ptr;
+    long long len;
+  };
+  std::vector<LeafSrc> srcs;
+  for (HExpr* leaf : leaves) {
+    if (leaf->kind == HExpr::CharLit) {
+      if (leaf->sval.empty())
+        continue; // an empty literal contributes no bytes
+      srcs.push_back({globalString(leaf->sval), (long long)leaf->sval.size()});
+      continue;
+    }
+    if (leaf->kind != HExpr::VarRef || !leaf->sym)
+      return false;
+    Symbol* ls = leaf->sym;
+    if (!leaf->memberPath.empty() || leaf->locPtr)
+      return false;
+    if (!ls->ty.isChar() || ls->ty.varying || ls->ty.starLen || ls->ty.isArray())
+      return false;
+    if (ls == dst)
+      return false;
+    if (ls->isBased() || ls->controlled || ls->definedBase)
+      return false;
+    // A by-reference parameter's storage is the caller's and could be the
+    // target's; a by-value parameter is a private cell (ADR-215).
+    if (isParamOfScope(ls) && !isByValueParam(ls))
+      return false;
+    llvm::Value* addr = addressOf(ls);
+    if (!addr)
+      return false;
+    srcs.push_back({addr, ls->ty.len});
+  }
+  llvm::Value* dstAddr = addressOf(dst);
+  if (!dstAddr)
+    return false;
+  // The lowering policy wins (ADR-260): with
+  // --experimental-lowering=concat_const:runtime the generic path is kept,
+  // so the differential oracle can compare the two lowerings.
+  if (runtimePath("concat_const")) {
+    facts_.recordBuiltin("concat_const", "runtime");
+    return false;
+  }
+  facts_.recordBuiltin("concat_const", "llvm");
+  // The store plan — how many bytes each leaf contributes and how many blanks
+  // follow them — is a decision (the plan's C2), so it lives in
+  // src/irgen_decisions.cpp.
+  std::vector<long long> leafLen;
+  leafLen.reserve(srcs.size());
+  for (const LeafSrc& l : srcs)
+    leafLen.push_back(l.len);
+  pli::ConcatStorePlan plan = pli::planConcatStore(leafLen, dst->ty.len);
+  if (!plan.ok)
+    return false;
+  // One store per leaf at a constant offset; the bytes past the
+  // concatenation are blanks, exactly as the generic assign path leaves
+  // them (rule (86)).
+  long long off = 0;
+  for (size_t i = 0; i < srcs.size(); ++i) {
+    const long long take = plan.sizes[i];
+    if (take > 0) {
+      llvm::Value* at = b_.CreateGEP(b_.getInt8Ty(), dstAddr, {b_.getInt64(off)}, "cc.at");
+      b_.CreateMemCpy(at, llvm::MaybeAlign(), srcs[i].ptr, llvm::MaybeAlign(),
+                      llvm::ConstantInt::get(b_.getInt64Ty(), take));
+      off += take;
+    }
+  }
+  if (plan.pad > 0)
+    b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dstAddr, {b_.getInt64(off)}, "cc.pad"),
+                    b_.getInt8(' '), llvm::ConstantInt::get(b_.getInt64Ty(), plan.pad),
+                    llvm::MaybeAlign(), false);
+  return true;
+}
+
+// Merge two masked bit tests on the same value into one masked test
+// (ADR-243): `(X & M1) = E1 & (X & M2) = E2` is `(X & (M1|M2)) = (E1|E2)`,
+// when the masks are disjoint and each expectation lies inside its own
+// mask. Mirrors MULTICS combine_tests.pl1:159-300, which requires the two
+// tests to read the same storage word of the same top-level object.
+//
+// The win is one masked test instead of two: the value is loaded once, the
+// mask is applied once, and the branch is one. LLVM cannot do this itself,
+// because PL/I's bit strings are bit-granular inside a byte array, so the
+// masks only exist at the PL/I level.
+//
+// The decision — whether the two tests may be merged, and what the merged
+// mask and expectation are — is pli::mergeBitTests (the plan's C2); what
+// stays here is the matching of the expression's shape and the emission.
+bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
+  // One side of the conjunction: (X & M) = E, with X the tested value, M a
+  // constant mask and E the constant expectation.
+  struct Side {
+    HExpr* var = nullptr;
+    std::string mask;
+    std::string want;
+    int nbits = 0;
+  };
+  auto parseSide = [](HExpr* t, Side& s) -> bool {
+    if (!t || t->kind != HExpr::Binary || t->op != Tok::Eq)
+      return false;
+    HExpr* masked = t->a.get();
+    HExpr* want = t->b.get();
+    if (!masked || masked->kind != HExpr::Binary || masked->op != Tok::Amp)
+      return false;
+    if (!want || want->kind != HExpr::BitLit)
+      return false;
+    HExpr* var = masked->a.get();
+    HExpr* mask = masked->b.get();
+    if (!var || var->kind != HExpr::VarRef || !var->sym)
+      return false;
+    if (!mask || mask->kind != HExpr::BitLit)
+      return false;
+    // A one-bit value's `&` is a logical conjunction, not a mask.
+    if (!var->ty.isBit() || var->ty.len <= 1)
+      return false;
+    // The mask and the expectation must have the tested value's length, so
+    // they select the same bits.
+    if (mask->ty.len != var->ty.len || want->ty.len != var->ty.len)
+      return false;
+    if ((int)mask->sval.size() != var->ty.len || (int)want->sval.size() != var->ty.len)
+      return false;
+    s.var = var;
+    s.mask = mask->sval;
+    s.want = want->sval;
+    s.nbits = var->ty.len;
+    return true;
+  };
+  Side s1, s2;
+  if (!parseSide(e->a.get(), s1) || !parseSide(e->b.get(), s2))
+    return false;
+  // The two tests must read the same value (MULTICS's `same_word`: the same
+  // storage object of the same top-level symbol). A locator-qualified
+  // reference reads through a runtime pointer, and two different locators are
+  // different storage, so only a plain reference qualifies.
+  if (s1.var->sym != s2.var->sym || s1.var->memberPath != s2.var->memberPath ||
+      s1.var->locPtr || s2.var->locPtr)
+    return false;
+  if (s1.nbits != s2.nbits)
+    return false;
+  // The merge itself: disjoint masks, each expectation inside its mask.
+  pli::BitTestMerge merge =
+      pli::mergeBitTests(s1.mask, s1.want, s2.mask, s2.want);
+  if (!merge.ok)
+    return false;
+  // The lowering policy wins (ADR-260): with
+  // --experimental-lowering=bit_merge:runtime the two tests stay separate,
+  // so the differential oracle can compare the two lowerings.
+  if (runtimePath("bit_merge")) {
+    facts_.recordBuiltin("bit_merge", "runtime");
+    return false;
+  }
+  facts_.recordBuiltin("bit_merge", "llvm");
+  // One load of the value, masked with the merged constant mask.
+  Val x = emitExpr(s1.var);
+  if (!x.ty.isBit() || x.ty.len != s1.nbits || !x.reg)
+    return false;
+  const int B = bitBytes(s1.nbits);
+  std::vector<unsigned char> maskBytes = packBitLiteral(merge.mask, s1.nbits);
+  std::vector<unsigned char> wantBytes = packBitLiteral(merge.want, s1.nbits);
+  llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+  llvm::Value* masked = llvm::UndefValue::get(arrTy);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* xb = b_.CreateExtractValue(x.reg, (unsigned)k, "bt.x");
+    llvm::Value* mb = llvm::ConstantInt::get(b_.getInt8Ty(), maskBytes[k]);
+    masked = b_.CreateInsertValue(masked, b_.CreateAnd(xb, mb, "bt.and"), (unsigned)k);
+  }
+  // The comparison is the one the two separate tests would make: the masked
+  // value against the merged expectation, as numbers (rule (117)).
+  Val mv;
+  mv.ty = Type::bit(s1.nbits);
+  mv.reg = masked;
+  Val wv;
+  wv.ty = Type::bit(s1.nbits);
+  wv.reg = llvm::ConstantDataArray::get(ctx_, wantBytes);
+  Val mi = convert(mv, Type::fixedBin(31, 0), e->loc);
+  Val wi = convert(wv, Type::fixedBin(31, 0), e->loc);
+  out.ty = Type::bit(1);
+  out.reg = b_.CreateICmpEQ(mi.reg, wi.reg, "bt.cmp");
+  return true;
+}
+
 void IRGen::emitAssign(HStmt* s) {
   if (!s->target)
     return;
@@ -5942,6 +6469,11 @@ void IRGen::emitAssign(HStmt* s) {
   // Self-append peephole first: X = X || lit... appends in place when the
   // target qualifies; anything else falls through to generic concat+assign.
   if (emitSelfAppend(s))
+    return;
+  // Constant-offset concatenation store: A = B || C into a fixed-length
+  // target stores each leaf at a constant offset, with no temporary buffer
+  // (ADR-242).
+  if (emitConcatConstStore(s))
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
@@ -6641,6 +7173,12 @@ void IRGen::collectCtlLoopInfo(HStmt* s, std::unordered_set<Symbol*>& uses,
 // that the body reuses via the hoist maps. Element stores write the data
 // buffer, never the stack metadata, so the hoist is sound. Callers erase the
 // returned symbols from the maps on loop exit.
+//
+// The hoist is the compiler's answer to the MULTICS save_temps contract
+// (ADR-269): a value cached across a control-flow edge is sound here only
+// because the analysis proved the generation cannot change inside the loop —
+// no call, no ALLOCATE, no FREE. A transformation that adds a call to the
+// body must drop the hoist.
 void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
                                 std::vector<Symbol*>& hoisted,
                                 std::vector<std::pair<Symbol*, size_t>>& hoistedExt) {
@@ -7554,24 +8092,40 @@ void IRGen::emitPutEditItems(HStmt* s) {
         break;
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
+      llvm::Value* val = nullptr;
+      int scale = 0;
       if (v.ty.isFixed()) {
-        llvm::Value* val = toI64(v);
-        llvm::Value* scale = i64(v.ty.scale);
-        // sign derived from the value: -1 if negative, +1 if non-negative.
-        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
-        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
-        deferCall("pli_put_edit_pic",
-                  {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
+        val = toI64(v);
+        scale = v.ty.scale;
       } else if (v.ty.k == TK::Float) {
         // Convert float to fixed-decimal via truncation.
-        llvm::Value* val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
-        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picfsn");
-        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picfs");
-        deferCall("pli_put_edit_pic",
-                  {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
+        val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
       } else {
         d_.error(item->loc, "P edit item requires a numeric value", "(53)");
+        break;
       }
+      // B4: a constant value through a foldable constant picture is formatted
+      // at compile time (rules (146)-(148)); the lowering policy still wins,
+      // so --experimental-lowering=picture:runtime keeps the interpreter and
+      // the differential oracle keeps both sides (ADR-274).
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      if (!runtimePath("picture") && spec.foldable) {
+        if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(val)) {
+          std::string text;
+          if (pli::foldPictureConversion(ci->getSExtValue(), scale, spec, text)) {
+            facts_.recordBuiltin("picture", "llvm");
+            deferCall("pli_put_edit_char", {globalString(text), i64((long long)text.size()),
+                                            i64((long long)text.size())});
+            break;
+          }
+        }
+      }
+      facts_.recordBuiltin("picture", "runtime");
+      // sign derived from the value: -1 if negative, +1 if non-negative.
+      llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
+      llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
+      deferCall("pli_put_edit_pic",
+                {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
       break;
     }
     }
@@ -9039,7 +9593,11 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
         b_.SetInsertPoint(copyBB);
         b_.CreateBr(mergeBB);
         b_.SetInsertPoint(mergeBB);
-        // Always reload fresh addr+len — may have changed in expBB
+        // Always reload fresh addr+len — may have changed in expBB. This is
+        // the MULTICS save_temps contract (ADR-269): a transformation that
+        // creates a new join must re-materialize the values it cached
+        // across that edge, and the generation's address is the one value
+        // here that can change.
         llvm::Value* faddr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "fraddr");
         llvm::Value* flen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "flen");
         emitAssignChar(faddr, flen, v.ptr, v.len);
@@ -10457,6 +11015,10 @@ Val IRGen::emitExpr(HExpr* e) {
   }
 
   if (op == Tok::Amp || op == Tok::Bar) { // rules (116),(115)
+    // A conjunction of two masked bit tests on the same value is one masked
+    // test (ADR-243); the merge is tried before the two tests are emitted.
+    if (op == Tok::Amp && emitCombinedBitTest(e, v))
+      return v;
     Val a = emitExpr(e->a.get());
     Val b = emitExpr(e->b.get());
     if (a.ty.isBit() && b.ty.isBit() && (a.ty.len > 1 || b.ty.len > 1)) {
@@ -10557,8 +11119,11 @@ Val IRGen::emitExpr(HExpr* e) {
     return v;
   }
 
-  Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
-                                        b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
+  // A BIT operand is compared as a 64-bit integer, not a 32-bit one: the
+  // packed value of a BIT(n) wider than 32 bits does not fit in 32, and
+  // truncating it would compare only the low 32 bits (ADR-275).
+  Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(63, 0) : a.ty,
+                                        b.ty.isBit() ? Type::fixedBin(63, 0) : b.ty)
                       : e->ty;
   // Power always promotes to FLOAT (rule 121, CM5). Division stays in the
   // type sema chose: FIXED for integer-valued operands (P3, ADR-190 — sdiv),
@@ -11429,15 +11994,49 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "ROUND") {
+    // A FIXED DECIMAL argument rounded to a constant digit count stays exact:
+    // the result is a decimal with that scale, and the conversion rounds half
+    // away from zero (ADR-006) — the same rounding an assignment uses, and
+    // the same one MULTICS's digit move produces (ADR-276).
+    if (e->args[0]->ty.k == TK::FixedDec && e->ty.k == TK::FixedDec) {
+      Val x = emitExpr(e->args[0].get());
+      Val r = convert(x, e->ty, e->loc);
+      v.ty = e->ty;
+      v.reg = r.reg;
+      result = v;
+      return true;
+    }
     Val x = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val xd = convert(x, Type::flt(6), e->loc);
-    v.ty = e->ty;
+    // The float path always produces a FLOAT, whatever the expression's type
+    // says: a value typed as a decimal would be stored raw (ADR-276).
+    v.ty = Type::flt(6);
     v.reg = b_.CreateCall(runtimeFn("pli_round"), {xd.reg, toI64(n)}, "round");
     result = v;
     return true;
   }
   if (e->name == "REPEAT") {
+    // A constant string repeated a constant number of times is itself a
+    // constant string (ADR-241): the text is built at compile time, so the
+    // result is a constant instead of a runtime loop. The lowering policy
+    // still wins: a forced runtime call keeps the library path, so the
+    // differential oracle keeps both sides.
+    HExpr* src = e->args[0].get();
+    HExpr* cnt = e->args[1].get();
+    if (src->kind == HExpr::CharLit && cnt->kind == HExpr::IntLit && cnt->ival > 0 &&
+        !runtimePath("repeat")) {
+      std::string text = pli::foldRepeatText(src->sval, cnt->ival);
+      if (!text.empty() && (long long)text.size() == (long long)e->ty.len) {
+        facts_.recordBuiltin("repeat", "llvm");
+        Val out;
+        out.ty = e->ty;
+        out.ptr = globalString(text);
+        out.len = i64(text.size());
+        result = out;
+        return true;
+      }
+    }
     Val s = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val out = charTemp(e->ty.len);
@@ -11448,13 +12047,29 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   }
   if (e->name == "VERIFY") {
     Val s = emitExpr(e->args[0].get());
-    Val t = emitExpr(e->args[1].get());
     llvm::Value* r;
-    if (e->args.size() == 3) {
-      Val st = emitExpr(e->args[2].get());
-      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
+    // A constant alphabet uses the membership table instead of a scan of the
+    // alphabet (ADR-241). The lowering policy still wins: a forced runtime
+    // call keeps the library path.
+    const char* op = e->args.size() == 3 ? "verify_from" : "verify";
+    HExpr* alpha = e->args[1].get();
+    if (alpha->kind == HExpr::CharLit && !useRuntimeCall(op)) {
+      llvm::Value* tbl = searchTable(alpha->sval);
+      if (e->args.size() == 3) {
+        Val st = emitExpr(e->args[2].get());
+        r = emitVerifyFromTable(s.ptr, s.len, tbl, toI64(st));
+      } else {
+        r = emitVerifyTable(s.ptr, s.len, tbl);
+      }
     } else {
-      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
+      // The alphabet is only materialized when the scan needs it.
+      Val t = emitExpr(e->args[1].get());
+      if (e->args.size() == 3) {
+        Val st = emitExpr(e->args[2].get());
+        r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
+      } else {
+        r = emitVerify(s.ptr, s.len, t.ptr, t.len);
+      }
     }
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
@@ -11462,6 +12077,22 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "TRANSLATE") {
+    // A constant (out, in) pair becomes a 256-byte table at compile time
+    // (ADR-273): one lookup per character instead of a scan of `in`. The
+    // lowering policy still wins, so the differential oracle keeps both sides.
+    HExpr* outArg = e->args[1].get();
+    HExpr* inArg = e->args[2].get();
+    if (outArg->kind == HExpr::CharLit && inArg->kind == HExpr::CharLit &&
+        !runtimePath("translate")) {
+      Val s = emitExpr(e->args[0].get());
+      Val dst = charTemp(e->ty.len);
+      emitTranslateTable(dst.ptr, dst.len, s.ptr, s.len,
+                         translateTable(outArg->sval, inArg->sval));
+      facts_.recordBuiltin("translate", "llvm");
+      dst.len = i64(e->ty.len);
+      result = dst;
+      return true;
+    }
     Val s = emitExpr(e->args[0].get());
     Val out = emitExpr(e->args[1].get());
     Val in = emitExpr(e->args[2].get());
@@ -11537,24 +12168,16 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val t = emitExpr(e->args[1].get());
     Val st = emitExpr(e->args[2].get());
-    llvm::Value* r = emitSearch(s.ptr, s.len, t.ptr, t.len, toI64(st));
+    // A constant alphabet uses the membership table instead of a scan of the
+    // alphabet (ADR-241).
+    llvm::Value* r;
+    HExpr* alpha = e->args[1].get();
+    if (alpha->kind == HExpr::CharLit && !useRuntimeCall("search"))
+      r = emitSearchTable(s.ptr, s.len, searchTable(alpha->sval), toI64(st));
+    else
+      r = emitSearch(s.ptr, s.len, t.ptr, t.len, toI64(st));
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "srch32");
-    result = v;
-    return true;
-  }
-  if (e->name == "VERIFY") {
-    Val s = emitExpr(e->args[0].get());
-    Val t = emitExpr(e->args[1].get());
-    llvm::Value* r;
-    if (e->args.size() == 3) {
-      Val st = emitExpr(e->args[2].get());
-      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
-    } else {
-      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
-    }
-    v.ty = e->ty;
-    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
     result = v;
     return true;
   }

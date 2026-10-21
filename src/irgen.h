@@ -141,6 +141,12 @@ private:
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynLb_;
+  // The membership table of each constant character alphabet used by
+  // VERIFY/SEARCH (ADR-241), keyed by the alphabet's text.
+  std::map<std::string, llvm::GlobalVariable*> searchTables_;
+  // The translate table of each constant (out, in) pair used by TRANSLATE
+  // (ADR-273), keyed by `out` + NUL + `in`.
+  std::map<std::string, llvm::GlobalVariable*> translateTables_;
   // Dynamic array member (rule 13) runtime bound values, keyed by (structure
   // symbol, member field path), recorded once at block entry.
   struct MemberDyn {
@@ -213,6 +219,17 @@ private:
   // Self-append peephole (rule (119), P4): X = X || lit... appends in place
   // for AUTOMATIC scalar VARYING targets; false for any other shape.
   bool emitSelfAppend(HStmt* s);
+  // Constant-offset concatenation store (rule (119), ADR-242): A = B || C
+  // into a fixed-length CHARACTER target stores every leaf at a constant
+  // offset, with no temporary buffer; false for any other shape.
+  bool emitConcatConstStore(HStmt* s);
+  // Merge two masked bit tests on the same value into one masked test
+  // (ADR-243): (X & M1) = E1 & (X & M2) = E2 is one test on X. False for
+  // any other shape, and when the two tests may not be merged.
+  bool emitCombinedBitTest(HExpr* e, Val& out);
+  // True when `s` is a parameter of the current procedure or of one of its
+  // enclosing procedures: such a symbol's storage may be the caller's.
+  bool isParamOfScope(Symbol* s) const;
   // Rule (119): a concat RHS evaluates into a fresh pli_alloc buffer; once
   // an assignment has copied it into the target the buffer is dead. Free it
   // unless the RHS is some other shape (no-op then).
@@ -670,6 +687,9 @@ private:
   // have no implementation fall back to runtime and report the fallback
   // under -v (design-docs/mlir-runtime-migration-plan.md §5.2, §6.5).
   bool useRuntimeCall(const std::string& op);
+  // The lowering policy for `op` without recording the decision: used where
+  // the caller has already asked for it (ADR-260).
+  bool runtimePath(const std::string& op);
   // True when a direct LLVM lowering exists for `op` (populated in P1+).
   bool hasLLVMLowering(const std::string& op);
   // Dispatch wrappers for the P0/P1 pilot operations. Each checks the
@@ -757,6 +777,29 @@ private:
   // Direct LLVM lowering for VERIFY (P3): bytewise scan for first char
   // absent from the delimiter set, 1-based result.
   llvm::Value* emitVerifyLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen);
+  // VERIFY with a constant alphabet (ADR-241): a 256-entry membership table
+  // replaces the inner scan, so each character costs one lookup instead of a
+  // scan of the whole alphabet (MULTICS compile_exp.pl1:1348-1380).
+  llvm::Value* emitVerifyTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table);
+  // VERIFY(s,t,from) with a constant alphabet: as above, starting at
+  // position `start` (1-based, clamped to 1).
+  llvm::Value* emitVerifyFromTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                   llvm::Value* start);
+  // SEARCH with a constant alphabet: the first char present in the set,
+  // 1-based, starting at `start` (clamped to 1).
+  llvm::Value* emitSearchTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                               llvm::Value* start);
+  // The 256-entry membership table for a constant character alphabet; one
+  // global per distinct alphabet, reused across call sites.
+  llvm::GlobalVariable* searchTable(const std::string& alphabet);
+  // TRANSLATE with constant `out`/`in` strings (ADR-273): a 256-entry
+  // translation table turns the inner scan of `in` into one lookup per
+  // character (MULTICS compile_exp.pl1:1392-1440).
+  void emitTranslateTable(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                          llvm::Value* table);
+  // The 256-entry translation table for a constant (out, in) pair; one global
+  // per distinct pair, reused across call sites.
+  llvm::GlobalVariable* translateTable(const std::string& out, const std::string& in);
   // Direct LLVM lowering for VERIFY(s,t,from) (P3): same as verify but
   // starting at position `start` (1-based, clamped to 1).
   llvm::Value* emitVerifyFromLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,

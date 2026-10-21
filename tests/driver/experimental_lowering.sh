@@ -16,7 +16,18 @@ witness: procedure options(main);
    declare v char(8) varying;
    declare f float(6);
    declare x fixed bin(31);
+   declare alpha char(10) init('0123456789');
+   declare vowels char(5) init('aeiou');
+   declare picbuf char(10);
    declare fails fixed bin(31);
+   /* WS-C/ADR-242: the constant-offset store and the temporary buffer */
+   declare cc char(12);
+   declare c1 char(6);
+   declare c2 char(4);
+   /* WS-C/ADR-243: the merged bit test and the two separate tests */
+   declare w bit(32);
+   declare bm fixed bin(31);
+   declare br fixed bin(31);
    fails = 0;
    v = 'AB';
    s = v;
@@ -27,6 +38,36 @@ witness: procedure options(main);
    if index('hello', 'll') ^= 3 then fails = fails + 1;
    if index('hi', 'hello') ^= 0 then fails = fails + 1;
    if index('hello', '') ^= 1 then fails = fails + 1;
+   /* WS-B/ADR-241: the constant table and the variable scan must agree */
+   if verify('12a3', '0123456789') ^= 3 then fails = fails + 1;
+   if verify('12a3', alpha) ^= 3 then fails = fails + 1;
+   if verify('ab c', 'ab ') ^= 4 then fails = fails + 1;
+   if search('hello', 'aeiou', 1) ^= 2 then fails = fails + 1;
+   if search('hello', vowels, 1) ^= 2 then fails = fails + 1;
+   if search('hello', 'aeiou', 4) ^= 5 then fails = fails + 1;
+   if repeat('ab', 3) ^= 'ababab' then fails = fails + 1;
+   /* WS-B/ADR-273: TRANSLATE pads `out` with blanks to the length of `in` */
+   if translate('abcxyz', 'XYQ', 'abc') ^= 'XYQxyz' then fails = fails + 1;
+   if translate('abcxyz', 'XY', 'abc') ^= 'XY xyz' then fails = fails + 1;
+   /* WS-B/ADR-274: the folded and runtime picture paths must agree */
+   put string(picbuf) edit(123.45) (P('ZZ9.99'));
+   if substr(picbuf,1,6) ^= '123.45' then fails = fails + 1;
+   /* WS-C/ADR-242: the constant-offset store and the temporary buffer
+      must produce the same characters */
+   c1 = 'abcdef';
+   c2 = 'ghij';
+   cc = c1 || c2;
+   if cc ^= 'abcdefghij  ' then fails = fails + 1;
+   /* WS-C/ADR-243: the merged bit test and the two separate tests must
+      agree */
+   w = fixed(13056);
+   bm = 0;
+   if ((w & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
+      ((w & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b)
+   then bm = 1;
+   br = 0;
+   if (w & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b then br = 1;
+   if bm ^= br then fails = fails + 1;
    /* W4: FIXED(float) and FIXED(char) differential check */
    f = 3.14;
    x = fixed(f);

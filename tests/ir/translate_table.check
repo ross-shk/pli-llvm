@@ -1,0 +1,6 @@
+CHECK: @pli_translate_table = private
+CHECK: getelementptr i8, ptr @pli_translate_table
+CHECK-NOT: call.*@pli_translate
+CHECK-NOT: %tr.inptr
+CHECK: br i1 %tr.more
+CHECK: ret void

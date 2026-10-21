@@ -1,0 +1,15 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-239: a constant subscript folds into one constant GEP displacement.
+    PL/I arrays may have any lower bound, so the displacement is
+    (index - lower bound) * stride, not the index itself, and a multi-axis
+    array's displacement is the row-major offset. The .check pins the three
+    displacements. */
+ const_offset: procedure options(main);
+    declare a(0:9) fixed bin(31);
+    declare b(-3:7) fixed bin(31);
+    declare c(0:9, 0:9) fixed bin(31);
+    a(3) = 1;
+    b(-1) = 2;
+    c(2, 3) = 3;
+ end const_offset;

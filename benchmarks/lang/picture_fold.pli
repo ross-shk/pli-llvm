@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* B4 gate (ADR-274): 1000000 constant picture conversions. The folded
+    build formats the value once at compile time; the runtime build runs
+    pli_put_edit_pic every iteration, so the pair prices the lowering. */
+ picture_fold: procedure options(main);
+    declare i fixed bin(31);
+    declare sum fixed bin(31);
+    declare b char(20);
+    sum = 0;
+    do i = 1 to 1000000;
+       put string(b) edit(123.45) (P('ZZ9.99'));
+       sum = sum + rank(substr(b, 1, 1));
+    end;
+    put skip list(sum);
+ end picture_fold;

@@ -1,0 +1,66 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Decimal operations with different operand scales (rules (16),(17),(135);
+    ADR-006, ADR-240). The plan's WS-E1 test: a table of decimal operations
+    with different operand scales, whose results must be exact — scale and
+    precision included. Each result is printed, so the declared scale is
+    visible in the output, and every value is checked against a hand-computed
+    expectation. */
+ decimal_scale: procedure options(main);
+   declare (a2, b2, s22) fixed decimal(9,2);
+   declare (c4, s24, d44, p22) fixed decimal(9,4);
+   declare p24 fixed decimal(9,4);
+   declare r2 fixed decimal(9,2);
+   declare (q2, w2, w4) fixed decimal(20,4);
+   declare (i, fails) fixed bin(31);
+
+   fails = 0;
+
+   /* The operands: two decimals at scale 2 and one at scale 4. */
+   a2 = 2.50;
+   b2 = 1.25;
+   c4 = 0.125;
+   w2 = 12345678901234.5678;
+   w4 = 0.0001;
+
+   /* Addition rescales the operands to the common scale (the larger one). */
+   s22 = a2 + b2;                    /* 3.75 at scale 2 */
+   if s22 ^= 3.75 then fails = fails + 1;
+   s24 = a2 + c4;                    /* 2.625 at scale 4 */
+   if s24 ^= 2.625 then fails = fails + 1;
+   d44 = a2 - c4;                    /* 2.375 at scale 4 */
+   if d44 ^= 2.375 then fails = fails + 1;
+
+   /* A product carries the sum of the operand scales. */
+   p22 = a2 * b2;                    /* 3.1250 at scale 4 */
+   if p22 ^= 3.1250 then fails = fails + 1;
+   p24 = a2 * c4;                    /* 0.3125 at scale 6, rounded to scale 4 */
+   if p24 ^= 0.3125 then fails = fails + 1;
+
+   /* An assignment rounds to the target's scale, half away from zero. */
+   r2 = 1.005;                       /* scale 3 into scale 2: 1.01 */
+   if r2 ^= 1.01 then fails = fails + 1;
+   q2 = 2.675;                       /* scale 3 into scale 4: 2.6750 */
+   if q2 ^= 2.6750 then fails = fails + 1;
+
+   /* A comparison rescales, so the scales do not change the answer. */
+   if (a2 = 2.50) = 0 then fails = fails + 1;
+   if (c4 = 0.125) = 0 then fails = fails + 1;
+
+   /* The precision: a wide product keeps every digit it can. */
+   w4 = w2 * w4;                     /* 12345678901234.5678 * 0.0001 */
+   if w4 ^= 1234567890.1235 then fails = fails + 1;
+
+   /* The table: the declared scale of each result is visible here. */
+   put skip list('s22 =', s22);
+   put skip list('s24 =', s24);
+   put skip list('d44 =', d44);
+   put skip list('p22 =', p22);
+   put skip list('p24 =', p24);
+   put skip list('r2  =', r2);
+   put skip list('q2  =', q2);
+   put skip list('w4  =', w4);
+
+   if fails = 0 then put skip list('PASS decimal_scale');
+   else put skip list('FAIL decimal_scale: fails =', fails);
+ end decimal_scale;

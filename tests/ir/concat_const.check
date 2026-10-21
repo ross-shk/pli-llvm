@@ -1,0 +1,6 @@
+CHECK-LABEL: define {{.*}}@PLI_MAIN
+CHECK-NOT: pli_alloc
+CHECK: call void @llvm.memcpy.p0.p0.i64\(ptr %{{.*}}, ptr %A.addr, i64 10
+CHECK: getelementptr i8, ptr %C.addr, i64 10
+CHECK: call void @llvm.memcpy.p0.p0.i64\(ptr %{{.*}}, ptr %B.addr, i64 10
+CHECK-NOT: pli_alloc

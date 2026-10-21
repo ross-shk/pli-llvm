@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-241: a VALUE constant and the literal it stands for produce the same
+    code (IBM zos:23492-23505), so the constant's use reads its value rather
+    than its storage. The .check asserts that the scan never reads %V.addr
+    and that both uses share one membership table. */
+ value_const_equiv: procedure options(main);
+    declare r fixed bin(31);
+    declare s char(10) init('hello');
+    declare v char(10) value('0123456789');
+    r = verify(s, v);
+    r = verify(s, '0123456789');
+ end value_const_equiv;
