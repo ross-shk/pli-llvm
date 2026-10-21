@@ -1150,9 +1150,11 @@ speculatively.
 ## 12. WS-K — the IBM decision layer: the measurement pass
 
 **The criterion.** WS-K's items are all gated the same way: *measure the
-witness first*. This section records what that pass found. Three items close
-without a diff, one is implemented (by a mechanism that was already in the
-tree), and three are deferred with the measurement that would promote them.
+witness first*. This section records what that pass found: **two** items are
+implemented (K1, by a mechanism that was already in the tree, and K3, which
+landed with the folding branch), **three** close without a diff (K5, K6, K10),
+**three** are deferred with the measurement that would promote them (K2 with
+K4, and K8), and two are not built (K9, K11).
 
 ### 12.1 K1 — `ORDER`-style storage pinning: implemented, and already there
 
