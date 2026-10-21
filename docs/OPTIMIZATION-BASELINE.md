@@ -1257,12 +1257,26 @@ calls (the runtime's `ctlFind` scan) measures **~2 ns** per fetch. The
 witness makes **two** fetches per cycle (the address and the length) over
 1,000,000 cycles — about **4 ms** of the 31.5 ms, some 13%.
 
-So the gain is real but small, and it is not reachable by a small change:
-the address of a CONTROLLED variable depends on the *current generation*, so
-the fetch cannot be removed without the compiler owning the generation
-stack. The compiler already hoists the fetch out of the inner loop (the
-optimized IR has one hoisted fetch and one per cycle, after the `ALLOCATE`
-that changes the generation — where the re-fetch is required).
+So the gain is real. **The sharper accounting** — the optimized IR of the
+witness makes **four** calls per cycle, not two: the address and the length,
+twice — once hoisted into the fill loop's preheader and once fresh after it
+(the `ALLOCATE` in between changes the generation, so the hoisted pair is
+re-taken after the fill).
+
+A compiler-held **anchor** removes three of the four: the `ALLOCATE` returns
+the new generation's address (so the refresh is free), the length becomes the
+declared extent (a compile-time constant), and the `FREE`'s refresh costs one
+call. At ~2 ns a call that is ~6 ns of the cycle, ~6 ms of the witness's
+31.5 ms — **about 19%**.
+
+**Why it is still deferred.** The anchor is only correct if the compiler sees
+*every* generation change, and it does not: a **nested** procedure may
+`ALLOCATE` the enclosing procedure's CONTROLLED variable (the compiler accepts
+that today), so the qualification needs a module-wide analysis of every
+`ALLOCATE` and `FREE` of the variable — and the change is a
+**storage-model** change, not a local one. The compiler already hoists the
+fetch out of the inner loop, which is why the fresh fetch is where it is.
+
 **Deferred**, with the promotion measurement named: a benchmark in which the
 CONTROLLED fetch dominates, and a design in which the compiler can hold the
 generation.
