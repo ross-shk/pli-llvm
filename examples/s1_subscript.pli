@@ -1,9 +1,17 @@
- /* scratch (WS-S1): a decimal subscript used three times in one statement,
-    with the subscript and the array contents unknown at compile time.
-    IBM's PAYTAX example (mvs:24251-24257) computes the subscript once. */
+ /* scratch (WS-S1): a subscript used three times in one statement, with the
+    subscript and the array contents unknown at compile time. IBM's PAYTAX
+    example (mvs:24251-24257) computes the subscript once.
+
+    The unoptimized IR computes it three times (%ld/%i64/%off, then the
+    same again for %off8 and %off14); the optimized IR computes it once and
+    folds the three uses into a multiply — so the hoist the item proposed is
+    not needed.
+
+    The subscript is a scale-0 FIXED DECIMAL: that is an integer here, and a
+    scaled decimal is rejected (ADR-277). */
  s1: procedure options(main);
-   declare a(1:10) fixed dec(5,2);
-   declare i fixed dec(5,2);
+   declare a(1:10) fixed dec(5,0);
+   declare i fixed dec(5,0);
    declare x fixed dec(9,0);
    declare j fixed bin(31);
    get list (i);
