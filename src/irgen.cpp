@@ -5337,11 +5337,11 @@ void IRGen::emitSignal(HStmt* s) {
 // statements
 // ---------------------------------------------------------------------------
 void IRGen::emitStmt(HStmt* s) {
+  if (!s)
+    return;
   // The current source location, for a remark raised inside a built-in
   // lowering (ADR-254).
   curLoc_ = s->loc;
-  if (!s)
-    return;
   if (!s->labels.empty()) {
     startBlock(labelBlocks_[s->labels.front()]);
   } else if (blockTerminated(b_.GetInsertBlock())) {
@@ -11309,6 +11309,8 @@ llvm::Value* IRGen::emitBinaryMath(const std::string& plifn, const std::string& 
 // Extracted from the emitExpr Call case so each built-in is a
 // self-contained block.
 bool IRGen::emitBuiltin(HExpr* e, Val& result) {
+  if (!e)
+    return false;
   // The call site's location, for a remark raised inside this lowering
   // (ADR-254).
   curLoc_ = e->loc;
