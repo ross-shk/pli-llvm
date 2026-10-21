@@ -1,0 +1,17 @@
+ /* scratch (WS-S1): a decimal subscript used three times in one statement,
+    with the subscript and the array contents unknown at compile time.
+    IBM's PAYTAX example (mvs:24251-24257) computes the subscript once. */
+ s1: procedure options(main);
+   declare a(1:10) fixed dec(5,2);
+   declare i fixed dec(5,2);
+   declare x fixed dec(9,0);
+   declare j fixed bin(31);
+   get list (i);
+   j = 1;
+   do while (j <= 10);
+     get list (a(j));
+     j = j + 1;
+   end;
+   x = a(i) + a(i) + a(i);
+   put skip list(x);
+ end;

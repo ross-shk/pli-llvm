@@ -1,0 +1,15 @@
+ /* scratch (WS-S5): the *variable* picture conversion — the path a picture
+    compiler would target. The constant case is folded (ADR-274). */
+ s5: procedure options(main);
+    declare i fixed bin(31);
+    declare sum fixed bin(31);
+    declare b char(20);
+    declare v fixed dec(9,2);
+    sum = 0;
+    get list (v);
+    do i = 1 to 1000000;
+       put string(b) edit(v) (P('ZZ9.99'));
+       sum = sum + rank(substr(b, 1, 1));
+    end;
+    put skip list(sum);
+ end;
