@@ -484,7 +484,9 @@ one character at a time, and each character is a locked stdio call. The
 stdout path has had a slab for this since ADR-220; the FILE path never did.
 ADR-272 gives it one — the characters come from a slab that one `fread`
 fills — and the read of 500 000 records falls from **340 ms to 10 ms**, the
-whole benchmark from about 120 ms to about 90 ms.
+whole `file_io` program from about **85 ms to about 55 ms** (a clean A/B of
+the same two binaries; the harness on a shared host does not resolve the
+difference on its own).
 
 The slab belongs to the *file* it was filled from, not to the selected
 stream: a GET statement unselects the file when it ends, and the characters

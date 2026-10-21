@@ -7891,7 +7891,9 @@ in the runtime seeks a stream, so a slab cannot go stale behind the
 program's back.
 
 **Consequences.** The read of 500 000 records falls from **340 ms to 10 ms**,
-and the whole `file_io` benchmark from about 120 ms to about 90 ms. The write
+and the whole `file_io` program from about **85 ms to about 55 ms** (a clean
+A/B of the same two binaries; the benchmark harness on a shared host does not
+resolve the difference on its own). The write
 phase is left alone: an output slab would have to drain at the record
 boundary to keep ADR-233's promise that a record reaches the stream before
 another task's record does, so it would buy the 10 ms between the write
