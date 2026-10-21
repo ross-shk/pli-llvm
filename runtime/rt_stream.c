@@ -65,7 +65,7 @@ static size_t rt_stdout_pos = 0;
 /* File input buffer (WS-H4, ADR-272): a list-directed GET reads a record one
  * character at a time, and a locked stdio call per character dominated the
  * file read path — measured on benchmarks/ir/file_io.pli, the same 500k
- * records take 340 ms through the per-character path and 30 ms through the
+ * records take 340 ms through the per-character path and 10 ms through the
  * buffered one. The characters are therefore pulled from a slab that one
  * fread fills.
  *

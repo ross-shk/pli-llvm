@@ -7893,18 +7893,34 @@ program's back.
 **Consequences.** The read of 500 000 records falls from **340 ms to 10 ms**,
 and the whole `file_io` program from about **85 ms to about 55 ms** (a clean
 A/B of the same two binaries; the benchmark harness on a shared host does not
-resolve the difference on its own). The write
-phase is left alone: an output slab would have to drain at the record
-boundary to keep ADR-233's promise that a record reaches the stream before
-another task's record does, so it would buy the 10 ms between the write
-phase and the C twin for a change to that promise.
+resolve the difference on its own).
 
-The stdin path still reads a character at a time (`pli_plat_getchar`): the
-same slab would serve it, and the same 34x, but the measure that justifies
-the change is the file path's, so the change stays where the measurement is.
+The write phase is left alone: an output slab would have to drain at the
+record boundary to keep ADR-233's promise that a record reaches the stream
+before another task's record does, so it would buy the 10 ms between the
+write phase and the C twin for a change to that promise.
+
+The stdin path still reads a character at a time (`pli_plat_getchar`). The
+same slab would serve it, and its read path is slower still (570 ms for the
+same 500 000 records), but the measurement that justifies the change is the
+file path's, so the change stays where the measurement is.
+
+**Two limits, stated rather than hidden.** The runtime has one global input
+stream (`rt_in_f`), so two tasks reading *different* files at once already
+raced before this change; the slab inherits that limit rather than adding
+one. And a slab belongs to one file, so switching between files discards the
+other file's buffered characters — harmless for a conforming program, where
+each GET ends on a record boundary, but it is the reason the slab is keyed by
+file and not by stream.
 
 **Test.** `tests/driver/file_slab.sh` writes 5 000 records and reads them
 back, checking every record and the total — enough records to cross the
 8 KiB slab several times, so a refill that lost or duplicated a character
 would show. `tests/hardening/task_input.pli` is the gate for the other half:
 two tasks reading one file, each record whole.
+
+**One trap for whoever changes this next.** The runtime is linked into the
+compiler as embedded bitcode, and `git checkout`/`git stash pop` can restore
+a source file with an mtime *older* than the bitcode it produced — so the
+build skips it and the binary does not reflect the tree. When a runtime
+change appears to have no effect, `touch runtime/*.c` and rebuild.
