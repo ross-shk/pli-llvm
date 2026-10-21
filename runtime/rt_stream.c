@@ -144,7 +144,11 @@ void rt_put_raw(const char *p, size_t n) {
 }
 
 /* Read one input character from the active FILE stream, STRING source, or
- * stdin. Tracks the input column for COLUMN positioning on GET EDIT. */
+ * stdin. Tracks the input column for COLUMN positioning on GET EDIT.
+ *
+ * Standard input goes through the input broker (ADR-238): the read itself
+ * happens on the broker's thread, so a task that waits for input parks
+ * instead of holding the worker it runs on. */
 int rt_next_char(void) {
   int c;
   if (rt_in_f)
@@ -152,7 +156,7 @@ int rt_next_char(void) {
   else if (rt_in_buf)
     c = rt_in_pos < rt_in_len ? (unsigned char)rt_in_buf[rt_in_pos++] : EOF;
   else
-    c = pli_plat_getchar();
+    c = rt_input_getc();
   if (c == EOF)
     return c;
   if (c == '\n')

@@ -84,6 +84,11 @@ size_t pli_plat_page_size(void);               /* the guard page size */
 int pli_plat_stack_alloc(size_t size, void **out_base);
 /* Release a stack obtained from pli_plat_stack_alloc (same base and size). */
 void pli_plat_stack_free(void *base, size_t size);
+/* Read up to `n` bytes of standard input, blocking until at least one byte
+ * is there or the input ends. Returns the number of bytes read, 0 at the
+ * end of the input, -1 on error. The input broker (ADR-238) calls this on
+ * its own thread, so a program that reads stdin does not block a worker. */
+int pli_plat_stdin_read(char *buf, int n);
 
 /* --- threading backend (one backend per platform TU; single-threaded custom
  * platforms: mutex/cond as no-ops over a non-shared state, spawn as

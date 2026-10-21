@@ -902,8 +902,10 @@ fiber backend yet.
 **Not yet**
 
 - You must `wait` before the block exits, or the event's storage may vanish while the task still runs. External and function-async tasks are diagnosed.
-- The fiber backend exists for x86-64; other architectures still use the
-  OS-thread model.
+- The fiber backend exists for x86-64 and AArch64. It has been run on x86-64 only.
+- A task that reads a *file* holds the worker it runs on. Reading *standard
+  input* does not: the read goes to a helper thread and the task parks until
+  the bytes arrive (ADR-238).
 
 > **Run the full example:** [`examples/concurrency.pli`](../examples/concurrency.pli) — `pli concurrency.pli -o conc && ./conc`.
 

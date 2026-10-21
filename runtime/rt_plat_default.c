@@ -108,6 +108,21 @@ size_t pli_plat_page_size(void) {
   GetSystemInfo(&si);
   return (size_t)si.dwPageSize;
 }
+/* Read standard input without the stdio buffer: the input broker reads on
+ * its own thread, and the bytes it hands to the tasks must be the same
+ * bytes the program would have read - so the stdio buffer must not be in
+ * the way. */
+int pli_plat_stdin_read(char *buf, int n) {
+  if (n <= 0)
+    return 0;
+  HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+  if (h == NULL || h == INVALID_HANDLE_VALUE)
+    return 0;
+  DWORD got = 0;
+  if (!ReadFile(h, buf, (DWORD)n, &got, NULL))
+    return 0; /* a console with no input: the read fails */
+  return (int)got;
+}
 
 /* The fiber stack: address space, not memory.
  *
@@ -639,6 +654,22 @@ long long pli_plat_now_ms(void) {
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     return 0;
   return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+/* Read standard input without the stdio buffer: the input broker reads on
+ * its own thread, and the bytes it hands to the tasks must be the same
+ * bytes the program would have read - so the stdio buffer must not be in
+ * the way. */
+int pli_plat_stdin_read(char *buf, int n) {
+  if (n <= 0)
+    return 0;
+  for (;;) {
+    ssize_t got = read(0, buf, (size_t)n);
+    if (got >= 0)
+      return (int)got;
+    if (errno == EINTR)
+      continue; /* a signal: read again */
+    return -1;
+  }
 }
 long long pli_plat_now_us(void) {
   struct timespec ts;

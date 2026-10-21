@@ -251,10 +251,11 @@ ADR-234 introduced and ADR-235 and ADR-236 refined.
 
 | Piece | Where | What it does |
 |---|---|---|
-| The context switch | `runtime/rt_fiber_asm.c` | Saves the callee-saved registers, the stack pointer and the resume address of the suspended fiber, restores the target's, and jumps. Hand-written assembly, because the compiler cannot express it. x86-64 only: SysV and Win64 variants. |
+| The context switch | `runtime/rt_fiber_asm.c` | Saves the callee-saved registers, the stack pointer and the resume address of the suspended fiber, restores the target's, and jumps. Hand-written assembly, because the compiler cannot express it. x86-64 (SysV and Win64) and AArch64 (AAPCS64). |
 | The scheduler | `runtime/rt_sched.c` | The worker pool, the run queues, the work stealing, the DELAY timer heap, the park and unpark, and the fiber pool. |
 | The lock layer | `runtime/rt_sync.c` | Locks and conditions that work on tasks rather than on OS threads. The fiber mode parks a task that cannot proceed; the legacy mode blocks the thread. |
 | The stack arena | `runtime/rt_plat_default.c` | The fiber stacks come from one reservation carved into slots, so a program with many tasks does not make many system calls. |
+| The input broker | `runtime/rt_input.c` | A reader thread that does the blocking read on standard input, so a task that waits for input parks instead of holding its worker. |
 
 The rules that make it work, each of them learned the hard way:
 
@@ -275,15 +276,22 @@ The rules that make it work, each of them learned the hard way:
 * **A stack's commit window must cover the fault handler's own frame.** The
   handler runs on the stack that faulted, so a stack that is not committed
   below the fault makes the handler fault too.
+* **A blocking read is not something a fiber can wait for.** A read on
+  standard input is a system call, and the fiber model has no way to park a
+  task around one, so the read moved to a helper thread (ADR-238). The
+  parsing stayed on the task's side, under the input lock, so a record is
+  still read as a unit.
 
 The model is the default; `PLI_TASK_MODEL=os` selects the legacy OS-thread
 model, which is also the default on the platforms that have no fiber
 backend. `PLI_TASK_WORKERS` sets the worker count (the default is
 `min(cores, 8)`) and `PLI_TASK_STACK` the stack ceiling (8 MiB).
 
-Two things are known not to be finished: a task that blocks on *standard
-input* holds the worker it runs on, because the read is a system call; and
-the AArch64 fiber backend is not written, so AArch64 uses the legacy model.
+Two things are known not to be finished: a task that reads a *file* still
+holds the worker it runs on, because a file read can block on a slow drive
+and the input broker covers standard input only; and the AArch64 fiber
+backend has not been run on AArch64 hardware - it is verified to assemble
+and to build, but not to switch.
 
 ## 4. Data representation and ABI
 

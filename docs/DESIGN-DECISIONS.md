@@ -7206,3 +7206,54 @@ program the way it should.
   exit when a program starts many tasks (`tests/core/task_many.pli`
   under `PLI_TASK_MODEL=os`). It predates this ADR and is not caused
   by it; the fiber model, which is the default, does not have it.
+
+---
+
+## ADR-238 - The input broker: a task that reads standard input does not block its worker
+
+**Context.** ADR-237 left one gap in the fiber model: a task that read
+standard input blocked the worker it ran on. The read is a system call,
+and a fiber cannot be parked around one, so the worker sat in the read
+until the bytes arrived - and every other task on that worker waited
+with it. That is the one thing the fiber model exists to avoid.
+
+**Decision.** The read moves to a helper thread and the task parks.
+
+* The broker is a reader thread that does the blocking read and fills a
+  queue of chunks. A task that finds the queue empty publishes itself
+  as the waiter, asks for a chunk, and *parks* - a scheduler park
+  (ADR-234), not a thread wait - so the worker stays free to run the
+  other tasks. The reader thread hands the bytes over and unparks the
+  task.
+* The parsing stays on the task's side, under the input lock (ADR-233):
+  a record is read as a unit and two tasks never split one. Only the
+  raw bytes cross the thread boundary.
+* The task's owner is recorded *before* it is published. The reader
+  thread may unpark the task before the task reaches its park, and an
+  unpark hands the task to its owner - the worker that is running it
+  now. Without the owner the task would go to the global queue, and
+  another worker would run it while it is still running.
+* The reader thread ends at the end of the input. It must not read
+  again, or it would spin on the end of the file.
+* The bytes are read without the stdio buffer, through a new seam
+  function `pli_plat_stdin_read` (`ReadFile` on Windows, `read` on
+  POSIX). The stdio buffer must not be in the way, or the tasks would
+  see the bytes in a different order than the program would have read
+  them.
+* The broker serves standard input only. A file read is served by the
+  page cache and does not block.
+
+**Consequences.**
+
+* A task that waits for input no longer stalls its worker. The
+  regression test is `tests/driver/task_stdin.sh`: the program starts
+  a reader and a ticker, the reader waits for a second number that
+  never comes, and the driver checks that the ticker finished anyway.
+  The test fails without the broker and passes with it.
+* The legacy OS-thread model uses the same broker with a plain thread
+  wait, so the bytes a program sees do not change with the tasking
+  model.
+* The broker costs one thread per program, started on the first read.
+* Known gap: reading from a *file* still blocks the worker. A file read
+  can block on a slow or network drive, and the broker does not cover
+  it. A task that reads a file slowly will hold its worker.

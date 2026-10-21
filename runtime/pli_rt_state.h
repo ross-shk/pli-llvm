@@ -163,6 +163,10 @@ extern volatile long long rt_pli_pages[PLI_MAX_FILES];
  * concurrently with the main thread (ADR-233). */
 void rt_put_raw(const char *p, size_t n);
 int rt_next_char(void);
+/* The input broker (ADR-238): the next byte of standard input, or EOF.
+ * The read happens on the broker's thread, so a task that waits for input
+ * parks instead of holding the worker it runs on. */
+int rt_input_getc(void);
 /* ADR-220: flush the stdout write slab before program exit or FILE routing. */
 void rt_flush_stdout(void);
 
