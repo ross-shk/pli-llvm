@@ -8935,3 +8935,70 @@ compiler says so instead of guessing:
   satisfied by the *absence* of the defect rather than by its presence: the
   optimizer computes a subscript once by itself, so the hoist S1 proposed is
   not needed.
+
+## ADR-253 — `ORDER`-style storage pinning for ON-unit-reachable variables
+
+**Context.** The plan's WS-K1 asks for IBM's `ORDER`/`REORDER` rule
+(`zos:6440-6445`): a variable that an ON unit can read must be **in storage**
+at a trap point, because the handler runs in the raiser's frame and reads it
+there. The plan's sketch was volatile accesses:
+
+```llvm
+; CHECK: load volatile i64, ptr %x
+; CHECK: store volatile i64, i64 %v, ptr %x
+```
+
+and the plan's worry was the cost: *"The pinned symbol is not
+register-allocated across the trap point. For the common case (a handler that
+does not read the block's variables), this is a pessimization. Therefore the
+implementation must be **narrow**: only pin a symbol when the ON-unit's body
+can actually reach it."*
+
+**The measurement.** The repo already implements the rule, by a different
+mechanism than the plan assumed. Rule (91) gives an ON unit a **capture
+context**: sema collects the automatics the unit touches (`onCaps`), the
+establishment stores their *addresses* in the context, and the handler loads
+them. The address escapes, so the optimizer cannot promote the variable to a
+register — it stays in storage, which is exactly what `ORDER` requires.
+
+The three measurements the gate asks for:
+
+* **The correctness.** A loop that writes a local, with a `ZERODIVIDE` handler
+  that reads it: the handler sees **100, 200, 300** — the latest values, not
+  stale ones (`examples/k1_order.pli`).
+* **The narrowness.** The same program with a handler that does *not* touch
+  the local: **zero** capture slots, and the local is promoted to a register
+  at `-O2` (its `%X.addr` disappears from the optimized IR). So the
+  pessimization the plan feared does not fall on the untouched symbols —
+  the capture set is exactly the reachable set.
+* **The cost.** A 10⁹-iteration loop with an unknown trip count and an
+  unknown-value dependency, pinned against promoted: **1.08–1.11 s** pinned,
+  **1.07–1.14 s** promoted — the delta is **under 1%**, inside the noise on
+  this host.
+
+**Decision.** The capture context **is** the `ORDER` implementation; no new
+code path is added. What the plan asked for and the tree did not have is the
+*reporting* and the *pins*, and both land now:
+
+* **`--print-facts` reports the pinned automatics** per procedure
+  (`pinned: SEEN X`), so a user can see which symbols the `ORDER` rule holds
+  in storage. The data was already computed (the capture set); it was just
+  not shown.
+* **The behaviour is pinned by tests**: `tests/core/order_pin.pli` — the
+  handler must see the latest value — and `tests/ir/order_pin.pli` — the
+  capture context holds the address of the symbol the unit reads, and of that
+  symbol only.
+
+**Consequences.**
+
+* The plan's account of this item was stale, in the same way as WS-G2's and
+  WS-E1's: the mechanism was in the tree and the plan proposed to add it.
+  The measurements are what turn that into a decision.
+* `volatile` is **not** used: the capture context gives the same guarantee
+  (the value in storage is the value the handler reads) without volatile
+  semantics, which would also forbid every other optimization of the
+  variable. The plan's `CHECK:` sketch is therefore not the IR this compiler
+  emits, and the IR test pins the mechanism that is.
+* A user-facing `ORDER`/`REORDER` attribute remains out of scope: it is a
+  language extension, and the plan's §21 rejects it for this plan. The
+  conservative behaviour is the default, and the analysis is now visible.

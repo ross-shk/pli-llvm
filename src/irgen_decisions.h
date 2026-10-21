@@ -37,6 +37,9 @@ struct ProcFacts {
   bool nounwind = false;   // the procedure cannot unwind
   bool willReturn = false; // the procedure always returns
   std::vector<BuiltinFact> builtins;
+  // The automatics an ON unit of this procedure can read, so they stay in
+  // storage at the trap point (ADR-253). Pinned by the capture context.
+  std::vector<std::string> pinned;
 };
 
 // The compiler's fact store: filled while lowering, printed by --print-facts.
@@ -50,6 +53,8 @@ public:
   // Per-procedure facts: beginProc opens a procedure, recordBuiltin adds to it.
   void beginProc(const std::string& name);
   void recordBuiltin(const std::string& op, const std::string& path);
+  // An automatic an ON unit can read: it is pinned in storage (ADR-253).
+  void recordPinned(const std::string& name);
   // The verdict for a procedure: memory effect, unwinding, return (ADR-264).
   void setEffects(const std::string& name, const std::string& effect,
                   const std::string& note, bool nounwind, bool willReturn);

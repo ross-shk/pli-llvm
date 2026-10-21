@@ -103,6 +103,25 @@ free=$($PLI --print-facts "$OUT.chain2.pli" 2>&1) || fail "plain chain dump fail
 block "$free" PFCHAIN | grep -q 'touches no memory' ||
   fail "the caller lost its claim without an ON unit"
 
+# --- the pinned automatics are reported (ADR-253) ---------------------------
+cat > "$OUT.pin.pli" <<'EOF'
+pfpin: procedure options(main);
+   declare x fixed bin(31);
+   declare y fixed bin(31);
+   declare seen fixed bin(31);
+   on zerodivide begin;
+      seen = x;
+   end;
+   y = 1;
+   put skip list(y);
+end pfpin;
+EOF
+pin=$($PLI --print-facts "$OUT.pin.pli" 2>&1) || fail "pinned dump failed"
+block "$pin" PFPIN | grep -q 'pinned: .*X' ||
+  fail "the automatic the ON unit reads was not reported as pinned"
+block "$pin" PFPIN | grep -q 'pinned: .*Y' &&
+  fail "an automatic the ON unit never touches was reported as pinned"
+
 # --- a name that escapes says so, not blaming a call it never makes ---------
 cat > "$OUT.esc.pli" <<'EOF'
 pfesc: procedure options(main);

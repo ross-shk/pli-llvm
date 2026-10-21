@@ -5379,6 +5379,10 @@ void IRGen::emitOn(HStmt* s) {
       for (size_t i = 0; i < s->onCaps.size(); ++i) {
         llvm::Value* fp = b_.CreateStructGEP(capTy, cap, (unsigned)i, "capf");
         b_.CreateStore(addressOf(s->onCaps[i]), fp);
+        // The captured automatic is pinned in storage: an ON unit reads it
+        // in the raiser's frame (ADR-253). Report which ones, so a user can
+        // see the ORDER rule at work (--print-facts).
+        facts_.recordPinned(s->onCaps[i]->name);
       }
       ctx = cap;
     }

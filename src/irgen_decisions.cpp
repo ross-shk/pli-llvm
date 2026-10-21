@@ -76,6 +76,18 @@ void FactStore::recordBuiltin(const std::string& op, const std::string& path) {
   p.builtins.push_back(BuiltinFact{op, path, 1});
 }
 
+// Record an automatic an ON unit can read, so it stays in storage at the
+// trap point (ADR-253). One entry per symbol, in the order it was captured.
+void FactStore::recordPinned(const std::string& name) {
+  if (cur_ < 0)
+    return;
+  ProcFacts& p = procs_[static_cast<size_t>(cur_)];
+  for (const auto& s : p.pinned)
+    if (s == name)
+      return;
+  p.pinned.push_back(name);
+}
+
 // The report, one fact per line. The module facts come first, then one block
 // per procedure with the facts it produced.
 std::string FactStore::report() const {
@@ -89,13 +101,19 @@ std::string FactStore::report() const {
     out += "\n";
   }
   for (const auto& p : procs_) {
-    if (p.builtins.empty() && p.effect.empty())
+    if (p.builtins.empty() && p.effect.empty() && p.pinned.empty())
       continue;
     out += "proc " + p.name + "\n";
     if (!p.effect.empty()) {
       out += "  effect: " + p.effect;
       if (!p.effectNote.empty())
         out += " (" + p.effectNote + ")";
+      out += "\n";
+    }
+    if (!p.pinned.empty()) {
+      out += "  pinned:";
+      for (const auto& s : p.pinned)
+        out += " " + s;
       out += "\n";
     }
     if (p.nounwind || p.willReturn) {
