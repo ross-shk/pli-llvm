@@ -1114,3 +1114,154 @@ The plan defers it: it needs a dependence analysis, LLVM's loop-fusion pass is
 not in the default pipeline, and the repo has no measured multi-pass array
 workload. Recorded as gated on a benchmark showing the pattern; not built
 speculatively.
+
+---
+
+## 12. WS-K — the IBM decision layer: the measurement pass
+
+**The criterion.** WS-K's items are all gated the same way: *measure the
+witness first*. This section records what that pass found. Three items close
+without a diff, one is implemented (by a mechanism that was already in the
+tree), and three are deferred with the measurement that would promote them.
+
+### 12.1 K1 — `ORDER`-style storage pinning: implemented, and already there
+
+IBM's rule (`zos:6440-6445`): a variable an ON unit can read must be **in
+storage** at a trap point, because the handler runs in the raiser's frame.
+The plan's sketch was volatile accesses, and its worry was that pinning a
+block's variables would be a pessimization.
+
+The tree already implements the rule, by another mechanism: rule (91) gives an
+ON unit a **capture context**, sema collects the automatics the unit touches,
+and the establishment stores their *addresses* — so the address escapes, the
+optimizer cannot promote the variable, and it stays in storage.
+
+| Measurement | Result |
+|---|---|
+| The correctness | A loop that writes a local with a `ZERODIVIDE` handler that reads it: the handler sees **100, 200, 300** — the latest values |
+| The narrowness | The same program with a handler that does *not* touch the local: **zero** capture slots, and the local is promoted to a register at `-O2` |
+| The cost | A 10⁹-iteration loop, pinned against promoted: **1.08–1.11 s** against **1.07–1.14 s** — under 1% |
+
+So the pessimization the plan feared does not fall on the untouched symbols:
+the capture set is exactly the reachable set. What the tree lacked was the
+*reporting* and the *pins*, and both land in ADR-253: `--print-facts` prints
+the pinned automatics (`pinned: X`), `tests/core/order_pin.pli` pins the
+correctness and `tests/ir/order_pin.pli` pins the capture set. `volatile` is
+not used — the capture context gives the same guarantee without forbidding
+every other optimization of the variable.
+
+### 12.2 K2, K4 — the inline-vs-library decision: measured, deferred
+
+The gate: *"close without a diff if the library path is already competitive
+for the shapes the repo supports."* The pair `string_search:inline->library`
+compiles the same program on both paths:
+
+| Path | Median (-O2) |
+|---|---|
+| inline (`memchr` + `memcmp`) | **110.1 ms** |
+| library (`pli_index`) | **2482.1 ms** |
+
+The library path is **22.55x** slower. The decision layer's value is
+therefore not in doubt — it is the difference between 110 ms and 2.5 s — and
+the repo's per-op table already picks the inline path wherever one exists.
+
+What K2 asks for *beyond* that is the per-call-site refinement, and one
+instance of it has already landed with the folding branch: a constant
+alphabet lowers to a membership table rather than a library call (ADR-241).
+The remaining scope is the built-ins the repo supports, one predicate each,
+seeded with IBM's tables (Tables 41/42/43, `mvs:25226-26045`): a large
+change whose measurement — that the library path is 22.55x slower — says
+the decision matters. **Deferred**, with the promotion measurement named:
+a built-in whose per-call-site predicate would change the chosen path.
+
+K4 (the remark that flags every library-call conversion) is the same change
+as K2 by the plan's own account — *"K2 and K4 are one change"* — so it is
+deferred with it.
+
+### 12.3 K5 — `REDUCE`, a `BY NAME` assignment as an aggregate move: closed
+
+The witness is a `BY NAME` assignment of a ten-member structure, 20,000,000
+times; the C twin copies the structure with one aggregate move, which is what
+the technique would produce.
+
+| Build | PL/I | C (aggregate move) | Ratio |
+|---|---|---|---|
+| `-O2` | **5.47 ms** | 6.00 ms | **0.99x** |
+
+The member-wise copy is as fast as the aggregate move, so there is no gain:
+**closed without a diff**. (At `-O0` the ratio is 1.48x — the unoptimized
+PL/I copy is slower — but the gate measures the optimized build, and there
+the two are equal.)
+
+### 12.4 K6 — `NOOVERLAP`, `memmove` → `memcpy`: closed
+
+The plan's own expectation: *"the expected gain is small — measure before
+building. If the timing delta is under 1%, close without a diff."*
+
+The measurement starts earlier: a whole-array copy (`b = a`) emits **neither**
+`llvm.memmove` nor `llvm.memcpy` — it is an aggregate load and store
+(`load [1000 x i32], ptr %A.addr` followed by the matching store). The
+member-wise copy of the whole structure is the same shape (12.3). The
+overlapping cases — a `SUBSTR` assignment into its own source — are the ones
+that need `memmove`, and they are the ones that keep it.
+
+So there is nothing to switch: the disjoint copies are already aggregate
+moves, and the copies that may overlap already use `memmove`.
+**Closed without a diff.**
+
+### 12.5 K8 — constant-extent `CONTROLLED`: deferred
+
+IBM's `RULES(NOLAXCTL)` (`zos:23039-23061`) lets the compiler generate the
+address of a CONTROLLED variable directly instead of fetching the runtime
+descriptor.
+
+The witness is `benchmarks/ir/controlled_stack.pli`: 1,000,000
+allocate/fill/sum/free cycles over a `CONTROLLED` array of 100 elements. It
+measures **31.5 ms** at `-O2` against **36.4 ms** for its C twin — **0.87x**,
+already ahead of C.
+
+The fetch itself is cheap: a micro-benchmark of 100,000,000 `pli_ctl_addr`
+calls (the runtime's `ctlFind` scan) measures **~2 ns** per fetch. The
+witness makes **two** fetches per cycle (the address and the length) over
+1,000,000 cycles — about **4 ms** of the 31.5 ms, some 13%.
+
+So the gain is real but small, and it is not reachable by a small change:
+the address of a CONTROLLED variable depends on the *current generation*, so
+the fetch cannot be removed without the compiler owning the generation
+stack. The compiler already hoists the fetch out of the inner loop (the
+optimized IR has one hoisted fetch and one per cycle, after the `ALLOCATE`
+that changes the generation — where the re-fetch is required).
+**Deferred**, with the promotion measurement named: a benchmark in which the
+CONTROLLED fetch dominates, and a design in which the compiler can hold the
+generation.
+
+### 12.6 K9 — `RESEXP`: not built
+
+Rejected by the plan's §21 as an *optimization* — it changes which conditions
+a program raises, so it belongs to the extension track (its own ADR, a
+`GRAMMAR-COVERAGE.md` extensions row). ADR-259 stays unwritten.
+
+### 12.7 K10 — `SELECT` via binary search: closed
+
+The gate: *"gate on the repo actually having such a pattern — if `SELECT` is
+rare, close without a diff."* The pattern is **not** rare: the corpus has
+`tests/corner_cases/select_edge.pli` with twenty `WHEN` arms and
+`tests/hardening/select_combo.pli` with seventeen. The new witness
+`benchmarks/lang/select_chain.pli` is a `SELECT` over twenty constant `CHAR`
+arms, 20,000,000 times; the C twin searches the same constants with a binary
+search, which is what a binary-search lowering would produce.
+
+| Build | PL/I (the chain) | C (binary search) | Ratio |
+|---|---|---|---|
+| `-O2` | **33.5 ms** | 345.6 ms | **0.10x** |
+
+The PL/I chain is **ten times faster** than a binary search: its arms are
+inlined character compares, while the C twin pays a `strcmp` call per probe.
+A binary-search lowering would make this program *slower*.
+**Closed without a diff.**
+
+### 12.8 K11 — `INLIST` / `INARRAY`: recorded, not built
+
+Rejected by §21 (a language feature, not an optimization). The transferable
+idea — a `CHAR(n≤4)` comparison as one word compare — belongs to the string
+path.

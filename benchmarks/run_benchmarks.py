@@ -72,6 +72,13 @@ LANG_BENCHMARKS = [
     ("alias_scope",   "lang/alias_scope.pli",   "lang/baseline/alias_scope_c.c"),
     ("pure_call",     "lang/pure_call.pli",     "lang/baseline/pure_call_c.c"),
     ("picture_fold",  "lang/picture_fold.pli",  "lang/baseline/picture_fold_c.c"),
+    # WS-K5: a BY NAME structure assignment. The C twin copies the structure
+    # with one aggregate move, which is what a REDUCE lowering would produce.
+    ("by_name",       "lang/by_name.pli",       "lang/baseline/by_name_c.c"),
+    # WS-K10: a SELECT over twenty constant CHAR arms. The C twin searches
+    # the same constants with a binary search, which is what a
+    # binary-search lowering would produce.
+    ("select_chain",  "lang/select_chain.pli",  "lang/baseline/select_chain_c.c"),
 ]
 
 # WS-A2 (ADR-267): a benchmark whose callee lives in another compilation unit
@@ -136,6 +143,13 @@ PAIRS = [
     # at constant offsets; the other side keeps the temporary buffer.
     ("concat_const", "constant-offset", [], "buffer",
      ["--experimental-lowering=concat_const:runtime"]),
+    # WS-K2 (ADR-254): the inline-vs-library decision. The same program on
+    # the library path (--experimental-lowering=runtime) and on the inline
+    # path, so the ratio prices the library call for the shapes the repo
+    # supports. A ratio near 1 means the library path is competitive and
+    # the decision layer has nothing to buy.
+    ("string_search", "inline", [], "library",
+     ["--experimental-lowering=runtime"]),
 ]
 
 
