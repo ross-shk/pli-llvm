@@ -7850,3 +7850,59 @@ whole-aggregate copy and the absence of a loop;
 `tests/core/bad_array_assign_defined.pli` pins the negative case — a
 whole-array assignment into a DEFINED overlay is *diagnosed*, not compiled
 into a copy that would break the aliasing.
+
+---
+
+## ADR-272 — The file read path is the cost, and a global slab cannot serve it
+
+**Context.** WS-H's gate is a profile: *"if the 1.38x is in the file syscall
+path (not formatting), the whole matching/descriptor design is the wrong
+fix."* The profile says the formatting is not the problem — the list-directed
+output path measures **0.79x** against its C twin, i.e. faster than C — while
+the file path measures **1.37x**. So IBM's compile-time format/data-list
+match (H1), the per-call-site descriptor (H2) and format pooling (H3) would
+be aimed at the wrong code.
+
+Splitting the `file_io` benchmark into its phases locates the cost:
+
+| phase | PL/I | C twin |
+|---|---|---|
+| write, 500 000 records | 40 ms | 30 ms |
+| **read, 500 000 records** | **340 ms** | **20 ms** |
+
+The read is 17x the C twin's. Its cause is visible in the runtime: a
+list-directed `GET` pulls the record one character at a time
+(`rt_next_char` → `pli_plat_fgetc`), and each of those is a locked stdio
+call. The stdout path got a slab for exactly this reason (ADR-220); the FILE
+path never did.
+
+**Decision.** H1, H2 and H3 are closed by the profile, and H4's fix — giving
+the FILE input a slab that one `fread` fills — is **not** taken, because the
+runtime's stream state is process-global by design and a slab is state.
+
+The runtime keeps its stream state global on purpose: a thread-local would
+fix the aliasing, but on Mach-O a thread-local access is a descriptor load
+plus an indirect call to the TLS resolver, and the resolver call lands in the
+output path of every PUT — measured on `benchmarks/io_throughput.pli` at
+**+69%** (20.0 ms → 33.9 ms for 200k PUTs). The input side has the same
+shape: a slab for the input would have to be per-thread to be safe, because
+two tasks reading the same stream would otherwise share one buffer's
+position.
+
+The experiment confirmed it: a global input slab took the read phase from
+**340 ms to 30 ms** — an 11x cut — and broke the concurrent task tests, which
+read through the same global state (`tests/hardening/task_input.pli`,
+`task_output.pli`). The cost of the slab is not the buffer; it is that the
+buffer's position is state, and this runtime's stream state is global.
+
+**Consequences.** WS-H's file read is left as it is, and the reason is
+recorded rather than the fix: the win is real (11x on the read phase) and the
+price is a per-thread input buffer, which the runtime's global-state design
+and the thread-local access cost on Mach-O both argue against.
+
+What *is* taken from this work is the profile itself, and it is what closed
+H1, H2 and H3: the plan's format-matching design would have been aimed at
+code that is already ahead of its C twin.
+
+**Test.** None added: the change was reverted, and the measurement stands in
+`docs/OPTIMIZATION-BASELINE.md` §7.

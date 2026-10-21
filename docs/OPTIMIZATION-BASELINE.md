@@ -449,3 +449,53 @@ about the storage behind the pointer. ADR-271 records the rule.
 **How to reproduce.** `python3 benchmarks/run_benchmarks.py --only array_param
 --runs 5` with the attribute and with `--no-param-attrs`, and
 `cmp` on the two linked objects.
+
+---
+
+## 7. WS-H: runtime I/O (P4)
+
+### 7.1 The profile the gate asks for
+
+WS-H's gate is explicit: *"Profile first — if the 1.38x is in the file
+syscall path (not formatting), the whole matching/descriptor design is the
+wrong fix."* The profile says the formatting is not where the time goes:
+
+| benchmark | what it measures | ratio at `-O2` |
+|---|---|---|
+| `io_throughput` | list-directed formatting to stdout | **0.79x** (faster than C) |
+| `file_io` | the same formatting, through a FILE | **1.37x** |
+
+So H1 (the compile-time format/data-list match), H2 (the per-call-site
+descriptor) and H3 (format pooling) would be aimed at code that is already
+ahead of its C twin. **They are closed by the profile**, and the item that
+pays is H4 — the file path.
+
+### 7.2 H4 — the file read path: 340 ms, and a slab that would fix it but cannot
+
+Splitting `file_io` into its phases locates the cost:
+
+| phase | PL/I | C twin |
+|---|---|---|
+| write, 500 000 records | 40 ms | 30 ms |
+| **read, 500 000 records** | **340 ms** | **20 ms** |
+
+The read is 17x the C twin's because a list-directed GET pulls the record
+one character at a time, and each character is a locked stdio call. The
+stdout path has had a slab for this since ADR-220; the FILE path never did.
+
+**The fix was implemented and then reverted.** A global input slab took the
+read phase from **340 ms to 30 ms** — an 11x cut — and broke the concurrent
+task tests (`tests/hardening/task_input.pli`, `task_output.pli`), which read
+through the same global state. The slab's *position* is state, and this
+runtime's stream state is process-global by design: a thread-local would fix
+the aliasing, but on Mach-O the TLS resolver call lands in every output
+path, measured at **+69%** on `io_throughput` (20.0 ms → 33.9 ms for 200k
+PUTs).
+
+So the honest record is a measurement and a constraint, not a win: **the
+file read is 17x the C twin's, the fix is known (a per-thread input slab),
+and the price is the runtime's global stream state.** H4 stays open with
+that named.
+
+**How to reproduce.** `benchmarks/ir/file_io.pli` split into a write-only and
+a read-only program, timed against the C twin's `fprintf`/`fscanf` loop.
