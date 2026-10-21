@@ -47,8 +47,7 @@ bool maxLeafMag(const Expr* e, int scale, PliI128& out) {
     return true;
   }
   case Expr::Unary:
-    return e->op == Tok::Minus || e->op == Tok::Plus ? maxLeafMag(e->a.get(), scale, out)
-                                                      : false;
+    return e->op == Tok::Minus || e->op == Tok::Plus ? maxLeafMag(e->a.get(), scale, out) : false;
   case Expr::Binary: {
     if (e->op != Tok::Plus && e->op != Tok::Minus && e->op != Tok::Star)
       return false;

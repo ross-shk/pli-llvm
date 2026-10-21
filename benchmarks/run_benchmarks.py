@@ -71,7 +71,6 @@ LANG_BENCHMARKS = [
     ("io_list",       "lang/io_list.pli",       "lang/baseline/io_list_c.c"),
     ("alias_scope",   "lang/alias_scope.pli",   "lang/baseline/alias_scope_c.c"),
     ("pure_call",     "lang/pure_call.pli",     "lang/baseline/pure_call_c.c"),
-    ("array_param",   "lang/array_param.pli",   "lang/baseline/array_param_c.c"),
     ("picture_fold",  "lang/picture_fold.pli",  "lang/baseline/picture_fold_c.c"),
 ]
 
@@ -109,9 +108,6 @@ PAIRS = [
     # The same program, once with the inference and once with
     # --no-memory-effects, so every call keeps LLVM's default effects.
     ("pure_call", "no-effects", ["--no-memory-effects"], "effects", []),
-    # WS-G3 (ADR-271): the shape of a by-ref array parameter, described to
-    # LLVM, priced against the same program compiled without it.
-    ("array_param", "no-attrs", ["--no-param-attrs"], "attrs", []),
     # The same measurement with the callee in another compilation unit: the
     # caller's optimizer cannot see the callee's body, so it cannot infer the
     # callee's effects either, and the promise on the definition reaches

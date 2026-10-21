@@ -1234,10 +1234,9 @@ ConcatStorePlan planConcatStore(const std::vector<long long>& leafLen, long long
 // also decides, and an expectation outside its mask can never hold, so both
 // keep the two separate tests.
 BitTestMerge mergeBitTests(const std::string& mask1, const std::string& want1,
-                            const std::string& mask2, const std::string& want2) {
+                           const std::string& mask2, const std::string& want2) {
   BitTestMerge merge;
-  if (mask1.size() != mask2.size() || mask1.size() != want1.size() ||
-      mask1.size() != want2.size())
+  if (mask1.size() != mask2.size() || mask1.size() != want1.size() || mask1.size() != want2.size())
     return merge;
   std::string mask(mask1.size(), '0');
   std::string want(mask1.size(), '0');

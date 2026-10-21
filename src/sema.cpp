@@ -2410,8 +2410,8 @@ void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
 
 Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
   Expr* lit = e;
-  if (lit && lit->kind != Expr::IntLit && lit->kind != Expr::DecLit &&
-      lit->kind != Expr::FltLit && lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
+  if (lit && lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
+      lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
     // Not a bare literal: a constant *expression* folds to one (ADR-240). The
     // value keeps the scale its operands imply; codegen rescales it to the
     // declared type's scale, which is the type-directed step. A leading
@@ -5809,8 +5809,8 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     // The digit count must be a constant integer. The folder may have
     // rewritten the literal as a decimal one (ADR-240), so both spellings
     // count as long as it has no fraction digits.
-    const bool countIsInt = na->kind == Expr::IntLit ||
-                            (na->kind == Expr::DecLit && na->decScale == 0);
+    const bool countIsInt =
+        na->kind == Expr::IntLit || (na->kind == Expr::DecLit && na->decScale == 0);
     if (xa->ty.k == TK::FixedDec && countIsInt && na->ival >= 0) {
       // The result keeps the source's precision, widened by the extra
       // fraction digits when the count asks for more of them (the 31-digit

@@ -1069,7 +1069,7 @@ llvm::GlobalVariable* IRGen::searchTable(const std::string& alphabet) {
   llvm::Constant* data = llvm::ConstantDataArray::get(
       ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
   auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
-                                      llvm::GlobalValue::PrivateLinkage, data, "pli_search_table");
+                                     llvm::GlobalValue::PrivateLinkage, data, "pli_search_table");
   g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
   searchTables_[alphabet] = g;
   return g;
@@ -1089,9 +1089,9 @@ llvm::GlobalVariable* IRGen::translateTable(const std::string& out, const std::s
   std::string bytes = pli::translateTableBytes(out, in);
   llvm::Constant* data = llvm::ConstantDataArray::get(
       ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
-  auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
-                                      llvm::GlobalValue::PrivateLinkage, data,
-                                      "pli_translate_table");
+  auto* g =
+      new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
+                               llvm::GlobalValue::PrivateLinkage, data, "pli_translate_table");
   g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
   translateTables_[key] = g;
   return g;
@@ -1139,8 +1139,8 @@ llvm::Value* IRGen::emitVerifyTable(llvm::Value* s, llvm::Value* sLen, llvm::Val
   b_.CreateBr(outerBB);
 
   startBlock(foundBB);
-  llvm::Value* matchResult = b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1),
-                                           "vrf.result");
+  llvm::Value* matchResult =
+      b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1), "vrf.result");
   b_.CreateBr(exitBB);
 
   startBlock(doneBB);
@@ -2515,8 +2515,7 @@ void IRGen::emitTranslateTable(llvm::Value* dst, llvm::Value* dstcap, llvm::Valu
   llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "tr.dstcap");
   // The copy stops at the shorter of the source and the destination, the
   // bound both the scan and the runtime call use.
-  llvm::Value* n =
-      b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.n");
+  llvm::Value* n = b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.n");
 
   llvm::Function* F = b_.GetInsertBlock()->getParent();
   llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "tr.loop", F);
@@ -6031,14 +6030,13 @@ bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
   // storage object of the same top-level symbol). A locator-qualified
   // reference reads through a runtime pointer, and two different locators are
   // different storage, so only a plain reference qualifies.
-  if (s1.var->sym != s2.var->sym || s1.var->memberPath != s2.var->memberPath ||
-      s1.var->locPtr || s2.var->locPtr)
+  if (s1.var->sym != s2.var->sym || s1.var->memberPath != s2.var->memberPath || s1.var->locPtr ||
+      s2.var->locPtr)
     return false;
   if (s1.nbits != s2.nbits)
     return false;
   // The merge itself: disjoint masks, each expectation inside its mask.
-  pli::BitTestMerge merge =
-      pli::mergeBitTests(s1.mask, s1.want, s2.mask, s2.want);
+  pli::BitTestMerge merge = pli::mergeBitTests(s1.mask, s1.want, s2.mask, s2.want);
   if (!merge.ok)
     return false;
   // The lowering policy wins (ADR-260): with
@@ -12086,8 +12084,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         !runtimePath("translate")) {
       Val s = emitExpr(e->args[0].get());
       Val dst = charTemp(e->ty.len);
-      emitTranslateTable(dst.ptr, dst.len, s.ptr, s.len,
-                         translateTable(outArg->sval, inArg->sval));
+      emitTranslateTable(dst.ptr, dst.len, s.ptr, s.len, translateTable(outArg->sval, inArg->sval));
       facts_.recordBuiltin("translate", "llvm");
       dst.len = i64(e->ty.len);
       result = dst;

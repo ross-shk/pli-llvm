@@ -16,6 +16,12 @@ two categories (ADR-262): `benchmarks/ir/` (the C-parity corpus, whose
 geomean is the acceptance gate) and `benchmarks/lang/` (the PL/I-language
 corpus, whose gates are paired PL/I-vs-PL-I comparisons).
 
+**How the sections are ordered.** By the phase that closed, not by the
+workstream's number: §3-§7 are the memory-effect, string, ON-dispatch,
+aggregate and I/O phases, and §8-§11 are the constant-folding, peephole,
+decimal and check-cost phases, which came in with the folding branch. The
+plan's own workstream numbering is the plan's, not this file's.
+
 ---
 
 ## 1. Check cost with the checks ON — M7's 1.5x criterion

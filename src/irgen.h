@@ -50,11 +50,11 @@ public:
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
         std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
         bool noMemoryEffects = false)
-      : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
-        noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
-        noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
+      : noMemoryEffects_(noMemoryEffects), d_(d), sema_(s), triple_(std::move(triple)),
+        mod_("pli", ctx_), b_(ctx_), noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks),
+        noZdivChecks_(noZdivChecks), noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
         platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
-        perOpOverrides_(std::move(perOpOverrides)), noMemoryEffects_(noMemoryEffects) {}
+        perOpOverrides_(std::move(perOpOverrides)) {}
 
   std::string run(HProgram& prog);
 
