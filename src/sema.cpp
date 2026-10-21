@@ -4433,6 +4433,28 @@ void Sema::checkSubscriptBounds(Expr* e, Symbol* arr) {
   checkSubscriptBoundsDims(e, arr->ty.dims, arr->name);
 }
 
+// A subscript must be of an integer type (rule 126, ADR-277): the value
+// addresses an element, so it needs an integer to address with. FIXED BINARY
+// is an integer type, and so is a FIXED DECIMAL with scale 0 — its stored
+// value *is* the integer (an integer literal has that type here), so it is
+// accepted. Anything else — a scaled decimal, a FLOAT, a CHARACTER — has no
+// integer value: the compiler used to take the stored bits as the index, so
+// a decimal subscript of 2.00 addressed element 200 of a three-element array.
+void Sema::checkSubscriptTypes(Expr* e) {
+  for (auto& a : e->args) {
+    if (a->kind == Expr::Star)
+      continue; // a cross-section axis marker (rule 126), not a value
+    const Type& t = a->ty;
+    if (t.isVoid())
+      continue; // already diagnosed elsewhere
+    if (t.k == TK::FixedBin)
+      continue;
+    if (t.k == TK::FixedDec && t.scale == 0)
+      continue;
+    d_.error(a->loc, "a subscript must be of an integer type, not " + t.desc(), "(126)");
+  }
+}
+
 void Sema::checkSubscriptBoundsDims(Expr* e, const std::vector<Dim>& dims,
                                     const std::string& name) {
   const size_t n = std::min(e->args.size(), dims.size());
@@ -4645,6 +4667,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         }
         e->kind = Expr::Subscript;
         e->sym = bs;
+        checkSubscriptTypes(e);
         const Type* leaf = resolveMemberPath(e, bs->ty.elementType());
         if (!leaf) {
           e->ty = Type::voidTy();
@@ -4671,6 +4694,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // to resolve is still recognised as a (void) subscript, not a call.
       e->kind = Expr::Subscript;
       e->sym = bs;
+      checkSubscriptTypes(e);
       const Type* leaf = resolveMemberPath(e, bs->ty);
       if (!leaf || !leaf->isArray()) {
         if (leaf)
@@ -4738,6 +4762,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         }
         e->kind = Expr::Subscript;
         e->sym = arr;
+        checkSubscriptTypes(e);
         int nStar = 0;
         Type reduced;
         if (crossSectionType(e, arr->ty, reduced, nStar)) {
@@ -4769,6 +4794,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       e->kind = Expr::Subscript;
       e->sym = arr;
+      checkSubscriptTypes(e);
       int nStar = 0;
       Type reduced;
       if (crossSectionType(e, arr->ty, reduced, nStar)) {
@@ -4797,6 +4823,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         e->path.empty()) {
       e->kind = Expr::Subscript;
       e->sym = ctl;
+      checkSubscriptTypes(e);
       e->ty = ctl->ty;
       noteStaticUse(p, ctl);
       break;

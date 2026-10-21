@@ -208,6 +208,9 @@ private:
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);
+  // A subscript must be of an integer type (rule 126, ADR-277): the index
+  // addresses an element, so it needs an integer value.
+  void checkSubscriptTypes(Expr* e);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript against an
   // explicit bound list (rule 126); `name` is the array's diagnostic name.
   void checkSubscriptBoundsDims(Expr* e, const std::vector<Dim>& dims, const std::string& name);

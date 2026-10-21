@@ -8876,3 +8876,62 @@ for. *Dropping the SIZE checks and trusting the range.* That is what NOSIZE
 does, and it is a different mode (rules (60)-(63), ADR-110). *Making the
 precision check cheap instead of eliding the storage check.* The two cost the
 same, so it buys nothing.
+
+## ADR-277 — A subscript must be of an integer type
+
+**Context.** The plan's WS-S1 item — hoist a decimal subscript conversion
+once per statement, IBM's `PAYTAX` example (`mvs:24251-24257`) — asked for a
+measurement of that shape. Measuring it found something else first: the
+compiler never checked that a subscript is of an integer type at all, and a
+scaled `FIXED DECIMAL` subscript was used **unscaled** as the index.
+
+```pli
+declare a(1:3) fixed dec(5,2);
+declare i fixed dec(5,2);
+i = 2.00;
+x = a(i);       /* a(2) holds 20.00 */
+```
+
+`i` holds 200 — a `FIXED DECIMAL(p,q)` is stored scaled by 10^q (ADR-006) —
+and the compiler took that 200 as the element index:
+
+* at `-O0`/`-O1`, where the SUBSCRIPTRANGE check is on by default, the
+  program trapped with *"SUBSCRIPTRANGE: array subscript out of bounds"* on a
+  legal value;
+* at `-O2`/`-O3`, where the check is elided by default (`--no-subscript`), the
+  access was out of bounds through an `inbounds` GEP — undefined behaviour,
+  and the program printed garbage.
+
+A `FLOAT` subscript behaved the same way: the float's bits became the index.
+
+**Decision.** A subscript must be of an integer type (rule (126)), and the
+compiler says so instead of guessing:
+
+* **FIXED BINARY** is accepted.
+* **A FIXED DECIMAL with scale 0** is accepted: its stored value *is* the
+  integer, and an integer literal has that type in this compiler — so `a(1)`
+  is a decimal subscript of scale 0, and rejecting it would reject every
+  literal subscript.
+* **Everything else** — a scaled `FIXED DECIMAL`, a `FLOAT`, a `CHARACTER`,
+  a `BIT`, a `POINTER` — is diagnosed: *"a subscript must be of an integer
+  type, not FIXED DECIMAL(5,2)"* (rule (126)).
+
+**Consequences.**
+
+* A program that used a scaled decimal subscript now fails to compile instead
+  of miscompiling. No program in the repo's corpus used one: the 647
+  pre-existing tests are green unchanged.
+* The check is `Sema::checkSubscriptTypes`, called from the five places a
+  subscript is resolved — the plain array, the member array, the
+  locator-qualified array, the array-of-structures and the CONTROLLED scalar.
+  It is a *type* check, so it runs before the bounds check and before
+  lowering.
+* A cross-section's `*` axis is a marker, not a value, and is skipped.
+* This is a conformance fix, not an optimization: it closes a gap in the type
+  rules. It was found while measuring the plan's WS-S1 item, and it is
+  recorded here because a silent miscompile is exactly what the repo's rule
+  ("gaps are diagnosed with a rule number, never silently accepted") does not
+  allow. The plan's own gate for S1 — *"the IR must show the miss"* — is
+  satisfied by the *absence* of the defect rather than by its presence: the
+  optimizer computes a subscript once by itself, so the hoist S1 proposed is
+  not needed.
