@@ -254,7 +254,7 @@ ADR-234 introduced and ADR-235 and ADR-236 refined.
 | The context switch | `runtime/rt_fiber_asm.c` | Saves the callee-saved registers, the stack pointer and the resume address of the suspended fiber, restores the target's, and jumps. Hand-written assembly, because the compiler cannot express it. x86-64 (SysV and Win64) and AArch64 (AAPCS64). |
 | The scheduler | `runtime/rt_sched.c` | The worker pool, the run queues, the work stealing, the DELAY timer heap, the park and unpark, and the fiber pool. |
 | The lock layer | `runtime/rt_sync.c` | Locks and conditions that work on tasks rather than on OS threads. The fiber mode parks a task that cannot proceed; the legacy mode blocks the thread. |
-| The stack arena | `runtime/rt_plat_default.c` | The fiber stacks come from one reservation carved into slots, so a program with many tasks does not make many system calls. |
+| The stack arena | `runtime/rt_plat_default.c` | The fiber stacks come from one reservation carved into slots, so a program with many tasks does not make many system calls. The stack grows in chunks, each with a guard page at its bottom. |
 | The input broker | `runtime/rt_input.c` | A reader thread that does the blocking read on standard input, so a task that waits for input parks instead of holding its worker. |
 
 The rules that make it work, each of them learned the hard way:
@@ -273,9 +273,14 @@ The rules that make it work, each of them learned the hard way:
   all the events, so a plain broadcast would wake every waiter for every
   task that ends. A waiter says what it waits for, and a signal wakes only
   those that said so.
-* **A stack's commit window must cover the fault handler's own frame.** The
-  handler runs on the stack that faulted, so a stack that is not committed
-  below the fault makes the handler fault too.
+* **A stack that grows has to fault where the handler can run.** The kernel
+  builds the exception record on the task's own stack, so the memory below
+  the stack pointer that faulted must be committed. The fiber stack grows in
+  chunks with a guard page at the bottom of each: the fault happens on the
+  guard, and the room the kernel needs is in the chunk above it (ADR-239).
+* **A report about a full stack cannot run on that stack.** The overflow
+  report runs on an emergency stack that the handler switches to through the
+  exception context, so it needs no room on the task's stack (ADR-239).
 * **A blocking read is not something a fiber can wait for.** A read on
   standard input is a system call, and the fiber model has no way to park a
   task around one, so the read moved to a helper thread (ADR-238). The

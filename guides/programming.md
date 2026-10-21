@@ -907,6 +907,10 @@ fiber backend yet.
   input* does not: the read goes to a helper thread and the task parks until
   the bytes arrive (ADR-238).
 
+A task that runs out of stack is reported, not left to die quietly:
+`TASK: stack overflow (the task's stack ran out)`, and the program stops
+with exit code 134 (ADR-239).
+
 > **Run the full example:** [`examples/concurrency.pli`](../examples/concurrency.pli) — `pli concurrency.pli -o conc && ./conc`.
 
 ---

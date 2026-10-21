@@ -127,13 +127,12 @@ int pli_plat_stdin_read(char *buf, int n) {
 /* The fiber stack: address space, not memory.
  *
  * The ceiling is reserved, not committed: a task that never touches its
- * stack costs one page, not the whole ceiling, so a program with ten
+ * stack costs one chunk, not the whole ceiling, so a program with ten
  * thousand tasks still fits in a small address space. The pages are
  * committed as the stack grows into them, by the vectored handler below:
- * it recognises a fault inside a fiber stack, commits the next window
- * below the committed part and resumes the faulting instruction. A fault
- * in the guard page below the stack is a stack overflow, and it is
- * reported as one.
+ * it recognises a fault on a chunk's guard page, commits the next chunk
+ * and lifts the guard, and the stack grows on. A stack that reaches the
+ * last guard page has run out of room, and it is reported as an overflow.
  *
  * The stacks come from an *arena*: one reservation, carved into slots.
  * A program with twenty thousand tasks would otherwise make twenty
@@ -148,18 +147,22 @@ int pli_plat_stdin_read(char *buf, int n) {
  * released stays in the list, and committing a released stack fails, which
  * leaves the fault to the default handler (a real crash, reported as
  * such). */
-#define RT_STACK_WINDOW (64u * 1024u) /* the commit granularity */
-#define RT_STACK_MARGIN (64u * 1024u) /* committed below the fault, for the
-                                        * handler's own frame */
-#define RT_ARENA_SLOTS 64              /* slots per arena reservation */
-typedef struct RtStack {
-  struct RtStack *next;
-  char *base;  /* the usable base; the guard page is the page below it */
-  size_t size; /* the usable size */
-  char *low;   /* the lowest committed address */
-} RtStack;
+/* The stack grows in chunks (ADR-239).
+ *
+ * A chunk is RT_STACK_CHUNK bytes: usable stack with a guard page at its
+ * bottom. The guard is what makes the growth fault, and the handler
+ * commits the next chunk and lifts the guard, so the stack grows on.
+ *
+ * The guard page is not decoration. The kernel builds the exception
+ * record on the *user's* stack, so the handler needs committed memory
+ * below the stack pointer that faulted. A stack that ran into
+ * uncommitted memory would fault the kernel's own bookkeeping first, and
+ * the process would die before the handler could do anything. The chunk
+ * above the guard is that memory: the fault happens on the guard, and
+ * the room the kernel needs is in the chunk above it. */
+#define RT_STACK_CHUNK (64u * 1024u) /* the commit granularity */
+#define RT_ARENA_SLOTS 64             /* slots per arena reservation */
 
-static RtStack *rt_stacks = NULL;
 static INIT_ONCE rt_stacks_once = INIT_ONCE_STATIC_INIT;
 static PVOID rt_veh = NULL;
 
@@ -182,15 +185,17 @@ static PVOID rt_veh = NULL;
  *     |  the stack's top     |  the fiber starts here
  *     |  (grows downward)    |
  *     |                      |
- *     |  the usable region  |
+ *     |  the usable region  |  the chunks, with a guard page
+ *     |                      |  at the bottom of each
  *     +----------------------+  slot_base + page
- *     |  the guard page      |  a stack that runs out lands here
+ *     |  the guard page      |  a write that lands outside the
+ *     |                      |  stack stops here
  *     +----------------------+  slot_base
  *
- * The guard page is the slot's first page, below the usable region: a
- * stack that runs out of room lands there, and it never reaches into the
- * next slot. The usable part is committed from the top down, in windows,
- * as the stack grows into it.
+ * The usable region is a whole number of chunks. Each chunk ends with a
+ * guard page, and the handler commits the next chunk and lifts the guard
+ * when the stack reaches it. The slot's own guard page, below the usable
+ * region, catches a write that lands outside the stack altogether.
  *
  * The free list is shared by the workers, so it is guarded by a spin lock:
  * the critical section is a couple of instructions, and a stack allocation
@@ -203,7 +208,6 @@ typedef struct RtArena {
   size_t usable;     /* the usable size of a slot */
   size_t page;       /* the guard page size */
   volatile LONG *free_slots; /* the free slot indices, LIFO */
-  char **lows;       /* per slot: the lowest committed address */
   int free_top;      /* how many are on the free list */
   int free_count;    /* the free list's capacity */
   volatile LONG lock; /* the free list's spin lock */
@@ -214,6 +218,54 @@ static INIT_ONCE rt_arena_once = INIT_ONCE_STATIC_INIT;
 static volatile LONG rt_arena_lock = 0;
 
 static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep);
+
+/* The stack overflow report (ADR-239).
+ *
+ * A fiber stack that runs out of room faults on its guard page, and the
+ * vectored handler cannot run on the faulting stack: the stack is full,
+ * and the dispatcher that called the handler needed stack room below the
+ * faulting stack pointer too. So the report runs on an *emergency stack*:
+ * the exception context is rewritten to continue there, and the report
+ * exits the program.
+ *
+ * This is the Windows counterpart of the alternate stack that POSIX gives
+ * the signal handler (ADR-237). Both platforms say the same thing and
+ * exit with the same code. */
+#define RT_EMERGENCY_BYTES (64u * 1024u)
+static __declspec(thread) char *rt_emergency = NULL;
+
+/* The emergency stack, allocated the first time a thread needs it. */
+static char *rt_emergency_get(void) {
+  if (!rt_emergency)
+    rt_emergency = (char *)VirtualAlloc(NULL, RT_EMERGENCY_BYTES,
+                                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  return rt_emergency;
+}
+
+/* The report. It runs on the emergency stack and never returns. */
+__declspec(noreturn) static void rt_overflow_report(void) {
+  static const char msg[] =
+      "TASK: stack overflow (the task's stack ran out)\n";
+  DWORD n = 0;
+  HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+  WriteFile(h, msg, (DWORD)(sizeof msg - 1), &n, NULL);
+  ExitProcess(134);
+}
+
+/* Report the overflow: continue execution on the emergency stack, where
+ * there is room for the report. */
+static LONG rt_report_overflow(EXCEPTION_POINTERS *ep) {
+  char *alt = rt_emergency_get();
+  if (!alt)
+    return EXCEPTION_CONTINUE_SEARCH; /* no room anywhere: let it crash */
+  CONTEXT *ctx = ep->ContextRecord;
+  /* The report is entered as if it had been called: the emergency
+   * stack's top is the return address slot, so the frame that the
+   * prologue sets up lands 16-byte aligned, as the ABI wants. */
+  ctx->Rsp = (DWORD64)((uintptr_t)alt + RT_EMERGENCY_BYTES - 8);
+  ctx->Rip = (DWORD64)(uintptr_t)rt_overflow_report;
+  return EXCEPTION_CONTINUE_EXECUTION;
+}
 
 static BOOL CALLBACK rt_stacks_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) {
   (void)o;
@@ -231,18 +283,6 @@ static BOOL CALLBACK rt_arena_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) {
   return TRUE;
 }
 
-/* Commit [from, to) of the stack and remember the new low watermark. */
-static int rt_stack_commit(RtStack *s, char *from, char *to) {
-  if (to <= from)
-    return 0;
-  /* MEM_COMMIT at a given address commits the reserved pages there. */
-  void *p = VirtualAlloc(from, (size_t)(to - from), MEM_COMMIT, PAGE_READWRITE);
-  if (!p)
-    return -1;
-  s->low = from;
-  return 0;
-}
-
 /* The arena that holds the faulting address, or NULL. The slots are
  * equal-sized, so the slot is found by arithmetic. */
 static RtArena *rt_arena_of(char *addr) {
@@ -253,61 +293,56 @@ static RtArena *rt_arena_of(char *addr) {
   return NULL;
 }
 
-/* The stack that owns the faulting address, or NULL. */
-static RtStack *rt_stack_of(char *addr) {
-  RtArena *a = rt_arena_of(addr);
-  if (!a)
-    return NULL;
-  size_t off = (size_t)(addr - a->base);
-  size_t idx = off / a->slot;
-  char *slot_base = a->base + idx * a->slot;
-  /* The slot's guard page sits at its low end, the usable stack above it. */
-  return (RtStack *)(void *)(a->base + idx * a->slot + a->page);
-}
-
 static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep) {
   EXCEPTION_RECORD *r = ep->ExceptionRecord;
-  if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+  /* A guard page reports a guard violation (STATUS_GUARD_PAGE_VIOLATION,
+   * 0x80000001) and an uncommitted page reports an access violation. Both
+   * mean the same thing here: the stack reached a page it may not use. The
+   * address tells a real fault from ours. */
+  if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION &&
+      r->ExceptionCode != 0x80000001u)
     return EXCEPTION_CONTINUE_SEARCH;
   /* ExceptionAddress is the faulting *instruction*; the address that was
    * actually accessed is the first extra information field. */
   char *fault = (char *)r->ExceptionInformation[1];
   size_t page = pli_plat_page_size();
   RtArena *a = rt_arena_of(fault);
-  if (a) {
-    size_t idx = (size_t)(fault - a->base) / a->slot;
-    char *slot_base = a->base + idx * a->slot;
-    char *usable = slot_base + a->page;
-    if (fault >= usable && fault < usable + a->usable) {
-      /* A touch inside the stack. The committed region is [low, top) and
-       * the stack grows down from the top, so the faulting page is below
-       * it: commit the gap [grow, low), which covers the fault and a
-       * margin below it - the handler itself runs on this stack, so its own
-       * frame has to be in committed memory too. The margin is clipped to
-       * the slot, so the commit never reaches into the next slot. */
-      char *from = (char *)((uintptr_t)fault & ~(uintptr_t)(page - 1));
-      char *low = a->lows[idx]; /* the lowest committed address */
-      char *grow = from - (long)RT_STACK_MARGIN;
-      if (grow < usable)
-        grow = usable;   /* the slot's floor: the guard page is below it */
-      if (grow > from)
-        grow = from;     /* the faulting page must be in the commit */
-      if (grow < low) {
-        if (!VirtualAlloc(grow, (size_t)(low - grow), MEM_COMMIT, PAGE_READWRITE))
-          return EXCEPTION_CONTINUE_SEARCH;
-        a->lows[idx] = grow;
-      }
-      return EXCEPTION_CONTINUE_EXECUTION;
-    }
-    if (fault >= slot_base && fault < slot_base + a->page) {
-      /* The guard page: the task's stack ran out. */
-      fprintf(stderr, "TASK: stack overflow (the task's stack ran out)\n");
-      fflush(stderr);
-      return EXCEPTION_CONTINUE_SEARCH;
-    }
+  if (!a)
     return EXCEPTION_CONTINUE_SEARCH;
+  size_t idx = (size_t)(fault - a->base) / a->slot;
+  char *usable = a->base + idx * a->slot + a->page;
+  if (fault < usable || fault >= usable + a->usable)
+    return EXCEPTION_CONTINUE_SEARCH;
+  /* The chunks are counted from the top, because the stack starts at the
+   * top and grows down. A chunk is a page of guard at its bottom and
+   * usable stack above it. */
+  char *top = usable + a->usable;
+  size_t chunk = ((size_t)(top - fault) - 1) / RT_STACK_CHUNK;
+  char *lo = top - (chunk + 1) * RT_STACK_CHUNK; /* the chunk's bottom */
+  if (fault >= lo + page)
+    return EXCEPTION_CONTINUE_SEARCH; /* not the guard: a real fault */
+  /* The guard page at the bottom of this chunk: the stack has filled the
+   * chunk. Commit the next one and lift the guard, and the stack grows
+   * on into it. */
+  if ((chunk + 1) * RT_STACK_CHUNK < a->usable) {
+    char *next = lo - RT_STACK_CHUNK;
+    if (!VirtualAlloc(next + page, RT_STACK_CHUNK - page, MEM_COMMIT, PAGE_READWRITE))
+      return EXCEPTION_CONTINUE_SEARCH;
+    /* PAGE_GUARD is a flag on top of a protection, not a protection by
+     * itself. */
+    if (!VirtualAlloc(next, page, MEM_COMMIT, PAGE_GUARD | PAGE_READWRITE))
+      return EXCEPTION_CONTINUE_SEARCH;
+    DWORD old = 0;
+    /* Lift the guard: the stack grows on through it. */
+    if (!VirtualProtect(lo, page, PAGE_READWRITE, &old))
+      return EXCEPTION_CONTINUE_SEARCH;
+    return EXCEPTION_CONTINUE_EXECUTION;
   }
-  return EXCEPTION_CONTINUE_SEARCH;
+  /* The last chunk: the stack ran out of room. The handler cannot run on
+   * this stack - it is full, and the dispatcher that called us needed room
+   * below the faulting stack pointer too - so the report runs on the
+   * emergency stack (ADR-239). */
+  return rt_report_overflow(ep);
 }
 
 /* The arena that holds stacks of this size, or NULL. The list is guarded by
@@ -325,10 +360,7 @@ static RtArena *rt_arena_new(size_t usable, size_t page) {
     return NULL;
   }
   a->free_slots = (volatile LONG *)malloc(sizeof(LONG) * RT_ARENA_SLOTS);
-  a->lows = (char **)malloc(sizeof(char *) * RT_ARENA_SLOTS);
-  if (!a->free_slots || !a->lows) {
-    free(a->free_slots);
-    free(a->lows);
+  if (!a->free_slots) {
     free(a);
     VirtualFree(base, 0, MEM_RELEASE);
     return NULL;
@@ -338,12 +370,9 @@ static RtArena *rt_arena_new(size_t usable, size_t page) {
   a->slot = slot;
   a->usable = usable;
   a->page = page;
-  /* Every slot starts free, with nothing committed yet. The watermark of a
-   * slot is the top of its usable region: the stack grows down from there. */
-  for (int i = 0; i < RT_ARENA_SLOTS; ++i) {
+  /* Every slot starts free, with nothing committed yet. */
+  for (int i = 0; i < RT_ARENA_SLOTS; ++i)
     a->free_slots[i] = i;
-    a->lows[i] = base + (size_t)(i + 1) * slot;
-  }
   a->free_top = RT_ARENA_SLOTS;
   a->free_count = RT_ARENA_SLOTS;
   a->lock = 0;
@@ -418,7 +447,9 @@ static void rt_arena_give(RtArena *a, size_t index) {
 
 int pli_plat_stack_alloc(size_t size, void **out_base) {
   size_t page = pli_plat_page_size();
-  size = (size + page - 1) & ~(page - 1);
+  /* The usable region is a whole number of chunks: every chunk ends with a
+   * guard page. */
+  size = (size + RT_STACK_CHUNK - 1) & ~(RT_STACK_CHUNK - 1);
   InitOnceExecuteOnce(&rt_stacks_once, rt_stacks_init_cb, NULL, NULL);
   InitOnceExecuteOnce(&rt_arena_once, rt_arena_init_cb, NULL, NULL);
   /* The arena holds the stacks: one reservation, many slots. A new arena
@@ -433,10 +464,18 @@ int pli_plat_stack_alloc(size_t size, void **out_base) {
    * the top is at the slot's end, and the guard page is below the usable
    * region. */
   char *usable = slot_base + a->page;
-  size_t window = RT_STACK_WINDOW < size ? RT_STACK_WINDOW : size;
-  if (!VirtualAlloc(usable + size - window, window, MEM_COMMIT, PAGE_READWRITE))
+  /* The first chunk: the top of the usable region, its usable part and the
+   * guard page below it. The guard is what makes the next growth fault
+   * where the handler can deal with it. */
+  char *top = usable + size;
+  if (!VirtualAlloc(top - RT_STACK_CHUNK + page, RT_STACK_CHUNK - page,
+                    MEM_COMMIT, PAGE_READWRITE))
     return -1;
-  a->lows[index] = usable + size - window;
+  /* PAGE_GUARD is a flag on top of a protection, not a protection by
+   * itself. */
+  if (!VirtualAlloc(top - RT_STACK_CHUNK, page, MEM_COMMIT,
+                    PAGE_GUARD | PAGE_READWRITE))
+    return -1;
   *out_base = usable;
   return 0;
 }

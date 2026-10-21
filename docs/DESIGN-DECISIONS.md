@@ -7257,3 +7257,63 @@ with it. That is the one thing the fiber model exists to avoid.
 * Known gap: reading from a *file* still blocks the worker. A file read
   can block on a slow or network drive, and the broker does not cover
   it. A task that reads a file slowly will hold its worker.
+
+---
+
+## ADR-239 - The Windows fiber stack grows in chunks, and the overflow is reported on an emergency stack
+
+**Context.** ADR-234 gave the Windows fiber stacks a reserved arena with
+a 64 KiB commit window and a vectored handler that committed more of
+the stack when the task ran into the edge of the committed part. That
+does not work, and it fails in two ways.
+
+The first is the growth. The kernel builds the exception record on the
+*user's* stack, so the handler needs committed memory below the stack
+pointer that faulted. A fiber stack that runs into uncommitted memory
+faults the kernel's own bookkeeping first, and the process dies with a
+bare access violation before the handler can do anything. The task that
+needed more than one window of stack simply died.
+
+The second is the overflow. The handler that was supposed to say "the
+task's stack ran out" had no room to run in: the stack was full, and
+the dispatcher that called the handler needed room below the faulting
+stack pointer too. So the overflow was never reported on Windows, while
+POSIX had reported it since ADR-237.
+
+**Decision.**
+
+*The stack grows in chunks.* A chunk is 64 KiB: usable stack with a
+guard page at its bottom. The stack starts at the top of the first
+chunk; when it fills the chunk it faults on the guard page, and the
+handler commits the next chunk and lifts the guard, so the stack grows
+on. The commit granularity is unchanged, so a program with many tasks
+does not pay more than it did before.
+
+*The guard page is what makes it work.* The fault has to happen on the
+guard, not on the edge of the committed part: the room the kernel needs
+below the faulting stack pointer is then in the chunk above the guard,
+which is committed. A stack that ran into uncommitted memory would
+fault the kernel's bookkeeping instead.
+
+*The overflow is reported on an emergency stack.* The handler rewrites
+the exception context to continue on a per-thread emergency stack, where
+there is room, and the report prints "TASK: stack overflow (the task's
+stack ran out)" and exits with 134. That is the same message and the
+same exit code that POSIX gives (ADR-237).
+
+**Consequences.**
+
+* A task's stack grows on Windows as it does on POSIX. Before this ADR
+  a task whose stack passed the first window died with a bare access
+  violation, and the overflow report could never run.
+* A task that runs out of stack is reported the same way on both
+  platforms. The regression test is `tests/driver/task_stack_overflow.sh`:
+  against the old runtime the program dies with a segmentation fault
+  and the test fails; against this one it says what happened and exits
+  with 134.
+* The commit charge per task is one chunk, as before. The guard page
+  of the last chunk is the overflow trap, and the slot's own guard page
+  below it catches a write that lands outside the stack.
+* The handler only touches the faulting stack through the context it is
+  given; the report itself runs on the emergency stack, so it does not
+  need the task's stack at all.
