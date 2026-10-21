@@ -26,8 +26,9 @@
 static int rt_model_fiber = 0;
 
 /* The fiber backend exists on x86-64 (the SysV and the Win64 assembly in
- * runtime/rt_fiber_asm.c). Elsewhere the runtime keeps the legacy model. */
-#if defined(__x86_64__)
+ * runtime/rt_fiber_asm.c) and on AArch64 (the AAPCS64 variant). Elsewhere
+ * the runtime keeps the legacy model. */
+#if defined(__x86_64__) || defined(__aarch64__)
 #define RT_HAVE_FIBER 1
 #else
 #define RT_HAVE_FIBER 0

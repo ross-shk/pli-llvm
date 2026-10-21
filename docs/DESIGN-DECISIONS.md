@@ -7154,3 +7154,55 @@ cannot be moved either. The arena made the *reservation* cheap; the
 * The fan-out still costs a stack per live task on Windows; a Go-style
   small stack that is copied when it grows is the way to close that gap,
   and it is not written.
+
+## ADR-237 - The AArch64 fiber backend and the POSIX stack overflow diagnostic
+
+**Context.** ADR-234 to ADR-236 built the fiber model for x86-64 and
+left two platforms behind. On AArch64 there was no fiber backend at all,
+so the model silently fell back to the legacy OS-thread one. On POSIX a
+stack that ran out of room killed the program with a bare `SIGSEGV` and
+no explanation, where Windows reported "TASK: stack overflow".
+
+**Decision.**
+
+*The AArch64 backend.* `runtime/rt_fiber_asm.c` gained an AAPCS64
+variant of the switch. The contract is the same as on x86-64: the saved
+stack pointer is the switch's *entry* stack pointer, the word at that
+address holds the resume address, and the restore ends with a jump to it.
+The callee-saved set is x19-x28, x29 and x30, plus the lower 64 bits of
+v8-v15; the frame is 176 bytes and the stack pointer stays 16-byte
+aligned, as the ABI requires. The AArch64 ABI keeps the return address
+in x30 rather than on the stack, so the resume address is stored
+explicitly in the frame and moved into x30 before the return.
+
+*The POSIX overflow diagnostic.* The POSIX half of the platform seam now
+remembers the guard page of every fiber stack and installs a `SIGSEGV`
+and `SIGBUS` handler that runs on an alternate stack - the faulting
+stack is full, so the handler cannot run on it. A fault inside a known
+guard page is an overflow: the handler prints "TASK: stack overflow (the
+task's stack ran out)" and exits. Every other fault restores the default
+handler and lets the fault happen again, so a real bug still crashes the
+program the way it should.
+
+**Consequences.**
+
+* AArch64 now uses the fiber model, like x86-64. The switch is
+  verified to assemble for `aarch64-linux-gnu`; it has not been run on
+  AArch64 hardware.
+* A POSIX program whose task overflows its stack now says so, the same
+  way a Windows program does. Verified on Linux: a recursive procedure
+  that runs out of stack prints the message and exits with 134.
+* The POSIX stack allocation is left as one `mmap` per stack. An arena
+  would not pay there: `mmap` is already demand-paged, so the
+  reservation costs address space and not memory, while the Windows
+  `VirtualAlloc` reservation is the expensive part that the arena
+  removed.
+* A task that reads *standard input* still blocks the worker it runs on:
+  the read is a system call, and the fiber model has no way to park a
+  task around one. The fix is an input broker - the read moves to a
+  helper thread, and the task parks until the bytes arrive. It is
+  written but was not verified, so it is not in the tree.
+* A separate, older problem: the *legacy* OS-thread model crashes at
+  exit when a program starts many tasks (`tests/core/task_many.pli`
+  under `PLI_TASK_MODEL=os`). It predates this ADR and is not caused
+  by it; the fiber model, which is the default, does not have it.

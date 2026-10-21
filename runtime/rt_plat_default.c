@@ -516,9 +516,118 @@ void pli_sleep_ms(long long ms) {
 #include <errno.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <signal.h>
+#include <string.h>
 #if defined(__APPLE__) && !defined(MAP_ANONYMOUS)
 #define MAP_ANONYMOUS MAP_ANON
 #endif
+
+/* The stack overflow diagnostic (ADR-237).
+ *
+ * A fiber stack has a guard page below it, so a stack that runs out of
+ * room faults on an inaccessible page. Windows has a vectored handler for
+ * this; POSIX has a signal handler, and it needs an alternate stack: the
+ * faulting stack is full, so the handler cannot run on it.
+ *
+ * The handler tells a stack overflow from any other fault by the address:
+ * the guard pages are remembered here, and a fault inside one of them is
+ * an overflow. Every other fault is left to the default handler, so a real
+ * bug still crashes the program the way it should.
+ *
+ * The guard list is append-only and lock-free: the handler may run at any
+ * moment, so it takes no lock. A released stack stays in the list (like the
+ * Windows one), and a fault in a released guard page is reported as an
+ * overflow, which is the right answer anyway. */
+#define RT_GUARD_MAX 4096
+static char *rt_guards[RT_GUARD_MAX];
+static size_t rt_guard_bytes[RT_GUARD_MAX];
+static volatile int rt_guard_count = 0;
+static volatile int rt_guard_ready = 0;
+
+static void rt_guard_add(void *p, size_t bytes) {
+  int i = __atomic_fetch_add(&rt_guard_count, 1, __ATOMIC_RELAXED);
+  if (i < RT_GUARD_MAX) {
+    rt_guards[i] = (char *)p;
+    rt_guard_bytes[i] = bytes;
+  }
+}
+
+static void rt_guard_remove(void *p) {
+  for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
+    if (rt_guards[i] == (char *)p) {
+      rt_guards[i] = NULL;
+      rt_guard_bytes[i] = 0;
+      return;
+    }
+  }
+}
+
+/* Is the address inside one of the guard pages? */
+static int rt_guard_holds(void *addr) {
+  for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
+    if (!rt_guards[i])
+      continue;
+    if ((char *)addr >= rt_guards[i] &&
+        (char *)addr < rt_guards[i] + rt_guard_bytes[i])
+      return 1;
+  }
+  return 0;
+}
+
+/* The handler runs on an alternate stack: the fiber's stack is full. The
+ * alternate stack is per thread, and a thread installs one the first time
+ * it allocates a fiber stack. */
+static __thread char *rt_alt_stack = NULL;
+
+static void rt_alt_stack_install(void) {
+  if (rt_alt_stack)
+    return;
+  size_t page = pli_plat_page_size();
+  size_t bytes = 64u * 1024u;
+  stack_t ss;
+  ss.ss_sp = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (ss.ss_sp == MAP_FAILED)
+    return;
+  ss.ss_size = bytes;
+  ss.ss_flags = 0;
+  if (sigaltstack(&ss, NULL) != 0) {
+    munmap(ss.ss_sp, bytes);
+    return;
+  }
+  rt_alt_stack = (char *)ss.ss_sp;
+}
+
+static void rt_segv_handler(int sig, siginfo_t *info, void *ctx) {
+  (void)ctx;
+  if (info && rt_guard_holds(info->si_addr)) {
+    static const char msg[] =
+        "TASK: stack overflow (the task's stack ran out)\n";
+    ssize_t n = write(2, msg, sizeof(msg) - 1);
+    (void)n;
+    _exit(134);
+  }
+  /* Not a stack overflow: restore the default handler and let the fault
+   * happen again, so the program dies the way it normally would. */
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
+/* Install the handler and the alternate stack. Called when the first fiber
+ * stack is allocated, which is on a worker thread. */
+static void rt_fault_handler_install(void) {
+  if (__atomic_exchange_n(&rt_guard_ready, 1, __ATOMIC_RELAXED))
+    return;
+  rt_alt_stack_install();
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_sigaction = rt_segv_handler;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGSEGV, &sa, NULL);
+  sigaction(SIGBUS, &sa, NULL);
+}
+
 /* The tasking model (ADR-234): the machine size, a monotonic clock, the
  * page size, and a lazily committed fiber stack with a guard page below. */
 int pli_plat_cpu_count(void) {
@@ -544,6 +653,9 @@ size_t pli_plat_page_size(void) {
 int pli_plat_stack_alloc(size_t size, void **out_base) {
   size_t page = pli_plat_page_size();
   size = (size + page - 1) & ~(page - 1);
+  /* The fault handler and the alternate stack it runs on: the first
+   * fiber stack on this thread installs them. */
+  rt_fault_handler_install();
   /* PROT_READ|PROT_WRITE over an anonymous mapping: the pages are
    * demand-paged, so the reservation costs address space, not memory, and
    * the fiber stack grows into it without ever moving. */
@@ -557,12 +669,16 @@ int pli_plat_stack_alloc(size_t size, void **out_base) {
     munmap(p, size + page);
     return -1;
   }
+  /* Remember the guard page, so the fault handler can tell a stack
+   * overflow from any other fault (ADR-237). */
+  rt_guard_add(p, page);
   *out_base = (char *)p + page;
   return 0;
 }
 void pli_plat_stack_free(void *base, size_t size) {
   size_t page = pli_plat_page_size();
   size = (size + page - 1) & ~(page - 1);
+  rt_guard_remove((char *)base - page);
   munmap((char *)base - page, size + page);
 }
 /* Mutual exclusion around one shared EVENT/task table. */

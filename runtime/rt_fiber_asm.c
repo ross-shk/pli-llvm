@@ -150,6 +150,79 @@ __asm__(
     "    movq    $0, 8(%rax)\n"   /* [S+8] = the entry's return address */
     "    ret\n");
 
+#elif defined(__aarch64__)
+
+/* The AArch64 variant.
+ *
+ * The contract is the same as on x86-64: the saved stack pointer is the
+ * switch's *entry* stack pointer, the word at that address holds the
+ * resume address, and the restore ends with a jump to it.
+ *
+ * The callee-saved set is x19-x28, x29 (the frame pointer) and x30 (the
+ * link register), plus the lower 64 bits of v8-v15. The frame is 176
+ * bytes: 64 for the SIMD registers, 96 for the general ones, and 16 for
+ * the resume address and the alignment. The stack pointer stays 16-byte
+ * aligned, as the ABI requires.
+ *
+ * The AArch64 ABI keeps the return address in x30 rather than on the
+ * stack, so the resume address is stored explicitly in the frame and
+ * moved into x30 before the return: the return then jumps to it, with the
+ * stack pointer at the frame's base, which is where the suspended code
+ * expects it. */
+__asm__(
+    ".text\n"
+    ".globl pli_fiber_switch\n"
+    ".type pli_fiber_switch,%function\n"
+    "pli_fiber_switch:\n"
+    "    mov     x9, sp\n"           /* S: the entry sp */
+    "    sub     sp, sp, #176\n"     /* the register slots land at [S-176, S) */
+    "    stp     d8,  d9,  [sp, #0]\n"
+    "    stp     d10, d11, [sp, #16]\n"
+    "    stp     d12, d13, [sp, #32]\n"
+    "    stp     d14, d15, [sp, #48]\n"
+    "    stp     x19, x20, [sp, #64]\n"
+    "    stp     x21, x22, [sp, #80]\n"
+    "    stp     x23, x24, [sp, #96]\n"
+    "    stp     x25, x26, [sp, #112]\n"
+    "    stp     x27, x28, [sp, #128]\n"
+    "    stp     x29, x30, [sp, #144]\n"
+    "    str     x30, [sp, #160]\n"  /* the resume address */
+    "    str     x9, [x0]\n"         /* from->sp = S */
+    "    ldr     x10, [x1]\n"        /* to->sp = S' */
+    "    mov     sp, x10\n"
+    "    ldp     d8,  d9,  [sp, #0]\n"
+    "    ldp     d10, d11, [sp, #16]\n"
+    "    ldp     d12, d13, [sp, #32]\n"
+    "    ldp     d14, d15, [sp, #48]\n"
+    "    ldp     x19, x20, [sp, #64]\n"
+    "    ldp     x21, x22, [sp, #80]\n"
+    "    ldp     x23, x24, [sp, #96]\n"
+    "    ldp     x25, x26, [sp, #112]\n"
+    "    ldp     x27, x28, [sp, #128]\n"
+    "    ldp     x29, x30, [sp, #144]\n"
+    "    ldr     x11, [sp, #160]\n"   /* the resume address */
+    "    mov     x30, x11\n"
+    "    ret\n"                      /* jump to the resume address; sp = S' */
+    ".size pli_fiber_switch,.-pli_fiber_switch\n"
+    ".globl pli_fiber_start\n"
+    ".type pli_fiber_start,%function\n"
+    "pli_fiber_start:\n"
+    "    mov     x9, x1\n"           /* the stack's top */
+    "    sub     x10, x9, #16\n"
+    "    and     x10, x10, #-16\n"   /* S: 16-aligned */
+    "    str     x2, [x10]\n"        /* [S] = the entry address */
+    "    str     xzr, [x10, #8]\n"   /* [S+8] = the entry's return address */
+    "    mov     x11, x10\n"
+    "    sub     x11, x11, #176\n"   /* the register save area */
+    "    mov     x12, #22\n"         /* 176 bytes of callee-saved slots to clear */
+    "    mov     x13, xzr\n"
+    "1:  str     x13, [x11], #8\n"
+    "    sub     x12, x12, #1\n"
+    "    cbnz    x12, 1b\n"
+    "    str     x10, [x0]\n"        /* f->sp = S */
+    "    ret\n"
+    ".size pli_fiber_start,.-pli_fiber_start\n");
+
 #else
 
 /* A platform without a fiber backend: the runtime keeps the legacy

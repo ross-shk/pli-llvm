@@ -242,6 +242,49 @@ the policy table is flipped to LLVM in P5). The 8 math wrappers without
 backend support keep their `pli_*` call in every mode. The runtime call path
 remains available and tested in all modes.
 
+### 3.7 The fiber scheduler
+
+A PL/I task is a *fiber*: a stack plus the registers that switch it. The
+runtime multiplexes the fibers of a program on a small pool of OS worker
+threads (`runtime/rt_sched.c`, `runtime/rt_fiber_asm.c`). This is the model
+ADR-234 introduced and ADR-235 and ADR-236 refined.
+
+| Piece | Where | What it does |
+|---|---|---|
+| The context switch | `runtime/rt_fiber_asm.c` | Saves the callee-saved registers, the stack pointer and the resume address of the suspended fiber, restores the target's, and jumps. Hand-written assembly, because the compiler cannot express it. x86-64 only: SysV and Win64 variants. |
+| The scheduler | `runtime/rt_sched.c` | The worker pool, the run queues, the work stealing, the DELAY timer heap, the park and unpark, and the fiber pool. |
+| The lock layer | `runtime/rt_sync.c` | Locks and conditions that work on tasks rather than on OS threads. The fiber mode parks a task that cannot proceed; the legacy mode blocks the thread. |
+| The stack arena | `runtime/rt_plat_default.c` | The fiber stacks come from one reservation carved into slots, so a program with many tasks does not make many system calls. |
+
+The rules that make it work, each of them learned the hard way:
+
+* **A task that parks belongs to the worker that parked it.** Between "the
+  task decided to sleep" and "the task's registers are saved" another worker
+  could pick the task up and restore a half-saved context, so an unpark hands
+  the task to its owner and only its owner runs it again.
+* **A task's owner is recorded before it is published.** A wakeup can arrive
+  before the task reaches its park, and the unpark has to know where to put
+  the task.
+* **A worker's run queue is a LIFO, and the task it spawned last is not
+  stealable.** A program that spawns a task and waits for it keeps both on
+  one worker; without that, every task costs an OS thread wakeup.
+* **A condition variable is keyed.** The event table has one condition for
+  all the events, so a plain broadcast would wake every waiter for every
+  task that ends. A waiter says what it waits for, and a signal wakes only
+  those that said so.
+* **A stack's commit window must cover the fault handler's own frame.** The
+  handler runs on the stack that faulted, so a stack that is not committed
+  below the fault makes the handler fault too.
+
+The model is the default; `PLI_TASK_MODEL=os` selects the legacy OS-thread
+model, which is also the default on the platforms that have no fiber
+backend. `PLI_TASK_WORKERS` sets the worker count (the default is
+`min(cores, 8)`) and `PLI_TASK_STACK` the stack ceiling (8 MiB).
+
+Two things are known not to be finished: a task that blocks on *standard
+input* holds the worker it runs on, because the read is a system call; and
+the AArch64 fiber backend is not written, so AArch64 uses the legacy model.
+
 ## 4. Data representation and ABI
 
 | PL/I data | Representation | Notes |
