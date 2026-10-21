@@ -566,6 +566,10 @@ the scale-8 products rounded back to scale 4 half away from zero).
 | `-O2` | 2.26x | **0.79x** |
 | `-O3` | 2.26x | 0.74x |
 
+(`python3 benchmarks/run_benchmarks.py --only bcd_decimal --runs 3 --force`, median
+of three; a later run of the same command gave 0.77x at `-O2` and 0.78x at `-O3`
+— the run-to-run noise on this benchmark is a few percent.)
+
 The corpus moves with it: the C-parity geomean at `-O2` is **0.77x** (it was
 0.82x with the artifact in it), and `bcd_decimal`'s parity check is now an
 exact match the harness enforces.
