@@ -1068,11 +1068,41 @@ the repo's `intBits()` already picks the narrowest of i32/i64/i128 ✓ → **def
 
 ## 11. WS-I — check cost with the checks on (I1, I2)
 
-### 11.1 I1 — range-based check elision with checks ON: **not closed; the ordering is now recorded** (ADR-252)
+### 11.1 I1 — range-based check elision with checks ON: **closed with the measurement recorded** (ADR-252)
 
 **The measurement.** The pair, re-measured with the current compiler (arm64
 macOS, LLVM 23.1.2, median of five): **1.93x** — M7's criterion (within 1.5x)
 is **not met**.
+
+**The breakdown, measured.** Two new pairs compile the same program with one
+check kind at a time, so the difference is attributed rather than argued:
+
+| Build | Median (-O2) | Ratio |
+|---|---|---|
+| check-free (the `-O2` default) | 70.4 ms | 1.00x |
+| `--subscript-checks` only | 70.3 ms | **0.99x** |
+| `--size-checks` only | 127.9 ms | **1.81x** |
+| both | 128.5 ms | 1.83x |
+
+The SUBSCRIPTRANGE checks are **free** — LLVM folds them away — and the SIZE
+overflow checks are the **whole** difference. So there is nothing to win on
+IBM's half of the item (WS-K7), and the plan's half cannot win either: the
+range metadata is sound only once the compiler enforces the *declared
+precision*, and when it does, the precision check costs what the storage check
+costs today. The ratio improves by the **width of a check, not by its
+absence** — which is why the criterion is out of reach for this design.
+
+**Why the item closes rather than stays open.** The plan's exit criterion for
+the phase is *"checks-on ratio within 1.5x, **or the item is closed with the
+measurement recorded**"*. The measurement is recorded — the ratio, the
+attribution, and the ordering the item needs (ADR-252) — and the ordering
+names the prerequisite: PL/I's SIZE must be the **declared-precision** check
+(rules (60)-(63),(86)), not the storage-width check it is today. That is a
+**conformance** item, not an optimization: the compiler must trap when a
+value exceeds its declared precision, and the range metadata that would make
+that check cheap follows from it. It is not this plan's work, and the plan's
+own design is unsound until it lands — which is why the ordering is recorded
+rather than the code.
 
 **Where the checks actually are.** Reading the *optimized* checks-on module:
 

@@ -111,6 +111,14 @@ PAIRS = [
     # "checks-on" build keeps them.
     ("checks_on", "check-free", [], "checks-on",
      ["--size-checks", "--subscript-checks"]),
+    # The same pair, one check kind at a time: ADR-252 records that the
+    # SUBSCRIPTRANGE checks are already free (LLVM folds them) and the
+    # SIZE overflow checks are the whole difference, and these two pairs
+    # are what says so.
+    ("checks_on", "check-free", [], "subscript-checks",
+     ["--subscript-checks"]),
+    ("checks_on", "check-free", [], "size-checks",
+     ["--size-checks"]),
     # WS-A1 (ADR-264): what the inferred procedure memory effects are worth.
     # The same program, once with the inference and once with
     # --no-memory-effects, so every call keeps LLVM's default effects.
