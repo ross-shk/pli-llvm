@@ -161,6 +161,8 @@ extern volatile long long rt_pli_pages[PLI_MAX_FILES];
  * concurrently with the main thread (ADR-233). */
 void rt_put_raw(const char *p, size_t n);
 int rt_next_char(void);
+/* Select the input stream (WS-H4, ADR-272). */
+void rt_select_input(FILE *f);
 /* ADR-220: flush the stdout write slab before program exit or FILE routing. */
 void rt_flush_stdout(void);
 

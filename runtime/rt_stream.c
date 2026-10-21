@@ -62,6 +62,25 @@ int rt_out_discard = 0;
 static char rt_stdout_buf[RT_STDOUT_BUF];
 static size_t rt_stdout_pos = 0;
 
+/* File input buffer (WS-H4, ADR-272): a list-directed GET reads a record one
+ * character at a time, and a locked stdio call per character dominated the
+ * file read path — measured on benchmarks/ir/file_io.pli, the same 500k
+ * records take 340 ms through the per-character path and 30 ms through the
+ * buffered one. The characters are therefore pulled from a slab that one
+ * fread fills.
+ *
+ * The slab belongs to the FILE it was filled from, not to the currently
+ * selected stream: a GET statement unselects the file when it ends, and the
+ * characters already read but not yet consumed must survive that. Two tasks
+ * reading the same file would otherwise lose the second half of a record
+ * between them. Nothing in the runtime seeks a stream, so a slab cannot go
+ * stale behind the program's back; a different file starts a fresh slab. */
+#define RT_FILE_IN_BUF 8192
+static char rt_in_f_buf[RT_FILE_IN_BUF];
+static size_t rt_in_f_len = 0;
+static size_t rt_in_f_pos = 0;
+static FILE *rt_in_f_owner = NULL; /* the file the slab was filled from */
+
 /* ---------------------------------------------------------------------------
  * Stream serialisation (ADR-233).
  *
@@ -143,13 +162,30 @@ void rt_put_raw(const char *p, size_t n) {
   rt_col += (int)n;
 }
 
+/* Select the input stream. The slab is not touched here: it belongs to the
+ * file it was filled from, and a GET statement unselects the file between
+ * statements (the characters read but not yet consumed must survive that). */
+void rt_select_input(FILE *f) { rt_in_f = f; }
+
 /* Read one input character from the active FILE stream, STRING source, or
  * stdin. Tracks the input column for COLUMN positioning on GET EDIT. */
 int rt_next_char(void) {
   int c;
-  if (rt_in_f)
-    c = pli_plat_fgetc(rt_in_f);
-  else if (rt_in_buf)
+  if (rt_in_f) {
+    if (rt_in_f_owner != rt_in_f) {
+      /* a different file: its slab starts afresh */
+      rt_in_f_owner = rt_in_f;
+      rt_in_f_len = 0;
+      rt_in_f_pos = 0;
+    }
+    if (rt_in_f_pos >= rt_in_f_len) {
+      rt_in_f_len = pli_plat_fread(rt_in_f_buf, 1, RT_FILE_IN_BUF, rt_in_f);
+      rt_in_f_pos = 0;
+      if (rt_in_f_len == 0)
+        return EOF;
+    }
+    c = (unsigned char)rt_in_f_buf[rt_in_f_pos++];
+  } else if (rt_in_buf)
     c = rt_in_pos < rt_in_len ? (unsigned char)rt_in_buf[rt_in_pos++] : EOF;
   else
     c = pli_plat_getchar();

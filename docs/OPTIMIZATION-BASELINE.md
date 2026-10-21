@@ -470,7 +470,7 @@ descriptor) and H3 (format pooling) would be aimed at code that is already
 ahead of its C twin. **They are closed by the profile**, and the item that
 pays is H4 — the file path.
 
-### 7.2 H4 — the file read path: 340 ms, and a slab that would fix it but cannot
+### 7.2 H4 — the file read path: 340 ms → 10 ms
 
 Splitting `file_io` into its phases locates the cost:
 
@@ -482,20 +482,22 @@ Splitting `file_io` into its phases locates the cost:
 The read is 17x the C twin's because a list-directed GET pulls the record
 one character at a time, and each character is a locked stdio call. The
 stdout path has had a slab for this since ADR-220; the FILE path never did.
+ADR-272 gives it one — the characters come from a slab that one `fread`
+fills — and the read of 500 000 records falls from **340 ms to 10 ms**, the
+whole benchmark from about 120 ms to about 90 ms.
 
-**The fix was implemented and then reverted.** A global input slab took the
-read phase from **340 ms to 30 ms** — an 11x cut — and broke the concurrent
-task tests (`tests/hardening/task_input.pli`, `task_output.pli`), which read
-through the same global state. The slab's *position* is state, and this
-runtime's stream state is process-global by design: a thread-local would fix
-the aliasing, but on Mach-O the TLS resolver call lands in every output
-path, measured at **+69%** on `io_throughput` (20.0 ms → 33.9 ms for 200k
-PUTs).
+The slab belongs to the *file* it was filled from, not to the selected
+stream: a GET statement unselects the file when it ends, and the characters
+read but not yet consumed have to survive that, or two tasks reading one
+file would split a record between them.
 
-So the honest record is a measurement and a constraint, not a win: **the
-file read is 17x the C twin's, the fix is known (a per-thread input slab),
-and the price is the runtime's global stream state.** H4 stays open with
-that named.
+The write phase is deliberately left alone — an output slab would have to
+drain at the record boundary to keep ADR-233's record-atomicity promise, for
+the 10 ms between it and the C twin. The stdin path still reads a character
+at a time; the same slab would serve it, but the measurement that justifies
+the change is the file path's.
 
 **How to reproduce.** `benchmarks/ir/file_io.pli` split into a write-only and
-a read-only program, timed against the C twin's `fprintf`/`fscanf` loop.
+a read-only program, timed against the C twin's `fprintf`/`fscanf` loop;
+`tests/driver/file_slab.sh` is the regression gate and
+`tests/hardening/task_input.pli` the concurrency gate.
