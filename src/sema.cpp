@@ -398,6 +398,10 @@ bool Sema::run(Program& prog, bool compileOnly) {
                "(1)");
     }
   }
+  // WS-K8 (ADR-257): the CONTROLLED qualification runs after every procedure
+  // is checked, because it needs to see every ALLOCATE and FREE of a
+  // variable — including the ones in a nested procedure.
+  markDirectCtl();
   // WS-A5 (ADR-266): the opt-in "used before set" walk. It runs last because
   // it needs every reference resolved to its Symbol.
   if (warnUnset_)
@@ -3962,6 +3966,32 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                   "SET on CONTROLLED ALLOCATE is ignored; generations are stack-managed", "(88)");
         Expr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
         const auto& bounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
+        // WS-K8 (ADR-257): this allocation changes the variable's generation,
+        // so note it — the qualification needs to see every one of them, and
+        // to know whether the allocation used the declared extent.
+        {
+          bool extentDiffers = false, starReuse = false;
+          if (bounds.empty()) {
+            // A bare ALLOCATE pushes a generation of the declared extent.
+          } else if (bsym->ty.dims.size() == 1 && bounds.size() == 1) {
+            const Dim& d = bsym->ty.dims[0];
+            if (bounds[0].star)
+              starReuse = true;
+            else if (bounds[0].lb || !bounds[0].ub) {
+              // an lb:ub pair or a missing bound: the extent is not the
+              // declared one, whatever it evaluates to
+              extentDiffers = true;
+            } else {
+              Expr* ub = bounds[0].ub.get();
+              long long declared = (long long)d.ub - (long long)d.lb + 1;
+              if (ub->kind != Expr::IntLit || ub->ival != declared)
+                extentDiffers = true;
+            }
+          } else {
+            extentDiffers = true; // multi-axis or a bound list: not the declared extent
+          }
+          noteCtlTouch(bsym, p, extentDiffers, starReuse);
+        }
         for (const auto& b : bounds) {
           if (b.lb) {
             typeExpr(b.lb.get(), sc, p);
@@ -4126,6 +4156,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     break;
   case Stmt::Free:
+    // WS-K8 (ADR-257): a FREE pops the generation, so it is a touch too.
+    for (const auto& fb : s->freeBase)
+      if (fb && fb->sym && fb->sym->controlled)
+        noteCtlTouch(fb->sym, p, false, false);
     // FREE (rule 90): free the storage of each based variable, addressed either
     // by an explicit locator pointer or by the variable's own BASED pointer,
     // optionally returning the block to an AREA ( IN ( area ) ).
@@ -4429,6 +4463,80 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
 // (126)); a runtime index is left to the generated bounds check in IRGen.
 // Each constant subscript is checked against its own axis (rules (12),(13)).
+
+// WS-K8 (ADR-257): note that this procedure changes the variable's
+// generation, and whether the allocation used the declared extent.
+void Sema::noteCtlTouch(Symbol* sym, Proc* p, bool extentDiffers, bool starReuse) {
+  if (!sym || !sym->controlled)
+    return;
+  CtlTouch& t = ctlTouches_[sym];
+  if (p)
+    t.procs.insert(p);
+  if (extentDiffers)
+    t.extentDiffers = true;
+  if (starReuse)
+    t.starReuse = true;
+}
+
+// WS-K8 (ADR-257): decide which CONTROLLED variables the compiler can
+// address directly. A direct address is a slot holding the current
+// generation's pointer, refreshed at every allocation and free; the length
+// is then the declared extent, a compile-time constant.
+//
+// The conditions, all of which must hold:
+//  - the element type is numeric and the extent is static — the character
+//    and VARYING paths need the live length for other reasons;
+//  - the variable is not a package variable (ADR-109) and nothing is BASED
+//    on it, so its address is only ever the generation's own;
+//  - every ALLOCATE and FREE of it is in the procedure that declares it — a
+//    nested procedure may ALLOCATE an enclosing procedure's CONTROLLED
+//    variable, and then the compiler would not see the generation change;
+//  - every ALLOCATE of it uses the declared extent (no '*' reuse, no other
+//    bound), so the live length is the declared one.
+void Sema::markDirectCtl() {
+  for (auto& kv : ctlTouches_) {
+    Symbol* sym = kv.first;
+    const CtlTouch& t = kv.second;
+    if (!sym->controlled || sym->ctlDirect)
+      continue;
+    if (t.extentDiffers || t.starReuse)
+      continue;
+    // Every touch must be in the declaring procedure.
+    if (!sym->owner)
+      continue;
+    bool sameProc = true;
+    for (Proc* p : t.procs)
+      if (p != sym->owner)
+        sameProc = false;
+    if (!sameProc)
+      continue;
+    // The type conditions: a numeric, statically bounded, rank-1 variable.
+    const Type& ty = sym->ty;
+    if (ty.isChar() || ty.isBit() || ty.isStruct() || ty.isPointer())
+      continue;
+    if (ty.isDynamic() || ty.dims.size() > 1)
+      continue;
+    if (!ty.isFixed())
+      continue;
+    if (ty.dims.size() == 1 && (ty.dims[0].dyn || ty.dims[0].lbDyn))
+      continue;
+    // A package variable's generation is program-lifetime (ADR-109).
+    if (sym->owner->isPackage)
+      continue;
+    // Nothing BASED on it: such a base has its own allocation path.
+    bool based = false;
+    for (Symbol* other : storage()) {
+      if (other && other->basedBase == sym) {
+        based = true;
+        break;
+      }
+    }
+    if (based)
+      continue;
+    sym->ctlDirect = true;
+  }
+}
+
 void Sema::checkSubscriptBounds(Expr* e, Symbol* arr) {
   checkSubscriptBoundsDims(e, arr->ty.dims, arr->name);
 }

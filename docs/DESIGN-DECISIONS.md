@@ -9071,3 +9071,64 @@ folds to text, ADR-274), but their *decisions* were also made in
   needs its own predicate and its own witness. The measurement that would
   promote one: a call site where the per-operation policy picks the wrong
   path.
+
+## ADR-257 — A constant-extent `CONTROLLED` variable is addressed directly
+
+**Context.** The plan's WS-K8 asks for IBM's `RULES(NOLAXCTL)`
+(`zos:23039-23061`): *"when a CONTROLLED variable is declared with constant
+extents, the compiler can generate much better code for any reference to that
+variable."* The repo reached every reference through `pli_ctl_addr`, a
+runtime call that returns the latest generation's pointer.
+
+**The measurement.** The witness (`benchmarks/ir/controlled_stack.pli`,
+1,000,000 allocate/fill/sum/free cycles) measures **31.5 ms** at `-O2`
+against **36.4 ms** for its C twin. A micro-benchmark of 100,000,000
+`pli_ctl_addr` calls measures the fetch at **~2 ns** — it is a call, and the
+call is the cost (the runtime's own lookup is a one-entry scan). The
+*optimized* code makes **two** fetches per cycle: one hoisted into the fill
+loop's preheader, one fresh after it, because the `ALLOCATE` in between
+changes the generation. (The `pli_ctl_len` fetch is not there: the optimizer
+removed it, because a statically bounded `CONTROLLED` array's bounds check
+already uses the *declared* bound.)
+
+**Decision.** The compiler keeps the current generation's address in a slot
+of its own, so a reference is a **load** rather than a call.
+
+* **The runtime's allocation returns the new generation's address.**
+  `pli_ctl_alloc` and `pli_ctl_alloc_dims` now return it, so the compiler's
+  refresh after an `ALLOCATE` is free.
+* **The qualification is module-wide.** A `CONTROLLED` variable qualifies
+  when: its element type is numeric and its extent is static; it is not a
+  package variable (ADR-109) and nothing is `BASED` on it; **every**
+  `ALLOCATE` and `FREE` of it is in the procedure that declares it; and
+  every `ALLOCATE` of it uses the declared extent. The third condition is
+  the one that matters: a **nested procedure may `ALLOCATE` the enclosing
+  procedure's `CONTROLLED` variable** (the compiler accepts that today), and
+  then the compiler would not see the generation change. The scan therefore
+  runs over the whole program, not over one procedure.
+* **A free re-reads the generation.** The compiler does not track the
+  runtime's generation stack, so after a `FREE` it asks the runtime for the
+  current generation — one call per free, where the old code made one call
+  per *reference*.
+* **The length is the declared extent** — the generation's byte size, a
+  compile-time constant.
+* **Only the declaring procedure uses the slot.** An ON handler (a function
+  of its own) and a nested procedure reach the variable through the frame,
+  so they ask the runtime as before.
+
+**Consequences.**
+
+* The witness's `pli_ctl_addr` call sites go from **two to one** per cycle,
+  and its time from **31.5 ms to 30.2 ms** — the ratio against its C twin
+  is unchanged at 0.87x, since the program was already ahead of C.
+* The length is the *declared* extent in bytes, not the element count: the
+  bounds check divides the length by the element size, and getting that
+  wrong made a five-element array look one-element long. The regression is
+  pinned by `tests/corner_cases/controlled_edge.pli`.
+* The behaviour is pinned by `tests/ir/ctl_const_extent.pli` (a constant
+  extent: no runtime call) and `tests/ir/ctl_dyn_extent.pli` (a dynamic
+  extent: the runtime path), and the generation stack's LIFO behaviour by
+  `tests/corner_cases/controlled_edge.pli`.
+* The change is a **storage-model** change, so the qualification is
+  deliberately conservative: a variable that fails any condition keeps the
+  runtime path.

@@ -189,6 +189,9 @@ private:
   // The library-call remark (ADR-254): --remark-library-calls makes every
   // library-path built-in report the conversion it hands to the routine.
   bool remarkLibraryCalls_ = false;
+  // WS-K8 (ADR-257): the compiler's slot for a CONTROLLED variable's current
+  // generation — the ALLOCATE fills it, so a reference is a load.
+  std::map<Symbol*, llvm::Value*> ctlAnchor_;
   // The source location of the statement or built-in call being lowered, for
   // that remark.
   SourceLoc curLoc_;
@@ -224,6 +227,15 @@ private:
 
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
+  // WS-K8 (ADR-257): the slot holding a CONTROLLED variable's current
+  // generation, created on first use.
+  llvm::Value* ctlAnchorSlot(Symbol* sym);
+  // The declared extent of a statically bounded CONTROLLED variable.
+  long long ctlDeclaredExtent(Symbol* sym);
+  // WS-K8 (ADR-257): keep the anchor in step with the runtime's generation
+  // stack.
+  void ctlNoteAlloc(Symbol* sym, llvm::Value* addr);
+  void ctlNoteFree(Symbol* sym);
   void emitAssign(HStmt* s);
   // Self-append peephole (rule (119), P4): X = X || lit... appends in place
   // for AUTOMATIC scalar VARYING targets; false for any other shape.

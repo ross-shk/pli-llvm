@@ -1241,7 +1241,7 @@ So there is nothing to switch: the disjoint copies are already aggregate
 moves, and the copies that may overlap already use `memmove`.
 **Closed without a diff.**
 
-### 12.5 K8 — constant-extent `CONTROLLED`: deferred
+### 12.5 K8 — constant-extent `CONTROLLED`: implemented (ADR-257)
 
 IBM's `RULES(NOLAXCTL)` (`zos:23039-23061`) lets the compiler generate the
 address of a CONTROLLED variable directly instead of fetching the runtime
@@ -1257,29 +1257,30 @@ calls (the runtime's `ctlFind` scan) measures **~2 ns** per fetch. The
 witness makes **two** fetches per cycle (the address and the length) over
 1,000,000 cycles — about **4 ms** of the 31.5 ms, some 13%.
 
-So the gain is real. **The sharper accounting** — the optimized IR of the
-witness makes **four** calls per cycle, not two: the address and the length,
-twice — once hoisted into the fill loop's preheader and once fresh after it
-(the `ALLOCATE` in between changes the generation, so the hoisted pair is
-re-taken after the fill).
+So the gain is real. **The sharper accounting** — the *optimized* code of the
+witness (the disassembly, not the emitted IR) makes **two** calls per cycle:
+`pli_ctl_addr` twice — once hoisted into the fill loop's preheader and once
+fresh after it, because the `ALLOCATE` in between changes the generation. The
+`pli_ctl_len` fetch is **not** there: the optimizer removed it, because a
+statically bounded CONTROLLED array's bounds check already uses the *declared*
+bound, so the live length was dead code.
 
-A compiler-held **anchor** removes three of the four: the `ALLOCATE` returns
-the new generation's address (so the refresh is free), the length becomes the
-declared extent (a compile-time constant), and the `FREE`'s refresh costs one
-call. At ~2 ns a call that is ~6 ns of the cycle, ~6 ms of the witness's
-31.5 ms — **about 19%**.
+A compiler-held **anchor** removes one of the two: the `ALLOCATE` returns the
+new generation's address, so the refresh is free and both references become
+loads; the `FREE`'s refresh costs one call. At ~2 ns a call that is ~2 ns of
+the cycle, ~2 ms of the witness's 31.5 ms — **about 6%**.
 
-**Why it is still deferred.** The anchor is only correct if the compiler sees
-*every* generation change, and it does not: a **nested** procedure may
-`ALLOCATE` the enclosing procedure's CONTROLLED variable (the compiler accepts
-that today), so the qualification needs a module-wide analysis of every
-`ALLOCATE` and `FREE` of the variable — and the change is a
-**storage-model** change, not a local one. The compiler already hoists the
-fetch out of the inner loop, which is why the fresh fetch is where it is.
+**Implemented** (ADR-257): the compiler keeps the current generation's
+address in a slot of its own, so a reference is a load rather than a call.
+The runtime's allocation returns the new address (so the refresh after an
+`ALLOCATE` is free), the qualification is module-wide (a nested procedure may
+`ALLOCATE` the enclosing procedure's `CONTROLLED` variable, and then the
+compiler would not see the generation change), the length is the declared
+extent, and a free re-reads the generation from the runtime.
 
-**Deferred**, with the promotion measurement named: a benchmark in which the
-CONTROLLED fetch dominates, and a design in which the compiler can hold the
-generation.
+The result: the witness's `pli_ctl_addr` call sites go from **two to one**
+per cycle, and its time from **31.5 ms to 30.2 ms** — the ratio against its
+C twin is unchanged at 0.87x, since the program was already ahead of C.
 
 ### 12.6 K9 — `RESEXP`: not built
 

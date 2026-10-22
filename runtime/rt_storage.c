@@ -101,7 +101,9 @@ typedef struct {
 } CtlCache;
 static _Thread_local CtlCache ctlCache = {.key = -1, .bytes = NULL, .len = 0};
 
-void pli_ctl_alloc(long long key, long long n) {
+// The allocation returns the new generation's address, so the compiler can
+// keep it in a slot (WS-K8, ADR-257) instead of fetching it per reference.
+char *pli_ctl_alloc(long long key, long long n) {
   CtlVar *v = ctlFind(key, 1);
   ctlGrow(v);
   // intent: same-key/same-size LIFO churn reuses the cached buffer.
@@ -115,11 +117,12 @@ void pli_ctl_alloc(long long key, long long n) {
   v->ranks[v->depth] = 0;
   v->dimss[v->depth] = NULL;
   ++v->depth;
+  return v->gens[v->depth - 1];
 }
 
 /* Push an N-D generation (rules (13),(89)): total payload bytes plus room for
  * rank per-axis extents, filled by pli_ctl_set_dim after the call. */
-void pli_ctl_alloc_dims(long long key, long long n, long long rank) {
+char *pli_ctl_alloc_dims(long long key, long long n, long long rank) {
   CtlVar *v = ctlFind(key, 1);
   if (rank < 0)
     rank = 0;
@@ -131,6 +134,7 @@ void pli_ctl_alloc_dims(long long key, long long n, long long rank) {
   if (rank && !v->dimss[v->depth])
     pli_signal_error("CONTROLLED generation stack out of memory");
   ++v->depth;
+  return v->gens[v->depth - 1];
 }
 
 /* Record one axis extent of the latest generation (0-based axis). The rank

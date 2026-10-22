@@ -1,0 +1,3 @@
+CHECK: %ctl.anchor = alloca ptr
+CHECK-NOT: call ptr @pli_ctl_addr
+CHECK: ret void

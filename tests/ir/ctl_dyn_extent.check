@@ -1,0 +1,1 @@
+CHECK: call ptr @pli_ctl_addr

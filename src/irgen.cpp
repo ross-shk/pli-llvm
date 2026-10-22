@@ -336,6 +336,66 @@ llvm::Constant* IRGen::wideDecConstant(const Type& t, PliI128 w) {
   return llvm::ConstantInt::get(llvmTy(t), pli_to_i64(w), true);
 }
 
+// WS-K8 (ADR-257): an allocation the compiler can watch fills the anchor
+// slot with the new generation's address, so a later reference is a load.
+void IRGen::ctlNoteAlloc(Symbol* sym, llvm::Value* addr) {
+  if (!sym || !sym->ctlDirect || !addr)
+    return;
+  b_.CreateStore(addr, ctlAnchorSlot(sym));
+}
+
+// ... and a free refreshes it: the generation below the popped one is the
+// current one now.
+void IRGen::ctlNoteFree(Symbol* sym) {
+  if (!sym || !sym->ctlDirect)
+    return;
+  llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlafterfree");
+  b_.CreateStore(addr, ctlAnchorSlot(sym));
+}
+
+// WS-K8 (ADR-257): the declared length of a statically bounded CONTROLLED
+// variable — the size of its generation in BYTES, which is what the runtime's
+// `pli_ctl_len` returns and what the bounds check divides by the element
+// size.
+long long IRGen::ctlDeclaredExtent(Symbol* sym) {
+  if (!sym || !sym->controlled)
+    return 0;
+  const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
+  long long elemBytes =
+      (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+  if (elemBytes <= 0)
+    elemBytes = 1;
+  long long count = 1;
+  for (const Dim& d : sym->ty.dims) {
+    if (d.dyn || d.lbDyn)
+      return 0;
+    count *= (long long)d.ub - (long long)d.lb + 1;
+  }
+  return count * elemBytes;
+}
+
+// WS-K8 (ADR-257): the slot that holds a CONTROLLED variable's current
+// generation. The ALLOCATE fills it (the runtime returns the new
+// generation's address), so a reference is a load rather than a runtime
+// call. The slot starts null, which is what the runtime returns for an
+// empty generation stack — so a reference before the first ALLOCATE faults
+// the same way it does today.
+llvm::Value* IRGen::ctlAnchorSlot(Symbol* sym) {
+  auto hit = ctlAnchor_.find(sym);
+  if (hit != ctlAnchor_.end())
+    return hit->second;
+  llvm::BasicBlock* entry = &curFn_->getEntryBlock();
+  llvm::IRBuilder<> ab(entry, entry->begin());
+  llvm::AllocaInst* slot = ab.CreateAlloca(b_.getPtrTy(), nullptr, "ctl.anchor");
+  // The null store goes immediately after the alloca, at the very start of
+  // the entry block, so it dominates every use of the slot.
+  llvm::Instruction* next = slot->getNextNode();
+  llvm::IRBuilder<> sb(entry, next ? next->getIterator() : entry->end());
+  sb.CreateStore(llvm::ConstantPointerNull::get(b_.getPtrTy()), slot);
+  ctlAnchor_[sym] = slot;
+  return slot;
+}
+
 llvm::AllocaInst* IRGen::entryAlloca(llvm::Type* ty, const llvm::Twine& name) {
   llvm::IRBuilder<> ab(&curFn_->getEntryBlock(), curFn_->getEntryBlock().begin());
   return ab.CreateAlloca(ty, nullptr, name);
@@ -3838,6 +3898,13 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
     auto hit = ctlAddrHoist_.find(sym);
     if (hit != ctlAddrHoist_.end())
       return hit->second;
+    // WS-K8 (ADR-257): a variable the compiler can address directly keeps
+    // its generation in a slot, so the reference is a load, not a call. The
+    // slot lives in the declaring procedure's frame: an ON handler (a
+    // function of its own) and a nested procedure reach the variable
+    // through the frame, so they ask the runtime for the generation.
+    if (sym->ctlDirect && !inHandler_ && curProc_ && curProc_->src == sym->owner)
+      return b_.CreateLoad(b_.getPtrTy(), ctlAnchorSlot(sym), "ctl.anchor.load");
     return b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctladdr");
   }
   // rule (8): an enclosing variable is reached through this frame's static
@@ -4886,6 +4953,12 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // The entry block must be the function's first block (so it is the real
   // entry, and the allocas it holds dominate every reachable block).
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
+  // WS-K8 (ADR-257): create this procedure's anchors now, before any
+  // statement, so the slot's initialisation (a null store in the entry
+  // block) dominates every use of it.
+  for (Symbol* sym : sema_.storage())
+    if (sym && sym->controlled && sym->ctlDirect && sym->owner == p->src)
+      ctlAnchorSlot(sym);
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
@@ -6416,9 +6489,12 @@ void IRGen::ctlAllocDeclared(Symbol* sym, SourceLoc loc) {
   for (size_t k = 0; k < rank; ++k)
     total = b_.CreateMul(total, exts[k], "ctldtot");
   if (rank == 1) {
-    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), total});
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), total});
+    ctlNoteAlloc(sym, addr);
   } else {
-    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), total, i64((long long)rank)});
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
+                                      {ctlKeyOf(sym), total, i64((long long)rank)});
+    ctlNoteAlloc(sym, addr);
     for (size_t k = 0; k < rank; ++k)
       b_.CreateCall(runtimeFn("pli_ctl_set_dim"), {ctlKeyOf(sym), i64((long long)k), exts[k]});
   }
@@ -6452,10 +6528,13 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   bool ndDims = isCtlNDynArray(sym) && !sym->ty.isDynamic();
   if (ndDims) {
     size_t rank = sym->ty.dims.size();
-    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), sz, i64((long long)rank)});
+    llvm::Value* addr =
+        b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), sz, i64((long long)rank)});
+    ctlNoteAlloc(sym, addr);
     emitCtlNDDescDims(sym);
   } else {
-    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+    ctlNoteAlloc(sym, addr);
   }
 }
 
@@ -6770,7 +6849,8 @@ void IRGen::emitAllocate(HStmt* s) {
       } else if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr) {
         sz = toI64(emitExpr(bsym->dynLenExpr), s->loc);
       }
-      b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
+      llvm::Value* baddr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
+      ctlNoteAlloc(bsym, baddr);
       if (isCtlNDynArray(bsym)) {
         // A bare N-D ALLOCATE re-pushes the DECLARE extents so the new top
         // generation's live bounds match the descriptor (an `(*)` axis never
@@ -6812,6 +6892,7 @@ void IRGen::emitFree(HStmt* s) {
     Symbol* bsym = s->freeBase[i]->sym;
     if (bsym && bsym->controlled) {
       b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(bsym)});
+      ctlNoteFree(bsym);
       continue;
     }
     llvm::Value* addr =
@@ -7088,8 +7169,16 @@ void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
   for (Symbol* sym : uses) {
     if (!sym || !sym->controlled || muts.count(sym) || ctlAddrHoist_.count(sym))
       continue;
-    ctlAddrHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlhoist.a");
-    ctlLenHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctlhoist.l");
+    if (sym->ctlDirect && !inHandler_ && curProc_ && curProc_->src == sym->owner) {
+      // WS-K8 (ADR-257): the generation is in the compiler's slot, so the
+      // hoisted read is a load and the length is the declared extent (a
+      // statically bounded CONTROLLED array's bounds check uses it anyway).
+      ctlAddrHoist_[sym] = b_.CreateLoad(b_.getPtrTy(), ctlAnchorSlot(sym), "ctlhoist.a");
+      ctlLenHoist_[sym] = i64(ctlDeclaredExtent(sym));
+    } else {
+      ctlAddrHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlhoist.a");
+      ctlLenHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctlhoist.l");
+    }
     hoisted.push_back(sym);
     if (isCtlNDynArray(sym)) {
       for (size_t k = 0; k < sym->ty.dims.size(); ++k) {

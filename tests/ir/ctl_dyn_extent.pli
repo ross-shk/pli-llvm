@@ -1,0 +1,17 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-257: the direct address is for the constant-extent case only — a
+    CONTROLLED variable with a dynamic extent still asks the runtime for the
+    generation, because its length is not a compile-time constant. */
+ ctl_dyn_extent: procedure options(main);
+    declare n fixed bin(31);
+    declare fds(*) fixed bin(31) controlled;
+    declare i fixed bin(31);
+    get list (n);
+    allocate fds(n);
+    do i = 1 to n;
+       fds(i) = i;
+    end;
+    put skip list(fds(1));
+    free fds;
+ end ctl_dyn_extent;

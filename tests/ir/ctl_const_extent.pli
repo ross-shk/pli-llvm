@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-257: a CONTROLLED variable with a constant extent is addressed
+    directly — the compiler keeps the current generation's address in a
+    slot, so a reference is a load and not a runtime call. */
+ ctl_const_extent: procedure options(main);
+    declare fds(100) fixed bin(31) controlled;
+    declare i fixed bin(31);
+    allocate fds(100);
+    do i = 1 to 100;
+       fds(i) = i;
+    end;
+    put skip list(fds(1));
+    /* no explicit FREE here: the free re-reads the generation from the
+       runtime (the stack below the popped one is the compiler's to know),
+       and this test is about the reference path. The free path is pinned by
+       tests/corner_cases/controlled_edge.pli. */
+ end ctl_const_extent;

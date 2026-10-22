@@ -51,6 +51,11 @@ struct Symbol {
   bool isBased() const { return basedBase != nullptr || basedNoPtr; }
   bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
   int ctlSlot = -1;        // runtime generation-stack slot index (87-90)
+  // WS-K8 (ADR-257): the compiler can address this CONTROLLED variable
+  // directly — it keeps the current generation's address in a slot and takes
+  // the length from the declared extent, so a reference costs a load instead
+  // of a runtime call. Set by the module-wide qualification.
+  bool ctlDirect = false;
   // AREA (rule (20)): the region's byte size, a compile-time constant (default
   // 1000, the IBM default). The runtime region is created at procedure entry.
   long long areaSize = 1000;
@@ -162,6 +167,15 @@ private:
   void collectLabels(Stmt* s,
                      std::vector<const Stmt*>& chain); // gather GO TO targets defined in this proc
   void checkStmt(Stmt* s, Scope* sc, Proc* p);
+  // The WS-K8 qualification (ADR-257): for each CONTROLLED symbol, the
+  // procedures that change its generation, and whether every allocation used
+  // the declared extent.
+  struct CtlTouch {
+    std::set<Proc*> procs;      // the procedures that change its generation
+    bool extentDiffers = false; // an allocation used a different extent
+    bool starReuse = false;     // an allocation reused the '*' extent
+  };
+  std::map<Symbol*, CtlTouch> ctlTouches_;
   // Rule (91): reject ON-unit constructs that need the establishing frame
   // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
   // was already type-checked by checkStmt, so symbol references are resolved.
@@ -214,6 +228,12 @@ private:
   // Compile-time SUBSCRIPTRANGE check for a constant subscript against an
   // explicit bound list (rule 126); `name` is the array's diagnostic name.
   void checkSubscriptBoundsDims(Expr* e, const std::vector<Dim>& dims, const std::string& name);
+  // The WS-K8 qualification (ADR-257): note that a procedure changes this
+  // CONTROLLED variable's generation, and whether the allocation used the
+  // declared extent.
+  void noteCtlTouch(Symbol* sym, Proc* p, bool extentDiffers, bool starReuse);
+  // Decide which CONTROLLED variables the compiler can address directly.
+  void markDirectCtl();
   // Resolve a qualified reference S.A.B (rule 124) against a structure type,
   // recording the LLVM field index of each step in e->memberPath. Returns the
   // leaf member's type, or nullptr after reporting a diagnostic.
