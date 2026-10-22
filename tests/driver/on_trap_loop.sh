@@ -42,6 +42,8 @@ for opt in -O0 -O1 -O2 -O3; do
   fi
   out=$("$OUT.exe" 2>&1)
   rc=$?
+  # the runtime writes CRLF on Windows; compare the text, not the endings.
+  out=$(printf '%s' "$out" | tr -d '\r')
   [ "$rc" -eq 0 ] || fail "$opt exited $rc (a trap loop must not crash)"
   # The resume value is 0 and every iteration trapped.
   if [ "$out" != "0
