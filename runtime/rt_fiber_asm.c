@@ -19,6 +19,7 @@
  * keeps its live values there:
  *   x86-64 SysV  — RBX RBP R12-R15
  *   x86-64 Win64 — RBX RBP RDI R12-R15 and XMM6-XMM15
+ *   AArch64      — x19-x28, x29, x30 and the low 64 bits of v8-v15
  *
  * The saved stack pointer is the switch's ENTRY stack pointer, and the
  * word at that address holds the resume address: it is the return address
@@ -27,10 +28,12 @@
  * exactly the stack pointer it had at the call site. Saving the post-push
  * stack pointer instead would leave the resumed frame eight bytes off,
  * and jumping to the saved address instead of returning would leave the
- * return address on the stack.
+ * return address on the stack. (AArch64 keeps the return address in x30
+ * rather than on the stack; the equivalent contract is described in its
+ * own block below.)
  *
- * The AArch64 variant lands with its CI coverage in a later phase; the
- * fallback below keeps the legacy OS-thread model on other platforms.
+ * A platform without a backend keeps the legacy OS-thread model, and the
+ * switch reports it if it is reached.
  */
 
 #if defined(__x86_64__) && !defined(_WIN32)
@@ -154,21 +157,22 @@ __asm__(
 
 /* The AArch64 variant.
  *
- * The contract is the same as on x86-64: the saved stack pointer is the
- * switch's *entry* stack pointer, the word at that address holds the
- * resume address, and the restore ends with a jump to it.
+ * The contract is the same as on x86-64, but the ABI keeps the return
+ * address in x30 rather than on the stack, so the shape of the frame
+ * differs. The frame is 176 bytes at [S-176, S), where S is the switch's
+ * entry stack pointer (always 16-byte aligned, as the ABI requires):
  *
- * The callee-saved set is x19-x28, x29 (the frame pointer) and x30 (the
- * link register), plus the lower 64 bits of v8-v15. The frame is 176
- * bytes: 64 for the SIMD registers, 96 for the general ones, and 16 for
- * the resume address and the alignment. The stack pointer stays 16-byte
- * aligned, as the ABI requires.
+ *     [S-176, S-112)  d8-d15   the low 64 bits of the SIMD callee-saved set
+ *     [S-112, S-32)   x19-x28  the general callee-saved registers
+ *     [S-32, S-16)    x29, x30 the frame pointer and the link register
+ *     [S-16, S)       padding, so the frame stays 16-byte aligned
  *
- * The AArch64 ABI keeps the return address in x30 rather than on the
- * stack, so the resume address is stored explicitly in the frame and
- * moved into x30 before the return: the return then jumps to it, with the
- * stack pointer at the frame's base, which is where the suspended code
- * expects it. */
+ * x30 is the resume address: it holds the return address of the
+ * pli_fiber_switch call in the suspended code, exactly as x86-64 keeps it
+ * in the word at [S]. So the restore ends with `ret`, after moving the
+ * stack pointer back to S: the resumed code then sees the stack pointer
+ * it had at the call site. (A `ret` with sp still at the frame base would
+ * hand the caller a stack pointer 176 bytes too low.) */
 __asm__(
     ".text\n"
     ".globl pli_fiber_switch\n"
@@ -185,8 +189,7 @@ __asm__(
     "    stp     x23, x24, [sp, #96]\n"
     "    stp     x25, x26, [sp, #112]\n"
     "    stp     x27, x28, [sp, #128]\n"
-    "    stp     x29, x30, [sp, #144]\n"
-    "    str     x30, [sp, #160]\n"  /* the resume address */
+    "    stp     x29, x30, [sp, #144]\n" /* x30 is the resume address */
     "    str     x9, [x0]\n"         /* from->sp = S */
     "    ldr     x10, [x1]\n"        /* to->sp = S' */
     "    mov     sp, x10\n"
@@ -200,9 +203,8 @@ __asm__(
     "    ldp     x25, x26, [sp, #112]\n"
     "    ldp     x27, x28, [sp, #128]\n"
     "    ldp     x29, x30, [sp, #144]\n"
-    "    ldr     x11, [sp, #160]\n"   /* the resume address */
-    "    mov     x30, x11\n"
-    "    ret\n"                      /* jump to the resume address; sp = S' */
+    "    add     sp, sp, #176\n"     /* sp = S', as the resumed code expects */
+    "    ret\n"                      /* jump to the restored x30 */
     ".size pli_fiber_switch,.-pli_fiber_switch\n"
     ".globl pli_fiber_start\n"
     ".type pli_fiber_start,%function\n"
@@ -210,16 +212,17 @@ __asm__(
     "    mov     x9, x1\n"           /* the stack's top */
     "    sub     x10, x9, #16\n"
     "    and     x10, x10, #-16\n"   /* S: 16-aligned */
-    "    str     x2, [x10]\n"        /* [S] = the entry address */
-    "    str     xzr, [x10, #8]\n"   /* [S+8] = the entry's return address */
     "    mov     x11, x10\n"
     "    sub     x11, x11, #176\n"   /* the register save area */
     "    mov     x12, #22\n"         /* 176 bytes of callee-saved slots to clear */
     "    mov     x13, xzr\n"
     "1:  str     x13, [x11], #8\n"
     "    sub     x12, x12, #1\n"
-    "    cbnz    x12, 1b\n"
+    "    cbnz    x12, 1b\n"          /* x11 is its base + 176 = S again */
+    "    sub     x11, x11, #176\n"
+    "    str     x2, [x11, #152]\n"  /* x30 = the entry point: the restore's ret */
     "    str     x10, [x0]\n"        /* f->sp = S */
+    "    str     x2, [x0, #8]\n"     /* f->pc = the entry point */
     "    ret\n"
     ".size pli_fiber_start,.-pli_fiber_start\n");
 
