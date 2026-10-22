@@ -103,7 +103,9 @@ case "$(uname -s)" in
     OVERRIDE_DST=mingw
     HOST_LEAK='Microsoft Visual Studio|/out:|kernel32\.lib|clang_rt\.builtins'
     STATIC_CHECK=
-    for f in crt2.o crtbegin.o crtend.o fltused.o chkstk.o libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a; do
+    # Keep this list in step with detectMingw() (src/hostcrt.cpp): a file it
+    # requires but this directory lacks makes the override silently fall back.
+    for f in crt2.o crtbegin.o crtend.o fltused.o chkstk.o libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a libws2_32.a; do
       [ -f "$SYSROOT/$f" ] || { echo "FAIL: sysroot source missing ($SYSROOT/$f)"; exit 1; }
     done
     if stage single; then link_and_run single "LIB=" 'vendored.*mingw.*embedded'; fi

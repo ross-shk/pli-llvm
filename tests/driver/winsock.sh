@@ -7,10 +7,10 @@
 # libws2_32.a is part of the default MinGW link.
 set -u
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) ;;
+  MINGW*|MSYS*|CYGWIN*|Windows_NT*) EXE=.exe ;;
   *) echo "SKIP: Winsock is Windows-only"; exit 0 ;;
 esac
-PLI=${PLI:-./build/cmake/pli}
+PLI=${PLI:-./build/cmake/pli$EXE}
 CLANG=${CLANG:-clang}
 OUT=tests/driver/out/winsock
 mkdir -p tests/driver/out
@@ -49,9 +49,10 @@ EOF
   || { echo "FAIL: C bridge compile"; exit 1; }
 "$PLI" -c "$OUT.pli" -o "$OUT.pli.o" \
   || { echo "FAIL: PL/I compile"; exit 1; }
-"$PLI" "$OUT.c.o" "$OUT.pli.o" -o "$OUT.exe" \
+"$PLI" "$OUT.c.o" "$OUT.pli.o" -o "$OUT$EXE" \
   || { echo "FAIL: link without --extra"; exit 1; }
-got=$("$OUT.exe") || { echo "FAIL: run"; exit 1; }
+raw=$("$OUT$EXE") || { echo "FAIL: run"; exit 1; }
+got=$(printf '%s\n' "$raw" | tr -d '\r')
 [ "$got" = "PASS winsock" ] || { echo "FAIL: run (got: $got)"; exit 1; }
 
 echo PASS
