@@ -350,10 +350,11 @@ if(PLI_SHARED_LLVM_LINK AND TARGET LLVM)
   # The dylib carries its own zlib/zstd; naming them here would need a
   # keg-only path on macOS. A *static* lld, though, is an archive with its own
   # zlib references (deflate), which the shared dylib does not export: name
-  # zlib and zstd when the lld libraries are the static ones.
+  # zlib and zstd when the lld libraries are the static ones. Apple keeps its
+  # keg-only zlib out of the default search path, so it is left alone.
   set(llvm_libs_core LLVM)
   set(llvm_libs_mc "")
-  if(LLD_ELF_LIB)
+  if(LLD_ELF_LIB AND NOT APPLE)
     get_filename_component(_lld_elf_ext "${LLD_ELF_LIB}" EXT)
     if(NOT _lld_elf_ext MATCHES "\\.(so|dylib)")
       list(APPEND llvm_libs_core z zstd)
