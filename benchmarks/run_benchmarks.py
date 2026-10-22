@@ -633,6 +633,15 @@ def check_for_deterioration(results: Dict, previous: Dict) -> List[str]:
 
 def main():
     import argparse
+    # The report prints UTF-8 marks (the check mark, the em dash). A Windows
+    # console defaults to the ANSI code page, where they are unencodable, and
+    # the print raises UnicodeEncodeError: write UTF-8 and replace whatever the
+    # console cannot take.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(
         description="PL/I compiler benchmark harness")
     parser.add_argument("--checks-forced", action="store_true",
