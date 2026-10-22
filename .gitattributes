@@ -1,0 +1,5 @@
+# Shell scripts are run by dash (Linux, CI, the cross-test image) and by Git
+# bash on Windows: a CRLF line ending makes "set -u" fail with an illegal
+# option, and every driver test then reports a bogus failure. Keep them LF
+# in the working tree on every platform.
+*.sh text eol=lf
