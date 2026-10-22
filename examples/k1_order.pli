@@ -1,0 +1,28 @@
+ /* scratch (WS-K1): the ORDER witness — a loop that writes a local, and a
+    ZERODIVIDE handler that reads the local. IBM's ORDER rule (zos:6440-6445)
+    says such a variable must be in storage at the trap point, because the
+    handler runs in the raiser's frame and reads it there. */
+ order: procedure options(main);
+   declare x fixed bin(31);
+   declare i fixed bin(31);
+   declare d fixed bin(31);
+   declare seen fixed bin(31);
+   declare fails fixed bin(31);
+   x = 0;
+   on zerodivide begin;
+      /* the handler reads the local the loop was writing */
+      seen = x;
+      put skip list(seen);
+      x = 0;
+   end;
+   i = 1;
+   do while (i <= 3);
+      x = x + 100;
+      d = 0;
+      /* the trap: the handler must see x = 300, not a stale value */
+      x = x + (100 / d);
+      i = i + 1;
+   end;
+   fails = 0;
+   put skip list(fails);
+ end;

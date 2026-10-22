@@ -1,0 +1,19 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* "Test vs. move" (WS-C7): a built-in whose value is used only in a
+    condition is compared, and the comparison is the branch condition —
+    the shape LLVM folds into the branch. A built-in whose value is needed
+    elsewhere materializes it. Rule (123). */
+ test_vs_move: procedure options(main);
+   declare s char(10);
+   declare x fixed bin(31);
+   declare hits fixed bin(31);
+   s = 'abc';
+   hits = 0;
+   /* the value is used only in the test */
+   if verify(s, 'abc') then hits = hits + 1;
+   /* the value is needed elsewhere, so it must be materialized */
+   x = search(s, 'bc', 1);
+   if x > 0 then hits = hits + 1;
+   put skip list(hits);
+ end test_vs_move;

@@ -1,0 +1,28 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Constant-offset concatenation (WS-C1). Two fixed-length halves are
+    concatenated into a fixed-length result, so every store lands at a
+    constant offset. The sources vary so the work is not folded away. */
+ concat_const: procedure options(main);
+   declare (i, j, hits) fixed bin(31);
+   declare srcs(4) char(20);
+   declare a char(10);
+   declare b char(10);
+   declare c char(20);
+
+   srcs(1) = 'abcdefghij0123456789';
+   srcs(2) = 'ABCDEFGHIJ0123456789';
+   srcs(3) = 'zyxwvutsrq9876543210';
+   srcs(4) = '0123456789abcdefghij';
+
+   hits = 0;
+   do i = 1 to 4000000;
+      j = mod(i, 4) + 1;
+      a = substr(srcs(j), 1, 10);
+      b = substr(srcs(j), 11, 10);
+      c = a || b;
+      if substr(c, 1, 1) = 'A' then hits = hits + 1;
+   end;
+
+   put skip list(hits);
+ end concat_const;

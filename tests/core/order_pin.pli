@@ -1,0 +1,38 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-253: an ON unit that reads a block variable must see the *latest*
+    value, because the variable is pinned in storage at the trap point
+    (IBM's ORDER rule, zos:6440-6445). The loop writes x, the handler
+    reads it, and the handler's view of x must be the value the loop
+    stored before the trap — not a stale copy from a register. */
+ order_pin: procedure options(main);
+    declare x fixed bin(31);
+    declare i fixed bin(31);
+    declare d fixed bin(31);
+    declare expected fixed bin(31);
+    declare seen fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+    x = 0;
+
+    on zerodivide begin;
+       /* the unit reads the variable the loop is writing */
+       seen = x;
+       if seen ^= expected then fails = fails + 1;
+    end;
+
+    i = 1;
+    do while (i <= 3);
+       x = x + 100;
+       expected = x;
+       d = 0;
+       /* the trap: the handler must see x = 100, 200, 300 */
+       x = x + (100 / d);
+       i = i + 1;
+    end;
+
+    if fails = 0 then
+       put skip list('PASS');
+    else
+       put skip list('FAIL');
+ end order_pin;

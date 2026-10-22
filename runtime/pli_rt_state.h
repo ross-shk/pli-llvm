@@ -167,6 +167,8 @@ int rt_next_char(void);
  * The read happens on the broker's thread, so a task that waits for input
  * parks instead of holding the worker it runs on. */
 int rt_input_getc(void);
+/* Select the input stream (WS-H4, ADR-272). */
+void rt_select_input(FILE *f);
 /* ADR-220: flush the stdout write slab before program exit or FILE routing. */
 void rt_flush_stdout(void);
 

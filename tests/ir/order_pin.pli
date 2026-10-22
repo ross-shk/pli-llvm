@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-253: the capture context holds the address of the automatics an ON
+    unit can read, and of those only. The unit reads x, so x is pinned in
+    storage; the unit never touches y, so y is not pinned and stays
+    register-allocatable. */
+ order_pin_ir: procedure options(main);
+    declare x fixed bin(31);
+    declare y fixed bin(31);
+    declare d fixed bin(31);
+    declare seen fixed bin(31);
+    x = 0;
+    y = 1;
+
+    on zerodivide begin;
+       seen = x;
+    end;
+
+    d = 0;
+    x = x + (100 / d);
+    put skip list(y);
+    put skip list(seen);
+ end order_pin_ir;

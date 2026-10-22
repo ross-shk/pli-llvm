@@ -1,0 +1,47 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* An exact decimal ROUND (ADR-276): a FIXED DECIMAL argument rounded to a
+    constant digit count keeps its exactness — the result is a decimal with
+    that scale, rounded half away from zero. A FLOAT argument or a runtime
+    digit count is the library's float rounding. Rules (123), QR2.2. */
+ round_decimal: procedure options(main);
+   declare w decimal(20,4);
+   declare z decimal(9,4);
+   declare neg decimal(9,4);
+   declare r decimal(20,2);
+   declare s decimal(9,2);
+   declare t decimal(9,1);
+   declare cnt fixed bin(31);
+   declare fails fixed bin(31);
+
+   fails = 0;
+
+   /* A wide decimal: the exact answer keeps every digit. */
+   w = 1234567890123456.7891;
+   r = round(w, 2);
+   if r ^= 1234567890123456.79 then fails = fails + 1;
+
+   /* Half away from zero, in both directions. */
+   z = 2.6750;
+   s = round(z, 2);
+   if s ^= 2.68 then fails = fails + 1;
+   neg = -2.6750;
+   s = round(neg, 2);
+   if s ^= -2.68 then fails = fails + 1;
+
+   /* The result carries the requested scale. */
+   t = round(z, 1);
+   if t ^= 2.7 then fails = fails + 1;
+
+   /* A runtime digit count is the float path. */
+   cnt = 2;
+   put skip list('rt =', round(z, cnt));
+
+   /* The table: the scale of each result is visible here. */
+   put skip list('r =', r);
+   put skip list('s =', s);
+   put skip list('t =', t);
+
+   if fails = 0 then put skip list('PASS round_decimal');
+   else put skip list('FAIL round_decimal: fails =', fails);
+ end round_decimal;

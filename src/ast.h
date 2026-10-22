@@ -56,6 +56,10 @@ struct Expr {
   // An unconnected BASED variable may be named there without a locator.
   bool allocBaseRef = false;
   bool isLabel = false;
+  // The node was rewritten in place by the constant folder (ADR-240): its
+  // `ty` is the result type the expression was folded to, not the type its
+  // digits describe, so typing must not re-derive it.
+  bool folded = false;
   Tok op = Tok::Eof; // Binary / Unary operator
   ExprP a, b;
   std::vector<ExprP> args; // Call
@@ -94,7 +98,7 @@ struct DefinedSub {
 // FORMAT statement (rule (55)). F(w,d[,p]): w = field width, d =
 // fractional digits, p = scale factor (evaluated, then formatting uses
 // (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
-// formats for the real/imaginary parts; P stays diagnosed (D1 pictures).
+// formats for the real/imaginary parts; P carries a picture string (rule 53).
 struct FormatItem {
   enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P } kind = A;
   ExprP w;                      // field width

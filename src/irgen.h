@@ -22,6 +22,7 @@
 #include "ast.h"
 #include "diag.h"
 #include "hir.h"
+#include "irgen_decisions.h"
 #include "sema.h"
 
 // Experimental lowering modes (design-docs/mlir-runtime-migration-plan.md §5.2).
@@ -47,14 +48,35 @@ public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
         bool noConvChecks = false, bool noSubChecks = false,
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
-        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "")
-      : d_(d), sema_(s), triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_),
-        noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks),
-        noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
+        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
+        bool noMemoryEffects = false)
+      : noMemoryEffects_(noMemoryEffects), d_(d), sema_(s), triple_(std::move(triple)),
+        mod_("pli", ctx_), b_(ctx_), noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks),
+        noZdivChecks_(noZdivChecks), noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
         platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
         perOpOverrides_(std::move(perOpOverrides)) {}
 
   std::string run(HProgram& prog);
+
+  // WS-A2 (ADR-267): the effects another module published for the external
+  // procedures this unit calls, read from a published-effects file.
+  // The library-call remark (ADR-254): every built-in that hands a
+  // conversion to the library routine reports it.
+  void setRemarkLibraryCalls(bool on) { remarkLibraryCalls_ = on; }
+  void setPublishedEffects(std::map<std::string, pli::PublishedEffect> e) {
+    published_ = std::move(e);
+  }
+
+  // WS-A2 (ADR-267): what this module's own procedures promise, for publishing
+  // to the modules that call them.
+  const std::map<const HProc*, pli::ProcEffects>& procEffects() const { return effects_; }
+  // The digest of a procedure's PL/I signature: the promise is published for
+  // it, and a consumer only uses a promise published for the same signature.
+  std::string definitionDigest(const HProc* p) const;
+
+  // The facts the compiler computed while lowering (ADR-260); --print-facts
+  // dumps them. The store lives in irgen_decisions.cpp, outside this file.
+  const pli::FactStore& facts() const { return facts_; }
 
   // Module ownership for the in-process backend (review §4): reuses run()
   // (so `-emit-llvm` stays byte-identical) then re-parses the IR into a fresh
@@ -122,6 +144,12 @@ private:
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, llvm::Value*> dynLb_;
+  // The membership table of each constant character alphabet used by
+  // VERIFY/SEARCH (ADR-241), keyed by the alphabet's text.
+  std::map<std::string, llvm::GlobalVariable*> searchTables_;
+  // The translate table of each constant (out, in) pair used by TRANSLATE
+  // (ADR-273), keyed by `out` + NUL + `in`.
+  std::map<std::string, llvm::GlobalVariable*> translateTables_;
   // Dynamic array member (rule 13) runtime bound values, keyed by (structure
   // symbol, member field path), recorded once at block entry.
   struct MemberDyn {
@@ -144,6 +172,32 @@ private:
   std::unordered_map<MemberDyn, MemberBounds, MemberDyn::Hash> memberDyn_;
   void emitGlobals();
   void declareProc(HProc* p); // pre-create a proc's functions/aliases so calls resolve
+  // WS-A1 (ADR-264): what each procedure can do to memory, computed by the
+  // decision layer before any function is declared, so the promise can be
+  // stamped on the function itself.
+  std::map<const HProc*, pli::ProcEffects> effects_;
+  // WS-A2 (ADR-267): the effects another module published for the external
+  // procedures this unit calls. A caller that cannot see the callee's body
+  // has this description and nothing else.
+  std::map<std::string, pli::PublishedEffect> published_;
+  // Stamp a published promise on an external declaration.
+  void applyPublishedEffect(llvm::Function* f, const Symbol* sym);
+  // --no-memory-effects: skip the inference, so every call keeps LLVM's
+  // default effects. The escape hatch that lets a benchmark measure what the
+  // inference is worth.
+  bool noMemoryEffects_ = false;
+  // The library-call remark (ADR-254): --remark-library-calls makes every
+  // library-path built-in report the conversion it hands to the routine.
+  bool remarkLibraryCalls_ = false;
+  // WS-K8 (ADR-257): the compiler's slot for a CONTROLLED variable's current
+  // generation — the ALLOCATE fills it, so a reference is a load.
+  std::map<Symbol*, llvm::Value*> ctlAnchor_;
+  // The source location of the statement or built-in call being lowered, for
+  // that remark.
+  SourceLoc curLoc_;
+  pli::MemEffect effectOf(const HProc* p) const;
+  // The control-flow verdict: can the procedure unwind, does it return?
+  void applyControlAttrs(llvm::Function* f, const HProc* p);
   void emitProc(HProc* p);
   void emitPlainProc(HProc* p, llvm::Type* retLLVM);
   void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM);
@@ -173,10 +227,30 @@ private:
 
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
+  // WS-K8 (ADR-257): the slot holding a CONTROLLED variable's current
+  // generation, created on first use.
+  llvm::Value* ctlAnchorSlot(Symbol* sym);
+  // The declared extent of a statically bounded CONTROLLED variable.
+  long long ctlDeclaredExtent(Symbol* sym);
+  // WS-K8 (ADR-257): keep the anchor in step with the runtime's generation
+  // stack.
+  void ctlNoteAlloc(Symbol* sym, llvm::Value* addr);
+  void ctlNoteFree(Symbol* sym);
   void emitAssign(HStmt* s);
   // Self-append peephole (rule (119), P4): X = X || lit... appends in place
   // for AUTOMATIC scalar VARYING targets; false for any other shape.
   bool emitSelfAppend(HStmt* s);
+  // Constant-offset concatenation store (rule (119), ADR-242): A = B || C
+  // into a fixed-length CHARACTER target stores every leaf at a constant
+  // offset, with no temporary buffer; false for any other shape.
+  bool emitConcatConstStore(HStmt* s);
+  // Merge two masked bit tests on the same value into one masked test
+  // (ADR-243): (X & M1) = E1 & (X & M2) = E2 is one test on X. False for
+  // any other shape, and when the two tests may not be merged.
+  bool emitCombinedBitTest(HExpr* e, Val& out);
+  // True when `s` is a parameter of the current procedure or of one of its
+  // enclosing procedures: such a symbol's storage may be the caller's.
+  bool isParamOfScope(Symbol* s) const;
   // Rule (119): a concat RHS evaluates into a fresh pli_alloc buffer; once
   // an assignment has copied it into the target the buffer is dead. Free it
   // unless the RHS is some other shape (no-op then).
@@ -265,24 +339,6 @@ private:
   // (rule 78). Without the record the actual ran twice — once for the buffer
   // and once for its length — and the two evaluations could disagree.
   std::unordered_map<HExpr*, Val> actuals_;
-  // Saves and restores `actuals_` around a call, so a nested call does not
-  // clobber the outer call's entries (the outer scope is restored intact).
-  struct ActualScope {
-    IRGen& g;
-    std::unordered_map<HExpr*, Val> saved;
-    explicit ActualScope(IRGen& ir) : g(ir), saved(std::move(ir.actuals_)) {
-      ir.actuals_.clear();
-    }
-    ~ActualScope() { g.actuals_ = std::move(saved); }
-  };
-  // Evaluate a call actual once: reuse the value recorded for this call, or
-  // evaluate and record it.
-  Val materializeActual(HExpr* a);
-  // Fit an integer value to the destination integer type: widen with a sign
-  // extension, narrow with a truncation. A direct SExt/Trunc is invalid IR
-  // when the widths do not line up — an i64 runtime result into an i128
-  // wide-DECIMAL slot, or an i128 value into an i64 slot.
-  llvm::Value* fitTo(llvm::Value* v, llvm::Type* dst, const char* name);
   // A CHARACTER VARYING argument of a different declared length than the
   // parameter is marshalled into a parameter-sized dummy (see argAddr); after
   // the call the callee's result is copied back into the caller's variable,
@@ -293,8 +349,57 @@ private:
     Symbol* sym = nullptr;        // the caller's varying-char variable
     Type pty;                     // the parameter (dummy) type, for layout
   };
+  // Saves and restores `actuals_` around a call, so a nested call does not
+  // clobber the outer call's entries (the outer scope is restored intact).
+  // The lifetime markers and the pending VARYING copy-backs are scoped the
+  // same way: a nested call ends only its own buffers' lifetimes and copies
+  // back only its own arguments — otherwise the outer buffer's lifetime
+  // would end before the outer call had even filled it, and the outer
+  // call's copy-back would happen before the outer call had run.
+  struct ActualScope {
+    IRGen& g;
+    std::unordered_map<HExpr*, Val> saved;
+    std::vector<llvm::Value*> savedLifetimes;
+    std::vector<PendingVarWrite> savedVarWrites;
+    explicit ActualScope(IRGen& ir)
+        : g(ir), saved(std::move(ir.actuals_)),
+          savedLifetimes(std::move(ir.pendingTempLifetimes_)),
+          savedVarWrites(std::move(ir.pendingVarWrites_)) {
+      ir.actuals_.clear();
+      ir.pendingTempLifetimes_.clear();
+      ir.pendingVarWrites_.clear();
+    }
+    ~ActualScope() {
+      g.actuals_ = std::move(saved);
+      g.pendingTempLifetimes_ = std::move(savedLifetimes);
+      g.pendingVarWrites_ = std::move(savedVarWrites);
+    }
+  };
+  // Evaluate a call actual once: reuse the value recorded for this call, or
+  // evaluate and record it.
+  Val materializeActual(HExpr* a);
+  // Fit an integer value to the destination integer type: widen with a sign
+  // extension, narrow with a truncation. A direct SExt/Trunc is invalid IR
+  // when the widths do not line up — an i64 runtime result into an i128
+  // wide-DECIMAL slot, or an i128 value into an i64 slot.
+  llvm::Value* fitTo(llvm::Value* v, llvm::Type* dst, const char* name);
   std::vector<PendingVarWrite> pendingVarWrites_;
   void flushVarWrites();
+  // ADR-246: the stack buffers that live only until the call returns — the
+  // argument dummies, the character-expression buffer and the NUL-terminated
+  // copy. Each is an entry-block alloca, so without a lifetime marker every
+  // one of them owns a stack slot for the whole procedure; with one, LLVM's
+  // stack colouring can give them the same slot.
+  std::vector<llvm::Value*> pendingTempLifetimes_;
+  // Mark the buffer live from here: the marker goes in the block that uses
+  // the buffer, not in the entry block, or a loop would end the lifetime
+  // before the next iteration's use.
+  void markTempLifetime(llvm::Value* buf);
+  // End the marked lifetimes (the buffers are dead after this point).
+  void endTempLifetimes();
+  // Drop the marked lifetimes without ending them: the buffers outlive the
+  // call, so their slots must stay reserved.
+  void dropTempLifetimes() { pendingTempLifetimes_.clear(); }
   // Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
   // FLOAT scalars convert to the parameter type and ride as values, POINTERs
   // ride as the pointer itself; anything else keeps the argAddr form. A
@@ -551,8 +656,15 @@ private:
   // unconditional `abortFn` call; otherwise consult the stack — empty takes
   // the abort path, established runs the matching handler then branches to
   // okBB, where the caller resumes with its own recovery value.
-  void emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
-                    llvm::BasicBlock* okBB);
+  void emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB);
+  // WS-F1 (ADR-249): the ON dispatch — the stack scan, the handler calls and
+  // the abort — lives in a cold function of its own, so the hot function
+  // carries only the branch and the call. One function per condition key:
+  // the handlers of a key are known before any procedure body is emitted
+  // (declareOnHandlers), so the dispatch can be shared by every trap site
+  // of that key.
+  llvm::Function* onTrapDispatch(int key, const std::string& abortFn);
+  std::map<int, llvm::Function*> trapDispatch_;
   // Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94).
   llvm::Value* clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub);
   // ZERODIVIDE value trap (rule 94): branch before the division so the
@@ -567,11 +679,9 @@ private:
     llvm::BasicBlock* okBB = nullptr;
     llvm::Value* zero = nullptr;
     int key = 0;
-    std::string tag;
     bool active() const { return computeBB != nullptr; }
   };
-  ZdivCheck beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
-                            int key, const std::string& tag);
+  ZdivCheck beginZerodivide(llvm::Value* isZero, llvm::Value* zero, int key);
   llvm::Value* endZerodivide(ZdivCheck z, llvm::Value* computed);
   // Constant-zero divisor fast path (rule 94): emit the trap directly and
   // return `zero`, no phi or dead compute block.
@@ -598,6 +708,13 @@ private:
   // have no implementation fall back to runtime and report the fallback
   // under -v (design-docs/mlir-runtime-migration-plan.md §5.2, §6.5).
   bool useRuntimeCall(const std::string& op);
+  // The lowering policy for `op` without recording the decision: used where
+  // the caller has already asked for it (ADR-260).
+  bool runtimePath(const std::string& op);
+  // The lowering decision for one call site (ADR-254): the path and the
+  // reason. The decision layer owns the policy (constraint C2); the
+  // --experimental-lowering override wins over it (constraint C3).
+  pli::InlineDecision inlineDecision(const std::string& op, const pli::CallSite& site);
   // True when a direct LLVM lowering exists for `op` (populated in P1+).
   bool hasLLVMLowering(const std::string& op);
   // Dispatch wrappers for the P0/P1 pilot operations. Each checks the
@@ -685,6 +802,29 @@ private:
   // Direct LLVM lowering for VERIFY (P3): bytewise scan for first char
   // absent from the delimiter set, 1-based result.
   llvm::Value* emitVerifyLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t, llvm::Value* tLen);
+  // VERIFY with a constant alphabet (ADR-241): a 256-entry membership table
+  // replaces the inner scan, so each character costs one lookup instead of a
+  // scan of the whole alphabet (MULTICS compile_exp.pl1:1348-1380).
+  llvm::Value* emitVerifyTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table);
+  // VERIFY(s,t,from) with a constant alphabet: as above, starting at
+  // position `start` (1-based, clamped to 1).
+  llvm::Value* emitVerifyFromTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                   llvm::Value* start);
+  // SEARCH with a constant alphabet: the first char present in the set,
+  // 1-based, starting at `start` (clamped to 1).
+  llvm::Value* emitSearchTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                               llvm::Value* start);
+  // The 256-entry membership table for a constant character alphabet; one
+  // global per distinct alphabet, reused across call sites.
+  llvm::GlobalVariable* searchTable(const std::string& alphabet);
+  // TRANSLATE with constant `out`/`in` strings (ADR-273): a 256-entry
+  // translation table turns the inner scan of `in` into one lookup per
+  // character (MULTICS compile_exp.pl1:1392-1440).
+  void emitTranslateTable(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm::Value* sLen,
+                          llvm::Value* table);
+  // The 256-entry translation table for a constant (out, in) pair; one global
+  // per distinct pair, reused across call sites.
+  llvm::GlobalVariable* translateTable(const std::string& out, const std::string& in);
   // Direct LLVM lowering for VERIFY(s,t,from) (P3): same as verify but
   // starting at position `start` (1-based, clamped to 1).
   llvm::Value* emitVerifyFromLLVM(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
@@ -883,6 +1023,9 @@ private:
   std::string platformBc_;
   LowerMode lowerMode_;
   std::map<std::string, LowerMode> perOpOverrides_;
+  // The PL/I-specific decisions made while lowering, and the report
+  // --print-facts prints (ADR-260).
+  pli::FactStore facts_;
   // Parse the embedded runtime blob, check its LLVM stamp and target triple,
   // merge the whole
   // runtime into the module, and re-apply the P0 side-table facts to the real

@@ -1,0 +1,32 @@
+ /* scratch (WS-K1, the cost): a hot loop that writes a local, with an ON
+    unit that reads the local the loop writes: it must stay in storage — against the same loop with an ON unit that does not. The
+    delta is the cost of the ORDER rule (IBM: a variable the handler can read
+    must be in storage at the trap point). The loop reads an array whose
+    contents are unknown, so it cannot be folded away. */
+ order_cost: procedure options(main);
+   declare x fixed bin(31);
+   declare i fixed bin(31);
+   declare n fixed bin(31);
+   declare j fixed bin(31);
+   declare d fixed bin(31);
+   declare sum fixed bin(31);
+   declare a(1:100) fixed bin(31);
+   get list (n);
+   j = 1;
+   do while (j <= 100);
+      get list (a(j));
+      j = j + 1;
+   end;
+   x = 0;
+   on zerodivide begin;
+      /* the handler reads the local the loop writes */
+      d = x;
+   end;
+   i = 1;
+   do while (i <= n);
+      x = x + a(i - (i / 100) * 100 + 1) * a(i - (i / 50) * 50 + 1);
+      i = i + 1;
+   end;
+   sum = x;
+   put skip list(sum);
+ end;

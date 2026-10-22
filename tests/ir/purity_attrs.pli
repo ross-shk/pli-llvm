@@ -1,0 +1,74 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-A1 (ADR-264): what a PL/I procedure promises to LLVM. A procedure
+    that touches no memory gets memory(none), one that only reads its
+    arguments gets memory(argmem: read), one that writes them gets
+    memory(argmem: readwrite), and one that does I/O gets no promise at
+    all, because an unknown call may set anything. A procedure that cannot
+    unwind and always returns also says so, which is what lets LLVM hoist a
+    call out of a loop. */
+ purity_attrs: procedure options(main);
+   declare i fixed bin(31);
+   declare v fixed bin(31);
+
+   i = pure();
+   v = reader(i);
+   call writer(v);
+   call io_proc(v);
+   put skip list(i);
+
+   /* touches no memory at all */
+   pure: procedure returns(fixed bin(31));
+      declare y fixed bin(31);
+      y = 7;
+      return(y);
+   end pure;
+
+   /* reads its argument and writes nothing */
+   reader: procedure(x) returns(fixed bin(31));
+      declare x fixed bin(31);
+      return(x + 1);
+   end reader;
+
+   /* writes its argument */
+   writer: procedure(x);
+      declare x fixed bin(31);
+      x = x + 1;
+   end writer;
+
+   /* does I/O: nothing may be promised */
+   io_proc: procedure(x);
+      declare x fixed bin(31);
+      put skip list(x);
+   end io_proc;
+
+   /* an endless loop: it cannot unwind, but it does not return either */
+   looper: procedure;
+      do while (1);
+         call pure();
+      end;
+   end looper;
+
+   /* a comparison computes no new value: it cannot overflow, so this one
+      still always returns */
+   chooser: procedure(x) returns(fixed bin(31));
+      declare x fixed bin(31);
+      if x > 0 then
+         return(x);
+      return(0);
+   end chooser;
+
+   /* recursion has no proven bound: it may never return */
+   down: procedure(x) recursive;
+      declare x fixed bin(31);
+      if x > 0 then
+         call down(x);
+   end down;
+
+   /* reads a global and writes nothing: the promise is memory(read) — the
+      rung between an argument-only promise and no promise at all */
+   reader_global: procedure returns(fixed bin(31));
+      declare g fixed bin(31) external;
+      return(g);
+   end reader_global;
+ end purity_attrs;

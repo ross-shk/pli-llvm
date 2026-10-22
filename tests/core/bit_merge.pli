@@ -1,0 +1,91 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Two masked bit tests on the same value in one conjunction (ADR-243):
+    the conjunction of two disjoint masked tests is one masked test, so the
+    value must not change. The shapes the merge declines — overlapping
+    masks, and two different values — must keep their own value too. */
+ bit_merge: procedure options(main);
+   declare w bit(32);
+   declare x bit(32);
+   declare cell bit(32) based(p);
+   declare p pointer;
+   declare q pointer;
+   declare buf1 bit(32);
+   declare buf2 bit(32);
+   declare m1 bit(32);
+   declare m2 bit(32);
+   declare e1 bit(32);
+   declare e2 bit(32);
+   declare r1 fixed bin(31);
+   declare r2 fixed bin(31);
+   declare ref fixed bin(31);
+   declare mrg fixed bin(31);
+   declare both fixed bin(31);
+   declare fails fixed bin(31);
+   declare i fixed bin(31);
+
+   m1 = '00000000000000000000000000001111'b;
+   m2 = '00000000000000000000000011110000'b;
+   e1 = '00000000000000000000000000000011'b;
+   e2 = '00000000000000000000000000110000'b;
+   fails = 0;
+
+   /* The merged conjunction must agree with the two tests taken separately. */
+   do i = 1 to 8;
+      w = fixed(i * 1000003);
+      r1 = 0;
+      if (w & m1) = e1 then r1 = 1;
+      r2 = 0;
+      if (w & m2) = e2 then r2 = 1;
+      ref = 0;
+      if (r1 = 1) & (r2 = 1) then ref = 1;
+      mrg = 0;
+      if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
+         ((w & '00000000000000000000000011110000'b) = '00000000000000000000000000110000'b)
+      then mrg = 1;
+      if mrg ^= ref then fails = fails + 1;
+   end;
+
+   /* Overlapping masks: the two tests are not independent, so they must not
+      be merged. The conjunction is false here, while a merged test would
+      have been true. */
+   w = fixed(3);
+   both = 0;
+   if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
+      ((w & '00000000000000000000000000000011'b) = '00000000000000000000000000000001'b)
+   then both = 1;
+   if both ^= 0 then fails = fails + 1;
+
+   /* Two tests on two different values are not merged either. */
+   x = fixed(48);
+   both = 0;
+   if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
+      ((x & '00000000000000000000000011110000'b) = '00000000000000000000000000110000'b)
+   then both = 1;
+   if both ^= 1 then fails = fails + 1;
+
+   /* A chain of three tests on the same value: the conjunction must keep
+      its value, and the fields must not be merged across each other. */
+   w = fixed(13248);
+   both = 0;
+   if ((w & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
+      ((w & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b) &
+      ((w & '00000000000000000000000011000000'b) = '00000000000000000000000011000000'b)
+   then both = 1;
+   if both ^= 1 then fails = fails + 1;
+
+   /* Two different locators for the same based variable are two different
+      storages, so the two tests must not be merged either. */
+   p = addr(buf1);
+   q = addr(buf2);
+   buf1 = fixed(13056);
+   buf2 = fixed(768);
+   both = 0;
+   if ((p->cell & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
+      ((q->cell & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b)
+   then both = 1;
+   if both ^= 1 then fails = fails + 1;
+
+   if fails = 0 then put skip list('PASS bit_merge');
+   else put skip list('FAIL bit_merge: fails =', fails);
+ end bit_merge;

@@ -1,0 +1,7 @@
+CHECK-LABEL: define internal void @PLI_TRAP_OUTLINE
+CHECK: call void @pli_on_trap
+CHECK-LABEL: define internal void @pli_on_trap
+CHECK: call i64 @pli_on_top_pair
+CHECK: call void @pli_zerodivide
+CHECK: call void @PLI_ON_ZERODIVIDE_1
+CHECK: attributes #{{[0-9]+}} = { cold noinline }

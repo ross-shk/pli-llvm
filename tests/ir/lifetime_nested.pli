@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-D3 (ADR-246, ADR-270): a buffer's lifetime ends when the call that
+    owns it returns. A nested call must not end the outer call's buffer:
+    the outer buffer is filled after the nested call has run, so its
+    lifetime has to reach the outer call. */
+ lifetime_nested: procedure options(main);
+   declare s char(10);
+   call outer(inner('abc'));
+   put skip list(s);
+
+   outer: procedure(x);
+      declare x char(10);
+      x = x || 'O';
+   end outer;
+
+   inner: procedure(y) returns(char(10));
+      declare y char(10);
+      y = 'I';
+      return(y);
+   end inner;
+ end lifetime_nested;

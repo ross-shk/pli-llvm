@@ -1,0 +1,3 @@
+CHECK: call void @"PLI_LIFETIME_NESTED\$INNER"
+CHECK: call void @"PLI_LIFETIME_NESTED\$OUTER"
+CHECK: @llvm\.lifetime\.end\.p0\(ptr %{{.*}}\)

@@ -1,0 +1,54 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (12),(13),(126): a constant subscript selects (index minus
+    the lower bound), so A(-3:7), B(0:9) and C(1:10) address the same
+     ten-element sequence from three origins (ADR-278, the B1 gate).
+    Each store below is reached by a constant subscript, and a compiler
+    that dropped the lower bound would store the second value over the
+    first. */
+ lower_bound: procedure options(main);
+    declare a(-3:7) fixed bin(31);
+    declare b(0:9) fixed bin(31);
+    declare c(1:10) fixed bin(31);
+    declare fails fixed bin(31);
+    fails = 0;
+
+    /* the first, a middle and the last element of each range */
+    a(-3) = 1;
+    a(0) = 4;
+    a(7) = 11;
+    b(0) = 1;
+    b(3) = 4;
+    b(9) = 11;
+    c(1) = 1;
+    c(4) = 4;
+    c(10) = 11;
+
+    /* every range answers with the value its own store put there */
+    if a(-3) ^= 1 then fails = fails + 1;
+    if a(0) ^= 4 then fails = fails + 1;
+    if a(7) ^= 11 then fails = fails + 1;
+    if b(0) ^= 1 then fails = fails + 1;
+    if b(3) ^= 4 then fails = fails + 1;
+    if b(9) ^= 11 then fails = fails + 1;
+    if c(1) ^= 1 then fails = fails + 1;
+    if c(4) ^= 4 then fails = fails + 1;
+    if c(10) ^= 11 then fails = fails + 1;
+
+    /* the same position in the three ranges answers identically */
+    if a(-3) ^= b(0) then fails = fails + 1;
+    if b(0) ^= c(1) then fails = fails + 1;
+    if a(0) ^= b(3) then fails = fails + 1;
+    if b(3) ^= c(4) then fails = fails + 1;
+    if a(7) ^= b(9) then fails = fails + 1;
+    if b(9) ^= c(10) then fails = fails + 1;
+
+    /* the declared bounds are the ones the program sees */
+    if lbound(a) ^= -3 then fails = fails + 1;
+    if hbound(a) ^= 7 then fails = fails + 1;
+    if lbound(b) ^= 0 then fails = fails + 1;
+    if hbound(c) ^= 10 then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS lower_bound');
+    else put skip list('FAIL lower_bound: fails =', fails);
+ end lower_bound;

@@ -3,6 +3,7 @@
 #include "irgen.h"
 #include "codegen.h" // pli::applyRuntimeFnAttrs declaration
 #include "embedded_runtime.h"
+#include "irgen_decisions.h" // pli:: the PL/I-specific decisions (ADR-260)
 #include <algorithm>
 #include <cfloat>
 #include <set>
@@ -174,10 +175,24 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
   case TK::Bit:
     // BIT(1) is a single i8 in storage (`i1` in registers); wider strings
     // pack big-endian, ceil(n/8) bytes (rule (18), QR2.2).
+    //
+    // ADR-245 (the PL/I string padding invariant): the declared extent is
+    // the whole value. A BIT(n) is exactly ceil(n/8) bytes and the bits
+    // above n in the last byte are zero, so the MULTICS question "may this
+    // fetch read padding bits?" (padded_ref) answers "yes, and they are
+    // zero" — the value cannot depend on what sits next to it.
     if (t.len == 1)
       return b_.getInt8Ty();
     return llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)bitBytes(t.len));
   case TK::Char: {
+    // ADR-245: a CHARACTER(n) is exactly n bytes. There is no storage
+    // padding in the LLVM sense, so "may this fetch read padding bits?"
+    // (MULTICS padded_ref) answers "no" and "must this store zero the
+    // padding bits?" (padded_for_store_ref) answers "there are none".
+    // MULTICS conflated the two in 1980 and shipped a variable that was
+    // stored unpadded but fetched padded; keep the two questions apart —
+    // the fetch side is address+length (loadSym), the store side is
+    // bounded by the declared length (storeCharTo).
     if (t.varying) {
       llvm::Type* data = llvm::ArrayType::get(b_.getInt8Ty(), t.len);
       return llvm::StructType::get(b_.getInt32Ty(), data);
@@ -319,6 +334,66 @@ llvm::Constant* IRGen::wideDecConstant(const Type& t, PliI128 w) {
   if (t.intBits() == 128)
     return llvm::cast<llvm::Constant>(i128(w));
   return llvm::ConstantInt::get(llvmTy(t), pli_to_i64(w), true);
+}
+
+// WS-K8 (ADR-257): an allocation the compiler can watch fills the anchor
+// slot with the new generation's address, so a later reference is a load.
+void IRGen::ctlNoteAlloc(Symbol* sym, llvm::Value* addr) {
+  if (!sym || !sym->ctlDirect || !addr)
+    return;
+  b_.CreateStore(addr, ctlAnchorSlot(sym));
+}
+
+// ... and a free refreshes it: the generation below the popped one is the
+// current one now.
+void IRGen::ctlNoteFree(Symbol* sym) {
+  if (!sym || !sym->ctlDirect)
+    return;
+  llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlafterfree");
+  b_.CreateStore(addr, ctlAnchorSlot(sym));
+}
+
+// WS-K8 (ADR-257): the declared length of a statically bounded CONTROLLED
+// variable — the size of its generation in BYTES, which is what the runtime's
+// `pli_ctl_len` returns and what the bounds check divides by the element
+// size.
+long long IRGen::ctlDeclaredExtent(Symbol* sym) {
+  if (!sym || !sym->controlled)
+    return 0;
+  const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
+  long long elemBytes =
+      (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
+  if (elemBytes <= 0)
+    elemBytes = 1;
+  long long count = 1;
+  for (const Dim& d : sym->ty.dims) {
+    if (d.dyn || d.lbDyn)
+      return 0;
+    count *= (long long)d.ub - (long long)d.lb + 1;
+  }
+  return count * elemBytes;
+}
+
+// WS-K8 (ADR-257): the slot that holds a CONTROLLED variable's current
+// generation. The ALLOCATE fills it (the runtime returns the new
+// generation's address), so a reference is a load rather than a runtime
+// call. The slot starts null, which is what the runtime returns for an
+// empty generation stack — so a reference before the first ALLOCATE faults
+// the same way it does today.
+llvm::Value* IRGen::ctlAnchorSlot(Symbol* sym) {
+  auto hit = ctlAnchor_.find(sym);
+  if (hit != ctlAnchor_.end())
+    return hit->second;
+  llvm::BasicBlock* entry = &curFn_->getEntryBlock();
+  llvm::IRBuilder<> ab(entry, entry->begin());
+  llvm::AllocaInst* slot = ab.CreateAlloca(b_.getPtrTy(), nullptr, "ctl.anchor");
+  // The null store goes immediately after the alloca, at the very start of
+  // the entry block, so it dominates every use of the slot.
+  llvm::Instruction* next = slot->getNextNode();
+  llvm::IRBuilder<> sb(entry, next ? next->getIterator() : entry->end());
+  sb.CreateStore(llvm::ConstantPointerNull::get(b_.getPtrTy()), slot);
+  ctlAnchor_[sym] = slot;
+  return slot;
 }
 
 llvm::AllocaInst* IRGen::entryAlloca(llvm::Type* ty, const llvm::Twine& name) {
@@ -631,161 +706,195 @@ void pli::applyRuntimeFnAttrs(llvm::Function& f) {
   applyRuntimeAttrs(&f);
 }
 
+// The name of a memory effect, for the --print-facts report.
+static const char* effectName(pli::MemEffect e) {
+  switch (e) {
+  case pli::MemEffect::None:
+    return "none";
+  case pli::MemEffect::ArgRead:
+    return "argmem-read";
+  case pli::MemEffect::ArgReadWrite:
+    return "argmem-readwrite";
+  case pli::MemEffect::Read:
+    return "read";
+  case pli::MemEffect::Unknown:
+    break;
+  }
+  return "unknown";
+}
+
+// Stamp the memory effect the decision layer computed for a procedure
+// (ADR-264). The attribute is the only channel: a PL/I-specific notion that
+// LLVM cannot express as an attribute gets dropped with a note in
+// --print-facts, not a custom pass (the plan's C1).
+static void applyMemoryEffect(llvm::Function* f, pli::MemEffect e) {
+  switch (e) {
+  case pli::MemEffect::None:
+    f->setMemoryEffects(llvm::MemoryEffects::none());
+    break;
+  case pli::MemEffect::ArgRead:
+    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref));
+    break;
+  case pli::MemEffect::ArgReadWrite:
+    f->setMemoryEffects(llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef));
+    break;
+  case pli::MemEffect::Read:
+    f->setMemoryEffects(llvm::MemoryEffects::readOnly());
+    break;
+  case pli::MemEffect::Unknown:
+    break; // no promise: the function keeps LLVM's default
+  }
+}
+
+// --- WS-A2 (ADR-267): the digest of a PL/I signature ----------------------
+//
+// A published promise names the signature it was published for. The digest is
+// over the PL/I types, not the LLVM ones, so it survives the other module
+// being rebuilt with a different compiler version.
+static std::string digestOf(const std::vector<Type>& params, bool isFunction, const Type& retTy) {
+  uint64_t h = 1469598103934665603ULL; // FNV-1a
+  auto mix = [&](uint64_t v) {
+    for (int i = 0; i < 8; ++i) {
+      h ^= (v >> (i * 8)) & 0xff;
+      h *= 1099511628211ULL;
+    }
+  };
+  auto mixType = [&](const Type& t) {
+    mix(static_cast<uint64_t>(t.k));
+    mix(static_cast<uint64_t>(t.prec));
+    mix(static_cast<uint64_t>(t.scale));
+    mix(static_cast<uint64_t>(t.len));
+    mix(t.varying ? 1 : 0);
+    mix(t.starLen ? 1 : 0);
+    mix(t.dims.size());
+    for (const auto& d : t.dims) {
+      mix(static_cast<uint64_t>(d.lb));
+      mix(static_cast<uint64_t>(d.ub));
+      mix(d.dyn ? 1 : 0);
+      mix(d.lbDyn ? 1 : 0);
+      mix(d.adj ? 1 : 0);
+    }
+  };
+  mix(isFunction ? 1 : 0);
+  mix(params.size());
+  for (const auto& t : params)
+    mixType(t);
+  mixType(retTy);
+  char buf[17];
+  snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
+  return buf;
+}
+
+// The digest of a definition's signature: the promise is published for it.
+std::string IRGen::definitionDigest(const HProc* p) const {
+  std::vector<Type> params;
+  for (const Symbol* s : p->paramSyms)
+    params.push_back(s->ty);
+  return digestOf(params, p->isFunction, p->retTy);
+}
+
+// The digest of a declaration's signature: the promise is consumed for it.
+static std::string declarationDigest(const Symbol& sym) {
+  return digestOf(sym.entryParams, sym.entryIsFunction, sym.entryRetTy);
+}
+
+// WS-A2 (ADR-267): apply a published promise to an external declaration.
+// The caller's optimizer cannot see the callee's body, so this description is
+// all it has; without it the call keeps LLVM's default effects and cannot be
+// hoisted or speculated. The promise is used only when it was published for
+// this signature: a promise for a different procedure is not a promise here.
+void IRGen::applyPublishedEffect(llvm::Function* f, const Symbol* sym) {
+  if (!sym)
+    return;
+  auto it = published_.find(sym->name);
+  if (it == published_.end())
+    return;
+  const pli::PublishedEffect& pub = it->second;
+  if (pub.digest != declarationDigest(*sym))
+    return; // published for a different signature: claim nothing
+  applyMemoryEffect(f, pub.effects.effect);
+  if (pub.effects.nounwind)
+    f->setDoesNotThrow();
+  if (pub.effects.willReturn)
+    f->setWillReturn();
+}
+
 // --- Lowering policy (design-docs/mlir-runtime-migration-plan.md §5.2) ---
 
-// P0 policy: every operation defaults to runtime. P5 flips entries one wave at
-// a time as lowerings land. The table is operation-name -> prefers direct LLVM.
-// P5 flips: W1, W2, W3, W4 default is now LLVM (was runtime).
-static const std::map<std::string, bool>& kRuntimeDefault() {
-  static const std::map<std::string, bool> table = {
-      {"assign_char", true},
-      {"index", true},
-      {"assign_varying", true},
-      {"high", true},
-      {"low", true},
-      {"uppercase", true},
-      {"lowercase", true},
-      {"reverse", true},
-      {"center", true},
-      {"cmp_char", true},
-      // P5 flip: W2 default is now LLVM (was runtime)
-      {"verify", true},
-      {"verify_from", true},
-      {"search", true},
-      {"tally", true},
-      // P5 flip: W3 default is now LLVM (was runtime)
-      {"substr", true},
-      {"substr_assign", true},
-      {"substr_assign_varying", true},
-      {"repeat", true},
-      {"translate", true},
-      {"trim", true},
-      // P5 flip: W4 scalar math and conversions default to LLVM
-      {"fixed_of_float", true},
-      {"fixed_of_char", true},
-      {"char_of_fixed", true},
-      {"char_of_float", true},
-      // P5 flip: W4b math transcendentals default to LLVM (intrinsics vs pli_* musl-port)
-      {"pli_sqrt", true},
-      {"pli_exp", true},
-      {"pli_log", true},
-      {"pli_sin", true},
-      {"pli_cos", true},
-      {"pli_tan", true},
-      {"pli_log2", true},
-      {"pli_log10", true},
-      {"pli_atan", true},
-      {"pli_sinh", true},
-      {"pli_cosh", true},
-      {"pli_tanh", true},
-      {"pli_atanh", true},
-      {"pli_erf", true},
-      {"pli_erfc", true},
-      {"pli_sind", true},
-      {"pli_cosd", true},
-      {"pli_tand", true},
-      {"pli_atand", true},
-      {"pli_asin", true},
-      {"pli_acos", true},
-      {"pli_cbrt", true},
-      {"pli_atan2", true},
-      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
-      {"pli_rank", true},
-      {"pli_collate", true},
-      {"pli_isochar", true},
+bool IRGen::hasLLVMLowering(const std::string& op) { return pli::hasLLVMLowering(op); }
+
+// The lowering policy as --print-facts prints it: the base mode, then any
+// per-operation override (ADR-260).
+static std::string loweringModeName(LowerMode mode,
+                                    const std::map<std::string, LowerMode>& perOp) {
+  auto name = [](LowerMode m) -> const char* {
+    switch (m) {
+    case LowerMode::Runtime: return "runtime";
+    case LowerMode::LLVM: return "llvm";
+    case LowerMode::MLIR: return "mlir";
+    case LowerMode::Auto: return "auto";
+    }
+    return "auto";
   };
-  return table;
+  std::string out = name(mode);
+  for (const auto& kv : perOp)
+    out += " (" + kv.first + "=" + name(kv.second) + ")";
+  return out;
 }
 
-// --- end lowering policy ---
-
-// Operations with a direct LLVM lowering implemented (populated P1+).
-static const std::set<std::string>& kLLVMLowerings() {
-  static const std::set<std::string> table = {
-      "assign_char",
-      "index",
-      "assign_varying",
-      "high",
-      "low",
-      "uppercase",
-      "lowercase",
-      "reverse",
-      "center",
-      "cmp_char",
-      // W2 search/scan operations
-      "verify",
-      "verify_from",
-      "search",
-      "tally",
-      // W3 clipping, padding, capacity operations
-      "substr",
-      "substr_assign",
-      "substr_assign_varying",
-      "repeat",
-      "translate",
-      "trim",
-      // W4 scalar conversions
-      "fixed_of_float",
-      "fixed_of_char",
-      "char_of_fixed",
-      "char_of_float",
-      // W4b math transcendentals (intrinsics)
-      "pli_sqrt",
-      "pli_exp",
-      "pli_log",
-      "pli_sin",
-      "pli_cos",
-      "pli_tan",
-      "pli_log2",
-      "pli_log10",
-      "pli_atan",
-      "pli_sinh",
-      "pli_cosh",
-      "pli_tanh",
-      "pli_atanh",
-      "pli_erf",
-      "pli_erfc",
-      "pli_sind",
-      "pli_cosd",
-      "pli_tand",
-      "pli_atand",
-      "pli_asin",
-      "pli_acos",
-      "pli_cbrt",
-      "pli_atan2",
-      // W4c: RANK, COLLATE, ISOCHAR — code-point operations
-      "pli_rank",
-      "pli_collate",
-      "pli_isochar",
-  };
-  return table;
-}
-
-bool IRGen::hasLLVMLowering(const std::string& op) { return kLLVMLowerings().count(op) > 0; }
-
-bool IRGen::useRuntimeCall(const std::string& op) {
+// The lowering decision for one call site (ADR-254): the path, and the
+// reason. The user's --experimental-lowering override wins — it is the
+// differential oracle (constraint C3) — otherwise the decision layer's
+// policy decides (constraint C2).
+pli::InlineDecision IRGen::inlineDecision(const std::string& op, const pli::CallSite& site) {
+  pli::InlineDecision d = pli::decideInline(op, site);
   LowerMode mode = lowerMode_;
   auto oit = perOpOverrides_.find(op);
   if (oit != perOpOverrides_.end())
     mode = oit->second;
   switch (mode) {
   case LowerMode::Runtime:
-    return true;
+    d.path = pli::InlinePath::Library;
+    d.reason = "the lowering mode forces the library path";
+    break;
   case LowerMode::MLIR:
     // MLIR not compiled in this build (P2+ gates it). Fall back to runtime.
-    return true;
+    d.path = pli::InlinePath::Library;
+    d.reason = "the lowering mode is MLIR, which this build does not have";
+    break;
   case LowerMode::LLVM:
-    if (hasLLVMLowering(op))
-      return false;
-    return true;
-  case LowerMode::Auto: {
-    auto dit = kRuntimeDefault().find(op);
-    if (dit != kRuntimeDefault().end() && dit->second && hasLLVMLowering(op))
-      return false;
-    return true;
+    // A compile-time table is an inline path, so the forced mode keeps it.
+    if (d.path != pli::InlinePath::ConstantTable) {
+      if (pli::hasLLVMLowering(op)) {
+        d.path = pli::InlinePath::LLVM;
+        d.reason = "the lowering mode forces the inline path";
+      } else {
+        d.path = pli::InlinePath::Library;
+        d.reason = "no inline expansion for this operation";
+      }
+    }
+    break;
+  case LowerMode::Auto:
+    break;
   }
-  }
-  return true;
+  return d;
+}
+
+bool IRGen::runtimePath(const std::string& op) {
+  return inlineDecision(op, {}).library();
+}
+
+bool IRGen::useRuntimeCall(const std::string& op) {
+  pli::InlineDecision d = inlineDecision(op, {});
+  bool useRuntime = d.library();
+  // Record the decision so --print-facts can show it (ADR-260), with the
+  // reason the decision layer gave (ADR-254).
+  facts_.recordBuiltin(op, useRuntime ? "runtime" : "llvm", d.reason);
+  // The library-call remark (ADR-254): IBM flags every conversion a library
+  // routine does (zos:23609-23610), so the user can find the hot spots.
+  if (useRuntime && remarkLibraryCalls_)
+    d_.remark(curLoc_, "the library routine does this conversion: " + op + " (" + d.reason + ")");
+  return useRuntime;
 }
 
 // --- P0/P1 pilot dispatch wrappers (design-docs/mlir-runtime-migration-plan.md) ===
@@ -898,6 +1007,223 @@ llvm::Value* IRGen::emitCmpChar(llvm::Value* a, llvm::Value* aLen, llvm::Value* 
 
 // --- W2 dispatch wrappers (search/scan operations) ---
 
+// The membership table of a constant character alphabet: entry c is 1 when
+// the character code c is in the alphabet, 0 otherwise. The table is a
+// module-level constant, one per distinct alphabet, reused by every call
+// site that uses it (MULTICS compile_exp.pl1:1348-1380 built the same table
+// at compile time).
+llvm::GlobalVariable* IRGen::searchTable(const std::string& alphabet) {
+  auto it = searchTables_.find(alphabet);
+  if (it != searchTables_.end())
+    return it->second;
+  // The table's bytes are a LLVM-free decision (ADR-241, the plan's C2).
+  std::string bytes = pli::searchTableBytes(alphabet);
+  llvm::Constant* data = llvm::ConstantDataArray::get(
+      ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  auto* g = new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
+                                     llvm::GlobalValue::PrivateLinkage, data, "pli_search_table");
+  g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  searchTables_[alphabet] = g;
+  return g;
+}
+
+// The translate table of a constant (out, in) pair (ADR-273): entry c is the
+// character a byte with value c maps to, so the scan of `in` becomes one
+// lookup per character.
+llvm::GlobalVariable* IRGen::translateTable(const std::string& out, const std::string& in) {
+  std::string key = out;
+  key += '\0';
+  key += in;
+  auto it = translateTables_.find(key);
+  if (it != translateTables_.end())
+    return it->second;
+  // The table's bytes are a LLVM-free decision (ADR-273, the plan's C2).
+  std::string bytes = pli::translateTableBytes(out, in);
+  llvm::Constant* data = llvm::ConstantDataArray::get(
+      ctx_, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  auto* g =
+      new llvm::GlobalVariable(mod_, llvm::ArrayType::get(b_.getInt8Ty(), 256), true,
+                               llvm::GlobalValue::PrivateLinkage, data, "pli_translate_table");
+  g->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  translateTables_[key] = g;
+  return g;
+}
+
+// VERIFY with a constant alphabet: the first character of `s` that is *not*
+// in the alphabet, 1-based; 0 when every character is in it. The table
+// replaces the inner scan of the alphabet (ADR-241).
+llvm::Value* IRGen::emitVerifyTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "vrf.outer.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(zero, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  // The character code is the byte value (0..255), which indexes the table.
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "vrf.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "vrf.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "vrf.in_set");
+  llvm::Value* notIn =
+      b_.CreateICmpEQ(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "vrf.not_in");
+  b_.CreateCondBr(notIn, foundBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1), "vrf.i_next"),
+                    latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(foundBB);
+  llvm::Value* matchResult =
+      b_.CreateAdd(iPhi, llvm::ConstantInt::get(b_.getInt64Ty(), 1), "vrf.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, foundBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// VERIFY(s,t,from) with a constant alphabet: as emitVerifyTable, but the
+// scan starts at position `start` (1-based, clamped to 1).
+llvm::Value* IRGen::emitVerifyFromTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                        llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "vrf.slen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "vrf.start");
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "vrf.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "vrf.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "vrf.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "vrf.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "vrf.outer.latch", F);
+  llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx_, "vrf.nomatch", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "vrf.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "vrf.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "vrf.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "vrf.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "vrf.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "vrf.si");
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "vrf.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "vrf.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "vrf.in_set");
+  llvm::Value* notIn =
+      b_.CreateICmpEQ(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "vrf.not_in");
+  b_.CreateCondBr(notIn, foundBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "vrf.i_next"), latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(foundBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "vrf.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "vrf.out");
+  resultPhi->addIncoming(matchResult, foundBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// SEARCH with a constant alphabet: the first character of `s` that *is* in
+// the alphabet, 1-based, starting at `start` (clamped to 1); 0 when there is
+// none (ADR-241).
+llvm::Value* IRGen::emitSearchTable(llvm::Value* s, llvm::Value* sLen, llvm::Value* table,
+                                    llvm::Value* start) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "srch.slen");
+  llvm::Value* start64 = b_.CreateZExtOrTrunc(start, b_.getInt64Ty(), "srch.start");
+  llvm::Value* clamped =
+      b_.CreateSelect(b_.CreateICmpULT(start64, one64), one64, start64, "srch.clamped");
+  llvm::Value* iStart = b_.CreateSub(clamped, one64, "srch.istart");
+
+  llvm::BasicBlock* outerBB = llvm::BasicBlock::Create(ctx_, "srch.outer", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "srch.check_byte", F);
+  llvm::BasicBlock* latchBB = llvm::BasicBlock::Create(ctx_, "srch.outer.latch", F);
+  llvm::BasicBlock* matchedBB = llvm::BasicBlock::Create(ctx_, "srch.matched", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "srch.done", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "srch.exit", F);
+
+  llvm::BasicBlock* entryBB = b_.GetInsertBlock();
+  llvm::Value* sEmpty = b_.CreateICmpULE(sLen64, zero, "srch.s_empty");
+  b_.CreateCondBr(sEmpty, doneBB, outerBB);
+
+  startBlock(outerBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.i");
+  iPhi->addIncoming(iStart, entryBB);
+  llvm::Value* iGeSlen = b_.CreateICmpUGE(iPhi, sLen64, "srch.i_ge_slen");
+  b_.CreateCondBr(iGeSlen, doneBB, checkBB);
+
+  startBlock(checkBB);
+  llvm::Value* siPtr = b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "srch.si_ptr");
+  llvm::Value* si = b_.CreateLoad(b_.getInt8Ty(), siPtr, "srch.si");
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "srch.code");
+  llvm::Value* tblPtr = b_.CreateGEP(b_.getInt8Ty(), table, {code}, "srch.tbl_ptr");
+  llvm::Value* inSet = b_.CreateLoad(b_.getInt8Ty(), tblPtr, "srch.in_set");
+  llvm::Value* isIn =
+      b_.CreateICmpNE(inSet, llvm::ConstantInt::get(b_.getInt8Ty(), 0), "srch.is_in");
+  b_.CreateCondBr(isIn, matchedBB, latchBB);
+
+  startBlock(latchBB);
+  iPhi->addIncoming(b_.CreateAdd(iPhi, one64, "srch.i_next"), latchBB);
+  b_.CreateBr(outerBB);
+
+  startBlock(matchedBB);
+  llvm::Value* matchResult = b_.CreateAdd(iPhi, one64, "srch.result");
+  b_.CreateBr(exitBB);
+
+  startBlock(doneBB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* resultPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "srch.out");
+  resultPhi->addIncoming(matchResult, matchedBB);
+  resultPhi->addIncoming(zero, doneBB);
+  return resultPhi;
+}
+
+// verify(s, t[, start]): the first character of s that is absent from the
+// alphabet t, 1-based. A constant alphabet uses the membership table.
 llvm::Value* IRGen::emitVerify(llvm::Value* s, llvm::Value* sLen, llvm::Value* t,
                                llvm::Value* tLen) {
   if (useRuntimeCall("verify")) {
@@ -2119,6 +2445,57 @@ void IRGen::emitTranslateLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value
   b_.CreateBr(loopBB);
 
   startBlock(doneBB);
+  // The result is a fixed string, so the field past the copied text is blank:
+  // the rule the other string built-ins use (ADR-273). Without it the tail of
+  // the temporary is uninitialized and the two lowerings disagree.
+  llvm::Value* copyLen =
+      b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.copy_len");
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {copyLen}, "tr.padptr"), blank,
+                  b_.CreateSub(dstcap64, copyLen, "tr.padlen"), llvm::MaybeAlign(), false);
+}
+
+// translate(dst, dstcap, s, slen, table): as emitTranslateLLVM, but `table` is
+// the compile-time translation table of a constant (out, in) pair, so the
+// scan of `in` becomes one lookup per character (ADR-273). Mirrors MULTICS's
+// inline translate sequence (compile_exp.pl1:1392-1440).
+void IRGen::emitTranslateTable(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s,
+                               llvm::Value* sLen, llvm::Value* table) {
+  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+
+  llvm::Value* sLen64 = b_.CreateZExtOrTrunc(sLen, b_.getInt64Ty(), "tr.slen");
+  llvm::Value* dstcap64 = b_.CreateZExtOrTrunc(dstcap, b_.getInt64Ty(), "tr.dstcap");
+  // The copy stops at the shorter of the source and the destination, the
+  // bound both the scan and the runtime call use.
+  llvm::Value* n = b_.CreateSelect(b_.CreateICmpULE(sLen64, dstcap64), sLen64, dstcap64, "tr.n");
+
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "tr.loop", F);
+  llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "tr.done", F);
+
+  b_.CreateCondBr(b_.CreateICmpULE(n, zero, "tr.empty"), doneBB, loopBB);
+
+  llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+  startBlock(loopBB);
+  llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "tr.i");
+  iPhi->addIncoming(zero, preLoopBB);
+  llvm::Value* si =
+      b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {iPhi}, "tr.siptr"), "tr.si");
+  // The character code is the byte value (0..255), which indexes the table.
+  llvm::Value* code = b_.CreateZExt(si, b_.getInt32Ty(), "tr.code");
+  llvm::Value* mapped = b_.CreateLoad(
+      b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), table, {code}, "tr.tbl_ptr"), "tr.mapped");
+  b_.CreateStore(mapped, b_.CreateGEP(b_.getInt8Ty(), dst, {iPhi}, "tr.dstptr"), false);
+  // One index per character; the back edge feeds the phi from this block.
+  llvm::Value* iNext = b_.CreateAdd(iPhi, one, "tr.i_next");
+  iPhi->addIncoming(iNext, loopBB);
+  b_.CreateCondBr(b_.CreateICmpULT(iNext, n, "tr.more"), loopBB, doneBB);
+
+  startBlock(doneBB);
+  // The field past the copied text is blank, as in the scan lowering above.
+  llvm::Value* blank = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
+  b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dst, {n}, "tr.padptr"), blank,
+                  b_.CreateSub(dstcap64, n, "tr.padlen"), llvm::MaybeAlign(), false);
 }
 
 // trim(dst, dstcap, s, slen, pad, padlen): copy s minus leading/trailing pad
@@ -2563,27 +2940,44 @@ llvm::Function* IRGen::intrinsicFn(const std::string& name, llvm::Type* ret,
 // the stack — empty takes the abort path, established runs the matching
 // handler then branches to okBB, where the caller resumes with its own
 // recovery value.
-void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string& tag,
-                         llvm::BasicBlock* okBB) {
+// WS-F1 (ADR-249): the ON dispatch of one condition key, as a cold function
+// of its own. The dispatch is the stack scan, the handler calls and the
+// abort — everything a raised condition needs, and nothing the hot path
+// needs. Keeping it in its own function keeps the hot function's body small
+// and gives the backend a cold function to put out of line. Mirrors MULTICS
+// cg_error.pl1, where the condition path is separate from the normal path.
+llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
+  auto cached = trapDispatch_.find(key);
+  if (cached != trapDispatch_.end())
+    return cached->second;
   auto it = onHandlers_.find(key);
-  if (it == onHandlers_.end()) {
-    b_.CreateCall(runtimeFn(abortFn), {});
-    b_.CreateUnreachable();
-    return;
-  }
+  if (it == onHandlers_.end())
+    return nullptr; // no handler: the caller aborts inline
   const std::vector<llvm::Function*>& handlers = it->second;
-  // T2b: a single combined scan replaces the pli_on_top_cond + pli_on_top_ctx
-  // pair — one alloca + one call + one load instead of two noinline scans.
-  llvm::Value* ctxSlot =
-      b_.CreateAlloca(b_.getPtrTy(), nullptr, tag + ".ctxslot");
-  llvm::Value* top =
-      b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot}, tag + "top");
-  llvm::Value* topCtx = b_.CreateLoad(b_.getPtrTy(), ctxSlot, tag + "ctx");
-  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), tag + "none");
-  llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, tag + ".abort", curFn_);
-  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, tag + ".dispatch", curFn_);
-  // intent: with a handler established the empty-stack edge is cold;
-  // weight the dispatch edge so the trap block stays out of the hot path.
+  llvm::Function* F = llvm::Function::Create(
+      llvm::FunctionType::get(b_.getVoidTy(), false), llvm::GlobalValue::InternalLinkage,
+      "pli_on_trap." + (abortFn.compare(0, 4, "pli_") == 0 ? abortFn.substr(4) : abortFn),
+      &mod_);
+  F->addFnAttr(llvm::Attribute::Cold);
+  F->addFnAttr(llvm::Attribute::NoInline);
+  trapDispatch_[key] = F;
+
+  // Build the body with the builder pointed at the dispatch function.
+  llvm::BasicBlock* savedBB = b_.GetInsertBlock();
+  llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", F);
+  b_.SetInsertPoint(entry);
+  // The scan: the top handler for this condition and its capture context.
+  // The slot lives in this function's entry block, so a trap in a loop does
+  // not grow the caller's stack (ADR-263).
+  llvm::AllocaInst* ctxSlot = b_.CreateAlloca(b_.getPtrTy(), nullptr, "on.ctxslot");
+  llvm::Value* top = b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot},
+                                    "on.top");
+  llvm::Value* topCtx = b_.CreateLoad(b_.getPtrTy(), ctxSlot, "on.ctx");
+  llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "on.none");
+  llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, "on.abort", F);
+  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", F);
+  // The empty-stack edge is cold; weight it so the dispatch stays out of the
+  // way of the handler path.
   llvm::MDBuilder mdb(ctx_);
   if (auto* br = b_.CreateCondBr(none, abortBB, dspBB))
     br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
@@ -2591,21 +2985,48 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, const std::string&
   b_.CreateCall(runtimeFn(abortFn), {});
   b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
-  llvm::SwitchInst* sw = b_.CreateSwitch(top, okBB, handlers.size());
+  llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.ret", F);
+  llvm::SwitchInst* sw = b_.CreateSwitch(top, retBB, handlers.size());
   for (size_t i = 0; i < handlers.size(); ++i) {
     llvm::BasicBlock* hbb =
-        llvm::BasicBlock::Create(ctx_, tag + ".handle." + std::to_string(i + 1), curFn_);
+        llvm::BasicBlock::Create(ctx_, "on.handle." + std::to_string(i + 1), F);
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
     b_.SetInsertPoint(hbb);
     b_.CreateCall(handlers[i], {topCtx});
-    b_.CreateBr(okBB);
+    b_.CreateBr(retBB);
   }
+  b_.SetInsertPoint(retBB);
+  b_.CreateRetVoid();
+  b_.SetInsertPoint(savedBB);
+  return F;
+}
+
+void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB) {
+  auto it = onHandlers_.find(key);
+  if (it == onHandlers_.end()) {
+    // No handler for this condition: the abort is already a call to a cold,
+    // noreturn runtime entry, so the trap block is as small as it can be.
+    b_.CreateCall(runtimeFn(abortFn), {});
+    b_.CreateUnreachable();
+    return;
+  }
+  // WS-F1 (ADR-249): the dispatch is a cold function of its own; the hot
+  // path carries the branch and the call, and nothing else.
+  llvm::Function* dispatch = onTrapDispatch(key, abortFn);
+  if (!dispatch) {
+    // No dispatch could be built (no handler for the key): abort inline.
+    b_.CreateCall(runtimeFn(abortFn), {});
+    b_.CreateUnreachable();
+    return;
+  }
+  b_.CreateCall(dispatch, {});
+  b_.CreateBr(okBB);
 }
 
 // SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
 // block; the computational-trap shape with the SIZE key and abort call.
 void IRGen::emitSizeTrap(llvm::BasicBlock* okBB) {
-  emitCondTrap(Stmt::kSizeCondKey, "pli_fixed_overflow", "size", okBB);
+  emitCondTrap(Stmt::kSizeCondKey, "pli_fixed_overflow", okBB);
 }
 
 // Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94): the
@@ -2624,8 +3045,7 @@ llvm::Value* IRGen::clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub)
 // join that resumes with `zero` on every faulting path and `computed` on the
 // clean path. When checks are off, beginZerodivide returns an inactive handle
 // and endZerodivide returns `computed` untouched.
-IRGen::ZdivCheck IRGen::beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
-                                 int key, const std::string& tag) {
+IRGen::ZdivCheck IRGen::beginZerodivide(llvm::Value* isZero, llvm::Value* zero, int key) {
   if (!zdivChecks())
     return ZdivCheck{}; // (NOZERODIVIDE): the raw result stands (rules (60)-(63), ADR-112)
   std::string zid = std::to_string(n_++);
@@ -2638,7 +3058,7 @@ IRGen::ZdivCheck IRGen::beginZerodivide(llvm::Value* isZero, llvm::Value* zero,
   if (auto* br = b_.CreateCondBr(isZero, trapBB, computeBB))
     br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(computeBB);
-  return ZdivCheck{trapBB, computeBB, okBB, zero, key, tag};
+  return ZdivCheck{trapBB, computeBB, okBB, zero, key};
 }
 llvm::Value* IRGen::endZerodivide(ZdivCheck z, llvm::Value* computed) {
   if (!z.computeBB)
@@ -2649,7 +3069,7 @@ llvm::Value* IRGen::endZerodivide(ZdivCheck z, llvm::Value* computed) {
   // the phi trivially resolves to `computed`.
   b_.CreateBr(z.okBB);
   b_.SetInsertPoint(z.trapBB);
-  emitCondTrap(z.key, "pli_zerodivide", z.tag, z.okBB);
+  emitCondTrap(z.key, "pli_zerodivide", z.okBB);
   b_.SetInsertPoint(z.okBB);
   llvm::PHINode* phi = b_.CreatePHI(computed->getType(), 1, "zdiv.r");
   phi->addIncoming(computed, z.computeBB);
@@ -2672,7 +3092,7 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
   if (auto* br = b_.CreateCondBr(isZero, trapBB, okBB))
     br->setMetadata(llvm::LLVMContext::MD_prof, zmdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(trapBB);
-  emitCondTrap(Stmt::kZerodivideCondKey, "pli_zerodivide", "zd", okBB);
+  emitCondTrap(Stmt::kZerodivideCondKey, "pli_zerodivide", okBB);
   b_.SetInsertPoint(okBB);
   return b_.CreateSelect(isZero, zero, computed, "zdiv.r");
 }
@@ -2835,11 +3255,16 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
       std::vector<llvm::Type*> pt2 = pt;
       pt2.insert(pt2.begin(), b_.getPtrTy());
       llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
-      return llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+      llvm::Function* decl =
+          llvm::Function::Create(ft2, llvm::Function::ExternalLinkage, name, &mod_);
+      applyPublishedEffect(decl, sym);
+      return decl;
     }
     llvm::Type* rty = sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy();
     llvm::FunctionType* ft = llvm::FunctionType::get(rty, pt, false);
-    return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+    llvm::Function* decl = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &mod_);
+    applyPublishedEffect(decl, sym);
+    return decl;
   }
   for (const Type& t : sym->entryParams) {
     if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
@@ -3025,6 +3450,14 @@ std::string IRGen::run(HProgram& prog) {
 
   emitGlobals();
 
+  // Module-level facts for --print-facts (ADR-260): the lowering policy and
+  // which checks the driver enabled.
+  facts_.setLoweringMode(loweringModeName(lowerMode_, perOpOverrides_));
+  facts_.setCheck("size", !noSizeChecks_);
+  facts_.setCheck("subscript", !noSubChecks_);
+  facts_.setCheck("zerodivide", !noZdivChecks_);
+  facts_.setCheck("conversion", !noConvChecks_);
+
   // ON ERROR handlers (rules (91)-(94)): number the established units, then
   // pre-create their functions so SIGNAL dispatch resolves regardless of
   // emission order (mirroring declareProc for procedures).
@@ -3034,6 +3467,22 @@ std::string IRGen::run(HProgram& prog) {
   // P6.1b (ADR-215): decide by-value parameters once for the whole program
   // so declareProc, emitProc, and every call site agree on signatures.
   computeByValueParams(prog);
+  // WS-A1 (ADR-264): what each procedure can do to memory. The decision layer
+  // computes it (the plan's C2); the verdict reaches LLVM only as a function
+  // attribute (the plan's C1).
+  {
+    std::unordered_set<const Symbol*> byValue;
+    for (const auto& kv : byValParam_)
+      if (kv.second) // the map holds every parameter; only the true ones ride by value
+        byValue.insert(kv.first);
+    pli::EffectOptions eopts;
+    eopts.sizeChecks = sizeChecks();
+    eopts.subscriptChecks = subChecks();
+    eopts.zerodivideChecks = zdivChecks();
+    eopts.conversionChecks = convChecks();
+    if (!noMemoryEffects_)
+      effects_ = pli::analyzeEffects(prog, byValue, eopts);
+  }
   // ADR-233: a program with an asynchronous CALL (rule (79)) writes to the
   // stream from more than one thread, so its output statements are bracketed
   // with the output lock. A program without one keeps the plain path.
@@ -3456,6 +3905,13 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
     auto hit = ctlAddrHoist_.find(sym);
     if (hit != ctlAddrHoist_.end())
       return hit->second;
+    // WS-K8 (ADR-257): a variable the compiler can address directly keeps
+    // its generation in a slot, so the reference is a load, not a call. The
+    // slot lives in the declaring procedure's frame: an ON handler (a
+    // function of its own) and a nested procedure reach the variable
+    // through the frame, so they ask the runtime for the generation.
+    if (sym->ctlDirect && !inHandler_ && curProc_ && curProc_->src == sym->owner)
+      return b_.CreateLoad(b_.getPtrTy(), ctlAnchorSlot(sym), "ctl.anchor.load");
     return b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctladdr");
   }
   // rule (8): an enclosing variable is reached through this frame's static
@@ -3490,12 +3946,11 @@ void IRGen::allocaLocals(HProc* p) {
      // P2: tag plain AUTOMATIC allocas with alias-disjoint facts so LLVM
      // knows loads through this pointer cannot be clobbered by calls or
      // stores via unrelated pointers (exercises LICM + LAA). Only plain
-     // automatic locals qualify — no aliases may be taken (definedBase,
-     // based, controlled, static, or params). All scopes share one domain
-     // per function so the facts compare; scalar loads/stores stamp the
-     // matching !alias.scope/!noalias via annotateAlias. (ADR-002: IRGen only.)
-     if (!s->isBased() && !s->controlled && !s->isStatic &&
-         !s->definedBase && s->kind == Symbol::Var) {
+     // automatic locals qualify — the alias taxonomy (ADR-265) decides which
+     // those are, in one place. All scopes share one domain per function so
+     // the facts compare; scalar loads/stores stamp the matching
+     // !alias.scope/!noalias via annotateAlias. (ADR-002: IRGen only.)
+     if (pli::aliasClass(s) == pli::AliasClass::Disjoint) {
        if (!aliasDomain_)
          aliasDomain_ = mdb.createAnonymousAliasScopeDomain("pli");
        llvm::MDNode* scope = mdb.createAnonymousAliasScope(aliasDomain_, "plain-automatic");
@@ -4230,6 +4685,33 @@ bool IRGen::isDerivedFromNonNegDoIndex(llvm::Value* v) const {
   return false;
 }
 
+// The memory-effect verdict for a procedure (ADR-264).
+pli::MemEffect IRGen::effectOf(const HProc* p) const {
+  auto it = effects_.find(p);
+  return it == effects_.end() ? pli::MemEffect::Unknown : it->second.effect;
+}
+
+// The control-flow verdict for a procedure (ADR-264): can it unwind, and does
+// it always return?
+void IRGen::applyControlAttrs(llvm::Function* f, const HProc* p) {
+  auto it = effects_.find(p);
+  if (it == effects_.end())
+    return;
+  if (it->second.nounwind)
+    f->addFnAttr(llvm::Attribute::NoUnwind);
+  if (it->second.willReturn)
+    f->addFnAttr(llvm::Attribute::WillReturn);
+}
+
+// ADR-271: describe the shape of a by-ref array parameter to LLVM. The
+// dummy's declared extent is known at compile time, so its base pointer
+// addresses at least that many elements and LLVM may widen the loads it
+// makes through it (and vectorize a loop over the parameter).
+//
+// The claim holds for a conforming program: PL/I requires the actual to be
+// conformable with the dummy (rule (34)), so it carries at least the
+// dummy's elements. It says nothing about alignment — a BASED actual's base
+// pointer carries no alignment guarantee — so `align` is not claimed.
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
@@ -4271,6 +4753,8 @@ void IRGen::declareProc(HProc* p) {
     auto linkage =
         p->isExternal ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
     llvm::Function* fn = llvm::Function::Create(ft, linkage, p->irName.substr(1), &mod_);
+    applyMemoryEffect(fn, effectOf(p));
+    applyControlAttrs(fn, p);
     for (const auto& en : p->entryNames)
       aliasFor(en, fn);
     return;
@@ -4301,6 +4785,8 @@ void IRGen::declareProc(HProc* p) {
   llvm::FunctionType* ift = llvm::FunctionType::get(implRet, pt, false);
   llvm::Function* impl = llvm::Function::Create(ift, llvm::Function::InternalLinkage,
                                                 p->irName.substr(1) + ".impl", &mod_);
+  applyMemoryEffect(impl, effectOf(p));
+  applyControlAttrs(impl, p);
 
   // A thunk marshals one entry's arguments and tail-calls the shared impl.
   // The impl carries one segment per entry point in body order; control must
@@ -4323,6 +4809,8 @@ void IRGen::declareProc(HProc* p) {
     llvm::FunctionType* tft = llvm::FunctionType::get(trty, sig, false);
     llvm::Function* tf = llvm::Function::Create(tft, llvm::Function::InternalLinkage,
                                                 "entry.thunk." + std::to_string(thunkN++), &mod_);
+    applyMemoryEffect(tf, effectOf(p));
+    applyControlAttrs(tf, p);
     llvm::BasicBlock* tb = llvm::BasicBlock::Create(ctx_, "entry", tf);
     b_.SetInsertPoint(tb);
     std::vector<llvm::Value*> args;
@@ -4419,6 +4907,18 @@ void IRGen::emitProc(HProc* p) {
     }
   }
   curProc_ = p;
+  // Open the procedure's fact block so --print-facts groups the decisions by
+  // procedure (ADR-260).
+  facts_.beginProc(p->name);
+  // The memory-effect promise made about this procedure (ADR-264), so
+  // --print-facts shows what the compiler claimed and why.
+  {
+    auto it = effects_.find(p);
+    if (it != effects_.end()) {
+      facts_.setEffects(p->name, effectName(it->second.effect), it->second.note,
+                        it->second.nounwind, it->second.willReturn);
+    }
+  }
   labelBlocks_.clear();
   labelBeginChain_.clear();
   onScopes_.clear();
@@ -4460,6 +4960,12 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // The entry block must be the function's first block (so it is the real
   // entry, and the allocas it holds dominate every reachable block).
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
+  // WS-K8 (ADR-257): create this procedure's anchors now, before any
+  // statement, so the slot's initialisation (a null store in the entry
+  // block) dominates every use of it.
+  for (Symbol* sym : sema_.storage())
+    if (sym && sym->controlled && sym->ctlDirect && sym->owner == p->src)
+      ctlAnchorSlot(sym);
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
@@ -4842,6 +5348,10 @@ void IRGen::emitOn(HStmt* s) {
       for (size_t i = 0; i < s->onCaps.size(); ++i) {
         llvm::Value* fp = b_.CreateStructGEP(capTy, cap, (unsigned)i, "capf");
         b_.CreateStore(addressOf(s->onCaps[i]), fp);
+        // The captured automatic is pinned in storage: an ON unit reads it
+        // in the raiser's frame (ADR-253). Report which ones, so a user can
+        // see the ORDER rule at work (--print-facts).
+        facts_.recordPinned(s->onCaps[i]->name);
       }
       ctx = cap;
     }
@@ -4909,6 +5419,9 @@ void IRGen::emitSignal(HStmt* s) {
 void IRGen::emitStmt(HStmt* s) {
   if (!s)
     return;
+  // The current source location, for a remark raised inside a built-in
+  // lowering (ADR-254).
+  curLoc_ = s->loc;
   if (!s->labels.empty()) {
     startBlock(labelBlocks_[s->labels.front()]);
   } else if (blockTerminated(b_.GetInsertBlock())) {
@@ -5295,6 +5808,250 @@ void IRGen::freeConcatTemp(HExpr* rhs, llvm::Value* buf) {
     b_.CreateCall(runtimeFn("pli_free"), {buf});
 }
 
+// True when `s` is a parameter of the current procedure or of one of its
+// enclosing procedures: such a symbol's storage is the caller's.
+bool IRGen::isParamOfScope(Symbol* s) const {
+  for (const HProc* q = curProc_; q; q = q->parent)
+    if (std::find(q->paramSyms.begin(), q->paramSyms.end(), s) != q->paramSyms.end())
+      return true;
+  return false;
+}
+
+// Constant-offset concatenation store (rule (119), ADR-242): A = B || C
+// where A is a fixed-length CHARACTER(n) and every leaf of the
+// concatenation has a compile-time-constant length. The result is the
+// leftmost n characters of the concatenation, blank-padded to n, so each
+// leaf is stored straight into A at a constant offset — no temporary
+// buffer, no length arithmetic, no allocation. Mirrors MULTICS
+// cat_op.pl1:140-167, which folds a constant tail length into the
+// target's constant offset.
+//
+// Safety: the leaves are read while A is written, so a leaf must read
+// storage that cannot overlap A's. A leaf is therefore a literal or a
+// whole variable that is not A, is not BASED/CONTROLLED/DEFINED storage,
+// and is not a by-reference parameter (its storage is the caller's, and
+// the caller may have passed A itself); a by-value parameter is a private
+// cell (ADR-215). Two distinct variables of one frame have disjoint
+// storage, and distinct frames are disjoint too. The target owns its
+// storage for the same reason: a by-reference target keeps the generic
+// path. Returns false when the shape does not qualify, and the caller
+// then runs the generic concat-and-assign path.
+bool IRGen::emitConcatConstStore(HStmt* s) {
+  if (!s->extraTargets.empty())
+    return false;
+  HExpr* t = s->target.get();
+  HExpr* rhs = s->value.get();
+  if (!t || !rhs || t->kind != HExpr::VarRef || !t->sym)
+    return false;
+  if (!t->memberPath.empty() || t->locPtr)
+    return false;
+  Symbol* dst = t->sym;
+  // The target must own a fixed-length character buffer of known size.
+  if (!dst->ty.isChar() || dst->ty.varying || dst->ty.starLen || dst->ty.isArray())
+    return false;
+  if (dst->ty.len <= 0)
+    return false;
+  if (dst->isBased() || dst->controlled || dst->definedBase)
+    return false;
+  // A by-reference target's storage is the caller's, which may be the very
+  // variable a leaf reads.
+  if (isParamOfScope(dst) && !isByValueParam(dst))
+    return false;
+  if (rhs->kind != HExpr::Binary || rhs->op != Tok::Concat)
+    return false;
+  // Flatten the spine (as the generic concat lowering does): the leaves come
+  // out in source order.
+  std::vector<HExpr*> leaves;
+  std::vector<HExpr*> stack{rhs};
+  while (!stack.empty()) {
+    HExpr* ex = stack.back();
+    stack.pop_back();
+    if (ex->kind == HExpr::Binary && ex->op == Tok::Concat) {
+      stack.push_back(ex->b.get());
+      stack.push_back(ex->a.get());
+      continue;
+    }
+    leaves.push_back(ex);
+  }
+  struct LeafSrc {
+    llvm::Value* ptr;
+    long long len;
+  };
+  std::vector<LeafSrc> srcs;
+  for (HExpr* leaf : leaves) {
+    if (leaf->kind == HExpr::CharLit) {
+      if (leaf->sval.empty())
+        continue; // an empty literal contributes no bytes
+      srcs.push_back({globalString(leaf->sval), (long long)leaf->sval.size()});
+      continue;
+    }
+    if (leaf->kind != HExpr::VarRef || !leaf->sym)
+      return false;
+    Symbol* ls = leaf->sym;
+    if (!leaf->memberPath.empty() || leaf->locPtr)
+      return false;
+    if (!ls->ty.isChar() || ls->ty.varying || ls->ty.starLen || ls->ty.isArray())
+      return false;
+    if (ls == dst)
+      return false;
+    if (ls->isBased() || ls->controlled || ls->definedBase)
+      return false;
+    // A by-reference parameter's storage is the caller's and could be the
+    // target's; a by-value parameter is a private cell (ADR-215).
+    if (isParamOfScope(ls) && !isByValueParam(ls))
+      return false;
+    llvm::Value* addr = addressOf(ls);
+    if (!addr)
+      return false;
+    srcs.push_back({addr, ls->ty.len});
+  }
+  llvm::Value* dstAddr = addressOf(dst);
+  if (!dstAddr)
+    return false;
+  // The lowering policy wins (ADR-260): with
+  // --experimental-lowering=concat_const:runtime the generic path is kept,
+  // so the differential oracle can compare the two lowerings.
+  if (runtimePath("concat_const")) {
+    facts_.recordBuiltin("concat_const", "runtime");
+    return false;
+  }
+  facts_.recordBuiltin("concat_const", "llvm");
+  // The store plan — how many bytes each leaf contributes and how many blanks
+  // follow them — is a decision (the plan's C2), so it lives in
+  // src/irgen_decisions.cpp.
+  std::vector<long long> leafLen;
+  leafLen.reserve(srcs.size());
+  for (const LeafSrc& l : srcs)
+    leafLen.push_back(l.len);
+  pli::ConcatStorePlan plan = pli::planConcatStore(leafLen, dst->ty.len);
+  if (!plan.ok)
+    return false;
+  // One store per leaf at a constant offset; the bytes past the
+  // concatenation are blanks, exactly as the generic assign path leaves
+  // them (rule (86)).
+  long long off = 0;
+  for (size_t i = 0; i < srcs.size(); ++i) {
+    const long long take = plan.sizes[i];
+    if (take > 0) {
+      llvm::Value* at = b_.CreateGEP(b_.getInt8Ty(), dstAddr, {b_.getInt64(off)}, "cc.at");
+      b_.CreateMemCpy(at, llvm::MaybeAlign(), srcs[i].ptr, llvm::MaybeAlign(),
+                      llvm::ConstantInt::get(b_.getInt64Ty(), take));
+      off += take;
+    }
+  }
+  if (plan.pad > 0)
+    b_.CreateMemSet(b_.CreateGEP(b_.getInt8Ty(), dstAddr, {b_.getInt64(off)}, "cc.pad"),
+                    b_.getInt8(' '), llvm::ConstantInt::get(b_.getInt64Ty(), plan.pad),
+                    llvm::MaybeAlign(), false);
+  return true;
+}
+
+// Merge two masked bit tests on the same value into one masked test
+// (ADR-243): `(X & M1) = E1 & (X & M2) = E2` is `(X & (M1|M2)) = (E1|E2)`,
+// when the masks are disjoint and each expectation lies inside its own
+// mask. Mirrors MULTICS combine_tests.pl1:159-300, which requires the two
+// tests to read the same storage word of the same top-level object.
+//
+// The win is one masked test instead of two: the value is loaded once, the
+// mask is applied once, and the branch is one. LLVM cannot do this itself,
+// because PL/I's bit strings are bit-granular inside a byte array, so the
+// masks only exist at the PL/I level.
+//
+// The decision — whether the two tests may be merged, and what the merged
+// mask and expectation are — is pli::mergeBitTests (the plan's C2); what
+// stays here is the matching of the expression's shape and the emission.
+bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
+  // One side of the conjunction: (X & M) = E, with X the tested value, M a
+  // constant mask and E the constant expectation.
+  struct Side {
+    HExpr* var = nullptr;
+    std::string mask;
+    std::string want;
+    int nbits = 0;
+  };
+  auto parseSide = [](HExpr* t, Side& s) -> bool {
+    if (!t || t->kind != HExpr::Binary || t->op != Tok::Eq)
+      return false;
+    HExpr* masked = t->a.get();
+    HExpr* want = t->b.get();
+    if (!masked || masked->kind != HExpr::Binary || masked->op != Tok::Amp)
+      return false;
+    if (!want || want->kind != HExpr::BitLit)
+      return false;
+    HExpr* var = masked->a.get();
+    HExpr* mask = masked->b.get();
+    if (!var || var->kind != HExpr::VarRef || !var->sym)
+      return false;
+    if (!mask || mask->kind != HExpr::BitLit)
+      return false;
+    // A one-bit value's `&` is a logical conjunction, not a mask.
+    if (!var->ty.isBit() || var->ty.len <= 1)
+      return false;
+    // The mask and the expectation must have the tested value's length, so
+    // they select the same bits.
+    if (mask->ty.len != var->ty.len || want->ty.len != var->ty.len)
+      return false;
+    if ((int)mask->sval.size() != var->ty.len || (int)want->sval.size() != var->ty.len)
+      return false;
+    s.var = var;
+    s.mask = mask->sval;
+    s.want = want->sval;
+    s.nbits = var->ty.len;
+    return true;
+  };
+  Side s1, s2;
+  if (!parseSide(e->a.get(), s1) || !parseSide(e->b.get(), s2))
+    return false;
+  // The two tests must read the same value (MULTICS's `same_word`: the same
+  // storage object of the same top-level symbol). A locator-qualified
+  // reference reads through a runtime pointer, and two different locators are
+  // different storage, so only a plain reference qualifies.
+  if (s1.var->sym != s2.var->sym || s1.var->memberPath != s2.var->memberPath || s1.var->locPtr ||
+      s2.var->locPtr)
+    return false;
+  if (s1.nbits != s2.nbits)
+    return false;
+  // The merge itself: disjoint masks, each expectation inside its mask.
+  pli::BitTestMerge merge = pli::mergeBitTests(s1.mask, s1.want, s2.mask, s2.want);
+  if (!merge.ok)
+    return false;
+  // The lowering policy wins (ADR-260): with
+  // --experimental-lowering=bit_merge:runtime the two tests stay separate,
+  // so the differential oracle can compare the two lowerings.
+  if (runtimePath("bit_merge")) {
+    facts_.recordBuiltin("bit_merge", "runtime");
+    return false;
+  }
+  facts_.recordBuiltin("bit_merge", "llvm");
+  // One load of the value, masked with the merged constant mask.
+  Val x = emitExpr(s1.var);
+  if (!x.ty.isBit() || x.ty.len != s1.nbits || !x.reg)
+    return false;
+  const int B = bitBytes(s1.nbits);
+  std::vector<unsigned char> maskBytes = packBitLiteral(merge.mask, s1.nbits);
+  std::vector<unsigned char> wantBytes = packBitLiteral(merge.want, s1.nbits);
+  llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+  llvm::Value* masked = llvm::UndefValue::get(arrTy);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* xb = b_.CreateExtractValue(x.reg, (unsigned)k, "bt.x");
+    llvm::Value* mb = llvm::ConstantInt::get(b_.getInt8Ty(), maskBytes[k]);
+    masked = b_.CreateInsertValue(masked, b_.CreateAnd(xb, mb, "bt.and"), (unsigned)k);
+  }
+  // The comparison is the one the two separate tests would make: the masked
+  // value against the merged expectation, as numbers (rule (117)).
+  Val mv;
+  mv.ty = Type::bit(s1.nbits);
+  mv.reg = masked;
+  Val wv;
+  wv.ty = Type::bit(s1.nbits);
+  wv.reg = llvm::ConstantDataArray::get(ctx_, wantBytes);
+  Val mi = convert(mv, Type::fixedBin(31, 0), e->loc);
+  Val wi = convert(wv, Type::fixedBin(31, 0), e->loc);
+  out.ty = Type::bit(1);
+  out.reg = b_.CreateICmpEQ(mi.reg, wi.reg, "bt.cmp");
+  return true;
+}
+
 void IRGen::emitAssign(HStmt* s) {
   if (!s->target)
     return;
@@ -5645,7 +6402,7 @@ void IRGen::emitAssign(HStmt* s) {
       // A shape mismatch has no index to clamp: a handled trap notifies the
       // handler, then aborts (rule 94).
       llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "dcp.abort." + id, curFn_);
-      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", abL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", abL);
       b_.SetInsertPoint(abL);
       b_.CreateUnreachable();
       startBlock(okL);
@@ -5686,6 +6443,11 @@ void IRGen::emitAssign(HStmt* s) {
   // Self-append peephole first: X = X || lit... appends in place when the
   // target qualifies; anything else falls through to generic concat+assign.
   if (emitSelfAppend(s))
+    return;
+  // Constant-offset concatenation store: A = B || C into a fixed-length
+  // target stores each leaf at a constant offset, with no temporary buffer
+  // (ADR-242).
+  if (emitConcatConstStore(s))
     return;
   Val v = emitExpr(s->value.get());
   storeTo(s->target->sym, v, s->loc);
@@ -5734,9 +6496,12 @@ void IRGen::ctlAllocDeclared(Symbol* sym, SourceLoc loc) {
   for (size_t k = 0; k < rank; ++k)
     total = b_.CreateMul(total, exts[k], "ctldtot");
   if (rank == 1) {
-    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), total});
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), total});
+    ctlNoteAlloc(sym, addr);
   } else {
-    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), total, i64((long long)rank)});
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"),
+                                      {ctlKeyOf(sym), total, i64((long long)rank)});
+    ctlNoteAlloc(sym, addr);
     for (size_t k = 0; k < rank; ++k)
       b_.CreateCall(runtimeFn("pli_ctl_set_dim"), {ctlKeyOf(sym), i64((long long)k), exts[k]});
   }
@@ -5770,10 +6535,13 @@ void IRGen::ensureCtlAlloc(Symbol* sym, SourceLoc loc) {
   bool ndDims = isCtlNDynArray(sym) && !sym->ty.isDynamic();
   if (ndDims) {
     size_t rank = sym->ty.dims.size();
-    b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), sz, i64((long long)rank)});
+    llvm::Value* addr =
+        b_.CreateCall(runtimeFn("pli_ctl_alloc_dims"), {ctlKeyOf(sym), sz, i64((long long)rank)});
+    ctlNoteAlloc(sym, addr);
     emitCtlNDDescDims(sym);
   } else {
-    b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+    llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), sz});
+    ctlNoteAlloc(sym, addr);
   }
 }
 
@@ -6088,7 +6856,8 @@ void IRGen::emitAllocate(HStmt* s) {
       } else if (bsym->ty.isChar() && bsym->ty.starLen && bsym->dynLenExpr) {
         sz = toI64(emitExpr(bsym->dynLenExpr), s->loc);
       }
-      b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
+      llvm::Value* baddr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(bsym), sz});
+      ctlNoteAlloc(bsym, baddr);
       if (isCtlNDynArray(bsym)) {
         // A bare N-D ALLOCATE re-pushes the DECLARE extents so the new top
         // generation's live bounds match the descriptor (an `(*)` axis never
@@ -6130,6 +6899,7 @@ void IRGen::emitFree(HStmt* s) {
     Symbol* bsym = s->freeBase[i]->sym;
     if (bsym && bsym->controlled) {
       b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(bsym)});
+      ctlNoteFree(bsym);
       continue;
     }
     llvm::Value* addr =
@@ -6385,6 +7155,12 @@ void IRGen::collectCtlLoopInfo(HStmt* s, std::unordered_set<Symbol*>& uses,
 // that the body reuses via the hoist maps. Element stores write the data
 // buffer, never the stack metadata, so the hoist is sound. Callers erase the
 // returned symbols from the maps on loop exit.
+//
+// The hoist is the compiler's answer to the MULTICS save_temps contract
+// (ADR-269): a value cached across a control-flow edge is sound here only
+// because the analysis proved the generation cannot change inside the loop —
+// no call, no ALLOCATE, no FREE. A transformation that adds a call to the
+// body must drop the hoist.
 void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
                                 std::vector<Symbol*>& hoisted,
                                 std::vector<std::pair<Symbol*, size_t>>& hoistedExt) {
@@ -6400,8 +7176,16 @@ void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
   for (Symbol* sym : uses) {
     if (!sym || !sym->controlled || muts.count(sym) || ctlAddrHoist_.count(sym))
       continue;
-    ctlAddrHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlhoist.a");
-    ctlLenHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctlhoist.l");
+    if (sym->ctlDirect && !inHandler_ && curProc_ && curProc_->src == sym->owner) {
+      // WS-K8 (ADR-257): the generation is in the compiler's slot, so the
+      // hoisted read is a load and the length is the declared extent (a
+      // statically bounded CONTROLLED array's bounds check uses it anyway).
+      ctlAddrHoist_[sym] = b_.CreateLoad(b_.getPtrTy(), ctlAnchorSlot(sym), "ctlhoist.a");
+      ctlLenHoist_[sym] = i64(ctlDeclaredExtent(sym));
+    } else {
+      ctlAddrHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlhoist.a");
+      ctlLenHoist_[sym] = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "ctlhoist.l");
+    }
     hoisted.push_back(sym);
     if (isCtlNDynArray(sym)) {
       for (size_t k = 0; k < sym->ty.dims.size(); ++k) {
@@ -6737,8 +7521,13 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
     if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
       if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
         emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
-      else
+      else {
+        // The library routine does the conversion (ADR-254): the scaled
+        // decimal becomes the runtime's fixed-point form.
+        if (remarkLibraryCalls_)
+          d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
         deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
+      }
     } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
       emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
     } else {
@@ -6871,8 +7660,12 @@ void IRGen::emitPut(HStmt* s) {
         if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
           if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
             emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
-          else
+          else {
+            // The library routine does the conversion (ADR-254).
+            if (remarkLibraryCalls_)
+              d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
             deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
+          }
         } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
           emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
         } else {
@@ -7298,24 +8091,45 @@ void IRGen::emitPutEditItems(HStmt* s) {
         break;
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
+      llvm::Value* val = nullptr;
+      int scale = 0;
       if (v.ty.isFixed()) {
-        llvm::Value* val = toI64(v);
-        llvm::Value* scale = i64(v.ty.scale);
-        // sign derived from the value: -1 if negative, +1 if non-negative.
-        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
-        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
-        deferCall("pli_put_edit_pic",
-                  {val, scale, sign, globalString(f.pic), i64((long long)f.pic.size())});
+        val = toI64(v);
+        scale = v.ty.scale;
       } else if (v.ty.k == TK::Float) {
         // Convert float to fixed-decimal via truncation.
-        llvm::Value* val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
-        llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picfsn");
-        llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picfs");
-        deferCall("pli_put_edit_pic",
-                  {val, i64(0), sign, globalString(f.pic), i64((long long)f.pic.size())});
+        val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
       } else {
         d_.error(item->loc, "P edit item requires a numeric value", "(53)");
+        break;
       }
+      // B4: a constant value through a foldable constant picture is formatted
+      // at compile time (rules (146)-(148)); the lowering policy still wins,
+      // so --experimental-lowering=picture:runtime keeps the interpreter and
+      // the differential oracle keeps both sides (ADR-274).
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      if (!runtimePath("picture") && spec.foldable) {
+        if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(val)) {
+          std::string text;
+          if (pli::foldPictureConversion(ci->getSExtValue(), scale, spec, text)) {
+            facts_.recordBuiltin("picture", "llvm");
+            deferCall("pli_put_edit_char", {globalString(text), i64((long long)text.size()),
+                                            i64((long long)text.size())});
+            break;
+          }
+        }
+      }
+      facts_.recordBuiltin("picture", "runtime",
+                           "the picture conversion needs the library routine");
+      // The library-call remark (ADR-254): the picture conversion is done by
+      // the library routine, so the user is told where it happens.
+      if (remarkLibraryCalls_)
+        d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+      // sign derived from the value: -1 if negative, +1 if non-negative.
+      llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
+      llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
+      deferCall("pli_put_edit_pic",
+                {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
       break;
     }
     }
@@ -7547,6 +8361,7 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
         llvm::Type* st = llvm::StructType::get(
             ctx_, {b_.getInt32Ty(), llvm::ArrayType::get(b_.getInt8Ty(), cap)});
         llvm::AllocaInst* tmp = entryAlloca(st, "vstar");
+        markTempLifetime(tmp);
         llvm::Value* lp = b_.CreateStructGEP(st, tmp, 0, "vlp");
         llvm::Value* srcLen = av0.len ? av0.len : i64(av0.ty.len);
         b_.CreateStore(b_.CreateTrunc(srcLen, b_.getInt32Ty(), "vl32"), lp);
@@ -7568,6 +8383,7 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
       // fixed 256-byte cap overflowed the stack for a longer actual.
       unsigned cap = av.ty.len > 0 ? (unsigned)av.ty.len : 1;
       llvm::AllocaInst* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
+      markTempLifetime(buf);
       b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
       // The concat's heap buffer has been copied: release it (the call
       // argument path had no free, so every call leaked one buffer).
@@ -7584,6 +8400,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
   if (memberDirect)
     return memberAddr(a->sym, a->memberPath, a->loc);
   llvm::Value* addr = entryAlloca(llvmTy(pty), "dummy");
+  // ADR-246: the dummy is live only until the call returns.
+  markTempLifetime(addr);
   Val av = emitExpr(a);
   if (pty.isChar()) {
     Val cv = av;
@@ -7614,6 +8432,25 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
 // a callee or a transitive call may free / allocate on this variable's slot,
 // invalidating the data pointer cached by `addressOf` at call-site time.
 // Reload the latest-generation pointer so the write-back hits live memory.
+// ADR-246: mark a stack buffer live from this point. The marker goes in the
+// block that uses the buffer — the alloca itself stays in the entry block,
+// but a marker there would describe a range that ends before the loop's
+// next iteration uses the buffer.
+void IRGen::markTempLifetime(llvm::Value* buf) {
+  // LLVM 23's lifetime intrinsics take the pointer alone (the size is
+  // inferred from the allocation): @llvm.lifetime.start.p0(ptr %buf).
+  b_.CreateIntrinsic(llvm::Intrinsic::lifetime_start, {b_.getPtrTy()}, {buf});
+  pendingTempLifetimes_.push_back(buf);
+}
+
+// ADR-246: end the marked lifetimes — the buffers are dead after this point,
+// so LLVM's stack colouring can give them one shared slot.
+void IRGen::endTempLifetimes() {
+  for (llvm::Value* buf : pendingTempLifetimes_)
+    b_.CreateIntrinsic(llvm::Intrinsic::lifetime_end, {b_.getPtrTy()}, {buf});
+  pendingTempLifetimes_.clear();
+}
+
 void IRGen::flushVarWrites() {
   for (const PendingVarWrite& w : pendingVarWrites_) {
     const Type& cty = w.sym->ty;
@@ -7654,6 +8491,9 @@ void IRGen::flushVarWrites() {
     }
   }
   pendingVarWrites_.clear();
+  // ADR-246: the argument buffers are dead once the call has returned and
+  // the copy-backs are done, so their stack slots are free again.
+  endTempLifetimes();
 }
 
 // VARYINGZ argument for a by-value C entry (ADR-168): copy the actual's
@@ -7683,6 +8523,8 @@ llvm::Value* IRGen::cstrArg(HExpr* a, const Type& pty, SourceLoc loc) {
     cap = 0;
   llvm::AllocaInst* buf =
       entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)cap + 1), "zstr");
+  // ADR-246: the NUL-terminated copy is live only until the call returns.
+  markTempLifetime(buf);
   b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
   llvm::Value* z = b_.CreateGEP(b_.getInt8Ty(), buf, {av.len}, "zterm");
   b_.CreateStore(b_.getInt8(0), z);
@@ -8142,6 +8984,10 @@ void IRGen::emitAsyncCall(HStmt* s) {
   llvm::Value* fnPtr = b_.CreateBitCast(wrap, b_.getPtrTy(), "twrap");
   b_.CreateCall(runtimeFn("pli_task_spawn"), {fnPtr, ctxRaw});
   pendingVarWrites_.clear(); // no sync point to copy a varying arg back
+  // ADR-246: the argument buffers stay live — the task reads them from the
+  // caller's frame after the call returns, so their slots must not be
+  // reused. Drop the markers without ending them.
+  dropTempLifetimes();
 }
 
 void IRGen::emitWait(HStmt* s) {
@@ -8242,7 +9088,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
       llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
       b_.CreateCondBr(oob, failL, okL);
       startBlock(failL);
-      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
       startBlock(okL);
     }
     return b_.CreateInBoundsGEP(llvmTy(el), base, {flat}, "aelem");
@@ -8287,7 +9133,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     b_.CreateCondBr(oob, failL, okL);
 
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
 
     startBlock(okL);
   }
@@ -8446,7 +9292,7 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
         // A shape mismatch has no index to clamp: a handled trap notifies
         // the handler, then aborts (rule 94).
         llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "bnm.abort." + id, curFn_);
-        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", abL);
+        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", abL);
         b_.SetInsertPoint(abL);
         b_.CreateUnreachable();
         startBlock(okL);
@@ -8590,6 +9436,9 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   v.ty = ty;
   llvm::Value* addr = addressOf(sym);
   if (ty.isChar()) {
+    // ADR-245: a fetch is an address plus a length, never a wider load —
+    // the value cannot depend on a byte outside the declared extent
+    // (MULTICS padded_ref).
     if (ty.varying) {
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(ty), addr, 1, "vdata");
       llvm::Value* lp = b_.CreateStructGEP(llvmTy(ty), addr, 0, "vlenp");
@@ -8655,6 +9504,9 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool 
 
 void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceLoc loc,
                         bool packed) {
+  // ADR-245: the store is bounded by the declared extent — it writes the
+  // target's own length and not one byte more, so a neighbouring variable
+  // is untouched (MULTICS padded_for_store_ref).
   if (!v.ty.isChar()) {
     d_.error(loc,
              "conversion from " + v.ty.desc() + " to " + dt.desc() +
@@ -8745,7 +9597,11 @@ void IRGen::storeTo(Symbol* sym, const Val& v, SourceLoc loc) {
         b_.SetInsertPoint(copyBB);
         b_.CreateBr(mergeBB);
         b_.SetInsertPoint(mergeBB);
-        // Always reload fresh addr+len — may have changed in expBB
+        // Always reload fresh addr+len — may have changed in expBB. This is
+        // the MULTICS save_temps contract (ADR-269): a transformation that
+        // creates a new join must re-materialize the values it cached
+        // across that edge, and the generation's address is the one value
+        // here that can change.
         llvm::Value* faddr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "fraddr");
         llvm::Value* flen = b_.CreateCall(runtimeFn("pli_ctl_len"), {ctlKeyOf(sym)}, "flen");
         emitAssignChar(faddr, flen, v.ptr, v.len);
@@ -8834,7 +9690,7 @@ llvm::Value* IRGen::ctlDynElementAddr(Symbol* sym, const std::vector<HExprP>& id
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
     startBlock(okL);
   }
   (void)loc;
@@ -8906,7 +9762,7 @@ llvm::Value* IRGen::ctlNDElementAddr(Symbol* sym, const std::vector<HExprP>& idx
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sub.ok." + id, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
     startBlock(okL);
   }
   (void)loc;
@@ -9095,7 +9951,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
         llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "cs.ok." + fid, curFn_);
         b_.CreateCondBr(oob, failL, okL);
         startBlock(failL);
-        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+        emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
         startBlock(okL);
       }
       v.fixedFlat = b_.CreateAdd(
@@ -9253,7 +10109,7 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
     llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
     b_.CreateCondBr(oob, failL, okL);
     startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", "sub", okL);
+    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
     startBlock(okL);
   }
 
@@ -9635,7 +10491,7 @@ Val IRGen::emitExpr(HExpr* e) {
           // Branch-then-compute: sdiv only runs in computeBB where bi != 0,
           // eliminating the safe-divisor select from the hot path (T1a).
           llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-          ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey, "zd");
+          ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey);
           q = b_.CreateSDiv(ai, bi, "bin");
           q = endZerodivide(zd, q);
         }
@@ -10163,6 +11019,10 @@ Val IRGen::emitExpr(HExpr* e) {
   }
 
   if (op == Tok::Amp || op == Tok::Bar) { // rules (116),(115)
+    // A conjunction of two masked bit tests on the same value is one masked
+    // test (ADR-243); the merge is tried before the two tests are emitted.
+    if (op == Tok::Amp && emitCombinedBitTest(e, v))
+      return v;
     Val a = emitExpr(e->a.get());
     Val b = emitExpr(e->b.get());
     if (a.ty.isBit() && b.ty.isBit() && (a.ty.len > 1 || b.ty.len > 1)) {
@@ -10263,8 +11123,11 @@ Val IRGen::emitExpr(HExpr* e) {
     return v;
   }
 
-  Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
-                                        b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty)
+  // A BIT operand is compared as a 64-bit integer, not a 32-bit one: the
+  // packed value of a BIT(n) wider than 32 bits does not fit in 32, and
+  // truncating it would compare only the low 32 bits (ADR-275).
+  Type common = isCmp ? arithResultType(a.ty.isBit() ? Type::fixedBin(63, 0) : a.ty,
+                                        b.ty.isBit() ? Type::fixedBin(63, 0) : b.ty)
                       : e->ty;
   // Power always promotes to FLOAT (rule 121, CM5). Division stays in the
   // type sema chose: FIXED for integer-valued operands (P3, ADR-190 — sdiv),
@@ -10455,7 +11318,7 @@ Val IRGen::emitExpr(HExpr* e) {
       // FLOAT division (ADR-014): fdiv, zero-divide resumes with 0.0.
       llvm::Value* fzero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
       llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, fzero, "zdiv");
-      ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey, "zd");
+      ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey);
       llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
       r = endZerodivide(zd, div);
     } else {
@@ -10491,7 +11354,7 @@ Val IRGen::emitExpr(HExpr* e) {
         // Branch-then-compute: sdiv only runs when the divisor is non-zero,
         // eliminating the safe-divisor select from the hot path (T1a).
         llvm::Value* dz = b_.CreateICmpEQ(bi, z0, "zdiv");
-        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey, "zd");
+        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey);
         q = b_.CreateSDiv(ai, bi, "bin");
         q = endZerodivide(zd, q);
       }
@@ -10542,6 +11405,11 @@ llvm::Value* IRGen::emitBinaryMath(const std::string& plifn, const std::string& 
 // Extracted from the emitExpr Call case so each built-in is a
 // self-contained block.
 bool IRGen::emitBuiltin(HExpr* e, Val& result) {
+  if (!e)
+    return false;
+  // The call site's location, for a remark raised inside this lowering
+  // (ADR-254).
+  curLoc_ = e->loc;
   // Names matching none of these are user function procedures.
   Val v;
   if (e->name == "BYADDR") {
@@ -10978,7 +11846,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     if (common.k == TK::Float) {
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
       llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
-      ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey, "mod_zd");
+      ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey);
       llvm::Value* m = b_.CreateCall(runtimeFn("pli_mod_dd"), {av.reg, bv.reg}, "mod");
       v.reg = endZerodivide(zd, m);
     } else if (common.intBits() == 128) {
@@ -10989,7 +11857,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       llvm::Value* bi = bv.reg;
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0.
       llvm::Value* dz = b_.CreateICmpEQ(bi, zero, "zdiv");
-      ZdivCheck zd = beginZerodivide(dz, zero, Stmt::kZerodivideCondKey, "mod_zd");
+      ZdivCheck zd = beginZerodivide(dz, zero, Stmt::kZerodivideCondKey);
       // PL/I MOD takes the sign of the divisor; srem gives the sign of the
       // dividend, so add the divisor back when the signs differ.
       llvm::Value* r = b_.CreateSRem(av.reg, bi, "mod");
@@ -11059,7 +11927,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         // inline and fold the body when the divisor is known at -O2+.
         llvm::Value* bi = toI64(bv);
         llvm::Value* dz = b_.CreateICmpEQ(bi, i64(0), "zdiv");
-        ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey, "mod_zd");
+        ZdivCheck zd = beginZerodivide(dz, i64(0), Stmt::kZerodivideCondKey);
         m = b_.CreateCall(runtimeFn("pli_mod_ll"), {avi, bi});
         m = endZerodivide(zd, m);
       }
@@ -11108,7 +11976,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     v.ty = common;
     // ZERODIVIDE (rule 94): as for `/`, a zero divisor traps, resuming with 0.
     llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
-    ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey, "div_zd");
+    ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey);
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
     v.reg = endZerodivide(zd, div);
     result = v;
@@ -11135,15 +12003,49 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "ROUND") {
+    // A FIXED DECIMAL argument rounded to a constant digit count stays exact:
+    // the result is a decimal with that scale, and the conversion rounds half
+    // away from zero (ADR-006) — the same rounding an assignment uses, and
+    // the same one MULTICS's digit move produces (ADR-276).
+    if (e->args[0]->ty.k == TK::FixedDec && e->ty.k == TK::FixedDec) {
+      Val x = emitExpr(e->args[0].get());
+      Val r = convert(x, e->ty, e->loc);
+      v.ty = e->ty;
+      v.reg = r.reg;
+      result = v;
+      return true;
+    }
     Val x = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val xd = convert(x, Type::flt(6), e->loc);
-    v.ty = e->ty;
+    // The float path always produces a FLOAT, whatever the expression's type
+    // says: a value typed as a decimal would be stored raw (ADR-276).
+    v.ty = Type::flt(6);
     v.reg = b_.CreateCall(runtimeFn("pli_round"), {xd.reg, toI64(n)}, "round");
     result = v;
     return true;
   }
   if (e->name == "REPEAT") {
+    // A constant string repeated a constant number of times is itself a
+    // constant string (ADR-241): the text is built at compile time, so the
+    // result is a constant instead of a runtime loop. The lowering policy
+    // still wins: a forced runtime call keeps the library path, so the
+    // differential oracle keeps both sides.
+    HExpr* src = e->args[0].get();
+    HExpr* cnt = e->args[1].get();
+    if (src->kind == HExpr::CharLit && cnt->kind == HExpr::IntLit && cnt->ival > 0 &&
+        !runtimePath("repeat")) {
+      std::string text = pli::foldRepeatText(src->sval, cnt->ival);
+      if (!text.empty() && (long long)text.size() == (long long)e->ty.len) {
+        facts_.recordBuiltin("repeat", "llvm");
+        Val out;
+        out.ty = e->ty;
+        out.ptr = globalString(text);
+        out.len = i64(text.size());
+        result = out;
+        return true;
+      }
+    }
     Val s = emitExpr(e->args[0].get());
     Val n = emitExpr(e->args[1].get());
     Val out = charTemp(e->ty.len);
@@ -11154,13 +12056,29 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   }
   if (e->name == "VERIFY") {
     Val s = emitExpr(e->args[0].get());
-    Val t = emitExpr(e->args[1].get());
     llvm::Value* r;
-    if (e->args.size() == 3) {
-      Val st = emitExpr(e->args[2].get());
-      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
+    // A constant alphabet uses the membership table instead of a scan of the
+    // alphabet (ADR-241). The lowering policy still wins: a forced runtime
+    // call keeps the library path.
+    const char* op = e->args.size() == 3 ? "verify_from" : "verify";
+    HExpr* alpha = e->args[1].get();
+    if (alpha->kind == HExpr::CharLit && !useRuntimeCall(op)) {
+      llvm::Value* tbl = searchTable(alpha->sval);
+      if (e->args.size() == 3) {
+        Val st = emitExpr(e->args[2].get());
+        r = emitVerifyFromTable(s.ptr, s.len, tbl, toI64(st));
+      } else {
+        r = emitVerifyTable(s.ptr, s.len, tbl);
+      }
     } else {
-      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
+      // The alphabet is only materialized when the scan needs it.
+      Val t = emitExpr(e->args[1].get());
+      if (e->args.size() == 3) {
+        Val st = emitExpr(e->args[2].get());
+        r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
+      } else {
+        r = emitVerify(s.ptr, s.len, t.ptr, t.len);
+      }
     }
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
@@ -11168,6 +12086,21 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     return true;
   }
   if (e->name == "TRANSLATE") {
+    // A constant (out, in) pair becomes a 256-byte table at compile time
+    // (ADR-273): one lookup per character instead of a scan of `in`. The
+    // lowering policy still wins, so the differential oracle keeps both sides.
+    HExpr* outArg = e->args[1].get();
+    HExpr* inArg = e->args[2].get();
+    if (outArg->kind == HExpr::CharLit && inArg->kind == HExpr::CharLit &&
+        !runtimePath("translate")) {
+      Val s = emitExpr(e->args[0].get());
+      Val dst = charTemp(e->ty.len);
+      emitTranslateTable(dst.ptr, dst.len, s.ptr, s.len, translateTable(outArg->sval, inArg->sval));
+      facts_.recordBuiltin("translate", "llvm");
+      dst.len = i64(e->ty.len);
+      result = dst;
+      return true;
+    }
     Val s = emitExpr(e->args[0].get());
     Val out = emitExpr(e->args[1].get());
     Val in = emitExpr(e->args[2].get());
@@ -11243,24 +12176,16 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val t = emitExpr(e->args[1].get());
     Val st = emitExpr(e->args[2].get());
-    llvm::Value* r = emitSearch(s.ptr, s.len, t.ptr, t.len, toI64(st));
+    // A constant alphabet uses the membership table instead of a scan of the
+    // alphabet (ADR-241).
+    llvm::Value* r;
+    HExpr* alpha = e->args[1].get();
+    if (alpha->kind == HExpr::CharLit && !useRuntimeCall("search"))
+      r = emitSearchTable(s.ptr, s.len, searchTable(alpha->sval), toI64(st));
+    else
+      r = emitSearch(s.ptr, s.len, t.ptr, t.len, toI64(st));
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "srch32");
-    result = v;
-    return true;
-  }
-  if (e->name == "VERIFY") {
-    Val s = emitExpr(e->args[0].get());
-    Val t = emitExpr(e->args[1].get());
-    llvm::Value* r;
-    if (e->args.size() == 3) {
-      Val st = emitExpr(e->args[2].get());
-      r = emitVerifyFrom(s.ptr, s.len, t.ptr, t.len, toI64(st));
-    } else {
-      r = emitVerify(s.ptr, s.len, t.ptr, t.len);
-    }
-    v.ty = e->ty;
-    v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "ver32");
     result = v;
     return true;
   }
@@ -11347,7 +12272,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
         b_.CreateCondBr(fail, trapBB, okBB);
         b_.SetInsertPoint(trapBB);
-        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
         b_.SetInsertPoint(okBB);
       }
       v.ty = e->ty;
@@ -11399,7 +12324,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
         b_.CreateCondBr(fail, trapBB, okBB);
         b_.SetInsertPoint(trapBB);
-        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", "conv", okBB);
+        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
         b_.SetInsertPoint(okBB);
       }
       Val fixed;

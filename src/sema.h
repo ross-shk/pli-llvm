@@ -51,6 +51,11 @@ struct Symbol {
   bool isBased() const { return basedBase != nullptr || basedNoPtr; }
   bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
   int ctlSlot = -1;        // runtime generation-stack slot index (87-90)
+  // WS-K8 (ADR-257): the compiler can address this CONTROLLED variable
+  // directly — it keeps the current generation's address in a slot and takes
+  // the length from the declared extent, so a reference costs a load instead
+  // of a runtime call. Set by the module-wide qualification.
+  bool ctlDirect = false;
   // AREA (rule (20)): the region's byte size, a compile-time constant (default
   // 1000, the IBM default). The runtime region is created at procedure entry.
   long long areaSize = 1000;
@@ -110,6 +115,8 @@ public:
   explicit Sema(Diags& d) : d_(d) {}
   void setSysparm(std::string v) { sysparm_ = std::move(v); }
   const std::string& sysparm() const { return sysparm_; }
+  // WS-A5 (ADR-266): opt-in warning for an AUTOMATIC read before it is set.
+  void setWarnUnset(bool v) { warnUnset_ = v; }
   bool run(Program& prog, bool compileOnly = false);
 
   // Symbols that require storage, in declaration order.
@@ -140,6 +147,9 @@ private:
   // Runs after all bodies are typed so CALL and function-reference callees
   // are resolved; reports one error at each non-recursive cycle member.
   void checkRecursion();
+  // WS-A5 (ADR-266): warn where an AUTOMATIC local is read before the walk can
+  // prove it is set on every path. Runs last: every reference is resolved.
+  void checkUnset(Program& prog);
   void collectCallees(const std::vector<StmtP>& body, std::vector<Proc*>& out);
   void collectStmtCallees(const Stmt* s, std::vector<Proc*>& out);
   void collectExprCallees(const Expr* e, std::vector<Proc*>& out);
@@ -157,6 +167,15 @@ private:
   void collectLabels(Stmt* s,
                      std::vector<const Stmt*>& chain); // gather GO TO targets defined in this proc
   void checkStmt(Stmt* s, Scope* sc, Proc* p);
+  // The WS-K8 qualification (ADR-257): for each CONTROLLED symbol, the
+  // procedures that change its generation, and whether every allocation used
+  // the declared extent.
+  struct CtlTouch {
+    std::set<Proc*> procs;      // the procedures that change its generation
+    bool extentDiffers = false; // an allocation used a different extent
+    bool starReuse = false;     // an allocation reused the '*' extent
+  };
+  std::map<Symbol*, CtlTouch> ctlTouches_;
   // Rule (91): reject ON-unit constructs that need the establishing frame
   // (automatic-variable access, RETURN, nested ON, DECLARE, ENTRY). The unit
   // was already type-checked by checkStmt, so symbol references are resolved.
@@ -203,9 +222,18 @@ private:
   void typeExpr(Expr* e, Scope* sc, Proc* p);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript (rule 126).
   void checkSubscriptBounds(Expr* e, Symbol* arr);
+  // A subscript must be of an integer type (rule 126, ADR-277): the index
+  // addresses an element, so it needs an integer value.
+  void checkSubscriptTypes(Expr* e);
   // Compile-time SUBSCRIPTRANGE check for a constant subscript against an
   // explicit bound list (rule 126); `name` is the array's diagnostic name.
   void checkSubscriptBoundsDims(Expr* e, const std::vector<Dim>& dims, const std::string& name);
+  // The WS-K8 qualification (ADR-257): note that a procedure changes this
+  // CONTROLLED variable's generation, and whether the allocation used the
+  // declared extent.
+  void noteCtlTouch(Symbol* sym, Proc* p, bool extentDiffers, bool starReuse);
+  // Decide which CONTROLLED variables the compiler can address directly.
+  void markDirectCtl();
   // Resolve a qualified reference S.A.B (rule 124) against a structure type,
   // recording the LLVM field index of each step in e->memberPath. Returns the
   // leaf member's type, or nullptr after reporting a diagnostic.
@@ -331,6 +359,7 @@ private:
   Diags& d_;
   Program* prog_ = nullptr;
   std::string sysparm_; // SYSPARM option value (rule (123)): SYSPARM() returns it
+  bool warnUnset_ = false; // --warn-unset: run the WS-A5 check (ADR-266)
   std::vector<std::unique_ptr<Symbol>> owned_;
   std::vector<std::unique_ptr<Scope>> scopes_;
   std::unordered_map<Proc*, Scope*> procScopes_;

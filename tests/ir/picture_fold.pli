@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-274: a constant P item through a foldable constant picture becomes
+    the formatted text at compile time, so the call is pli_put_edit_char and
+    no pli_put_edit_pic is left for that item. A variable item and a picture
+    outside the foldable subset keep the runtime interpreter. */
+ picture_fold: procedure options(main);
+    declare v fixed dec(7,2);
+    v = 123.45;
+    put edit(123.45) (P('ZZ9.99'));
+    put edit(v) (P('ZZ9.99'));
+    put edit(123.45) (P('ZZ9,99'));
+ end picture_fold;

@@ -32,6 +32,27 @@ TIMEOUT = 10  # seconds per exec run step
 # they get their own budget while single-binary runs stay tight enough to
 # catch genuine hangs quickly.
 DRIVER_TIMEOUT = 60  # seconds per driver test
+# The ceiling the load-scaled driver budget may reach.
+DRIVER_TIMEOUT_MAX = 300
+
+
+def driver_timeout() -> int:
+    """The driver budget, scaled by how busy the host is.
+
+    The budget is wall-clock, so on a shared machine a fixed one fails a
+    test that is merely slow: the drivers that link and run a program are
+    the first to exceed it, and the whole suite then reports a failure
+    that no amount of rerunning explains. The load average is sampled
+    once, at start-up, and the budget grows with it. On an idle host it
+    stays at DRIVER_TIMEOUT, so a genuine hang is still caught quickly.
+    """
+    try:
+        load = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        return DRIVER_TIMEOUT
+    cores = os.cpu_count() or 1
+    scaled = int(DRIVER_TIMEOUT * load / cores)
+    return min(DRIVER_TIMEOUT_MAX, max(DRIVER_TIMEOUT, scaled))
 ROOT = Path(__file__).resolve().parent.parent
 IS_WINDOWS = sys.platform == "win32"
 EXE_EXT = ".exe" if IS_WINDOWS else ""
@@ -185,25 +206,26 @@ class Runner:
         # ./build/cmake/pli, so the env must carry the real (possibly .exe) path.
         import os as _os
         env = dict(_os.environ, PLI=PLI, CLANG=CLANG)
+        budget = driver_timeout()
         try:
             with open(self.out / f"{self.name}.out", "wb") as fh:
                 proc = subprocess.Popen([sh, str(self.dir / f"{self.name}.sh")],
                                         stdout=fh, stderr=subprocess.STDOUT,
                                         cwd=str(ROOT), env=env)
                 try:
-                    proc.wait(timeout=DRIVER_TIMEOUT)
+                    proc.wait(timeout=budget)
                 except subprocess.TimeoutExpired:
                     try:
                         proc.kill()
                     except (ProcessLookupError, PermissionError):
                         pass
                     proc.wait()
-                    return f"FAIL {self.name} (timed out after {DRIVER_TIMEOUT}s)\n", 1
+                    return f"FAIL {self.name} (timed out after {budget}s)\n", 1
                 rc = proc.returncode
         except FileNotFoundError as e:
             return f"FAIL {self.name} (cannot run shell: {e})\n", 1
         if rc == 124:
-            return f"FAIL {self.name} (timed out after {DRIVER_TIMEOUT}s)\n", 1
+            return f"FAIL {self.name} (timed out after {budget}s)\n", 1
         return self.check_out()
 
     def exec_test(self):

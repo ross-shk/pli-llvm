@@ -1,0 +1,31 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* BIT field tests within one storage word (WS-C3). The word holds four
+    adjacent four-bit fields; each field is tested on its own, so a
+    compiler that can merge the tests on one word has four chances to do
+    it. The C twin tests the same fields with masks. */
+ bit_fields: procedure options(main);
+   declare (i, hits) fixed bin(31);
+   declare (w, m1, m2, m3, m4) bit(32);
+   declare (e1, e2, e3, e4) bit(32);
+
+   m1 = '00000000000000000000000000001111'b;
+   m2 = '00000000000000000000000011110000'b;
+   m3 = '00000000000000000000111100000000'b;
+   m4 = '00000000000000001111000000000000'b;
+   e1 = '00000000000000000000000000000011'b;
+   e2 = '00000000000000000000000000110000'b;
+   e3 = '00000000000000000000001000000000'b;
+   e4 = '00000000000000001011000000000000'b;
+
+   hits = 0;
+   do i = 1 to 150000000;
+      w = fixed(mod(i, 700) * 3000001);
+      if (w & m1) = e1 then hits = hits + 1;
+      if (w & m2) = e2 then hits = hits + 1;
+      if (w & m3) = e3 then hits = hits + 1;
+      if (w & m4) = e4 then hits = hits + 1;
+   end;
+
+   put skip list(hits);
+ end bit_fields;

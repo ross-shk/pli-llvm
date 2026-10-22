@@ -1,0 +1,30 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Check-heavy arithmetic (M7's criterion: check-heavy code within 1.5x of
+    check-free code). The values are bounded at run time but not at compile
+    time, so the compiler cannot prove the SIZE overflow traps or the
+    SUBSCRIPTRANGE bounds checks away and must keep them. The paired build
+    (--size-checks --subscript-checks) prices them against the default -O2
+    build, which elides them. */
+ checks_on: procedure options(main);
+   declare a(1000) fixed bin(31);
+   declare (i, j, x, y) fixed bin(31);
+   declare (s, u) fixed bin(63);
+
+   do i = 1 to 1000;
+      a(i) = i * 7 - 3;
+   end;
+
+   s = 0;
+   u = 0;
+   do i = 1 to 100000000;
+      j = mod(i, 1000) + 1;
+      x = a(j);
+      y = x * 3 + 1;
+      s = s + y;
+      u = u + x;
+   end;
+
+   put skip list(s);
+   put skip list(u);
+ end checks_on;

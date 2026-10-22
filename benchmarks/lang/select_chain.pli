@@ -1,0 +1,69 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-K10 (SELECT via binary search): a SELECT over many constant CHAR
+    WHEN arms. The lowering is a chain of comparisons; the C twin does a
+    binary search over the same constants, which is what a binary-search
+    lowering would produce, so the ratio prices the chain. */
+ select_chain: procedure options(main);
+    declare s char(3);
+    declare r fixed bin(31);
+    declare n fixed bin(31);
+    declare iter fixed bin(31);
+    declare k fixed bin(31);
+    declare hits fixed bin(31);
+    declare 1 arms,
+       2 v(20) char(3);
+    hits = 0;
+    arms.v(1) = 'a00';
+    arms.v(2) = 'a01';
+    arms.v(3) = 'a02';
+    arms.v(4) = 'a03';
+    arms.v(5) = 'a04';
+    arms.v(6) = 'a05';
+    arms.v(7) = 'a06';
+    arms.v(8) = 'a07';
+    arms.v(9) = 'a08';
+    arms.v(10) = 'a09';
+    arms.v(11) = 'a10';
+    arms.v(12) = 'a11';
+    arms.v(13) = 'a12';
+    arms.v(14) = 'a13';
+    arms.v(15) = 'a14';
+    arms.v(16) = 'a15';
+    arms.v(17) = 'a16';
+    arms.v(18) = 'a17';
+    arms.v(19) = 'a18';
+    arms.v(20) = 'a19';
+    n = 20000000;
+    iter = 1;
+    do while (iter <= n);
+       k = iter - (iter / 20) * 20;
+       s = arms.v(k + 1);
+       select (s);
+          when ('a00') r = 0;
+          when ('a01') r = 1;
+          when ('a02') r = 2;
+          when ('a03') r = 3;
+          when ('a04') r = 4;
+          when ('a05') r = 5;
+          when ('a06') r = 6;
+          when ('a07') r = 7;
+          when ('a08') r = 8;
+          when ('a09') r = 9;
+          when ('a10') r = 10;
+          when ('a11') r = 11;
+          when ('a12') r = 12;
+          when ('a13') r = 13;
+          when ('a14') r = 14;
+          when ('a15') r = 15;
+          when ('a16') r = 16;
+          when ('a17') r = 17;
+          when ('a18') r = 18;
+          when ('a19') r = 19;
+          otherwise r = -1;
+       end;
+       if r = k then hits = hits + 1;
+       iter = iter + 1;
+    end;
+    put skip list(hits);
+ end select_chain;

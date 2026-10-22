@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* List-directed output item marshalling (WS-H1). One statement writes
+    several items of different kinds, so the cost is per item, not per
+    statement: four integers and one blank-padded character. The C twin
+    writes the same line with the same spacing. */
+ io_list: procedure options(main);
+   declare (i, hits) fixed bin(31);
+   declare t char(8);
+   declare s fixed bin(63);
+
+   hits = 0;
+   s = 0;
+   do i = 1 to 500000;
+      t = 'item';
+      put skip list(i, i + 1, i + 2, i + 3, t);
+      s = s + i;
+      if i > 0 then hits = hits + 1;
+   end;
+
+   put skip list(s);
+   put skip list(hits);
+ end io_list;

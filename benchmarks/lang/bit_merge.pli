@@ -1,0 +1,21 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Merged bit tests (WS-C3). Two masked tests on the same 32-bit word in
+    one conjunction: the compiler merges them into one masked test, so the
+    word is loaded and masked once instead of twice. The masks are
+    constants, which is what makes the merge possible. The C twin tests
+    the same two fields. */
+ bit_merge: procedure options(main);
+   declare (i, hits) fixed bin(31);
+   declare w bit(32);
+
+   hits = 0;
+   do i = 1 to 300000000;
+      w = fixed(mod(i, 700) * 3000001);
+      if ((w & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
+         ((w & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b)
+      then hits = hits + 1;
+   end;
+
+   put skip list(hits);
+ end bit_merge;

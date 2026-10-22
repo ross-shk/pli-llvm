@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-241: VERIFY and SEARCH with a constant alphabet lower to a 256-entry
+    membership table, not a byte-at-a-time scan of the alphabet. The .check
+    asserts the table global and that no pli_verify/pli_search call is left. */
+ search_table: procedure options(main);
+    declare r fixed bin(31);
+    declare s char(20) init('hello world');
+    r = verify(s, '0123456789');
+    r = search(s, '0123456789', 1);
+ end search_table;

@@ -113,8 +113,20 @@ static void usage() {
          "  -c               compile each input to a relocatable object (no linking)\n"
          "  -emit-llvm       write LLVM IR per input and stop\n"
          "  --print-hir      lower to HIR and print it per input, then stop\n"
+         "  --print-facts    print the compiler's PL/I-specific decisions\n"
+         "                   (lowering policy, check state, built-in paths)\n"
+         "                   and stop (ADR-260)\n"
          "  -fsyntax-only    parse and analyse each input only\n"
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
+         "  --no-memory-effects  do not infer procedure memory effects (ADR-264);\n"
+         "                   every call keeps LLVM's default effects\n"
+         "  --warn-unset     warn when an AUTOMATIC variable may be used before\n"
+         "                   it is set (ADR-266; off by default)\n"
+         "  --remark-library-calls  remark when a built-in hands a conversion to\n"
+         "                   the library routine (ADR-254; off by default)\n"
+         "  --emit-effects=FILE  publish the effects this module's external\n"
+         "                   procedures promise, for another module to use\n"
+         "  --effects=FILE  use the effects another module published (ADR-267)\n"
          "  --no-size-checks elide FIXED overflow traps (default at -O2/-O3;\n"
          "                   cf. (NOSIZE), ADR-111)\n"
          "  --size-checks    force FIXED overflow traps (overrides -O2/-O3 default)\n"
@@ -246,6 +258,82 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
   return results;
 }
 
+// --- WS-A2 (ADR-267): the published-effects file ---------------------------
+//
+// A module publishes what its external procedures promise, so a module that
+// calls them can attach that promise to its declarations: the caller's
+// optimizer cannot see the callee's body, so this description is all it has.
+
+// Read the effects another module published. A malformed line is an error, not
+// a silent skip: a promise that is dropped must not look like one that was
+// never made. The header names the format version; a reader that does not
+// know it refuses the file rather than guess at it.
+static bool readPublishedEffects(const std::string& path,
+                                  std::map<std::string, pli::PublishedEffect>& out) {
+  std::ifstream in(path);
+  if (!in) {
+    std::cerr << "pli: cannot read " << path << "\n";
+    return false;
+  }
+  std::string line;
+  int lineno = 0;
+  bool sawHeader = false;
+  while (std::getline(in, line)) {
+    ++lineno;
+    size_t start = line.find_first_not_of(" \t\r");
+    if (start == std::string::npos)
+      continue; // blank
+    if (!sawHeader) {
+      sawHeader = true;
+      if (line.compare(0, std::string(pli::kPublishedEffectsHeader).size(),
+                       pli::kPublishedEffectsHeader) != 0) {
+        std::cerr << "pli: " << path << ": not a published-effects file (expected the header \""
+                  << pli::kPublishedEffectsHeader << "\")\n";
+        return false;
+      }
+      continue;
+    }
+    if (line[start] == '#')
+      continue; // comment
+    std::string name, digest;
+    pli::ProcEffects e;
+    if (!pli::parseEffectLine(line, name, e, digest)) {
+      std::cerr << "pli: " << path << ":" << lineno << ": malformed effect line\n";
+      return false;
+    }
+    pli::PublishedEffect pub;
+    pub.effects = e;
+    pub.digest = digest;
+    out[name] = pub;
+  }
+  if (!sawHeader) {
+    std::cerr << "pli: " << path << ": empty published-effects file\n";
+    return false;
+  }
+  return true;
+}
+
+// Write what this module's external procedures promise.
+static bool writePublishedEffects(const std::string& path, const HProgram& hir,
+                                  const std::map<const HProc*, pli::ProcEffects>& effects,
+                                  const IRGen& irgen) {
+  std::ofstream os(path);
+  if (!os) {
+    std::cerr << "pli: cannot write " << path << "\n";
+    return false;
+  }
+  os << pli::kPublishedEffectsHeader << "\n";
+  for (const auto& p : hir.procs) {
+    if (!p || !p->isExternal)
+      continue; // only what another module can call
+    auto it = effects.find(p.get());
+    if (it == effects.end())
+      continue;
+    os << pli::formatEffectLine(p->name, it->second, irgen.definitionDigest(p.get())) << "\n";
+  }
+  return true;
+}
+
 // Compile one translation unit through the full pipeline (preprocessor ->
 // lexer -> parser -> sema -> HIR -> IRGen) and assemble it to a relocatable
 // object with the backend clang. Multi-input drivers call this once per file.
@@ -255,14 +343,18 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
 static bool compileOne(Preprocessor& preprocessor, const std::string& input, std::string& output,
                        std::string& triple, const std::string& sysparm, bool sysparmExplicit,
                        bool compileOnly, bool semaCompileOnly, bool emitLLVM, bool emitMlir,
-                       bool syntaxOnly, bool print_hir, bool keepLL, bool verbose,
+                       bool syntaxOnly, bool print_hir, bool print_facts, bool keepLL, bool verbose,
                        bool noSizeChecks, bool noZdivChecks, bool noConvChecks, bool noSubChecks,
                        const std::string& optLevel, const fs::path& keepLLDir, int fileIndex,
                        std::string* outObj, bool linkBitcode, LowerMode lowerMode = LowerMode::Auto,
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
                        bool linkRuntimeIn = false, const std::string& ltoKind = "",
                        pli::PgoMode pgoMode = pli::PgoMode::None, const std::string& pgoUse = "",
-                       bool marchNative = false, const std::string& platformBc = "") {
+                       bool marchNative = false, const std::string& platformBc = "",
+                       bool noMemoryEffects = false, bool warnUnset = false,
+                       const std::string& effectsFile = "",
+                       const std::string& emitEffectsFile = "",
+                       bool remarkLibraryCalls = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -298,6 +390,12 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     if (const char* env = std::getenv("PLI_SYSPARM"))
       effSysparm = env;
   sema.setSysparm(effSysparm);
+  sema.setWarnUnset(warnUnset);
+  // WS-A2 (ADR-267): the effects another module published for the external
+  // procedures this unit calls.
+  std::map<std::string, pli::PublishedEffect> published;
+  if (!effectsFile.empty() && !readPublishedEffects(effectsFile, published))
+    return false;
   // In multi-input link mode every unit is a relocatable object like `-c`:
   // no MAIN fallback promotion, so a library module with no OPTIONS(MAIN)
   // compiles cleanly and only its external procedures are emitted.
@@ -315,6 +413,20 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     return true;
   }
 
+  // `--print-facts` lowers once and reports the decisions the compiler made
+  // (ADR-260), then stops — no object, no link.
+  if (print_facts) {
+    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
+                false, lowerMode, perOpOverrides, "", noMemoryEffects);
+    irgen.setPublishedEffects(published);
+    irgen.setRemarkLibraryCalls(remarkLibraryCalls);
+    irgen.run(hir);
+    if (!diags.ok())
+      return false;
+    std::cout << irgen.facts().report();
+    return true;
+  }
+
   // --- code generation ---------------------------------------------------
   // (triple defaulted above: LLVM itself, in-process.)
 
@@ -323,7 +435,9 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   if (emitLLVM || emitMlir) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides);
+                false, lowerMode, perOpOverrides, "", noMemoryEffects);
+    irgen.setPublishedEffects(published);
+    irgen.setRemarkLibraryCalls(remarkLibraryCalls);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -388,13 +502,20 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-              linkBitcode, lowerMode, perOpOverrides, platformBc);
+              linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects);
+    ipg.setPublishedEffects(published);
+    ipg.setRemarkLibraryCalls(remarkLibraryCalls);
     auto om = ipg.takeModule(hir);
     if (!om) {
       if (diags.ok())
         std::cerr << "pli: codegen failed for " << input << "\n";
       return false;
     }
+    // WS-A2 (ADR-267): publish what this module's external procedures promise,
+    // so a module that calls them can attach the promise to its declarations.
+    if (!emitEffectsFile.empty() &&
+        !writePublishedEffects(emitEffectsFile, hir, ipg.procEffects(), ipg))
+      return false;
     // Single-module fast path: runtime linked at BC level (never `-c`).
     // Bitcode (linkBitcode) already merged the runtime via IRGen, so the
     // embedded blob is only linked when it did not.
@@ -480,10 +601,16 @@ int main(int argc, char** argv) {
   std::vector<std::string> linkArgs;    // extra args appended to the link step
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
-  bool runtimeExplicit = false, print_hir = false, release = false, debug = false;
+  bool runtimeExplicit = false, print_hir = false, print_facts = false, release = false, debug = false;
   bool marchNative = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
+  bool noMemoryEffects = false;
+  bool warnUnset = false; // --warn-unset: WS-A5 "used before set" (ADR-266)
+  // --remark-library-calls: WS-K4, the library-call conversion remark (ADR-254).
+  bool remarkLibraryCalls = false;
+  // WS-A2 (ADR-267): the published-effects file, in both directions.
+  std::string effectsFile, emitEffectsFile;
   bool useBitcode = true, pgoGenerate = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
@@ -512,6 +639,10 @@ int main(int argc, char** argv) {
       emitLLVM = true;
     else if (a == "--print-hir")
       print_hir = true;
+    else if (a == "--print-facts")
+      print_facts = true;
+    else if (a == "--remark-library-calls")
+      remarkLibraryCalls = true;
     else if (a == "-fsyntax-only")
       syntaxOnly = true;
     else if (a == "--keep-ll")
@@ -634,6 +765,14 @@ int main(int argc, char** argv) {
       // tests that use --size-checks get the checks they expect.
       noSubChecks = false;
       noSubChecksExplicit = true;
+    } else if (a == "--no-memory-effects") {
+      noMemoryEffects = true;
+    } else if (a.rfind("--emit-effects=", 0) == 0) {
+      emitEffectsFile = a.substr(15);
+    } else if (a.rfind("--effects=", 0) == 0) {
+      effectsFile = a.substr(10);
+    } else if (a == "--warn-unset") {
+      warnUnset = true;
     } else if (a == "--no-zero-divide")
       noZdivChecks = true;
     else if (a == "--no-conversion")
@@ -684,9 +823,10 @@ int main(int argc, char** argv) {
   std::vector<std::string> pliInputs, foreignObjs;
   for (const std::string& in : inputs)
     (isPLISource(in) ? pliInputs : foreignObjs).push_back(in);
-  if (!foreignObjs.empty() && (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir)) {
-    std::cerr
-        << "pli: object inputs cannot be used with -c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir\n";
+  if (!foreignObjs.empty() &&
+      (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts)) {
+    std::cerr << "pli: object inputs cannot be used with "
+                 "-c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir/--print-facts\n";
     return 2;
   }
   const bool linkOnly = pliInputs.empty();
@@ -802,7 +942,7 @@ int main(int argc, char** argv) {
     std::cerr << "pli: cannot specify -o when generating multiple output files\n";
     return 2;
   }
-  if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir)) {
+  if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts)) {
     std::cerr << "pli: -o is ambiguous with a per-file mode and multiple inputs\n";
     return 2;
   }
@@ -840,7 +980,7 @@ int main(int argc, char** argv) {
 
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
-  const bool terminalMode = compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir;
+  const bool terminalMode = compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts;
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
@@ -876,11 +1016,13 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < pliInputs.size(); ++i) {
     std::string outObj;
     if (!compileOne(preprocessor, pliInputs[i], output, triple, sysparm, sysparmExplicit,
-                    compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, keepLL,
-                    verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
+                    compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, print_facts,
+                    keepLL, verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
-                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc))
+                    false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
+                    noMemoryEffects, warnUnset, effectsFile, emitEffectsFile,
+                    remarkLibraryCalls))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);

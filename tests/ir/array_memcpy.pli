@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-G2: a whole-array assignment between two identically laid-out
+    arrays is a copy, not a loop (IBM's four conditions, ADR-250): the same
+    element type, the same extent, neither a DEFINED overlay nor BASED
+    storage, and no adjustable bound. */
+ array_memcpy: procedure options(main);
+   declare a(10) fixed bin(31);
+   declare b(10) fixed bin(31);
+   declare i fixed bin(31);
+   do i = 1 to 10;
+      b(i) = i;
+   end;
+   a = b;
+   put skip list(a(1), a(10));
+ end array_memcpy;

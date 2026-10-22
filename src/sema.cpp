@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 #include "sema.h"
+#include "constfold.h"
 #include <algorithm>
 #include <climits>
 #include <functional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -396,7 +398,389 @@ bool Sema::run(Program& prog, bool compileOnly) {
                "(1)");
     }
   }
+  // WS-K8 (ADR-257): the CONTROLLED qualification runs after every procedure
+  // is checked, because it needs to see every ALLOCATE and FREE of a
+  // variable — including the ones in a nested procedure.
+  markDirectCtl();
+  // WS-A5 (ADR-266): the opt-in "used before set" walk. It runs last because
+  // it needs every reference resolved to its Symbol.
+  if (warnUnset_)
+    checkUnset(prog);
   return d_.ok();
+}
+
+// --- WS-A5 (ADR-266): "used before set", flow-sensitive --------------------
+//
+// MULTICS reported a variable that no assignment anywhere in the program stores
+// to (error 307, `assign_storage.pl1:277`). That check is flow-insensitive, so
+// it misses the common mistake: a store on one branch and a read after the
+// merge. This walk is a definite-assignment analysis over the AST: a read is
+// reported when a path can reach it with no store. It is opt-in because the
+// corpus is not warning-clean, and it is conservative: a procedure with a GO TO,
+// a label or an alternate ENTRY is skipped, since the walk has no CFG to join on
+// and a warning is better withheld than wrong.
+
+// The expressions one statement names directly. Nested bodies are walked by the
+// caller so that a block's locals stay scoped to the block.
+template <class Fn>
+static void eachStmtExpr(const Stmt* s, Fn&& f) {
+  auto e = [&](const ExprP& p) {
+    if (p)
+      f(p.get());
+  };
+  e(s->target);
+  e(s->value);
+  e(s->cond);
+  e(s->from);
+  e(s->to);
+  e(s->by);
+  for (const auto& p : s->extraTargets)
+    e(p);
+  for (const auto& p : s->items)
+    e(p);
+  e(s->stringTarget);
+  for (const auto& p : s->args)
+    e(p);
+  e(s->gotoTarget);
+  for (const auto& p : s->waitEvents)
+    e(p);
+  e(s->waitCount);
+  e(s->taskRef);
+  e(s->eventRef);
+  e(s->priorityExpr);
+  e(s->oncodeExpr);
+  e(s->skipCount);
+  for (const auto& p : s->allocBase)
+    e(p);
+  for (const auto& p : s->allocSet)
+    e(p);
+  for (const auto& p : s->allocArea)
+    e(p);
+  for (const auto& v : s->allocBounds)
+    for (const auto& b : v) {
+      e(b.lb);
+      e(b.ub);
+    }
+  for (const auto& p : s->allocCharLen)
+    e(p);
+  for (const auto& p : s->freeBase)
+    e(p);
+  for (const auto& p : s->freeArea)
+    e(p);
+}
+
+// A GO TO, a label or an alternate ENTRY breaks the linear walk: such a
+// procedure is skipped rather than guessed at.
+static bool hasJump(const Stmt* s) {
+  if (!s)
+    return false;
+  if (!s->labels.empty() || s->kind == Stmt::Goto || s->kind == Stmt::Entry)
+    return true;
+  for (const auto& b : s->body)
+    if (hasJump(b.get()))
+      return true;
+  return hasJump(s->thenS.get()) || hasJump(s->elseS.get()) || hasJump(s->unit.get());
+}
+
+static bool hasJump(const std::vector<StmtP>& body) {
+  for (const auto& s : body)
+    if (hasJump(s.get()))
+      return true;
+  return false;
+}
+
+// ADDR(x) hands x's address to code the walk cannot see — a callee may store
+// through it — so x is never reported.
+static void collectAddrTaken(const Expr* e, std::set<const Symbol*>& out) {
+  if (!e)
+    return;
+  if (e->kind == Expr::Call && e->name == "ADDR")
+    for (const auto& a : e->args)
+      if (a->kind == Expr::VarRef && a->sym)
+        out.insert(a->sym);
+  for (const auto& a : e->args)
+    collectAddrTaken(a.get(), out);
+  collectAddrTaken(e->a.get(), out);
+  collectAddrTaken(e->b.get(), out);
+}
+
+static void collectAddrTaken(const Stmt* s, std::set<const Symbol*>& out) {
+  if (!s)
+    return;
+  eachStmtExpr(s, [&](const Expr* e) { collectAddrTaken(e, out); });
+  for (const auto& b : s->body)
+    collectAddrTaken(b.get(), out);
+  collectAddrTaken(s->thenS.get(), out);
+  collectAddrTaken(s->elseS.get(), out);
+}
+
+static void collectAddrTaken(const std::vector<StmtP>& body, std::set<const Symbol*>& out) {
+  for (const auto& s : body)
+    collectAddrTaken(s.get(), out);
+}
+
+// One procedure's definite-assignment walk.
+class UnsetWalk {
+public:
+  UnsetWalk(Diags& d, std::set<const Symbol*> cand) : d_(d), cand_(std::move(cand)) {}
+
+  void run(const std::vector<StmtP>& body) { list(body); }
+
+private:
+  // A reference the walk can track: a whole variable, not a member of one and
+  // not a based access through a locator.
+  bool tracked(const Expr* e) const {
+    return e && (e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->path.empty() &&
+           !e->locPtr && e->sym && cand_.count(e->sym) != 0;
+  }
+
+  // A read: report it when this path has not stored the variable yet, then
+  // count it as set so one mistake gives one diagnostic.
+  void use(const Symbol* s, SourceLoc loc) {
+    if (set_.count(s))
+      return;
+    if (warned_.insert(s).second)
+      d_.warn(loc, "variable '" + s->name + "' may be used before it is set");
+    set_.insert(s);
+  }
+
+  void store(const Expr* e) {
+    if (tracked(e))
+      set_.insert(e->sym);
+  }
+
+  void read(const Expr* e) {
+    if (!e)
+      return;
+    if (tracked(e))
+      use(e->sym, e->loc);
+    if (e->kind == Expr::Call) {
+      // A by-reference argument may be written by the callee, so a bare
+      // variable argument is a store, not a read (MULTICS `passed_as_arg`).
+      for (const auto& a : e->args)
+        argument(a.get());
+      return;
+    }
+    for (const auto& a : e->args)
+      read(a.get());
+    read(e->a.get());
+    read(e->b.get());
+  }
+
+  // One call argument: a variable may be an output parameter, so passing it
+  // counts as initializing it; anything else is read normally.
+  void argument(const Expr* e) {
+    if (!e)
+      return;
+    if (tracked(e)) {
+      for (const auto& a : e->args)
+        read(a.get());
+      set_.insert(e->sym);
+      return;
+    }
+    read(e);
+  }
+
+  // The subscripts of an assignment target are read, the target is stored.
+  void assign(const Expr* e) {
+    if (!e)
+      return;
+    for (const auto& a : e->args)
+      read(a.get());
+    store(e);
+  }
+
+  bool list(const std::vector<StmtP>& b) {
+    for (const auto& st : b)
+      if (st && !stmt(st.get()))
+        return false;
+    return true;
+  }
+
+  // Returns false when the path ends here (RETURN, STOP, GO TO).
+  bool stmt(const Stmt* s) {
+    switch (s->kind) {
+    case Stmt::Null:
+    case Stmt::Declare:
+    case Stmt::Format:
+    case Stmt::DefineAlias:
+    case Stmt::DefineConstant:
+    case Stmt::Revert:
+    case Stmt::Leave:
+    case Stmt::Iterate:
+    case Stmt::Entry:
+    case Stmt::Open:
+    case Stmt::Close:
+    case Stmt::On: // the unit runs later; it cannot reach an AUTOMATIC (rule 91)
+      return true;
+    case Stmt::Assign:
+      read(s->value.get());
+      assign(s->target.get());
+      for (const auto& t : s->extraTargets)
+        assign(t.get());
+      return true;
+    case Stmt::If: {
+      read(s->cond.get());
+      const std::set<const Symbol*> entry = set_;
+      const bool thenFalls = s->thenS ? stmt(s->thenS.get()) : true;
+      const std::set<const Symbol*> thenSet = set_;
+      set_ = entry;
+      const bool elseFalls = s->elseS ? stmt(s->elseS.get()) : true;
+      const std::set<const Symbol*> elseSet = set_;
+      // A branch that does not fall through contributes no facts to the join.
+      if (!elseFalls)
+        set_ = thenSet;
+      else if (!thenFalls)
+        set_ = elseSet;
+      else {
+        // Only what both paths set is definitely set after the merge.
+        set_ = thenSet;
+        for (auto it = set_.begin(); it != set_.end();)
+          it = elseSet.count(*it) ? std::next(it) : set_.erase(it);
+      }
+      return thenFalls || elseFalls;
+    }
+    case Stmt::Group:
+      return list(s->body);
+    case Stmt::Begin: {
+      // A block's AUTOMATIC is created on entry and dies at END: its facts must
+      // not leak into the enclosing path, and a re-entry starts unset again.
+      const bool falls = list(s->body);
+      for (const auto& d : s->decls)
+        if (d.sym)
+          set_.erase(d.sym);
+      return falls;
+    }
+    case Stmt::DoWhile:
+    case Stmt::DoIter: {
+      // The head reads the test and a DO's bounds; the control variable is
+      // assigned before the first test. The body is walked once: a read it
+      // reports is reachable on a first iteration, which is the point.
+      read(s->cond.get());
+      read(s->from.get());
+      read(s->to.get());
+      read(s->by.get());
+      const std::set<const Symbol*> entry = set_;
+      if (s->sym)
+        set_.insert(s->sym);
+      list(s->body);
+      // A zero-trip loop stores nothing; DO UNTIL runs its body at least once.
+      if (!s->until) {
+        set_ = entry;
+        if (s->sym)
+          set_.insert(s->sym);
+      }
+      return true;
+    }
+    case Stmt::Put:
+      read(s->skipCount.get());
+      for (const auto& it : s->items)
+        read(it.get());
+      if (s->stringTarget)
+        store(s->stringTarget.get());
+      return true;
+    case Stmt::Get:
+      if (s->stringTarget)
+        read(s->stringTarget.get());
+      for (const auto& it : s->items)
+        assign(it.get());
+      return true;
+    case Stmt::CallS:
+      for (const auto& a : s->args)
+        argument(a.get());
+      return true;
+    case Stmt::Return:
+      read(s->value.get());
+      return false;
+    case Stmt::Stop:
+      read(s->value.get());
+      return false;
+    case Stmt::Goto:
+      return false;
+    case Stmt::Read:
+      assign(s->target.get());
+      return true;
+    case Stmt::Write:
+    case Stmt::Display:
+    case Stmt::Delay:
+      read(s->value.get());
+      return true;
+    case Stmt::Signal:
+      read(s->oncodeExpr.get());
+      return true;
+    case Stmt::Wait:
+      for (const auto& e : s->waitEvents)
+        read(e.get());
+      read(s->waitCount.get());
+      return true;
+    case Stmt::Allocate:
+      for (const auto& b : s->allocBase) {
+        read(b.get());
+        store(b.get());
+      }
+      for (const auto& p : s->allocSet)
+        store(p.get());
+      for (const auto& p : s->allocArea)
+        read(p.get());
+      for (const auto& v : s->allocBounds)
+        for (const auto& b : v) {
+          read(b.lb.get());
+          read(b.ub.get());
+        }
+      for (const auto& p : s->allocCharLen)
+        read(p.get());
+      return true;
+    case Stmt::Free:
+      for (const auto& p : s->freeBase)
+        read(p.get());
+      for (const auto& p : s->freeArea)
+        read(p.get());
+      return true;
+    }
+    // An unmodelled statement: assume everything it names is stored, so the
+    // check never warns on a construct it does not understand.
+    eachStmtExpr(s, [&](const Expr* e) {
+      if (e->sym && (e->kind == Expr::VarRef || e->kind == Expr::Subscript))
+        set_.insert(e->sym);
+    });
+    return true;
+  }
+
+  Diags& d_;
+  std::set<const Symbol*> cand_;   // the variables worth tracking
+  std::set<const Symbol*> set_;    // definitely assigned on this path
+  std::set<const Symbol*> warned_; // one diagnostic per variable
+};
+
+void Sema::checkUnset(Program& prog) {
+  for (const auto& p : prog.procs) {
+    if (!p || p->isPackage || hasJump(p->body))
+      continue;
+    std::set<const Symbol*> escaped;
+    collectAddrTaken(p->body, escaped);
+    std::set<const Symbol*> cand;
+    for (const Symbol* s : p->localSyms) {
+      if (!s || s->kind != Symbol::Var)
+        continue;
+      // Storage that is not an uninitialized AUTOMATIC of this procedure, or
+      // that the language initializes, is not a candidate.
+      if (s->isStatic || s->external || s->controlled || s->isBased() || s->definedBase)
+        continue;
+      if (s->initExpr || s->initCall || !s->initElems.empty())
+        continue;
+      if (s->isValue || s->fileAttr || s->isEntryVar || s->isCond || s->implicit)
+        continue;
+      // A structure is diagnosed member by member by no one (MULTICS skips
+      // them too), and an escaped address defeats the walk.
+      if (s->ty.isStruct() || escaped.count(s))
+        continue;
+      cand.insert(s);
+    }
+    if (cand.empty())
+      continue;
+    UnsetWalk walk(d_, std::move(cand));
+    walk.run(p->body);
+  }
 }
 
 // True when a declaration subtree carries a per-member INITIAL (rule (26)):
@@ -2030,17 +2414,28 @@ void Sema::checkByNameMatch(const Type& dst, const Type& src, SourceLoc loc) {
 
 Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
   Expr* lit = e;
-  if (lit->kind == Expr::Unary && lit->op == Tok::Minus)
-    lit = lit->a.get();
-  if (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
+  if (lit && lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
       lit->kind != Expr::CharLit && lit->kind != Expr::BitLit) {
-    d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
-    return nullptr;
+    // Not a bare literal: a constant *expression* folds to one (ADR-240). The
+    // value keeps the scale its operands imply; codegen rescales it to the
+    // declared type's scale, which is the type-directed step. A leading
+    // unary sign folds with the expression, so it needs no separate case.
+    ConstNum num;
+    if (!constNumOf(lit, num) ||
+        !foldConstExpr(lit, Type::fixedDec(num.prec, num.scale), num.scale)) {
+      d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
+      return nullptr;
+    }
   }
-  if (lit != e) { // apply the leading unary minus once
-    lit->ival = -lit->ival;
-    lit->wideIval = -lit->wideIval;
-    lit->fval = -lit->fval;
+  // A FIXED DECIMAL target carries a scale, so an integer literal must be
+  // rescaled to it: the constant is expressed as a DECIMAL literal and
+  // codegen applies the declared scale (ADR-240).
+  if (lit->kind == Expr::IntLit && ty.k == TK::FixedDec && ty.scale > 0) {
+    lit->kind = Expr::DecLit;
+    lit->decScale = 0;
+    lit->decPrec = constDigits(lit->wideIval);
+    lit->ty = Type::fixedDec(lit->decPrec, 0);
+    lit->folded = true;
   }
   bool strInit = lit->kind == Expr::CharLit;
   if (ty.isChar() != strInit) {
@@ -3571,6 +3966,32 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                   "SET on CONTROLLED ALLOCATE is ignored; generations are stack-managed", "(88)");
         Expr* clE = (i < s->allocCharLen.size()) ? s->allocCharLen[i].get() : nullptr;
         const auto& bounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
+        // WS-K8 (ADR-257): this allocation changes the variable's generation,
+        // so note it — the qualification needs to see every one of them, and
+        // to know whether the allocation used the declared extent.
+        {
+          bool extentDiffers = false, starReuse = false;
+          if (bounds.empty()) {
+            // A bare ALLOCATE pushes a generation of the declared extent.
+          } else if (bsym->ty.dims.size() == 1 && bounds.size() == 1) {
+            const Dim& d = bsym->ty.dims[0];
+            if (bounds[0].star)
+              starReuse = true;
+            else if (bounds[0].lb || !bounds[0].ub) {
+              // an lb:ub pair or a missing bound: the extent is not the
+              // declared one, whatever it evaluates to
+              extentDiffers = true;
+            } else {
+              Expr* ub = bounds[0].ub.get();
+              long long declared = (long long)d.ub - (long long)d.lb + 1;
+              if (ub->kind != Expr::IntLit || ub->ival != declared)
+                extentDiffers = true;
+            }
+          } else {
+            extentDiffers = true; // multi-axis or a bound list: not the declared extent
+          }
+          noteCtlTouch(bsym, p, extentDiffers, starReuse);
+        }
         for (const auto& b : bounds) {
           if (b.lb) {
             typeExpr(b.lb.get(), sc, p);
@@ -3735,6 +4156,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     break;
   case Stmt::Free:
+    // WS-K8 (ADR-257): a FREE pops the generation, so it is a touch too.
+    for (const auto& fb : s->freeBase)
+      if (fb && fb->sym && fb->sym->controlled)
+        noteCtlTouch(fb->sym, p, false, false);
     // FREE (rule 90): free the storage of each based variable, addressed either
     // by an explicit locator pointer or by the variable's own BASED pointer,
     // optionally returning the block to an AREA ( IN ( area ) ).
@@ -4038,8 +4463,104 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
 // (126)); a runtime index is left to the generated bounds check in IRGen.
 // Each constant subscript is checked against its own axis (rules (12),(13)).
+
+// WS-K8 (ADR-257): note that this procedure changes the variable's
+// generation, and whether the allocation used the declared extent.
+void Sema::noteCtlTouch(Symbol* sym, Proc* p, bool extentDiffers, bool starReuse) {
+  if (!sym || !sym->controlled)
+    return;
+  CtlTouch& t = ctlTouches_[sym];
+  if (p)
+    t.procs.insert(p);
+  if (extentDiffers)
+    t.extentDiffers = true;
+  if (starReuse)
+    t.starReuse = true;
+}
+
+// WS-K8 (ADR-257): decide which CONTROLLED variables the compiler can
+// address directly. A direct address is a slot holding the current
+// generation's pointer, refreshed at every allocation and free; the length
+// is then the declared extent, a compile-time constant.
+//
+// The conditions, all of which must hold:
+//  - the element type is numeric and the extent is static — the character
+//    and VARYING paths need the live length for other reasons;
+//  - the variable is not a package variable (ADR-109) and nothing is BASED
+//    on it, so its address is only ever the generation's own;
+//  - every ALLOCATE and FREE of it is in the procedure that declares it — a
+//    nested procedure may ALLOCATE an enclosing procedure's CONTROLLED
+//    variable, and then the compiler would not see the generation change;
+//  - every ALLOCATE of it uses the declared extent (no '*' reuse, no other
+//    bound), so the live length is the declared one.
+void Sema::markDirectCtl() {
+  for (auto& kv : ctlTouches_) {
+    Symbol* sym = kv.first;
+    const CtlTouch& t = kv.second;
+    if (!sym->controlled || sym->ctlDirect)
+      continue;
+    if (t.extentDiffers || t.starReuse)
+      continue;
+    // Every touch must be in the declaring procedure.
+    if (!sym->owner)
+      continue;
+    bool sameProc = true;
+    for (Proc* p : t.procs)
+      if (p != sym->owner)
+        sameProc = false;
+    if (!sameProc)
+      continue;
+    // The type conditions: a numeric, statically bounded, rank-1 variable.
+    const Type& ty = sym->ty;
+    if (ty.isChar() || ty.isBit() || ty.isStruct() || ty.isPointer())
+      continue;
+    if (ty.isDynamic() || ty.dims.size() > 1)
+      continue;
+    if (!ty.isFixed())
+      continue;
+    if (ty.dims.size() == 1 && (ty.dims[0].dyn || ty.dims[0].lbDyn))
+      continue;
+    // A package variable's generation is program-lifetime (ADR-109).
+    if (sym->owner->isPackage)
+      continue;
+    // Nothing BASED on it: such a base has its own allocation path.
+    bool based = false;
+    for (Symbol* other : storage()) {
+      if (other && other->basedBase == sym) {
+        based = true;
+        break;
+      }
+    }
+    if (based)
+      continue;
+    sym->ctlDirect = true;
+  }
+}
+
 void Sema::checkSubscriptBounds(Expr* e, Symbol* arr) {
   checkSubscriptBoundsDims(e, arr->ty.dims, arr->name);
+}
+
+// A subscript must be of an integer type (rule 126, ADR-277): the value
+// addresses an element, so it needs an integer to address with. FIXED BINARY
+// is an integer type, and so is a FIXED DECIMAL with scale 0 — its stored
+// value *is* the integer (an integer literal has that type here), so it is
+// accepted. Anything else — a scaled decimal, a FLOAT, a CHARACTER — has no
+// integer value: the compiler used to take the stored bits as the index, so
+// a decimal subscript of 2.00 addressed element 200 of a three-element array.
+void Sema::checkSubscriptTypes(Expr* e) {
+  for (auto& a : e->args) {
+    if (a->kind == Expr::Star)
+      continue; // a cross-section axis marker (rule 126), not a value
+    const Type& t = a->ty;
+    if (t.isVoid())
+      continue; // already diagnosed elsewhere
+    if (t.k == TK::FixedBin)
+      continue;
+    if (t.k == TK::FixedDec && t.scale == 0)
+      continue;
+    d_.error(a->loc, "a subscript must be of an integer type, not " + t.desc(), "(126)");
+  }
 }
 
 void Sema::checkSubscriptBoundsDims(Expr* e, const std::vector<Dim>& dims,
@@ -4112,7 +4633,10 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     break;
   }
   case Expr::DecLit:
-    e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
+    // A folded constant (ADR-240) carries the result type it was folded to;
+    // a literal from the source keeps the type its digits describe.
+    if (!e->folded)
+      e->ty = Type::fixedDec(e->decPrec > 0 ? e->decPrec : 1, e->decScale);
     break;
   case Expr::FltLit:
     e->ty = Type::flt(6);
@@ -4251,6 +4775,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         }
         e->kind = Expr::Subscript;
         e->sym = bs;
+        checkSubscriptTypes(e);
         const Type* leaf = resolveMemberPath(e, bs->ty.elementType());
         if (!leaf) {
           e->ty = Type::voidTy();
@@ -4277,6 +4802,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // to resolve is still recognised as a (void) subscript, not a call.
       e->kind = Expr::Subscript;
       e->sym = bs;
+      checkSubscriptTypes(e);
       const Type* leaf = resolveMemberPath(e, bs->ty);
       if (!leaf || !leaf->isArray()) {
         if (leaf)
@@ -4344,6 +4870,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         }
         e->kind = Expr::Subscript;
         e->sym = arr;
+        checkSubscriptTypes(e);
         int nStar = 0;
         Type reduced;
         if (crossSectionType(e, arr->ty, reduced, nStar)) {
@@ -4375,6 +4902,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       e->kind = Expr::Subscript;
       e->sym = arr;
+      checkSubscriptTypes(e);
       int nStar = 0;
       Type reduced;
       if (crossSectionType(e, arr->ty, reduced, nStar)) {
@@ -4403,6 +4931,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         e->path.empty()) {
       e->kind = Expr::Subscript;
       e->sym = ctl;
+      checkSubscriptTypes(e);
       e->ty = ctl->ty;
       noteStaticUse(p, ctl);
       break;
@@ -4633,6 +5162,13 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       e->ty = Type::fixedBin(31, 0);
       break;
     }
+    // A constant `+`, `-` or `*` folds to its value at compile time (ADR-240).
+    // The fold is type-directed: the value is computed at the scale of the
+    // result type, so it is exactly the value the runtime path produces. A
+    // division is never folded — ZERODIVIDE must still fire.
+    if ((e->op == Tok::Plus || e->op == Tok::Minus || e->op == Tok::Star) &&
+        e->ty.k == TK::FixedDec)
+      foldConstExpr(e, e->ty, e->ty.scale);
     break;
   }
   }
@@ -5386,7 +5922,11 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
     return true;
   }
-  // ROUND built-in (M2): round(x, n) — the result is a FLOAT value.
+  // ROUND built-in (M2): round(x, n). A FIXED DECIMAL argument rounded to a
+  // constant digit count keeps its exactness: the result is a FIXED DECIMAL
+  // with that scale, and the conversion does the rounding (ADR-006, ADR-276).
+  // Every other shape — a FLOAT or FIXED BINARY argument, a runtime digit
+  // count, a negative count — is a FLOAT, the library rounding.
   if (e->name == "ROUND") {
     if (e->args.size() != 2) {
       d_.error(e->loc, "ROUND expects 2 arguments", "(123)");
@@ -5399,6 +5939,21 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::flt(6);
+    const Expr* xa = e->args[0].get();
+    const Expr* na = e->args[1].get();
+    // The digit count must be a constant integer. The folder may have
+    // rewritten the literal as a decimal one (ADR-240), so both spellings
+    // count as long as it has no fraction digits.
+    const bool countIsInt =
+        na->kind == Expr::IntLit || (na->kind == Expr::DecLit && na->decScale == 0);
+    if (xa->ty.k == TK::FixedDec && countIsInt && na->ival >= 0) {
+      // The result keeps the source's precision, widened by the extra
+      // fraction digits when the count asks for more of them (the 31-digit
+      // maximum is the ceiling; beyond it the float path takes over).
+      long long prec = xa->ty.prec + std::max<long long>(0, na->ival - xa->ty.scale);
+      if (prec <= 31)
+        e->ty = Type::fixedDec((int)prec, (int)na->ival);
+    }
     return true;
   }
   // REPEAT built-in (M2): repeat(s, n) — s repeated n times; the length

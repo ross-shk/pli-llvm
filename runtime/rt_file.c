@@ -117,14 +117,14 @@ void pli_put_unselect(void) {
 /* FILE ( f ) input routing (rule 105): rt_next_char reads from the named file. */
 void pli_get_select(long long slot) {
   rt_in_lock();
-  rt_in_f = (slot >= 0 && slot < PLI_MAX_FILES) ? rt_pli_files[slot] : NULL;
+  rt_select_input((slot >= 0 && slot < PLI_MAX_FILES) ? rt_pli_files[slot] : NULL);
   rt_in_col = 0;
   rt_in_unlock();
 }
 
 void pli_get_unselect(void) {
   rt_in_lock();
-  rt_in_f = NULL;
+  rt_select_input(NULL);
   rt_in_col = 0;
   rt_in_unlock();
 }

@@ -1,0 +1,53 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-K5 (REDUCE): a BY NAME structure assignment. The members are copied
+    one by one, by name; the C twin copies the whole structure with one
+    aggregate move, so the ratio prices what the member-wise copy costs.
+    The structure has ten members, so the copy is wide enough to matter. */
+ by_name: procedure options(main);
+    declare 1 src,
+       2 a fixed bin(31),
+       2 b fixed bin(31),
+       2 c fixed bin(31),
+       2 d fixed bin(31),
+       2 e fixed bin(31),
+       2 f fixed bin(31),
+       2 g fixed bin(31),
+       2 h fixed bin(31),
+       2 m fixed bin(31),
+       2 n fixed bin(31);
+    declare 1 dst,
+       2 a fixed bin(31),
+       2 b fixed bin(31),
+       2 c fixed bin(31),
+       2 d fixed bin(31),
+       2 e fixed bin(31),
+       2 f fixed bin(31),
+       2 g fixed bin(31),
+       2 h fixed bin(31),
+       2 m fixed bin(31),
+       2 n fixed bin(31);
+    declare count fixed bin(31);
+    declare iter fixed bin(31);
+    declare hits fixed bin(31);
+    hits = 0;
+    count = 20000000;
+    iter = 1;
+    do while (iter <= count);
+       src.a = iter;
+       src.b = iter + 1;
+       src.c = iter + 2;
+       src.d = iter + 3;
+       src.e = iter + 4;
+       src.f = iter + 5;
+       src.g = iter + 6;
+       src.h = iter + 7;
+       src.m = iter + 8;
+       src.n = iter + 9;
+       /* the copy under test: ten members, matched by name */
+       dst = src, by name;
+       if dst.a + dst.n = 2 * iter + 9 then hits = hits + 1;
+       iter = iter + 1;
+    end;
+    put skip list(hits);
+ end by_name;

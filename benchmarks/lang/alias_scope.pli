@@ -1,0 +1,27 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Alias taxonomy (WS-A4). The store to a(i) reads b(i) and c(i), so the
+    loop vectorizes only when the compiler can prove the three arrays are
+    disjoint. The C twin says so with restrict. */
+ alias_scope: procedure options(main);
+   declare a(10000) fixed bin(31);
+   declare b(10000) fixed bin(31);
+   declare c(10000) fixed bin(31);
+   declare (i, k) fixed bin(31);
+   declare s fixed bin(63);
+
+   do i = 1 to 10000;
+      b(i) = i;
+      c(i) = i * 2;
+   end;
+
+   s = 0;
+   do k = 1 to 60000;
+      do i = 1 to 10000;
+         a(i) = b(i) + c(i) + k;
+      end;
+      s = s + a(mod(k, 10000) + 1);
+   end;
+
+   put skip list(s);
+ end alias_scope;

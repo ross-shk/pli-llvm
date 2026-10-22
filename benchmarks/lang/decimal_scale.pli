@@ -1,0 +1,25 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Decimal scale reconciliation and precision (WS-E1). The price is scaled
+    by 2, the rate by 4, so the product carries scale 6 and the assignment
+    back to scale 2 is a rescale with rounding. The C twin is exact fixed
+    point, so the two outputs must agree exactly. */
+ decimal_scale: procedure options(main);
+   declare (i, qty) fixed bin(31);
+   declare (price, total, tax) fixed decimal(18,2);
+   declare rate fixed decimal(5,4);
+   declare grand fixed decimal(18,2);
+
+   rate = 0.0875;
+   grand = 0;
+
+   do i = 1 to 60000000;
+      price = mod(i, 1000) * 1.99;
+      qty = mod(i, 100) / 10 + 1;
+      total = price * qty;
+      tax = total * rate;
+      grand = grand + total + tax;
+   end;
+
+   put skip list(grand);
+ end decimal_scale;

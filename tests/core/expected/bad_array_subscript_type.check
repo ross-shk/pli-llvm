@@ -1,0 +1,3 @@
+CHECK: a subscript must be of an integer type
+CHECK: a subscript must be of an integer type
+CHECK: a subscript must be of an integer type

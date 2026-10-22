@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-D1 (ADR-245): the declared extent is the whole value. A CHARACTER(3)
+    occupies three bytes, its store writes three bytes and no more, and
+    the fetch that hands it on carries the length three — so nothing can
+    read or write a byte outside the string. */
+ string_extent: procedure options(main);
+   declare s char(3);
+   declare t char(3);
+   s = 'abc';
+   t = 'xyz';
+   put skip list(s, t);
+ end string_extent;

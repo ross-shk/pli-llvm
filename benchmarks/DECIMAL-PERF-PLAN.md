@@ -19,7 +19,7 @@
             - PL / I `FIXED DECIMAL(p, q)` is an integer scaled by 10 ^
         q(ADR - 006).Arithmetic is exact in that scale; rescaling + round-half-away-from-zero happens on
   assignment (ADR-056). `decimal_ops.pli` relies on this: `price=9950.00`, `qty=1.10`.
-- The C baseline (`baseline/decimal_ops_c.c`) uses `double` for everything: no
+- The C baseline (`ir/baseline/decimal_ops_c.c`) uses `double` for everything: no
   rescale, no `fcvtzs`, no rounding to declared scale. It is *inexact* (0.10 not
   representable) and rounds only at `printf`. It is the wrong reference for
   decimal semantics but the right one for "raw FP throughput," so the PL/I/C
@@ -155,7 +155,7 @@ not the product prec, so the wide type is harmless at `-O3` (no check). But at
 dominate); revisit only if `-O0`/`-O1` profiling shows the zext as material.
 
 ### P5 — Benchmark harness: stop measuring noise (LOW)  ✅ DONE
-`benchmarks/decimal_ops.pli`: loop 5 000 → 200 000 (40x) and `grand` widened
+`benchmarks/ir/decimal_ops.pli`: loop 5 000 → 200 000 (40x) and `grand` widened
 `DECIMAL(12,2)` → `DECIMAL(18,2)` (i64-safe max ~10¹⁶; accumulated ∑ at 200 K ≈
 5.8×10¹⁴). `C` baseline loop matched. 5 000 000 was infeasible — PL/I exact decimal
 arithmetic overflows `i64` (`p>18` is the deferred BCD path, non-goal); the 40x bump
@@ -184,7 +184,7 @@ The harness already does 5-run median + stdev; no harness change needed.
 - `src/irgen.cpp:6024-6076` FIXED->FIXED rescale: unchanged (magic multiply).
 - `src/irgen.cpp:6159-6192` Convert fast-path: retained as a no-op optimization (same `sdiv`).
 - `baseline/math_functions_c.c:14` (R1b, ADOPTED): `x = i * 0.01;` -> `x = i / 100.0;`
-- `benchmarks/decimal_ops.pli` & `baseline/decimal_ops_c.c` (P5): loop 5 000 -> 200 000;
+- `benchmarks/ir/decimal_ops.pli` & `ir/baseline/decimal_ops_c.c` (P5): loop 5 000 -> 200 000;
   `grand` widened `DECIMAL(12,2)` -> `DECIMAL(18,2)` to avoid SIZE overflow at 200 K.
 - `tests/core/expected/arith.out` (P3): `7/2 into FLOAT = 3.5` → `3` (integer `/`
   truncates, SIToFP gives 3.0).

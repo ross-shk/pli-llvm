@@ -1,0 +1,4 @@
+CHECK: alloca \[3 x i8\]
+CHECK: @llvm\.memmove\.p0\.p0\.i64\(ptr %S\.addr, ptr @{{.*}}, i64 3, i1 false\)
+CHECK: @llvm\.memset\.p0\.i64\(ptr %{{.*}}, i8 32, i64 0, i1 false\)
+CHECK: @pli_put_list_char\(ptr %S\.addr, i64 3\)

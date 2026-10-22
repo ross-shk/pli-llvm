@@ -1,0 +1,17 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* WS-D2: blank padding on store versus fetch. A character assignment
+    blank-pads the target to its declared length and truncates a longer
+    value; the padding is part of the value, not an artefact of storage. */
+ char_pad: procedure options(main);
+   declare s char(5);
+   declare t char(5);
+   declare u char(5);
+
+   s = 'ab';       /* padded to five: two characters and three blanks */
+   t = 'abcdef';   /* truncated to five */
+   u = 'cd';
+   put skip list('s=[', s, ']');
+   put skip list('t=[', t, ']');
+   put skip list('u=[', u, ']');
+ end char_pad;

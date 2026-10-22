@@ -6,11 +6,10 @@
 # in-process lld optimizes at link. No clang anywhere: -v output must never
 # mention it.
 #
-# Environment note: in-process LTO executes LLVM passes inside lld, which
-# needs a single LLVM instance. Package-manager builds that mix static LLVM
-# archives with libLLVM/liblld shared libraries (brew) crash or mislink
-# there; the full link+run is gated on --assert-static and skipped (not
-# failed) elsewhere. The -c emission checks run everywhere.
+# The link needs ONE LLVM instance in the process: a shared lld drags in the
+# shared libLLVM, and the compiler's own symbols must come from that same
+# instance (ADR-268). The build picks the one that matches the lld it links,
+# so the link+run below must work on every supported configuration.
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
@@ -82,35 +81,31 @@ if $PLI "$OUT.pli" -o "$OUT.combo$EXE" --flto=thin --fprofile-generate >/dev/nul
   ok=0
 fi
 
-# --- full link+run (pure-static builds only; see header) ----------------
-if sh scripts/bundle_standalone.sh --assert-static "$PLI" >/dev/null 2>&1; then
-  cmd=$($PLI "$OUT.pli" -o "$OUT.thin$EXE" --flto=thin -v 2>&1) \
-    || { echo "FAIL: thin-lto compile+link"; ok=0; }
-  no_clang "thin-lto link -v" "$cmd"
-  check "thin run" "$($OUT.thin$EXE)" "PASS flto"
+# --- full link+run ---------------------------------------------------------
+cmd=$($PLI "$OUT.pli" -o "$OUT.thin$EXE" --flto=thin -v 2>&1) \
+  || { echo "FAIL: thin-lto compile+link"; ok=0; }
+no_clang "thin-lto link -v" "$cmd"
+check "thin run" "$($OUT.thin$EXE)" "PASS flto"
 
-  $PLI "$OUT.pli" -o "$OUT.full$EXE" --flto=full \
-    || { echo "FAIL: full-lto compile+link"; ok=0; }
-  check "full run" "$($OUT.full$EXE)" "PASS flto"
+$PLI "$OUT.pli" -o "$OUT.full$EXE" --flto=full \
+  || { echo "FAIL: full-lto compile+link"; ok=0; }
+check "full run" "$($OUT.full$EXE)" "PASS flto"
 
-  cat > "$OUT.lib.pli" <<'EOF'
+cat > "$OUT.lib.pli" <<'EOF'
  flto_lib: procedure(x) returns(fixed bin(31));
     declare x fixed bin(31);
     return(x * 2);
  end flto_lib;
 EOF
-  cat > "$OUT.main.pli" <<'EOF'
+cat > "$OUT.main.pli" <<'EOF'
  flto_main2: procedure options(main);
     declare flto_lib entry(fixed bin(31)) returns(fixed bin(31)) external;
     put skip list('PASS flto', flto_lib(21));
  end flto_main2;
 EOF
-  $PLI "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi$EXE" --flto=thin \
-    || { echo "FAIL: multi-unit thin-lto"; ok=0; }
-  check "multi thin run" "$($OUT.multi$EXE)" "PASS flto 42"
-else
-  echo "SKIP: in-process LTO link needs a pure-static pli (LLVM-instance duplication on mixed builds)"
-fi
+$PLI "$OUT.lib.pli" "$OUT.main.pli" -o "$OUT.multi$EXE" --flto=thin \
+  || { echo "FAIL: multi-unit thin-lto"; ok=0; }
+check "multi thin run" "$($OUT.multi$EXE)" "PASS flto 42"
 
 [ "$ok" -eq 1 ] && echo PASS
 exit 0
