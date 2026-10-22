@@ -572,25 +572,20 @@ static unsigned long long pli_shr128(PliU128 v, int scale) {
 }
 #endif
 
-/* List-directed output of a scaled FIXED value (ADR-006): the stored integer v
- * holds the value * 2^scale, so print v / 2^scale exactly as a decimal. The
- * fractional part of a dyadic rational terminates, so the digit loop is exact. */
-void pli_put_list_fixed_scaled(long long v, long long scale) {
-  char buf[96];
+/* Format the value v/2^scale into buf; returns the length. The fractional
+ * part of a dyadic rational terminates, so the digit loop is exact. */
+static size_t format_fixed_scaled(char *buf, size_t cap, long long v, long long scale) {
   char *p = buf;
-  if (scale <= 0) {  /* fall back to the plain formatter */
-    pli_put_list_fixed(v);
-    return;
-  }
+  if (scale <= 0)  /* no binary fraction */
+    return (size_t)pli_snprintf(buf, cap, "%lld", v);
   /* 1LL << 63 is undefined; a binary scale above 62 cannot be represented
    * by the stored integer anyway. */
   if (scale > 62) scale = 62;
   if (v < 0) { *p++ = '-'; v = -v; }
   unsigned long long factor = 1ULL << (unsigned)scale;  /* 2^scale */
-  int n = pli_snprintf(p, sizeof buf - (size_t)(p - buf), "%lld", v / (long long)factor);
+  int n = pli_snprintf(p, cap - (size_t)(p - buf), "%lld", v / (long long)factor);
   p += n;
   unsigned long long rem = (unsigned long long)v % factor;
-  rt_out_lock();
   if (rem != 0) {
     *p++ = '.';
     char digit[64];
@@ -599,7 +594,7 @@ void pli_put_list_fixed_scaled(long long v, long long scale) {
      * rem * 10 exceeds 64 bits for a scale above 59. */
     while (rem != 0 && cnt < 60) {
       PliU128 r = pli_mul_u(pli_u128(rem, 0u), pli_u128(10u, 0u));
-      digit[cnt++] = (char)(pli_shr128(r, (int)scale) & 9u);
+      digit[cnt++] = (char)(pli_shr128(r, (int)scale) & 0xFu);
 #ifdef PLI_WIDE128_PORTABLE
       rem = r.lo & (factor - 1);
 #else
@@ -608,8 +603,29 @@ void pli_put_list_fixed_scaled(long long v, long long scale) {
     }
     for (int i = 0; i < cnt; ++i) *p++ = '0' + digit[i];
   }
+  return (size_t)(p - buf);
+}
+
+/* List-directed output of a scaled FIXED value (ADR-006): the stored integer v
+ * holds the value * 2^scale, so print v / 2^scale exactly as a decimal. */
+void pli_put_list_fixed_scaled(long long v, long long scale) {
+  char buf[96];
+  size_t n = format_fixed_scaled(buf, sizeof buf, v, scale);
+  rt_out_lock();
   separate();
-  rt_put_raw(buf, (size_t)(p - buf));
+  rt_put_raw(buf, n);
+  rt_out_unlock();
+}
+
+/* DISPLAY of a scaled FIXED value (rule 114, ADR-282): the same point-aware
+ * image as list-directed output, written without the separating blank. */
+void pli_display_fixed_scaled(long long v, long long scale) {
+  char buf[96];
+  size_t n = format_fixed_scaled(buf, sizeof buf, v, scale);
+  rt_out_lock();
+  display_begin();
+  rt_put_raw(buf, n);
+  display_end();
   rt_out_unlock();
 }
 

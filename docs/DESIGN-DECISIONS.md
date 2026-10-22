@@ -9690,3 +9690,51 @@ the language does not name becomes observable through a later `UNSPEC`, and
 two equal values can differ in a byte-wise path. *Leaving the padding bits
 unchanged.* A dirty bit written by `UNSPEC` would then survive `NOT`, with the
 same effect; normalising costs one `and`.
+
+## ADR-282 — `FIXED BINARY(p,q)` stores the value scaled by `2^q`
+
+**Context.** `Type::scale` carried `q` for a binary type from the start, but
+only the decimal half of ADR-006 used it: literals, assignment, arithmetic,
+`FLOAT` conversion and output all treated the stored integer as the value.
+`tests/core/scaled.pli` pinned that model, and `OPTIMIZATION-BASELINE.md §9.4`
+deferred the `sitofp`/`2^-q` patch (C5, reserved as ADR-244) until the language
+feature existed. A3 supplies the feature.
+
+**Decision.** A `FIXED BINARY(p,q)` variable holds `value × 2^q` in its integer
+slot, with `q < p` as rule (16) already requires.
+
+* A decimal or float literal converted to the type is scaled by `2^q`;
+  `INITIAL` and `VALUE` use the same rule at compile time.
+* `+`, `-` and comparisons rescale both operands to `max(q)`; `*` of two
+  binary operands sums the scales, so the raw integers multiply directly.
+* `FIXED BINARY → FLOAT` is `sitofp` followed by a multiply by `2^-q`, not a
+  divide. The factor is a power of two, so the patch is exact. This serves C5
+  and releases the ADR-244 reservation (D2).
+* List-directed output and `DISPLAY` print the point exactly — a dyadic
+  rational terminates — and list-directed input parses a decimal token into
+  `value × 2^q`. The runtime entry points are `pli_put_list_fixed_scaled`,
+  `pli_get_list_fixed_scaled` and `pli_display_fixed_scaled`.
+* Assignment between fixed types follows the target: a binary scale-down
+  truncates toward zero, a decimal target rounds half away from zero, and
+  decimal → binary truncates at the target scale. A scale-up works in i128.
+* A subscript must have scale 0 (ADR-277): a scaled value is not an address,
+  so `checkSubscriptTypes` rejects scaled binary as well as scaled decimal.
+* `PUT EDIT F` of a scaled binary goes through `FLOAT`, so it prints the
+  value. A picture (`P`) formatter works in decimal and is diagnosed under
+  rule (53) instead of printing the wrong image. Wide cross-base conversions
+  also go through `FLOAT`; exact rescaling for those cases is B11.
+
+**Consequences.** `tests/core/scaled.pli` is rewritten from the unscaled model
+to the conformant one as a cited conformance change (Open decision 1).
+`bad_scaled_subscript.pli` and `bad_scaled_picture.pli` are the negative gates,
+and `bad_array_subscript_type.pli` now covers a scaled binary subscript. The
+decimal tests are unchanged: their `10^q` model is separate.
+
+**Rejected.** *Keeping the unscaled model.* It ships wrong values and the test
+suite pins them. *Sending a scaled binary through the decimal picture
+formatter.* That formatter reads the stored integer against a decimal point, so
+`2.5` became `0.00`. *Lowering C5 as a divide.* Multiplying by `2^-q` is exact
+too and avoids a divide on the conversion path. *Rescaling wide cross-base
+conversions exactly now.* It needs a wider intermediate or an arbitrary
+precision path; B11 records the refinement, and the `FLOAT` fallback is
+documented rather than silent.

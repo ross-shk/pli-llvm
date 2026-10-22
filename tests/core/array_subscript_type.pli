@@ -3,7 +3,8 @@
  /* A subscript must be of an integer type (rule (126), ADR-277). The types
     that carry an integer are accepted: FIXED BINARY, and a FIXED DECIMAL
     with scale 0 (its stored value *is* the integer — an integer literal has
-    that type here). A scaled decimal, a FLOAT and a CHARACTER are rejected
+    that type here). A scaled FIXED (binary or decimal), a FLOAT and a
+    CHARACTER are rejected
     (bad_array_subscript_type.pli). */
  subok: procedure options(main);
     declare a(1:3) fixed bin(31);

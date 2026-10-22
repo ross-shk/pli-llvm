@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A scaled FIXED BINARY(p,q) is not an integer type: its stored
+    integer is the value times 2^q, so using it as a subscript would
+    address the wrong element. Rule (126), ADR-277/ADR-282. */
+ badscaledsub: procedure options(main);
+    declare a(1:3) fixed bin(31);
+    declare b fixed bin(15,2);
+    declare x fixed bin(31);
+    b = 2.00;
+    x = a(b);
+ end badscaledsub;

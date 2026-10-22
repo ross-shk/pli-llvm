@@ -4543,11 +4543,12 @@ void Sema::checkSubscriptBounds(Expr* e, Symbol* arr) {
 
 // A subscript must be of an integer type (rule 126, ADR-277): the value
 // addresses an element, so it needs an integer to address with. FIXED BINARY
-// is an integer type, and so is a FIXED DECIMAL with scale 0 — its stored
-// value *is* the integer (an integer literal has that type here), so it is
-// accepted. Anything else — a scaled decimal, a FLOAT, a CHARACTER — has no
-// integer value: the compiler used to take the stored bits as the index, so
-// a decimal subscript of 2.00 addressed element 200 of a three-element array.
+// with scale 0 is an integer type, and so is a FIXED DECIMAL with scale 0 —
+// its stored value *is* the integer (an integer literal has that type here),
+// so it is accepted. Anything else — a scaled FIXED (binary or decimal), a
+// FLOAT, a CHARACTER — has no integer value: the compiler used to take the
+// stored bits as the index, so a decimal subscript of 2.00 addressed element
+// 200 of a three-element array.
 void Sema::checkSubscriptTypes(Expr* e) {
   for (auto& a : e->args) {
     if (a->kind == Expr::Star)
@@ -4555,7 +4556,7 @@ void Sema::checkSubscriptTypes(Expr* e) {
     const Type& t = a->ty;
     if (t.isVoid())
       continue; // already diagnosed elsewhere
-    if (t.k == TK::FixedBin)
+    if (t.k == TK::FixedBin && t.scale == 0)
       continue;
     if (t.k == TK::FixedDec && t.scale == 0)
       continue;

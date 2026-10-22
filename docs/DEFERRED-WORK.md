@@ -65,7 +65,7 @@ Bands **A**–**D** apply that order; within a band, `Deps` decides the sequence
 |---|---|---|---|---|---|---|
 | A1 | **Doc repair**: the stale references and the stale `PP` claims | done | The repair pass landed: `GC:11` no longer points at the deleted `QUICK-RELEASE-IMPLEMENTATION-PLAN.md`, `DD:5` and `OB:29` no longer point at a document the tree does not contain, `AGENTS.md:49` lists this file instead of the deleted `SPEC-COMPLIANCE-REPORT.md`, and `PP`'s "Not yet" bullets for division, label variables and the fiber backend were corrected | no reference to a file that is not in the tree; every `PP` "Not yet" bullet is true of the current tree; each open row below appears exactly once | S | — |
 | A2 | **Declared-precision `SIZE`**: trap when a `FIXED BINARY(p)` value leaves its declared precision, not its storage width | done | Served by ADR-280: every conversion into `FIXED BINARY(p)` checks `[-2^p, 2^p-1]` and a resuming handler receives the value wrapped in `p+1` bits (`src/irgen.cpp`, `fixedBinPrecTrap`); the gate is `driver/precision_overflow` (all three conversion paths, the `bin(31)` edge, `--no-size-checks`); no existing test relied on storage-width wrapping, so the sweep was empty; `OB §11.1` re-measured | `driver/precision_overflow` traps at the declared precision and a `SIZE` handler resumes with the wrapped value; `(NOSIZE)` still elides; every test that silently relied on storage-width wrapping is updated with a cited reason; `OB §11.1` re-measured | M | — |
-| A3 | **`FIXED BINARY(p,q)` scale semantics**: literal scaling, mixed-scale `+ - *`, `2^-q` on `FLOAT` conversion, list-directed output | gated | `OB §9.4`; `GC` (16),(17) states the compiler treats binary scale as unscaled; `tests/core/scaled.pli` pins that non-conformant model. Gate: `Open decisions` 1 | a scale-2 variable assigned `5` holds `20`, two scale-2 values multiply to the rescaled product, `FLOAT` conversion divides by 2^q, output prints the point; `tests/core/scaled.pli` is rewritten **as a conformance change with its own ADR**, not as a quiet update | M | decision 1 |
+| A3 | **`FIXED BINARY(p,q)` scale semantics**: literal scaling, mixed-scale `+ - *`, `2^-q` on `FLOAT` conversion, list-directed output | done | Served by ADR-282: a scale-2 variable assigned `5` holds `20`; `+ -` and comparisons rescale to max q and `*` sums scales; `FLOAT` conversion is `sitofp` plus a multiply by 2^-q; list-directed I/O and DISPLAY print/read the point; `tests/core/scaled.pli` was rewritten as a cited conformance change (Open decision 1), with `bad_scaled_subscript.pli` and `bad_scaled_picture.pli` as negatives. Picture output of a scaled binary and exact wide cross-base rescaling stay B11 | a scale-2 variable assigned `5` holds `20`, two scale-2 values multiply to the rescaled product, `FLOAT` conversion divides by 2^q, output prints the point; `tests/core/scaled.pli` is rewritten **as a conformance change with its own ADR**, not as a quiet update | M | decision 1 |
 | A4 | **`BIT` padding model** written down, closing `C8`'s residual | done | Served by ADR-281: the padding bits are indeterminate and are not part of the value, every value operation ignores them, and `NOT` complements the declared bits and normalises the padding to zero; `tests/ir/bit_padding.pli` pins the `xor`/`and` lowering, ADR-243/ADR-275 are cross-referenced, and `OB §9.6` now points at the ADR | the model is stated once (padding bits are indeterminate and unobservable except through `NOT`), `tests/ir/bit_padding.pli` pins `NOT` over a padded value, and ADR-243/ADR-275 are cross-referenced | S | — |
 | A5 | **Release pipeline gate**: the release workflow's `Test` step is `continue-on-error: true` with nothing after it that consumes the result, so a tag can publish a red suite | open | `.github/workflows/release.yml:103-110`; `build.yml` runs the same `ctest` as a real gate, so only the release path is soft | the release workflow fails the build job on a red suite, or records an explicit, reviewed reason why it does not; a deliberately failing test proves the gate fires | S | — |
 
@@ -90,7 +90,7 @@ Ordered by the size of the program class each unblocks, not by the size of the w
 | B8 | **Descriptor and array-form remainder (`QR2.1`)**: dope-vector descriptors, `POSITION`, subscripted `DEFINED` bases, per-`ALLOCATE` dimension bounds, multiple-`*` descriptor dimensions, multi-axis iSUB, parameter correspondence | open | `GC` (34)–(38) tail ("full dope-vector descriptors → M2", multiple-`*` dimensions diagnosed), (24) `POSITION` and `DEFINED X(i)` diagnosed, (25) per-`ALLOCATE` bounds rejected, (134) multi-axis iSUB | generated shape and alias matrix passes; each item either works or keeps its cited diagnostic with a recorded reason | L | — |
 | B9 | **Entry and interop surface (`QR2.6`)**: mixed-return alternate entries, C structure returns, `USES`/`SETS`, `SECONDARY`/`CELL`, `ABNORMAL`/`NORMAL`, `REDUCIBLE`/`IRREDUCIBLE` | open | `GC` (38): mixed returns and C structure returns diagnosed; no `USES`/`SETS` handling exists in `src/` | each item either lands with a test or is recorded as an accepted extension or limitation in `GC` | L | — |
 | B10 | **Source compatibility (`M8`)**: `GENERIC`, the remaining keyword abbreviations, 48-character-set forms | gated | `GC` (41) `GENERIC` = M8, aux §2.3.2.1 and §2.3.3; GC's own note says "prioritize by corpus impact" | a corpus ranking exists first (`Open decisions` 4), then a dispatch and signature matrix plus an abbreviation golden | M | decision 4 |
-| B11 | **Numeric data remainder (`D1`/`QR2.2`)**: the `IMAGINARY` data and I/O cases `GC` routes to `D1`, complex I/O completeness (`EDIT`/`CHAR`/`FIXED` of a complex value), the tail of full decimal and precision conformance | open | `GC` (16),(17) "full decimal/precision conformance → D1/QR2", (128),(129) "imaginary/sterling → D1", (135)–(139) "decimal/complex I/O completeness"; `CHAR` and `FIXED` of a complex value are diagnosed today (`guides/builtins.md`) | each item lands with a test or is recorded as an accepted limitation; the diagnostic set for complex is exhausted | M | — |
+| B11 | **Numeric data remainder (`D1`/`QR2.2`)**: the `IMAGINARY` data and I/O cases `GC` routes to `D1`, complex I/O completeness (`EDIT`/`CHAR`/`FIXED` of a complex value), the tail of full decimal and precision conformance, `P` picture output of a scaled `FIXED BINARY`, and exact wide cross-base fixed-point rescaling | open | `GC` (16),(17) "full decimal/precision conformance → D1/QR2", (128),(129) "imaginary/sterling → D1", (135)–(139) "decimal/complex I/O completeness"; `CHAR` and `FIXED` of a complex value are diagnosed today (`guides/builtins.md`); ADR-282 diagnoses the scaled-binary picture (`bad_scaled_picture.pli`) and routes wide cross-base conversions through FLOAT | each item lands with a test or is recorded as an accepted limitation; the diagnostic set for complex is exhausted | M | — |
 | B12 | **Complex exponentiation (`**`, rule 121)** | open | `GC` (123) expression row; `PP` says `**` with complex exponents is future work | `z ** n` for integer `n` and `z1 ** z2` produce correct results or keep a cited diagnostic; a small reach item, so it sits last in this band | S | — |
 
 ## Band C — runtime and platform completeness
@@ -110,7 +110,7 @@ measurement recorded, as `OB` already does for `I1`, `K5` and `K10`.
 | ID | Work | Status | Gate to promote | Size | Deps |
 |---|---|---|---|---|---|
 | D1 | Range facts for declared precision, then re-measure the checks-on ratio against 1.5x | open | A2 landed (ADR-280); `OB §11.1`, ADR-252. The win is now only for a `p` narrower than its slot: at `p = 31`/`63` the storage check is the precision check, and `stampFixedBinRange` also needs the ADR-280 range before a fact is emitted | M | — |
-| D2 | `C5` exponent patch: `sitofp` followed by a multiply by 2^-q | blocked | A3 landed; ADR-244 is reserved for it (`OB §9.4`) | S | A3 |
+| D2 | `C5` exponent patch: `sitofp` followed by a multiply by 2^-q | done | Served by ADR-282 in the A3 change: `convert()` lowers `FIXED BINARY -> FLOAT` as `sitofp` then `fmul 2^-q` (factor from `std::ldexp(1.0, -q)`), not a divide; ADR-244 is released (`OB §9.4`) | S | A3 |
 | D3 | `E5` narrow-type codegen: add a 32-bit target benchmark first | gated | a narrow-integer workload on a 32-bit or embedded target shows a gap; on x86-64 the expected gain is ~0 (`OB §10.3`) | S–M | measurement |
 | D4 | `I2` loop fusion: add the workload first | gated | a measured multi-pass array pattern exists; LLVM's loop-fusion pass is not in the default pipeline (`OB §11.2`) | M | measurement |
 | D5 | Extension track: `RESEXP` and `INLIST`/`INARRAY` | gated | own ADR each plus an `Extensions (not in TR 25.084)` row; rejected as optimizations because they change which conditions a program raises (`OB §12.6`, §12.8); ADR-259 is reserved for `RESEXP` | M | ADR accepted |
@@ -134,7 +134,8 @@ Do not re-open these without a new record.
 - `A1` (landed) was the tracking surface every other row depends on; its standing
   duty is now a working rule.
 - `A2` → `D1` (the precision check must land before range facts are emitted).
-- `A3` → `D2` (the language feature before its exponent patch).
+- `A3` → `D2` (served together by ADR-282: the language feature and its
+  exponent patch).
 - `B0` → `B5` (a sanitizer run before the area and locator work ships).
 - `B2` → `B7` (sequential update before keyed organisations).
 - `C1` → `C2` (a tasking matrix before more tasking semantics).
@@ -150,18 +151,20 @@ Do not re-open these without a new record.
   column 2, nothing past column 72.
 - Run the smoke group plus the new test per change; the full suite only at band
   boundaries, because it is expensive.
-- ADRs are append-only. Claim a number **before** writing: 244 is reserved for
-  `C5`, 259 for `RESEXP`, and 282 is the next free number. Two collisions already
-  happened (192/194 and 239), both renumbered (ADR-232, ADR-279).
+- ADRs are append-only. Claim a number **before** writing: 259 is reserved for
+  `RESEXP` and 283 is the next free number; 244 was released when ADR-282 served
+  `C5`. Two collisions already happened (192/194 and 239), both renumbered
+  (ADR-232, ADR-279).
 - A row that changes user-visible behaviour without an ADR is a documentation bug.
 - Keep this file true: a new deferral gets a row in the same commit that creates
   it, and a served row moves its `GRAMMAR-COVERAGE.md` entry in the same commit.
 
 ## Open decisions
 
-1. **A3 rewrites a green test.** `tests/core/scaled.pli` pins the unscaled model.
-   The repo rule forbids rolling back conforming features, so this is only
-   legitimate as a cited conformance change with an ADR. Needs an explicit yes.
+1. **A3 rewrites a green test — settled.** `tests/core/scaled.pli` pinned the
+   unscaled model. The repo rule forbids rolling back conforming features, so
+   the rewrite landed as a cited conformance change under ADR-282. The negative
+   gates are `bad_scaled_subscript.pli` and `bad_scaled_picture.pli`.
 2. **A2 blast radius — settled.** Declared precision is enforced by default
    under the `SIZE` checks; the policy is to update an expectation with a cited
    reason rather than hold the conformance fix behind a flag (ADR-280). The

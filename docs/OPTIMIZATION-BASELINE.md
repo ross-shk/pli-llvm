@@ -813,37 +813,27 @@ names the obligation too.
 No behaviour changed, so there is nothing to benchmark: the item's cost was a
 constraint to be written down, and the constraint is now written down.
 
-### 9.4 C5 — the exponent patch for a scaled `FIXED BINARY`: **deferred**
+### 9.4 C5 — the exponent patch for a scaled `FIXED BINARY`: **landed**
 
 **The gate.** The plan's C5 says: *"If the repo does not support binary scale
 at all, **defer** — check `Type` for a binary-scale field first."* The field
-exists — `Type::scale` carries it for `FIXED BINARY(p,q)` — but nothing uses
-it:
+existed, but nothing used it, so the patch could not land alone. A3 supplied
+the language feature (ADR-282) and every path now agrees:
 
-| where | what a binary scale would need | what the compiler does |
+| where | before | now |
 |---|---|---|
-| a literal assigned to a scaled `FIXED BINARY` | the literal scaled by 2^q | stored unscaled (only `FIXED DECIMAL` is rescaled, ADR-240) |
-| `+` between two different binary scales | the operands rescaled to a common scale | the raw integers added (sema takes the larger scale, irgen does not rescale) |
-| conversion to `FLOAT` | the value divided by 2^q | the raw integer converted (`sitofp` only) |
-| list-directed output | the 2^q point printed | the integer printed |
+| a literal assigned to a scaled `FIXED BINARY` | stored unscaled (only `FIXED DECIMAL` was rescaled, ADR-240) | scaled by 2^q (`binLitRescaled`) |
+| `+` between two different binary scales | the raw integers added | the operands rescaled to the larger scale by `convert` |
+| conversion to `FLOAT` | the raw integer converted (`sitofp` only) | `sitofp` then a multiply by 2^-q |
+| list-directed output | the integer printed | the exact 2^q point printed |
 
-`docs/GRAMMAR-COVERAGE.md` (16),(17) says it plainly: *"`FIXED BINARY(p,q)`
-stays 2-based (unscaled)"*, and `tests/core/scaled.pli` pins that behaviour: a
-scale-2 variable assigned the literal `5` holds `5` (not `20`), two scale-2
-values multiply to their raw product, and a scaled value prints as an integer.
-So the compiler's own test suite asserts the unscaled model — the exponent
-patch would contradict it.
-
-**The verdict.** The exponent patch cannot be ported on its own: multiplying
-by 2^-q in the float conversion alone would disagree with every other path
-that treats a binary-scaled value as unscaled. The prerequisite is the
-*language feature* — `FIXED BINARY(p,q)` semantics — which is rules (16),(17)
-work, not an IRGen peephole, and which would need its own ADR and its own
-rule-coverage rows. The plan's gate therefore applies: **C5 is deferred**, no
-ADR-244 is written, and ADR-244 stays reserved for it. When the language
-feature lands, the conversion becomes an exponent patch — `sitofp` followed by
-a multiply by 2^-q, exact over the whole range — and the decision is already
-recorded here.
+**The verdict.** C5 is the `sitofp` followed by a multiply by `2^-q`, with the
+factor from `std::ldexp(1.0, -q)`. The factor is a power of two, so the
+multiply is exact and avoids a divide. It is part of ADR-282, not a standalone
+ADR-244; that reservation is released and `DEFERRED-WORK.md` D2 is done. The
+gate is correctness rather than throughput: `tests/core/scaled.pli` pins the
+values and the conversion adds one `fmul` to a path that already did
+`sitofp`.
 
 ### 9.5 C7 — "test vs. move": **closed, already covered by LLVM**
 

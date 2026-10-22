@@ -106,6 +106,66 @@ long long pli_get_list_decfixed(long long q) {
   return neg ? -v : v;
 }
 
+/* FIXED BINARY input (ADR-282): parse a decimal token into value*2^q,
+ * truncating extra fraction digits. At most 18 significant digits are
+ * kept; lenient like the other readers. */
+long long pli_get_list_fixed_scaled(long long q) {
+  char tok[64];
+  if (!get_token(tok, sizeof tok))
+    return 0;
+  if (q < 0)
+    q = 0;
+  if (q > 62)
+    q = 62;
+  int neg = 0;
+  const char *p = tok;
+  if (*p == '+' || *p == '-') {
+    neg = *p == '-';
+    ++p;
+  }
+  PliU128 num = pli_u128(0u, 0u);
+  PliU128 ten = pli_u128(10u, 0u);
+  int digits = 0;
+  int frac = 0;
+  while (*p >= '0' && *p <= '9') {
+    if (digits < 18) {
+      num = pli_add_u(pli_mul_u(num, ten), pli_u128((uint64_t)(*p - '0'), 0u));
+      ++digits;
+    }
+    ++p;
+  }
+  if (*p == '.') {
+    ++p;
+    while (*p >= '0' && *p <= '9') {
+      if (digits < 18) {
+        num = pli_add_u(pli_mul_u(num, ten), pli_u128((uint64_t)(*p - '0'), 0u));
+        ++digits;
+        ++frac;
+      }
+      ++p;
+    }
+  }
+  /* target raw = num * 2^q / 10^frac, truncated toward zero */
+  PliU128 pow2 = pli_u128(1u, 0u);
+  PliU128 two = pli_u128(2u, 0u);
+  for (long long i = 0; i < q; ++i)
+    pow2 = pli_mul_u(pow2, two);
+  PliU128 den = pli_u128(1u, 0u);
+  for (int i = 0; i < frac; ++i)
+    den = pli_mul_u(den, ten);
+  PliU128 quo, rem;
+  pli_divmod_u(pli_mul_u(num, pow2), den, &quo, &rem);
+  unsigned long long mag;
+#ifdef PLI_WIDE128_PORTABLE
+  mag = quo.hi != 0 ? 0x7fffffffffffffffULL : quo.lo;
+#else
+  mag = (unsigned long long)quo > 0x7fffffffffffffffULL
+            ? 0x7fffffffffffffffULL
+            : (unsigned long long)quo;
+#endif
+  return neg ? -(long long)mag : (long long)mag;
+}
+
 /* List-directed complex input (CM5, ADR-086): a `re+imI` token reads both
  * parts; a bare number reads with a zero imaginary part. Lenient like the
  * other readers: missing or malformed parts read as zero. */
