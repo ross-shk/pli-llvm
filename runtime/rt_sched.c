@@ -162,6 +162,9 @@ void rt_sched_init(void) {
     rt_worker_count = 1;
 
   if (rt_model_fiber) {
+    /* This thread runs tasks too (it becomes worker 0), so it gets the
+     * platform's per-thread tasking setup now, before the first task. */
+    pli_plat_thread_init();
     pli_mutex_init(&rt_sched_mu);
     for (int i = 0; i < RT_WORKERS_MAX; ++i) {
       pli_mutex_init(&rt_workers[i].mu);
@@ -684,6 +687,10 @@ static void rt_worker_loop(rt_worker *w) {
 static void *rt_worker_entry(void *arg) {
   rt_worker *w = (rt_worker *)arg;
   rt_self = w;
+  /* The platform's per-thread tasking setup: on POSIX that is the stack
+   * overflow handler's alternate stack, which is thread-local and must be
+   * in place before this worker runs a task (ADR-237). */
+  pli_plat_thread_init();
   rt_worker_loop(w);
   return NULL;
 }

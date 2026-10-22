@@ -280,7 +280,11 @@ The rules that make it work, each of them learned the hard way:
   guard, and the room the kernel needs is in the chunk above it (ADR-239).
 * **A report about a full stack cannot run on that stack.** The overflow
   report runs on an emergency stack that the handler switches to through the
-  exception context, so it needs no room on the task's stack (ADR-239).
+  exception context, so it needs no room on the task's stack (ADR-239). On
+  POSIX that emergency stack is the signal handler's alternate stack, which
+  is *per thread*: every worker installs its own before it runs a task,
+  because a worker that only steals tasks may be the one that overflows
+  (ADR-237).
 * **A blocking read is not something a fiber can wait for.** A read on
   standard input is a system call, and the fiber model has no way to park a
   task around one, so the read moved to a helper thread (ADR-238). The

@@ -4,12 +4,17 @@
 # tests/driver/task_stack_overflow.sh - a task that runs out of stack says
 # so, and does not hang (ADR-239).
 #
-# The task recurses until its stack is full. The runtime must say
+# The tasks recurse until their stacks are full. The runtime must say
 # "TASK: stack overflow (the task's stack ran out)" and exit with 134, the
 # same way on Windows and on POSIX. Before ADR-239 the Windows fiber stack
 # could not grow at all: the stack that ran out killed the process with a
 # bare access violation, and a stack that grew past its first window did
 # the same.
+#
+# Run twice: on one worker, where the fault is the main worker's, and on
+# four, where the tasks are spread over the workers. The second run is the
+# one that catches a report that only works on the thread that started the
+# scheduler (the POSIX handler needs an alternate stack per thread).
 set -u
 PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/task_stack_overflow
@@ -17,15 +22,18 @@ mkdir -p tests/driver/out
 
 cat > "$OUT.pli" <<'EOF'
  /* rules (79): a task that runs out of stack is reported, not left to
-    die in a way the program cannot explain. The task recurses until its
+    die in a way the program cannot explain. Each task recurses until its
     stack is full; the runtime says so and stops the program. */
  sov: procedure options(main);
-    declare e event;
+    declare ev(8) event;
+    declare i fixed binary(31);
     declare total fixed binary(31);
     total = 0;
-    call deep event(e);
-    wait(e);
-    put skip list('FAIL the task returned', total);
+    do i = 1 to 8;
+       call deep event(ev(i));
+    end;
+    wait(ev);
+    put skip list('FAIL the tasks returned', total);
     deep: procedure recursive;
        declare a(1000) fixed binary(31);
        declare j fixed binary(31);
@@ -42,21 +50,29 @@ EOF
 
 $PLI "$OUT.pli" -o "$OUT" || { echo "FAIL task_stack_overflow: compile"; exit 1; }
 
-# A small ceiling, so the task runs out of stack quickly.
+# A small ceiling, so a task runs out of stack quickly. The test is about
+# the fiber model's report: under PLI_TASK_MODEL=os a task is an OS thread,
+# and the OS handles its stack overflow its own way.
 PLI_TASK_STACK=131072
-export PLI_TASK_STACK
-"$OUT" > tests/driver/out/task_stack_overflow.out 2>&1
-rc=$?
+PLI_TASK_MODEL=fiber
+export PLI_TASK_STACK PLI_TASK_MODEL
 
-if [ $rc -ne 134 ]; then
-   echo "FAIL task_stack_overflow: expected exit 134, got $rc"
-   cat tests/driver/out/task_stack_overflow.out
-   exit 1
-fi
-if ! grep -q "stack overflow" tests/driver/out/task_stack_overflow.out; then
-   echo "FAIL task_stack_overflow: the runtime did not report the overflow"
-   cat tests/driver/out/task_stack_overflow.out
-   exit 1
-fi
+for workers in 1 4; do
+   PLI_TASK_WORKERS=$workers
+   export PLI_TASK_WORKERS
+   "$OUT" > tests/driver/out/task_stack_overflow.out 2>&1
+   rc=$?
+
+   if [ $rc -ne 134 ]; then
+      echo "FAIL task_stack_overflow: $workers worker(s): expected exit 134, got $rc"
+      cat tests/driver/out/task_stack_overflow.out
+      exit 1
+   fi
+   if ! grep -q "stack overflow" tests/driver/out/task_stack_overflow.out; then
+      echo "FAIL task_stack_overflow: $workers worker(s): the runtime did not report the overflow"
+      cat tests/driver/out/task_stack_overflow.out
+      exit 1
+   fi
+done
 echo "PASS task_stack_overflow"
 exit 0

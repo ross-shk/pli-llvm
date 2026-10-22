@@ -89,6 +89,12 @@ void pli_plat_stack_free(void *base, size_t size);
  * end of the input, -1 on error. The input broker (ADR-238) calls this on
  * its own thread, so a program that reads stdin does not block a worker. */
 int pli_plat_stdin_read(char *buf, int n);
+/* Prepare the calling thread for the tasking runtime: the scheduler calls
+ * it on every thread it runs tasks on, before the first task. Windows has
+ * nothing to do (its fault handler is process-wide); POSIX installs the
+ * stack-overflow signal handler and the *thread's* alternate stack, which
+ * the handler needs to report an overflow at all. */
+void pli_plat_thread_init(void);
 
 /* --- threading backend (one backend per platform TU; single-threaded custom
  * platforms: mutex/cond as no-ops over a non-shared state, spawn as

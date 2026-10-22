@@ -123,6 +123,10 @@ int pli_plat_stdin_read(char *buf, int n) {
     return 0; /* a console with no input: the read fails */
   return (int)got;
 }
+/* Windows needs nothing per thread: the vectored handler is process-wide,
+ * and the overflow report's emergency stack is allocated by the handler
+ * itself on whatever thread faults. */
+void pli_plat_thread_init(void) {}
 
 /* The fiber stack: address space, not memory.
  *
@@ -599,17 +603,29 @@ static volatile int rt_guard_count = 0;
 static volatile int rt_guard_ready = 0;
 
 static void rt_guard_add(void *p, size_t bytes) {
+  /* A released stack leaves a hole in the list: reuse it. Without that, a
+   * program that allocates and frees stacks for its whole life would fill
+   * the list once and then stop registering guards - the overflow report
+   * would quietly stop working. The bytes go in before the address, so the
+   * handler never sees a matching address with a stale length. */
+  for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
+    if (!rt_guards[i]) {
+      rt_guard_bytes[i] = bytes;
+      __atomic_store_n(&rt_guards[i], (char *)p, __ATOMIC_RELEASE);
+      return;
+    }
+  }
   int i = __atomic_fetch_add(&rt_guard_count, 1, __ATOMIC_RELAXED);
   if (i < RT_GUARD_MAX) {
-    rt_guards[i] = (char *)p;
     rt_guard_bytes[i] = bytes;
+    __atomic_store_n(&rt_guards[i], (char *)p, __ATOMIC_RELEASE);
   }
 }
 
 static void rt_guard_remove(void *p) {
   for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
-    if (rt_guards[i] == (char *)p) {
-      rt_guards[i] = NULL;
+    if (__atomic_load_n(&rt_guards[i], __ATOMIC_ACQUIRE) == (char *)p) {
+      __atomic_store_n(&rt_guards[i], NULL, __ATOMIC_RELEASE);
       rt_guard_bytes[i] = 0;
       return;
     }
@@ -619,10 +635,10 @@ static void rt_guard_remove(void *p) {
 /* Is the address inside one of the guard pages? */
 static int rt_guard_holds(void *addr) {
   for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
-    if (!rt_guards[i])
+    char *p = __atomic_load_n(&rt_guards[i], __ATOMIC_ACQUIRE);
+    if (!p)
       continue;
-    if ((char *)addr >= rt_guards[i] &&
-        (char *)addr < rt_guards[i] + rt_guard_bytes[i])
+    if ((char *)addr >= p && (char *)addr < p + rt_guard_bytes[i])
       return 1;
   }
   return 0;
@@ -667,12 +683,14 @@ static void rt_segv_handler(int sig, siginfo_t *info, void *ctx) {
   raise(sig);
 }
 
-/* Install the handler and the alternate stack. Called when the first fiber
- * stack is allocated, which is on a worker thread. */
+/* Install the handler and the alternate stack. The handler is one per
+ * process, but the alternate stack is one per *thread* (sigaltstack is
+ * thread-local), so every thread that may run fibers installs its own: a
+ * worker started after the handler was installed would otherwise run the
+ * handler on the full fiber stack and die instead of reporting. */
 static void rt_fault_handler_install(void) {
   if (__atomic_exchange_n(&rt_guard_ready, 1, __ATOMIC_RELAXED))
     return;
-  rt_alt_stack_install();
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = rt_segv_handler;
@@ -680,6 +698,12 @@ static void rt_fault_handler_install(void) {
   sigemptyset(&sa.sa_mask);
   sigaction(SIGSEGV, &sa, NULL);
   sigaction(SIGBUS, &sa, NULL);
+}
+/* The scheduler calls this on every thread that runs tasks. The handler is
+ * installed once; the alternate stack is this thread's. */
+void pli_plat_thread_init(void) {
+  rt_fault_handler_install();
+  rt_alt_stack_install();
 }
 
 /* The tasking model (ADR-234): the machine size, a monotonic clock, the
