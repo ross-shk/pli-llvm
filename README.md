@@ -42,6 +42,43 @@ pli hello.pli -o hello
 
 For a fuller tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are in the [Built-ins reference](guides/builtins.md).
 
+## Benchmarks
+
+`benchmarks/run_benchmarks.py` compares PL/I against C and Go across 33 micro-benchmarks (scalar, string, decimal, array, I/O) and the tasking harness (`run_tasking_bench.py`).
+
+```sh
+python3 benchmarks/run_benchmarks.py            
+python3 benchmarks/run_tasking_bench.py --models fiber,os  
+
+```
+
+### PL/I vs C (micro-benchmarks, -O2, median)
+
+24 of 33 benchmarks are at parity with or faster than Clang `-O2`. The wins concentrate where PL/I's native semantics avoid per-element C overhead:
+
+<table class="markdown-table">
+  <tr><th>Benchmark</th><th>PL/I / C ratio</th><th>PL/I Advantage</th></tr>
+  <tr><td>string_search</td><td>0.068×</td><td>14.7× faster</td></tr>
+  <tr><td>select_chain</td><td>0.104×</td><td>9.6× faster</td></tr>
+  <tr><td>picture_fold</td><td>0.218×</td><td>4.6× faster</td></tr>
+  <tr><td>string_ops</td><td>0.285×</td><td>3.5× faster</td></tr>
+  <tr><td>decimal_scale</td><td>0.461×</td><td>2.2× faster</td></tr>
+  <tr><td>io_list</td><td>0.727×</td><td>1.4× faster</td></tr>
+  <tr><td>controlled_stack</td><td>0.714×</td><td>1.4× faster</td></tr>
+</table>
+
+Full results and the methodology live in `benchmarks/`.
+
+### PL/I vs Go (tasking, fiber model)
+
+<table class="markdown-table">
+  <tr><th>Benchmark</th><th>PL/I / Go ratio</th><th>Result</th></tr>
+  <tr><td>task_loop (spawn–join lifecycle)</td><td>0.800×</td><td>PL/I beats Go</td></tr>
+  <tr><td>task_spawn (20 000 live tasks)</td><td>21.7× (pending improvement)</td><td>Go&#39;s 2 KiB growable stack wins for fan-out</td></tr>
+</table>
+
+The fiber model reuses a pre-allocated stack per worker, making it faster than Go on the spawn–join lifecycle. Fan-out of many simultaneously-live tasks is PL/I's known cost — each fiber reserves an 8 MiB demand-paged stack region.
+
 ## Build from source
 
 Builds on Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), and Windows (x86_64).
@@ -166,7 +203,7 @@ Everything else is diagnosed with its TR 25.084 rule number — the diagnostic i
 | `src/` | Compiler pipeline: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target |
 | `runtime/` | PL/I runtime and platform seam |
 | `tests/` | Golden, self-checking, and driver tests |
-| `benchmarks/` | Benchmark programs |
+| `benchmarks/` | Benchmark programs, runner, and results |
 | `scripts/` | Build and code-generation helpers |
 | `docs/`, `guides/` | Architecture, ADRs, grammar coverage, user guides |
 | `CMakeLists.txt` | Canonical build: LLVM C++ API + lld, embedded runtime bitcode |
