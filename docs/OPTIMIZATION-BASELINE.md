@@ -887,7 +887,7 @@ when the value has no other use.
 **The verdict.** Closed without a diff: the transformation is LLVM's, the
 guard is LLVM's, and the IR check pins the shape both rely on.
 
-### 9.6 C8 — the infinite loop's condition and the `NOT` of a `BIT(1)`: **closed, one case deferred**
+### 9.6 C8 — the infinite loop's condition and the `NOT` of a `BIT(1)`: **closed**
 
 **The loop case.** The plan asks for "`CHECK-NOT` for a dead condition". The
 compiler does not even emit one: a constant `DO WHILE` condition is folded
@@ -920,12 +920,14 @@ false, `^'0'b` is true), and LLVM folds the `xor` into the branch:
 br i1 %not, label %if.then.0, label %if.end.0
 ```
 
-**The deferral.** For `BIT(n>1)` the `NOT` is byte-wise over the whole array,
-so the *padding* bits are complemented too. Nothing observes them today — every
-comparison of a `BIT` value drops the padding bits (`packBitValue` shifts them
-out) — but the model is not written down yet, so the item stays **deferred to
-WS-D1** as the plan says. The deferral costs nothing today; it is a note for
-the day WS-D1 models the padding.
+**The model.** For `BIT(n>1)` the `NOT` is byte-wise over the whole array; the
+model is now written down (ADR-281): the padding bits are indeterminate and
+are not part of the value, every value operation ignores them, and `NOT` — the
+one operation that writes them — complements the declared bits and normalises
+the padding to zero. `tests/ir/bit_padding.pli` pins the lowering (`xor` on the
+byte, then the mask that clears the padding bits), and ADR-243/ADR-275 read
+the same model for the test merge and the comparison. The C8 deferral is
+closed.
 
 ### 9.7 C9 — reference-count-driven temp elision: **closed, already covered by LLVM**
 
@@ -1097,10 +1099,10 @@ the phase is *"checks-on ratio within 1.5x, **or the item is closed with the
 measurement recorded**"*. The measurement is recorded — the ratio, the
 attribution, and the ordering the item needs (ADR-252) — and the ordering
 names the prerequisite: PL/I's SIZE must be the **declared-precision** check
-(rules (60)-(63),(86)), not the storage-width check it is today. That is a
-**conformance** item, not an optimization: the compiler must trap when a
-value exceeds its declared precision, and the range metadata that would make
-that check cheap follows from it. It is not this plan's work, and the plan's
+(rules (60)-(63),(86)), not the storage-width check it was when this section
+was written. That conformance item landed as A2 (ADR-280); the range metadata
+that would make the check cheap follows it and is D1's work. It is not this
+plan's work, and the plan's
 own design is unsound until it lands — which is why the ordering is recorded
 rather than the code.
 
@@ -1112,13 +1114,16 @@ rather than the code.
 | SIZE overflow (`mod+1`, `*3`, `+1`, two 64-bit accumulations) | five `llvm.*.with.overflow` intrinsics per hot iteration — the whole remaining difference |
 
 **Why the range fact cannot remove them.** The plan's design — emit the range
-metadata always — is sound only if the range is an invariant. For
-`FIXED BINARY` it is not: the compiler's SIZE check is the **storage width**
-check (an i32/i64 overflow), not the **declared precision** check, so a
-`FIXED BINARY(31)` value may hold anything in the i32 range. Emitting the
-declared range with the checks on would assert a bound the compiler does not
-enforce (`x = x + x` near `2^30` stores a value inside the i32 and outside the
-declared precision). The guard in `stampFixedBinRange` stays.
+metadata always — is sound only if the range is an invariant. Before A2 it was
+not: the SIZE check was the **storage width** check, so a variable declared
+`FIXED BINARY(15)` could hold `40000`. ADR-280 closes that at every conversion
+into the type and fixes the range's definition: `FIXED BINARY(p)` is
+`[-2^p, 2^p-1]`, so `FIXED BINARY(31)` covers the whole i32 range (ADR-252's
+`2^30` example was one bit tight). Two consequences remain: at `p = 31`/`63`
+the declared range *is* the storage range, so no fact can remove the storage
+check; and `stampFixedBinRange` still stamps the one-bit-narrower `p`-bit
+range, which D1 must align before it emits a fact. The guard in
+`stampFixedBinRange` stays until that work lands.
 
 **The ordering the item needs** (ADR-252): the check must enforce the fact
 before the fact is emitted. So the work is:
@@ -1137,6 +1142,14 @@ overflows the i32; the two 64-bit accumulations overflow the i64). The range
 facts remove the *storage* checks; the *precision* checks stay and cost about
 the same. The ratio improves by the width of a check, not by its absence — so
 the 1.5x criterion needs the checks to be *cheaper*, not merely fewer.
+
+**Re-measured after A2 (ADR-280).** `checks_on.pli` declares only
+`FIXED BIN(31)` and `FIXED BIN(63)`, so the new declared-precision check adds
+nothing to it: the pair is **76.4 ms vs 146.6 ms, 1.92x** (arm64 macOS,
+LLVM 23.1.2, median of five), unchanged from 1.93x within noise. That is the
+bounded outcome ADR-252 predicted, now with the range defined correctly: the
+surviving checks are the storage checks, and at `p = 31`/`63` those are the
+precision checks.
 
 ### 11.2 I2 — loop fusion: **deferred**
 

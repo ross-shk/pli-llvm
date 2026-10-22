@@ -64,9 +64,9 @@ Bands **A**–**D** apply that order; within a band, `Deps` decides the sequence
 | ID | Work | Status | Evidence | Done when | Size | Deps |
 |---|---|---|---|---|---|---|
 | A1 | **Doc repair**: the stale references and the stale `PP` claims | done | The repair pass landed: `GC:11` no longer points at the deleted `QUICK-RELEASE-IMPLEMENTATION-PLAN.md`, `DD:5` and `OB:29` no longer point at a document the tree does not contain, `AGENTS.md:49` lists this file instead of the deleted `SPEC-COMPLIANCE-REPORT.md`, and `PP`'s "Not yet" bullets for division, label variables and the fiber backend were corrected | no reference to a file that is not in the tree; every `PP` "Not yet" bullet is true of the current tree; each open row below appears exactly once | S | — |
-| A2 | **Declared-precision `SIZE`**: trap when a `FIXED BINARY(p)` value leaves its declared precision, not its storage width | open | ADR-252 records the ordering (*the check must enforce the fact before the fact is emitted*) and names this a conformance change, rules (60)–(63),(86); `OB §11.1`; `benchmarks/DECIMAL-PERF-PLAN.md:238` lists the same gap as "P4". The decimal path already checks declared precision; the binary path does not | `driver/precision_overflow` traps at the declared precision and a `SIZE` handler resumes with the wrapped value; `(NOSIZE)` still elides; every test that silently relied on storage-width wrapping is updated with a cited reason; `OB §11.1` re-measured | M | — |
+| A2 | **Declared-precision `SIZE`**: trap when a `FIXED BINARY(p)` value leaves its declared precision, not its storage width | done | Served by ADR-280: every conversion into `FIXED BINARY(p)` checks `[-2^p, 2^p-1]` and a resuming handler receives the value wrapped in `p+1` bits (`src/irgen.cpp`, `fixedBinPrecTrap`); the gate is `driver/precision_overflow` (all three conversion paths, the `bin(31)` edge, `--no-size-checks`); no existing test relied on storage-width wrapping, so the sweep was empty; `OB §11.1` re-measured | `driver/precision_overflow` traps at the declared precision and a `SIZE` handler resumes with the wrapped value; `(NOSIZE)` still elides; every test that silently relied on storage-width wrapping is updated with a cited reason; `OB §11.1` re-measured | M | — |
 | A3 | **`FIXED BINARY(p,q)` scale semantics**: literal scaling, mixed-scale `+ - *`, `2^-q` on `FLOAT` conversion, list-directed output | gated | `OB §9.4`; `GC` (16),(17) states the compiler treats binary scale as unscaled; `tests/core/scaled.pli` pins that non-conformant model. Gate: `Open decisions` 1 | a scale-2 variable assigned `5` holds `20`, two scale-2 values multiply to the rescaled product, `FLOAT` conversion divides by 2^q, output prints the point; `tests/core/scaled.pli` is rewritten **as a conformance change with its own ADR**, not as a quiet update | M | decision 1 |
-| A4 | **`BIT` padding model** written down, closing `C8`'s residual | open | `OB §9.6`: for `BIT(n>1)` the `NOT` complements the padding bits too; nothing observes them (`packBitValue` shifts them out) but the model is unstated, so the item waits on WS-D1 | the model is stated once (padding bits are indeterminate and unobservable except through `NOT`), `tests/ir/bit_padding.pli` pins `NOT` over a padded value, and ADR-243/ADR-275 are cross-referenced | S | — |
+| A4 | **`BIT` padding model** written down, closing `C8`'s residual | done | Served by ADR-281: the padding bits are indeterminate and are not part of the value, every value operation ignores them, and `NOT` complements the declared bits and normalises the padding to zero; `tests/ir/bit_padding.pli` pins the `xor`/`and` lowering, ADR-243/ADR-275 are cross-referenced, and `OB §9.6` now points at the ADR | the model is stated once (padding bits are indeterminate and unobservable except through `NOT`), `tests/ir/bit_padding.pli` pins `NOT` over a padded value, and ADR-243/ADR-275 are cross-referenced | S | — |
 | A5 | **Release pipeline gate**: the release workflow's `Test` step is `continue-on-error: true` with nothing after it that consumes the result, so a tag can publish a red suite | open | `.github/workflows/release.yml:103-110`; `build.yml` runs the same `ctest` as a real gate, so only the release path is soft | the release workflow fails the build job on a red suite, or records an explicit, reviewed reason why it does not; a deliberately failing test proves the gate fires | S | — |
 
 **Why A2 before A3.** Both are silent-wrong-answer items. A2 is first because
@@ -109,7 +109,7 @@ measurement recorded, as `OB` already does for `I1`, `K5` and `K10`.
 
 | ID | Work | Status | Gate to promote | Size | Deps |
 |---|---|---|---|---|---|
-| D1 | Range facts for declared precision, then re-measure the checks-on ratio against 1.5x | blocked | A2 landed; `OB §11.1`, ADR-252. Even then the elision is bounded: the surviving precision checks cost about what the storage checks cost | M | A2 |
+| D1 | Range facts for declared precision, then re-measure the checks-on ratio against 1.5x | open | A2 landed (ADR-280); `OB §11.1`, ADR-252. The win is now only for a `p` narrower than its slot: at `p = 31`/`63` the storage check is the precision check, and `stampFixedBinRange` also needs the ADR-280 range before a fact is emitted | M | — |
 | D2 | `C5` exponent patch: `sitofp` followed by a multiply by 2^-q | blocked | A3 landed; ADR-244 is reserved for it (`OB §9.4`) | S | A3 |
 | D3 | `E5` narrow-type codegen: add a 32-bit target benchmark first | gated | a narrow-integer workload on a 32-bit or embedded target shows a gap; on x86-64 the expected gain is ~0 (`OB §10.3`) | S–M | measurement |
 | D4 | `I2` loop fusion: add the workload first | gated | a measured multi-pass array pattern exists; LLVM's loop-fusion pass is not in the default pipeline (`OB §11.2`) | M | measurement |
@@ -151,7 +151,7 @@ Do not re-open these without a new record.
 - Run the smoke group plus the new test per change; the full suite only at band
   boundaries, because it is expensive.
 - ADRs are append-only. Claim a number **before** writing: 244 is reserved for
-  `C5`, 259 for `RESEXP`, and 280 is the next free number. Two collisions already
+  `C5`, 259 for `RESEXP`, and 282 is the next free number. Two collisions already
   happened (192/194 and 239), both renumbered (ADR-232, ADR-279).
 - A row that changes user-visible behaviour without an ADR is a documentation bug.
 - Keep this file true: a new deferral gets a row in the same commit that creates
@@ -162,10 +162,10 @@ Do not re-open these without a new record.
 1. **A3 rewrites a green test.** `tests/core/scaled.pli` pins the unscaled model.
    The repo rule forbids rolling back conforming features, so this is only
    legitimate as a cited conformance change with an ADR. Needs an explicit yes.
-2. **Blast radius of A2.** Enforcing declared precision changes results for
-   programs that currently wrap inside a wider storage slot. Decide the policy
-   before the sweep: update the expectations with reasons, or hold the feature
-   behind a flag for one release.
+2. **A2 blast radius — settled.** Declared precision is enforced by default
+   under the `SIZE` checks; the policy is to update an expectation with a cited
+   reason rather than hold the conformance fix behind a flag (ADR-280). The
+   sweep found no existing test that relied on storage-width wrapping.
 3. **B7 needs a file-format decision.** What is a keyed file on a POSIX host — an
    index sidecar, a simple hashed layout, or IBM-compatible blocks? Nothing should
    be implemented before this is written down.

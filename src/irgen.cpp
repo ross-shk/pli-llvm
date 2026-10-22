@@ -3176,6 +3176,44 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
   b_.SetInsertPoint(okBB);
 }
 
+// FIXED BINARY declared-precision trap (QR1.2, rule (86), ADR-280): PL/I
+// raises SIZE when a value exceeds FIXED BINARY(p)'s declared range
+// [-2^p, 2^p-1] (rules (60)-(63)). The storage-width check cannot see it when
+// p is narrower than the slot. On a resumed SIZE the value wraps inside the
+// declared precision (p+1 bits, two's complement), so a value stored through
+// the trap is always inside the range the type promises.
+llvm::Value* IRGen::fixedBinPrecTrap(llvm::Value* v, int prec) {
+  if (!sizeChecks() || prec <= 0)
+    return v; // (NOSIZE): the wrapped value stands (rules (60)-(63), ADR-110)
+  if (!v->getType()->isIntegerTy())
+    return v; // a whole array is copied; each element already carries the type
+  unsigned bits = v->getType()->getIntegerBitWidth();
+  // p = bits-1 is the full signed slot: the storage check already enforces it,
+  // and 2^p is not a representable positive constant at that width.
+  if (prec >= (int)bits - 1)
+    return v;
+  llvm::APInt limAp(bits, 1);
+  limAp <<= prec;
+  llvm::Value* lim = llvm::ConstantInt::get(v->getType(), limAp);
+  llvm::Value* negLim = llvm::ConstantInt::get(v->getType(), -limAp);
+  llvm::Value* hi = b_.CreateICmpSGE(v, lim, "pov.hi");
+  llvm::Value* lo = b_.CreateICmpSLT(v, negLim, "pov.lo");
+  llvm::Value* of = b_.CreateOr(hi, lo, "pov");
+  // Resume value: truncate to the p+1 signed bits and sign-extend back, the
+  // wrap the declared precision defines (ADR-280).
+  llvm::Value* low = b_.CreateTrunc(v, b_.getIntNTy((unsigned)prec + 1), "pov.wrap");
+  llvm::Value* wrapped = b_.CreateSExt(low, v->getType(), "pov.ws");
+  int seq = ovSeq_++;
+  llvm::BasicBlock* trapBB =
+      llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+  b_.CreateCondBr(of, trapBB, okBB);
+  b_.SetInsertPoint(trapBB);
+  emitSizeTrap(okBB);
+  b_.SetInsertPoint(okBB);
+  return b_.CreateSelect(of, wrapped, v, "pov.r");
+}
+
 // FLOAT -> FIXED range trap (QR1.2): FPToSI outside [lo, hi) is UB, so trap
 // first through the SIZE path (hard ERROR when unhandled). Ordered compares
 // fail on NaN, which therefore traps as well.
@@ -10241,6 +10279,9 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     } else {
       out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
     }
+    // A BINARY target narrower than its slot checks the declared precision.
+    if (!dstFloat && dst.k == TK::FixedBin)
+      out.reg = fixedBinPrecTrap(out.reg, dst.prec);
     return out;
   }
   if (srcFloat && dstFloat)
@@ -10275,6 +10316,9 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     } else {
       out.reg = b_.CreateFPToSI(f, llvmTy(dst), "cvt");
     }
+    // A binary target narrower than its slot checks the declared precision.
+    if (dst.k == TK::FixedBin)
+      out.reg = fixedBinPrecTrap(out.reg, dst.prec);
     return out;
   }
   if (!srcFloat && dstFloat) {
@@ -10295,18 +10339,18 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     // FIXED narrowing traps (QR1.2): a value the target cannot hold is a SIZE
     // overflow (hard ERROR until SIZE can route it). A DECIMAL target wider
     // than i64 range needs no check; a same-or-wider decimal source whose
-    // rescaled digits fit is proven safe statically. BINARY targets keep the
-    // arithmetic convention (width-checked, precision is not enforced).
+    // rescaled digits fit is proven safe statically. A BINARY target checks
+    // its declared precision, which may be narrower than the storage slot
+    // (ADR-280); the check runs before any narrowing.
     int dqDec = (dst.k == TK::FixedDec && v.ty.k == TK::FixedDec) ? dst.scale - v.ty.scale : 0;
     bool decFits = v.ty.k == TK::FixedDec && v.ty.prec + std::max(dqDec, 0) <= dst.prec;
     bool needDec = dst.k == TK::FixedDec && dst.prec <= 18 && !decFits;
-    bool needBin = dst.k == TK::FixedBin && dst.intBits() == 32 && v.ty.intBits() == 64;
-    long long limit = dst.k == TK::FixedDec ? pliPow10(dst.prec) : (1LL << 31);
+    long long limit = dst.k == TK::FixedDec ? pliPow10(dst.prec) : 0;
     bool rescale = dst.k == TK::FixedDec && v.ty.scale != dst.scale;
     if (!rescale && (v.ty.k == TK::FixedDec && v.ty.scale > 0 && dst.k != TK::FixedDec))
       rescale = true; // DECIMAL source -> BINARY target: drop the fraction
     if (!rescale) {
-      if (needDec || needBin) {
+      if (needDec) {
         // Trap at the source's native width; magTrap sign-extends the i64
         // limit to i128 for a wide (>18 digit) source (ADR-191) so an i128
         // value is never truncated into a narrower compare.
@@ -10317,14 +10361,17 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
                 : (srcBits == 32 ? b_.CreateSExt(v.reg, b_.getInt64Ty(), "cvtw") : v.reg);
         magTrap(w, limit);
       }
+      llvm::Value* sv = v.reg;
+      if (dst.k == TK::FixedBin)
+        sv = fixedBinPrecTrap(sv, dst.prec);
       if (v.ty.intBits() == dst.intBits()) {
-        out.reg = v.reg;
+        out.reg = sv;
         return out;
       }
       if (v.ty.intBits() < dst.intBits())
-        out.reg = b_.CreateSExt(v.reg, llvmTy(dst), "cvt");
+        out.reg = b_.CreateSExt(sv, llvmTy(dst), "cvt");
       else
-        out.reg = b_.CreateTrunc(v.reg, llvmTy(dst), "cvt");
+        out.reg = b_.CreateTrunc(sv, llvmTy(dst), "cvt");
       return out;
     }
     // Work in the wider of the source/destination widths so an i128 value
@@ -10355,8 +10402,10 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       // DECIMAL->BINARY assignment truncates the fraction toward zero.
       r = b_.CreateSDiv(r, i64(pliPow10(-dq)), "res");
     }
-    if (needDec || needBin)
+    if (needDec)
       magTrap(r, limit);
+    if (dst.k == TK::FixedBin)
+      r = fixedBinPrecTrap(r, dst.prec);
     unsigned dstBits = (unsigned)dst.intBits();
     unsigned rBits = r->getType()->getIntegerBitWidth();
     if (rBits == dstBits)

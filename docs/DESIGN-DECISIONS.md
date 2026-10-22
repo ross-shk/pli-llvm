@@ -9583,3 +9583,110 @@ decisions under one number, and every citation would be ambiguous.
 *Renumbering the tasking ADR instead.* It is already merged and cited by
 the runtime, `docs/ARCHITECTURE.md`, `guides/programming.md` and the driver
 test, so moving it would break published references.
+
+## ADR-280 — `SIZE` enforces the declared precision of `FIXED BINARY(p)`
+
+**Context.** `DEFERRED-WORK.md` A2 is the ordering ADR-252 recorded: the
+compiler must enforce a type's declared range before it can emit a range fact
+for it. The `FIXED DECIMAL` path already checks the declared precision at a
+narrowing conversion (`magTrap`); the `FIXED BINARY` path checks the storage
+width only, so a value can sit inside the i32 slot while exceeding what the
+declaration promises:
+
+```pli
+dcl a fixed bin(15);
+a = 40000;      /* accepted today: 40000 fits an i32 */
+```
+
+**What "declared precision" means here.** `FIXED BINARY(p)` is a signed
+integer with `p` magnitude bits plus its sign, so its range is
+`[-2^p, 2^p-1]`: `FIXED BINARY(31)` covers the full i32 range and
+`FIXED BINARY(15)` is `[-32768, 32767]`. The repo already pins that model —
+`tests/core/on_size.pli` and `tests/corner_cases/condition_edge.pli` call
+`2147483647` "MAX FIXED BIN(31)". This corrects ADR-252's worked example: with
+`x` a `FIXED BINARY(31)` near `2^30`, `x + x` is `2^31-2`, which is *inside*
+the declared range. The gap ADR-252 names is real but narrower than its
+example: it appears when `p` is smaller than the slot (`FIXED BINARY(15)` in
+an i32), not at `p = 31`.
+
+**Decision.** Every conversion into a `FIXED BINARY(p)` value checks the value
+against `[-2^p, 2^p-1]` and routes an out-of-range value to the `SIZE`
+condition (rules (60)-(63),(86)):
+
+* assignment, including array elements, structure members and multiple
+  assignment — each converts to the target type before storing;
+* `FLOAT` to `FIXED BINARY`, after the storage-range check that keeps
+  `fptosi` defined;
+* `BIT` to `FIXED BINARY`;
+* `FIXED` to `FIXED BINARY`, checked before a narrowing truncation.
+
+When a `SIZE` handler resumes, the value the assignment stores is wrapped
+inside the declared precision: the low `p+1` two's-complement bits,
+sign-extended. That is the value the slot would have held under `(NOSIZE)` if
+the slot were exactly `p+1` bits wide.
+
+The check is elided when the `SIZE` checks are off — the global
+`--no-size-checks` or a `(NOSIZE)` prefix or block (rules (60)-(63),
+ADR-110). No extra check is emitted when `p` fills the slot
+(`FIXED BINARY(31)` in an i32, `FIXED BINARY(63)` in an i64): there the
+storage check is already exactly the declared range.
+
+**Consequences.** The gate is `tests/driver/precision_overflow.sh`: the three
+conversion paths trap unhandled, an established handler resumes with `-25536`
+for `40000` in a `FIXED BINARY(15)` and `-56` for `200` in a `FIXED
+BINARY(7)`, `2147483647` stays legal in a `FIXED BINARY(31)`, and
+`--no-size-checks` lets the wide-slot value stand.
+
+This narrows what D1 can win. For `FIXED BINARY(31)` and `FIXED BINARY(63)`
+the storage check *is* the precision check, so a range fact cannot remove it;
+only a variable whose `p` is smaller than its slot has a fact narrower than
+the storage check, and the check that replaces the storage check costs about
+the same. `stampFixedBinRange` still stamps a `p`-bit signed range
+(`[-2^(p-1), 2^(p-1)-1]`), one bit narrower than this decision's range;
+D1 owns that function and must align it with the range defined here before it
+emits the fact with the checks on.
+
+**Rejected.** *Checking only when the source and destination types differ.*
+A copy from another `FIXED BINARY(15)` can carry an out-of-range value when it
+was produced under `(NOSIZE)`, by `UNSPEC`, or by a foreign callee; the
+assignment is the point where the declared type must hold. *Checking
+arithmetic results against a narrower declared precision.* The expression
+type carries the storage-class sentinel (`p = 31` or `63`; see
+`arithResultType`), so there is no narrower result precision to enforce;
+propagating PL/I result precisions is B11's precision tail, not this item.
+*Wrapping to the storage width on resume.* That leaves an out-of-range value
+in the variable and makes the range fact false again.
+
+## ADR-281 — The padding bits of a `BIT(n)` are not part of the value
+
+**Context.** A `BIT(n)` is held left-justified in `ceil(n/8)` bytes, so the
+low `8*ceil(n/8) - n` bits of the last byte are storage the language does not
+name. Two decisions already depend on ignoring them — the masked-test merge
+(ADR-243) and the whole-value comparison (ADR-275) — but the model itself was
+never written down, and `OPTIMIZATION-BASELINE.md` §9.6 (C8) deferred the
+`NOT` case for that reason.
+
+**Decision.** The padding bits are indeterminate in storage and are not part
+of the value.
+
+* Every value operation ignores them. A comparison packs from the most
+  significant bit and shifts them out (ADR-275); the test-merge masks stay
+  inside the declared bits (ADR-243); a BIT-to-BIT assignment of a different
+  length masks the last byte.
+* `NOT` is the only operation that writes them. It complements the `n`
+  declared bits and sets the padding bits to zero, so its result is
+  canonical: two values that are equal as `BIT(n)` cannot differ in the
+  padding after a `NOT`.
+* `UNSPEC` is the only way to read the padding, because it reads raw storage.
+  After a `NOT` it reads zero.
+
+**Consequences.** `^x` is exact over the declared bits by construction, and
+the byte-wise lowering may work on the whole byte. The gate is
+`tests/ir/bit_padding.pli`: a `BIT(5)` `NOT` must lower to `xor i8 %b, -1`
+followed by `and i8 %b, -8`, and the comparison packs with `lshr i64 %v, 3`.
+
+**Rejected.** *Complementing the padding bits too.* Then a bit of storage that
+the language does not name becomes observable through a later `UNSPEC`, and
+two equal values can differ in a byte-wise path. *Leaving the padding bits
+unchanged.* A dirty bit written by `UNSPEC` would then survive `NOT`, with the
+same effect; normalising costs one `and`.
