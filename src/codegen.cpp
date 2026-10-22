@@ -150,20 +150,12 @@ bool isPlatformSeamSymbol(const std::string& name) {
       "pli_spawn",          "pli_spawn_detached",  "pli_thread_detach", "pli_sleep_ms",
       "pli_mutex_init_recursive",
   };
-  // The tasking model (ADR-234): the environment, the machine, the clock,
-  // and the fiber-stack allocator. The pli_plat_* prefix already covers
-  // them, so this list is only here to document the surface a custom
-  // --rt-platform must provide.
-  static const char* const kTaskSeam[] = {
-      "pli_plat_getenv",     "pli_plat_cpu_count",  "pli_plat_now_ms",
-      "pli_plat_page_size",  "pli_plat_stack_alloc", "pli_plat_stack_free",
-  };
+  // The tasking model (ADR-234) adds pli_plat_getenv, pli_plat_cpu_count,
+  // pli_plat_now_ms/us, pli_plat_page_size and the fiber-stack allocator.
+  // They all carry the pli_plat_ prefix, which the check below covers.
   if (name.rfind("pli_plat_", 0) == 0)
     return true;
   for (const char* t : kThreadSeam)
-    if (name == t)
-      return true;
-  for (const char* t : kTaskSeam)
     if (name == t)
       return true;
   return false;

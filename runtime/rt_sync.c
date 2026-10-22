@@ -57,7 +57,6 @@ void rt_lock_init(rt_lock *l) {
   l->owner = NULL;
   l->waiters = NULL;
   l->depth = 0;
-  l->inited = 1;
 }
 
 void rt_lock_init_recursive(rt_lock *l) {
@@ -66,13 +65,11 @@ void rt_lock_init_recursive(rt_lock *l) {
   l->owner = NULL;
   l->waiters = NULL;
   l->depth = 0;
-  l->inited = 1;
 }
 
 void rt_cond_init(rt_cond *c) {
   pli_cond_init(&c->os);
   c->waiters = NULL;
-  c->inited = 1;
 }
 
 void rt_lock_acquire(rt_lock *l) {

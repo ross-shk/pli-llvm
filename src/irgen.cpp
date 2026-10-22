@@ -3075,8 +3075,7 @@ std::string IRGen::run(HProgram& prog) {
      // changes.
      b_.CreateCall(runtimeFn("pli_sched_main"), {b_.CreateBitCast(mfn, b_.getPtrTy())});
      b_.CreateCall(runtimeFn("pli_rt_fini"), {});
-
-    b_.CreateRet(i32(0));
+     b_.CreateRet(i32(0));
   }
 
   // Bitcode runtime (OPTIMIZATION.md §10, P3): link the pli_* definitions the

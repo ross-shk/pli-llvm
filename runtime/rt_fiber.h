@@ -4,7 +4,7 @@
  *
  * A fiber is a stack plus the saved registers that switch it. The
  * scheduler (runtime/rt_sched.c) runs fibers; this header is the shape
- * the assembly in runtime/rt_fiber.S depends on.
+ * the assembly in runtime/rt_fiber_asm.c depends on.
  *
  * The first two members are the assembly's contract: offset 0 is the
  * saved stack pointer and offset 8 the resume address. Nothing may be
@@ -58,7 +58,6 @@ struct pli_fiber {
   pli_fiber *wait_next;/* the wait-queue link (a lock or a condition)       */
   const void *wait_key;/* what the task waits for (a condition's key)      */
   long long deadline;  /* the DELAY deadline (ms since an arbitrary origin) */
-  long long id;        /* the task id (the TASK variable's handle)          */
   void *(*entry_fn)(void *);   /* the task body, set by the scheduler          */
   void *entry_arg;             /* its argument                                */
   pli_task_local *local;       /* the per-task PL/I state, allocated on demand */

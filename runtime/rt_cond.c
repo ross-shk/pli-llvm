@@ -54,7 +54,6 @@ void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
     pli_abort("ON ERROR stack overflow");
   }
 }
-/* Always-inline, portable: MSVC has no __attribute__((always_inline)). */
 
 /* Topmost id for a key, or 0 when none (or SYSTEM) is established for it.
  * T2a: static inline so the scan folds into the ABI wrapper at C-compile time. */

@@ -40,7 +40,9 @@ static struct {
   RtChunk *tail;
   int eof;         /* the input has ended */
   int requested;    /* a consumer wants more input */
-  struct pli_fiber *waiter; /* the fiber parked for input */
+  struct pli_fiber *waiter; /* the fiber parked for input: at most one,
+                             * because the reader holds the input lock
+                             * (ADR-233) for the whole record */
   pli_thread th;
   pli_once once;
 } rt_input;
@@ -104,8 +106,11 @@ static void rt_input_start(void) {
   pli_mutex_init(&rt_input.mu);
   pli_cond_init(&rt_input.cv);
   pli_cond_init(&rt_input.ready);
-  if (pli_spawn(&rt_input.th, rt_input_thread, NULL) == 0)
-    pli_thread_detach(rt_input.th);
+  /* A broker that never starts would leave every reader waiting for bytes
+   * that cannot arrive: say so instead of hanging. */
+  if (pli_spawn(&rt_input.th, rt_input_thread, NULL) != 0)
+    pli_abort("TASK: could not start the input thread");
+  pli_thread_detach(rt_input.th);
 }
 
 /* The next byte of standard input, or EOF. */

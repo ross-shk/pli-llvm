@@ -35,14 +35,12 @@ typedef struct {
   struct pli_fiber *owner;    /* the FIBER mode's holder */
   struct pli_fiber *waiters;  /* the FIBER mode's wait queue */
   long depth;                 /* the recursion depth */
-  int inited;
 } rt_lock;
 
 /* A condition variable, paired with an rt_lock. */
 typedef struct {
   pli_cond os;                /* the OS mode's condvar */
   struct pli_fiber *waiters;  /* the FIBER mode's wait queue */
-  int inited;
 } rt_cond;
 
 /* Initialise a lock / a condition. Not thread-safe by itself: call it

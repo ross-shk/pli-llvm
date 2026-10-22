@@ -8,8 +8,8 @@
  * uses a bounded number of OS threads.
  *
  * The legacy model — one OS thread per task — stays available through
- * PLI_TASK_MODEL=os and is what the runtime uses until the fiber model
- * becomes the default.
+ * PLI_TASK_MODEL=os for A/B runs, and is what the runtime uses on a
+ * platform whose fiber backend is missing.
  */
 #ifndef PLI_RT_SCHED_H
 #define PLI_RT_SCHED_H

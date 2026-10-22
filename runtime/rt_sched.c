@@ -89,14 +89,13 @@ typedef struct rt_worker {
 
 static rt_worker rt_workers[RT_WORKERS_MAX];
 static int rt_worker_count = 1;
-static int rt_workers_started = 0;
+static _Atomic int rt_workers_started = 0;
 
 /* The noinline accessors (see the note above the thread-locals). */
 PLI_NOINLINE static pli_fiber *rt_cur_get(void) { return rt_cur; }
 PLI_NOINLINE static rt_worker *rt_self_get(void) { return rt_self; }
 
 /* The program's main task: the fiber the MAIN procedure runs on. */
-long long rt_dbg_body_us = 0, rt_dbg_switch_us = 0;
 static pli_fiber *rt_main_fib = NULL;
 static _Atomic int rt_main_done = 0;
 
@@ -526,6 +525,10 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
   f->wait_next = NULL;
   f->wait_key = NULL;
   f->deadline = 0;
+  /* A fiber that was parked on a previous task still points at that
+   * task's worker; the owner is recorded again at every park, but a stale
+   * one must never be trustable. */
+  f->home = NULL;
   /* A recycled fiber carries the previous task's state: the new task starts
    * with an empty ON stack (QR2.8) and no CONTROLLED generations. The
    * CONTROLLED table and the one-slot freelist are kept for reuse: the
@@ -703,9 +706,10 @@ static void *rt_worker_entry(void *arg) {
  * so the others are the only ones created here; they are created when the
  * first task appears, so a program without tasks never pays for them. */
 static void rt_workers_start(void) {
-  if (rt_workers_started)
+  /* Two tasks on two workers may spawn at the same moment: only one of them
+   * may create the pool, or two threads would end up owning one worker. */
+  if (atomic_exchange_explicit(&rt_workers_started, 1, memory_order_acq_rel))
     return;
-  rt_workers_started = 1;
   for (int i = 1; i < rt_worker_count; ++i) {
     rt_workers[i].id = i;
     pli_thread th;
@@ -742,7 +746,6 @@ void rt_sched_main(void (*entry)(void)) {
   main_fib.next = NULL;
   main_fib.wait_next = NULL;
   main_fib.deadline = 0;
-  main_fib.id = 0;
   main_fib.entry_fn = rt_main_entry;
   main_fib.entry_arg = (void *)entry;
   main_fib.local = NULL;
@@ -773,12 +776,12 @@ int rt_sched_spawn(void *(*fn)(void *), void *arg) {
   /* The new task goes into the worker's runnext slot, which no stealer may
    * touch. A worker that already had a runnext task pushes it back to the
    * run queue: the program spawned two tasks in a row, and the older one
-   * waits its turn. */
+   * waits its turn. This worker finds the new task when it next looks
+   * (after the current one yields), so there is no wakeup to send. */
   pli_fiber *old = w->runnext;
   w->runnext = f;
   if (old)
     rt_queue_push(&w->local, old);
-  rt_wake_one(w);
   return 0;
 }
 

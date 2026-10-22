@@ -238,5 +238,5 @@ PLI_FN(pli_wait_n, VOID, (PTR, I64, I64))   /* WAIT(evs)(k): array of addrs */
 PLI_FN(pli_event_status, I8, (PTR))         /* EVENT(ev) poll: 0/1 */
 PLI_FN(pli_delay, VOID, (I64))              /* DELAY(n): sleep n milliseconds */
 PLI_FN(pli_task_spawn, VOID, (PTR, PTR))    /* spawn wrapper(ctx), detached */
-PLI_FN(pli_sched_main, VOID, (PTR))          /* run MAIN as a task (ADR-234) */
+PLI_FN(pli_sched_main, VOID, (PTR))         /* run MAIN as a task (ADR-234) */
 PLI_FN(pli_task_note, VOID, (PTR))          /* CALL TASK: assign a handle id */
