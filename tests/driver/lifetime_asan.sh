@@ -92,7 +92,12 @@ EOF
 
 $PLI "$OUT.pli" -c -o "$OUT.o" || { echo "FAIL lifetime_asan: compile"; exit 1; }
 "$CC" -fsanitize=address "$OUT.o" -o "$OUT" 2>"$OUT.link.log" || {
-   if grep -q "sanitiz" "$OUT.link.log"; then
+   # Skip when the AddressSanitizer runtime is unavailable: the static LLVM
+   # stash (ADR-224) ships no libclang_rt.asan* runtime, so the -asan link cannot
+   # resolve the runtime dylib/.so. Older clang reported this as "sanitizer
+   # runtime ..."; clang/lld 23 report it as a missing libclang_rt.asan* file.
+   # Detect both wordings so the test skips instead of failing on a bare toolchain.
+   if grep -qE 'sanitiz|libclang_rt\.asan' "$OUT.link.log"; then
       echo "SKIP: no AddressSanitizer runtime in this toolchain"
       exit 0
    fi
