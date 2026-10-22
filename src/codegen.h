@@ -72,7 +72,12 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
                        llvm::raw_pwrite_stream& out, std::string& err,
                        const std::string& platformBc = "");
 // Link object files + system libs into an executable in-process (needs lld).
-bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err);
+// Optional outs/errs let the caller capture or suppress lld's diagnostic output
+// (e.g. a speculative first pass whose output should be hidden on retry);
+// canRetry reports whether lld left the process able to run another link.
+bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err,
+                    llvm::raw_ostream* outs = nullptr, llvm::raw_ostream* errs = nullptr,
+                    bool* canRetry = nullptr);
 // ADR-227: link via lld's MinGW driver (GNU-ld-compatible, handles mingw-w64
 // CRT objects the COFF driver rejects) for the vendored-mingw sysroot path.
 bool linkMinGWExecutable(llvm::ArrayRef<const char*> args, std::string& err);

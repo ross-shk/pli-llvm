@@ -278,18 +278,28 @@ message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
 # Apple host bitcode: a from-source clang ships no baked-in macOS SDK, so the
 # host-triple runtime compile must be given a sysroot explicitly or it cannot
-# find <stdio.h>. Resolve the active SDK once via xcrun (dev + CI runners).
+# find <stdio.h>. Probe the stable SDK locations directly (ADR-280): the
+# driver does the same at link time, and no build step shells out to xcrun.
 set(PLI_HOST_SYSROOT_FLAG "")
 if(APPLE)
-  execute_process(
-    COMMAND xcrun --show-sdk-path
-    OUTPUT_VARIABLE PLI_HOST_SDK
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
+  find_path(PLI_HOST_SDK
+    NAMES usr/lib/libSystem.B.tbd
+    PATHS
+      /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+      /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+    NO_DEFAULT_PATH)
   if(PLI_HOST_SDK)
     set(PLI_HOST_SYSROOT_FLAG -isysroot ${PLI_HOST_SDK})
     message(STATUS "Host bitcode sysroot: ${PLI_HOST_SDK}")
+  else()
+    message(WARNING "No macOS SDK found; the host runtime bitcode may fail to compile")
   endif()
+endif()
+# The test suite's clang comes from our LLVM build, which has no baked-in SDK
+# either: expose the probed root to tests that compile C (interop, ASan, C IR).
+set(PLI_TEST_SDK_ENV "")
+if(APPLE AND PLI_HOST_SDK)
+  set(PLI_TEST_SDK_ENV "SDKROOT=${PLI_HOST_SDK}")
 endif()
 
 # Toolchain prefix baked in as a data-file fallback (ADR-225): the profile
@@ -807,9 +817,13 @@ add_custom_command(
 enable_testing()
 add_test(NAME pli-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/run_tests.py)
+set(PLI_TEST_ENV "PLI=$<TARGET_FILE:pli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
+if(PLI_TEST_SDK_ENV)
+  list(APPEND PLI_TEST_ENV "${PLI_TEST_SDK_ENV}")
+endif()
 set_tests_properties(pli-tests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  ENVIRONMENT "PLI=$<TARGET_FILE:pli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
+  ENVIRONMENT "${PLI_TEST_ENV}")
 
 # Single-binary distribution: only the pli driver ships. The runtime travels
 # embedded (embedded_runtime.inc), so no libpli_runtime.a / runtime.bc is

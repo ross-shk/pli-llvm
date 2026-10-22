@@ -9583,3 +9583,56 @@ decisions under one number, and every citation would be ambiguous.
 *Renumbering the tasking ADR instead.* It is already merged and cited by
 the runtime, `docs/ARCHITECTURE.md`, `guides/programming.md` and the driver
 test, so moving it would break published references.
+
+---
+
+## ADR-280 — Host macOS SDK probe replaces the last `xcrun`; failed stub links retry with the real libSystem
+
+**Context.** ADR-225 left two subprocess sites: the build-time
+`xcrun --show-sdk-path` (for the host runtime bitcode's `-isysroot`) and the
+driver's runtime fallback for the Mach-O `-syslibroot`. ADR-226/227 then made
+the vendored SDK stub the default so user links need no Xcode, but the stub is
+a curated subset: a C-interop program referencing socket APIs (`_socket`,
+`_connect`, `_send`, `_recv`, `_getaddrinfo`, …) or `___memcpy_chk` fails at
+link with `undefined symbol`. The workaround was manual — pass the real
+`libSystem.B.tbd` through `--extra` — and both `xcrun` sites remained a
+host-toolchain dependency (and a subprocess ADR-225 says should not exist).
+
+**Decision.** Probe known SDK locations instead of asking a tool:
+- `findMacOSSdk()` in `src/hostcrt.cpp` checks the CLT SDK first, then
+  Xcode.app; a root counts when `usr/lib` is a directory. The driver uses it
+  for the `-syslibroot` fallback when no vendored/embedded stub set exists.
+- `CMakeLists.txt` uses `find_path(PLI_HOST_SDK NAMES usr/lib/libSystem.B.tbd
+  PATHS ... NO_DEFAULT_PATH)` for the host runtime bitcode's `-isysroot`.
+- The MachO link is two-pass: the first pass keeps the vendored sysroot (so
+  the common program still links with no host SDK, and the vendor-sysroot
+  test's no-leak assertion holds), with its output captured. If it fails and
+  a host SDK exists, lld is retried with the real `usr/lib/libSystem.B.tbd`
+  appended as an explicit input — lld resolves the remaining symbols in that
+  final pass, exactly what the manual `--extra` workaround did. A successful
+  retry suppresses the first pass's output; a failed retry reports only the
+  retry's diagnostics.
+- `linkExecutable` now calls `lld::lldMain` with the canonical driver name
+  (`ld.lld`, `ld64.lld`, `lld-link`; MinGW stays `ld.lld` and is selected by
+  its `-m i386pep`) instead of a driver's `link` entry point. Only
+  `lldMain` destroys LLD's global context after a run; a direct second call
+  would reuse the first pass's loaded dylibs and carry stale state into the
+  retry, which was observed as the same undefined symbol reported again.
+- `popen`/`pclose` and the `<cstdio>`/`<unistd.h>`/`<process.h>` shims leave
+  `src/main.cpp`: the driver has no subprocess left.
+
+**Consequences.** C-interop links (libnet's sockets) work with no `--extra`
+and no `xcrun`; a machine with no SDK keeps the old undefined-symbol
+diagnostic and grows the stub by a line (ADR-226). The vendored-sysroot test
+still sees only the embedded stub path (the first pass succeeds), and the
+clang-shadow test now covers the whole no-subprocess claim. CMake warns when
+an Apple host has no SDK, since the runtime bitcode's `<stdio.h>` needs one.
+
+**Rejected.** Extending the vendored stub with the socket surface — the
+missing set is whatever libc a user's C-interop program references, so the
+curated subset cannot be complete; the real SDK is already on every machine
+that needs it. Making the real SDK the default `-syslibroot` — reintroduces
+the host dependency ADR-227 removed and leaks `MacOSX.sdk` into `-v` output.
+Requiring `--extra` for sockets — a manual workaround is not a compiler
+behaviour. Keeping `xcrun` "because it is Apple tooling" — it is still a
+subprocess whose answer can be recovered by a filesystem probe.

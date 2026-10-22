@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 // codegen.cpp — in-process object emission + runtime-once helpers + lld link.
+#include <vector>
+
 #include "codegen.h"
 
 #include "embedded_runtime.h"
@@ -339,34 +341,65 @@ bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple
   return emitObject(*rt, TM, out, err);
 }
 
-bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err) {
+namespace {
+// lldMain (not the per-driver `link` entry points) is LLD's documented
+// re-entry-safe API: it destroys the linker context after every run, which a
+// retry (ADR-280) needs. It selects the driver from argv[0], so the canonical
+// name for the object format replaces our generic "ld.lld". MinGW keeps
+// "ld.lld": its `-m i386pep` makes the dispatcher pick the MinGW driver.
+const lld::DriverDef kLldDrivers[] = {
+    {lld::Gnu, &lld::elf::link},
+    {lld::Darwin, &lld::macho::link},
+    {lld::WinLink, &lld::coff::link},
+    {lld::MinGW, &lld::mingw::link},
+};
+
+bool runLld(llvm::ArrayRef<const char*> args, const char* driver, llvm::raw_ostream& out,
+            llvm::raw_ostream& errsRef, bool* canRetry) {
+  std::vector<const char*> argv(args.begin(), args.end());
+  argv[0] = driver;
+  lld::Result r = lld::lldMain(argv, out, errsRef, kLldDrivers);
+  if (canRetry)
+    *canRetry = r.canRunAgain;
+  return r.retCode == 0;
+}
+} // namespace
+
+bool linkExecutable(llvm::ArrayRef<const char*> args, int objFmt, std::string& err,
+                    llvm::raw_ostream* outs, llvm::raw_ostream* errs, bool* canRetry) {
 #if !PLI_HAVE_LLD
 #error "in-process lld is mandatory (ADR-225): configure against an LLVM that ships lld"
 #endif
-  // `args` are exactly the argv lld would receive (program name, then inputs).
-  // `exitEarly=false` keeps the driver alive after a failed link; diagnostics
-  // go to stderr (disableOutput=false).
+  // Optional streams default to real stdout/stderr so callers that don't care
+  // see normal output; the MachO two-pass path captures the first pass.
+  llvm::raw_ostream& out = outs ? *outs : llvm::outs();
+  llvm::raw_ostream& errsRef = errs ? *errs : llvm::errs();
+  const char* driver = "ld.lld";
   switch (static_cast<llvm::Triple::ObjectFormatType>(objFmt)) {
   case llvm::Triple::ELF:
-    return lld::elf::link(args, llvm::outs(), llvm::errs(), false, false);
+    break;
   case llvm::Triple::MachO:
-    return lld::macho::link(args, llvm::outs(), llvm::errs(), false, false);
+    driver = "ld64.lld";
+    break;
   case llvm::Triple::COFF:
-    return lld::coff::link(args, llvm::outs(), llvm::errs(), false, false);
+    driver = "lld-link";
+    break;
   default:
     err = "unsupported object format";
     return false;
   }
+  return runLld(args, driver, out, errsRef, canRetry);
 }
 
 // ADR-227: the MinGW driver links GNU mingw-w64 objects (crt2.o,
 // libmingw32.a with its .refptr.__image_base__ GNU-isms) that the COFF
-// driver rejects. Same Common-driver argv contract as linkExecutable.
+// driver rejects. Same Common-driver argv contract as linkExecutable; its
+// `-m i386pep` is what routes lldMain to the MinGW driver.
 bool linkMinGWExecutable(llvm::ArrayRef<const char*> args, std::string& err) {
 #if !PLI_HAVE_LLD
 #error "in-process lld is mandatory (ADR-225): configure against an LLVM that ships lld"
 #endif
   (void)err;
-  return lld::mingw::link(args, llvm::outs(), llvm::errs(), false, false);
+  return runLld(args, "ld.lld", llvm::outs(), llvm::errs(), nullptr);
 }
 } // namespace pli

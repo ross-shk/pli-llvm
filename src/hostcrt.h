@@ -65,4 +65,10 @@ struct EmbeddedSysroot {
 };
 EmbeddedSysroot materializeEmbeddedSysroot();
 void cleanupMaterializedSysroot(const std::string& dir);
+
+// macOS only: probe stable filesystem locations for the active Xcode / CLT
+// SDK (the syslibroot for -syslibroot). Never shells out (ADR-225). Returns
+// the SDK root dir (e.g. .../MacOSX.sdk) when found, empty otherwise; the
+// caller falls back to vendored stubs or reports a clear error.
+std::string findMacOSSdk();
 } // namespace pli
