@@ -1,8 +1,9 @@
 # Design decisions
 
 Numbered, immutable records. Each states the context, the decision, its
-consequences, and what was rejected. "M*n*" refers to milestones in
-IMPLEMENTATION-PLAN.md.
+consequences, and what was rejected. "M*n*" refers to the historical milestone
+labels recorded in GRAMMAR-COVERAGE.md; the remaining rows are tracked in
+DEFERRED-WORK.md.
 
 ---
 

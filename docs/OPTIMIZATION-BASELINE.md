@@ -26,10 +26,10 @@ plan's own workstream numbering is the plan's, not this file's.
 
 ## 1. Check cost with the checks ON — M7's 1.5x criterion
 
-**The criterion.** `design-docs/IMPLEMENTATION-PLAN.md` (a local working
-document, not tracked) M7: *"check-heavy code is within 1.5x of check-free
-code"*. Never measured before: the repo's `--checks-forced` mode compares
-*outputs*, not *times*.
+**The criterion.** The planning document this baseline was written against is not
+tracked; its remaining rows now live in `DEFERRED-WORK.md`. Its M7 gate:
+*"check-heavy code is within 1.5x of check-free code"*. Never measured before:
+the repo's `--checks-forced` mode compares *outputs*, not *times*.
 
 **The measurement.** `benchmarks/lang/checks_on.pli` — a loop whose values are
 bounded at run time but not at compile time, so the compiler cannot prove the

@@ -7,8 +7,8 @@ support several important cases while rejecting others.
 
 The milestone labels are historical planning groups, not a statement that a
 whole rule is complete. `M0`–`M2` name the first implementation milestones;
-later `M` labels and `D1` identify deferred work. The active schedule for 1966
-language work is `QUICK-RELEASE-IMPLEMENTATION-PLAN.md`. `diag` means the
+later `M` labels and `D1` identify deferred work; `DEFERRED-WORK.md` is the
+registry that tracks those rows and their promotion gates. `diag` means the
 unsupported form is recognized and rejected with a specification-rule citation.
 
 Test paths are relative to `tests/` unless they begin with `driver/` or name a

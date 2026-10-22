@@ -123,8 +123,10 @@ Overflow of `+ - *` on fixed types can raise the `size` condition (see [Conditio
 **Not yet**
 
 - `fixed bin` precision is 31 or 63 bits; mixed widths widen to the larger side.
-- `/` and `**` use floating-point even for fixed operands.
-- `picture` and `label` variables are not implemented.
+- `/` truncates toward zero on integer-valued fixed operands; `**`, and any
+  division with a fractional or float operand, still go through floating point.
+- `picture` data and picture variables are not implemented. `label` variables are
+  (ADR-192): `declare l label;` plus an indirect `goto (l)` through `addr`.
 
 > **Run the full example:** [`examples/data_types.pli`](../examples/data_types.pli) — `pli data_types.pli -o data_types && ./data_types`.
 
@@ -902,7 +904,9 @@ fiber backend yet.
 **Not yet**
 
 - You must `wait` before the block exits, or the event's storage may vanish while the task still runs. External and function-async tasks are diagnosed.
-- The fiber backend exists for x86-64 and AArch64. It has been run on x86-64 only.
+- The fiber backend exists for x86-64 and AArch64 and runs in CI on Linux, macOS
+  and Windows; the Windows backend (ADR-239) is the least-proven of the three.
+  The tasking matrix per backend is tracked in `docs/DEFERRED-WORK.md` (C1).
 - A task that reads a *file* holds the worker it runs on. Reading *standard
   input* does not: the read goes to a helper thread and the task parks until
   the bytes arrive (ADR-238).
