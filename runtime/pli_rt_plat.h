@@ -78,10 +78,13 @@ int pli_plat_cpu_count(void);                  /* >= 1 */
 long long pli_plat_now_ms(void);               /* monotonic milliseconds */
 long long pli_plat_now_us(void);               /* monotonic microseconds */
 size_t pli_plat_page_size(void);               /* the guard page size */
-/* Reserve a fiber stack: `size` usable bytes, lazily committed, with one
- * guard page below. Returns 0 on success and writes the usable base to
- * *out_base (page-aligned). */
-int pli_plat_stack_alloc(size_t size, void **out_base);
+/* Reserve a fiber stack: `*size_inout` usable bytes, lazily committed, with
+ * one guard page below. The platform rounds the size up (to its page or its
+ * chunk) and writes the size the caller actually got back to *size_inout:
+ * the stack's top must be the top of that region, or the guard is not
+ * where the fault handler expects it. Returns 0 on success and writes the
+ * usable base to *out_base (page-aligned). */
+int pli_plat_stack_alloc(size_t *size_inout, void **out_base);
 /* Release a stack obtained from pli_plat_stack_alloc (same base and size). */
 void pli_plat_stack_free(void *base, size_t size);
 /* Read up to `n` bytes of standard input, blocking until at least one byte

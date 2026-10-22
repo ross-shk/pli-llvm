@@ -538,10 +538,14 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
   }
   if (!f->stack_base) {
     void *base = NULL;
-    if (pli_plat_stack_alloc(rt_stack_bytes, &base) != 0)
+    size_t size = rt_stack_bytes;
+    /* The platform rounds the size up and reports what the caller got: the
+     * stack's top has to be the top of that region, or the guard page that
+     * makes the stack grow is not where the platform's handler looks. */
+    if (pli_plat_stack_alloc(&size, &base) != 0)
       return -1;
     f->stack_base = base;
-    f->stack_size = rt_stack_bytes;
+    f->stack_size = size;
   }
   pli_fiber_start(f, (char *)f->stack_base + f->stack_size, (void *)rt_fiber_trampoline);
   return 0;

@@ -218,7 +218,6 @@ typedef struct RtArena {
 } RtArena;
 
 static RtArena *rt_arenas = NULL;
-static INIT_ONCE rt_arena_once = INIT_ONCE_STATIC_INIT;
 static volatile LONG rt_arena_lock = 0;
 
 static LONG CALLBACK rt_stack_veh(EXCEPTION_POINTERS *ep);
@@ -277,13 +276,6 @@ static BOOL CALLBACK rt_stacks_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) {
   (void)c;
 
   rt_veh = AddVectoredExceptionHandler(1, rt_stack_veh);
-  return TRUE;
-}
-
-static BOOL CALLBACK rt_arena_init_cb(PINIT_ONCE o, PVOID p, PVOID *c) {
-  (void)o;
-  (void)p;
-  (void)c;
   return TRUE;
 }
 
@@ -388,41 +380,31 @@ static RtArena *rt_arena_new(size_t usable, size_t page) {
   return a;
 }
 
-/* The newest arena that holds stacks of this size, or NULL. The list is
- * guarded by a spin lock: creating an arena is rare, and the lock is held
- * for a few instructions. */
-static RtArena *rt_arena_get(size_t usable, size_t page) {
-  (void)page;
-  while (InterlockedCompareExchange(&rt_arena_lock, 1, 0) != 0)
-    Sleep(0);
-  RtArena *found = NULL;
-  for (RtArena *a = rt_arenas; a; a = a->next) {
-    if (a->usable == usable) {
-      found = a;
-      break;
-    }
-  }
-  InterlockedExchange(&rt_arena_lock, 0);
-  return found;
-}
-
 /* Take a free slot from the arena, or -1 when it is full. */
 static long rt_arena_take(RtArena *a) {
   while (InterlockedCompareExchange(&a->lock, 1, 0) != 0)
     Sleep(0);
   long index = -1;
-  if (a->free_top > 0) {    index = (long)a->free_slots[--a->free_top];
-  }
+  if (a->free_top > 0)
+    index = (long)a->free_slots[--a->free_top];
   InterlockedExchange(&a->lock, 0);
   return index;
 }
 
 /* Take a slot from an arena of this size, making a new arena when they are
  * all full. The arenas are searched newest first: the newest one is the one
- * most likely to have room, and the others are tried in turn. */
+ * most likely to have room, and the older ones are tried in turn (a slot
+ * released to an older arena must not be lost). */
 static long rt_arena_take_slot(size_t usable, size_t page, RtArena **out_arena) {
-  RtArena *a = rt_arena_get(usable, page);
-  if (a) {
+  /* Snapshot the list under the list lock, then take from each arena in
+   * turn. The arenas only ever grow, so an arena found here stays valid. */
+  while (InterlockedCompareExchange(&rt_arena_lock, 1, 0) != 0)
+    Sleep(0);
+  RtArena *first = rt_arenas;
+  InterlockedExchange(&rt_arena_lock, 0);
+  for (RtArena *a = first; a; a = a->next) {
+    if (a->usable != usable)
+      continue;
     long index = rt_arena_take(a);
     if (index >= 0) {
       *out_arena = a;
@@ -430,7 +412,7 @@ static long rt_arena_take_slot(size_t usable, size_t page, RtArena **out_arena) 
     }
   }
   /* Every arena of this size is full: make another one. */
-  a = rt_arena_new(usable, page);
+  RtArena *a = rt_arena_new(usable, page);
   if (!a)
     return -1;
   long index = rt_arena_take(a);
@@ -449,13 +431,13 @@ static void rt_arena_give(RtArena *a, size_t index) {
   InterlockedExchange(&a->lock, 0);
 }
 
-int pli_plat_stack_alloc(size_t size, void **out_base) {
+int pli_plat_stack_alloc(size_t *size_inout, void **out_base) {
   size_t page = pli_plat_page_size();
   /* The usable region is a whole number of chunks: every chunk ends with a
-   * guard page. */
-  size = (size + RT_STACK_CHUNK - 1) & ~(RT_STACK_CHUNK - 1);
+   * guard page, and the handler computes the chunks from the region's top,
+   * so a partial chunk would put the guard in the wrong place. */
+  size_t size = (*size_inout + RT_STACK_CHUNK - 1) & ~(RT_STACK_CHUNK - 1);
   InitOnceExecuteOnce(&rt_stacks_once, rt_stacks_init_cb, NULL, NULL);
-  InitOnceExecuteOnce(&rt_arena_once, rt_arena_init_cb, NULL, NULL);
   /* The arena holds the stacks: one reservation, many slots. A new arena
    * is made when the current one is full. */
   RtArena *a = NULL;
@@ -473,13 +455,18 @@ int pli_plat_stack_alloc(size_t size, void **out_base) {
    * where the handler can deal with it. */
   char *top = usable + size;
   if (!VirtualAlloc(top - RT_STACK_CHUNK + page, RT_STACK_CHUNK - page,
-                    MEM_COMMIT, PAGE_READWRITE))
+                    MEM_COMMIT, PAGE_READWRITE)) {
+    rt_arena_give(a, (size_t)index); /* the slot is still free */
     return -1;
+  }
   /* PAGE_GUARD is a flag on top of a protection, not a protection by
    * itself. */
   if (!VirtualAlloc(top - RT_STACK_CHUNK, page, MEM_COMMIT,
-                    PAGE_GUARD | PAGE_READWRITE))
+                    PAGE_GUARD | PAGE_READWRITE)) {
+    rt_arena_give(a, (size_t)index);
     return -1;
+  }
+  *size_inout = size; /* the usable size the caller gets */
   *out_base = usable;
   return 0;
 }
@@ -744,12 +731,10 @@ size_t pli_plat_page_size(void) {
   long p = sysconf(_SC_PAGESIZE);
   return p > 0 ? (size_t)p : 4096;
 }
-int pli_plat_stack_alloc(size_t size, void **out_base) {
+int pli_plat_stack_alloc(size_t *size_inout, void **out_base) {
+  size_t size = *size_inout;
   size_t page = pli_plat_page_size();
   size = (size + page - 1) & ~(page - 1);
-  /* The fault handler and the alternate stack it runs on: the first
-   * fiber stack on this thread installs them. */
-  rt_fault_handler_install();
   /* PROT_READ|PROT_WRITE over an anonymous mapping: the pages are
    * demand-paged, so the reservation costs address space, not memory, and
    * the fiber stack grows into it without ever moving. */
@@ -766,6 +751,7 @@ int pli_plat_stack_alloc(size_t size, void **out_base) {
   /* Remember the guard page, so the fault handler can tell a stack
    * overflow from any other fault (ADR-237). */
   rt_guard_add(p, page);
+  *size_inout = size; /* the usable size the caller gets */
   *out_base = (char *)p + page;
   return 0;
 }
