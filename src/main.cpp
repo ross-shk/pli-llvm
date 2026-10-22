@@ -1356,12 +1356,14 @@ int main(int argc, char** argv) {
           argStore.push_back(md + "/fltused.o");
           argStore.push_back(md + "/chkstk.o");
           argStore.push_back("-L" + md);
+          // libws2_32.a lets C-interop networking link without a manual
+          // /DEFAULTLIB:ws2_32 (ADR-281); unused imports pull no DLL.
           // libkernel32.a repeats: one-pass GNU linking needs it again for
           // symbols referenced by the later import libs.
           for (const char* lib :
                {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a", "libucrt.a",
                 "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a",
-                "libuser32.a", "libkernel32.a"})
+                "libuser32.a", "libws2_32.a", "libkernel32.a"})
             argStore.push_back(std::string("-l:") + lib);
           argStore.push_back("-o");
           argStore.push_back(output);

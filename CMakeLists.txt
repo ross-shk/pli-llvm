@@ -750,7 +750,8 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   if(PLI_BUILD_ARCH STREQUAL "x86_64")
     set(PLI_SYSROOT_FILES crt2.o crtbegin.o crtend.o fltused.o chkstk.o
         libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a
-        libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a)
+        libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a
+        libws2_32.a)
   endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   # .tbd stubs are text symbol lists (arch-independent), so no arch gate.

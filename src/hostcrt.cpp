@@ -135,7 +135,7 @@ bool detectMingw(const fs::path& mingw) {
   return allExist(mingw, {"crt2.o", "crtbegin.o", "crtend.o", "fltused.o", "chkstk.o", "libgcc.a",
                           "libkernel32.a", "libmsvcrt.a", "libmingw32.a", "libmingwex.a",
                           "libmoldname.a", "libucrt.a", "libadvapi32.a", "libshell32.a",
-                          "libuser32.a"});
+                          "libuser32.a", "libws2_32.a"});
 }
 
 VendoredSysroot resolveVendoredSysroot(const std::string& exeDir) {

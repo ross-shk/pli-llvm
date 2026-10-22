@@ -9636,3 +9636,39 @@ the host dependency ADR-227 removed and leaks `MacOSX.sdk` into `-v` output.
 Requiring `--extra` for sockets — a manual workaround is not a compiler
 behaviour. Keeping `xcrun` "because it is Apple tooling" — it is still a
 subprocess whose answer can be recovered by a filesystem probe.
+
+---
+
+## ADR-281 — Vendored Winsock import library: Windows C-interop needs no extra link flag
+
+**Context.** ADR-227's embedded MinGW sysroot carries the CRT, GCC helpers and
+the Win32 import libs the PL/I runtime needs, but not Winsock. A C-interop
+program that reaches `socket`/`getaddrinfo`/`WSAPoll` therefore failed at link;
+libnet's CMake worked around it with `-Wl,/DEFAULTLIB:ws2_32` — the Windows
+counterpart of the macOS `--extra libSystem.B.tbd` workaround ADR-280 removed.
+Linux needed no change: musl's `libc.a` already exports the POSIX socket
+surface (`socket`, `connect`, `getaddrinfo`, `poll`, …), which the existing
+`socket_pair` test exercises through the vendored sysroot.
+
+**Decision.** Vendor the authentic x86_64 `libws2_32.a` from mingw-w64 11.0.1
+in `platform/windows-mingw/`, embed it with the rest of the sysroot (ADR-227),
+and add `-l:libws2_32.a` to the default MinGW link just before the trailing
+`libkernel32.a`. Import libraries have one archive member per export, so the
+linker pulls only the thunks a program actually references: a non-networking
+program gains no `WS2_32.dll` dependency. `tests/driver/winsock.sh` compiles a
+C bridge using `WSAStartup`/`socket`/`closesocket`, links it through pli with
+no extra flags, runs it, and prints PASS (skipped off Windows).
+
+**Consequences.** Windows C-interop links networking code with no
+`/DEFAULTLIB` and no `--extra`, matching macOS (retry with the real libSystem)
+and Linux (musl libc). The archive is a build input only, like the other
+MinGW libs; it does not change the runtime or the embedded sysroot's set
+name. Programs using a Winsock export outside the library's list still fail
+loudly at link, as with any missing import.
+
+**Rejected.** A hand-written partial `ws2_32.def` stub like the macOS `.tbd`
+files — Winsock's surface is large and versioned, and an import library is a
+generated artifact whose exact form the linker expects. Requiring
+`-lws2_32`/`--extra` — that is the workaround being removed. Linking
+`libws2_32.a` as a whole archive — it would import the DLL even for programs
+that never call it.
