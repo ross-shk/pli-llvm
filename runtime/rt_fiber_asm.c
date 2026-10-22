@@ -36,13 +36,18 @@
  * switch reports it if it is reached.
  */
 
+#if defined(__APPLE__)
+#define RT_FIBER_SYM(name) "_" name
+#else
+#define RT_FIBER_SYM(name) name
+#endif
+
 #if defined(__x86_64__) && !defined(_WIN32)
 
 __asm__(
     ".text\n"
-    ".globl pli_fiber_switch\n"
-    ".type pli_fiber_switch,@function\n"
-    "pli_fiber_switch:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_switch") "\n"
+    RT_FIBER_SYM("pli_fiber_switch") ":\n"
     "    movq    %rsp, %r8\n" /* S: the entry rsp; [S] holds the resume address */
     "    pushq   %rbp\n"       /* the register slots land at [S-48, S) */
     "    pushq   %rbx\n"
@@ -60,10 +65,8 @@ __asm__(
     "    movq    -16(%rsp), %rbx\n"
     "    movq    -8(%rsp), %rbp\n"
     "    ret\n" /* pop [S'] = the resume address; rsp = S'+8 */
-    ".size pli_fiber_switch,.-pli_fiber_switch\n"
-    ".globl pli_fiber_start\n"
-    ".type pli_fiber_start,@function\n"
-    "pli_fiber_start:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_start") "\n"
+    RT_FIBER_SYM("pli_fiber_start") ":\n"
     "    movq    %rdx, 8(%rdi)\n" /* f->pc = the entry point */
     "    leaq    -64(%rsi), %rax\n"
     "    andq    $-16, %rax\n"    /* S: 16-aligned, so the entry runs with rsp = S+8 */
@@ -77,15 +80,14 @@ __asm__(
     "    movq    %rax, 0(%rdi)\n" /* f->sp = S */
     "    movq    %rdx, (%rax)\n"  /* [S] = the entry address: the switch's RET jumps there */
     "    movq    $0, 8(%rax)\n"  /* [S+8] = the entry's return address (never used) */
-    "    ret\n"
-    ".size pli_fiber_start,.-pli_fiber_start\n");
+    "    ret\n");
 
 #elif defined(__x86_64__) && defined(_WIN32)
 
 __asm__(
     ".text\n"
-    ".globl pli_fiber_switch\n"
-    "pli_fiber_switch:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_switch") "\n"
+    RT_FIBER_SYM("pli_fiber_switch") ":\n"
     /* Windows x64 passes the arguments in RCX and RDX (not RDI/RSI), and
      * its callee-saved set is RBX RBP RDI RSI R12-R15 plus XMM6-XMM15. */
     "    movq    %rsp, %r8\n" /* S: the entry rsp; [S] holds the resume address */
@@ -131,8 +133,8 @@ __asm__(
     "    movq    -16(%rsp), %rbx\n"
     "    movq    -8(%rsp), %rbp\n"
     "    ret\n" /* pop [S'] = the resume address; rsp = S'+8 */
-    ".globl pli_fiber_start\n"
-    "pli_fiber_start:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_start") "\n"
+    RT_FIBER_SYM("pli_fiber_start") ":\n"
     /* Only the volatile registers may be touched: rsi and the other
      * callee-saved registers belong to the caller, and a hand-written
      * function that clobbers them corrupts the caller's live values (the
@@ -172,12 +174,15 @@ __asm__(
  * in the word at [S]. So the restore ends with `ret`, after moving the
  * stack pointer back to S: the resumed code then sees the stack pointer
  * it had at the call site. (A `ret` with sp still at the frame base would
- * hand the caller a stack pointer 176 bytes too low.) */
+ * hand the caller a stack pointer 176 bytes too low.)
+ *
+ * Unlike x86-64, the saved fiber pointer is the FRAME BASE (S-176), not
+ * S: the restore loads the slots at positive offsets from it and then
+ * adds 176 to recover S. */
 __asm__(
     ".text\n"
-    ".globl pli_fiber_switch\n"
-    ".type pli_fiber_switch,%function\n"
-    "pli_fiber_switch:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_switch") "\n"
+    RT_FIBER_SYM("pli_fiber_switch") ":\n"
     "    mov     x9, sp\n"           /* S: the entry sp */
     "    sub     sp, sp, #176\n"     /* the register slots land at [S-176, S) */
     "    stp     d8,  d9,  [sp, #0]\n"
@@ -190,7 +195,8 @@ __asm__(
     "    stp     x25, x26, [sp, #112]\n"
     "    stp     x27, x28, [sp, #128]\n"
     "    stp     x29, x30, [sp, #144]\n" /* x30 is the resume address */
-    "    str     x9, [x0]\n"         /* from->sp = S */
+    "    sub     x11, x9, #176\n"     /* the frame base = S-176 */
+    "    str     x11, [x0]\n"         /* from->sp = the frame base */
     "    ldr     x10, [x1]\n"        /* to->sp = S' */
     "    mov     sp, x10\n"
     "    ldp     d8,  d9,  [sp, #0]\n"
@@ -205,10 +211,8 @@ __asm__(
     "    ldp     x29, x30, [sp, #144]\n"
     "    add     sp, sp, #176\n"     /* sp = S', as the resumed code expects */
     "    ret\n"                      /* jump to the restored x30 */
-    ".size pli_fiber_switch,.-pli_fiber_switch\n"
-    ".globl pli_fiber_start\n"
-    ".type pli_fiber_start,%function\n"
-    "pli_fiber_start:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_start") "\n"
+    RT_FIBER_SYM("pli_fiber_start") ":\n"
     "    mov     x9, x1\n"           /* the stack's top */
     "    sub     x10, x9, #16\n"
     "    and     x10, x10, #-16\n"   /* S: 16-aligned */
@@ -221,10 +225,9 @@ __asm__(
     "    cbnz    x12, 1b\n"          /* x11 is its base + 176 = S again */
     "    sub     x11, x11, #176\n"
     "    str     x2, [x11, #152]\n"  /* x30 = the entry point: the restore's ret */
-    "    str     x10, [x0]\n"        /* f->sp = S */
+    "    str     x11, [x0]\n"        /* f->sp = the frame base */
     "    str     x2, [x0, #8]\n"     /* f->pc = the entry point */
-    "    ret\n"
-    ".size pli_fiber_start,.-pli_fiber_start\n");
+    "    ret\n");
 
 #else
 
@@ -232,11 +235,11 @@ __asm__(
  * OS-thread model, and the switch reports it if it is reached. */
 __asm__(
     ".text\n"
-    ".globl pli_fiber_switch\n"
-    "pli_fiber_switch:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_switch") "\n"
+    RT_FIBER_SYM("pli_fiber_switch") ":\n"
     "    jmp     rt_fiber_unsupported\n"
-    ".globl pli_fiber_start\n"
-    "pli_fiber_start:\n"
+    ".globl " RT_FIBER_SYM("pli_fiber_start") "\n"
+    RT_FIBER_SYM("pli_fiber_start") ":\n"
     "    jmp     rt_fiber_unsupported\n");
 
 #endif
