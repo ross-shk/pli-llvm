@@ -1,0 +1,144 @@
+name: AI Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    name: AI Review with Spec Skill
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup build environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build clang lld llvm-dev libffi-dev
+
+      - name: Build pli-llvm
+        run: |
+          cmake -B build/cmake -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/cmake -j
+
+      - name: Run smoke tests
+        run: |
+          python3 tests/run_tests.py smoke
+
+      - name: Check GRAMMAR-COVERAGE.md updates
+        id: coverage
+        run: |
+          # Check if any .pli test files were added/modified
+          CHANGED_TESTS=$(git diff --name-only HEAD~1..HEAD -- 'tests/**/*.pli' || true)
+          if [ -n "$CHANGED_TESTS" ]; then
+            echo "changed_tests=true" >> $GITHUB_OUTPUT
+            echo "Changed test files:"
+            echo "$CHANGED_TESTS"
+          else
+            echo "changed_tests=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check if GRAMMAR-COVERAGE.md was updated
+          COVERAGE_CHANGED=$(git diff --name-only HEAD~1..HEAD -- 'docs/GRAMMAR-COVERAGE.md' || true)
+          if [ -n "$COVERAGE_CHANGED" ]; then
+            echo "coverage_updated=true" >> $GITHUB_OUTPUT
+          else
+            echo "coverage_updated=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate ADR for new extensions
+        if: steps.coverage.outputs.changed_tests == 'true'
+        run: |
+          # Check for new test files that might implement extensions
+          NEW_TESTS=$(git diff --name-only --diff-filter=A HEAD~1..HEAD -- 'tests/**/*.pli' || true)
+          if [ -n "$NEW_TESTS" ]; then
+            echo "New test files detected:"
+            echo "$NEW_TESTS"
+            # Check if any test might be for later-dialect feature
+            for test in $NEW_TESTS; do
+              if grep -qi "select\|do until\|leave\|iterate" "$test" 2>/dev/null; then
+                echo "⚠ Warning: Test '$test' may implement later-dialect feature"
+                echo "  Ensure ADR exists in docs/DESIGN-DECISIONS.md"
+                echo "  Ensure entry in docs/GRAMMAR-COVERAGE.md Extensions table"
+              fi
+            done
+          fi
+
+      - name: Check for rule numbers in diagnostics
+        run: |
+          # Verify new/modified diagnostics cite rule numbers
+          CHANGED_SRC=$(git diff --name-only HEAD~1..HEAD -- 'src/**/*.cpp' 'src/**/*.h' || true)
+          if [ -n "$CHANGED_SRC" ]; then
+            echo "Checking diagnostics in changed files for rule numbers..."
+            for file in $CHANGED_SRC; do
+              # Look for d_.error/warning/note calls without rule numbers
+              if grep -n "d_\.(error|warning|note)" "$file" | grep -v "(\([0-9]\+\))" | grep -v "// " | head -5; then
+                echo "⚠ Warning: Found diagnostic without rule number in $file"
+                echo "  All diagnostics must cite TR 25.084 rule number: d_.error(loc, msg, \"(nn)\")"
+              fi
+            done
+          fi
+
+      - name: Check platform separation in runtime
+        run: |
+          # Verify runtime/ core has no platform-specific code
+          echo "Checking platform separation in runtime/..."
+          VIOLATIONS=$(grep -rn "#ifdef.*_WIN32\|#ifdef.*__linux__\|#ifdef.*__APPLE__\|pthread_\|CreateThread\|WaitForSingleObject\|GetLastError\|errno\|strerror" runtime/ --include="*.cpp" --include="*.h" 2>/dev/null | grep -v "sync/pli_thread.h" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ FAIL: Platform-specific code found in runtime/ core:"
+            echo "$VIOLATIONS"
+            echo "  Use pli_thread.h abstractions only in runtime/ core"
+            exit 1
+          else
+            echo "✓ Platform separation OK"
+          fi
+
+      - name: Check for LLVM in frontend (ADR-002)
+        run: |
+          # Verify no LLVM types in frontend/sema (ADR-002)
+          echo "Checking ADR-002: IRGen only LLVM-aware component..."
+          VIOLATIONS=$(grep -rn "llvm::\|LLVM" src/parser.cpp src/sema.cpp src/ast.cpp src/types.cpp src/lexer.cpp 2>/dev/null || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ FAIL: LLVM types found in frontend/sema (ADR-002 violation):"
+            echo "$VIOLATIONS"
+            exit 1
+          else
+            echo "✓ ADR-002 OK"
+          fi
+
+      - name: Check for later-dialect features without ADR
+        run: |
+          # Check for later-dialect features in frontend
+          echo "Checking for later-dialect features without ADR..."
+          VIOLATIONS=$(grep -rn "select\|do until\|leave\|iterate\|exit" src/parser.cpp src/sema.cpp 2>/dev/null | grep -v "// ADR" | grep -v "//.*ADR" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "⚠ Warning: Later-dialect features found without ADR reference:"
+            echo "$VIOLATIONS"
+            echo "  These require ADR + GRAMMAR-COVERAGE.md Extensions entry"
+          else
+            echo "✓ No unauthorized later-dialect features"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## AI Review Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Build: ✓" >> $GITHUB_STEP_SUMMARY
+          echo "- Smoke tests: ✓" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.coverage.outputs.changed_tests }}" = "true" ]; then
+            echo "- Test changes: ✓ (verify GRAMMAR-COVERAGE.md updated)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ steps.coverage.outputs.coverage_updated }}" = "true" ]; then
+            echo "- GRAMMAR-COVERAGE.md: ✓ Updated" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- GRAMMAR-COVERAGE.md: ⚠ Not updated (may be needed)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See workflow logs for detailed checks." >> $GITHUB_STEP_SUMMARY
