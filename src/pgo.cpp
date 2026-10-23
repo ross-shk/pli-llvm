@@ -4,6 +4,8 @@
 #include "pgo.h"
 
 #include "codegen.h"
+#include "embedded_runtime.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Module.h"
 #include "llvm/ProfileData/InstrProfReader.h"
@@ -85,6 +87,20 @@ std::set<std::string> runtimeFuncNames(const llvm::Triple& triple) {
     for (const llvm::Function& f : *rt)
       if (!f.isDeclaration())
         names.insert(f.getName().str());
+  }
+  // The platform TU is a second embedded blob; its pli_plat_* functions are
+  // merged into every MAIN module too, so they must not prove a stale profile
+  // belongs here.
+  if (const RuntimeBlob* blob = selectPlatformForTarget(triple)) {
+    llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len),
+                              "pli_rtplat.bc");
+    if (auto modOrErr = llvm::parseBitcodeFile(buf, ctx)) {
+      for (const llvm::Function& f : **modOrErr)
+        if (!f.isDeclaration())
+          names.insert(f.getName().str());
+    } else {
+      llvm::consumeError(modOrErr.takeError());
+    }
   }
   return names;
 }
