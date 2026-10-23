@@ -5601,6 +5601,20 @@ void IRGen::emitStmt(HStmt* s) {
       break; // array/struct operands are diagnosed by sema
     }
     flushCalls("pli_out_begin", "pli_out_end");
+    // DISPLAY ... REPLY (rule 114): after the prompt is written, read one
+    // reply line from the active input into the character variable.
+    if (s->replyTarget) {
+      HExpr* rt = s->replyTarget.get();
+      const Type& rty = rt->ty;
+      llvm::Value* buf =
+          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)rty.len), "reply");
+      b_.CreateCall(runtimeFn("pli_get_reply"), {buf, i64(rty.len)});
+      Val rv;
+      rv.ptr = buf;
+      rv.len = i64(rty.len);
+      rv.ty = rty;
+      storeGetTarget(rt, rv, s->loc);
+    }
     break;
   }
   case HStmt::Get:
@@ -7734,6 +7748,11 @@ void IRGen::emitPut(HStmt* s) {
     }
     deferCall("pli_put_skip", {n});
   }
+  // LINE ( n ) stream option (rule (105)): start the output at line n.
+  if (s->line) {
+    llvm::Value* n = s->lineCount ? toI64(emitExpr(s->lineCount.get())) : i64(1);
+    deferCall("pli_put_edit_line", {n});
+  }
   // STRING (rule 105) sink: route the list-directed output into the character
   // variable instead of SYSPRINT.
   llvm::Value *sdata = nullptr, *slen = nullptr;
@@ -7828,6 +7847,8 @@ void IRGen::emitPut(HStmt* s) {
   }
   if (s->stringTarget)
     deferCall("pli_string_put_close", {sdata, slen}, /*capture=*/true);
+  if (s->copy)
+    deferCall("pli_copy", {});
   if (s->fileSym)
     deferCall("pli_put_unselect", {});
   // Write the record: under the output lock when the program has a task.
@@ -7945,6 +7966,11 @@ void IRGen::emitGet(HStmt* s) {
       b_.CreateCall(runtimeFn("pli_string_get_open"), {sdata, slen});
     if (s->fileSym)
       b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
+    // LINE ( n ) stream option (rule (105)): resume input at line n.
+    if (s->line) {
+      llvm::Value* n = s->lineCount ? toI64(emitExpr(s->lineCount.get())) : i64(1);
+      b_.CreateCall(runtimeFn("pli_get_edit_skip"), {n});
+    }
     emitGetDataItems(s);
     if (s->fileSym)
       b_.CreateCall(runtimeFn("pli_get_unselect"), {});
@@ -7958,6 +7984,11 @@ void IRGen::emitGet(HStmt* s) {
     deferCall("pli_string_get_open", {sdata, slen});
   if (s->fileSym)
     deferCall("pli_get_select", {i64(s->fileSym->fileSlot)});
+  // LINE ( n ) stream option (rule (105)): resume input at line n.
+  if (s->line) {
+    llvm::Value* n = s->lineCount ? toI64(emitExpr(s->lineCount.get())) : i64(1);
+    deferCall("pli_get_edit_skip", {n});
+  }
   if (s->edit) {
     emitGetEditItems(s);
   } else {

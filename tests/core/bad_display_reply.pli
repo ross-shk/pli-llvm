@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* REPLY needs a NONVARYING scalar CHARACTER variable (rule (114)). */
+ bad_display_reply: procedure options(main);
+    declare n fixed bin(31);
+    display('prompt> ') reply(n);
+ end bad_display_reply;

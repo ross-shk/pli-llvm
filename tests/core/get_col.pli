@@ -1,0 +1,28 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* GET COLUMN positioning (rules 48, 108): COL(n) on input skips
+    forward so the next item starts at 1-based column n. */
+ getcol: procedure options(main);
+    declare src char(16);
+    declare fails fixed bin(31);
+    declare a char(3);
+    declare b char(3);
+    declare k fixed bin(31);
+    fails = 0;
+
+    /* "abc  def": column 1 is a, column 6 is d. */
+    src = 'abc  def';
+    get string(src) edit (a, b) (a(3), col(6), a(3));
+    if a ^= 'abc' then fails = fails + 1;
+    if b ^= 'def' then fails = fails + 1;
+
+    /* Dynamic column: a variable expression. */
+    k = 4;
+    src = 'xyz  uvw';
+    get string(src) edit (a, b) (a(3), col(k+2), a(3));
+    if a ^= 'xyz' then fails = fails + 1;
+    if b ^= 'uvw' then fails = fails + 1;
+
+    if fails = 0 then put skip list('PASS get_col');
+    else put skip list('FAIL get_col: fails =', fails);
+ end getcol;

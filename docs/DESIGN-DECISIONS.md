@@ -9814,3 +9814,43 @@ known and a per-file `ftell` is O(1); a full rewrite would move the whole tail
 on every update. *A marker-per-record layout.* The fixed-size image format has
 no room for a marker without changing `READ`/`WRITE` too, which would break
 `driver/record`.
+
+## ADR-285 — `COPY`, `LINE(n)` and `DISPLAY REPLY` reuse the line-control runtime
+
+**Context.** Rule (105) lists `COPY` and `LINE ( expression )` among the stream
+options of `GET`/`PUT`, and the attested rule (114) allows
+`DISPLAY (scalar) REPLY (scalar-character-variable)`. All three were diagnosed
+unimplemented; `GET` `COLUMN` positioning was already served but the coverage
+table still called it diagnosed.
+
+**Decision.** `COPY` is a `PUT`-only option: `pli_copy` reads the remainder of
+the current input record through `rt_next_char` and writes it to the active
+output sink, terminating the output line. Reading is done under the input lock
+and writing under the output lock, never both at once, so the two locks cannot
+be taken in opposite orders. `COPY` with `STRING` has no input remainder to
+echo and is diagnosed, as is `COPY` on `GET`. `LINE ( n )` reuses the existing
+line-control entry points (`pli_put_edit_line`/`pli_get_edit_skip`), so it
+advances n lines rather than maintaining a separate page line counter — the
+same approximation the `LINE` format item already uses. `DISPLAY ... REPLY`
+prints the value first (the prompt), then calls `pli_get_reply`, which reads one
+line into a NONVARYING scalar character variable, truncating the excess and
+blank-padding the remainder. A reply target that is not such a variable is
+diagnosed. Dynamic repetition counts `(expr)(group)` stay diagnosed with rule
+(48), pinned by `bad_edit_iter.pli`: a runtime data cursor would require a
+per-item value table for every data format, which is out of scope here.
+
+**Consequences.** `tests/core/line_put.pli` records the `PUT LINE(3)` golden,
+`tests/driver/stream_opts.sh` echoes a remainder with `COPY` and skips a line
+with `GET LINE(1)`, `tests/driver/display_reply.sh` feeds a reply on stdin, and
+`tests/core/get_col.pli` pins `GET` `COL(n)`; `bad_copy_get.pli` and
+`bad_display_reply.pli` pin the diagnostics. The coverage rows for (104),(105),
+(106)–(111) and (114) now describe the served forms.
+
+**Rejected.** *Treating `COPY` as valid on `GET`.* There is no output to receive
+the remainder and IBM defines it as a `PUT` option. *A per-call page line
+counter for `LINE`.* It would diverge from the `LINE` format item and require
+`PAGESIZE` state the runtime does not track. *Reading the reply without a
+length.* A NONVARYING target needs the truncate/pad rule; `pli_get_reply` takes
+its capacity. *Lowering dynamic counts by unrolling a maximum.* That would
+evaluate data expressions the program did not supply and change side-effect
+order.

@@ -1140,3 +1140,61 @@ int pli_snprintf(char *buf, size_t cap, const char *fmt, ...) {
 
 /* Assignment to CHARACTER(n) NONVARYING: truncate or pad with blanks. */
 
+
+/* COPY stream option (rule (105)): copy the remainder of the current input
+ * record to the output stream, terminating the output line. Reads happen
+ * under the input lock only; the bytes are written after it is released, so
+ * the input and output locks are never held out of order. */
+void pli_copy(void) {
+  int last = '\n';
+  for (;;) {
+    char buf[256];
+    size_t n = 0;
+    int eof = 0;
+    rt_in_lock();
+    while (n < sizeof buf) {
+      int c = rt_next_char();
+      if (c == EOF) {
+        eof = 1;
+        break;
+      }
+      buf[n++] = (char)c;
+      if (c == '\n')
+        break;
+    }
+    rt_in_unlock();
+    if (n > 0) {
+      rt_out_lock();
+      rt_put_raw(buf, n);
+      rt_out_unlock();
+      last = (unsigned char)buf[n - 1];
+    }
+    if (eof || last == '\n')
+      break;
+  }
+  if (last != '\n') {
+    rt_out_lock();
+    rt_put_raw("\n", 1);
+    rt_out_unlock();
+  }
+}
+
+/* DISPLAY ... REPLY (rule (114)): read one line from the active input into a
+ * NONVARYING character field, truncating the excess and blank-padding. */
+void pli_get_reply(char *dst, long long cap) {
+  if (cap <= 0)
+    return;
+  long long i = 0;
+  rt_in_lock();
+  for (;;) {
+    int c = rt_next_char();
+    if (c == EOF || c == '\n')
+      break;
+    if (i < cap)
+      dst[i] = (char)c;
+    ++i;
+  }
+  for (long long j = i < cap ? i : cap; j < cap; ++j)
+    dst[j] = ' ';
+  rt_in_unlock();
+}

@@ -185,7 +185,10 @@ struct HStmt {
 
   // GET/PUT stream statement options (rules (104),(105))
   bool skip = false, page = false;
+  bool copy = false;              // COPY stream option (rule 105)
+  bool line = false;              // LINE(n) stream option (rule 105)
   HExprP skipCount;
+  HExprP lineCount;               // LINE(n) expression
   std::vector<HExprP> items;
   // Edit-directed transmission (rule (108)); mirrors the AST flag and format
   // list, with lowered width/decimals expressions.
@@ -209,6 +212,10 @@ struct HStmt {
   bool openInput = false;
   bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112))
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
+
+  // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
+  // the reply input.
+  HExprP replyTarget;
 
   std::vector<HExprP> args; // CALL arguments
 

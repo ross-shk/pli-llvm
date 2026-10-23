@@ -1,0 +1,6 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* COPY copies input to output, so it belongs on PUT (rule (105)). */
+ bad_copy_get: procedure options(main);
+    get copy;
+ end bad_copy_get;

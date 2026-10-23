@@ -238,7 +238,10 @@ struct Stmt {
 
   // PUT/GET stream statement options (rules (104),(105))
   bool skip = false, page = false;
+  bool copy = false;              // COPY stream option (rule 105)
+  bool line = false;              // LINE(n) stream option (rule 105)
   ExprP skipCount;
+  ExprP lineCount;                // LINE(n) expression
   std::vector<ExprP> items;
   // Edit-directed transmission (rule (108)): when true, the data items are
   // written/read through the paired format list instead of list-directed.
@@ -262,6 +265,10 @@ struct Stmt {
                            // read and write in place (REWRITE/DELETE)
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
                            // file; READ/WRITE transfer fixed-size binary records
+
+  // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
+  // the reply input.
+  ExprP replyTarget;
 
    std::vector<ExprP> args; // CALL arguments
    ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))

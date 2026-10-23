@@ -260,6 +260,9 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->entryParamSyms = s->entryParamSyms;
   h->skip = s->skip;
   h->page = s->page;
+  h->copy = s->copy;
+  h->line = s->line;
+  h->lineCount = lowerExpr(s->lineCount.get());
   h->condName = s->condName;
   h->condKey = s->condKey;
   h->snap = s->snap;
@@ -384,6 +387,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->openInput = s->openInput;
   h->openUpdate = s->openUpdate;
   h->openRecord = s->openRecord;
+  h->replyTarget = lowerExpr(s->replyTarget.get());
 
   // CALL statement arguments: coerce to the callee's parameter types.
   for (const auto& a : s->args) {

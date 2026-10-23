@@ -67,6 +67,7 @@ PLI_FN(pli_put_edit_column, VOID, (I64))
 PLI_FN(pli_put_edit_skip, VOID, (I64))
 PLI_FN(pli_put_edit_page, VOID, (VOID))
 PLI_FN(pli_put_edit_line, VOID, (I64))
+PLI_FN(pli_copy, VOID, (VOID))                        /* COPY (105): echo input remainder */
 PLI_FN(pli_put_edit_pic, VOID, (I64, I64, I32, CPTR, I64))
 
 PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
@@ -203,6 +204,7 @@ PLI_FN(pli_get_edit_bit, VOID, (PTR, I64, I64))
 PLI_FN(pli_get_edit_column, VOID, (I64))
 PLI_FN(pli_get_edit_x, VOID, (I64))
 PLI_FN(pli_get_edit_skip, VOID, (I64))
+PLI_FN(pli_get_reply, VOID, (PTR, I64))               /* DISPLAY REPLY (114) */
 
 PLI_FN(pli_string_put_open, VOID, (PTR, I64))         /* STRING output (105) */
 PLI_FN(pli_string_put_close, I64, (PTR, I64))         /* STRING output (105), returns length written */

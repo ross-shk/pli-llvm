@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* LINE(n) stream option on output (rule (105)): PUT LINE(n) starts the
+    statement's output at line n of the current page. */
+ line_put: procedure options(main);
+    put line(3) list('at line three');
+    put skip list('end');
+ end line_put;

@@ -3596,6 +3596,14 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   }
   case Stmt::Put: {
     typeExpr(s->skipCount.get(), sc, p);
+    // LINE ( expression ) stream option (rule (105)): a numeric line number.
+    typeExpr(s->lineCount.get(), sc, p);
+    if (s->lineCount && !s->lineCount->ty.isNumeric())
+      d_.error(s->lineCount->loc, "a LINE count must be numeric", "(105)");
+    // COPY copies the remainder of the current input record to the output
+    // file, so it has no meaning with a STRING sink (rule (105)).
+    if (s->copy && s->stringTarget)
+      d_.error(s->loc, "COPY cannot be combined with STRING", "(105)");
     checkStringTarget(s, sc, p, false);
     checkFileTarget(s, sc);
     if (s->edit) {
@@ -3637,6 +3645,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // item must be an assignable scalar reference, not a constant or procedure
     // (rules (109),(110)).
     typeExpr(s->skipCount.get(), sc, p);
+    // LINE ( expression ) stream option (rule (105)): a numeric line number.
+    typeExpr(s->lineCount.get(), sc, p);
+    if (s->lineCount && !s->lineCount->ty.isNumeric())
+      d_.error(s->lineCount->loc, "a LINE count must be numeric", "(105)");
+    // COPY is a PUT-side option: it copies input to output (rule (105)).
+    if (s->copy)
+      d_.error(s->loc, "COPY is not valid on a GET statement", "(105)");
     checkStringTarget(s, sc, p, true);
     checkFileTarget(s, sc);
     if (s->edit) {
@@ -3920,6 +3935,22 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "DISPLAY takes a scalar value", "(114)");
     else if (s->value && s->value->ty.isBit() && s->value->ty.len > 1)
       d_.error(s->loc, "DISPLAY of a BIT(n>1) value is not implemented in this stage", "(114)");
+    // DISPLAY ... REPLY ( reference ) (rule 114): the reply line lands in a
+    // NONVARYING scalar character variable.
+    if (s->replyTarget) {
+      typeExpr(s->replyTarget.get(), sc, p);
+      Expr* rt = s->replyTarget.get();
+      bool ref = rt && ((rt->kind == Expr::VarRef && rt->sym &&
+                         rt->sym->kind != Symbol::ProcName) ||
+                        rt->kind == Expr::Subscript);
+      if (!ref)
+        d_.error(rt ? rt->loc : s->loc, "DISPLAY REPLY requires a variable", "(114)");
+      else if (!rt->ty.isChar() || rt->ty.isArray() || rt->ty.varying)
+        d_.error(rt->loc,
+                 "DISPLAY REPLY requires a NONVARYING scalar CHARACTER variable", "(114)");
+      else
+        checkValueTarget(rt); // VALUE constants cannot receive the reply
+    }
     break;
   }
   case Stmt::Read: {

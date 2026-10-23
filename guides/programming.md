@@ -1010,6 +1010,11 @@ Use `-v` to list the configured paths.
 
 Served items: `f(w,d)`, `e(w,d)`, `a(w)`, `x(w)`, `skip(n)`, `page`, `line(n)`, `b(n)`, `c(re,im)`, `col(n)`, and `(n)(...)` repetition groups. Labelled `format` statements plus remote `r(label)` splicing work too.
 
+`line(n)` also works as a stream option on `get`/`put` and advances to line n
+(a newline-count approximation, not a tracked page counter). `put ... copy`
+echoes the rest of the current input line to the output, which is handy for
+keeping a transcript while reading a field.
+
 ### DATA-directed: self-describing dumps
 
 `put data(x, y)` prints `name=value` pairs; `get data` reads them in any order and skips unknown names. Great for configs and debugging — like `repr()` of your variables.
@@ -1056,6 +1061,8 @@ the way through, with `on endfile` telling the loop to stop:
 ```
 
 `display(x)` prints one value plus a newline (handy for quick debugging).
+`display(x) reply(v)` prints `x` and then reads the next input line into the
+character variable `v` — a prompt and its answer in one statement.
 
 **Not yet**
 

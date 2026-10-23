@@ -2822,7 +2822,7 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
   return st;
 }
 
-// display-statement ::= DISPLAY ( expression )                  rule (114)
+// display-statement ::= DISPLAY ( expression ) [ REPLY ( reference ) ]  rule (114)
 StmtP Parser::parseDisplay() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Display;
@@ -2833,11 +2833,16 @@ StmtP Parser::parseDisplay() {
   st->value = parseExpr();
   if (!expect(Tok::RParen, "(114)"))
     return nullptr;
-  // The REPLY form stays diagnosed.
   if (atWord("REPLY")) {
-    d_.error(cur().loc, "DISPLAY ... REPLY is not implemented in this stage", "(114)");
-    resync();
-    return nullptr;
+    advance();
+    if (eat(Tok::LParen)) {
+      // REPLY takes a reference (scalar character variable).
+      st->replyTarget = parseExpr();
+      expect(Tok::RParen, "(114)");
+    } else {
+      d_.error(cur().loc, "expected '(' after REPLY", "(114)");
+      return nullptr;
+    }
   }
   expect(Tok::Semi, "(114)");
   return st;
@@ -2931,11 +2936,19 @@ StmtP Parser::parsePut() {
       }
       continue;
     }
-    if (atWord("LINE") || atWord("COPY")) {
-      d_.error(cur().loc, "PUT option " + cur().text + " is not implemented in this stage",
-               "(105)");
-      resync();
-      return nullptr;
+    if (atWord("LINE")) {
+      advance();
+      st->line = true;
+      if (eat(Tok::LParen)) {
+        st->lineCount = parseExpr();
+        expect(Tok::RParen, "(105)");
+      }
+      continue;
+    }
+    if (atWord("COPY")) {
+      advance();
+      st->copy = true;
+      continue;
     }
     d_.error(cur().loc, "unexpected token in PUT statement", "(105)");
     resync();
@@ -3028,9 +3041,22 @@ StmtP Parser::parseGet() {
       }
       continue;
     }
-    if (atWord("COPY") || atWord("LINE") || atWord("PAGE")) {
-      d_.error(cur().loc, "GET option " + cur().text + " is not implemented in this stage",
-               "(105)");
+    if (atWord("LINE")) {
+      advance();
+      st->line = true;
+      if (eat(Tok::LParen)) {
+        st->lineCount = parseExpr();
+        expect(Tok::RParen, "(105)");
+      }
+      continue;
+    }
+    if (atWord("COPY")) {
+      advance();
+      st->copy = true;
+      continue;
+    }
+    if (atWord("PAGE")) {
+      d_.error(cur().loc, "GET option PAGE is not implemented in this stage", "(105)");
       resync();
       return nullptr;
     }
