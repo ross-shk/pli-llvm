@@ -10601,3 +10601,36 @@ positions is diagnosed rather than narrowed (`bad_sterling_picture.pli`).
 the 240/12 radix and produce the wrong character value. *Route through the
 constant parser.* Pictures are runtime templates, not source constants; the
 two paths must share the pence value but not the parser.
+
+---
+
+## ADR-296 — Per-ALLOCATE bounds for a 1-D BASED array
+
+**Context.** Rules (25),(89) served a BASED heap cell sized from the
+DECLARE descriptor (`ALLOCATE x SET(p)`), and ADR-184 extended that to a
+runtime-`(n)` DECLARE bound. The standard IBM idiom `DCL a(*) FIXED
+BASED(p); ALLOCATE a(n) SET(p);` stayed diagnosed — both because a
+non-parameter `(*)` was rejected and because the parser did not accept
+`SET` after a dimension.
+
+**Decision.** The parser accepts `SET`/`IN` after a dimension-attribute
+(rule (88)). Sema serves one extent on a 1-D BASED array: it types the
+bound, marks that axis dynamic, and leaves the multi-axis, `lb:ub` and
+`*` forms diagnosed with rule (89). A `(*)` BASED array must receive an
+extent at every `ALLOCATE`. IRGen sizes the block as `extent × elemSize`
+and rewrites the `dynUb_` dope slot, so subscripts, `LBOUND`/`HBOUND` and
+`DIM` read the ALLOCATE-time extent, not the DECLARE placeholder. Pass 2b
+seeds the slot for a BASED axis with no DECLARE bound expression. The
+compile-time constant-subscript check now skips every BASED array, since
+the DECLARE extent is no longer authoritative; runtime
+`SUBSCRIPTRANGE` remains the check.
+
+**Consequences.** `based_alloc_dim.pli` pins the `(*)` declare, a fixed
+DECLARE overridden by `ALLOCATE`, re-allocation with a new extent, and
+`IN (area)`. `bad_based_alloc_dim.pli` re-pins the rejected shapes and
+`bad_based_array.pli` keeps a multi-`*` axis as its negative.
+
+**Rejected.** *Keep the DECLARE extent authoritative for the static
+subscript check.* It rejects legal programs after an override. *Store
+extents in the heap block header.* ADR-184 already reads the dope slots;
+a header would split the overlay and heap representations.

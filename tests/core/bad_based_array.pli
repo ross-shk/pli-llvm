@@ -1,9 +1,10 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Rules (12),(13),(25): dimensioned BASED stays numeric or
-    POINTER. Each DECLARE below must fail with its rule cite. */
+ /* Rule (13): a BASED adjustable extent is served for a leading
+    '*' with constant later axes; a second '*' stays diagnosed.
+    (A 1-D `(*)` BASED array is served since ADR-296.) */
  bad_based_array: procedure options(main);
    dcl p pointer;
    dcl c(4) char(1) based(p);
-   dcl s(*) fixed bin(31) based(p);
+   dcl s(*,*) fixed bin(31) based(p);
  end bad_based_array;

@@ -4152,12 +4152,20 @@ void IRGen::allocaLocals(HProc* p) {
   // storage of its own (it stays out of localSyms). Subscripting and the
   // array built-ins then check against the live extent.
   for (Symbol* s : sema_.storage()) {
-    if (s->kind != Symbol::Var || !s->ty.isDynamic() || !s->basedBase)
+    if (s->kind != Symbol::Var || !s->ty.isDynamic() ||
+        (!s->basedBase && !s->basedNoPtr))
       continue;
     if (s->owner != p->src)
       continue;
     if (s->dynUb && !dynUb_.count(s))
       dynUb_[s] = toI64(emitExpr(s->dynUb));
+    // A `(*)` or per-ALLOCATE BASED axis has no DECLARE bound expression;
+    // seed the dope slot so a reference emitted before the first ALLOCATE
+    // still has a value.
+    if (s->ty.dims[0].adj && !dynUb_.count(s))
+      dynUb_[s] = i64(s->ty.dims[0].ub);
+    if (s->ty.dims[0].dyn && !s->dynUb && !dynUb_.count(s))
+      dynUb_[s] = i64(s->ty.dims[0].ub);
     if (s->dynLb && !dynLb_.count(s))
       dynLb_[s] = toI64(emitExpr(s->dynLb));
   }
@@ -6826,7 +6834,9 @@ void IRGen::emitAllocate(HStmt* s) {
     Symbol* bsym = s->allocBase[i]->sym;
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
-    if (!bsym->controlled && bsym->ty.isArray() && bsym->ty.isDynamic()) {
+    const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : noBounds;
+    if (!bsym->controlled && bsym->ty.isArray() &&
+        (bsym->ty.isDynamic() || !bbounds.empty())) {
       // A dynamic-extent BASED heap array (rules (25),(89)): size the block
       // from the live DECLARE bounds at ALLOCATE time. The first axis may be
       // dynamic (later axes are static — sema gates the rest); each reference
@@ -6839,15 +6849,19 @@ void IRGen::emitAllocate(HStmt* s) {
       llvm::Value* total = i64(elemSz);
       for (size_t k = 0; k < bsym->ty.dims.size(); ++k) {
         const Dim& d = bsym->ty.dims[k];
-        llvm::Value* ub =
-            (k == 0 && bsym->dynUb) ? toI64(emitExpr(bsym->dynUb), s->loc) : i64(d.ub);
+        // A per-ALLOCATE extent overrides the DECLARE bound (rule (89)); sema
+        // admits a single bound on a 1-D BASED array.
+        llvm::Value* ub = i64(d.ub);
+        if (k == 0 && !bbounds.empty() && bbounds[0].ub)
+          ub = toI64(emitExpr(bbounds[0].ub.get()), s->loc);
+        else if (k == 0 && bsym->dynUb)
+          ub = toI64(emitExpr(bsym->dynUb), s->loc);
         llvm::Value* lb =
             (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc) : i64(d.lb);
         if (k == 0) {
           // Later references check against the ALLOCATE-time extent, which
           // may differ from the entry-evaluated one when the bound changed.
-          if (bsym->dynUb)
-            dynUb_[bsym] = ub;
+          dynUb_[bsym] = ub;
           if (d.lbDyn && bsym->dynLb)
             dynLb_[bsym] = lb;
         }

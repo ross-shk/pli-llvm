@@ -9,8 +9,11 @@ examples/bkp/
 examples/out/
 .jspace/
 .kilo/
+.pi/
+.opencode/
 __pycache__
 design-docs/
+AI_*.md
 
 # test baselines are source of truth, not build output
 !tests/*/expected/*.out

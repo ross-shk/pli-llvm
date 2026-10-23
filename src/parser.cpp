@@ -3768,9 +3768,37 @@ StmtP Parser::parseAllocate() {
           }
           break;
         }
+        // SET/IN may follow a dimension (rule (88)): ALLOCATE x(n) SET(p).
+        ExprP setOpt;
+        ExprP areaOpt;
+        while (atOpt("SET") || atOpt("IN")) {
+          if (atOpt("SET")) {
+            if (setOpt)
+              d_.error(cur().loc, "duplicate SET option in ALLOCATE", "(88)");
+            advance();
+            expect(Tok::LParen, "(88)");
+            setOpt = parsePrimary();
+            if (!setOpt) {
+              resync();
+              return nullptr;
+            }
+            expect(Tok::RParen, "(88)");
+            continue;
+          }
+          if (areaOpt)
+            d_.error(cur().loc, "duplicate IN option in ALLOCATE", "(88)");
+          advance();
+          expect(Tok::LParen, "(88)");
+          areaOpt = parsePrimary();
+          if (!areaOpt) {
+            resync();
+            return nullptr;
+          }
+          expect(Tok::RParen, "(88)");
+        }
         st->allocBase.push_back(std::move(base));
-        st->allocSet.push_back(nullptr);
-        st->allocArea.push_back(nullptr);
+        st->allocSet.push_back(std::move(setOpt));
+        st->allocArea.push_back(std::move(areaOpt));
         st->allocBounds.push_back(std::move(bounds));
         st->allocCharLen.push_back(std::move(charLen));
         st->allocVarying.push_back(varying);

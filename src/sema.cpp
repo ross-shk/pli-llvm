@@ -1898,7 +1898,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             // ALLOCATE bound overrides them); the element must be numeric/BIT.
             bool ctlStar = item.controlled && hasStar && !item.ty.elementType().isChar() &&
                            (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
-            if (hasStar && !isParam && !ctlStar)
+            // A `(*)` BASED array takes its extent from each ALLOCATE
+            // (rules (13),(25),(89)), like a CONTROLLED `(*)` axis.
+            bool basedStar = hasStar &&
+                             (!item.basedBase.empty() || item.basedNoPtr || item.sym->isBased());
+            if (hasStar && !isParam && !ctlStar && !basedStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
             if (hasStar && isParam) {
               // A multi-axis '*' parameter is served when only the first axis
@@ -4237,17 +4241,61 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           }
       }
       const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
-      if (!bbounds.empty() || (i < s->allocCharLen.size() && s->allocCharLen[i])) {
-        for (const auto& b : bbounds) {
-          if (b.lb)
-            typeExpr(b.lb.get(), sc, p);
-          if (b.ub)
-            typeExpr(b.ub.get(), sc, p);
+      bool hasCharLen = (i < s->allocCharLen.size() && s->allocCharLen[i]);
+      // Type the per-ALLOCATE bound expressions first so their symbols resolve.
+      for (const auto& b : bbounds) {
+        if (b.lb) {
+          typeExpr(b.lb.get(), sc, p);
+          if (!b.lb->ty.isNumeric())
+            d_.error(b.lb->loc, "ALLOCATE bound must be numeric", "(89)");
         }
-        if (i < s->allocCharLen.size() && s->allocCharLen[i])
-          typeExpr(s->allocCharLen[i].get(), sc, p);
+        if (b.ub) {
+          typeExpr(b.ub.get(), sc, p);
+          if (!b.ub->ty.isNumeric())
+            d_.error(b.ub->loc, "ALLOCATE length must be numeric", "(89)");
+        }
+      }
+      if (hasCharLen) {
+        typeExpr(s->allocCharLen[i].get(), sc, p);
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
+      }
+      if (!bbounds.empty()) {
+        // Per-ALLOCATE bounds override the DECLARE extent (rules (89),(25)).
+        // A single extent on a 1-D array is served; other shapes stay
+        // diagnosed rather than silently sized wrong.
+        if (!bsym->ty.isArray())
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE bounds are only valid on an array", "(89)");
+        else if (bsym->ty.dims.size() != 1)
+          d_.error(s->allocBase[i]->loc,
+                   "per-ALLOCATE bounds for a multi-axis BASED array are not implemented "
+                   "in this stage",
+                   "(89)");
+        else if (bbounds.size() != 1)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE of '" + s->allocBase[i]->name + "' takes 1 bound, " +
+                       std::to_string(bbounds.size()) + " given",
+                   "(89)");
+        else if (bbounds[0].lb)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE lb:ub bounds are not implemented in this stage", "(89)");
+        else if (bbounds[0].star)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE (*) of BASED storage is not implemented in this stage", "(89)");
+        else
+          // Served: the live extent comes from this ALLOCATE, so mark the axis
+          // dynamic for references and the array built-ins.
+          bsym->ty.dims[0].dyn = true;
+      } else if (bsym->ty.isArray()) {
+        // A `(*)` BASED array has no DECLARE extent: every ALLOCATE needs one.
+        bool anyAdj = false;
+        for (const auto& d : bsym->ty.dims)
+          if (d.adj)
+            anyAdj = true;
+        if (anyAdj)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE of (*) needs extent(s): ALLOCATE x (n[, ...])", "(89)");
       }
       // The IN ( area ) option (rule (88)): the block is allocated from the
       // named AREA region; the reference must name an AREA variable.
@@ -5079,8 +5127,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         // A CONTROLLED array subscript skips the static bounds check: an
         // ALLOCATE (n) override changes the live extent per generation, so the
         // DECLARE bounds may not match (rules (13),(89)); IRGen checks the
-        // live bounds at run time.
-        if (!arr->controlled)
+        // live bounds at run time. A BASED array has the same override rule.
+        if (!arr->controlled && !arr->isBased())
           checkSubscriptBounds(e, arr);
         break;
       }
@@ -5108,8 +5156,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // rule (8)/(42): an array of an enclosing procedure is reached through
       // this procedure's static link.
       noteStaticUse(p, arr);
-      // CONTROLLED skips the static check (live per-generation bounds, above).
-      if (!arr->controlled)
+      // CONTROLLED and BASED skip the static check (live bounds, above).
+      if (!arr->controlled && !arr->isBased())
         checkSubscriptBounds(e, arr);
       break;
     }
