@@ -1,9 +1,12 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Rule (89): a BASED heap cell cannot take a per-ALLOCATE
-    dimension; the dimension lives on the DECLARE overlay. */
+ /* Rules (13),(89): a per-ALLOCATE dimension is served for a
+    1-D BASED array; the multi-axis and '*' forms stay diagnosed,
+    and a '*' BASED array needs an explicit extent. */
  bad_based_alloc_dim: procedure options(main);
    dcl p pointer;
-   dcl w(4) fixed bin(31) based(p);
-   allocate w(4) set(p);
+   dcl w(2,2) fixed bin(31) based(p);
+   dcl z(*) fixed bin(31) based(p);
+   allocate w(3,3) set(p);
+   allocate z set(p);
  end bad_based_alloc_dim;

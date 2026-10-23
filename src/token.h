@@ -57,6 +57,7 @@ struct Token {
   SourceLoc loc{};
   bool binaryRadix = false; // Number had the B suffix (rule 136)
   bool imaginary = false;   // Number had the I suffix (rule 139)
+  bool sterling = false;    // Number was a pounds.shillings.pence £ constant (rule 145)
   bool isFloat = false;
   bool hasExp = false; // Number had an E exponent (a FLOAT constant, rule 135)
 

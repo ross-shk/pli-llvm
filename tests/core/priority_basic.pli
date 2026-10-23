@@ -3,7 +3,7 @@
  /* rules (79),(82): PRIORITY reads and sets a task's priority (QR2.8).
     PRIORITY(t) reads the relative priority (t minus self);
     PRIORITY(t) = n sets it; CALL ... PRIORITY(n) sets the spawn-time
-    priority relative to the caller (ADR-291). */
+    priority relative to the caller (ADR-298). */
  priority_basic: procedure options(main);
     declare ev event;
     declare ta task;

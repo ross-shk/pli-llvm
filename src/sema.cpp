@@ -1408,9 +1408,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(19)");
             return Type::chr(1);
           }
-          if (spec.intDigits + spec.fracDigits > 18) {
+          if (spec.intDigits + spec.fracDigits > 38) {
             d_.error(it.loc,
-                     "a PICTURE with more than 18 digit positions is not implemented in this "
+                     "a PICTURE with more than 38 digit positions is not implemented in this "
                      "stage",
                      "(19)");
             return Type::chr(1);
@@ -1898,7 +1898,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             // ALLOCATE bound overrides them); the element must be numeric/BIT.
             bool ctlStar = item.controlled && hasStar && !item.ty.elementType().isChar() &&
                            (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
-            if (hasStar && !isParam && !ctlStar)
+            // A `(*)` BASED array takes its extent from each ALLOCATE
+            // (rules (13),(25),(89)), like a CONTROLLED `(*)` axis.
+            bool basedStar = hasStar &&
+                             (!item.basedBase.empty() || item.basedNoPtr || item.sym->isBased());
+            if (hasStar && !isParam && !ctlStar && !basedStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
             if (hasStar && isParam) {
               // A multi-axis '*' parameter is served when only the first axis
@@ -2784,6 +2788,8 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kZerodivideCondKey;
   if (s->condName == "CONVERSION")
     return Stmt::kConversionCondKey;
+  if (s->condName == "STRINGRANGE")
+    return Stmt::kStringrangeCondKey;
   // Programmer-named conditions: deterministic hash ensures every
   // compilation unit assigns the same key to the same name, enabling
   // cross-object signal dispatch.
@@ -3056,6 +3062,7 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->strRange = s->strRange;
   {
     auto tgt = std::make_unique<Expr>();
     tgt->kind = Expr::Call;
@@ -3409,6 +3416,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       fill->noSub = s->noSub;
       fill->noZdiv = s->noZdiv;
       fill->noConv = s->noConv;
+      fill->strRange = s->strRange;
       auto fillTgt = std::make_unique<Expr>();
       fillTgt->kind = Expr::VarRef;
       fillTgt->name = base;
@@ -3431,6 +3439,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         copy->noSub = s->noSub;
         copy->noZdiv = s->noZdiv;
         copy->noConv = s->noConv;
+        copy->strRange = s->strRange;
         auto ctgt = std::make_unique<Expr>();
         ctgt->kind = Expr::VarRef;
         ctgt->name = t->name;
@@ -3449,7 +3458,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       checkStmt(s, sc, p);
       break;
     }
-    // PRIORITY pseudo-variable (rule (79), ADR-291): priority(t) = n
+    // PRIORITY pseudo-variable (rule (79), ADR-298): priority(t) = n
     // sets the task handle t's priority so that a subsequent priority(t)
     // reads back n. The argument must resolve to a TASK-typed reference.
     if (s->target->kind == Expr::Call && s->target->name == "PRIORITY") {
@@ -3773,16 +3782,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(it->loc, "a whole structure cannot be read with GET LIST in this stage", "(110)");
         continue;
       }
-      // Picture-directed input stays a B1 item: a numeric picture must parse
-      // the field, not copy its characters.
-      if (it->ty.isChar() && !it->ty.picture.empty()) {
-        d_.error(it->loc, "GET LIST of a PICTURE variable is not implemented in this stage",
-                 "(109)");
-        continue;
-      }
-      // A CHARACTER member or array element is read through storeArrayElement
-      // /member paths, which are not served (mirrors assignment, rule (11)/(12)).
-      if (it->ty.isChar() &&
+      // A numeric PICTURE variable is numeric character data (rule (19)):
+      // GET LIST reads an arithmetic value and edits it, so it is not the
+      // character-token path below (ADR-292).
+      // A plain CHARACTER member or array element is read through
+      // storeArrayElement / member paths, which are not served (mirrors
+      // assignment, rule (11)/(12)).
+      if (it->ty.isChar() && it->ty.picture.empty() &&
           ((it->kind == Expr::VarRef && !it->memberPath.empty()) || it->kind == Expr::Subscript)) {
         d_.error(it->loc,
                  "GET LIST of a CHARACTER member or array element is not implemented in this "
@@ -3859,7 +3865,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // Task options (rule (79), QR2.8): any option makes the CALL asynchronous.
     // TASK takes a TASK variable (or nothing), EVENT an EVENT variable,
     // PRIORITY a numeric expression.
-    // External entry procedures (rule 34) now support async CALL (ADR-291);
+    // External entry procedures (rule 34) now support async CALL (ADR-298);
     // function procedures stay diagnosed, internal or external.
     if (s->hasTaskOpt || s->eventRef || s->priorityExpr) {
       if ((callee && callee->isFunction) || (en && en->entryIsFunction) ||
@@ -4258,17 +4264,61 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           }
       }
       const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
-      if (!bbounds.empty() || (i < s->allocCharLen.size() && s->allocCharLen[i])) {
-        for (const auto& b : bbounds) {
-          if (b.lb)
-            typeExpr(b.lb.get(), sc, p);
-          if (b.ub)
-            typeExpr(b.ub.get(), sc, p);
+      bool hasCharLen = (i < s->allocCharLen.size() && s->allocCharLen[i]);
+      // Type the per-ALLOCATE bound expressions first so their symbols resolve.
+      for (const auto& b : bbounds) {
+        if (b.lb) {
+          typeExpr(b.lb.get(), sc, p);
+          if (!b.lb->ty.isNumeric())
+            d_.error(b.lb->loc, "ALLOCATE bound must be numeric", "(89)");
         }
-        if (i < s->allocCharLen.size() && s->allocCharLen[i])
-          typeExpr(s->allocCharLen[i].get(), sc, p);
+        if (b.ub) {
+          typeExpr(b.ub.get(), sc, p);
+          if (!b.ub->ty.isNumeric())
+            d_.error(b.ub->loc, "ALLOCATE length must be numeric", "(89)");
+        }
+      }
+      if (hasCharLen) {
+        typeExpr(s->allocCharLen[i].get(), sc, p);
         d_.error(s->allocBase[i]->loc,
                  "ALLOCATE length is only valid on CHARACTER CONTROLLED storage", "(89)");
+      }
+      if (!bbounds.empty()) {
+        // Per-ALLOCATE bounds override the DECLARE extent (rules (89),(25)).
+        // A single extent on a 1-D array is served; other shapes stay
+        // diagnosed rather than silently sized wrong.
+        if (!bsym->ty.isArray())
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE bounds are only valid on an array", "(89)");
+        else if (bsym->ty.dims.size() != 1)
+          d_.error(s->allocBase[i]->loc,
+                   "per-ALLOCATE bounds for a multi-axis BASED array are not implemented "
+                   "in this stage",
+                   "(89)");
+        else if (bbounds.size() != 1)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE of '" + s->allocBase[i]->name + "' takes 1 bound, " +
+                       std::to_string(bbounds.size()) + " given",
+                   "(89)");
+        else if (bbounds[0].lb)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE lb:ub bounds are not implemented in this stage", "(89)");
+        else if (bbounds[0].star)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE (*) of BASED storage is not implemented in this stage", "(89)");
+        else
+          // Served: the live extent comes from this ALLOCATE, so mark the axis
+          // dynamic for references and the array built-ins.
+          bsym->ty.dims[0].dyn = true;
+      } else if (bsym->ty.isArray()) {
+        // A `(*)` BASED array has no DECLARE extent: every ALLOCATE needs one.
+        bool anyAdj = false;
+        for (const auto& d : bsym->ty.dims)
+          if (d.adj)
+            anyAdj = true;
+        if (anyAdj)
+          d_.error(s->allocBase[i]->loc,
+                   "ALLOCATE of (*) needs extent(s): ALLOCATE x (n[, ...])", "(89)");
       }
       // The IN ( area ) option (rule (88)): the block is allocated from the
       // named AREA region; the reference must name an AREA variable.
@@ -4585,12 +4635,55 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
       d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
     }
-    if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+    if (f.kind == FormatItem::P && isGet) {
+      // Picture-directed input (ADR-291): the field width is the picture's
+      // output width and the value is scaled at its assumed point. The
+      // runtime parser handles digits, V/., comma and sign positions; other
+      // picture characters are not in this slice.
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      const bool targetIsPicture = it->ty.isChar() && !it->ty.picture.empty();
+      if (spec.sterling) {
+        if (!spec.valid || spec.width <= 0)
+          d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
+        else if (spec.intDigits > 18)
+          d_.error(it->loc,
+                   "sterling P input with more than 18 digit positions is not implemented in "
+                   "this stage",
+                   "(53)");
+      } else if (!spec.valid || spec.width <= 0 || !spec.numeric || spec.hasScale) {
+        d_.error(f.w ? f.w->loc : it->loc, "invalid PICTURE format for input", "(53)");
+      } else if (spec.width > 127) {
+        d_.error(it->loc, "P input wider than 127 positions is not implemented in this stage",
+                 "(53)");
+      } else if (spec.intDigits + spec.fracDigits > 38) {
+        d_.error(it->loc,
+                 "P input with more than 38 digit positions is not implemented in this stage",
+                 "(53)");
+      } else {
+        for (char c : spec.expanded) {
+          if (std::string("9ZV.,+-S ").find(c) == std::string::npos) {
+            d_.error(it->loc,
+                     std::string("P input does not support the picture character '") + c +
+                         "' in this stage",
+                     "(53)");
+            break;
+          }
+        }
+      }
+      if (!it->ty.isNumeric() && !targetIsPicture)
+        d_.error(it->loc, "an input P format requires a numeric or PICTURE item", "(53)");
+    } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
       // A scaled FIXED BINARY is rescaled to the picture's decimal positions
       // in IRGen (ADR-288); the formatter itself stays decimal. More than 18
       // fractional positions exceed its 64-bit decimal value.
-      if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
-        const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      if (!isGet && spec.sterling && (!spec.valid || spec.width <= 0)) {
+        d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
+      } else if (!isGet && spec.sterling &&
+                 (it->ty.scale != 0 || (it->ty.k == TK::FixedDec && it->ty.intBits() == 128))) {
+        d_.error(it->loc,
+                 "sterling PICTURE output requires a non-wide whole-pence value", "(53)");
+      } else if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
         if (it->ty.scale >= 127)
           d_.error(it->loc,
                    "PICTURE output of a scaled FIXED BINARY needs a scale below 127",
@@ -4601,11 +4694,11 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
                    "fractional positions",
                    "(53)");
       }
-    } else if (f.kind == FormatItem::P && !it->ty.isNumeric()) {
+    } else if (f.kind == FormatItem::P) {
       d_.error(it->loc, "a P format requires a numeric item", "(53)");
     }
     if (isGet) {
-      if (it->ty.isChar() && !it->ty.picture.empty())
+      if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
         d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
                  "(53)");
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
@@ -5057,8 +5150,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         // A CONTROLLED array subscript skips the static bounds check: an
         // ALLOCATE (n) override changes the live extent per generation, so the
         // DECLARE bounds may not match (rules (13),(89)); IRGen checks the
-        // live bounds at run time.
-        if (!arr->controlled)
+        // live bounds at run time. A BASED array has the same override rule.
+        if (!arr->controlled && !arr->isBased())
           checkSubscriptBounds(e, arr);
         break;
       }
@@ -5086,8 +5179,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // rule (8)/(42): an array of an enclosing procedure is reached through
       // this procedure's static link.
       noteStaticUse(p, arr);
-      // CONTROLLED skips the static check (live per-generation bounds, above).
-      if (!arr->controlled)
+      // CONTROLLED and BASED skip the static check (live bounds, above).
+      if (!arr->controlled && !arr->isBased())
         checkSubscriptBounds(e, arr);
       break;
     }
@@ -5496,6 +5589,7 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->strRange = s->strRange;
   s->kind = Stmt::Group;
   s->byName = false;
   for (auto& f : fills)

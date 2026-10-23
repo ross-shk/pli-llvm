@@ -1,0 +1,78 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* Per-ALLOCATE dimension bounds for BASED arrays
+     (rules (13),(25),(89)): ALLOCATE x(n) SET(p)
+     sizes the block and sets the live extent, so
+     references and HBOUND/DIM follow it. */
+  based_alloc_dim: procedure options(main);
+     declare p pointer;
+     declare q pointer;
+     declare n fixed bin(31);
+     declare i fixed bin(31);
+     declare a(*) fixed bin(31) based(p);
+     declare b(4) fixed bin(31) based(p);
+     declare region area;
+     /* a '*' BASED array takes its extent from each ALLOCATE */
+     n = 3;
+     allocate a(n) set(p);
+     do i = 1 to n;
+        a(i) = i * 10;
+     end;
+     do i = 1 to n;
+        if a(i) ^= i * 10 then do;
+           put skip list('FAIL based_alloc_dim: value at', i);
+           stop;
+        end;
+     end;
+     if hbound(a) ^= 3 then do;
+        put skip list('FAIL based_alloc_dim: hbound', hbound(a));
+        stop;
+     end;
+     if dim(a) ^= 3 then do;
+        put skip list('FAIL based_alloc_dim: dim', dim(a));
+        stop;
+     end;
+     free a;
+     /* re-allocating with a new extent moves the live bound */
+     n = 5;
+     allocate a(n) set(p);
+     do i = 1 to n;
+        a(i) = i + 100;
+     end;
+     if hbound(a) ^= 5 then do;
+        put skip list('FAIL based_alloc_dim: realloc bound', hbound(a));
+        stop;
+     end;
+     if a(5) ^= 105 then do;
+        put skip list('FAIL based_alloc_dim: realloc value', a(5));
+        stop;
+     end;
+     free a;
+     /* a fixed DECLARE extent is overridden by ALLOCATE */
+     n = 6;
+     allocate b(n) set(p);
+     do i = 1 to n;
+        b(i) = i;
+     end;
+     if hbound(b) ^= 6 then do;
+        put skip list('FAIL based_alloc_dim: fixed declare', hbound(b));
+        stop;
+     end;
+     if b(6) ^= 6 then do;
+        put skip list('FAIL based_alloc_dim: fixed value', b(6));
+        stop;
+     end;
+     free b;
+     /* IN ( area ) takes the sized block from the region */
+     n = 4;
+     allocate a(n) in(region) set(p);
+     do i = 1 to n;
+        a(i) = i * i;
+     end;
+     if a(4) ^= 16 | hbound(a) ^= 4 then do;
+        put skip list('FAIL based_alloc_dim: area heap');
+        stop;
+     end;
+     free a in(region);
+     put skip list('PASS based-alloc-dim');
+  end based_alloc_dim;

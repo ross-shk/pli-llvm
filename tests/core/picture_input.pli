@@ -1,0 +1,64 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Picture-directed input (rules (53),(146)-(148), ADR-291): a P format
+    reads a field through a STRING source, parses it at the picture's
+    assumed decimal point, and stores either a numeric value or a PICTURE
+    variable's edited characters. */
+ picture_input: procedure options(main);
+    declare buf char(20);
+    declare x fixed dec(7,2);
+    declare y fixed dec(7,2);
+    declare v fixed dec(5,2);
+    declare pv picture('ZZZ9.99-');
+    declare q picture('9V99');
+    declare 1 rec,
+      2 m picture('99');
+
+    /* negative value with a trailing sign position */
+    x = -12.5;
+    put string(buf) edit(x) (p('ZZZ9.99-'));
+    get string(buf) edit(pv) (p('ZZZ9.99-'));
+    if pv ^= '  12.50-' then do;
+       put skip list('FAIL picture input negative:', pv);
+       stop;
+    end;
+    get string(buf) edit(y) (p('ZZZ9.99-'));
+    if y ^= -12.5 then do;
+       put skip list('FAIL picture input numeric:', y);
+       stop;
+    end;
+
+    /* a blank sign position is positive */
+    x = 12.5;
+    put string(buf) edit(x) (p('ZZZ9.99-'));
+    get string(buf) edit(pv) (p('ZZZ9.99-'));
+    if pv ^= '  12.50 ' then do;
+       put skip list('FAIL picture input positive:', pv);
+       stop;
+    end;
+
+    /* V is an assumed point, so the field has no decimal character */
+    v = 1.5;
+    put string(buf) edit(v) (p('9V99'));
+    get string(buf) edit(q) (p('9V99'));
+    if q ^= '150' then do;
+       put skip list('FAIL picture input V:', q);
+       stop;
+    end;
+    get string(buf) edit(v) (p('9V99'));
+    if v ^= 1.5 then do;
+       put skip list('FAIL picture input V numeric:', v);
+       stop;
+    end;
+
+    /* the same input path reaches a structure member */
+    x = 7;
+    put string(buf) edit(x) (p('99'));
+    get string(buf) edit(rec.m) (p('99'));
+    if rec.m ^= '07' then do;
+       put skip list('FAIL picture input member:', rec.m);
+       stop;
+    end;
+
+    put skip list('PASS picture_input');
+ end picture_input;

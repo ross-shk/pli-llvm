@@ -4,7 +4,7 @@
 # tests/driver/task_matrix.sh — run the tasking matrix under every backend
 # (fiber/1, fiber/4, os/1, os/4). The program lives in
 # tests/core/task_matrix.pli so the core suite and this matrix cannot drift.
-# PLI_TASK_MODEL=os opts into the legacy OS-thread model (ADR-291).
+# PLI_TASK_MODEL=os opts into the legacy OS-thread model (ADR-298).
 set -u
 PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/task_matrix

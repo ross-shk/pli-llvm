@@ -5,7 +5,7 @@
     proves the wrapper reached it; sharing an alternate entry's *automatic*
     storage with the parent is a separate (pre-existing) limitation.
     External entry-procedure async is covered by
-    tests/driver/ext_async_test.sh (ADR-291). */
+    tests/driver/ext_async_test.sh (ADR-298). */
  entry_async: procedure options(main) recursive;
     declare ev event;
 

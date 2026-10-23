@@ -28,12 +28,12 @@ void rt_sched_main(void (*entry)(void));
 /* Start a task: fn(arg) runs as a fiber. Returns 0 on success. */
 int rt_sched_spawn(void *(*fn)(void *), void *arg);
 
-/* Priority-aware spawn (ADR-291): sets the fiber's absolute priority and
+/* Priority-aware spawn (ADR-298): sets the fiber's absolute priority and
  * TASK handle, returning the fiber (NULL on failure). */
 pli_fiber *rt_sched_spawn_p(void *(*fn)(void *), void *arg, int priority,
                             long long handle);
 
-/* Change a live task's priority (ADR-291). */
+/* Change a live task's priority (ADR-298). */
 void rt_sched_set_priority(pli_fiber *f, int priority);
 
 /* The current fiber's priority, or 0 outside a fiber. */

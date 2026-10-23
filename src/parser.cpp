@@ -47,6 +47,71 @@ static void parseIntConstant(const std::string& text, Expr& e, int base) {
 }
 // point and no exponent, e.g. "3.14". Sets ival to the value scaled by 10^q,
 // decScale to the fraction digit count q, and decPrec to the digit count p.
+// Sterling constant (rule (145)): convert pounds.shillings.pence[.fraction]£
+// to fixed-point pence, exactly as the standard defines the value. The
+// pence fraction becomes the decimal scale of the resulting DECIMAL literal.
+static bool parseSterlingConstant(const std::string& text, Expr& e) {
+  size_t d1 = text.find('.');
+  if (d1 == std::string::npos)
+    return false;
+  size_t d2 = text.find('.', d1 + 1);
+  if (d2 == std::string::npos)
+    return false;
+  std::string poundsS = text.substr(0, d1);
+  std::string shillS = text.substr(d1 + 1, d2 - d1 - 1);
+  std::string penceS = text.substr(d2 + 1);
+  size_t d3 = penceS.find('.');
+  std::string penceIntS = d3 == std::string::npos ? penceS : penceS.substr(0, d3);
+  std::string penceFracS = d3 == std::string::npos ? "" : penceS.substr(d3 + 1);
+  auto digits = [](const std::string& s) {
+    return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
+  };
+  if (!digits(poundsS) || !digits(shillS) || !digits(penceIntS) ||
+      (d3 != std::string::npos && !digits(penceFracS)))
+    return false;
+  // Both subfields are bounded by the constant grammar, so their text is
+  // at most two digits; rejecting longer text avoids an out-of-range parse.
+  if (shillS.size() > 2 || penceIntS.size() > 2 || penceFracS.size() > 38)
+    return false;
+  long long shill = std::stoll(shillS);
+  long long penceInt = std::stoll(penceIntS);
+  if (shill >= 20 || penceInt >= 12)
+    return false;
+
+  int scale = (int)penceFracS.size();
+  // 240 and 12 widen the pounds field by at most three decimal digits.
+  size_t poundsSig = poundsS.find_first_not_of('0');
+  size_t poundsDigits = poundsSig == std::string::npos ? 1 : poundsS.size() - poundsSig;
+  if (poundsDigits + (size_t)scale + 3 > 38)
+    return false;
+
+  PliI128 pounds = 0;
+  for (char c : poundsS)
+    pounds = pounds * 10 + (c - '0');
+  PliI128 penceFrac = 0;
+  for (char c : penceFracS)
+    penceFrac = penceFrac * 10 + (c - '0');
+  PliI128 value = pounds * 240 + shill * 12 + penceInt;
+  for (int i = 0; i < scale; ++i)
+    value = value * 10;
+  value += penceFrac;
+
+  PliU128 mag = pli_mag_s(value);
+  int prec = 0;
+  do {
+    pli_divmod10(&mag);
+    ++prec;
+  } while (!pli_iszero_u(mag));
+  if (prec > 38)
+    return false;
+  e.kind = Expr::DecLit;
+  e.wideIval = value;
+  e.ival = pli_to_i64(value);
+  e.decScale = scale;
+  e.decPrec = prec;
+  return true;
+}
+
 static void parseDecConstant(const std::string& text, Expr& e) {
   size_t dot = text.find('.');
   std::string intPart = dot == std::string::npos ? text : text.substr(0, dot);
@@ -419,6 +484,14 @@ Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
 // procedure ::= [prefixlist] entry-namelist PROCEDURE [(parameterlist)]
 //               [procedure-optionslist] sentencelist                rule (2)
 void Parser::parseExternalProcedure() {
+  // procedure ::= [prefixlist] entry-namelist PROCEDURE ... (rule (2)): the
+  // prefix list belongs to the PROCEDURE statement and scopes its body.
+  auto pre = std::make_unique<Stmt>();
+  pre->loc = cur().loc;
+  if (!parseCondPrefixes(pre.get())) {
+    resync();
+    return;
+  }
   if (!at(Tok::Word)) {
     d_.error(cur().loc, "expected procedure name", "(2)");
     resync();
@@ -461,7 +534,12 @@ void Parser::parseExternalProcedure() {
   Proc* p = startProc(name, loc, nullptr);
   p->entryNames = std::move(entryNames);
   parseProcOptions(p);
+  // Apply the procedure statement's condition prefix to its body.
+  int outerStr = procStrRange_;
+  if (pre->strRange != 0)
+    procStrRange_ = pre->strRange;
   parseProcBody(p);
+  procStrRange_ = outerStr;
 }
 
 void Parser::parseProcOptions(Proc* p) {
@@ -606,11 +684,9 @@ EndInfo Parser::parseBody(Proc* owner, std::vector<StmtP>& body, const std::stri
   }
 }
 
-StmtP Parser::parseStatement(Proc* owner) {
-  auto st = std::make_unique<Stmt>();
-  st->loc = cur().loc;
-
-  // condition prefix list                                          rule (60)
+// condition-prefix-list (rules (60)-(63)): `(cond [, cond]*) :` precedes the
+// statement it governs; a PROCEDURE statement's prefix covers its body.
+bool Parser::parseCondPrefixes(Stmt* st) {
   while (at(Tok::LParen)) {
     SourceLoc l = cur().loc;
     int depth = 0;
@@ -626,44 +702,75 @@ StmtP Parser::parseStatement(Proc* owner) {
       }
       advance();
     }
-    if (at(Tok::Colon)) {
-      advance();
-      // Extensions (ADR-110/112): SIZE/NOSIZE and SUBSCRIPTRANGE/
-      // NOSUBSCRIPTRANGE and ZERODIVIDE/NOZERODIVIDE prefixes are
-      // enforced; any other condition keeps the unenforced warning.
-      bool anyWord = false, allHandled = true;
-      for (size_t k = save; k < i_; ++k) {
-        if (t_[k].kind != Tok::Word)
-          continue;
-        anyWord = true;
-        const std::string& w = t_[k].text;
-        if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE" || w == "CONVERSION")
-          continue; // already enabled: no-op
-        if (w == "NOSIZE") {
-          st->noSize = true;
-          continue;
-        }
-        if (w == "NOSUBSCRIPTRANGE") {
-          st->noSub = true;
-          continue;
-        }
-        if (w == "NOZERODIVIDE") {
-          st->noZdiv = true;
-          continue;
-        }
-        if (w == "NOCONVERSION") {
-          st->noConv = true;
-          continue;
-        }
-        allHandled = false;
-      }
-      if (!anyWord || !allHandled)
-        d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
-    } else {
+    if (!at(Tok::Colon)) {
       d_.error(l, "condition prefix must end with ':'", "(60)");
-      return nullptr;
+      return false;
     }
+    advance();
+    // Extensions (ADR-110/112): SIZE/NOSIZE and SUBSCRIPTRANGE/
+    // NOSUBSCRIPTRANGE and ZERODIVIDE/NOZERODIVIDE prefixes are
+    // enforced; any other condition keeps the unenforced warning.
+    // STRINGRANGE/NOSTRINGRANGE is IBM's opt-in condition (ADR-297):
+    // disabled by default, enabled only inside the prefix's scope.
+    bool anyWord = false, allHandled = true;
+    for (size_t k = save; k < i_; ++k) {
+      if (t_[k].kind != Tok::Word)
+        continue;
+      anyWord = true;
+      const std::string& w = t_[k].text;
+      if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE" || w == "CONVERSION")
+        continue; // already enabled: no-op
+      if (w == "NOSIZE") {
+        st->noSize = true;
+        continue;
+      }
+      if (w == "NOSUBSCRIPTRANGE") {
+        st->noSub = true;
+        continue;
+      }
+      if (w == "NOZERODIVIDE") {
+        st->noZdiv = true;
+        continue;
+      }
+      if (w == "NOCONVERSION") {
+        st->noConv = true;
+        continue;
+      }
+      if (w == "STRINGRANGE") {
+        st->strRange = 1;
+        continue;
+      }
+      if (w == "NOSTRINGRANGE") {
+        st->strRange = -1;
+        continue;
+      }
+      allHandled = false;
+    }
+    if (!anyWord || !allHandled)
+      d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
   }
+  return true;
+}
+
+StmtP Parser::parseStatement(Proc* owner) {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  // A PROCEDURE-level prefix covers every statement in its body.
+  st->strRange = procStrRange_;
+
+  // condition prefix list                                          rule (60)
+  if (!parseCondPrefixes(st.get()))
+    return nullptr;
+  // A prefix governs its statement and every body nested in it (rules
+  // (60)-(63)) — including ON-unit bodies, which codegen emits outside the
+  // enclosing group. The guard restores the outer scope on return.
+  struct RangeGuard {
+    int& state;
+    int saved;
+    ~RangeGuard() { state = saved; }
+  } rangeGuard{procStrRange_, procStrRange_};
+  if (st->strRange != 0)
+    procStrRange_ = st->strRange;
 
   // label prefixes                                                 rule (64)
   while (at(Tok::Word) && peek().kind == Tok::Colon) {
@@ -685,8 +792,8 @@ StmtP Parser::parseStatement(Proc* owner) {
     advance();
     Proc* p = startProc(st->labels.front(), st->loc, owner);
     parseProcOptions(p);
-    parseProcBody(p);
-    return nullptr; // procedures are hoisted into Program::procs
+    parseProcBody(p); // the statement guard already scoped the prefix
+    return nullptr;   // procedures are hoisted into Program::procs
   }
 
   // ENTRY statement                                     rule (56)
@@ -745,6 +852,7 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->noSub = st->noSub;
       s->noZdiv = st->noZdiv;
       s->noConv = st->noConv;
+      s->strRange = st->strRange;
       return s;
     }
   }
@@ -756,6 +864,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     k->noSub = st->noSub;
     k->noZdiv = st->noZdiv;
     k->noConv = st->noConv;
+    k->strRange = st->strRange;
     return k;
   }
 
@@ -766,6 +875,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     s->noSub = st->noSub;
     s->noZdiv = st->noZdiv;
     s->noConv = st->noConv;
+    s->strRange = st->strRange;
   }
   return s;
 }
@@ -984,12 +1094,18 @@ std::string Parser::parseCondition(std::string* fileArg) {
     advance();
     return w;
   }
+  if (w == "STRINGRANGE") {
+    // IBM's opt-in condition (rules (60)-(63),(94)): detection is enabled by
+    // a (STRINGRANGE) prefix, but ON/SIGNAL/REVERT are always accepted.
+    advance();
+    return w;
+  }
   if (w == "FINISH" || w == "AREA") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
   }
-  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" || w == "STRINGRANGE" ||
+  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" ||
       w == "UNDERFLOW") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
@@ -1018,7 +1134,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
     if (!expect(Tok::RParen, "(99)"))
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
-        name == "CONVERSION") {
+        name == "CONVERSION" || name == "STRINGRANGE") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }
@@ -3703,9 +3819,37 @@ StmtP Parser::parseAllocate() {
           }
           break;
         }
+        // SET/IN may follow a dimension (rule (88)): ALLOCATE x(n) SET(p).
+        ExprP setOpt;
+        ExprP areaOpt;
+        while (atOpt("SET") || atOpt("IN")) {
+          if (atOpt("SET")) {
+            if (setOpt)
+              d_.error(cur().loc, "duplicate SET option in ALLOCATE", "(88)");
+            advance();
+            expect(Tok::LParen, "(88)");
+            setOpt = parsePrimary();
+            if (!setOpt) {
+              resync();
+              return nullptr;
+            }
+            expect(Tok::RParen, "(88)");
+            continue;
+          }
+          if (areaOpt)
+            d_.error(cur().loc, "duplicate IN option in ALLOCATE", "(88)");
+          advance();
+          expect(Tok::LParen, "(88)");
+          areaOpt = parsePrimary();
+          if (!areaOpt) {
+            resync();
+            return nullptr;
+          }
+          expect(Tok::RParen, "(88)");
+        }
         st->allocBase.push_back(std::move(base));
-        st->allocSet.push_back(nullptr);
-        st->allocArea.push_back(nullptr);
+        st->allocSet.push_back(std::move(setOpt));
+        st->allocArea.push_back(std::move(areaOpt));
         st->allocBounds.push_back(std::move(bounds));
         st->allocCharLen.push_back(std::move(charLen));
         st->allocVarying.push_back(varying);
@@ -4245,6 +4389,12 @@ ExprP Parser::parsePrimary() {
   }
   if (at(Tok::Number)) {
     const Token& t = cur();
+    if (t.sterling) {
+      if (!parseSterlingConstant(t.text, *e))
+        d_.error(t.loc, "invalid sterling constant", "(145)");
+      advance();
+      return e;
+    }
     if (t.imaginary) {
       // Imaginary constant 2i (rule 139): 0 + value*i as a double pair part.
       e->kind = Expr::ComplexLit;

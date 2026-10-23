@@ -175,7 +175,7 @@ void rt_select_input(FILE *f) { rt_in_f = f; }
  * instead of holding the worker it runs on.
  *
  * File reads under the fiber model likewise park (C2 DEFERRED-WORK,
- * ADR-291): the file-read broker does the blocking fread on a helper thread
+ * ADR-298): the file-read broker does the blocking fread on a helper thread
  * while the task yields to the scheduler. */
 int rt_next_char(void) {
   int c;

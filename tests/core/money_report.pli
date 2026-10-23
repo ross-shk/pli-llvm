@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Money/report golden (B1): a sterling amount and a decimal net value
+    through picture variables. */
+ money_report: procedure options(main);
+    declare amount picture('GM(3)9M.99M.99');
+    declare net picture('ZZZ9.99');
+    amount = 366;
+    net = 1234.56;
+    put skip list('Amount:', amount);
+    put skip list('Net:', net);
+ end money_report;

@@ -106,6 +106,48 @@ long long pli_get_list_decfixed(long long q) {
   return neg ? -v : v;
 }
 
+/* Wide FIXED DECIMAL input (B1): the same token rules as
+ * pli_get_list_decfixed, returned as a 128-bit value through `out`. */
+void pli_get_list_decfixed_wide(long long q, char *out) {
+  PliI128 *dst = (PliI128 *)out;
+  char tok[64];
+  if (!get_token(tok, sizeof tok)) {
+    *dst = pli_from_i64(0);
+    return;
+  }
+  if (q < 0)
+    q = 0;
+  if (q > 38)
+    q = 38;
+  int neg = 0;
+  const char *p = tok;
+  if (*p == '+' || *p == '-') {
+    neg = *p == '-';
+    ++p;
+  }
+  PliU128 ten = pli_u128(10u, 0u);
+  PliU128 whole = pli_u128(0u, 0u);
+  while (*p >= '0' && *p <= '9')
+    whole = pli_add_u(pli_mul_u(whole, ten), pli_u128((uint64_t)(*p++ - '0'), 0u));
+  PliU128 frac = pli_u128(0u, 0u);
+  long long qd = 0;
+  if (*p == '.') {
+    ++p;
+    while (*p >= '0' && *p <= '9' && qd < q) {
+      frac = pli_add_u(pli_mul_u(frac, ten), pli_u128((uint64_t)(*p++ - '0'), 0u));
+      ++qd;
+    }
+    while (*p >= '0' && *p <= '9')
+      ++p; // truncate beyond q
+  }
+  while (qd++ < q)
+    frac = pli_mul_u(frac, ten);
+  for (long long i = 0; i < q; ++i)
+    whole = pli_mul_u(whole, ten);
+  PliI128 v = pli_to_s(pli_add_u(whole, frac));
+  *dst = neg ? pli_neg_s(v) : v;
+}
+
 /* FIXED BINARY input (ADR-284): parse a decimal token into value*2^q,
  * truncating extra fraction digits. At most 18 significant digits are
  * kept; lenient like the other readers. */

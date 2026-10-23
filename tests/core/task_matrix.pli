@@ -5,7 +5,7 @@
     every backend (fiber/1, fiber/4, os/1, os/4). Covers: yield/park/wake,
     event-poll-after-wait, independent task-local state (two tasks each
     run to completion without clobbering each other), array-element
-    TASK/EVENT refs. (ADR-291) */
+    TASK/EVENT refs. (ADR-298) */
  task_matrix: procedure options(main);
     declare e1 event;
     declare e2 event;

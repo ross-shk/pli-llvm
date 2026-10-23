@@ -1,0 +1,52 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Wide PICTURE items (rules (19),(53),(146)-(148)): a picture may have up
+    to 38 digit positions, so a wide FIXED DECIMAL is edited exactly on
+    assignment, P output, GET EDIT P and GET LIST. */
+ picture_wide: procedure options(main);
+    declare d fixed decimal(27,2) initial(1234567890123456789012345.67);
+    declare n fixed decimal(27,2) initial(-1234567890123456789012345.67);
+    declare p picture('(25)9.99');
+    declare q picture('(25)9.99-');
+    declare r picture('(25)9.99');
+    declare s char(28);
+    declare t char(28);
+
+    /* assignment from a wide decimal goes through the runtime formatter */
+    p = d;
+    if p ^= '1234567890123456789012345.67' then do;
+       put skip list('FAIL wide picture assignment:', p);
+       stop;
+    end;
+
+    /* the same picture as a P output item */
+    put string(s) edit(d) (P('(25)9.99'));
+    if s ^= '1234567890123456789012345.67' then do;
+       put skip list('FAIL wide picture output:', s);
+       stop;
+    end;
+
+    /* GET EDIT P reads the wide field back through the same scale */
+    get string(s) edit(r) (P('(25)9.99'));
+    if r ^= '1234567890123456789012345.67' then do;
+       put skip list('FAIL wide picture input:', r);
+       stop;
+    end;
+
+    /* GET LIST into a wide picture reads the arithmetic value */
+    t = '1234567890123456789012345.67';
+    get string(t) list(r);
+    if r ^= '1234567890123456789012345.67' then do;
+       put skip list('FAIL wide picture list input:', r);
+       stop;
+    end;
+
+    /* a trailing sign position still takes the sign from the wide value */
+    q = n;
+    if q ^= '1234567890123456789012345.67-' then do;
+       put skip list('FAIL wide picture negative:', q);
+       stop;
+    end;
+
+    put skip list('PASS picture_wide');
+ end picture_wide;

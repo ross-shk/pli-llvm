@@ -40,8 +40,8 @@ pli name.pli -o name && ./name
 | Program    | `procedure options(main)` entry point                            | —                                |
 | Types      | FIXED BIN/DEC, FLOAT, COMPLEX, BIT, CHAR/VARYING, POINTER        | STERLING constants, PICTURE type |
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
-| Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | dynamic-extent BASED arrays      |
-| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, named | OVERFLOW, CHECK                  |
+| Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
+| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), named | OVERFLOW, CHECK                  |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
@@ -885,7 +885,7 @@ Poll instead of blocking with the `event()` built-in (`'1'b` means done):
 
 Also: `call ... task[(t)]` requests an async task; `call ... priority(p)` sets the
 spawned task's absolute priority to the caller's priority plus `p` (default 0)
-(ADR-291); `priority(tk)` reads it back relative to the caller, and
+(ADR-298); `priority(tk)` reads it back relative to the caller, and
 `priority(tk) = n` changes it for a live task; task/event arrays, elements
 `ev(i)`, and members `s.ev` work.
 
@@ -913,7 +913,7 @@ fiber backend yet.
   The tasking matrix per backend is tracked in `docs/DEFERRED-WORK.md` (C1).
 - Under the fiber model, a stream `get` from a file parks the task (and frees
   its worker) until the read completes, using the same helper-thread mechanism
-  as standard input (ADR-238, ADR-291). Record `read` still blocks the worker
+  as standard input (ADR-238, ADR-298). Record `read` still blocks the worker
   (DEFERRED-WORK C4). Reading *standard input* likewise parks rather than
   blocking.
 

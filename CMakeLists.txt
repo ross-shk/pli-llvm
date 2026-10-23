@@ -301,6 +301,43 @@ set(PLI_TEST_SDK_ENV "")
 if(APPLE AND PLI_HOST_SDK)
   set(PLI_TEST_SDK_ENV "SDKROOT=${PLI_HOST_SDK}")
 endif()
+if(WIN32 AND NOT APPLE)
+  # Test subprocesses invoke clang/lld-link for C interop — they need the
+  # MSVC Windows SDK include and lib paths (set by vcvarsall.bat). Probe them
+  # at configure time so ctest works without a pre-initialised dev shell.
+  find_program(VCVARSALL_BAT NAMES vcvarsall.bat
+    HINTS ENV VCINSTALLDIR
+    PATHS
+      "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build"
+      "C:/Program Files (x86)/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build"
+      "C:/Program Files (x86)/Microsoft Visual Studio/2022/Professional/VC/Auxiliary/Build"
+      "C:/Program Files (x86)/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build"
+    DOC "Path to vcvarsall.bat")
+  if(VCVARSALL_BAT)
+    # vcvarsall.bat sets up the MSVC env; use a temp batch wrapper so cmd.exe
+    # parses the quoted path (with spaces) correctly. `call` is required so
+    # execution returns after vcvarsall.bat finishes.
+    file(WRITE ${CMAKE_BINARY_DIR}/_msvc_env.bat
+      "call \"${VCVARSALL_BAT}\" x64 && set INCLUDE && set LIB\n")
+    execute_process(
+      COMMAND cmd /c "${CMAKE_BINARY_DIR}/_msvc_env.bat"
+      OUTPUT_VARIABLE _msvc_env
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    foreach(_var INCLUDE LIB)
+      string(REGEX MATCH "${_var}=([^\r\n]*)" _m "${_msvc_env}")
+      if(_m)
+        # Escape semicolons so CMake's ENVIRONMENT property doesn't split
+        # the ;-separated Windows path list into separate variables.
+        string(REPLACE ";" "\\;" _val "${CMAKE_MATCH_1}")
+        list(APPEND PLI_TEST_SDK_ENV "${_var}=${_val}")
+        message(STATUS "Test env MSVC ${_var}: ${CMAKE_MATCH_1}")
+      endif()
+    endforeach()
+  else()
+    message(WARNING "vcvarsall.bat not found — C interop tests may fail on Windows")
+  endif()
+endif()
 
 # Toolchain prefix baked in as a data-file fallback (ADR-225): the profile
 # runtime / builtins probes try exe-relative first (release layout), then

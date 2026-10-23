@@ -1,0 +1,31 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Sterling constants (rule (145)): pounds, shillings and pence are
+    converted to fixed-point pence, with the pence fraction as the scale. */
+ sterling_test: procedure options(main);
+    declare pence fixed decimal(5,0) initial(101.13.8£);
+    declare half fixed decimal(4,1);
+    declare zero fixed decimal(3,0);
+
+    /* 101 pounds 13 shillings 8 pence = 24404 pence */
+    if pence ^= 24404 then do;
+       put skip list('FAIL sterling pounds:', pence);
+       stop;
+    end;
+
+    /* 9 shillings and a halfpenny = 108.5 pence */
+    half = 0.9.0.5£;
+    if half ^= 108.5 then do;
+       put skip list('FAIL sterling fraction:', half);
+       stop;
+    end;
+
+    /* one pound ten shillings and sixpence = 366 pence */
+    zero = 1.10.6£;
+    if zero ^= 366 then do;
+       put skip list('FAIL sterling exact:', zero);
+       stop;
+    end;
+
+    put skip list('PASS sterling');
+ end sterling_test;

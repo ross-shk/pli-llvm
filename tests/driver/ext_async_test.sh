@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/ext_async_test.sh — async CALL of an external entry procedure
-# (ADR-291). The CHAR(*) parameter checks the hidden length argument that
+# (ADR-298). The CHAR(*) parameter checks the hidden length argument that
 # the async wrapper must pass, matching the synchronous external ABI.
 set -u
 PLI=${PLI:-./build/cmake/pli}

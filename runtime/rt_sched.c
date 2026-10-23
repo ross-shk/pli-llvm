@@ -377,7 +377,7 @@ static pli_fiber *rt_take_expired_timer(void) {
 
 /* --- the workers --- */
 
-/* Set once any task uses a nonzero priority (ADR-291). While it stays 0,
+/* Set once any task uses a nonzero priority (ADR-298). While it stays 0,
  * every run queue is plain LIFO and the scheduler keeps its O(1) pop path. */
 static _Atomic int rt_prio_used = 0;
 
@@ -386,7 +386,7 @@ static _Atomic int rt_prio_used = 0;
  * whole list at once), so it can safely traverse and re-link. Detach the
  * list, find the best candidate, unlink it, and push the rest back.
  * Within equal priority the most-recent (head-end) task is chosen first,
- * preserving LIFO for same-priority tasks (ADR-291). */
+ * preserving LIFO for same-priority tasks (ADR-298). */
 static pli_fiber *rt_queue_pop_best(rt_worker *w) {
   if (!atomic_load_explicit(&rt_prio_used, memory_order_relaxed))
     return rt_queue_pop(&w->local);
@@ -568,7 +568,7 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
   f->wait_key = NULL;
   f->deadline = 0;
   /* A new task starts at priority 0 and without a TASK handle; the
-   * priority-aware spawn overwrites both (ADR-291). */
+   * priority-aware spawn overwrites both (ADR-298). */
   f->priority = 0;
   f->handle = 0;
   /* A fiber that was parked on a previous task still points at that
@@ -810,7 +810,7 @@ void rt_sched_main(void (*entry)(void)) {
   rt_worker_loop(w);
 }
 
-/* Shared spawn (ADR-291): fn(arg) runs as a fiber with the given absolute
+/* Shared spawn (ADR-298): fn(arg) runs as a fiber with the given absolute
  * priority and TASK handle. Returns the fiber, or NULL on failure. */
 static pli_fiber *rt_sched_spawn_ex(void *(*fn)(void *), void *arg, int priority,
                                     long long handle) {
@@ -847,14 +847,14 @@ int rt_sched_spawn(void *(*fn)(void *), void *arg) {
   return rt_sched_spawn_ex(fn, arg, 0, 0) ? 0 : -1;
 }
 
-/* Priority-aware spawn (ADR-291): the same as rt_sched_spawn but the
+/* Priority-aware spawn (ADR-298): the same as rt_sched_spawn but the
  * fiber carries an absolute priority and its TASK handle. */
 pli_fiber *rt_sched_spawn_p(void *(*fn)(void *), void *arg, int priority,
                             long long handle) {
   return rt_sched_spawn_ex(fn, arg, priority, handle);
 }
 
-/* Change a live task's priority (ADR-291). The scheduler reads it at the
+/* Change a live task's priority (ADR-298). The scheduler reads it at the
  * next selection; a parked task keeps the new value for its next run. */
 void rt_sched_set_priority(pli_fiber *f, int priority) {
   if (!f)

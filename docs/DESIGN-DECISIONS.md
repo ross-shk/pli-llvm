@@ -10430,7 +10430,260 @@ compiler-side copy would drift from `P` output.
 
 ---
 
-## ADR-291 — Tasking contract freeze (C1/C2 integration)
+## ADR-291 — Picture-directed input parses at the picture's assumed point
+
+**Context.** ADR-290 made `DECLARE p PICTURE(...)` a real CHARACTER value with
+a format template, but `GET EDIT` still rejected every `P` item. A picture
+variable could be written, not read, so the `B1` round trip was one-sided.
+
+**Decision.** A new runtime entry, `pli_get_edit_pic(w, scale)`, reads a
+picture-width field and returns an integer scaled by the picture's fractional
+digit count. It skips blanks, commas, currency symbols and `+`; a `-`
+anywhere sets the sign. Without a `.` every digit is already in picture
+positions (`9V99` field `150` is 1.50 and returns 150 at scale 2); with a `.`
+the digits after it are padded or truncated to the picture's scale. The
+integer result is exact, unlike a `strtod` round trip through `double`.
+
+`IRGen` wraps that integer in a `FIXED DECIMAL(picture-digits, scale)` value
+and hands it to the normal conversion path. A numeric target rescales through
+the existing exact `convert`; a PICTURE target formats through
+`convertToPicture`, so input and output share one picture interpreter. This
+also fixes the member/defined store path, which now routes CHARACTER targets
+through `storeCharTo` instead of a scalar store.
+
+The slice supports the picture characters `9 Z V . , + - S`, at most 18 digit
+positions, and numeric or PICTURE targets. Sterling, `$`/`*` positions, `CR`/
+`DB`, wide pictures and `GET LIST` into a picture keep cited diagnostics.
+
+**Consequences.** `tests/core/picture_input.pli` round-trips positive and
+negative fields, `V`, numeric and PICTURE targets, and a structure member.
+`bad_picture_input.pli` and `bad_picture_input_char.pli` pin the unsupported
+picture character and the plain-CHARACTER target. `B1` remains open for
+sterling data, wide picture items and `GET LIST` into a picture.
+
+**Rejected.** *Parse the field as `double` and reuse `F` input.* It loses
+decimal money values at the conversion boundary. *Store the raw field in a
+PICTURE variable.* The variable has to hold the picture-directed result, not
+the input spelling, or a later `A` output would expose the unedited text.
+
+---
+
+## ADR-292 — List-directed input into numeric character data
+
+**Context.** ADR-290 made `DECLARE p PICTURE(...)` numeric character data and
+ADR-291 gave it edit-directed input, but `GET LIST` still rejected it. A
+numeric picture variable has arithmetic attributes (Y33-6003), so the field in
+the stream is an arithmetic value, not a character token; copying the token
+would store the input spelling instead of the pictured value.
+
+**Decision.** `GET LIST` of a PICTURE variable reads the token through
+`pli_get_list_decfixed(picture.fracDigits)`, wraps the exact integer in a
+`FIXED DECIMAL(precision, scale)` value and stores it through the normal
+conversion path. `convertToPicture` then edits it with the same runtime
+interpreter as assignment and `P` output. Scalar, structure-member and array
+targets all use `storeGetTarget`, so no separate picture path was needed.
+
+The reader truncates extra fraction digits, matching the picture formatter's
+own truncation. This slice leaves the general list-directed exponent gap
+unchanged; it is a decimal-reader concern shared with FIXED DECIMAL targets.
+
+**Consequences.** `tests/core/picture_list.pli` covers a negative value with a
+trailing sign position, a comma-separated positive value, an integer picture,
+`V`, an array and a structure member. The old `bad_picture_get.pli` gap gate is
+removed because the form now conforms. `B1` remains open only for sterling data
+and wide picture items.
+
+**Rejected.** *Copy the token into the CHARACTER storage.* It bypasses the
+picture and breaks the arithmetic value. *Read the token as `FLOAT`.* It loses
+decimal money values at the conversion boundary.
+
+
+---
+
+## ADR-293 — Wide PICTURE items use the 128-bit formatter
+
+**Context.** `PICTURE` declarations stopped at 18 digit positions because the
+formatter core worked on a `long long`. A `FIXED DECIMAL(p)` with `p` up to 38
+already exists (ADR-191), so a wide value could not be assigned to or printed
+through a picture of matching width. The picture character set and layout do
+not change at 19 digits; only the digit store and its conversion boundary do.
+
+**Decision.** The runtime `pic_format` core now takes the portable `PliI128`
+and extracts digits with `pli_divmod10`. Thin wrappers keep the existing i64
+ABI, while new `(lo, hi)` entry points serve wide DECIMAL values:
+
+- `pli_pic_format_wide` for `PICTURE` variable assignment,
+- `pli_put_edit_pic_wide` for a `P` output item,
+- `pli_get_edit_pic_wide` for `GET EDIT P`, and
+- `pli_get_list_decfixed_wide` for `GET LIST` into a picture.
+
+`irgen` routes a `FIXED DECIMAL` with an i128 slot through those entry points;
+narrow values keep the existing paths. Picture width remains capped at 127
+output positions, and the numeric implementation limit is 38 digit positions.
+
+**Consequences.** `tests/core/picture_wide.pli` exercises a 27-digit decimal
+through assignment, `P` output, `GET EDIT P` and `GET LIST`, plus a negative
+value with a trailing sign position. `tests/core/bad_picture_wide.pli` pins the
+new 38-digit diagnostic. `B1` remains open only for sterling data.
+
+**Rejected.** *Keep the 18-digit limit.* It would make a declared wide decimal
+unprintable through a matching picture. *Copy the decimal text and patch
+digits.* It would bypass the picture's zero suppression, sign and insertion
+characters; the shared formatter must stay the single interpretation.
+
+
+---
+
+## ADR-294 — Sterling constants are fixed-point pence
+
+**Context.** Rule (145) defines a constant as
+`pounds . shillings . pence [ . pence-fraction ] £`. The scanner stopped at the
+first fraction, so the pence field and the `£` suffix were unreachable. The
+1966 PL/I specification makes the value precise: multiply pounds by 240, add
+12 times shillings, then add pence. The pence fraction is the constant's
+decimal scale.
+
+**Decision.** `Lexer::lexNumber` recognises the second and optional third dot
+of a sterling constant and consumes the UTF-8 `£` suffix. The parser converts
+the three fields to a `FIXED DECIMAL` literal whose scaled value is pence:
+`(pounds * 240 + shillings * 12 + wholePence) * 10^d + penceFraction`, with
+`d` fraction digits. Shillings must be below 20 and whole pence below 12; a
+malformed or over-38-digit constant is diagnosed with rule (145).
+
+The value then uses the existing decimal constant path, so arithmetic,
+`INITIAL`/`VALUE`, rescaling and wide-digit support need no new code.
+
+**Consequences.** `tests/core/sterling.pli` checks three constants, including a
+fractional halfpenny; `tests/core/bad_sterling.pli` pins the shillings range.
+`B1` remains open only for sterling pictures, whose `G`/`M`/`H`/`P` editing is
+a separate runtime formatter.
+
+**Rejected.** *Treat the shillings field as a decimal fraction.* That would
+turn `1.10.6£` into 0.1106 rather than 366 pence. *Parse sterling in the
+preprocessor.* It is a language constant, and the lexer already owns the
+suffix and field boundaries.
+
+
+---
+
+## ADR-295 — Sterling pictures format fixed-point pence
+
+**Context.** ADR-294 made sterling constants fixed-point pence, but a
+`PICTURE` beginning with `G` still fell into the generic numeric formatter. It
+printed the `G` and `M` markers literally and treated the whole string as
+decimal digits. The 1966 specification defines the sterling form as pounds,
+shillings and pence subfields, with `G` and `M` carrying no output and the
+value converted to fixed-point pence for arithmetic.
+
+**Decision.** `classifyPicture` recognizes a sterling picture and records its
+output width separately. This slice accepts:
+
+- `G` at the start and three `M` subfield markers,
+- `9`/`Z` digit positions in the pounds, shillings and pence fields,
+- the literal separators `.`, `B`, `/`, `H` and `P` (H writes `S`, P writes
+  `D`, B writes a blank).
+
+The runtime `sterling_format` divides pence by 240 and 12 into the three
+fields, applies `Z` suppression across the whole field, and emits the
+separators. `sterling_read_field` reverses the mapping for `GET EDIT P`; a
+pence value assigned through `GET LIST` uses the same conversion path. The
+existing numeric picture paths are untouched because the classifier sets the
+`sterling` flag before the generic layout walk.
+
+**Consequences.** `tests/core/sterling_picture.pli` covers assignment, `P`
+output, `GET EDIT P`, `GET LIST`, and zero suppression.
+`tests/core/money_report.pli` is the money/report golden. Whole-pence values
+only: fractional pence, sign editing, `6`/`7`/`8`, `T`/`I`/`R`/`Y`, `*`, and
+`CR`/`DB` keep cited diagnostics. Sterling picture input above 18 digit
+positions is diagnosed rather than narrowed (`bad_sterling_picture.pli`).
+
+**Rejected.** *Format sterling as ordinary decimal digits.* It would ignore
+the 240/12 radix and produce the wrong character value. *Route through the
+constant parser.* Pictures are runtime templates, not source constants; the
+two paths must share the pence value but not the parser.
+
+---
+
+## ADR-296 — Per-ALLOCATE bounds for a 1-D BASED array
+
+**Context.** Rules (25),(89) served a BASED heap cell sized from the
+DECLARE descriptor (`ALLOCATE x SET(p)`), and ADR-184 extended that to a
+runtime-`(n)` DECLARE bound. The standard IBM idiom `DCL a(*) FIXED
+BASED(p); ALLOCATE a(n) SET(p);` stayed diagnosed — both because a
+non-parameter `(*)` was rejected and because the parser did not accept
+`SET` after a dimension.
+
+**Decision.** The parser accepts `SET`/`IN` after a dimension-attribute
+(rule (88)). Sema serves one extent on a 1-D BASED array: it types the
+bound, marks that axis dynamic, and leaves the multi-axis, `lb:ub` and
+`*` forms diagnosed with rule (89). A `(*)` BASED array must receive an
+extent at every `ALLOCATE`. IRGen sizes the block as `extent × elemSize`
+and rewrites the `dynUb_` dope slot, so subscripts, `LBOUND`/`HBOUND` and
+`DIM` read the ALLOCATE-time extent, not the DECLARE placeholder. Pass 2b
+seeds the slot for a BASED axis with no DECLARE bound expression. The
+compile-time constant-subscript check now skips every BASED array, since
+the DECLARE extent is no longer authoritative; runtime
+`SUBSCRIPTRANGE` remains the check.
+
+**Consequences.** `based_alloc_dim.pli` pins the `(*)` declare, a fixed
+DECLARE overridden by `ALLOCATE`, re-allocation with a new extent, and
+`IN (area)`. `bad_based_alloc_dim.pli` re-pins the rejected shapes and
+`bad_based_array.pli` keeps a multi-`*` axis as its negative.
+
+**Rejected.** *Keep the DECLARE extent authoritative for the static
+subscript check.* It rejects legal programs after an override. *Store
+extents in the heap block header.* ADR-184 already reads the dope slots;
+a header would split the overlay and heap representations.
+
+---
+
+## ADR-297 — `STRINGRANGE` is IBM's opt-in condition on `SUBSTR`
+
+**Context.** Rules (60)-(63) parse condition prefixes and (91)-(99) serve
+the establish/raise/pop machinery for ERROR, SIZE, SUBSCRIPTRANGE,
+ZERODIVIDE, CONVERSION and programmer-named conditions. `ON STRINGRANGE`
+was rejected by `parseCondition`, and an out-of-range `SUBSTR` silently
+returned the clamped value with no condition raised. IBM makes
+STRINGRANGE unusual: it is **disabled by default** and enabled only
+within the scope of a `(STRINGRANGE)` condition prefix. Its implicit
+action is also not an abort — it prints a message and continues with the
+revised substring.
+
+**Decision.** Serve STRINGRANGE on the `SUBSTR` function with the same
+fixed-key dispatch as the other served conditions (key -5). Detection is
+gated by a tri-state prefix flag carried on statements: `(STRINGRANGE)`
+enables it, `(NOSTRINGRANGE)` disables it, and an unset value inherits
+from the enclosing statement, so a prefixed `DO`/`BEGIN`/`PROCEDURE`
+covers its body. A prefix on a PROCEDURE statement (including the
+file-scope form `(STRINGRANGE): MAIN: PROC ...`, rule (2)) is inherited
+by every statement parsed in that procedure. The argument triple raises
+when `y < 1`, `z < 0`, or the substring reaches past the source's
+current length; `y = LENGTH(x)+1` with `z = 0` is explicitly not a
+raise. A handler resumes with the clamped value the existing lowerings
+already compute. With no handler, IRGen calls a new
+`pli_stringrange` entry that flushes pending output, prints the message
+and returns, so execution continues (IBM's implicit action) instead of
+aborting like the other served conditions.
+
+**Consequences.** `on_stringrange.pli` pins the disabled default, the
+two-handler stack with `REVERT`, the clamped resume values, the
+`LENGTH+1`/zero-length exception, `SIGNAL`, a nested `(NOSTRINGRANGE)`,
+and a `SUBSTR` inside an ON-unit body reached through the enclosing
+prefix. `stringrange_implicit.pli` is the golden for the procedure-level
+prefix and the notify-and-continue implicit action.
+`bad_on_cond_stringrange.pli` pins the `CONDITION(STRINGRANGE)`
+exclusion. The `SUBSTR` pseudo-variable is not checked: IBM documents
+its out-of-range store as an invalid program that writes past `x`, so
+the address-style write stays untouched.
+
+**Rejected.** *Treat STRINGRANGE as enabled by default like
+SUBSCRIPTRANGE is in this compiler.* It would raise on ordinary programs
+and contradict IBM's stated default. *Abort when no handler exists.* The
+implicit action is defined as a message plus normal return.
+
+---
+
+## ADR-298 — Tasking contract freeze (C1/C2 integration)
 
 **Status:** accepted (Band C completion)
 

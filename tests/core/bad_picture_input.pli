@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Picture-directed input only parses the picture characters this slice
+    implements; a currency position is diagnosed (rule (53), ADR-291). */
+ bad_picture_input: procedure options(main);
+    declare buf char(10);
+    declare p picture('ZZ9.99');
+    get string(buf) edit(p) (p('$999.99'));
+ end bad_picture_input;

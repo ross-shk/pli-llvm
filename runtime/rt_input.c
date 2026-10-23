@@ -14,7 +14,7 @@
  * bytes cross the thread boundary.
  *
  * This broker serves standard input; stream file reads use the file broker
- * (rt_fbroker.c, ADR-291), and record READ still blocks.
+ * (rt_fbroker.c, ADR-298), and record READ still blocks.
  */
 #include "pli_rt.h"
 #include "rt_fiber.h"

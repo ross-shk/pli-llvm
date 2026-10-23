@@ -222,6 +222,9 @@ struct Stmt {
   bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
   bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
   bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
+  // (STRINGRANGE)/(NOSTRINGRANGE) prefix (rules (60)-(63)): 0 = inherit
+  // (disabled unless an enclosing scope enables it), 1 = enable, -1 = disable.
+  int strRange = 0;
   StmtP thenS, elseS;
   std::vector<StmtP> body;
 
@@ -296,6 +299,7 @@ struct Stmt {
   static constexpr int kSubscriptrangeCondKey = -2;
   static constexpr int kZerodivideCondKey = -3;
   static constexpr int kConversionCondKey = -4; // CONVERSION (rule 94, QR1.2)
+  static constexpr int kStringrangeCondKey = -5; // STRINGRANGE (rules 60-63, 94)
   // ENDFILE(f) (rule 97) is a file condition: its key is this base minus the
   // FILE variable's runtime slot, so each file has its own handler. Mirrored
   // in runtime/rt_file.c (RT_ENDFILE_KEY_BASE).

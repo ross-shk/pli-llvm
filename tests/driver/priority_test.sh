@@ -4,7 +4,7 @@
 # tests/driver/priority_test.sh — PRIORITY on every backend (fiber/1,
 # fiber/4, os/1, os/4). Values are checked on all four; ordering is checked
 # on fiber/1 only because the OS model does not schedule by priority
-# (ADR-291).
+# (ADR-298).
 set -u
 PLI=${PLI:-./build/cmake/pli}
 OUT=./tests/driver/out/priority_test
@@ -12,7 +12,7 @@ mkdir -p tests/driver/out
 
 cat > "$OUT.pli" <<'EOF'
  /* SPDX-License-Identifier: Apache-2.0 */
- /* rules (79),(82): PRIORITY values on every backend (ADR-291). */
+ /* rules (79),(82): PRIORITY values on every backend (ADR-298). */
  priority_values: procedure options(main);
     declare ev event;
     declare tk task;
@@ -56,7 +56,7 @@ EOF
 cat > "$OUT.order.pli" <<'EOF'
  /* SPDX-License-Identifier: Apache-2.0 */
  /* rule (79): a higher-priority task spawned first still runs before a
-    lower-priority task spawned second on a single fiber worker (ADR-291). */
+    lower-priority task spawned second on a single fiber worker (ADR-298). */
  priority_order: procedure options(main);
     declare e1 event;
     declare e2 event;

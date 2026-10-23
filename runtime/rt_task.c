@@ -25,7 +25,7 @@ static rt_lock pli_task_mu;
 static pli_once pli_rt_once = PLI_ONCE_INIT;
 static int pli_task_next = 1;
 
-/* Live OS-model tasks (ADR-291). The legacy model detaches every task, so
+/* Live OS-model tasks (ADR-298). The legacy model detaches every task, so
  * without this count the process can exit while a task thread is still in
  * the runtime; pli_rt_fini waits for the count to reach zero first. */
 static _Atomic int pli_os_live = 0;
@@ -62,7 +62,7 @@ void rt_wait_tasks(void) {
   }
 }
 
-/* Task handle registry (ADR-291): maps a 1-based task id to its absolute
+/* Task handle registry (ADR-298): maps a 1-based task id to its absolute
  * priority and the fiber currently running it. Ids are never recycled, so a
  * completed handle cannot alias a later-spawned task; the fiber pointer is
  * guarded by the fiber's own handle when a priority is updated. The array
@@ -220,7 +220,7 @@ void pli_task_spawn(char *fn, char *ctx) {
   pli_spawn_task(body, ctx);
 }
 
-/* Priority-aware spawn (ADR-291): pli_task_spawn with a priority.
+/* Priority-aware spawn (ADR-298): pli_task_spawn with a priority.
  * `id` is the task handle id (0 = no TASK variable, bare TASK); `prio` is
  * relative to the spawning task, so the stored value is absolute. */
 void pli_task_spawn_p(char *fn, char *ctx, long long id, int prio) {
@@ -268,7 +268,7 @@ void pli_task_note(char *task) {
 }
 
 /* PRIORITY(t): read a task handle's priority as a value relative to the
- * current task (rule 79, ADR-291). */
+ * current task (rule 79, ADR-298). */
 int pli_task_priority_of(long long id) {
   if (id < 1)
     return 0;
@@ -282,7 +282,7 @@ int pli_task_priority_of(long long id) {
 }
 
 /* PRIORITY(t) = n: set a task handle's priority so that a subsequent
- * PRIORITY(t) reads back n (rule 79, ADR-291). The stored value is
+ * PRIORITY(t) reads back n (rule 79, ADR-298). The stored value is
  * absolute: current + n. A live fiber whose handle still matches gets the
  * new value, so the change takes effect at the next scheduling decision. */
 void pli_task_set_priority_of(long long id, int rel) {

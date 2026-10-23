@@ -2974,7 +2974,7 @@ llvm::Function* IRGen::intrinsicFn(const std::string& name, llvm::Type* ret,
 // needs. Keeping it in its own function keeps the hot function's body small
 // and gives the backend a cold function to put out of line. Mirrors MULTICS
 // cg_error.pl1, where the condition path is separate from the normal path.
-llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
+llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn, bool notifyOnly) {
   auto cached = trapDispatch_.find(key);
   if (cached != trapDispatch_.end())
     return cached->second;
@@ -3011,7 +3011,12 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
     br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(abortBB);
   b_.CreateCall(runtimeFn(abortFn), {});
-  b_.CreateUnreachable();
+  // A notify-and-continue condition (STRINGRANGE) returns from the dispatch;
+  // every other served condition aborts on the empty-handler edge.
+  if (notifyOnly)
+    b_.CreateRetVoid();
+  else
+    b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
   llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.ret", F);
   llvm::SwitchInst* sw = b_.CreateSwitch(top, retBB, handlers.size());
@@ -3029,26 +3034,61 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
   return F;
 }
 
-void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB) {
+void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB,
+                         bool notifyOnly) {
   auto it = onHandlers_.find(key);
   if (it == onHandlers_.end()) {
     // No handler for this condition: the abort is already a call to a cold,
     // noreturn runtime entry, so the trap block is as small as it can be.
+    // A notify-and-continue condition returns and resumes at okBB.
     b_.CreateCall(runtimeFn(abortFn), {});
-    b_.CreateUnreachable();
+    if (notifyOnly)
+      b_.CreateBr(okBB);
+    else
+      b_.CreateUnreachable();
     return;
   }
   // WS-F1 (ADR-249): the dispatch is a cold function of its own; the hot
   // path carries the branch and the call, and nothing else.
-  llvm::Function* dispatch = onTrapDispatch(key, abortFn);
+  llvm::Function* dispatch = onTrapDispatch(key, abortFn, notifyOnly);
   if (!dispatch) {
-    // No dispatch could be built (no handler for the key): abort inline.
+    // No dispatch could be built (no handler for the key): take the
+    // implicit action inline.
     b_.CreateCall(runtimeFn(abortFn), {});
-    b_.CreateUnreachable();
+    if (notifyOnly)
+      b_.CreateBr(okBB);
+    else
+      b_.CreateUnreachable();
     return;
   }
   b_.CreateCall(dispatch, {});
   b_.CreateBr(okBB);
+}
+
+// STRINGRANGE check (rules (60)-(63),(94)): raise before the extraction when
+// the argument triple is invalid. IBM's normal return then gives the clamped
+// substring the lowerings already compute. y = LENGTH(x)+1 with z = 0 is
+// explicitly not a raise.
+void IRGen::emitStringrangeCheck(const Val& start, const Val& len, llvm::Value* srcLen) {
+  llvm::Value* one = i64(1);
+  llvm::Value* zero = i64(0);
+  llvm::Value* start64 = toI64(start);
+  llvm::Value* len64 = toI64(len);
+  llvm::Value* srclen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "sr.srclen");
+  // start < 1, len < 0, or len reaches past the source's current length.
+  llvm::Value* lo = b_.CreateICmpSLT(start64, one, "sr.lo");
+  llvm::Value* neg = b_.CreateICmpSLT(len64, zero, "sr.neg");
+  llvm::Value* avail =
+      b_.CreateSub(srclen64, b_.CreateSub(start64, one, "sr.start0"), "sr.avail");
+  llvm::Value* past = b_.CreateICmpSGT(len64, avail, "sr.past");
+  llvm::Value* bad = b_.CreateOr(b_.CreateOr(lo, neg, "sr.bad1"), past, "sr.bad");
+  std::string id = std::to_string(n_++);
+  llvm::BasicBlock* trapL = llvm::BasicBlock::Create(ctx_, "sr.trap." + id, curFn_);
+  llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sr.ok." + id, curFn_);
+  b_.CreateCondBr(bad, trapL, okL);
+  b_.SetInsertPoint(trapL);
+  emitCondTrap(Stmt::kStringrangeCondKey, "pli_stringrange", okL, /*notifyOnly=*/true);
+  b_.SetInsertPoint(okL);
 }
 
 // SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
@@ -4152,12 +4192,20 @@ void IRGen::allocaLocals(HProc* p) {
   // storage of its own (it stays out of localSyms). Subscripting and the
   // array built-ins then check against the live extent.
   for (Symbol* s : sema_.storage()) {
-    if (s->kind != Symbol::Var || !s->ty.isDynamic() || !s->basedBase)
+    if (s->kind != Symbol::Var || !s->ty.isDynamic() ||
+        (!s->basedBase && !s->basedNoPtr))
       continue;
     if (s->owner != p->src)
       continue;
     if (s->dynUb && !dynUb_.count(s))
       dynUb_[s] = toI64(emitExpr(s->dynUb));
+    // A `(*)` or per-ALLOCATE BASED axis has no DECLARE bound expression;
+    // seed the dope slot so a reference emitted before the first ALLOCATE
+    // still has a value.
+    if (s->ty.dims[0].adj && !dynUb_.count(s))
+      dynUb_[s] = i64(s->ty.dims[0].ub);
+    if (s->ty.dims[0].dyn && !s->dynUb && !dynUb_.count(s))
+      dynUb_[s] = i64(s->ty.dims[0].ub);
     if (s->dynLb && !dynLb_.count(s))
       dynLb_[s] = toI64(emitExpr(s->dynLb));
   }
@@ -5371,6 +5419,8 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
     else if (keyId.first == Stmt::kConversionCondKey)
       name = "PLI_ON_CONVERSION_" + std::to_string(keyId.second);
+    else if (keyId.first == Stmt::kStringrangeCondKey)
+      name = "PLI_ON_STRINGRANGE_" + std::to_string(keyId.second);
     else
       name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
     onHandlers_[keyId.first].push_back(
@@ -5495,21 +5545,28 @@ void IRGen::emitSignal(HStmt* s) {
   llvm::BasicBlock* resBB = llvm::BasicBlock::Create(ctx_, "on.resume", curFn_);
   b_.CreateCondBr(none, defBB, dspBB);
   b_.SetInsertPoint(defBB);
-  std::string msg;
-  if (s->condKey == 0)
-    msg = "SIGNAL ERROR";
-  else if (s->condKey == Stmt::kSizeCondKey)
-    msg = "SIGNAL SIZE";
-  else if (s->condKey == Stmt::kSubscriptrangeCondKey)
-    msg = "SIGNAL SUBSCRIPTRANGE";
-  else if (s->condKey == Stmt::kZerodivideCondKey)
-    msg = "SIGNAL ZERODIVIDE";
-  else if (s->condKey == Stmt::kConversionCondKey)
-    msg = "SIGNAL CONVERSION";
-  else
-    msg = "SIGNAL CONDITION(" + s->condName + ")";
-  b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
-  b_.CreateUnreachable();
+  // STRINGRANGE's implicit action is "message printed, processing continues"
+  // (rules (60)-(63),(94)); every other served condition aborts.
+  if (s->condKey == Stmt::kStringrangeCondKey) {
+    b_.CreateCall(runtimeFn("pli_stringrange"), {});
+    b_.CreateBr(resBB);
+  } else {
+    std::string msg;
+    if (s->condKey == 0)
+      msg = "SIGNAL ERROR";
+    else if (s->condKey == Stmt::kSizeCondKey)
+      msg = "SIGNAL SIZE";
+    else if (s->condKey == Stmt::kSubscriptrangeCondKey)
+      msg = "SIGNAL SUBSCRIPTRANGE";
+    else if (s->condKey == Stmt::kZerodivideCondKey)
+      msg = "SIGNAL ZERODIVIDE";
+    else if (s->condKey == Stmt::kConversionCondKey)
+      msg = "SIGNAL CONVERSION";
+    else
+      msg = "SIGNAL CONDITION(" + s->condName + ")";
+    b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
+    b_.CreateUnreachable();
+  }
   b_.SetInsertPoint(dspBB);
   if (s->condKey == 0)
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
@@ -5545,6 +5602,9 @@ void IRGen::emitStmt(HStmt* s) {
   top.noSub = top.noSub || s->noSub;
   top.noZdiv = top.noZdiv || s->noZdiv;
   top.noConv = top.noConv || s->noConv;
+  // An explicit (STRINGRANGE)/(NOSTRINGRANGE) prefix wins for its subtree.
+  if (s->strRange != 0)
+    top.strRange = s->strRange;
   checkStack_.push_back(top);
   switch (s->kind) {
   case HStmt::Null:
@@ -6336,7 +6396,7 @@ void IRGen::emitAssign(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_set_pageno"), {toI64(slot), toI64(rhs)});
     return;
   }
-  // PRIORITY pseudo-variable (rule 79, ADR-291): priority(t) = n calls the
+  // PRIORITY pseudo-variable (rule 79, ADR-298): priority(t) = n calls the
   // runtime setter; the value is relative to self.
   if (s->target->kind == HExpr::Call && s->target->name == "PRIORITY") {
     HExpr* t = s->target.get();
@@ -6844,7 +6904,9 @@ void IRGen::emitAllocate(HStmt* s) {
     Symbol* bsym = s->allocBase[i]->sym;
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
-    if (!bsym->controlled && bsym->ty.isArray() && bsym->ty.isDynamic()) {
+    const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : noBounds;
+    if (!bsym->controlled && bsym->ty.isArray() &&
+        (bsym->ty.isDynamic() || !bbounds.empty())) {
       // A dynamic-extent BASED heap array (rules (25),(89)): size the block
       // from the live DECLARE bounds at ALLOCATE time. The first axis may be
       // dynamic (later axes are static — sema gates the rest); each reference
@@ -6857,15 +6919,19 @@ void IRGen::emitAllocate(HStmt* s) {
       llvm::Value* total = i64(elemSz);
       for (size_t k = 0; k < bsym->ty.dims.size(); ++k) {
         const Dim& d = bsym->ty.dims[k];
-        llvm::Value* ub =
-            (k == 0 && bsym->dynUb) ? toI64(emitExpr(bsym->dynUb), s->loc) : i64(d.ub);
+        // A per-ALLOCATE extent overrides the DECLARE bound (rule (89)); sema
+        // admits a single bound on a 1-D BASED array.
+        llvm::Value* ub = i64(d.ub);
+        if (k == 0 && !bbounds.empty() && bbounds[0].ub)
+          ub = toI64(emitExpr(bbounds[0].ub.get()), s->loc);
+        else if (k == 0 && bsym->dynUb)
+          ub = toI64(emitExpr(bsym->dynUb), s->loc);
         llvm::Value* lb =
             (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc) : i64(d.lb);
         if (k == 0) {
           // Later references check against the ALLOCATE-time extent, which
           // may differ from the entry-evaluated one when the bound changed.
-          if (bsym->dynUb)
-            dynUb_[bsym] = ub;
+          dynUb_[bsym] = ub;
           if (d.lbDyn && bsym->dynLb)
             dynLb_[bsym] = lb;
         }
@@ -8103,6 +8169,35 @@ void IRGen::emitGet(HStmt* s) {
         break;
       }
       case TK::Char: {
+        if (!ty.picture.empty()) {
+          // Numeric character data (ADR-292): read an arithmetic value at
+          // the picture's decimal scale, then let convertToPicture edit it.
+          const pli::PictureSpec spec = pli::classifyPicture(ty.picture);
+          const int frac = spec.fracDigits;
+          int prec = spec.intDigits + frac;
+          if (prec < 1)
+            prec = 1;
+          if (prec > 18) {
+            // A wide picture reads a 128-bit decimal value (B1).
+            llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "glw");
+            deferCall("pli_get_list_decfixed_wide", {i64(frac), slot}, false,
+                      [this, t, loc, prec, frac, slot](const std::vector<llvm::Value*>&, size_t) {
+                        Val v;
+                        v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "glwv");
+                        v.ty = Type::fixedDec(prec, frac);
+                        storeGetTarget(t, v, loc);
+                      });
+          } else {
+            deferCall("pli_get_list_decfixed", {i64(frac)}, false,
+                      [this, t, loc, prec, frac](const std::vector<llvm::Value*>& r, size_t i) {
+                        Val v;
+                        v.reg = r[i];
+                        v.ty = Type::fixedDec(prec, frac);
+                        storeGetTarget(t, v, loc);
+                      });
+          }
+          break;
+        }
         // Read into a reusable entry buffer, then assign into the target.
         llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
         deferCall("pli_get_list_char", {buf, i64(ty.len)}, false,
@@ -8153,12 +8248,20 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
                                           : memberAddr(t->sym, t->memberPath, loc);
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, loc, ub, lb);
-      storeScalarTo(addr, ty, convert(v, ty, loc), packedMemberPath(t->sym->ty, t->memberPath));
+      Val cv = convert(v, ty, loc);
+      if (ty.isChar())
+        storeCharTo(addr, ty, cv, loc, packedMemberPath(t->sym->ty, t->memberPath));
+      else
+        storeScalarTo(addr, ty, cv, packedMemberPath(t->sym->ty, t->memberPath));
       return;
     }
     if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
       llvm::Value* addr = definedSubElementAddr(t->sym, t->args, loc);
-      storeScalarTo(addr, ty, convert(v, ty, loc));
+      Val cv = convert(v, ty, loc);
+      if (ty.isChar())
+        storeCharTo(addr, ty, cv, loc);
+      else
+        storeScalarTo(addr, ty, cv);
       return;
     }
     storeArrayElement(t->sym, t->args, v, loc, t->locPtr.get());
@@ -8169,7 +8272,11 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       llvm::Value* addr =
           t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
                     : memberAddr(t->sym, t->memberPath, loc);
-      storeScalarTo(addr, ty, convert(v, ty, loc), packedMemberPath(t->sym->ty, t->memberPath));
+      Val cv = convert(v, ty, loc);
+      if (ty.isChar())
+        storeCharTo(addr, ty, cv, loc, packedMemberPath(t->sym->ty, t->memberPath));
+      else
+        storeScalarTo(addr, ty, cv, packedMemberPath(t->sym->ty, t->memberPath));
       return;
     }
     storeTo(t->sym, v, loc);
@@ -8325,6 +8432,50 @@ void IRGen::emitPutEditItems(HStmt* s) {
       llvm::Value* signSrc = nullptr;
       bool binaryScaled = false;
       int scale = 0;
+      if (spec.sterling) {
+        if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+          d_.error(item->loc, "wide FIXED DECIMAL output through a sterling PICTURE is not "
+                              "implemented",
+                   "(53)");
+          break;
+        }
+        if (!v.ty.isFixed() && v.ty.k != TK::Float) {
+          d_.error(item->loc, "P edit item requires a numeric value", "(53)");
+          break;
+        }
+        if (v.ty.isFixed() && v.ty.scale != 0) {
+          d_.error(item->loc, "sterling PICTURE output requires a whole-pence value", "(53)");
+          break;
+        }
+        val = v.ty.k == TK::Float ? b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picsf")
+                                  : toI64(v);
+        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(val, i64(0), "picsgn"),
+                                            i32(-1), i32(1), "picst");
+        facts_.recordBuiltin("picture", "runtime",
+                             "the sterling picture conversion needs the library routine");
+        if (remarkLibraryCalls_)
+          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+        deferCall("pli_put_edit_pic_sterling",
+                  {val, sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size())});
+        break;
+      }
+      if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+        // Wide DECIMAL output uses the 128-bit formatter core (B1).
+        llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
+        llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
+                                         b_.getInt64Ty(), "picw.hi");
+        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(v.reg, i128(0), "picwneg"),
+                                            i32(-1), i32(1), "picwsgn");
+        facts_.recordBuiltin("picture", "runtime",
+                             "the wide picture conversion needs the library routine");
+        if (remarkLibraryCalls_)
+          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+        deferCall("pli_put_edit_pic_wide",
+                  {lo, hi, i64(v.ty.scale), sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size())});
+        break;
+      }
       if (v.ty.isFixed()) {
         val = toI64(v);
         signSrc = val;
@@ -8521,10 +8672,57 @@ void IRGen::emitGetEditItems(HStmt* s) {
                 });
       break;
     }
-    case HFormatItem::P:
-      // P input: picture-directed input is not implemented in this stage (D1).
-      d_.error(s->loc, "P edit item on GET is not implemented in this stage", "(53)");
+    case HFormatItem::P: {
+      // P input (ADR-291): read the picture-width field and return the value
+      // at the picture's assumed decimal point; the normal conversion path
+      // then rescales it into a numeric target or formats a PICTURE target.
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      SourceLoc loc = s->loc;
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      if (!spec.valid || spec.width <= 0) {
+        d_.error(loc, "invalid PICTURE format for input", "(53)");
+        break;
+      }
+      if (spec.sterling) {
+        deferCall("pli_get_edit_pic_sterling",
+                  {i64(spec.width), globalString(spec.expanded),
+                   i64((long long)spec.expanded.size())},
+                  false, [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                    Val v;
+                    v.reg = r[i];
+                    int p = spec.intDigits > 0 ? spec.intDigits : 1;
+                    v.ty = Type::fixedDec(p, 0);
+                    storeGetTarget(t, v, loc);
+                  });
+        break;
+      }
+      {
+        int p = spec.intDigits + spec.fracDigits;
+        if (p > 18) {
+          // Wide P input writes the 128-bit value through a temp (B1).
+          llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "gpicw");
+          deferCall("pli_get_edit_pic_wide", {i64(spec.width), i64(spec.fracDigits), slot},
+                    false, [this, t, spec, loc, slot](const std::vector<llvm::Value*>&, size_t) {
+                      Val v;
+                      v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "gpicwv");
+                      int prec = spec.intDigits + spec.fracDigits;
+                      v.ty = Type::fixedDec(prec > 0 ? prec : 1, spec.fracDigits);
+                      storeGetTarget(t, v, loc);
+                    });
+        } else {
+          deferCall("pli_get_edit_pic", {i64(spec.width), i64(spec.fracDigits)}, false,
+                    [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
+                      Val v;
+                      v.reg = r[i];
+                      v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
+                      storeGetTarget(t, v, loc);
+                    });
+        }
+      }
       break;
+    }
     }
   }
 }
@@ -9138,7 +9336,7 @@ void IRGen::emitAsyncCall(HStmt* s) {
   Proc* callee = calleeSym->proc;
   Stmt* en = calleeSym->entry;
   if (!callee && !en) {
-    // External entry async (rule 79, ADR-291): marshal args for the
+    // External entry async (rule 79, ADR-298): marshal args for the
     // external procedure using its declared entryParams Types, the same
     // ABI rules as a synchronous external call. Function-async is diagnosed
     // by sema, so no hidden sret is needed here.
@@ -9224,7 +9422,7 @@ void IRGen::emitAsyncCall(HStmt* s) {
  * wrapper, and spawn the task (with priority if PRIORITY was given). */
 void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
                            std::vector<llvm::Value*> callArgs) {
-  // PRIORITY (rule 79, ADR-291): evaluated and passed to the spawn
+  // PRIORITY (rule 79, ADR-298): evaluated and passed to the spawn
   // function so the task starts with that priority. A bare CALL (no
   // task option) reaches here only when PRIORITY is the sole option.
   llvm::Value* prioVal = i32(0);
@@ -9293,7 +9491,7 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   llvm::Value* fnPtr = b_.CreateBitCast(wrap, b_.getPtrTy(), "twrap");
   // Always the priority-aware entry: it stores the handle's fiber so a later
   // PRIORITY(t) can update a live task, and with no option it still inherits
-  // the spawning task's priority (absolute = self + 0) (ADR-291).
+  // the spawning task's priority (absolute = self + 0) (ADR-298).
   b_.CreateCall(runtimeFn("pli_task_spawn_p"), {fnPtr, ctxRaw, taskId, prioVal});
   pendingVarWrites_.clear(); // no sync point to copy a varying arg back
   // ADR-246: the argument buffers stay live — the task reads them from the
@@ -10852,7 +11050,20 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
     return out;
   }
   if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-    d_.error(loc, "assignment of a wide FIXED DECIMAL to a PICTURE is not implemented", "(53)");
+    if (spec.sterling) {
+      d_.error(loc, "assignment of a wide FIXED DECIMAL to a sterling PICTURE is not implemented",
+               "(53)");
+      return out;
+    }
+    // A wide DECIMAL is edited by the 128-bit formatter core (B1).
+    llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
+    llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
+                                     b_.getInt64Ty(), "picw.hi");
+    llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(v.reg, i128(0), "picwneg"),
+                                        b_.getInt32(-1), b_.getInt32(1), "picwsgn");
+    b_.CreateCall(runtimeFn("pli_pic_format_wide"),
+                  {lo, hi, i64(v.ty.scale), sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size()), out.ptr, out.len});
     return out;
   }
   llvm::Value* val = nullptr;
@@ -10884,6 +11095,18 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
     signSrc = val;
   } else {
     d_.error(loc, "a PICTURE assignment requires a numeric value", "(53)");
+    return out;
+  }
+  if (spec.sterling) {
+    if (scale != 0) {
+      d_.error(loc, "a sterling PICTURE assignment requires a whole-pence value", "(53)");
+      return out;
+    }
+    llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(signSrc, i64(0), "picsgn"),
+                                        b_.getInt32(-1), b_.getInt32(1), "picst");
+    b_.CreateCall(runtimeFn("pli_pic_format_sterling"),
+                  {val, sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size()), out.ptr, out.len});
     return out;
   }
   llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");
@@ -12078,6 +12301,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val start = emitExpr(e->args[1].get());
     Val len = emitExpr(e->args[2].get());
+    // STRINGRANGE (rules (60)-(63),(94)): an invalid argument triple raises
+    // before the clamped extraction when the condition is enabled here.
+    if (strRangeChecks())
+      emitStringrangeCheck(start, len, s.len);
     // Source capacity for clipping: static, except for adjustable `CHAR(*)`
     // (rule (18)) / CONTROLLED (rule (15)) sources, where it is live.
     Symbol* ssysm = e->args[0]->sym;
@@ -12930,7 +13157,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
-  // PRIORITY(t) (rule (79), ADR-291): read a task handle's priority as a
+  // PRIORITY(t) (rule (79), ADR-298): read a task handle's priority as a
   // relative value (t minus self). The handle may be a scalar, an array
   // element t(i), or a member S.T; the runtime computes the difference.
   if (e->name == "PRIORITY") {

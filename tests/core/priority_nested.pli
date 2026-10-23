@@ -2,7 +2,7 @@
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* rule (79): a task's PRIORITY option is relative to the spawning task,
     so a child spawned by a priority-5 task with PRIORITY(10) runs at
-    absolute 15; a read from main (priority 0) sees 15 (ADR-291). */
+    absolute 15; a read from main (priority 0) sees 15 (ADR-298). */
  priority_nested: procedure options(main);
     declare ev event;
     declare child task;
