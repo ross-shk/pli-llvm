@@ -1408,9 +1408,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(19)");
             return Type::chr(1);
           }
-          if (spec.intDigits + spec.fracDigits > 18) {
+          if (spec.intDigits + spec.fracDigits > 38) {
             d_.error(it.loc,
-                     "a PICTURE with more than 18 digit positions is not implemented in this "
+                     "a PICTURE with more than 38 digit positions is not implemented in this "
                      "stage",
                      "(19)");
             return Type::chr(1);
@@ -4576,9 +4576,9 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       } else if (spec.width > 127) {
         d_.error(it->loc, "P input wider than 127 positions is not implemented in this stage",
                  "(53)");
-      } else if (spec.intDigits + spec.fracDigits > 18) {
+      } else if (spec.intDigits + spec.fracDigits > 38) {
         d_.error(it->loc,
-                 "P input with more than 18 digit positions is not implemented in this stage",
+                 "P input with more than 38 digit positions is not implemented in this stage",
                  "(53)");
       } else {
         for (char c : spec.expanded) {

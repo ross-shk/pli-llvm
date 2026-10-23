@@ -40,6 +40,7 @@ PLI_FN(pli_display_decfixed, VOID, (I64, I64))    /* decimal point (QR1.2) */
 PLI_FN(pli_put_list_decfixed128, VOID, (I64, I64, I64))   /* >18 digit DECIMAL (ADR-191): (lo, hi, scale) */
 PLI_FN(pli_display_decfixed128, VOID, (I64, I64, I64))    /* >18 digit DECIMAL (ADR-191): (lo, hi, scale) */
 PLI_FN(pli_get_list_decfixed, I64, (I64))         /* decimal input (QR1.2) */
+PLI_FN(pli_get_list_decfixed_wide, VOID, (I64, PTR)) /* wide decimal input (B1): (scale, out) */
 PLI_FN(pli_get_list_fixed_scaled, I64, (I64))     /* scaled binary input (ADR-284) */
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
@@ -69,7 +70,9 @@ PLI_FN(pli_put_edit_page, VOID, (VOID))
 PLI_FN(pli_put_edit_line, VOID, (I64))
 PLI_FN(pli_copy, VOID, (VOID))                        /* COPY (105): echo input remainder */
 PLI_FN(pli_put_edit_pic, VOID, (I64, I64, I32, CPTR, I64))
+PLI_FN(pli_put_edit_pic_wide, VOID, (I64, I64, I64, I32, CPTR, I64)) /* wide P output (B1) */
 PLI_FN(pli_pic_format, I64, (I64, I64, I32, CPTR, I64, PTR, I64)) /* PICTURE variable (ADR-290) */
+PLI_FN(pli_pic_format_wide, I64, (I64, I64, I64, I32, CPTR, I64, PTR, I64)) /* wide PICTURE variable (B1) */
 
 PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
 PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))
@@ -201,6 +204,7 @@ PLI_FN(pli_data_name_is, I32, (CPTR, I64, CPTR, I64))
  * and X/SKIP advance the input position. */
 PLI_FN(pli_get_edit_num, DOUBLE, (I64))
 PLI_FN(pli_get_edit_pic, I64, (I64, I64)) /* P input (ADR-291) */
+PLI_FN(pli_get_edit_pic_wide, VOID, (I64, I64, PTR)) /* wide P input (B1): (width, scale, out) */
 PLI_FN(pli_get_edit_char, VOID, (PTR, I64, I64))
 PLI_FN(pli_get_edit_bit, VOID, (PTR, I64, I64))
 PLI_FN(pli_get_edit_column, VOID, (I64))

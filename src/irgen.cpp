@@ -8093,13 +8093,25 @@ void IRGen::emitGet(HStmt* s) {
           int prec = spec.intDigits + frac;
           if (prec < 1)
             prec = 1;
-          deferCall("pli_get_list_decfixed", {i64(frac)}, false,
-                    [this, t, loc, prec, frac](const std::vector<llvm::Value*>& r, size_t i) {
-                      Val v;
-                      v.reg = r[i];
-                      v.ty = Type::fixedDec(prec, frac);
-                      storeGetTarget(t, v, loc);
-                    });
+          if (prec > 18) {
+            // A wide picture reads a 128-bit decimal value (B1).
+            llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "glw");
+            deferCall("pli_get_list_decfixed_wide", {i64(frac), slot}, false,
+                      [this, t, loc, prec, frac, slot](const std::vector<llvm::Value*>&, size_t) {
+                        Val v;
+                        v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "glwv");
+                        v.ty = Type::fixedDec(prec, frac);
+                        storeGetTarget(t, v, loc);
+                      });
+          } else {
+            deferCall("pli_get_list_decfixed", {i64(frac)}, false,
+                      [this, t, loc, prec, frac](const std::vector<llvm::Value*>& r, size_t i) {
+                        Val v;
+                        v.reg = r[i];
+                        v.ty = Type::fixedDec(prec, frac);
+                        storeGetTarget(t, v, loc);
+                      });
+          }
           break;
         }
         // Read into a reusable entry buffer, then assign into the target.
@@ -8336,6 +8348,22 @@ void IRGen::emitPutEditItems(HStmt* s) {
       llvm::Value* signSrc = nullptr;
       bool binaryScaled = false;
       int scale = 0;
+      if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+        // Wide DECIMAL output uses the 128-bit formatter core (B1).
+        llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
+        llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
+                                         b_.getInt64Ty(), "picw.hi");
+        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(v.reg, i128(0), "picwneg"),
+                                            i32(-1), i32(1), "picwsgn");
+        facts_.recordBuiltin("picture", "runtime",
+                             "the wide picture conversion needs the library routine");
+        if (remarkLibraryCalls_)
+          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+        deferCall("pli_put_edit_pic_wide",
+                  {lo, hi, i64(v.ty.scale), sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size())});
+        break;
+      }
       if (v.ty.isFixed()) {
         val = toI64(v);
         signSrc = val;
@@ -8545,14 +8573,29 @@ void IRGen::emitGetEditItems(HStmt* s) {
         d_.error(loc, "invalid PICTURE format for input", "(53)");
         break;
       }
-      deferCall("pli_get_edit_pic", {i64(spec.width), i64(spec.fracDigits)}, false,
-                [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
-                  Val v;
-                  v.reg = r[i];
-                  int p = spec.intDigits + spec.fracDigits;
-                  v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
-                  storeGetTarget(t, v, loc);
-                });
+      {
+        int p = spec.intDigits + spec.fracDigits;
+        if (p > 18) {
+          // Wide P input writes the 128-bit value through a temp (B1).
+          llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "gpicw");
+          deferCall("pli_get_edit_pic_wide", {i64(spec.width), i64(spec.fracDigits), slot},
+                    false, [this, t, spec, loc, slot](const std::vector<llvm::Value*>&, size_t) {
+                      Val v;
+                      v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "gpicwv");
+                      int prec = spec.intDigits + spec.fracDigits;
+                      v.ty = Type::fixedDec(prec > 0 ? prec : 1, spec.fracDigits);
+                      storeGetTarget(t, v, loc);
+                    });
+        } else {
+          deferCall("pli_get_edit_pic", {i64(spec.width), i64(spec.fracDigits)}, false,
+                    [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
+                      Val v;
+                      v.reg = r[i];
+                      v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
+                      storeGetTarget(t, v, loc);
+                    });
+        }
+      }
       break;
     }
     }
@@ -10793,7 +10836,15 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
     return out;
   }
   if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-    d_.error(loc, "assignment of a wide FIXED DECIMAL to a PICTURE is not implemented", "(53)");
+    // A wide DECIMAL is edited by the 128-bit formatter core (B1).
+    llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
+    llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
+                                     b_.getInt64Ty(), "picw.hi");
+    llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(v.reg, i128(0), "picwneg"),
+                                        b_.getInt32(-1), b_.getInt32(1), "picwsgn");
+    b_.CreateCall(runtimeFn("pli_pic_format_wide"),
+                  {lo, hi, i64(v.ty.scale), sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size()), out.ptr, out.len});
     return out;
   }
   llvm::Value* val = nullptr;

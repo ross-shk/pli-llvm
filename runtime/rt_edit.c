@@ -276,6 +276,65 @@ long long pli_get_edit_pic(long long w, long long scale) {
   return isneg ? -val : val;
 }
 
+/* Wide P input (B1): the same field rules as pli_get_edit_pic, but the
+ * scaled value is 128-bit. The result leaves through `out` because a
+ * by-value 128-bit return lowers differently across targets. */
+static PliU128 pic_mul10(PliU128 v, long long n) {
+  PliU128 ten = pli_u128(10u, 0u);
+  while (n-- > 0)
+    v = pli_mul_u(v, ten);
+  return v;
+}
+
+void pli_get_edit_pic_wide(long long w, long long scale, char *out) {
+  char field[128];
+  long long i = 0;
+  PliI128 *dst = (PliI128 *)out;
+  rt_in_lock();
+  for (; i < w && i < (long long)(sizeof field - 1); ++i) {
+    int c = rt_next_char();
+    if (c == EOF)
+      break;
+    field[i] = (char)c;
+  }
+  field[i] = '\0';
+  rt_in_unlock();
+  long long nread = i;
+
+  PliU128 ival = pli_u128(0u, 0u), fval = pli_u128(0u, 0u);
+  PliU128 ten = pli_u128(10u, 0u);
+  long long fcount = 0;
+  int isneg = 0, has_point = 0;
+  for (i = 0; i < nread; ++i) {
+    char c = field[i];
+    if (c >= '0' && c <= '9') {
+      PliU128 d = pli_u128((uint64_t)(c - '0'), 0u);
+      if (has_point) {
+        if (fcount < scale) {
+          fval = pli_add_u(pli_mul_u(fval, ten), d);
+          ++fcount;
+        }
+      } else {
+        ival = pli_add_u(pli_mul_u(ival, ten), d);
+      }
+    } else if (c == '.') {
+      has_point = 1;
+    } else if (c == '-') {
+      isneg = 1;
+    } else if (c == '+') {
+      isneg = 0;
+    }
+    /* blanks, commas and currency signs carry no value */
+  }
+  if (has_point) {
+    fval = pic_mul10(fval, scale - fcount);
+    ival = pic_mul10(ival, scale);
+  }
+  PliU128 val = has_point ? pli_add_u(ival, fval) : ival;
+  PliI128 sv = pli_to_s(val);
+  *dst = isneg ? pli_neg_s(sv) : sv;
+}
+
 /* A(w): read w characters left-justified into dst, blank-padded to cap; a field
  * wider than the target is truncated (the excess input is still consumed). */
 void pli_get_edit_char(char *dst, long long cap, long long w) {
@@ -389,26 +448,23 @@ void pli_get_edit_skip(long long n) {
  * characters to `out` and returns the number written. The output routine and
  * a PICTURE variable assignment share it (ADR-290), so both sides cannot
  * disagree about the edited text. */
-static long long pic_format(long long val, long long scale, int sign,
-                            const char *pic, long long piclen,
-                            char *out, long long cap) {
+static long long pic_format128(PliI128 val, long long scale, int sign,
+                               const char *pic, long long piclen,
+                               char *out, long long cap) {
   if (piclen <= 0 || cap <= 0)
     return 0;
   int isneg = sign < 0;
-  long long av = isneg ? -val : val;
+  PliU128 av = isneg ? pli_mag_s(val) : pli_to_u(val);
 
-  /* Decompose |val| into big-endian decimal digits. */
+  /* Decompose |val| into big-endian decimal digits (38 fit PliI128). */
   long long digits[64];
   long long ndig = 0;
-  if (av == 0) {
+  if (pli_iszero_u(av)) {
     digits[0] = 0;
     ndig = 1;
   } else {
-    long long tmp = av;
-    while (tmp > 0 && ndig < 64) {
-      digits[ndig++] = tmp % 10;
-      tmp /= 10;
-    }
+    while (!pli_iszero_u(av) && ndig < 64)
+      digits[ndig++] = (long long)pli_divmod10(&av);
     for (long long i = 0; i < ndig / 2; ++i) {
       long long t = digits[i];
       digits[i] = digits[ndig - 1 - i];
@@ -502,8 +558,21 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
                       const char *pic, long long piclen) {
   char outbuf[128];
   rt_out_lock();
-  long long n = pic_format(val, scale, sign, pic, piclen, outbuf,
-                           (long long)sizeof(outbuf) - 1);
+  long long n = pic_format128(pli_from_i64(val), scale, sign, pic, piclen, outbuf,
+                              (long long)sizeof(outbuf) - 1);
+  rt_put_raw(outbuf, n);
+  rt_out_unlock();
+}
+
+/* Wide P output (B1): the value arrives as explicit (lo, hi) halves, the
+ * same ABI rule as the other 128-bit DECIMAL entry points (ADR-191). */
+void pli_put_edit_pic_wide(long long lo, long long hi, long long scale, int sign,
+                           const char *pic, long long piclen) {
+  char outbuf[128];
+  PliI128 val = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
+  rt_out_lock();
+  long long n = pic_format128(val, scale, sign, pic, piclen, outbuf,
+                              (long long)sizeof(outbuf) - 1);
   rt_put_raw(outbuf, n);
   rt_out_unlock();
 }
@@ -513,6 +582,13 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
 long long pli_pic_format(long long val, long long scale, int sign,
                          const char *pic, long long piclen,
                          char *dst, long long cap) {
-  return pic_format(val, scale, sign, pic, piclen, dst, cap);
+  return pic_format128(pli_from_i64(val), scale, sign, pic, piclen, dst, cap);
+}
+
+long long pli_pic_format_wide(long long lo, long long hi, long long scale, int sign,
+                              const char *pic, long long piclen,
+                              char *dst, long long cap) {
+  PliI128 val = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
+  return pic_format128(val, scale, sign, pic, piclen, dst, cap);
 }
 

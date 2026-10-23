@@ -10496,3 +10496,37 @@ and wide picture items.
 **Rejected.** *Copy the token into the CHARACTER storage.* It bypasses the
 picture and breaks the arithmetic value. *Read the token as `FLOAT`.* It loses
 decimal money values at the conversion boundary.
+
+
+---
+
+## ADR-293 — Wide PICTURE items use the 128-bit formatter
+
+**Context.** `PICTURE` declarations stopped at 18 digit positions because the
+formatter core worked on a `long long`. A `FIXED DECIMAL(p)` with `p` up to 38
+already exists (ADR-191), so a wide value could not be assigned to or printed
+through a picture of matching width. The picture character set and layout do
+not change at 19 digits; only the digit store and its conversion boundary do.
+
+**Decision.** The runtime `pic_format` core now takes the portable `PliI128`
+and extracts digits with `pli_divmod10`. Thin wrappers keep the existing i64
+ABI, while new `(lo, hi)` entry points serve wide DECIMAL values:
+
+- `pli_pic_format_wide` for `PICTURE` variable assignment,
+- `pli_put_edit_pic_wide` for a `P` output item,
+- `pli_get_edit_pic_wide` for `GET EDIT P`, and
+- `pli_get_list_decfixed_wide` for `GET LIST` into a picture.
+
+`irgen` routes a `FIXED DECIMAL` with an i128 slot through those entry points;
+narrow values keep the existing paths. Picture width remains capped at 127
+output positions, and the numeric implementation limit is 38 digit positions.
+
+**Consequences.** `tests/core/picture_wide.pli` exercises a 27-digit decimal
+through assignment, `P` output, `GET EDIT P` and `GET LIST`, plus a negative
+value with a trailing sign position. `tests/core/bad_picture_wide.pli` pins the
+new 38-digit diagnostic. `B1` remains open only for sterling data.
+
+**Rejected.** *Keep the 18-digit limit.* It would make a declared wide decimal
+unprintable through a matching picture. *Copy the decimal text and patch
+digits.* It would bypass the picture's zero suppression, sign and insertion
+characters; the shared formatter must stay the single interpretation.

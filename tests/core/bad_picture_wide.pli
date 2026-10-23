@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A picture wider than the 38-digit implementation limit is diagnosed
+    (rules (19),(146)-(148)). */
+ bad_picture_wide: procedure options(main);
+    declare p picture('(39)9');
+    p = 1;
+ end bad_picture_wide;
