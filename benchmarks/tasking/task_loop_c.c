@@ -20,6 +20,9 @@ int main(void) {
   int i;
   for (i = 0; i < TASKS; ++i) {
     HANDLE t = CreateThread(NULL, 0, worker, NULL, 0, NULL);
+    /* A failed creation is not a fast task: report it so the harness rejects
+       the measurement instead of timing a workload that did not run. */
+    if (t == NULL) { fprintf(stderr, "CreateThread failed\n"); return 1; }
     WaitForSingleObject(t, INFINITE);
     CloseHandle(t);
   }
@@ -38,8 +41,16 @@ int main(void) {
   int i;
   for (i = 0; i < TASKS; ++i) {
     pthread_t t;
-    pthread_create(&t, NULL, worker, NULL);
-    pthread_join(t, NULL);
+    /* A failed creation is not a fast task: bail out instead of joining an
+       uninitialised handle, so the harness rejects the measurement. */
+    if (pthread_create(&t, NULL, worker, NULL) != 0) {
+      fprintf(stderr, "pthread_create failed\n");
+      return 1;
+    }
+    if (pthread_join(t, NULL) != 0) {
+      fprintf(stderr, "pthread_join failed\n");
+      return 1;
+    }
   }
   printf("done\n");
   return 0;

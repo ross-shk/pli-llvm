@@ -44,12 +44,12 @@ For a fuller tour — arrays, structures, storage, conditions, concurrency — s
 
 ## Benchmarks
 
-`benchmarks/run_benchmarks.py` compares PL/I against C and Go across 33 micro-benchmarks (scalar, string, decimal, array, I/O) and the tasking harness (`run_tasking_bench.py`).
+`benchmarks/run_benchmarks.py` compares PL/I against C across 33 micro-benchmarks (scalar, string, decimal, array, I/O); `benchmarks/run_tasking_bench.py` compares the tasking models against Go and C. Methodology and the validity rules are in [`benchmarks/README.md`](benchmarks/README.md).
 
 ```sh
-python3 benchmarks/run_benchmarks.py            
-python3 benchmarks/run_tasking_bench.py --models fiber,os  
-
+cmake --build build/cmake -j                    # rebuild before timing
+python3 benchmarks/run_benchmarks.py
+python3 benchmarks/run_tasking_bench.py --models fiber,os
 ```
 
 ### PL/I vs C (micro-benchmarks, -O2, median)

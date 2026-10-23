@@ -1,12 +1,16 @@
 @echo off
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
-set "LLVM_BIN=C:\Users\Nick\Development\clang+llvm-23.1.3-x86_64-pc-windows-msvc\bin"
-set "PATH=%LLVM_BIN%;%PATH%"
-set "CC=clang.exe"
-REM Create an empty m.lib so -lm links when baselines are built manually
-REM (math funcs are in the CRT). Mirrors the top-level run_benchmarks.cmd.
-"%LLVM_BIN%\llvm-lib.exe" /OUT:"C:\Users\Nick\Development\pli-llvm\build\m.lib" 2>nul
-set "LIB=C:\Users\Nick\Development\pli-llvm\build;%LIB%"
+REM SPDX-License-Identifier: Apache-2.0
+REM Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
+REM Windows wrapper for the PL/I benchmark harness (cf. run_benchmarks.sh).
+REM Optional: set LLVM_BIN to a directory holding clang.exe (or put clang.exe
+REM on PATH). PLI and CC are honoured when already set; the runner otherwise
+REM finds the newest build\pli.exe or build\cmake\pli.exe.
+setlocal
+set "DIR=%~dp0"
+if defined LLVM_BIN set "PATH=%LLVM_BIN%;%PATH%"
+if not defined CC set "CC=clang.exe"
+REM Force UTF-8: the harness prints check marks the ANSI code page cannot encode.
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
-python "C:\Users\Nick\Development\pli-llvm\benchmarks\run_benchmarks.py" %*
+python "%DIR%run_benchmarks.py" %*
+endlocal

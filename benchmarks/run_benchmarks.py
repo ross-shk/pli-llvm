@@ -19,10 +19,18 @@ import json
 import csv
 import math
 import statistics
+import uuid
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
 
+from bench_common import MeasureError, probe_pinning, run_measured, sha256_file
+
 BENCHMARK_DIR = Path(__file__).parent
+
+# Result files carry a schema version and a manifest of everything that could
+# change a ratio, so a regression check never silently compares two different
+# measurements (P1 reproducibility).
+SCHEMA_VERSION = 2
 
 
 # Two benchmark categories (ADR-262):
@@ -186,7 +194,6 @@ def _find_pli() -> Path:
 
 PLI = Path(os.environ.get("PLI", str(_find_pli())))
 CC = os.environ.get("CC", _default_cc())
-IS_MACOS = platform.system() == "Darwin"
 RESULTS_DIR = BENCHMARK_DIR / "results"
 BIN_DIR = RESULTS_DIR / "bin"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -206,6 +213,9 @@ EXTRA_PLIFLAGS = {
 
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3"]
 RUNS_PER_BENCH = 5
+# One untimed warmup per side: pays for page-in and first-run effects, and
+# fixes the expected output every timed run must reproduce (P1.2).
+WARMUP = 1
 
 BENCHMARKS_REQUIRING_MATH = {"math_functions", "matrix_float"}
 
@@ -250,10 +260,27 @@ CHECKS = {
     "io_list":          {"min_ms_O2": 50, "float_tol": False},
     "alias_scope":      {"min_ms_O2": 50, "float_tol": False},
     "picture_fold":     {"min_ms_O2": 50, "float_tol": False},
+    "pure_call":        {"min_ms_O2": 50, "float_tol": False},
+    "bit_merge":        {"min_ms_O2": 50, "float_tol": False},
+    "by_name":          {"min_ms_O2": 50, "float_tol": False},
+    "select_chain":     {"min_ms_O2": 50, "float_tol": False},
 }
 
+# Benchmarks whose C twin is a *descriptive* reference, not a parity twin: the
+# two programs compute with different number systems, so their output can never
+# match and their ratio prices PL/I's decimal work against C doubles. They are
+# reported, but excluded from the C-parity acceptance gate (ADR-262): a gate row
+# that is by design unequal would either fail forever or be waived forever.
+NON_PARITY = {
+    "decimal_ops": "PL/I fixed decimal vs C double (DECIMAL-PERF-PLAN.md §8)",
+}
 
-def get_machine_info() -> Dict:
+# The rows the -O2 acceptance gate requires: every IR benchmark except the
+# descriptive-only ones. A missing, failed or mismatched row voids the gate.
+GATE_BENCHMARKS = [b[0] for b in IR_BENCHMARKS if b[0] not in NON_PARITY]
+
+
+def get_machine_info(cc_cmd: str = None) -> Dict:
     """Collect machine and toolchain metadata for JSON results (P3)."""
     info = {
         "python": sys.version.split()[0],
@@ -275,7 +302,7 @@ def get_machine_info() -> Dict:
         info["pli_version"] = "unknown"
         info["llvm_version"] = "unknown"
     try:
-        rc, out, _ = run_command([CC, "--version"])
+        rc, out, _ = run_command([cc_cmd or CC, "--version"])
         if rc == 0:
             info["clang_version"] = out.strip().split('\n')[0]
     except Exception:
@@ -298,60 +325,28 @@ def get_machine_info() -> Dict:
     return info
 
 
-def pin_cmd(cmd: List[str]) -> List[str]:
-    """Prepend process pinning flags for stable timings (P3).
-    Linux: taskset -c 0 (pin to CPU 0). macOS: nice -n -20 (high priority).
-    Windows: no argv wrapper exists, so the command is returned unchanged and
-    run_command applies affinity/priority to the child handle instead.
-    Single-runner is already guaranteed by sequential execution in the harness.
-    Falls back to no pinning if the tool is unavailable (non-fatal)."""
-    if IS_WINDOWS:
-        return cmd
-    if IS_MACOS:
-        # best-effort nice; won't fail if we lack privileges
-        return ["nice", "-n", "-20"] + cmd
-    # Linux: taskset when present; otherwise run unpinned (a missing taskset
-    # must not fail the harness — run_command also guards with OSError).
-    if shutil.which("taskset") is None:
-        return cmd
-    return ["taskset", "-c", "0"] + cmd
+# Process pinning (P3): probed once, and recorded in the manifest. The probe
+# exists because a wrapper can be present and still refuse: macOS `nice`
+# exits 0 after "setpriority: Permission denied".
+PINNING: Dict = {"mode": "unprobed", "prefix": [], "applied": False}
 
 
-def _pin_child_windows(proc: "subprocess.Popen") -> None:
-    """Best-effort Windows equivalent of taskset+nice: pin the child to CPU 0
-    and raise its priority class. Never raises; pinning is noise reduction,
-    not correctness."""
-    try:
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        # HIGH_PRIORITY_CLASS (0x80): above-normal without starving the OS the
-        # way REALTIME would. Affinity mask 1 = CPU 0, mirroring taskset -c 0.
-        kernel32.SetPriorityClass(proc._handle, 0x00000080)
-        kernel32.SetProcessAffinityMask(proc._handle, 1)
-    except Exception:
-        pass
+def resolve_pinning() -> Dict:
+    """Probe and cache the pinning prefix for this host."""
+    global PINNING
+    PINNING = probe_pinning()
+    return PINNING
 
 
 def run_command(cmd: List[str], cwd: Path = None, timeout: int = 300) -> Tuple[int, str, str]:
     """Run a command and return (returncode, stdout, stderr).
 
+    Used for compiler invocations and metadata probes, never for timed runs
+    (those go through bench_common.run_measured, which validates the run).
     encoding="utf-8" (not the locale default) so the ✓/≈/✗/⚠ output survives
-    a C/POSIX locale on Linux even without PYTHONUTF8 set. On Windows the
-    child is pinned to CPU 0 at high priority (see _pin_child_windows).
+    a C/POSIX locale on Linux even without PYTHONUTF8 set.
     """
     try:
-        if IS_WINDOWS:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, cwd=cwd,
-                                    text=True, encoding="utf-8")
-            _pin_child_windows(proc)
-            try:
-                out, err = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                out, err = proc.communicate()
-                return -1, out, "Timeout"
-            return proc.returncode, out, err
         result = subprocess.run(cmd, capture_output=True, text=True,
                                 encoding="utf-8", cwd=cwd, timeout=timeout)
         return result.returncode, result.stdout, result.stderr
@@ -446,27 +441,33 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
     return rc == 0
 
 
-def run_benchmark(exe: Path, runs: int = RUNS_PER_BENCH,
-                  warmup: int = 1) -> Tuple[List[float], str]:
-    """Run a benchmark multiple times and return execution times in seconds.
+def run_benchmark(exe: Path, runs: int = RUNS_PER_BENCH, warmup: int = WARMUP,
+                  cwd: Optional[Path] = None) -> Tuple[str, List[float], str]:
+    """Run *exe* and return (status, times_seconds, stdout).
 
-    One warmup run is performed untimed (P1.2). Process pinning (P3) prepends
-    taskset/nice for noise reduction. Returns (times, last_stdout).
+    One warmup run is performed untimed (P1.2) and fixes the expected output.
+    Every later run must exit 0 and print that same output: a crashed run, a
+    timeout or an unstable workload invalidates the measurement instead of
+    silently contributing a timing (or an unrelated checksum) to the median.
     """
+    expected = None
+    try:
+        for _ in range(warmup):
+            _, out = run_measured([str(exe)], cwd=cwd, prefix=PINNING["prefix"])
+            expected = out.strip()
+    except MeasureError as exc:
+        print(f"  Warmup failed: {exc}")
+        return "warmup_failed", [], ""
     times = []
-    for _ in range(warmup):
-        run_command(pin_cmd([str(exe)]), timeout=60)
-    out = ""
     for _ in range(runs):
-        start = time.perf_counter()
-        rc, out, err = run_command(pin_cmd([str(exe)]), timeout=60)
-        end = time.perf_counter()
-        if rc == 0:
-            times.append(end - start)
-        else:
-            print(f"  Run failed: {err}")
-            return [], ""
-    return times, out
+        try:
+            secs, _ = run_measured([str(exe)], cwd=cwd, expected_stdout=expected,
+                                   prefix=PINNING["prefix"])
+        except MeasureError as exc:
+            print(f"  Run failed: {exc}")
+            return exc.status, [], ""
+        times.append(secs)
+    return "ok", times, expected or ""
 
 
 def median_result(times: List[float]) -> Optional[float]:
@@ -500,58 +501,108 @@ def run_pair_comparisons(selected: Set[str], opt: str, runs: int) -> Dict:
         src_b = entry[5] if len(entry) > 5 else None
         if bench not in src_of or bench not in selected:
             continue
-        # The bench-level flags apply to both sides of the pair.
-        # "@effects" stands for the flag that consumes the file the library
-        # unit published.
-        eff_file = publish_effects(bench)
-        eff_flag = f"--effects={eff_file}" if eff_file else "@effects"
-        extra_a = [(eff_flag if f == "@effects" else f) for f in flags_a] + \
-            EXTRA_PLIFLAGS.get(bench, [])
-        extra_b = [(eff_flag if f == "@effects" else f) for f in flags_b] + \
-            EXTRA_PLIFLAGS.get(bench, [])
+        # One stable key per comparison, whatever happens to it.
+        pair_id = f"{bench}:{label_a}->{label_b}"
+        record = {"benchmark": bench, "status": "ok", "a": {"label": label_a},
+                  "b": {"label": label_b}}
+
+        # Publication is built only when a side consumes it: a pair without
+        # "@effects" must not depend on an unrelated publish succeeding, and a
+        # failed publish must never reach the compiler as a literal flag.
+        eff_flag = None
+        if "@effects" in flags_a or "@effects" in flags_b:
+            eff_file = publish_effects(bench)
+            if eff_file is None:
+                record["status"] = "effects_publish_failed"
+                results[pair_id] = record
+                print(f"{bench:<16} {pair_id} EFFECTS PUBLISH FAILED")
+                continue
+            eff_flag = f"--effects={eff_file}"
+
+        def side_flags(flags: List[str]) -> List[str]:
+            """Resolve @effects and add the benchmark's required flags."""
+            resolved = [eff_flag if f == "@effects" else f for f in flags]
+            return resolved + EXTRA_PLIFLAGS.get(bench, [])
+
+        extra_a = side_flags(flags_a)
+        extra_b = side_flags(flags_b)
         exe_a = BIN_DIR / f"{bench}_pair_{label_a}_{tag}{EXE_SUFFIX}"
         exe_b = BIN_DIR / f"{bench}_pair_{label_b}_{tag}{EXE_SUFFIX}"
         if not compile_pli(bench, src_of[bench], opt, exe_a, extra_flags=extra_a):
+            record["status"] = "a_compile_failed"
+            results[pair_id] = record
             print(f"{bench:<16} {label_a:<14} PL/I COMPILE FAILED")
-            results[f"{bench}:{label_a}"] = {"error": "pli_compile_failed"}
             continue
         if not compile_pli(bench, src_b if src_b else src_of[bench], opt, exe_b,
                            extra_flags=extra_b):
+            record["status"] = "b_compile_failed"
+            results[pair_id] = record
             print(f"{bench:<16} {label_b:<14} PL/I COMPILE FAILED")
-            results[f"{bench}:{label_b}"] = {"error": "pli_compile_failed"}
             continue
-        times_a, out_a = run_benchmark(exe_a, runs=runs)
-        times_b, out_b = run_benchmark(exe_b, runs=runs)
+        status_a, times_a, out_a = run_benchmark(exe_a, runs=runs, cwd=BIN_DIR)
+        status_b, times_b, out_b = run_benchmark(exe_b, runs=runs, cwd=BIN_DIR)
+        if status_a != "ok" or status_b != "ok":
+            record["status"] = f"a_{status_a}" if status_a != "ok" else f"b_{status_b}"
+            results[pair_id] = record
+            print(f"{bench:<16} {pair_id} RUN FAILED ({record['status']})")
+            continue
         med_a = median_result(times_a)
         med_b = median_result(times_b)
-        if not med_a or not med_b:
-            print(f"{bench:<16} RUN FAILED")
-            results[f"{bench}:{label_a}"] = {"error": "pli_run_failed"}
-            continue
         same = "✓" if out_a.strip() == out_b.strip() else "✗"
         ratio = round(med_b / med_a, 4) if med_a > 0 else float("inf")
-        key = f"{bench}:{label_a}->{label_b}"
-        results[key] = {
-            "benchmark": bench,
-            "a": {"label": label_a, "flags": extra_a, "median": med_a},
-            "b": {"label": label_b, "flags": extra_b, "median": med_b},
-            "ratio": ratio,
-            "same_output": same,
-        }
+        record["a"].update({"flags": extra_a, "median": med_a, "runs": times_a,
+                            "output": out_a.strip()})
+        record["b"].update({"flags": extra_b, "median": med_b, "runs": times_b,
+                            "output": out_b.strip()})
+        record["ratio"] = ratio
+        record["same_output"] = same
+        # A pair whose builds disagree is a bug, not a measurement.
+        if same != "✓":
+            record["status"] = "output_mismatch"
+        results[pair_id] = record
         print(f"{bench:<16} {label_a:<14} {label_b:<14} "
               f"{med_a*1000:>10.2f} {med_b*1000:>10.2f} {ratio:>7.2f}x {same:>6}")
     return results
 
 
-def needs_recompile(src: Path, exe: Path, force: bool = False) -> bool:
-    """Skip recompilation if the executable is newer than the source (P1.5).
+def outputs_agree(bench_name: str, pli_out: str, c_out: str) -> str:
+    """The parity mark for a benchmark row.
 
-    *force* recompiles unconditionally: the skip only compares source and
-    binary mtimes, so a compiler rebuild otherwise times stale binaries.
+    A NON_PARITY benchmark is descriptive (`~`): its C twin is a different
+    algorithm, so the row is reported but never gates. Everything else must
+    match exactly, or tolerantly when it prints floating point.
     """
-    if force or not exe.exists():
-        return True
-    return src.stat().st_mtime > exe.stat().st_mtime
+    if bench_name in NON_PARITY:
+        return "~"
+    return outputs_match(pli_out, c_out, bench_name)
+
+
+def row_is_valid(row: Dict) -> bool:
+    """Whether a result row may be published as a ratio or feed the gate."""
+    if row.get("status") != "ok":
+        return False
+    if row.get("match") not in ("✓", "≈", "~"):
+        return False
+    ratio = row.get("ratio")
+    return isinstance(ratio, (int, float)) and math.isfinite(ratio) and ratio > 0
+
+
+def accepted_geomean(results: Dict, expected: List[str],
+                     opt: str = "-O2") -> Optional[float]:
+    """The corpus geomean, or None unless every expected row is valid.
+
+    A partial run, a failed row or a mismatched output voids the gate rather
+    than quietly shrinking the set of rows it averages over (ADR-262).
+    """
+    ratios = []
+    for name in expected:
+        row = results.get(name, {}).get(opt, {})
+        if not row_is_valid(row) or row.get("match") == "~":
+            return None
+        ratios.append(row["ratio"])
+    if not ratios:
+        return None
+    return math.exp(statistics.mean(math.log(r) for r in ratios))
 
 
 def outputs_match(pli_out: str, c_out: str, bench_name: str) -> str:
@@ -578,57 +629,165 @@ def prune_old_results(files: List[Path], keep: int = MAX_RESULTS):
         f.unlink(missing_ok=True)
 
 
-def load_previous_results(current_filename: Optional[str] = None) -> Optional[Dict]:
-    """Load the most recent previous benchmark results JSON.
+def load_previous_results(current_filename: Optional[str] = None,
+                          explicit: Optional[str] = None) -> Optional[Dict]:
+    """Load the results a regression check compares against.
 
-    *current_filename* (the basename of the file about to be or just written)
-    is excluded so that the current run never compares against itself (W7
-    regression guard).  Returns the full payload (always normalized to
-    {"machine": ..., "results": ...} so callers can compare compiler
-    identity), or None if no usable previous run exists.
+    *explicit* names a file (--compare-to). Otherwise the newest saved run that
+    is not *current_filename* is used, so a run never compares against itself.
+    Old-format payloads are still readable but carry no manifest, which makes
+    them non-comparable rather than silently comparable.
     """
+    if explicit:
+        try:
+            with open(explicit, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"  cannot read --compare-to {explicit}: {exc}")
+            return None
+        return normalize_payload(data)
     json_files = sorted(RESULTS_DIR.glob("benchmark_results_*.json"),
                         key=lambda f: f.stat().st_mtime, reverse=True)
-    if not json_files:
-        return None
     for f in json_files:
         if current_filename and f.name == current_filename:
             continue
         try:
             with open(f, encoding="utf-8") as fh:
                 data = json.load(fh)
-            # Support both old (flat results) and new ({"machine", "results"}) formats
-            if isinstance(data, dict) and "results" in data:
-                return data
-            return {"machine": {}, "results": data}
         except (json.JSONDecodeError, OSError):
             continue
+        return normalize_payload(data)
     return None
 
 
-def check_for_deterioration(results: Dict, previous: Dict) -> List[str]:
-    """Compare current -O2 ratios against the previous run.
+def normalize_payload(data) -> Dict:
+    """Accept both the old flat results map and the current {"results": ...}."""
+    if isinstance(data, dict) and "results" in data:
+        return data
+    return {"machine": {}, "manifest": {}, "results": data}
 
-    Returns a list of warning strings for benchmarks whose ratio worsened
-    (increased) by more than DETERIORATION_THRESHOLD (5 % relative).
+
+def manifest_mismatch(current: Dict, previous: Dict) -> Optional[str]:
+    """Why two runs are not comparable, or None when their settings match.
+
+    Compiler identity is deliberately not part of this: detecting what a new
+    compiler did to a ratio is the point of the guard. Settings, workload set,
+    flags and pinning are, because a delta across them measures the setup.
+    """
+    prev = previous.get("manifest") or {}
+    if not prev:
+        return "previous run has no manifest (pre-v2 results)"
+    for key in ("benchmarks", "opt_levels", "runs", "warmup",
+                "checks_forced", "extra_pli_flags", "pli_flags",
+                "platform"):
+        if prev.get(key) != current.get(key):
+            return f"manifest differs on {key}"
+    return None
+
+
+def check_for_deterioration(results: Dict, previous: Dict,
+                            names: List[str]) -> Tuple[List[str], int]:
+    """Compare current -O2 ratios against a compatible previous run.
+
+    Returns (warnings, compared_rows). Only rows valid on both sides count, so
+    "no deterioration" always says how many rows it actually looked at.
     """
     warnings = []
-    for bench_name, _, _ in BENCHMARKS:
+    compared = 0
+    for bench_name in names:
         cur = results.get(bench_name, {}).get("-O2", {})
         prev = previous.get(bench_name, {}).get("-O2", {})
-        cur_ratio = cur.get("ratio")
-        prev_ratio = prev.get("ratio")
-        if cur_ratio is None or prev_ratio is None:
+        if not row_is_valid(cur) or not row_is_valid(prev):
             continue
-        if prev_ratio <= 0:
-            continue
+        cur_ratio = cur["ratio"]
+        prev_ratio = prev["ratio"]
+        compared += 1
         rel_change = (cur_ratio - prev_ratio) / prev_ratio
         if rel_change > DETERIORATION_THRESHOLD:
+            # The PL/I spread says whether the delta is bigger than the noise
+            # the threshold is meant to ignore.
+            pli = cur.get("pli", {})
+            spread = (pli.get("stdev", 0.0) / pli["median"] * 100
+                      if pli.get("median") else 0.0)
             warnings.append(
                 f"  {bench_name:<20} ⚠ ratio {cur_ratio:.2f}x vs prev "
-                f"{prev_ratio:.2f}x (+{rel_change*100:.1f}%)"
+                f"{prev_ratio:.2f}x (+{rel_change*100:.1f}%, "
+                f"PL/I spread ±{spread:.0f}%)"
             )
-    return warnings
+    return warnings, compared
+
+
+def build_manifest(pli: Path, cc_cmd: str, benches: List[Tuple],
+                   opt_levels: List[str], runs: int, warmup: int,
+                   checks_forced: bool) -> Dict:
+    """Everything that can change a ratio, so comparability is checkable.
+
+    Source contents are hashed rather than mtime-compared: two files can share
+    a timestamp, and a checkout can rewrite one without changing it.
+    """
+    sources = {}
+    for name, pli_file, c_file in benches:
+        for rel in (pli_file, c_file):
+            sources[rel] = sha256_file(BENCHMARK_DIR / rel)
+    return {
+        "schema": SCHEMA_VERSION,
+        "benchmarks": sorted(b[0] for b in benches),
+        "opt_levels": opt_levels,
+        "runs": runs,
+        "warmup": warmup,
+        "checks_forced": checks_forced,
+        "extra_pli_flags": [" ".join(EXTRA_PLIFLAGS.get(b[0], []))
+                            for b in benches],
+        "pli_binary": str(pli),
+        "pli_sha256": sha256_file(pli),
+        "cc": cc_cmd,
+        "pinning": PINNING,
+        "platform": platform.platform(aliased=True),
+        "sources": sources,
+    }
+
+
+def write_atomic(path: Path, write) -> None:
+    """Write through a temporary file: an interrupted run leaves no half-file."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as fh:
+        write(fh)
+    os.replace(tmp, path)
+
+
+def validate_inventory() -> List[str]:
+    """Check that the registration tables agree with the source tree.
+
+    Registration is the single list the runner trusts; a source that is
+    missing, a duplicate name or a gate row without timing metadata is an
+    inventory bug that should stop the run before it builds anything.
+    """
+    problems = []
+    seen = set()
+    for name, pli_file, c_file in BENCHMARKS:
+        if name in seen:
+            problems.append(f"duplicate benchmark name: {name}")
+        seen.add(name)
+        for rel in (pli_file, c_file):
+            if not (BENCHMARK_DIR / rel).is_file():
+                problems.append(f"{name}: missing source {rel}")
+        if name not in CHECKS:
+            problems.append(f"{name}: no CHECKS entry (timing metadata)")
+    for name, sources in MULTI_BENCHMARKS:
+        for rel in sources:
+            if not (BENCHMARK_DIR / rel).is_file():
+                problems.append(f"{name}: missing source {rel}")
+    known = seen | {b[0] for b in MULTI_BENCHMARKS}
+    for entry in PAIRS:
+        if entry[0] not in known:
+            problems.append(f"pair {entry[0]}: benchmark not registered")
+        for rel in (entry[5] if len(entry) > 5 else []):
+            if not (BENCHMARK_DIR / rel).is_file():
+                problems.append(f"pair {entry[0]}: missing side-B source {rel}")
+    for name in NON_PARITY:
+        if name not in seen:
+            problems.append(f"NON_PARITY names unknown benchmark {name}")
+    return problems
 
 
 def main():
@@ -656,14 +815,23 @@ def main():
     parser.add_argument("--pli", type=str, default=None,
                         help="pli binary to use (overrides PLI env var)")
     parser.add_argument("--force", action="store_true",
-                        help="recompile every benchmark even if the binary "
-                             "is newer than the source (use after a compiler "
-                             "rebuild, otherwise stale binaries are timed)")
+                        help="accepted for compatibility; every measured binary "
+                             "is now always recompiled")
+    parser.add_argument("--compare-to", type=str, default=None, metavar="JSON",
+                        help="baseline results file for the regression check "
+                             "(default: the newest compatible saved run)")
     parser.add_argument("--only", type=str, default=None, metavar="BENCHES",
                         help="comma-separated subset of benchmarks to run "
                              "(e.g. --only proc_calls,string_ops); "
-                             "default: all 28 (21 in ir/, 7 in lang/)")
+                             f"default: all {len(BENCHMARKS)} "
+                             f"({len(IR_BENCHMARKS)} in ir/, "
+                             f"{len(LANG_BENCHMARKS)} in lang/)")
     args = parser.parse_args()
+
+    # Reject nonsensical sample counts before touching the filesystem: a run
+    # with zero timed samples has no median to report.
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
 
     # Use --cc argument if provided, otherwise fall back to env var, then default
     cc_cmd = args.cc or os.environ.get("CC", _default_cc())
@@ -673,6 +841,8 @@ def main():
 
     print("PL/I Compiler Benchmark Harness")
     print("=" * 70)
+    if args.force:
+        print("Note: --force is redundant; every measured binary is rebuilt.")
 
     if not PLI.exists():
         print(f"Error: pli not found at {PLI}")
@@ -682,13 +852,28 @@ def main():
 
     opt_levels = ["-O2"] if args.checks_forced else OPT_LEVELS
 
+    # Inventory sanity before any build: a registered source that is missing or
+    # a row without timing metadata would otherwise surface mid-run.
+    problems = validate_inventory()
+    if problems:
+        print("Error: benchmark inventory is inconsistent:")
+        for problem in problems:
+            print(f"  {problem}")
+        return 2
+
+    # Pinning is probed once: a wrapper that is present but refuses (macOS
+    # `nice` without the privilege) must be reported, not assumed.
+    resolve_pinning()
+    print(f"Pinning: {PINNING['mode']} — {PINNING['note']}")
+
     # Header for the comparison table
-    print(f"{'Benchmark':<20} {'Opt':<6} {'Flags':<24} {'PL/I (min)':>10} "
+    print(f"\n{'Benchmark':<20} {'Opt':<6} {'Flags':<24} {'PL/I (min)':>10} "
           f"{'PL/I (med)':>10} {'C (med)':>10} {'Ratio':>8} {'Match':>6}")
     print("-" * 84)
 
-    results = {}
+    results: Dict = {}
     ts = int(time.time())
+    run_id = f"{ts}_{uuid.uuid4().hex[:8]}"
 
     # --only subset (the plan docs invoke --only throughout; running one
     # witness at a time keeps the 5-run ritual fast and the noise down).
@@ -696,6 +881,9 @@ def main():
     multi_names = {b[0] for b in MULTI_BENCHMARKS}
     if args.only:
         wanted = [b.strip() for b in args.only.split(",") if b.strip()]
+        if not wanted:
+            print("Error: --only needs at least one benchmark name")
+            return 2
         known = {b[0] for b in BENCHMARKS} | multi_names
         unknown = [b for b in wanted if b not in known]
         if unknown:
@@ -711,11 +899,8 @@ def main():
 
     for bench_name, pli_file, c_file in benches:
         results[bench_name] = {}
-        src_pli = BENCHMARK_DIR / pli_file
-        src_c = BENCHMARK_DIR / c_file
 
         default_flags = EXTRA_PLIFLAGS.get(bench_name, [])
-        forced_flags = CHECKS_FORCED_FLAGS
 
         for opt in opt_levels:
             tag = opt.replace('-', '')
@@ -724,44 +909,43 @@ def main():
 
             if args.checks_forced:
                 pli_exe_forced = BIN_DIR / f"{bench_name}_pli_forced_{tag}{EXE_SUFFIX}"
-                default_flags_str = ""
+                # Forced checks are additive: the benchmark's own required
+                # flags stay on, otherwise the parity check compares two
+                # different programs.
+                forced_flags = list(dict.fromkeys(default_flags + CHECKS_FORCED_FLAGS))
                 forced_flags_str = " ".join(forced_flags)
 
-                # --- default run (for comparison baseline) ---
                 if not compile_pli(bench_name, pli_file, opt, pli_exe):
                     print(f"{bench_name:<20} {opt:<6} PL/I COMPILE FAILED")
-                    results[bench_name][opt] = {"error": "pli_compile_failed"}
+                    results[bench_name][opt] = {"status": "pli_compile_failed"}
                     continue
-
-                # --- forced-checks run ---
                 if not compile_pli(bench_name, pli_file, opt, pli_exe_forced,
                                    extra_flags=forced_flags):
                     print(f"{bench_name:<20} {opt:<6} FORCED PL/I COMPILE FAILED")
-                    results[bench_name][opt] = {"error": "pli_forced_compile_failed"}
+                    results[bench_name][opt] = {"status": "pli_forced_compile_failed"}
                     continue
 
-                # --- C compile (skip mtime in forced mode) ---
-                if not compile_c(bench_name, c_file, opt, c_exe,
-                                 compiler=cc_cmd):
-                    print(f"{bench_name:<20} {opt:<6} C COMPILE FAILED")
-                    results[bench_name][opt] = {"error": "c_compile_failed"}
+                # Timings are recorded, but this mode's verdict is parity.
+                status, pli_times, pli_out = run_benchmark(
+                    pli_exe, runs=args.runs, cwd=BIN_DIR)
+                if status != "ok":
+                    print(f"{bench_name:<20} {opt:<6} PL/I {status.upper()}")
+                    results[bench_name][opt] = {"status": status,
+                                                "flags": forced_flags_str}
                     continue
-
-                pli_times, pli_out = run_benchmark(pli_exe, runs=args.runs)
-                _, pli_forced_out = run_benchmark(pli_exe_forced, runs=1)
-
-                if not pli_times:
-                    print(f"{bench_name:<20} {opt:<6} PL/I RUN FAILED")
-                    results[bench_name][opt] = {"error": "pli_run_failed"}
+                f_status, _, pli_forced_out = run_benchmark(
+                    pli_exe_forced, runs=1, cwd=BIN_DIR)
+                if f_status != "ok":
+                    print(f"{bench_name:<20} {opt:<6} FORCED PL/I {f_status.upper()}")
+                    results[bench_name][opt] = {"status": f_status,
+                                                "flags": forced_flags_str}
                     continue
 
                 match = "✓" if pli_out.strip() == pli_forced_out.strip() else "✗"
                 pli_min = min(pli_times)
                 pli_median = median_result(pli_times)
-                # C is not re-run in forced mode; record default timing only
-                c_median = 0.0
-                ratio = float('inf') if c_median == 0 else pli_median / c_median
                 results[bench_name][opt] = {
+                    "status": "ok" if match == "✓" else "output_mismatch",
                     "flags": forced_flags_str,
                     "pli": {"median": pli_median, "min": pli_min,
                             "output": pli_out.strip()},
@@ -773,34 +957,31 @@ def main():
                       f"{'—':>10} {'—':>8} {match:>6}")
                 continue
 
-            # Normal mode
+            # Normal mode. Every measured binary is rebuilt: a cache keyed on
+            # source mtimes would time a stale binary after a compiler rebuild.
             flags_str = " ".join(default_flags) if default_flags else "(default)"
 
-            # Compile PL/I (skip if up-to-date)
-            if needs_recompile(src_pli, pli_exe, args.force):
-                if not compile_pli(bench_name, pli_file, opt, pli_exe):
-                    print(f"{bench_name:<20} {opt:<6} PL/I COMPILE FAILED")
-                    results[bench_name][opt] = {"error": "pli_compile_failed"}
-                    continue
-            if needs_recompile(src_c, c_exe, args.force):
-                if not compile_c(bench_name, c_file, opt, c_exe,
-                                 compiler=cc_cmd):
-                    print(f"{bench_name:<20} {opt:<6} C COMPILE FAILED")
-                    results[bench_name][opt] = {"error": "c_compile_failed"}
-                    continue
-
-            # Run both
-            pli_times, pli_out = run_benchmark(pli_exe, runs=args.runs)
-            c_times, c_out = run_benchmark(c_exe, runs=args.runs)
-
-            if not pli_times:
-                print(f"{bench_name:<20} {opt:<6} PL/I RUN FAILED")
-                results[bench_name][opt] = {"error": "pli_run_failed"}
+            if not compile_pli(bench_name, pli_file, opt, pli_exe):
+                print(f"{bench_name:<20} {opt:<6} PL/I COMPILE FAILED")
+                results[bench_name][opt] = {"status": "pli_compile_failed"}
+                continue
+            if not compile_c(bench_name, c_file, opt, c_exe, compiler=cc_cmd):
+                print(f"{bench_name:<20} {opt:<6} C COMPILE FAILED")
+                results[bench_name][opt] = {"status": "c_compile_failed"}
                 continue
 
-            if not c_times:
-                print(f"{bench_name:<20} {opt:<6} C RUN FAILED")
-                results[bench_name][opt] = {"error": "c_run_failed"}
+            # Run both: PL/I first, C second, each with a verified warmup.
+            status, pli_times, pli_out = run_benchmark(
+                pli_exe, runs=args.runs, cwd=BIN_DIR)
+            if status != "ok":
+                print(f"{bench_name:<20} {opt:<6} PL/I {status.upper()}")
+                results[bench_name][opt] = {"status": status, "flags": flags_str}
+                continue
+            c_status, c_times, c_out = run_benchmark(
+                c_exe, runs=args.runs, cwd=BIN_DIR)
+            if c_status != "ok":
+                print(f"{bench_name:<20} {opt:<6} C {c_status.upper()}")
+                results[bench_name][opt] = {"status": c_status, "flags": flags_str}
                 continue
 
             pli_median = median_result(pli_times)
@@ -813,8 +994,9 @@ def main():
             # but load-sensitive. Record both, gate on the median.
             min_ratio = pli_min / c_min if c_min > 0 else float('inf')
 
-            out_match = outputs_match(pli_out, c_out, bench_name)
+            mark = outputs_agree(bench_name, pli_out, c_out)
             results[bench_name][opt] = {
+                "status": "output_mismatch" if mark == "✗" else "ok",
                 "flags": flags_str,
                 "pli": {
                     "median": pli_median,
@@ -833,35 +1015,42 @@ def main():
                 },
                 "ratio": round(ratio, 4),
                 "min_ratio": round(min_ratio, 4),
-                "match": out_match,
+                "match": mark,
             }
             print(f"{bench_name:<20} {opt:<6} {flags_str:<24} "
                   f"{pli_min*1000:>10.2f} {pli_median*1000:>10.2f} "
-                  f"{c_median*1000:>10.2f} {ratio:>7.2f}x {out_match:>6}")
+                  f"{c_median*1000:>10.2f} {ratio:>7.2f}x {mark:>6}")
 
     # The paired PL/I-vs-PL-I comparisons: one source compiled two ways.
     # They are a -O2 measurement (the gate the optimization plan sets), so
-    # they run once, not at every optimization level.
-    pairs = run_pair_comparisons(pair_names, "-O2", args.runs)
+    # they run once, not at every optimization level. Checks-forced mode asks
+    # a parity question, so the pairs would only cost time there.
+    pairs = {} if args.checks_forced else run_pair_comparisons(
+        pair_names, "-O2", args.runs)
 
-    # Save JSON with machine metadata (P3)
-    json_file = RESULTS_DIR / f"benchmark_results_{ts}.json"
-    machine_info = get_machine_info()
-    with open(json_file, "w", encoding="utf-8") as f:
-        json.dump({"machine": machine_info, "results": results,
-                   "pairs": pairs}, f, indent=2)
+    # Save JSON with machine metadata and the manifest (P3).
+    manifest = build_manifest(PLI, cc_cmd, benches, opt_levels, args.runs,
+                              WARMUP, args.checks_forced)
+    machine_info = get_machine_info(cc_cmd)
+    json_file = RESULTS_DIR / f"benchmark_results_{run_id}.json"
+    payload = {"schema": SCHEMA_VERSION, "run_id": run_id, "machine": machine_info,
+               "manifest": manifest, "results": results, "pairs": pairs}
+    write_atomic(json_file, lambda fh: json.dump(payload, fh, indent=2))
 
-    # Save CSV (P1.5)
-    csv_file = RESULTS_DIR / f"summary_{ts}.csv"
-    with open(csv_file, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+    # Save CSV (P1.5); the status column makes a failed row explicit.
+    csv_file = RESULTS_DIR / f"summary_{run_id}.csv"
+
+    def write_csv(fh):
+        w = csv.writer(fh)
         w.writerow(["benchmark", "opt", "flags", "pli_min_ms",
-                    "pli_median_ms", "c_median_ms", "ratio", "match"])
+                    "pli_median_ms", "c_median_ms", "ratio", "match",
+                    "status"])
         for bench_name, _, _ in benches:
             for opt in opt_levels:
                 data = results.get(bench_name, {}).get(opt, {})
-                if "error" in data:
-                    w.writerow([bench_name, opt, "", "", "", "", "", "ERR"])
+                if data.get("status") != "ok":
+                    w.writerow([bench_name, opt, data.get("flags", ""), "", "",
+                                "", "", "", data.get("status", "missing")])
                 elif "ratio" in data:
                     pli = data["pli"]
                     c = data["c"]
@@ -869,10 +1058,12 @@ def main():
                                 round(pli["min"] * 1000, 4),
                                 round(pli["median"] * 1000, 4),
                                 round(c["median"] * 1000, 4),
-                                data["ratio"], data.get("match", "")])
-                elif "parity" in data:
-                    w.writerow([bench_name, opt, data.get("flags", ""),
-                                "", "", "", "", data["parity"]])
+                                data["ratio"], data.get("match", ""), "ok"])
+                else:
+                    w.writerow([bench_name, opt, data.get("flags", ""), "", "",
+                                "", "", data.get("parity", ""), "ok"])
+
+    write_atomic(csv_file, write_csv)
 
     print(f"\nResults saved to {json_file}")
     print(f"CSV saved to {csv_file}")
@@ -890,11 +1081,8 @@ def main():
         all_ok = True
         for bench_name, _, _ in benches:
             data = results.get(bench_name, {}).get("-O2", {})
-            if "parity" not in data:
-                print(f"  {bench_name:<20} ERROR: {data.get('error', '?')}")
-                all_ok = False
-            elif data["parity"] != "✓":
-                print(f"  {bench_name:<20} ✗ stdout differs with forced checks")
+            if data.get("status") != "ok":
+                print(f"  {bench_name:<20} ERROR: {data.get('status', 'missing')}")
                 all_ok = False
             else:
                 print(f"  {bench_name:<20} ✓ parity OK")
@@ -913,39 +1101,59 @@ def main():
         row = f"{bench_name:<20}"
         for opt in OPT_LEVELS:
             data = results.get(bench_name, {}).get(opt, {})
-            if "error" in data:
-                row += f" {'ERR':>8}"
-            elif "ratio" in data:
+            if data.get("status") == "ok" and "ratio" in data:
                 row += f" {data['ratio']:>7.2f}x"
-            else:
+            elif data.get("status") in (None, "ok"):
                 row += f" {'-':>8}"
+            else:
+                row += f" {'ERR':>8}"
         print(row)
 
     # Average ratio by optimization level, per category. The ir corpus's
     # geomean is the project's acceptance gate, so the lang corpus — whose
     # benchmarks price PL/I-only costs — is reported on its own and never
-    # dilutes or inflates that gate.
-    ir_names = {b[0] for b in benches if b[1].startswith("ir/")}
-    lang_names = {b[0] for b in benches if b[1].startswith("lang/")}
+    # dilutes or inflates that gate. Only valid rows are averaged, and the
+    # count is printed so a partial average cannot pass for a corpus one.
+    ir_names = [b[0] for b in benches if b[1].startswith("ir/")]
+    lang_names = [b[0] for b in benches if b[1].startswith("lang/")]
     for label, names in (("ir (C parity — the acceptance gate)", ir_names),
                           ("lang (PL/I-specific)", lang_names)):
         if not names:
             continue
         print(f"\nAverage PL/I vs C ratio by optimization level [{label}]:")
         for opt in OPT_LEVELS:
-            ratios = []
-            for bench_name in names:
-                data = results.get(bench_name, {}).get(opt, {})
-                if "ratio" in data:
-                    ratios.append(data["ratio"])
-            if ratios:
-                avg = statistics.mean(ratios)
-                # The acceptance gate is a geomean (<0.90x) — print it, not just
-                # the arithmetic mean, which one outlier can drag.
-                finite = [r for r in ratios if math.isfinite(r) and r > 0]
-                geo = math.exp(sum(math.log(r) for r in finite) / len(finite)) if finite else float('nan')
-                print(f"  {opt}: avg ratio = {avg:.2f}x geomean = {geo:.2f}x "
-                      f"(min={min(ratios):.2f}x, max={max(ratios):.2f}x)")
+            ratios = [results[n][opt]["ratio"] for n in names
+                      if row_is_valid(results.get(n, {}).get(opt, {}))]
+            if not ratios:
+                print(f"  {opt}: no valid rows")
+                continue
+            avg = statistics.mean(ratios)
+            geo = math.exp(statistics.mean(math.log(r) for r in ratios))
+            print(f"  {opt}: avg ratio = {avg:.2f}x geomean = {geo:.2f}x "
+                  f"(min={min(ratios):.2f}x, max={max(ratios):.2f}x, "
+                  f"{len(ratios)}/{len(names)} rows valid)")
+
+    # The acceptance gate: the full ir corpus, every row valid, at -O2.
+    print("\n=== -O2 acceptance gate (ir geomean < 0.90x) ===")
+    selected_gate = [n for n in GATE_BENCHMARKS if n in {b[0] for b in benches}]
+    if selected_gate != GATE_BENCHMARKS:
+        print(f"  not evaluated: --only selected {len(selected_gate)}/"
+              f"{len(GATE_BENCHMARKS)} gate rows (a subset is a measurement, "
+              "not the corpus gate)")
+    else:
+        gate = accepted_geomean(results, GATE_BENCHMARKS, "-O2")
+        invalid = [n for n in GATE_BENCHMARKS
+                   if not row_is_valid(results.get(n, {}).get("-O2", {}))
+                   or results[n]["-O2"].get("match") == "~"]
+        if gate is None:
+            print(f"  NOT EVALUATED: {len(invalid)} of {len(GATE_BENCHMARKS)} "
+                  f"rows invalid/unavailable ({', '.join(invalid[:6])}"
+                  f"{'...' if len(invalid) > 6 else ''})")
+        else:
+            verdict = "PASS" if gate < 0.90 else "MISS"
+            print(f"  {verdict}: ir geomean = {gate:.2f}x over "
+                  f"{len(GATE_BENCHMARKS)} rows "
+                  f"(descriptive, not gating: {', '.join(sorted(NON_PARITY))})")
 
     # Timing + parity validation (W7)
     print("\n=== Timing & Parity Checks (W7) ===")
@@ -954,70 +1162,76 @@ def main():
         chk = CHECKS.get(bench_name, {})
         min_ms = chk.get("min_ms_O2", 50)
         data_o2 = results.get(bench_name, {}).get("-O2", {})
-        if "error" in data_o2:
-            print(f"  {bench_name:<20} ✗ {data_o2['error']}")
+        status = data_o2.get("status", "missing")
+        if status != "ok":
+            print(f"  {bench_name:<20} ✗ {status}")
             all_checks_ok = False
             continue
         pli_med = data_o2.get("pli", {}).get("median", 0) * 1000
-        pli_out = data_o2.get("pli", {}).get("output", "")
-        c_out = data_o2.get("c", {}).get("output", "")
         # Timing note (not a gate): below the noise floor the ratio is
-        # indicative only. Fast benches now live here *by success*, so this
-        # must never fail the run — only stdout mismatch does that.
+        # indicative only. Fast benches live here *by success*, so this must
+        # never fail the run — only an invalid row does that.
         if pli_med < min_ms:
             print(f"  {bench_name:<20} ◦ {pli_med:.1f}ms < {min_ms}ms noise floor", end="")
         else:
             print(f"  {bench_name:<20} ✓ {pli_med:.1f}ms ≥ {min_ms}ms", end="")
-        # Parity: PL/I output matches C baseline (or tolerant for floats)
-        if bench_name in FLOAT_BENCHES and chk.get("float_tol"):
-            m = outputs_match(pli_out, c_out, bench_name)
-            if m == "✓":
-                print(f"  ✓ parity (exact)")
-            elif m == "≈":
-                print(f"  ≈ parity (float-tolerant)")
-            else:
-                print(f"  ✗ parity (float mismatch)")
-                all_checks_ok = False
-        elif bench_name == "decimal_ops":
-            # decimal_ops uses exact decimal arithmetic; its C baseline uses
-            # double — expected ~ mismatch (see DECIMAL-PERF-PLAN.md §8 non-goal).
-            # bcd_decimal is NOT here: WS-E3 (ADR-248) gave it an exact
-            # __int128 baseline, so its output must match exactly.
-            if pli_out.strip() == c_out.strip():
-                print(f"  ✓ parity (exact)")
-            else:
-                print(f"  ≈ parity (decimal-vs-FP, by design)")
+        mark = data_o2.get("match")
+        if mark == "✓":
+            print("  ✓ parity (exact)")
+        elif mark == "≈":
+            print("  ≈ parity (float-tolerant)")
+        elif mark == "~":
+            print(f"  ~ descriptive, not a parity twin: {NON_PARITY[bench_name]}")
         else:
-            if pli_out.strip() == c_out.strip():
-                print(f"  ✓ parity (exact)")
-            else:
-                print(f"  ✗ parity (output mismatch)")
-                all_checks_ok = False
+            print("  ✗ parity (output mismatch)")
+            all_checks_ok = False
 
-    # Regression guard: compare against the most recent previous run (W7)
-    prev_full = load_previous_results(json_file.name)
-    previous = prev_full.get("results") if isinstance(prev_full, dict) else None
-    if previous is not None:
-        prev_id = prev_full.get("machine", {}).get("compiler_id")
-        cur_id = machine_info.get("compiler_id")
-        if prev_id and cur_id and prev_id != cur_id:
-            print("\n=== COMPILER CHANGE NOTICE ===")
-            print(f"  Previous run used compiler {prev_id}; this run uses {cur_id}.")
-            print("  Ratio deltas below mix compiler changes with noise — "
-                  "re-baseline before trusting them.")
-        warnings = check_for_deterioration(results, previous)
-        if warnings:
-            print("\n=== REGRESSION WARNINGS ===")
-            for w in warnings:
-                print(w)
-            print(f"\n⚠ {len(warnings)} benchmark(s) deteriorated by >"
-                  f"{int(DETERIORATION_THRESHOLD*100)}% at -O2 vs previous run")
+    # Paired comparisons: a pair whose builds disagree, or that failed to
+    # build or run, is a failure of the run, not a footnote.
+    if pairs:
+        bad_pairs = {k: v["status"] for k, v in pairs.items()
+                     if v.get("status") != "ok"}
+        print("\n=== Paired comparisons ===")
+        if bad_pairs:
+            for key, status in bad_pairs.items():
+                print(f"  {key:<48} ✗ {status}")
+            all_checks_ok = False
         else:
-            print("\n=== REGRESSION CHECK ===")
-            print("  ✓ No material deterioration detected at -O2 vs previous run")
-    else:
-        print("\n=== REGRESSION CHECK ===")
+            print(f"  ✓ {len(pairs)} pair(s) valid and output-identical")
+
+    # Regression guard: only against a run whose settings match this one.
+    prev_full = load_previous_results(json_file.name, args.compare_to)
+    previous = prev_full.get("results") if isinstance(prev_full, dict) else None
+    print("\n=== REGRESSION CHECK ===")
+    if previous is None:
         print("  — No previous results found to compare against")
+    else:
+        reason = manifest_mismatch(manifest, prev_full)
+        if reason:
+            print(f"  — Not compared: {reason}")
+        else:
+            prev_id = prev_full.get("machine", {}).get("compiler_id")
+            cur_id = machine_info.get("compiler_id")
+            if prev_id and cur_id and prev_id != cur_id:
+                print(f"  Compiler changed ({prev_id} → {cur_id}); ratio deltas "
+                      "mix the change with noise.")
+            # Pinning changes the noise floor, not the workload: say so rather
+            # than let a new pinning mode masquerade as a codegen delta.
+            prev_pin = (prev_full.get("manifest") or {}).get("pinning", {})
+            if prev_pin.get("mode") != manifest["pinning"]["mode"]:
+                print(f"  Pinning changed ({prev_pin.get('mode')} → "
+                      f"{manifest['pinning']['mode']}); treat small deltas with care.")
+            warnings, compared = check_for_deterioration(
+                results, previous, [b[0] for b in benches])
+            if warnings:
+                print(f"  ⚠ {len(warnings)} benchmark(s) deteriorated by >"
+                      f"{int(DETERIORATION_THRESHOLD*100)}% at -O2 "
+                      f"(compared {compared} valid rows)")
+                for w in warnings:
+                    print(w)
+            else:
+                print(f"  ✓ No material deterioration at -O2 vs previous run "
+                      f"(compared {compared} valid rows)")
 
     return 0 if all_checks_ok else 1
 

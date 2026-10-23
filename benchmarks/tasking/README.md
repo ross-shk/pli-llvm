@@ -39,11 +39,23 @@ python3 benchmarks/run_tasking_bench.py --models fiber,os
 # a single model
 python3 benchmarks/run_tasking_bench.py --models os
 
-# skip the fiber gate assertion
-python3 run_tasking_bench.py --models fiber,os --no-gate
+# report the numbers but do not fail on the fiber gate
+python3 benchmarks/run_tasking_bench.py --models fiber,os --no-gate
 ```
 
-Results are saved to `benchmarks/results/tasking_<timestamp>.json`.
+Results are saved to `benchmarks/results/tasking_<run id>.json`.
+
+## What a number means
+
+The harness times the whole program (one warmup plus `--runs` timed runs,
+median) and the tables divide that by 20 000 to get `ns/task`. Process
+startup is inside every number, which is why the gate is startup-sensitive on
+these short workloads. The C and Go baselines do not depend on the PL/I
+model, so they are measured once per workload and shared by the `fiber` and
+`os` rows. A run is admitted only if the process exited 0 and printed
+`done`: a crashed or truncated workload would otherwise look fast. The C
+references fail loudly when a thread cannot be created, so resource
+exhaustion cannot be reported as a win.
 
 ## Latest measurement
 
@@ -119,6 +131,6 @@ reused):
 
 * **The fiber gate is noisy on macOS** (~0.70×–1.58× across run sets).
   task_loop is a ~5–10 ms program where process startup is 2–3 ms, so the
-  median swings 20–30 % run-to-run. The gate check warns when the median
-  slips above 0.90×; this is a noise-sensitive measurement, not a codegen
-  regression. Larger N or an in-process timer loop would tighten it.
+  median swings 20–30 % run-to-run. The gate check reports when the median
+  slips above 0.90×; this is a startup-sensitive diagnostic, not a codegen
+  regression test. Larger N or an in-process timer loop would tighten it.
