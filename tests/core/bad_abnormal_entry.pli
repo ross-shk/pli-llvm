@@ -1,0 +1,32 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ABNORMAL/NORMAL restrictions (rule (38)): entry-name-attributes
+    only, never on a function, never both, and the label must be a
+    top-level label of the procedure that declares the entry. */
+ bad_abnormal_entry: procedure options(main);
+    declare x fixed bin(31);
+    /* ABNORMAL and NORMAL are entry attributes */
+    declare h fixed bin(31) abnormal(done);
+    /* a function's value comes back through the call itself */
+    declare f entry returns(fixed bin(31)) abnormal(done);
+    /* the two attributes contradict each other */
+    declare b entry abnormal(done) normal;
+    /* an entry variable has no fixed return label */
+    declare v entry variable abnormal(done);
+    /* no such label in this procedure */
+    declare e entry abnormal(nowhere);
+    /* the label sits inside a block that may not be active */
+    declare g entry abnormal(inner);
+    begin;
+ inner:
+       x = 2;
+    end;
+    /* the label is here, so only this block may call the entry */
+    declare e2 entry abnormal(done);
+    call inner;
+ done:
+    x = 1;
+ inner: procedure;
+    call e2;
+ end inner;
+ end bad_abnormal_entry;

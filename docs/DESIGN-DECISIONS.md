@@ -11111,3 +11111,48 @@ the compile-time bounds check is the only loss, and it still applies to a litera
 *Evaluate the subscript once and cache it on the symbol.* That is a stale alias —
 IBM's per-reference evaluation is observable when the index changes between
 references, which is the whole point of the form.
+
+---
+
+## ADR-308 — `ABNORMAL`/`NORMAL`: a declared return point for an entry
+
+**Context.** Entry-name-attributes (rule (38)) include `ABNORMAL(label-name)`
+and `NORMAL`. IBM defines `ABNORMAL` as: when a procedure invoked through the
+entry returns, control passes to the named label instead of the statement after
+the `CALL`. It is the PL/I way to give a family of subroutines one shared exit
+without threading a status flag through every caller. `NORMAL` names the
+ordinary return point and exists to cancel an `ABNORMAL` inherited from a group
+or `LIKE` declaration. The compiler previously rejected `ABNORMAL` at parse
+time, so the attribute was unusable.
+
+**Decision.** The attribute parser accepts either form on an `ENTRY` declaration
+in any attribute order. Sema accepts `ABNORMAL` only on an entry, refuses it on
+a function entry (a `RETURNS` value comes back through the call itself), refuses
+it together with `NORMAL`, refuses it on an `ENTRY VARIABLE` (an assignable
+procedure value has no fixed label), and refuses an asynchronous `CALL` to such
+an entry (a task has no caller to return to). The label is resolved after the
+procedure's labels are collected: it must be a label of the declaring procedure
+and must sit at that procedure's top level, so the branch can never land in an
+inactive `BEGIN` block — a narrower, sound version of IBM's "same block as the
+declaration" rule. Because the label lives in the declaring block, only a `CALL`
+emitted in that same procedure can branch to it; a call from a nested or outer
+procedure is diagnosed instead of silently returning normally. IRGen branches to the label's block right after the call, so
+the statement that follows is emitted but unreachable, and it restores the ON
+depth through `onExitDepth`, exactly as `GO TO` to the same label does, so the
+handlers of a `BEGIN` block the call sat in are reverted. `NORMAL` is recorded
+and changes nothing, which is correct because this compiler does not propagate
+`ABNORMAL` through group or `LIKE` declarations yet.
+
+**Consequences.** `abnormal_entry.pli` is a golden test: a `NORMAL` entry returns
+normally, the `ABNORMAL` entry's following `PUT` never prints, and control lands
+on the label. `bad_abnormal_entry.pli` pins the six diagnostics. Nothing changes
+for an entry without the attribute: the branch is emitted only when the symbol
+carries a resolved label. B9 loses its `ABNORMAL`/`NORMAL` item.
+
+**Rejected.** *Accepting a label inside a nested `BEGIN`.* It needs the
+declaration's own block chain to be compared with the label's, which this pass
+does not carry; the conservative top-level rule rejects some legal programs with
+a cited diagnostic instead of jumping into a possibly inactive block. *Making
+`ABNORMAL` a property of the called procedure rather than of the entry name.* It
+is an entry attribute: the same body reached through a different, `NORMAL`
+entry must still return normally.

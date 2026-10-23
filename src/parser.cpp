@@ -1781,6 +1781,28 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
+      if (w == "ABNORMAL" || w == "NORMAL") {
+        // entry-name-attribute { ABNORMAL ( label-name ) | NORMAL } (rule (38)):
+        // ABNORMAL names the label control passes to when a CALL through this
+        // entry returns, in place of the statement after the CALL. NORMAL names
+        // the ordinary return point and cancels an inherited ABNORMAL.
+        bool isAbnormal = (w == "ABNORMAL");
+        advance();
+        if (isAbnormal) {
+          if (expect(Tok::LParen, "(38)")) {
+            if (at(Tok::Word)) {
+              item.abnormalLabel = cur().text;
+              advance();
+            } else {
+              d_.error(cur().loc, "ABNORMAL requires a label name", "(38)");
+            }
+            expect(Tok::RParen, "(38)");
+          }
+        } else {
+          item.normal = true;
+        }
+        continue;
+      }
       if (w == "LIKE") {
         // like-attribute ::= LIKE unsubscripted-reference (rule 43): the
         // declared item takes the structure shape of the referenced structure.

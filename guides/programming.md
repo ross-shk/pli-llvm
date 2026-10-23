@@ -569,6 +569,24 @@ One body, several names, via `entry` — handy for related calculations that sha
 
 `area(5)` is 25, `cube(5)` is 125.
 
+### Where a call returns
+
+An `entry` declaration can move the return point of its calls with `abnormal`:
+control goes to the named label instead of the statement after the `call`. Old
+report writers use this to keep one error path for a family of subroutines.
+`normal` is the default and cancels it.
+
+```pli
+ dcl step entry abnormal(bail);
+ call step;              /* if step returns at all, control lands at bail */
+ put skip list('this runs only if the entry is not abnormal');
+ bail:
+ put skip list('cleanup path');
+```
+
+The label must be a top-level label of the procedure that declares the entry,
+and `abnormal` cannot be combined with `returns`.
+
 > **Run the full example:** [`examples/procedures_functions.pli`](../examples/procedures_functions.pli) — `pli procedures_functions.pli -o procs && ./procs`.
 
 ---

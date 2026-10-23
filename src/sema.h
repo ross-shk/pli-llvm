@@ -35,6 +35,12 @@ struct Symbol {
   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
   std::vector<std::string> entryUses; // USES(...) interface metadata (rules (34),(38))
   std::vector<std::string> entrySets; // SETS(...) interface metadata (rules (34),(38))
+  // ABNORMAL(label) (rule (38)): a CALL through this entry returns to that label
+  // instead of the statement after the CALL. Empty = the normal return point.
+  // The label lives in the declaring procedure's block, so only calls from that
+  // procedure can use it (abnormalOwner records which one declared it).
+  std::string abnormalLabel;
+  Proc* abnormalOwner = nullptr;
   std::string irName;            // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc* proc = nullptr;          // for ProcName
   Proc* owner = nullptr;         // the procedure that declares this variable (static link)
@@ -274,6 +280,15 @@ private:
     Proc* proc = nullptr;
   };
   std::vector<PendingBased> pendingBased_;
+  // An ENTRY declaration carrying ABNORMAL(label) (rule (38)): the label is
+  // resolved after the procedure's labels are collected.
+  struct PendingAbnormal {
+    Symbol* sym = nullptr;
+    Proc* owner = nullptr;
+    SourceLoc loc{};
+    std::string label;
+  };
+  std::vector<PendingAbnormal> pendingAbnormal_;
   // Try to resolve one deferred BASED base; create a POINTER Var for a
   // parameter base with no DECLARE yet. Returns true when resolved.
   bool tryResolveBased(PendingBased& pb);

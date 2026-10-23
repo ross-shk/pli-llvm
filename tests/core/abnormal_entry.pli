@@ -1,0 +1,26 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ABNORMAL/NORMAL entry-name-attributes (rule (38)): a CALL through an
+    ABNORMAL entry returns to the named label instead of the statement
+    after the CALL; a NORMAL entry returns the ordinary way. */
+ abnormal_entry: procedure options(main);
+    declare p entry abnormal(after);
+    declare q entry normal;
+
+    call q;                     /* NORMAL: the ordinary return point */
+    put skip list('q returned');
+
+    call p;                     /* ABNORMAL: control goes to AFTER */
+    put skip list('this line is not reached');
+
+ after:
+    put skip list('after label');
+ end abnormal_entry;
+
+ p: procedure;
+    put skip list('in p');
+ end p;
+
+ q: procedure;
+    put skip list('in q');
+ end q;

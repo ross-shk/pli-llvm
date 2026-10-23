@@ -909,6 +909,26 @@ void Sema::processProc(Proc* p) {
     for (auto& s : p->body)
       collectLabels(s.get(), beginChain);
   }
+  // ABNORMAL(label) (rule (38)): now that this procedure's labels are known,
+  // bind each entry's return label. The label must be in this procedure and at
+  // its top level, so the branch never enters an inactive block.
+  for (auto it = pendingAbnormal_.begin(); it != pendingAbnormal_.end();) {
+    if (it->owner != p) {
+      ++it;
+      continue;
+    }
+    auto lc = labelBeginChains_.find(it->label);
+    if (lc == labelBeginChains_.end())
+      d_.error(it->loc, "'" + it->label + "' is not a label in this procedure", "(38)");
+    else if (!lc->second.empty())
+      d_.error(it->loc,
+               "an ABNORMAL label must be at the procedure's top level in this stage", "(38)");
+    else {
+      it->sym->abnormalLabel = it->label;
+      it->sym->abnormalOwner = p;
+    }
+    it = pendingAbnormal_.erase(it);
+  }
   for (auto& s : p->body) {
     if (s && s->kind == Stmt::Entry)
       curEntry_ = s.get(); // later statements belong to this segment
@@ -1348,6 +1368,23 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           item.uses.clear();
           item.sets.clear();
         }
+        if ((!item.abnormalLabel.empty() || item.normal) && !item.isEntry) {
+          // ABNORMAL/NORMAL is an entry-name-attribute (rule (38)): it decides
+          // where a CALL through the entry returns to.
+          d_.error(item.loc, "ABNORMAL/NORMAL is only valid on an ENTRY declaration", "(38)");
+          item.abnormalLabel.clear();
+          item.normal = false;
+        }
+        if (!item.abnormalLabel.empty() && item.normal) {
+          d_.error(item.loc, "ABNORMAL and NORMAL are mutually exclusive", "(38)");
+          item.normal = false;
+        }
+        if (!item.abnormalLabel.empty() && item.entryIsFunction) {
+          // A function's value comes back through the call expression, so it
+          // cannot also change the return point.
+          d_.error(item.loc, "ABNORMAL cannot be specified on a function entry", "(38)");
+          item.abnormalLabel.clear();
+        }
         if (item.isCondition) {
           // DECLARE name CONDITION; (rule 9): register the programmer-named
           // condition so subsequent SIGNAL/ON CONDITION(name) resolve it. Use
@@ -1387,6 +1424,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "an ENTRY variable returning a STRUCTURE or CHARACTER is not implemented "
                      "(ADR-171)",
                      "");
+          else if (!item.abnormalLabel.empty())
+            d_.error(item.loc, "ABNORMAL on an ENTRY variable is not implemented (ADR-171)",
+                     "");
           else {
             Symbol* sym = declare(sc, item.name, Type::entryTy(), item.loc, Symbol::Var, isStatic);
             sym->owner = p;
@@ -1425,6 +1465,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           sym->irName = "@" + (item.extName.empty() ? item.name : item.extName);
           item.sym = sym;
           entries_.push_back(sym);
+          if (!item.abnormalLabel.empty())
+            pendingAbnormal_.push_back({sym, p, item.loc, item.abnormalLabel});
           continue;
         }
         // Group the remaining (storage) items into a tree by level.
@@ -4016,6 +4058,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       break;
     }
     s->sym = sym;
+    // ABNORMAL(label) (rule (38)) replaces the return point of a synchronous
+    // CALL; an asynchronous CALL (rule (79)) has no return point to replace.
+    if (!sym->abnormalLabel.empty() && (s->hasTaskOpt || s->eventRef || s->priorityExpr))
+      d_.error(s->loc, "a CALL to an ABNORMAL entry cannot be asynchronous", "(38)");
+    if (!sym->abnormalLabel.empty() && sym->abnormalOwner && sym->abnormalOwner != p)
+      d_.error(s->loc,
+               "an ABNORMAL entry can only be called from the procedure that declares it", "(38)");
     Proc* callee = sym->proc;
     Stmt* en = sym->entry; // rule (56): an ENTRY name uses the entry's params
     std::vector<Symbol*> calleeParams =

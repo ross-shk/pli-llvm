@@ -9341,6 +9341,23 @@ void IRGen::emitCall(HStmt* s) {
   appendStaticLinks(callee, args);
   b_.CreateCall(calleeF, args);
   flushVarWrites();
+  // ABNORMAL(label) (rule (38)): a CALL through this entry returns to the
+  // label instead of the statement after the CALL, so branch there now and
+  // leave the following statement's code unreachable. Sema resolved the label
+  // and rejected an asynchronous call.
+  if (!calleeSym->abnormalLabel.empty()) {
+    // Leaving enclosing BEGIN blocks reverts the ON units they established,
+    // exactly as a GO TO to the same label does (rule (91)).
+    if (llvm::Value* depth = onExitDepth(calleeSym->abnormalLabel))
+      b_.CreateCall(runtimeFn("pli_on_reset_error"), {depth});
+    auto lb = labelBlocks_.find(calleeSym->abnormalLabel);
+    if (lb != labelBlocks_.end())
+      b_.CreateBr(lb->second);
+    else
+      d_.error(s->loc,
+               "an ABNORMAL entry can only be called from the procedure that declares it",
+               "(38)");
+  }
 }
 
 // Address of an EVENT/TASK reference (rules (79),(82)): a scalar variable's
