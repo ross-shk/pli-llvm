@@ -13,9 +13,7 @@
          2 street char(40) varying,
          2 city char(25) varying;
    dcl 1 backup like employee;
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    employee.name = 'Alice';
    employee.id = 7;
@@ -26,25 +24,25 @@
    backup = employee;
 
    if employee.name ^= 'Alice' then do;
-      fails = fails + 1;
       put skip list('FAIL: name =', employee.name);
+      stop;
    end;
    if employee.id ^= 7 then do;
-      fails = fails + 1;
       put skip list('FAIL: id =', employee.id);
+      stop;
    end;
    if employee.salary ^= 75000.00 then do;
-      fails = fails + 1;
       put skip list('FAIL: salary =', employee.salary);
+      stop;
    end;
    if office.city ^= 'Trenton' then do;
-      fails = fails + 1;
       put skip list('FAIL: city =', office.city);
+      stop;
    end;
    if backup.name ^= 'Alice' then do;
-      fails = fails + 1;
       put skip list('FAIL: backup =', backup.name);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS declarations_structures');
  end dcls;

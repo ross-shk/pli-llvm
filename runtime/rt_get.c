@@ -106,7 +106,7 @@ long long pli_get_list_decfixed(long long q) {
   return neg ? -v : v;
 }
 
-/* FIXED BINARY input (ADR-282): parse a decimal token into value*2^q,
+/* FIXED BINARY input (ADR-284): parse a decimal token into value*2^q,
  * truncating extra fraction digits. At most 18 significant digits are
  * kept; lenient like the other readers. */
 long long pli_get_list_fixed_scaled(long long q) {

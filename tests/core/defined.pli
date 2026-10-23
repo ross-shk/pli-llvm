@@ -8,24 +8,33 @@
       declare y fixed bin(31) defined x;
       declare a(3) fixed bin(31);
       declare b(3) fixed bin(31) defined a;
-      declare i fixed bin(31), fails fixed bin(31);
 
-      fails = 0;
 
       /* scalar overlay: x and y are the same storage */
       x = 7;
-      if y ^= 7 then fails = fails + 1;
+      if y ^= 7 then do;
+         put skip list('FAIL defined: expected 7, got', y);
+         stop;
+      end;
       y = 99;
-      if x ^= 99 then fails = fails + 1;
+      if x ^= 99 then do;
+         put skip list('FAIL defined: expected 99, got', x);
+         stop;
+      end;
 
       /* array overlay: writing through b is visible via a, and vice versa */
       a(1) = 10;
       a(2) = 20;
       a(3) = 30;
-      if b(1) ^= 10 or b(2) ^= 20 or b(3) ^= 30 then fails = fails + 1;
+      if b(1) ^= 10 or b(2) ^= 20 or b(3) ^= 30 then do;
+         put skip list('FAIL defined: check at line 25 failed');
+         stop;
+      end;
       b(2) = 22;
-      if a(2) ^= 22 then fails = fails + 1;
+      if a(2) ^= 22 then do;
+         put skip list('FAIL defined: expected 22, got', a(2));
+         stop;
+      end;
 
-      if fails = 0 then put skip list('PASS defined');
-      else put skip list('FAIL defined: fails =', fails);
+   put skip list('PASS defined');
    end defined_test;

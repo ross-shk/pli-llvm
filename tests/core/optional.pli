@@ -7,21 +7,25 @@
     the omission (null address). */
  optional_test: procedure options(main);
     declare t fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     call greet('hey', '!');
     call greet('hey', *);
     call greet('hey');
     t = addb(3, 4);
-    if t ^= 7 then fails = fails + 1;
+    if t ^= 7 then do;
+       put skip list('FAIL optional: expected 7, got', t);
+       stop;
+    end;
     t = addb(3, *);
-    if t ^= 3 then fails = fails + 1;
+    if t ^= 3 then do;
+       put skip list('FAIL optional: expected 3, got', t);
+       stop;
+    end;
     t = addb(3);
-    if t ^= 3 then fails = fails + 1;
-    if fails = 0 then
-       put skip list('PASS optional');
-    else put skip list('FAIL optional:',
-       fails);
+    if t ^= 3 then do;
+       put skip list('FAIL optional: expected 3, got', t);
+       stop;
+    end;
+   put skip list('PASS optional');
 
  greet: procedure(s, ending);
     declare s char(5);

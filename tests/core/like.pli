@@ -8,29 +8,38 @@
             2 a fixed bin(31),
             2 b fixed bin(31);
      declare 1 t like s;
-     declare fails fixed bin(31);
 
-     fails = 0;
      s.a = 11;
      s.b = 22;
 
      /* t is a copy of s's structure: its members are set independently */
      t.a = 33;
      t.b = 44;
-     if t.a ^= 33 or t.b ^= 44 then fails = fails + 1;
-     if s.a ^= 11 or s.b ^= 22 then fails = fails + 1;
+     if t.a ^= 33 or t.b ^= 44 then do;
+        put skip list('FAIL like: check at line 20 failed');
+        stop;
+     end;
+     if s.a ^= 11 or s.b ^= 22 then do;
+        put skip list('FAIL like: check at line 21 failed');
+        stop;
+     end;
 
      /* identical shape, so whole-structure assignment works between them */
      t = s;
-     if t.a ^= 11 or t.b ^= 22 then fails = fails + 1;
+     if t.a ^= 11 or t.b ^= 22 then do;
+        put skip list('FAIL like: check at line 25 failed');
+        stop;
+     end;
 
      /* LIKE as a nested (member) structure: 2 m like s inside 1 p */
      declare 1 p,
             2 m like s;
      p.m.a = 55;
      p.m.b = 66;
-     if p.m.a ^= 55 or p.m.b ^= 66 then fails = fails + 1;
+     if p.m.a ^= 55 or p.m.b ^= 66 then do;
+        put skip list('FAIL like: check at line 32 failed');
+        stop;
+     end;
 
-     if fails = 0 then put skip list('PASS like');
-     else put skip list('FAIL like: fails =', fails);
+   put skip list('PASS like');
   end like_test;

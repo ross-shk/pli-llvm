@@ -11,9 +11,7 @@
    dcl m(3,5) fixed bin(31);
    dcl row(5) fixed bin(31);
    dcl i fixed bin(31);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    do i = 1 to 5;
      scores(i) = i * 10;
@@ -23,20 +21,20 @@
    temps(-2) = 1;
 
    if scores(1) ^= 10 then do;
-      fails = fails + 1;
       put skip list('FAIL: scores(1) =', scores(1));
+      stop;
    end;
    if board(2,3) ^= 99 then do;
-      fails = fails + 1;
       put skip list('FAIL: board(2,3) =', board(2,3));
+      stop;
    end;
    if lbound(temps) ^= -2 then do;
-      fails = fails + 1;
       put skip list('FAIL: temps lbound =', lbound(temps));
+      stop;
    end;
    if sum(scores) ^= 150 then do;
-      fails = fails + 1;
       put skip list('FAIL: sum =', sum(scores));
+      stop;
    end;
 
    /* slice: whole row write, row read */
@@ -44,15 +42,15 @@
    m(1,*) = 42;
    row = m(1,*);
    if sum(row) ^= 210 then do;
-      fails = fails + 1;
       put skip list('FAIL: row sum =', sum(row));
+      stop;
    end;
 
    /* whole-array math, no loop */
    scores = scores * 2;
    if sum(scores) ^= 300 then do;
-      fails = fails + 1;
       put skip list('FAIL: doubled sum =', sum(scores));
+      stop;
    end;
 
    /* dynamic size frozen on block entry */
@@ -67,14 +65,14 @@
    end;
 
    if dim(a) ^= 4 then do;
-      fails = fails + 1;
       put skip list('FAIL: dyn dim =', dim(a));
+      stop;
    end;
    if sum(a) ^= 20 then do;
-      fails = fails + 1;
       put skip list('FAIL: dyn sum =', sum(a));
+      stop;
    end;
  end fill;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS arrays');
  end arrays;

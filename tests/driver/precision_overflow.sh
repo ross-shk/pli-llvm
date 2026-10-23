@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
-# tests/driver/precision_overflow.sh — ADR-280: SIZE enforces the declared
+# tests/driver/precision_overflow.sh — ADR-282: SIZE enforces the declared
 # precision of FIXED BINARY(p), not the storage width. A value outside
 # [-2^p, 2^p-1] aborts when unhandled and resumes wrapped when an ON SIZE
 # unit is established; --no-size-checks still elides every trap.

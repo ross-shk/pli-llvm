@@ -3,67 +3,111 @@
     plus conversions combined in one
     flow (intro-060 rules). */
  ops_conv_combo: procedure options(main);
-    declare fails fixed bin(31);
     declare x fixed bin(31);
     declare r char(8);
     declare b bit(1);
-    fails = 0;
     /* unary minus binds looser than ** */
     x = -3**2;
-    if x ^= -9 then fails = fails + 1;
+    if x ^= -9 then do;
+       put skip list('FAIL ops_conv_combo: expected -9, got', x);
+       stop;
+    end;
     /* ** is right associative */
     x = 2**3**2;
-    if x ^= 512 then fails = fails + 1;
+    if x ^= 512 then do;
+       put skip list('FAIL ops_conv_combo: expected 512, got', x);
+       stop;
+    end;
     /* + binds tighter than ||: the '5'
        lands at 25, past a 24-wide
        image of (3 + 4) */
     if index(3 + 4 || '5', '5') ^= 25
-       then fails = fails + 1;
+       then do;
+          put skip list('FAIL ops_conv_combo: check at line 21 failed');
+          stop;
+       end;
     /* & binds tighter than |, so this
        is '1'B | ('0'B & '0'B) */
     b = '1'b | '0'b & '0'b;
-    if b ^= '1'b then fails = fails + 1;
+    if b ^= '1'b then do;
+       put skip list('FAIL ops_conv_combo: expected 1b, got', b);
+       stop;
+    end;
     /* comparison binds tighter than & */
     b = '1'b & '1'b = '1'b;
-    if b ^= '1'b then fails = fails + 1;
+    if b ^= '1'b then do;
+       put skip list('FAIL ops_conv_combo: expected 1b, got', b);
+       stop;
+    end;
     /* unary not flips a single bit */
     b = ^'1'b;
-    if b ^= '0'b then fails = fails + 1;
+    if b ^= '0'b then do;
+       put skip list('FAIL ops_conv_combo: expected 0b, got', b);
+       stop;
+    end;
     /* FIXED() reads a numeric string,
        the explicit form of '4' -> 4 */
     x = 3 + fixed('4');
-    if x ^= 7 then fails = fails + 1;
+    if x ^= 7 then do;
+       put skip list('FAIL ops_conv_combo: expected 7, got', x);
+       stop;
+    end;
     x = fixed('111');
-    if x ^= 111 then fails = fails + 1;
+    if x ^= 111 then do;
+       put skip list('FAIL ops_conv_combo: expected 111, got', x);
+       stop;
+    end;
     /* a bit literal is binary: 30 */
     x = '11110'B;
-    if x ^= 30 then fails = fails + 1;
+    if x ^= 30 then do;
+       put skip list('FAIL ops_conv_combo: expected 30, got', x);
+       stop;
+    end;
     /* || converts the number to text;
        the number goes last so trim
        strips the padding */
     if trim('n=' || (30 + fixed('4')))
-       ^= 'n=34' then fails = fails + 1;
+       ^= 'n=34' then do;
+          put skip list('FAIL ops_conv_combo: check at line 45 failed');
+          stop;
+       end;
     /* a comparison result drives IF */
     if (5 = 5) then b = '1'b;
     else b = '0'b;
-    if b ^= '1'b then fails = fails + 1;
+    if b ^= '1'b then do;
+       put skip list('FAIL ops_conv_combo: expected 1b, got', b);
+       stop;
+    end;
     /* 48-charset word spellings */
     if 5 GT 3 then b = '1'b;
     else b = '0'b;
-    if b ^= '1'b then fails = fails + 1;
+    if b ^= '1'b then do;
+       put skip list('FAIL ops_conv_combo: expected 1b, got', b);
+       stop;
+    end;
     r = 'ab' CAT 'cd';
-    if r ^= 'abcd' then fails = fails + 1;
+    if r ^= 'abcd' then do;
+       put skip list('FAIL ops_conv_combo: expected abcd, got', r);
+       stop;
+    end;
     /* ^= and ^> spellings */
     if 5 ^= 6 then b = '1'b;
     else b = '0'b;
-    if b ^= '1'b then fails = fails + 1;
+    if b ^= '1'b then do;
+       put skip list('FAIL ops_conv_combo: expected 1b, got', b);
+       stop;
+    end;
     if 5 ^> 10 then b = '1'b;
     else b = '0'b;
-    if b ^= '1'b then fails = fails + 1;
+    if b ^= '1'b then do;
+       put skip list('FAIL ops_conv_combo: expected 1b, got', b);
+       stop;
+    end;
     /* !! aliases || */
     r = 'ab' !! 'cd';
-    if r ^= 'abcd' then fails = fails + 1;
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL ops_conv: ',
-       fails);
+    if r ^= 'abcd' then do;
+       put skip list('FAIL ops_conv_combo: expected abcd, got', r);
+       stop;
+    end;
+   put skip list('PASS ops_conv_combo');
  end ops_conv_combo;

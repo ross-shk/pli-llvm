@@ -818,7 +818,7 @@ constraint to be written down, and the constraint is now written down.
 **The gate.** The plan's C5 says: *"If the repo does not support binary scale
 at all, **defer** — check `Type` for a binary-scale field first."* The field
 existed, but nothing used it, so the patch could not land alone. A3 supplied
-the language feature (ADR-282) and every path now agrees:
+the language feature (ADR-284) and every path now agrees:
 
 | where | before | now |
 |---|---|---|
@@ -829,7 +829,7 @@ the language feature (ADR-282) and every path now agrees:
 
 **The verdict.** C5 is the `sitofp` followed by a multiply by `2^-q`, with the
 factor from `std::ldexp(1.0, -q)`. The factor is a power of two, so the
-multiply is exact and avoids a divide. It is part of ADR-282, not a standalone
+multiply is exact and avoids a divide. It is part of ADR-284, not a standalone
 ADR-244; that reservation is released and `DEFERRED-WORK.md` D2 is done. The
 gate is correctness rather than throughput: `tests/core/scaled.pli` pins the
 values and the conversion adds one `fmul` to a path that already did
@@ -911,7 +911,7 @@ br i1 %not, label %if.then.0, label %if.end.0
 ```
 
 **The model.** For `BIT(n>1)` the `NOT` is byte-wise over the whole array; the
-model is now written down (ADR-281): the padding bits are indeterminate and
+model is now written down (ADR-283): the padding bits are indeterminate and
 are not part of the value, every value operation ignores them, and `NOT` — the
 one operation that writes them — complements the declared bits and normalises
 the padding to zero. `tests/ir/bit_padding.pli` pins the lowering (`xor` on the
@@ -1090,7 +1090,7 @@ measurement recorded**"*. The measurement is recorded — the ratio, the
 attribution, and the ordering the item needs (ADR-252) — and the ordering
 names the prerequisite: PL/I's SIZE must be the **declared-precision** check
 (rules (60)-(63),(86)), not the storage-width check it was when this section
-was written. That conformance item landed as A2 (ADR-280); the range metadata
+was written. That conformance item landed as A2 (ADR-282); the range metadata
 that would make the check cheap follows it and is D1's work. It is not this
 plan's work, and the plan's
 own design is unsound until it lands — which is why the ordering is recorded
@@ -1106,7 +1106,7 @@ rather than the code.
 **Why the range fact cannot remove them.** The plan's design — emit the range
 metadata always — is sound only if the range is an invariant. Before A2 it was
 not: the SIZE check was the **storage width** check, so a variable declared
-`FIXED BINARY(15)` could hold `40000`. ADR-280 closes that at every conversion
+`FIXED BINARY(15)` could hold `40000`. ADR-282 closes that at every conversion
 into the type and fixes the range's definition: `FIXED BINARY(p)` is
 `[-2^p, 2^p-1]`, so `FIXED BINARY(31)` covers the whole i32 range (ADR-252's
 `2^30` example was one bit tight). Two consequences remain: at `p = 31`/`63`
@@ -1133,7 +1133,7 @@ facts remove the *storage* checks; the *precision* checks stay and cost about
 the same. The ratio improves by the width of a check, not by its absence — so
 the 1.5x criterion needs the checks to be *cheaper*, not merely fewer.
 
-**Re-measured after A2 (ADR-280).** `checks_on.pli` declares only
+**Re-measured after A2 (ADR-282).** `checks_on.pli` declares only
 `FIXED BIN(31)` and `FIXED BIN(63)`, so the new declared-precision check adds
 nothing to it: the pair is **76.4 ms vs 146.6 ms, 1.92x** (arm64 macOS,
 LLVM 23.1.2, median of five), unchanged from 1.93x within noise. That is the

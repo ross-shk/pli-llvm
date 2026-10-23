@@ -2,7 +2,7 @@
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* A BIT(5) is left-justified in one byte: the low three bits are
     storage padding, not part of the value. `^` complements the five
-    value bits and normalises the padding bits to zero (ADR-281,
+    value bits and normalises the padding bits to zero (ADR-283,
     ADR-243, ADR-275). */
  bit_padding: procedure options(main);
     declare b bit(5);

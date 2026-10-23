@@ -15,24 +15,22 @@
          2 port fixed bin(31);
    dcl f file;
    dcl line char(40) varying;
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    name = 'ada';
    count = 3;
 
    put skip list('Hello,', name);
    if count ^= 3 then do;
-      fails = fails + 1;
       put skip list('FAIL: count =', count);
+      stop;
    end;
 
    /* string: format into a varying buffer */
    put string(buff) list('n=', 42);
    if buff ^= 'n= 42' then do;
-      fails = fails + 1;
       put skip list('FAIL: buff =', buff);
+      stop;
    end;
 
    /* edit-directed: fixed columns */
@@ -45,8 +43,8 @@
    config.port = 8080;
    put data(config);
    if config.port ^= 8080 then do;
-      fails = fails + 1;
       put skip list('FAIL: port =', config.port);
+      stop;
    end;
 
    /* file round-trip into the gitignored scratch dir: list-directed
@@ -61,9 +59,9 @@
    close file(f);
 
    if line ^= 'file' then do;
-      fails = fails + 1;
       put skip list('FAIL: file said:', line);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS input_output');
  end io;

@@ -3,7 +3,6 @@
 /* Rule (18): adjustable CHAR(*) parameters cross-module.
    Build: two -c units linked together. */
 starparam: procedure options(main);
-  dcl fails fixed bin(31) init(0);
   dcl buf1 char(20) varying;
   dcl buf2 char(50) varying;
   dcl buf3 char(10) varying;
@@ -20,43 +19,69 @@ starparam: procedure options(main);
   buf1 = '';
   call fill_buf(buf1, 10);
   result = get_len(buf1);
-  if result ^= 10 then fails = fails + 1;
+  if result ^= 10 then do;
+     put skip list('FAIL star_param: expected 10, got', result);
+     stop;
+  end;
   str = get_content(buf1);
-  if str ^= 'xxxxxxxxxx' then fails = fails + 1;
+  if str ^= 'xxxxxxxxxx' then do;
+     put skip list('FAIL star_param: expected xxxxxxxxxx, got', str);
+     stop;
+  end;
 
   buf2 = '';
   call fill_buf(buf2, 30);
   result = get_len(buf2);
-  if result ^= 30 then fails = fails + 1;
+  if result ^= 30 then do;
+     put skip list('FAIL star_param: expected 30, got', result);
+     stop;
+  end;
   str = get_content(buf2);
-  if str ^= 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' then fails = fails + 1;
+  if str ^= 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' then do;
+     put skip list('FAIL star_param: check at line 32 failed');
+     stop;
+  end;
 
   buf3 = '';
   call fill_buf(buf3, 15);  /* truncates to 10 */
   result = get_len(buf3);
-  if result ^= 10 then fails = fails + 1;
+  if result ^= 10 then do;
+     put skip list('FAIL star_param: expected 10, got', result);
+     stop;
+  end;
 
   /* Test 2: concatenate two buffers */
   buf1 = 'hello';
   buf2 = 'world';
   call concat_buf(buf1, buf2);
   result = get_len(buf1);
-  if result ^= 10 then fails = fails + 1;  /* 'helloworld' = 10 */
+  if result ^= 10 then do;
+     put skip list('FAIL star_param: expected 10, got', result);
+     stop;
+  end;
   str = get_content(buf1);
-  if str ^= 'helloworld' then fails = fails + 1;
+  if str ^= 'helloworld' then do;
+     put skip list('FAIL star_param: expected helloworld, got', str);
+     stop;
+  end;
 
   /* Test 3: uppercase in place (get_len stops at first blank per lib spec) */
   buf1 = 'Hello World';
   call uppercase(buf1);
   str = get_content(buf1);
-  if str ^= 'HELLO' then fails = fails + 1;  /* up to first blank */
+  if str ^= 'HELLO' then do;
+     put skip list('FAIL star_param: expected HELLO, got', str);
+     stop;
+  end;
 
   /* Test 4: VARYING actual into CHAR(*) dummy (fill overwrites from 1) */
   buf1 = 'varying test';
   call fill_buf(buf1, 20);
   result = get_len(buf1);
-  if result ^= 20 then fails = fails + 1;  /* 20 x's (max), overwrite */
+  if result ^= 20 then do;
+     put skip list('FAIL star_param: expected 20, got', result);
+     stop;
+  end;
 
-  if fails = 0 then put skip list('PASS star_param');
-  else put skip list('FAIL star_param: fails=', fails);
+   put skip list('PASS star_param');
 end starparam;

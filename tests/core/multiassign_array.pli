@@ -11,22 +11,26 @@
      declare c(3) fixed bin(31);
      declare d(3) fixed bin(31);
      declare i fixed bin(31);
-     declare fails fixed bin(31);
      declare calls fixed bin(31);
-     fails = 0;
      calls = 0;
      /* whole-array variable source */
      c(1) = 1; c(2) = 2; c(3) = 3;
      a, b = c;
      do i = 1 to 3;
         if a(i) ^= c(i) | b(i) ^= c(i)
-           then fails = fails + 1;
+           then do;
+              put skip list('FAIL multiassign_array: check at line 23 failed');
+              stop;
+           end;
      end;
      /* scalar broadcast */
      a, b = 7;
      do i = 1 to 3;
         if a(i) ^= 7 | b(i) ^= 7
-           then fails = fails + 1;
+           then do;
+              put skip list('FAIL multiassign_array: check at line 29 failed');
+              stop;
+           end;
      end;
      /* array expression source */
      c(1) = 1; c(2) = 2; c(3) = 3;
@@ -34,20 +38,30 @@
      a, b = c + d;
      do i = 1 to 3;
         if a(i) ^= c(i) + d(i)
-           then fails = fails + 1;
+           then do;
+              put skip list('FAIL multiassign_array: check at line 37 failed');
+              stop;
+           end;
         if b(i) ^= c(i) + d(i)
-           then fails = fails + 1;
+           then do;
+              put skip list('FAIL multiassign_array: check at line 39 failed');
+              stop;
+           end;
      end;
      /* expression evaluates once per
         element, not once per target */
      a, b = c + next();
-     if calls ^= 3 then fails = fails + 1;
-     do i = 1 to 3;
-        if a(i) ^= b(i) then fails = fails + 1;
+     if calls ^= 3 then do;
+        put skip list('FAIL multiassign_array: expected 3, got', calls);
+        stop;
      end;
-     if fails = 0
-        then put skip list('PASS multiassign-array');
-        else put skip list('FAIL multiassign-array');
+     do i = 1 to 3;
+        if a(i) ^= b(i) then do;
+           put skip list('FAIL multiassign_array: check at line 46 failed');
+           stop;
+        end;
+     end;
+   put skip list('PASS multiassign-array');
   next: procedure returns(fixed bin(31));
      calls = calls + 1;
      return(calls);

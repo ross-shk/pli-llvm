@@ -10,49 +10,88 @@
     are served. Bounds are passed as parameters (the entry-time value the
     dynamic extent reads). */
  dyn_init_test: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
 
     check: procedure(n); /* a full matching itemlist with an iteration factor */
        declare n fixed bin(31);
        declare a(n) fixed bin(31) init((2)(7, 8));
-       if a(1) ^= 7 then fails = fails + 1;
-       if a(2) ^= 8 then fails = fails + 1;
-       if a(3) ^= 7 then fails = fails + 1;
-       if a(4) ^= 8 then fails = fails + 1;
+       if a(1) ^= 7 then do;
+          put skip list('FAIL dyn_init: expected 7, got', a(1));
+          stop;
+       end;
+       if a(2) ^= 8 then do;
+          put skip list('FAIL dyn_init: expected 8, got', a(2));
+          stop;
+       end;
+       if a(3) ^= 7 then do;
+          put skip list('FAIL dyn_init: expected 7, got', a(3));
+          stop;
+       end;
+       if a(4) ^= 8 then do;
+          put skip list('FAIL dyn_init: expected 8, got', a(4));
+          stop;
+       end;
     end check;
     call check(4);
 
     short: procedure(n); /* a list shorter than the extent: the supplied set only */
        declare n fixed bin(31);
        declare b(n) fixed bin(31) init(1, 2);
-       if b(1) ^= 1 then fails = fails + 1;
-       if b(2) ^= 2 then fails = fails + 1;
+       if b(1) ^= 1 then do;
+          put skip list('FAIL dyn_init: expected 1, got', b(1));
+          stop;
+       end;
+       if b(2) ^= 2 then do;
+          put skip list('FAIL dyn_init: expected 2, got', b(2));
+          stop;
+       end;
     end short;
     call short(3);
 
     multi: procedure(n); /* dynamic multi-axis fills flat row-major */
        declare n fixed bin(31);
        declare c(n, 3) fixed bin(31) init(10, 20, 30, 40, 50, 60);
-       if c(1,1) ^= 10 then fails = fails + 1;
-       if c(1,2) ^= 20 then fails = fails + 1;
-       if c(1,3) ^= 30 then fails = fails + 1;
-       if c(2,1) ^= 40 then fails = fails + 1;
-       if c(2,2) ^= 50 then fails = fails + 1;
-       if c(2,3) ^= 60 then fails = fails + 1;
+       if c(1,1) ^= 10 then do;
+          put skip list('FAIL dyn_init: expected 10, got', c(1,1));
+          stop;
+       end;
+       if c(1,2) ^= 20 then do;
+          put skip list('FAIL dyn_init: expected 20, got', c(1,2));
+          stop;
+       end;
+       if c(1,3) ^= 30 then do;
+          put skip list('FAIL dyn_init: expected 30, got', c(1,3));
+          stop;
+       end;
+       if c(2,1) ^= 40 then do;
+          put skip list('FAIL dyn_init: expected 40, got', c(2,1));
+          stop;
+       end;
+       if c(2,2) ^= 50 then do;
+          put skip list('FAIL dyn_init: expected 50, got', c(2,2));
+          stop;
+       end;
+       if c(2,3) ^= 60 then do;
+          put skip list('FAIL dyn_init: expected 60, got', c(2,3));
+          stop;
+       end;
     end multi;
     call multi(2);
 
     rerun: procedure(n); /* INITIAL runs on every activation (AUTOMATIC) */
        declare n fixed bin(31);
        declare d(n) fixed bin(31) init(4, 5);
-       if d(1) ^= 4 then fails = fails + 1;
-       if d(2) ^= 5 then fails = fails + 1;
+       if d(1) ^= 4 then do;
+          put skip list('FAIL dyn_init: expected 4, got', d(1));
+          stop;
+       end;
+       if d(2) ^= 5 then do;
+          put skip list('FAIL dyn_init: expected 5, got', d(2));
+          stop;
+       end;
        d(1) = 0;
     end rerun;
     call rerun(2);
     call rerun(2);
 
-    if fails = 0 then put skip list('PASS dyn_init');
-    else put skip list('FAIL dyn_init: fails =', fails);
+   put skip list('PASS dyn_init');
  end dyn_init_test;

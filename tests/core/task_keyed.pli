@@ -13,8 +13,6 @@
     declare evc event;
     declare evd event;
     declare released fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     released = 0;
     /* The third task ends late and completes evb. It is started first, so
        that evb is reset (a fresh EVENT is complete) before the waiter
@@ -29,12 +27,18 @@
     if released ^= 0 then
        do;
           put skip list('FAIL a task was released by the wrong event');
-          fails = fails + 1;
+          do;
+             put skip list('FAIL task_keyed: check at line 32 failed');
+             stop;
+          end;
        end;
     if event(evc) = 0 then
        do;
           put skip list('FAIL the early event never completed');
-          fails = fails + 1;
+          do;
+             put skip list('FAIL task_keyed: check at line 37 failed');
+             stop;
+          end;
        end;
     /* Now wait for the late task, which completes evb and releases the
        first task. */
@@ -43,10 +47,12 @@
     if released = 0 then
        do;
           put skip list('FAIL the waited event never released the waiter');
-          fails = fails + 1;
+          do;
+             put skip list('FAIL task_keyed: check at line 46 failed');
+             stop;
+          end;
        end;
-    if fails = 0 then
-       put skip list('PASS');
+   put skip list('PASS task_keyed');
     waiter: procedure;
        wait(evb);
        released = 1;

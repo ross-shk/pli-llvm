@@ -9,13 +9,15 @@
    - STATIC attribute causes LLVM internal error
    These cases are commented out. */
 static_link_edge: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* Recursive procedure without internal proc - WORKS */
     declare fact_result fixed bin(31);
     fact_result = factorial(5);
-    if fact_result ^= 120 then fails = fails + 1;
+    if fact_result ^= 120 then do;
+       put skip list('FAIL static_link_edge: expected 120, got',
+          fact_result);
+       stop;
+    end;
 
     /* Recursive procedure with internal helper accessing enclosing variable - COMPILER BUG */
     /* declare sum_result fixed bin(31); */
@@ -25,10 +27,18 @@ static_link_edge: procedure options(main);
     /* Mutually recursive procedures - WORKS */
     declare mut_result fixed bin(31);
     mut_result = even_check(6);
-    if mut_result ^= 1 then fails = fails + 1;  /* 6 is even */
+    if mut_result ^= 1 then do;
+       put skip list('FAIL static_link_edge: expected 1, got',
+          mut_result);
+       stop;
+    end;
 
     mut_result = even_check(7);
-    if mut_result ^= 0 then fails = fails + 1;  /* 7 is odd */
+    if mut_result ^= 0 then do;
+       put skip list('FAIL static_link_edge: expected 0, got',
+          mut_result);
+       stop;
+    end;
 
     /* Multiple internal procedures sharing same enclosing variable - WORKS */
     call multi_internal(3);
@@ -41,8 +51,7 @@ static_link_edge: procedure options(main);
     /* STATIC variable in recursive procedure - COMPILER BUG: LLVM internal error */
     /* call static_in_recursive(1); */
 
-    if fails = 0 then put skip list('PASS static_link_edge');
-    else put skip list('FAIL static_link_edge: fails =', fails);
+   put skip list('PASS static_link_edge');
 
 /* Simple recursive factorial - WORKS */
 factorial: proc(n) returns(fixed bin(31)) recursive options(bypass);

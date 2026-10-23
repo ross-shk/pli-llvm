@@ -1,11 +1,10 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Scaled FIXED BINARY(p,q): the stored integer holds the value scaled
-    by 2^q (ADR-006). A scale-2 variable assigned 5 stores 20; + and -
-    rescale to the larger scale, * sums the scales, FLOAT conversion
-    divides by 2^q, and list-directed output prints the point. This is a
-    conformance change (ADR-282): the old test pinned the unscaled
-    model.
+    by 2^q. A scale-2 variable assigned 5 stores 20; + and - rescale to
+    the larger scale, * sums the scales, FLOAT conversion divides by
+    2^q, and list-directed output prints the point. This is a conformance
+    change (ADR-284): the old test pinned the unscaled model.
     TR 25.084 rules (16),(17). */
  scaled: procedure options(main);
     declare a fixed bin(15,2);
@@ -20,65 +19,63 @@
     declare iraw fixed bin(15,0) defined i;
     declare v fixed bin(15,2) value(2.5);
     declare f float decimal(6);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* A scale-2 target stores value*4: 5 -> 20. */
     a = 5;
     if araw ^= 20 then do;
-       fails = fails + 1;
-       put skip list('FAIL a=5 raw', araw);
+       put skip list('FAIL a=5: expected 20, got', araw);
+       stop;
     end;
     f = a;
     if abs(f - 5.0) > 1e-9 then do;
-       fails = fails + 1;
-       put skip list('FAIL a=5 float', f);
+       put skip list('FAIL a=5 float: expected 5, got', f);
+       stop;
     end;
 
     /* A decimal literal keeps its fraction in the binary scale. */
     a = 2.5;
     if araw ^= 10 then do;
-       fails = fails + 1;
-       put skip list('FAIL a=2.5 raw', araw);
+       put skip list('FAIL a=2.5: expected 10, got', araw);
+       stop;
     end;
     f = a;
     if abs(f - 2.5) > 1e-9 then do;
-       fails = fails + 1;
-       put skip list('FAIL a=2.5 float', f);
+       put skip list('FAIL a=2.5 float: expected 2.5, got', f);
+       stop;
     end;
 
     /* A negative literal is stored and read back with its sign. */
     a = -2.5;
     if araw ^= -10 then do;
-       fails = fails + 1;
-       put skip list('FAIL a=-2.5 raw', araw);
+       put skip list('FAIL a=-2.5: expected -10, got', araw);
+       stop;
     end;
     f = a;
     if abs(f + 2.5) > 1e-9 then do;
-       fails = fails + 1;
-       put skip list('FAIL a=-2.5 float', f);
+       put skip list('FAIL a=-2.5 float: expected -2.5, got', f);
+       stop;
     end;
 
     /* FLOAT -> FIXED multiplies by 2^q; FIXED -> FLOAT divides. */
     a = 1.5e0;
     if araw ^= 6 then do;
-       fails = fails + 1;
-       put skip list('FAIL a=1.5e0 raw', araw);
+       put skip list('FAIL a=1.5e0: expected 6, got', araw);
+       stop;
     end;
 
     /* Mixed scales: + and - rescale to the larger scale. */
     b = 1.0e0;
     p = a + b;
     if praw ^= 10 then do;
-       fails = fails + 1;
-       put skip list('FAIL a+b raw', praw);
+       put skip list('FAIL a+b: expected 10, got', praw);
+       stop;
     end;
     d = 2;
     p = a - d;
     if praw ^= -2 then do;
-       fails = fails + 1;
-       put skip list('FAIL a-d raw', praw);
+       put skip list('FAIL a-d: expected -2, got', praw);
+       stop;
     end;
 
     /* Multiplication: the product scale is the sum of the scales. */
@@ -86,51 +83,51 @@
     b = 2.5;
     c = a * b;
     if craw ^= 60 then do;
-       fails = fails + 1;
-       put skip list('FAIL a*b raw', craw);
+       put skip list('FAIL a*b: expected 60, got', craw);
+       stop;
     end;
     p = a * b;
     if praw ^= 15 then do;
-       fails = fails + 1;
-       put skip list('FAIL product raw', praw);
+       put skip list('FAIL product: expected 15, got', praw);
+       stop;
     end;
     f = c;
     if abs(f - 3.75) > 1e-9 then do;
-       fails = fails + 1;
-       put skip list('FAIL product float', f);
+       put skip list('FAIL product float: expected 3.75, got', f);
+       stop;
     end;
 
     /* Comparison rescales across scales. */
     a = 1.5e0;
     d = 1;
     if a <= d then do;
-       fails = fails + 1;
-       put skip list('FAIL 1.5 <= 1');
+       put skip list('FAIL 1.5 <= 1 holds');
+       stop;
     end;
     if a ^= 1.5e0 then do;
-       fails = fails + 1;
-       put skip list('FAIL 1.5 = 1.5');
+       put skip list('FAIL 1.5 = 1.5 fails');
+       stop;
     end;
     d = 2;
     if a >= d then do;
-       fails = fails + 1;
-       put skip list('FAIL 1.5 >= 2');
+       put skip list('FAIL 1.5 >= 2 holds');
+       stop;
     end;
 
     /* INITIAL and VALUE constants use the same scaling. */
     if iraw ^= 20 then do;
-       fails = fails + 1;
-       put skip list('FAIL initial raw', iraw);
+       put skip list('FAIL initial: expected 20, got', iraw);
+       stop;
     end;
     f = i;
     if abs(f - 5.0) > 1e-9 then do;
-       fails = fails + 1;
-       put skip list('FAIL initial float', f);
+       put skip list('FAIL initial float: expected 5, got', f);
+       stop;
     end;
     f = v;
     if abs(f - 2.5) > 1e-9 then do;
-       fails = fails + 1;
-       put skip list('FAIL value float', f);
+       put skip list('FAIL value float: expected 2.5, got', f);
+       stop;
     end;
 
     /* List-directed output prints the point. */
@@ -139,8 +136,5 @@
     p = a * b;
     put skip list('product p =', p);
 
-    if fails = 0 then
-       put skip list('PASS');
-    else
-       put skip list('FAILED checks:', fails);
+    put skip list('PASS scaled');
  end scaled;

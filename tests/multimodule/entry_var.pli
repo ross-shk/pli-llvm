@@ -10,19 +10,28 @@
        variable) returns (fixed bin(31)) external;
    dcl apply2 entry (entry (fixed bin(31)) returns (fixed bin(31))
        variable, fixed bin(31)) returns (fixed bin(31)) external;
-   dcl fails  fixed bin(31) init(0);
    dcl on_get entry (fixed bin(31)) returns (fixed bin(31)) variable;
 
    on_get = add1;
    /* pass the entry variable ... */
-   if dispatch(on_get) ^= 42 then fails = fails + 1;
+   if dispatch(on_get) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got',
+         dispatch(on_get));
+      stop;
+   end;
    /* ... and a bare procedure name */
-   if dispatch(add1) ^= 42 then fails = fails + 1;
+   if dispatch(add1) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got', dispatch(add1));
+      stop;
+   end;
    /* an extra by-reference scalar alongside the callback */
-   if apply2(on_get, 10) ^= 11 then fails = fails + 1;
+   if apply2(on_get, 10) ^= 11 then do;
+      put skip list('FAIL entry_var: expected 11, got',
+         apply2(on_get, 10));
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS entry_var');
-   else put skip list('FAIL entry_var: fails =', fails);
+   put skip list('PASS entry_var');
  end entry_var;
 
  /* Top-level so the callback needs no static link. */

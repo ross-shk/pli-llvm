@@ -15,19 +15,17 @@
     declare in2 char(2) init('aa');
     declare a char(6);
     declare b char(6);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* the constant table and the variable scan agree */
     a = translate(s, 'XYQ', 'abc');
     b = translate(s, out3, in3);
     if a ^= b then do;
-       fails = fails + 1;
        put skip list('FAIL table', a, b);
+       stop;
     end;
     if a ^= 'XYQxyz' then do;
-       fails = fails + 1;
        put skip list('FAIL exact', a);
+       stop;
     end;
 
     /* `out` shorter than `in`: a match past the end of `out` is a
@@ -35,32 +33,32 @@
     a = translate(s, 'XY', 'abc');
     b = translate(s, out2, in3);
     if a ^= b then do;
-       fails = fails + 1;
        put skip list('FAIL blank', a, b);
+       stop;
     end;
     if a ^= 'XY xyz' then do;
-       fails = fails + 1;
        put skip list('FAIL blank exact', a);
+       stop;
     end;
 
     /* one character mapped, everything else passes through */
     a = translate('hello', 'H', 'h');
     b = translate('hello', out1, in1);
     if a ^= b then do;
-       fails = fails + 1;
        put skip list('FAIL single', a, b);
+       stop;
     end;
 
     /* the first occurrence in `in` decides, as the scan does */
     a = translate('ab', 'PQ', 'aa');
     b = translate('ab', 'PQ', in2);
     if a ^= b then do;
-       fails = fails + 1;
        put skip list('FAIL first', a, b);
+       stop;
     end;
     if a ^= 'Pb' then do;
-       fails = fails + 1;
        put skip list('FAIL first exact', a);
+       stop;
     end;
 
     /* a VARYING source is translated the same way */
@@ -68,17 +66,16 @@
     v = 'abc';
     a = translate(v, 'XY', 'abc');
     if a ^= 'XY ' then do;
-       fails = fails + 1;
        put skip list('FAIL varying', a);
+       stop;
     end;
 
     /* a zero-length source is a zero-length result */
     a = translate('', 'XY', 'abc');
     if a ^= '' then do;
-       fails = fails + 1;
        put skip list('FAIL empty', a);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS translate_const');
-    else put skip list('FAIL translate_const: fails =', fails);
+   put skip list('PASS translate_const');
  end translate_const;

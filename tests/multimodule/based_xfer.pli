@@ -3,7 +3,6 @@
 /* Rule (25): BASED/POINTER cross-module scenarios.
    Build: two -c units linked together. */
 basedxfer: procedure options(main);
-  dcl fails fixed bin(31) init(0);
   dcl p     pointer;
   dcl p2    pointer;
   dcl val   fixed bin(31);
@@ -18,11 +17,17 @@ basedxfer: procedure options(main);
   /* Test 1: create in lib, use in main, free in lib */
   p = create_rec();
   val = read_rec(p);
-  if val ^= 123 then fails = fails + 1;
+  if val ^= 123 then do;
+     put skip list('FAIL based_xfer: expected 123, got', val);
+     stop;
+  end;
 
   call write_rec(p, 456);
   val = read_rec(p);
-  if val ^= 456 then fails = fails + 1;
+  if val ^= 456 then do;
+     put skip list('FAIL based_xfer: expected 456, got', val);
+     stop;
+  end;
 
   call free_rec(p);
 
@@ -30,15 +35,27 @@ basedxfer: procedure options(main);
   call create_two(p, p2);
   val = read_rec(p);
   val2 = read_rec(p2);
-  if val ^= 100 then fails = fails + 1;
-  if val2 ^= 200 then fails = fails + 1;
+  if val ^= 100 then do;
+     put skip list('FAIL based_xfer: expected 100, got', val);
+     stop;
+  end;
+  if val2 ^= 200 then do;
+     put skip list('FAIL based_xfer: expected 200, got', val2);
+     stop;
+  end;
 
   call write_rec(p, 111);
   call write_rec(p2, 222);
   val = read_rec(p);
   val2 = read_rec(p2);
-  if val ^= 111 then fails = fails + 1;
-  if val2 ^= 222 then fails = fails + 1;
+  if val ^= 111 then do;
+     put skip list('FAIL based_xfer: expected 111, got', val);
+     stop;
+  end;
+  if val2 ^= 222 then do;
+     put skip list('FAIL based_xfer: expected 222, got', val2);
+     stop;
+  end;
 
   call free_rec(p);
   call free_rec(p2);
@@ -50,8 +67,10 @@ basedxfer: procedure options(main);
   local_p = addr(local_rec);
   call write_rec(local_p, 777);
   val = read_rec(local_p);
-  if val ^= 777 then fails = fails + 1;
+  if val ^= 777 then do;
+     put skip list('FAIL based_xfer: expected 777, got', val);
+     stop;
+  end;
 
-  if fails = 0 then put skip list('PASS based_xfer');
-  else put skip list('FAIL based_xfer: fails=', fails);
+   put skip list('PASS based_xfer');
 end basedxfer;

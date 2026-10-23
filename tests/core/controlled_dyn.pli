@@ -6,13 +6,11 @@
     the same. Generations are LIFO with live bounds from the top
     generation size. */
  controlled_dyn_test: procedure options(main);
-   dcl fails fixed bin(31);
    dcl n fixed bin(31);
    dcl i fixed bin(31);
    dcl s fixed bin(31);
    dcl fds fixed bin(31) controlled;
    dcl g(*) fixed bin(31) controlled;
-   fails = 0;
    /* scalar CONTROLLED + ALLOCATE (n): wishlist #1 idiom */
    n = 4;
    allocate fds (n);
@@ -20,25 +18,59 @@
    fds(2) = 22;
    fds(3) = 33;
    fds(4) = 44;
-   if fds(1) ^= 11 then fails = fails + 1;
-   if fds(4) ^= 44 then fails = fails + 1;
-   if hbound(fds) ^= 4 then fails = fails + 1;
-   if dim(fds) ^= 4 then fails = fails + 1;
-   if lbound(fds) ^= 1 then fails = fails + 1;
+   if fds(1) ^= 11 then do;
+      put skip list('FAIL controlled_dyn: expected 11, got', fds(1));
+      stop;
+   end;
+   if fds(4) ^= 44 then do;
+      put skip list('FAIL controlled_dyn: expected 44, got', fds(4));
+      stop;
+   end;
+   if hbound(fds) ^= 4 then do;
+      put skip list('FAIL controlled_dyn: expected 4, got',
+         hbound(fds));
+      stop;
+   end;
+   if dim(fds) ^= 4 then do;
+      put skip list('FAIL controlled_dyn: expected 4, got', dim(fds));
+      stop;
+   end;
+   if lbound(fds) ^= 1 then do;
+      put skip list('FAIL controlled_dyn: expected 1, got',
+         lbound(fds));
+      stop;
+   end;
    s = 0;
    do i = 1 to n;
      s = s + fds(i);
    end;
-   if s ^= 110 then fails = fails + 1;
+   if s ^= 110 then do;
+      put skip list('FAIL controlled_dyn: expected 110, got', s);
+      stop;
+   end;
    /* LIFO: push a smaller generation, pop back to n=4 */
    allocate fds (2);
-   if hbound(fds) ^= 2 then fails = fails + 1;
+   if hbound(fds) ^= 2 then do;
+      put skip list('FAIL controlled_dyn: expected 2, got',
+         hbound(fds));
+      stop;
+   end;
    fds(1) = 7;
    fds(2) = 8;
-   if fds(2) ^= 8 then fails = fails + 1;
+   if fds(2) ^= 8 then do;
+      put skip list('FAIL controlled_dyn: expected 8, got', fds(2));
+      stop;
+   end;
    free fds;
-   if hbound(fds) ^= 4 then fails = fails + 1;
-   if fds(3) ^= 33 then fails = fails + 1;
+   if hbound(fds) ^= 4 then do;
+      put skip list('FAIL controlled_dyn: expected 4, got',
+         hbound(fds));
+      stop;
+   end;
+   if fds(3) ^= 33 then do;
+      put skip list('FAIL controlled_dyn: expected 33, got', fds(3));
+      stop;
+   end;
    free fds;
    /* (*) CONTROLLED array + ALLOCATE (n): same storage, array decl */
    n = 3;
@@ -46,9 +78,14 @@
    do i = 1 to n;
      g(i) = i * 5;
    end;
-   if g(3) ^= 15 then fails = fails + 1;
-   if hbound(g) ^= 3 then fails = fails + 1;
+   if g(3) ^= 15 then do;
+      put skip list('FAIL controlled_dyn: expected 15, got', g(3));
+      stop;
+   end;
+   if hbound(g) ^= 3 then do;
+      put skip list('FAIL controlled_dyn: expected 3, got', hbound(g));
+      stop;
+   end;
    free g;
-   if fails = 0 then put skip list('PASS controlled_dyn');
-   else put skip list('FAIL controlled_dyn: fails =', fails);
+   put skip list('PASS controlled_dyn');
  end controlled_dyn_test;

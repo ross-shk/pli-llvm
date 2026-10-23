@@ -6,34 +6,66 @@
    position 1, match in middle, no match returns 0, match at last
    position. Exercises pli_index / emitIndex dispatch. */
 idx: PROCEDURE OPTIONS(MAIN);
-  DECLARE fails FIXED BIN(31);
-  fails = 0;
 
   /* Empty needle → returns 1 (per pli_index: blen <= 0 → return 1) */
-  IF INDEX('hello', '') ^= 1 THEN fails = fails + 1;
+  if INDEX('hello', '') ^= 1 then do;
+     put skip list('FAIL index: expected 1, got', INDEX('hello', ''));
+     stop;
+  end;
 
   /* Needle longer than haystack → returns 0 */
-  IF INDEX('hi', 'hello') ^= 0 THEN fails = fails + 1;
+  if INDEX('hi', 'hello') ^= 0 then do;
+     put skip list('FAIL index: expected 0, got', INDEX('hi', 'hello'));
+     stop;
+  end;
 
   /* Match at position 1 → returns 1 */
-  IF INDEX('hello', 'h') ^= 1 THEN fails = fails + 1;
+  if INDEX('hello', 'h') ^= 1 then do;
+     put skip list('FAIL index: expected 1, got', INDEX('hello', 'h'));
+     stop;
+  end;
 
   /* Match in middle → correct 1-based position */
-  IF INDEX('hello', 'll') ^= 3 THEN fails = fails + 1;
-  IF INDEX('hello world', 'wor') ^= 7 THEN fails = fails + 1;
+  if INDEX('hello', 'll') ^= 3 then do;
+     put skip list('FAIL index: expected 3, got', INDEX('hello', 'll'));
+     stop;
+  end;
+  if INDEX('hello world', 'wor') ^= 7 then do;
+     put skip list('FAIL index: expected 7, got',
+        INDEX('hello world', 'wor'));
+     stop;
+  end;
 
   /* No match → returns 0 */
-  IF INDEX('hello', 'x') ^= 0 THEN fails = fails + 1;
-  IF INDEX('hello', 'hez') ^= 0 THEN fails = fails + 1;
+  if INDEX('hello', 'x') ^= 0 then do;
+     put skip list('FAIL index: expected 0, got', INDEX('hello', 'x'));
+     stop;
+  end;
+  if INDEX('hello', 'hez') ^= 0 then do;
+     put skip list('FAIL index: expected 0, got',
+        INDEX('hello', 'hez'));
+     stop;
+  end;
 
   /* Match at last position */
-  IF INDEX('hello', 'lo') ^= 4 THEN fails = fails + 1;
-  IF INDEX('abc', 'c') ^= 3 THEN fails = fails + 1;
+  if INDEX('hello', 'lo') ^= 4 then do;
+     put skip list('FAIL index: expected 4, got', INDEX('hello', 'lo'));
+     stop;
+  end;
+  if INDEX('abc', 'c') ^= 3 then do;
+     put skip list('FAIL index: expected 3, got', INDEX('abc', 'c'));
+     stop;
+  end;
 
   /* Case sensitivity: INDEX is case-sensitive */
-  IF INDEX('Hello', 'h') ^= 0 THEN fails = fails + 1;
-  IF INDEX('Hello', 'H') ^= 1 THEN fails = fails + 1;
+  if INDEX('Hello', 'h') ^= 0 then do;
+     put skip list('FAIL index: expected 0, got', INDEX('Hello', 'h'));
+     stop;
+  end;
+  if INDEX('Hello', 'H') ^= 1 then do;
+     put skip list('FAIL index: expected 1, got', INDEX('Hello', 'H'));
+     stop;
+  end;
 
-  IF fails = 0 THEN PUT SKIP LIST('PASS index');
-  ELSE PUT SKIP LIST('FAIL index:', fails);
+   put skip list('PASS index');
 END idx;

@@ -1,36 +1,33 @@
 picture_test: procedure options(main);
-   declare fails fixed bin(31);
    declare buf char(40);
    declare p fixed dec(5,2);
    declare n fixed dec(7,2);
    declare z fixed dec(7,2);
    declare out char(20);
-   fails = 0;
 
    p = 123.45;
    put string(buf) edit(p) (P('ZZ9.99'));
    out = substr(buf, 1, 6);
    if out ^= '123.45' then do;
-      fails = fails + 1;
       put skip list('FAIL pic+:', out);
+      stop;
    end;
 
    n = -6.78;
    put string(buf) edit(n) (P('SZZ9.99'));
    out = substr(buf, 1, 7);
    if out ^= '-  6.78' then do;
-      fails = fails + 1;
       put skip list('FAIL picneg:', out);
+      stop;
    end;
 
    z = 0.0;
    put string(buf) edit(z) (P('ZZ9.99'));
    out = substr(buf, 1, 6);
    if out ^= '  0.00' then do;
-      fails = fails + 1;
       put skip list('FAIL pic0:', out);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS picture');
-   else put skip list('FAIL picture: fails =', fails);
+   put skip list('PASS picture');
 end picture_test;

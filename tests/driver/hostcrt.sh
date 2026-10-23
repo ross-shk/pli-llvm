@@ -4,8 +4,8 @@
 # tests/driver/hostcrt.sh — host C-runtime independence (ADR-225): pli links
 # against the host CRT from probed filesystem recipes (src/hostcrt.cpp),
 # never by asking clang. This test hides every clang from PATH and still
-# compiles, links, and runs. (macOS keeps xcrun for the SDK path — Apple
-# tooling, not clang; vendored SDK stubs are Phase 4.)
+# compiles, links, and runs. (macOS probes the CLT/Xcode SDK path directly —
+# ADR-280 — so no Apple tool is invoked either.)
 set -u
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) EXE=.exe ;;

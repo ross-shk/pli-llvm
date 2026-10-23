@@ -9,30 +9,40 @@
  star_fwd_test: procedure options(main);
     declare a(6) fixed bin(31);
     declare i fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     do i = 1 to 6;
        a(i) = i * 2;
     end;
     call outer(a);
-    if a(1) ^= 102 then fails = fails + 1;
-    if fails = 0 then
-       put skip list('PASS star_forward');
-    else put skip list('FAIL star_forward:',
-       fails);
+    if a(1) ^= 102 then do;
+       put skip list('FAIL star_forward: expected 102, got', a(1));
+       stop;
+    end;
+   put skip list('PASS star_forward');
 
  outer: procedure(x);
     declare x(*) fixed bin(31);
-    if hbound(x) ^= 6 then fails = fails + 1;
+    if hbound(x) ^= 6 then do;
+       put skip list('FAIL star_forward: expected 6, got', hbound(x));
+       stop;
+    end;
     call inner(x);
-    if dim(x) ^= 6 then fails = fails + 1;
+    if dim(x) ^= 6 then do;
+       put skip list('FAIL star_forward: expected 6, got', dim(x));
+       stop;
+    end;
  end outer;
 
  inner: procedure(y);
     declare y(*) fixed bin(31);
     declare i fixed bin(31);
-    if hbound(y) ^= 6 then fails = fails + 1;
-    if sum(y) ^= 42 then fails = fails + 1;
+    if hbound(y) ^= 6 then do;
+       put skip list('FAIL star_forward: expected 6, got', hbound(y));
+       stop;
+    end;
+    if sum(y) ^= 42 then do;
+       put skip list('FAIL star_forward: expected 42, got', sum(y));
+       stop;
+    end;
     do i = 1 to hbound(y);
        y(i) = y(i) + 100;
     end;

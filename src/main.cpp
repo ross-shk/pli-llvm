@@ -5,7 +5,6 @@
 // Pipeline: source -> preprocessor -> lexer -> parser -> sema -> LLVM IR ->
 // in-process object (integrated assembler) -> in-process lld link with the
 // embedded runtime. No subprocesses (ADR-225). See docs/ARCHITECTURE.md.
-#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -13,14 +12,6 @@
 #include <set>
 #include <sstream>
 #include <string>
-#ifdef _WIN32
-#include <process.h>
-#define getpid _getpid
-#define popen _popen
-#define pclose _pclose
-#else
-#include <unistd.h>
-#endif
 #include <vector>
 
 #include "diag.h"
@@ -1180,9 +1171,9 @@ int main(int argc, char** argv) {
         }
         if (llt.getObjectFormat() == llvm::Triple::MachO) {
           // Vendored SDK stubs (ADR-226/227): exe-relative <exeDir>/sdk is
-          // a dev override; the embedded stubs are next (single-file
-          // release); otherwise the Xcode CLT provides the syslibroot via
-          // xcrun (Apple tooling, not clang).
+          // a dev override; the embedded stubs are next (single-file release);
+          // otherwise fall back to the host Xcode CLT / Xcode SDK, probed
+          // directly via findMacOSSdk() — no subprocess (ADR-225).
           std::string sdkPath;
           bool sdkOverride = false;
           {
@@ -1204,14 +1195,12 @@ int main(int argc, char** argv) {
                         << (sdkOverride ? "exe-relative override" : "embedded") << ": " << sdkPath
                         << ")\n";
           } else {
-            if (FILE* f = popen("xcrun --show-sdk-path 2>/dev/null", "r")) {
-              char buf[1024];
-              while (fgets(buf, sizeof buf, f))
-                sdkPath += buf;
-              pclose(f);
-            }
-            while (!sdkPath.empty() && (sdkPath.back() == '\n' || sdkPath.back() == '\r'))
-              sdkPath.pop_back();
+            sdkPath = pli::findMacOSSdk();
+            if (!sdkPath.empty()) {
+              if (verbose)
+                std::cerr << "pli: using host macOS SDK: " << sdkPath << "\n";
+            } else if (verbose)
+              std::cerr << "pli: no vendored or host macOS SDK found\n";
           }
           argStore.push_back("-arch");
           argStore.push_back(std::string(llt.getArchName()));
@@ -1367,12 +1356,14 @@ int main(int argc, char** argv) {
           argStore.push_back(md + "/fltused.o");
           argStore.push_back(md + "/chkstk.o");
           argStore.push_back("-L" + md);
+          // libws2_32.a lets C-interop networking link without a manual
+          // /DEFAULTLIB:ws2_32 (ADR-281); unused imports pull no DLL.
           // libkernel32.a repeats: one-pass GNU linking needs it again for
           // symbols referenced by the later import libs.
           for (const char* lib :
                {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a", "libucrt.a",
                 "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a",
-                "libuser32.a", "libkernel32.a"})
+                "libuser32.a", "libws2_32.a", "libkernel32.a"})
             argStore.push_back(std::string("-l:") + lib);
           argStore.push_back("-o");
           argStore.push_back(output);
@@ -1414,8 +1405,60 @@ int main(int argc, char** argv) {
         }
         // ADR-227: the vendored-mingw link runs the MinGW driver (GNU argv);
         // every other link runs the object-format driver as before.
-        const bool linkOk = useMingw ? pli::linkMinGWExecutable(argv, linkErr)
-                                     : pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr);
+        const bool isMachO = llt.getObjectFormat() == llvm::Triple::MachO;
+        bool linkOk = false;
+        // MachO first pass stays on the vendored stub, but its output is
+        // captured: ADR-280 may retry with the host SDK, and a successful
+        // retry must not print the first pass's undefined-symbol noise.
+        std::string firstOut, firstErr;
+        bool canRetry = true;
+        if (isMachO) {
+          llvm::raw_string_ostream out(firstOut), err(firstErr);
+          linkOk =
+              pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr, &out, &err, &canRetry);
+          out.flush();
+          err.flush();
+        } else {
+          linkOk = useMingw ? pli::linkMinGWExecutable(argv, linkErr)
+                            : pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr);
+        }
+        // ADR-280: the vendored stub is a curated subset, so a C-interop
+        // program can reference symbols it omits (sockets, __memcpy_chk).
+        // Retry once with the real host SDK's libSystem.B.tbd as an explicit
+        // input; the vendored -syslibroot still supplies the other stubs.
+        bool retried = false;
+        if (!linkOk && isMachO && canRetry) {
+          const std::string sdk = pli::findMacOSSdk();
+          const std::string tbd = sdk.empty() ? "" : sdk + "/usr/lib/libSystem.B.tbd";
+          std::error_code ec;
+          if (!tbd.empty() && fs::is_regular_file(tbd, ec)) {
+            retried = true;
+            if (verbose)
+              std::cerr << "pli: retrying MachO link with host SDK libSystem.B.tbd\n";
+            // A positional input appended after `-o <output>` is fine: lld
+            // takes it as another dylib, not as the output path.
+            std::vector<std::string> retryStore = argStore;
+            retryStore.push_back(tbd);
+            std::vector<const char*> retryArgv;
+            for (const std::string& a : retryStore)
+              retryArgv.push_back(a.c_str());
+            std::string retryOut, retryErr;
+            llvm::raw_string_ostream out(retryOut), err(retryErr);
+            linkOk =
+                pli::linkExecutable(retryArgv, (int)llt.getObjectFormat(), linkErr, &out, &err);
+            out.flush();
+            err.flush();
+            // The retry ran the same inputs, so its diagnostics supersede
+            // the first pass's; never print both.
+            if (!linkOk)
+              std::cerr << retryOut << retryErr;
+          }
+        }
+        // A first-pass success may still carry warnings: replay them. A
+        // failed pass is represented by the retry's own diagnostics, or by
+        // this replay when no retry was possible.
+        if (!retried)
+          std::cerr << firstOut << firstErr;
         if (linkOk) {
           for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
             std::error_code ec;

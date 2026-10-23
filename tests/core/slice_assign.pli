@@ -15,7 +15,6 @@
       declare 1 s,
              2 q(2, 3) char(1);
       declare i fixed bin(31), j fixed bin(31);
-      declare k fixed bin(31), fails fixed bin(31);
 
       do i = 1 to 3;
          do j = 1 to 4;
@@ -30,34 +29,49 @@
          c(i) = 200 + i;
       end;
 
-      fails = 0;
 
       /* row slice to row slice: a(3, *) = a(1, *) -> {11,12,13,14} */
       a(3, *) = a(1, *);
       do j = 1 to 4;
-         if a(3, j) ^= 10 + j then fails = fails + 1;
+         if a(3, j) ^= 10 + j then do;
+            put skip list('FAIL slice_assign: check at line 38 failed');
+            stop;
+         end;
       end;
 
       /* column slice to column slice: b(*, 4) = b(*, 2) */
       b(*, 4) = b(*, 2);
       do i = 1 to 3;
-         if b(i, 4) ^= 10 * i + 2 then fails = fails + 1;
+         if b(i, 4) ^= 10 * i + 2 then do;
+            put skip list('FAIL slice_assign: check at line 44 failed');
+            stop;
+         end;
       end;
 
       /* whole array into a row slice, then a scalar broadcast */
       m(2, *) = r;
       do j = 1 to 4;
-         if m(2, j) ^= 100 + j then fails = fails + 1;
+         if m(2, j) ^= 100 + j then do;
+            put skip list('FAIL slice_assign: check at line 50 failed');
+            stop;
+         end;
       end;
       m(3, *) = 0;
       do j = 1 to 4;
-         if m(3, j) ^= 0 then fails = fails + 1;
+         if m(3, j) ^= 0 then do;
+            put skip list('FAIL slice_assign: expected 0, got',
+               m(3, j));
+            stop;
+         end;
       end;
 
       /* whole array into a column slice: m(*, 1) = c */
       m(*, 1) = c;
       do i = 1 to 3;
-         if m(i, 1) ^= 200 + i then fails = fails + 1;
+         if m(i, 1) ^= 200 + i then do;
+            put skip list('FAIL slice_assign: check at line 60 failed');
+            stop;
+         end;
       end;
 
       /* 3-D sub-block with a runtime first axis */
@@ -72,7 +86,10 @@
       d(i, *, *) = d(1, *, *);
       do j = 1 to 3;
          do k = 1 to 4;
-            if d(2, j, k) ^= 100 + 10 * j + k then fails = fails + 1;
+            if d(2, j, k) ^= 100 + 10 * j + k then do;
+               put skip list('FAIL slice_assign: check at line 75 failed');
+               stop;
+            end;
          end;
       end;
 
@@ -83,9 +100,12 @@
       end;
       s.q(2, *) = s.q(1, *);
       do j = 1 to 3;
-         if s.q(2, j) ^= 'x' then fails = fails + 1;
+         if s.q(2, j) ^= 'x' then do;
+            put skip list('FAIL slice_assign: expected x, got',
+               s.q(2, j));
+            stop;
+         end;
       end;
 
-      if fails = 0 then put skip list('PASS slice_assign');
-      else put skip list('FAIL slice_assign: fails =', fails);
+   put skip list('PASS slice_assign');
    end slice_assign_test;

@@ -3,8 +3,6 @@
 /* Record I/O edge cases (rules 112,113): Sequential RECORD I/O.
    WRITE FROM, READ INTO with fixed-size binary records. */
 record_io_edge: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
 /* Declare file variable */
     declare rec_file file;
@@ -42,16 +40,29 @@ record_io_edge: procedure options(main);
    declare r4 bit(1);
 
    read file(rec_file) into(r1);
-   if r1 ^= 42 then fails = fails + 1;
+   if r1 ^= 42 then do;
+      put skip list('FAIL record_io_edge: expected 42, got', r1);
+      stop;
+   end;
 
    read file(rec_file) into(r2);
-   if abs(r2 - 3.14159) > 0.001 then fails = fails + 1;
+   if abs(r2 - 3.14159) > 0.001 then do;
+      put skip list('FAIL record_io_edge: check at line 48 failed');
+      stop;
+   end;
 
    read file(rec_file) into(r3);
-   if r3 ^= 'hello record' then fails = fails + 1;
+   if r3 ^= 'hello record' then do;
+      put skip list('FAIL record_io_edge: expected hello record, got',
+         r3);
+      stop;
+   end;
 
    read file(rec_file) into(r4);
-   if r4 ^= '1'b then fails = fails + 1;
+   if r4 ^= '1'b then do;
+      put skip list('FAIL record_io_edge: expected 1b, got', r4);
+      stop;
+   end;
 
    /* Short read raises ERROR */
    /* read file(rec_file) into(r1); -- would raise ERROR */
@@ -61,6 +72,5 @@ record_io_edge: procedure options(main);
    /* Clean up */
    /* system('rm test_rec.dat'); */
 
-   if fails = 0 then put skip list('PASS record_io_edge');
-   else put skip list('FAIL record_io_edge: fails =', fails);
+   put skip list('PASS record_io_edge');
 end record_io_edge;

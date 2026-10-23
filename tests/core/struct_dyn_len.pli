@@ -6,14 +6,11 @@
      live member bounds (including a dynamic lower bound), and the array
      reduction built-ins SUM/PROD walk the runtime-sized member buffer. */
   struct_dyn_len_test: procedure options(main);
-     declare fails fixed bin(31);
-     fails = 0;
      call check(5);
      call check(1);
      call check(0);
      call check_lb(5);
-     if fails = 0 then put skip list('PASS struct_dyn_len');
-     else put skip list('FAIL struct_dyn_len: fails =', fails);
+   put skip list('PASS struct_dyn_len');
 
      check: procedure(n);
         declare n fixed bin(31);
@@ -23,16 +20,16 @@
         declare t fixed bin(31);
         /* the live member extent drives the attribute built-ins */
         if lbound(s.v) ^= 1 then do;
-           fails = fails + 1;
            put skip list('FAIL lbound', lbound(s.v));
+           stop;
         end;
         if hbound(s.v) ^= n then do;
-           fails = fails + 1;
            put skip list('FAIL hbound', hbound(s.v));
+           stop;
         end;
         if dim(s.v) ^= n then do;
-           fails = fails + 1;
            put skip list('FAIL dim', dim(s.v));
+           stop;
         end;
         /* fill the member buffer and reduce over its full extent */
         do i = 1 to n;
@@ -40,8 +37,8 @@
         end;
         t = sum(s.v);
         if t ^= (n * (n + 1)) / 2 then do;
-           fails = fails + 1;
            put skip list('FAIL sum', t, 'want', (n * (n + 1)) / 2);
+           stop;
         end;
      end check;
 
@@ -51,16 +48,16 @@
                2 v(2:n+1) fixed bin(31);
         /* a dynamic lower bound member reports its live bounds */
         if lbound(s.v) ^= 2 then do;
-           fails = fails + 1;
            put skip list('FAIL lb lbound', lbound(s.v));
+           stop;
         end;
         if hbound(s.v) ^= n + 1 then do;
-           fails = fails + 1;
            put skip list('FAIL lb hbound', hbound(s.v));
+           stop;
         end;
         if dim(s.v) ^= n then do;
-           fails = fails + 1;
            put skip list('FAIL lb dim', dim(s.v));
+           stop;
         end;
      end check_lb;
   end struct_dyn_len_test;

@@ -1,11 +1,9 @@
 reserved_test: procedure options(main);
    dcl x reserved fixed bin(31);
-   dcl fails fixed bin(31);
-   fails = 0;
    x = 42;
    if x = 42 then put skip list('PASS reserved');
    else do;
-      fails = 1;
       put skip list('FAIL reserved: x =', x);
+      stop;
    end;
 end reserved_test;

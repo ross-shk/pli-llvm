@@ -12,9 +12,7 @@
          2 v fixed bin(31);
    dcl 1 other based(pb),
          2 v fixed bin(31);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    allocate slot in(region) set(pa);
    slot.v = 11;
@@ -22,22 +20,22 @@
    allocate other in(region) set(pb);
    other.v = 22;
    if slot.v ^= 11 then do;
-      fails = fails + 1;
       put skip list('FAIL: a =', slot.v);
+      stop;
    end;
    if other.v ^= 22 then do;
-      fails = fails + 1;
       put skip list('FAIL: b =', other.v);
+      stop;
    end;
 
    free slot in(region);
    pa = null();
 
    if other.v ^= 22 then do;
-      fails = fails + 1;
       put skip list('FAIL: b still =', other.v);
+      stop;
    end;
    free other in(region);
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS area_offset');
  end arena;

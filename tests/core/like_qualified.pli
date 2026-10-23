@@ -16,27 +16,39 @@
     declare 1 u like s.h.k;
     declare 1 p,
            2 m like s.g;
-    declare fails fixed bin(31);
 
-    fails = 0;
     s.g.x = 1;
     s.g.y = 2;
     /* narrowed copies expose the minor structure's members */
     t.x = 7;
     t.y = 8;
-    if t.x ^= 7 or t.y ^= 8 then fails = fails + 1;
+    if t.x ^= 7 or t.y ^= 8 then do;
+       put skip list('FAIL like_qualified: check at line 27 failed');
+       stop;
+    end;
     u.v = 9;
-    if u.v ^= 9 then fails = fails + 1;
+    if u.v ^= 9 then do;
+       put skip list('FAIL like_qualified: expected 9, got', u.v);
+       stop;
+    end;
     /* independent storage: the template is untouched */
-    if s.g.x ^= 1 or s.g.y ^= 2 then fails = fails + 1;
+    if s.g.x ^= 1 or s.g.y ^= 2 then do;
+       put skip list('FAIL like_qualified: check at line 31 failed');
+       stop;
+    end;
     /* nested LIKE of a qualified template */
     p.m.x = 5;
     p.m.y = 6;
-    if p.m.x ^= 5 or p.m.y ^= 6 then fails = fails + 1;
+    if p.m.x ^= 5 or p.m.y ^= 6 then do;
+       put skip list('FAIL like_qualified: check at line 35 failed');
+       stop;
+    end;
     /* the same narrowed shape assigns whole */
     t = s.g;
-    if t.x ^= 1 or t.y ^= 2 then fails = fails + 1;
+    if t.x ^= 1 or t.y ^= 2 then do;
+       put skip list('FAIL like_qualified: check at line 38 failed');
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS like qualified');
-    else put skip list('FAIL like qualified: fails =', fails);
+   put skip list('PASS like qualified');
  end like_qualified;

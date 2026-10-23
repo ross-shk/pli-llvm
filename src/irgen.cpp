@@ -87,7 +87,7 @@ static PliI128 decLitRescaled128(const Expr* e, const Type& t) {
 }
 
 // Stored integer of an INITIAL/VALUE literal for a FIXED BINARY(p,q)
-// target (ADR-282): value * 2^q, with a decimal literal's fraction
+// target (ADR-284): value * 2^q, with a decimal literal's fraction
 // truncated toward zero — the same rule convert() applies at run time.
 static PliI128 binLitRescaled(const Expr* e, const Type& t) {
   if (!e)
@@ -3193,7 +3193,7 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
   b_.SetInsertPoint(okBB);
 }
 
-// FIXED BINARY declared-precision trap (QR1.2, rule (86), ADR-280): PL/I
+// FIXED BINARY declared-precision trap (QR1.2, rule (86), ADR-282): PL/I
 // raises SIZE when a value exceeds FIXED BINARY(p)'s declared range
 // [-2^p, 2^p-1] (rules (60)-(63)). The storage-width check cannot see it when
 // p is narrower than the slot. On a resumed SIZE the value wraps inside the
@@ -3217,7 +3217,7 @@ llvm::Value* IRGen::fixedBinPrecTrap(llvm::Value* v, int prec) {
   llvm::Value* lo = b_.CreateICmpSLT(v, negLim, "pov.lo");
   llvm::Value* of = b_.CreateOr(hi, lo, "pov");
   // Resume value: truncate to the p+1 signed bits and sign-extend back, the
-  // wrap the declared precision defines (ADR-280).
+  // wrap the declared precision defines (ADR-282).
   llvm::Value* low = b_.CreateTrunc(v, b_.getIntNTy((unsigned)prec + 1), "pov.wrap");
   llvm::Value* wrapped = b_.CreateSExt(low, v->getType(), "pov.ws");
   int seq = ovSeq_++;
@@ -3785,7 +3785,7 @@ llvm::Constant* IRGen::scalarInitConstant(const Type& t, const Expr* ini) {
   switch (t.k) {
   case TK::FixedBin:
   case TK::FixedDec: {
-    // A binary target scales by 2^q (ADR-282); decimal literals truncate
+    // A binary target scales by 2^q (ADR-284); decimal literals truncate
     // their 10^s fraction with the same rule as the runtime path.
     if (t.k == TK::FixedBin)
       return wideDecConstant(t, binLitRescaled(ini, t));
@@ -3884,7 +3884,7 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
     break;
   }
   default: { // Fixed
-    // A binary target scales by 2^q (ADR-282), the INITIAL counterpart of
+    // A binary target scales by 2^q (ADR-284), the INITIAL counterpart of
     // convert()'s FIXED -> FIXED path.
     if (t.k == TK::FixedBin) {
       v.reg = wideDecConstant(t, binLitRescaled(e, t));
@@ -4207,7 +4207,7 @@ bool IRGen::constScalarInit(Symbol* s, Val& out) {
     return true;
   }
   if (s->ty.k == TK::FixedBin || s->ty.k == TK::FixedDec) {
-    // A binary target scales by 2^q (ADR-282); the decimal rescale below
+    // A binary target scales by 2^q (ADR-284); the decimal rescale below
     // only applies to FIXED DECIMAL.
     if (s->ty.k == TK::FixedBin) {
       out.reg = wideDecConstant(s->ty, binLitRescaled(e, s->ty));
@@ -5584,7 +5584,7 @@ void IRGen::emitStmt(HStmt* s) {
         emitWideDecOut("pli_display_decfixed128", v.reg, 0);
       } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
         // The stored integer is value*2^q; the runtime prints the point
-        // (ADR-282).
+        // (ADR-284).
         deferCall("pli_display_fixed_scaled", {toI64(v), i64(v.ty.scale)});
       } else {
         deferCall("pli_display_fixed", {toI64(v)});
@@ -7662,7 +7662,7 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
       emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
     } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
       // The stored integer is value*2^q; the runtime prints the point
-      // (ADR-282).
+      // (ADR-284).
       deferCall("pli_put_list_fixed_scaled", {toI64(v), i64(v.ty.scale)});
     } else {
       deferCall("pli_put_list_fixed", {toI64(v)});
@@ -7809,7 +7809,7 @@ void IRGen::emitPut(HStmt* s) {
           emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
         } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
           // The stored integer is value*2^q; the runtime prints the point
-          // (ADR-282).
+          // (ADR-284).
           deferCall("pli_put_list_fixed_scaled", {toI64(v), i64(v.ty.scale)});
         } else {
           deferCall("pli_put_list_fixed", {toI64(v)});
@@ -7896,7 +7896,7 @@ void IRGen::emitGetDataItems(HStmt* s) {
         v.reg = fitTo(raw, llvmTy(ty), "gdec");
         v.ty = ty;
       } else if (ty.k == TK::FixedBin && ty.scale > 0) {
-        // The reader returns value*2^q, the target's stored form (ADR-282).
+        // The reader returns value*2^q, the target's stored form (ADR-284).
         v.reg = b_.CreateCall(runtimeFn("pli_get_list_fixed_scaled"), {i64(ty.scale)});
         v.ty = Type::fixedBin(63, ty.scale);
       } else {
@@ -8010,7 +8010,7 @@ void IRGen::emitGet(HStmt* s) {
                       storeGetTarget(t, v, loc);
                     });
         } else if (ty.k == TK::FixedBin && ty.scale > 0) {
-          // The reader returns value*2^q, the target's stored form (ADR-282).
+          // The reader returns value*2^q, the target's stored form (ADR-284).
           deferCall("pli_get_list_fixed_scaled", {i64(ty.scale)}, false,
                     [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
                       Val v;
@@ -8236,7 +8236,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
         deferCall("pli_put_edit_float", {v.reg, w, d});
       } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
         // F(w,d) needs the true value: a scaled binary is divided by 2^q
-        // first (ADR-282). The FLOAT path keeps the common d digits; a
+        // first (ADR-284). The FLOAT path keeps the common d digits; a
         // point-aware fixed formatter remains a B11 refinement.
         Val fv = convert(v, Type::flt(6), item->loc);
         deferCall("pli_put_edit_float", {fv.reg, w, d});
@@ -10432,7 +10432,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     return v;
   if (srcFloat && !dstFloat) { // FLOAT -> FIXED truncates toward zero
     // A FIXED DECIMAL target holds the value scaled by 10^q (ADR-006), a
-    // FIXED BINARY target by 2^q (ADR-282), so scale the float up first.
+    // FIXED BINARY target by 2^q (ADR-284), so scale the float up first.
     llvm::Value* f = v.reg;
     if (dst.k == TK::FixedDec && dst.scale > 0) {
       double sc = dst.scale <= 18 ? (double)pliPow10(dst.scale)
@@ -10479,13 +10479,13 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       f = b_.CreateFDiv(f, flt(sc), "fds");
     } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0)
       // A power of two is exact, so the multiply is the C5 exponent patch
-      // (2^-q) rather than a divide (ADR-282, closing D2).
+      // (2^-q) rather than a divide (ADR-284, closing D2).
       f = b_.CreateFMul(f, flt(std::ldexp(1.0, -v.ty.scale)), "fds");
     out.reg = f;
     return out;
   }
   // FIXED -> FIXED. DECIMAL scale is 10^q, BINARY scale is 2^q (ADR-006,
-  // ADR-282). A same-base rescale multiplies/divides by the base's power;
+  // ADR-284). A same-base rescale multiplies/divides by the base's power;
   // a cross-base conversion first recovers the value, then applies the
   // target scale. BINARY targets check declared precision; a DECIMAL target
   // checks magnitude after the rescale.
@@ -12061,7 +12061,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       v.reg = b_.CreateMul(t, p, "truncd");
     } else if (a.ty.k == TK::FixedBin && a.ty.scale > 0) {
       // Drop the binary fraction toward zero, keeping the scaled type and
-      // its q-bit zero tail: trunc(1.5) at scale 2 is 1.0, raw 4 (ADR-282).
+      // its q-bit zero tail: trunc(1.5) at scale 2 is 1.0, raw 4 (ADR-284).
       llvm::Type* wt = llvmTy(a.ty);
       llvm::Value* p = fitTo(i64(1LL << a.ty.scale), wt, "truncp");
       llvm::Value* t = b_.CreateSDiv(a.reg, p, "trunci");

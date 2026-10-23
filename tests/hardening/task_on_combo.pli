@@ -10,8 +10,6 @@
     declare e2 event;
     declare s1 fixed bin(31);
     declare s2 fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     s1 = 0;
     s2 = 0;
     call w1 event(e1);
@@ -19,19 +17,21 @@
     wait(e1, e2);
     /* a real divide trap: handler ran and
        the faulting store never landed */
-    if s1 ^= 1000 then
-       fails = fails + 1;
+    if s1 ^= 1000 then do;
+       put skip list('FAIL task_on_combo: expected 1000, got', s1);
+       stop;
+    end;
     /* a signalled ERROR with its code */
-    if s2 ^= 1 then
-       fails = fails + 1;
+    if s2 ^= 1 then do;
+       put skip list('FAIL task_on_combo: expected 1, got', s2);
+       stop;
+    end;
     /* main never established a unit */
-    if oncode() ^= 0 then
-       fails = fails + 1;
-    if fails = 0 then
-       put skip list('PASS task_on_combo');
-    else
-       put skip list('FAIL task_on: ',
-          fails);
+    if oncode() ^= 0 then do;
+       put skip list('FAIL task_on_combo: expected 0, got', oncode());
+       stop;
+    end;
+   put skip list('PASS task_on_combo');
     w1: procedure;
        declare hit fixed bin(31);
        declare c fixed bin(31);

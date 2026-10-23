@@ -6,8 +6,6 @@
    Tests cover matching/mismatching members, nested structures, arrays in
    structures, and BY NAME with dynamic members. */
 struct_edge: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
    /* Identical structures - whole assignment */
    declare 1 s1,
@@ -20,10 +18,22 @@ struct_edge: procedure options(main);
 
    s1.a = 1; s1.b = 2; s1.c.x = 3; s1.c.y = 4;
    s2 = s1;  /* whole structure copy */
-   if s2.a ^= 1 then fails = fails + 1;
-   if s2.b ^= 2 then fails = fails + 1;
-   if s2.c.x ^= 3 then fails = fails + 1;
-   if s2.c.y ^= 4 then fails = fails + 1;
+   if s2.a ^= 1 then do;
+      put skip list('FAIL struct_edge: expected 1, got', s2.a);
+      stop;
+   end;
+   if s2.b ^= 2 then do;
+      put skip list('FAIL struct_edge: expected 2, got', s2.b);
+      stop;
+   end;
+   if s2.c.x ^= 3 then do;
+      put skip list('FAIL struct_edge: expected 3, got', s2.c.x);
+      stop;
+   end;
+   if s2.c.y ^= 4 then do;
+      put skip list('FAIL struct_edge: expected 4, got', s2.c.y);
+      stop;
+   end;
 
    /* BY NAME with identical members */
    declare 1 t1,
@@ -37,9 +47,18 @@ struct_edge: procedure options(main);
 
    t1.a = 10; t1.b = 20; t1.d = 30;
    t2 = t1, by name;  /* copies a and b, ignores d and c */
-   if t2.a ^= 10 then fails = fails + 1;
-   if t2.b ^= 20 then fails = fails + 1;
-   if t2.c ^= 0 then fails = fails + 1;  /* c not in t1, stays 0 */
+   if t2.a ^= 10 then do;
+      put skip list('FAIL struct_edge: expected 10, got', t2.a);
+      stop;
+   end;
+   if t2.b ^= 20 then do;
+      put skip list('FAIL struct_edge: expected 20, got', t2.b);
+      stop;
+   end;
+   if t2.c ^= 0 then do;
+      put skip list('FAIL struct_edge: expected 0, got', t2.c);
+      stop;
+   end;
 
    /* BY NAME with nested structures */
    declare 1 n1,
@@ -56,10 +75,22 @@ struct_edge: procedure options(main);
 
    n1.a = 100; n1.s.x = 200; n1.s.y = 300;
    n2 = n1, by name;  /* recurses into s, copies x and y by name */
-   if n2.a ^= 100 then fails = fails + 1;
-   if n2.s.x ^= 200 then fails = fails + 1;
-   if n2.s.y ^= 300 then fails = fails + 1;
-   if n2.s.z ^= 0 then fails = fails + 1;
+   if n2.a ^= 100 then do;
+      put skip list('FAIL struct_edge: expected 100, got', n2.a);
+      stop;
+   end;
+   if n2.s.x ^= 200 then do;
+      put skip list('FAIL struct_edge: expected 200, got', n2.s.x);
+      stop;
+   end;
+   if n2.s.y ^= 300 then do;
+      put skip list('FAIL struct_edge: expected 300, got', n2.s.y);
+      stop;
+   end;
+   if n2.s.z ^= 0 then do;
+      put skip list('FAIL struct_edge: expected 0, got', n2.s.z);
+      stop;
+   end;
 
    /* BY NAME with array members */
    declare 1 arr_s1,
@@ -72,9 +103,21 @@ struct_edge: procedure options(main);
    arr_s1.vals(1) = 1; arr_s1.vals(2) = 2; arr_s1.vals(3) = 3;
    arr_s1.name = 'original';
    arr_s2 = arr_s1, by name;  /* copies vals array element-wise and name */
-   if arr_s2.vals(1) ^= 1 then fails = fails + 1;
-   if arr_s2.vals(3) ^= 3 then fails = fails + 1;
-   if arr_s2.name ^= 'original' then fails = fails + 1;
+   if arr_s2.vals(1) ^= 1 then do;
+      put skip list('FAIL struct_edge: expected 1, got',
+         arr_s2.vals(1));
+      stop;
+   end;
+   if arr_s2.vals(3) ^= 3 then do;
+      put skip list('FAIL struct_edge: expected 3, got',
+         arr_s2.vals(3));
+      stop;
+   end;
+   if arr_s2.name ^= 'original' then do;
+      put skip list('FAIL struct_edge: expected original, got',
+         arr_s2.name);
+      stop;
+   end;
 
    /* Structure with array member - subscripted access */
    declare 1 rec,
@@ -84,7 +127,11 @@ struct_edge: procedure options(main);
    do i = 1 to 5;
       rec.scores(i) = i * 10;
    end;
-   if rec.scores(3) ^= 30 then fails = fails + 1;
+   if rec.scores(3) ^= 30 then do;
+      put skip list('FAIL struct_edge: expected 30, got',
+         rec.scores(3));
+      stop;
+   end;
 
    /* Array of structures */
    declare 1 employees(3),
@@ -93,19 +140,28 @@ struct_edge: procedure options(main);
    employees(1).id = 1; employees(1).salary = 50000;
    employees(2).id = 2; employees(2).salary = 60000;
    employees(3).id = 3; employees(3).salary = 70000;
-   if employees(2).salary ^= 60000 then fails = fails + 1;
+   if employees(2).salary ^= 60000 then do;
+      put skip list('FAIL struct_edge: check at line 96 failed');
+      stop;
+   end;
 
    /* Whole array of structures assignment */
    declare 1 emp_copy(3) like employees;
    emp_copy = employees;
-   if emp_copy(2).salary ^= 60000 then fails = fails + 1;
+   if emp_copy(2).salary ^= 60000 then do;
+      put skip list('FAIL struct_edge: check at line 101 failed');
+      stop;
+   end;
 
    /* BY NAME on array of structures */
    declare 1 other_emps(3),
           2 salary fixed bin(31),
           2 id fixed bin(31);
    other_emps = employees, by name;
-   if other_emps(2).salary ^= 60000 then fails = fails + 1;
+   if other_emps(2).salary ^= 60000 then do;
+      put skip list('FAIL struct_edge: check at line 108 failed');
+      stop;
+   end;
 
    /* Structure as function argument (by reference) */
    call struct_proc(s1);
@@ -113,10 +169,12 @@ struct_edge: procedure options(main);
    /* Structure-valued function (ADR-070) */
    declare 1 ret_struct like s1;
    ret_struct = struct_func();
-   if ret_struct.a ^= 99 then fails = fails + 1;
+   if ret_struct.a ^= 99 then do;
+      put skip list('FAIL struct_edge: expected 99, got', ret_struct.a);
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS struct_edge');
-   else put skip list('FAIL struct_edge: fails =', fails);
+   put skip list('PASS struct_edge');
 
 struct_proc: proc(s) options(bypass);
    dcl 1 s,

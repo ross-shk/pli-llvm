@@ -6,29 +6,26 @@
  substr_test: procedure options(main);
     declare s char(8);
     declare t char(3);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     s = 'ABCDEFGH';
     t = substr(s, 2, 3);
     if t ^= 'BCD' then do;
-       fails = fails + 1;
        put skip list('FAIL substr(2,3) =', t);
+       stop;
     end;
 
     t = substr(s, 1, 1);
     if t ^= 'A' then do;
-       fails = fails + 1;
        put skip list('FAIL substr(1,1) =', t);
+       stop;
     end;
 
     t = substr('abcdef', 4, 3);
     if t ^= 'def' then do;
-       fails = fails + 1;
        put skip list('FAIL substr lit =', t);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS substr');
-    else put skip list('FAIL substr: fails =', fails);
+   put skip list('PASS substr');
  end substr_test;

@@ -10,18 +10,20 @@
     declare t char(20) varying;
     declare n fixed bin(31);
     declare len fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     t = 'hello';
     n = 0;
     len = show(mk(t));
     /* one evaluation: the counter advanced once ... */
-    if n ^= 1 then fails = fails + 1;
+    if n ^= 1 then do;
+       put skip list('FAIL call_actual_once: expected 1, got', n);
+       stop;
+    end;
     /* ... and the length is the first result, not the second */
-    if len ^= 3 then fails = fails + 1;
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL call-actual-once: n =', n,
-       'len =', len);
+    if len ^= 3 then do;
+       put skip list('FAIL call_actual_once: expected 3, got', len);
+       stop;
+    end;
+   put skip list('PASS call_actual_once');
 
  show: procedure(s) returns(fixed bin(31));
     declare s char(*);

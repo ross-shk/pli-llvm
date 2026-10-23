@@ -7,46 +7,44 @@
  ops: proc options(main);
    dcl r fixed bin(31);
    dcl (s, tag) char(20) varying;
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    r = -3 ** 2;
    if r ^= -9 then do;
-      fails = fails + 1;
       put skip list('FAIL: -3 ** 2 =', r);
+      stop;
    end;
 
    s = 'a' || 'b' || 'c';
    if s ^= 'abc' then do;
-      fails = fails + 1;
       put skip list('FAIL: glue =', s);
+      stop;
    end;
 
    tag = 'user-' || 42;
    if tag ^= 'user-42' then do;
-      fails = fails + 1;
       put skip list('FAIL: tag =', tag);
+      stop;
    end;
 
    tag = 'user-' !! '42';
    if tag ^= 'user-42' then do;
-      fails = fails + 1;
       put skip list('FAIL: alias !! =', tag);
+      stop;
    end;
 
    if r >= 0 then do;
-      fails = fails + 1;
       put skip list('FAIL: r not negative =', r);
+      stop;
    end;
    if tag ^= 'user-42' then do;
-      fails = fails + 1;
       put skip list('FAIL: eq works =', tag);
+      stop;
    end;
    if r = 9 then do;
-      fails = fails + 1;
       put skip list('FAIL: not-eq r =', r);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS operators_expressions');
  end ops;

@@ -10,29 +10,44 @@
               2 y fixed bin(31) init(2);
       declare 1 arr(3) controlled,
               2 v fixed bin(31) init(0);
-      declare fails fixed bin(31);
 
-      fails = 0;
 
       /* the implicit entry generation has the per-member INITIAL values */
-      if rec.x ^= 1 or rec.y ^= 2 then fails = fails + 1;
+      if rec.x ^= 1 or rec.y ^= 2 then do;
+         put skip list('FAIL controlled_struct: check at line 18 failed');
+         stop;
+      end;
 
       /* an explicit ALLOCATE pushes a fresh, re-initialised generation */
       allocate rec;
       rec.x = 7;
-      if rec.x ^= 7 or rec.y ^= 2 then fails = fails + 1;
+      if rec.x ^= 7 or rec.y ^= 2 then do;
+         put skip list('FAIL controlled_struct: check at line 23 failed');
+         stop;
+      end;
       free rec;
-      if rec.x ^= 1 or rec.y ^= 2 then fails = fails + 1;
+      if rec.x ^= 1 or rec.y ^= 2 then do;
+         put skip list('FAIL controlled_struct: check at line 25 failed');
+         stop;
+      end;
 
       /* an array of structures is one generation of three elements */
       arr(1).v = 11;
       arr(3).v = 33;
-      if arr(1).v ^= 11 or arr(3).v ^= 33 then fails = fails + 1;
+      if arr(1).v ^= 11 or arr(3).v ^= 33 then do;
+         put skip list('FAIL controlled_struct: check at line 30 failed');
+         stop;
+      end;
       allocate arr;
-      if arr(1).v ^= 0 or arr(3).v ^= 0 then fails = fails + 1;
+      if arr(1).v ^= 0 or arr(3).v ^= 0 then do;
+         put skip list('FAIL controlled_struct: check at line 32 failed');
+         stop;
+      end;
       free arr;
-      if arr(1).v ^= 11 or arr(3).v ^= 33 then fails = fails + 1;
+      if arr(1).v ^= 11 or arr(3).v ^= 33 then do;
+         put skip list('FAIL controlled_struct: check at line 34 failed');
+         stop;
+      end;
 
-      if fails = 0 then put skip list('PASS controlled_struct');
-      else put skip list('FAIL controlled_struct: fails =', fails);
+   put skip list('PASS controlled_struct');
    end controlled_struct_test;

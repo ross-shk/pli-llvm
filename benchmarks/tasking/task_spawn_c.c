@@ -19,8 +19,12 @@ static DWORD WINAPI worker(LPVOID arg) {
 
 int main(void) {
   int i;
-  for (i = 0; i < TASKS; ++i)
+  for (i = 0; i < TASKS; ++i) {
     th[i] = CreateThread(NULL, 0, worker, NULL, 0, NULL);
+    /* Resource exhaustion must fail loudly: a fan-out that silently started
+       fewer threads would look like a win. */
+    if (th[i] == NULL) { fprintf(stderr, "CreateThread failed\n"); return 1; }
+  }
   for (i = 0; i < TASKS; ++i) {
     WaitForSingleObject(th[i], INFINITE);
     CloseHandle(th[i]);
@@ -39,10 +43,20 @@ static void *worker(void *arg) {
 int main(void) {
   pthread_t th[TASKS];
   int i;
-  for (i = 0; i < TASKS; ++i)
-    pthread_create(&th[i], NULL, worker, NULL);
-  for (i = 0; i < TASKS; ++i)
-    pthread_join(th[i], NULL);
+  for (i = 0; i < TASKS; ++i) {
+    /* Resource exhaustion must fail loudly: a fan-out that silently started
+       fewer threads would look like a win. */
+    if (pthread_create(&th[i], NULL, worker, NULL) != 0) {
+      fprintf(stderr, "pthread_create failed at %d\n", i);
+      return 1;
+    }
+  }
+  for (i = 0; i < TASKS; ++i) {
+    if (pthread_join(th[i], NULL) != 0) {
+      fprintf(stderr, "pthread_join failed at %d\n", i);
+      return 1;
+    }
+  }
   printf("done\n");
   return 0;
 }

@@ -7,7 +7,7 @@
         s = s + a(i);
      end;
      if s ^= 60 then do;
-        fails = fails + 1;
         put skip list('FAIL arr =', s);
+        stop;
      end;
      %if tag = 1 %then %include 'pp_tag.inc';

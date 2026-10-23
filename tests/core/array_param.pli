@@ -9,9 +9,7 @@
     declare m(3,3) fixed bin(31);
     declare i fixed bin(31);
     declare j fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
     do i = 1 to 5;
        a(i) = i;
     end;
@@ -25,22 +23,39 @@
     call check(a);
     /* by-reference writes inside the callee reflect outside */
     call double(a);
-    if a(1) ^= 2 or a(5) ^= 10 then fails = fails + 1;
+    if a(1) ^= 2 or a(5) ^= 10 then do;
+       put skip list('FAIL array_param: check at line 28 failed');
+       stop;
+    end;
     /* a multi-axis array param, read and summed */
     call trace(m);
     /* a function procedure with an array param, returning a value */
-    if trace2(m) ^= 12 then fails = fails + 1;
+    if trace2(m) ^= 12 then do;
+       put skip list('FAIL array_param: expected 12, got', trace2(m));
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS array_param');
-    else put skip list('FAIL array_param: fails =', fails);
+   put skip list('PASS array_param');
 
  check: procedure(x);
     declare x(5) fixed bin(31);
     declare i fixed bin(31);
-    if x(1) ^= 1 or x(5) ^= 5 then fails = fails + 1;
-    if dim(x) ^= 5 then fails = fails + 1;
-    if lbound(x) ^= 1 or hbound(x) ^= 5 then fails = fails + 1;
-    if sum(x) ^= 15 then fails = fails + 1;
+    if x(1) ^= 1 or x(5) ^= 5 then do;
+       put skip list('FAIL array_param: check at line 40 failed');
+       stop;
+    end;
+    if dim(x) ^= 5 then do;
+       put skip list('FAIL array_param: expected 5, got', dim(x));
+       stop;
+    end;
+    if lbound(x) ^= 1 or hbound(x) ^= 5 then do;
+       put skip list('FAIL array_param: check at line 42 failed');
+       stop;
+    end;
+    if sum(x) ^= 15 then do;
+       put skip list('FAIL array_param: expected 15, got', sum(x));
+       stop;
+    end;
  end check;
 
  double: procedure(x);
@@ -59,7 +74,10 @@
     do i = 1 to 3;
        t = t + x(i,i);
     end;
-    if t ^= 12 then fails = fails + 1;
+    if t ^= 12 then do;
+       put skip list('FAIL array_param: expected 12, got', t);
+       stop;
+    end;
  end trace;
 
  trace2: procedure(x) returns(fixed bin(31));

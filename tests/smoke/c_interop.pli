@@ -18,21 +18,19 @@
      external('c_byval_mul');
 
    dcl r fixed bin(31);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    r = c_add(3, 4);
    if r ^= 7 then do;
-      fails = fails + 1;
       put skip list('FAIL: 3 + 4 =', r);
+      stop;
    end;
 
    r = c_mul(6, 7);
    if r ^= 42 then do;
-      fails = fails + 1;
       put skip list('FAIL: 6 * 7 =', r);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS c_interop');
  end cdemo;

@@ -4,8 +4,6 @@
     entered from a FLOAT literal and its scale is honoured in conversion and
     in + - * and comparison, which rescale operands to a common scale. */
  DEC: PROCEDURE OPTIONS(MAIN);
-   DECLARE FAILS FIXED BINARY(31);
-   FAILS = 0;
    DECLARE A FIXED DECIMAL(5,2);   /* cents: 2 fraction digits */
    DECLARE B FIXED DECIMAL(5,2);
    DECLARE C FIXED DECIMAL(7,4);
@@ -14,60 +12,95 @@
 
    /* entry from a FLOAT literal: value * 10^2 is stored */
    A = 2.5;                        /* 2.50 */
-   IF A ^= 2.50 THEN FAILS = FAILS + 1;
+   if A ^= 2.50 then do;
+      put skip list('FAIL decimal: expected 2.50, got', A);
+      stop;
+   end;
 
    /* FIXED DECIMAL -> FLOAT divides back by 10^q */
    D = A;
-   IF D ^= 2.5 THEN FAILS = FAILS + 1;
+   if D ^= 2.5 then do;
+      put skip list('FAIL decimal: expected 2.5, got', D);
+      stop;
+   end;
 
    /* scaled addition: operands rescaled to the common (max) scale */
    B = 1.75;                       /* 1.75 */
    C = A + B;                      /* 2.50 + 1.75 = 4.25, widened to scale 4 */
-   IF C ^= 4.25 THEN FAILS = FAILS + 1;
+   if C ^= 4.25 then do;
+      put skip list('FAIL decimal: expected 4.25, got', C);
+      stop;
+   end;
 
    /* mixed-scale addition: 1.2 (scale 1) + 1.50 (scale 2) = 2.70 */
    B = 1.2;
    A = 1.50;
    C = B + A;
-   IF C ^= 2.7 THEN FAILS = FAILS + 1;
+   if C ^= 2.7 then do;
+      put skip list('FAIL decimal: expected 2.7, got', C);
+      stop;
+   end;
 
    /* scaled subtraction */
    B = 1.25;
    C = A - B;                      /* 1.50 - 1.25 = 0.25 */
-   IF C ^= 0.25 THEN FAILS = FAILS + 1;
+   if C ^= 0.25 then do;
+      put skip list('FAIL decimal: expected 0.25, got', C);
+      stop;
+   end;
 
    /* multiplication: scale of the product is the sum of the operand scales */
    A = 2.5;
    B = 4.0;
    C = A * B;                      /* 2.5 * 4.0 = 10.0000 */
-   IF C ^= 10.0 THEN FAILS = FAILS + 1;
+   if C ^= 10.0 then do;
+      put skip list('FAIL decimal: expected 10.0, got', C);
+      stop;
+   end;
 
    /* scale-reducing assignment rounds half up: 3.15 -> 3.2 (scale 1) */
    A = 3.15;
    DECLARE E FIXED DECIMAL(5,1);
    E = A;
-   IF E ^= 3.2 THEN FAILS = FAILS + 1;
+   if E ^= 3.2 then do;
+      put skip list('FAIL decimal: expected 3.2, got', E);
+      stop;
+   end;
 
    /* 3.14 -> 3.1 (rounds down) */
    A = 3.14;
    E = A;
-   IF E ^= 3.1 THEN FAILS = FAILS + 1;
+   if E ^= 3.1 then do;
+      put skip list('FAIL decimal: expected 3.1, got', E);
+      stop;
+   end;
 
     /* FIXED DECIMAL -> FIXED BINARY truncates the fraction (ADR-056) */
     A = 2.4;
     I = A;
-    IF I ^= 2 THEN FAILS = FAILS + 1;
+    if I ^= 2 then do;
+       put skip list('FAIL decimal: expected 2, got', I);
+       stop;
+    end;
     A = 2.6;
     I = A;
-    IF I ^= 2 THEN FAILS = FAILS + 1;
+    if I ^= 2 then do;
+       put skip list('FAIL decimal: expected 2, got', I);
+       stop;
+    end;
 
    /* comparison compares the rescaled integer values */
    A = 1.5;
    B = 1.5;
-   IF A ^= B THEN FAILS = FAILS + 1;
+   if A ^= B then do;
+      put skip list('FAIL decimal: check at line 67 failed');
+      stop;
+   end;
    B = 1.4;
-   IF A <= B THEN FAILS = FAILS + 1;
+   if A <= B then do;
+      put skip list('FAIL decimal: check at line 69 failed');
+      stop;
+   end;
 
-   IF FAILS = 0 THEN PUT SKIP LIST('PASS decimal');
-   ELSE PUT SKIP LIST('FAIL decimal: fails =', FAILS);
+   put skip list('PASS decimal');
  END DEC;

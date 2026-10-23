@@ -9,7 +9,6 @@
      declare b fixed bin(31);
      declare v fixed bin(31);
      declare rc fixed bin(31);
-     declare fails fixed bin(31);
      declare sk_pair entry(fixed bin(31),
         fixed bin(31)) returns(fixed bin(31))
         external('sk_pair');
@@ -20,24 +19,21 @@
         external('sk_recv');
      declare sk_close entry(fixed bin(31))
         external('sk_close');
-     fails = 0;
 
      rc = sk_pair(a, b);
      if rc ^= 0 then do;
-        fails = fails + 1;
         put skip list('FAIL pair', rc);
+        stop;
      end;
 
      call sk_send(a, 42);
      v = sk_recv(b);
      if v ^= 42 then do;
-        fails = fails + 1;
         put skip list('FAIL roundtrip', v);
+        stop;
      end;
 
      call sk_close(a);
      call sk_close(b);
-     if fails = 0
-        then put skip list('PASS socket-pair');
-        else put skip list('FAIL socket-pair');
+   put skip list('PASS socket-pair');
   end socket_pair;

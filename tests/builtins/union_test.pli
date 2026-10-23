@@ -2,9 +2,6 @@ union_test: procedure options(main);
    dcl 1 u union,
        2 a fixed bin(31),
        2 b char(10);
-   dcl fails fixed bin(31);
-   fails = 0;
    u.a = 42;
-   if fails = 0 then put skip list('PASS union');
-   else put skip list('FAIL union');
+   put skip list('PASS union');
 end union_test;

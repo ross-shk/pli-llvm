@@ -643,7 +643,7 @@ private:
   // FIXED DECIMAL precision trap (QR1.2): an i64 magnitude at or beyond
   // `limit` (10^prec digits, or a binary width) traps to the SIZE path.
   void magTrap(llvm::Value* v, long long limit);
-  // FIXED BINARY declared-precision trap (QR1.2, rule (86), ADR-280): a value
+  // FIXED BINARY declared-precision trap (QR1.2, rule (86), ADR-282): a value
   // outside [-2^p, 2^p-1] traps to the SIZE path, and a resuming handler
   // receives the value wrapped inside the declared precision. `v` may be
   // wider than the destination slot (the check runs before a narrowing).

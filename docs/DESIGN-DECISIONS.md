@@ -369,6 +369,8 @@ keeping the `@PLI_` prefix on entry symbols (breaks the C symbol name match);
 blindly lower-casing every imported symbol (would make an upper-case C
 function unreachable).
 
+---
+
 ## ADR-022 — Function procedures: scalar results by value
 
 **Context.** M1's exit criterion is a recursive `FACTORIAL` function. Rule (34)
@@ -397,6 +399,8 @@ parameters (`OPTIONS(BYVALUE)`) remain M9.
 `char[n]` is not a first-class return type and would silently truncate); and
 allowing a function to fall off without a value (would violate invariant 2).
 
+---
+
 ## ADR-023 — `BEGIN` blocks are lexical scopes over a flat storage model
 
 **Context.** Rule (68) `BEGIN` executed but shared the enclosing procedure's
@@ -424,6 +428,8 @@ storage); block-entry initialisation of AUTOMATIC storage is deferred.
 block — the flat model keeps codegen simple and matches the M0 storage
 simplification of ADR-010.
 
+---
+
 ## ADR-024 — `SUBSTR` as a pseudo-variable is a runtime write into the source string
 
 **Context.** Rule (86) allows a *reference* on the left of `=`. The M2 plan
@@ -446,6 +452,8 @@ right of `=` is unaffected — it is the ordinary built-in.
 **Rejected.** Building a general pseudo-variable infrastructure (other
 pseudo-variables, or targets that are arbitrary expressions) — KISS, one
 pseudo-variable now; the runtime call keeps codegen simple.
+
+---
 
 ## ADR-025 — A program-level scope makes sibling external procedures callable
 
@@ -471,6 +479,8 @@ lookup order (own scope before parent before root) preserves shadowing.
 **Rejected.** Keeping external procedures mutually invisible (blocks the M1
 exit criterion); or emitting one function body per entry name with no shared
 scope (duplicates logic and still cannot be called from a sibling).
+
+---
 
 ## ADR-026 — `ENTRY` statements: a shared impl split into entry-point segments
 
@@ -506,6 +516,8 @@ programmer.
 **Rejected.** One LLVM function per entry chained by tail calls (locals would
 need promotion to globals or threaded pointers); or one function per entry
 with no shared body (duplicates logic and cannot share storage).
+
+---
 
 ## ADR-027 — Static links make internal procedures reach enclosing automatic storage
 
@@ -543,6 +555,8 @@ itself and the callee (rule (8)).
 M1 case needs; promoting enclosing variables to globals again (reintroduces the
 reentrancy bug); heap-allocating automatic storage (needless cost).
 
+---
+
 ## ADR-028 — `--explain`: rule productions generated from the spec
 
 **Context.** Diagnostics cite TR 25.084 rule numbers; a user wants to look up a
@@ -561,6 +575,8 @@ spec, so `--explain` points the user at the rule without re-stating the prose.
 **Rejected.** Hand-maintaining a rule table (duplicates the spec, drifts);
 reading the spec file at runtime (requires the spec on the installed system,
 and couples the binary to a repo path).
+
+---
 
 ## ADR-029 — HIR as a field-for-field AST mirror plus explicit `Convert` nodes
 
@@ -585,6 +601,8 @@ maintenance.
 milestone, M8); rewriting sema to build HIR directly (far beyond the M1 "thin
 mirror" scope); dropping the mirror and keeping IRGen on the AST (leaves no
 inspectable HIR for later passes to hang off).
+
+---
 
 ## ADR-030 — Fix-its: insertions threaded through `Diags`, rendered at the caret
 
@@ -616,6 +634,8 @@ speculative (KISS).
 
 
 
+
+---
 
 ## ADR-031 — IR golden tests: a dependency-free FileCheck-style matcher
 
@@ -773,6 +793,8 @@ one entry per element type/operation; a `SUBSCRIPTRANGE` check on every iteratio
 (always in-bounds — pure overhead); and walking the array through the public
 `A(i)` load (which would re-run bounds checks and be needlessly indirect).
 
+---
+
 ## ADR-036 — Multi-axis fixed-size arrays: flat row-major layout
 
 **Context.** ADR-033 served fixed-size **single-axis** scalar arrays and diagnosed
@@ -806,6 +828,8 @@ the built-ins (out of scope until the axis-argument form `LBOUND(a,d)` is added)
 and column-major order (PL/I is row-major). Dynamic bounds, `*` extents, and
 cross-sections remain diagnosed.
 
+---
+
 ## ADR-037 — Level-numbered structures: literal LLVM structs, members without symbols
 
 **Context.** The M2 plan (rules (11),(124),(125)) needs `DECLARE 1 S, 2 A ..., 2 B ...`
@@ -833,6 +857,8 @@ addressing. **Rejected.** Giving every member its own symbol/storage (breaks PL/
 semantics and complicates qualification); a per-member dope vector or descriptor
 (unneeded for constant layout); serving whole-structure values in this stage
 (diagnosed per unimplemented ≠ accepted).
+
+---
 
 ## ADR-038 — Structure array members: `llvmTy` handles arrays, subscripted via memberPath
 
@@ -862,6 +888,8 @@ standalone arrays, reusing the existing aggregate layout (ADR-036/037).
 member semantics); a dope vector for constant-bounds member arrays (unneeded —
 ADR-008); re-deriving the member type by walking in IRGen instead of the single
 `memberType` helper (duplication). `CHARACTER` array members remain diagnosed.
+
+---
 
 ## ADR-039 — Array procedure parameters: by-reference addressing, widened sema checks
 
@@ -893,6 +921,8 @@ reserves descriptors for dynamic extents/`*`); copying array arguments by value
 (PL/I is by reference); adding extent/shape checking between caller and callee
 declarations in this stage (a later hardening step).
 
+---
+
 ## ADR-040 — Whole-structure assignment: a storage copy between identical shapes
 
 **Context.** The M2 scope ("aggregate ... assignment", rule (127)) and the
@@ -922,6 +952,8 @@ scope — rule (127) keeps those diagnosed); computing the byte size by walking
 members (wrong once a nested struct's padding is accounted for — the data layout
 gives the true store size).
 
+---
+
 ## ADR-041 — Multiple assignment: one shared RHS, same-type targets
 
 **Context.** Rule (86) is `assignment-statement ::= {,• reference•••} = expression
@@ -945,6 +977,8 @@ function-call RHS); per-target independent HIR value conversion (would re-derive
 conversion once per target and require the RHS to be evaluated N times, and would
 change the HIR/IR shape of the existing single-target case); serving mixed-type or
 `BY NAME` multiple assignment in this stage.
+
+---
 
 ## ADR-042 — Build tooling: clang stays the link driver; `cmake --build build/cmake --target check` is the analysis gate
 
@@ -973,6 +1007,8 @@ reformat of `src/` is mechanical and covered by the full test suite.
 macOS, and no bare `lld` installed); making `fmt-check` a soft, non-failing check
 (the user chose enforcement); wiring CI now (deferred); putting the full `check`
 gate in CMake while the Makefile is the documented bootstrap build.
+
+---
 
 ## ADR-043 — `BY NAME` assignment: layout-independent member matching
 
@@ -1004,6 +1040,8 @@ introduce a half-working case); storing a materialised member-pair plan from sem
 to IRGen (the two structure types let codegen re-derive the same name walk cheaply,
 keeping the change KISS).
 
+---
+
 ## ADR-044 — `INITIAL` iteration factors on arrays: parse-time item tree, sema expansion
 
 **Context.** Rule (26) is `initial-attribute ::= INITIAL ( { initial-call |
@@ -1030,6 +1068,8 @@ folded last value, so a repeated negative constant is not double-negated.
 place twice (breaks `*` over a negative constant); padding a short list to the
 extent (PL/I requires a full list; a mismatch is an error); implementing
 `INITIAL CALL` now (independent, deferred).
+
+---
 
 ## ADR-045 — `LIKE` template: the item deep-copies the referenced structure's type
 
@@ -1058,6 +1098,8 @@ the template); emitting a member-tree copy into `children` (the struct `Type`
 already carries the full shape); allowing a dimension after `LIKE` (an array of a
 template needs the whole-template dimension machinery, independent); allowing the
 extend form (members after `LIKE`); resolving qualified `S.A.B` templates now.
+
+---
 
 ## ADR-046 — Cross-sections: a `*` axis marker and a gather loop on assignment
 
@@ -1093,6 +1135,8 @@ independent); reusing `arrayElementAddr` per gather step by wrapping the
 induction variable in an `IntLit` (fixed indices may be runtime values, so the
 source flat offset is computed incrementally instead).
 
+---
+
 ## ADR-047 — `DEFINED` overlays: no storage, an address alias to the base
 
 **Context.** Rule (24) is `defined-attribute ::= DEFINED basic-reference
@@ -1122,6 +1166,8 @@ visible-alias bug at -O0, and both names already share one alloca, so LLVM sees
 the aliasing structurally); a different-type overlay (needs an address bitcast and
 a size check, an independent slice); `POSITION`, subscripted bases, and `iSUB`
 (rule 134) now.
+
+---
 
 ## ADR-048 — iSUB and subscripted `DEFINED`: an element-address redirect to the base
 
@@ -1154,6 +1200,8 @@ now (needs evaluating an index expression against the iSUB variable, an
 independent slice); multi-axis iSUB (a sub-block overlay, broader address logic);
 non-constant fixed subscripts (would need the address recomputed per reference
 rather than at a stable point).
+
+---
 
 ## ADR-049 — Multi-`*` cross-sections: a general affine gather over the star axes
 
@@ -1308,6 +1356,8 @@ continue to use the constant itemlist; a one-time (STATIC) evaluation — STATIC
 not yet implemented, so the call runs each entry, and a genuine STATIC `INITIAL CALL`
 is deferred with STATIC storage.
 
+---
+
 ## ADR-053 — iSUB index arithmetic: an affine 1-D overlay of one base axis
 
 **Context.** ADR-048 served a bare `iSUB` dummy (`X(1SUB)`) making `Y(n)` a 1-D
@@ -1340,6 +1390,8 @@ and vice versa.
 axis — the affine image is computed per axis, but the address logic for a
 multi-axis sub-block remains broader); a non-affine iSUB (e.g. `1SUB*1SUB`); a
 non-constant coefficient or offset (constant-folded only in this stage).
+
+---
 
 ## ADR-054 — Dynamic array parameters: a by-reference bound argument sized at callee entry
 
@@ -1375,6 +1427,8 @@ GRAMMAR-COVERAGE rules (12),(13) and (34)-(38) list the served form.
 parameter (need dope-vector descriptors, ADR-008); `*` adjustable-extent
 parameters (a descriptor with re-allocation on entry); passing a dynamic array
 that is a structure member (dynamic structure members remain diagnosed).
+
+---
 
 ## ADR-055 — `*` adjustable-extent array parameters: a hidden extent argument
 
@@ -1445,6 +1499,8 @@ DECIMAL now drops the fractional digits. FIXED division still evaluates in FLOAT
 changing `scaled.pli`'s 2-based FIXED BINARY behavior; adding decimal overflow
 (`SIZE`/`FIXEDOVERFLOW`) checks in this slice (deferred to QR2).
 
+---
+
 ## ADR-057 — `INITIAL` on a structure: a per-leaf store walk
 
 **Context.** ADR-044 expands an `INITIAL` itemlist for a fixed-size array into a
@@ -1474,6 +1530,8 @@ a value must be folded against its own member type, not a single element type);
 STATIC constant structure initializers and CHARACTER members in this slice
 (deferred).
 
+---
+
 ## ADR-058 — Dynamic lower bound: a runtime lower bound on a 1-D AUTOMATIC array
 
 **Context.** ADR-050 serves a single-axis AUTOMATIC array with a runtime *upper*
@@ -1498,6 +1556,8 @@ pairs; `bad_dyn_lower.pli` keeps the multi-axis gate. `ctest --test-dir build/cm
 **Rejected.** Threading a lower-bound argument through the dyn-param / `*`
 calling conventions (extend the ABI in a later slice); multi-axis dynamic
 arrays; a dynamic lower bound on a parameter in this slice.
+
+---
 
 ## ADR-059 — Dynamic multi-axis arrays: a runtime first axis with fixed later axes
 
@@ -1527,6 +1587,8 @@ rejects `A(3,n)`; a constant-upper dynamic array `A(lb:5,3)` runs (the
 runtime strides for each such axis, deferred); a dynamic multi-axis array passed
 to a `*` parameter beyond the total-extent case; a dynamic structure member
 (still gated).
+
+---
 
 ## ADR-060 — Dynamic array structure members: a bare buffer-pointer field
 
@@ -1563,6 +1625,8 @@ member (needs deep copy of each buffer, deferred); a dynamic member of an array
 of structures `arr(i).v(n)` (member buffer per element not yet served); `LIKE`
 of a struct with a dynamic member is diagnosed, not deep-copied.
 
+---
+
 ## ADR-061 — `INITIAL` on a dynamic array: fill the runtime buffer at entry
 
 **Context.** ADR-044 serves an `INITIAL` itemlist on a **fixed-size** array by
@@ -1595,6 +1659,8 @@ now rejects only the multi-axis form.
 runtime); zero-filling the rest of a short itemlist (AUTOMATIC leaves it
 uninitialized, matching scalar/array semantics); a loop for the store (the
 itemlist is a fixed constant sequence, straight-line GEPs are leaner).
+
+---
 
 ## ADR-062 — Runtime aggregate lengths on a dynamic structure member
 
@@ -1631,6 +1697,8 @@ array built-in argument (rule 123); `ctest --test-dir build/cmake` stays green. 
 live in `memberDyn_`); requiring the whole structure as the built-in argument
 (the built-ins reduce a single array, not a whole structure).
 
+---
+
 ## ADR-063 — POINTER as a first-class address type
 
 **Context.** QR1.3 (CM2 of the C-mirror sub-plan) needs `POINTER`, based data,
@@ -1664,6 +1732,8 @@ numeric target; `ctest --test-dir build/cmake` stays green. A pointer value cann
 avoids accidental arithmetic); allowing bare `NULL` without parentheses (kept
 consistent with DATE/TIME and other no-arg built-ins in this compiler); pointer
 arithmetic or ordering.
+
+---
 
 ## ADR-064 — BASED data and `->` locator qualification
 
@@ -1699,6 +1769,8 @@ target); requiring the locator pointer to equal the based structure's own
 without a pointer (needs an unqualified-locator rule deferred with
 `ALLOCATE`/`FREE`).
 
+---
+
 ## ADR-065 — ALLOCATE/FREE for based records via heap malloc/free
 
 **Context.** ADR-063/064 added POINTER and based data with `->`. QR1.3 (CM2)
@@ -1731,6 +1803,8 @@ reusing the based structure's own `BASED` pointer for `ALLOCATE SET` (SET may
 name any pointer); serving the `IN (AREA)` option, which needs a runtime
 sub-allocator.
 
+---
+
 ## ADR-066 — GET LIST list-directed input from SYSIN
 
 **Context.** CM3 (QR1.5) of the C-mirror sub-plan needs list-directed input, the
@@ -1760,6 +1834,8 @@ pair of FIXED, a FLOAT, and a CHARACTER value, verifies each, and prints PASS;
 sources, `EDIT`/`DATA` specifications, `COPY`, `LINE`, or `PAGE` in this stage
 (QR2.5); list-directed `DO`-repetition data-list elements (rule 111).
 
+---
+
 ## ADR-067 — STRING ( reference ) list-directed sinks and sources
 
 **Context.** CM3 (QR1.5) of the C-mirror sub-plan needs file/string sources and
@@ -1788,6 +1864,8 @@ rejects a non-character STRING target; `ctest --test-dir build/cmake` and `cmake
 set (duplicated the whole list-directed surface); routing through the FILE
 option (needs file-handle state, QR2.5); supporting `STRING` with `PAGE`/`SKIP`
 or a VARYING target (not meaningful for a fixed in-memory sink/source).
+
+---
 
 ## ADR-068 — OPEN/CLOSE and the FILE ( f ) stream option
 
@@ -1820,6 +1898,8 @@ the values; `tests/core/bad_file.pli` rejects a numeric variable as a FILE targe
 compiler-resolved name of a slot here); a new `TK::File` (would force a case in
 every type switch for a value that never reaches arithmetic); `FILE` with `PAGE`/
 `SKIP` (not part of this stage's stream surface).
+
+---
 
 ## ADR-069 — edit-directed `PUT/GET EDIT` with common format items
 
@@ -1858,6 +1938,8 @@ functions (they separate and tokenize, not position in fixed-width fields); an
 `E` scientific item in this slice (FLOAT uses `F`); an implicit-decimal-point
 `F(w,d)` read (a field with an explicit `'.'` is parsed; the implied-decimal form
 is not).
+
+---
 
 ## ADR-070 — `E(w,d)` scientific format and structures by value
 
@@ -1903,6 +1985,8 @@ changing the caller/callee return convention for one type); struct-returning
 functions with `ENTRY` statements in this slice; inline structure definitions in
 `RETURNS` (a declared template name is the supported form).
 
+---
+
 ## ADR-071 — Recursive `%INCLUDE` before lexical analysis
 
 **Context.** QR1.6 and CM4 require the safe subset of the C28-6571-3 Chapter 9
@@ -1935,6 +2019,8 @@ implementing Chapter 9 replacement or control flow in this slice; include
 search-path flags and the implementation-defined multi-identifier data-set form
 before a concrete use case requires them.
 
+---
+
 ## ADR-072 — Scalar math built-ins lowered through pli_* runtime wrappers
 
 **Context.** The C-mirror sub-plan (CM5) maps the remaining QR2.7 Appendix 1
@@ -1959,6 +2045,8 @@ symbols from IRGen: both would bypass the ABI-def single source of truth and
 add the only non-`pli_*` external surface. Complex component/conjugate and the
 remaining Appendix 1 families stay for later CM5 slices.
 
+
+---
 
 ## ADR-073 — Complex values as an `{double,double}` pair, expression-only
 
@@ -1991,6 +2079,8 @@ to fake a complex (semantically wrong and would invite struct-path confusion);
 adding `TK::Complex` to `isNumeric` (complex is not a real arithmetic type for
 the existing `+ - * /` operators).
 
+---
+
 ## ADR-074 — COMPLEX as a storable data type with real↔complex conversion
 
 **Context.** The C-mirror sub-plan (CM5) completes the complex type begun in
@@ -2021,6 +2111,8 @@ arithmetic operators treat a complex pair as a single real scalar and
 miscompile); implementing complex arithmetic in this slice (a separate, larger
 effort, out of the "declare, assign, convert" scope).
 
+---
+
 ## ADR-075 — Mixed void/function ENTRYs: one common impl type, no fall-through
 
 Context. ADR-026 shares one implementation function across a procedure's
@@ -2047,6 +2139,8 @@ ENTRYs plus an external ENTRY...RETURNS function call; the linkage (`.c`
 helper, cross-unit link) reuses the existing `cinterop` pattern. Truly mixed
 valued types stay diagnosed; USES/SETS/REDUCIBLE entry attributes stay
 out of scope.
+
+---
 
 ## ADR-076 — ON ERROR: handler-id stack, frameless units, ONCODE 1/0
 
@@ -2076,6 +2170,8 @@ inside and out, re-establishment after REVERT, and the SYSTEM/REVERT no-op
 path. Frame-carrying units, computational and I/O conditions, FINISH, and
 non-local GO TO unwinding stay diagnosed for later slices.
 
+---
+
 ## ADR-077 — %REPLACE: token-level substitution as a marked extension
 
 Context. TR 25.084 defines no preprocessor: the only comment form is
@@ -2101,6 +2197,8 @@ multi-token (whole statement) substitution plus string immunity;
 last definition. `%INCLUDE`, `%IF`, `%DECLARE`, and recursive expansion
 stay out of scope.
 
+---
+
 ## ADR-078 — %INCLUDE search paths: file dir, -I, env, exe-relative default
 
 Context. ADR-071 resolves `%INCLUDE` only against the including file's
@@ -2119,6 +2217,8 @@ for snippet libraries.
 Consequences. `driver/include_dirs` covers -I discovery, first-wins order,
 env discovery, missing-file rejection, and the -v default listing.
 
+---
+
 ## ADR-079 — Small binaries: sectioned runtime archive + link-time strip
 
 Context. `libpli.a` is a single object, and static archives link at object
@@ -2134,6 +2234,8 @@ keeps exactly its reachable set (`pli_rt_init/fini`, `put_skip`,
 
 Consequences. `driver/link` asserts an unused probe (`pli_sin`) is absent
 and a used one present. A future source split composes with this unchanged.
+
+---
 
 ## ADR-080 — Programmer-named conditions: use-declared names, tagged dispatch
 
@@ -2157,6 +2259,8 @@ ERROR, resume, and re-establishment; `bad_on_cond_decl.pli` and
 `bad_on_cond_error.pli` pin the two diagnostics. Computational, I/O,
 FINISH, AREA, and CHECK conditions stay diagnosed.
 
+---
+
 ## ADR-081 — Minimal DISPLAY: one scalar plus a newline
 
 Context. Rule (114) is `DISPLAY ( expression )` (Y33 attests a scalar print
@@ -2172,6 +2276,8 @@ column/item state, so mixed PUT/DISPLAY output never joins or splits lines.
 
 Consequences. `display.pli` (golden) covers all four scalar types;
 `bad_display.pli` pins the non-scalar diagnostic. `REPLY` is a later slice.
+
+---
 
 ## ADR-082 — Quoted %REPLACE operands are re-scanned as source text
 
@@ -2190,6 +2296,8 @@ diagnostic instead of the generic expression error.
 Consequences. `replace_quoted.pli` (golden) covers quoted single-token,
 quoted multi-token, and unquoted coexistence; `bad_replace_mixed.pli` and
 `bad_dqstring.pli` pin the two diagnostics. Unquoted behavior is unchanged.
+
+---
 
 ## ADR-083 — Preprocessor conditionals: %IF over integer variables
 
@@ -2213,6 +2321,8 @@ Consequences. `pp_if.pli` (golden, with `pp_yes.inc`/`pp_no.inc`) covers
 taken/untaken/else/nested arms; `bad_pp_if.pli` pins the undeclared-name
 diagnostic. `%DO` groups (multi-directive arms) stay out per the subplan.
 
+---
+
 ## ADR-084 — Complex arithmetic over pairs, exact equality, imaginary constants
 
 Context. CM5 serves complex values as {double,double} pairs with REAL/IMAG/
@@ -2233,6 +2343,8 @@ imaginary constants, and both equalities; `bad_complex_power.pli` and
 Appendix-1 math stay out. Bare factored `a, b <attr>;` typing only the
 last item is a known pre-existing parser limitation, untouched here.
 
+---
+
 ## ADR-085 — Complex output as real, sign, imaginary, I
 
 Context. CM5 values exist with arithmetic served, but output was diagnosed
@@ -2248,6 +2360,8 @@ diagnosed in sema beside the struct case, so front-end checks reject it.
 Consequences. `complex_io.pli` (golden) covers single/multi-item PUT and
 DISPLAY including negative parts; `bad_get_complex.pli` pins the input
 diagnostic. Complex input parsing stays out.
+
+---
 
 ## ADR-086 — Complex input as re+imI tokens through element pointers
 
@@ -2265,6 +2379,8 @@ is lifted (the codegen backstop stays as defense).
 Consequences. `driver/get_complex` covers both shapes plus the bare-real
 rule; the transient `bad_get_complex.pli` pin is removed.
 
+---
+
 ## ADR-087 — ASIN, ACOS, ATAN2, CBRT through thin runtime wrappers
 
 Context. The Appendix-1 math family stops at ATAND, leaving the remaining
@@ -2277,6 +2393,8 @@ mirroring the one-arg shape otherwise. All four lower through thin
 
 Consequences. `math4.pli` checks all four within tolerance;
 `bad_math4.pli` pins arity and numeric diagnostics.
+
+---
 
 ## ADR-088 — Decimal I/O prints and reads the 10^q point
 
@@ -2295,6 +2413,8 @@ miscompiled this once during development).
 Consequences. `decimal_io.pli` (golden) and `driver/get_decimal` cover
 output, DISPLAY, and round-trip input. Overflow checks stay out (D1/QR2).
 
+---
+
 ## ADR-089 — FIXED BINARY overflow traps to hard ERROR
 
 Context. QR1.2 needs overflow checks, but routing them needs a SIZE
@@ -2311,6 +2431,8 @@ the checks in QR1.4.
 
 Consequences. `driver/overflow` covers all four traps plus in-range
 edges; the `tests/ir` arith/func expectations track the checked shape.
+
+---
 
 ## ADR-090 — Dynamic lower-bound params read both bounds at entry
 
@@ -2330,6 +2452,8 @@ Consequences. `dyn_param_lower.pli` covers l=1, remapped l=0/2/5,
 writes-through, and a function result; `bad_dyn_param.pli` keeps only
 the multi-axis case and `bad_dyn_lower.pli` the beyond-first-axis
 lower case.
+
+---
 
 ## ADR-091 — Whole-structure copy with dynamic members deep-copies
 
@@ -2354,6 +2478,8 @@ Consequences. `struct_dyn_copy.pli` covers scalar/element copy,
 `LBOUND`/`HBOUND`/`DIM`/`SUM` over the copied member, and
 deep-not-aliased divergence; `bad_struct_dyn.pli` now pins the
 `LIKE`-with-dynamic-member diagnostic.
+
+---
 
 ## ADR-092 — INITIAL on structures with a trailing dynamic member
 
@@ -2384,6 +2510,8 @@ bounds inquiries, per-variable buffers, and reactivation;
 `bad_struct_dyn_init.pli` pins the non-trailing and nested
 diagnostics.
 
+---
+
 ## ADR-093 — BY NAME copies dynamic members by buffer contents
 
 Context. QR1.1 serves `BY NAME` across differing layouts (ADR-043) and
@@ -2407,6 +2535,8 @@ Consequences. `struct_by_name_dyn.pli` covers cross-layout matching,
 deep-not-aliased divergence; `bad_by_name_dyn.pli` pins the
 dynamic-vs-fixed pairing diagnostic.
 
+---
+
 ## ADR-094 — Callee parameters resolve before any body is typed
 
 Context. Argument checks (`checkAssignable` on `CALL` and function-call
@@ -2428,6 +2558,8 @@ identically.
 Consequences. `bad_struct_dyn.pli` gains the by-value-argument case
 alongside its `LIKE` case; the full suite stays green (201/201), so no
 passing test relied on the hole.
+
+---
 
 ## ADR-095 — FIXED DECIMAL overflow traps to hard ERROR
 
@@ -2457,6 +2589,8 @@ traps plus fitting edges (rescaled narrowing, decimal-to-binary);
 limitation: an intermediate wider than its storage width traps even
 when the final target could hold the value — serving that needs the
 deferred widened intermediates.
+
+---
 
 ## ADR-096 — FLOAT to FIXED conversions trap outside the range
 
@@ -3553,6 +3687,8 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
   VARYING members, DEFINED/BASED member overlays, and
   whole-struct char assignment stay later slices.
 
+---
+
 ## ADR-138 — CONTROLLED attribute parses; allocation stays out
 
 Context. `CONTROLLED` was rejected at parse with the other M3
@@ -3575,6 +3711,8 @@ diagnostics; `bad_controlled_area.pli` pins the AREA parse
 diagnostic separately (a parse error anywhere masks all sema
 diagnostics in the same file, so the two levels cannot share
 a test). Runtime generation stack (B2/B3) stays out.
+
+---
 
 ## ADR-139 — CONTROLLED generation stack and wiring
 
@@ -3605,6 +3743,8 @@ Consequences. `controlled.pli` runs the full lifecycle
 pins the moved BASED-SET diagnostic and the locator FREE.
 A C-level unit check (`/tmp`, uncommitted) pins push/shadow/
 pop/NULL/sparse-slot behavior including the exit-8 empty pop.
+
+---
 
 ## ADR-140 — BYADDR opts a call out of the struct copy
 
@@ -3637,6 +3777,8 @@ member intact, default-copy contrast pinned);
 forwarding (`f(byaddr(p))` through a struct param) works by
 construction. Structs in by-value C entries and async calls
 ride the same choke point unchanged.
+
+---
 
 ## ADR-141 — Variable-length SUBSTR via VARYING results
 
@@ -3705,6 +3847,8 @@ adjustable-length characters in `RETURNS`; a non-parameter (local) adjustable
 character (no caller to supply the length); and array-of-adjustable-char. A
 runtime-length local `CHAR(n)` (not a parameter) stays diagnosed.
 
+---
+
 ## ADR-143 — BASED directly on a procedure POINTER parameter
 
 **Context.** Every library method takes a POINTER handle, but
@@ -3727,6 +3871,8 @@ undeclared non-parameter bases still error under (25).
 **Rejected.** Keeping immediate single-pass lookup (order-dependent);
 inferring POINTER for any undeclared base (only procedure/ENTRY
 parameter names get POINTER; other undeclared bases stay diagnosed).
+
+---
 
 ## ADR-144 — `CHAR(*)` in ENTRY descriptor lists
 
@@ -3763,6 +3909,8 @@ supply a result buffer to a foreign caller); handling `*`-extent chars via dope
 vectors (overkill — a single i64 length suffices); deferring until M2 (blocks
 practical C interop with string-handling functions).
 
+---
+
 ## ADR-145 — `DECLARE name CONDITION;` programmer-named condition declaration
 
 **Context.** TR 25.084 rule (9) allows `DECLARE name CONDITION;` to explicitly
@@ -3797,6 +3945,8 @@ ProcName + `isCond` flag covers the collision semantics cleanly without adding a
 new symbol category to sema's type system. Deferring until M2 — the feature is a
 small parser+Sema change with no runtime cost beyond what use-declaration already
 pays.
+
+---
 
 ## ADR-146 — Package-level data symbols visible from member-proc LIKE references
 
@@ -3844,6 +3994,8 @@ resolution for module-level names (would diverge from the general lookup path).
 
 
 
+---
+
 ## ADR-147 — Nested ON units establish handlers when the outer unit runs
 
 **Context.** Rule (91) reads `ON condition [SNAP] {unconditional-statement |
@@ -3874,6 +4026,8 @@ would pop a directly-nested handler when the outer unit returns, breaking
 the establish-then-raise-later shape that direct nesting serves.
 
 
+---
+
 ## ADR-148 — Array attribute axis argument and SYSPARM builtin
 
 **Context.** Rules (12),(13),(123): `LBOUND`/`HBOUND`/`DIM` took one array
@@ -3903,6 +4057,8 @@ diagnosed, never miscompiled); `DIM(A)` switching to first-axis extent
 (would break `array2d.pli`'s total-count pin); a `SYSPARM` runtime call
 (nothing to call — the value is a compile-time constant).
 
+---
+
 ## ADR-149 — MAXLENGTH removed as a non-standard builtin
 
 **Context.** ADR-134 added `MAXLENGTH(v)` to serve libnet's heap-guard form
@@ -3928,6 +4084,8 @@ entry.
 builtin with no remaining consumer violates the no-extensions bar); replacing
 it with a runtime `pli_maxlength` helper (there is nothing to compute — the
 value was always a constant fold).
+
+---
 
 ## ADR-150 — Implicit ALLOCATE/FREE for CONTROLLED variables
 
@@ -4105,6 +4263,8 @@ forms.
  **Rejected.** Passing a length for controlled dummies (loses stack sharing);
  folding `controlled` into type equality (breaks descriptor matching).
 
+---
+
 ## ADR-156 — `//` line comments as a dialect extension
 
 **Context.** TR 25.084 (149)–(151) defines only `/* … */`, and the
@@ -4129,6 +4289,8 @@ MODERN-PLI-PLAN MX10 list the form.
 **Rejected.** Treating spaced `/ /` as a comment (changes division);
 stripping `//` text in the preprocessor instead of passing it through
 (diverges columns from the lexer path).
+
+---
 
 ## ADR-157 — `%XINCLUDE`: IBM Enterprise include-once
 
@@ -4261,6 +4423,8 @@ directions.
 grow); data-pointer passing to a varying dummy (callee reads garbage
 length); leaving tails uninitialized (scans read stale bytes).
 
+---
+
 ## ADR-161 — CONTROLLED dynamic numeric arrays size from ALLOCATE, bound from the live generation
 
 **Context.** libnet needs `DCL FDS FIXED BIN(31) CONTROLLED` plus
@@ -4287,6 +4451,8 @@ live `HBOUND`/`DIM`/`LBOUND`, and LIFO restore;
 `multimodule/ctl_dyn_array.pli` pins private per-module stacks across
 the object boundary. `bad_controlled.pli` still rejects `DCL C8(n)
 CONTROLLED`.
+
+---
 
 ## ADR-162 — Multi-file driver arguments (separate compilation, cc-style)
 
@@ -4319,6 +4485,8 @@ against a library unit in one invocation (previously two `-c` steps +
 manual `-c` path and `tests/multimodule/*` are unchanged. Mixing `.c`
 inputs into the driver and intra-call parallel compilation remain
 follow-ups.
+
+---
 
 ## ADR-163 — Dimensioned BASED arrays overlay pointer storage, bounds from the declaration
 
@@ -4355,6 +4523,8 @@ overlays, live bounds, and heap cells;
 `bad_based_array.pli` / `bad_based_alloc_dim.pli` pin the
 remaining diagnostics.
 
+---
+
 ## ADR-164 — Locator-qualified BASED array subscripts address off the locator
 
 **Context.** libnet handle/event views are addressed through
@@ -4384,6 +4554,8 @@ runtime-index reads/writes through a differing locator;
 caller-buffer views through caller-supplied locators across the
 object boundary. `bad_based_locator_sub.pli` pins the three
 diagnostics (non-POINTER locator, non-BASED target, arity).
+
+---
 
 ## ADR-165 — ADDR on array elements shares the subscript address path
 
@@ -4422,6 +4594,8 @@ BASED fixed/`(n)`, locator, 2-D, and pointer-arg cases via
 scalar BASED write-through; `multimodule/addr_elem.pli` pins
 cross-object poke/peek and `(n)` views through element
 addresses. `bad_addr_elem.pli` pins the non-variable diagnostic.
+
+---
 
 ## ADR-166 — `(*)` adjustable-extent array descriptors in ENTRY lists
 
@@ -4465,6 +4639,8 @@ multi-axis `(*, *)` (needs dope vectors, ADR-008); accepting
 only the spec order (the wishlist order is what libnet
 declares, so both ride one code path).
 
+---
+
 ## ADR-167 — General locator expressions address the BASED view
 
 **Context.** libnet wishlist #6 wants handle-pool member
@@ -4505,6 +4681,8 @@ non-POINTER locator and non-BASED target diagnostics (124).
 **Rejected.** Accepting `ptr -> CONTROLLED.member` directly
 (not IBM: the right side must be BASED; use a LIKE view);
 extending FREE locators or `P -> S.A(i)` in this slice.
+
+---
 
 ## ADR-168 — `VARYINGZ`: NUL-terminated strings for the C ABI
 
@@ -4548,6 +4726,8 @@ and `bad_varyingz_ret.pli` pin the rejected forms.
 length (would fork every VARYING operation for no observable
 gain inside PL/I); C write-back through a VARYINGZ argument
 (input strings only in this slice).
+
+---
 
 ## ADR-169 — `UNALIGNED` packed structures for C-interop records
 
@@ -4605,6 +4785,8 @@ keeping LLVM's inferred alignment honest); rejecting `UNALIGNED`
 on non-structures (a standalone scalar has no observable
 misalignment in this compiler, so it is accepted like `ALIGNED`).
 
+---
+
 ## ADR-170 — AREA/OFFSET region allocation reuses the BASED locator path
 
 **Context.** libnet wishlist #9 needs random-access, out-of-order
@@ -4661,6 +4843,8 @@ and `SET`/`IN` in either order; `multimodule/area_offset.pli`
 (+ `_lib`) allocates in the caller's region from a library and
 returns the offset; `bad_area_offset.pli`/`bad_area_attr.pli` pin
 the diagnostics.
+
+---
 
 ## ADR-171 — `ENTRY ... VARIABLE`: first-class procedure values
 
@@ -4727,6 +4911,8 @@ function pointer cannot carry a static link); arrayed ENTRY and
 ENTRY structure members; and `STRUCTURE`/`CHARACTER` entry returns
 (they would need to thread the hidden result buffer through the
 stored pointer).
+
+---
 
 ## ADR-172 — GO TO terminates BEGIN blocks, reverting their ON-units
 
@@ -4831,6 +5017,8 @@ is natural and falls out of the all-`*` view); accepting array
 expressions or reductions as the slice value (kept diagnosed, as
 elsewhere).
 
+---
+
 ## ADR-174 — Bare `BASED` declares an unconnected variable
 
 **Context.** libnet's `net_poll_multi` walks a caller handle pool
@@ -4878,6 +5066,8 @@ should be refactored to `p -> c.fd`. Declaring an implicit hidden
 locator for bare `BASED` (would silently make an unqualified
 reference dereference a null locator instead of being diagnosed).
 
+---
+
 ## ADR-175 — INITIAL on a CONTROLLED structure member assigns per allocation, including package scope
 
 **Context.** `source/net.pli` declares `2 n_clients fixed bin(31)
@@ -4923,6 +5113,8 @@ still rejects scalar CONTROLLED INITIAL; `core` (268),
 constant initializer (loses ALLOCATE/FREE generations and contradicts
 SC26-3114); pushing/popping a fresh package generation per procedure
 entry (destroys sharing — each call would see a blank slate).
+
+---
 
 ## ADR-176 — ALLOCATE bounds override DECLARE bounds; N-D CONTROLLED arrays
 
@@ -5134,6 +5326,8 @@ risk, and keeping it costs nothing); comparing target triples as strings
 (two LLVM builds spell the same Darwin ABI differently, e.g.
 `arm64-apple-darwin25.6.0` vs `arm64-apple-macosx26.0.0`).
 
+---
+
 ## ADR-180 — Tier 1 completions: cross-section values by sema desugar, fixed CHARACTER arrays, CONTROLLED INITIAL and runtime extents
 
 **Context.** Four Tier 1 gaps shared one shape: the value was already typed
@@ -5183,6 +5377,8 @@ treating a runtime-bound `A(n)` CONTROLLED array as `A(*)` with the bound
 supplied at each `ALLOCATE` (loses the implicit entry generation, so
 first-use references would need an explicit `ALLOCATE` like `(*)` does).
 
+---
+
 ## ADR-181 — TASK/EVENT aggregates in tasking options and equal-size different-type DEFINED overlays
 
 **Context.** QR2.8 tasking (rules (15),(79),(82)) gated every TASK/EVENT
@@ -5225,6 +5421,8 @@ dynamic TASK/EVENT arrays (their per-element init paths are unprobed);
 relaxing the iSUB/element DEFINED type match (element addressing there
 is type-driven, unlike the whole-base opaque address).
 
+---
+
 ## ADR-182 — Complex exponentiation via exp(b*log(a))
 
 **Context.** Rule (121) served complex `+ - * /` over `{double,double}`
@@ -5246,6 +5444,8 @@ row (115)–(122) moves.
 **Rejected.** A `pli_cpow` runtime helper (new struct ABI for one
 operator); repeated-multiplication fast paths (extra runtime
 branches for exactness the tolerance already covers).
+
+---
 
 ## ADR-183 — Multiple assignment to whole arrays via a temp desugar
 
@@ -5274,6 +5474,8 @@ row (86) moves.
 side-effecting RHS once per target); a new IRGen multi-target array
 path (duplicates the three single-target paths it reuses).
 
+---
+
 ## ADR-184 — Dynamic BASED heap arrays sized from live DECLARE bounds
 
 **Context.** Rules (25),(89) served fixed-extent BASED heap cells
@@ -5300,6 +5502,8 @@ live `LBOUND`/`HBOUND`/`DIM`. GRAMMAR-COVERAGE row (25) moves.
 already read separate dope slots; a header would split the overlay
 and heap representations); evaluating bounds only at entry (wrong
 block size when the bound changes before ALLOCATE).
+
+---
 
 ## ADR-185 — Multi-axis `*` adjustable-extent parameters
 
@@ -5330,6 +5534,8 @@ parameter) — no caller-side precedent; a single extent with static
 strides reuses the existing hidden-arg slot. Accepting `*` on later
 axes (would need per-axis hidden extents, a different ABI).
 
+---
+
 ## ADR-186 — SYSTEM(x) built-in function
 
 **Context.** TR 25.084 rule (123) lists the miscellaneous built-in functions
@@ -5354,6 +5560,8 @@ pin the character and numeric argument paths and the arg-count/arg-type
 rejections. GRAMMAR-COVERAGE row (123) moves to include SYSTEM. The runtime
 function is not placed in kRuntimeAttrs — like pli_date/pli_time/pli_delay it
 performs external I/O and receives only the default NoUnwind.
+
+---
 
 ## ADR-187 — CONVERSION condition: FIXED(char) trap, ON/SIGNAL/REVERT, (NOCONVERSION)
 
@@ -5394,6 +5602,8 @@ were accepted as syntax but produced no runtime behaviour.
 CONVERSION, the FIXED(char) trap, ONCODE behavior (0 inside CONVERSION), and the
 (NOCONVERSION) prefix. `bad_on_cond_conversion.pli` pins `CONDITION(CONVERSION)`
 rejection. GRAMMAR-COVERAGE rows (60)–(63) and (91)–(99) updated.
+
+---
 
 ## ADR-188 — Zig-style upward filesystem walk for library and include paths
 
@@ -5520,6 +5730,8 @@ fast-path (irgen.cpp:6186) and on ARM64 the hardware `SDIV` by zero returns 0
 (e.g. `fixed bin(15,2) / fixed bin(15,2)`) correctly stays FLOAT — the cross-base
 scale mismatch is genuinely lossy.
 
+---
+
 ## ADR-191 — Wide `FIXED DECIMAL` (>18 digit) as a 128-bit scaled integer
 
 **Context.** `intBits()` (src/types.h:219-225) mapped every `FIXED DECIMAL` with
@@ -5559,6 +5771,8 @@ separate runtime subsystem with no benefit for this workload; 32-bit or wider
 integer-only widening (i128 already fits the standard's 31-digit cap and the
 `DECIMAL(25,2)` case).
 
+---
+
 ## ADR-202 — `UNION` overlapping structure members
 
 **Context.** PL/I `UNION` (Subset-G extension) declares minor structures that
@@ -5581,6 +5795,8 @@ ensures correct sizing. Type equality (`operator==`) distinguishes union from
 non-union structs, so BY NAME assignment (rule 86) requires identical
 `isUnion` flags.
 
+---
+
 ## ADR-203 — `RESERVED` attribute (storage reservation without initialization)
 
 **Context.** TR 25.084 rule (15) allows `DCL x RESERVED;` to reserve storage
@@ -5596,6 +5812,8 @@ accepted so that existing PL/I code using it compiles without diagnostic.
 **Consequences.** Storage is zero-initialized implicitly by the C runtime.
 The flag is available for future diagnostics (e.g., detecting `INITIAL` on a
 `RESERVED` variable) if needed.
+
+---
 
 ## ADR-204 — `NONPRINT` stream attribute (discard output to a file)
 
@@ -5619,6 +5837,8 @@ runtime side effects. The `rt_out_discard` flag is thread-local per the
 existing `rt_out_f` pattern. The `pli_file_open` ABI signature changed to
 include the `nonprint` parameter (runtime/pli_rt_abi.def).
 
+---
+
 ## ADR-195 — `EVERY`/`SOME` reduction built-ins (Subset-G extension)
 
 **Context.** Subset-G specifies `EVERY(array)` and `SOME(array)` as aggregate
@@ -5641,6 +5861,8 @@ element-wise expression form (`EVERY(a > 0)`) is only served in direct
 assignment (mirrors `SUM(a + 1)`), per the existing reduction restriction.
 Tests: `tests/builtins/every_some.pli`, `tests/builtins/bad_every.pli`.
 
+---
+
 ## ADR-197 — `DATETIME` built-in (Subset-G extension)
 
 **Context.** Subset-G specifies `DATETIME(...)` alongside `DATE` and `TIME`
@@ -5661,6 +5883,8 @@ writes the concatenated stamp with the same blank-pad convention.
 no new lowering machinery. `DATETIME() = DATE() || TIME()` character-wise
 (the test asserts the concatenation). Tests: `tests/builtins/datetime.pli`,
 `tests/builtins/bad_datetime.pli`.
+
+---
 
 ## ADR-199 — `IDENTICAL` aggregate-comparison built-in (Subset-G extension)
 
@@ -5693,6 +5917,8 @@ VARYING/dynamic shapes, and arrays of aggregates remain diagnosed gaps for
 a later stage. Tests: `tests/builtins/identical.pli`,
 `tests/builtins/bad_identical.pli`.
 
+---
+
 ## ADR-192 — `LABEL` attribute (rule (21))
 
 **Context.** TR 25.084 rule (21) gives label variables: a variable that can
@@ -5706,6 +5932,8 @@ src/irgen.cpp).
 
 **Consequences.** No ABI change — pure compiler lowering. Test:
 `tests/builtins/label_attr.pli`.
+
+---
 
 ## ADR-193 — `ISOCHAR` built-in (IBM extension)
 
@@ -5721,6 +5949,8 @@ and returns `CHARACTER(256)` — the maximum span for 8-bit code points.
 **Consequences.** One runtime helper, fixed by the ABI. Tests:
 `tests/builtins/isochar.pli`, `tests/builtins/bad_isochar.pli`.
 
+---
+
 ## ADR-194 — `BOOL` built-in (rule (123), Appendix 1)
 
 **Context.** `BOOL(b1, b2, b3)` selects `b2` when `b1` is true, else `b3` —
@@ -5733,6 +5963,8 @@ the pointer/length pair). No ABI entries, no runtime helpers.
 
 **Consequences.** Zero-cost conditional values for every servable type.
 Tests: `tests/builtins/bool.pli`, `tests/builtins/bad_bool.pli`.
+
+---
 
 ## ADR-196 — `UNSPEC` function + pseudo-variable (rule (123))
 
@@ -5751,6 +5983,8 @@ blank/tail handling (runtime `pli_unspec_copy`, `runtime/rt_cond.c`).
 must use `IDENTICAL` (ADR-199), not `UNSPEC` equality. Test:
 `tests/builtins/unspec_test.pli` (round-trip incl. the pseudo-variable).
 
+---
+
 ## ADR-198 — `CURRENTSIZE` built-in (rule (123), Appendix 1)
 
 **Context.** `CURRENTSIZE(x)` reports the live size of `x`: the current
@@ -5767,6 +6001,8 @@ width. No ABI entries, no runtime helpers.
 lengths are read from the value, not the type. Tests:
 `tests/builtins/currentsize.pli`, `tests/builtins/bad_currentsize.pli`.
 
+---
+
 ## ADR-200 — `EMPTY` built-in (rule (123), Appendix 1)
 
 **Context.** `EMPTY()` denotes the null `AREA` handle — the area equivalent
@@ -5779,6 +6015,8 @@ returns `AREA`. `IRGen::emitBuiltin` (src/irgen.cpp) calls runtime
 
 **Consequences.** One trivial runtime helper. Tests:
 `tests/builtins/empty.pli`, `tests/builtins/bad_empty.pli`.
+
+---
 
 ## ADR-201 — `PAGENO` pseudo-variable (rule (123))
 
@@ -5795,6 +6033,8 @@ matching the `pli_pageno` getter used by the function form.
 **Consequences.** Symmetric getter/setter pair over per-file runtime state.
 Tests: `tests/builtins/pageno_assign.pli`, reads in
 `tests/builtins/fileopen.pli`.
+
+---
 
 ## ADR-209 — picture `P` edit item in `PUT EDIT` (rules (53),(146)-(148))
 
@@ -5813,6 +6053,8 @@ the `VALID`/`EDIT` built-ins (Phase C1a/C1e) remain future work.
 input and declared picture variables are diagnosed gaps, not silent ones.
 Test: `tests/builtins/picture_test.pli`.
 
+---
+
 ## ADR-210 — `ONSOURCE` pseudo-variable (rule (123))
 
 **Context.** The `ONSOURCE` function reads the source key of the
@@ -5830,6 +6072,8 @@ matching the `pli_on_source` getter.
 **Consequences.** Symmetric with the function form; only meaningful inside
 an `ON` handler, blank/default otherwise. Test:
 `tests/builtins/onsource_assign.pli`.
+
+---
 
 ## ADR-206 — `NULL(:ENTRY:/:FILE:/:LABEL:)` typed nulls
 
@@ -5851,6 +6095,8 @@ flag), so a null file value has no representation in this stage.
 null; mistyped uses are caught by ordinary assignment checking. Tests:
 `tests/builtins/enquiries.pli`, `tests/builtins/bad_enquiries.pli`.
 
+---
+
 ## ADR-207 — `DECLARESIZE(:var:)` declared-size enquiry
 
 **Context.** `CURRENTSIZE` (ADR-198) reports the *live* size of a value, but
@@ -5869,6 +6115,8 @@ diagnosed (123); dynamically-sized variables are diagnosed (13).
 **Consequences.** Pure compile-time — no ABI entries, no runtime helpers.
 Tests: `tests/builtins/enquiries.pli`, `tests/builtins/bad_enquiries.pli`.
 
+---
+
 ## ADR-208 — `EPSILON`/`MAXVAL`/`MINVAL` float enquiries
 
 **Context.** Code needing float limits (convergence thresholds, range
@@ -5885,6 +6133,8 @@ emitted as pure LLVM constants.
 second float format ever lands, the designator text is already threaded
 through for refinement. Tests: `tests/builtins/enquiries.pli`,
 `tests/builtins/bad_enquiries.pli`.
+
+---
 
 ## ADR-205 — DEFINE CONSTANT textual named constants
 
@@ -5915,6 +6165,8 @@ array bound; `tests/core/bad_define_constant.pli` pins duplicates,
 non-constant values, and reassignment. Known limits: no constant
 expressions (`OTHER + 1` is diagnosed — the same limit `VALUE` has);
 file-scope constants stay diagnosed.
+
+---
 
 ## ADR-230 — Optional MLIR helper bridge architecture (P2 spike)
 
@@ -5950,6 +6202,8 @@ every HIR form and violates ADR-002); using `unrealized_conversion_cast` as the
 final bridge (the conversion target must reject it); shipping MLIR enabled by
 default (keeps P2 time-boxed and non-blocking for P3/P5).
 
+---
+
 ## ADR-231 — Production MLIR lowering rejected; direct LLVM IR is the migration target (P4 outcome)
 
 **Context.** The migration plan ended with P4 (lower migrated operations
@@ -5978,6 +6232,8 @@ with fresh measurements against this baseline.
 LLVM passes already recover the performance); deleting the 8 runtime-only
 bodies now (they are the only implementation, P6 step 1 fails).
 
+---
+
 ## ADR-211 — `NONPRINT` on SEQUENTIAL RECORD files (rules (112),(113))
 
 **Context.** ADR-204 gave `NONPRINT` stream files discard semantics by
@@ -5999,6 +6255,8 @@ as meaningless-but-harmless for binary records.
 **Consequences.** No sema change — `NONPRINT` was already accepted on the
 `DECLARE`; only the runtime signature was missing. Tests:
 `tests/corner_cases/record_io_edge.pli`, `tests/driver/record.sh`.
+
+---
 
 ## ADR-212 — `!noalias`/`!alias.scope` on plain `AUTOMATIC` locals (P2)
 
@@ -6073,6 +6331,8 @@ duplicates what SROA already achieves); adding a separate `-passes=loop-vectoriz
 invocation after the default pipeline (the vectorizer needs TTI registered in
 the analysis manager, which `buildPerModuleDefaultPipeline` sets up only once).
 
+---
+
 ## ADR-214 — One-slot CONTROLLED generation freelist
 
 Rules (87)–(90): per-iteration `ALLOCATE`/`FREE` of the same size paid a
@@ -6116,6 +6376,8 @@ table it mirrors is already process-global — matching existing practice
 instead of fixing threading here).
 
 
+
+---
 
 ## ADR-215 — By-value passing for read-only scalar internal parameters
 
@@ -6161,6 +6423,8 @@ eligibility proof anyway); forwarding-argument refinement for wrapper
 procs (`g(x) { return f(x); }` stays by reference — documented future
 work, unneeded for the measured gap).
 
+---
+
 ## ADR-216 — Variable-tail in-place self-append for VARYING strings
 
 Rule (119): `result = result || temp` in a loop paid a fresh `pli_alloc`
@@ -6197,6 +6461,8 @@ proof burden buys nothing measurable. Freeing the generic temp buffer:
 it would fix the RSS leak (unfreed temp per concat-assign) but not the
 traffic; recorded as a separate issue, not attempted here.
 
+---
+
 ## ADR-217 — Free the generic concat temp buffer at assignment
 
 Rule (119): the generic concat lowering evaluates into a fresh `pli_alloc`
@@ -6228,6 +6494,8 @@ same check — more sites for identical coverage); freeing one-shot temps
 (unmeasured, adds call noise where the optimizer currently folds
 cleanly).
 
+---
+
 ## ADR-218 — Rebrand the toolchain from `plic` to `pli`
 
 The working title `plic` (PL/I compiler) collided with nothing but read
@@ -6253,6 +6521,8 @@ file keeps its original wording (ADRs are immutable).
 `PLIC_*` cache entries); `pli version` plus the full `ctest` suite pass
 after the rename. `rg -w plic` is empty outside this file's history.
 Driver fallbacks move to the canonical `./build/cmake/pli` path.
+
+---
 
 ## ADR-219 — Source-line attribution through `%include`
 
@@ -6283,6 +6553,8 @@ error to `pp_line.inc:3:` and a post-include root error to
 unchanged (flat line == root file-local line, root path matches `rootCanon_`).
 No golden `.out` pinned diagnostic wording (none existed), so zero churn outside
 include cases.
+
+---
 
 ## ADR-220 — Buffered stdout in `rt_put_raw` (io_throughput fix)
 
@@ -6473,6 +6745,8 @@ the pair functions write to their out-pointer argument, and the optimizer
 previously eliminated the `load` from the caller's `alloca` because it believed
 nothing could write to that memory.
 
+---
+
 ## ADR-224 — Hermetic static toolchain: LLVM built once from source, stashed, never rebuilt
 
 **Context.** Release tarballs must run where LLVM is not installed. The
@@ -6512,6 +6786,8 @@ and libxml2 from source to keep them enabled (cost for features pli never
 calls); `actions/cache` as the stash (10 GB cap, LRU eviction — fine as a
 speed layer, not the store of record); all-targets source build (2–3× build
 time for triples pli has no runtime bitcode for).
+
+---
 
 ## ADR-225 — Zero-subprocess driver: in-process codegen, link, LTO, and PGO
 
@@ -6564,6 +6840,8 @@ debug info is emitted yet). `--triple` for non-host triples diagnoses
 second behavior to test and a stale-toolchain hazard); fully static libc
 (ADR-224, unchanged); vendoring the macOS SDK now (license + drift — phased).
 
+---
+
 ## ADR-226 — Vendored macOS SDK stubs: link with no Xcode
 
 **Context.** ADR-225 left one subprocess standing: `xcrun --show-sdk-path`
@@ -6590,6 +6868,8 @@ runtime on the host instead).
 **Rejected.** Copying Apple's `.tbd` files (redistribution restriction —
 hence hand-written); covering iOS/simulator targets (host-only recipes).
 (Embedding the stubs was deferred here and done in ADR-227.)
+
+---
 
 ## ADR-227 — Embedded sysroots: one file, link with nothing except the OS
 
@@ -6668,6 +6948,8 @@ and portable); compressing the blobs (no decompressor dependency — raw
 arrays ride the existing embed mechanism); a stash release for the ~12 MB
 now (revisit if they grow — same evolution as ADR-224's LLVM stash).
 
+---
+
 ## ADR-228 — Host CRT recipe searches GCC's libdir; `-Wl` non-PIE spellings reach lld
 
 **Context.** ADR-227 made the embedded sysroot the default link (static musl
@@ -6705,6 +6987,8 @@ the next toolchain; dropping the `-Wl` passthrough test as "expected" — the
 flag is valid and the test is the source of truth (change the compiler, not
 the test); forwarding `-nopie`/`-no-pic` to lld — not lld spellings, an
 explicit error would replace the old no-op.
+
+---
 
 ## ADR-229 — Vendored sysroot stubs cover the codegen's symbol surface, gated by a driver test
 
@@ -6764,6 +7048,8 @@ manifest the compiler does not read is documentation, not a gate; listing
 *every* real libSystem export in the stub — the stub exists to stay a small
 curated subset of a 9 800-symbol export list.
 
+---
+
 ## ADR-232 — ADR numbers 192 and 194 were each used twice; the MLIR pair is renumbered 230/231
 
 **Context.** The ADR log had two entries numbered 192 and two numbered 194,
@@ -6795,6 +7081,8 @@ them — an ADR records one decision, and merging two unrelated ones would
 destroy the history. Deleting the duplicate entries — the decisions are still
 in force. Adding a disambiguation note to ADR-192/194 instead of renumbering —
 the number itself is the citation, so a note cannot fix a reference.
+
+---
 
 ## ADR-233 — Serialised stream access for programs with tasks (CALL ... TASK)
 
@@ -6892,6 +7180,8 @@ bytes stay intact but the split between them does not. The routing calls are
 inside the statement's lock, so a task's record does not land in another task's
 file — but a task that *selects* a file while another task's statement is open
 still changes the destination for the statements that follow.
+
+---
 
 ## ADR-234 - Go-style lightweight threading for PL/I tasking (the fiber model)
 
@@ -7007,6 +7297,8 @@ contended lock never enters the kernel. Until then, the model is still
 * The AArch64 fiber backend is not written; the legacy model is the
   default there.
 
+---
+
 ## ADR-235 - The fiber scheduler's locality and parking (amends ADR-234)
 
 **Context.** ADR-234 put the PL/I task on a fiber and measured the result:
@@ -7080,6 +7372,8 @@ a time never pays this: the fiber pool recycles the stack.
 * A task that is live at the same time as thousands of others still costs
   a stack reservation on Windows; a Go-style small stack that is copied
   when it grows is the way to close that gap, and it is not written.
+
+---
 
 ## ADR-236 - Keyed condition variables, a stack arena, and a lock-free fiber lock (amends ADR-234, ADR-235)
 
@@ -7155,6 +7449,8 @@ cannot be moved either. The arena made the *reservation* cheap; the
 * The fan-out still costs a stack per live task on Windows; a Go-style
   small stack that is copied when it grows is the way to close that gap,
   and it is not written.
+
+---
 
 ## ADR-237 - The AArch64 fiber backend and the POSIX stack overflow diagnostic
 
@@ -7380,6 +7676,8 @@ plan's "close without a diff" is the cheaper and safer outcome.
 `sub i64 %i, -3` becomes `add i64 %i, 3`; both are already affine.
 
 
+---
+
 ## ADR-240 — Type-directed constant folding for `FIXED DECIMAL`
 
 **Context.** A PL/I `FIXED DECIMAL(p,q)` stores an exact decimal: an integer
@@ -7457,6 +7755,8 @@ value, checks the integer-literal rescale, and — the negative test the plan
 asks for — requires `1.0 / 0.0` still to raise ZERODIVIDE, which fails if the
 division is ever folded.
 
+
+---
 
 ## ADR-241 — Constant-argument built-in lowering: search tables, constant `REPEAT`, and `VALUE`-constant equivalence
 
@@ -7550,6 +7850,8 @@ literal's differ, so the substitution would not deliver the identical-code
 property it exists for.
 
 
+---
+
 ## ADR-260 — A PL/I-specific decision layer, reported by `--print-facts`
 
 **Context.** The PL/I compiler makes decisions that no C compiler makes: which
@@ -7626,6 +7928,8 @@ LLVM metadata.* They would then only be visible in the IR, which is exactly
 where the reader is not looking.
 
 
+---
+
 ## ADR-261 — The struct-mirror gate: PL/I and C structures must agree on layout
 
 **Context.** PL/I structures are passed to C by pointer, so the two layouts
@@ -7692,6 +7996,8 @@ minutes; 512 elements compiles in two. The gate needs only enough elements
 for the vectorizer to engage on the compact structure, so it stays small. The
 quadratic behaviour itself is a separate matter and is not fixed here.
 
+---
+
 ## ADR-262 — Two benchmark categories, and paired PL/I-vs-PL/I comparisons
 
 **Context.** The benchmark corpus had one measure and one question: is the
@@ -7750,6 +8056,8 @@ commands were updated. ADR-233's text still says
 correction is recorded here rather than by editing the ADR — the same rule
 that applies to ADR-231's `PLIC_ENABLE_MLIR` name drift.
 
+
+---
 
 ## ADR-263 — The ON-unit context slot is allocated in the entry block
 
@@ -8583,6 +8891,8 @@ a source file with an mtime *older* than the bitcode it produced — so the
 build skips it and the binary does not reflect the tree. When a runtime
 change appears to have no effect, `touch runtime/*.c` and rebuild.
 
+---
+
 ## ADR-273 — A constant `TRANSLATE` folds to a table, and both paths pad the result
 
 *(ADR number: this decision was ADR-264 on the branch that grew it; the memory-effect branch had already taken ADR-264 for a different decision, so it is renumbered here to ADR-273. ADR-232 did the same for a duplicated pair.)*
@@ -8658,6 +8968,8 @@ lookup, and no `pli_translate` call or `tr.inptr` scan left), and the
 the same witness under `auto`, `runtime` and `llvm` and require identical
 output.
 
+
+---
 
 ## ADR-274 — A picture classifier, and constant P-item folding
 
@@ -8746,6 +9058,8 @@ the right input: it is already the exact `(value, scale)` pair the runtime
 receives, including float truncation and wide-decimal narrowing, so the
 folder cannot disagree with the call it replaces.
 
+
+---
 
 ## ADR-242 — Constant-offset concatenation stores
 
@@ -8857,6 +9171,8 @@ concat-temp's ownership (`freeConcatTemp`) to change. *Merging the leaves into
 one copy.* Only a single leaf may be a literal; a variable leaf's bytes are not
 contiguous with the next leaf's, so there is nothing to merge.
 
+
+---
 
 ## ADR-243 — Merge bit tests within one storage object
 
@@ -8980,6 +9296,8 @@ variables.* The disjointness and the subset relation cannot be known at compile
 time, and a runtime check would cost more than the merge saves.
 
 
+---
+
 ## ADR-269 — A synthesized control-flow edge re-materializes the values it crosses
 
 *(ADR-242, ADR-243 and ADR-244 are the plan's WS-C numbers, and ADR-244
@@ -9055,6 +9373,8 @@ nothing to invalidate; the invariant names the obligation instead, which is
 what survives until the cache exists.
 
 
+---
+
 ## ADR-248 — An exact-decimal benchmark baseline for `bcd_decimal`
 
 **Context.** WS-E3 is the plan's most honest item. The `bcd_decimal` benchmark
@@ -9118,6 +9438,8 @@ the tolerance would hide a future divergence between the two programs — which
 is precisely the signal the benchmark is for.
 
 
+---
+
 ## ADR-275 — A `BIT` comparison compares every bit
 
 *(ADR number: this decision was ADR-270 on the branch that grew it; the memory-effect branch had already taken ADR-270 for a different decision, so it is renumbered here to ADR-275. ADR-232 did the same for a duplicated pair.)*
@@ -9155,6 +9477,8 @@ is exact for any width, but it would be a second spelling of the same
 comparison in a different place, and the 64-bit form covers every width the
 compiler can pack.
 
+
+---
 
 ## ADR-276 — An exact decimal `ROUND`
 
@@ -9218,6 +9542,8 @@ through a double.* That is the bug. *Rounding to a negative digit count
 exactly.* The count rounds to tens, hundreds and beyond, which is not a scale
 the decimal type can carry; that shape keeps the float path.
 
+
+---
 
 ## ADR-252 — The range fact is independent of the check decision, and the check must enforce it
 
@@ -9303,6 +9629,8 @@ does, and it is a different mode (rules (60)-(63), ADR-110). *Making the
 precision check cheap instead of eliding the storage check.* The two cost the
 same, so it buys nothing.
 
+---
+
 ## ADR-277 — A subscript must be of an integer type
 
 **Context.** The plan's WS-S1 item — hoist a decimal subscript conversion
@@ -9361,6 +9689,8 @@ compiler says so instead of guessing:
   satisfied by the *absence* of the defect rather than by its presence: the
   optimizer computes a subscript once by itself, so the hoist S1 proposed is
   not needed.
+
+---
 
 ## ADR-253 — `ORDER`-style storage pinning for ON-unit-reachable variables
 
@@ -9428,6 +9758,8 @@ code path is added. What the plan asked for and the tree did not have is the
 * A user-facing `ORDER`/`REORDER` attribute remains out of scope: it is a
   language extension, and the plan's §21 rejects it for this plan. The
   conservative behaviour is the default, and the analysis is now visible.
+
+---
 
 ## ADR-254 — Inline-vs-library decisions are per-call-site predicates, and the library-call conversions are flagged
 
@@ -9497,6 +9829,8 @@ folds to text, ADR-274), but their *decisions* were also made in
   needs its own predicate and its own witness. The measurement that would
   promote one: a call site where the per-operation policy picks the wrong
   path.
+
+---
 
 ## ADR-257 — A constant-extent `CONTROLLED` variable is addressed directly
 
@@ -9584,7 +9918,98 @@ decisions under one number, and every citation would be ambiguous.
 the runtime, `docs/ARCHITECTURE.md`, `guides/programming.md` and the driver
 test, so moving it would break published references.
 
-## ADR-280 — `SIZE` enforces the declared precision of `FIXED BINARY(p)`
+---
+
+## ADR-280 — Host macOS SDK probe replaces the last `xcrun`; failed stub links retry with the real libSystem
+
+**Context.** ADR-225 left two subprocess sites: the build-time
+`xcrun --show-sdk-path` (for the host runtime bitcode's `-isysroot`) and the
+driver's runtime fallback for the Mach-O `-syslibroot`. ADR-226/227 then made
+the vendored SDK stub the default so user links need no Xcode, but the stub is
+a curated subset: a C-interop program referencing socket APIs (`_socket`,
+`_connect`, `_send`, `_recv`, `_getaddrinfo`, …) or `___memcpy_chk` fails at
+link with `undefined symbol`. The workaround was manual — pass the real
+`libSystem.B.tbd` through `--extra` — and both `xcrun` sites remained a
+host-toolchain dependency (and a subprocess ADR-225 says should not exist).
+
+**Decision.** Probe known SDK locations instead of asking a tool:
+- `findMacOSSdk()` in `src/hostcrt.cpp` checks the CLT SDK first, then
+  Xcode.app; a root counts when `usr/lib` is a directory. The driver uses it
+  for the `-syslibroot` fallback when no vendored/embedded stub set exists.
+- `CMakeLists.txt` uses `find_path(PLI_HOST_SDK NAMES usr/lib/libSystem.B.tbd
+  PATHS ... NO_DEFAULT_PATH)` for the host runtime bitcode's `-isysroot`.
+- The MachO link is two-pass: the first pass keeps the vendored sysroot (so
+  the common program still links with no host SDK, and the vendor-sysroot
+  test's no-leak assertion holds), with its output captured. If it fails and
+  a host SDK exists, lld is retried with the real `usr/lib/libSystem.B.tbd`
+  appended as an explicit input — lld resolves the remaining symbols in that
+  final pass, exactly what the manual `--extra` workaround did. A successful
+  retry suppresses the first pass's output; a failed retry reports only the
+  retry's diagnostics.
+- `linkExecutable` now calls `lld::lldMain` with the canonical driver name
+  (`ld.lld`, `ld64.lld`, `lld-link`; MinGW stays `ld.lld` and is selected by
+  its `-m i386pep`) instead of a driver's `link` entry point. Only
+  `lldMain` destroys LLD's global context after a run; a direct second call
+  would reuse the first pass's loaded dylibs and carry stale state into the
+  retry, which was observed as the same undefined symbol reported again.
+- `popen`/`pclose` and the `<cstdio>`/`<unistd.h>`/`<process.h>` shims leave
+  `src/main.cpp`: the driver has no subprocess left.
+
+**Consequences.** C-interop links (libnet's sockets) work with no `--extra`
+and no `xcrun`; a machine with no SDK keeps the old undefined-symbol
+diagnostic and grows the stub by a line (ADR-226). The vendored-sysroot test
+still sees only the embedded stub path (the first pass succeeds), and the
+clang-shadow test now covers the whole no-subprocess claim. CMake warns when
+an Apple host has no SDK, since the runtime bitcode's `<stdio.h>` needs one.
+
+**Rejected.** Extending the vendored stub with the socket surface — the
+missing set is whatever libc a user's C-interop program references, so the
+curated subset cannot be complete; the real SDK is already on every machine
+that needs it. Making the real SDK the default `-syslibroot` — reintroduces
+the host dependency ADR-227 removed and leaks `MacOSX.sdk` into `-v` output.
+Requiring `--extra` for sockets — a manual workaround is not a compiler
+behaviour. Keeping `xcrun` "because it is Apple tooling" — it is still a
+subprocess whose answer can be recovered by a filesystem probe.
+
+---
+
+## ADR-281 — Vendored Winsock import library: Windows C-interop needs no extra link flag
+
+**Context.** ADR-227's embedded MinGW sysroot carries the CRT, GCC helpers and
+the Win32 import libs the PL/I runtime needs, but not Winsock. A C-interop
+program that reaches `socket`/`getaddrinfo`/`WSAPoll` therefore failed at link;
+libnet's CMake worked around it with `-Wl,/DEFAULTLIB:ws2_32` — the Windows
+counterpart of the macOS `--extra libSystem.B.tbd` workaround ADR-280 removed.
+Linux needed no change: musl's `libc.a` already exports the POSIX socket
+surface (`socket`, `connect`, `getaddrinfo`, `poll`, …), which the existing
+`socket_pair` test exercises through the vendored sysroot.
+
+**Decision.** Vendor the authentic x86_64 `libws2_32.a` from mingw-w64 11.0.1
+in `platform/windows-mingw/`, embed it with the rest of the sysroot (ADR-227),
+and add `-l:libws2_32.a` to the default MinGW link just before the trailing
+`libkernel32.a`. Import libraries have one archive member per export, so the
+linker pulls only the thunks a program actually references: a non-networking
+program gains no `WS2_32.dll` dependency. `tests/driver/winsock.sh` compiles a
+C bridge using `WSAStartup`/`socket`/`closesocket`, links it through pli with
+no extra flags, runs it, and prints PASS (skipped off Windows).
+
+**Consequences.** Windows C-interop links networking code with no
+`/DEFAULTLIB` and no `--extra`, matching macOS (retry with the real libSystem)
+and Linux (musl libc). The archive is a build input only, like the other
+MinGW libs; it does not change the runtime or the embedded sysroot's set
+name. Programs using a Winsock export outside the library's list still fail
+loudly at link, as with any missing import.
+
+**Rejected.** A hand-written partial `ws2_32.def` stub like the macOS `.tbd`
+files — Winsock's surface is large and versioned, and an import library is a
+generated artifact whose exact form the linker expects. Requiring
+`-lws2_32`/`--extra` — that is the workaround being removed. Linking
+`libws2_32.a` as a whole archive — it would import the DLL even for programs
+that never call it.
+
+---
+
+## ADR-282 — `SIZE` enforces the declared precision of `FIXED BINARY(p)`
 
 **Context.** `DEFERRED-WORK.md` A2 is the ordering ADR-252 recorded: the
 compiler must enforce a type's declared range before it can emit a range fact
@@ -9657,7 +10082,9 @@ propagating PL/I result precisions is B11's precision tail, not this item.
 *Wrapping to the storage width on resume.* That leaves an out-of-range value
 in the variable and makes the range fact false again.
 
-## ADR-281 — The padding bits of a `BIT(n)` are not part of the value
+---
+
+## ADR-283 — The padding bits of a `BIT(n)` are not part of the value
 
 **Context.** A `BIT(n)` is held left-justified in `ceil(n/8)` bytes, so the
 low `8*ceil(n/8) - n` bits of the last byte are storage the language does not
@@ -9691,7 +10118,9 @@ two equal values can differ in a byte-wise path. *Leaving the padding bits
 unchanged.* A dirty bit written by `UNSPEC` would then survive `NOT`, with the
 same effect; normalising costs one `and`.
 
-## ADR-282 — `FIXED BINARY(p,q)` stores the value scaled by `2^q`
+---
+
+## ADR-284 — `FIXED BINARY(p,q)` stores the value scaled by `2^q`
 
 **Context.** `Type::scale` carried `q` for a binary type from the start, but
 only the decimal half of ADR-006 used it: literals, assignment, arithmetic,
@@ -9739,7 +10168,9 @@ conversions exactly now.* It needs a wider intermediate or an arbitrary
 precision path; B11 records the refinement, and the `FLOAT` fallback is
 documented rather than silent.
 
-## ADR-283 — A file condition is keyed by its FILE variable's runtime slot
+---
+
+## ADR-285 — A file condition is keyed by its FILE variable's runtime slot
 
 **Context.** The ON/SIGNAL/REVERT dispatch keys a condition by an integer:
 0 is ERROR, negative constants are the fixed conditions, and a programmer-named
@@ -9770,7 +10201,9 @@ program would collide. *A per-slot dispatch key in the runtime alone.* The
 compiler must compute the same key at `ON`, `REVERT` and `SIGNAL` sites, so the
 formula lives with the other condition keys in `Stmt`.
 
-## ADR-284 — Sequential record update: REWRITE, DELETE and the UPDATE open mode
+---
+
+## ADR-286 — Sequential record update: REWRITE, DELETE and the UPDATE open mode
 
 **Context.** ADR-101 served the sequential record slice: `READ`/`WRITE` of one
 fixed-size image (FIXED 8B, FLOAT 8B, BIT(1) 1B, CHAR(n) nB) on a
@@ -9815,7 +10248,9 @@ on every update. *A marker-per-record layout.* The fixed-size image format has
 no room for a marker without changing `READ`/`WRITE` too, which would break
 `driver/record`.
 
-## ADR-285 — `COPY`, `LINE(n)` and `DISPLAY REPLY` reuse the line-control runtime
+---
+
+## ADR-287 — `COPY`, `LINE(n)` and `DISPLAY REPLY` reuse the line-control runtime
 
 **Context.** Rule (105) lists `COPY` and `LINE ( expression )` among the stream
 options of `GET`/`PUT`, and the attested rule (114) allows

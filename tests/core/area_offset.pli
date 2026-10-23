@@ -18,7 +18,6 @@
    dcl pb offset(region);
    dcl pc offset(region);
    dcl pd offset(region2);
-   dcl fails fixed bin(31) init(0);
 
    /* allocate three blocks from the region */
    allocate a in(region) set(pa);
@@ -27,34 +26,60 @@
    a.v = 11;
    b.v = 22;
    c.v = 33;
-   if a.v ^= 11 then fails = fails + 1;
-   if b.v ^= 22 then fails = fails + 1;
-   if c.v ^= 33 then fails = fails + 1;
+   if a.v ^= 11 then do;
+      put skip list('FAIL area_offset: expected 11, got', a.v);
+      stop;
+   end;
+   if b.v ^= 22 then do;
+      put skip list('FAIL area_offset: expected 22, got', b.v);
+      stop;
+   end;
+   if c.v ^= 33 then do;
+      put skip list('FAIL area_offset: expected 33, got', c.v);
+      stop;
+   end;
 
    /* free the middle block first (out of order); the others survive */
    free b in(region);
-   if a.v ^= 11 then fails = fails + 1;
-   if c.v ^= 33 then fails = fails + 1;
+   if a.v ^= 11 then do;
+      put skip list('FAIL area_offset: expected 11, got', a.v);
+      stop;
+   end;
+   if c.v ^= 33 then do;
+      put skip list('FAIL area_offset: expected 33, got', c.v);
+      stop;
+   end;
    free a in(region);
-   if c.v ^= 33 then fails = fails + 1;
+   if c.v ^= 33 then do;
+      put skip list('FAIL area_offset: expected 33, got', c.v);
+      stop;
+   end;
    free c in(region);
 
    /* NULL offset assignment and comparison */
    pa = null();
-   if pa ^= null() then fails = fails + 1;
+   if pa ^= null() then do;
+      put skip list('FAIL area_offset: check at line 44 failed');
+      stop;
+   end;
 
    /* a second region is independent of the first */
    allocate d in(region2) set(pd);
    d.v = 77;
-   if d.v ^= 77 then fails = fails + 1;
+   if d.v ^= 77 then do;
+      put skip list('FAIL area_offset: expected 77, got', d.v);
+      stop;
+   end;
    free d in(region2);
 
    /* reusing the region after a full free cycle works */
    allocate a in(region) set(pa);
    a.v = 88;
-   if a.v ^= 88 then fails = fails + 1;
+   if a.v ^= 88 then do;
+      put skip list('FAIL area_offset: expected 88, got', a.v);
+      stop;
+   end;
    free a in(region);
 
-   if fails = 0 then put skip list('PASS area_offset');
-   else put skip list('FAIL area_offset:', fails);
+   put skip list('PASS area_offset');
  end area_offset;

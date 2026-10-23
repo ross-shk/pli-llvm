@@ -31,32 +31,60 @@
        options(linkage(system)) external('ua_packed_write_code');
    dcl a_read_code entry (pointer) returns(fixed bin(31))
        options(linkage(system)) external('ua_aligned_read_code');
-   dcl fails fixed bin(31) init(0);
 
    /* C reports the layouts the two attributes must produce */
-   if a_size() ^= 12 then fails = fails + 1;
-   if a_off_code() ^= 8 then fails = fails + 1;
-   if p_size() ^= 9 then fails = fails + 1;
-   if p_off_code() ^= 5 then fails = fails + 1;
+   if a_size() ^= 12 then do;
+      put skip list('FAIL unaligned: expected 12, got', a_size());
+      stop;
+   end;
+   if a_off_code() ^= 8 then do;
+      put skip list('FAIL unaligned: expected 8, got', a_off_code());
+      stop;
+   end;
+   if p_size() ^= 9 then do;
+      put skip list('FAIL unaligned: expected 9, got', p_size());
+      stop;
+   end;
+   if p_off_code() ^= 5 then do;
+      put skip list('FAIL unaligned: expected 5, got', p_off_code());
+      stop;
+   end;
 
    /* PL/I writes a packed record; C reads the packed offsets */
    p_rec.fd = 7;
    p_rec.flag = '1'b;
    p_rec.code = 12345;
-   if p_read_fd(addr(p_rec)) ^= 7 then fails = fails + 1;
-   if p_read_flag(addr(p_rec)) ^= 1 then fails = fails + 1;
-   if p_read_code(addr(p_rec)) ^= 12345 then fails = fails + 1;
+   if p_read_fd(addr(p_rec)) ^= 7 then do;
+      put skip list('FAIL unaligned: check at line 46 failed');
+      stop;
+   end;
+   if p_read_flag(addr(p_rec)) ^= 1 then do;
+      put skip list('FAIL unaligned: check at line 47 failed');
+      stop;
+   end;
+   if p_read_code(addr(p_rec)) ^= 12345 then do;
+      put skip list('FAIL unaligned: check at line 48 failed');
+      stop;
+   end;
 
    /* C writes a packed record; PL/I reads the fields back */
    call p_write_code(addr(p_rec), 999);
-   if p_rec.code ^= 999 then fails = fails + 1;
-   if p_rec.fd ^= 7 then fails = fails + 1;
+   if p_rec.code ^= 999 then do;
+      put skip list('FAIL unaligned: expected 999, got', p_rec.code);
+      stop;
+   end;
+   if p_rec.fd ^= 7 then do;
+      put skip list('FAIL unaligned: expected 7, got', p_rec.fd);
+      stop;
+   end;
 
    /* the default ALIGNED layout matches an ordinary C struct */
    a_rec.fd = 3;
    a_rec.code = 55;
-   if a_read_code(addr(a_rec)) ^= 55 then fails = fails + 1;
+   if a_read_code(addr(a_rec)) ^= 55 then do;
+      put skip list('FAIL unaligned: check at line 58 failed');
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS unaligned_xfer');
-   else put skip list('FAIL unaligned_xfer: fails =', fails);
+   put skip list('PASS unaligned_xfer');
  end unaligned_xfer;

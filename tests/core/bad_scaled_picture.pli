@@ -2,7 +2,7 @@
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* A PICTURE formatter works in decimal (val*10^-scale), so a scaled
     FIXED BINARY would print its stored integer against a decimal point
-    (2.5 became 0.00). Diagnose it instead, rule (53), ADR-282. */
+    (2.5 became 0.00). Diagnose it instead, rule (53), ADR-284. */
  badscaledpic: procedure options(main);
     declare b fixed bin(15,2);
     b = 2.5;

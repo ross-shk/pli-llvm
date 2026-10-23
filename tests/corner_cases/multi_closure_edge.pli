@@ -4,8 +4,6 @@
    END label closes all blocks up to and including the labelled one.
    Unlabelled END closes innermost. Tests deeply nested cases. */
 multi_closure_edge: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* Basic multiple closure: one END closes two DO groups */
     declare total fixed bin(31);
@@ -14,7 +12,10 @@ multi_closure_edge: procedure options(main);
        inner: do j = 1 to 3;
           total = total + 1;
        end outer;  /* closes both inner and outer */
-    if total ^= 9 then fails = fails + 1;
+    if total ^= 9 then do;
+       put skip list('FAIL multi_closure_edge: expected 9, got', total);
+       stop;
+    end;
 
     /* Three levels closed by one END */
     total = 0;
@@ -23,7 +24,10 @@ multi_closure_edge: procedure options(main);
           l3: do k = 1 to 2;
              total = total + 1;
           end l1;  /* closes l3, l2, l1 */
-    if total ^= 8 then fails = fails + 1;
+    if total ^= 8 then do;
+       put skip list('FAIL multi_closure_edge: expected 8, got', total);
+       stop;
+    end;
 
     /* Multiple closure with BEGIN blocks */
     total = 0;
@@ -32,7 +36,11 @@ multi_closure_edge: procedure options(main);
           b3: begin;
              total = total + 1;
           end b1;  /* closes b3, b2, b1 */
-       if total ^= 1 then fails = fails + 1;
+       if total ^= 1 then do;
+          put skip list('FAIL multi_closure_edge: expected 1, got',
+             total);
+          stop;
+       end;
 
     /* Mixed DO and BEGIN */
     total = 0;
@@ -41,7 +49,11 @@ multi_closure_edge: procedure options(main);
           md2: do j = 1 to 2;
              total = total + 1;
           end md1;  /* closes md2, mb1, md1 */
-       if total ^= 4 then fails = fails + 1;
+       if total ^= 4 then do;
+          put skip list('FAIL multi_closure_edge: expected 4, got',
+             total);
+          stop;
+       end;
 
     /* END without label closes only innermost */
     total = 0;
@@ -51,7 +63,10 @@ multi_closure_edge: procedure options(main);
        end;  /* closes only inner */
        total = total + 10;
     end;  /* closes outer */
-    if total ^= 9 + 30 then fails = fails + 1;  /* 9 inner + 3*10 outer = 39 */
+    if total ^= 9 + 30 then do;
+       put skip list('FAIL multi_closure_edge: check at line 54 failed');
+       stop;
+    end;
 
     /* Label on END that doesn't match any open block - should be diagnosed */
     /* end nomatch;  -- compile error */
@@ -70,7 +85,10 @@ multi_closure_edge: procedure options(main);
        end;
        /* ON units don't affect DO nesting */
     end;
-    if total ^= 0 then fails = fails + 1;  /* no signals sent */
+    if total ^= 0 then do;
+       put skip list('FAIL multi_closure_edge: expected 0, got', total);
+       stop;
+    end;
 
     /* Multiple closure skipping a level */
     total = 0;
@@ -81,10 +99,12 @@ multi_closure_edge: procedure options(main);
        skip3: do k = 1 to 2;
           total = total + 10;
        end skip1;  /* closes skip3 and skip1, skip2 already closed */
-    if total ^= 4 + 40 then fails = fails + 1;  /* 2*2 + 2*2*10 = 44 */
+    if total ^= 4 + 40 then do;
+       put skip list('FAIL multi_closure_edge: check at line 84 failed');
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS multi_closure_edge');
-    else put skip list('FAIL multi_closure_edge: fails =', fails);
+   put skip list('PASS multi_closure_edge');
 end multi_closure_edge;
 
 /* Separate nested procedure test - can't use multiple closure on PROCEDURE */

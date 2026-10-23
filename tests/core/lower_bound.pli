@@ -10,8 +10,6 @@
     declare a(-3:7) fixed bin(31);
     declare b(0:9) fixed bin(31);
     declare c(1:10) fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* the first, a middle and the last element of each range */
     a(-3) = 1;
@@ -25,30 +23,86 @@
     c(10) = 11;
 
     /* every range answers with the value its own store put there */
-    if a(-3) ^= 1 then fails = fails + 1;
-    if a(0) ^= 4 then fails = fails + 1;
-    if a(7) ^= 11 then fails = fails + 1;
-    if b(0) ^= 1 then fails = fails + 1;
-    if b(3) ^= 4 then fails = fails + 1;
-    if b(9) ^= 11 then fails = fails + 1;
-    if c(1) ^= 1 then fails = fails + 1;
-    if c(4) ^= 4 then fails = fails + 1;
-    if c(10) ^= 11 then fails = fails + 1;
+    if a(-3) ^= 1 then do;
+       put skip list('FAIL lower_bound: expected 1, got', a(-3));
+       stop;
+    end;
+    if a(0) ^= 4 then do;
+       put skip list('FAIL lower_bound: expected 4, got', a(0));
+       stop;
+    end;
+    if a(7) ^= 11 then do;
+       put skip list('FAIL lower_bound: expected 11, got', a(7));
+       stop;
+    end;
+    if b(0) ^= 1 then do;
+       put skip list('FAIL lower_bound: expected 1, got', b(0));
+       stop;
+    end;
+    if b(3) ^= 4 then do;
+       put skip list('FAIL lower_bound: expected 4, got', b(3));
+       stop;
+    end;
+    if b(9) ^= 11 then do;
+       put skip list('FAIL lower_bound: expected 11, got', b(9));
+       stop;
+    end;
+    if c(1) ^= 1 then do;
+       put skip list('FAIL lower_bound: expected 1, got', c(1));
+       stop;
+    end;
+    if c(4) ^= 4 then do;
+       put skip list('FAIL lower_bound: expected 4, got', c(4));
+       stop;
+    end;
+    if c(10) ^= 11 then do;
+       put skip list('FAIL lower_bound: expected 11, got', c(10));
+       stop;
+    end;
 
     /* the same position in the three ranges answers identically */
-    if a(-3) ^= b(0) then fails = fails + 1;
-    if b(0) ^= c(1) then fails = fails + 1;
-    if a(0) ^= b(3) then fails = fails + 1;
-    if b(3) ^= c(4) then fails = fails + 1;
-    if a(7) ^= b(9) then fails = fails + 1;
-    if b(9) ^= c(10) then fails = fails + 1;
+    if a(-3) ^= b(0) then do;
+       put skip list('FAIL lower_bound: check at line 39 failed');
+       stop;
+    end;
+    if b(0) ^= c(1) then do;
+       put skip list('FAIL lower_bound: check at line 40 failed');
+       stop;
+    end;
+    if a(0) ^= b(3) then do;
+       put skip list('FAIL lower_bound: check at line 41 failed');
+       stop;
+    end;
+    if b(3) ^= c(4) then do;
+       put skip list('FAIL lower_bound: check at line 42 failed');
+       stop;
+    end;
+    if a(7) ^= b(9) then do;
+       put skip list('FAIL lower_bound: check at line 43 failed');
+       stop;
+    end;
+    if b(9) ^= c(10) then do;
+       put skip list('FAIL lower_bound: check at line 44 failed');
+       stop;
+    end;
 
     /* the declared bounds are the ones the program sees */
-    if lbound(a) ^= -3 then fails = fails + 1;
-    if hbound(a) ^= 7 then fails = fails + 1;
-    if lbound(b) ^= 0 then fails = fails + 1;
-    if hbound(c) ^= 10 then fails = fails + 1;
+    if lbound(a) ^= -3 then do;
+       put skip list('FAIL lower_bound: expected -3, got', lbound(a));
+       stop;
+    end;
+    if hbound(a) ^= 7 then do;
+       put skip list('FAIL lower_bound: expected 7, got', hbound(a));
+       stop;
+    end;
+    if lbound(b) ^= 0 then do;
+       put skip list('FAIL lower_bound: expected 0, got', lbound(b));
+       stop;
+    end;
+    if hbound(c) ^= 10 then do;
+       put skip list('FAIL lower_bound: expected 10, got', hbound(c));
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS lower_bound');
-    else put skip list('FAIL lower_bound: fails =', fails);
+   put skip list('PASS lower_bound');
  end lower_bound;

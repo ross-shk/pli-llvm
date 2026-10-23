@@ -5,8 +5,6 @@
    Desugars to IF chain. Tests cover bare predicates, value lists,
    OTHERWISE, and diagnostics. */
 select_edge: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
    /* SELECT with expression - value matching */
    declare val fixed bin(31);
@@ -17,7 +15,10 @@ select_edge: procedure options(main);
       when(3) put skip list('val=3');
       otherwise put skip list('val=other');
    end;
-   if val ^= 2 then fails = fails + 1;
+   if val ^= 2 then do;
+      put skip list('FAIL select_edge: expected 2, got', val);
+      stop;
+   end;
 
    /* SELECT without expression - bare predicates */
    declare x fixed bin(31);
@@ -82,6 +83,5 @@ select_edge: procedure options(main);
 
    /* CASE-insensitive? No, PL/I keywords are case-insensitive but we use lowercase */
 
-   if fails = 0 then put skip list('PASS select_edge');
-   else put skip list('FAIL select_edge: fails =', fails);
+   put skip list('PASS select_edge');
 end select_edge;

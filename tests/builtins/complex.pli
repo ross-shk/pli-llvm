@@ -7,46 +7,43 @@
     */
  complex_test: procedure options(main);
     declare y float dec(6);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     y = real(complex(1.5, 2.5));
     if abs(y - 1.5) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL real(complex(1.5,2.5)) =', y);
+       stop;
     end;
 
     y = imag(complex(1.5, 2.5));
     if abs(y - 2.5) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL imag(complex(1.5,2.5)) =', y);
+       stop;
     end;
 
     y = real(conjg(complex(1.5, 2.5)));
     if abs(y - 1.5) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL real(conjg(...)) =', y);
+       stop;
     end;
 
     y = imag(conjg(complex(1.5, 2.5)));
     if abs(y - (-2.5)) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL imag(conjg(...)) =', y);
+       stop;
     end;
 
     y = real(complex(3, 4));
     if abs(y - 3.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL real(complex(3,4)) =', y);
+       stop;
     end;
 
     y = imag(complex(3, 4));
     if abs(y - 4.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL imag(complex(3,4)) =', y);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS complex');
-    else put skip list('FAIL complex: fails =', fails);
+   put skip list('PASS complex');
  end complex_test;

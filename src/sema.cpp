@@ -4509,7 +4509,7 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     }
     if (f.kind == FormatItem::P && it->ty.isNumeric()) {
       // A picture formatter works in decimal (val*10^-scale); a scaled FIXED
-      // BINARY has a 2^q point, which the formatter cannot express (ADR-282).
+      // BINARY has a 2^q point, which the formatter cannot express (ADR-284).
       if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0)
         d_.error(it->loc,
                  "PICTURE output of a scaled FIXED BINARY is not implemented in this stage",

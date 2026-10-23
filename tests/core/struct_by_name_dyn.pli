@@ -6,12 +6,8 @@
     match by name as usual, unmatched names are
     skipped. Bounds come from parameters. */
  struct_by_name_dyn_test: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
     call check(4);
-    if fails = 0 then put skip list('PASS struct_by_name_dyn');
-    else put skip list('FAIL struct_by_name_dyn: fails =',
-       fails);
+   put skip list('PASS struct_by_name_dyn');
  check: procedure(n);
     declare n fixed bin(31);
     declare 1 s,
@@ -30,14 +26,37 @@
     s.skip = 999;
     t.extra = -1;
     t = s, by name;
-    if t.a ^= 7 then fails = fails + 1;
-    if t.v(1) ^= 111 then fails = fails + 1;
-    if t.v(4) ^= 444 then fails = fails + 1;
-    if sum(t.v) ^= 605 then fails = fails + 1;
+    if t.a ^= 7 then do;
+       put skip list('FAIL struct_by_name_dyn: expected 7, got', t.a);
+       stop;
+    end;
+    if t.v(1) ^= 111 then do;
+       put skip list('FAIL struct_by_name_dyn: expected 111, got',
+          t.v(1));
+       stop;
+    end;
+    if t.v(4) ^= 444 then do;
+       put skip list('FAIL struct_by_name_dyn: expected 444, got',
+          t.v(4));
+       stop;
+    end;
+    if sum(t.v) ^= 605 then do;
+       put skip list('FAIL struct_by_name_dyn: expected 605, got',
+          sum(t.v));
+       stop;
+    end;
     /* unmatched names are skipped on both sides */
-    if t.extra ^= -1 then fails = fails + 1;
+    if t.extra ^= -1 then do;
+       put skip list('FAIL struct_by_name_dyn: expected -1, got',
+          t.extra);
+       stop;
+    end;
     /* deep, not aliased: writes diverge after copy */
     s.v(1) = 0;
-    if t.v(1) ^= 111 then fails = fails + 1;
+    if t.v(1) ^= 111 then do;
+       put skip list('FAIL struct_by_name_dyn: expected 111, got',
+          t.v(1));
+       stop;
+    end;
  end check;
  end struct_by_name_dyn_test;

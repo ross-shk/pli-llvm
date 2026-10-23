@@ -6,19 +6,17 @@
 
  hello: proc options(main);
    dcl who char(20) varying;
-   dcl fails fixed bin(31);
 
-   fails = 0;
    who = 'world';
 
    if 'Hello, ' || who || '!' ^= 'Hello, world!' then do;
-      fails = fails + 1;
       put skip list('FAIL: greeting =', 'Hello, ' || who || '!');
+      stop;
    end;
    if 2 + 3 ^= 5 then do;
-      fails = fails + 1;
       put skip list('FAIL: 2 + 3 =', 2 + 3);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS getting_started');
  end hello;

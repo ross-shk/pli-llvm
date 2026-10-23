@@ -4,7 +4,6 @@
     A handle-pool element s.handles(i) addresses
     a BASED view directly, with no temp copy. */
  blocxpr: procedure options(main);
-   dcl fails fixed bin(31) init(0);
    dcl i fixed bin(31);
    dcl k fixed bin(31);
    dcl dead pointer;
@@ -29,39 +28,62 @@
    slots(1) = addr(r1);
    slots(2) = addr(r2);
    /* read through a member-array locator */
-   if srv.handles(1) -> view.fd ^= 11 then
-     fails = fails + 1;
-   if srv.handles(2) -> view.tag ^= 222 then
-     fails = fails + 1;
+   if srv.handles(1) -> view.fd ^= 11 then do;
+      put skip list('FAIL based_locator_expr: check at line 33 failed');
+      stop;
+   end;
+   if srv.handles(2) -> view.tag ^= 222 then do;
+      put skip list('FAIL based_locator_expr: check at line 35 failed');
+      stop;
+   end;
    /* read through a plain-array locator */
-   if slots(1) -> view.fd ^= 11 then
-     fails = fails + 1;
+   if slots(1) -> view.fd ^= 11 then do;
+      put skip list('FAIL based_locator_expr: check at line 38 failed');
+      stop;
+   end;
    /* write through a member-array locator */
    srv.handles(1) -> view.fd = 33;
-   if r1.fd ^= 33 then fails = fails + 1;
-   if srv.handles(1) -> view.fd ^= 33 then
-     fails = fails + 1;
+   if r1.fd ^= 33 then do;
+      put skip list('FAIL based_locator_expr: expected 33, got', r1.fd);
+      stop;
+   end;
+   if srv.handles(1) -> view.fd ^= 33 then do;
+      put skip list('FAIL based_locator_expr: check at line 43 failed');
+      stop;
+   end;
    /* a runtime index rides the same path */
    k = 2;
    slots(k) -> view.tag = 444;
-   if r2.tag ^= 444 then fails = fails + 1;
-   if slots(k) -> view.tag ^= 444 then
-     fails = fails + 1;
+   if r2.tag ^= 444 then do;
+      put skip list('FAIL based_locator_expr: expected 444, got',
+         r2.tag);
+      stop;
+   end;
+   if slots(k) -> view.tag ^= 444 then do;
+      put skip list('FAIL based_locator_expr: check at line 49 failed');
+      stop;
+   end;
    /* locator in a wider expression */
    if (srv.handles(2) -> view.fd) + 1 ^= 23
-     then fails = fails + 1;
+     then do;
+        put skip list('FAIL based_locator_expr: check at line 52 failed');
+        stop;
+     end;
    /* loop over the pool with a variable index */
    r1.fd = 10; r2.fd = 20;
    do i = 1 to 2;
-     if srv.handles(i) -> view.fd <= 0 then
-       fails = fails + 1;
+     if srv.handles(i) -> view.fd <= 0 then do;
+        put skip list('FAIL based_locator_expr: check at line 57 failed');
+        stop;
+     end;
    end;
-   if srv.handles(1) -> view.fd ^= 10 then
-     fails = fails + 1;
-   if srv.handles(2) -> view.fd ^= 20 then
-     fails = fails + 1;
-   if fails = 0 then
-     put skip list('PASS based_locator_expr');
-   else put skip list('FAIL based_locator_expr:'
-     , fails);
+   if srv.handles(1) -> view.fd ^= 10 then do;
+      put skip list('FAIL based_locator_expr: check at line 60 failed');
+      stop;
+   end;
+   if srv.handles(2) -> view.fd ^= 20 then do;
+      put skip list('FAIL based_locator_expr: check at line 62 failed');
+      stop;
+   end;
+   put skip list('PASS based_locator_expr');
  end blocxpr;

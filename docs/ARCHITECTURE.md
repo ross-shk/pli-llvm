@@ -84,8 +84,9 @@ driver, needs only OS DLLs), `sdk` (macOS stubs, ADR-226) — and materializes
 to a temp dir at link time, so release archives hold only `pli`/`pli.exe`.
 An exe-relative `musl/`/`mingw/`/`sdk/` dir overrides the embedded set (dev
 use); otherwise the driver falls back to the host toolchain (probed CRT
-recipes / MSVC `LIB` / `xcrun`). `-shared`/`-static-pie` need a dynamic host
-CRT, so they skip the vendored (static) sysroot and take the host recipe; the
+recipes / MSVC `LIB` / probed macOS SDK — no subprocess).
+`-shared`/`-static-pie` need a dynamic host CRT, so they skip the vendored
+(static) sysroot and take the host recipe; the
 link itself is still in-process lld, never a subprocess.
 
 Given several input files, pli runs the pipeline once per file to an

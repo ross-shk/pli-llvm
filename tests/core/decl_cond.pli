@@ -8,9 +8,7 @@
 decl_cond_test: procedure options(main);
    declare neterror condition;
    declare other condition;
-   declare fails fixed bin(31);
 
-   fails = 0;
 
    /* explicit condition declarations enable signal/on usage below */
    on condition(neterror) begin;
@@ -30,7 +28,6 @@ decl_cond_test: procedure options(main);
    revert error;
    put skip list('resumed');
 
-   if fails = 0 then put skip list('PASS decl_cond');
-   else put skip list('FAIL decl_cond: fails =', fails);
+   put skip list('PASS decl_cond');
 
 end decl_cond_test;

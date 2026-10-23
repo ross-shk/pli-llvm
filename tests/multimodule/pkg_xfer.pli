@@ -3,7 +3,6 @@
 /* PACKAGE / EXPORTS (ADR-109): cross-module package with shared data.
    Build: two -c units linked together. */
 pkgxfer: procedure options(main);
-  dcl fails fixed bin(31) init(0);
   dcl result fixed bin(31);
 
   /* Call exported procedures from pkgxfer_lib */
@@ -18,29 +17,46 @@ pkgxfer: procedure options(main);
 
   /* Test package-level static data */
   result = pkg_get();
-  if result ^= 10 then fails = fails + 1;
+  if result ^= 10 then do;
+     put skip list('FAIL pkg_xfer: expected 10, got', result);
+     stop;
+  end;
 
   call pkg_add(5);
   result = pkg_get();
-  if result ^= 15 then fails = fails + 1;
+  if result ^= 15 then do;
+     put skip list('FAIL pkg_xfer: expected 15, got', result);
+     stop;
+  end;
 
   result = pkg_mul(3);
-  if result ^= 45 then fails = fails + 1;
+  if result ^= 45 then do;
+     put skip list('FAIL pkg_xfer: expected 45, got', result);
+     stop;
+  end;
 
   result = pkg_get();
-  if result ^= 45 then fails = fails + 1;
+  if result ^= 45 then do;
+     put skip list('FAIL pkg_xfer: expected 45, got', result);
+     stop;
+  end;
 
   call pkg_reset();
   result = pkg_get();
-  if result ^= 10 then fails = fails + 1;
+  if result ^= 10 then do;
+     put skip list('FAIL pkg_xfer: expected 10, got', result);
+     stop;
+  end;
 
   /* Test package-level array */
   call pkg_add(1);
   call pkg_add(2);
   call pkg_add(3);
   result = pkg_get_arr();
-  if result ^= 11 then fails = fails + 1;  /* 5+1+2+3 = 11 (reset keeps array) */
+  if result ^= 11 then do;
+     put skip list('FAIL pkg_xfer: expected 11, got', result);
+     stop;
+  end;
 
-  if fails = 0 then put skip list('PASS pkg_xfer');
-  else put skip list('FAIL pkg_xfer: fails=', fails);
+   put skip list('PASS pkg_xfer');
 end pkgxfer;

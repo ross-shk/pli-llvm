@@ -5,9 +5,7 @@
  array_reduce: procedure options(main);
     declare a(5) fixed bin(31);
     declare i fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     do i = 1 to 5;
        a(i) = i;
@@ -15,19 +13,19 @@
 
     /* SUM and PROD over the full extent */
     if sum(a) ^= 15 then do;
-       fails = fails + 1;
        put skip list('FAIL sum(a) =', sum(a));
+       stop;
     end;
     if prod(a) ^= 120 then do;
-       fails = fails + 1;
        put skip list('FAIL prod(a) =', prod(a));
+       stop;
     end;
 
     /* a sparse partial is also handled: sum(a(3)) is just that element */
     a(2) = 2;
     if sum(a) ^= 15 then do;
-       fails = fails + 1;
        put skip list('FAIL sum after reset =', sum(a));
+       stop;
     end;
 
     /* ANY/ALL over a BIT array */
@@ -39,19 +37,18 @@
     b(3) = '1'b;
     b(4) = '1'b;
     if ^all(b) then do;
-       fails = fails + 1;
        put skip list('FAIL all(b)');
+       stop;
     end;
     if ^any(b) then do;
-       fails = fails + 1;
        put skip list('FAIL any(b)');
+       stop;
     end;
     b(4) = '0'b;
     if all(b) then do;
-       fails = fails + 1;
        put skip list('FAIL all(b) after clear');
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS array_reduce');
-    else put skip list('FAIL array_reduce: fails =', fails);
+   put skip list('PASS array_reduce');
  end array_reduce;

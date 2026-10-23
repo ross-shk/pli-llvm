@@ -6,30 +6,28 @@
 
  procs: proc options(main);
    dcl r fixed bin(31);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    call helper(5);
    r = add(3, 4);
    if r ^= 7 then do;
-      fails = fails + 1;
       put skip list('FAIL: add =', r);
+      stop;
    end;
    if fact(5) ^= 120 then do;
-      fails = fails + 1;
       put skip list('FAIL: fact(5) =', fact(5));
+      stop;
    end;
    if cube(3) ^= 27 then do;
-      fails = fails + 1;
       put skip list('FAIL: cube(3) =', cube(3));
+      stop;
    end;
 
    call greet('sam', '!');
    call greet('sam', *);
    call greet('sam');
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS procedures_functions');
 
  helper: proc(n);
    dcl n fixed bin(31);

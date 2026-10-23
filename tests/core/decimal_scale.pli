@@ -12,9 +12,7 @@
    declare p24 fixed decimal(9,4);
    declare r2 fixed decimal(9,2);
    declare (q2, w2, w4) fixed decimal(20,4);
-   declare (i, fails) fixed bin(31);
 
-   fails = 0;
 
    /* The operands: two decimals at scale 2 and one at scale 4. */
    a2 = 2.50;
@@ -25,31 +23,62 @@
 
    /* Addition rescales the operands to the common scale (the larger one). */
    s22 = a2 + b2;                    /* 3.75 at scale 2 */
-   if s22 ^= 3.75 then fails = fails + 1;
+   if s22 ^= 3.75 then do;
+      put skip list('FAIL decimal_scale: expected 3.75, got', s22);
+      stop;
+   end;
    s24 = a2 + c4;                    /* 2.625 at scale 4 */
-   if s24 ^= 2.625 then fails = fails + 1;
+   if s24 ^= 2.625 then do;
+      put skip list('FAIL decimal_scale: expected 2.625, got', s24);
+      stop;
+   end;
    d44 = a2 - c4;                    /* 2.375 at scale 4 */
-   if d44 ^= 2.375 then fails = fails + 1;
+   if d44 ^= 2.375 then do;
+      put skip list('FAIL decimal_scale: expected 2.375, got', d44);
+      stop;
+   end;
 
    /* A product carries the sum of the operand scales. */
    p22 = a2 * b2;                    /* 3.1250 at scale 4 */
-   if p22 ^= 3.1250 then fails = fails + 1;
+   if p22 ^= 3.1250 then do;
+      put skip list('FAIL decimal_scale: expected 3.1250, got', p22);
+      stop;
+   end;
    p24 = a2 * c4;                    /* 0.3125 at scale 6, rounded to scale 4 */
-   if p24 ^= 0.3125 then fails = fails + 1;
+   if p24 ^= 0.3125 then do;
+      put skip list('FAIL decimal_scale: expected 0.3125, got', p24);
+      stop;
+   end;
 
    /* An assignment rounds to the target's scale, half away from zero. */
    r2 = 1.005;                       /* scale 3 into scale 2: 1.01 */
-   if r2 ^= 1.01 then fails = fails + 1;
+   if r2 ^= 1.01 then do;
+      put skip list('FAIL decimal_scale: expected 1.01, got', r2);
+      stop;
+   end;
    q2 = 2.675;                       /* scale 3 into scale 4: 2.6750 */
-   if q2 ^= 2.6750 then fails = fails + 1;
+   if q2 ^= 2.6750 then do;
+      put skip list('FAIL decimal_scale: expected 2.6750, got', q2);
+      stop;
+   end;
 
    /* A comparison rescales, so the scales do not change the answer. */
-   if (a2 = 2.50) = 0 then fails = fails + 1;
-   if (c4 = 0.125) = 0 then fails = fails + 1;
+   if (a2 = 2.50) = 0 then do;
+      put skip list('FAIL decimal_scale: check at line 47 failed');
+      stop;
+   end;
+   if (c4 = 0.125) = 0 then do;
+      put skip list('FAIL decimal_scale: check at line 48 failed');
+      stop;
+   end;
 
    /* The precision: a wide product keeps every digit it can. */
    w4 = w2 * w4;                     /* 12345678901234.5678 * 0.0001 */
-   if w4 ^= 1234567890.1235 then fails = fails + 1;
+   if w4 ^= 1234567890.1235 then do;
+      put skip list('FAIL decimal_scale: expected 1234567890.1235, got',
+         w4);
+      stop;
+   end;
 
    /* The table: the declared scale of each result is visible here. */
    put skip list('s22 =', s22);
@@ -61,6 +90,5 @@
    put skip list('q2  =', q2);
    put skip list('w4  =', w4);
 
-   if fails = 0 then put skip list('PASS decimal_scale');
-   else put skip list('FAIL decimal_scale: fails =', fails);
+   put skip list('PASS decimal_scale');
  end decimal_scale;

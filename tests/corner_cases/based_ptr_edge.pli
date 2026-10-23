@@ -5,8 +5,6 @@
    P -> X. POINTER can hold NULL, ADDR(x), or another pointer.
    Tests cover based structures, locator qualification, pointer params. */
 based_ptr_edge: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
    /* Basic BASED with explicit pointer */
    declare p pointer;
@@ -17,26 +15,49 @@ based_ptr_edge: procedure options(main);
    allocate based_rec set(p);
    based_rec.a = 11;
    based_rec.b = 22;
-   if based_rec.a ^= 11 then fails = fails + 1;
-   if based_rec.b ^= 22 then fails = fails + 1;
+   if based_rec.a ^= 11 then do;
+      put skip list('FAIL based_ptr_edge: expected 11, got',
+         based_rec.a);
+      stop;
+   end;
+   if based_rec.b ^= 22 then do;
+      put skip list('FAIL based_ptr_edge: expected 22, got',
+         based_rec.b);
+      stop;
+   end;
 
    /* Locator-qualified reference */
    p -> based_rec.a = 33;
-   if based_rec.a ^= 33 then fails = fails + 1;
-   if p -> based_rec.b ^= 22 then fails = fails + 1;
+   if based_rec.a ^= 33 then do;
+      put skip list('FAIL based_ptr_edge: expected 33, got',
+         based_rec.a);
+      stop;
+   end;
+   if p -> based_rec.b ^= 22 then do;
+      put skip list('FAIL based_ptr_edge: check at line 26 failed');
+      stop;
+   end;
 
    /* Multiple based variables on same pointer */
    declare 1 based_rec2 based(p),
           2 x fixed bin(31),
           2 y fixed bin(31);
    p -> based_rec2.x = 99;
-   if based_rec2.x ^= 99 then fails = fails + 1;
+   if based_rec2.x ^= 99 then do;
+      put skip list('FAIL based_ptr_edge: expected 99, got',
+         based_rec2.x);
+      stop;
+   end;
 
 /* BASED with pointer parameter - must use explicit pointer */
     declare 1 param_rec based(p),
            2 val fixed bin(31);
     p -> param_rec.val = 888;
-    if param_rec.val ^= 888 then fails = fails + 1;
+    if param_rec.val ^= 888 then do;
+       put skip list('FAIL based_ptr_edge: expected 888, got',
+          param_rec.val);
+       stop;
+    end;
     call based_param(p);
 
    /* POINTER arithmetic not supported, but ADDR() is */
@@ -47,7 +68,10 @@ based_ptr_edge: procedure options(main);
    declare 1 based_on_x based(px),
           2 val fixed bin(31);
    based_on_x.val = 777;
-   if x ^= 777 then fails = fails + 1;
+   if x ^= 777 then do;
+      put skip list('FAIL based_ptr_edge: expected 777, got', x);
+      stop;
+   end;
 
    /* NULL pointer */
    declare null_ptr pointer;
@@ -60,7 +84,10 @@ based_ptr_edge: procedure options(main);
    if p2 = p then put skip list('pointer assign ok');
 
    /* Pointer equality */
-   if p ^= p2 then fails = fails + 1;
+   if p ^= p2 then do;
+      put skip list('FAIL based_ptr_edge: check at line 63 failed');
+      stop;
+   end;
 
 /* BASED in structure - use separate based variable with pointer from struct */
     declare 1 container,
@@ -70,13 +97,16 @@ based_ptr_edge: procedure options(main);
     declare based_val fixed bin(31) based(cp);
     allocate based_val set(cp);
     based_val = 42;
-    if based_val ^= 42 then fails = fails + 1;
+    if based_val ^= 42 then do;
+       put skip list('FAIL based_ptr_edge: expected 42, got',
+          based_val);
+       stop;
+    end;
 
     /* BASED parameter with explicit pointer */
     call bare_based_param(p);
 
-   if fails = 0 then put skip list('PASS based_ptr_edge');
-   else put skip list('FAIL based_ptr_edge: fails =', fails);
+   put skip list('PASS based_ptr_edge');
 
 based_param: proc(ptr_arg) options(bypass);
    dcl ptr_arg pointer;

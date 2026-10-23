@@ -10,9 +10,7 @@
    dcl st char(10) varying;
    dcl step fixed bin(31) init(0);
    dcl done bit(1) init('0'b);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    score = 85;
    if score >= 90 then
@@ -27,16 +25,16 @@
      total = total + i;
    end;
    if total ^= 55 then do;
-      fails = fails + 1;
       put skip list('FAIL: 1..10 =', total);
+      stop;
    end;
 
    do while (total < 1000);
      total = total * 2;
    end;
    if total ^= 1760 then do;
-      fails = fails + 1;
       put skip list('FAIL: grown =', total);
+      stop;
    end;
 
    /* scope block */
@@ -45,8 +43,8 @@
      total = total + tmp;
    end;
    if total ^= 1765 then do;
-      fails = fails + 1;
       put skip list('FAIL: after begin =', total);
+      stop;
    end;
 
    /* select: first match wins */
@@ -65,8 +63,8 @@
      total = total + i;
    end;
    if total ^= 9 then do;
-      fails = fails + 1;
       put skip list('FAIL: odd total =', total);
+      stop;
    end;
 
    /* do until always runs once */
@@ -77,9 +75,9 @@
      if step >= 3 then done = '1'b;
    end;
    if step ^= 3 then do;
-      fails = fails + 1;
       put skip list('FAIL: steps =', step);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS control_flow');
  end flow;

@@ -617,7 +617,7 @@ void pli_put_list_fixed_scaled(long long v, long long scale) {
   rt_out_unlock();
 }
 
-/* DISPLAY of a scaled FIXED value (rule 114, ADR-282): the same point-aware
+/* DISPLAY of a scaled FIXED value (rule 114, ADR-284): the same point-aware
  * image as list-directed output, written without the separating blank. */
 void pli_display_fixed_scaled(long long v, long long scale) {
   char buf[96];

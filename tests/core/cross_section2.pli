@@ -11,7 +11,6 @@
       declare d(2, 3, 4) fixed bin(31);
       declare block(3, 4) fixed bin(31); /* d(2, *, *) */
       declare block2(2, 4) fixed bin(31); /* d(*, 3, *) */
-      declare i fixed bin(31), j fixed bin(31), k fixed bin(31), fails fixed bin(31);
 
       /* fill a in row-major order: a(i, j) = 10*i + j */
       do i = 1 to 3;
@@ -20,13 +19,15 @@
          end;
       end;
 
-      fails = 0;
 
       /* full 2-D sub-block: a(*, *) is the whole array */
       full = a(*, *);
       do i = 1 to 3;
          do j = 1 to 4;
-            if full(i, j) ^= 10 * i + j then fails = fails + 1;
+            if full(i, j) ^= 10 * i + j then do;
+               put skip list('FAIL cross_section2: check at line 29 failed');
+               stop;
+            end;
          end;
       end;
 
@@ -43,7 +44,10 @@
       block = d(2, *, *);
       do j = 1 to 3;
          do k = 1 to 4;
-            if block(j, k) ^= 200 + 10 * j + k then fails = fails + 1;
+            if block(j, k) ^= 200 + 10 * j + k then do;
+               put skip list('FAIL cross_section2: check at line 46 failed');
+               stop;
+            end;
          end;
       end;
 
@@ -51,7 +55,10 @@
       block2 = d(*, 3, *);
       do i = 1 to 2;
          do k = 1 to 4;
-            if block2(i, k) ^= 100 * i + 30 + k then fails = fails + 1;
+            if block2(i, k) ^= 100 * i + 30 + k then do;
+               put skip list('FAIL cross_section2: check at line 54 failed');
+               stop;
+            end;
          end;
       end;
 
@@ -67,10 +74,12 @@
       mblock = s.m(2, *, *);
       do j = 1 to 3;
          do k = 1 to 4;
-            if mblock(j, k) ^= 1000 + 10 * j + k then fails = fails + 1;
+            if mblock(j, k) ^= 1000 + 10 * j + k then do;
+               put skip list('FAIL cross_section2: check at line 70 failed');
+               stop;
+            end;
          end;
       end;
 
-      if fails = 0 then put skip list('PASS cross_section2');
-      else put skip list('FAIL cross_section2: fails =', fails);
+   put skip list('PASS cross_section2');
    end cross_section2_test;

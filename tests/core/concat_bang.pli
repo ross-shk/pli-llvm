@@ -4,12 +4,17 @@
     concatenates exactly like ||, including chained uses. */
  bang: procedure options(main);
     declare s char(8);
-    declare fails fixed bin(31);
-    fails = 0;
     s = 'a' !! 'b';
-    if substr(s, 1, 2) ^= 'ab' then fails = fails + 1;
+    if substr(s, 1, 2) ^= 'ab' then do;
+       put skip list('FAIL concat_bang: expected ab, got',
+          substr(s, 1, 2));
+       stop;
+    end;
     s = 'x' !! 'y' !! 'z';
-    if substr(s, 1, 3) ^= 'xyz' then fails = fails + 1;
-    if fails = 0 then put skip list('PASS bang');
-    else put skip list('FAIL bang: fails =', fails);
+    if substr(s, 1, 3) ^= 'xyz' then do;
+       put skip list('FAIL concat_bang: expected xyz, got',
+          substr(s, 1, 3));
+       stop;
+    end;
+   put skip list('PASS bang');
  end bang;

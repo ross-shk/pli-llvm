@@ -7,30 +7,28 @@
  outer: procedure options(main);
     declare x fixed bin(31);
     declare r fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* internal proc reads and writes the enclosing automatic variable */
     x = 5;
     call bump();
     if x ^= 8 then do;
-       fails = fails + 1;
        put skip list('FAIL bump x =', x);
+       stop;
     end;
 
     /* reentrancy: the recursive function's internal proc sees each
        activation's own v (3 + 2 + 1 + 0 = 6) */
     r = f(3);
     if r ^= 6 then do;
-       fails = fails + 1;
        put skip list('FAIL reentrant f(3) =', r);
+       stop;
     end;
 
     do i = 1 to 1;
     end;
     call readi();
 
-    if fails = 0 then put skip list('PASS');
+   put skip list('PASS staticlink');
 
     bump: procedure;
        x = x + 3;
@@ -38,8 +36,8 @@
 
     readi: procedure;
        if i ^= 2 then do;
-          fails = fails + 1;
           put skip list('FAIL implicit DO static link i =', i);
+          stop;
        end;
     end readi;
 

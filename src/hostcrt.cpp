@@ -135,7 +135,7 @@ bool detectMingw(const fs::path& mingw) {
   return allExist(mingw, {"crt2.o", "crtbegin.o", "crtend.o", "fltused.o", "chkstk.o", "libgcc.a",
                           "libkernel32.a", "libmsvcrt.a", "libmingw32.a", "libmingwex.a",
                           "libmoldname.a", "libucrt.a", "libadvapi32.a", "libshell32.a",
-                          "libuser32.a"});
+                          "libuser32.a", "libws2_32.a"});
 }
 
 VendoredSysroot resolveVendoredSysroot(const std::string& exeDir) {
@@ -235,6 +235,23 @@ void cleanupMaterializedSysroot(const std::string& dir) {
   if (p.filename().string().rfind("pli-sysroot-", 0) != 0)
     return;
   fs::remove_all(p, ec);
+}
+
+std::string findMacOSSdk() {
+  // Probe stable SDK locations: CLT first (always present on dev machines),
+  // then Xcode.app (full IDE / server installs use the Xcode SDK). Each root
+  // must contain usr/lib (libSystem.tbd lives there) to count as a valid SDK.
+  // No subprocess (ADR-225) — this replaces `xcrun --show-sdk-path`.
+  const std::vector<std::string> roots = {
+    "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+  };
+  for (const std::string& root : roots) {
+    std::error_code ec;
+    if (fs::is_directory(fs::path(root) / "usr" / "lib", ec))
+      return root;
+  }
+  return "";
 }
 
 HostCrt resolveHostCrt(const llvm::Triple& triple, const std::string& sysroot) {

@@ -16,14 +16,12 @@
     declare c(4) fixed bin(31) controlled;
     declare mark fixed bin(31) controlled;
     declare code fixed bin(31);
-    declare fails fixed bin(31);
     declare p pointer;
     declare q pointer;
     declare h(5) fixed bin(31) based;
     declare 1 rec based,
               2 m fixed decimal(5,2),
               2 f fixed bin(31);
-    fails = 0;
     code = 0;
     do i = 1 to 5;
        a(i) = i * 10;
@@ -45,27 +43,39 @@
     end;
     i = 0;
     v = a(i);
-    if v ^= 10 then
-       fails = fails + 1;
+    if v ^= 10 then do;
+       put skip list('FAIL on_alloc_combo: expected 10, got', v);
+       stop;
+    end;
     i = 6;
     v = p -> h(i);
-    if v ^= 50 then
-       fails = fails + 1;
+    if v ^= 50 then do;
+       put skip list('FAIL on_alloc_combo: expected 50, got', v);
+       stop;
+    end;
     i = 5;
     v = c(i);
-    if v ^= 40 then
-       fails = fails + 1;
+    if v ^= 40 then do;
+       put skip list('FAIL on_alloc_combo: expected 40, got', v);
+       stop;
+    end;
     i = 7;
     c(i) = 99;
-    if c(4) ^= 99 then
-       fails = fails + 1;
+    if c(4) ^= 99 then do;
+       put skip list('FAIL on_alloc_combo: expected 99, got', c(4));
+       stop;
+    end;
     i = 8;
     p -> h(i) = 77;
-    if p -> h(5) ^= 77 then
-       fails = fails + 1;
+    if p -> h(5) ^= 77 then do;
+       put skip list('FAIL on_alloc_combo: check at line 65 failed');
+       stop;
+    end;
     revert subscriptrange;
-    if mark ^= 5 then
-       fails = fails + 1;
+    if mark ^= 5 then do;
+       put skip list('FAIL on_alloc_combo: expected 5, got', mark);
+       stop;
+    end;
     /* an overflow reaches SIZE; only the
        firing is asserted, not the wrap */
     on size begin;
@@ -73,8 +83,10 @@
     end;
     q -> rec.m = q -> rec.m + 0.01;
     revert size;
-    if mark ^= 105 then
-       fails = fails + 1;
+    if mark ^= 105 then do;
+       put skip list('FAIL on_alloc_combo: expected 105, got', mark);
+       stop;
+    end;
     /* ERROR sees the live top generation */
     on error begin;
        mark = mark + 1000;
@@ -82,26 +94,34 @@
     end;
     signal error;
     revert error;
-    if mark ^= 1105 then
-       fails = fails + 1;
-    if code ^= 1 then
-       fails = fails + 1;
+    if mark ^= 1105 then do;
+       put skip list('FAIL on_alloc_combo: expected 1105, got', mark);
+       stop;
+    end;
+    if code ^= 1 then do;
+       put skip list('FAIL on_alloc_combo: expected 1, got', code);
+       stop;
+    end;
     /* every allocation survived */
-    if p -> h(1) ^= 10 then
-       fails = fails + 1;
-    if q -> rec.f ^= 333 then
-       fails = fails + 1;
-    if c(1) ^= 10 then
-       fails = fails + 1;
-    if c(4) ^= 99 then
-       fails = fails + 1;
+    if p -> h(1) ^= 10 then do;
+       put skip list('FAIL on_alloc_combo: check at line 91 failed');
+       stop;
+    end;
+    if q -> rec.f ^= 333 then do;
+       put skip list('FAIL on_alloc_combo: check at line 93 failed');
+       stop;
+    end;
+    if c(1) ^= 10 then do;
+       put skip list('FAIL on_alloc_combo: expected 10, got', c(1));
+       stop;
+    end;
+    if c(4) ^= 99 then do;
+       put skip list('FAIL on_alloc_combo: expected 99, got', c(4));
+       stop;
+    end;
     free p -> h;
     free q -> rec;
     free c;
     free mark;
-    if fails = 0 then
-       put skip list('PASS on_alloc_combo');
-    else
-       put skip list('FAIL on_alloc: ',
-          fails);
+   put skip list('PASS on_alloc_combo');
  end onalloc;

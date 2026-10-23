@@ -11,14 +11,15 @@
     declare d fixed bin(31);
     declare expected fixed bin(31);
     declare seen fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     x = 0;
 
     on zerodivide begin;
        /* the unit reads the variable the loop is writing */
        seen = x;
-       if seen ^= expected then fails = fails + 1;
+       if seen ^= expected then do;
+          put skip list('FAIL order_pin: check at line 21 failed');
+          stop;
+       end;
     end;
 
     i = 1;
@@ -31,8 +32,5 @@
        i = i + 1;
     end;
 
-    if fails = 0 then
-       put skip list('PASS');
-    else
-       put skip list('FAIL');
+   put skip list('PASS order_pin');
  end order_pin;
