@@ -179,6 +179,33 @@ Token Lexer::lexNumber() {
       t.text.push_back(cur());
       bump();
     }
+    // A second dot starts a sterling constant's pence field (rule (145)):
+    // pounds . shillings . pence [ . pence-fraction ] £
+    if (cur() == '.' && isdigit((unsigned char)peek())) {
+      t.text.push_back('.');
+      bump();
+      while (isdigit((unsigned char)cur())) {
+        t.text.push_back(cur());
+        bump();
+      }
+      if (cur() == '.' && isdigit((unsigned char)peek())) {
+        t.text.push_back('.');
+        bump();
+        while (isdigit((unsigned char)cur())) {
+          t.text.push_back(cur());
+          bump();
+        }
+      }
+      if ((unsigned char)cur() == 0xC2 && (unsigned char)peek() == 0xA3) {
+        bump(); // UTF-8 £
+        bump();
+        t.sterling = true;
+        t.isFloat = false;
+        return t;
+      }
+      d_.error(t.loc, "a sterling constant must end with '£'", "(145)");
+      return t;
+    }
   }
   if (cur() == 'E' || cur() == 'e') {
     // Only an exponent if followed by [sign] digit.

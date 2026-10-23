@@ -10530,3 +10530,35 @@ new 38-digit diagnostic. `B1` remains open only for sterling data.
 unprintable through a matching picture. *Copy the decimal text and patch
 digits.* It would bypass the picture's zero suppression, sign and insertion
 characters; the shared formatter must stay the single interpretation.
+
+
+---
+
+## ADR-294 — Sterling constants are fixed-point pence
+
+**Context.** Rule (145) defines a constant as
+`pounds . shillings . pence [ . pence-fraction ] £`. The scanner stopped at the
+first fraction, so the pence field and the `£` suffix were unreachable. The
+1966 PL/I specification makes the value precise: multiply pounds by 240, add
+12 times shillings, then add pence. The pence fraction is the constant's
+decimal scale.
+
+**Decision.** `Lexer::lexNumber` recognises the second and optional third dot
+of a sterling constant and consumes the UTF-8 `£` suffix. The parser converts
+the three fields to a `FIXED DECIMAL` literal whose scaled value is pence:
+`(pounds * 240 + shillings * 12 + wholePence) * 10^d + penceFraction`, with
+`d` fraction digits. Shillings must be below 20 and whole pence below 12; a
+malformed or over-38-digit constant is diagnosed with rule (145).
+
+The value then uses the existing decimal constant path, so arithmetic,
+`INITIAL`/`VALUE`, rescaling and wide-digit support need no new code.
+
+**Consequences.** `tests/core/sterling.pli` checks three constants, including a
+fractional halfpenny; `tests/core/bad_sterling.pli` pins the shillings range.
+`B1` remains open only for sterling pictures, whose `G`/`M`/`H`/`P` editing is
+a separate runtime formatter.
+
+**Rejected.** *Treat the shillings field as a decimal fraction.* That would
+turn `1.10.6£` into 0.1106 rather than 366 pence. *Parse sterling in the
+preprocessor.* It is a language constant, and the lexer already owns the
+suffix and field boundaries.

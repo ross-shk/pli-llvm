@@ -47,6 +47,71 @@ static void parseIntConstant(const std::string& text, Expr& e, int base) {
 }
 // point and no exponent, e.g. "3.14". Sets ival to the value scaled by 10^q,
 // decScale to the fraction digit count q, and decPrec to the digit count p.
+// Sterling constant (rule (145)): convert pounds.shillings.pence[.fraction]£
+// to fixed-point pence, exactly as the standard defines the value. The
+// pence fraction becomes the decimal scale of the resulting DECIMAL literal.
+static bool parseSterlingConstant(const std::string& text, Expr& e) {
+  size_t d1 = text.find('.');
+  if (d1 == std::string::npos)
+    return false;
+  size_t d2 = text.find('.', d1 + 1);
+  if (d2 == std::string::npos)
+    return false;
+  std::string poundsS = text.substr(0, d1);
+  std::string shillS = text.substr(d1 + 1, d2 - d1 - 1);
+  std::string penceS = text.substr(d2 + 1);
+  size_t d3 = penceS.find('.');
+  std::string penceIntS = d3 == std::string::npos ? penceS : penceS.substr(0, d3);
+  std::string penceFracS = d3 == std::string::npos ? "" : penceS.substr(d3 + 1);
+  auto digits = [](const std::string& s) {
+    return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
+  };
+  if (!digits(poundsS) || !digits(shillS) || !digits(penceIntS) ||
+      (d3 != std::string::npos && !digits(penceFracS)))
+    return false;
+  // Both subfields are bounded by the constant grammar, so their text is
+  // at most two digits; rejecting longer text avoids an out-of-range parse.
+  if (shillS.size() > 2 || penceIntS.size() > 2 || penceFracS.size() > 38)
+    return false;
+  long long shill = std::stoll(shillS);
+  long long penceInt = std::stoll(penceIntS);
+  if (shill >= 20 || penceInt >= 12)
+    return false;
+
+  int scale = (int)penceFracS.size();
+  // 240 and 12 widen the pounds field by at most three decimal digits.
+  size_t poundsSig = poundsS.find_first_not_of('0');
+  size_t poundsDigits = poundsSig == std::string::npos ? 1 : poundsS.size() - poundsSig;
+  if (poundsDigits + (size_t)scale + 3 > 38)
+    return false;
+
+  PliI128 pounds = 0;
+  for (char c : poundsS)
+    pounds = pounds * 10 + (c - '0');
+  PliI128 penceFrac = 0;
+  for (char c : penceFracS)
+    penceFrac = penceFrac * 10 + (c - '0');
+  PliI128 value = pounds * 240 + shill * 12 + penceInt;
+  for (int i = 0; i < scale; ++i)
+    value = value * 10;
+  value += penceFrac;
+
+  PliU128 mag = pli_mag_s(value);
+  int prec = 0;
+  do {
+    pli_divmod10(&mag);
+    ++prec;
+  } while (!pli_iszero_u(mag));
+  if (prec > 38)
+    return false;
+  e.kind = Expr::DecLit;
+  e.wideIval = value;
+  e.ival = pli_to_i64(value);
+  e.decScale = scale;
+  e.decPrec = prec;
+  return true;
+}
+
 static void parseDecConstant(const std::string& text, Expr& e) {
   size_t dot = text.find('.');
   std::string intPart = dot == std::string::npos ? text : text.substr(0, dot);
@@ -4245,6 +4310,12 @@ ExprP Parser::parsePrimary() {
   }
   if (at(Tok::Number)) {
     const Token& t = cur();
+    if (t.sterling) {
+      if (!parseSterlingConstant(t.text, *e))
+        d_.error(t.loc, "invalid sterling constant", "(145)");
+      advance();
+      return e;
+    }
     if (t.imaginary) {
       // Imaginary constant 2i (rule 139): 0 + value*i as a double pair part.
       e->kind = Expr::ComplexLit;

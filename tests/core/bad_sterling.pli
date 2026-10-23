@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A shillings field of 20 or more is not a sterling constant (rule (145)). */
+ bad_sterling: procedure options(main);
+    declare x fixed decimal(3,0);
+    x = 1.20.0£;
+ end bad_sterling;
