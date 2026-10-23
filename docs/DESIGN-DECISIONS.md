@@ -10562,3 +10562,42 @@ a separate runtime formatter.
 turn `1.10.6£` into 0.1106 rather than 366 pence. *Parse sterling in the
 preprocessor.* It is a language constant, and the lexer already owns the
 suffix and field boundaries.
+
+
+---
+
+## ADR-295 — Sterling pictures format fixed-point pence
+
+**Context.** ADR-294 made sterling constants fixed-point pence, but a
+`PICTURE` beginning with `G` still fell into the generic numeric formatter. It
+printed the `G` and `M` markers literally and treated the whole string as
+decimal digits. The 1966 specification defines the sterling form as pounds,
+shillings and pence subfields, with `G` and `M` carrying no output and the
+value converted to fixed-point pence for arithmetic.
+
+**Decision.** `classifyPicture` recognizes a sterling picture and records its
+output width separately. This slice accepts:
+
+- `G` at the start and three `M` subfield markers,
+- `9`/`Z` digit positions in the pounds, shillings and pence fields,
+- the literal separators `.`, `B`, `/`, `H` and `P` (H writes `S`, P writes
+  `D`, B writes a blank).
+
+The runtime `sterling_format` divides pence by 240 and 12 into the three
+fields, applies `Z` suppression across the whole field, and emits the
+separators. `sterling_read_field` reverses the mapping for `GET EDIT P`; a
+pence value assigned through `GET LIST` uses the same conversion path. The
+existing numeric picture paths are untouched because the classifier sets the
+`sterling` flag before the generic layout walk.
+
+**Consequences.** `tests/core/sterling_picture.pli` covers assignment, `P`
+output, `GET EDIT P`, `GET LIST`, and zero suppression.
+`tests/core/money_report.pli` is the money/report golden. Whole-pence values
+only: fractional pence, sign editing, `6`/`7`/`8`, `T`/`I`/`R`/`Y`, `*`, and
+`CR`/`DB` keep cited diagnostics. Sterling picture input above 18 digit
+positions is diagnosed rather than narrowed (`bad_sterling_picture.pli`).
+
+**Rejected.** *Format sterling as ordinary decimal digits.* It would ignore
+the 240/12 radix and produce the wrong character value. *Route through the
+constant parser.* Pictures are runtime templates, not source constants; the
+two paths must share the pence value but not the parser.

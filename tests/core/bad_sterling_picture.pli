@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Sterling picture input above 18 digit positions is diagnosed, never
+    silently truncated (rules (53),(146)-(148)). */
+ bad_sterling_picture: procedure options(main);
+    declare p picture('GM(19)9M.99M.99');
+    declare s char(23);
+    get string(s) edit(p) (P('GM(19)9M.99M.99'));
+ end bad_sterling_picture;

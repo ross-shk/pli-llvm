@@ -553,6 +553,145 @@ static long long pic_format128(PliI128 val, long long scale, int sign,
   return oi;
 }
 
+/* Sterling pictures (rules (19),(146)-(148)): the value is fixed-point pence.
+ * G and the M subfield markers emit nothing; the pounds, shillings and pence
+ * fields are filled from the three quantities. This slice accepts 9/Z digit
+ * positions and . B / H P literals; other sterling editing is diagnosed by
+ * the classifier and never reaches here. */
+static void sterling_field(const char *pic, long long start, long long end,
+                           long long value, char *out, long long cap, long long *oi,
+                           int *seen) {
+  char digits[128];
+  long long n = 0;
+  for (long long i = start; i < end; ++i)
+    if (pic[i] == '9' || pic[i] == 'Z')
+      ++n;
+  if (n > (long long)sizeof digits)
+    n = (long long)sizeof digits;
+  for (long long i = 0; i < n; ++i)
+    digits[i] = '0';
+  long long v = value;
+  for (long long i = n - 1; i >= 0 && v > 0; --i) {
+    digits[i] = (char)('0' + v % 10);
+    v /= 10;
+  }
+  long long k = 0;
+  for (long long i = start; i < end && *oi < cap; ++i) {
+    char c = pic[i];
+    if (c == '9' || c == 'Z') {
+      char d = digits[k++];
+      if (c == 'Z' && d == '0' && !*seen) {
+        out[(*oi)++] = ' ';
+      } else {
+        out[(*oi)++] = d;
+        if (d != '0')
+          *seen = 1;
+      }
+    } else if (c == '.') {
+      out[(*oi)++] = '.';
+    } else if (c == '/') {
+      out[(*oi)++] = '/';
+    } else if (c == 'B') {
+      out[(*oi)++] = ' ';
+    } else if (c == 'H') {
+      out[(*oi)++] = 'S';
+    } else if (c == 'P') {
+      out[(*oi)++] = 'D';
+    }
+  }
+}
+
+/* Read one sterling subfield: each 9/Z position consumes one character and
+ * contributes a decimal digit (blank counts as zero); literals are consumed
+ * without a value. */
+static long long sterling_read_field(const char *pic, long long start, long long end,
+                                     const char *field, long long *pos) {
+  long long value = 0;
+  for (long long i = start; i < end; ++i) {
+    char c = pic[i];
+    if (c == '9' || c == 'Z') {
+      char d = field[(*pos)++];
+      if (d >= '0' && d <= '9')
+        value = value * 10 + (d - '0');
+    } else {
+      ++*pos; // a literal occupies one field position
+    }
+  }
+  return value;
+}
+
+static long long sterling_format(long long val, int sign, const char *pic, long long piclen,
+                                 char *out, long long cap) {
+  if (piclen <= 0 || cap <= 0)
+    return 0;
+  long long m1 = -1, m2 = -1, m3 = -1;
+  for (long long i = 0; i < piclen; ++i)
+    if (pic[i] == 'M') {
+      if (m1 < 0)
+        m1 = i;
+      else if (m2 < 0)
+        m2 = i;
+      else if (m3 < 0)
+        m3 = i;
+    }
+  if (m1 < 0 || m2 < 0 || m3 < 0)
+    return 0;
+  unsigned long long mag = sign < 0 ? (unsigned long long)(-(val + 1)) + 1u
+                                    : (unsigned long long)val;
+  unsigned long long pounds = mag / 240u;
+  unsigned long long rem = mag % 240u;
+  long long shill = (long long)(rem / 12u);
+  long long pence = (long long)(rem % 12u);
+  long long oi = 0;
+  int seen = 0;
+  sterling_field(pic, m1 + 1, m2, (long long)pounds, out, cap, &oi, &seen);
+  sterling_field(pic, m2 + 1, m3, shill, out, cap, &oi, &seen);
+  sterling_field(pic, m3 + 1, piclen, pence, out, cap, &oi, &seen);
+  return oi;
+}
+
+/* Sterling P input (B1): read the picture-width field and recover its pence
+ * value. The picture positions decide which characters are pounds, shillings
+ * and pence digits; separators are consumed but carry no value. */
+long long pli_get_edit_pic_sterling(long long w, const char *pic, long long piclen) {
+  char field[128];
+  long long i = 0;
+  rt_in_lock();
+  for (; i < w && i < (long long)(sizeof field - 1); ++i) {
+    int c = rt_next_char();
+    if (c == EOF)
+      break;
+    field[i] = (char)c;
+  }
+  rt_in_unlock();
+  long long nread = i;
+  while (i < (long long)(sizeof field - 1))
+    field[i++] = ' ';
+  field[i] = '\0';
+  long long m1 = -1, m2 = -1, m3 = -1;
+  for (i = 0; i < piclen; ++i)
+    if (pic[i] == 'M') {
+      if (m1 < 0)
+        m1 = i;
+      else if (m2 < 0)
+        m2 = i;
+      else if (m3 < 0)
+        m3 = i;
+    }
+  if (m1 < 0 || m2 < 0 || m3 < 0)
+    return 0;
+  long long pos = 0;
+  long long pounds = sterling_read_field(pic, m1 + 1, m2, field, &pos);
+  long long shill = sterling_read_field(pic, m2 + 1, m3, field, &pos);
+  long long pence = sterling_read_field(pic, m3 + 1, piclen, field, &pos);
+  long long total = pounds * 240 + shill * 12 + pence;
+  int neg = 0;
+  for (i = 0; i < nread; ++i)
+    if (field[i] == '-')
+      neg = 1;
+  return neg ? -total : total;
+}
+
 /* P picture-directed output: format and write the field. */
 void pli_put_edit_pic(long long val, long long scale, int sign,
                       const char *pic, long long piclen) {
@@ -590,5 +729,19 @@ long long pli_pic_format_wide(long long lo, long long hi, long long scale, int s
                               char *dst, long long cap) {
   PliI128 val = pli_to_s(pli_u128((uint64_t)lo, (uint64_t)hi));
   return pic_format128(val, scale, sign, pic, piclen, dst, cap);
+}
+
+long long pli_pic_format_sterling(long long val, int sign, const char *pic, long long piclen,
+                                  char *dst, long long cap) {
+  return sterling_format(val, sign, pic, piclen, dst, cap);
+}
+
+void pli_put_edit_pic_sterling(long long val, int sign, const char *pic, long long piclen) {
+  char outbuf[128];
+  rt_out_lock();
+  long long n = sterling_format(val, sign, pic, piclen, outbuf,
+                                (long long)sizeof(outbuf) - 1);
+  rt_put_raw(outbuf, n);
+  rt_out_unlock();
 }
 

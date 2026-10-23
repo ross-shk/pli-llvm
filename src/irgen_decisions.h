@@ -219,6 +219,7 @@ struct PictureSpec {
   bool valid = false;     // parses as a picture specification
   bool numeric = false;   // numeric rather than character picture
   bool foldable = false;  // the simple numeric subset B4 folds
+  bool sterling = false;  // a G/M pounds-shillings-pence picture
   bool hasRepeat = false; // a repetition factor was expanded
   bool hasScale = false;  // a trailing F(n) scaling factor was present
   int width = 0;          // output positions (V and F(n) emit none)

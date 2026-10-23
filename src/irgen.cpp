@@ -8348,6 +8348,34 @@ void IRGen::emitPutEditItems(HStmt* s) {
       llvm::Value* signSrc = nullptr;
       bool binaryScaled = false;
       int scale = 0;
+      if (spec.sterling) {
+        if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+          d_.error(item->loc, "wide FIXED DECIMAL output through a sterling PICTURE is not "
+                              "implemented",
+                   "(53)");
+          break;
+        }
+        if (!v.ty.isFixed() && v.ty.k != TK::Float) {
+          d_.error(item->loc, "P edit item requires a numeric value", "(53)");
+          break;
+        }
+        if (v.ty.isFixed() && v.ty.scale != 0) {
+          d_.error(item->loc, "sterling PICTURE output requires a whole-pence value", "(53)");
+          break;
+        }
+        val = v.ty.k == TK::Float ? b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picsf")
+                                  : toI64(v);
+        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(val, i64(0), "picsgn"),
+                                            i32(-1), i32(1), "picst");
+        facts_.recordBuiltin("picture", "runtime",
+                             "the sterling picture conversion needs the library routine");
+        if (remarkLibraryCalls_)
+          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+        deferCall("pli_put_edit_pic_sterling",
+                  {val, sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size())});
+        break;
+      }
       if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
         // Wide DECIMAL output uses the 128-bit formatter core (B1).
         llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
@@ -8571,6 +8599,19 @@ void IRGen::emitGetEditItems(HStmt* s) {
       const pli::PictureSpec spec = pli::classifyPicture(f.pic);
       if (!spec.valid || spec.width <= 0) {
         d_.error(loc, "invalid PICTURE format for input", "(53)");
+        break;
+      }
+      if (spec.sterling) {
+        deferCall("pli_get_edit_pic_sterling",
+                  {i64(spec.width), globalString(spec.expanded),
+                   i64((long long)spec.expanded.size())},
+                  false, [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                    Val v;
+                    v.reg = r[i];
+                    int p = spec.intDigits > 0 ? spec.intDigits : 1;
+                    v.ty = Type::fixedDec(p, 0);
+                    storeGetTarget(t, v, loc);
+                  });
         break;
       }
       {
@@ -10836,6 +10877,11 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
     return out;
   }
   if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+    if (spec.sterling) {
+      d_.error(loc, "assignment of a wide FIXED DECIMAL to a sterling PICTURE is not implemented",
+               "(53)");
+      return out;
+    }
     // A wide DECIMAL is edited by the 128-bit formatter core (B1).
     llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
     llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
@@ -10876,6 +10922,18 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
     signSrc = val;
   } else {
     d_.error(loc, "a PICTURE assignment requires a numeric value", "(53)");
+    return out;
+  }
+  if (spec.sterling) {
+    if (scale != 0) {
+      d_.error(loc, "a sterling PICTURE assignment requires a whole-pence value", "(53)");
+      return out;
+    }
+    llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(signSrc, i64(0), "picsgn"),
+                                        b_.getInt32(-1), b_.getInt32(1), "picst");
+    b_.CreateCall(runtimeFn("pli_pic_format_sterling"),
+                  {val, sign, globalString(spec.expanded),
+                   i64((long long)spec.expanded.size()), out.ptr, out.len});
     return out;
   }
   llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");

@@ -1287,6 +1287,51 @@ PictureSpec classifyPicture(const std::string& pic) {
   if (s.expanded.empty())
     return s;
 
+  // Sterling pictures (rules (19),(146)-(148)): G starts the field, the
+  // following M starts the pounds subfield, and M starts the shillings and
+  // pence subfields. This slice accepts 9/Z digits and the literal
+  // separators . B / H P; the editing, overpunch and single-character
+  // sterling forms stay diagnosed.
+  if (s.expanded[0] == 'G') {
+    s.sterling = true;
+    s.numeric = true;
+    s.foldable = false;
+    s.width = 0;
+    s.intDigits = 0;
+    s.fracDigits = 0;
+    size_t i = 1;
+    if (i >= s.expanded.size() || s.expanded[i] != 'M')
+      return s;
+    ++i; // M before the pounds field
+    int field = 0;
+    int digits = 0;
+    for (; i < s.expanded.size(); ++i) {
+      char c = s.expanded[i];
+      if (c == 'M') {
+        if (digits == 0 || field >= 2)
+          return s;
+        ++field;
+        digits = 0;
+        continue;
+      }
+      if (c == '9' || c == 'Z') {
+        ++digits;
+        ++s.width;
+        ++s.intDigits;
+        continue;
+      }
+      // The pounds field has no literal separators in this slice; the two
+      // later fields may carry one of the standard subfield separators.
+      if (field == 0 || (c != '.' && c != 'B' && c != '/' && c != 'H' && c != 'P'))
+        return s;
+      ++s.width;
+    }
+    if (field != 2 || digits == 0 || s.width <= 0 || s.width > 127 || s.intDigits > 38)
+      return s;
+    s.valid = true;
+    return s;
+  }
+
   // The first V or '.' is the assumed decimal point; digits after it are
   // fractional positions (the rule the runtime formatter uses).
   for (size_t i = 0; i < s.expanded.size(); ++i)

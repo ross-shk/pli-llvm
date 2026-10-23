@@ -1,0 +1,56 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Sterling pictures (rules (19),(53),(146)-(148)): the arithmetic value is
+    fixed-point pence; G and M emit nothing and the fields receive pounds,
+    shillings and pence. */
+ sterling_picture: procedure options(main);
+    declare p picture('GM(3)9M.99M.99');
+    declare z picture('GM(3)ZM.Z9M.Z9');
+    declare buf char(9);
+    declare in char(9);
+
+    /* 366 pence = 1 pound 10 shillings 6 pence */
+    p = 366;
+    if p ^= '001.10.06' then do;
+       put skip list('FAIL sterling picture assignment:', p);
+       stop;
+    end;
+
+    /* the same field through P output */
+    put string(buf) edit(366) (P('GM(3)9M.99M.99'));
+    if buf ^= '001.10.06' then do;
+       put skip list('FAIL sterling picture output:', buf);
+       stop;
+    end;
+
+    /* Z suppresses leading zeros inside each subfield */
+    z = 366;
+    if z ^= '  1.10.06' then do;
+       put skip list('FAIL sterling picture zero suppression:', z);
+       stop;
+    end;
+
+    p = 0;
+    if p ^= '000.00.00' then do;
+       put skip list('FAIL sterling picture zero:', p);
+       stop;
+    end;
+
+    /* GET EDIT P reads the three subfields back to pence */
+    in = '001.10.06';
+    get string(in) edit(p) (P('GM(3)9M.99M.99'));
+    if p ^= '001.10.06' then do;
+       put skip list('FAIL sterling picture input:', p);
+       stop;
+    end;
+
+    /* GET LIST into a sterling picture uses the same pence value */
+    in = '366';
+    get string(in) list(p);
+    if p ^= '001.10.06' then do;
+       put skip list('FAIL sterling picture list input:', p);
+       stop;
+    end;
+
+    put skip list('PASS sterling_picture');
+ end sterling_picture;

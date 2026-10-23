@@ -4571,7 +4571,15 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       // picture characters are not in this slice.
       const pli::PictureSpec spec = pli::classifyPicture(f.pic);
       const bool targetIsPicture = it->ty.isChar() && !it->ty.picture.empty();
-      if (!spec.valid || spec.width <= 0 || !spec.numeric || spec.hasScale) {
+      if (spec.sterling) {
+        if (!spec.valid || spec.width <= 0)
+          d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
+        else if (spec.intDigits > 18)
+          d_.error(it->loc,
+                   "sterling P input with more than 18 digit positions is not implemented in "
+                   "this stage",
+                   "(53)");
+      } else if (!spec.valid || spec.width <= 0 || !spec.numeric || spec.hasScale) {
         d_.error(f.w ? f.w->loc : it->loc, "invalid PICTURE format for input", "(53)");
       } else if (spec.width > 127) {
         d_.error(it->loc, "P input wider than 127 positions is not implemented in this stage",
@@ -4597,8 +4605,14 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       // A scaled FIXED BINARY is rescaled to the picture's decimal positions
       // in IRGen (ADR-288); the formatter itself stays decimal. More than 18
       // fractional positions exceed its 64-bit decimal value.
-      if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
-        const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      if (!isGet && spec.sterling && (!spec.valid || spec.width <= 0)) {
+        d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
+      } else if (!isGet && spec.sterling &&
+                 (it->ty.scale != 0 || (it->ty.k == TK::FixedDec && it->ty.intBits() == 128))) {
+        d_.error(it->loc,
+                 "sterling PICTURE output requires a non-wide whole-pence value", "(53)");
+      } else if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
         if (it->ty.scale >= 127)
           d_.error(it->loc,
                    "PICTURE output of a scaled FIXED BINARY needs a scale below 127",
