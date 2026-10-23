@@ -350,7 +350,7 @@ static inline std::string pli_to_dec_string(PliI128 v) {
 #ifdef __cplusplus
 #ifdef PLI_WIDE128_PORTABLE
 /* MSVC (portable fallback) operator sugar so compiler sources read like
- * native __int128 code. clang-cl uses native operators instead. */
+ * native __int128 code. clang-cl uses native operators instead.
  * Mixed int operands convert implicitly via PliI128(long long). */
 inline PliI128 operator+(PliI128 a, PliI128 b) { return pli_to_s(pli_add_u(pli_to_u(a), pli_to_u(b))); }
 inline PliI128 operator-(PliI128 a, PliI128 b) { return pli_to_s(pli_sub_u(pli_to_u(a), pli_to_u(b))); }

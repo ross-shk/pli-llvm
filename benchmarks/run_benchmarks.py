@@ -175,6 +175,18 @@ def _default_cc() -> str:
     return found or "clang"
 
 
+def _find_builtins_lib() -> Optional[str]:
+    """Path to clang_rt.builtins on Windows, where clang.exe does not auto-link it."""
+    if not IS_WINDOWS:
+        return None
+    rc, out, _ = run_command([CC, "-print-runtime-dir"])
+    if rc == 0 and out.strip():
+        lib = Path(out.strip()) / "clang_rt.builtins-x86_64.lib"
+        if lib.is_file():
+            return str(lib)
+    return None
+
+
 def _find_pli() -> Path:
     """Locate the pli binary: newest of `build/pli[.exe]`, `build/cmake/...`."""
     here = BENCHMARK_DIR.parent / "build"
@@ -435,6 +447,9 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
         # -lm is POSIX-only; on Windows the math routines live in the CRT,
         # so no import library is needed (and no m.lib bootstrap either).
         cmd.append("-lm")
+    _builtins = _find_builtins_lib()
+    if _builtins:
+        cmd.append(_builtins)
     rc, out, err = run_command(cmd)
     if rc != 0:
         print(f"  C compile failed [{bench_name} {opt}]:\n{out}\n{err}")
