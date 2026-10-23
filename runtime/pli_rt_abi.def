@@ -69,6 +69,7 @@ PLI_FN(pli_put_edit_page, VOID, (VOID))
 PLI_FN(pli_put_edit_line, VOID, (I64))
 PLI_FN(pli_copy, VOID, (VOID))                        /* COPY (105): echo input remainder */
 PLI_FN(pli_put_edit_pic, VOID, (I64, I64, I32, CPTR, I64))
+PLI_FN(pli_pic_format, I64, (I64, I64, I32, CPTR, I64, PTR, I64)) /* PICTURE variable (ADR-290) */
 
 PLI_FN(pli_assign_char, VOID, (PTR, I64, CPTR, I64))  /* string semantics */
 PLI_FN(pli_assign_varying, I64, (PTR, I64, CPTR, I64))

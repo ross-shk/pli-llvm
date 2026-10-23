@@ -10289,3 +10289,141 @@ length.* A NONVARYING target needs the truncate/pad rule; `pli_get_reply` takes
 its capacity. *Lowering dynamic counts by unrolling a maximum.* That would
 evaluate data expressions the program did not supply and change side-effect
 order.
+
+---
+
+## ADR-288 — Picture output of a scaled `FIXED BINARY` truncates at the picture's decimal positions
+
+**Context.** ADR-284 established that a `FIXED BINARY(p,q)` variable stores
+`value × 2^q`, and rejected sending its raw integer through the decimal
+picture formatter: the formatter read the raw integer against a decimal point,
+so a scale-2 `2.5` printed as `0.00`. The gap was diagnosed under rule (53) and
+recorded as B11.
+
+**Decision.** `P` output of a scaled `FIXED BINARY` is served. Let `d` be the
+number of fractional digit positions in the picture (after `V` or `.`). The
+lowering computes
+
+```
+dec = trunc(raw × 10^d / 2^q)
+```
+
+in i128 and calls `pli_put_edit_pic` with the decimal value `dec` and scale
+`d`. The arithmetic is integer, so the digit positions the picture shows are
+truncated exactly, not rounded; this matches the existing decimal picture path,
+which drops fractional digits beyond its scale. The sign passed to the
+formatter comes from `raw`, so a negative value whose fraction truncates to
+zero still takes its sign position. For the same reason a scaled binary stays
+on the runtime interpreter: the constant folder cannot recover that sign from
+the truncated value.
+
+A picture with more than 18 fractional positions, or a declared scale of 127
+or more (the i128 rescue has no positive power of two there), keeps a rule
+(53) diagnostic rather than wrapping. The converted value shares the
+formatter's existing 64-bit decimal range, the same limit a decimal picture
+item has.
+
+**Consequences.** `tests/core/scaled_picture.pli` pins `2.5` through
+`ZZ9.99`, `-2.5` through `SZZ9.99`, truncation (`1.25` → `1.2`, `2.75` → `2`),
+a high binary scale (`bin(31,15)` at `0.75`) and zero fill;
+`bad_scaled_picture.pli` now gates the over-wide picture diagnostic. The work
+also exposed a formatter bug for any value below one whose digits exactly fill
+its scale: `0.75` at scale 2 printed `0.00` because the runtime and the
+constant folder counted the fractional digits only when the digit count
+exceeded the scale. Both now use `min(digits, scale)`, and
+`tests/core/picture_fold.pli` pins the decimal case on the folded and runtime
+paths. The `(44)–(55)` row in `GRAMMAR-COVERAGE.md` moves from "diagnosed" to
+the served form, and B11 loses this item.
+
+**Rejected.** *Converting through `FLOAT`.* `double` rounds where the picture
+truncates and loses low digits for the wider `p` values the integer path keeps.
+*Rescaling to the exact decimal `raw × 5^q` at scale `q`.* The product
+overflows the formatter's 64-bit value for ordinary `q`, and the formatter
+would then only trim it again. *A new runtime entry point.* The i128 rescale is
+three IR instructions and keeps the `pli_put_edit_pic` ABI unchanged.
+
+---
+
+## ADR-289 — Wide cross-base FIXED conversion rescales exactly in i256
+
+**Context.** ADR-284 made `convert()` rescale a narrow `FIXED DECIMAL` ↔
+`FIXED BINARY` pair exactly in i128. The wide (>18 digit) DECIMAL pairs still
+crossed through `FLOAT`, because `raw × 2^q` or `raw × 10^s` can exceed i128
+when `raw` is i128. B11 named the gap. The detour is visibly wrong: a double
+keeps 53 significant bits, so `2^53+1` loses its last digit, and the
+`binary → wide DECIMAL` path truncated its half-away rounding instead of
+rounding.
+
+**Decision.** A cross-base pair that involves a wide DECIMAL and a `FIXED
+BINARY` is rescaled exactly in i256:
+
+* `DECIMAL → BINARY` computes `trunc(raw × 2^q / 10^s)` with a signed divide
+  (truncation toward zero, the narrow path's rule), then applies
+  `fixedBinPrecTrap` at `p`.
+* `BINARY → DECIMAL` computes `(raw × 10^s + sign × 2^(q-1)) / 2^q`, the same
+  half-away-from-zero rounding Y33-6003 gives the narrow path, then traps at
+  the target's `10^p` precision through `wideMagTrap`, which compares at the
+  i256 width because `10^p` does not fit i64.
+* The `10^s` and `2^q` constants are built as `APInt` at 256 bits, so the
+  compiler's own arithmetic stays 128-bit/portable. No runtime entry point or
+  ABI changes.
+
+`10^s` fits an i128 only for `s <= 38`. A scale beyond that keeps the ADR-284
+scaled-`FLOAT` path as the documented limit; it is already outside the digits a
+128-bit DECIMAL can represent meaningfully. The narrow (i64 or non-wide i128)
+pairs keep their existing i128 path.
+
+**Consequences.** `tests/core/wide_cross_base.pli` pins the exact decode and
+encode around `2^53+1`, the negative side, half-away rounding, truncation, and
+both SIZE traps. The `(86)` assignment rows in `GRAMMAR-COVERAGE.md` no longer
+say the wide cross-base pairs go through `FLOAT`, and B11 loses this item.
+
+**Rejected.** *Pre-scaling in i128.* Dividing before multiplying loses the low
+digits the item exists to keep. *`long double`.* Its precision is target
+dependent and still rounds. *A big-integer dependency.* i256 is the smallest
+width that covers an i128 `raw` times `10^38`.
+
+---
+
+## ADR-290 — PICTURE variables are CHARACTER storage with a format template
+
+**Context.** The parser accepted `DECLARE p PICTURE('ZZ9.99')` and kept the
+string on the declaration, but sema ignored it. The name then received the
+default `FIXED BINARY` type, so `p = 12.5; PUT SKIP LIST(p);` printed `13`:
+a silent wrong answer in the `B1` picture family.
+
+**Decision.** A picture declaration is a `CHARACTER(width)` value plus a
+`picture` template carried by `Type`. `classifyPicture` expands repetition
+factors and computes the output width (a `V` or the trailing `F(n)` occupies no
+output position). The `picture` field is deliberately not part of type
+equivalence: the storage type is `CHARACTER`, so character comparisons and
+`PUT LIST` see the edited text.
+
+A numeric source assigned to a numeric picture is formatted through the same
+runtime interpreter as `P` output. The formatter core moved out of
+`pli_put_edit_pic` into `pic_format`, and a new `pli_pic_format` entry writes
+the field into the variable's storage. One interpreter therefore backs
+`PUT EDIT ... (P(...))` and picture assignment; the diagnostic is not a second
+implementation. A scaled `FIXED BINARY` source keeps the `P` rule: truncate at
+the picture's fractional positions in i128 and take the sign from the raw
+binary value.
+
+The first slice serves numeric pictures from numeric sources, including array
+elements and structure members. It diagnoses, with a rule number, the cases it
+does not serve: an invalid picture string (19), a character picture (19), the
+`F(n)` scaling factor (19), more than 18 digit positions or 127 output
+positions (19), a character source for a numeric picture (86), picture-directed
+`GET` (53/109), a wide `FIXED DECIMAL` source (53), and `INITIAL` with a
+picture (26). Picture-to-picture assignment copies only when both sides carry
+the same template.
+
+**Consequences.** `tests/core/picture_var.pli` covers leading-zero suppression,
+full width, `V`, repetition, sign positions, negative and `FLOAT` sources, plus
+an array element and a structure member. `bad_picture_decl`, `bad_picture_char`,
+`bad_picture_get` and `bad_picture_attr` pin the diagnostics. `B1` remains open
+for `GET EDIT P`, sterling data and wide picture items.
+
+**Rejected.** *A separate `TK::Picture`.* It would duplicate every CHARACTER
+storage and comparison path for no run-time difference. *Formatting in
+`IRGen`.* The runtime already owns the picture interpreter, and a second
+compiler-side copy would drift from `P` output.

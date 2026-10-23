@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A numeric PICTURE does not silently accept a character source
+    (rules (19),(86)); only the same picture copies straight through. */
+ bad_picture_char: procedure options(main);
+    declare p picture('ZZ9.99');
+    p = '123.45';
+ end bad_picture_char;

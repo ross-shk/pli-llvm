@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* An invalid PICTURE string is diagnosed (rules (19),(146)-(148)). */
+ bad_picture_decl: procedure options(main);
+    declare p picture('ZZ9.Q');
+    p = 1;
+ end bad_picture_decl;

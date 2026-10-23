@@ -1,0 +1,91 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Exact wide cross-base FIXED rescaling (rule (16), ADR-289): a
+    DECIMAL(>18 digits) source keeps all of its i128 digits when it is
+    converted to FIXED BINARY, and the reverse conversion keeps the bits
+    a double would round away. */
+ wide_cross_base: procedure options(main);
+    declare d fixed dec(25,4);
+    declare d3 fixed dec(30,3);
+    declare b fixed bin(63,4);
+    declare b0 fixed bin(63,0);
+    declare raw fixed bin(63,0) defined b;
+    declare dr fixed dec(30,0) defined d;
+    declare dr3 fixed dec(30,0) defined d3;
+    declare d19 fixed dec(19,1);
+    declare hit fixed bin(31);
+
+    /* DECIMAL -> BINARY: value*2^4 is 2^53+1, which a double rounds. */
+    d = 562949953421312.0625;
+    b = d;
+    if raw ^= 9007199254740993 then do;
+       put skip list('FAIL dec->bin exact, raw=', raw);
+       stop;
+    end;
+
+    /* The negative side keeps the same magnitude. */
+    d = -562949953421312.0625;
+    b = d;
+    if raw ^= -9007199254740993 then do;
+       put skip list('FAIL dec->bin negative, raw=', raw);
+       stop;
+    end;
+
+    /* BINARY -> DECIMAL: value*10^4 keeps the low digits. */
+    b = 562949953421312.0625;
+    d = b;
+    if dr ^= 5629499534213120625 then do;
+       put skip list('FAIL bin->dec exact, raw=', dr);
+       stop;
+    end;
+
+    /* BINARY -> DECIMAL rounds half away from zero (Y33-6003): 1/16 at
+       three places is 62.5 stored digits, which rounds to 63. */
+    b = 0.0625;
+    d3 = b;
+    if dr3 ^= 63 then do;
+       put skip list('FAIL bin->dec round, raw=', dr3);
+       stop;
+    end;
+
+    /* DECIMAL -> BINARY truncates toward zero (narrow path rule). */
+    d = 1.9999;
+    b0 = d;
+    if b0 ^= 1 then do;
+       put skip list('FAIL dec->bin trunc, got', b0);
+       stop;
+    end;
+    d = -1.9999;
+    b0 = d;
+    if b0 ^= -1 then do;
+       put skip list('FAIL dec->bin negative trunc, got', b0);
+       stop;
+    end;
+
+    /* A wide DECIMAL target traps at its declared precision in i256. */
+    on size begin;
+       hit = 1;
+    end;
+    hit = 0;
+    b0 = 9223372036854775807;
+    d19 = b0;
+    if hit ^= 1 then do;
+       put skip list('FAIL wide dec target did not trap');
+       stop;
+    end;
+    revert size;
+    /* A wide DECIMAL source that overflows FIXED BINARY(p) traps too. */
+    on size begin;
+       hit = 1;
+    end;
+    hit = 0;
+    d = 10000000000000000000;
+    b0 = d;
+    if hit ^= 1 then do;
+       put skip list('FAIL wide bin target did not trap');
+       stop;
+    end;
+    revert size;
+
+    put skip list('PASS wide_cross_base');
+ end wide_cross_base;

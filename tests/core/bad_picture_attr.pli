@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* PICTURE already fixes the item's type, so a second data attribute is
+    diagnosed (rules (19),(15)). */
+ bad_picture_attr: procedure options(main);
+    declare p picture('ZZ9.99') fixed;
+    p = 1;
+ end bad_picture_attr;
