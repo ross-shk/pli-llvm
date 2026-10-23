@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (20): AREA(*) inherits the size from an argument, so a
+    non-parameter declaration has no region size and is diagnosed. */
+ badas: procedure options(main);
+    declare a area(*);
+ end badas;

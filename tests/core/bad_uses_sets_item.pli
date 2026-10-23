@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (38): a USES/SETS item is an unsubscripted reference, an
+    integer level number, or '*'; anything else is diagnosed. */
+ badusi: procedure options(main);
+    declare a fixed bin(31);
+    declare f entry uses(a(1));
+    declare g entry sets(1.5);
+ end badusi;

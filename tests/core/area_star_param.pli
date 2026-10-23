@@ -1,0 +1,35 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (20): AREA(*) is an adjustable size inherited from the
+    argument, so a parameter allocates from the caller's region. */
+ areastar: procedure options(main);
+    declare ar area(1000);
+    declare 1 s based(p),
+              2 v fixed bin(31);
+    declare p pointer;
+    declare extf entry(area(*)) uses(ar);
+    declare bad fixed bin(31);
+    bad = 0;
+
+    call fill(ar, p);
+    if s.v ^= 5 then bad = 1;
+    /* the block is in the caller's region: FREE IN(ar) accepts it */
+    free p -> s in(ar);
+
+    if bad ^= 0 then do;
+       put skip list('FAIL area star param', bad);
+       stop;
+    end;
+    put skip list('PASS area_star_param');
+
+ fill: procedure(a, out);
+    declare a area(*);
+    declare out pointer;
+    declare 1 t based(q),
+              2 v fixed bin(31);
+    declare q pointer;
+    allocate t in(a) set(q);
+    t.v = 5;
+    out = q;
+ end fill;
+ end areastar;

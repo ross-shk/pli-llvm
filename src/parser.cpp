@@ -1651,6 +1651,10 @@ void Parser::parseDeclTail(DeclItem& item) {
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
         d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
                 "(15)");
+        // Keep STATIC visible to sema: an automatic region would silently
+        // lose a STATIC AREA's lifetime, so that combination is diagnosed.
+        if (w == "STATIC")
+          bag.staticAttr = true;
         advance();
         continue;
       }
@@ -1723,6 +1727,55 @@ void Parser::parseDeclTail(DeclItem& item) {
           if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
             d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
             item.entryRetTy = Type::chr(1);
+          }
+          expect(Tok::RParen, "(34)");
+        }
+        continue;
+      }
+      if (w == "USES" || w == "SETS") {
+        // entry-name-attribute { USES | SETS } ( {,• uses-sets-item••• } )
+        // (rules (34),(38)): interface metadata naming the variables the entry
+        // uses or sets. It feeds interprocedural analysis, which this compiler
+        // does not perform, so the list rides the symbol without changing
+        // generated code; the item shape is still checked (a name, a level
+        // number, or '*').
+        bool isUses = (w == "USES");
+        advance();
+        if (expect(Tok::LParen, "(34)")) {
+          auto& list = isUses ? item.uses : item.sets;
+          for (;;) {
+            std::string text;
+            if (at(Tok::Star)) {
+              text = "*";
+              advance();
+            } else if (at(Tok::Number)) {
+              if (cur().isFloat || cur().sterling || cur().imaginary)
+                d_.error(cur().loc, "a USES/SETS level must be an integer constant", "(38)");
+              text = cur().text;
+              advance();
+            } else if (at(Tok::Word)) {
+              // uses-sets-item ::= unsubscripted-reference | integer | * (38):
+              // the reference parser rejects a subscript below.
+              ExprP ref = parsePrimary();
+              if (!ref)
+                break;
+              if (ref->kind != Expr::VarRef || ref->locPtr) {
+                d_.error(ref->loc, "a USES/SETS item must be an unsubscripted reference",
+                         "(38)");
+              } else {
+                text = ref->name;
+                for (const std::string& q : ref->path)
+                  text += "." + q;
+              }
+            } else {
+              d_.error(cur().loc, "expected a name, a level number, or '*' in USES/SETS",
+                       "(38)");
+              break;
+            }
+            if (!text.empty())
+              list.push_back(text);
+            if (!eat(Tok::Comma))
+              break;
           }
           expect(Tok::RParen, "(34)");
         }
@@ -1921,7 +1974,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.area = true;
         if (eat(Tok::LParen)) {
           if (at(Tok::Star)) {
-            d_.error(cur().loc, "AREA(*) adjustable size is not implemented in this stage", "(20)");
+            // AREA(*) (rule (20)): an adjustable size, valid on a parameter
+            // (the size comes from the argument). Sema rejects it elsewhere.
+            bag.areaStar = true;
             advance();
           } else {
             bag.areaSize = parseExprOrPlaceholder();
@@ -2152,6 +2207,8 @@ void Parser::parseDeclTail(DeclItem& item) {
   item.unaligned = bag.unaligned;
   item.area = bag.area;
   item.areaSize = std::move(bag.areaSize);
+  item.areaStar = bag.areaStar;
+  item.sawStatic = bag.staticAttr;
   item.offset = bag.offset;
   item.offsetRef = std::move(bag.offsetRef);
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
@@ -2450,7 +2507,9 @@ bool Parser::parseDescriptorType(Type& out) {
     return true;
   }
   // An AREA parameter (rule (20)): the runtime region pointer, passed like any
-  // other variable. A parameter carries no size (the actual owns the region).
+  // other variable. The descriptor's size — AREA(*) or an expression — is not
+  // part of the call ABI: the argument is a region pointer and the callee owns
+  // no copy, so the parenthesized size is consumed and has no effect.
   if (atWord("AREA")) {
     advance();
     if (at(Tok::LParen)) {
@@ -2462,7 +2521,6 @@ bool Parser::parseDescriptorType(Type& out) {
           --depth;
         advance();
       } while (depth > 0 && !at(Tok::Eof));
-      d_.error(cur().loc, "AREA size on an ENTRY descriptor parameter is not implemented", "(20)");
     }
     out = Type::areaTy();
     return true;

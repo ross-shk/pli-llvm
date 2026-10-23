@@ -135,6 +135,8 @@ struct DeclItem {
   bool controlled = false;             // CONTROLLED generation-stack storage (rule (15), ADR-140)
   bool area = false;                   // AREA attribute (rule (20)); areaSize = size expr
   ExprP areaSize;                      // AREA( expression ) region size; null = default 1000
+  bool areaStar = false;               // AREA(*): size inherited from the parameter argument
+  bool sawStatic = false;              // STATIC keyword: a no-op except for an AREA (rule (20))
   bool offset = false;                 // OFFSET attribute (rule (22)); offsetRef = OFFSET(area)
   std::string offsetRef;  // OFFSET( <area-name> ) association (rule (22)); empty = none
   bool aligned = false;   // ALIGNED (rule (15)): natural layout (the default)
@@ -161,6 +163,8 @@ struct DeclItem {
    bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
    bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
                                   // scalar/pointer params marshal by value (C ABI)
+   std::vector<std::string> uses; // USES( ... ) entry-name-attribute (rules (34),(38))
+   std::vector<std::string> sets; // SETS( ... ) entry-name-attribute (rules (34),(38))
    std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
    bool reserved = false;         // RESERVED (ADR-203): no init
    bool unionAttr = false;        // UNION (ADR-202): overlay with next member
