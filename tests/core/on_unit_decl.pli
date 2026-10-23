@@ -1,0 +1,42 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (68),(91): a BEGIN ON-unit is a block, so its
+    DECLARE items are unit locals. They shadow outer
+    names, are captured like the establishing frame's
+    automatics, and keep their storage across repeated
+    invocations of the handler. */
+ ondecl: procedure options(main);
+    declare outer fixed bin(31);
+    declare tag char(3);
+    outer = 0;
+    tag = 'out';
+    on error begin;
+       declare hits fixed bin(31) init(7);
+       declare tag char(3) init('abc');
+       hits = hits + 1;
+       outer = outer + hits;
+       if tag ^= 'abc' then outer = -1;
+    end;
+    signal error;
+    signal error;
+    if outer ^= 17 then do;
+       put skip list('FAIL unit locals', outer);
+       stop;
+    end;
+    /* the unit-local shadowed the outer TAG */
+    if tag ^= 'out' then do;
+       put skip list('FAIL shadow', tag);
+       stop;
+    end;
+    /* a second unit has locals of its own */
+    on condition(later) begin;
+       declare n fixed bin(31) init(100);
+       outer = outer + n;
+    end;
+    signal condition(later);
+    if outer ^= 117 then do;
+       put skip list('FAIL second unit', outer);
+       stop;
+    end;
+    put skip list('PASS on_unit_decl');
+ end ondecl;

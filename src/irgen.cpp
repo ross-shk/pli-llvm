@@ -4274,6 +4274,7 @@ static void collectDeclStmts(HStmt* s, std::vector<HStmt*>& out) {
       collectDeclStmts(b.get(), out);
     collectDeclStmts(s->thenS.get(), out);
     collectDeclStmts(s->elseS.get(), out);
+    collectDeclStmts(s->unit.get(), out); // ON-unit block locals (ADR-299)
   }
 }
 

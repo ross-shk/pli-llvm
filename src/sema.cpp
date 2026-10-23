@@ -2221,6 +2221,22 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       collectDecls(s->body, raw, p, isStatic);
       continue;
     }
+    if (s->kind == Stmt::On && s->unit) {
+      // A BEGIN unit is a block of its own (rule (91)): its declarations are
+      // locals of that block, scoped inside the unit and captured by address
+      // like any automatic of the establishing frame.
+      if (s->unit->kind == Stmt::Begin) {
+        auto child = std::make_unique<Scope>();
+        child->parent = sc;
+        Scope* raw = child.get();
+        scopes_.push_back(std::move(child));
+        beginScopes_[s->unit.get()] = raw;
+        collectDecls(s->unit->body, raw, p, isStatic);
+      }
+      // A bare DECLARE/DEFINE unit is diagnosed by checkOnUnit, never
+      // registered into the enclosing scope.
+      continue;
+    }
     // Declarations in DO/IF bodies contribute to the enclosing scope.
     if (!s->body.empty())
       collectDecls(s->body, sc, p, isStatic);
@@ -2619,7 +2635,12 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
       d_.error(s->loc, "ITERATE inside an ON-unit is not implemented in this stage", "(91)");
       break;
     case Stmt::Declare:
-      d_.error(s->loc, "DECLARE inside an ON-unit is not implemented in this stage", "(91)");
+      // Declarations in a BEGIN unit are block-locals of that block (rule
+      // (68)): sema gave it its own scope, and codegen captures the storage
+      // by address like any other automatic of the establishing frame. A
+      // bare DECLARE as the unit itself is not an unconditional statement.
+      if (!u || u->kind != Stmt::Begin)
+        d_.error(s->loc, "a DECLARE is only allowed inside a BEGIN ON-unit", "(91)");
       break;
     case Stmt::DefineAlias:
       d_.error(s->loc, "DEFINE ALIAS inside an ON-unit is not implemented in this stage", "(91)");

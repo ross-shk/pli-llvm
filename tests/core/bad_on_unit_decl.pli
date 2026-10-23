@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (91),(68): declarations need a block; a bare
+    DECLARE cannot be the ON-unit itself. */
+ badonunitdecl: procedure options(main);
+    on error declare x fixed bin(31);
+ end badonunitdecl;

@@ -782,7 +782,17 @@ PL/I has resumable conditions with dynamic scope — think `try/except` in Pytho
  revert error;          /* pop the handler */
 ```
 
-Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, plus your own named conditions.
+Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), plus your own named conditions.
+
+A `begin` ON-unit is a block, so it can declare its own work variables. They shadow outer names and keep their value for as long as the handler stays established:
+
+```pli
+ on error begin;
+   dcl tries fixed bin(31) init(0);
+   tries = tries + 1;
+   put skip list('caught', tries);
+ end;
+```
 
 Bounds-checking example — the handler runs, then execution resumes with the index clamped:
 

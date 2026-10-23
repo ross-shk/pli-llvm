@@ -10761,3 +10761,41 @@ blocked on C1: the contract must be frozen before its semantics are built on.
   on fiber/1, fiber/4, os/1, os/4. Priority *values* are checked on every
   backend; priority *ordering* is checked only on fiber/1 because the OS model
   does not schedule by priority.
+
+---
+
+## ADR-299 — `DECLARE` in a `BEGIN` ON-unit
+
+**Context.** Rule (91) compiles an ON-unit to a handler function without
+the establishing frame, and rules (60)-(63)/(68) make a `BEGIN` block a
+scope with its own automatics. Sema rejected every `DECLARE` inside a
+unit because the handler runs off the establishing frame's call chain.
+Ordinary ON-units declare work variables, so these units were a common
+source-rewrite blocker (B4).
+
+**Decision.** A `BEGIN` unit is treated as the block it is: sema opens a
+child scope for it during declaration collection, so its `DECLARE` items
+are unit locals that shadow outer names. The symbols are automatics of
+the establishing procedure's frame, so the existing capture mechanism
+carries their addresses into the handler exactly like any other whole
+scalar automatic the unit touches. Storage therefore persists across
+repeated invocations of the same handler, which matches IBM's
+establishment-time allocation, and a second ON statement gets its own
+locals. A bare `DECLARE` as the unit body is not an unconditional
+statement and is diagnosed.
+
+**Consequences.** `on_unit_decl.pli` pins a unit-local counter keeping
+its value across two raises, a unit-local `CHAR` shadowing an outer
+variable of the same name, and a second unit with its own locals.
+`bad_on_unit_decl.pli` pins the bare-`DECLARE` diagnostic. INITIAL
+values are applied once at procedure entry by the existing
+`emitInitials` pass, not per establishment — the same model the
+compiler already uses for `BEGIN` blocks. Unit locals that are arrays,
+structures, or reached by subscript/qualified name still take the
+existing "reaching an automatic variable" diagnostic; `DEFINE`,
+`ENTRY`, `RETURN(value)`, and `GO TO` inside a unit are unchanged.
+
+**Rejected.** *Allocate the unit's locals in the handler function.* It
+would diverge from IBM's establishment-time lifetime and need a second
+capture path for nested references. *Make unit locals static.* It would
+break recursion and re-entrant handlers.
