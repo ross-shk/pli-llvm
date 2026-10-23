@@ -484,6 +484,14 @@ Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
 // procedure ::= [prefixlist] entry-namelist PROCEDURE [(parameterlist)]
 //               [procedure-optionslist] sentencelist                rule (2)
 void Parser::parseExternalProcedure() {
+  // procedure ::= [prefixlist] entry-namelist PROCEDURE ... (rule (2)): the
+  // prefix list belongs to the PROCEDURE statement and scopes its body.
+  auto pre = std::make_unique<Stmt>();
+  pre->loc = cur().loc;
+  if (!parseCondPrefixes(pre.get())) {
+    resync();
+    return;
+  }
   if (!at(Tok::Word)) {
     d_.error(cur().loc, "expected procedure name", "(2)");
     resync();
@@ -526,7 +534,12 @@ void Parser::parseExternalProcedure() {
   Proc* p = startProc(name, loc, nullptr);
   p->entryNames = std::move(entryNames);
   parseProcOptions(p);
+  // Apply the procedure statement's condition prefix to its body.
+  int outerStr = procStrRange_;
+  if (pre->strRange != 0)
+    procStrRange_ = pre->strRange;
   parseProcBody(p);
+  procStrRange_ = outerStr;
 }
 
 void Parser::parseProcOptions(Proc* p) {
@@ -671,11 +684,9 @@ EndInfo Parser::parseBody(Proc* owner, std::vector<StmtP>& body, const std::stri
   }
 }
 
-StmtP Parser::parseStatement(Proc* owner) {
-  auto st = std::make_unique<Stmt>();
-  st->loc = cur().loc;
-
-  // condition prefix list                                          rule (60)
+// condition-prefix-list (rules (60)-(63)): `(cond [, cond]*) :` precedes the
+// statement it governs; a PROCEDURE statement's prefix covers its body.
+bool Parser::parseCondPrefixes(Stmt* st) {
   while (at(Tok::LParen)) {
     SourceLoc l = cur().loc;
     int depth = 0;
@@ -691,44 +702,75 @@ StmtP Parser::parseStatement(Proc* owner) {
       }
       advance();
     }
-    if (at(Tok::Colon)) {
-      advance();
-      // Extensions (ADR-110/112): SIZE/NOSIZE and SUBSCRIPTRANGE/
-      // NOSUBSCRIPTRANGE and ZERODIVIDE/NOZERODIVIDE prefixes are
-      // enforced; any other condition keeps the unenforced warning.
-      bool anyWord = false, allHandled = true;
-      for (size_t k = save; k < i_; ++k) {
-        if (t_[k].kind != Tok::Word)
-          continue;
-        anyWord = true;
-        const std::string& w = t_[k].text;
-        if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE" || w == "CONVERSION")
-          continue; // already enabled: no-op
-        if (w == "NOSIZE") {
-          st->noSize = true;
-          continue;
-        }
-        if (w == "NOSUBSCRIPTRANGE") {
-          st->noSub = true;
-          continue;
-        }
-        if (w == "NOZERODIVIDE") {
-          st->noZdiv = true;
-          continue;
-        }
-        if (w == "NOCONVERSION") {
-          st->noConv = true;
-          continue;
-        }
-        allHandled = false;
-      }
-      if (!anyWord || !allHandled)
-        d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
-    } else {
+    if (!at(Tok::Colon)) {
       d_.error(l, "condition prefix must end with ':'", "(60)");
-      return nullptr;
+      return false;
     }
+    advance();
+    // Extensions (ADR-110/112): SIZE/NOSIZE and SUBSCRIPTRANGE/
+    // NOSUBSCRIPTRANGE and ZERODIVIDE/NOZERODIVIDE prefixes are
+    // enforced; any other condition keeps the unenforced warning.
+    // STRINGRANGE/NOSTRINGRANGE is IBM's opt-in condition (ADR-297):
+    // disabled by default, enabled only inside the prefix's scope.
+    bool anyWord = false, allHandled = true;
+    for (size_t k = save; k < i_; ++k) {
+      if (t_[k].kind != Tok::Word)
+        continue;
+      anyWord = true;
+      const std::string& w = t_[k].text;
+      if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE" || w == "CONVERSION")
+        continue; // already enabled: no-op
+      if (w == "NOSIZE") {
+        st->noSize = true;
+        continue;
+      }
+      if (w == "NOSUBSCRIPTRANGE") {
+        st->noSub = true;
+        continue;
+      }
+      if (w == "NOZERODIVIDE") {
+        st->noZdiv = true;
+        continue;
+      }
+      if (w == "NOCONVERSION") {
+        st->noConv = true;
+        continue;
+      }
+      if (w == "STRINGRANGE") {
+        st->strRange = 1;
+        continue;
+      }
+      if (w == "NOSTRINGRANGE") {
+        st->strRange = -1;
+        continue;
+      }
+      allHandled = false;
+    }
+    if (!anyWord || !allHandled)
+      d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
   }
+  return true;
+}
+
+StmtP Parser::parseStatement(Proc* owner) {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  // A PROCEDURE-level prefix covers every statement in its body.
+  st->strRange = procStrRange_;
+
+  // condition prefix list                                          rule (60)
+  if (!parseCondPrefixes(st.get()))
+    return nullptr;
+  // A prefix governs its statement and every body nested in it (rules
+  // (60)-(63)) — including ON-unit bodies, which codegen emits outside the
+  // enclosing group. The guard restores the outer scope on return.
+  struct RangeGuard {
+    int& state;
+    int saved;
+    ~RangeGuard() { state = saved; }
+  } rangeGuard{procStrRange_, procStrRange_};
+  if (st->strRange != 0)
+    procStrRange_ = st->strRange;
 
   // label prefixes                                                 rule (64)
   while (at(Tok::Word) && peek().kind == Tok::Colon) {
@@ -750,8 +792,8 @@ StmtP Parser::parseStatement(Proc* owner) {
     advance();
     Proc* p = startProc(st->labels.front(), st->loc, owner);
     parseProcOptions(p);
-    parseProcBody(p);
-    return nullptr; // procedures are hoisted into Program::procs
+    parseProcBody(p); // the statement guard already scoped the prefix
+    return nullptr;   // procedures are hoisted into Program::procs
   }
 
   // ENTRY statement                                     rule (56)
@@ -810,6 +852,7 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->noSub = st->noSub;
       s->noZdiv = st->noZdiv;
       s->noConv = st->noConv;
+      s->strRange = st->strRange;
       return s;
     }
   }
@@ -821,6 +864,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     k->noSub = st->noSub;
     k->noZdiv = st->noZdiv;
     k->noConv = st->noConv;
+    k->strRange = st->strRange;
     return k;
   }
 
@@ -831,6 +875,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     s->noSub = st->noSub;
     s->noZdiv = st->noZdiv;
     s->noConv = st->noConv;
+    s->strRange = st->strRange;
   }
   return s;
 }
@@ -1049,12 +1094,18 @@ std::string Parser::parseCondition(std::string* fileArg) {
     advance();
     return w;
   }
+  if (w == "STRINGRANGE") {
+    // IBM's opt-in condition (rules (60)-(63),(94)): detection is enabled by
+    // a (STRINGRANGE) prefix, but ON/SIGNAL/REVERT are always accepted.
+    advance();
+    return w;
+  }
   if (w == "FINISH" || w == "AREA") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
   }
-  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" || w == "STRINGRANGE" ||
+  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" ||
       w == "UNDERFLOW") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
@@ -1083,7 +1134,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
     if (!expect(Tok::RParen, "(99)"))
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
-        name == "CONVERSION") {
+        name == "CONVERSION" || name == "STRINGRANGE") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

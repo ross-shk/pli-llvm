@@ -666,17 +666,25 @@ private:
   void emitSizeTrap(llvm::BasicBlock* okBB);
   // Computational-condition trap (rules (91)-(94)): the shared shape behind
   // emitSizeTrap. Without an ON unit for `key` in the module emit the
-  // unconditional `abortFn` call; otherwise consult the stack — empty takes
-  // the abort path, established runs the matching handler then branches to
-  // okBB, where the caller resumes with its own recovery value.
-  void emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB);
+  // A condition trap: with no handler, call the unconditional `abortFn`;
+  // otherwise consult the stack — empty takes the abort path, established
+  // runs the matching handler then branches to okBB, where the caller
+  // resumes with its own recovery value. With notifyOnly the no-handler
+  // path calls `abortFn` as the implicit action (it returns) and resumes at
+  // okBB instead of aborting (STRINGRANGE).
+  void emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB,
+                    bool notifyOnly = false);
+  // STRINGRANGE check (rules (60)-(63),(94)): with the condition enabled in
+  // the current scope, an invalid SUBSTR argument triple raises before the
+  // clamped extraction runs.
+  void emitStringrangeCheck(const Val& start, const Val& len, llvm::Value* srcLen);
   // WS-F1 (ADR-249): the ON dispatch — the stack scan, the handler calls and
   // the abort — lives in a cold function of its own, so the hot function
   // carries only the branch and the call. One function per condition key:
   // the handlers of a key are known before any procedure body is emitted
   // (declareOnHandlers), so the dispatch can be shared by every trap site
   // of that key.
-  llvm::Function* onTrapDispatch(int key, const std::string& abortFn);
+  llvm::Function* onTrapDispatch(int key, const std::string& abortFn, bool notifyOnly = false);
   std::map<int, llvm::Function*> trapDispatch_;
   // Clamp an index into [lb, ub] (SUBSCRIPTRANGE resume value, rule 94).
   llvm::Value* clampIndex(llvm::Value* i, llvm::Value* lb, llvm::Value* ub);
@@ -966,6 +974,9 @@ private:
     bool noSub = false;
     bool noZdiv = false;
     bool noConv = false;
+    // STRINGRANGE is opt-in (ADR-297): 0 disabled/inherited, 1 enabled,
+    // -1 explicitly disabled in this scope.
+    int strRange = 0;
   };
   std::vector<CheckState> checkStack_;
   // Global --no-size-checks (ADR-111) disables every SIZE trap, including
@@ -985,6 +996,9 @@ private:
   }
   bool convChecks() const {
     return !noConvChecks_ && (checkStack_.empty() || !checkStack_.back().noConv);
+  }
+  bool strRangeChecks() const {
+    return !checkStack_.empty() && checkStack_.back().strRange == 1;
   }
   // P6.1: true when internal procedures should be marked AlwaysInline
   // (checks off = -O2/-O3 default; at -O0 checks are on, no inliner runs).

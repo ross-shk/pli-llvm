@@ -1,0 +1,96 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (60)-(63),(91)-(94): (STRINGRANGE) enables the
+    condition for its scope only; ON STRINGRANGE catches an
+    out-of-range SUBSTR and resumes with IBM's clamped
+    substring; REVERT exposes the enclosing handler. */
+ onstrrange: procedure options(main);
+    declare s char(5) init('abcde');
+    declare r char(2);
+    declare hits fixed bin(31);
+    hits = 0;
+    /* the condition is disabled by default: no raise */
+    r = substr(s, 0, 2);
+    if hits ^= 0 then do;
+       put skip list('FAIL disabled raised');
+       stop;
+    end;
+    if r ^= '  ' then do;
+       put skip list('FAIL disabled value', r);
+       stop;
+    end;
+    /* two handlers: the topmost runs, REVERT exposes the first */
+    on stringrange hits = hits + 10;
+    on stringrange hits = hits + 1;
+    (stringrange):
+       r = substr(s, 0, 2);
+    if hits ^= 1 then do;
+       put skip list('FAIL raise count', hits);
+       stop;
+    end;
+    revert stringrange;
+    (stringrange):
+       r = substr(s, 4, 10);
+    if hits ^= 11 then do;
+       put skip list('FAIL inner revert', hits);
+       stop;
+    end;
+    if r ^= 'de' then do;
+       put skip list('FAIL clamped value', r);
+       stop;
+    end;
+    /* a substring inside the source raises nothing */
+    (stringrange):
+       r = substr(s, 2, 2);
+    if hits ^= 11 then do;
+       put skip list('FAIL valid raised');
+       stop;
+    end;
+    if r ^= 'bc' then do;
+       put skip list('FAIL valid value', r);
+       stop;
+    end;
+    /* y = LENGTH(x)+1 with z = 0 is not a raise */
+    (stringrange):
+       r = substr(s, 6, 0);
+    if hits ^= 11 then do;
+       put skip list('FAIL empty raised');
+       stop;
+    end;
+    /* (NOSTRINGRANGE) turns detection off inside an enabled group */
+    (stringrange):
+       do;
+          (nostringrange):
+             r = substr(s, 0, 2);
+       end;
+    if hits ^= 11 then do;
+       put skip list('FAIL disabled nested raised');
+       stop;
+    end;
+    if r ^= '  ' then do;
+       put skip list('FAIL disabled nested value', r);
+       stop;
+    end;
+    /* SIGNAL raises the condition explicitly */
+    signal stringrange;
+    if hits ^= 21 then do;
+       put skip list('FAIL signal count', hits);
+       stop;
+    end;
+    revert stringrange;
+    /* a prefix covers statements inside a nested ON-unit body */
+    (stringrange):
+       do;
+          on stringrange hits = hits + 100;
+          on error do;
+             hits = hits + 1;
+             if substr(s, 0, 2) = '  ' then hits = hits + 10;
+          end;
+          signal error;
+       end;
+    if hits ^= 132 then do;
+       put skip list('FAIL unit body count', hits);
+       stop;
+    end;
+    put skip list('PASS stringrange');
+ end onstrrange;

@@ -10634,3 +10634,49 @@ DECLARE overridden by `ALLOCATE`, re-allocation with a new extent, and
 subscript check.* It rejects legal programs after an override. *Store
 extents in the heap block header.* ADR-184 already reads the dope slots;
 a header would split the overlay and heap representations.
+
+---
+
+## ADR-297 — `STRINGRANGE` is IBM's opt-in condition on `SUBSTR`
+
+**Context.** Rules (60)-(63) parse condition prefixes and (91)-(99) serve
+the establish/raise/pop machinery for ERROR, SIZE, SUBSCRIPTRANGE,
+ZERODIVIDE, CONVERSION and programmer-named conditions. `ON STRINGRANGE`
+was rejected by `parseCondition`, and an out-of-range `SUBSTR` silently
+returned the clamped value with no condition raised. IBM makes
+STRINGRANGE unusual: it is **disabled by default** and enabled only
+within the scope of a `(STRINGRANGE)` condition prefix. Its implicit
+action is also not an abort — it prints a message and continues with the
+revised substring.
+
+**Decision.** Serve STRINGRANGE on the `SUBSTR` function with the same
+fixed-key dispatch as the other served conditions (key -5). Detection is
+gated by a tri-state prefix flag carried on statements: `(STRINGRANGE)`
+enables it, `(NOSTRINGRANGE)` disables it, and an unset value inherits
+from the enclosing statement, so a prefixed `DO`/`BEGIN`/`PROCEDURE`
+covers its body. A prefix on a PROCEDURE statement (including the
+file-scope form `(STRINGRANGE): MAIN: PROC ...`, rule (2)) is inherited
+by every statement parsed in that procedure. The argument triple raises
+when `y < 1`, `z < 0`, or the substring reaches past the source's
+current length; `y = LENGTH(x)+1` with `z = 0` is explicitly not a
+raise. A handler resumes with the clamped value the existing lowerings
+already compute. With no handler, IRGen calls a new
+`pli_stringrange` entry that flushes pending output, prints the message
+and returns, so execution continues (IBM's implicit action) instead of
+aborting like the other served conditions.
+
+**Consequences.** `on_stringrange.pli` pins the disabled default, the
+two-handler stack with `REVERT`, the clamped resume values, the
+`LENGTH+1`/zero-length exception, `SIGNAL`, a nested `(NOSTRINGRANGE)`,
+and a `SUBSTR` inside an ON-unit body reached through the enclosing
+prefix. `stringrange_implicit.pli` is the golden for the procedure-level
+prefix and the notify-and-continue implicit action.
+`bad_on_cond_stringrange.pli` pins the `CONDITION(STRINGRANGE)`
+exclusion. The `SUBSTR` pseudo-variable is not checked: IBM documents
+its out-of-range store as an invalid program that writes past `x`, so
+the address-style write stays untouched.
+
+**Rejected.** *Treat STRINGRANGE as enabled by default like
+SUBSCRIPTRANGE is in this compiler.* It would raise on ordinary programs
+and contradict IBM's stated default. *Abort when no handler exists.* The
+implicit action is defined as a message plus normal return.

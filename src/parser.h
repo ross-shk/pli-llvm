@@ -65,6 +65,10 @@ private:
   EndInfo parseProcBody(Proc* p);
   EndInfo parseBody(Proc* owner, std::vector<StmtP>& body, const std::string& ownName);
   StmtP parseStatement(Proc* owner);
+  // condition-prefix-list (rules (60)-(63)): consume `(cond [, cond]*) :`
+  // and record the enables/disables on the statement. False after a
+  // diagnostic (a malformed prefix).
+  bool parseCondPrefixes(Stmt* st);
   StmtP parseDeclare();
   StmtP parseIf(Proc* owner);
   StmtP parseDo(Proc* owner, const std::vector<std::string>& labels);
@@ -212,4 +216,8 @@ private:
   size_t i_ = 0;
   std::unique_ptr<Program> prog_ = std::make_unique<Program>();
   EndInfo pendingEnd_{}; // propagates multiple closure outward
+  // Scope of a condition prefix on a PROCEDURE statement (rules (60)-(63)):
+  // 0 = inherit, 1 = enabled, -1 = disabled. Every statement parsed inside
+  // that procedure starts from this state.
+  int procStrRange_ = 0;
 };

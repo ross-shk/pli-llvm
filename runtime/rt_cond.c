@@ -237,6 +237,16 @@ void pli_conversion(void) {
   pli_signal_error("CONVERSION: invalid numeric conversion");
 }
 
+/* STRINGRANGE implicit action (rules (60)-(63),(94), ADR-297): the condition
+ * was raised but no handler is established. IBM prints a message and resumes
+ * with the clamped SUBSTR value, so this returns to the trap's join. The
+ * stdout flush keeps the message in source order with list-directed output. */
+void pli_stringrange(void) {
+  rt_flush_stdout();
+  pli_plat_fflush(stdout);
+  pli_plat_fprintf(stderr, "STRINGRANGE: substring arguments out of range\n");
+}
+
 /* ALLOCATE (rule 87): heap-allocate n bytes for a based structure. A null
  * return would be an ALLOCATION condition (M4); the interim raises a hard
  * error. */

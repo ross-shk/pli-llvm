@@ -341,6 +341,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->noSub = s->noSub;
   h->noZdiv = s->noZdiv;
   h->noConv = s->noConv;
+  h->strRange = s->strRange;
   h->until = s->until;
   h->cond = lowerExpr(s->cond.get());
   h->from = lowerExpr(s->from.get());

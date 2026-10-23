@@ -2974,7 +2974,7 @@ llvm::Function* IRGen::intrinsicFn(const std::string& name, llvm::Type* ret,
 // needs. Keeping it in its own function keeps the hot function's body small
 // and gives the backend a cold function to put out of line. Mirrors MULTICS
 // cg_error.pl1, where the condition path is separate from the normal path.
-llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
+llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn, bool notifyOnly) {
   auto cached = trapDispatch_.find(key);
   if (cached != trapDispatch_.end())
     return cached->second;
@@ -3011,7 +3011,12 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
     br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
   b_.SetInsertPoint(abortBB);
   b_.CreateCall(runtimeFn(abortFn), {});
-  b_.CreateUnreachable();
+  // A notify-and-continue condition (STRINGRANGE) returns from the dispatch;
+  // every other served condition aborts on the empty-handler edge.
+  if (notifyOnly)
+    b_.CreateRetVoid();
+  else
+    b_.CreateUnreachable();
   b_.SetInsertPoint(dspBB);
   llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.ret", F);
   llvm::SwitchInst* sw = b_.CreateSwitch(top, retBB, handlers.size());
@@ -3029,26 +3034,61 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn) {
   return F;
 }
 
-void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB) {
+void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* okBB,
+                         bool notifyOnly) {
   auto it = onHandlers_.find(key);
   if (it == onHandlers_.end()) {
     // No handler for this condition: the abort is already a call to a cold,
     // noreturn runtime entry, so the trap block is as small as it can be.
+    // A notify-and-continue condition returns and resumes at okBB.
     b_.CreateCall(runtimeFn(abortFn), {});
-    b_.CreateUnreachable();
+    if (notifyOnly)
+      b_.CreateBr(okBB);
+    else
+      b_.CreateUnreachable();
     return;
   }
   // WS-F1 (ADR-249): the dispatch is a cold function of its own; the hot
   // path carries the branch and the call, and nothing else.
-  llvm::Function* dispatch = onTrapDispatch(key, abortFn);
+  llvm::Function* dispatch = onTrapDispatch(key, abortFn, notifyOnly);
   if (!dispatch) {
-    // No dispatch could be built (no handler for the key): abort inline.
+    // No dispatch could be built (no handler for the key): take the
+    // implicit action inline.
     b_.CreateCall(runtimeFn(abortFn), {});
-    b_.CreateUnreachable();
+    if (notifyOnly)
+      b_.CreateBr(okBB);
+    else
+      b_.CreateUnreachable();
     return;
   }
   b_.CreateCall(dispatch, {});
   b_.CreateBr(okBB);
+}
+
+// STRINGRANGE check (rules (60)-(63),(94)): raise before the extraction when
+// the argument triple is invalid. IBM's normal return then gives the clamped
+// substring the lowerings already compute. y = LENGTH(x)+1 with z = 0 is
+// explicitly not a raise.
+void IRGen::emitStringrangeCheck(const Val& start, const Val& len, llvm::Value* srcLen) {
+  llvm::Value* one = i64(1);
+  llvm::Value* zero = i64(0);
+  llvm::Value* start64 = toI64(start);
+  llvm::Value* len64 = toI64(len);
+  llvm::Value* srclen64 = b_.CreateZExtOrTrunc(srcLen, b_.getInt64Ty(), "sr.srclen");
+  // start < 1, len < 0, or len reaches past the source's current length.
+  llvm::Value* lo = b_.CreateICmpSLT(start64, one, "sr.lo");
+  llvm::Value* neg = b_.CreateICmpSLT(len64, zero, "sr.neg");
+  llvm::Value* avail =
+      b_.CreateSub(srclen64, b_.CreateSub(start64, one, "sr.start0"), "sr.avail");
+  llvm::Value* past = b_.CreateICmpSGT(len64, avail, "sr.past");
+  llvm::Value* bad = b_.CreateOr(b_.CreateOr(lo, neg, "sr.bad1"), past, "sr.bad");
+  std::string id = std::to_string(n_++);
+  llvm::BasicBlock* trapL = llvm::BasicBlock::Create(ctx_, "sr.trap." + id, curFn_);
+  llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "sr.ok." + id, curFn_);
+  b_.CreateCondBr(bad, trapL, okL);
+  b_.SetInsertPoint(trapL);
+  emitCondTrap(Stmt::kStringrangeCondKey, "pli_stringrange", okL, /*notifyOnly=*/true);
+  b_.SetInsertPoint(okL);
 }
 
 // SIZE dispatch (QR1.4, rules (91)-(94)): body of a fixed-overflow trap
@@ -5379,6 +5419,8 @@ void IRGen::declareOnHandlers(HProgram& prog) {
       name = "PLI_ON_ZERODIVIDE_" + std::to_string(keyId.second);
     else if (keyId.first == Stmt::kConversionCondKey)
       name = "PLI_ON_CONVERSION_" + std::to_string(keyId.second);
+    else if (keyId.first == Stmt::kStringrangeCondKey)
+      name = "PLI_ON_STRINGRANGE_" + std::to_string(keyId.second);
     else
       name = "PLI_ONC_" + std::to_string(keyId.first) + "_" + std::to_string(keyId.second);
     onHandlers_[keyId.first].push_back(
@@ -5503,21 +5545,28 @@ void IRGen::emitSignal(HStmt* s) {
   llvm::BasicBlock* resBB = llvm::BasicBlock::Create(ctx_, "on.resume", curFn_);
   b_.CreateCondBr(none, defBB, dspBB);
   b_.SetInsertPoint(defBB);
-  std::string msg;
-  if (s->condKey == 0)
-    msg = "SIGNAL ERROR";
-  else if (s->condKey == Stmt::kSizeCondKey)
-    msg = "SIGNAL SIZE";
-  else if (s->condKey == Stmt::kSubscriptrangeCondKey)
-    msg = "SIGNAL SUBSCRIPTRANGE";
-  else if (s->condKey == Stmt::kZerodivideCondKey)
-    msg = "SIGNAL ZERODIVIDE";
-  else if (s->condKey == Stmt::kConversionCondKey)
-    msg = "SIGNAL CONVERSION";
-  else
-    msg = "SIGNAL CONDITION(" + s->condName + ")";
-  b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
-  b_.CreateUnreachable();
+  // STRINGRANGE's implicit action is "message printed, processing continues"
+  // (rules (60)-(63),(94)); every other served condition aborts.
+  if (s->condKey == Stmt::kStringrangeCondKey) {
+    b_.CreateCall(runtimeFn("pli_stringrange"), {});
+    b_.CreateBr(resBB);
+  } else {
+    std::string msg;
+    if (s->condKey == 0)
+      msg = "SIGNAL ERROR";
+    else if (s->condKey == Stmt::kSizeCondKey)
+      msg = "SIGNAL SIZE";
+    else if (s->condKey == Stmt::kSubscriptrangeCondKey)
+      msg = "SIGNAL SUBSCRIPTRANGE";
+    else if (s->condKey == Stmt::kZerodivideCondKey)
+      msg = "SIGNAL ZERODIVIDE";
+    else if (s->condKey == Stmt::kConversionCondKey)
+      msg = "SIGNAL CONVERSION";
+    else
+      msg = "SIGNAL CONDITION(" + s->condName + ")";
+    b_.CreateCall(runtimeFn("pli_signal_error"), {globalString(msg)});
+    b_.CreateUnreachable();
+  }
   b_.SetInsertPoint(dspBB);
   if (s->condKey == 0)
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
@@ -5553,6 +5602,9 @@ void IRGen::emitStmt(HStmt* s) {
   top.noSub = top.noSub || s->noSub;
   top.noZdiv = top.noZdiv || s->noZdiv;
   top.noConv = top.noConv || s->noConv;
+  // An explicit (STRINGRANGE)/(NOSTRINGRANGE) prefix wins for its subtree.
+  if (s->strRange != 0)
+    top.strRange = s->strRange;
   checkStack_.push_back(top);
   switch (s->kind) {
   case HStmt::Null:
@@ -12142,6 +12194,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val s = emitExpr(e->args[0].get());
     Val start = emitExpr(e->args[1].get());
     Val len = emitExpr(e->args[2].get());
+    // STRINGRANGE (rules (60)-(63),(94)): an invalid argument triple raises
+    // before the clamped extraction when the condition is enabled here.
+    if (strRangeChecks())
+      emitStringrangeCheck(start, len, s.len);
     // Source capacity for clipping: static, except for adjustable `CHAR(*)`
     // (rule (18)) / CONTROLLED (rule (15)) sources, where it is live.
     Symbol* ssysm = e->args[0]->sym;

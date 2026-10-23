@@ -1,0 +1,15 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (60)-(63),(94): a (STRINGRANGE) prefix on the
+    PROCEDURE enables the condition for the whole body;
+    with no handler established the implicit action
+    prints a message and resumes with the clamped
+    substring, and SIGNAL takes the same action. */
+ (stringrange): strimp: procedure options(main);
+    declare s char(5) init('abcde');
+    declare r char(2);
+    r = substr(s, 0, 2);
+    signal stringrange;
+    put skip list('after substr', r);
+    put skip list('after signal');
+ end strimp;

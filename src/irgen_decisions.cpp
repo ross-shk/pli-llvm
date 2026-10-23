@@ -450,6 +450,10 @@ void EffectWalker::walkCallExpr(HExpr* e, bool writeCtx) {
       if (opts_->zerodivideChecks)
         b_.raiseKeys.insert(Stmt::kZerodivideCondKey);
     }
+    // SUBSTR can raise STRINGRANGE under a prefix (ADR-297); a handler
+    // established anywhere may then run and write.
+    if (e->name == "SUBSTR")
+      b_.raiseKeys.insert(Stmt::kStringrangeCondKey);
     if (e->name == "ADD" || e->name == "SUBTRACT" || e->name == "MULTIPLY")
       raiseSize();
     break;

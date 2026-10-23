@@ -2788,6 +2788,8 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kZerodivideCondKey;
   if (s->condName == "CONVERSION")
     return Stmt::kConversionCondKey;
+  if (s->condName == "STRINGRANGE")
+    return Stmt::kStringrangeCondKey;
   // Programmer-named conditions: deterministic hash ensures every
   // compilation unit assigns the same key to the same name, enabling
   // cross-object signal dispatch.
@@ -3060,6 +3062,7 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->strRange = s->strRange;
   {
     auto tgt = std::make_unique<Expr>();
     tgt->kind = Expr::Call;
@@ -3413,6 +3416,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       fill->noSub = s->noSub;
       fill->noZdiv = s->noZdiv;
       fill->noConv = s->noConv;
+      fill->strRange = s->strRange;
       auto fillTgt = std::make_unique<Expr>();
       fillTgt->kind = Expr::VarRef;
       fillTgt->name = base;
@@ -3435,6 +3439,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         copy->noSub = s->noSub;
         copy->noZdiv = s->noZdiv;
         copy->noConv = s->noConv;
+        copy->strRange = s->strRange;
         auto ctgt = std::make_unique<Expr>();
         ctgt->kind = Expr::VarRef;
         ctgt->name = t->name;
@@ -5566,6 +5571,7 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->strRange = s->strRange;
   s->kind = Stmt::Group;
   s->byName = false;
   for (auto& f : fills)
