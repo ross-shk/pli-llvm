@@ -10661,20 +10661,50 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
 }
 
 // Address of a DEFINED scalar element overlay (rule 24): Y overlays the base
-// array element at the (compile-time checked) constant subscripts, so its
-// address is a stable GEP into the base. Y has no storage of its own.
+// array element selected by one subscript per base axis — a compile-time
+// constant or a runtime expression that IBM re-evaluates at every reference to
+// Y. Y has no storage of its own, so its address is a GEP into the base.
 llvm::Value* IRGen::definedConstAddr(Symbol* sym) {
   Symbol* base = sym->definedBase;
   const Type& bty = base->ty;
-  llvm::Value* baseAddr = addressOf(base);
-  long long flat = 0, stride = 1;
   const size_t n = bty.dims.size();
+  // One base index per base axis; a runtime subscript is bounds-checked
+  // (rule 126) and clamped on a resumed SUBSCRIPTRANGE slip.
+  std::vector<llvm::Value*> idx(n);
+  for (size_t k = 0; k < n; ++k) {
+    HExpr* he = k < sym->definedIdx.size() ? sym->definedIdx[k] : nullptr;
+    if (!he) {
+      idx[k] = i64(sym->definedConst[k]); // compile-time checked in sema
+      continue;
+    }
+    llvm::Value* raw = toI64(emitExpr(he));
+    const Dim& dd = bty.dims[k];
+    const int ilb = dd.lb, iub = dd.ub;
+    llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(raw, i64(ilb), "lo"),
+                                   b_.CreateICmpSGT(raw, i64(iub), "hi"), "oob");
+    // A handled slip resumes with the base index clamped into range (rule 94);
+    // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
+    idx[k] = subChecks() ? clampIndex(raw, i64(ilb), i64(iub)) : raw;
+    if (subChecks()) {
+      std::string id = std::to_string(n_++);
+      llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
+      llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
+      b_.CreateCondBr(oob, failL, okL);
+      startBlock(failL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
+      startBlock(okL);
+    }
+  }
+  llvm::Value* flat = i64(0);
+  long long stride = 1;
   for (size_t k = n; k-- > 0;) {
-    flat += (sym->definedConst[k] - bty.dims[k].lb) * stride;
+    flat = b_.CreateAdd(
+        flat,
+        b_.CreateMul(b_.CreateSub(idx[k], i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
     stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);
   }
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
-  return b_.CreateInBoundsGEP(arrTy, baseAddr, {i64(0), i64(flat)}, "defined");
+  return b_.CreateInBoundsGEP(arrTy, addressOf(base), {i64(0), flat}, "defined");
 }
 
 // Address of a subscripted iSUB-DEFINED array element Y(i0,i1,...) (rules

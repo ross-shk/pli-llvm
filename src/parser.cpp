@@ -1823,9 +1823,9 @@ void Parser::parseDeclTail(DeclItem& item) {
           advance();
           if (!at(Tok::RParen)) {
             for (;;) {
-              // One base subscript (rules 126,134): a constant integer, a bare
-              // iSUB dummy, or an affine iSUB form `[m] [*] 1SUB [+/- c]`. A
-              // non-affine base subscript is diagnosed.
+              // One base subscript (rules 126,134): an iSUB dummy (bare or
+              // affine `[m*] kSUB [+/- c]`), or an expression evaluated at each
+              // reference to the defined item.
               DefinedSub ds;
               auto parseInt = [&](bool neg) -> long long {
                 long long v = 0;
@@ -1833,52 +1833,38 @@ void Parser::parseDeclTail(DeclItem& item) {
                   v = strtoll(cur().text.c_str(), nullptr, 10);
                   advance();
                 } else {
-                  d_.error(cur().loc,
-                           "DEFINED base subscripts must be constant integers or an affine iSUB "
-                           "expression",
-                           "(24)");
+                  d_.error(cur().loc, "expected an integer in the iSUB offset", "(134)");
                 }
                 return neg ? -v : v;
               };
-              if (at(Tok::Number)) {
-                long long c = strtoll(cur().text.c_str(), nullptr, 10);
-                advance();
-                if (eat(Tok::Star)) {
-                  // m * 1SUB
-                  if (at(Tok::Isub)) {
-                    // m * kSUB: the dummy names the k-th subscript of the item.
-                    ds.isub = true;
-                    ds.axis = (int)strtol(cur().text.c_str(), nullptr, 10) - 1;
-                    ds.mult = c;
-                    advance();
-                  } else {
-                    d_.error(cur().loc, "expected an iSUB dummy after '*'", "(134)");
-                  }
-                } else {
-                  // a plain constant index (no iSUB)
-                  ds.expr = std::make_unique<Expr>();
-                  ds.expr->kind = Expr::IntLit;
-                  ds.expr->loc = cur().loc;
-                  ds.expr->ival = c;
+              bool isubForm =
+                  at(Tok::Isub) ||
+                  (at(Tok::Number) && peek(1).kind == Tok::Star && peek(2).kind == Tok::Isub);
+              if (isubForm) {
+                // The optional multiplier of an affine `m * kSUB` dummy.
+                if (at(Tok::Number)) {
+                  ds.mult = strtoll(cur().text.c_str(), nullptr, 10);
+                  advance();
+                  eat(Tok::Star);
                 }
-              } else if (at(Tok::Isub)) {
-                // 1SUB (or 1SUB +/- c): the dummy names the item's 1st subscript.
+                // kSUB: the dummy names the item's k-th subscript (rule 134).
                 ds.isub = true;
                 ds.axis = (int)strtol(cur().text.c_str(), nullptr, 10) - 1;
-                ds.mult = 1;
                 advance();
+                // optional affine offset (only meaningful after an iSUB)
+                if (at(Tok::Plus) || at(Tok::Minus)) {
+                  bool neg = cur().kind == Tok::Minus;
+                  advance();
+                  ds.add = parseInt(neg);
+                }
               } else {
-                d_.error(cur().loc,
-                         "DEFINED base subscripts must be constant integers or an affine iSUB "
-                         "expression",
-                         "(24)");
-                advance(); // skip the offending token to keep parsing the list
-              }
-              // optional affine offset (only meaningful after an iSUB)
-              if (ds.isub && (at(Tok::Plus) || at(Tok::Minus))) {
-                bool neg = cur().kind == Tok::Minus;
-                advance();
-                ds.add = parseInt(neg);
+                // A constant or runtime index expression; sema types it and
+                // resolves the bounds.
+                ds.expr = parseExpr();
+                if (!ds.expr) {
+                  d_.error(cur().loc, "expected a DEFINED base subscript", "(24)");
+                  advance(); // skip the offending token to keep parsing the list
+                }
               }
               item.definedSubs.push_back(std::move(ds));
               if (!eat(Tok::Comma))

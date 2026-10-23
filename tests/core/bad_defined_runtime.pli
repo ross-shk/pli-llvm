@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* DEFINED runtime base-subscript restrictions (rules 24,126,134): the
+    index must address an element, the item must match the base element
+    type, and an iSUB overlay keeps its other subscripts constant. */
+ bad_defined_runtime: procedure options(main);
+    declare a(10) fixed bin(31);
+    declare c char(2);
+    declare i fixed bin(31);
+    declare e(4) fixed bin(31);
+    declare f(4,4) fixed bin(31);
+    declare p pointer;
+    declare g(*) based(p) fixed bin(31);
+    /* a CHARACTER cannot address an element */
+    declare bad1 fixed bin(31) defined a(c);
+    /* the item must match the base element type */
+    declare bad2 char(2) defined a(i);
+    /* iSUB defining needs the other base subscripts constant */
+    declare bad3(4) fixed bin(31) defined f(1SUB, i);
+    declare bad4(4) fixed bin(31) defined e(i);
+    /* a runtime-extent base has no compile-time shape to overlay */
+    declare bad5 fixed bin(31) defined g(i);
+ end bad_defined_runtime;

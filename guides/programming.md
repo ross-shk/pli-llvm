@@ -794,9 +794,23 @@ at the n-th character of the base (counting from 1) and must fit inside it:
  mid = 'vwxyz';                            /* buf(6:10) is now 'vwxyz' */
 ```
 
+A base subscript may be an expression; it is re-evaluated at every reference, so
+the alias follows the index — like a pointer you can retarget by changing a variable:
+
+```pli
+ dcl a(10) fixed bin(31);
+ dcl i fixed bin(31);
+ dcl y fixed bin(31) defined a(i);   /* y is a(i), for the current i */
+
+ i = 3;
+ y = 30;                             /* a(3) = 30 */
+ i = 7;
+ put skip list(y);                   /* a(7), re-evaluated here */
+```
+
 **Not yet**
 
-- every item subscript must be mapped by a dummy; `position` needs a scalar character item over a character base (a bit-string position is an error); the base must be in the same or an enclosing scope.
+- every item subscript must be mapped by a dummy; a runtime base subscript keeps the item a scalar of the base's element type; `position` needs a scalar character item over a character base (a bit-string position is an error); the base must be in the same or an enclosing scope.
 
 > **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `pli defined_isub.pli -o overlays && ./overlays`.
 

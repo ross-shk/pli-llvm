@@ -1,0 +1,40 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A runtime DEFINED base subscript is bounds-checked (rule 126): a
+    slip routes to the SUBSCRIPTRANGE unit and resumes at the nearest
+    bound, so no reference leaves the base array. */
+ defined_runtime_range: procedure options(main);
+    declare a(5) fixed bin(31);
+    declare i fixed bin(31);
+    declare y fixed bin(31) defined a(i);
+    declare caught fixed bin(31) initial(0);
+
+    do i = 1 to 5;
+       a(i) = i * 10;
+    end;
+
+    on subscriptrange caught = caught + 1;
+
+    i = 0;                         /* below the lower bound */
+    y = 77;                        /* resumes clamped to a(1) */
+    if caught ^= 1 then do;
+       put skip list('FAIL defined_runtime_range: no trap low');
+       stop;
+    end;
+    if a(1) ^= 77 then do;
+       put skip list('FAIL defined_runtime_range: low store', a(1));
+       stop;
+    end;
+
+    i = 9;                         /* above the upper bound */
+    if y ^= 50 then do;
+       put skip list('FAIL defined_runtime_range: high load', y);
+       stop;
+    end;
+    if caught ^= 2 then do;
+       put skip list('FAIL defined_runtime_range: no trap high');
+       stop;
+    end;
+
+    put skip list('PASS defined_runtime_range');
+ end defined_runtime_range;

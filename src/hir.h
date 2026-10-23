@@ -96,6 +96,10 @@ struct HDeclItem {
   // expression. Symbol::dynLenExpr points into it; kept in HIR so IRGen can
   // size CONTROLLED generations at each ALLOCATE.
   HExprP dynLenBound;
+  // Owns the lowered runtime base subscripts of a subscripted DEFINED overlay
+  // (rule 24), one entry per base axis; null for a constant or iSUB slot.
+  // Symbol::definedIdx points into it, so IRGen re-evaluates it per reference.
+  std::vector<HExprP> definedIdxBounds;
   HExprP init;     // INITIAL(...) — scalar constant only in M0
   HExprP initCall; // INITIAL(CALL f(...)) — a function-call initializer (rule 27)
   Symbol* sym = nullptr;

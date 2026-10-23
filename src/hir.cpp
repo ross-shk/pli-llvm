@@ -323,6 +323,20 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
         }
         hd.sym->dynMembers.push_back(std::move(mh));
       }
+    // DEFINED base subscripts that are runtime expressions (rules 24,126):
+    // lower each onto the symbol so addressOf can re-evaluate it at every
+    // reference to the defined item. hd.definedIdxBounds owns the exprs.
+    if (hd.sym && !d.definedSubs.empty()) {
+      hd.definedIdxBounds.resize(d.definedSubs.size());
+      hd.sym->definedIdx.assign(d.definedSubs.size(), nullptr);
+      for (size_t k = 0; k < d.definedSubs.size(); ++k) {
+        const DefinedSub& ds = d.definedSubs[k];
+        if (ds.isub || !ds.expr || ds.expr->kind == Expr::IntLit)
+          continue;
+        hd.definedIdxBounds[k] = lowerExpr(ds.expr.get());
+        hd.sym->definedIdx[k] = hd.definedIdxBounds[k].get();
+      }
+    }
     // The lowered INITIAL(CALL f(...)) expression (rule 27) rides on the symbol
     // so irgen's emitInitials can evaluate it at block entry; hd.initCall owns
     // the HExpr (freed with the HStmt), which outlives IRGen.

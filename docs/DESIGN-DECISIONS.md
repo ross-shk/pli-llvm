@@ -11062,3 +11062,52 @@ lengths.* That is the whole point of the form — IBM2656I warns when a
 different-length declaration is taken as simple defining instead. *Serving BIT
 positions now.* A bit position needs bit-granular extract/insert; a separate
 slice, kept diagnosed.
+
+---
+
+## ADR-307 — `DEFINED` with a runtime base subscript
+
+**Context.** Rule (24) allows the base of a `DEFINED` overlay to be a
+`basic-reference`, which may be subscripted. ADR-048 served constant subscripts
+and the iSUB forms; a non-constant subscript was diagnosed ("DEFINED base
+subscripts must be constant integers"). IBM evaluates that subscript at each
+reference to the defined item, so `DCL Y FIXED BIN(31) DEFINED A(I);` makes `Y`
+a live alias whose target follows `I` — the natural way to write a
+subscript-dependent view without a POINTER.
+
+**Decision.** A base subscript parses as an expression (the iSUB forms are still
+recognised first, so `m*kSUB±c` keeps its meaning). Sema types the expression,
+requires an integer type (the same scale-0 FIXED rule the compiler already
+applies to ordinary subscripts, ADR-277), and accepts a scalar item of the base's
+element type. The expression is lowered to HIR and attached to the symbol as
+`definedIdx`, one entry per base axis; `IRGen::definedConstAddr` emits the index
+per axis — the constant when there is no expression — so the address is rebuilt
+at every reference to the item, exactly as IBM specifies. A runtime index is
+bounds-checked against its base axis and clamped on a resumed SUBSCRIPTRANGE slip,
+the same contract the iSUB and ordinary array paths use; `(NOSUBSCRIPTRANGE)`
+still elides the check. A runtime subscript combined with iSUB defining is
+diagnosed with rule (134) — the iSUB map multiplies the item's own subscripts, and
+a slot that changes per reference has no place in it — and a CHARACTER or scaled
+subscript keeps the ordinary (126) diagnostic.
+
+**Consequences.** `defined_runtime.pli` points one alias at three different
+elements by changing `i`, checks that the other elements keep their values, uses a
+mixed constant/runtime list (`b(2,i)`) and an expression (`a(i+1)`), compares
+`ADDR` with the selected element, and writes every element of an array through
+the single alias in a loop. `defined_runtime_range.pli` proves both out-of-range
+directions trap and resume at the nearest bound; `bad_defined_runtime.pli` pins
+the four diagnostics. The `POSITION` overlay (ADR-306) composes with a runtime
+subscript for free, because it adds its byte offset to whatever address the
+element-overlay path computed. A base named by a runtime extent (a BASED `(*)`
+array or a dynamic DECLARE) is now diagnosed with rule (126): the flat element
+GEP needs the base's compile-time shape, and the old acceptance addressed past
+the declared placeholder extent (an `inbounds` GEP that LLVM may treat as
+poison). B8 loses its `DEFINED X(i)` line and stays open only for the descriptor
+tail.
+
+**Rejected.** *Fold constant expressions and treat them as compile-time indices.*
+A folded constant would need the same evaluation the runtime path already does;
+the compile-time bounds check is the only loss, and it still applies to a literal.
+*Evaluate the subscript once and cache it on the symbol.* That is a stale alias —
+IBM's per-reference evaluation is observable when the index changes between
+references, which is the whole point of the form.

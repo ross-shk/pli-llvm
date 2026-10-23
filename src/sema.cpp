@@ -40,6 +40,10 @@ static unsigned fnv1a(const char* s, size_t len);
 // Defined below; forward-declared for the Call pre-pass in typeExpr.
 static std::vector<std::string> splitDesignator(const std::string& raw);
 
+// True when a value can address an element: a scale-0 FIXED (rule 126,
+// ADR-277). Defined below; forward-declared for the DEFINED subscript check.
+static bool isIntegerSubscriptType(const Type& t);
+
 // Storage size in bytes of one scalar for a DEFINED whole-base overlay
 // (rule 24): two scalars with equal size share the base's address, each
 // reference loading/storing through its own declared type. Returns -1 when
@@ -82,6 +86,16 @@ static long long definedCharUnits(const Type& t) {
     n *= d.ub - d.lb + 1;
   }
   return n * t.len;
+}
+
+// True when an array axis has a runtime extent (rule (13)): a dynamic DECLARE
+// bound or an adjustable `*` axis. A DEFINED element overlay needs the base's
+// compile-time shape to compute its flat offset, so such a base is diagnosed.
+static bool hasRuntimeExtent(const Type& t) {
+  for (const Dim& d : t.dims)
+    if (d.dyn || d.lbDyn || d.adj)
+      return true;
+  return false;
 }
 
 // POSITION fit check shared by both overlay forms (rule 24): the item starts at
@@ -1706,6 +1720,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                        "DEFINED base '" + item.definedBase +
                            "' is not an array and cannot be subscripted",
                        "(126)");
+            } else if (hasRuntimeExtent(base->ty)) {
+              // A flat element GEP needs the base's compile-time shape; a
+              // runtime extent would address past the declared placeholder.
+              d_.error(item.loc,
+                       "DEFINED over an array with a runtime extent is not implemented in this "
+                       "stage",
+                       "(126)");
             } else if (item.definedSubs.size() != base->ty.dims.size()) {
               d_.error(item.loc,
                        "DEFINED base '" + item.definedBase + "' has " +
@@ -1720,6 +1741,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               std::vector<bool> axisUsed(item.ty.dims.size(), false);
               int nIsub = 0;
               bool ok = true;
+              bool runtimeSub = false;
               for (size_t k = 0; k < item.definedSubs.size(); ++k) {
                 const DefinedSub& ds = item.definedSubs[k];
                 if (ds.isub) {
@@ -1747,10 +1769,33 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                                  " is out of bounds " + std::to_string(d.lb) + ":" +
                                  std::to_string(d.ub),
                              "(126)");
+                } else if (ds.expr) {
+                  // A runtime base subscript: it is re-evaluated at each
+                  // reference to the defined item and checked when it runs
+                  // (rule 126), so only its type is checked here.
+                  typeExpr(ds.expr.get(), sc, p);
+                  runtimeSub = true;
+                  if (!ds.expr->ty.isVoid() && !isIntegerSubscriptType(ds.expr->ty)) {
+                    d_.error(ds.expr->loc,
+                             "a DEFINED base subscript must be of an integer type, not " +
+                                 ds.expr->ty.desc(),
+                             "(126)");
+                    ok = false;
+                  }
                 } else {
-                  d_.error(item.loc, "DEFINED base subscripts must be constant integers", "(24)");
+                  d_.error(item.loc, "expected a DEFINED base subscript", "(24)");
                   ok = false;
                 }
+              }
+              if (ok && nIsub > 0 && runtimeSub) {
+                // An iSUB overlay maps item axes onto base axes; a runtime
+                // base index would need a per-reference map, so keep the
+                // other base subscripts constant (rule 134).
+                d_.error(item.loc,
+                         "DEFINED iSUB defining requires the other base subscripts to be "
+                         "constant",
+                         "(134)");
+                ok = false;
               }
               if (ok && nIsub > 0 && item.hasPos) {
                 // IBM2130I: POSITION is string-overlay defining and cannot be
@@ -1827,7 +1872,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   isDefined = true;
                 } else {
                   d_.error(item.loc,
-                           "DEFINED element base requires the item to match the base's element "
+                           "DEFINED element base requires a scalar item of the base's element "
                            "type (" +
                                item.ty.desc() + " vs " + base->ty.elementType().desc() + ")",
                            "(24)");
@@ -4990,6 +5035,10 @@ void Sema::checkSubscriptBounds(Expr* e, Symbol* arr) {
 // FLOAT, a CHARACTER — has no integer value: the compiler used to take the
 // stored bits as the index, so a decimal subscript of 2.00 addressed element
 // 200 of a three-element array.
+static bool isIntegerSubscriptType(const Type& t) {
+  return (t.k == TK::FixedBin || t.k == TK::FixedDec) && t.scale == 0;
+}
+
 void Sema::checkSubscriptTypes(Expr* e) {
   for (auto& a : e->args) {
     if (a->kind == Expr::Star)
@@ -4997,9 +5046,7 @@ void Sema::checkSubscriptTypes(Expr* e) {
     const Type& t = a->ty;
     if (t.isVoid())
       continue; // already diagnosed elsewhere
-    if (t.k == TK::FixedBin && t.scale == 0)
-      continue;
-    if (t.k == TK::FixedDec && t.scale == 0)
+    if (isIntegerSubscriptType(t))
       continue;
     d_.error(a->loc, "a subscript must be of an integer type, not " + t.desc(), "(126)");
   }

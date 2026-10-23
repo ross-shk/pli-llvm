@@ -1,0 +1,51 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* DEFINED with a runtime base subscript (rule 24): y aliases a(i), and
+    i is re-evaluated at every reference, so the alias follows i. */
+ defined_runtime: procedure options(main);
+    declare a(10) fixed bin(31);
+    declare b(3,4) fixed bin(31);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare y fixed bin(31) defined a(i);
+    declare s fixed bin(31) defined b(2,i);
+    declare t fixed bin(31) defined a(i + 1);
+    declare bad fixed bin(31);
+    bad = 0;
+
+    /* the live index selects the target of each reference */
+    i = 3;
+    y = 30;
+    if a(3) ^= 30 then bad = 1;
+    i = 7;
+    y = 70;
+    if a(7) ^= 70 then bad = 2;
+    if a(3) ^= 30 then bad = 3;
+    if y ^= 70 then bad = 4;
+
+    /* a mixed constant/runtime base subscript, and an expression */
+    i = 4;
+    s = 24;
+    if b(2,4) ^= 24 then bad = 5;
+    i = 2;
+    t = 50;                        /* a(3) */
+    if a(3) ^= 50 then bad = 6;
+
+    /* the alias resolves to the live base element's address */
+    i = 5;
+    if addr(y) ^= addr(a(5)) then bad = 7;
+
+    /* a loop writes every element through the one alias */
+    do i = 1 to 10;
+       y = i * 2;
+    end;
+    do j = 1 to 10;
+       if a(j) ^= j * 2 then bad = 8;
+    end;
+
+    if bad ^= 0 then do;
+       put skip list('FAIL defined_runtime', bad);
+       stop;
+    end;
+    put skip list('PASS defined_runtime');
+ end defined_runtime;

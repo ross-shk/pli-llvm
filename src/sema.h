@@ -79,6 +79,10 @@ struct Symbol {
   std::vector<long long> definedSlotMult;
   std::vector<long long> definedSlotAdd;
   bool hasIsubOverlay() const { return !definedSlotAxis.empty(); }
+  // Runtime base subscripts of a DEFINED element overlay (rule 24), one entry
+  // per base axis; null for a compile-time constant. Each is re-evaluated at
+  // every reference to the defined item, with a SUBSCRIPTRANGE check.
+  std::vector<HExpr*> definedIdx;
   // Runtime upper-bound expression of a dynamic array's first axis (rule (13)),
   // lowered to HIR during AST->HIR lowering; null for a constant array. Used by
   // irgen to size and bounds-check the dynamic array.
