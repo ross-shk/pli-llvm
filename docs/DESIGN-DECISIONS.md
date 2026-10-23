@@ -10913,3 +10913,38 @@ source for no benefit. *Resolve the names in the declaring scope.* It
 would report false errors for a callee's variables. *Ignore the list
 without checking its shape.* A subscripted item or a non-integer level
 is malformed and should cite rule (38).
+
+---
+
+## ADR-303 — `AREA(*)` as an adjustable area size
+
+**Context.** Rule (20) is `area-attribute ::= AREA [ ( expression | * ) ]`.
+The parser rejected the asterisk with "AREA(*) adjustable size is not
+implemented", so a procedure could not declare the parameter form that
+IBM defines: with `AREA(*)` the size is inherited from the argument,
+while a parameter declared `AREA(n)` already shared the caller's region.
+An ENTRY descriptor had a separate refusal for any `AREA(size)`.
+
+**Decision.** `AREA(*)` sets an item flag and is accepted on a procedure
+parameter (a PROCEDURE statement parameter or an ENTRY-statement
+parameter); the region pointer arrives from the caller, so no region is
+created and no size is stored. On a non-parameter the declaration is
+diagnosed with rule (20), because the region would have no size. An
+ENTRY descriptor consumes the parenthesized size, starred or not: the
+size is not part of the call ABI, so it cannot change the emitted call.
+The same pass made a STATIC AREA reachable by the existing rule (20)
+diagnostic — the STATIC keyword is normally a warned no-op, but an
+automatic region would silently lose the STATIC lifetime.
+
+**Consequences.** `area_star_param.pli` allocates a block in a `area(*)`
+parameter, proves the caller sees the value through its own based view,
+and frees the block back into the caller's region (the runtime refuses a
+block from another region). `bad_area_star.pli` pins the non-parameter
+diagnostic. Still open: a real STATIC/EXTERNAL area (module-wide storage
+created once), arrays of AREA/OFFSET, and offset arithmetic.
+
+**Rejected.** *Give a non-parameter `AREA(*)` a default size.* It would
+silently pick a lifetime and capacity the source never asked for.
+*Keep refusing the descriptor form.* A caller's descriptor cannot know
+the callee's region size, so the refusal blocked correct declarations
+for no ABI reason.

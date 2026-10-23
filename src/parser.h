@@ -149,6 +149,8 @@ private:
     bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
     bool area = false;       // AREA (rule (20)): a region for BASED allocation
     ExprP areaSize;          // AREA( expression ): region size in bytes; null = default
+    bool areaStar = false;   // AREA(*): the size is inherited from the argument
+    bool staticAttr = false; // STATIC keyword seen (a warned no-op; AREA diagnoses it)
     bool offset = false;     // OFFSET (rule (22)): a locator into an AREA
     std::string offsetRef;   // OFFSET( area ): the associated AREA; empty = unassociated
     bool task = false;       // TASK (rules (15),(79), QR2.8): a task name

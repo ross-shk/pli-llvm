@@ -1651,6 +1651,10 @@ void Parser::parseDeclTail(DeclItem& item) {
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
         d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
                 "(15)");
+        // Keep STATIC visible to sema: an automatic region would silently
+        // lose a STATIC AREA's lifetime, so that combination is diagnosed.
+        if (w == "STATIC")
+          bag.staticAttr = true;
         advance();
         continue;
       }
@@ -1970,7 +1974,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.area = true;
         if (eat(Tok::LParen)) {
           if (at(Tok::Star)) {
-            d_.error(cur().loc, "AREA(*) adjustable size is not implemented in this stage", "(20)");
+            // AREA(*) (rule (20)): an adjustable size, valid on a parameter
+            // (the size comes from the argument). Sema rejects it elsewhere.
+            bag.areaStar = true;
             advance();
           } else {
             bag.areaSize = parseExprOrPlaceholder();
@@ -2201,6 +2207,8 @@ void Parser::parseDeclTail(DeclItem& item) {
   item.unaligned = bag.unaligned;
   item.area = bag.area;
   item.areaSize = std::move(bag.areaSize);
+  item.areaStar = bag.areaStar;
+  item.sawStatic = bag.staticAttr;
   item.offset = bag.offset;
   item.offsetRef = std::move(bag.offsetRef);
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
@@ -2499,7 +2507,9 @@ bool Parser::parseDescriptorType(Type& out) {
     return true;
   }
   // An AREA parameter (rule (20)): the runtime region pointer, passed like any
-  // other variable. A parameter carries no size (the actual owns the region).
+  // other variable. The descriptor's size — AREA(*) or an expression — is not
+  // part of the call ABI: the argument is a region pointer and the callee owns
+  // no copy, so the parenthesized size is consumed and has no effect.
   if (atWord("AREA")) {
     advance();
     if (at(Tok::LParen)) {
@@ -2511,7 +2521,6 @@ bool Parser::parseDescriptorType(Type& out) {
           --depth;
         advance();
       } while (depth > 0 && !at(Tok::Eof));
-      d_.error(cur().loc, "AREA size on an ENTRY descriptor parameter is not implemented", "(20)");
     }
     out = Type::areaTy();
     return true;

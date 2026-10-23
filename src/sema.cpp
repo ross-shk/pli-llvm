@@ -1819,7 +1819,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (item.area) {
           if (item.ty.isArray())
             d_.error(item.loc, "an array of AREA is not implemented in this stage", "(20)");
-          if (item.sym->isStatic)
+          if (item.sym->isStatic || item.sawStatic)
             d_.error(item.loc, "a STATIC or EXTERNAL AREA is not implemented in this stage",
                      "(20)");
           auto areaErr = [&](const char* what, const char* rule) {
@@ -1837,7 +1837,22 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             areaErr("BASED", "(25)");
           if (item.controlled)
             areaErr("CONTROLLED", "(15)");
-          if (item.areaSize) {
+          if (item.areaStar) {
+            // AREA(*) (rule (20)): an adjustable size inherited from the
+            // argument, so it is meaningful only on a procedure parameter.
+            bool isParam =
+                std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+            if (!isParam)
+              for (auto& st : p->body)
+                if (st && st->kind == Stmt::Entry &&
+                    std::find(st->params.begin(), st->params.end(), item.name) !=
+                        st->params.end())
+                  isParam = true;
+            if (!isParam)
+              d_.error(item.loc,
+                       "AREA(*) requires a parameter: the size is inherited from the argument",
+                       "(20)");
+          } else if (item.areaSize) {
             typeExpr(item.areaSize.get(), sc, p);
             if (item.areaSize->kind == Expr::IntLit && item.areaSize->ival > 0)
               item.sym->areaSize = item.areaSize->ival;

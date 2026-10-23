@@ -135,6 +135,8 @@ struct DeclItem {
   bool controlled = false;             // CONTROLLED generation-stack storage (rule (15), ADR-140)
   bool area = false;                   // AREA attribute (rule (20)); areaSize = size expr
   ExprP areaSize;                      // AREA( expression ) region size; null = default 1000
+  bool areaStar = false;               // AREA(*): size inherited from the parameter argument
+  bool sawStatic = false;              // STATIC keyword: a no-op except for an AREA (rule (20))
   bool offset = false;                 // OFFSET attribute (rule (22)); offsetRef = OFFSET(area)
   std::string offsetRef;  // OFFSET( <area-name> ) association (rule (22)); empty = none
   bool aligned = false;   // ALIGNED (rule (15)): natural layout (the default)
