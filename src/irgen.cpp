@@ -4061,7 +4061,7 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
 }
 
 void IRGen::allocaLocals(HProc* p) {
-  areaLocals_.clear();
+  areaSlots_.clear();
   // P2 alias facts start fresh per function (see aliasScopeOf_): scopes from
   // an enclosing procedure must never describe this frame's storage.
   aliasDomain_ = nullptr;
@@ -4109,10 +4109,19 @@ void IRGen::allocaLocals(HProc* p) {
     if (s->ty.isArea()) {
       // An AUTOMATIC AREA (rule (20)): create the runtime region at entry and
       // destroy it on exit (emitCtlEpilogue). Allocation from it supports
-      // out-of-order FREE via the region's size accounting.
-      llvm::Value* region = b_.CreateCall(runtimeFn("pli_area_create"), {i64(s->areaSize)}, "area");
-      b_.CreateStore(region, a);
-      areaLocals_.push_back(s);
+      // out-of-order FREE via the region's size accounting. An AREA array gets
+      // one region per element, each slot remembered for the epilogue.
+      long long n = s->ty.isArray() ? arrayExtent(s->ty) : 1;
+      llvm::ArrayType* arrTy =
+          s->ty.isArray() ? llvm::ArrayType::get(b_.getPtrTy(), (unsigned)n) : nullptr;
+      for (long long i = 0; i < n; ++i) {
+        llvm::Value* slot =
+            arrTy ? b_.CreateInBoundsGEP(arrTy, a, {i64(0), i64(i)}, "ar.i") : a;
+        llvm::Value* region =
+            b_.CreateCall(runtimeFn("pli_area_create"), {i64(s->areaSize)}, "area");
+        b_.CreateStore(region, slot);
+        areaSlots_.push_back(slot);
+      }
     } else if (s->ty.isArray() && (s->ty.elementType().isTask() || s->ty.elementType().isEvent())) {
       // A TASK/EVENT array (rules (15),(79),(82)): each element is its own
       // handle/flag — TASK starts unset (0), EVENT starts complete (1).
@@ -5457,7 +5466,7 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       ctlAddrHoist_.clear();
       ctlLenHoist_.clear();
       ctlExtHoist_.clear();
-      areaLocals_.clear(); // ... and owns no AREA regions
+      areaSlots_.clear(); // ... and owns no AREA regions
       for (Symbol* gs : sema_.storage())
         if (gs->isStatic && gs->kind == Symbol::Var)
           symAddr_[gs] = mod_.getGlobalVariable(gs->irName.substr(1), true);
@@ -6895,10 +6904,10 @@ void IRGen::emitPackageCtlEnsure() {
 void IRGen::emitCtlEpilogue() {
   for (Symbol* sym : ctlImplicitAlloc_)
     b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(sym)});
-  // Destroy the procedure's AUTOMATIC AREA regions (rule (20)). Any blocks
-  // still allocated in them are released with the region.
-  for (Symbol* sym : areaLocals_)
-    b_.CreateCall(runtimeFn("pli_area_destroy"), {b_.CreateLoad(b_.getPtrTy(), addressOf(sym))});
+  // Destroy the procedure's AUTOMATIC AREA regions (rule (20)), one per slot.
+  // Any blocks still allocated in them are released with the region.
+  for (llvm::Value* slot : areaSlots_)
+    b_.CreateCall(runtimeFn("pli_area_destroy"), {b_.CreateLoad(b_.getPtrTy(), slot)});
 }
 
 // ALLOCATE (rule 87): heap-allocate a based structure (rule 88, SET option) and

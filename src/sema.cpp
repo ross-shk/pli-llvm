@@ -24,6 +24,13 @@ static const long long kMaxInitElems = 1LL << 20;
 // LIKE/assignment (rules 43,127) both use it.
 static bool hasDynamicMember(const Type& ty);
 
+// An AREA reference (rule (20)): a scalar AREA variable or one element of an
+// AREA array. A whole AREA array is a buffer of regions, not a region.
+static bool isAreaRef(const Expr* e) {
+  return e && (e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->ty.isArea() &&
+         !e->ty.isArray();
+}
+
 // FNV-1a 32-bit hash — deterministic per-name so all compilation units agree
 // on the integer key for a given name (cross-object SIGNAL and CONTROLLED slot
 // assignment). Defined below; forward-declared for the earlier DECLARE pass.
@@ -1817,8 +1824,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // optional size is a compile-time constant in bytes (default 1000, the
         // IBM default); the region is created at procedure entry.
         if (item.area) {
-          if (item.ty.isArray())
-            d_.error(item.loc, "an array of AREA is not implemented in this stage", "(20)");
+          // An array of AREA (rule (20)) gives each element its own region,
+          // created and destroyed with the block. A runtime extent would need
+          // one region per element created in a loop, so it stays diagnosed.
+          if (item.ty.isDynamic())
+            d_.error(item.loc, "an AREA array with a variable bound is not implemented in "
+                               "this stage",
+                     "(20)");
           if (item.sym->isStatic || item.sawStatic)
             d_.error(item.loc, "a STATIC or EXTERNAL AREA is not implemented in this stage",
                      "(20)");
@@ -4372,8 +4384,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       Expr* areaE = (i < s->allocArea.size()) ? s->allocArea[i].get() : nullptr;
       if (areaE) {
         typeExpr(areaE, sc, p);
-        if (areaE->kind != Expr::VarRef || !areaE->ty.isArea())
-          d_.error(areaE->loc, "the IN target of ALLOCATE must be an AREA variable", "(88)");
+        if (!isAreaRef(areaE))
+          d_.error(areaE->loc,
+                   areaE->ty.isArea()
+                       ? "an AREA array names one region only through a subscript, e.g. ar(1)"
+                       : "the IN target of ALLOCATE must be an AREA variable",
+                   "(88)");
         else if (bsym->basedBase && bsym->basedBase->ty.isOffset() && bsym->basedBase->offsetArea &&
                  bsym->basedBase->offsetArea != areaE->sym)
           d_.error(areaE->loc, "the IN area does not match the OFFSET association", "(22)");
@@ -4432,8 +4448,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER or OFFSET", "(90)");
       if (i < s->freeArea.size() && s->freeArea[i]) {
         typeExpr(s->freeArea[i].get(), sc, p);
-        if (s->freeArea[i]->kind != Expr::VarRef || !s->freeArea[i]->ty.isArea())
-          d_.error(s->freeArea[i]->loc, "the IN target of FREE must be an AREA variable", "(90)");
+        if (!isAreaRef(s->freeArea[i].get()))
+          d_.error(s->freeArea[i]->loc,
+                   s->freeArea[i]->ty.isArea()
+                       ? "an AREA array names one region only through a subscript, e.g. ar(1)"
+                       : "the IN target of FREE must be an AREA variable",
+                   "(90)");
       }
     }
     break;

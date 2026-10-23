@@ -1041,9 +1041,11 @@ private:
   void hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
                            std::vector<Symbol*>& hoisted,
                            std::vector<std::pair<Symbol*, size_t>>& hoistedExt);
-  // AUTOMATIC AREA variables of the procedure being emitted (rule (20)): the
-  // runtime region is created at entry and destroyed on every exit path.
-  std::vector<Symbol*> areaLocals_;
+  // AUTOMATIC AREA region slots of the procedure being emitted (rule (20)):
+  // each slot holds one region pointer (a scalar AREA's alloca, or one element
+  // of an AREA array). The region is created at entry and destroyed on every
+  // exit path.
+  std::vector<llvm::Value*> areaSlots_;
   // Bitcode runtime (OPTIMIZATION.md §10, P3): the embedded blob's pli_*
   // definitions merge into the module when linkBitcode_ requests it. Only
   // the MAIN unit embeds (runtime globals must stay shared across units);

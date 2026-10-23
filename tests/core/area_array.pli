@@ -1,0 +1,73 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (20): an array of AREA gives every element its own region,
+    so blocks allocated through different elements are independent,
+    and an element passes to an AREA(*) parameter as a region. */
+ area_array: procedure options(main);
+    declare ar(3) area(256);
+    declare grid(2,3) area(64);
+    declare 1 s based(p),
+              2 v fixed bin(31);
+    declare p pointer;
+    declare pa pointer;
+    declare bad fixed bin(31);
+    bad = 0;
+
+    /* a block from ar(1) lives in the first region */
+    allocate s in(ar(1)) set(p);
+    s.v = 11;
+    if s.v ^= 11 then bad = 1;
+    free p -> s in(ar(1));
+
+    /* the third element has its own region and its own block */
+    allocate s in(ar(3)) set(p);
+    s.v = 33;
+    if s.v ^= 33 then bad = 2;
+
+    /* an element of the array satisfies an AREA(*) parameter */
+    call fill(ar(2), pa);
+    if pa -> s.v ^= 42 then bad = 3;
+    free pa -> s in(ar(2));
+
+    /* the whole array is a parameter too: a(3) is the caller's
+       region */
+    call fill3(ar, pa);
+    if pa -> s.v ^= 7 then bad = 4;
+    free pa -> s in(ar(3));
+
+    free p -> s in(ar(3));
+
+    /* a multi-axis AREA array still has one region per element */
+    allocate s in(grid(2,3)) set(p);
+    s.v = 5;
+    if s.v ^= 5 then bad = 5;
+    free p -> s in(grid(2,3));
+
+    if bad ^= 0 then do;
+       put skip list('FAIL area array', bad);
+       stop;
+    end;
+    put skip list('PASS area_array');
+
+ fill: procedure(a, out);
+    declare a area(*);
+    declare out pointer;
+    declare 1 t based(q),
+              2 v fixed bin(31);
+    declare q pointer;
+    allocate t in(a) set(q);
+    t.v = 42;
+    out = q;
+ end fill;
+
+ fill3: procedure(a, out);
+    declare a(3) area(*);
+    declare out pointer;
+    declare 1 t based(q),
+              2 v fixed bin(31);
+    declare q pointer;
+    allocate t in(a(3)) set(q);
+    t.v = 7;
+    out = q;
+ end fill3;
+ end area_array;

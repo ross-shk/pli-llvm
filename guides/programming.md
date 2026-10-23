@@ -721,9 +721,17 @@ An `area` is a memory pool for `based` allocation; an `offset` is an opaque loca
 
 An `area` parameter can take any size: `dcl a area(*)` inherits the size from the argument, so the callee allocates in the caller's region.
 
+An array of areas gives every element its own region — handy for a fixed set of pools:
+
+```pli
+ dcl pools(2) area(4096);
+
+ allocate slot in(pools(1)) set(pa);   /* pool 1 */
+```
+
 **Not yet**
 
-- Static/external areas, arrays of areas/offsets, and offset arithmetic are diagnosed.
+- Static/external areas, arrays of offsets, and offset arithmetic are diagnosed.
 
 > **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.
 

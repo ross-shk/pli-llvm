@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (20): an AREA array needs one region per element, so a
+    runtime extent (an unknown element count) is diagnosed. */
+ bad_area_array: procedure options(main);
+    declare n fixed bin(31);
+    declare ar(n) area(256);
+ end bad_area_array;
+ /* A whole AREA array is a buffer of regions, not a region (rules
+    (88),(90)): the IN target must name one element. */
+ bad_area_in: procedure options(main);
+    declare ar(2) area(256);
+    declare 1 s based(p),
+              2 v fixed bin(31);
+    declare p pointer;
+    allocate s in(ar) set(p);
+    free s in(ar);
+ end bad_area_in;

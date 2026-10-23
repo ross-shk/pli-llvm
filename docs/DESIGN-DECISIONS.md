@@ -10948,3 +10948,38 @@ silently pick a lifetime and capacity the source never asked for.
 *Keep refusing the descriptor form.* A caller's descriptor cannot know
 the callee's region size, so the refusal blocked correct declarations
 for no ABI reason.
+
+---
+
+## ADR-304 — arrays of AREA keep one region per element
+
+**Context.** Rule (20) allows `AREA` as a storage attribute, and the type
+system already carried `AREA` through `elementType()`, so `DCL ar(2) AREA(256)`
+declared a buffer of region pointers. Sema rejected it outright and the entry
+pass would in any case have created a single region and stored it over the
+first element. IBM treats each element as an independent area, so an array is
+the natural way to keep several pools of the same size.
+
+**Decision.** Every element of an AUTOMATIC AREA array gets its own region,
+created at entry and destroyed on exit like a scalar area. The creation and
+destruction lists hold the *slot* of each region pointer (a scalar's alloca, or
+a GEP to one element) instead of a `Symbol*`, so the epilogue can free them all
+in one loop. `IN ( ar(i) )` accepts a subscripted AREA reference in ALLOCATE
+and FREE; the general AREA predicate rejects a whole array, because the array
+is a buffer of regions rather than a region, and rejects a runtime extent,
+because one region per element would need a creation loop that this stage does
+not emit.
+
+**Consequences.** `area_array.pli` allocates from three elements, checks that
+blocks survive independently, frees each block back into the region that owns
+it, and passes an element and the whole array to `AREA(*)` parameters — the
+array parameter sees the caller's regions. `bad_area_array.pli` pins the
+variable-bound diagnostic and the whole-array `IN` diagnostics for rules (88)
+and (90). Still open in this row: real STATIC/EXTERNAL area storage, arrays of
+OFFSET, and offset arithmetic.
+
+**Rejected.** *Flatten an array of AREA into one big region divided by the
+element count.* Elements are then not independent, and a `FREE ... IN(ar(2))`
+could return a block that `ar(1)` owns. *Allow the whole array in `IN`.* It was
+accepted by the predicate and lowered to a load of the whole `[N x ptr]` value,
+producing an invalid module; the diagnostic is the honest fix.
