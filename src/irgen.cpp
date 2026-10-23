@@ -43,6 +43,17 @@ static long long pliPow10(int k) {
   return p;
 }
 
+// base^exp as a constant at an arbitrary integer width (ADR-289): the exact
+// wide cross-base rescale works in i256, where 10^38 still fits.
+static llvm::ConstantInt* intPowConst(llvm::Type* ty, int base, int exp) {
+  unsigned bits = ty->getIntegerBitWidth();
+  llvm::APInt acc(bits, 1);
+  llvm::APInt b(bits, base);
+  for (int i = 0; i < exp; ++i)
+    acc *= b;
+  return llvm::cast<llvm::ConstantInt>(llvm::ConstantInt::get(ty, acc));
+}
+
 // Compile-time scale reduction of a FIXED DECIMAL stored integer v by 10^k,
 // matching convert(): DECIMAL targets round half away from zero, BINARY
 // targets truncate toward zero.
@@ -3183,6 +3194,32 @@ void IRGen::magTrap(llvm::Value* v, long long limit) {
   llvm::Value* hi = b_.CreateICmpSGE(v, limHi, "dov.hi");
   llvm::Value* lo = b_.CreateICmpSLE(v, limLo, "dov.lo");
   llvm::Value* of = b_.CreateOr(hi, lo, "dov");
+  int seq = ovSeq_++;
+  llvm::BasicBlock* trapBB =
+      llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
+  b_.CreateCondBr(of, trapBB, okBB);
+  b_.SetInsertPoint(trapBB);
+  emitSizeTrap(okBB);
+  b_.SetInsertPoint(okBB);
+}
+
+// Wide FIXED DECIMAL precision trap (ADR-289): the 10^prec limit does not fit
+// i64, so compare at the value's width (the i256 cross-base rescale) before it
+// narrows to i128. Same SIZE path and resume contract as magTrap.
+void IRGen::wideMagTrap(llvm::Value* v, int prec) {
+  if (!sizeChecks())
+    return;
+  unsigned bits = v->getType()->getIntegerBitWidth();
+  llvm::APInt lim(bits, 1);
+  llvm::APInt ten(bits, 10);
+  for (int i = 0; i < prec; ++i)
+    lim *= ten;
+  llvm::Value* limHi = llvm::ConstantInt::get(v->getType(), lim);
+  llvm::Value* limLo = llvm::ConstantInt::get(v->getType(), -lim);
+  llvm::Value* hi = b_.CreateICmpSGE(v, limHi, "wov.hi");
+  llvm::Value* lo = b_.CreateICmpSLE(v, limLo, "wov.lo");
+  llvm::Value* of = b_.CreateOr(hi, lo, "wov");
   int seq = ovSeq_++;
   llvm::BasicBlock* trapBB =
       llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
@@ -10519,12 +10556,13 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     const bool srcDec = v.ty.k == TK::FixedDec;
     const bool dstDec = dst.k == TK::FixedDec;
 
-    // A wide DECIMAL target cannot hold raw*10^s in i128 for every binary
-    // value, and a wide DECIMAL source cannot be multiplied by 2^q there:
-    // cross those through the scaled FLOAT value (an exact divide-first
-    // rescale remains a B11 refinement). Narrow cases stay exact below.
-    if ((srcBin && dstDec && (dst.intBits() == 128 || dst.prec > 18)) ||
-        (srcDec && dstBin && v.ty.intBits() == 128 && dst.scale > 0)) {
+    // Exact wide cross-base rescale (ADR-289): compute raw*2^q / 10^s in
+    // i256, where the product of an i128 raw and 10^38 still fits. A scale
+    // beyond the 128-bit decimal range (10^s no longer fits i128) keeps the
+    // scaled-FLOAT path as the documented limit. Narrow cases stay exact
+    // below.
+    if ((srcBin && dstDec && (dst.intBits() == 128 || dst.prec > 18) && dst.scale > 38) ||
+        (srcDec && dstBin && v.ty.intBits() == 128 && dst.scale > 0 && v.ty.scale > 38)) {
       Val f = convert(v, Type::flt(6), loc);
       return convert(f, dst, loc);
     }
@@ -10585,8 +10623,22 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     }
 
     if (srcDec && dstBin) {
+      if (v.ty.intBits() == 128) {
+        // Wide DECIMAL source: raw*2^q can exceed i128, so apply the target
+        // scale in i256 and divide by 10^s there; truncation matches the
+        // narrow path (ADR-289).
+        llvm::Type* wide = b_.getIntNTy(256);
+        llvm::Value* r = b_.CreateSExt(v.reg, wide, "res");
+        if (dst.scale > 0)
+          r = b_.CreateMul(r, intPowConst(wide, 2, dst.scale), "res");
+        if (v.ty.scale > 0)
+          r = b_.CreateSDiv(r, intPowConst(wide, 10, v.ty.scale), "res");
+        r = fixedBinPrecTrap(r, dst.prec);
+        out.reg = fitFixed(r);
+        return out;
+      }
       // value*2^q: a non-wide DECIMAL's raw integer times 2^q fits i128
-      // (< 10^18 * 2^62); the wide source case took the FLOAT fallback above.
+      // (< 10^18 * 2^62).
       llvm::Value* r = b_.CreateSExt(v.reg, b_.getInt128Ty(), "res");
       if (dst.scale > 0)
         r = b_.CreateMul(r, i128(pli_from_i64(1LL << dst.scale)), "res");
@@ -10598,8 +10650,29 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     }
 
     if (srcBin && dstDec) {
+      if (dst.intBits() == 128) {
+        // Wide DECIMAL target: raw*10^s can exceed i128, so scale in i256,
+        // round half away from zero (Y33-6003), trap at the declared
+        // precision, then narrow (ADR-289).
+        llvm::Type* wide = b_.getIntNTy(256);
+        llvm::Value* r = b_.CreateSExt(v.reg, wide, "res");
+        if (dst.scale > 0)
+          r = b_.CreateMul(r, intPowConst(wide, 10, dst.scale), "res");
+        int q = v.ty.scale;
+        if (q > 0) {
+          llvm::Value* div = intPowConst(wide, 2, q);
+          llvm::Value* sign = b_.CreateSelect(
+              b_.CreateICmpSLT(r, llvm::ConstantInt::get(wide, 0), "sgn"),
+              llvm::ConstantInt::get(wide, -1), llvm::ConstantInt::get(wide, 1));
+          llvm::Value* adj = b_.CreateMul(intPowConst(wide, 2, q - 1), sign, "adj");
+          r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+        }
+        wideMagTrap(r, dst.prec);
+        out.reg = fitFixed(r);
+        return out;
+      }
       // value*10^s = raw*10^s/2^q; the target rounds half away from zero
-      // (Y33-6003). The wide target case took the FLOAT fallback above.
+      // (Y33-6003).
       llvm::Value* r = b_.CreateSExt(v.reg, b_.getInt128Ty(), "res");
       if (dst.scale > 0)
         r = b_.CreateMul(r, i128(pli_from_i64(pliPow10(dst.scale))), "res");

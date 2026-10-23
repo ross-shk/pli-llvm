@@ -10341,3 +10341,44 @@ truncates and loses low digits for the wider `p` values the integer path keeps.
 overflows the formatter's 64-bit value for ordinary `q`, and the formatter
 would then only trim it again. *A new runtime entry point.* The i128 rescale is
 three IR instructions and keeps the `pli_put_edit_pic` ABI unchanged.
+
+---
+
+## ADR-289 — Wide cross-base FIXED conversion rescales exactly in i256
+
+**Context.** ADR-284 made `convert()` rescale a narrow `FIXED DECIMAL` ↔
+`FIXED BINARY` pair exactly in i128. The wide (>18 digit) DECIMAL pairs still
+crossed through `FLOAT`, because `raw × 2^q` or `raw × 10^s` can exceed i128
+when `raw` is i128. B11 named the gap. The detour is visibly wrong: a double
+keeps 53 significant bits, so `2^53+1` loses its last digit, and the
+`binary → wide DECIMAL` path truncated its half-away rounding instead of
+rounding.
+
+**Decision.** A cross-base pair that involves a wide DECIMAL and a `FIXED
+BINARY` is rescaled exactly in i256:
+
+* `DECIMAL → BINARY` computes `trunc(raw × 2^q / 10^s)` with a signed divide
+  (truncation toward zero, the narrow path's rule), then applies
+  `fixedBinPrecTrap` at `p`.
+* `BINARY → DECIMAL` computes `(raw × 10^s + sign × 2^(q-1)) / 2^q`, the same
+  half-away-from-zero rounding Y33-6003 gives the narrow path, then traps at
+  the target's `10^p` precision through `wideMagTrap`, which compares at the
+  i256 width because `10^p` does not fit i64.
+* The `10^s` and `2^q` constants are built as `APInt` at 256 bits, so the
+  compiler's own arithmetic stays 128-bit/portable. No runtime entry point or
+  ABI changes.
+
+`10^s` fits an i128 only for `s <= 38`. A scale beyond that keeps the ADR-284
+scaled-`FLOAT` path as the documented limit; it is already outside the digits a
+128-bit DECIMAL can represent meaningfully. The narrow (i64 or non-wide i128)
+pairs keep their existing i128 path.
+
+**Consequences.** `tests/core/wide_cross_base.pli` pins the exact decode and
+encode around `2^53+1`, the negative side, half-away rounding, truncation, and
+both SIZE traps. The `(86)` assignment rows in `GRAMMAR-COVERAGE.md` no longer
+say the wide cross-base pairs go through `FLOAT`, and B11 loses this item.
+
+**Rejected.** *Pre-scaling in i128.* Dividing before multiplying loses the low
+digits the item exists to keep. *`long double`.* Its precision is target
+dependent and still rounds. *A big-integer dependency.* i256 is the smallest
+width that covers an i128 `raw` times `10^38`.
