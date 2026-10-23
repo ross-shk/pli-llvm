@@ -11,41 +11,59 @@
    declare c char(4);
    declare d char(8);
    declare e char(3);
-   declare fails fixed bin(31);
 
-   fails = 0;
 
    /* Shorter than the target: blank-padded to the target's length. */
    b = 'ab';
    c = 'cd';
    a = b || c;
-   if a ^= 'abcd  ' then fails = fails + 1;
+   if a ^= 'abcd  ' then do;
+      put skip list('FAIL concat_pad: expected abcd  , got', a);
+      stop;
+   end;
 
    /* Exactly the target's length: no padding, no truncation. */
    d = 'abcdefgh';
    a = d;
-   if a ^= 'abcdef' then fails = fails + 1;
+   if a ^= 'abcdef' then do;
+      put skip list('FAIL concat_pad: expected abcdef, got', a);
+      stop;
+   end;
 
    /* Longer than the target: the leftmost characters survive. */
    a = d || b;
-   if a ^= 'abcdef' then fails = fails + 1;
+   if a ^= 'abcdef' then do;
+      put skip list('FAIL concat_pad: expected abcdef, got', a);
+      stop;
+   end;
 
    /* A literal leaf and an empty literal leaf. */
    a = 'ab' || 'cd';
-   if a ^= 'abcd  ' then fails = fails + 1;
+   if a ^= 'abcd  ' then do;
+      put skip list('FAIL concat_pad: expected abcd  , got', a);
+      stop;
+   end;
    a = 'ab' || '';
-   if a ^= 'ab    ' then fails = fails + 1;
+   if a ^= 'ab    ' then do;
+      put skip list('FAIL concat_pad: expected ab    , got', a);
+      stop;
+   end;
 
    /* The target is also a leaf: the old value is read before the store. */
    e = 'xyz';
    e = e || 'ab';
-   if e ^= 'xyz' then fails = fails + 1;
+   if e ^= 'xyz' then do;
+      put skip list('FAIL concat_pad: expected xyz, got', e);
+      stop;
+   end;
 
    /* The target is the second leaf: the concatenation is read whole first. */
    e = 'xyz';
    a = 'ab' || e;
-   if a ^= 'abxyz ' then fails = fails + 1;
+   if a ^= 'abxyz ' then do;
+      put skip list('FAIL concat_pad: expected abxyz , got', a);
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS concat_pad');
-   else put skip list('FAIL concat_pad: fails =', fails);
+   put skip list('PASS concat_pad');
  end concat_pad;

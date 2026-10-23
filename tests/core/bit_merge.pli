@@ -21,14 +21,12 @@
    declare ref fixed bin(31);
    declare mrg fixed bin(31);
    declare both fixed bin(31);
-   declare fails fixed bin(31);
    declare i fixed bin(31);
 
    m1 = '00000000000000000000000000001111'b;
    m2 = '00000000000000000000000011110000'b;
    e1 = '00000000000000000000000000000011'b;
    e2 = '00000000000000000000000000110000'b;
-   fails = 0;
 
    /* The merged conjunction must agree with the two tests taken separately. */
    do i = 1 to 8;
@@ -43,7 +41,10 @@
       if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
          ((w & '00000000000000000000000011110000'b) = '00000000000000000000000000110000'b)
       then mrg = 1;
-      if mrg ^= ref then fails = fails + 1;
+      if mrg ^= ref then do;
+         put skip list('FAIL bit_merge: check at line 46 failed');
+         stop;
+      end;
    end;
 
    /* Overlapping masks: the two tests are not independent, so they must not
@@ -54,7 +55,10 @@
    if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
       ((w & '00000000000000000000000000000011'b) = '00000000000000000000000000000001'b)
    then both = 1;
-   if both ^= 0 then fails = fails + 1;
+   if both ^= 0 then do;
+      put skip list('FAIL bit_merge: expected 0, got', both);
+      stop;
+   end;
 
    /* Two tests on two different values are not merged either. */
    x = fixed(48);
@@ -62,7 +66,10 @@
    if ((w & '00000000000000000000000000001111'b) = '00000000000000000000000000000011'b) &
       ((x & '00000000000000000000000011110000'b) = '00000000000000000000000000110000'b)
    then both = 1;
-   if both ^= 1 then fails = fails + 1;
+   if both ^= 1 then do;
+      put skip list('FAIL bit_merge: expected 1, got', both);
+      stop;
+   end;
 
    /* A chain of three tests on the same value: the conjunction must keep
       its value, and the fields must not be merged across each other. */
@@ -72,7 +79,10 @@
       ((w & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b) &
       ((w & '00000000000000000000000011000000'b) = '00000000000000000000000011000000'b)
    then both = 1;
-   if both ^= 1 then fails = fails + 1;
+   if both ^= 1 then do;
+      put skip list('FAIL bit_merge: expected 1, got', both);
+      stop;
+   end;
 
    /* Two different locators for the same based variable are two different
       storages, so the two tests must not be merged either. */
@@ -84,8 +94,10 @@
    if ((p->cell & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
       ((q->cell & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b)
    then both = 1;
-   if both ^= 1 then fails = fails + 1;
+   if both ^= 1 then do;
+      put skip list('FAIL bit_merge: expected 1, got', both);
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS bit_merge');
-   else put skip list('FAIL bit_merge: fails =', fails);
+   put skip list('PASS bit_merge');
  end bit_merge;

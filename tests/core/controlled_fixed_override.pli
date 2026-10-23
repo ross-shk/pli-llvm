@@ -6,23 +6,45 @@
      (n) pushes an n-element generation with the DECLARE lb kept;
      LIFO FREE restores the prior live bound. */
  fixed_override_test: procedure options(main);
-   dcl fails fixed bin(31);
    dcl i fixed bin(31);
    dcl s fixed bin(31);
    dcl fds(10) fixed bin(31) controlled;
    dcl b(0:9) fixed bin(31) controlled;
-   fails = 0;
    /* bare ALLOCATE keeps the descriptor bounds */
    allocate fds;
-   if hbound(fds) ^= 10 then fails = fails + 1;
-   if lbound(fds) ^= 1 then fails = fails + 1;
-   if dim(fds) ^= 10 then fails = fails + 1;
+   if hbound(fds) ^= 10 then do;
+      put skip list('FAIL controlled_fixed_override: expected 10, got',
+         hbound(fds));
+      stop;
+   end;
+   if lbound(fds) ^= 1 then do;
+      put skip list('FAIL controlled_fixed_override: expected 1, got',
+         lbound(fds));
+      stop;
+   end;
+   if dim(fds) ^= 10 then do;
+      put skip list('FAIL controlled_fixed_override: expected 10, got',
+         dim(fds));
+      stop;
+   end;
    fds(10) = 100;
-   if fds(10) ^= 100 then fails = fails + 1;
+   if fds(10) ^= 100 then do;
+      put skip list('FAIL controlled_fixed_override: expected 100, got',
+         fds(10));
+      stop;
+   end;
    /* override smaller: live bound follows the ALLOCATE */
    allocate fds (5);
-   if hbound(fds) ^= 5 then fails = fails + 1;
-   if dim(fds) ^= 5 then fails = fails + 1;
+   if hbound(fds) ^= 5 then do;
+      put skip list('FAIL controlled_fixed_override: expected 5, got',
+         hbound(fds));
+      stop;
+   end;
+   if dim(fds) ^= 5 then do;
+      put skip list('FAIL controlled_fixed_override: expected 5, got',
+         dim(fds));
+      stop;
+   end;
    do i = 1 to 5;
      fds(i) = i * 10;
    end;
@@ -30,30 +52,69 @@
    do i = 1 to 5;
      s = s + fds(i);
    end;
-   if s ^= 150 then fails = fails + 1;
+   if s ^= 150 then do;
+      put skip list('FAIL controlled_fixed_override: expected 150, got',
+         s);
+      stop;
+   end;
    free fds;
    /* LIFO pops back to the descriptor-sized generation */
-   if hbound(fds) ^= 10 then fails = fails + 1;
-   if fds(10) ^= 100 then fails = fails + 1;
+   if hbound(fds) ^= 10 then do;
+      put skip list('FAIL controlled_fixed_override: expected 10, got',
+         hbound(fds));
+      stop;
+   end;
+   if fds(10) ^= 100 then do;
+      put skip list('FAIL controlled_fixed_override: expected 100, got',
+         fds(10));
+      stop;
+   end;
    free fds;
    /* override larger than declared: no static reject */
    allocate fds (12);
    fds(12) = 42;
-   if fds(12) ^= 42 then fails = fails + 1;
-   if hbound(fds) ^= 12 then fails = fails + 1;
+   if fds(12) ^= 42 then do;
+      put skip list('FAIL controlled_fixed_override: expected 42, got',
+         fds(12));
+      stop;
+   end;
+   if hbound(fds) ^= 12 then do;
+      put skip list('FAIL controlled_fixed_override: expected 12, got',
+         hbound(fds));
+      stop;
+   end;
    free fds;
    /* lb:ub DECLARE keeps its lb across the override */
    allocate b;
-   if lbound(b) ^= 0 then fails = fails + 1;
-   if hbound(b) ^= 9 then fails = fails + 1;
+   if lbound(b) ^= 0 then do;
+      put skip list('FAIL controlled_fixed_override: expected 0, got',
+         lbound(b));
+      stop;
+   end;
+   if hbound(b) ^= 9 then do;
+      put skip list('FAIL controlled_fixed_override: expected 9, got',
+         hbound(b));
+      stop;
+   end;
    b(0) = 7;
    allocate b (5);
-   if lbound(b) ^= 0 then fails = fails + 1;
-   if hbound(b) ^= 4 then fails = fails + 1;
+   if lbound(b) ^= 0 then do;
+      put skip list('FAIL controlled_fixed_override: expected 0, got',
+         lbound(b));
+      stop;
+   end;
+   if hbound(b) ^= 4 then do;
+      put skip list('FAIL controlled_fixed_override: expected 4, got',
+         hbound(b));
+      stop;
+   end;
    b(4) = 9;
-   if b(4) ^= 9 then fails = fails + 1;
+   if b(4) ^= 9 then do;
+      put skip list('FAIL controlled_fixed_override: expected 9, got',
+         b(4));
+      stop;
+   end;
    free b;
    free b;
-   if fails = 0 then put skip list('PASS fixed_override');
-   else put skip list('FAIL fixed_override: fails =', fails);
+   put skip list('PASS fixed_override');
  end fixed_override_test;

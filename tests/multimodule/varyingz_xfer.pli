@@ -5,7 +5,6 @@
     (descriptor pointer plus hidden maximum-length argument).
     Companion: varyingz_xfer_lib.pli. */
  varyingz_xfer: procedure options(main);
-   dcl fails fixed bin(31) init(0);
    dcl buf   char(16) varying;
    dcl n     fixed bin(31);
 
@@ -15,15 +14,29 @@
    dcl vz_first  entry (char(*) varyingz) returns(char(1)) external;
 
    buf = 'hello';
-   if vz_getlen(buf) ^= 5 then fails = fails + 1;
-   if vz_first(buf) ^= 'h' then fails = fails + 1;
+   if vz_getlen(buf) ^= 5 then do;
+      put skip list('FAIL varyingz_xfer: expected 5, got',
+         vz_getlen(buf));
+      stop;
+   end;
+   if vz_first(buf) ^= 'h' then do;
+      put skip list('FAIL varyingz_xfer: expected h, got',
+         vz_first(buf));
+      stop;
+   end;
 
    call vz_setlen(buf, 4);
-   if buf ^= 'abcd' then fails = fails + 1;
+   if buf ^= 'abcd' then do;
+      put skip list('FAIL varyingz_xfer: expected abcd, got', buf);
+      stop;
+   end;
 
    buf = '';
-   if vz_getlen(buf) ^= 0 then fails = fails + 1;
+   if vz_getlen(buf) ^= 0 then do;
+      put skip list('FAIL varyingz_xfer: expected 0, got',
+         vz_getlen(buf));
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS varyingz_xfer');
-   else put skip list('FAIL varyingz_xfer: fails =', fails);
+   put skip list('PASS varyingz_xfer');
  end varyingz_xfer;

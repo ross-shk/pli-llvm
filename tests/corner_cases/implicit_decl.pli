@@ -5,8 +5,6 @@
    otherwise -> FLOAT DECIMAL(6). This is required for legacy code but warns
    by default. --strict-declare makes it an error. */
 implicit_decl: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* I-N range -> FIXED BINARY(31) */
     /* Note: PL/I is case-insensitive, so use distinct names */
@@ -28,37 +26,54 @@ implicit_decl: procedure options(main);
     /* Verify FIXED BINARY behavior for I-N */
     put skip list('i1=', i1, 'j1=', j1, 'k1=', k1, 'l1=', l1, 'm1=', m1, 'n1=', n1);
     put skip list('sum I-N=', i1 + j1 + k1 + l1 + m1 + n1);
-    if i1 + j1 + k1 + l1 + m1 + n1 ^= 21 then do; fails = fails + 1; put skip list('FAIL I-N sum'); end;
+    if i1 + j1 + k1 + l1 + m1 + n1 ^= 21 then do;
+       put skip list('FAIL I-N sum');
+       stop;
+    end;
 
     /* Verify FLOAT DECIMAL behavior for others */
     put skip list('a1=', a1, 'b1=', b1, 'c1=', c1);
     put skip list('sum a1+b1+c1=', a1 + b1 + c1);
-    if a1 + b1 + c1 ^= 6.0 then do; fails = fails + 1; put skip list('FAIL a1+b1+c1 sum'); end;
+    if a1 + b1 + c1 ^= 6.0 then do;
+       put skip list('FAIL a1+b1+c1 sum');
+       stop;
+    end;
     put skip list('o1=', o1, 'p1=', p1, 'z1=', z1);
     put skip list('sum o1+p1+z1=', o1 + p1 + z1);
-    if o1 + p1 + z1 ^= 15.0 then do; fails = fails + 1; put skip list('FAIL o1+p1+z1 sum'); end;
+    if o1 + p1 + z1 ^= 15.0 then do;
+       put skip list('FAIL o1+p1+z1 sum');
+       stop;
+    end;
 
     /* Implicit in expressions */
     x1 = i1 + a1;    /* i1 is FIXED BINARY, a1 is FLOAT -> conversion */
     put skip list('x1=', x1);
-    if x1 ^= 2.0 then do; fails = fails + 1; put skip list('FAIL x1'); end;
+    if x1 ^= 2.0 then do;
+       put skip list('FAIL x1');
+       stop;
+    end;
 
     /* Implicit in different scopes */
     begin;
        implicit_inner = 99;  /* I-N -> FIXED BINARY */
     end;
     put skip list('implicit_inner=', implicit_inner);
-    if implicit_inner ^= 99 then do; fails = fails + 1; put skip list('FAIL implicit_inner'); end;
+    if implicit_inner ^= 99 then do;
+       put skip list('FAIL implicit_inner');
+       stop;
+    end;
 
     /* Implicit in nested procedure */
     inner: proc;
        nested_implicit = 77;  /* N -> FIXED BINARY */
        put skip list('nested_implicit=', nested_implicit);
-       if nested_implicit ^= 77 then do; fails = fails + 1; put skip list('FAIL nested_implicit'); end;
+       if nested_implicit ^= 77 then do;
+          put skip list('FAIL nested_implicit');
+          stop;
+       end;
     end inner;
 
     call inner();
 
-    if fails = 0 then put skip list('PASS implicit_decl');
-    else put skip list('FAIL implicit_decl: fails =', fails);
+   put skip list('PASS implicit_decl');
 end implicit_decl;

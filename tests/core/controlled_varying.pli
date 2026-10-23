@@ -5,30 +5,58 @@
     from ALLOCATE (n) CHARACTER VARYING or CHAR(n) VARYING;
     RETURNS(CHAR(*) VARYING) carries a caller-sized max. */
  ctlvary: procedure options(main);
-    declare fails fixed bin(31);
     declare n fixed bin(31);
     declare text char(*) varying controlled;
     declare s char(20) varying;
-    fails = 0;
     n = 20;
     allocate text (n) character varying;
     text = 'hello';
-    if length(text) ^= 5 then fails = fails + 1;
-    if text ^= 'hello' then fails = fails + 1;
+    if length(text) ^= 5 then do;
+       put skip list('FAIL controlled_varying: expected 5, got',
+          length(text));
+       stop;
+    end;
+    if text ^= 'hello' then do;
+       put skip list('FAIL controlled_varying: expected hello, got',
+          text);
+       stop;
+    end;
     text = 'hello' || ' ' || 'world';
-    if text ^= 'hello world' then fails = fails + 1;
-    if length(text) ^= 11 then fails = fails + 1;
-    if substr(text, 1, 5) ^= 'hello' then fails = fails + 1;
+    if text ^= 'hello world' then do;
+       put skip list('FAIL controlled_varying: check at line 19 failed');
+       stop;
+    end;
+    if length(text) ^= 11 then do;
+       put skip list('FAIL controlled_varying: expected 11, got',
+          length(text));
+       stop;
+    end;
+    if substr(text, 1, 5) ^= 'hello' then do;
+       put skip list('FAIL controlled_varying: expected hello, got',
+          substr(text, 1, 5));
+       stop;
+    end;
     free text;
     allocate text char(10) varying;
     text = 'abcdef';
-    if length(text) ^= 6 then fails = fails + 1;
+    if length(text) ^= 6 then do;
+       put skip list('FAIL controlled_varying: expected 6, got',
+          length(text));
+       stop;
+    end;
     free text;
     s = ReadString(6);
-    if s ^= 'hello!' then fails = fails + 1;
-    if length(s) ^= 6 then fails = fails + 1;
-    if fails = 0 then put skip list('PASS ctlvary');
-    else put skip list('FAIL ctlvary: fails =', fails);
+    if s ^= 'hello!' then do;
+       put skip list('FAIL controlled_varying: expected hello!, got',
+          s);
+       stop;
+    end;
+    if length(s) ^= 6 then do;
+       put skip list('FAIL controlled_varying: expected 6, got',
+          length(s));
+       stop;
+    end;
+   put skip list('PASS ctlvary');
  ReadString: procedure(m) returns(char(*) varying);
     declare m fixed bin(31);
     declare buf char(*) varying controlled;

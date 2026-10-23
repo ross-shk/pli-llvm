@@ -5,7 +5,6 @@
       round-trip recovers the original values. Covers the common numeric (F),
       character (A), and control (X, SKIP) format items. */
    edit_test: procedure options(main);
-      declare fails fixed bin(31);
       declare buf char(40);
       declare a fixed bin(31);
       declare b fixed bin(31);
@@ -18,7 +17,6 @@
       declare p fixed dec(5,2);
       declare q fixed dec(5,2);
       declare chunk char(7);
-      fails = 0;
 
       /* F(w): right-justified integer in a width-w field. */
       a = 123;
@@ -26,12 +24,12 @@
       put string(buf) edit(a, b) (f(6), f(6));
       get string(buf) edit(c, d) (f(6), f(6));
       if c ^= 123 then do;
-         fails = fails + 1;
          put skip list('FAIL F int c', c);
+         stop;
       end;
       if d ^= -45 then do;
-         fails = fails + 1;
          put skip list('FAIL F int d', d);
+         stop;
       end;
 
       /* A(w): an exact-width character field round-trips cleanly. */
@@ -39,8 +37,8 @@
       put string(buf) edit(x) (a(4));
       get string(buf) edit(y) (a(4));
       if y ^= 'abcd' then do;
-         fails = fails + 1;
          put skip list('FAIL A roundtrip', y);
+         stop;
       end;
 
       /* X(w): spacing between A fields, visible in the buffer. */
@@ -49,8 +47,8 @@
       put string(buf) edit(z, w) (a(2), x(3), a(2));
       chunk = substr(buf, 1, 7);
       if chunk ^= 'ab   cd' then do;
-         fails = fails + 1;
          put skip list('FAIL X spacing', chunk);
+         stop;
       end;
 
       /* F(w,d): scaled fixed decimal with d fractional digits round-trips. */
@@ -58,10 +56,9 @@
       put string(buf) edit(p) (f(8,2));
       get string(buf) edit(q) (f(8,2));
       if q ^= 123.45 then do;
-         fails = fails + 1;
          put skip list('FAIL F dec roundtrip', q);
+         stop;
       end;
 
-      if fails = 0 then put skip list('PASS edit');
-      else put skip list('FAIL edit: fails =', fails);
+   put skip list('PASS edit');
    end edit_test;

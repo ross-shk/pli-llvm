@@ -11,9 +11,7 @@
            2 x,
              3 y fixed bin(31),
              3 z fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* write via qualified references */
     s.a = 11;
@@ -22,18 +20,29 @@
     s.x.z = 44;
 
     /* read back */
-    if s.a ^= 11 then fails = fails + 1;
-    if s.b ^= 22 then fails = fails + 1;
-    if s.x.y ^= 33 then fails = fails + 1;
-    if s.x.z ^= 44 then fails = fails + 1;
+    if s.a ^= 11 then do;
+       put skip list('FAIL struct: expected 11, got', s.a);
+       stop;
+    end;
+    if s.b ^= 22 then do;
+       put skip list('FAIL struct: expected 22, got', s.b);
+       stop;
+    end;
+    if s.x.y ^= 33 then do;
+       put skip list('FAIL struct: expected 33, got', s.x.y);
+       stop;
+    end;
+    if s.x.z ^= 44 then do;
+       put skip list('FAIL struct: expected 44, got', s.x.z);
+       stop;
+    end;
 
     /* members in an arithmetic expression */
     s.b = s.a + s.x.y + 1;
     if s.b ^= 45 then do;
-       fails = fails + 1;
        put skip list('FAIL s.b =', s.b);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS struct');
-    else put skip list('FAIL struct: fails =', fails);
+   put skip list('PASS struct');
  end struct_test;

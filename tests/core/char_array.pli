@@ -9,33 +9,55 @@
       declare d(4) character(3);
       declare m(2, 2) character(2);
       declare r(2) character(2);
-      declare i fixed bin(31), j fixed bin(31), fails fixed bin(31);
       declare 1 s,
               2 q(3) character(2);
 
-      fails = 0;
       c(1) = 'aaa';
       c(2) = 'b';
       c(3) = 'ccccc';
       c(4) = c(1);
-      if c(1) ^= 'aaa' then fails = fails + 1;
-      if c(2) ^= 'b  ' then fails = fails + 1;
-      if c(3) ^= 'ccc' then fails = fails + 1;
-      if c(4) ^= 'aaa' then fails = fails + 1;
-      if length(c(2)) ^= 3 then fails = fails + 1;
+      if c(1) ^= 'aaa' then do;
+         put skip list('FAIL char_array: expected aaa, got', c(1));
+         stop;
+      end;
+      if c(2) ^= 'b  ' then do;
+         put skip list('FAIL char_array: expected b  , got', c(2));
+         stop;
+      end;
+      if c(3) ^= 'ccc' then do;
+         put skip list('FAIL char_array: expected ccc, got', c(3));
+         stop;
+      end;
+      if c(4) ^= 'aaa' then do;
+         put skip list('FAIL char_array: expected aaa, got', c(4));
+         stop;
+      end;
+      if length(c(2)) ^= 3 then do;
+         put skip list('FAIL char_array: check at line 25 failed');
+         stop;
+      end;
 
       /* a member array element */
       s.q(2) = 'xy';
-      if s.q(2) ^= 'xy' then fails = fails + 1;
+      if s.q(2) ^= 'xy' then do;
+         put skip list('FAIL char_array: expected xy, got', s.q(2));
+         stop;
+      end;
 
       /* by-reference writes inside the callee reflect outside */
       call setc(c);
-      if c(1) ^= 'zzz' then fails = fails + 1;
+      if c(1) ^= 'zzz' then do;
+         put skip list('FAIL char_array: expected zzz, got', c(1));
+         stop;
+      end;
 
       /* a whole-array copy moves every element's bytes */
       d = c;
       do i = 1 to 4;
-         if d(i) ^= c(i) then fails = fails + 1;
+         if d(i) ^= c(i) then do;
+            put skip list('FAIL char_array: check at line 38 failed');
+            stop;
+         end;
       end;
 
       /* a 2-D array and a cross-section value of it */
@@ -45,10 +67,12 @@
          end;
       end;
       r = m(2, *);
-      if r(1) ^= 'ab' or r(2) ^= 'ab' then fails = fails + 1;
+      if r(1) ^= 'ab' or r(2) ^= 'ab' then do;
+         put skip list('FAIL char_array: check at line 48 failed');
+         stop;
+      end;
 
-      if fails = 0 then put skip list('PASS char_array');
-      else put skip list('FAIL char_array: fails =', fails);
+   put skip list('PASS char_array');
 
    setc: procedure(x);
       declare x(4) character(3);

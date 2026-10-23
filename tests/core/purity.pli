@@ -8,29 +8,42 @@
    declare i fixed bin(31);
    declare v fixed bin(31);
    declare s fixed bin(63);
-   declare fails fixed bin(31);
 
-   fails = 0;
 
    /* a procedure that touches no memory at all */
    i = pure();
-   if i ^= 7 then fails = fails + 1;
+   if i ^= 7 then do;
+      put skip list('FAIL purity: expected 7, got', i);
+      stop;
+   end;
 
    /* a procedure that reads its argument and writes nothing */
    v = 41;
    i = reader(v);
-   if i ^= 42 then fails = fails + 1;
-   if v ^= 41 then fails = fails + 1;
+   if i ^= 42 then do;
+      put skip list('FAIL purity: expected 42, got', i);
+      stop;
+   end;
+   if v ^= 41 then do;
+      put skip list('FAIL purity: expected 41, got', v);
+      stop;
+   end;
 
    /* a procedure that writes its argument */
    v = 41;
    call writer(v);
-   if v ^= 42 then fails = fails + 1;
+   if v ^= 42 then do;
+      put skip list('FAIL purity: expected 42, got', v);
+      stop;
+   end;
 
    /* a procedure that does I/O: nothing is promised about it */
    v = 5;
    call io_proc(v);
-   if v ^= 5 then fails = fails + 1;
+   if v ^= 5 then do;
+      put skip list('FAIL purity: expected 5, got', v);
+      stop;
+   end;
 
    /* a loop over the pure procedures: the promises let the optimizer hoist
       the calls, and the values must still be the same */
@@ -38,10 +51,12 @@
    do i = 1 to 1000;
       s = s + pure() + reader(i);
    end;
-   if s ^= 1000 * 7 + 501500 then fails = fails + 1;
+   if s ^= 1000 * 7 + 501500 then do;
+      put skip list('FAIL purity: check at line 41 failed');
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS purity');
-   else put skip list('FAIL purity: fails =', fails);
+   put skip list('PASS purity');
 
    /* touches no memory at all */
    pure: procedure returns(fixed bin(31));

@@ -7,36 +7,34 @@
     declare a(5) fixed bin(31);
     declare b(2:5) fixed bin(31);
     declare i fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* default bounds are 1..n, extent n */
     if lbound(a) ^= 1 then do;
-       fails = fails + 1;
        put skip list('FAIL lbound(a) =', lbound(a));
+       stop;
     end;
     if hbound(a) ^= 5 then do;
-       fails = fails + 1;
        put skip list('FAIL hbound(a) =', hbound(a));
+       stop;
     end;
     if dim(a) ^= 5 then do;
-       fails = fails + 1;
        put skip list('FAIL dim(a) =', dim(a));
+       stop;
     end;
 
     /* declared lower bound is honoured */
     if lbound(b) ^= 2 then do;
-       fails = fails + 1;
        put skip list('FAIL lbound(b) =', lbound(b));
+       stop;
     end;
     if hbound(b) ^= 5 then do;
-       fails = fails + 1;
        put skip list('FAIL hbound(b) =', hbound(b));
+       stop;
     end;
     if dim(b) ^= 4 then do;
-       fails = fails + 1;
        put skip list('FAIL dim(b) =', dim(b));
+       stop;
     end;
 
     /* a bounds-driven loop over the array's elements */
@@ -44,10 +42,9 @@
        a(i) = i * 10;
     end;
     if a(dim(a)) ^= 50 then do;
-       fails = fails + 1;
        put skip list('FAIL a(dim(a)) =', a(dim(a)));
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS array_bounds');
-    else put skip list('FAIL array_bounds: fails =', fails);
+   put skip list('PASS array_bounds');
  end array_bounds;

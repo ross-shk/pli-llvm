@@ -6,9 +6,7 @@
  array_test: procedure options(main);
     declare a(5) fixed bin(31);
     declare i fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* write via constant subscripts */
     a(1) = 10;
@@ -16,12 +14,12 @@
 
     /* read via constant subscripts */
     if a(1) ^= 10 then do;
-       fails = fails + 1;
        put skip list('FAIL a(1) =', a(1));
+       stop;
     end;
     if a(5) ^= 50 then do;
-       fails = fails + 1;
        put skip list('FAIL a(5) =', a(5));
+       stop;
     end;
 
     /* fill and read back with a runtime-variable subscript */
@@ -30,18 +28,17 @@
     end;
     do i = 1 to 5;
        if a(i) ^= i * 10 then do;
-          fails = fails + 1;
           put skip list('FAIL a(i) at i =', i);
+          stop;
        end;
     end;
 
     /* array element in an arithmetic expression */
     a(3) = a(1) + a(2) + 7;
     if a(3) ^= 37 then do;
-       fails = fails + 1;
        put skip list('FAIL a(3) =', a(3));
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS array');
-    else put skip list('FAIL array: fails =', fails);
+   put skip list('PASS array');
  end array_test;

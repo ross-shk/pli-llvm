@@ -6,64 +6,61 @@
     values within a small tolerance. */
  math2_test: procedure options(main);
     declare y float dec(6);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     y = log2(8.0);
     if abs(y - 3.0) > 1e-5 then do;
-       fails = fails + 1;
        put skip list('FAIL log2(8) =', y);
+       stop;
     end;
 
     y = log10(100.0);
     if abs(y - 2.0) > 1e-5 then do;
-       fails = fails + 1;
        put skip list('FAIL log10(100) =', y);
+       stop;
     end;
 
     y = atan(1.0);
     if abs(y - 0.785398) > 1e-5 then do;
-       fails = fails + 1;
        put skip list('FAIL atan(1) =', y);
+       stop;
     end;
 
     y = sinh(0.0);
     if abs(y - 0.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL sinh(0) =', y);
+       stop;
     end;
 
     y = cosh(0.0);
     if abs(y - 1.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL cosh(0) =', y);
+       stop;
     end;
 
     y = tanh(0.0);
     if abs(y - 0.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL tanh(0) =', y);
+       stop;
     end;
 
     y = atanh(0.0);
     if abs(y - 0.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL atanh(0) =', y);
+       stop;
     end;
 
     y = erf(0.0);
     if abs(y - 0.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL erf(0) =', y);
+       stop;
     end;
 
     y = erfc(0.0);
     if abs(y - 1.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL erfc(0) =', y);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS math2');
-    else put skip list('FAIL math2: fails =', fails);
+   put skip list('PASS math2');
  end math2_test;

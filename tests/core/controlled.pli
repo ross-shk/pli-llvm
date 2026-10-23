@@ -4,27 +4,25 @@
     a fresh generation, references address the latest, FREE pops LIFO.
     A SET option on ALLOCATE warns and is ignored (stack-managed). */
  controlled_test: procedure options(main);
-    declare fails fixed bin(31);
     declare p pointer;
     declare c fixed bin(31) controlled;
-    fails = 0;
     allocate c;
     c = 11;
     if c ^= 11 then do;
-       fails = fails + 1;
        put skip list('FAIL gen0 readback');
+       stop;
     end;
     allocate c set(p);
     c = 22;
     if c ^= 22 then do;
-       fails = fails + 1;
        put skip list('FAIL gen1 readback');
+       stop;
     end;
     free c;
     if c ^= 11 then do;
-       fails = fails + 1;
        put skip list('FAIL gen0 after pop');
+       stop;
     end;
     free c;
-    if fails = 0 then put skip list('PASS controlled');
+   put skip list('PASS controlled');
  end controlled_test;

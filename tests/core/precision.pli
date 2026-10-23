@@ -8,30 +8,27 @@
     declare x fixed bin(31);
     declare y fixed bin(63);
     declare f float dec(6);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     x = 12345;
     y = precision(x, 40);
     if y ^= 12345 then do;
-       fails = fails + 1;
        put skip list('FAIL precision(12345,40) =', y);
+       stop;
     end;
 
     x = -999;
     y = precision(x, 63);
     if y ^= -999 then do;
-       fails = fails + 1;
        put skip list('FAIL precision(-999,63) =', y);
+       stop;
     end;
 
     f = precision(3.5, 6);
     if f ^= 3.5 then do;
-       fails = fails + 1;
        put skip list('FAIL precision(3.5,6) =', f);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS precision');
-    else put skip list('FAIL precision: fails =', fails);
+   put skip list('PASS precision');
  end precision_test;

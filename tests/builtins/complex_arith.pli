@@ -8,63 +8,59 @@
      checked via REAL(), IMAG(), = and ^=. */
   complex_arith: procedure options(main);
      declare (z, w, r) complex;
-     declare fails fixed bin(31);
-     fails = 0;
      z = complex(1.0, 2.0);
      w = complex(3.0, 4.0);
 
      r = z + w;
      if real(r) ^= 4.0 | imag(r) ^= 6.0
         then do;
-        fails = fails + 1;
         put skip list('FAIL add');
+        stop;
      end;
 
      r = w - z;
      if real(r) ^= 2.0 | imag(r) ^= 2.0
         then do;
-        fails = fails + 1;
         put skip list('FAIL sub');
+        stop;
      end;
 
      r = z * w;
      if real(r) ^= -5.0 | imag(r) ^= 10.0
         then do;
-        fails = fails + 1;
         put skip list('FAIL mul');
+        stop;
      end;
 
      r = w / w;
      if real(r) ^= 1.0 | imag(r) ^= 0.0
         then do;
-        fails = fails + 1;
         put skip list('FAIL div');
+        stop;
      end;
 
      r = z + 1.0;
      if real(r) ^= 2.0 | imag(r) ^= 2.0
         then do;
-        fails = fails + 1;
         put skip list('FAIL mixed');
+        stop;
      end;
 
      r = 2i;
      if real(r) ^= 0.0 | imag(r) ^= 2.0
         then do;
-        fails = fails + 1;
         put skip list('FAIL imag');
+        stop;
      end;
 
      if z ^= complex(1.0, 2.0) then do;
-        fails = fails + 1;
         put skip list('FAIL eq');
+        stop;
      end;
      if z = w then do;
-        fails = fails + 1;
         put skip list('FAIL ne');
+        stop;
      end;
 
-     if fails = 0
-        then put skip list('PASS complex-arith');
-        else put skip list('FAIL complex-arith');
+   put skip list('PASS complex-arith');
   end complex_arith;

@@ -65,8 +65,6 @@ end my_pkg;
 
 /* Main procedure - calls package exports */
 pkg_main: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
    /* Declare exported procedures as external entries */
    declare pkg_init entry() options(bypass) external;
@@ -85,7 +83,10 @@ pkg_main: procedure options(main);
    call pkg_set_global(100);
    declare val fixed bin(31);
    val = pkg_get_global();
-   if val ^= 100 then fails = fails + 1;
+   if val ^= 100 then do;
+      put skip list('FAIL package_edge: expected 100, got', val);
+      stop;
+   end;
 
    /* Package-level structure used in LIKE template */
    call pkg_use_like();
@@ -93,7 +94,6 @@ pkg_main: procedure options(main);
    /* Non-exported procedure should not be callable from outside */
    /* call pkg_internal(); -- would fail to link */
 
-   if fails = 0 then put skip list('PASS package_edge');
-   else put skip list('FAIL package_edge: fails =', fails);
+   put skip list('PASS package_edge');
 
 end pkg_main;

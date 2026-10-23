@@ -9,7 +9,6 @@
    dcl q pointer;
    dcl n fixed bin(31);
    dcl i fixed bin(31);
-   dcl fails fixed bin(31) init(0);
    dcl buf(4) fixed bin(31);
    dcl slots(4) pointer;
    dcl grid(2, 2) fixed bin(31);
@@ -21,41 +20,82 @@
    p = addr(buf);
    e_array(1) = 11;
    e_array(4) = 44;
-   if buf(1) ^= 11 then fails = fails + 1;
-   if buf(4) ^= 44 then fails = fails + 1;
-   if e_array(1) ^= 11 then fails = fails + 1;
-   if hbound(e_array) ^= 4 then fails = fails + 1;
-   if dim(e_array) ^= 4 then fails = fails + 1;
-   if lbound(e_array) ^= 1 then fails = fails + 1;
+   if buf(1) ^= 11 then do;
+      put skip list('FAIL based_array: expected 11, got', buf(1));
+      stop;
+   end;
+   if buf(4) ^= 44 then do;
+      put skip list('FAIL based_array: expected 44, got', buf(4));
+      stop;
+   end;
+   if e_array(1) ^= 11 then do;
+      put skip list('FAIL based_array: expected 11, got', e_array(1));
+      stop;
+   end;
+   if hbound(e_array) ^= 4 then do;
+      put skip list('FAIL based_array: expected 4, got',
+         hbound(e_array));
+      stop;
+   end;
+   if dim(e_array) ^= 4 then do;
+      put skip list('FAIL based_array: expected 4, got', dim(e_array));
+      stop;
+   end;
+   if lbound(e_array) ^= 1 then do;
+      put skip list('FAIL based_array: expected 1, got',
+         lbound(e_array));
+      stop;
+   end;
    /* POINTER elements: the handle-pool view */
    q = addr(slots);
    h_array(1) = addr(buf);
    h_array(4) = addr(buf);
-   if h_array(1) ^= addr(buf) then fails = fails + 1;
-   if h_array(4) ^= addr(buf) then fails = fails + 1;
+   if h_array(1) ^= addr(buf) then do;
+      put skip list('FAIL based_array: check at line 34 failed');
+      stop;
+   end;
+   if h_array(4) ^= addr(buf) then do;
+      put skip list('FAIL based_array: check at line 35 failed');
+      stop;
+   end;
    /* runtime-(n) overlay in a callee over the same buffer */
    n = 4;
    p = addr(buf);
    call fill_view(p, n, 7);
    do i = 1 to n;
-     if buf(i) ^= 7 then fails = fails + 1;
+     if buf(i) ^= 7 then do;
+        put skip list('FAIL based_array: expected 7, got', buf(i));
+        stop;
+     end;
    end;
-   if sum_view(p, n) ^= 28 then fails = fails + 1;
+   if sum_view(p, n) ^= 28 then do;
+      put skip list('FAIL based_array: expected 28, got',
+         sum_view(p, n));
+      stop;
+   end;
    /* multi-axis fixed overlay rides the same pointer base */
    p = addr(grid);
    g_array(1, 1) = 1;
    g_array(2, 2) = 4;
-   if grid(1, 1) ^= 1 then fails = fails + 1;
-   if grid(2, 2) ^= 4 then fails = fails + 1;
+   if grid(1, 1) ^= 1 then do;
+      put skip list('FAIL based_array: expected 1, got', grid(1, 1));
+      stop;
+   end;
+   if grid(2, 2) ^= 4 then do;
+      put skip list('FAIL based_array: expected 4, got', grid(2, 2));
+      stop;
+   end;
    /* heap block behind a fixed BASED array: independent cells */
    dcl cells(2) fixed bin(31) based(q);
    allocate cells set(q);
    cells(1) = 21;
    cells(2) = 22;
-   if cells(2) ^= 22 then fails = fails + 1;
+   if cells(2) ^= 22 then do;
+      put skip list('FAIL based_array: expected 22, got', cells(2));
+      stop;
+   end;
    free cells;
-   if fails = 0 then put skip list('PASS based_array');
-   else put skip list('FAIL based_array: fails =', fails);
+   put skip list('PASS based_array');
  end based_array;
  /* Runtime-bound overlay (rules (13),(25)): bound (n) names the
     length parameter read at entry; no storage of its own. */

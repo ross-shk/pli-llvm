@@ -9,7 +9,6 @@
     Callbacks are top-level so they carry no static link. */
  entry_var: procedure options(main);
    dcl shared  fixed bin(31) external;
-   dcl fails   fixed bin(31) init(0);
    dcl on_ping entry (fixed bin(31)) variable;
    dcl on_get  entry (fixed bin(31)) returns (fixed bin(31)) variable;
    dcl on_txt  entry (pointer, char(16) varying) variable;
@@ -18,28 +17,51 @@
    shared = 0;
    on_ping = ping;
    call on_ping(7);
-   if shared ^= 7 then fails = fails + 1;
+   if shared ^= 7 then do;
+      put skip list('FAIL entry_var: expected 7, got', shared);
+      stop;
+   end;
 
    /* an indirect function reference */
    on_get = add1;
-   if on_get(41) ^= 42 then fails = fails + 1;
+   if on_get(41) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got', on_get(41));
+      stop;
+   end;
 
    /* reassign to a different procedure */
    on_get = dbl;
-   if on_get(21) ^= 42 then fails = fails + 1;
+   if on_get(21) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got', on_get(21));
+      stop;
+   end;
 
    /* pass an entry variable and a procedure name to a dispatcher */
    on_get = add1;
-   if dispatch(on_get) ^= 42 then fails = fails + 1;
-   if dispatch(add1) ^= 42 then fails = fails + 1;
-   if apply(on_get, 41) ^= 42 then fails = fails + 1;
+   if dispatch(on_get) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got',
+         dispatch(on_get));
+      stop;
+   end;
+   if dispatch(add1) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got', dispatch(add1));
+      stop;
+   end;
+   if apply(on_get, 41) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got',
+         apply(on_get, 41));
+      stop;
+   end;
 
    /* a varying-CHAR callback writes back through the arg */
    on_txt = wants;
-   if tdispatch(on_txt) ^= 42 then fails = fails + 1;
+   if tdispatch(on_txt) ^= 42 then do;
+      put skip list('FAIL entry_var: expected 42, got',
+         tdispatch(on_txt));
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS entry_var');
-   else put skip list('FAIL entry_var: fails =', fails);
+   put skip list('PASS entry_var');
 
  dispatch: procedure (cb) returns (fixed bin(31));
    dcl cb entry (fixed bin(31)) returns (fixed bin(31)) variable;

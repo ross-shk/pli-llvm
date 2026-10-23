@@ -6,36 +6,33 @@
  index_test: procedure options(main);
     declare s char(8);
     declare p fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     s = 'ABCDEFGH';
     p = index(s, 'CD');
     if p ^= 3 then do;
-       fails = fails + 1;
        put skip list('FAIL index CD =', p);
+       stop;
     end;
 
     p = index('hello world', 'world');
     if p ^= 7 then do;
-       fails = fails + 1;
        put skip list('FAIL index world =', p);
+       stop;
     end;
 
     p = index('hello', 'xyz');
     if p ^= 0 then do;
-       fails = fails + 1;
        put skip list('FAIL index absent =', p);
+       stop;
     end;
 
     /* INDEX returns a value usable in an expression. */
     p = index('abcabc', 'bc') + 1;
     if p ^= 3 then do;
-       fails = fails + 1;
        put skip list('FAIL index expr =', p);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS index');
-    else put skip list('FAIL index: fails =', fails);
+   put skip list('PASS index');
  end index_test;

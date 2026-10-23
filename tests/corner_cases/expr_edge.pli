@@ -4,17 +4,21 @@
    Operator precedence, complex arithmetic, concatenation, comparison
    operators, prefix operators, built-in functions. */
 expr_edge: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
    /* Operator precedence: ** binds tighter than unary - */
    declare x fixed bin(31);
    x = -3**2;  /* = -(3**2) = -9, not (-3)**2 = 9 */
-   if x ^= -9 then fails = fails + 1;
+   if x ^= -9 then do;
+      put skip list('FAIL expr_edge: expected -9, got', x);
+      stop;
+   end;
 
    /* ** is right-associative */
    x = 2**3**2;  /* = 2**(3**2) = 2**9 = 512 */
-   if x ^= 512 then fails = fails + 1;
+   if x ^= 512 then do;
+      put skip list('FAIL expr_edge: expected 512, got', x);
+      stop;
+   end;
 
    /* Prefix operators + - ¬ */
    declare b bit(1);
@@ -46,33 +50,66 @@ expr_edge: procedure options(main);
    c1 = complex(3.0, 4.0);
    c2 = complex(1.0, 2.0);
    c3 = c1 + c2;
-   if real(c3) ^= 4.0 then fails = fails + 1;
-   if imag(c3) ^= 6.0 then fails = fails + 1;
+   if real(c3) ^= 4.0 then do;
+      put skip list('FAIL expr_edge: expected 4.0, got', real(c3));
+      stop;
+   end;
+   if imag(c3) ^= 6.0 then do;
+      put skip list('FAIL expr_edge: expected 6.0, got', imag(c3));
+      stop;
+   end;
 
    c3 = c1 - c2;
-   if real(c3) ^= 2.0 then fails = fails + 1;
-   if imag(c3) ^= 2.0 then fails = fails + 1;
+   if real(c3) ^= 2.0 then do;
+      put skip list('FAIL expr_edge: expected 2.0, got', real(c3));
+      stop;
+   end;
+   if imag(c3) ^= 2.0 then do;
+      put skip list('FAIL expr_edge: expected 2.0, got', imag(c3));
+      stop;
+   end;
 
    c3 = c1 * c2;
    /* (3+4i)*(1+2i) = 3+6i+4i+8i^2 = -5+10i */
-   if real(c3) ^= -5.0 then fails = fails + 1;
-   if imag(c3) ^= 10.0 then fails = fails + 1;
+   if real(c3) ^= -5.0 then do;
+      put skip list('FAIL expr_edge: expected -5.0, got', real(c3));
+      stop;
+   end;
+   if imag(c3) ^= 10.0 then do;
+      put skip list('FAIL expr_edge: expected 10.0, got', imag(c3));
+      stop;
+   end;
 
    c3 = c1 / c2;
    /* (3+4i)/(1+2i) = (3+4i)*(1-2i)/5 = (11-2i)/5 = 2.2 - 0.4i */
-   if abs(real(c3) - 2.2) > 0.01 then fails = fails + 1;
-   if abs(imag(c3) - (-0.4)) > 0.01 then fails = fails + 1;
+   if abs(real(c3) - 2.2) > 0.01 then do;
+      put skip list('FAIL expr_edge: check at line 63 failed');
+      stop;
+   end;
+   if abs(imag(c3) - (-0.4)) > 0.01 then do;
+      put skip list('FAIL expr_edge: check at line 64 failed');
+      stop;
+   end;
 
    /* Complex conjugate */
    c3 = conjg(c1);
-   if real(c3) ^= 3.0 then fails = fails + 1;
-   if imag(c3) ^= -4.0 then fails = fails + 1;
+   if real(c3) ^= 3.0 then do;
+      put skip list('FAIL expr_edge: expected 3.0, got', real(c3));
+      stop;
+   end;
+   if imag(c3) ^= -4.0 then do;
+      put skip list('FAIL expr_edge: expected -4.0, got', imag(c3));
+      stop;
+   end;
 
    /* Complex equality (exact part-wise) */
    declare c4 complex float dec(6);
    c4 = complex(3.0, 4.0);
    if c1 = c4 then put skip list('complex = ok');
-   if c1 ^= c4 then fails = fails + 1;
+   if c1 ^= c4 then do;
+      put skip list('FAIL expr_edge: check at line 75 failed');
+      stop;
+   end;
    c4 = complex(3.0, 4.0001);
    if c1 ^= c4 then put skip list('complex ^= ok');
 
@@ -81,36 +118,86 @@ expr_edge: procedure options(main);
 
    /* Built-in functions */
    /* ABS */
-   if abs(-5) ^= 5 then fails = fails + 1;
-   if abs(complex(3.0, 4.0)) ^= 5.0 then fails = fails + 1;
+   if abs(-5) ^= 5 then do;
+      put skip list('FAIL expr_edge: expected 5, got', abs(-5));
+      stop;
+   end;
+   if abs(complex(3.0, 4.0)) ^= 5.0 then do;
+      put skip list('FAIL expr_edge: check at line 85 failed');
+      stop;
+   end;
 
    /* MIN/MAX */
-   if min(1, 2, 3) ^= 1 then fails = fails + 1;
-   if max(1, 2, 3) ^= 3 then fails = fails + 1;
+   if min(1, 2, 3) ^= 1 then do;
+      put skip list('FAIL expr_edge: expected 1, got', min(1, 2, 3));
+      stop;
+   end;
+   if max(1, 2, 3) ^= 3 then do;
+      put skip list('FAIL expr_edge: expected 3, got', max(1, 2, 3));
+      stop;
+   end;
 
    /* MOD */
-   if mod(10, 3) ^= 1 then fails = fails + 1;
+   if mod(10, 3) ^= 1 then do;
+      put skip list('FAIL expr_edge: expected 1, got', mod(10, 3));
+      stop;
+   end;
 
    /* MULTIPLY, DIVIDE, PRECISION */
-   if multiply(5, 3) ^= 15 then fails = fails + 1;
-   if abs(divide(10, 3) - 3.333333) > 0.001 then fails = fails + 1;  /* approximate */
+   if multiply(5, 3) ^= 15 then do;
+      put skip list('FAIL expr_edge: expected 15, got', multiply(5, 3));
+      stop;
+   end;
+   if abs(divide(10, 3) - 3.333333) > 0.001 then do;
+      put skip list('FAIL expr_edge: check at line 96 failed');
+      stop;
+   end;
 
    /* ROUND */
-   if round(3.14159, 2) ^= 3.14 then fails = fails + 1;
-   if round(3.145, 2) ^= 3.15 then fails = fails + 1;
+   if round(3.14159, 2) ^= 3.14 then do;
+      put skip list('FAIL expr_edge: expected 3.14, got',
+         round(3.14159, 2));
+      stop;
+   end;
+   if round(3.145, 2) ^= 3.15 then do;
+      put skip list('FAIL expr_edge: expected 3.15, got',
+         round(3.145, 2));
+      stop;
+   end;
 
    /* TRUNC */
-   if trunc(3.9) ^= 3 then fails = fails + 1;
-   if trunc(-3.9) ^= -3 then fails = fails + 1;
+   if trunc(3.9) ^= 3 then do;
+      put skip list('FAIL expr_edge: expected 3, got', trunc(3.9));
+      stop;
+   end;
+   if trunc(-3.9) ^= -3 then do;
+      put skip list('FAIL expr_edge: expected -3, got', trunc(-3.9));
+      stop;
+   end;
 
    /* FLOOR/CEIL */
-   if floor(3.2) ^= 3 then fails = fails + 1;
-   if floor(-3.2) ^= -4 then fails = fails + 1;
-   if ceil(3.2) ^= 4 then fails = fails + 1;
-   if ceil(-3.2) ^= -3 then fails = fails + 1;
+   if floor(3.2) ^= 3 then do;
+      put skip list('FAIL expr_edge: expected 3, got', floor(3.2));
+      stop;
+   end;
+   if floor(-3.2) ^= -4 then do;
+      put skip list('FAIL expr_edge: expected -4, got', floor(-3.2));
+      stop;
+   end;
+   if ceil(3.2) ^= 4 then do;
+      put skip list('FAIL expr_edge: expected 4, got', ceil(3.2));
+      stop;
+   end;
+   if ceil(-3.2) ^= -3 then do;
+      put skip list('FAIL expr_edge: expected -3, got', ceil(-3.2));
+      stop;
+   end;
 
    /* SQRT/EXP/LOG */
-   if sqrt(4.0) ^= 2.0 then fails = fails + 1;
+   if sqrt(4.0) ^= 2.0 then do;
+      put skip list('FAIL expr_edge: expected 2.0, got', sqrt(4.0));
+      stop;
+   end;
    if abs(exp(1.0) - 2.71828) < 0.001 then put skip list('exp ok');
    if abs(log(2.71828) - 1.0) < 0.001 then put skip list('log ok');
 
@@ -124,28 +211,56 @@ expr_edge: procedure options(main);
    if abs(cosd(0.0) - 1.0) < 0.001 then put skip list('cosd ok');
 
    /* String built-ins */
-   if length('hello') ^= 5 then fails = fails + 1;
-   if index('hello world', 'world') ^= 7 then fails = fails + 1;
-   if substr('hello', 2, 3) ^= 'ell' then fails = fails + 1;
+   if length('hello') ^= 5 then do;
+      put skip list('FAIL expr_edge: expected 5, got', length('hello'));
+      stop;
+   end;
+   if index('hello world', 'world') ^= 7 then do;
+      put skip list('FAIL expr_edge: expected 7, got',
+         index('hello world', 'world'));
+      stop;
+   end;
+   if substr('hello', 2, 3) ^= 'ell' then do;
+      put skip list('FAIL expr_edge: expected ell, got',
+         substr('hello', 2, 3));
+      stop;
+   end;
 
    /* TRANSLATE */
-   if translate('abc', 'ABC', 'abc') ^= 'ABC' then fails = fails + 1;
+   if translate('abc', 'ABC', 'abc') ^= 'ABC' then do;
+      put skip list('FAIL expr_edge: expected ABC, got',
+         translate('abc', 'ABC', 'abc'));
+      stop;
+   end;
 
    /* VERIFY */
-   if verify('abc123', 'abc') ^= 4 then fails = fails + 1;
+   if verify('abc123', 'abc') ^= 4 then do;
+      put skip list('FAIL expr_edge: expected 4, got',
+         verify('abc123', 'abc'));
+      stop;
+   end;
 
    /* REPEAT */
-   if repeat('ab', 3) ^= 'ababab' then fails = fails + 1;
+   if repeat('ab', 3) ^= 'ababab' then do;
+      put skip list('FAIL expr_edge: expected ababab, got',
+         repeat('ab', 3));
+      stop;
+   end;
 
    /* HIGH/LOW (M2): character strings of the highest/lowest collating char;
       a BIT constant may only hold 0/1 digits, so compare the result shape. */
-   if length(high(5)) ^= 5 then fails = fails + 1;
-   if high(3) = low(3) then fails = fails + 1;
+   if length(high(5)) ^= 5 then do;
+      put skip list('FAIL expr_edge: check at line 142 failed');
+      stop;
+   end;
+   if high(3) = low(3) then do;
+      put skip list('FAIL expr_edge: check at line 143 failed');
+      stop;
+   end;
    /* LOW is implementation dependent */
 
    /* DATE/TIME */
    /* date() returns YYMMDD, time() returns HHMMSSTTT */
 
-   if fails = 0 then put skip list('PASS expr_edge');
-   else put skip list('FAIL expr_edge: fails =', fails);
+   put skip list('PASS expr_edge');
 end expr_edge;

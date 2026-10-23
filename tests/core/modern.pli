@@ -12,9 +12,7 @@
     declare limit fixed bin(31) value(10);
     declare i fixed bin(31);
     declare s fixed bin(31);
-    declare fails fixed bin(31);
     declare w char(8);
-    fails = 0;
     s = 0;
     do i = 1 to limit;
        if i = 4 then iterate;
@@ -27,15 +25,17 @@
     end;
     w = '  hi  ';
     if tally(trim(w), 'hi') ^= 1 then do;
-       fails = fails + 1;
        put skip list('FAIL trim/tally');
+       stop;
     end;
     %include 'modern.inc';
     call optm(5, *);
     call optm(5);
-    if optf(5) ^= 5 then fails = fails + 1;
-    if fails = 0 then put skip list('PASS modern');
-    else put skip list('FAIL modern: fails =', fails);
+    if optf(5) ^= 5 then do;
+       put skip list('FAIL modern: expected 5, got', optf(5));
+       stop;
+    end;
+   put skip list('PASS modern');
 
  optm: procedure(a, b);
     declare a fixed bin(31);

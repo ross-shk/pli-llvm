@@ -6,7 +6,6 @@
     read/write, a LIKE template, ALLOCATE ... SET, an array subscript,
     and FREE with a locator. */
  based_noptr: procedure options(main);
-   dcl fails fixed bin(31) init(0);
    dcl 1 y,
        2 a fixed bin(31);
    dcl 1 rec based,
@@ -16,10 +15,19 @@
    /* explicit members, locator-qualified read and write */
    p = addr(y);
    p -> rec.a = 42;
-   if y.a ^= 42 then fails = fails + 1;
-   if p -> rec.a ^= 42 then fails = fails + 1;
+   if y.a ^= 42 then do;
+      put skip list('FAIL based_noptr: expected 42, got', y.a);
+      stop;
+   end;
+   if p -> rec.a ^= 42 then do;
+      put skip list('FAIL based_noptr: check at line 20 failed');
+      stop;
+   end;
    y.a = 7;
-   if p -> rec.a ^= 7 then fails = fails + 1;
+   if p -> rec.a ^= 7 then do;
+      put skip list('FAIL based_noptr: check at line 22 failed');
+      stop;
+   end;
 
    /* LIKE template plus ALLOCATE ... SET, then FREE with a locator */
    dcl 1 tpl,
@@ -28,7 +36,10 @@
    dcl q pointer;
    allocate view set(q);
    q -> view.v = 99;
-   if q -> view.v ^= 99 then fails = fails + 1;
+   if q -> view.v ^= 99 then do;
+      put skip list('FAIL based_noptr: check at line 31 failed');
+      stop;
+   end;
    free (q -> view);
 
    /* bare-based array addressed through a locator (rule (126)) */
@@ -36,7 +47,10 @@
    dcl r pointer;
    allocate a set(r);
    r -> a(2) = 5;
-   if r -> a(2) ^= 5 then fails = fails + 1;
+   if r -> a(2) ^= 5 then do;
+      put skip list('FAIL based_noptr: check at line 39 failed');
+      stop;
+   end;
    free (r -> a);
 
    /* a scalar bare-based variable (empty member path) stores/loads */
@@ -45,9 +59,14 @@
    dcl sval fixed bin(31);
    sp = addr(sval);
    sp -> sv = 13;
-   if sval ^= 13 then fails = fails + 1;
-   if sp -> sv ^= 13 then fails = fails + 1;
+   if sval ^= 13 then do;
+      put skip list('FAIL based_noptr: expected 13, got', sval);
+      stop;
+   end;
+   if sp -> sv ^= 13 then do;
+      put skip list('FAIL based_noptr: check at line 49 failed');
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS based_noptr');
-   else put skip list('FAIL based_noptr:', fails);
+   put skip list('PASS based_noptr');
  end based_noptr;

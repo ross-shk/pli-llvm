@@ -5,20 +5,23 @@
      static link, and the locator form returns through its own
      pointer parameter. */
   based_return: procedure options(main);
-     declare fails fixed bin(31);
      declare p pointer;
      declare 1 y, 2 fd fixed bin(31);
      declare 1 c based(p), 2 fd fixed bin(31);
      declare r fixed bin(31);
-     fails = 0;
      y.fd = 21;
      p = addr(y);
      r = get_fd();
-     if r ^= 21 then fails = fails + 1;
+     if r ^= 21 then do;
+        put skip list('FAIL based_return: expected 21, got', r);
+        stop;
+     end;
      r = get_loc(p);
-     if r ^= 21 then fails = fails + 1;
-     if fails = 0 then put skip list('PASS based_return');
-     else put skip list('FAIL based_return: fails =', fails);
+     if r ^= 21 then do;
+        put skip list('FAIL based_return: expected 21, got', r);
+        stop;
+     end;
+   put skip list('PASS based_return');
      get_fd: procedure returns(fixed bin(31));
         return(c.fd);
         end get_fd;

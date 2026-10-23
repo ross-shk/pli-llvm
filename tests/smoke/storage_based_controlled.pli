@@ -16,20 +16,18 @@
    dcl q pointer;
    dcl 1 rec based(q),
          2 data fixed bin(31);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    p = addr(target);
    view.value = 42;
 
    if target.value ^= 42 then do;
-      fails = fails + 1;
       put skip list('FAIL: via view =', target.value);
+      stop;
    end;
    if p -> view.value ^= 42 then do;
-      fails = fails + 1;
       put skip list('FAIL: explicit =', p -> view.value);
+      stop;
    end;
 
    /* controlled: a stack of generations */
@@ -40,14 +38,14 @@
    c = 22;
 
    if c ^= 22 then do;
-      fails = fails + 1;
       put skip list('FAIL: top =', c);
+      stop;
    end;
 
    free c;
    if c ^= 11 then do;
-      fails = fails + 1;
       put skip list('FAIL: after free =', c);
+      stop;
    end;
 
    /* heap block with SET */
@@ -55,10 +53,10 @@
    q -> rec.data = 99;
 
    if q -> rec.data ^= 99 then do;
-      fails = fails + 1;
       put skip list('FAIL: heap =', q -> rec.data);
+      stop;
    end;
    free rec;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS storage_based_controlled');
  end storage;

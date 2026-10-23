@@ -7,8 +7,6 @@
    NOTE: Compiler currently doesn't handle null optional params correctly
    (crashes on access without OMITTED check). Those calls are commented. */
 optional_edge: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
     put skip list('START optional_edge');
 
     /* Call with all arguments - WORKS */
@@ -47,8 +45,7 @@ optional_edge: procedure options(main);
     call forward_opt(100);
     /* call forward_opt(*); -- COMPILER BUG */
 
-    if fails = 0 then put skip list('PASS optional_edge');
-    else put skip list('FAIL optional_edge: fails =', fails);
+   put skip list('PASS optional_edge');
 
 opt_proc: proc(p1, p2, p3) options(bypass);
     dcl p1 fixed bin(31);

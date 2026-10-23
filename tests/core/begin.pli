@@ -5,9 +5,7 @@
     outer one without disturbing it after the block ends. */
  begin_test: procedure options(main);
     declare x fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* An inner declaration shadows the outer x inside the block... */
     x = 1;
@@ -17,17 +15,16 @@
        x = 100;
        y = x + 1;
        if y ¬= 101 then do;
-          fails = fails + 1;
           put skip list('FAIL: shadowed x y =', y);
+          stop;
        end;
     end;
 
     /* ...and the outer x is untouched after the block. */
     if x ¬= 1 then do;
-       fails = fails + 1;
        put skip list('FAIL: outer x =', x);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS begin scope');
-    else put skip list('FAIL begin scope: fails =', fails);
+   put skip list('PASS begin scope');
  end begin_test;

@@ -4,77 +4,151 @@
     procs, per-axis bounds and reductions
     combined. */
  array_generic_combo: proc options(main);
-    declare fails fixed bin(31);
     declare i fixed bin(31);
     declare j fixed bin(31);
     declare t(-1:1, 0:2) fixed bin(31);
     declare v(5) fixed bin(31);
     declare u(-2:2) fixed bin(31);
     declare m(2, 3) fixed bin(31);
-    fails = 0;
     /* A(5) means A(1:5) */
     do i = 1 to 5;
        v(i) = i * 10;
     end;
-    if lbound(v) ^= 1 then fails = fails
-       + 1;
-    if hbound(v) ^= 5 then fails = fails
-       + 1;
-    if dim(v) ^= 5 then fails = fails + 1;
-    if sum(v) ^= 150 then fails = fails
-       + 1;
+    if lbound(v) ^= 1 then do;
+       put skip list('FAIL array_generic_combo: expected 1, got',
+          lbound(v));
+       stop;
+    end;
+    if hbound(v) ^= 5 then do;
+       put skip list('FAIL array_generic_combo: expected 5, got',
+          hbound(v));
+       stop;
+    end;
+    if dim(v) ^= 5 then do;
+       put skip list('FAIL array_generic_combo: expected 5, got',
+          dim(v));
+       stop;
+    end;
+    if sum(v) ^= 150 then do;
+       put skip list('FAIL array_generic_combo: expected 150, got',
+          sum(v));
+       stop;
+    end;
     /* a second 1-D shape with a lower
        bound below 1 */
     do i = -2 to 2;
        u(i) = i + 3;
     end;
-    if lbound(u) ^= -2 then fails = fails
-       + 1;
-    if hbound(u) ^= 2 then fails = fails
-       + 1;
-    if dimension(u) ^= 5 then fails =
-       fails + 1;
+    if lbound(u) ^= -2 then do;
+       put skip list('FAIL array_generic_combo: expected -2, got',
+          lbound(u));
+       stop;
+    end;
+    if hbound(u) ^= 2 then do;
+       put skip list('FAIL array_generic_combo: expected 2, got',
+          hbound(u));
+       stop;
+    end;
+    if dimension(u) ^= 5 then do;
+       put skip list('FAIL array_generic_combo: expected 5, got',
+          dimension(u));
+       stop;
+    end;
     /* one (*) callee serves both shapes */
-    if total(v) ^= 150 then fails = fails
-       + 1;
-    if total(u) ^= 15 then fails = fails
-       + 1;
+    if total(v) ^= 150 then do;
+       put skip list('FAIL array_generic_combo: expected 150, got',
+          total(v));
+       stop;
+    end;
+    if total(u) ^= 15 then do;
+       put skip list('FAIL array_generic_combo: expected 15, got',
+          total(u));
+       stop;
+    end;
     call dbl(v);
     call dbl(u);
-    if v(1) ^= 20 then fails = fails + 1;
-    if v(5) ^= 100 then fails = fails
-       + 1;
-    if u(-2) ^= 2 then fails = fails + 1;
-    if u(2) ^= 10 then fails = fails + 1;
+    if v(1) ^= 20 then do;
+       put skip list('FAIL array_generic_combo: expected 20, got',
+          v(1));
+       stop;
+    end;
+    if v(5) ^= 100 then do;
+       put skip list('FAIL array_generic_combo: expected 100, got',
+          v(5));
+       stop;
+    end;
+    if u(-2) ^= 2 then do;
+       put skip list('FAIL array_generic_combo: expected 2, got',
+          u(-2));
+       stop;
+    end;
+    if u(2) ^= 10 then do;
+       put skip list('FAIL array_generic_combo: expected 10, got',
+          u(2));
+       stop;
+    end;
     /* negative 2-D bounds hold i * j */
     do i = -1 to 1;
        do j = 0 to 2;
           t(i, j) = i * j;
        end;
     end;
-    if t(-1, 2) ^= -2 then fails = fails
-       + 1;
-    if t(0, 1) ^= 0 then fails = fails
-       + 1;
-    if lbound(t, 1) ^= -1 then fails =
-       fails + 1;
-    if hbound(t, 1) ^= 1 then fails =
-       fails + 1;
-    if lbound(t, 2) ^= 0 then fails =
-       fails + 1;
-    if hbound(t, 2) ^= 2 then fails =
-       fails + 1;
-    if dimension(t, 1) ^= 3 then fails =
-       fails + 1;
-    if dimension(t, 2) ^= 3 then fails =
-       fails + 1;
+    if t(-1, 2) ^= -2 then do;
+       put skip list('FAIL array_generic_combo: expected -2, got',
+          t(-1, 2));
+       stop;
+    end;
+    if t(0, 1) ^= 0 then do;
+       put skip list('FAIL array_generic_combo: expected 0, got',
+          t(0, 1));
+       stop;
+    end;
+    if lbound(t, 1) ^= -1 then do;
+       put skip list('FAIL array_generic_combo: expected -1, got',
+          lbound(t, 1));
+       stop;
+    end;
+    if hbound(t, 1) ^= 1 then do;
+       put skip list('FAIL array_generic_combo: expected 1, got',
+          hbound(t, 1));
+       stop;
+    end;
+    if lbound(t, 2) ^= 0 then do;
+       put skip list('FAIL array_generic_combo: expected 0, got',
+          lbound(t, 2));
+       stop;
+    end;
+    if hbound(t, 2) ^= 2 then do;
+       put skip list('FAIL array_generic_combo: expected 2, got',
+          hbound(t, 2));
+       stop;
+    end;
+    if dimension(t, 1) ^= 3 then do;
+       put skip list('FAIL array_generic_combo: expected 3, got',
+          dimension(t, 1));
+       stop;
+    end;
+    if dimension(t, 2) ^= 3 then do;
+       put skip list('FAIL array_generic_combo: expected 3, got',
+          dimension(t, 2));
+       stop;
+    end;
     call fill(t);
-    if t(1, 2) ^= 3 then fails = fails
-       + 1;
-    if t(-1, 0) ^= -1 then fails = fails
-       + 1;
-    if trace(t) ^= 3 then fails = fails
-       + 1;
+    if t(1, 2) ^= 3 then do;
+       put skip list('FAIL array_generic_combo: expected 3, got',
+          t(1, 2));
+       stop;
+    end;
+    if t(-1, 0) ^= -1 then do;
+       put skip list('FAIL array_generic_combo: expected -1, got',
+          t(-1, 0));
+       stop;
+    end;
+    if trace(t) ^= 3 then do;
+       put skip list('FAIL array_generic_combo: expected 3, got',
+          trace(t));
+       stop;
+    end;
     /* a second 2-D shape, same pattern */
     do i = 1 to 2;
        do j = 1 to 3;
@@ -82,13 +156,17 @@
        end;
     end;
     call fillm(m);
-    if m(2, 3) ^= 5 then fails = fails
-       + 1;
-    if tracem(m) ^= 10 then fails = fails
-       + 1;
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL array_gen: ',
-       fails);
+    if m(2, 3) ^= 5 then do;
+       put skip list('FAIL array_generic_combo: expected 5, got',
+          m(2, 3));
+       stop;
+    end;
+    if tracem(m) ^= 10 then do;
+       put skip list('FAIL array_generic_combo: expected 10, got',
+          tracem(m));
+       stop;
+    end;
+   put skip list('PASS array_generic_combo');
  total: procedure(w)
     returns(fixed bin(31));
     declare w(*) fixed bin(31);

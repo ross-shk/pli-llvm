@@ -27,18 +27,16 @@
 
    dcl is_even entry(fixed bin(31))
      returns(bit(1)) external;
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    if doubleit(21) ^= 43 then do;
-      fails = fails + 1;
       put skip list('FAIL: double(21) =', doubleit(21));
+      stop;
    end;
    if is_even(4) ^= '1'b then do;
-      fails = fails + 1;
       put skip list('FAIL: 4 not even');
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS packages');
  end use_pkgs;

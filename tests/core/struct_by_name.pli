@@ -19,9 +19,7 @@
               3 y fixed bin(31),
               3 w fixed bin(31),
             2 q fixed bin(31);
-     declare fails fixed bin(31);
 
-     fails = 0;
      t.a = 11;
      t.v(1) = 1;
      t.v(2) = 2;
@@ -34,16 +32,30 @@
      s.p = 7;
      s = t, by name;
 
-     if s.a ^= 11 then fails = fails + 1;
-     if s.v(1) ^= 1 or s.v(2) ^= 2 then fails = fails + 1;
-     if s.x.y ^= 33 then fails = fails + 1;
+     if s.a ^= 11 then do;
+        put skip list('FAIL struct_by_name: expected 11, got', s.a);
+        stop;
+     end;
+     if s.v(1) ^= 1 or s.v(2) ^= 2 then do;
+        put skip list('FAIL struct_by_name: check at line 38 failed');
+        stop;
+     end;
+     if s.x.y ^= 33 then do;
+        put skip list('FAIL struct_by_name: expected 33, got', s.x.y);
+        stop;
+     end;
      /* s.x.z has no same-named t member, so it keeps its prior value */
      s.x.z = 55;
      s = t, by name;
-     if s.x.z ^= 55 then fails = fails + 1;
+     if s.x.z ^= 55 then do;
+        put skip list('FAIL struct_by_name: expected 55, got', s.x.z);
+        stop;
+     end;
      /* s.p is untouched because t has no member p */
-     if s.p ^= 7 then fails = fails + 1;
+     if s.p ^= 7 then do;
+        put skip list('FAIL struct_by_name: expected 7, got', s.p);
+        stop;
+     end;
 
-     if fails = 0 then put skip list('PASS struct_by_name');
-     else put skip list('FAIL struct_by_name: fails =', fails);
+   put skip list('PASS struct_by_name');
   end struct_by_name_test;

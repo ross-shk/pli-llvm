@@ -5,7 +5,6 @@
  /* BASED fixed and runtime-(n) overlays, locator form, 2-D. A */
  /* scalar BASED overlay proves the address by write-through. */
  addr_elem: procedure options(main);
-   dcl fails fixed bin(31) init(0);
    dcl p pointer;
    dcl q pointer;
    dcl buf(4) fixed bin(31);
@@ -18,15 +17,30 @@
    buf(1) = 11; buf(2) = 22; buf(3) = 33; buf(4) = 44;
    /* fixed element: addr(buf(2)) hits the 2nd cell only */
    p = addr(buf(2));
-   if cell ^= 22 then fails = fails + 1;
+   if cell ^= 22 then do;
+      put skip list('FAIL addr_elem: expected 22, got', cell);
+      stop;
+   end;
    cell = 27;
-   if buf(2) ^= 27 then fails = fails + 1;
-   if buf(1) ^= 11 then fails = fails + 1;
-   if buf(3) ^= 33 then fails = fails + 1;
+   if buf(2) ^= 27 then do;
+      put skip list('FAIL addr_elem: expected 27, got', buf(2));
+      stop;
+   end;
+   if buf(1) ^= 11 then do;
+      put skip list('FAIL addr_elem: expected 11, got', buf(1));
+      stop;
+   end;
+   if buf(3) ^= 33 then do;
+      put skip list('FAIL addr_elem: expected 33, got', buf(3));
+      stop;
+   end;
    buf(2) = 22;
    /* first element: addr(buf(1)) is the base address */
    p = addr(buf(1));
-   if cell ^= 11 then fails = fails + 1;
+   if cell ^= 11 then do;
+      put skip list('FAIL addr_elem: expected 11, got', cell);
+      stop;
+   end;
    /* CONTROLLED dyn (wishlist #1 idiom): allocate then addr */
    n = 4;
    allocate fds(n);
@@ -34,16 +48,34 @@
      fds(i) = i * 10;
    end;
    p = addr(fds(1));
-   if cell ^= 10 then fails = fails + 1;
+   if cell ^= 10 then do;
+      put skip list('FAIL addr_elem: expected 10, got', cell);
+      stop;
+   end;
    cell = 15;
-   if fds(1) ^= 15 then fails = fails + 1;
-   if fds(2) ^= 20 then fails = fails + 1;
+   if fds(1) ^= 15 then do;
+      put skip list('FAIL addr_elem: expected 15, got', fds(1));
+      stop;
+   end;
+   if fds(2) ^= 20 then do;
+      put skip list('FAIL addr_elem: expected 20, got', fds(2));
+      stop;
+   end;
    fds(1) = 10;
    p = addr(fds(3));
-   if cell ^= 30 then fails = fails + 1;
+   if cell ^= 30 then do;
+      put skip list('FAIL addr_elem: expected 30, got', cell);
+      stop;
+   end;
    cell = 37;
-   if fds(3) ^= 37 then fails = fails + 1;
-   if fds(2) ^= 20 then fails = fails + 1;
+   if fds(3) ^= 37 then do;
+      put skip list('FAIL addr_elem: expected 37, got', fds(3));
+      stop;
+   end;
+   if fds(2) ^= 20 then do;
+      put skip list('FAIL addr_elem: expected 20, got', fds(2));
+      stop;
+   end;
    free fds;
    /* BASED fixed overlay: addr(e(2)) views caller storage */
    call check_based(buf);
@@ -55,17 +87,34 @@
    grid(1, 1) = 1; grid(1, 2) = 2;
    grid(2, 1) = 3; grid(2, 2) = 4;
    q = addr(grid(1, 2));
-   if spot ^= 2 then fails = fails + 1;
+   if spot ^= 2 then do;
+      put skip list('FAIL addr_elem: expected 2, got', spot);
+      stop;
+   end;
    spot = 9;
-   if grid(1, 2) ^= 9 then fails = fails + 1;
-   if grid(2, 1) ^= 3 then fails = fails + 1;
+   if grid(1, 2) ^= 9 then do;
+      put skip list('FAIL addr_elem: expected 9, got', grid(1, 2));
+      stop;
+   end;
+   if grid(2, 1) ^= 3 then do;
+      put skip list('FAIL addr_elem: expected 3, got', grid(2, 1));
+      stop;
+   end;
    /* pointer args carry element addresses (poll_multi idiom) */
    call poke(addr(buf(4)), 48);
-   if buf(4) ^= 48 then fails = fails + 1;
-   if peek(addr(buf(4))) ^= 48 then fails = fails + 1;
-   if peek(addr(buf(1))) ^= 11 then fails = fails + 1;
-   if fails = 0 then put skip list('PASS addr_elem');
-   else put skip list('FAIL addr_elem: fails =', fails);
+   if buf(4) ^= 48 then do;
+      put skip list('FAIL addr_elem: expected 48, got', buf(4));
+      stop;
+   end;
+   if peek(addr(buf(4))) ^= 48 then do;
+      put skip list('FAIL addr_elem: check at line 65 failed');
+      stop;
+   end;
+   if peek(addr(buf(1))) ^= 11 then do;
+      put skip list('FAIL addr_elem: check at line 66 failed');
+      stop;
+   end;
+   put skip list('PASS addr_elem');
  end addr_elem;
  /* BASED fixed overlay probe: addr(e(2)) must hit buf(2). */
  check_based: procedure(b);

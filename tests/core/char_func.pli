@@ -9,8 +9,6 @@
     declare u char(6);
     declare v char(10) varying;
     declare w char(3);
-    declare fails fixed bin(31);
-    fails = 0;
     greet: procedure returns(char(5));
        return('hi');
     end greet;
@@ -22,27 +20,51 @@
        return('abcdef');
     end long;
     s = greet();
-    if substr(s, 1, 2) ^= 'hi' then
-       fails = fails + 1;
-    if substr(s, 3, 3) ^= '   ' then
-       fails = fails + 1;
+    if substr(s, 1, 2) ^= 'hi' then do;
+       put skip list('FAIL char_func: expected hi, got',
+          substr(s, 1, 2));
+       stop;
+    end;
+    if substr(s, 3, 3) ^= '   ' then do;
+       put skip list('FAIL char_func: expected    , got',
+          substr(s, 3, 3));
+       stop;
+    end;
     v = shout();
-    if v ^= 'hey' then fails = fails + 1;
-    if length(v) ^= 3 then fails = fails + 1;
+    if v ^= 'hey' then do;
+       put skip list('FAIL char_func: expected hey, got', v);
+       stop;
+    end;
+    if length(v) ^= 3 then do;
+       put skip list('FAIL char_func: expected 3, got', length(v));
+       stop;
+    end;
     w = long();
-    if w ^= 'abc' then fails = fails + 1;
+    if w ^= 'abc' then do;
+       put skip list('FAIL char_func: expected abc, got', w);
+       stop;
+    end;
     s = greet() || '!';
-    if substr(s, 1, 2) ^= 'hi' then
-       fails = fails + 1;
-    if substr(s, 3, 1) ^= ' ' then
-       fails = fails + 1;
+    if substr(s, 1, 2) ^= 'hi' then do;
+       put skip list('FAIL char_func: expected hi, got',
+          substr(s, 1, 2));
+       stop;
+    end;
+    if substr(s, 3, 1) ^= ' ' then do;
+       put skip list('FAIL char_func: expected  , got',
+          substr(s, 3, 1));
+       stop;
+    end;
     u = greet() || '!';
-    if substr(u, 1, 2) ^= 'hi' then
-       fails = fails + 1;
-    if substr(u, 6, 1) ^= '!' then
-       fails = fails + 1;
-    if fails = 0 then
-       put skip list('PASS char_func');
-    else put skip list('FAIL char_func:',
-       fails);
+    if substr(u, 1, 2) ^= 'hi' then do;
+       put skip list('FAIL char_func: expected hi, got',
+          substr(u, 1, 2));
+       stop;
+    end;
+    if substr(u, 6, 1) ^= '!' then do;
+       put skip list('FAIL char_func: expected !, got',
+          substr(u, 6, 1));
+       stop;
+    end;
+   put skip list('PASS char_func');
  end char_func;

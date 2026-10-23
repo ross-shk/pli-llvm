@@ -5,11 +5,9 @@
      buf=spare||... cycle works correctly both for locals and when
      passed through a CALL across module-like boundaries (ADR-152). */
  ctlmod: procedure options(main);
-    declare fails fixed bin(31);
     declare n fixed bin(31);
     declare text char(*) varying controlled;
     declare result char(64) varying;
-    fails = 0;
     n = 8;
     allocate text (n) character varying;
 
@@ -19,12 +17,12 @@
     text = 'hello';
     result = grow_body(text);
     if length(result) ^= 11 then do;
-       fails = fails + 1;
        put skip list('FAIL grow_body len');
+       stop;
     end;
     if substr(result, 1, 11) ^= 'hello world' then do;
-       fails = fails + 1;
        put skip list('FAIL grow_body val');
+       stop;
     end;
 
     /* Test 2: our caller's own CONTROLLED variable should survive the
@@ -35,17 +33,16 @@
     result = grow_body(text);
     /* text must still read back its original value. */
     if length(text) ^= 12 then do;
-       fails = fails + 1;
        put skip list('FAIL surviving text len');
+       stop;
     end;
     if text ^= 'abcdefghijkl' then do;
-       fails = fails + 1;
        put skip list('FAIL surviving text val');
+       stop;
     end;
 
     free text;
-    if fails = 0 then put skip list('PASS ctlmod');
-    else put skip list('FAIL ctlmod: fails=', fails);
+   put skip list('PASS ctlmod');
 
  /* grow_body mimics the libnet net_read_all pattern:
       DCL buf  CHAR(*) VARYING CONTROLLED;  -- our LOCAL controlled

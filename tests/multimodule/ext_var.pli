@@ -8,7 +8,6 @@ extvar: procedure options(main);
   dcl shared_buffer  char(64) varying external;
   dcl local_num      fixed bin(31);
   dcl local_str      char(64) varying;
-  dcl fails          fixed bin(31) init(0);
 
   dcl init_shared    entry external;
   dcl read_shared    entry returns(fixed bin(31)) external;
@@ -21,36 +20,62 @@ extvar: procedure options(main);
 
   /* Read initial values */
   local_num = read_shared();
-  if local_num ^= 42 then fails = fails + 1;
+  if local_num ^= 42 then do;
+     put skip list('FAIL ext_var: expected 42, got', local_num);
+     stop;
+  end;
 
   local_num = shared_counter;
-  if local_num ^= 42 then fails = fails + 1;
+  if local_num ^= 42 then do;
+     put skip list('FAIL ext_var: expected 42, got', local_num);
+     stop;
+  end;
 
   /* Write through entry, read back directly (flag=0 doubles per lib) */
   call write_shared(100);
-  if shared_counter ^= 200 then fails = fails + 1;
+  if shared_counter ^= 200 then do;
+     put skip list('FAIL ext_var: expected 200, got', shared_counter);
+     stop;
+  end;
 
   /* Read through entry */
   local_num = read_shared();
-  if local_num ^= 200 then fails = fails + 1;
+  if local_num ^= 200 then do;
+     put skip list('FAIL ext_var: expected 200, got', local_num);
+     stop;
+  end;
 
   /* Test shared VARYING string */
   call set_buffer('hello from main');
-  if shared_buffer ^= 'hello from main' then fails = fails + 1;
+  if shared_buffer ^= 'hello from main' then do;
+     put skip list('FAIL ext_var: expected hello from main, got',
+        shared_buffer);
+     stop;
+  end;
 
   local_str = get_buffer();
-  if local_str ^= 'hello from main' then fails = fails + 1;
+  if local_str ^= 'hello from main' then do;
+     put skip list('FAIL ext_var: expected hello from main, got',
+        local_str);
+     stop;
+  end;
 
   /* Modify directly, read through entry */
   shared_buffer = 'modified in main';
   local_str = get_buffer();
-  if local_str ^= 'modified in main' then fails = fails + 1;
+  if local_str ^= 'modified in main' then do;
+     put skip list('FAIL ext_var: expected modified in main, got',
+        local_str);
+     stop;
+  end;
 
   /* Test shared flag */
   shared_flag = 1;
   call write_shared(999);  /* uses flag to modify counter */
-  if shared_counter ^= 999 then fails = fails + 1;
+  if shared_counter ^= 999 then do;
+     put skip list('FAIL ext_var: expected 999, got', shared_counter);
+     stop;
+  end;
 
-  if fails = 0 then put skip list('PASS ext_var');
-  else put skip list('FAIL ext_var: fails=', fails);
+   put skip list('PASS ext_var');
 end extvar;

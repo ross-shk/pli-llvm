@@ -9,64 +9,62 @@
    dcl a(5) fixed bin(31);
    dcl s char(24) varying;
    dcl (n, i) fixed bin(31);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    email = 'user@example.com';
 
    if index(email, '@') ^= 5 then do;
-      fails = fails + 1;
       put skip list('FAIL: index @ =', index(email, '@'));
+      stop;
    end;
    if length(email) ^= 16 then do;
-      fails = fails + 1;
       put skip list('FAIL: len =', length(email));
+      stop;
    end;
    if substr(email, 1, 4) ^= 'user' then do;
-      fails = fails + 1;
       put skip list('FAIL: user =', substr(email, 1, 4));
+      stop;
    end;
    if trim('  hi  ') ^= 'hi' then do;
-      fails = fails + 1;
       put skip list('FAIL: trimmed =', trim('  hi  '));
+      stop;
    end;
    if uppercase(email) ^= 'USER@EXAMPLE.COM' then do;
-      fails = fails + 1;
       put skip list('FAIL: upper =', uppercase(email));
+      stop;
    end;
    if abs(-7) ^= 7 then do;
-      fails = fails + 1;
       put skip list('FAIL: abs =', abs(-7));
+      stop;
    end;
    if mod(17, 5) ^= 2 then do;
-      fails = fails + 1;
       put skip list('FAIL: mod =', mod(17, 5));
+      stop;
    end;
    if min(3, 8, 1) ^= 1 then do;
-      fails = fails + 1;
       put skip list('FAIL: min =', min(3, 8, 1));
+      stop;
    end;
 
    do i = 1 to 5;
      a(i) = i;
    end;
    if sum(a) ^= 15 then do;
-      fails = fails + 1;
       put skip list('FAIL: sum =', sum(a));
+      stop;
    end;
 
    s = char(42);
    if s ^= '42' then do;
-      fails = fails + 1;
       put skip list('FAIL: char(42) =', s);
+      stop;
    end;
 
    n = fixed('1234');
    if n ^= 1234 then do;
-      fails = fails + 1;
       put skip list('FAIL: fixed =', n);
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS builtins_tour');
  end bitour;

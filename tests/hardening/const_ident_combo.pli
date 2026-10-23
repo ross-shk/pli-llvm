@@ -15,40 +15,59 @@
     declare select fixed bin(31);
     declare leave fixed bin(31);
     declare until fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     /* case is folded: one variable */
     Foo = 41;
     FOO = FOO + 1;
-    if fOo ^= 42 then fails = fails + 1;
+    if fOo ^= 42 then do;
+       put skip list('FAIL const_ident_combo: expected 42, got', fOo);
+       stop;
+    end;
     /* keywords still name variables */
     select = 7;
     leave = 8;
     until = 9;
-    if SeLeCt + LeAvE + UnTiL ^= 24 then
-       fails = fails + 1;
+    if SeLeCt + LeAvE + UnTiL ^= 24 then do;
+       put skip list('FAIL const_ident_combo: check at line 29 failed');
+       stop;
+    end;
     /* keywords work spelled any case */
     SeLeCt (select);
        WhEn (7) total = 1;
        OtHeRwIsE total = 2;
     EnD;
-    if total ^= 1 then fails = fails + 1;
+    if total ^= 1 then do;
+       put skip list('FAIL const_ident_combo: expected 1, got', total);
+       stop;
+    end;
     /* constants feed bounds and exprs */
     total = max + neg;
-    if total ^= 93 then fails = fails + 1;
+    if total ^= 93 then do;
+       put skip list('FAIL const_ident_combo: expected 93, got', total);
+       stop;
+    end;
     total = lim * 2;
-    if total ^= 20 then fails = fails + 1;
-    if hbound(t) ^= 100 then fails =
-       fails + 1;
-    if hbound(u) ^= 10 then fails = fails
-       + 1;
+    if total ^= 20 then do;
+       put skip list('FAIL const_ident_combo: expected 20, got', total);
+       stop;
+    end;
+    if hbound(t) ^= 100 then do;
+       put skip list('FAIL const_ident_combo: expected 100, got',
+          hbound(t));
+       stop;
+    end;
+    if hbound(u) ^= 10 then do;
+       put skip list('FAIL const_ident_combo: expected 10, got',
+          hbound(u));
+       stop;
+    end;
     /* control vars mix with the rest */
     do total = 1 to 3;
        select = select + total;
     end;
-    if select ^= 13 then fails = fails
-       + 1;
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL consts: ',
-       fails);
+    if select ^= 13 then do;
+       put skip list('FAIL const_ident_combo: expected 13, got',
+          select);
+       stop;
+    end;
+   put skip list('PASS const_ident_combo');
  end const_ident_combo;

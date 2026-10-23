@@ -11,13 +11,11 @@
      declare n fixed bin(31);
      declare i fixed bin(31);
      declare j fixed bin(31);
-     declare fails fixed bin(31);
      declare x(n) fixed bin(31) based(p);
      declare h(n) pointer based(q);
      declare g(n, 2) fixed bin(31) based(p);
      declare region area;
      declare xa(n) fixed bin(31) based(p);
-     fails = 0;
      /* 1-D numeric heap with live bounds */
      n = 4;
      allocate x set(p);
@@ -25,11 +23,25 @@
         x(i) = i * 10;
      end;
      do i = 1 to n;
-        if x(i) ^= i * 10 then fails = fails + 1;
+        if x(i) ^= i * 10 then do;
+           put skip list('FAIL based_heap_dyn: check at line 28 failed');
+           stop;
+        end;
      end;
-     if lbound(x) ^= 1 then fails = fails + 1;
-     if hbound(x) ^= 4 then fails = fails + 1;
-     if dim(x) ^= 4 then fails = fails + 1;
+     if lbound(x) ^= 1 then do;
+        put skip list('FAIL based_heap_dyn: expected 1, got',
+           lbound(x));
+        stop;
+     end;
+     if hbound(x) ^= 4 then do;
+        put skip list('FAIL based_heap_dyn: expected 4, got',
+           hbound(x));
+        stop;
+     end;
+     if dim(x) ^= 4 then do;
+        put skip list('FAIL based_heap_dyn: expected 4, got', dim(x));
+        stop;
+     end;
      free x;
      /* re-allocate a new extent: refs
         follow the ALLOCATE-time bound */
@@ -37,17 +49,33 @@
      allocate x set(p);
      x(1) = 21; x(2) = 22;
      if x(1) ^= 21 | x(2) ^= 22
-        then fails = fails + 1;
-     if hbound(x) ^= 2 then fails = fails + 1;
+        then do;
+           put skip list('FAIL based_heap_dyn: check at line 40 failed');
+           stop;
+        end;
+     if hbound(x) ^= 2 then do;
+        put skip list('FAIL based_heap_dyn: expected 2, got',
+           hbound(x));
+        stop;
+     end;
      free x;
      /* POINTER elements on the heap */
      n = 3;
      allocate h set(q);
      h(1) = addr(n);
      h(3) = addr(n);
-     if h(1) ^= addr(n) then fails = fails + 1;
-     if h(3) ^= addr(n) then fails = fails + 1;
-     if dim(h) ^= 3 then fails = fails + 1;
+     if h(1) ^= addr(n) then do;
+        put skip list('FAIL based_heap_dyn: check at line 48 failed');
+        stop;
+     end;
+     if h(3) ^= addr(n) then do;
+        put skip list('FAIL based_heap_dyn: check at line 49 failed');
+        stop;
+     end;
+     if dim(h) ^= 3 then do;
+        put skip list('FAIL based_heap_dyn: expected 3, got', dim(h));
+        stop;
+     end;
      free h;
      /* 2-D heap, dynamic first axis */
      n = 3;
@@ -60,11 +88,22 @@
      do i = 1 to n;
         do j = 1 to 2;
            if g(i, j) ^= i * 10 + j
-              then fails = fails + 1;
+              then do;
+                 put skip list('FAIL based_heap_dyn: check at line 63 failed');
+                 stop;
+              end;
         end;
      end;
-     if hbound(g, 1) ^= 3 then fails = fails + 1;
-     if hbound(g, 2) ^= 2 then fails = fails + 1;
+     if hbound(g, 1) ^= 3 then do;
+        put skip list('FAIL based_heap_dyn: expected 3, got',
+           hbound(g, 1));
+        stop;
+     end;
+     if hbound(g, 2) ^= 2 then do;
+        put skip list('FAIL based_heap_dyn: expected 2, got',
+           hbound(g, 2));
+        stop;
+     end;
      free g;
      /* heap block inside an AREA region */
      n = 4;
@@ -73,10 +112,11 @@
         xa(i) = i;
      end;
      do i = 1 to n;
-        if xa(i) ^= i then fails = fails + 1;
+        if xa(i) ^= i then do;
+           put skip list('FAIL based_heap_dyn: check at line 76 failed');
+           stop;
+        end;
      end;
      free xa in(region);
-     if fails = 0
-        then put skip list('PASS based-heap-dyn');
-        else put skip list('FAIL based-heap-dyn');
+   put skip list('PASS based-heap-dyn');
   end based_heap_dyn;

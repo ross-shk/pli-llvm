@@ -8,7 +8,6 @@ ctlxfer2: procedure options(main);
   dcl body2       char(*) varying controlled;
   dcl cap         fixed bin(31);
   dcl got         fixed bin(31);
-  dcl fails       fixed bin(31) init(0);
 
   dcl grow        entry (char(*) varying controlled, fixed bin(31),
                    fixed bin(31)) returns (fixed bin(31)) external;
@@ -21,16 +20,32 @@ ctlxfer2: procedure options(main);
   cap = 32;
   allocate body (cap) character varying;
   got = grow(body, cap, 20);
-  if got ^= 20 then fails = fails + 1;
-  if length(body) ^= 20 then fails = fails + 1;
+  if got ^= 20 then do;
+     put skip list('FAIL ctl_xfer2: expected 20, got', got);
+     stop;
+  end;
+  if length(body) ^= 20 then do;
+     put skip list('FAIL ctl_xfer2: expected 20, got', length(body));
+     stop;
+  end;
   call trim_free(body);
-  if length(body) ^= 20 then fails = fails + 1;  /* trim_free doesn't free */
+  if length(body) ^= 20 then do;
+     put skip list('FAIL ctl_xfer2: expected 20, got', length(body));
+     stop;
+  end;
   free body;
 
   /* Test 2: callee allocates and frees on caller's stack */
   call alloc_free(body2, 16);
-  if length(body2) ^= 9 then fails = fails + 1;  /* VARYING length = content, not capacity */
-  if substr(body2, 1, 9) ^= 'allocated' then fails = fails + 1;
+  if length(body2) ^= 9 then do;
+     put skip list('FAIL ctl_xfer2: expected 9, got', length(body2));
+     stop;
+  end;
+  if substr(body2, 1, 9) ^= 'allocated' then do;
+     put skip list('FAIL ctl_xfer2: expected allocated, got',
+        substr(body2, 1, 9));
+     stop;
+  end;
   free body2;
 
   /* Test 3: callee pushes second generation, caller pops both */
@@ -38,13 +53,26 @@ ctlxfer2: procedure options(main);
   allocate body (cap) character varying;
   body = 'firstgen';
   call double_gen(body);
-  if length(body) ^= 7 then fails = fails + 1;  /* 'secondg' content length */
-  if substr(body, 1, 7) ^= 'secondg' then fails = fails + 1;
+  if length(body) ^= 7 then do;
+     put skip list('FAIL ctl_xfer2: expected 7, got', length(body));
+     stop;
+  end;
+  if substr(body, 1, 7) ^= 'secondg' then do;
+     put skip list('FAIL ctl_xfer2: expected secondg, got',
+        substr(body, 1, 7));
+     stop;
+  end;
   free body;  /* pop second */
-  if length(body) ^= 8 then fails = fails + 1;
-  if substr(body, 1, 8) ^= 'firstgen' then fails = fails + 1;
+  if length(body) ^= 8 then do;
+     put skip list('FAIL ctl_xfer2: expected 8, got', length(body));
+     stop;
+  end;
+  if substr(body, 1, 8) ^= 'firstgen' then do;
+     put skip list('FAIL ctl_xfer2: expected firstgen, got',
+        substr(body, 1, 8));
+     stop;
+  end;
   free body;  /* pop first */
 
-  if fails = 0 then put skip list('PASS ctl_xfer2');
-  else put skip list('FAIL ctl_xfer2: fails=', fails);
+   put skip list('PASS ctl_xfer2');
 end ctlxfer2;

@@ -3,7 +3,6 @@
 /* Rule (42): External procedure callback across modules.
    Build: two -c units linked together. */
 nestedext: procedure options(main);
-  dcl fails fixed bin(31) init(0);
   dcl result fixed bin(31);
 
   /* External entries from lib */
@@ -14,11 +13,16 @@ nestedext: procedure options(main);
   /* Test callback via external procedure */
   call lib_set_cb(10);
   result = lib_invoke_cb();
-  if result ^= 21 then fails = fails + 1;  /* 10*2+1 = 21 */
+  if result ^= 21 then do;
+     put skip list('FAIL nested_ext: expected 21, got', result);
+     stop;
+  end;
 
   result = lib_call_cb(5);
-  if result ^= 11 then fails = fails + 1;  /* 5*2+1 = 11 */
+  if result ^= 11 then do;
+     put skip list('FAIL nested_ext: expected 11, got', result);
+     stop;
+  end;
 
-  if fails = 0 then put skip list('PASS nested_ext');
-  else put skip list('FAIL nested_ext: fails=', fails);
+   put skip list('PASS nested_ext');
 end nestedext;

@@ -11,44 +11,42 @@
     declare b fixed bin(15,2);
     declare c fixed bin(15,4);    /* product of two scale-2 values */
     declare d fixed bin(15,0);    /* scale 0 */
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* assignment of a scale-0 literal rescales to the target scale */
     a = 5;
     if a ¬= 5 then do;
-       fails = fails + 1;
        put skip list('FAIL: a=5', a);
+       stop;
     end;
 
     b = 3;
     a = a + b;                     /* same-scale +: 5 + 3 = 8 */
     if a ¬= 8 then do;
-       fails = fails + 1;
        put skip list('FAIL: a+b', a);
+       stop;
     end;
 
     a = 8;
     a = a - b;                     /* same-scale -: 8 - 3 = 5 */
     if a ¬= 5 then do;
-       fails = fails + 1;
        put skip list('FAIL: a-b', a);
+       stop;
     end;
 
     a = 5;
     b = 4;
     c = a * b;                     /* *: scale sums, 5 * 4 = 20 */
     if c ¬= 20 then do;
-       fails = fails + 1;
        put skip list('FAIL: a*b', c);
+       stop;
     end;
 
     /* assignment from a scaled expression rescales the stored value */
     d = a + b;                     /* a+b (scale 2) = 9, downscaled to scale 0 */
     if d ¬= 9 then do;
-       fails = fails + 1;
        put skip list('FAIL: d = a+b', d);
+       stop;
     end;
 
     /* PUT prints the correctly-scaled value */
@@ -58,8 +56,5 @@
     put skip list('scaled a =', a);
     put skip list('product c =', c);
 
-    if fails = 0 then
-       put skip list('PASS');
-    else
-       put skip list('FAILED checks:', fails);
+   put skip list('PASS scaled');
  end scaled;

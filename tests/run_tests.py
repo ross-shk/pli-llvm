@@ -21,6 +21,7 @@ printed in deterministic group order. `cmake --build -j` parallelises the
 compile step.
 """
 import os
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -112,7 +113,6 @@ def ir_match(ir, checkfile):
     Python regex (so a literal parenthesis is backslash escaped in the check
     file). Returns (ok, reason). Minimal and dependency-free (no FileCheck
     binary)."""
-    import re
     dirs = []
     for lineno, line in enumerate(checkfile.splitlines(), 1):
         s = line.strip()
@@ -162,6 +162,12 @@ class Runner:
         self.out = self.dir / "out"
         self.out.mkdir(parents=True, exist_ok=True)
 
+    def fail(self, reason, detail=""):
+        """Uniform failure line `FAIL <name>: <reason>`, with any detail
+        (diff, compiler output, test output) indented beneath it."""
+        head = f"FAIL {self.name}: {reason}"
+        return (head + ("\n" + indented(detail) if detail else ""), 1)
+
     def check_out(self):
         """Classify a produced <name>.out: golden diff or self-check PASS."""
         outfile = self.out / f"{self.name}.out"
@@ -178,7 +184,7 @@ class Runner:
                 fromfile=str(expected), tofile=str(outfile), lineterm=""))
             if not diff:
                 return f"PASS {self.name}", 0
-            return f"FAIL {self.name} (output differs)\n{indented(chr(10).join(diff))}", 1
+            return self.fail("output differs", chr(10).join(diff))
         text = outfile.read_text(errors="replace") if outfile.exists() else ""
         if "PASS" in text.upper() and "FAIL" not in text.upper():
             return f"PASS {self.name}", 0
@@ -188,7 +194,13 @@ class Runner:
             first = text.strip().splitlines()[0]
             reason = first[4:].strip().lstrip(":").strip() or "skipped"
             return f"SKIP {self.name} ({reason})", 0
-        return f"FAIL {self.name} (self test did not print PASS)\n\n{indented(text)}", 1
+        # Surface the test's own diagnostic on the FAIL line, so the reason is
+        # visible without reading the captured output.
+        for line in text.splitlines():
+            if re.search(r"\bFAIL\b", line, re.I):
+                reason = re.sub(r"^\s*FAIL\b[:\s]*", "", line.strip(), flags=re.I)
+                return self.fail(reason or "test failed", text)
+        return self.fail("self test did not print PASS", text or "(no output)")
 
     def driver(self):
         import shutil
@@ -201,7 +213,7 @@ class Runner:
                     sh = cand
                     break
         if sh is None:
-            return f"FAIL {self.name} (sh not found: driver tests need a POSIX shell)\n", 1
+            return self.fail("driver tests need a POSIX shell (sh not found)")
         # Forward the resolved tool paths: driver scripts default to
         # ./build/cmake/pli, so the env must carry the real (possibly .exe) path.
         import os as _os
@@ -220,12 +232,12 @@ class Runner:
                     except (ProcessLookupError, PermissionError):
                         pass
                     proc.wait()
-                    return f"FAIL {self.name} (timed out after {budget}s)\n", 1
+                    return self.fail(f"timed out after {budget}s")
                 rc = proc.returncode
         except FileNotFoundError as e:
-            return f"FAIL {self.name} (cannot run shell: {e})\n", 1
+            return self.fail(f"cannot run shell: {e}")
         if rc == 124:
-            return f"FAIL {self.name} (timed out after {budget}s)\n", 1
+            return self.fail(f"timed out after {budget}s")
         return self.check_out()
 
     def exec_test(self):
@@ -264,11 +276,11 @@ class Runner:
                 else:
                     failed = None
         if failed:
-            return (f"FAIL {self.name} ({failed})\n"
-                    f"{indented(compilefile.read_text(errors='replace'))}"), 1
+            return self.fail(failed,
+                             compilefile.read_text(errors="replace"))
         rc, _ = run_cmd([str(self.out / (self.name + EXE_EXT))], self.out / f"{self.name}.out")
         if rc == 124:
-            return f"FAIL {self.name} (timed out after {TIMEOUT}s)\n", 1
+            return self.fail(f"timed out after {TIMEOUT}s")
         return self.check_out()
 
     def diag(self):
@@ -278,7 +290,7 @@ class Runner:
                             stderr=subprocess.STDOUT).returncode
         text = compilefile.read_text(errors="replace") if compilefile.exists() else ""
         if rc == 0:
-            return f"FAIL {self.name} (expected diagnostics, compiled cleanly)\n\n{indented(text)}", 1
+            return self.fail("expected diagnostics but compiled cleanly", text)
         # Optional FileCheck-style assertion over the combined compiler output
         # (reuses the ir matcher). Lets a diag test pin source location lines
         # such as file:line:col without asserting message wording.
@@ -286,14 +298,14 @@ class Runner:
         if checkfile.exists():
             ok, reason = ir_match(text, checkfile.read_text(errors="replace"))
             if not ok:
-                return f"FAIL {self.name} (check: {reason})\n\n{indented(text)}", 1
+                return self.fail(f"check: {reason}", text)
         return f"PASS {self.name} (rejected as expected)", 0
 
     def ir_test(self):
         # Emit LLVM IR for the program and FileCheck it against <name>.check.
         checkfile = self.dir / f"{self.name}.check"
         if not checkfile.exists():
-            return f"FAIL {self.name} (missing {self.name}.check)", 1
+            return self.fail(f"missing {self.name}.check")
         llfile = self.out / f"{self.name}.ll"
         compilefile = self.out / f"{self.name}.compile"
         # Optional per-test compiler flags (e.g. --experimental-lowering=llvm).
@@ -307,11 +319,12 @@ class Runner:
                  "-emit-llvm", "-o", str(llfile)],
                 stdout=cfh, stderr=subprocess.STDOUT).returncode
         if rc != 0:
-            return f"FAIL {self.name} (compilation failed)\n{indented(compilefile.read_text(errors='replace'))}", 1
+            return self.fail("compilation failed",
+                             compilefile.read_text(errors="replace"))
         ir = llfile.read_text(errors="replace")
         ok, reason = ir_match(ir, checkfile.read_text(errors="replace"))
         if not ok:
-            return f"FAIL {self.name} (IR check: {reason})\n\n{indented(ir)}", 1
+            return self.fail(f"IR check: {reason}", ir)
         return f"PASS {self.name}", 0
 
     def run(self):

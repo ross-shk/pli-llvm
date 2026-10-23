@@ -3,7 +3,6 @@
 /* Rule (42): Multiple external procedures in one module - testing linkage.
    Build: two -c units linked together. */
 extlink: procedure options(main);
-  dcl fails fixed bin(31) init(0);
   dcl result fixed bin(31);
 
   /* External procedures from lib */
@@ -19,28 +18,48 @@ extlink: procedure options(main);
 
   /* Test each function */
   result = func_a(10);
-  if result ^= 20 then fails = fails + 1;  /* x * 2 */
+  if result ^= 20 then do;
+     put skip list('FAIL ext_link: expected 20, got', result);
+     stop;
+  end;
 
   result = func_b(10);
-  if result ^= 30 then fails = fails + 1;  /* x * 3 */
+  if result ^= 30 then do;
+     put skip list('FAIL ext_link: expected 30, got', result);
+     stop;
+  end;
 
   result = func_c(4, 5);
-  if result ^= 20 then fails = fails + 1;  /* x * y */
+  if result ^= 20 then do;
+     put skip list('FAIL ext_link: expected 20, got', result);
+     stop;
+  end;
 
   /* Verify internal state */
   result = get_a();
-  if result ^= 20 then fails = fails + 1;
+  if result ^= 20 then do;
+     put skip list('FAIL ext_link: expected 20, got', result);
+     stop;
+  end;
 
   result = get_b();
-  if result ^= 30 then fails = fails + 1;
+  if result ^= 30 then do;
+     put skip list('FAIL ext_link: expected 30, got', result);
+     stop;
+  end;
 
   result = get_c();
-  if result ^= 20 then fails = fails + 1;
+  if result ^= 20 then do;
+     put skip list('FAIL ext_link: expected 20, got', result);
+     stop;
+  end;
 
   /* Call again */
   result = func_a(7);
-  if result ^= 14 then fails = fails + 1;
+  if result ^= 14 then do;
+     put skip list('FAIL ext_link: expected 14, got', result);
+     stop;
+  end;
 
-  if fails = 0 then put skip list('PASS ext_link');
-  else put skip list('FAIL ext_link: fails=', fails);
+   put skip list('PASS ext_link');
 end extlink;

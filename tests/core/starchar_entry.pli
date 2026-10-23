@@ -10,30 +10,47 @@
     declare small char(2);
     declare large char(10);
     declare len fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* call-based COPY with different-size buffers */
     call fill_two(s1);
-    if s1 ^= 'ab' then fails = fails + 1;
-    if length(s1) ^= 8 then fails = fails + 1;
+    if s1 ^= 'ab' then do;
+       put skip list('FAIL starchar_entry: expected ab, got', s1);
+       stop;
+    end;
+    if length(s1) ^= 8 then do;
+       put skip list('FAIL starchar_entry: expected 8, got',
+          length(s1));
+       stop;
+    end;
 
     call fill_two(s2);
-    if s2 ^= 'ab' then fails = fails + 1;
-    if length(s2) ^= 5 then fails = fails + 1;
+    if s2 ^= 'ab' then do;
+       put skip list('FAIL starchar_entry: expected ab, got', s2);
+       stop;
+    end;
+    if length(s2) ^= 5 then do;
+       put skip list('FAIL starchar_entry: expected 5, got',
+          length(s2));
+       stop;
+    end;
 
     /* function-returning LENGTH of char(*) arg */
     small = 'xy';
     len = upper_len(small);
-    if len ^= 2 then fails = fails + 1;
+    if len ^= 2 then do;
+       put skip list('FAIL starchar_entry: expected 2, got', len);
+       stop;
+    end;
 
     large = 'hello worl';
     len = upper_len(large);
-    if len ^= 10 then fails = fails + 1;
+    if len ^= 10 then do;
+       put skip list('FAIL starchar_entry: expected 10, got', len);
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS starchar_entry');
-    else put skip list('FAIL starchar_entry: fails =', fails);
+   put skip list('PASS starchar_entry');
 
  end starchar_entry;
 

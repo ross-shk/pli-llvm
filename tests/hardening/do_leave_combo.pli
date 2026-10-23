@@ -3,37 +3,50 @@
     with LEAVE/ITERATE, labels, WHILE and
     UNTIL edge counts in one flow. */
  do_leave_combo: procedure options(main);
-    declare fails fixed bin(31);
     declare i fixed bin(31);
     declare j fixed bin(31);
     declare s fixed bin(31);
     declare w fixed bin(31);
-    fails = 0;
     /* BY before TO orders freely, step 2 */
     s = 0;
     do i = 1 by 2 to 9;
        s = s + i;
     end;
-    if s ^= 25 then fails = fails + 1;
+    if s ^= 25 then do;
+       put skip list('FAIL do_leave_combo: expected 25, got', s);
+       stop;
+    end;
     /* negative step walks back down */
     s = 0;
     do i = 5 to 1 by -1;
        s = s + i;
     end;
-    if s ^= 15 then fails = fails + 1;
+    if s ^= 15 then do;
+       put skip list('FAIL do_leave_combo: expected 15, got', s);
+       stop;
+    end;
     /* TO with WHILE stops on the guard */
     s = 0;
     do i = 1 to 100 while (s < 10);
        s = s + i;
     end;
-    if s ^= 10 then fails = fails + 1;
-    if i ^= 5 then fails = fails + 1;
+    if s ^= 10 then do;
+       put skip list('FAIL do_leave_combo: expected 10, got', s);
+       stop;
+    end;
+    if i ^= 5 then do;
+       put skip list('FAIL do_leave_combo: expected 5, got', i);
+       stop;
+    end;
     /* WHILE may run zero times */
     s = 7;
     do while (s < 0);
        s = 99;
     end;
-    if s ^= 7 then fails = fails + 1;
+    if s ^= 7 then do;
+       put skip list('FAIL do_leave_combo: expected 7, got', s);
+       stop;
+    end;
     /* UNTIL always runs at least once */
     s = 0;
     w = 0;
@@ -41,7 +54,10 @@
        s = s + 1;
        if s >= 3 then w = '1'b;
     end;
-    if s ^= 3 then fails = fails + 1;
+    if s ^= 3 then do;
+       put skip list('FAIL do_leave_combo: expected 3, got', s);
+       stop;
+    end;
     /* LEAVE exits; ITERATE skips evens */
     s = 0;
     do i = 1 to 100;
@@ -49,7 +65,10 @@
        if mod(i, 2) = 0 then iterate;
        s = s + i;
     end;
-    if s ^= 9 then fails = fails + 1;
+    if s ^= 9 then do;
+       put skip list('FAIL do_leave_combo: expected 9, got', s);
+       stop;
+    end;
     /* labeled LEAVE escapes both loops */
     s = 0;
     outer: do i = 1 to 5;
@@ -58,14 +77,20 @@
           s = s + 1;
        end inner;
     end outer;
-    if s ^= 2 then fails = fails + 1;
+    if s ^= 2 then do;
+       put skip list('FAIL do_leave_combo: expected 2, got', s);
+       stop;
+    end;
     /* labeled ITERATE restarts the outer */
     s = 0;
     up: do i = 1 to 4;
        if i = 3 then iterate up;
        s = s + i;
     end up;
-    if s ^= 7 then fails = fails + 1;
+    if s ^= 7 then do;
+       put skip list('FAIL do_leave_combo: expected 7, got', s);
+       stop;
+    end;
     /* SELECT arms can LEAVE the loop */
     s = 0;
     do i = 1 to 10;
@@ -74,8 +99,9 @@
           otherwise s = s + i;
        end;
     end;
-    if s ^= 6 then fails = fails + 1;
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL do_leave: ',
-       fails);
+    if s ^= 6 then do;
+       put skip list('FAIL do_leave_combo: expected 6, got', s);
+       stop;
+    end;
+   put skip list('PASS do_leave_combo');
  end do_leave_combo;

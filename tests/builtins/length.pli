@@ -7,37 +7,34 @@
     declare s char(8);
     declare v char(8) varying;
     declare n fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     s = 'ABCD';
     n = length(s);
     if n ^= 8 then do;
-       fails = fails + 1;
        put skip list('FAIL length fixed =', n);
+       stop;
     end;
 
     v = 'ABCD';
     n = length(v);
     if n ^= 4 then do;
-       fails = fails + 1;
        put skip list('FAIL length varying =', n);
+       stop;
     end;
 
     n = length('xyz');
     if n ^= 3 then do;
-       fails = fails + 1;
        put skip list('FAIL length lit =', n);
+       stop;
     end;
 
     /* LENGTH is usable in an expression. */
     n = length('ab') + length('c');
     if n ^= 3 then do;
-       fails = fails + 1;
        put skip list('FAIL length expr =', n);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS length');
-    else put skip list('FAIL length: fails =', fails);
+   put skip list('PASS length');
  end length_test;

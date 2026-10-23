@@ -4,69 +4,131 @@
    cases: start past end, length > available, zero-length,
    VARYING-length growth, pad characters, capacity clamping, overlap. */
 w3_ops: procedure options(main);
-    declare fails fixed bin(31) init(0);
     declare result char(20) varying;
 
     /* --- SUBSTR (rule 30): 1-based start, length clamping --- */
     result = substr('hello', 2, 3);
-    if result ^= 'ell' then fails = fails + 1;
+    if result ^= 'ell' then do;
+       put skip list('FAIL w3_clipping: expected ell, got', result);
+       stop;
+    end;
     result = substr('hello', 1, 3);
-    if result ^= 'hel' then fails = fails + 1;
+    if result ^= 'hel' then do;
+       put skip list('FAIL w3_clipping: expected hel, got', result);
+       stop;
+    end;
     result = substr('hello', 1, 10);
-    if result ^= 'hello' then fails = fails + 1;
+    if result ^= 'hello' then do;
+       put skip list('FAIL w3_clipping: expected hello, got', result);
+       stop;
+    end;
     result = substr('hello', 3, 0);
-    if result ^= '' then fails = fails + 1;
+    if result ^= '' then do;
+       put skip list('FAIL w3_clipping: expected , got', result);
+       stop;
+    end;
 
     /* SUBSTR boundary: start past end → blanks, zero-length */
     result = substr('hello', 6, 3);
-    if result ^= '   ' then fails = fails + 1;
+    if result ^= '   ' then do;
+       put skip list('FAIL w3_clipping: expected    , got', result);
+       stop;
+    end;
     result = substr('hello', 7, 2);
-    if result ^= '  ' then fails = fails + 1;
+    if result ^= '  ' then do;
+       put skip list('FAIL w3_clipping: expected   , got', result);
+       stop;
+    end;
 
     /* --- REPEAT --- */
     result = repeat('ab', 3);
-    if result ^= 'ababab' then fails = fails + 1;
+    if result ^= 'ababab' then do;
+       put skip list('FAIL w3_clipping: expected ababab, got', result);
+       stop;
+    end;
     result = repeat('x', 0);
-    if result ^= '' then fails = fails + 1;
+    if result ^= '' then do;
+       put skip list('FAIL w3_clipping: expected , got', result);
+       stop;
+    end;
     /* REPEAT with src longer than field width → clipped to cap */
     result = repeat('abcde', 1);
-    if result ^= 'abcde' then fails = fails + 1;
+    if result ^= 'abcde' then do;
+       put skip list('FAIL w3_clipping: expected abcde, got', result);
+       stop;
+    end;
 
     /* --- TRANSLATE --- */
     result = translate('abc', 'def', 'a');
-    if result ^= 'dbc' then fails = fails + 1;
+    if result ^= 'dbc' then do;
+       put skip list('FAIL w3_clipping: expected dbc, got', result);
+       stop;
+    end;
     result = translate('hello', 'H', 'h');
-    if result ^= 'Hello' then fails = fails + 1;
+    if result ^= 'Hello' then do;
+       put skip list('FAIL w3_clipping: expected Hello, got', result);
+       stop;
+    end;
     /* TRANSLATE with unmatched chars → passthrough */
     result = translate('hello', 'X', 'h');
-    if result ^= 'Xello' then fails = fails + 1;
+    if result ^= 'Xello' then do;
+       put skip list('FAIL w3_clipping: expected Xello, got', result);
+       stop;
+    end;
     result = translate('hello', 'HI', 'he');
-    if result ^= 'HIllo' then fails = fails + 1;
+    if result ^= 'HIllo' then do;
+       put skip list('FAIL w3_clipping: expected HIllo, got', result);
+       stop;
+    end;
 
     /* --- TRIM --- */
     result = trim('  hello  ');
-    if result ^= 'hello' then fails = fails + 1;
+    if result ^= 'hello' then do;
+       put skip list('FAIL w3_clipping: expected hello, got', result);
+       stop;
+    end;
     result = trim('hello');
-    if result ^= 'hello' then fails = fails + 1;
+    if result ^= 'hello' then do;
+       put skip list('FAIL w3_clipping: expected hello, got', result);
+       stop;
+    end;
     result = trim('   ', ' ');
-    if result ^= '' then fails = fails + 1;
+    if result ^= '' then do;
+       put skip list('FAIL w3_clipping: expected , got', result);
+       stop;
+    end;
     /* TRIM with custom pad set and leading/trailing chars */
     result = trim('00abc00', '0');
-    if result ^= 'abc' then fails = fails + 1;
+    if result ^= 'abc' then do;
+       put skip list('FAIL w3_clipping: expected abc, got', result);
+       stop;
+    end;
     result = trim('xxxhelloxxx', 'x');
-    if result ^= 'hello' then fails = fails + 1;
+    if result ^= 'hello' then do;
+       put skip list('FAIL w3_clipping: expected hello, got', result);
+       stop;
+    end;
 
     /* SUBSTR assignment (rule 86/123) and varying-length growth */
     declare buf char(20);
     buf = 'hello world';
     substr(buf, 2, 3) = 'XYZ';
-    if buf ^= 'hXYZo world' then fails = fails + 1;
+    if buf ^= 'hXYZo world' then do;
+       put skip list('FAIL w3_clipping: expected hXYZo world, got',
+          buf);
+       stop;
+    end;
     declare vg char(20) varying;
     vg = 'ab';
     substr(vg, 4, 2) = 'cd';
-    if length(vg) ^= 5 then fails = fails + 1;
-    if vg ^= 'ab cd' then fails = fails + 1;
+    if length(vg) ^= 5 then do;
+       put skip list('FAIL w3_clipping: expected 5, got', length(vg));
+       stop;
+    end;
+    if vg ^= 'ab cd' then do;
+       put skip list('FAIL w3_clipping: expected ab cd, got', vg);
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS w3 ops');
-    else put skip list('FAIL w3 ops: fails =', fails);
+   put skip list('PASS w3 ops');
 end w3_ops;

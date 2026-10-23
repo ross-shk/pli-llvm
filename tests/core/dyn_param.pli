@@ -11,9 +11,7 @@
     declare m(4) fixed bin(31);
     declare i fixed bin(31);
     declare n fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
     do i = 1 to 10;
        a(i) = i * 2;
     end;
@@ -22,7 +20,10 @@
     call check(a, n);
     /* writes through the dynamic parameter reflect outside */
     call bump(a, n);
-    if a(1) ^= 3 or a(10) ^= 21 then fails = fails + 1;
+    if a(1) ^= 3 or a(10) ^= 21 then do;
+       put skip list('FAIL dyn_param: check at line 25 failed');
+       stop;
+    end;
     /* pass a smaller fixed array with a matching extent */
     do i = 1 to 4;
        m(i) = i;
@@ -30,10 +31,12 @@
     call check(m, 4);
     /* a function procedure with a dynamic array param returning a value */
     n = 4;
-    if total(m, n) ^= 10 then fails = fails + 1;
+    if total(m, n) ^= 10 then do;
+       put skip list('FAIL dyn_param: expected 10, got', total(m, n));
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS dyn_param');
-    else put skip list('FAIL dyn_param: fails =', fails);
+   put skip list('PASS dyn_param');
 
  check: procedure(x, k);
     declare k fixed bin(31);
@@ -44,10 +47,22 @@
     do i = 1 to k;
        t = t + x(i);
     end;
-    if lbound(x) ^= 1 then fails = fails + 1;
-    if hbound(x) ^= k then fails = fails + 1;
-    if dim(x) ^= k then fails = fails + 1;
-    if sum(x) ^= t then fails = fails + 1;
+    if lbound(x) ^= 1 then do;
+       put skip list('FAIL dyn_param: expected 1, got', lbound(x));
+       stop;
+    end;
+    if hbound(x) ^= k then do;
+       put skip list('FAIL dyn_param: check at line 48 failed');
+       stop;
+    end;
+    if dim(x) ^= k then do;
+       put skip list('FAIL dyn_param: check at line 49 failed');
+       stop;
+    end;
+    if sum(x) ^= t then do;
+       put skip list('FAIL dyn_param: check at line 50 failed');
+       stop;
+    end;
  end check;
 
  bump: procedure(x, k);

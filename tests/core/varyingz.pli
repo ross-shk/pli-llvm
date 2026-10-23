@@ -6,31 +6,53 @@
     the NUL is added only at the by-value C ABI boundary. `VARZ`
     is the IBM abbreviation. */
  varyingz: procedure options(main);
-   dcl fails fixed bin(31) init(0);
    dcl z     char(8) varyingz;
    dcl a     char(4) varz;
    dcl v     char(8) varying;
 
    z = 'abc';
-   if length(z) ^= 3 then fails = fails + 1;
-   if z ^= 'abc' then fails = fails + 1;
+   if length(z) ^= 3 then do;
+      put skip list('FAIL varyingz: expected 3, got', length(z));
+      stop;
+   end;
+   if z ^= 'abc' then do;
+      put skip list('FAIL varyingz: expected abc, got', z);
+      stop;
+   end;
 
    /* VARYINGZ and VARYING assign interchangeably */
    v = z;
-   if v ^= 'abc' then fails = fails + 1;
+   if v ^= 'abc' then do;
+      put skip list('FAIL varyingz: expected abc, got', v);
+      stop;
+   end;
    z = v;
-   if z ^= 'abc' then fails = fails + 1;
+   if z ^= 'abc' then do;
+      put skip list('FAIL varyingz: expected abc, got', z);
+      stop;
+   end;
 
    /* an overlong assignment truncates to the declared maximum */
    z = 'abcdefghij';
-   if length(z) ^= 8 then fails = fails + 1;
-   if z ^= 'abcdefgh' then fails = fails + 1;
+   if length(z) ^= 8 then do;
+      put skip list('FAIL varyingz: expected 8, got', length(z));
+      stop;
+   end;
+   if z ^= 'abcdefgh' then do;
+      put skip list('FAIL varyingz: expected abcdefgh, got', z);
+      stop;
+   end;
 
    /* the VARZ abbreviation */
    a = 'xy';
-   if length(a) ^= 2 then fails = fails + 1;
-   if a ^= 'xy' then fails = fails + 1;
+   if length(a) ^= 2 then do;
+      put skip list('FAIL varyingz: expected 2, got', length(a));
+      stop;
+   end;
+   if a ^= 'xy' then do;
+      put skip list('FAIL varyingz: expected xy, got', a);
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS varyingz');
-   else put skip list('FAIL varyingz: fails =', fails);
+   put skip list('PASS varyingz');
  end varyingz;

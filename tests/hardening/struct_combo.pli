@@ -30,27 +30,37 @@
           3 px fixed bin(31),
           3 pz fixed bin(31),
        2 onlyd fixed bin(31);
-    declare fails fixed bin(31);
-    fails = 0;
     /* non-consecutive levels address
        the same way as 1/2/3 */
     rect.upleft.x = 20.5;
     rect.upleft.y = 30.5;
     rect.lowright.x = 40.5;
     rect.lowright.y = 10.5;
-    if rect.upleft.x ^= 20.5 then fails =
-       fails + 1;
-    if rect.lowright.y ^= 10.5 then
-       fails = fails + 1;
+    if rect.upleft.x ^= 20.5 then do;
+       put skip list('FAIL struct_combo: expected 20.5, got',
+          rect.upleft.x);
+       stop;
+    end;
+    if rect.lowright.y ^= 10.5 then do;
+       put skip list('FAIL struct_combo: expected 10.5, got',
+          rect.lowright.y);
+       stop;
+    end;
     /* deeper minor paths read and
        write through two levels */
     addr.city = 'Springfield';
     addr.road.name = 'Main';
     addr.road.num = 12;
-    if addr.city ^= 'Springfield' then
-       fails = fails + 1;
-    if addr.road.num ^= 12 then fails =
-       fails + 1;
+    if addr.city ^= 'Springfield' then do;
+       put skip list('FAIL struct_combo: expected Springfield, got',
+          addr.city);
+       stop;
+    end;
+    if addr.road.num ^= 12 then do;
+       put skip list('FAIL struct_combo: expected 12, got',
+          addr.road.num);
+       stop;
+    end;
     /* BY NAME copies shared names only,
        recursing into minor structs */
     src.a = 11;
@@ -62,19 +72,30 @@
     dst.onlyd = 7;
     dst.pt.pz = 55;
     dst = src, by name;
-    if dst.a ^= 11 then fails = fails + 1;
-    if dst.v(1) ^= 1 then fails = fails
-       + 1;
-    if dst.v(2) ^= 2 then fails = fails
-       + 1;
-    if dst.pt.px ^= 33 then fails = fails
-       + 1;
+    if dst.a ^= 11 then do;
+       put skip list('FAIL struct_combo: expected 11, got', dst.a);
+       stop;
+    end;
+    if dst.v(1) ^= 1 then do;
+       put skip list('FAIL struct_combo: expected 1, got', dst.v(1));
+       stop;
+    end;
+    if dst.v(2) ^= 2 then do;
+       put skip list('FAIL struct_combo: expected 2, got', dst.v(2));
+       stop;
+    end;
+    if dst.pt.px ^= 33 then do;
+       put skip list('FAIL struct_combo: expected 33, got', dst.pt.px);
+       stop;
+    end;
     /* absent names keep prior values */
-    if dst.pt.pz ^= 55 then fails = fails
-       + 1;
-    if dst.onlyd ^= 7 then fails = fails
-       + 1;
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL struct: ',
-       fails);
+    if dst.pt.pz ^= 55 then do;
+       put skip list('FAIL struct_combo: expected 55, got', dst.pt.pz);
+       stop;
+    end;
+    if dst.onlyd ^= 7 then do;
+       put skip list('FAIL struct_combo: expected 7, got', dst.onlyd);
+       stop;
+    end;
+   put skip list('PASS struct_combo');
  end struct_combo;

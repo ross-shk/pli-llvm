@@ -5,31 +5,44 @@
    Default generation allocated on proc entry. Tests cover LIFO, implicit
    allocation, parameter aliasing, and VARYING CONTROLLED. */
 controlled_edge: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* Basic CONTROLLED - implicit generation on entry */
     declare ctl1 fixed bin(31) controlled;
     ctl1 = 42;  /* uses implicit generation */
-    if ctl1 ^= 42 then fails = fails + 1;
+    if ctl1 ^= 42 then do;
+       put skip list('FAIL controlled_edge: expected 42, got', ctl1);
+       stop;
+    end;
 
     /* Explicit ALLOCATE pushes new generation */
     allocate ctl1;
     ctl1 = 99;
-    if ctl1 ^= 99 then fails = fails + 1;
+    if ctl1 ^= 99 then do;
+       put skip list('FAIL controlled_edge: expected 99, got', ctl1);
+       stop;
+    end;
 
     /* Another ALLOCATE */
     allocate ctl1;
     ctl1 = 100;
-    if ctl1 ^= 100 then fails = fails + 1;
+    if ctl1 ^= 100 then do;
+       put skip list('FAIL controlled_edge: expected 100, got', ctl1);
+       stop;
+    end;
 
     /* FREE pops - back to 99 */
     free ctl1;
-    if ctl1 ^= 99 then fails = fails + 1;
+    if ctl1 ^= 99 then do;
+       put skip list('FAIL controlled_edge: expected 99, got', ctl1);
+       stop;
+    end;
 
     /* FREE again - back to 42 */
     free ctl1;
-    if ctl1 ^= 42 then fails = fails + 1;
+    if ctl1 ^= 42 then do;
+       put skip list('FAIL controlled_edge: expected 42, got', ctl1);
+       stop;
+    end;
 
     /* FREE on empty stack - runtime error */
     /* free ctl1; free ctl1; -- would raise ERROR */
@@ -37,10 +50,18 @@ controlled_edge: procedure options(main);
     /* CONTROLLED with separate INITIAL assignment */
     declare ctl_init fixed bin(31) controlled;
     ctl_init = 777;  /* Initial generation has 777 */
-    if ctl_init ^= 777 then fails = fails + 1;
+    if ctl_init ^= 777 then do;
+       put skip list('FAIL controlled_edge: expected 777, got',
+          ctl_init);
+       stop;
+    end;
     allocate ctl_init;
     ctl_init = 777;  /* new gen also initialized */
-    if ctl_init ^= 777 then fails = fails + 1;
+    if ctl_init ^= 777 then do;
+       put skip list('FAIL controlled_edge: expected 777, got',
+          ctl_init);
+       stop;
+    end;
     free ctl_init;
 
     /* CONTROLLED array */
@@ -48,10 +69,13 @@ controlled_edge: procedure options(main);
     allocate ctl_arr;
     declare i fixed bin(31);
     do i = 1 to 5; ctl_arr(i) = i * 10; end;
-    if ctl_arr(3) ^= 30 then fails = fails + 1;
+    if ctl_arr(3) ^= 30 then do;
+       put skip list('FAIL controlled_edge: expected 30, got',
+          ctl_arr(3));
+       stop;
+    end;
     free ctl_arr;
 
-    if fails = 0 then put skip list('PASS controlled_edge');
-    else put skip list('FAIL controlled_edge: fails =', fails);
+   put skip list('PASS controlled_edge');
 
 end controlled_edge;

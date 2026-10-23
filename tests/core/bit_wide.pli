@@ -8,9 +8,7 @@
    declare y bit(40);
    declare z bit(40);
    declare hits fixed bin(31);
-   declare fails fixed bin(31);
 
-   fails = 0;
    hits = 0;
 
    /* The high eight bits differ: the values are not equal. */
@@ -27,8 +25,10 @@
 
    /* Every hit is the expected one: not-equal, unequal, not-equal, equal,
       not-equal. */
-   if hits ^= 3 then fails = fails + 1;
+   if hits ^= 3 then do;
+      put skip list('FAIL bit_wide: expected 3, got', hits);
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS bit_wide');
-   else put skip list('FAIL bit_wide: fails =', fails);
+   put skip list('PASS bit_wide');
  end bit_wide;

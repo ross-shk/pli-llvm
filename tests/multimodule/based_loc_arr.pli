@@ -19,29 +19,47 @@
    dcl q pointer;
    dcl i fixed bin(31);
    dcl n fixed bin(31);
-   dcl fails fixed bin(31) init(0);
    dcl buf(4) fixed bin(31);
    dcl view(4) fixed bin(31) based(p);
    n = 4;
    /* heap block round-trip through locators */
    p = make_block(n);
    call loc_fill(p, n, 7);
-   if loc_at(p, n, 3) ^= 7 then fails = fails + 1;
-   if loc_sum(p, n) ^= 28 then fails = fails + 1;
+   if loc_at(p, n, 3) ^= 7 then do;
+      put skip list('FAIL based_loc_arr: expected 7, got',
+         loc_at(p, n, 3));
+      stop;
+   end;
+   if loc_sum(p, n) ^= 28 then do;
+      put skip list('FAIL based_loc_arr: expected 28, got',
+         loc_sum(p, n));
+      stop;
+   end;
    call drop_block(p);
    /* caller buffer reached via an (n) overlay + locator */
    buf(1) = 1; buf(2) = 2; buf(3) = 3; buf(4) = 4;
-   if loc_sum(addr(buf), n) ^= 10 then fails = fails + 1;
+   if loc_sum(addr(buf), n) ^= 10 then do;
+      put skip list('FAIL based_loc_arr: check at line 34 failed');
+      stop;
+   end;
    call loc_fill(addr(buf), n, 5);
    do i = 1 to n;
-     if buf(i) ^= 5 then fails = fails + 1;
+     if buf(i) ^= 5 then do;
+        put skip list('FAIL based_loc_arr: expected 5, got', buf(i));
+        stop;
+     end;
    end;
    /* caller-side locator over its own overlay */
    p = addr(buf);
    q = addr(buf);
    q -> view(2) = 42;
-   if buf(2) ^= 42 then fails = fails + 1;
-   if p -> view(2) ^= 42 then fails = fails + 1;
-   if fails = 0 then put skip list('PASS based_loc_arr');
-   else put skip list('FAIL based_loc_arr: fails =', fails);
+   if buf(2) ^= 42 then do;
+      put skip list('FAIL based_loc_arr: expected 42, got', buf(2));
+      stop;
+   end;
+   if p -> view(2) ^= 42 then do;
+      put skip list('FAIL based_loc_arr: check at line 44 failed');
+      stop;
+   end;
+   put skip list('PASS based_loc_arr');
  end basedlocxfer;

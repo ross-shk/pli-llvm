@@ -7,31 +7,29 @@
  firstcls: proc options(main);
    dcl on_get entry(fixed bin(31))
      returns(fixed bin(31)) variable;
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    on_get = add1;
    if on_get(41) ^= 42 then do;
-      fails = fails + 1;
       put skip list('FAIL: add1(41) =', on_get(41));
+      stop;
    end;
 
    on_get = dbl;
    if on_get(41) ^= 82 then do;
-      fails = fails + 1;
       put skip list('FAIL: dbl(41) =', on_get(41));
+      stop;
    end;
    if dispatch(add1) ^= 42 then do;
-      fails = fails + 1;
       put skip list('FAIL: dispatch(add1) =', dispatch(add1));
+      stop;
    end;
    if dispatch(dbl) ^= 82 then do;
-      fails = fails + 1;
       put skip list('FAIL: dispatch(dbl) =', dispatch(dbl));
+      stop;
    end;
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS first_class_procedures');
 
  add1: proc(x) returns(fixed bin(31));
    dcl x fixed bin(31);

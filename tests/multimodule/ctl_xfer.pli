@@ -8,7 +8,6 @@
    dcl body        char(*) varying controlled;
    dcl cap         fixed bin(31);
    dcl got         fixed bin(31);
-   dcl fails       fixed bin(31) init(0);
    dcl grow        entry (char(*) varying controlled, fixed bin(31),
                   fixed bin(31)) returns (fixed bin(31)) external;
    dcl topup       entry (char(*) varying controlled, fixed bin(31))
@@ -17,21 +16,51 @@
    /* grow allocates, doubles past 16, appends 100 bytes, trims. */
    cap = 16;
    got = grow(body, cap, 100);
-   if got ^= 100 then fails = fails + 1;
-   if cap ^= 128 then fails = fails + 1;   /* by-reference doubling */
-   if length(body) ^= 100 then fails = fails + 1;
-   if substr(body, 1, 8) ^= 'xxxxxxxx' then fails = fails + 1;
-   if substr(body, 46, 8) ^= 'xxxxxxxx' then fails = fails + 1;
-   if substr(body, 93, 8) ^= 'xxxxxxxx' then fails = fails + 1;
+   if got ^= 100 then do;
+      put skip list('FAIL ctl_xfer: expected 100, got', got);
+      stop;
+   end;
+   if cap ^= 128 then do;
+      put skip list('FAIL ctl_xfer: expected 128, got', cap);
+      stop;
+   end;
+   if length(body) ^= 100 then do;
+      put skip list('FAIL ctl_xfer: expected 100, got', length(body));
+      stop;
+   end;
+   if substr(body, 1, 8) ^= 'xxxxxxxx' then do;
+      put skip list('FAIL ctl_xfer: expected xxxxxxxx, got',
+         substr(body, 1, 8));
+      stop;
+   end;
+   if substr(body, 46, 8) ^= 'xxxxxxxx' then do;
+      put skip list('FAIL ctl_xfer: expected xxxxxxxx, got',
+         substr(body, 46, 8));
+      stop;
+   end;
+   if substr(body, 93, 8) ^= 'xxxxxxxx' then do;
+      put skip list('FAIL ctl_xfer: expected xxxxxxxx, got',
+         substr(body, 93, 8));
+      stop;
+   end;
 
    /* topup pushed a second generation onto the caller's stack. */
    call topup(body, 8);
-   if length(body) ^= 8 then fails = fails + 1;
-   if substr(body, 1, 8) ^= 'yyyyyyyy' then fails = fails + 1;
+   if length(body) ^= 8 then do;
+      put skip list('FAIL ctl_xfer: expected 8, got', length(body));
+      stop;
+   end;
+   if substr(body, 1, 8) ^= 'yyyyyyyy' then do;
+      put skip list('FAIL ctl_xfer: expected yyyyyyyy, got',
+         substr(body, 1, 8));
+      stop;
+   end;
    free body;
-   if length(body) ^= 100 then fails = fails + 1;
+   if length(body) ^= 100 then do;
+      put skip list('FAIL ctl_xfer: expected 100, got', length(body));
+      stop;
+   end;
    free body;
 
-   if fails = 0 then put skip list('PASS ctl_xfer');
-   else put skip list('FAIL ctl_xfer: fails=', fails);
+   put skip list('PASS ctl_xfer');
  end ctlxfer;

@@ -11,15 +11,19 @@
    dcl off offset;
    dcl 1 rec based(off),
        2 v fixed bin(31);
-   dcl fails fixed bin(31) init(0);
 
    off = mk_alloc(region);
-   if off = null() then fails = fails + 1;
-   if rec.v ^= 1234 then fails = fails + 1;
+   if off = null() then do;
+      put skip list('FAIL area_offset: check at line 17 failed');
+      stop;
+   end;
+   if rec.v ^= 1234 then do;
+      put skip list('FAIL area_offset: expected 1234, got', rec.v);
+      stop;
+   end;
 
    call mk_free(region, off);
    off = null();
 
-   if fails = 0 then put skip list('PASS area_offset');
-   else put skip list('FAIL area_offset:', fails);
+   put skip list('PASS area_offset');
  end area_offset;

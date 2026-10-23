@@ -9,9 +9,7 @@
            2 x fixed bin(31),
            2 y fixed bin(31);
     declare i fixed bin(31);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     /* write members of each element with a runtime subscript */
     do i = 1 to 3;
@@ -20,15 +18,29 @@
     end;
 
     /* read members back */
-    if arr(1).x ^= 10 then fails = fails + 1;
-    if arr(1).y ^= 100 then fails = fails + 1;
-    if arr(2).x ^= 20 then fails = fails + 1;
-    if arr(3).y ^= 300 then fails = fails + 1;
+    if arr(1).x ^= 10 then do;
+       put skip list('FAIL struct_array_of: check at line 23 failed');
+       stop;
+    end;
+    if arr(1).y ^= 100 then do;
+       put skip list('FAIL struct_array_of: check at line 24 failed');
+       stop;
+    end;
+    if arr(2).x ^= 20 then do;
+       put skip list('FAIL struct_array_of: check at line 25 failed');
+       stop;
+    end;
+    if arr(3).y ^= 300 then do;
+       put skip list('FAIL struct_array_of: check at line 26 failed');
+       stop;
+    end;
 
     /* a member in an expression, and cross-element use */
     arr(2).x = arr(1).x + arr(3).x;
-    if arr(2).x ^= 40 then fails = fails + 1;
+    if arr(2).x ^= 40 then do;
+       put skip list('FAIL struct_array_of: check at line 30 failed');
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS struct_array_of');
-    else put skip list('FAIL struct_array_of: fails =', fails);
+   put skip list('PASS struct_array_of');
  end struct_array_of_test;

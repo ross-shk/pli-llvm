@@ -3,45 +3,91 @@
     reverse, center, cmp_char — rules (80)–(83). Boundary cases cover
     empty/zero-length, clipping to capacity, overlap safety, blank extension. */
  w1_ops: procedure options(main);
-    declare fails fixed bin(31) init(0);
 
     /* --- assign_varying --- */
     declare v char(20) varying;
     v = 'hello';
-    if v ^= 'hello' then fails = fails + 1;
+    if v ^= 'hello' then do;
+       put skip list('FAIL w1_string_ops: expected hello, got', v);
+       stop;
+    end;
     /* truncation to capacity */
     v = 'this is a very long string that exceeds';
-    if v ^= 'this is a very long' then fails = fails + 1;
+    if v ^= 'this is a very long' then do;
+       put skip list('FAIL w1_string_ops: check at line 14 failed');
+       stop;
+    end;
     /* varying-to-varying copy */
     declare v2 char(10) varying init('abc');
     v = v2;
-    if v ^= v2 then fails = fails + 1;
+    if v ^= v2 then do;
+       put skip list('FAIL w1_string_ops: check at line 18 failed');
+       stop;
+    end;
 
     /* --- high / low (highest/lowest collating chars) --- */
     declare h char(1);
     h = high(1);
-    if rank(h) ^= 255 then fails = fails + 1;
+    if rank(h) ^= 255 then do;
+       put skip list('FAIL w1_string_ops: expected 255, got', rank(h));
+       stop;
+    end;
     declare l char(1);
     l = low(1);
-    if rank(l) ^= 0 then fails = fails + 1;
+    if rank(l) ^= 0 then do;
+       put skip list('FAIL w1_string_ops: expected 0, got', rank(l));
+       stop;
+    end;
 
     /* --- uppercase / lowercase --- */
-    if uppercase('hello') ^= 'HELLO' then fails = fails + 1;
-    if lowercase('HeLLo') ^= 'hello' then fails = fails + 1;
+    if uppercase('hello') ^= 'HELLO' then do;
+       put skip list('FAIL w1_string_ops: expected HELLO, got',
+          uppercase('hello'));
+       stop;
+    end;
+    if lowercase('HeLLo') ^= 'hello' then do;
+       put skip list('FAIL w1_string_ops: expected hello, got',
+          lowercase('HeLLo'));
+       stop;
+    end;
 
     /* --- reverse --- */
-    if reverse('hello') ^= 'olleh' then fails = fails + 1;
-    if reverse('ab') ^= 'ba' then fails = fails + 1;
+    if reverse('hello') ^= 'olleh' then do;
+       put skip list('FAIL w1_string_ops: expected olleh, got',
+          reverse('hello'));
+       stop;
+    end;
+    if reverse('ab') ^= 'ba' then do;
+       put skip list('FAIL w1_string_ops: expected ba, got',
+          reverse('ab'));
+       stop;
+    end;
 
     /* --- center --- */
-    if center('x', 5) ^= '  x  ' then fails = fails + 1;
-    if center('ab', 6) ^= '  ab  ' then fails = fails + 1;
+    if center('x', 5) ^= '  x  ' then do;
+       put skip list('FAIL w1_string_ops: expected   x  , got',
+          center('x', 5));
+       stop;
+    end;
+    if center('ab', 6) ^= '  ab  ' then do;
+       put skip list('FAIL w1_string_ops: expected   ab  , got',
+          center('ab', 6));
+       stop;
+    end;
 
     /* --- cmp_char (via string comparison, rule 117) --- */
-    if 'abc' = 'abd' then fails = fails + 1;
-    if 'abc' ^= 'abc' then fails = fails + 1;
-    if 'ab' ^= 'ab ' then fails = fails + 1;
+    if 'abc' = 'abd' then do;
+       put skip list('FAIL w1_string_ops: check at line 41 failed');
+       stop;
+    end;
+    if 'abc' ^= 'abc' then do;
+       put skip list('FAIL w1_string_ops: check at line 42 failed');
+       stop;
+    end;
+    if 'ab' ^= 'ab ' then do;
+       put skip list('FAIL w1_string_ops: check at line 43 failed');
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS w1 string ops');
-    else put skip list('FAIL w1 string ops: fails =', fails);
+   put skip list('PASS w1 string ops');
  end w1_ops;

@@ -5,8 +5,6 @@
    bounds, multi-axis row-major layout, cross-sections (single-* and multi-*),
    SUBSCRIPTRANGE checking, DIM/LBOUND/HBOUND built-ins. */
 array_edge: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
    /* Single axis with explicit lower bound */
    declare a1(-3:3) fixed bin(31);
@@ -15,36 +13,78 @@ array_edge: procedure options(main);
       a1(i) = i * 10;
    end;
    do i = -3 to 3;
-      if a1(i) ^= i * 10 then fails = fails + 1;
+      if a1(i) ^= i * 10 then do;
+         put skip list('FAIL array_edge: check at line 18 failed');
+         stop;
+      end;
    end;
-   if lbound(a1) ^= -3 then fails = fails + 1;
-   if hbound(a1) ^= 3 then fails = fails + 1;
-   if dim(a1) ^= 7 then fails = fails + 1;
+   if lbound(a1) ^= -3 then do;
+      put skip list('FAIL array_edge: expected -3, got', lbound(a1));
+      stop;
+   end;
+   if hbound(a1) ^= 3 then do;
+      put skip list('FAIL array_edge: expected 3, got', hbound(a1));
+      stop;
+   end;
+   if dim(a1) ^= 7 then do;
+      put skip list('FAIL array_edge: expected 7, got', dim(a1));
+      stop;
+   end;
 
    /* Two-dimensional array */
    declare a2(2,3) fixed bin(31);
    a2(1,1) = 11; a2(1,2) = 12; a2(1,3) = 13;
    a2(2,1) = 21; a2(2,2) = 22; a2(2,3) = 23;
-   if a2(1,1) ^= 11 then fails = fails + 1;
-   if a2(2,3) ^= 23 then fails = fails + 1;
+   if a2(1,1) ^= 11 then do;
+      put skip list('FAIL array_edge: expected 11, got', a2(1,1));
+      stop;
+   end;
+   if a2(2,3) ^= 23 then do;
+      put skip list('FAIL array_edge: expected 23, got', a2(2,3));
+      stop;
+   end;
 
    /* Two-dim with explicit bounds */
    declare a3(0:1, 1:2) fixed bin(31);
    a3(0,1) = 7; a3(0,2) = 8;
    a3(1,1) = 9; a3(1,2) = 10;
-   if a3(0,1) ^= 7 then fails = fails + 1;
-   if a3(1,2) ^= 10 then fails = fails + 1;
-   if lbound(a3) ^= 0 then fails = fails + 1;
-   if hbound(a3) ^= 1 then fails = fails + 1;
-   if dim(a3) ^= 4 then fails = fails + 1;
+   if a3(0,1) ^= 7 then do;
+      put skip list('FAIL array_edge: expected 7, got', a3(0,1));
+      stop;
+   end;
+   if a3(1,2) ^= 10 then do;
+      put skip list('FAIL array_edge: expected 10, got', a3(1,2));
+      stop;
+   end;
+   if lbound(a3) ^= 0 then do;
+      put skip list('FAIL array_edge: expected 0, got', lbound(a3));
+      stop;
+   end;
+   if hbound(a3) ^= 1 then do;
+      put skip list('FAIL array_edge: expected 1, got', hbound(a3));
+      stop;
+   end;
+   if dim(a3) ^= 4 then do;
+      put skip list('FAIL array_edge: expected 4, got', dim(a3));
+      stop;
+   end;
 
    /* Three-dimensional array */
    declare a4(2,3,4) fixed bin(31);
    a4(1,1,1) = 111;
    a4(2,3,4) = 234;
-   if a4(1,1,1) ^= 111 then fails = fails + 1;
-   if a4(2,3,4) ^= 234 then fails = fails + 1;
-   if dim(a4) ^= 24 then fails = fails + 1;
+   if a4(1,1,1) ^= 111 then do;
+      put skip list('FAIL array_edge: expected 111, got', a4(1,1,1));
+      stop;
+   end;
+   if a4(2,3,4) ^= 234 then do;
+      put skip list('FAIL array_edge: expected 234, got', a4(2,3,4));
+      stop;
+   end;
+   if dim(a4) ^= 24 then do;
+      put skip list('FAIL array_edge: expected 24, got', dim(a4));
+      stop;
+   end;
 
    /* Cross-section: single * on first axis */
    declare b1(3,4) fixed bin(31);
@@ -54,7 +94,10 @@ array_edge: procedure options(main);
    end;
    b1_row = b1(2,*);  /* copies row 2 */
    do i = 1 to 4;
-      if b1_row(i) ^= i * 100 then fails = fails + 1;
+      if b1_row(i) ^= i * 100 then do;
+         put skip list('FAIL array_edge: check at line 57 failed');
+         stop;
+      end;
    end;
 
    /* Cross-section: single * on second axis */
@@ -64,7 +107,10 @@ array_edge: procedure options(main);
    end;
    b1_col = b1(*,3);  /* copies column 3 */
    do i = 1 to 3;
-      if b1_col(i) ^= i * 1000 then fails = fails + 1;
+      if b1_col(i) ^= i * 1000 then do;
+         put skip list('FAIL array_edge: check at line 67 failed');
+         stop;
+      end;
    end;
 
    /* Cross-section: multi * (sub-block) */
@@ -78,7 +124,10 @@ array_edge: procedure options(main);
    b2_sub = b2(2,*,*);  /* copies plane at first index 2 */
    do i = 1 to 3;
       do j = 1 to 4;
-         if b2_sub(i,j) ^= i * 10 + j then fails = fails + 1;
+         if b2_sub(i,j) ^= i * 10 + j then do;
+            put skip list('FAIL array_edge: check at line 81 failed');
+            stop;
+         end;
       end;
    end;
 
@@ -88,15 +137,24 @@ array_edge: procedure options(main);
    src(1,1) = 1; src(1,2) = 2; src(1,3) = 3;
    src(2,1) = 4; src(2,2) = 5; src(2,3) = 6;
    tgt = src(*,*);  /* whole array copy via cross-section */
-   if tgt(1,1) ^= 1 then fails = fails + 1;
-   if tgt(2,3) ^= 6 then fails = fails + 1;
+   if tgt(1,1) ^= 1 then do;
+      put skip list('FAIL array_edge: expected 1, got', tgt(1,1));
+      stop;
+   end;
+   if tgt(2,3) ^= 6 then do;
+      put skip list('FAIL array_edge: expected 6, got', tgt(2,3));
+      stop;
+   end;
 
 /* Cross-section in expression - element-wise operations on arrays */
     declare c1(7) fixed bin(31);
     do i = -3 to 3;
        c1(i + 4) = a1(i) + a1(i);  /* element-wise addition */
     end;
-    if c1(1) ^= a1(-3) + a1(-3) then fails = fails + 1;
+    if c1(1) ^= a1(-3) + a1(-3) then do;
+       put skip list('FAIL array_edge: check at line 99 failed');
+       stop;
+    end;
 
 /* SUBSCRIPTRANGE runtime check with variable index */
     declare idx fixed bin(31);
@@ -108,12 +166,20 @@ array_edge: procedure options(main);
     declare param_hb fixed bin(31);
     declare param_dim fixed bin(31);
     call array_param_fixed(a2, param_lb, param_hb, param_dim);
-    if param_lb ^= 1 then fails = fails + 1;
-    if param_hb ^= 2 then fails = fails + 1;
-    if param_dim ^= 6 then fails = fails + 1;
+    if param_lb ^= 1 then do;
+       put skip list('FAIL array_edge: expected 1, got', param_lb);
+       stop;
+    end;
+    if param_hb ^= 2 then do;
+       put skip list('FAIL array_edge: expected 2, got', param_hb);
+       stop;
+    end;
+    if param_dim ^= 6 then do;
+       put skip list('FAIL array_edge: expected 6, got', param_dim);
+       stop;
+    end;
 
-    if fails = 0 then put skip list('PASS array_edge');
-    else put skip list('FAIL array_edge: fails =', fails);
+   put skip list('PASS array_edge');
 
 array_param_fixed: proc(x, lb, hb, dm) options(bypass);
    dcl x(2,3) fixed bin(31);

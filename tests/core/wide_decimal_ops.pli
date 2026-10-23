@@ -11,20 +11,27 @@
       declare z fixed dec(25, 3);
       declare a fixed bin(63);
       declare b fixed bin(63);
-      declare fails fixed bin(31);
-      fails = 0;
       x = 123456789012345678901234;
       y = 1000;
       z = 123456789012345678901234.567;
       /* the remainder keeps every digit of the dividend */
-      if mod(x, y) ^= 234 then fails = fails + 1;
+      if mod(x, y) ^= 234 then do;
+         put skip list('FAIL wide_decimal_ops: expected 234, got',
+            mod(x, y));
+         stop;
+      end;
       /* TRUNC drops the fraction, not the high digits */
       if trunc(z) ^= 123456789012345678901234.000
-         then fails = fails + 1;
+         then do;
+            put skip list('FAIL wide_decimal_ops: check at line 23 failed');
+            stop;
+         end;
       /* a 64-bit MOD keeps a remainder wider than 32 bits */
       a = 1099511627776;
       b = 8589934593;
-      if mod(a, b) ^= 8589934465 then fails = fails + 1;
-      if fails = 0 then put skip list('PASS');
-      else put skip list('FAIL wide-decimal-ops: fails =', fails);
+      if mod(a, b) ^= 8589934465 then do;
+         put skip list('FAIL wide_decimal_ops: check at line 27 failed');
+         stop;
+      end;
+   put skip list('PASS wide_decimal_ops');
    end wide_decimal_ops;

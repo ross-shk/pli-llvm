@@ -13,7 +13,6 @@
     declare e3 event;
     declare e4 event;
     declare seen(4,50) fixed bin(31);
-    declare fails fixed bin(31);
     declare i fixed bin(31);
     declare j fixed bin(31);
     declare rec fixed bin(31);
@@ -22,7 +21,6 @@
     declare k fixed bin(31);
     declare n fixed bin(31);
 
-    fails = 0;
     do i = 1 to 4;
        do j = 1 to 50;
           seen(i,j) = 0;
@@ -42,12 +40,30 @@
     open file(f) title('tests/hardening/out/task_output.dat') input;
     do rec = 1 to 200;
        get file(f) list(w1, k, w2, n);
-       if w1 ^= 'task' then fails = fails + 1;
-       if w2 ^= 'line' then fails = fails + 1;
-       if k < 1 then fails = fails + 1;
-       if k > 4 then fails = fails + 1;
-       if n < 1 then fails = fails + 1;
-       if n > 50 then fails = fails + 1;
+       if w1 ^= 'task' then do;
+          put skip list('FAIL task_output: expected task, got', w1);
+          stop;
+       end;
+       if w2 ^= 'line' then do;
+          put skip list('FAIL task_output: expected line, got', w2);
+          stop;
+       end;
+       if k < 1 then do;
+          put skip list('FAIL task_output: check at line 47 failed');
+          stop;
+       end;
+       if k > 4 then do;
+          put skip list('FAIL task_output: check at line 48 failed');
+          stop;
+       end;
+       if n < 1 then do;
+          put skip list('FAIL task_output: check at line 49 failed');
+          stop;
+       end;
+       if n > 50 then do;
+          put skip list('FAIL task_output: check at line 50 failed');
+          stop;
+       end;
        if k >= 1 then
           if k <= 4 then
              if n >= 1 then
@@ -60,14 +76,15 @@
        record would show up as a missing or a doubled pair */
     do i = 1 to 4;
        do j = 1 to 50;
-          if seen(i,j) ^= 1 then fails = fails + 1;
+          if seen(i,j) ^= 1 then do;
+             put skip list('FAIL task_output: expected 1, got',
+                seen(i,j));
+             stop;
+          end;
        end;
     end;
 
-    if fails = 0 then
-       put skip list('PASS task_output');
-    else
-       put skip list('FAIL task_output: fails =', fails);
+   put skip list('PASS task_output');
 
     worker: procedure(idx);
        declare idx fixed bin(31);

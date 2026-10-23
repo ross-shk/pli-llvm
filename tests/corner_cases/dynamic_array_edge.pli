@@ -4,8 +4,6 @@
    AUTOMATIC arrays with runtime bounds, dynamic lower bounds, dynamic
    multi-axis, dynamic array parameters, * adjustable-extent parameters. */
 dynamic_array_edge: procedure options(main);
-   declare fails fixed bin(31);
-   fails = 0;
 
    /* Single-axis dynamic upper bound */
    declare n fixed bin(31);
@@ -14,9 +12,21 @@ dynamic_array_edge: procedure options(main);
    do i = 1 to n;
       dyn1(i) = i * 2;
    end;
-   if hbound(dyn1) ^= 10 then fails = fails + 1;
-   if lbound(dyn1) ^= 1 then fails = fails + 1;
-   if dim(dyn1) ^= 10 then fails = fails + 1;
+   if hbound(dyn1) ^= 10 then do;
+      put skip list('FAIL dynamic_array_edge: expected 10, got',
+         hbound(dyn1));
+      stop;
+   end;
+   if lbound(dyn1) ^= 1 then do;
+      put skip list('FAIL dynamic_array_edge: expected 1, got',
+         lbound(dyn1));
+      stop;
+   end;
+   if dim(dyn1) ^= 10 then do;
+      put skip list('FAIL dynamic_array_edge: expected 10, got',
+         dim(dyn1));
+      stop;
+   end;
 
    /* Dynamic lower and upper bound */
    declare lb fixed bin(31), ub fixed bin(31);
@@ -25,9 +35,21 @@ dynamic_array_edge: procedure options(main);
    do i = lb to ub;
       dyn2(i) = i * 10;
    end;
-   if lbound(dyn2) ^= -5 then fails = fails + 1;
-   if hbound(dyn2) ^= 5 then fails = fails + 1;
-   if dim(dyn2) ^= 11 then fails = fails + 1;
+   if lbound(dyn2) ^= -5 then do;
+      put skip list('FAIL dynamic_array_edge: expected -5, got',
+         lbound(dyn2));
+      stop;
+   end;
+   if hbound(dyn2) ^= 5 then do;
+      put skip list('FAIL dynamic_array_edge: expected 5, got',
+         hbound(dyn2));
+      stop;
+   end;
+   if dim(dyn2) ^= 11 then do;
+      put skip list('FAIL dynamic_array_edge: expected 11, got',
+         dim(dyn2));
+      stop;
+   end;
 
    /* Dynamic multi-axis: first axis dynamic, rest fixed */
    declare rows fixed bin(31);
@@ -38,8 +60,16 @@ dynamic_array_edge: procedure options(main);
          dyn3(i,j) = i * 10 + j;
       end;
    end;
-   if dyn3(2,3) ^= 23 then fails = fails + 1;
-   if dim(dyn3) ^= 12 then fails = fails + 1;
+   if dyn3(2,3) ^= 23 then do;
+      put skip list('FAIL dynamic_array_edge: expected 23, got',
+         dyn3(2,3));
+      stop;
+   end;
+   if dim(dyn3) ^= 12 then do;
+      put skip list('FAIL dynamic_array_edge: expected 12, got',
+         dim(dyn3));
+      stop;
+   end;
 
    /* Dynamic multi-axis with dynamic lower bound on first axis */
    declare row_lb fixed bin(31), row_ub fixed bin(31);
@@ -50,8 +80,16 @@ dynamic_array_edge: procedure options(main);
          dyn4(i,j) = i * 100 + j;
       end;
    end;
-   if lbound(dyn4) ^= 0 then fails = fails + 1;
-   if dyn4(1,2) ^= 102 then fails = fails + 1;
+   if lbound(dyn4) ^= 0 then do;
+      put skip list('FAIL dynamic_array_edge: expected 0, got',
+         lbound(dyn4));
+      stop;
+   end;
+   if dyn4(1,2) ^= 102 then do;
+      put skip list('FAIL dynamic_array_edge: expected 102, got',
+         dyn4(1,2));
+      stop;
+   end;
 
    /* Dynamic array parameter */
    call dyn_param_proc(dyn1);
@@ -71,20 +109,35 @@ dynamic_array_edge: procedure options(main);
    /* Array reductions on dynamic arrays */
    declare sum_val fixed bin(31);
    sum_val = sum(dyn1);  /* 2+4+...+20 = 110 */
-   if sum_val ^= 110 then fails = fails + 1;
+   if sum_val ^= 110 then do;
+      put skip list('FAIL dynamic_array_edge: expected 110, got',
+         sum_val);
+      stop;
+   end;
 
    sum_val = sum(dyn2);  /* -50+-40+...+50 = 0 */
-   if sum_val ^= 0 then fails = fails + 1;
+   if sum_val ^= 0 then do;
+      put skip list('FAIL dynamic_array_edge: expected 0, got',
+         sum_val);
+      stop;
+   end;
 
    /* ANY/ALL on BIT dynamic array */
    declare bit_dyn(n) bit(1);
    do i = 1 to n; bit_dyn(i) = '0'b; end;
    bit_dyn(5) = '1'b;
-   if any(bit_dyn) ^= '1'b then fails = fails + 1;
-   if all(bit_dyn) ^= '0'b then fails = fails + 1;
+   if any(bit_dyn) ^= '1'b then do;
+      put skip list('FAIL dynamic_array_edge: expected 1b, got',
+         any(bit_dyn));
+      stop;
+   end;
+   if all(bit_dyn) ^= '0'b then do;
+      put skip list('FAIL dynamic_array_edge: expected 0b, got',
+         all(bit_dyn));
+      stop;
+   end;
 
-   if fails = 0 then put skip list('PASS dynamic_array_edge');
-   else put skip list('FAIL dynamic_array_edge: fails =', fails);
+   put skip list('PASS dynamic_array_edge');
 
 dyn_param_proc: proc(arr) options(bypass);
    dcl arr(*) fixed bin(31);

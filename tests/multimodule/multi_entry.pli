@@ -3,7 +3,6 @@
 /* Rules (3),(56): Multiple entry names and ENTRY statement cross-module.
    Build: two -c units linked together. */
 multientry: procedure options(main);
-  dcl fails fixed bin(31) init(0);
   dcl result fixed bin(31);
 
   /* Main entry and alternate entries from lib */
@@ -15,30 +14,50 @@ multientry: procedure options(main);
 
   /* Call main entry */
   result = lib_main();
-  if result ^= 100 then fails = fails + 1;
+  if result ^= 100 then do;
+     put skip list('FAIL multi_entry: expected 100, got', result);
+     stop;
+  end;
 
   /* Call alternate entry A */
   result = lib_entry_a(10);
-  if result ^= 110 then fails = fails + 1;
+  if result ^= 110 then do;
+     put skip list('FAIL multi_entry: expected 110, got', result);
+     stop;
+  end;
 
   result = lib_entry_a(20);
-  if result ^= 130 then fails = fails + 1;
+  if result ^= 130 then do;
+     put skip list('FAIL multi_entry: expected 130, got', result);
+     stop;
+  end;
 
   /* Call alternate entry B */
   result = lib_entry_b(5, 3);
-  if result ^= 138 then fails = fails + 1;  /* 130 + 5 + 3 */
+  if result ^= 138 then do;
+     put skip list('FAIL multi_entry: expected 138, got', result);
+     stop;
+  end;
 
   result = lib_entry_b(2, 2);
-  if result ^= 142 then fails = fails + 1;
+  if result ^= 142 then do;
+     put skip list('FAIL multi_entry: expected 142, got', result);
+     stop;
+  end;
 
   /* Reset and verify */
   call lib_reset();
   result = lib_get_cnt();
-  if result ^= 0 then fails = fails + 1;
+  if result ^= 0 then do;
+     put skip list('FAIL multi_entry: expected 0, got', result);
+     stop;
+  end;
 
   result = lib_main();
-  if result ^= 100 then fails = fails + 1;
+  if result ^= 100 then do;
+     put skip list('FAIL multi_entry: expected 100, got', result);
+     stop;
+  end;
 
-  if fails = 0 then put skip list('PASS multi_entry');
-  else put skip list('FAIL multi_entry: fails=', fails);
+   put skip list('PASS multi_entry');
 end multientry;

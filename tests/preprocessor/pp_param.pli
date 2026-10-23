@@ -10,9 +10,6 @@
  %deactivate tag;
  %activate tag;
  ppmain: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
     %include 'pp_arr.inc';
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL param: fails =', fails);
+   put skip list('PASS pp_param');
  end ppmain;

@@ -11,7 +11,6 @@
    dcl i fixed bin(31);
    dcl k fixed bin(31);
    dcl n fixed bin(31);
-   dcl fails fixed bin(31) init(0);
    dcl bufa(4) fixed bin(31);
    dcl bufb(4) fixed bin(31);
    dcl ga(2, 2) fixed bin(31);
@@ -26,57 +25,121 @@
    p = addr(bufa);
    q = addr(bufb);
    /* reads ride the locator, not the declared base */
-   if q -> e(1) ^= 101 then fails = fails + 1;
-   if q -> e(4) ^= 104 then fails = fails + 1;
-   if p -> e(1) ^= 1 then fails = fails + 1;
+   if q -> e(1) ^= 101 then do;
+      put skip list('FAIL based_locator_sub: check at line 29 failed');
+      stop;
+   end;
+   if q -> e(4) ^= 104 then do;
+      put skip list('FAIL based_locator_sub: check at line 30 failed');
+      stop;
+   end;
+   if p -> e(1) ^= 1 then do;
+      put skip list('FAIL based_locator_sub: check at line 31 failed');
+      stop;
+   end;
    /* writes land in the locator storage only */
    q -> e(2) = 202;
-   if bufb(2) ^= 202 then fails = fails + 1;
-   if bufa(2) ^= 2 then fails = fails + 1;
-   if q -> e(2) ^= 202 then fails = fails + 1;
+   if bufb(2) ^= 202 then do;
+      put skip list('FAIL based_locator_sub: expected 202, got',
+         bufb(2));
+      stop;
+   end;
+   if bufa(2) ^= 2 then do;
+      put skip list('FAIL based_locator_sub: expected 2, got', bufa(2));
+      stop;
+   end;
+   if q -> e(2) ^= 202 then do;
+      put skip list('FAIL based_locator_sub: check at line 36 failed');
+      stop;
+   end;
    p -> e(3) = 303;
-   if bufa(3) ^= 303 then fails = fails + 1;
-   if bufb(3) ^= 103 then fails = fails + 1;
+   if bufa(3) ^= 303 then do;
+      put skip list('FAIL based_locator_sub: expected 303, got',
+         bufa(3));
+      stop;
+   end;
+   if bufb(3) ^= 103 then do;
+      put skip list('FAIL based_locator_sub: expected 103, got',
+         bufb(3));
+      stop;
+   end;
    /* a runtime index rides the same path */
    k = 4;
-   if q -> e(k) ^= 104 then fails = fails + 1;
+   if q -> e(k) ^= 104 then do;
+      put skip list('FAIL based_locator_sub: check at line 42 failed');
+      stop;
+   end;
    q -> e(k) = 404;
-   if bufb(4) ^= 404 then fails = fails + 1;
+   if bufb(4) ^= 404 then do;
+      put skip list('FAIL based_locator_sub: expected 404, got',
+         bufb(4));
+      stop;
+   end;
    /* POINTER elements: the handle-pool view by locator */
    q = addr(slots);
    r = addr(bufa);
    q -> h(1) = r;
    q -> h(4) = r;
-   if q -> h(1) ^= r then fails = fails + 1;
-   if slots(4) ^= r then fails = fails + 1;
+   if q -> h(1) ^= r then do;
+      put skip list('FAIL based_locator_sub: check at line 50 failed');
+      stop;
+   end;
+   if slots(4) ^= r then do;
+      put skip list('FAIL based_locator_sub: check at line 51 failed');
+      stop;
+   end;
    /* multi-axis overlay by locator */
    ga(2, 1) = 0; gb(2, 1) = 0;
    p = addr(ga);
    q = addr(gb);
    q -> g(2, 1) = 7;
-   if gb(2, 1) ^= 7 then fails = fails + 1;
-   if ga(2, 1) ^= 0 then fails = fails + 1;
-   if q -> g(2, 1) ^= 7 then fails = fails + 1;
+   if gb(2, 1) ^= 7 then do;
+      put skip list('FAIL based_locator_sub: expected 7, got',
+         gb(2, 1));
+      stop;
+   end;
+   if ga(2, 1) ^= 0 then do;
+      put skip list('FAIL based_locator_sub: expected 0, got',
+         ga(2, 1));
+      stop;
+   end;
+   if q -> g(2, 1) ^= 7 then do;
+      put skip list('FAIL based_locator_sub: check at line 59 failed');
+      stop;
+   end;
    /* runtime-(n) overlay in a callee, driven by locator */
    n = 4;
    q = addr(bufb);
    call loc_fill(q, n, 9);
    do i = 1 to n;
-     if bufb(i) ^= 9 then fails = fails + 1;
+     if bufb(i) ^= 9 then do;
+        put skip list('FAIL based_locator_sub: expected 9, got',
+           bufb(i));
+        stop;
+     end;
    end;
-   if loc_sum(q, n) ^= 36 then fails = fails + 1;
+   if loc_sum(q, n) ^= 36 then do;
+      put skip list('FAIL based_locator_sub: expected 36, got',
+         loc_sum(q, n));
+      stop;
+   end;
    /* heap block behind a fixed BASED array via alias */
    dcl cells(2) fixed bin(31) based(r);
    allocate cells set(r);
    q = r;
    q -> cells(1) = 51;
    q -> cells(2) = 52;
-   if r -> cells(2) ^= 52 then fails = fails + 1;
-   if cells(1) ^= 51 then fails = fails + 1;
+   if r -> cells(2) ^= 52 then do;
+      put skip list('FAIL based_locator_sub: check at line 74 failed');
+      stop;
+   end;
+   if cells(1) ^= 51 then do;
+      put skip list('FAIL based_locator_sub: expected 51, got',
+         cells(1));
+      stop;
+   end;
    free cells;
-   if fails = 0 then put skip list('PASS based_locator_sub');
-   else put skip list('FAIL based_locator_sub: fails =',
-     fails);
+   put skip list('PASS based_locator_sub');
  end basedlocsub;
  /* Runtime-bound overlay (rules (13),(25)): the locator
     supplies the base; the bound (n) names the length. */

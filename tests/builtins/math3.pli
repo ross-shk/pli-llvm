@@ -6,52 +6,49 @@
     checked against expected values within a small tolerance. */
  math3_test: procedure options(main);
     declare y float dec(6);
-    declare fails fixed bin(31);
 
-    fails = 0;
 
     y = sind(30.0);
     if abs(y - 0.5) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL sind(30) =', y);
+       stop;
     end;
 
     y = cosd(60.0);
     if abs(y - 0.5) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL cosd(60) =', y);
+       stop;
     end;
 
     y = tand(45.0);
     if abs(y - 1.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL tand(45) =', y);
+       stop;
     end;
 
     y = atand(1.0);
     if abs(y - 45.0) > 1e-5 then do;
-       fails = fails + 1;
        put skip list('FAIL atand(1) =', y);
+       stop;
     end;
 
     y = sind(0.0);
     if abs(y - 0.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL sind(0) =', y);
+       stop;
     end;
 
     y = cosd(0.0);
     if abs(y - 1.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL cosd(0) =', y);
+       stop;
     end;
 
     y = atand(0.0);
     if abs(y - 0.0) > 1e-6 then do;
-       fails = fails + 1;
        put skip list('FAIL atand(0) =', y);
+       stop;
     end;
 
-    if fails = 0 then put skip list('PASS math3');
-    else put skip list('FAIL math3: fails =', fails);
+   put skip list('PASS math3');
  end math3_test;

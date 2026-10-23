@@ -7,6 +7,6 @@
         t = t + a(k);
      end;
      if t ^= 10 then do;
-        fails = fails + 1;
         put skip list('FAIL inc =', t);
+        stop;
      end;

@@ -5,8 +5,6 @@
    Shared impl with segment switching, thunks for each entry.
    Tests cover multiple entries, different params, mixed return types. */
 entry_edge: procedure options(main);
-    declare fails fixed bin(31);
-    fails = 0;
 
     /* Multiple entry points in one procedure */
     call entry_main(10, 20);
@@ -16,10 +14,16 @@ entry_edge: procedure options(main);
     /* Entry with RETURNS (function procedure) */
     declare result fixed bin(31);
     result = entry_func(5, 6);
-    if result ^= 30 then fails = fails + 1;  /* 5 * 6 */
+    if result ^= 30 then do;
+       put skip list('FAIL entry_edge: expected 30, got', result);
+       stop;
+    end;
 
     result = entry_func_alt(7);
-    if result ^= 49 then fails = fails + 1;  /* 7 * 7 */
+    if result ^= 49 then do;
+       put skip list('FAIL entry_edge: expected 49, got', result);
+       stop;
+    end;
 
     /* Different entry names with different params */
     call entry_multi1(1);
@@ -31,8 +35,7 @@ entry_edge: procedure options(main);
     call name_a(100);
     call name_b(200);
 
-    if fails = 0 then put skip list('PASS entry_edge');
-    else put skip list('FAIL entry_edge: fails =', fails);
+   put skip list('PASS entry_edge');
 
 /* Procedure with multiple ENTRY statements - different param names */
 entry_main: proc(a, b) options(bypass);

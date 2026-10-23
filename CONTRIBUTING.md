@@ -93,6 +93,7 @@ The lesson worth generalising: **a feature that is "accepted" by the parser and 
 | ------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | `tests/<group>/x.pli` + `tests/<group>/expected/x.out` | golden: compile, run, diff stdout                                                       |
 | `tests/<group>/x.pli` without `expected/`              | self-contained: passes iff it prints `PASS` and never `FAIL`                            |
+| Self-check body                                        | each check prints `FAIL <name>: expected X, got Y` (or its line) then `STOP` — no counter |
 | `tests/<group>/bad_x.pli`                              | must be rejected; `run_tests.py` checks exit status                                     |
 | `tests/<group>/out/`                                   | scratch binaries, logs and diffs; gitignored                                            |
 | Header comment                                         | names the rules exercised, e.g. `rules (74),(75)`                                       |

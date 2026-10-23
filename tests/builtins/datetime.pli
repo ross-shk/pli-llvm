@@ -7,50 +7,47 @@
      declare d char(8);
      declare t char(6);
      declare dt char(14);
-     declare fails fixed bin(31);
 
-     fails = 0;
 
      d = date();
      t = time();
      dt = datetime();
 
      if length(d) ^= 8 then do;
-        fails = fails + 1;
         put skip list('FAIL date length =', length(d));
+        stop;
      end;
 
      if length(t) ^= 6 then do;
-        fails = fails + 1;
         put skip list('FAIL time length =', length(t));
+        stop;
      end;
 
      if length(dt) ^= 14 then do;
-        fails = fails + 1;
         put skip list('FAIL datetime length =', length(dt));
+        stop;
      end;
 
      /* date() and time() differ from an arbitrary fixed string. */
      if d = 'XXXXXXXX' then do;
-        fails = fails + 1;
         put skip list('FAIL date constant');
+        stop;
      end;
 
      if t = '123456' then do;
-        fails = fails + 1;
         put skip list('FAIL time constant');
+        stop;
      end;
 
      /* datetime() = date() + time() */
      if substr(dt, 1, 8) ^= d then do;
-        fails = fails + 1;
         put skip list('FAIL datetime date part');
+        stop;
      end;
      if substr(dt, 9, 6) ^= t then do;
-        fails = fails + 1;
         put skip list('FAIL datetime time part');
+        stop;
      end;
 
-     if fails = 0 then put skip list('PASS datetime');
-     else put skip list('FAIL datetime: fails =', fails);
+   put skip list('PASS datetime');
    end datetime_test;

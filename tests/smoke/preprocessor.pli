@@ -15,31 +15,29 @@
    dcl small(bound) fixed bin(31);
 
    dcl i fixed bin(31);
-   dcl fails fixed bin(31);
 
-   fails = 0;
 
    do i = 1 to bound;
      small(i) = i;
    end;
 
    if %tabcap ^= 1000 then do;
-      fails = fails + 1;
       put skip list('FAIL: cap =', %tabcap);
+      stop;
    end;
    if sum(small) ^= 15 then do;
-      fails = fails + 1;
       put skip list('FAIL: sum =', sum(small));
+      stop;
    end;
 
    table(1) = 'hello';
    if table(1) ^= 'hello' then do;
-      fails = fails + 1;
       put skip list('FAIL: first =', table(1));
+      stop;
    end;
 
    %if debug = 1 %then put skip list('debug is on');
    %else put skip list('debug is off');
 
-   if fails = 0 then put skip list('PASS');
+   put skip list('PASS preprocessor');
  end demo;
