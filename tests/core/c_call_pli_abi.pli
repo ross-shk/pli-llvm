@@ -1,0 +1,73 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* C calls PL/I via exported ENTRYs (rules (34),(38),(42)). Tests that
+    C code can call PL/I functions with the expected ABI:
+    - scalar parameters passed by reference (pointer)
+    - scalar function results returned by value
+    - structure-valued functions via hidden result buffer pointer (sret)
+    - structure parameters passed by reference, callee writes visible. */
+
+ pliabi: package exports(pli_add_one, pli_inc_int, pli_make_rec, pli_mutate_rec);
+
+   dcl 1 rec_t,
+     2 tag  fixed bin(31),
+     2 flag bit(1),
+     2 code fixed bin(31);
+
+   /* Scalar function result: returned by value to C. */
+   pli_add_one: procedure(x) returns(fixed bin(31));
+     declare x fixed bin(31);
+     return(x + 1);
+   end pli_add_one;
+
+   /* Scalar procedure: sees C-written changes (BYADDR). */
+   pli_inc_int: procedure(x);
+     declare x fixed bin(31);
+     x = x + 100;
+   end pli_inc_int;
+
+   /* Structure-valued function: returns via hidden result buffer pointer. */
+   pli_make_rec: procedure(x) returns(rec_t);
+     declare x fixed bin(31);
+     declare 1 r,
+       2 tag  fixed bin(31),
+       2 flag bit(1),
+       2 code fixed bin(31);
+
+     r.tag  = x;
+     r.flag = '1'b;
+     r.code = x * 2;
+
+     return(r);
+   end pli_make_rec;
+
+   /* Structure parameter: C passes &struct; PL/I mutates visible fields. */
+   pli_mutate_rec: procedure(r, x);
+     declare 1 r,
+       2 tag  fixed bin(31),
+       2 flag bit(1),
+       2 code fixed bin(31);
+     declare x fixed bin(31);
+
+     r.tag  = x + 10;
+     r.flag = '0'b;
+     r.code = x + 20;
+   end pli_mutate_rec;
+
+ end pliabi;
+
+ /* MAIN entry: call a C helper that calls back into the exported PL/I funcs. */
+ c_call_pli_abi: procedure options(main);
+   declare ok fixed bin(31);
+
+   declare c_run entry returns(fixed bin(31))
+     options(linkage(system)) external('c_call_pli_abi_run');
+
+   ok = c_run();
+   if ok ^= 1 then do;
+     put skip list('FAIL c_call_pli_abi');
+     stop;
+   end;
+
+   put skip list('PASS c_call_pli_abi');
+ end c_call_pli_abi;
