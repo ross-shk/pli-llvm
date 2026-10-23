@@ -84,6 +84,12 @@ struct Type {
   // sharing storage. Part of layout but not type equivalence — a union and a
   // non-union struct with the same members have different layout.
   bool isUnion = false;
+  // PICTURE('...') (rules (19),(146)-(148), ADR-290): storage is a fixed
+  // CHARACTER(len); the template is what a numeric assignment formats
+  // through. Deliberately not part of type equivalence: the value's storage
+  // type is CHARACTER, so picture and plain character values compare as
+  // strings. Only a numeric source is accepted for a numeric picture.
+  std::string picture;
   // Array dimension bounds per axis — rules (12),(13). Empty for a scalar.
   // `len`/`prec`/... describe the element type.
   std::vector<Dim> dims;
@@ -256,6 +262,8 @@ struct Type {
     case TK::Float:
       return "FLOAT DECIMAL(" + std::to_string(prec) + ")";
     case TK::Char:
+      if (!picture.empty())
+        return "PICTURE('" + picture + "')";
       return "CHARACTER(" + std::to_string(len) + ")" +
              (varyingz  ? " VARYINGZ"
               : varying ? " VARYING"
@@ -310,6 +318,7 @@ inline Type& Type::operator=(const Type& o) {
   controlled = o.controlled;
   unaligned = o.unaligned;
   isUnion = o.isUnion; // Union overlay layout (ADR-202)
+  picture = o.picture;
   dims = o.dims;
   members.clear();
   members.reserve(o.members.size());

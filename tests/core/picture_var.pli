@@ -1,0 +1,75 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* PICTURE variables (rules (19),(146)-(148), ADR-290): a declared
+    picture is a CHARACTER(width) value whose assignment from a numeric
+    value is picture-directed. PUT LIST and A output see the stored
+    characters. */
+ picture_var: procedure options(main);
+    declare money picture('ZZZ9.99');
+    declare point picture('9V99');
+    declare rep picture('(2)9V(2)9');
+    declare signed picture('ZZZ9.99-');
+    declare a(2) picture('99');
+    declare 1 rec,
+      2 code picture('99');
+
+    /* leading Z positions become blanks; 9 positions keep a zero */
+    money = 12.5;
+    if money ^= '  12.50' then do;
+       put skip list('FAIL picture width/suppress:', money);
+       stop;
+    end;
+    money = 1234.5;
+    if money ^= '1234.50' then do;
+       put skip list('FAIL picture full width:', money);
+       stop;
+    end;
+
+    /* V is an assumed point: it takes no storage position */
+    point = 1.5;
+    if point ^= '150' then do;
+       put skip list('FAIL picture V:', point);
+       stop;
+    end;
+
+    /* a repetition factor expands to the same output positions */
+    rep = 12.34;
+    if rep ^= '1234' then do;
+       put skip list('FAIL picture repeat:', rep);
+       stop;
+    end;
+
+    /* a trailing '-' position carries the sign, blank when positive */
+    signed = -12.5;
+    if signed ^= '  12.50-' then do;
+       put skip list('FAIL picture sign:', signed);
+       stop;
+    end;
+    signed = 12.5;
+    if signed ^= '  12.50 ' then do;
+       put skip list('FAIL picture unsigned:', signed);
+       stop;
+    end;
+
+    /* a FLOAT source truncates toward zero, like P output */
+    signed = 3.99E0;
+    if signed ^= '   3.00 ' then do;
+       put skip list('FAIL picture float:', signed);
+       stop;
+    end;
+
+    /* the same conversion reaches array elements and members */
+    a(1) = 12;
+    a(2) = 7;
+    if a(1) ^= '12' | a(2) ^= '07' then do;
+       put skip list('FAIL picture array:', a(1), a(2));
+       stop;
+    end;
+    rec.code = 5;
+    if rec.code ^= '05' then do;
+       put skip list('FAIL picture member:', rec.code);
+       stop;
+    end;
+
+    put skip list('PASS picture_var');
+ end picture_var;

@@ -1383,6 +1383,43 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                           std::vector<DeclItem::DynMemberInfo>& dynMs,
                           bool inheritUnaligned) -> Type {
         const DeclItem& it = *items[idx];
+        // PICTURE (rules (19),(146)-(148), ADR-290): the declared value is a
+        // fixed CHARACTER string sized by the picture's output positions. The
+        // runtime formatter handles numeric pictures; character pictures and
+        // the F(n) scaling factor stay diagnosed for now.
+        if (!it.picture.empty()) {
+          const pli::PictureSpec spec = pli::classifyPicture(it.picture);
+          if (!spec.valid || spec.width <= 0) {
+            d_.error(it.loc, "invalid PICTURE string", "(19)");
+            return Type::chr(1);
+          }
+          if (!spec.numeric) {
+            d_.error(it.loc, "character PICTURE variables are not implemented in this stage",
+                     "(19)");
+            return Type::chr(1);
+          }
+          if (spec.hasScale) {
+            d_.error(it.loc,
+                     "the PICTURE scaling factor F(n) is not implemented in this stage", "(19)");
+            return Type::chr(1);
+          }
+          if (spec.width > 127) {
+            d_.error(it.loc, "a PICTURE wider than 127 output positions is not implemented",
+                     "(19)");
+            return Type::chr(1);
+          }
+          if (spec.intDigits + spec.fracDigits > 18) {
+            d_.error(it.loc,
+                     "a PICTURE with more than 18 digit positions is not implemented in this "
+                     "stage",
+                     "(19)");
+            return Type::chr(1);
+          }
+          Type t = Type::chr(spec.width);
+          t.picture = it.picture;
+          t.dims = it.ty.dims;
+          return t;
+        }
         // UNALIGNED packs the members of this structure with no inter-member
         // padding (ADR-169). A member inherits an enclosing UNALIGNED unless it
         // carries an explicit ALIGNED; an explicit UNALIGNED always wins.
@@ -2331,6 +2368,21 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     return true;
   if (dst.isBit() && (src.isBit() || src.isNumeric()))
     return true;
+  // PICTURE (rules (19),(146)-(148), ADR-290): a numeric source is formatted
+  // through the picture; a character source is only a straight copy when it
+  // is the very same picture. A plain character string is never silently
+  // reinterpreted as a number.
+  if (dst.isChar() && !dst.picture.empty()) {
+    if (src.isNumeric())
+      return true;
+    if (src.isChar() && src.picture == dst.picture)
+      return true;
+    d_.error(loc,
+             std::string(what) + ": assignment from " + src.desc() + " to " + dst.desc() +
+                 " is not implemented in this stage; write a numeric value or the same PICTURE",
+             "(86)");
+    return false;
+  }
   if (dst.isChar() && src.isChar())
     return true;
   // Complex conversions (QR2.2/CM5): complex <-> complex passes through; a real
@@ -3672,7 +3724,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           continue;
         }
         if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() || it->ty.isComplex() ||
-            it->ty.isArray()) {
+            it->ty.isArray() || (it->ty.isChar() && !it->ty.picture.empty())) {
           d_.error(it->loc, "GET DATA of this type is not implemented in this stage", "(110)");
         }
       }
@@ -3701,6 +3753,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       if (it->ty.isStruct()) {
         d_.error(it->loc, "a whole structure cannot be read with GET LIST in this stage", "(110)");
+        continue;
+      }
+      // Picture-directed input stays a B1 item: a numeric picture must parse
+      // the field, not copy its characters.
+      if (it->ty.isChar() && !it->ty.picture.empty()) {
+        d_.error(it->loc, "GET LIST of a PICTURE variable is not implemented in this stage",
+                 "(109)");
         continue;
       }
       // A CHARACTER member or array element is read through storeArrayElement
@@ -4528,6 +4587,9 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       d_.error(it->loc, "a P format requires a numeric item", "(53)");
     }
     if (isGet) {
+      if (it->ty.isChar() && !it->ty.picture.empty())
+        d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
+                 "(53)");
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
                  it->kind == Expr::Subscript;
       if (!ref)

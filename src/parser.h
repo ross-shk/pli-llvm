@@ -139,6 +139,7 @@ private:
     bool character = false, bit = false, varying = false;
     bool varyingz = false; // VARYINGZ (IBM extension, ADR-168); implies VARYING
     bool pointer = false;
+    bool picture = false;    // PICTURE('...') (rules (19),(146)-(148), ADR-290)
     bool complex = false;    // COMPLEX (QR2.2/CM5): a real+imaginary pair
     bool file = false;       // FILE (rules 39,40): a named file variable
     bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage

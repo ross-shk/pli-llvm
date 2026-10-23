@@ -611,6 +611,9 @@ private:
   llvm::Value* definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs, SourceLoc);
 
   Val convert(const Val& v, const Type& dst, SourceLoc loc);
+  // Numeric value -> PICTURE variable (ADR-290): format through the declared
+  // picture into a CHARACTER(width) temp using the same formatter as P output.
+  Val convertToPicture(const Val& v, const Type& dst, SourceLoc loc);
   llvm::Value* toI1(const Val& v, SourceLoc loc);
   llvm::Value* toI64(const Val& v, SourceLoc loc = SourceLoc{});
   // Packed BIT(n) layout (rule (18), QR2.2): big-endian bytes, the first

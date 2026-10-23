@@ -9745,6 +9745,13 @@ void IRGen::storeCharTo(llvm::Value* addr, const Type& dt, const Val& v, SourceL
   // target's own length and not one byte more, so a neighbouring variable
   // is untouched (MULTICS padded_for_store_ref).
   if (!v.ty.isChar()) {
+    // A numeric value into a PICTURE target is picture-directed (ADR-290);
+    // the formatted text is then an ordinary CHARACTER copy.
+    if (dt.isChar() && !dt.picture.empty() && v.ty.isNumeric()) {
+      Val cv = convert(v, dt, loc);
+      storeCharTo(addr, dt, cv, loc, packed);
+      return;
+    }
     d_.error(loc,
              "conversion from " + v.ty.desc() + " to " + dt.desc() +
                  " is not implemented in this stage",
@@ -10371,6 +10378,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (v.ty.isChar() || dst.isChar()) {
     if (v.ty.isChar() && dst.isChar())
       return v;
+    if (dst.isChar() && !dst.picture.empty() && v.ty.isNumeric())
+      return convertToPicture(v, dst, loc);
     d_.error(loc,
              "conversion between " + v.ty.desc() + " and " + dst.desc() +
                  " is not implemented in this stage",
@@ -10716,6 +10725,65 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     out.reg = fitFixed(r);
     return out;
   }
+  return out;
+}
+
+// Numeric value -> PICTURE variable (rules (19),(146)-(148), ADR-290): the
+// picture is the target CHARACTER(width)'s metadata, so the assignment edits
+// the value with the same formatter as P output. The scaled-binary truncation
+// mirrors the P path: the formatter works in decimal, the sign comes from the
+// raw binary value so a negative fraction below one keeps its sign.
+Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
+  const pli::PictureSpec spec = pli::classifyPicture(dst.picture);
+  int width = spec.valid && spec.width > 0 ? spec.width : 1;
+  Val out;
+  out.ty = dst;
+  out.ptr = charTemp(width).ptr;
+  out.len = i64(width);
+  if (!spec.valid || spec.width <= 0 || !spec.numeric) {
+    d_.error(loc, "invalid PICTURE target", "(19)");
+    return out;
+  }
+  if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+    d_.error(loc, "assignment of a wide FIXED DECIMAL to a PICTURE is not implemented", "(53)");
+    return out;
+  }
+  llvm::Value* val = nullptr;
+  llvm::Value* signSrc = nullptr;
+  int scale = 0;
+  if (v.ty.isFixed()) {
+    val = toI64(v);
+    signSrc = val;
+    scale = v.ty.scale;
+    if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+      // A binary scale holds raw/2^q; hand the formatter the value truncated
+      // at the picture's decimal positions (ADR-288's P rule).
+      const int d = spec.fracDigits;
+      if (d > 18) {
+        d_.error(loc, "a scaled FIXED BINARY PICTURE assignment supports at most 18 "
+                      "fractional positions",
+                 "(53)");
+        return out;
+      }
+      llvm::Type* wideTy = b_.getInt128Ty();
+      llvm::Value* wide = b_.CreateSExt(val, wideTy, "picw");
+      wide = b_.CreateMul(wide, intPowConst(wideTy, 10, d), "picsc");
+      wide = b_.CreateSDiv(wide, intPowConst(wideTy, 2, v.ty.scale), "picdv");
+      val = b_.CreateTrunc(wide, b_.getInt64Ty(), "picdec");
+      scale = d;
+    }
+  } else if (v.ty.k == TK::Float) {
+    val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
+    signSrc = val;
+  } else {
+    d_.error(loc, "a PICTURE assignment requires a numeric value", "(53)");
+    return out;
+  }
+  llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");
+  llvm::Value* sign = b_.CreateSelect(neg, b_.getInt32(-1), b_.getInt32(1), "picst");
+  b_.CreateCall(runtimeFn("pli_pic_format"),
+                {val, i64(scale), sign, globalString(spec.expanded),
+                 i64((long long)spec.expanded.size()), out.ptr, out.len});
   return out;
 }
 

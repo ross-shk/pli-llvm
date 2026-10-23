@@ -1196,6 +1196,7 @@ StmtP Parser::parseDeclare() {
         item.entryByValue = base.entryByValue;
         item.controlled = base.controlled;
         item.like = base.like;
+        item.picture = base.picture;
         st->decls.push_back(std::move(item));
       }
     } else {
@@ -1836,6 +1837,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         if (eat(Tok::LParen)) {
           if (at(Tok::CharLit)) {
             item.picture = cur().sval;
+            bag.picture = true;
             advance();
           } else {
             d_.error(cur().loc, "PICTURE requires a character-string literal in parentheses", "(19)");
@@ -1933,6 +1935,15 @@ void Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "CHARACTER and BIT are conflicting attributes", "(18)");
   if ((bag.character || bag.bit) && (bag.fixed || bag.floating || bag.binary || bag.decimal))
     d_.error(item.loc, "string and arithmetic attributes cannot be combined", "(15)");
+  // PICTURE (rules (19),(146)-(148)) defines the item's own CHARACTER type:
+  // it cannot share the declaration with another data attribute.
+  if (bag.picture &&
+      (bag.fixed || bag.floating || bag.binary || bag.decimal || bag.character || bag.bit ||
+       bag.pointer || bag.complex || bag.file || bag.task || bag.event || bag.area ||
+       bag.offset || bag.varying))
+    d_.error(item.loc, "PICTURE cannot be combined with another data attribute", "(19)");
+  if (bag.picture && (!item.like.empty() || !item.typeRef.empty()))
+    d_.error(item.loc, "PICTURE cannot be combined with LIKE or TYPE", "(19)");
   if (bag.varying && !bag.character && !bag.bit)
     d_.error(item.loc, "VARYING requires CHARACTER or BIT", "(15)");
   if (bag.varyingz && !bag.character)
@@ -2154,7 +2165,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
-           w == "EVENT";
+           w == "EVENT" || w == "PICTURE" || w == "PIC";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);

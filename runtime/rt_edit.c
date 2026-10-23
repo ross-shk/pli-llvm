@@ -328,13 +328,17 @@ void pli_get_edit_skip(long long n) {
  * (stored as val*10^scale) against the PICTURE edit string. Digits are
  * right-aligned in digit positions; Z suppresses leading zeros, 9 forces a
  * zero. Supports: Z, 9, V, ., +, -, S, X, A, and fixed characters. */
-void pli_put_edit_pic(long long val, long long scale, int sign,
-                      const char *pic, long long piclen) {
-  if (piclen <= 0)
-    return;
+/* Picture formatter core (rules (53),(146)-(148)): writes at most `cap`
+ * characters to `out` and returns the number written. The output routine and
+ * a PICTURE variable assignment share it (ADR-290), so both sides cannot
+ * disagree about the edited text. */
+static long long pic_format(long long val, long long scale, int sign,
+                            const char *pic, long long piclen,
+                            char *out, long long cap) {
+  if (piclen <= 0 || cap <= 0)
+    return 0;
   int isneg = sign < 0;
   long long av = isneg ? -val : val;
-  rt_out_lock();
 
   /* Decompose |val| into big-endian decimal digits. */
   long long digits[64];
@@ -360,23 +364,16 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
   for (long long i = 0; i < piclen; ++i) {
     if (pic[i] == 'V' || (pic[i] == '.' && vpos < 0)) { vpos = i; break; }
   }
-  /* Picture fractional digit count (digits after the decimal marker). */
-  long long picfrac = 0;
-  if (vpos >= 0)
-    for (long long i = vpos + 1; i < piclen; ++i)
-      if (pic[i] == 'Z' || pic[i] == '9') ++picfrac;
 
   /* Value: val_int integer digits, val_frac fractional digits. */
   long long val_int = ndig > scale ? ndig - scale : 0;
   long long val_frac = scale < ndig ? scale : ndig;
 
-  /* Walk the picture, emitting characters. The NUL terminator needs a slot
-   * of its own: ocap capped at sizeof(outbuf) would write one byte past the
-   * array when the picture is at least as long as the buffer. */
-  char outbuf[128];
-  long long ocap = piclen < (long long)sizeof(outbuf) - 1 ? piclen
-                                                          : (long long)sizeof(outbuf) - 1;
-  for (long long i = 0; i < ocap; ++i) outbuf[i] = ' ';
+  /* Walk the picture, emitting characters. A picture with a V position has
+   * one more template character than output positions; cap is the output
+   * width, so V simply does not consume a slot. */
+  long long ocap = piclen < cap ? piclen : cap;
+  for (long long i = 0; i < ocap; ++i) out[i] = ' ';
   long long oi = 0;
   int led_zero = 1;
 
@@ -392,14 +389,13 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
     if (c == '9' || c == 'Z') {
       if (is_fractional) {
         /* Fractional digit: emit value's fractional digit or '0'. */
-        long long src = val_int + frac_idx;
         long long vfrac_idx = frac_idx;  /* index among value fractional digits */
         if (vfrac_idx < val_frac) {
           char d = (char)('0' + digits[val_int + vfrac_idx]);
           led_zero = 0;
-          outbuf[oi++] = d;
+          out[oi++] = d;
         } else {
-          outbuf[oi++] = '0';  /* zero-pad if value has fewer fractional digits */
+          out[oi++] = '0';  /* zero-pad if value has fewer fractional digits */
         }
         ++frac_idx;
       } else {
@@ -415,34 +411,51 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
         /* Map to source digit index: right-aligned. */
         long long src_idx = int_idx - (pic_int_total - val_int);
         if (src_idx < 0) {
-          outbuf[oi++] = (c == '9') ? '0' : ' ';  /* Z→blank, 9→zero */
+          out[oi++] = (c == '9') ? '0' : ' ';  /* Z→blank, 9→zero */
         } else if (src_idx < val_int) {
           char d = (char)('0' + digits[src_idx]);
           if (c == 'Z' && d == '0' && led_zero) {
-            outbuf[oi++] = ' ';  /* leading zero suppression */
+            out[oi++] = ' ';  /* leading zero suppression */
           } else {
             led_zero = 0;
-            outbuf[oi++] = d;
+            out[oi++] = d;
           }
         } else {
           /* Value has fewer integer digits than picture; Z→blank, 9→'0'. */
-          outbuf[oi++] = (c == '9') ? '0' : ' ';
+          out[oi++] = (c == '9') ? '0' : ' ';
         }
       }
       continue;
     }
-    if (c == '.' || c == ',') { outbuf[oi++] = '.'; continue; }
+    if (c == '.' || c == ',') { out[oi++] = '.'; continue; }
     if (c == '+' || c == '-') {
-      outbuf[oi++] = isneg ? '-' : (c == '-' ? ' ' : '+');
+      out[oi++] = isneg ? '-' : (c == '-' ? ' ' : '+');
       continue;
     }
-    if (c == 'S') { outbuf[oi++] = isneg ? '-' : ' '; continue; }
-    if (c == 'X') { outbuf[oi++] = ' '; continue; }
-    if (c == 'A') { outbuf[oi++] = ' '; continue; }
-    outbuf[oi++] = c;
+    if (c == 'S') { out[oi++] = isneg ? '-' : ' '; continue; }
+    if (c == 'X') { out[oi++] = ' '; continue; }
+    if (c == 'A') { out[oi++] = ' '; continue; }
+    out[oi++] = c;
   }
-  outbuf[ocap] = '\0';
-  rt_put_raw(outbuf, oi);
+  return oi;
+}
+
+/* P picture-directed output: format and write the field. */
+void pli_put_edit_pic(long long val, long long scale, int sign,
+                      const char *pic, long long piclen) {
+  char outbuf[128];
+  rt_out_lock();
+  long long n = pic_format(val, scale, sign, pic, piclen, outbuf,
+                           (long long)sizeof(outbuf) - 1);
+  rt_put_raw(outbuf, n);
   rt_out_unlock();
+}
+
+/* PICTURE variable assignment (ADR-290): the same formatter, into the
+ * variable's CHARACTER storage. Returns the number of characters written. */
+long long pli_pic_format(long long val, long long scale, int sign,
+                         const char *pic, long long piclen,
+                         char *dst, long long cap) {
+  return pic_format(val, scale, sign, pic, piclen, dst, cap);
 }
 

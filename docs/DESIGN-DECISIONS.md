@@ -10382,3 +10382,48 @@ say the wide cross-base pairs go through `FLOAT`, and B11 loses this item.
 digits the item exists to keep. *`long double`.* Its precision is target
 dependent and still rounds. *A big-integer dependency.* i256 is the smallest
 width that covers an i128 `raw` times `10^38`.
+
+---
+
+## ADR-290 — PICTURE variables are CHARACTER storage with a format template
+
+**Context.** The parser accepted `DECLARE p PICTURE('ZZ9.99')` and kept the
+string on the declaration, but sema ignored it. The name then received the
+default `FIXED BINARY` type, so `p = 12.5; PUT SKIP LIST(p);` printed `13`:
+a silent wrong answer in the `B1` picture family.
+
+**Decision.** A picture declaration is a `CHARACTER(width)` value plus a
+`picture` template carried by `Type`. `classifyPicture` expands repetition
+factors and computes the output width (a `V` or the trailing `F(n)` occupies no
+output position). The `picture` field is deliberately not part of type
+equivalence: the storage type is `CHARACTER`, so character comparisons and
+`PUT LIST` see the edited text.
+
+A numeric source assigned to a numeric picture is formatted through the same
+runtime interpreter as `P` output. The formatter core moved out of
+`pli_put_edit_pic` into `pic_format`, and a new `pli_pic_format` entry writes
+the field into the variable's storage. One interpreter therefore backs
+`PUT EDIT ... (P(...))` and picture assignment; the diagnostic is not a second
+implementation. A scaled `FIXED BINARY` source keeps the `P` rule: truncate at
+the picture's fractional positions in i128 and take the sign from the raw
+binary value.
+
+The first slice serves numeric pictures from numeric sources, including array
+elements and structure members. It diagnoses, with a rule number, the cases it
+does not serve: an invalid picture string (19), a character picture (19), the
+`F(n)` scaling factor (19), more than 18 digit positions or 127 output
+positions (19), a character source for a numeric picture (86), picture-directed
+`GET` (53/109), a wide `FIXED DECIMAL` source (53), and `INITIAL` with a
+picture (26). Picture-to-picture assignment copies only when both sides carry
+the same template.
+
+**Consequences.** `tests/core/picture_var.pli` covers leading-zero suppression,
+full width, `V`, repetition, sign positions, negative and `FLOAT` sources, plus
+an array element and a structure member. `bad_picture_decl`, `bad_picture_char`,
+`bad_picture_get` and `bad_picture_attr` pin the diagnostics. `B1` remains open
+for `GET EDIT P`, sterling data and wide picture items.
+
+**Rejected.** *A separate `TK::Picture`.* It would duplicate every CHARACTER
+storage and comparison path for no run-time difference. *Formatting in
+`IRGen`.* The runtime already owns the picture interpreter, and a second
+compiler-side copy would drift from `P` output.
