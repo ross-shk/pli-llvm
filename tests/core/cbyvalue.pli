@@ -4,7 +4,7 @@
     OPTIONS(LINKAGE(SYSTEM)) or OPTIONS(BYVALUE) marshals FIXED
     and FLOAT scalars plus POINTERs as C values, and takes C
     scalar results by value. */
- cbyvalue: procedure options(main);
+  cbyvalue: procedure options(main);
     declare c_add entry (fixed bin(31), fixed bin(31))
        returns(fixed bin(31))
        options(linkage(system)) external('c_byval_add');
@@ -15,10 +15,16 @@
        returns(float)
        options(linkage(system)) external('c_byval_double');
     declare c_touch entry (pointer)
-       options(linkage(system)) external('c_byval_touch');
+        options(linkage(system)) external('c_byval_touch');
+    declare c_fill_charstar entry (char(*))
+       options(linkage(system)) external('c_byval_fill_charstar');
     declare x fixed bin(31);
     declare r fixed bin(31);
     declare y float;
+
+    /* by-value C entries pass hidden CHAR(*) length args (rule (18)) */
+    declare s5 char(5);
+    declare s10 char(10);
     x = 41;
     r = c_add(x, 1);
     if r ^= 41001 then do;
@@ -37,8 +43,21 @@
     end;
     y = c_dbl(1.5);
     if y ^= 3.0 then do;
-       put skip list('FAIL cbyvalue: expected 3.0, got', y);
+        put skip list('FAIL cbyvalue: expected 3.0, got', y);
+        stop;
+    end;
+
+    s5 = 'zzzzz';
+    s10 = 'zzzzzzzzzz';
+    call c_fill_charstar(s5);
+    call c_fill_charstar(s10);
+    if s5 ^= 'abxxx' then do;
+       put skip list('FAIL cbyvalue: expected abxxx, got', s5);
        stop;
     end;
-   put skip list('PASS cbyvalue');
- end cbyvalue;
+    if s10 ^= 'abxxxxxxxx' then do;
+       put skip list('FAIL cbyvalue: expected abxxxxxxxx, got', s10);
+       stop;
+    end;
+    put skip list('PASS cbyvalue');
+  end cbyvalue;

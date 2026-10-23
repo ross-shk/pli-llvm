@@ -3364,21 +3364,21 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     else
       pt.push_back(b_.getPtrTy());
   }
-  // External ENTRY symbols (no PL/I body): by-value C entries (rules
-  // (34),(38)) use their declared params verbatim — any char(*) lengths
-  // must be explicit scalar fixed-bin(31) params (c_bridge.inc pattern).
+  // External ENTRY symbols (no PL/I body): parameters that normally carry
+  // hidden extent/length arguments (rules (13),(18)) append those hidden
+  // i64 values to the end of the C signature (even for by-value C
+  // entries).
   // A plain-EXTERNAL PL/I entry is a procedure in another object file and
   // follows the PL/I inter-procedure convention: hidden extent/length args
   // for `*`-extent arrays (rule (13)) and CHAR(*) params (rule (18)),
   // exactly as if the procedure were defined in this compilation.
   if (!sym->proc && !en) {
-    if (!sym->entryByValue)
-      for (const Type& t : sym->entryParams) {
-        if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
-          pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
-        if (t.isChar() && t.starLen)
-          pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
-      }
+    for (const Type& t : sym->entryParams) {
+      if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+        pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+      if (t.isChar() && t.starLen)
+        pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+    }
     // An external character-valued function (rules (34),(37)) returns through
     // a hidden result buffer like structures do: the caller allocates it and
     // passes its address as the first argument, so the declaration is
@@ -3439,13 +3439,12 @@ llvm::FunctionType* IRGen::entryFnType(Symbol* sym) {
     else
       pt.push_back(b_.getPtrTy());
   }
-  if (!sym->entryByValue)
-    for (const Type& t : sym->entryParams) {
-      if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
-        pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
-      if (t.isChar() && t.starLen)
-        pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
-    }
+  for (const Type& t : sym->entryParams) {
+    if (t.isArray() && !t.dims.empty() && t.dims[0].adj)
+      pt.push_back(b_.getInt64Ty()); // hidden `*` extent arg (rule (13))
+    if (t.isChar() && t.starLen)
+      pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
+  }
   llvm::Type* rt =
       sret ? b_.getVoidTy() : (sym->entryIsFunction ? llvmTy(sym->entryRetTy) : b_.getVoidTy());
   return llvm::FunctionType::get(rt, pt, false);
@@ -3484,20 +3483,19 @@ llvm::CallInst* IRGen::emitEntryCall(Symbol* sym, std::vector<HExprP>& args, Sou
   // Trailing omitted OPTIONALs pad with nulls to the full declared signature.
   for (size_t i = args.size(); i < sym->entryParams.size(); ++i)
     callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
-  if (!sym->entryByValue)
-    for (size_t i = 0; i < sym->entryParams.size(); ++i) {
-      const Type& t = sym->entryParams[i];
-      if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
-        continue;
-      HExpr* a = (i >= args.size() || args[i]->kind == HExpr::Star) ? nullptr : args[i].get();
-      llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
-      if (!ext) {
-        d_.error(loc, "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
-                 "(13)");
-        ext = i64(0);
-      }
-      callArgs.push_back(ext);
+  for (size_t i = 0; i < sym->entryParams.size(); ++i) {
+    const Type& t = sym->entryParams[i];
+    if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
+      continue;
+    HExpr* a = (i >= args.size() || args[i]->kind == HExpr::Star) ? nullptr : args[i].get();
+    llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
+    if (!ext) {
+      d_.error(loc, "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+               "(13)");
+      ext = i64(0);
     }
+    callArgs.push_back(ext);
+  }
   llvm::Value* fp = loadSym(sym, sym->ty).reg;
   // A void-returning entry (or a hidden-buffer result) cannot name the call.
   llvm::CallInst* call = (sret || rty.isVoid()) ? b_.CreateCall(ft, fp, callArgs)
@@ -9307,10 +9305,10 @@ void IRGen::emitCall(HStmt* s) {
       args.push_back(ext);
     }
   }
-  // The same hidden args when CALLing a plain-EXTERNAL PL/I entry (no local
-  // Proc/ENTRY statement): driven by the ENTRY declaration's parameter
-  // types. By-value C entries carry none (lengths are explicit there).
-  if (!en && !callee && !calleeSym->entryByValue)
+  // Hidden extent/length args when CALLing a plain-EXTERNAL PL/I entry
+  // (no local Proc/ENTRY statement): driven by the ENTRY declaration's
+  // parameter types.
+  if (!en && !callee)
     for (size_t i = 0; i < calleeSym->entryParams.size(); ++i) {
       const Type& t = calleeSym->entryParams[i];
       if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
@@ -9390,22 +9388,21 @@ void IRGen::emitAsyncCall(HStmt* s) {
     // Hidden extent/length args for `*`-extent array and CHAR(*) parameters
     // (rules (13),(18)), exactly as the synchronous external path marshals
     // them; without these the wrapper call would not match calleeFn.
-    if (!calleeSym->entryByValue)
-      for (size_t i = 0; i < paramTypes.size(); ++i) {
-        const Type& t = paramTypes[i];
-        if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
-          continue;
-        HExpr* a =
-            (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
-        llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
-        if (!ext) {
-          SourceLoc loc = (i < s->args.size() && s->args[i]) ? s->args[i]->loc : s->loc;
-          d_.error(loc, "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
-                   "(13)");
-          ext = i64(0);
-        }
-        callArgs.push_back(ext);
+    for (size_t i = 0; i < paramTypes.size(); ++i) {
+      const Type& t = paramTypes[i];
+      if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
+        continue;
+      HExpr* a =
+          (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
+      llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
+      if (!ext) {
+        SourceLoc loc = (i < s->args.size() && s->args[i]) ? s->args[i]->loc : s->loc;
+        d_.error(loc, "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                 "(13)");
+        ext = i64(0);
       }
+      callArgs.push_back(ext);
+    }
     appendStaticLinks(nullptr, callArgs);
     emitAsyncSpawn(s, calleeF, callArgs);
     return;
@@ -11569,24 +11566,22 @@ Val IRGen::emitExpr(HExpr* e) {
       }
       // Hidden extent/length args for the `*`-extent array and CHAR(*)
       // params of a plain-EXTERNAL PL/I entry (rules (13),(18)): the same
-      // convention as for a locally-defined procedure. By-value C entries
-      // carry none (lengths are explicit params there).
-      if (!e->sym->entryByValue)
-        for (size_t i = 0; i < e->sym->entryParams.size(); ++i) {
-          const Type& t = e->sym->entryParams[i];
-          if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
-            continue;
-          HExpr* a =
-              (i >= e->args.size() || e->args[i]->kind == HExpr::Star) ? nullptr : e->args[i].get();
-          llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
-          if (!ext) {
-            d_.error(e->args[i]->loc,
-                     "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
-                     "(13)");
-            ext = i64(0);
-          }
-          args.push_back(ext);
+      // convention as for a locally-defined procedure.
+      for (size_t i = 0; i < e->sym->entryParams.size(); ++i) {
+        const Type& t = e->sym->entryParams[i];
+        if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
+          continue;
+        HExpr* a =
+            (i >= e->args.size() || e->args[i]->kind == HExpr::Star) ? nullptr : e->args[i].get();
+        llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
+        if (!ext) {
+          d_.error(e->args[i]->loc,
+                   "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                   "(13)");
+          ext = i64(0);
         }
+        args.push_back(ext);
+      }
       if (!e->sym->entryIsFunction) {
         b_.CreateCall(extFn, args);
         flushVarWrites();

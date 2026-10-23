@@ -7,3 +7,12 @@ int c_byval_add(int a, int b) { return a * 1000 + b; }
 int c_byval_scale(int *p, int scale) { return (*p) * scale; }
 double c_byval_double(double x) { return x * 2.0; }
 void c_byval_touch(int *p) { *p = 7; }
+void c_byval_fill_charstar(char* p, long len) {
+  if (len <= 0)
+    return;
+  p[0] = 'a';
+  if (len > 1)
+    p[1] = 'b';
+  for (long i = 2; i < len; ++i)
+    p[i] = 'x';
+}
