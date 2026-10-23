@@ -10465,3 +10465,34 @@ sterling data, wide picture items and `GET LIST` into a picture.
 decimal money values at the conversion boundary. *Store the raw field in a
 PICTURE variable.* The variable has to hold the picture-directed result, not
 the input spelling, or a later `A` output would expose the unedited text.
+
+---
+
+## ADR-292 — List-directed input into numeric character data
+
+**Context.** ADR-290 made `DECLARE p PICTURE(...)` numeric character data and
+ADR-291 gave it edit-directed input, but `GET LIST` still rejected it. A
+numeric picture variable has arithmetic attributes (Y33-6003), so the field in
+the stream is an arithmetic value, not a character token; copying the token
+would store the input spelling instead of the pictured value.
+
+**Decision.** `GET LIST` of a PICTURE variable reads the token through
+`pli_get_list_decfixed(picture.fracDigits)`, wraps the exact integer in a
+`FIXED DECIMAL(precision, scale)` value and stores it through the normal
+conversion path. `convertToPicture` then edits it with the same runtime
+interpreter as assignment and `P` output. Scalar, structure-member and array
+targets all use `storeGetTarget`, so no separate picture path was needed.
+
+The reader truncates extra fraction digits, matching the picture formatter's
+own truncation. This slice leaves the general list-directed exponent gap
+unchanged; it is a decimal-reader concern shared with FIXED DECIMAL targets.
+
+**Consequences.** `tests/core/picture_list.pli` covers a negative value with a
+trailing sign position, a comma-separated positive value, an integer picture,
+`V`, an array and a structure member. The old `bad_picture_get.pli` gap gate is
+removed because the form now conforms. `B1` remains open only for sterling data
+and wide picture items.
+
+**Rejected.** *Copy the token into the CHARACTER storage.* It bypasses the
+picture and breaks the arithmetic value. *Read the token as `FLOAT`.* It loses
+decimal money values at the conversion boundary.

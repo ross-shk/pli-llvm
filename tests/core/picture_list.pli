@@ -1,0 +1,60 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* List-directed input into numeric character data (rules (19),(109),
+    (146)-(148)): GET LIST reads an arithmetic value and edits it into the
+    PICTURE variable's character form. */
+ picture_list: procedure options(main);
+    declare buf char(40);
+    declare p picture('ZZZ9.99-');
+    declare q picture('9V99');
+    declare n picture('999');
+    declare a(2) picture('99');
+    declare 1 rec,
+      2 m picture('99');
+
+    /* a decimal point and a trailing sign position */
+    buf = '-12.5';
+    get string(buf) list(p);
+    if p ^= '  12.50-' then do;
+       put skip list('FAIL picture list negative:', p);
+       stop;
+    end;
+
+    /* two items separated by a comma */
+    buf = '12.5, 7';
+    get string(buf) list(p, n);
+    if p ^= '  12.50 ' then do;
+       put skip list('FAIL picture list positive:', p);
+       stop;
+    end;
+    if n ^= '007' then do;
+       put skip list('FAIL picture list integer:', n);
+       stop;
+    end;
+
+    /* V is an assumed point, so the input token has no decimal character */
+    buf = '1.5';
+    get string(buf) list(q);
+    if q ^= '150' then do;
+       put skip list('FAIL picture list V:', q);
+       stop;
+    end;
+
+    /* the aggregate expands to one arithmetic read per element */
+    buf = '7 8';
+    get string(buf) list(a);
+    if a(1) ^= '07' | a(2) ^= '08' then do;
+       put skip list('FAIL picture list array:', a(1), a(2));
+       stop;
+    end;
+
+    /* a structure member takes the same path */
+    buf = '7';
+    get string(buf) list(rec.m);
+    if rec.m ^= '07' then do;
+       put skip list('FAIL picture list member:', rec.m);
+       stop;
+    end;
+
+    put skip list('PASS picture_list');
+ end picture_list;

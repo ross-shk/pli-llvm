@@ -3755,16 +3755,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(it->loc, "a whole structure cannot be read with GET LIST in this stage", "(110)");
         continue;
       }
-      // Picture-directed input stays a B1 item: a numeric picture must parse
-      // the field, not copy its characters.
-      if (it->ty.isChar() && !it->ty.picture.empty()) {
-        d_.error(it->loc, "GET LIST of a PICTURE variable is not implemented in this stage",
-                 "(109)");
-        continue;
-      }
-      // A CHARACTER member or array element is read through storeArrayElement
-      // /member paths, which are not served (mirrors assignment, rule (11)/(12)).
-      if (it->ty.isChar() &&
+      // A numeric PICTURE variable is numeric character data (rule (19)):
+      // GET LIST reads an arithmetic value and edits it, so it is not the
+      // character-token path below (ADR-292).
+      // A plain CHARACTER member or array element is read through
+      // storeArrayElement / member paths, which are not served (mirrors
+      // assignment, rule (11)/(12)).
+      if (it->ty.isChar() && it->ty.picture.empty() &&
           ((it->kind == Expr::VarRef && !it->memberPath.empty()) || it->kind == Expr::Subscript)) {
         d_.error(it->loc,
                  "GET LIST of a CHARACTER member or array element is not implemented in this "

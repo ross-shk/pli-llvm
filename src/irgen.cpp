@@ -8085,6 +8085,23 @@ void IRGen::emitGet(HStmt* s) {
         break;
       }
       case TK::Char: {
+        if (!ty.picture.empty()) {
+          // Numeric character data (ADR-292): read an arithmetic value at
+          // the picture's decimal scale, then let convertToPicture edit it.
+          const pli::PictureSpec spec = pli::classifyPicture(ty.picture);
+          const int frac = spec.fracDigits;
+          int prec = spec.intDigits + frac;
+          if (prec < 1)
+            prec = 1;
+          deferCall("pli_get_list_decfixed", {i64(frac)}, false,
+                    [this, t, loc, prec, frac](const std::vector<llvm::Value*>& r, size_t i) {
+                      Val v;
+                      v.reg = r[i];
+                      v.ty = Type::fixedDec(prec, frac);
+                      storeGetTarget(t, v, loc);
+                    });
+          break;
+        }
         // Read into a reusable entry buffer, then assign into the target.
         llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
         deferCall("pli_get_list_char", {buf, i64(ty.len)}, false,

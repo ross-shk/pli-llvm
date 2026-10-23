@@ -1,8 +1,0 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Picture-directed input is a B1 item: GET into a PICTURE variable is
-    diagnosed rather than copying the field characters (rule (109)). */
- bad_picture_get: procedure options(main);
-    declare p picture('ZZ9.99');
-    get list(p);
- end bad_picture_get;
