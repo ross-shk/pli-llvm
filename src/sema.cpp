@@ -4378,6 +4378,13 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // optionally returning the block to an AREA ( IN ( area ) ).
     for (size_t i = 0; i < s->freeBase.size(); ++i) {
       Expr* f = s->freeBase[i].get();
+      // rule (90): `FREE [reference ->] identifier` frees the based variable
+      // named by the trailing identifier, so a subscripted name or a member
+      // path names storage, not the variable to free.
+      if (f->kind != Expr::VarRef || !f->path.empty()) {
+        d_.error(f->loc, "FREE requires a based variable name", "(90)");
+        continue;
+      }
       typeExpr(f, sc, p);
       Symbol* bsym = f->sym;
       if (bsym && bsym->controlled) {

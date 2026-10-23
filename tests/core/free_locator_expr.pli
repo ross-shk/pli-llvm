@@ -1,0 +1,80 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (90): the locator before '->' in FREE is any
+    pointer-valued reference, so a qualified member, a
+    subscripted element or a nested chain frees the block
+    it addresses. */
+ freloc: procedure options(main);
+    declare 1 node based(p),
+              2 v fixed bin(31),
+              2 next pointer;
+    declare p pointer;
+    declare n1 pointer;
+    declare n2 pointer;
+    declare n3 pointer;
+    declare pool(3) pointer;
+    declare ar area(4000);
+    declare bad fixed bin(31);
+    bad = 0;
+
+    /* three linked blocks, each with a distinct value */
+    allocate node set(p);
+    n1 = p;
+    n1->node.v = 1;
+    allocate node set(p);
+    n2 = p;
+    n2->node.v = 2;
+    allocate node set(p);
+    n3 = p;
+    n3->node.v = 3;
+    n1->node.next = n2;
+    n2->node.next = n3;
+
+    /* a qualified member locator frees the middle block */
+    free n1->node.next -> node;
+    if n1->node.v ^= 1 then bad = 1;
+    if n1->node.next ^= n2 then bad = 2;
+    if n3->node.v ^= 3 then bad = 3;
+
+    /* a subscripted locator frees the tail block */
+    pool(2) = n3;
+    free pool(2) -> node;
+    if n1->node.v ^= 1 then bad = 4;
+    if n1->node.next ^= n2 then bad = 5;
+
+    /* a simple pointer locator still works */
+    allocate node set(p);
+    n3 = p;
+    n3->node.v = 4;
+    free n3 -> node;
+
+    /* the rule's parenthesised item list frees several blocks */
+    allocate node set(p);
+    n1 = p;
+    n1->node.v = 5;
+    allocate node set(p);
+    n2 = p;
+    n2->node.v = 6;
+    free (n1 -> node, n2 -> node);
+
+    /* IN ( area ): the locator names the older block, while the
+       structure's own BASED pointer names the newer one */
+    allocate node in(ar) set(p);
+    n1 = p;
+    n1->node.v = 7;
+    allocate node in(ar) set(p);
+    n2 = p;
+    n2->node.v = 8;
+    pool(1) = n1;
+    free pool(1) -> node in(ar);
+    if n2->node.v ^= 8 then bad = 6;
+    allocate node in(ar) set(p);
+    p->node.v = 9;
+    if p->node.v ^= 9 then bad = 7;
+
+    if bad ^= 0 then do;
+       put skip list('FAIL free locator expression', bad);
+       stop;
+    end;
+    put skip list('PASS free_locator_expr');
+ end freloc;

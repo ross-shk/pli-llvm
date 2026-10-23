@@ -10839,3 +10839,40 @@ compile and then write through the wrong pointer, which is worse than a
 diagnostic. *Require the locator to be the declared BASED pointer.* It
 would remove the feature's reason for existing: reaching a block through
 a copy of the pointer.
+
+---
+
+## ADR-301 — Any reference as a `FREE` locator
+
+**Context.** Rule (90) is `FREE ( [reference ->] identifier
+[IN (reference)] )`, where `reference` is the same general reference as
+rule (124)'s locator: a pointer variable, a subscripted element, a
+qualified member, or a locator chain. Assignments and ordinary references
+already accept all of them (ADR-167), but `parseFree` read one bare word,
+an optional `->` and another word, so `FREE pool(i) -> X` and
+`FREE S.NEXT -> X` were syntax errors. The same parser also treated the
+rule's outer parentheses as per-item wrappers, so the grammatical
+`FREE (a -> x, b -> y)` failed on the comma.
+
+**Decision.** Parse the freed operand with the ordinary reference parser
+and keep the resulting expression as the `FREE` item. Sema now requires
+the trailing identifier to be a plain based-variable name (no member path,
+no subscript) and the locator to be a POINTER, which is the same shape
+check every other locator gets; IRGen already emitted the item's locator
+with `emitExpr`, so no lowering changed. The statement's parentheses wrap
+the whole item list, and the lenient unparenthesised form stays accepted.
+
+**Consequences.** `free_locator_expr.pli` frees a linked-list middle node
+through `n1 -> node.next`, a tail node through `pool(2) -> node`, a block
+through a simple pointer, two blocks in one `FREE (a -> x, b -> y)`, and
+an AREA block through a locator with `IN`, checking each time that the
+block the locator did *not* name is still intact. `bad_free_operand.pli`
+pins the subscripted-base and qualified-base diagnostics. Still diagnosed:
+an OFFSET locator (general locator typing accepts POINTER only), a
+CONTROLLED free with a locator, and a base that is not BASED.
+
+**Rejected.** *Keep the hand-rolled word parse and add a subscript case.*
+It would need a third copy of reference parsing, and the qualified and
+nested forms would stay unsupported. *Accept any expression as the freed
+identifier.* `FREE pool(1)` would free the pool array's storage rather
+than the block the element points at, which is the wrong block.

@@ -691,6 +691,8 @@ With `set`, `allocate` hands you a fresh heap block in a pointer:
  free rec;              /* release it */
 ```
 
+Any pointer-valued reference can be the locator: `free pool(i) -> rec;` and `free head -> node.next -> rec;` release the block that reference points at, and `free (a -> rec, b -> rec);` frees several in one statement.
+
 **Not yet**
 
 - `set` on a controlled allocate warns and is ignored (it's stack-managed, not heap).

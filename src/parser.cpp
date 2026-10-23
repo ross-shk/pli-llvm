@@ -3933,38 +3933,21 @@ StmtP Parser::parseFree() {
   st->kind = Stmt::Free;
   st->loc = cur().loc;
   advance(); // FREE
+  // Rule (90) parenthesises the whole item list: FREE ( X, Y ); an
+  // unparenthesised list stays accepted for source that predates it.
+  bool outer = eat(Tok::LParen);
   for (;;) {
-    bool paren = eat(Tok::LParen);
     ExprP areaRef;
-    if (at(Tok::Word)) {
-      auto base = std::make_unique<Expr>();
-      base->kind = Expr::VarRef;
-      base->name = cur().text;
-      base->loc = cur().loc;
-      advance();
-      if (at(Tok::Arrow)) {
-        // [reference ->] identifier: the left word is the locator pointer, the
-        // right is the based variable.
-        auto loc = std::make_unique<Expr>();
-        loc->kind = Expr::VarRef;
-        loc->name = base->name;
-        loc->loc = base->loc;
-        advance(); // ->
-        if (at(Tok::Word)) {
-          base->name = cur().text;
-          base->loc = cur().loc;
-          base->locPtr = std::move(loc);
-          advance();
-        } else {
-          d_.error(cur().loc, "expected a based variable after '->'", "(90)");
-        }
-      }
-      st->freeBase.push_back(std::move(base));
-    } else {
-      d_.error(cur().loc, "expected an identifier after FREE", "(90)");
+    // [reference ->] identifier (rule (90)): the locator is any pointer-valued
+    // reference (rule (124) left recursion), so a subscripted element, a
+    // qualified member or a nested locator chain is parsed like any reference;
+    // sema checks that the operand ends in a plain based-variable name.
+    ExprP base = parsePrimary();
+    if (!base) {
       resync();
       return nullptr;
     }
+    st->freeBase.push_back(std::move(base));
     if (atWord("IN") && peek().kind == Tok::LParen) {
       // IN ( area ) (rule (90)): return the block to the named AREA.
       advance();
@@ -3977,11 +3960,11 @@ StmtP Parser::parseFree() {
       expect(Tok::RParen, "(90)");
     }
     st->freeArea.push_back(std::move(areaRef));
-    if (paren)
-      expect(Tok::RParen, "(90)");
     if (!eat(Tok::Comma))
       break;
   }
+  if (outer)
+    expect(Tok::RParen, "(90)");
   expect(Tok::Semi, "(90)");
   return st;
 }

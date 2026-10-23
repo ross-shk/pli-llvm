@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (90): FREE frees the based variable named by the
+    trailing identifier, so a subscripted name or a member
+    path is not the storage to release and is diagnosed. */
+ badfreeop: procedure options(main);
+    declare 1 node based(p),
+              2 v fixed bin(31);
+    declare p pointer;
+    declare pool(2) pointer;
+    pool(1) = p;
+    free pool(1);
+    free p -> node.v;
+ end badfreeop;
