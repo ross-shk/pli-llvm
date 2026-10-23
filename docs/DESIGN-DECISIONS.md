@@ -10289,3 +10289,55 @@ length.* A NONVARYING target needs the truncate/pad rule; `pli_get_reply` takes
 its capacity. *Lowering dynamic counts by unrolling a maximum.* That would
 evaluate data expressions the program did not supply and change side-effect
 order.
+
+---
+
+## ADR-288 — Picture output of a scaled `FIXED BINARY` truncates at the picture's decimal positions
+
+**Context.** ADR-284 established that a `FIXED BINARY(p,q)` variable stores
+`value × 2^q`, and rejected sending its raw integer through the decimal
+picture formatter: the formatter read the raw integer against a decimal point,
+so a scale-2 `2.5` printed as `0.00`. The gap was diagnosed under rule (53) and
+recorded as B11.
+
+**Decision.** `P` output of a scaled `FIXED BINARY` is served. Let `d` be the
+number of fractional digit positions in the picture (after `V` or `.`). The
+lowering computes
+
+```
+dec = trunc(raw × 10^d / 2^q)
+```
+
+in i128 and calls `pli_put_edit_pic` with the decimal value `dec` and scale
+`d`. The arithmetic is integer, so the digit positions the picture shows are
+truncated exactly, not rounded; this matches the existing decimal picture path,
+which drops fractional digits beyond its scale. The sign passed to the
+formatter comes from `raw`, so a negative value whose fraction truncates to
+zero still takes its sign position. For the same reason a scaled binary stays
+on the runtime interpreter: the constant folder cannot recover that sign from
+the truncated value.
+
+A picture with more than 18 fractional positions, or a declared scale of 127
+or more (the i128 rescue has no positive power of two there), keeps a rule
+(53) diagnostic rather than wrapping. The converted value shares the
+formatter's existing 64-bit decimal range, the same limit a decimal picture
+item has.
+
+**Consequences.** `tests/core/scaled_picture.pli` pins `2.5` through
+`ZZ9.99`, `-2.5` through `SZZ9.99`, truncation (`1.25` → `1.2`, `2.75` → `2`),
+a high binary scale (`bin(31,15)` at `0.75`) and zero fill;
+`bad_scaled_picture.pli` now gates the over-wide picture diagnostic. The work
+also exposed a formatter bug for any value below one whose digits exactly fill
+its scale: `0.75` at scale 2 printed `0.00` because the runtime and the
+constant folder counted the fractional digits only when the digit count
+exceeded the scale. Both now use `min(digits, scale)`, and
+`tests/core/picture_fold.pli` pins the decimal case on the folded and runtime
+paths. The `(44)–(55)` row in `GRAMMAR-COVERAGE.md` moves from "diagnosed" to
+the served form, and B11 loses this item.
+
+**Rejected.** *Converting through `FLOAT`.* `double` rounds where the picture
+truncates and loses low digits for the wider `p` values the integer path keeps.
+*Rescaling to the exact decimal `raw × 5^q` at scale `q`.* The product
+overflows the formatter's 64-bit value for ordinary `q`, and the formatter
+would then only trim it again. *A new runtime entry point.* The i128 rescale is
+three IR instructions and keeps the `pli_put_edit_pic` ABI unchanged.

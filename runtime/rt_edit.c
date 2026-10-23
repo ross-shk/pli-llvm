@@ -368,7 +368,7 @@ void pli_put_edit_pic(long long val, long long scale, int sign,
 
   /* Value: val_int integer digits, val_frac fractional digits. */
   long long val_int = ndig > scale ? ndig - scale : 0;
-  long long val_frac = scale < ndig ? scale : 0;
+  long long val_frac = scale < ndig ? scale : ndig;
 
   /* Walk the picture, emitting characters. The NUL terminator needs a slot
    * of its own: ocap capped at sizeof(outbuf) would write one byte past the

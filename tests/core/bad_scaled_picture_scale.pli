@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A scaled FIXED BINARY picture is rescaled in i128 (ADR-288); a
+    declared scale of 127 or more has no positive power of two, so it
+    is diagnosed under rule (53) instead of crashing the lowering. */
+ badscalepic: procedure options(main);
+    declare b fixed bin(200,150);
+    declare a char(10);
+    b = 1;
+    put string(a) edit(b) (p('9'));
+ end badscalepic;

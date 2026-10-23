@@ -49,6 +49,19 @@
        stop;
     end;
 
+    /* a value below one keeps the digits its scale stores */
+    v = 0.75;
+    put string(a) edit(0.75) (P('ZZ9.99'));
+    put string(b) edit(v) (P('ZZ9.99'));
+    if substr(a,1,6) ^= substr(b,1,6) then do;
+       put skip list('FAIL frac agree', substr(a,1,6), substr(b,1,6));
+       stop;
+    end;
+    if substr(a,1,6) ^= '  0.75' then do;
+       put skip list('FAIL frac exact', substr(a,1,6));
+       stop;
+    end;
+
     /* explicit plus sign, and the blank minus sign */
     v = 42.5;
     put string(a) edit(42.5) (P('+Z9.99'));

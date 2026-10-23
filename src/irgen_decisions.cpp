@@ -1351,7 +1351,7 @@ bool foldPictureConversion(long long value, int scale, const PictureSpec& spec, 
   }
 
   const long long val_int = ndig > scale ? ndig - scale : 0;
-  const long long val_frac = scale < ndig ? scale : 0;
+  const long long val_frac = scale < ndig ? scale : ndig;
   std::string text;
   text.reserve(static_cast<size_t>(spec.width));
   int led_zero = 1;

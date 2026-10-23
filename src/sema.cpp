@@ -2,6 +2,7 @@
 // Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 #include "sema.h"
 #include "constfold.h"
+#include "irgen_decisions.h" // pli::classifyPicture: the picture digit layout (ADR-288)
 #include <algorithm>
 #include <climits>
 #include <functional>
@@ -4508,12 +4509,21 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
     }
     if (f.kind == FormatItem::P && it->ty.isNumeric()) {
-      // A picture formatter works in decimal (val*10^-scale); a scaled FIXED
-      // BINARY has a 2^q point, which the formatter cannot express (ADR-284).
-      if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0)
-        d_.error(it->loc,
-                 "PICTURE output of a scaled FIXED BINARY is not implemented in this stage",
-                 "(53)");
+      // A scaled FIXED BINARY is rescaled to the picture's decimal positions
+      // in IRGen (ADR-288); the formatter itself stays decimal. More than 18
+      // fractional positions exceed its 64-bit decimal value.
+      if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
+        const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+        if (it->ty.scale >= 127)
+          d_.error(it->loc,
+                   "PICTURE output of a scaled FIXED BINARY needs a scale below 127",
+                   "(53)");
+        else if (spec.valid && spec.fracDigits > 18)
+          d_.error(it->loc,
+                   "PICTURE output of a scaled FIXED BINARY supports at most 18 "
+                   "fractional positions",
+                   "(53)");
+      }
     } else if (f.kind == FormatItem::P && !it->ty.isNumeric()) {
       d_.error(it->loc, "a P format requires a numeric item", "(53)");
     }

@@ -8265,14 +8265,37 @@ void IRGen::emitPutEditItems(HStmt* s) {
         break;
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
       llvm::Value* val = nullptr;
+      llvm::Value* signSrc = nullptr;
+      bool binaryScaled = false;
       int scale = 0;
       if (v.ty.isFixed()) {
         val = toI64(v);
+        signSrc = val;
         scale = v.ty.scale;
+        if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+          // A binary scale holds raw/2^q; the formatter works in decimal.
+          // Truncate at the picture's fractional positions in i128 and hand
+          // the formatter that decimal value (ADR-288). The sign comes from
+          // the raw value so a negative fraction below one keeps its sign.
+          binaryScaled = true;
+          const int d = spec.valid ? spec.fracDigits : 0;
+          llvm::Type* wideTy = b_.getInt128Ty();
+          llvm::APInt p10(128, 1);
+          for (int i = 0; i < d; ++i)
+            p10 *= llvm::APInt(128, 10);
+          llvm::Value* wide = b_.CreateSExt(val, wideTy, "picw");
+          wide = b_.CreateMul(wide, llvm::ConstantInt::get(wideTy, p10), "picsc");
+          llvm::APInt pow2 = llvm::APInt(128, 1).shl(v.ty.scale);
+          wide = b_.CreateSDiv(wide, llvm::ConstantInt::get(wideTy, pow2), "picdv");
+          val = b_.CreateTrunc(wide, b_.getInt64Ty(), "picdec");
+          scale = d;
+        }
       } else if (v.ty.k == TK::Float) {
         // Convert float to fixed-decimal via truncation.
         val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
+        signSrc = val;
       } else {
         d_.error(item->loc, "P edit item requires a numeric value", "(53)");
         break;
@@ -8280,9 +8303,10 @@ void IRGen::emitPutEditItems(HStmt* s) {
       // B4: a constant value through a foldable constant picture is formatted
       // at compile time (rules (146)-(148)); the lowering policy still wins,
       // so --experimental-lowering=picture:runtime keeps the interpreter and
-      // the differential oracle keeps both sides (ADR-274).
-      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
-      if (!runtimePath("picture") && spec.foldable) {
+      // the differential oracle keeps both sides (ADR-274). A scaled binary
+      // stays on the runtime path: its sign is not recoverable from the
+      // truncated decimal value when the fraction is below one.
+      if (!binaryScaled && !runtimePath("picture") && spec.foldable) {
         if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(val)) {
           std::string text;
           if (pli::foldPictureConversion(ci->getSExtValue(), scale, spec, text)) {
@@ -8300,7 +8324,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
       if (remarkLibraryCalls_)
         d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
       // sign derived from the value: -1 if negative, +1 if non-negative.
-      llvm::Value* neg = b_.CreateICmpSLT(val, i64(0), "picsign");
+      llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");
       llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
       deferCall("pli_put_edit_pic",
                 {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
