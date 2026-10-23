@@ -3,12 +3,13 @@
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 """tests/run_tests.py — compile, run and check every test program, in parallel.
 
-Usage: tests/run_tests.py [group ... | <group>/<name>.pli ...]
+Usage: tests/run_tests.py [group ... | <group>/<name>.pli|.sh ...]
 Without arguments every tests/*/ group runs; otherwise only the named groups,
 or the single tests named by path (e.g. usecases/data.pli).
 
 Each tests/<group>/ subfolder is a test group containing:
   <group>/*.pli           test programs (bad_*.pli must be rejected)
+  <group>/*.sh            driver tests (compile and check several programs)
   <group>/expected/*.out  recorded stdout for golden tests
   <group>/out/            scratch binaries, logs and diffs (gitignored)
 A group may mix test classes; each test is classified individually:
@@ -16,6 +17,8 @@ A group may mix test classes; each test is classified individually:
   self   — no expected/<name>.out: the program verifies itself and must print
            PASS (case-insensitive); any FAIL in its output fails it
 
+A test that really ran under a sanitizer prints `SANITIZER: <list>`; the run
+ends with the coverage of every group and counts the tests that SKIPped.
 Tests run concurrently, bounded by JOBS (default: number of CPUs). Results are
 printed in deterministic group order. `cmake --build -j` parallelises the
 compile step.
@@ -161,10 +164,19 @@ class Runner:
         self.name = name
         self.out = self.dir / "out"
         self.out.mkdir(parents=True, exist_ok=True)
+        # Sanitizers this test really ran under (from its `SANITIZER:` line).
+        self.sanitizers = set()
 
     def check_out(self):
         """Classify a produced <name>.out: golden diff or self-check PASS."""
         outfile = self.out / f"{self.name}.out"
+        text = outfile.read_text(errors="replace") if outfile.exists() else ""
+        # A test that really ran under a sanitizer prints `SANITIZER: <list>`;
+        # main() aggregates these into the per-group coverage report (B0).
+        for line in text.splitlines():
+            if line.startswith("SANITIZER:"):
+                for s in line.split(":", 1)[1].replace(",", " ").split():
+                    self.sanitizers.add(s)
         expected = self.dir / "expected" / f"{self.name}.out"
         if expected.exists():
             # Portable unified diff: the external `diff` utility is not
@@ -172,14 +184,13 @@ class Runner:
             # identical output.
             import difflib
             exp_lines = expected.read_text(errors="replace").splitlines()
-            out_lines = outfile.read_text(errors="replace").splitlines() if outfile.exists() else []
+            out_lines = text.splitlines()
             diff = list(difflib.unified_diff(
                 exp_lines, out_lines,
                 fromfile=str(expected), tofile=str(outfile), lineterm=""))
             if not diff:
                 return f"PASS {self.name}", 0
             return f"FAIL {self.name} (output differs)\n{indented(chr(10).join(diff))}", 1
-        text = outfile.read_text(errors="replace") if outfile.exists() else ""
         if "PASS" in text.upper() and "FAIL" not in text.upper():
             return f"PASS {self.name}", 0
         # A script may SKIP itself (e.g. toolchain lacks a feature); a skip
@@ -324,7 +335,7 @@ def enumerate_jobs(args):
     """Return the ordered list of (dir, name, kind) jobs selected by `args`."""
     groups, onetest = [], None
     for arg in args:
-        if arg.endswith(".pli"):
+        if arg.endswith(".pli") or arg.endswith(".sh"):
             t = arg[2:] if arg.startswith("./") else arg
             t = t if t.startswith("tests/") else f"tests/{t}"
             p = Path(t)
@@ -394,24 +405,41 @@ def main():
         dir_path, name, kind = job
         # dir_path may use native separators; normalize for the skip lookup.
         if IS_WINDOWS and (Path(dir_path).as_posix(), name) in WINDOWS_SKIP:
-            return job, f"SKIP {name} ({WINDOWS_SKIP[(Path(dir_path).as_posix(), name)]})", 0
+            return job, f"SKIP {name} ({WINDOWS_SKIP[(Path(dir_path).as_posix(), name)]})", 0, ()
         r = Runner(dir_path, name)
         r.kind = kind
         result, rc = r.run()
-        return job, result, rc
+        return job, result, rc, tuple(sorted(r.sanitizers))
 
     results = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for job, result, rc in pool.map(work, jobs):
-            results[job] = (result, rc)
+        for job, result, rc, sans in pool.map(work, jobs):
+            results[job] = (result, rc, sans)
 
-    pass_count = fail_count = 0
+    pass_count = fail_count = skip_count = 0
+    coverage = {}
     for job in jobs:
-        result, rc = results[job]
+        result, rc, sans = results[job]
         print(result)
-        pass_count += rc == 0
-        fail_count += rc != 0
-    print(f"\n{pass_count} passed, {fail_count} failed")
+        if rc == 0 and result.startswith("SKIP "):
+            skip_count += 1
+        elif rc == 0:
+            pass_count += 1
+        else:
+            fail_count += 1
+        # Count each group's tests per sanitizer set; an unmarked test ran none.
+        group = Path(job[0]).name
+        per = coverage.setdefault(group, {})
+        key = ",".join(sans) if sans else "none"
+        per[key] = per.get(key, 0) + 1
+
+    print(f"\n{pass_count} passed, {fail_count} failed, {skip_count} skipped")
+    # B0: a test only claims a sanitizer when it actually ran under one, so
+    # this table is the measured coverage of the run, not an intention.
+    print("sanitizer coverage by group:")
+    for group in sorted(coverage):
+        parts = ", ".join(f"{s} ({n})" for s, n in sorted(coverage[group].items()))
+        print(f"  {group}: {parts}")
     return 0 if fail_count == 0 else 1
 
 

@@ -115,7 +115,10 @@ case "$out" in
      ;;
 esac
 case "$out" in
-  *"PASS lifetime_asan"*) echo "PASS lifetime_asan" ;;
+  *"PASS lifetime_asan"*)
+     echo "SANITIZER: address"
+     echo "PASS lifetime_asan"
+     ;;
   *) echo "FAIL lifetime_asan: $out"; exit 1 ;;
 esac
 exit 0

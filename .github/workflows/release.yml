@@ -100,8 +100,9 @@ jobs:
             cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
           fi
 
+      # A red suite blocks the release: a tag can point at any commit, so the
+      # pull-request gate in build.yml is not enough (A5).
       - name: Test
-        continue-on-error: true
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
             ctest --test-dir build/cmake -j$NUMBER_OF_PROCESSORS
