@@ -131,6 +131,8 @@ struct DeclItem {
   std::string typeRef;                 // TYPE <alias> (extension, ADR-114); empty = none
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
+  bool hasPos = false; // DEFINED base POSITION(n) (rule 24): the 1-based position
+  long long pos = 1;   // in the base at which the defined item starts
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
   bool basedNoPtr = false;             // bare BASED (rule 25): no locator, refs must qualify
   bool controlled = false;             // CONTROLLED generation-stack storage (rule (15), ADR-140)

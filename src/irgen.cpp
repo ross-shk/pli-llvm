@@ -4034,9 +4034,14 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
   // iSUB overlay resolves to the base's address; a scalar element overlay
   // (all-constant subscripts, no iSUB) is a stable GEP into the base.
   if (sym->definedBase) {
-    if (!sym->definedConst.empty() && !sym->hasIsubOverlay())
-      return definedConstAddr(sym);
-    return addressOf(sym->definedBase);
+    // A POSITION'd overlay (rule 24) starts `definedPos` bytes into the base
+    // (or into the selected element), so its address is a byte GEP from there.
+    llvm::Value* base = (!sym->definedConst.empty() && !sym->hasIsubOverlay())
+                            ? definedConstAddr(sym)
+                            : addressOf(sym->definedBase);
+    if (sym->definedPos > 0)
+      return b_.CreateInBoundsGEP(b_.getInt8Ty(), base, i64(sym->definedPos), "dpos");
+    return base;
   }
   // A CONTROLLED variable (rules (15),(87)-(90), ADR-140) has no frame
   // storage: its address is the latest generation on its runtime stack.

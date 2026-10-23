@@ -1887,19 +1887,26 @@ void Parser::parseDeclTail(DeclItem& item) {
           }
           expect(Tok::RParen, "(126)");
         }
-        while (at(Tok::Word) && (cur().text == "POSITION" || cur().text == "POS")) {
-          d_.error(cur().loc, "POSITION on DEFINED is not implemented in this stage", "(24)");
+        // POSITION (rule 24, `POSITION | POS`): the 1-based position in the
+        // base at which the defined item starts (IBM string-overlay defining).
+        // The argument is an integer constant; sema checks the fit.
+        if (at(Tok::Word) && (cur().text == "POSITION" || cur().text == "POS")) {
           advance();
-          if (at(Tok::LParen)) {
-            int dd = 0;
-            do {
-              if (at(Tok::LParen))
-                ++dd;
-              else if (at(Tok::RParen))
-                --dd;
+          long long pos = 1;
+          if (eat(Tok::LParen)) {
+            if (at(Tok::Number)) {
+              pos = strtoll(cur().text.c_str(), nullptr, 10);
               advance();
-            } while (dd && !at(Tok::Eof));
+            } else {
+              d_.error(cur().loc, "POSITION requires an integer constant", "(24)");
+              advance();
+            }
+            expect(Tok::RParen, "(24)");
+          } else {
+            d_.error(cur().loc, "expected '(' after POSITION", "(24)");
           }
+          item.hasPos = true;
+          item.pos = pos;
         }
         continue;
       }

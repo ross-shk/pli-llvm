@@ -68,6 +68,41 @@ static long long definedScalarBytes(const Type& t) {
   }
 }
 
+// Characters in one CHARACTER string or CHARACTER array for a POSITION overlay
+// (rule 24): IBM's string-overlay defining counts characters from the base's
+// first character across every element. Returns -1 for a non-CHARACTER, varying
+// or runtime-extent type.
+static long long definedCharUnits(const Type& t) {
+  if (!t.isChar() || t.varying || t.starLen)
+    return -1;
+  long long n = 1;
+  for (const Dim& d : t.dims) {
+    if (d.dyn || d.lbDyn || d.adj || d.ub < d.lb)
+      return -1;
+    n *= d.ub - d.lb + 1;
+  }
+  return n * t.len;
+}
+
+// POSITION fit check shared by both overlay forms (rule 24): the item starts at
+// character `pos` (1-based) and must end inside a base of `baseUnits`
+// characters.
+static bool definedPosFits(Diags& d_, SourceLoc loc, long long pos, long long itemUnits,
+                           long long baseUnits, const char* what) {
+  if (pos < 1) {
+    d_.error(loc, "POSITION must be 1 or greater", "(24)");
+    return false;
+  }
+  if (pos - 1 + itemUnits > baseUnits) {
+    d_.error(loc,
+             std::string("the DEFINED item does not fit into its ") + what + " at POSITION(" +
+                 std::to_string(pos) + ")",
+             "(24)");
+    return false;
+  }
+  return true;
+}
+
 // FIXED op FIXED -> FIXED with the wider precision and the larger scale;
 // anything involving FLOAT is FLOAT. This is the *common* result type for
 // +,-,comparison (and MIN/MAX/MOD), where a mixed-scale operand is rescaled
@@ -1625,6 +1660,23 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc,
                      "DEFINED across an enclosing procedure is not implemented in this stage",
                      "(24)");
+          } else if (item.definedSubs.empty() && item.hasPos) {
+            // String-overlay defining (rule 24): POSITION starts a CHARACTER
+            // view at the n-th character of the base, so the item may be a
+            // different length than the base as long as it fits. Arrays and
+            // BIT (bit-granular positions) stay diagnosed.
+            long long itemUnits = item.ty.isArray() ? -1 : definedCharUnits(item.ty);
+            long long baseUnits = definedCharUnits(base->ty);
+            if (itemUnits < 0 || baseUnits < 0) {
+              d_.error(item.loc,
+                       "POSITION requires a scalar CHARACTER item and base (string-overlay "
+                       "defining)",
+                       "(24)");
+            } else if (definedPosFits(d_, item.loc, item.pos, itemUnits, baseUnits, "base")) {
+              item.sym->definedBase = base;
+              item.sym->definedPos = item.pos - 1;
+              isDefined = true;
+            }
           } else if (item.definedSubs.empty()) {
             // Whole-base overlay (rule 24): the item shares the base's storage.
             // A different-type overlay is a memory view when both scalars have
@@ -1700,6 +1752,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   ok = false;
                 }
               }
+              if (ok && nIsub > 0 && item.hasPos) {
+                // IBM2130I: POSITION is string-overlay defining and cannot be
+                // combined with iSUB defining.
+                d_.error(item.loc, "POSITION cannot be used with iSUB defining", "(24)");
+                ok = false;
+              }
               if (ok && nIsub > 0) {
                 // iSUB overlay: Y overlays the base element selected by its
                 // subscripts. With index arithmetic Y(i) -> X(m*i + c), the
@@ -1742,6 +1800,23 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   item.sym->definedSlotAxis = slotAxis;
                   item.sym->definedSlotMult = slotMult;
                   item.sym->definedSlotAdd = slotAdd;
+                  isDefined = true;
+                }
+              } else if (ok && item.hasPos) {
+                // POSITION inside a base element (rule 24): a CHARACTER view of
+                // that element starting at the n-th character. The item is a
+                // scalar, so no element addressing follows.
+                long long itemUnits = item.ty.isArray() ? -1 : definedCharUnits(item.ty);
+                long long elUnits = definedCharUnits(base->ty.elementType());
+                if (itemUnits < 0 || elUnits < 0) {
+                  d_.error(item.loc,
+                           "POSITION requires a scalar CHARACTER item and base element",
+                           "(24)");
+                } else if (definedPosFits(d_, item.loc, item.pos, itemUnits, elUnits,
+                                          "base element")) {
+                  item.sym->definedBase = base;
+                  item.sym->definedConst = cst;
+                  item.sym->definedPos = item.pos - 1;
                   isDefined = true;
                 }
               } else if (ok) {

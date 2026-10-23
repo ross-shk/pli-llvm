@@ -1,0 +1,34 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* POSITION (rule 24): DEFINED ... POSITION(n) starts a CHARACTER view
+    at the n-th base character; the item must fit inside the base. */
+ defined_pos: procedure options(main);
+    declare buf char(20) initial('0123456789ABCDEFGHIJ');
+    declare whole char(4) defined buf position(1);
+    declare mid char(5) defined buf pos(6);
+    declare tail char(12) defined buf position(9);
+    declare arr(3) char(4);
+    declare el char(2) defined arr(2) position(3);
+    declare bad fixed bin(31);
+    bad = 0;
+    if whole ^= '0123' then bad = 1;
+    if mid ^= '56789' then bad = 2;
+    if tail ^= '89ABCDEFGHIJ' then bad = 3;
+    /* a store through the overlay lands at that position in the base */
+    mid = 'vwxyz';
+    if buf ^= '01234vwxyzABCDEFGHIJ' then bad = 4;
+    if mid ^= 'vwxyz' then bad = 5;
+    /* POSITION inside one element of a base array */
+    arr(1) = 'zzzz';
+    arr(2) = 'zzzz';
+    arr(3) = 'zzzz';
+    if el ^= 'zz' then bad = 6;
+    el = 'XY';
+    if arr(2) ^= 'zzXY' then bad = 7;
+    if arr(1) ^= 'zzzz' then bad = 8;
+    if bad ^= 0 then do;
+       put skip list('FAIL defined_pos', bad);
+       stop;
+    end;
+    put skip list('PASS defined_pos');
+ end defined_pos;

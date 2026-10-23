@@ -784,9 +784,19 @@ axes may cross — a transposed view — and one dummy may drive several base ax
  dcl diag(5) fixed bin(31) defined sq(1sub, 1sub); /* sq(i,i) */
 ```
 
+`position` slices a character string in place — the item is a window that starts
+at the n-th character of the base (counting from 1) and must fit inside it:
+
+```pli
+ dcl buf char(20) initial('0123456789ABCDEFGHIJ');
+ dcl mid char(5) defined buf position(6);  /* '56789' */
+
+ mid = 'vwxyz';                            /* buf(6:10) is now 'vwxyz' */
+```
+
 **Not yet**
 
-- `position` is an error; every item subscript must be mapped by a dummy; the base must be in the same or an enclosing scope.
+- every item subscript must be mapped by a dummy; `position` needs a scalar character item over a character base (a bit-string position is an error); the base must be in the same or an enclosing scope.
 
 > **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `pli defined_isub.pli -o overlays && ./overlays`.
 

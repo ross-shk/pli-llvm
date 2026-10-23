@@ -11020,3 +11020,45 @@ routing site.
 Y33-6003 diagonal form unrepresentable. *Require every item axis to map to a
 distinct base axis.* That forbids the diagonal, which is exactly the case the
 cross-check in rule (134) prints.
+
+---
+
+## ADR-306 — `DEFINED ... POSITION(n)`: a character-positioned string overlay
+
+**Context.** Rule (24) is `defined-attribute ::= DEFINED basic-reference
+[ POSITION ( integer ) ]`. ADR-047/048 deferred `POSITION` and diagnosed it. IBM
+calls the form *string-overlay defining*: the base and the defined item are
+CHARACTER (or BIT/GRAPHIC) strings, `POSITION` names the element of the base at
+which the item begins, and the item need not have the base's length. IBM's own
+messages pin the two rules that matter here: a position below 1 is an error
+(IBM1402I), and an item that runs past its base is an error (IBM1375I). IBM2130I
+forbids `POSITION` with iSUB defining.
+
+**Decision.** `POSITION(n)` positions a **scalar CHARACTER** item inside a
+CHARACTER base (a scalar string or a string array, counted across elements) or
+inside one constant-subscripted base element. The position is 1-based, matching
+IBM; sema checks `n >= 1` and `n - 1 + N(item) <= N(base)` at compile time, so no
+runtime check is emitted. A positioned overlay keeps `definedBase` and stores the
+0-based byte offset in `definedPos`; `IRGen::addressOf` computes the base (or
+base-element) address as before and then takes a byte GEP by `definedPos`. A
+CHARACTER is one byte, so no bit-level addressing is involved and a load/store
+through the overlay is an ordinary string reference, which reaches the base.
+`POSITION` with a BIT base (bit-granular positions), a numeric base, an array
+item, an unbounded extent, a position below 1, an overrun, and an iSUB base are
+diagnosed with rule (24).
+
+**Consequences.** `defined_pos.pli` reads three windows of one 20-character buffer
+and writes through the middle one, checks a window inside an array element, and
+pins that a neighbouring element is untouched; `bad_defined_pos.pli` pins the six
+diagnostics. `defined.pli`, `defined_diff.pli`, `isub_defined.pli` and
+`isub_arith.pli` are unchanged, so an unpositioned overlay takes exactly the old
+path. B8's `POSITION` item moves to served; the row stays open for `DEFINED X(i)`
+runtime bases and the descriptor tail.
+
+**Rejected.** *A byte offset with 0 meaning the start.* IBM's grammar says
+`integer`, its message says a constant below 1 is invalid, and its arity rule
+`n <= N(b) - N(d) + 1` only balances at 1-based counting. *Diagnosing differing
+lengths.* That is the whole point of the form — IBM2656I warns when a
+different-length declaration is taken as simple defining instead. *Serving BIT
+positions now.* A bit position needs bit-granular extract/insert; a separate
+slice, kept diagnosed.

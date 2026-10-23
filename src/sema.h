@@ -44,6 +44,10 @@ struct Symbol {
   Expr* initCall = nullptr;      // INITIAL(CALL f(...)) call expr (rule 27), lowered to HIR
   HExpr* initCallH = nullptr;    // the lowered INITIAL CALL expression, for codegen
   Symbol* definedBase = nullptr; // DEFINED on this variable's storage (rule 24); null = none
+  // DEFINED ... POSITION(n) (rule 24): the item starts this many bytes into the
+  // base (n-1, since IBM counts the base's characters from 1 and a CHARACTER
+  // is one byte here). Zero when the overlay starts at the base's first byte.
+  long long definedPos = 0;
   // BASED (rule 25): the POINTER variable that addresses this based structure's
   // storage; a based symbol has no own storage, its address is the pointer value.
   Symbol* basedBase = nullptr;

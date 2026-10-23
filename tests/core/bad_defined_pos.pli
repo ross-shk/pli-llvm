@@ -1,0 +1,21 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* POSITION restrictions (rule 24): 1-based position, the item must fit
+    in a CHARACTER base; POSITION is never valid with iSUB defining. */
+ bad_defined_pos: procedure options(main);
+    declare a char(10);
+    declare n fixed bin(31);
+    declare b(3,3) fixed bin(31);
+    /* 8 + 5 - 1 runs past the base's 10 characters */
+    declare bad1 char(5) defined a position(8);
+    /* POSITION counts from 1 */
+    declare bad2 char(2) defined a position(0);
+    /* a numeric base is not string-overlay defining */
+    declare bad3 char(2) defined n position(1);
+    /* iSUB defining and POSITION are mutually exclusive */
+    declare bad4(3) fixed bin(31) defined b(1sub,2) position(1);
+    /* the positioned item is a scalar CHARACTER string */
+    declare bad5(2) char(2) defined a position(1);
+    /* an array element overlay takes a CHARACTER item and element */
+    declare bad6 fixed bin(31) defined b(2,2) position(1);
+ end bad_defined_pos;
