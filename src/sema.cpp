@@ -4567,7 +4567,36 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
       d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
     }
-    if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+    if (f.kind == FormatItem::P && isGet) {
+      // Picture-directed input (ADR-291): the field width is the picture's
+      // output width and the value is scaled at its assumed point. The
+      // runtime parser handles digits, V/., comma and sign positions; other
+      // picture characters are not in this slice.
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      const bool targetIsPicture = it->ty.isChar() && !it->ty.picture.empty();
+      if (!spec.valid || spec.width <= 0 || !spec.numeric || spec.hasScale) {
+        d_.error(f.w ? f.w->loc : it->loc, "invalid PICTURE format for input", "(53)");
+      } else if (spec.width > 127) {
+        d_.error(it->loc, "P input wider than 127 positions is not implemented in this stage",
+                 "(53)");
+      } else if (spec.intDigits + spec.fracDigits > 18) {
+        d_.error(it->loc,
+                 "P input with more than 18 digit positions is not implemented in this stage",
+                 "(53)");
+      } else {
+        for (char c : spec.expanded) {
+          if (std::string("9ZV.,+-S ").find(c) == std::string::npos) {
+            d_.error(it->loc,
+                     std::string("P input does not support the picture character '") + c +
+                         "' in this stage",
+                     "(53)");
+            break;
+          }
+        }
+      }
+      if (!it->ty.isNumeric() && !targetIsPicture)
+        d_.error(it->loc, "an input P format requires a numeric or PICTURE item", "(53)");
+    } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
       // A scaled FIXED BINARY is rescaled to the picture's decimal positions
       // in IRGen (ADR-288); the formatter itself stays decimal. More than 18
       // fractional positions exceed its 64-bit decimal value.
@@ -4583,11 +4612,11 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
                    "fractional positions",
                    "(53)");
       }
-    } else if (f.kind == FormatItem::P && !it->ty.isNumeric()) {
+    } else if (f.kind == FormatItem::P) {
       d_.error(it->loc, "a P format requires a numeric item", "(53)");
     }
     if (isGet) {
-      if (it->ty.isChar() && !it->ty.picture.empty())
+      if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
         d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
                  "(53)");
       bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||

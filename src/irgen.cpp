@@ -8135,12 +8135,20 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
                                           : memberAddr(t->sym, t->memberPath, loc);
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, loc, ub, lb);
-      storeScalarTo(addr, ty, convert(v, ty, loc), packedMemberPath(t->sym->ty, t->memberPath));
+      Val cv = convert(v, ty, loc);
+      if (ty.isChar())
+        storeCharTo(addr, ty, cv, loc, packedMemberPath(t->sym->ty, t->memberPath));
+      else
+        storeScalarTo(addr, ty, cv, packedMemberPath(t->sym->ty, t->memberPath));
       return;
     }
     if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
       llvm::Value* addr = definedSubElementAddr(t->sym, t->args, loc);
-      storeScalarTo(addr, ty, convert(v, ty, loc));
+      Val cv = convert(v, ty, loc);
+      if (ty.isChar())
+        storeCharTo(addr, ty, cv, loc);
+      else
+        storeScalarTo(addr, ty, cv);
       return;
     }
     storeArrayElement(t->sym, t->args, v, loc, t->locPtr.get());
@@ -8151,7 +8159,11 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       llvm::Value* addr =
           t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
                     : memberAddr(t->sym, t->memberPath, loc);
-      storeScalarTo(addr, ty, convert(v, ty, loc), packedMemberPath(t->sym->ty, t->memberPath));
+      Val cv = convert(v, ty, loc);
+      if (ty.isChar())
+        storeCharTo(addr, ty, cv, loc, packedMemberPath(t->sym->ty, t->memberPath));
+      else
+        storeScalarTo(addr, ty, cv, packedMemberPath(t->sym->ty, t->memberPath));
       return;
     }
     storeTo(t->sym, v, loc);
@@ -8503,10 +8515,29 @@ void IRGen::emitGetEditItems(HStmt* s) {
                 });
       break;
     }
-    case HFormatItem::P:
-      // P input: picture-directed input is not implemented in this stage (D1).
-      d_.error(s->loc, "P edit item on GET is not implemented in this stage", "(53)");
+    case HFormatItem::P: {
+      // P input (ADR-291): read the picture-width field and return the value
+      // at the picture's assumed decimal point; the normal conversion path
+      // then rescales it into a numeric target or formats a PICTURE target.
+      if (di >= s->items.size())
+        break;
+      HExpr* t = s->items[di++].get();
+      SourceLoc loc = s->loc;
+      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+      if (!spec.valid || spec.width <= 0) {
+        d_.error(loc, "invalid PICTURE format for input", "(53)");
+        break;
+      }
+      deferCall("pli_get_edit_pic", {i64(spec.width), i64(spec.fracDigits)}, false,
+                [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                  Val v;
+                  v.reg = r[i];
+                  int p = spec.intDigits + spec.fracDigits;
+                  v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
+                  storeGetTarget(t, v, loc);
+                });
       break;
+    }
     }
   }
 }

@@ -219,6 +219,63 @@ double pli_get_edit_num(long long w) {
   return pli_strtod(field, NULL);
 }
 
+/* P(picture) input (rules (53),(146)-(148), ADR-291): read a w-character
+ * field and return its value scaled by the picture's assumed decimal point.
+ * A blank, comma, currency symbol, '+' or '-' is skipped; a '-' anywhere sets
+ * the sign, and a '.' moves the following digits to the fractional side.
+ * Without a '.', every digit is already in picture positions (so a 9V99 field
+ * "150" is 1.50 and comes back as the integer 150 at scale 2). */
+long long pli_get_edit_pic(long long w, long long scale) {
+  char field[128];
+  long long i = 0;
+  rt_in_lock();
+  for (; i < w && i < (long long)(sizeof field - 1); ++i) {
+    int c = rt_next_char();
+    if (c == EOF)
+      break;
+    field[i] = (char)c;
+  }
+  field[i] = '\0';
+  rt_in_unlock();
+  long long nread = i;
+
+  long long ival = 0, fval = 0, fcount = 0;
+  int isneg = 0, has_point = 0;
+  for (i = 0; i < nread; ++i) {
+    char c = field[i];
+    if (c >= '0' && c <= '9') {
+      if (has_point) {
+        if (fcount < scale) {
+          fval = fval * 10 + (c - '0');
+          ++fcount;
+        }
+      } else {
+        ival = ival * 10 + (c - '0');
+      }
+    } else if (c == '.') {
+      has_point = 1;
+    } else if (c == '-') {
+      isneg = 1;
+    } else if (c == '+') {
+      isneg = 0;
+    }
+    /* blanks, commas and currency signs carry no value */
+  }
+  long long val;
+  if (has_point) {
+    while (fcount < scale) {
+      fval *= 10;
+      ++fcount;
+    }
+    for (long long k = 0; k < scale; ++k)
+      ival *= 10;
+    val = ival + fval;
+  } else {
+    val = ival;
+  }
+  return isneg ? -val : val;
+}
+
 /* A(w): read w characters left-justified into dst, blank-padded to cap; a field
  * wider than the target is truncated (the excess input is still consumed). */
 void pli_get_edit_char(char *dst, long long cap, long long w) {

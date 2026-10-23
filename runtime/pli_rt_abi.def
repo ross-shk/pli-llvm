@@ -200,6 +200,7 @@ PLI_FN(pli_data_name_is, I32, (CPTR, I64, CPTR, I64))
  * (the caller converts to the target's type), A(w) reads a character field,
  * and X/SKIP advance the input position. */
 PLI_FN(pli_get_edit_num, DOUBLE, (I64))
+PLI_FN(pli_get_edit_pic, I64, (I64, I64)) /* P input (ADR-291) */
 PLI_FN(pli_get_edit_char, VOID, (PTR, I64, I64))
 PLI_FN(pli_get_edit_bit, VOID, (PTR, I64, I64))
 PLI_FN(pli_get_edit_column, VOID, (I64))

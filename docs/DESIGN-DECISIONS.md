@@ -10427,3 +10427,41 @@ for `GET EDIT P`, sterling data and wide picture items.
 storage and comparison path for no run-time difference. *Formatting in
 `IRGen`.* The runtime already owns the picture interpreter, and a second
 compiler-side copy would drift from `P` output.
+
+---
+
+## ADR-291 — Picture-directed input parses at the picture's assumed point
+
+**Context.** ADR-290 made `DECLARE p PICTURE(...)` a real CHARACTER value with
+a format template, but `GET EDIT` still rejected every `P` item. A picture
+variable could be written, not read, so the `B1` round trip was one-sided.
+
+**Decision.** A new runtime entry, `pli_get_edit_pic(w, scale)`, reads a
+picture-width field and returns an integer scaled by the picture's fractional
+digit count. It skips blanks, commas, currency symbols and `+`; a `-`
+anywhere sets the sign. Without a `.` every digit is already in picture
+positions (`9V99` field `150` is 1.50 and returns 150 at scale 2); with a `.`
+the digits after it are padded or truncated to the picture's scale. The
+integer result is exact, unlike a `strtod` round trip through `double`.
+
+`IRGen` wraps that integer in a `FIXED DECIMAL(picture-digits, scale)` value
+and hands it to the normal conversion path. A numeric target rescales through
+the existing exact `convert`; a PICTURE target formats through
+`convertToPicture`, so input and output share one picture interpreter. This
+also fixes the member/defined store path, which now routes CHARACTER targets
+through `storeCharTo` instead of a scalar store.
+
+The slice supports the picture characters `9 Z V . , + - S`, at most 18 digit
+positions, and numeric or PICTURE targets. Sterling, `$`/`*` positions, `CR`/
+`DB`, wide pictures and `GET LIST` into a picture keep cited diagnostics.
+
+**Consequences.** `tests/core/picture_input.pli` round-trips positive and
+negative fields, `V`, numeric and PICTURE targets, and a structure member.
+`bad_picture_input.pli` and `bad_picture_input_char.pli` pin the unsupported
+picture character and the plain-CHARACTER target. `B1` remains open for
+sterling data, wide picture items and `GET LIST` into a picture.
+
+**Rejected.** *Parse the field as `double` and reuse `F` input.* It loses
+decimal money values at the conversion boundary. *Store the raw field in a
+PICTURE variable.* The variable has to hold the picture-directed result, not
+the input spelling, or a later `A` output would expose the unedited text.

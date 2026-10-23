@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A P input target must be numeric or a PICTURE variable; a plain
+    CHARACTER item is diagnosed (rule (53), ADR-291). */
+ bad_picture_input_char: procedure options(main);
+    declare buf char(10);
+    declare c char(6);
+    get string(buf) edit(c) (p('999.99'));
+ end bad_picture_input_char;
