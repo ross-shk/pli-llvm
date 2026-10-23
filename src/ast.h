@@ -161,6 +161,8 @@ struct DeclItem {
    bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
    bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
                                   // scalar/pointer params marshal by value (C ABI)
+   std::vector<std::string> uses; // USES( ... ) entry-name-attribute (rules (34),(38))
+   std::vector<std::string> sets; // SETS( ... ) entry-name-attribute (rules (34),(38))
    std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
    bool reserved = false;         // RESERVED (ADR-203): no init
    bool unionAttr = false;        // UNION (ADR-202): overlay with next member

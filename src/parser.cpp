@@ -1728,6 +1728,55 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
+      if (w == "USES" || w == "SETS") {
+        // entry-name-attribute { USES | SETS } ( {,• uses-sets-item••• } )
+        // (rules (34),(38)): interface metadata naming the variables the entry
+        // uses or sets. It feeds interprocedural analysis, which this compiler
+        // does not perform, so the list rides the symbol without changing
+        // generated code; the item shape is still checked (a name, a level
+        // number, or '*').
+        bool isUses = (w == "USES");
+        advance();
+        if (expect(Tok::LParen, "(34)")) {
+          auto& list = isUses ? item.uses : item.sets;
+          for (;;) {
+            std::string text;
+            if (at(Tok::Star)) {
+              text = "*";
+              advance();
+            } else if (at(Tok::Number)) {
+              if (cur().isFloat || cur().sterling || cur().imaginary)
+                d_.error(cur().loc, "a USES/SETS level must be an integer constant", "(38)");
+              text = cur().text;
+              advance();
+            } else if (at(Tok::Word)) {
+              // uses-sets-item ::= unsubscripted-reference | integer | * (38):
+              // the reference parser rejects a subscript below.
+              ExprP ref = parsePrimary();
+              if (!ref)
+                break;
+              if (ref->kind != Expr::VarRef || ref->locPtr) {
+                d_.error(ref->loc, "a USES/SETS item must be an unsubscripted reference",
+                         "(38)");
+              } else {
+                text = ref->name;
+                for (const std::string& q : ref->path)
+                  text += "." + q;
+              }
+            } else {
+              d_.error(cur().loc, "expected a name, a level number, or '*' in USES/SETS",
+                       "(38)");
+              break;
+            }
+            if (!text.empty())
+              list.push_back(text);
+            if (!eat(Tok::Comma))
+              break;
+          }
+          expect(Tok::RParen, "(34)");
+        }
+        continue;
+      }
       if (w == "LIKE") {
         // like-attribute ::= LIKE unsubscripted-reference (rule 43): the
         // declared item takes the structure shape of the referenced structure.

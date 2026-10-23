@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (34),(38): USES/SETS name the variables an ENTRY uses
+    or sets. They are interface metadata for interprocedural
+    analysis, so the compiler checks each item's shape (a name,
+    a level number, or '*') and records the lists without
+    changing generated code. */
+ enuses: procedure options(main);
+    declare 1 s,
+              2 a fixed bin(31),
+              2 b(2) fixed bin(31);
+    declare extf entry(fixed bin(31)) returns(fixed bin(31))
+            uses(s.a, 1, *) sets(s.b);
+    /* attribute order is free: USES may precede ENTRY */
+    declare extg uses(s) sets(2) entry;
+
+    put skip list('PASS entry_uses_sets');
+ end enuses;

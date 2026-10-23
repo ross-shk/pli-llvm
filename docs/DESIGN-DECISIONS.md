@@ -10876,3 +10876,40 @@ It would need a third copy of reference parsing, and the qualified and
 nested forms would stay unsupported. *Accept any expression as the freed
 identifier.* `FREE pool(1)` would free the pool array's storage rather
 than the block the element points at, which is the wrong block.
+
+---
+
+## ADR-302 — `USES`/`SETS` as `ENTRY` interface metadata
+
+**Context.** Rule (34) makes `{ USES | SETS } ( {,• uses-sets-item••• } )`
+an entry-name-attribute, and rule (38) defines an item as an
+unsubscripted reference, an integer level number, or `*`. The lists name
+the variables that the entry uses or sets so an interprocedural
+optimizer can reason about calls; they do not change program behaviour.
+The parser only knew `ENTRY` and `RETURNS` there, so a declaration with
+either attribute failed as a syntax error (rule (9)) even though the
+syntax is valid.
+
+**Decision.** Accept both attributes on a `DECLARE ... ENTRY` in any
+attribute order. The parser checks the item shape — `*`, an integer
+constant, or a name/qualified name without subscripts — and stores the
+texts on the item; sema copies them to the entry symbol's `entryUses` /
+`entrySets`. Nothing consumes them yet: this compiler performs no
+interprocedural analysis, so generated code is identical with or without
+the attributes. On a storage item the attribute is not silently
+dropped: sema diagnoses it with rule (34).
+
+**Consequences.** `entry_uses_sets.pli` declares entries with all three
+item shapes, a qualified reference, and `USES` before `ENTRY`; neither
+declaration changes the program's output. `bad_uses_sets.pli` pins the
+storage-item diagnostic and `bad_uses_sets_item.pli` the subscripted and
+non-integer item diagnostics. The lists are deliberately not resolved
+against the current scope: on an external entry they describe the
+callee's variables, which the caller cannot see.
+
+**Rejected.** *Reject the attributes as unimplemented.* They are valid
+syntax with no behavioural effect, so rejecting them blocks correct PL/I
+source for no benefit. *Resolve the names in the declaring scope.* It
+would report false errors for a callee's variables. *Ignore the list
+without checking its shape.* A subscripted item or a non-integer level
+is malformed and should cite rule (38).

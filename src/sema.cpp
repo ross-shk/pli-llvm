@@ -1285,6 +1285,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                    "(34)");
           item.entryByValue = false;
         }
+        if (!item.isEntry && (!item.uses.empty() || !item.sets.empty())) {
+          // USES/SETS is an entry-name-attribute (rule (34)): it describes a
+          // procedure's interface, so on a storage item it names nothing.
+          d_.error(item.loc, "USES/SETS is only valid on an ENTRY declaration", "(34)");
+          item.uses.clear();
+          item.sets.clear();
+        }
         if (item.isCondition) {
           // DECLARE name CONDITION; (rule 9): register the programmer-named
           // condition so subsequent SIGNAL/ON CONDITION(name) resolve it. Use
@@ -1332,6 +1339,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             sym->entryIsFunction = item.entryIsFunction;
             sym->entryRetTy = item.entryRetTy;
             sym->entryByValue = item.entryByValue;
+            sym->entryUses = item.uses;
+            sym->entrySets = item.sets;
             if (!isStatic)
               p->localSyms.push_back(sym);
             item.sym = sym;
@@ -1355,6 +1364,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           sym->entryIsFunction = item.entryIsFunction;
           sym->entryRetTy = item.entryRetTy;
           sym->entryByValue = item.entryByValue;
+          sym->entryUses = item.uses;
+          sym->entrySets = item.sets;
           sym->irName = "@" + (item.extName.empty() ? item.name : item.extName);
           item.sym = sym;
           entries_.push_back(sym);

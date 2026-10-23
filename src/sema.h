@@ -33,6 +33,8 @@ struct Symbol {
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
+  std::vector<std::string> entryUses; // USES(...) interface metadata (rules (34),(38))
+  std::vector<std::string> entrySets; // SETS(...) interface metadata (rules (34),(38))
   std::string irName;            // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc* proc = nullptr;          // for ProcName
   Proc* owner = nullptr;         // the procedure that declares this variable (static link)

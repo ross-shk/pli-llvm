@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (34): USES/SETS describes an ENTRY's interface, so it is
+    diagnosed on a storage item. */
+ badus: procedure options(main);
+    declare a fixed bin(31);
+    declare x fixed bin(31) uses(a);
+ end badus;
