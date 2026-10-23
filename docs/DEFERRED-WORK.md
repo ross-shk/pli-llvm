@@ -77,6 +77,11 @@ because it also rewrites a green test, which needs an explicit decision.
 
 Ordered by the size of the program class each unblocks, not by the size of the work.
 
+**Preprocessor work is parked.** B6 is the lowest-priority row in this plan
+and lives in the Parked section after Band D: take it up only after every
+non-preprocessor row in Bands B-D is served or recorded. Its size and reach
+are not in question; the near-term sequence stays on the language and runtime.
+
 | ID | Work | Status | Evidence | Done when | Size | Deps |
 |---|---|---|---|---|---|---|
 | B0 | **Sanitizer matrix**: ASan/UBSan for the storage and overlay paths, a race check for tasking, and explicit (not silent) skips | done | Served: `tests/run_tests.py` counts skips in the summary and prints a per-group sanitizer table; `tests/driver/storage_asan.sh` builds the runtime from source with ASan+UBSan and runs twelve self-checking storage, overlay and varying-string programs (`based_*`, `controlled_*`, `defined*`, `varying_nested`); `tests/driver/tasking_tsan.sh` builds it with TSan and runs `task`/`task_many` under the fiber and OS-thread models; `lifetime_asan.sh` marks its ASan run too. Each test prints a `SANITIZER:` marker, and a missing runtime or a non-Unix host is a counted skip. The emitted program object stays uninstrumented — B13 | each test group states which sanitizer ran; skips are counted and visible in the run; tasking has a race-detection run | S | — |
@@ -85,7 +90,6 @@ Ordered by the size of the program class each unblocks, not by the size of the w
 | B3 | **Format and display remainder (`M5`)**: `COPY`/`LINE`, dynamic format counts, `GET` `COL` positioning, `DISPLAY REPLY` | done | `GC` (105)–(111),(114) | one golden per item; a dynamic-count negative; report programs stop needing source rewrites. Dynamic counts stay diagnosed with rule (48) (`bad_edit_iter.pli`); the rest are served (`line_put.pli`, `driver/stream_opts`, `get_col.pli`, `driver/display_reply`, ADR-287) | M | — |
 | B4 | **Conditions remainder (`M4`)**: the remaining condition kinds, `CHECK`, ON-unit `DECLARE`/`RETURN(value)`/`GO TO`, non-local `GO TO`, initial labels | open | `GC` (60)–(63),(65),(77),(91)–(99); `PP`'s conditions section | a matrix test per condition covering establish, raise, resume, revert, default action; `GO TO` out of an internal procedure; initial-label behaviour pinned after the damaged-scan question is settled | L | — |
 | B5 | **`AREA`/`OFFSET` completion (`M3`)**: STATIC/EXTERNAL areas, `AREA(*)`, arrays of AREA/OFFSET, offset arithmetic, locator member arrays `P -> S.A(i)`, `FREE` locators | open | `GC` (20),(22),(23),(124); `PP`'s area section | the alloc/free order matrix passes under ASan; locator member arrays read and write on both sides; unsupported combinations keep cited diagnostics | L | B0 |
-| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | open | `GC` Chapter 9 row: `%DO`/`%GO TO`/procedures still reject; `%REPLACE` exists (`src/preprocessor.cpp:361`) but rescanning is not modelled | the processor examples reproduce their expected program text; nested replacement across `%INCLUDE` is tested | M | — |
 | B7 | **Keyed/direct record I/O (`M6b`)**: keyed/update/direct organisations, `LOCATE`/`UNLOCK`/`NOLOCK`/`SET`/`EVENT`, `KEY`/`KEYTO`/`KEYFROM`, and the file attributes `IDENT`/`LINESIZE`/`PAGESIZE`/`ENVIRONMENT` | blocked | `GC` (100)–(105),(112),(113) | round trips per organisation against a documented host file format; needs its own ADR — IBM keyed files are not portable (`Open decisions` 3) | L | B2, decision 3 |
 | B8 | **Descriptor and array-form remainder (`QR2.1`)**: dope-vector descriptors, `POSITION`, subscripted `DEFINED` bases, per-`ALLOCATE` dimension bounds, multiple-`*` descriptor dimensions, multi-axis iSUB, parameter correspondence | open | `GC` (34)–(38) tail ("full dope-vector descriptors → M2", multiple-`*` dimensions diagnosed), (24) `POSITION` and `DEFINED X(i)` diagnosed, (25) per-`ALLOCATE` bounds rejected, (134) multi-axis iSUB | generated shape and alias matrix passes; each item either works or keeps its cited diagnostic with a recorded reason | L | — |
 | B9 | **Entry and interop surface (`QR2.6`)**: mixed-return alternate entries, C structure returns, `USES`/`SETS`, `SECONDARY`/`CELL`, `ABNORMAL`/`NORMAL`, `REDUCIBLE`/`IRREDUCIBLE` | open | `GC` (38): mixed returns and C structure returns diagnosed; no `USES`/`SETS` handling exists in `src/` | each item either lands with a test or is recorded as an accepted extension or limitation in `GC` | L | — |
@@ -116,6 +120,16 @@ measurement recorded, as `OB` already does for `I1`, `K5` and `K10`.
 | D4 | `I2` loop fusion: add the workload first | gated | a measured multi-pass array pattern exists; LLVM's loop-fusion pass is not in the default pipeline (`OB §11.2`) | M | measurement |
 | D5 | Extension track: `RESEXP` and `INLIST`/`INARRAY` | gated | own ADR each plus an `Extensions (not in TR 25.084)` row; rejected as optimizations because they change which conditions a program raises (`OB §12.6`, §12.8); ADR-259 is reserved for `RESEXP` | M | ADR accepted |
 | D6 | P2 architectural items 11 and 12: SSA promotion in `IRGen`, `llvm.assume` overflow-narrowing hints | gated | close unless a benchmark regresses; parity targets are already met (`benchmarks/OPTIMIZATION-PLAN.md:7-10`) | S | measurement |
+
+## Parked — deliberately last
+
+These rows stay in the register but are worked only after every open row in
+Bands B-D is served or recorded. They are not blocked by a dependency; they
+are a deliberate ordering decision.
+
+| ID | Work | Status | Evidence | Done when | Size | Deps |
+|---|---|---|---|---|---|---|
+| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | open | `GC` Chapter 9 row: `%DO`/`%GO TO`/procedures still reject; `%REPLACE` exists (`src/preprocessor.cpp:361`) but rescanning is not modelled | the processor examples reproduce their expected program text; nested replacement across `%INCLUDE` is tested | M | — |
 
 ## Dropped, or deliberately out of scope
 
