@@ -1,0 +1,17 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (56),(79),(82): an ENTRY alternate within a procedure, called
+    with EVENT (async CALL). The entry prints the PASS line, so the test
+    proves the wrapper reached it; sharing an alternate entry's *automatic*
+    storage with the parent is a separate (pre-existing) limitation.
+    External entry-procedure async is covered by
+    tests/driver/ext_async_test.sh (ADR-291). */
+ entry_async: procedure options(main) recursive;
+    declare ev event;
+
+    call ext_worker event(ev);
+    wait(ev);
+
+    ext_worker: entry;
+       put skip list('PASS entry_async');
+ end entry_async;

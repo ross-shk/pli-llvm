@@ -1,0 +1,95 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82): PRIORITY reads and sets a task's priority (QR2.8).
+    PRIORITY(t) reads the relative priority (t minus self);
+    PRIORITY(t) = n sets it; CALL ... PRIORITY(n) sets the spawn-time
+    priority relative to the caller (ADR-291). */
+ priority_basic: procedure options(main);
+    declare ev event;
+    declare ta task;
+    declare tb task;
+    declare tc task;
+    declare tk(2) task;
+    declare 1 st, 2 pad fixed binary(31), 2 tkm task;
+    declare val fixed binary(15);
+    declare ok fixed binary(31);
+
+    ok = 1;
+
+    /* Spawn with the default priority; the task's relative priority is 0. */
+    call pw priority(0) event(ev) task(ta);
+    wait(ev);
+    val = priority(ta);
+    if val ^= 0 then do;
+       put skip list('FAIL priority read', val);
+       ok = 0;
+    end;
+
+    /* Set a relative priority and read it back. */
+    priority(ta) = 5;
+    val = priority(ta);
+    if val ^= 5 then do;
+       put skip list('FAIL priority set/read', val);
+       ok = 0;
+    end;
+
+    /* Negative priorities are permitted. */
+    priority(ta) = -3;
+    val = priority(ta);
+    if val ^= -3 then do;
+       put skip list('FAIL priority negative', val);
+       ok = 0;
+    end;
+
+    /* Spawn-time priority is stored on the handle. */
+    call pw priority(10) event(ev) task(tb);
+    wait(ev);
+    val = priority(tb);
+    if val ^= 10 then do;
+       put skip list('FAIL priority spawn', val);
+       ok = 0;
+    end;
+
+    /* A task spawned without the PRIORITY option still has a live handle. */
+    call pw event(ev) task(tc);
+    wait(ev);
+    priority(tc) = 6;
+    val = priority(tc);
+    if val ^= 6 then do;
+       put skip list('FAIL priority default spawn set', val);
+       ok = 0;
+    end;
+
+    /* A TASK array element names its own handle, not the array base. */
+    call pw priority(7) event(ev) task(tk(2));
+    wait(ev);
+    val = priority(tk(2));
+    if val ^= 7 then do;
+       put skip list('FAIL priority element read', val);
+       ok = 0;
+    end;
+    priority(tk(2)) = 9;
+    val = priority(tk(2));
+    if val ^= 9 then do;
+       put skip list('FAIL priority element set', val);
+       ok = 0;
+    end;
+
+    /* A TASK member at a nonzero offset names its own handle. */
+    st.pad = 1;
+    call pw priority(4) event(ev) task(st.tkm);
+    wait(ev);
+    val = priority(st.tkm);
+    if val ^= 4 then do;
+       put skip list('FAIL priority member read', val);
+       ok = 0;
+    end;
+
+    if ok then
+       put skip list('PASS priority_basic');
+    else
+       put skip list('FAIL priority_basic');
+
+    pw: procedure;
+    end pw;
+ end priority_basic;

@@ -377,22 +377,64 @@ static pli_fiber *rt_take_expired_timer(void) {
 
 /* --- the workers --- */
 
-/* The next runnable task: the worker's runnext slot, then the worker's own
- * queue, then the global queue, then a steal from a peer, then a matured
- * DELAY.
- *
- * The runnext slot comes first and is not stealable: a task that a program
- * has just spawned is usually the one it waits for next, so it should run on
- * the worker that spawned it. If a stealer took it, the spawner's WAIT
- * would have to be woken by the OS — a thread wake-up, microseconds — and
- * the worker's own queue would have to be searched for it. */
-static pli_fiber *rt_next_runnable(rt_worker *w) {
-  pli_fiber *f = w->runnext;
-  if (f) {
-    w->runnext = NULL;
-    return f;
+/* Set once any task uses a nonzero priority (ADR-291). While it stays 0,
+ * every run queue is plain LIFO and the scheduler keeps its O(1) pop path. */
+static _Atomic int rt_prio_used = 0;
+
+/* Pop the highest-priority fiber from a worker's local queue. The worker
+ * is the exclusive owner of its local queue (only a thief detaches the
+ * whole list at once), so it can safely traverse and re-link. Detach the
+ * list, find the best candidate, unlink it, and push the rest back.
+ * Within equal priority the most-recent (head-end) task is chosen first,
+ * preserving LIFO for same-priority tasks (ADR-291). */
+static pli_fiber *rt_queue_pop_best(rt_worker *w) {
+  if (!atomic_load_explicit(&rt_prio_used, memory_order_relaxed))
+    return rt_queue_pop(&w->local);
+  pli_fiber *list = atomic_exchange_explicit(&w->local, NULL, memory_order_acq_rel);
+  if (!list)
+    return NULL;
+  /* Find the highest-priority fiber. On ties prefer the earlier (newer)
+   * one, so LIFO order is preserved within a priority. */
+  pli_fiber *best = list;
+  pli_fiber *best_prev = NULL;
+  pli_fiber *prev = list;
+  pli_fiber *cur = list->next;
+  while (cur) {
+    if (cur->priority > best->priority) {
+      best = cur;
+      best_prev = prev;
+    }
+    prev = cur;
+    cur = cur->next;
   }
-  f = rt_queue_pop(&w->local);
+  /* Unlink best from the list. */
+  if (best_prev)
+    best_prev->next = best->next;
+  else
+    list = best->next;
+  best->next = NULL;
+  /* Push the remaining list back. */
+  if (list)
+    rt_queue_push_list(&w->local, list);
+  return best;
+}
+
+/* The next runnable task: the worker's runnext slot, then the worker's own
+ * queue (priority-ordered), then the global queue, then a steal from a peer,
+ * then a matured DELAY. */
+static pli_fiber *rt_next_runnable(rt_worker *w) {
+  /* Once priorities are in use, the runnext shortcut must not outrank a
+   * queued higher-priority task. Fold the runnext task into the local
+   * queue and let the priority scan choose; otherwise keep the O(1) path
+   * (a just-spawned task is usually the one the spawner waits for). */
+  if (w->runnext) {
+    pli_fiber *f = w->runnext;
+    w->runnext = NULL;
+    if (!atomic_load_explicit(&rt_prio_used, memory_order_relaxed))
+      return f;
+    rt_queue_push(&w->local, f);
+  }
+  pli_fiber *f = rt_queue_pop_best(w);
   if (f)
     return f;
   f = rt_take_global();
@@ -403,7 +445,7 @@ static pli_fiber *rt_next_runnable(rt_worker *w) {
     pli_fiber *stolen = rt_queue_steal(&victim->local);
     if (stolen) {
       rt_queue_push_list(&w->local, stolen);
-      return rt_queue_pop(&w->local);
+      return rt_queue_pop_best(w);
     }
   }
   return rt_take_expired_timer();
@@ -525,6 +567,10 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
   f->wait_next = NULL;
   f->wait_key = NULL;
   f->deadline = 0;
+  /* A new task starts at priority 0 and without a TASK handle; the
+   * priority-aware spawn overwrites both (ADR-291). */
+  f->priority = 0;
+  f->handle = 0;
   /* A fiber that was parked on a previous task still points at that
    * task's worker; the owner is recorded again at every park, but a stale
    * one must never be trustable. */
@@ -574,6 +620,9 @@ static pli_fiber *rt_fiber_get(void) {
   f = (pli_fiber *)pli_plat_malloc(sizeof(pli_fiber));
   if (!f)
     return NULL;
+  /* Atomic members need explicit initialization before their first store. */
+  atomic_init(&f->priority, 0);
+  atomic_init(&f->handle, 0);
   f->stack_base = NULL;
   f->stack_size = 0;
   f->local = NULL;
@@ -749,6 +798,8 @@ void rt_sched_main(void (*entry)(void)) {
   main_fib.entry_fn = rt_main_entry;
   main_fib.entry_arg = (void *)entry;
   main_fib.local = NULL;
+  atomic_init(&main_fib.priority, 0);
+  atomic_init(&main_fib.handle, 0);
   if (rt_fiber_prepare(&main_fib, rt_main_entry, (void *)entry) != 0) {
     entry();
     return;
@@ -759,20 +810,27 @@ void rt_sched_main(void (*entry)(void)) {
   rt_worker_loop(w);
 }
 
-int rt_sched_spawn(void *(*fn)(void *), void *arg) {
+/* Shared spawn (ADR-291): fn(arg) runs as a fiber with the given absolute
+ * priority and TASK handle. Returns the fiber, or NULL on failure. */
+static pli_fiber *rt_sched_spawn_ex(void *(*fn)(void *), void *arg, int priority,
+                                    long long handle) {
   if (!rt_model_fiber)
-    return -1;
+    return NULL;
   rt_worker *w = rt_self_get();
   if (!w)
-    return -1;
+    return NULL;
   rt_workers_start();
   pli_fiber *f = rt_fiber_get();
   if (!f)
-    return -1;
+    return NULL;
   if (rt_fiber_prepare(f, fn, arg) != 0) {
     rt_fiber_put(f);
-    return -1;
+    return NULL;
   }
+  f->priority = priority;
+  f->handle = handle;
+  if (priority != 0)
+    atomic_store_explicit(&rt_prio_used, 1, memory_order_relaxed);
   /* The new task goes into the worker's runnext slot, which no stealer may
    * touch. A worker that already had a runnext task pushes it back to the
    * run queue: the program spawned two tasks in a row, and the older one
@@ -782,7 +840,34 @@ int rt_sched_spawn(void *(*fn)(void *), void *arg) {
   w->runnext = f;
   if (old)
     rt_queue_push(&w->local, old);
-  return 0;
+  return f;
+}
+
+int rt_sched_spawn(void *(*fn)(void *), void *arg) {
+  return rt_sched_spawn_ex(fn, arg, 0, 0) ? 0 : -1;
+}
+
+/* Priority-aware spawn (ADR-291): the same as rt_sched_spawn but the
+ * fiber carries an absolute priority and its TASK handle. */
+pli_fiber *rt_sched_spawn_p(void *(*fn)(void *), void *arg, int priority,
+                            long long handle) {
+  return rt_sched_spawn_ex(fn, arg, priority, handle);
+}
+
+/* Change a live task's priority (ADR-291). The scheduler reads it at the
+ * next selection; a parked task keeps the new value for its next run. */
+void rt_sched_set_priority(pli_fiber *f, int priority) {
+  if (!f)
+    return;
+  f->priority = priority;
+  if (priority != 0)
+    atomic_store_explicit(&rt_prio_used, 1, memory_order_relaxed);
+}
+
+/* Current fiber's priority, or 0 outside a fiber. */
+int rt_sched_current_priority(void) {
+  pli_fiber *f = rt_cur_get();
+  return f ? f->priority : 0;
 }
 
 /* The PL/I-facing entry (the ABI name): run the MAIN procedure as a task.

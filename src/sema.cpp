@@ -3449,6 +3449,24 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       checkStmt(s, sc, p);
       break;
     }
+    // PRIORITY pseudo-variable (rule (79), ADR-291): priority(t) = n
+    // sets the task handle t's priority so that a subsequent priority(t)
+    // reads back n. The argument must resolve to a TASK-typed reference.
+    if (s->target->kind == Expr::Call && s->target->name == "PRIORITY") {
+      Expr* t = s->target.get();
+      if (t->args.size() != 1) {
+        d_.error(t->loc, "PRIORITY expects 1 argument (a TASK variable)", "(123)");
+        break;
+      }
+      Expr* a = t->args[0].get();
+      if (!((a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
+             a->ty.isTask()) ||
+            (a->kind == Expr::Subscript && a->sym && a->ty.isTask())))
+        d_.error(a->loc, "PRIORITY argument must be a TASK variable or element", "(79)");
+      if (!s->value->ty.isVoid())
+        checkAssignable(Type::fixedBin(15, 0), s->value->ty, s->loc, "assignment");
+      break;
+    }
     // SUBSTR pseudo-variable (M2): substr(v, i, n) on the left of '=' — v
     // must be a modifiable character variable that the assignment overwrites.
     if (s->target->kind == Expr::Call && s->target->name == "SUBSTR") {
@@ -3840,12 +3858,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     // Task options (rule (79), QR2.8): any option makes the CALL asynchronous.
     // TASK takes a TASK variable (or nothing), EVENT an EVENT variable,
-    // PRIORITY a numeric expression (evaluated, best-effort ignored).
+    // PRIORITY a numeric expression.
+    // External entry procedures (rule 34) now support async CALL (ADR-291);
+    // function procedures stay diagnosed, internal or external.
     if (s->hasTaskOpt || s->eventRef || s->priorityExpr) {
-      if (!callee && !en)
-        d_.error(s->loc, "CALL with TASK/EVENT/PRIORITY on an external entry is not implemented",
-                 "(79)");
-      if ((callee && callee->isFunction) || (en && en->entryIsFunction))
+      if ((callee && callee->isFunction) || (en && en->entryIsFunction) ||
+          (!callee && !en && sym->entryIsFunction))
         d_.error(s->loc, "CALL with TASK/EVENT/PRIORITY on a function procedure is not implemented",
                  "(79)");
       if (s->taskRef) {
@@ -6479,11 +6497,30 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::bit(1);
     return true;
   }
-  // PRIORITY built-in/pseudo-variable (rule (79), QR2.8): task priorities
-  // are best-effort ignored in this stage; diagnose uses, never accept.
+  // PRIORITY built-in/pseudo-variable (rule (79), QR2.8): takes a TASK
+  // variable reference, yields FIXED BINARY(15,0). PRIORITY(t) = n is
+  // handled as an assignment-target pseudo-variable (rule 86).
   if (e->name == "PRIORITY") {
-    d_.error(e->loc, "PRIORITY is not implemented in this stage", "(79)");
-    e->ty = Type::voidTy();
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "PRIORITY expects 1 argument (a TASK variable)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    Expr* a = e->args[0].get();
+    // A TASK argument may be a scalar TASK variable, a TASK array element
+    // t(i), or a TASK member S.T (rules (79),(82)); each resolves to a
+    // TASK-typed reference whose live address the built-in reads/writes.
+    const Type* tt = nullptr;
+    if (a->kind == Expr::VarRef && a->sym && a->sym->kind != Symbol::ProcName && a->ty.isTask())
+      tt = &a->ty;
+    else if (a->kind == Expr::Subscript && a->sym && a->ty.isTask())
+      tt = &a->ty;
+    if (!tt) {
+      d_.error(a->loc, "PRIORITY argument must be a TASK variable or element", "(79)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(15, 0);
     return true;
   }
   // MULTIPLY built-in (M2): multiply(a, b) — product of two numerics; for

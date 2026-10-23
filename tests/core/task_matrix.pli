@@ -1,0 +1,90 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82),(83): the tasking matrix — a single program that
+    exercises the core multitasking paths so the driver can run it under
+    every backend (fiber/1, fiber/4, os/1, os/4). Covers: yield/park/wake,
+    event-poll-after-wait, independent task-local state (two tasks each
+    run to completion without clobbering each other), array-element
+    TASK/EVENT refs. (ADR-291) */
+ task_matrix: procedure options(main);
+    declare e1 event;
+    declare e2 event;
+    declare ev(4) event;
+    declare tk(4) task;
+    declare results(4) fixed binary(31);
+    declare idx(4) fixed binary(31);
+    declare total fixed binary(31);
+    declare i fixed binary(31);
+
+    /* --- yield / park / wake: a spawned task writes its result --- */
+    results(1) = 0;
+    call worker event(e1);
+    wait(e1);
+    if results(1) = 1 then
+       put skip list('PASS switch');
+    else
+       put skip list('FAIL switch', results(1));
+
+    /* --- event poll after wait --- */
+    if event(e1) then
+       put skip list('PASS event-poll-after-wait');
+    else
+       put skip list('FAIL event-poll-after-wait');
+
+    /* --- independent task-local state ---
+       Two tasks each write a distinct value to a distinct slot.
+       Under the fiber model the per-task ON stack / CONTROLLED
+       generations are isolated; under the OS model each task's
+       locals live on its own stack. Either way results(2) and
+       results(3) hold their own values. (QR2.8) */
+    call oc1 event(e1);
+    call oc2 event(e2);
+    wait(e1, e2);
+    if results(2) = 2 then
+       if results(3) = 3 then
+          put skip list('PASS task-local-state');
+       else
+          put skip list('FAIL task-local-state', results(3));
+    else
+       put skip list('FAIL task-local-state', results(2));
+
+    /* --- array-element TASK and EVENT refs ---
+       Spawn four tasks through array elements ev(i)/tk(i); WAIT all;
+       then poll each element. Each task gets its own stable element
+       idx(i): a loop variable would change while the tasks run (C28). */
+    do i = 1 to 4;
+       idx(i) = i;
+    end;
+    do i = 1 to 4;
+       call arrw(idx(i)) event(ev(i)) task(tk(i));
+    end;
+    wait(ev);
+    total = 0;
+    do i = 1 to 4;
+       if event(ev(i)) then total = total + 1;
+     end;
+    if total = 4 then
+       put skip list('PASS array-element-refs');
+    else
+       put skip list('FAIL array-element-refs', total, 'of 4');
+
+    put skip list('PASS task_matrix');
+
+    worker: procedure;
+       results(1) = 1;
+    end worker;
+
+    oc1: procedure;
+       results(2) = 2;
+    end oc1;
+
+    oc2: procedure;
+       results(3) = 3;
+    end oc2;
+
+    arrw: procedure(i);
+       declare i fixed binary(31);
+       results(i) = results(i) + 1;
+    end arrw;
+
+ end task_matrix;

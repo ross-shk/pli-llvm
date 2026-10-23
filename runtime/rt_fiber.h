@@ -13,6 +13,7 @@
 #ifndef PLI_RT_FIBER_H
 #define PLI_RT_FIBER_H
 
+#include <stdatomic.h>
 #include <stddef.h>
 
 typedef struct pli_fiber pli_fiber;
@@ -54,6 +55,8 @@ struct pli_fiber {
   void *stack_base;    /* the usable low address of the reserved stack      */
   size_t stack_size;   /* the usable size of the reserved stack             */
   int state;           /* PLI_FIB_RUNNABLE / RUNNING / WAITING / DEAD        */
+  _Atomic int priority; /* the task's absolute priority (ADR-291)             */
+  _Atomic long long handle; /* the TASK handle this fiber runs (ADR-291)     */
   pli_fiber *next;     /* the run-queue link                                */
   pli_fiber *wait_next;/* the wait-queue link (a lock or a condition)       */
   const void *wait_key;/* what the task waits for (a condition's key)      */

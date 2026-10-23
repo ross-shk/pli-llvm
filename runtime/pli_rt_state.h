@@ -167,6 +167,11 @@ int rt_next_char(void);
  * The read happens on the broker's thread, so a task that waits for input
  * parks instead of holding the worker it runs on. */
 int rt_input_getc(void);
+/* File-read broker (C2, ADR-291): fread under the fiber model parks the
+ * task while a helper thread does the blocking read. */
+size_t rt_fbroker_fread(void *buf, size_t n, FILE *f);
+/* Wait for legacy OS-model tasks before the process exits (ADR-291). */
+void rt_wait_tasks(void);
 /* Select the input stream (WS-H4, ADR-272). */
 void rt_select_input(FILE *f);
 /* ADR-220: flush the stdout write slab before program exit or FILE routing. */

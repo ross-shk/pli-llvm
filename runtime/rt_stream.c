@@ -172,7 +172,11 @@ void rt_select_input(FILE *f) { rt_in_f = f; }
  *
  * Standard input goes through the input broker (ADR-238): the read itself
  * happens on the broker's thread, so a task that waits for input parks
- * instead of holding the worker it runs on. */
+ * instead of holding the worker it runs on.
+ *
+ * File reads under the fiber model likewise park (C2 DEFERRED-WORK,
+ * ADR-291): the file-read broker does the blocking fread on a helper thread
+ * while the task yields to the scheduler. */
 int rt_next_char(void) {
   int c;
   if (rt_in_f) {
@@ -183,7 +187,7 @@ int rt_next_char(void) {
       rt_in_f_pos = 0;
     }
     if (rt_in_f_pos >= rt_in_f_len) {
-      rt_in_f_len = pli_plat_fread(rt_in_f_buf, 1, RT_FILE_IN_BUF, rt_in_f);
+      rt_in_f_len = rt_fbroker_fread(rt_in_f_buf, RT_FILE_IN_BUF, rt_in_f);
       rt_in_f_pos = 0;
       if (rt_in_f_len == 0)
         return EOF;

@@ -6336,6 +6336,24 @@ void IRGen::emitAssign(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_set_pageno"), {toI64(slot), toI64(rhs)});
     return;
   }
+  // PRIORITY pseudo-variable (rule 79, ADR-291): priority(t) = n calls the
+  // runtime setter; the value is relative to self.
+  if (s->target->kind == HExpr::Call && s->target->name == "PRIORITY") {
+    HExpr* t = s->target.get();
+    HExpr* a = t->args[0].get();
+    Val rhs = emitExpr(s->value.get());
+    llvm::Value* idVal = i64(0);
+    /* The handle cell may be an array element or a member, not just the
+     * symbol's base address (rules (79),(82)). */
+    if (llvm::Value* idAddr = taskEventAddr(a, s->loc)) {
+      llvm::Value* id32 = b_.CreateLoad(b_.getInt32Ty(), idAddr, "tid");
+      idVal = b_.CreateSExt(id32, b_.getInt64Ty(), "tid64");
+    }
+    b_.CreateCall(runtimeFn("pli_task_set_priority_of"),
+                  {idVal, b_.CreateTrunc(toI64(rhs), b_.getInt32Ty(), "p32")});
+    freeConcatTemp(s->value.get(), {});
+    return;
+  }
   // ONSOURCE pseudo-variable (TR 123, ADR-210): onsource = key calls the runtime
   // setter to update the source condition key of the current SIGNAL handler.
   if (s->target->kind == HExpr::VarRef && s->target->name == "ONSOURCE") {
@@ -9119,8 +9137,47 @@ void IRGen::emitAsyncCall(HStmt* s) {
   Symbol* calleeSym = s->sym;
   Proc* callee = calleeSym->proc;
   Stmt* en = calleeSym->entry;
-  if (!callee && !en)
-    return; // external async: diagnosed by sema (79)
+  if (!callee && !en) {
+    // External entry async (rule 79, ADR-291): marshal args for the
+    // external procedure using its declared entryParams Types, the same
+    // ABI rules as a synchronous external call. Function-async is diagnosed
+    // by sema, so no hidden sret is needed here.
+    llvm::Function* calleeF = calleeFn(calleeSym);
+    std::vector<Type> paramTypes = calleeSym->entryParams;
+    std::vector<llvm::Value*> callArgs;
+    ActualScope scope(*this);
+    for (size_t i = 0; i < s->args.size() && i < paramTypes.size(); ++i) {
+      HExpr* a = s->args[i].get();
+      if (a->kind == HExpr::Star) {
+        callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+        continue;
+      }
+      callArgs.push_back(calleeSym->entryByValue ? marshalArg(a, paramTypes[i], s->loc)
+                                                 : argAddr(a, paramTypes[i]));
+    }
+    // Hidden extent/length args for `*`-extent array and CHAR(*) parameters
+    // (rules (13),(18)), exactly as the synchronous external path marshals
+    // them; without these the wrapper call would not match calleeFn.
+    if (!calleeSym->entryByValue)
+      for (size_t i = 0; i < paramTypes.size(); ++i) {
+        const Type& t = paramTypes[i];
+        if (!((t.isArray() && !t.dims.empty() && t.dims[0].adj) || (t.isChar() && t.starLen)))
+          continue;
+        HExpr* a =
+            (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
+        llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled);
+        if (!ext) {
+          SourceLoc loc = (i < s->args.size() && s->args[i]) ? s->args[i]->loc : s->loc;
+          d_.error(loc, "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
+                   "(13)");
+          ext = i64(0);
+        }
+        callArgs.push_back(ext);
+      }
+    appendStaticLinks(nullptr, callArgs);
+    emitAsyncSpawn(s, calleeF, callArgs);
+    return;
+  }
   llvm::Function* calleeF = calleeFn(calleeSym);
   std::vector<Symbol*> calleeParams =
       en ? en->entryParamSyms : (callee ? callee->paramSyms : std::vector<Symbol*>());
@@ -9160,11 +9217,19 @@ void IRGen::emitAsyncCall(HStmt* s) {
     }
   }
   appendStaticLinks(callee, callArgs);
-  // PRIORITY is evaluated for its effects, then ignored (best-effort, (79)).
-  if (s->priorityExpr) {
-    Val pv = emitExpr(s->priorityExpr.get());
-    (void)toI64(pv);
-  }
+  emitAsyncSpawn(s, calleeF, callArgs);
+}
+
+/* The common tail of emitAsyncCall: build the context layout, the per-site
+ * wrapper, and spawn the task (with priority if PRIORITY was given). */
+void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
+                           std::vector<llvm::Value*> callArgs) {
+  // PRIORITY (rule 79, ADR-291): evaluated and passed to the spawn
+  // function so the task starts with that priority. A bare CALL (no
+  // task option) reaches here only when PRIORITY is the sole option.
+  llvm::Value* prioVal = i32(0);
+  if (s->priorityExpr)
+    prioVal = b_.CreateTrunc(toI64(emitExpr(s->priorityExpr.get())), b_.getInt32Ty(), "prio");
 
   llvm::Value* eventAddr = llvm::Constant::getNullValue(b_.getPtrTy());
   if (s->eventRef)
@@ -9180,8 +9245,10 @@ void IRGen::emitAsyncCall(HStmt* s) {
     fields.push_back(v->getType());
   llvm::StructType* ctxTy = llvm::StructType::get(ctx_, fields);
 
-  // Per-site wrapper: unpack the context, call the procedure, complete the
-  // event, free the context, return null.
+  // Per-site wrapper: unpack the context, call the procedure, free the
+  // context, then complete the event. Completing last means a WAIT that
+  // returns sees a task with no work left on its heap (the OS-thread model
+  // may exit the process as soon as the waiter resumes).
   llvm::FunctionType* wft = llvm::FunctionType::get(b_.getPtrTy(), {b_.getPtrTy()}, false);
   llvm::Function* wrap = llvm::Function::Create(wft, llvm::Function::InternalLinkage,
                                                 "pli_task_wrap_" + std::to_string(n_++), &mod_);
@@ -9197,8 +9264,8 @@ void IRGen::emitAsyncCall(HStmt* s) {
   b_.CreateCall(calleeF, wargs);
   llvm::Value* evp = b_.CreateStructGEP(ctxTy, ctx, 0, "cev");
   llvm::Value* ev = b_.CreateLoad(b_.getPtrTy(), evp, "ev");
-  b_.CreateCall(runtimeFn("pli_event_complete"), {ev});
   b_.CreateCall(runtimeFn("pli_free"), {ctx});
+  b_.CreateCall(runtimeFn("pli_event_complete"), {ev});
   b_.CreateRet(llvm::Constant::getNullValue(b_.getPtrTy()));
   b_.SetInsertPoint(savedBB);
 
@@ -9216,8 +9283,18 @@ void IRGen::emitAsyncCall(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
   if (taskAddr)
     b_.CreateCall(runtimeFn("pli_task_note"), {taskAddr});
+  // Load the task id (if any) so pli_task_spawn_p can store the priority in
+  // the handle's registry entry. A bare TASK has no handle (id = 0).
+  llvm::Value* taskId = i64(0);
+  if (taskAddr) {
+    llvm::Value* idVal = b_.CreateLoad(b_.getInt32Ty(), taskAddr, "tid");
+    taskId = b_.CreateSExt(idVal, b_.getInt64Ty(), "tid64");
+  }
   llvm::Value* fnPtr = b_.CreateBitCast(wrap, b_.getPtrTy(), "twrap");
-  b_.CreateCall(runtimeFn("pli_task_spawn"), {fnPtr, ctxRaw});
+  // Always the priority-aware entry: it stores the handle's fiber so a later
+  // PRIORITY(t) can update a live task, and with no option it still inherits
+  // the spawning task's priority (absolute = self + 0) (ADR-291).
+  b_.CreateCall(runtimeFn("pli_task_spawn_p"), {fnPtr, ctxRaw, taskId, prioVal});
   pendingVarWrites_.clear(); // no sync point to copy a varying arg back
   // ADR-246: the argument buffers stay live — the task reads them from the
   // caller's frame after the call returns, so their slots must not be
@@ -9225,27 +9302,57 @@ void IRGen::emitAsyncCall(HStmt* s) {
   dropTempLifetimes();
 }
 
-void IRGen::emitWait(HStmt* s) {
-  // WAIT (rule (82)): no count waits for every event; WAIT(evs)(k) waits for
-  // any k of them through pli_wait_n.
-  if (!s->waitCount) {
-    for (auto& e : s->waitEvents) {
-      llvm::Value* addr = taskEventAddr(e.get(), s->loc);
-      if (!addr)
-        continue;
-      b_.CreateCall(runtimeFn("pli_event_wait"), {addr});
+// Expand one WAIT operand into its event addresses (rule (82)). A whole
+// static EVENT array contributes every element; a scalar, an element, or a
+// member is one address. A dynamic/controlled array is diagnosed instead of
+// silently waiting for only its first element.
+void IRGen::appendWaitAddrs(HExpr* e, std::vector<llvm::Value*>& out, SourceLoc loc) {
+  const Type& ty = e->ty;
+  if (e->kind == HExpr::VarRef && ty.isArray()) {
+    bool dynamic = e->sym && e->sym->controlled;
+    for (const auto& d : ty.dims)
+      if (d.dyn || d.lbDyn)
+        dynamic = true;
+    if (dynamic) {
+      d_.error(loc, "WAIT over a dynamic EVENT array is not implemented in this stage", "(82)");
+      return;
+    }
+    llvm::Value* base = taskEventAddr(e, loc);
+    if (!base)
+      return;
+    long long n = arrayExtent(ty);
+    llvm::Type* at = llvmTy(ty);
+    for (long long i = 0; i < n; ++i) {
+      llvm::Value* ep = b_.CreateInBoundsGEP(at, base, {i64(0), i64(i)}, "wev");
+      out.push_back(ep);
     }
     return;
   }
-  size_t n = s->waitEvents.size();
+  llvm::Value* addr = taskEventAddr(e, loc);
+  if (addr)
+    out.push_back(addr);
+}
+
+void IRGen::emitWait(HStmt* s) {
+  // WAIT (rule (82)): no count waits for every event; WAIT(evs)(k) waits for
+  // any k of them through pli_wait_n. An EVENT array operand expands to its
+  // elements, so WAIT(ev) waits for all of them.
+  std::vector<llvm::Value*> addrs;
+  for (auto& e : s->waitEvents)
+    appendWaitAddrs(e.get(), addrs, s->loc);
+  if (!s->waitCount) {
+    for (llvm::Value* addr : addrs)
+      b_.CreateCall(runtimeFn("pli_event_wait"), {addr});
+    return;
+  }
+  size_t n = addrs.size();
+  if (n == 0)
+    return;
   llvm::Value* arr = entryAlloca(llvm::ArrayType::get(b_.getPtrTy(), (unsigned)n), "wait.evs");
   for (size_t i = 0; i < n; ++i) {
     llvm::Value* ep = b_.CreateInBoundsGEP(llvm::ArrayType::get(b_.getPtrTy(), (unsigned)n), arr,
                                            {i64(0), i64((long long)i)}, "we");
-    llvm::Value* addr = taskEventAddr(s->waitEvents[i].get(), s->loc);
-    if (!addr)
-      addr = llvm::Constant::getNullValue(b_.getPtrTy());
-    b_.CreateStore(addr, ep);
+    b_.CreateStore(addrs[i], ep);
   }
   Val need = emitExpr(s->waitCount.get());
   b_.CreateCall(runtimeFn("pli_wait_n"), {arr, i64((long long)n), toI64(need)});
@@ -12820,6 +12927,23 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* st = b_.CreateCall(runtimeFn("pli_event_status"), {addr}, "evst");
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(st, b_.getInt1Ty(), "evb");
+    result = v;
+    return true;
+  }
+  // PRIORITY(t) (rule (79), ADR-291): read a task handle's priority as a
+  // relative value (t minus self). The handle may be a scalar, an array
+  // element t(i), or a member S.T; the runtime computes the difference.
+  if (e->name == "PRIORITY") {
+    HExpr* a = e->args[0].get();
+    llvm::Value* idVal = i64(0);
+    if (llvm::Value* idAddr = taskEventAddr(a, e->loc)) {
+      llvm::Value* id32 = b_.CreateLoad(b_.getInt32Ty(), idAddr, "tid");
+      idVal = b_.CreateSExt(id32, b_.getInt64Ty(), "tid64");
+    }
+    llvm::Value* pri = b_.CreateCall(runtimeFn("pli_task_priority_of"), {idVal}, "prio");
+    v.ty = e->ty;
+    // pli_task_priority_of returns i32 (ABI), FIXED BIN(15) is i32 — same width.
+    v.reg = pri;
     result = v;
     return true;
   }

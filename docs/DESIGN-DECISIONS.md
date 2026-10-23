@@ -10427,3 +10427,84 @@ for `GET EDIT P`, sterling data and wide picture items.
 storage and comparison path for no run-time difference. *Formatting in
 `IRGen`.* The runtime already owns the picture interpreter, and a second
 compiler-side copy would drift from `P` output.
+
+---
+
+## ADR-291 — Tasking contract freeze (C1/C2 integration)
+
+**Status:** accepted (Band C completion)
+
+**Context.** ADRs 233–239 delivered the fiber backend (switch, park, wake,
+overflow, stdin broker, AArch64 Windows switching). DEFERRED-WORK row C1 asks
+for a matrix proof across backends; row C2 asks for the remaining QR2.8
+features: `PRIORITY`, external async `CALL TASK`, and file-read parking. C2 is
+blocked on C1: the contract must be frozen before its semantics are built on.
+
+**Decision.** Freeze the tasking contract as follows, effective with this row.
+
+1. **Priority range.** `PRIORITY(t)` yields `FIXED BINARY(15,0)`.
+   `CALL ... PRIORITY(n)` accepts any numeric expression and truncates its
+   value to `i32`; negative priorities are permitted. No additional clamping is
+   performed.
+
+2. **Relative-value semantics.**
+   - `PRIORITY(t)` **reads** the task `t` handle's priority as the difference
+     *t minus current*: `prio(t) − prio(self)`. Outside a running task (the
+     main program before any task, or a non-task context) `self` is 0.
+   - `PRIORITY(t) = n` **sets** `t`'s priority so that a subsequent read returns
+     `n`: `prio(t) := prio(self) + n`. A set on a live task updates its
+     scheduling priority for the next selection; a set on a completed task is
+     stored and observed by later reads, but has no scheduling effect.
+   - `CALL ... TASK(...) ... PRIORITY(n)` spawns the task with absolute priority
+     `prio(self) + n`.
+
+3. **Scheduler ordering.** Higher priority is favoured: `rt_next_runnable`
+   scans the owning worker's local queue and selects the highest-priority
+   fiber before falling through to the LIFO/steal order. Once a nonzero
+   priority is in use, the just-spawned `runnext` task is folded into the local
+   queue so it cannot outrank a queued higher-priority task. Same-priority
+   tasks keep LIFO order. This ordering is a *soft guarantee*: priority raises
+   the probability of earlier execution, not a hard deadline, but within a
+   single worker the highest-priority runnable task always runs next.
+
+4. **TASK-handle lifetime.** Handles are sequential `int` ids allocated by
+   `pli_task_note`. The id is the 1-based index into a growable registry; it is
+   not recycled, so a task that completes and whose fiber is recycled for a new
+   spawn gets a *different* handle. `PRIORITY(t)` on a completed handle returns
+   the last stored priority minus `prio(self)`; on an unnoted handle it returns
+   0.
+
+5. **OS-thread model.** Under `PLI_TASK_MODEL=os` the priority value is stored
+   in the handle's registry entry but has no scheduling effect: POSIX
+   `sched_setscheduler` is not used (it would need capabilities and a priority
+   range the platform may not grant). The `PRIORITY` built-in still reads and
+   writes the stored value, and `CALL PRIORITY` is accepted, so programs are
+   portable across models. The contract for ordering applies only to the fiber
+   model.
+
+6. **Function-async `CALL TASK`.** Not delivered with this row. A `CALL` of a
+   function procedure with `TASK`/`EVENT`/`PRIORITY` is diagnosed at rule (79):
+   "CALL ... TASK on a function procedure is not implemented." Only external
+   *entry procedure* async calls are accepted.
+
+7. **File-read parking.** The broker parks a task for stream `GET` from a named
+   `FILE` under the fiber model. Record `READ` still performs a blocking
+   `fread`; moving it to the broker requires serialising record access and is
+   tracked separately (DEFERRED-WORK C4).
+
+**Consequences.**
+- `runtime/pli_rt_abi.def` gains `pli_task_spawn_p` (priority-aware spawn),
+  `pli_task_priority_of`, and `pli_task_set_priority_of`. Generated CALLs use
+  `pli_task_spawn_p` even without a `PRIORITY` option (priority 0, so the task
+  inherits the caller's priority), which also publishes the handle's fiber for
+  later `PRIORITY(t) = n` updates; `pli_task_spawn` stays in the ABI for
+  compatibility.
+- `rt_fiber` gains an atomic `priority` and the TASK `handle`; the scheduler
+  reads the priority at selection. `rt_task_local` is unchanged (priority
+  follows the fiber, not the PL/I state).
+- The legacy OS model counts live tasks and `pli_rt_fini` waits for them (up to
+  two seconds), so a detached task cannot outlive the process teardown.
+- The tasking matrix test (`tests/driver/task_matrix.sh`) runs the same program
+  on fiber/1, fiber/4, os/1, os/4. Priority *values* are checked on every
+  backend; priority *ordering* is checked only on fiber/1 because the OS model
+  does not schedule by priority.

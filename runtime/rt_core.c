@@ -28,6 +28,9 @@ void pli_rt_init(void) {
 }
 
 void pli_rt_fini(void) {
+  /* ADR-291: the legacy model detaches its task threads; let them finish
+   * before the process tears the runtime down. */
+  rt_wait_tasks();
   /* ADR-220: flush buffered stdout before the trailing-newline fputc so
    * the final newline lands after the buffered content, not before it. */
   rt_out_lock();

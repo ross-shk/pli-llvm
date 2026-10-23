@@ -883,7 +883,11 @@ Poll instead of blocking with the `event()` built-in (`'1'b` means done):
  end;
 ```
 
-Also: `call ... task[(t)]` requests an async task (`priority(p)` is accepted but ignored for now); task/event arrays, elements `ev(i)`, and members `s.ev` work.
+Also: `call ... task[(t)]` requests an async task; `call ... priority(p)` sets the
+spawned task's absolute priority to the caller's priority plus `p` (default 0)
+(ADR-291); `priority(tk)` reads it back relative to the caller, and
+`priority(tk) = n` changes it for a live task; task/event arrays, elements
+`ev(i)`, and members `s.ev` work.
 
 > **Go friends:** `call f event(e); ... wait(e);` is `go f(); ... wg.Wait()`. `event(e)` polling is a non-blocking channel check.
 
@@ -903,13 +907,15 @@ fiber backend yet.
 
 **Not yet**
 
-- You must `wait` before the block exits, or the event's storage may vanish while the task still runs. External and function-async tasks are diagnosed.
+- You must `wait` before the block exits, or the event's storage may vanish while the task still runs. External `CALL TASK` of entry procedures is supported; function-async tasks remain diagnosed.
 - The fiber backend exists for x86-64 and AArch64 and runs in CI on Linux, macOS
   and Windows; the Windows backend (ADR-239) is the least-proven of the three.
   The tasking matrix per backend is tracked in `docs/DEFERRED-WORK.md` (C1).
-- A task that reads a *file* holds the worker it runs on. Reading *standard
-  input* does not: the read goes to a helper thread and the task parks until
-  the bytes arrive (ADR-238).
+- Under the fiber model, a stream `get` from a file parks the task (and frees
+  its worker) until the read completes, using the same helper-thread mechanism
+  as standard input (ADR-238, ADR-291). Record `read` still blocks the worker
+  (DEFERRED-WORK C4). Reading *standard input* likewise parks rather than
+  blocking.
 
 A task that runs out of stack is reported, not left to die quietly:
 `TASK: stack overflow (the task's stack ran out)`, and the program stops

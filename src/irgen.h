@@ -315,7 +315,13 @@ private:
   // heap context, spawn a detached thread running a per-site wrapper, and
   // return at once. Shared by emitCall when a task option is present.
   void emitAsyncCall(HStmt* s);
+  // Shared spawn tail for emitAsyncCall: builds the context and spawns the
+  // task, passing PRIORITY if present.
+  void emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
+                      std::vector<llvm::Value*> callArgs);
   void emitWait(HStmt* s); // WAIT (rule (82), QR2.8)
+  // One WAIT operand -> its event addresses (an EVENT array expands).
+  void appendWaitAddrs(HExpr* e, std::vector<llvm::Value*>& out, SourceLoc loc);
   // Address of a task/event operand (rule (78),(81)): accepts a scalar,
   // array-element (ev(i)) or member reference, covering CONTROLLED/dynamic
   // storage for the latter two. Returns a pointer to the underlying flag.

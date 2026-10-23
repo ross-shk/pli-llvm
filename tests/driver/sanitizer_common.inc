@@ -13,8 +13,8 @@
 # CMakeLists.txt. Keep the two lists in sync: a new runtime TU missing here
 # would stay uninstrumented and silently unmeasured.
 SAN_RT_SRCS="rt_core rt_stream rt_string rt_math rt_mathport rt_cond
-  rt_storage rt_get rt_file rt_edit rt_task rt_sync rt_input rt_sched
-  rt_fiber_asm rt_plat_default"
+  rt_storage rt_get rt_file rt_edit rt_task rt_sync rt_input rt_fbroker
+  rt_sched rt_fiber_asm rt_plat_default"
 
 # Resolve the clang of the compiler's own LLVM (LLVM_BINDIR, then CLANG as
 # ctest passes it, then the build tree's CMake cache). Prints the path or

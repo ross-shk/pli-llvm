@@ -181,7 +181,7 @@ set(RT_PORTABLE_SRCS
   runtime/rt_math.c runtime/rt_mathport.c runtime/rt_cond.c
   runtime/rt_storage.c runtime/rt_get.c runtime/rt_file.c
   runtime/rt_edit.c runtime/rt_task.c runtime/rt_sync.c
-  runtime/rt_input.c
+  runtime/rt_input.c runtime/rt_fbroker.c
   runtime/rt_sched.c runtime/rt_fiber_asm.c)
 set(RT_PLATFORM_SRCS
   runtime/rt_plat_default.c)
