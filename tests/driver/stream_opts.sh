@@ -20,8 +20,10 @@ cat > "$OUT.pli" <<'EOF'
     get line(1) edit(b) (a(5));
     if a = 'abcde' & b = 'HELLO' then
        put skip list('PASS stream_opts');
-    else
-       put skip list('FAIL stream_opts: a >', a, '< b >', b, '<');
+    else do;
+       put skip list('FAIL stream_opts: got >', a, '< >', b, '<');
+       stop;
+    end;
  end opts;
 EOF
 

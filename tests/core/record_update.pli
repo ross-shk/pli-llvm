@@ -10,8 +10,6 @@
     declare want fixed binary(31);
     declare i fixed binary(31);
     declare eof bit(1);
-    declare fails fixed binary(31);
-    fails = 0;
     eof = '0'b;
 
     /* A six-record master file: 1, 2, 3, 4, 5, 6. */
@@ -45,16 +43,15 @@
        else if i >= 4 then want = i + 1;
        else want = i;
        if rec ^= want then do;
-          fails = fails + 1;
           put skip list('FAIL record', i, 'got', rec, 'want', want);
+          stop;
        end;
     end;
     read file(master) into(rec);
     if ^eof then do;
-       fails = fails + 1;
-       put skip list('FAIL endfile');
+       put skip list('FAIL endfile: expected eof, got record', rec);
+       stop;
     end;
     close file(master);
-    if fails = 0 then put skip list('PASS');
-    else put skip list('FAIL count', fails);
+    put skip list('PASS');
  end record_update;

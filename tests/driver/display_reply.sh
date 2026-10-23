@@ -15,8 +15,10 @@ disp_reply: procedure options(main);
    display('prompt> ') reply(reply_var);
    if reply_var = 'user reply          ' then
       put skip list('PASS display_reply');
-   else
+   else do;
       put skip list('FAIL display_reply: got >', reply_var, '<');
+      stop;
+   end;
 end disp_reply;
 EOF
 
