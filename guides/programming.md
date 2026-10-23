@@ -1040,11 +1040,30 @@ Served items: `f(w,d)`, `e(w,d)`, `a(w)`, `x(w)`, `skip(n)`, `page`, `line(n)`, 
  close file(f);
 ```
 
+A sequential record file can be opened `update` to rewrite or delete records on
+the way through, with `on endfile` telling the loop to stop:
+
+```pli
+ dcl f file;
+ on endfile(f) eof = '1'b;
+ do while(^eof);
+    read file(f) into(rec);
+    if ^eof then do;
+       if rec = 2 then rewrite file(f) from(20);
+       else if rec = 4 then delete file(f);
+    end;
+ end;
+```
+
 `display(x)` prints one value plus a newline (handy for quick debugging).
 
 **Not yet**
 
-- `record`/`update`/`keyed` open options, `rewrite`/`delete`/`locate`/`unlock`, and `on endfile` are diagnosed. Record I/O is fixed-size binary only.
+- `record`/`update`/`keyed` open options beyond `record sequential input|output|update`,
+  `read`/`write`/`rewrite`/`delete` beyond the sequential record slice,
+  `locate`/`unlock`, `ignore`/`keyto`/`key`/`nolock`/`set`/`keyfrom`/`event`,
+  and the keyed/direct organisations are diagnosed. Record I/O is fixed-size
+  binary only.
 
 > **Run the full example:** [`examples/input_output.pli`](../examples/input_output.pli) — `pli input_output.pli -o io && ./io` (writes `io_demo.txt` in the current directory).
 

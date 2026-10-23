@@ -225,6 +225,11 @@ PLI_FN(pli_record_write_fixed, VOID, (I64, I64))
 PLI_FN(pli_record_write_float, VOID, (I64, DOUBLE))
 PLI_FN(pli_record_write_char, VOID, (I64, PTR, I64))
 PLI_FN(pli_record_write_bit, VOID, (I64, I8))
+PLI_FN(pli_record_rewrite_fixed, VOID, (I64, I64))       /* REWRITE the current record (112) */
+PLI_FN(pli_record_rewrite_float, VOID, (I64, DOUBLE))
+PLI_FN(pli_record_rewrite_char, VOID, (I64, PTR, I64))
+PLI_FN(pli_record_rewrite_bit, VOID, (I64, I8))
+PLI_FN(pli_record_delete, VOID, (I64))                    /* DELETE the current record (112) */
 PLI_FN(pli_record_read_fixed, I64, (I64))
 PLI_FN(pli_record_read_float, DOUBLE, (I64))
 PLI_FN(pli_record_read_char, VOID, (I64, PTR, I64))

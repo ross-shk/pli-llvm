@@ -1,11 +1,11 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rules (112),(113): REWRITE and DELETE stay
-    diagnosed; only sequential READ/WRITE
-    are served in this stage. */
+ /* rules (112),(113): REWRITE takes a FROM source and
+    DELETE takes no data clause; the keyed options
+    stay diagnosed. */
  badrecord: procedure options(main);
     declare f file;
     declare x fixed bin(31);
-    rewrite file(f) from(x);
-    delete file(f);
+    rewrite file(f) into(x);
+    delete file(f) from(x);
  end badrecord;

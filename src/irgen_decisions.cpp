@@ -663,6 +663,8 @@ void EffectWalker::walkStmt(HStmt* st) {
   case HStmt::Display:
   case HStmt::Read:
   case HStmt::Write:
+  case HStmt::Rewrite:
+  case HStmt::Delete:
   case HStmt::Open:
   case HStmt::Close:
   case HStmt::Allocate:

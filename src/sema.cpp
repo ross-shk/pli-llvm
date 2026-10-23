@@ -701,9 +701,12 @@ private:
       assign(s->target.get());
       return true;
     case Stmt::Write:
+    case Stmt::Rewrite:
     case Stmt::Display:
     case Stmt::Delay:
       read(s->value.get());
+      return true;
+    case Stmt::Delete:
       return true;
     case Stmt::Signal:
       read(s->oncodeExpr.get());
@@ -2744,6 +2747,23 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   return (unsigned int)((fnv1a(s->condName.data(), s->condName.size()) & 0x7FFFFFFFU) + 1);
 }
 
+// Rule (97): ENDFILE is a file condition, so its handler is keyed by the
+// file: kEndfileBaseCondKey - slot keeps each file's unit separate on the
+// shared ON stack.
+int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
+  if (s->fileIdent.empty()) {
+    d_.error(s->loc, "ENDFILE requires a FILE ( f ) reference", "(97)");
+    return 0;
+  }
+  Symbol* f = lookup(sc, s->fileIdent);
+  if (!f || f->kind == Symbol::ProcName || !f->fileAttr) {
+    d_.error(s->loc, "'" + s->fileIdent + "' is not a FILE variable", "(97)");
+    return 0;
+  }
+  s->fileSym = f;
+  return Stmt::kEndfileBaseCondKey - f->fileSlot;
+}
+
 // Whole-array expressions (rules 86, 127; QR2.1): storage a DO desugar can
 // address — a variable with its own storage. Parameters (hidden extents),
 // DEFINED overlays, BASED storage, and dynamic structure members stay
@@ -3924,9 +3944,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "READ INTO of this type is not implemented in this stage", "(112)");
     break;
   }
-  case Stmt::Write: {
-    // Rules (112),(113): WRITE FILE ( f ) FROM ( expression ) — one fixed-size
-    // binary record from a scalar value (sequential slice).
+  case Stmt::Write:
+  case Stmt::Rewrite: {
+    // Rules (112),(113): WRITE/REWRITE FILE ( f ) FROM ( expression ) — one
+    // fixed-size binary record from a scalar value; REWRITE replaces the
+    // record most recently read or written.
+    const std::string verb = s->kind == Stmt::Rewrite ? "REWRITE" : "WRITE";
     Symbol* rsym = lookup(sc, s->fileIdent);
     if (!rsym || rsym->kind == Symbol::ProcName || !rsym->fileAttr) {
       d_.error(s->loc, "'" + s->fileIdent + "' is not a FILE variable", "(112)");
@@ -3937,7 +3960,17 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     Expr* v = s->value.get();
     if (!v || v->ty.isVoid() || v->ty.isArray() || v->ty.isStruct() || v->ty.isPointer() ||
         v->ty.isComplex() || (v->ty.isChar() && v->ty.varying))
-      d_.error(s->loc, "WRITE FROM of this type is not implemented in this stage", "(112)");
+      d_.error(s->loc, verb + " FROM of this type is not implemented in this stage", "(112)");
+    break;
+  }
+  case Stmt::Delete: {
+    // Rule (112): DELETE FILE ( f ) removes the record most recently read.
+    Symbol* rsym = lookup(sc, s->fileIdent);
+    if (!rsym || rsym->kind == Symbol::ProcName || !rsym->fileAttr) {
+      d_.error(s->loc, "'" + s->fileIdent + "' is not a FILE variable", "(112)");
+      break;
+    }
+    s->fileSym = rsym;
     break;
   }
   case Stmt::Allocate:
@@ -4218,9 +4251,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     break;
   case Stmt::On:
-    // Rules (91),(94),(99): ERROR, SIZE, or a programmer-named condition;
-    // the unit body only needs typing plus the establishing-frame checks.
-    s->condKey = resolveCondKey(s, sc);
+    // Rules (91),(94),(97),(99): ERROR, a fixed condition, ENDFILE(file), or
+    // a programmer-named condition; the unit body only needs typing plus the
+    // establishing-frame checks.
+    s->condKey = s->condName == "ENDFILE" ? resolveFileCondKey(s, sc)
+                                          : resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
       ++inUnit_;
       checkStmt(s->unit.get(), sc, p);
@@ -4229,8 +4264,17 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     break;
   case Stmt::Revert:
-  case Stmt::Signal:
     // A REVERT with no established handler is a no-op reverting to SYSTEM.
+    s->condKey = s->condName == "ENDFILE" ? resolveFileCondKey(s, sc)
+                                          : resolveCondKey(s, sc);
+    break;
+  case Stmt::Signal:
+    // Rule (97): ENDFILE is raised by READ, never by SIGNAL.
+    if (s->condName == "ENDFILE") {
+      d_.error(s->loc, "SIGNAL ENDFILE is not allowed; the condition is raised by READ",
+               "(93)");
+      break;
+    }
     s->condKey = resolveCondKey(s, sc);
     // SIGNAL ... SET ONCODE(expr) (rule (93)): the code is numeric.
     if (s->oncodeExpr) {

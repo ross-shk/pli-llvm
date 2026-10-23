@@ -9738,3 +9738,79 @@ too and avoids a divide on the conversion path. *Rescaling wide cross-base
 conversions exactly now.* It needs a wider intermediate or an arbitrary
 precision path; B11 records the refinement, and the `FLOAT` fallback is
 documented rather than silent.
+
+## ADR-283 — A file condition is keyed by its FILE variable's runtime slot
+
+**Context.** The ON/SIGNAL/REVERT dispatch keys a condition by an integer:
+0 is ERROR, negative constants are the fixed conditions, and a programmer-named
+condition (rule (99)) is a hash of its name so every object file agrees on the
+key. `ENDFILE` is a *file* condition: `ON ENDFILE(f)` names the file it applies
+to, and rule (97) requires the reference. A hash of "ENDFILE" alone would make
+every file share one handler, and a program that reads two files sequentially
+would need its two ENDFILE units to disentangle.
+
+**Decision.** `ON ENDFILE(f)`/`REVERT ENDFILE(f)` key the handler by
+`kEndfileBaseCondKey - slot`, where `slot` is the FILE variable's compile-time
+runtime slot and `kEndfileBaseCondKey` is a constant (currently `-1000`) shared
+as `Stmt::kEndfileBaseCondKey` in `src/ast.h` and `RT_ENDFILE_KEY_BASE` in
+`runtime/rt_file.c`. The READ runtime raises ENDFILE on a short read, looks up
+the topmost handler for its slot's key, runs it with its capture context, and
+resumes after the READ; with no handler the condition is unhandled and raises
+ERROR, as before it was served. `SIGNAL ENDFILE` is diagnosed, because the
+condition is raised by READ, not by the programmer.
+
+**Consequences.** The gate is `tests/core/record_update.pli`, whose read loop
+rises on `ON ENDFILE(master)` without a trailing end test (the handler clears a
+flag). A second read after the loop start, fed by the same file, would run the
+same unit. `bad_endfile.pli` pins the requirement that the reference be a FILE
+variable.
+
+**Rejected.** *A hash of the condition name only.* Two ENDFILE units on one
+program would collide. *A per-slot dispatch key in the runtime alone.* The
+compiler must compute the same key at `ON`, `REVERT` and `SIGNAL` sites, so the
+formula lives with the other condition keys in `Stmt`.
+
+## ADR-284 — Sequential record update: REWRITE, DELETE and the UPDATE open mode
+
+**Context.** ADR-101 served the sequential record slice: `READ`/`WRITE` of one
+fixed-size image (FIXED 8B, FLOAT 8B, BIT(1) 1B, CHAR(n) nB) on a
+`RECORD SEQUENTIAL` file opened INPUT or OUTPUT. `REWRITE`/`DELETE`, the
+`UPDATE` open mode, and `ON ENDFILE` stayed diagnosed. A master-file update
+program needs all three: read a record, decide, replace or remove it, and stop
+at the end of file.
+
+**Decision.** `OPEN FILE ( f ) RECORD SEQUENTIAL UPDATE TITLE ('name')` opens
+the file `r+b` (mode 2) so it can be read and written in place without a second
+open; `UPDATE` is diagnosed unless combined with `RECORD SEQUENTIAL`, and with
+`INPUT`. `REWRITE FILE ( f ) FROM (v)` overwrites the current record; `DELETE
+FILE ( f )` removes it. The visible `(113)` option lines in the damaged scan
+are reassigned to this rule per the scan note, and both take no options beyond
+FILE in this slice — `KEYTO`/`IGNORE`/`NOLOCK`/`SET`/`EVENT` cannot apply to
+sequential *update* records anyway (they belong to the keyed/direct
+organisations of B7).
+
+The runtime tracks each slot's current record as an `(offset, size)` pair,
+set by every successful READ/WRITE and cleared on EOF, close and reopen.
+`REWRITE` requires a current record and an unchanged size (a size change would
+rewrite the wrong image), then seeks to the offset and writes in place.
+`DELETE` shifts the tail of the byte stream down over the record and truncates
+the file, so the next READ sees the following record; images carry no record
+marker, so a delete is `O(bytes in tail)` — fixed-size images make that
+`O(n - i)`.
+
+**Consequences.** `tests/core/record_update.pli` writes a six-record master,
+`ON ENDFILE`s its update pass, rewrites record 2 to 20 and deletes record 4,
+then reads back `1, 20, 3, 5, 6` and an ENDFILE. `storage_asan.sh` runs it
+under the sanitized runtime. `bad_record.pli` now pins that `REWRITE` needs a
+`FROM` and `DELETE` takes no data clause; `bad_open_update.pli` pins that
+`UPDATE` must be `RECORD SEQUENTIAL`. New platform seams `pli_plat_fseek`/
+`pli_plat_ftell`/`pli_plat_ftruncate` (POSIX, or the 64-bit CRT pair on
+Windows) are added to the darwin-sdk `libSystem.tbd` stub.
+
+**Rejected.** *A fixed 2 GiB `int` position on Windows.* `_fseeki64` keeps
+positions 64-bit there, matching the LP64 POSIX pair. *Overwriting in place by
+rewriting from the file start.* The offset of the current record is already
+known and a per-file `ftell` is O(1); a full rewrite would move the whole tail
+on every update. *A marker-per-record layout.* The fixed-size image format has
+no room for a marker without changing `READ`/`WRITE` too, which would break
+`driver/record`.

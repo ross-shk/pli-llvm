@@ -103,15 +103,16 @@ private:
   StmtP parseSignal();        // rule (93)
   // Parse one condition (rule 94); returns its name ("ERROR" or a rule (99)
   // programmer-named condition, otherwise "" after diagnosing the
-  // unimplemented condition).
-  std::string parseCondition();
+  // unimplemented condition). A file condition (ENDFILE, rule 97) writes its
+  // FILE reference through fileArg.
+  std::string parseCondition(std::string* fileArg = nullptr);
   // Consume a balanced (...) group (e.g. an unimplemented CHECK list).
   void skipParen(const char* rule);
   StmtP parseAllocate(); // ALLOCATE (rule 87)
   StmtP parseFree();     // FREE (rule 90)
   StmtP parseOpen();     // OPEN (rules 100,101)
   StmtP parseClose();    // CLOSE (rules 102,103)
-  StmtP parseRecordIO(); // READ/WRITE (rules (112),(113)): sequential slice
+  StmtP parseRecordIO(); // READ/WRITE/REWRITE/DELETE (rules (112),(113))
   void parseProcOptions(Proc* p);
   bool parseDeclItem(DeclItem& item);
   // Parse the dimension + attribute tail shared by a declaration item and by a

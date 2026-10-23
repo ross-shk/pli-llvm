@@ -327,6 +327,8 @@ private:
   void emitClose(HStmt* s);       // CLOSE (rules 102,103)
   void emitRecordRead(HStmt* s);  // READ (rules (112),(113)): one binary record in
   void emitRecordWrite(HStmt* s); // WRITE (rules (112),(113)): one binary record out
+  void emitRecordRewrite(HStmt* s); // REWRITE (rule (112)): replace the current record
+  void emitRecordDelete(HStmt* s);  // DELETE (rule (112)): remove the current record
 
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is

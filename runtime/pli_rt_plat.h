@@ -56,6 +56,11 @@ int pli_plat_getchar(void);
 int pli_plat_fputc(int c, FILE *fp);
 int pli_plat_fflush(FILE *fp);
 int pli_plat_ferror(FILE *fp);
+/* Sequential record positioning (REWRITE/DELETE, rule 112): a seek/tell pair
+ * plus truncation after a DELETE shifts the tail down. */
+int pli_plat_fseek(FILE *fp, long long off, int whence);
+long long pli_plat_ftell(FILE *fp);
+int pli_plat_ftruncate(FILE *fp, long long size);
 int pli_plat_fprintf(FILE *fp, const char *fmt, ...);
 
 /* --- the tasking model (ADR-234)

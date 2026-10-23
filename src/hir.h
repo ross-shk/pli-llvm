@@ -148,6 +148,8 @@ struct HStmt {
     Display, // rule (114)
     Read,    // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
     Write,   // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
+    Rewrite, // rule (112) REWRITE FILE ( f ) FROM ( reference ) — replace the current record
+    Delete,  // rule (112) DELETE FILE ( f ) — remove the current record
     Wait,    // rule (82) WAIT(ev,...)[(count)] (QR2.8)
     Delay,   // rule (83) DELAY(expr) (QR2.8)
     Format,  // rule (44) FORMAT(formatlist); — no code, labels only for R(ref)
@@ -205,6 +207,7 @@ struct HStmt {
   Symbol* fileSym = nullptr;
   std::string openTitle;
   bool openInput = false;
+  bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112))
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
 
   std::vector<HExprP> args; // CALL arguments

@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (101): UPDATE is a RECORD SEQUENTIAL mode. */
+ badopenupdate: procedure options(main);
+    declare f file;
+    open file(f) update title('bad.dat');
+ end badopenupdate;

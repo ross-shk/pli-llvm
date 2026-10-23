@@ -11,8 +11,11 @@
 #include "pli_rt_plat.h"
 
 #include <stdarg.h>
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <io.h>
+#else
 #include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 /* --- allocation: direct libc (the portable TUs must not name these) */
@@ -69,6 +72,35 @@ int pli_plat_getchar(void) { return getchar(); }
 int pli_plat_fputc(int c, FILE *fp) { return fputc(c, fp); }
 int pli_plat_fflush(FILE *fp) { return fflush(fp); }
 int pli_plat_ferror(FILE *fp) { return ferror(fp); }
+/* Sequential record positioning (REWRITE/DELETE, rule (112)). POSIX uses the
+ * ISO seek/tell pair: `long` is 64-bit on the LP64 targets, and a record file
+ * larger than 2 GiB is out of scope for this slice. Windows needs the 64-bit
+ * CRT calls (long is 32-bit there). */
+int pli_plat_fseek(FILE *fp, long long off, int whence) {
+#if defined(_WIN32)
+  return _fseeki64(fp, off, whence);
+#else
+  return fseek(fp, (long)off, whence);
+#endif
+}
+long long pli_plat_ftell(FILE *fp) {
+#if defined(_WIN32)
+  return _ftelli64(fp);
+#else
+  return (long long)ftell(fp);
+#endif
+}
+/* Truncate after a DELETE has shifted the tail down. The caller flushes
+ * first; this flushes again because the FILE position must be settled. */
+int pli_plat_ftruncate(FILE *fp, long long size) {
+  if (fflush(fp) != 0)
+    return -1;
+#if defined(_WIN32)
+  return _chsize_s(_fileno(fp), size);
+#else
+  return ftruncate(fileno(fp), (off_t)size);
+#endif
+}
 /* Printf via vfprintf: the ... crosses the seam, so __builtin_va_list never
  * appears in the portable blob's ABI. */
 int pli_plat_fprintf(FILE *fp, const char *fmt, ...) {

@@ -198,6 +198,8 @@ struct Stmt {
     Display,     // rule (114) DISPLAY (expression) — one scalar value
     Read,        // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
     Write,       // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
+    Rewrite,     // rule (112) REWRITE FILE ( f ) FROM ( reference ) — replace the current record
+    Delete,      // rule (112) DELETE FILE ( f ) — remove the current record
     Wait,        // rule (82) WAIT(ev,...)[(count)] — suspend until events complete (QR2.8)
     Delay,       // rule (83) DELAY(expr) — suspend for N milliseconds (QR2.8)
     Format,      // rule (44) FORMAT(formatlist); — remote format repository for R(ref)
@@ -256,6 +258,8 @@ struct Stmt {
   Symbol* fileSym = nullptr;
   std::string openTitle;
   bool openInput = false;
+  bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112)):
+                           // read and write in place (REWRITE/DELETE)
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
                            // file; READ/WRITE transfer fixed-size binary records
 
@@ -285,6 +289,10 @@ struct Stmt {
   static constexpr int kSubscriptrangeCondKey = -2;
   static constexpr int kZerodivideCondKey = -3;
   static constexpr int kConversionCondKey = -4; // CONVERSION (rule 94, QR1.2)
+  // ENDFILE(f) (rule 97) is a file condition: its key is this base minus the
+  // FILE variable's runtime slot, so each file has its own handler. Mirrored
+  // in runtime/rt_file.c (RT_ENDFILE_KEY_BASE).
+  static constexpr int kEndfileBaseCondKey = -1000;
   std::string condName; // e.g. "ERROR", "SIZE", "SUBSCRIPTRANGE", "ZERODIVIDE",
                         // or a rule (99) condition name
   int condKey = 0;      // 0 = ERROR, negative = fixed key above, else condNames index + 1

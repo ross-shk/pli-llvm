@@ -5633,6 +5633,12 @@ void IRGen::emitStmt(HStmt* s) {
   case HStmt::Write:
     emitRecordWrite(s);
     break;
+  case HStmt::Rewrite:
+    emitRecordRewrite(s);
+    break;
+  case HStmt::Delete:
+    emitRecordDelete(s);
+    break;
   case HStmt::Return: {
     // Rule (91): procedure exit restores the entry ERROR depth, popping any
     // handlers this procedure established.
@@ -6989,14 +6995,16 @@ void IRGen::emitFree(HStmt* s) {
 }
 
 // OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
-// The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 = OUTPUT.
-// A RECORD SEQUENTIAL open (rules (101),(112)) uses the binary record runtime.
+// The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 =
+// OUTPUT, 2 = UPDATE. A RECORD SEQUENTIAL open (rules (101),(112)) uses the
+// binary record runtime.
 void IRGen::emitOpen(HStmt* s) {
   Symbol* f = s->fileSym;
   llvm::Value* name = globalString(s->openTitle);
+  long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
    b_.CreateCall(
        runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
-       {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(s->openInput ? 0 : 1),
+       {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(mode),
         i64(f->fileNonprint ? 1 : 0)});
 }
 
@@ -7024,6 +7032,39 @@ void IRGen::emitRecordWrite(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+}
+
+// REWRITE (rule (112)): replace the record most recently read or written.
+// The runtime checks that a current record exists and that the new image has
+// the same size, then writes it in place.
+void IRGen::emitRecordRewrite(HStmt* s) {
+  llvm::Value* slot = i64(s->fileSym->fileSlot);
+  Val v = emitExpr(s->value.get());
+  switch (v.ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    b_.CreateCall(runtimeFn("pli_record_rewrite_fixed"), {slot, toI64(v)});
+    break;
+  case TK::Float:
+    b_.CreateCall(runtimeFn("pli_record_rewrite_float"), {slot, v.reg});
+    break;
+  case TK::Bit: {
+    llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "rbit");
+    b_.CreateCall(runtimeFn("pli_record_rewrite_bit"), {slot, bit});
+    break;
+  }
+  case TK::Char:
+    b_.CreateCall(runtimeFn("pli_record_rewrite_char"), {slot, v.ptr, v.len});
+    break;
+  default:
+    break; // other types are diagnosed by sema
+  }
+}
+
+// DELETE (rule (112)): remove the record most recently read, shifting the
+// rest of the file down so the next READ sees the following record.
+void IRGen::emitRecordDelete(HStmt* s) {
+  b_.CreateCall(runtimeFn("pli_record_delete"), {i64(s->fileSym->fileSlot)});
 }
 
 // READ (rules (112),(113)): consume one fixed-size binary record into a plain

@@ -382,6 +382,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->fileSym = s->fileSym;
   h->openTitle = s->openTitle;
   h->openInput = s->openInput;
+  h->openUpdate = s->openUpdate;
   h->openRecord = s->openRecord;
 
   // CALL statement arguments: coerce to the callee's parameter types.
@@ -737,6 +738,10 @@ const char* stmtKind(HStmt::Kind k) {
     return "Read";
   case HStmt::Write:
     return "Write";
+  case HStmt::Rewrite:
+    return "Rewrite";
+  case HStmt::Delete:
+    return "Delete";
   case HStmt::Format:
     return "Format";
   }
@@ -882,6 +887,13 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Write:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " from=";
     printExpr(os, s->value.get(), ind);
+    break;
+  case HStmt::Rewrite:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name) << " from=";
+    printExpr(os, s->value.get(), ind);
+    break;
+  case HStmt::Delete:
+    os << " " << (s->fileSym ? s->fileSym->name : s->name);
     break;
   case HStmt::Allocate:
     for (size_t i = 0; i < s->allocBase.size(); ++i) {

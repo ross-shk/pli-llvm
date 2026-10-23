@@ -935,14 +935,8 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     return parseOpen();
   if (kw("CLOSE"))
     return parseClose();
-  if (kw("READ") || kw("WRITE"))
-    return parseRecordIO(); // rules (112),(113): sequential slice
-  if (kw("REWRITE") || kw("DELETE")) {
-    d_.error(cur().loc, "REWRITE/DELETE file input/output is not implemented in this stage",
-             "(112)");
-    resync();
-    return nullptr;
-  }
+  if (kw("READ") || kw("WRITE") || kw("REWRITE") || kw("DELETE"))
+    return parseRecordIO(); // rules (112),(113): sequential record transfer/update
   return nullptr;
 }
 
@@ -967,7 +961,7 @@ void Parser::skipParen(const char* rule) {
 // One condition (rule 94). ERROR, SIZE, SUBSCRIPTRANGE, and ZERODIVIDE are
 // served; every other condition is diagnosed with its rule number, never
 // silently accepted.
-std::string Parser::parseCondition() {
+std::string Parser::parseCondition(std::string* fileArg) {
   if (!at(Tok::Word)) {
     d_.error(cur().loc, "expected a condition", "(94)");
     return "";
@@ -1030,7 +1024,27 @@ std::string Parser::parseCondition() {
     }
     return name;
   }
-  if (w == "ENDFILE" || w == "ENDPAGE" || w == "KEY" || w == "UNDEFINEDFILE" || w == "NAME" ||
+  if (w == "ENDFILE") {
+    // ENDFILE(file) (rule 97): a file condition names its file. Sema keys
+    // the handler per file slot (Stmt::kEndfileBaseCondKey).
+    advance();
+    if (!at(Tok::LParen)) {
+      d_.error(l, "ENDFILE requires a FILE ( f ) reference", "(97)");
+      return "";
+    }
+    advance(); // (
+    if (!at(Tok::Word)) {
+      d_.error(cur().loc, "expected a FILE variable after ENDFILE(", "(97)");
+      return "";
+    }
+    if (fileArg)
+      *fileArg = cur().text;
+    advance();
+    if (!expect(Tok::RParen, "(97)"))
+      return "";
+    return "ENDFILE";
+  }
+  if (w == "ENDPAGE" || w == "KEY" || w == "UNDEFINEDFILE" || w == "NAME" ||
       w == "RECORD" || w == "TRANSMIT") {
     advance();
     if (at(Tok::LParen))
@@ -1049,7 +1063,7 @@ StmtP Parser::parseOn(Proc* owner) {
   st->loc = cur().loc;
   advance(); // ON
   st->kind = Stmt::On;
-  st->condName = parseCondition();
+  st->condName = parseCondition(&st->fileIdent);
   if (st->condName.empty()) {
     resync();
     return nullptr;
@@ -1088,7 +1102,7 @@ StmtP Parser::parseRevert() {
   st->loc = cur().loc;
   advance(); // REVERT
   st->kind = Stmt::Revert;
-  st->condName = parseCondition();
+  st->condName = parseCondition(&st->fileIdent);
   if (st->condName.empty()) {
     resync();
     return nullptr;
@@ -1103,7 +1117,7 @@ StmtP Parser::parseSignal() {
   st->loc = cur().loc;
   advance(); // SIGNAL
   st->kind = Stmt::Signal;
-  st->condName = parseCondition();
+  st->condName = parseCondition(&st->fileIdent);
   if (st->condName.empty()) {
     resync();
     return nullptr;
@@ -3798,9 +3812,12 @@ StmtP Parser::parseFree() {
 StmtP Parser::parseRecordIO() {
   auto st = std::make_unique<Stmt>();
   st->loc = cur().loc;
-  bool isRead = atWord("READ");
-  advance(); // READ / WRITE
-  st->kind = isRead ? Stmt::Read : Stmt::Write;
+  const bool isRead = atWord("READ");
+  const bool isRewrite = atWord("REWRITE");
+  const bool isDelete = atWord("DELETE");
+  advance(); // READ / WRITE / REWRITE / DELETE
+  st->kind = isRead ? Stmt::Read
+                    : isRewrite ? Stmt::Rewrite : isDelete ? Stmt::Delete : Stmt::Write;
   if (atWord("FILE")) {
     advance();
     if (eat(Tok::LParen)) {
@@ -3815,26 +3832,32 @@ StmtP Parser::parseRecordIO() {
       d_.error(cur().loc, "expected '(' after FILE", "(113)");
     }
   } else {
-    d_.error(cur().loc, "READ/WRITE require a FILE ( f ) option in this stage", "(113)");
-  }
-  const char* want = isRead ? "INTO" : "FROM";
-  if (atWord(want)) {
-    advance();
-    if (eat(Tok::LParen)) {
-      if (isRead)
-        st->target = parseExpr();
-      else
-        st->value = parseExpr();
-      expect(Tok::RParen, "(113)");
-    } else {
-      d_.error(cur().loc, std::string("expected '(' after ") + want, "(113)");
-    }
-  } else {
     d_.error(cur().loc,
-             std::string(isRead ? "READ requires an INTO ( reference ) option; "
-                                : "WRITE requires a FROM ( expression ) option; ") +
-                 "it is not implemented otherwise in this stage",
-             "(113)");
+             "READ/WRITE/REWRITE/DELETE require a FILE ( f ) option in this stage", "(113)");
+  }
+  // DELETE removes the current record and takes no data clause; READ needs a
+  // receiver and WRITE/REWRITE a source.
+  if (!isDelete) {
+    const char* want = isRead ? "INTO" : "FROM";
+    if (atWord(want)) {
+      advance();
+      if (eat(Tok::LParen)) {
+        if (isRead)
+          st->target = parseExpr();
+        else
+          st->value = parseExpr();
+        expect(Tok::RParen, "(113)");
+      } else {
+        d_.error(cur().loc, std::string("expected '(' after ") + want, "(113)");
+      }
+    } else {
+      d_.error(cur().loc,
+               std::string(isRead
+                               ? "READ requires an INTO ( reference ) option; "
+                               : "WRITE/REWRITE require a FROM ( expression ) option; ") +
+                   "it is not implemented otherwise in this stage",
+               "(113)");
+    }
   }
   while (!at(Tok::Semi) && !at(Tok::Eof)) {
     d_.error(cur().loc,
@@ -3852,8 +3875,9 @@ StmtP Parser::parseRecordIO() {
 // open-statement ::= OPEN {, open-optionslist};    rules (100),(101)
 // This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the
 // INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40); and the sequential
-// record form with RECORD SEQUENTIAL (rules (101),(112)). KEYED/UPDATE and
-// the IDENT/LINESIZE/PAGESIZE/ENVIRONMENT options stay unimplemented.
+// record form with RECORD SEQUENTIAL [INPUT|OUTPUT|UPDATE] (rules
+// (101),(112)). KEYED/DIRECT and the IDENT/LINESIZE/PAGESIZE/ENVIRONMENT
+// options stay unimplemented.
 StmtP Parser::parseOpen() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Open;
@@ -3900,6 +3924,13 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
+    if (atWord("UPDATE")) {
+      // UPDATE (rules (101),(112)): read and write the same sequential
+      // record file in place, for REWRITE/DELETE.
+      st->openUpdate = true;
+      advance();
+      continue;
+    }
     if (atWord("STREAM") || atWord("PRINT")) {
       sawStream = true;
       advance();
@@ -3912,7 +3943,7 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("KEYED") || atWord("UPDATE") || atWord("ENVIRONMENT") || atWord("IDENT") ||
+    if (atWord("KEYED") || atWord("ENVIRONMENT") || atWord("IDENT") ||
         atWord("LINESIZE") || atWord("PAGESIZE")) {
       d_.error(cur().loc, "OPEN option " + cur().text + " is not implemented in this stage",
                "(101)");
@@ -3927,6 +3958,12 @@ StmtP Parser::parseOpen() {
     d_.error(st->loc, "OPEN requires a FILE ( f ) option in this stage", "(101)");
   if (st->openRecord && sawStream)
     d_.error(st->loc, "OPEN cannot combine RECORD with STREAM/PRINT in this stage", "(101)");
+  if (st->openUpdate && (!st->openRecord || sawStream))
+    d_.error(st->loc,
+             "OPEN ... UPDATE requires the RECORD SEQUENTIAL organisation in this stage",
+             "(101)");
+  else if (st->openUpdate && st->openInput)
+    d_.error(st->loc, "OPEN cannot combine INPUT with UPDATE", "(101)");
   expect(Tok::Semi, "(100)");
   return st;
 }

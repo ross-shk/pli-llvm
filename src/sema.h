@@ -193,6 +193,10 @@ private:
   // prog_->condNames would not). A programmer-named name already declared as
   // a variable, parameter, or procedure is diagnosed.
   int resolveCondKey(Stmt* s, Scope* sc);
+  // Rule (97): resolve a file condition (ENDFILE) to its per-file dispatch
+  // key — Stmt::kEndfileBaseCondKey minus the FILE variable's runtime slot.
+  // Sets s->fileSym; returns 0 after diagnosing a missing or non-FILE name.
+  int resolveFileCondKey(Stmt* s, Scope* sc);
   // Validate the STRING ( reference ) stream option (rule 105): the target must
   // be a NONVARYING CHARACTER variable, and PAGE/SKIP are stream-only. A PUT
   // STRING formats into its target, so a VALUE constant is diagnosed there.

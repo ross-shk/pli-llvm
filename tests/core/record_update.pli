@@ -1,0 +1,60 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (97),(112),(113): a sequential master-file update — an ON
+    ENDFILE read loop, a conditional REWRITE and DELETE, then a
+    verification pass over the rewritten file. The scratch file is
+    written under out/, which the test runner creates and gitignores. */
+ record_update: procedure options(main);
+    declare master file;
+    declare rec fixed binary(31);
+    declare want fixed binary(31);
+    declare i fixed binary(31);
+    declare eof bit(1);
+    declare fails fixed binary(31);
+    fails = 0;
+    eof = '0'b;
+
+    /* A six-record master file: 1, 2, 3, 4, 5, 6. */
+    open file(master) record sequential output
+       title('tests/core/out/record_update.dat');
+    do i = 1 to 6;
+       write file(master) from(i);
+    end;
+    close file(master);
+
+    /* Update in place: 2 becomes 20, record 4 is deleted. */
+    open file(master) record sequential update
+       title('tests/core/out/record_update.dat');
+    on endfile(master) eof = '1'b;
+    do while(^eof);
+       read file(master) into(rec);
+       if ^eof then do;
+          if rec = 2 then rewrite file(master) from(20);
+          else if rec = 4 then delete file(master);
+       end;
+    end;
+    close file(master);
+
+    /* Read back: 1, 20, 3, 5, 6, then one more READ raises ENDFILE. */
+    open file(master) record sequential input
+       title('tests/core/out/record_update.dat');
+    eof = '0'b;
+    do i = 1 to 5;
+       read file(master) into(rec);
+       if i = 2 then want = 20;
+       else if i >= 4 then want = i + 1;
+       else want = i;
+       if rec ^= want then do;
+          fails = fails + 1;
+          put skip list('FAIL record', i, 'got', rec, 'want', want);
+       end;
+    end;
+    read file(master) into(rec);
+    if ^eof then do;
+       fails = fails + 1;
+       put skip list('FAIL endfile');
+    end;
+    close file(master);
+    if fails = 0 then put skip list('PASS');
+    else put skip list('FAIL count', fails);
+ end record_update;
