@@ -10,7 +10,7 @@ Linux (x86_64 or aarch64) and macOS (Apple Silicon):
 
 ```sh
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
-arch=$(uname -m)          # x86_64, aarch64, or arm64
+arch=$(uname -m)          
 curl -L "https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-$os-$arch.tar.gz" \
   | tar xzf - && sudo install -m 755 "$os-$arch/pli" /usr/local/bin/pli
 ```
@@ -47,24 +47,26 @@ For a fuller tour — arrays, structures, storage, conditions, concurrency — s
 `benchmarks/run_benchmarks.py` compares PL/I against C across 33 micro-benchmarks (scalar, string, decimal, array, I/O); `benchmarks/run_tasking_bench.py` compares the tasking models against Go and C. Methodology and the validity rules are in [`benchmarks/README.md`](benchmarks/README.md).
 
 ```sh
-cmake --build build/cmake -j                    # rebuild before timing
+cmake --build build/cmake -j                   
+
 python3 benchmarks/run_benchmarks.py
 python3 benchmarks/run_tasking_bench.py --models fiber,os
 ```
 
 ### PL/I vs C (micro-benchmarks, -O2, median)
 
-24 of 33 benchmarks are at parity with or faster than Clang `-O2`. The wins concentrate where PL/I's native semantics avoid per-element C overhead:
+21 of 33 benchmarks are at parity with or faster than Clang `-O2`. The wins concentrate where PL/I's native semantics avoid per-element C overhead:
 
 <table class="markdown-table">
   <tr><th>Benchmark</th><th>PL/I / C ratio</th><th>PL/I Advantage</th></tr>
-  <tr><td>string_search</td><td>0.068×</td><td>14.7× faster</td></tr>
-  <tr><td>select_chain</td><td>0.104×</td><td>9.6× faster</td></tr>
-  <tr><td>picture_fold</td><td>0.218×</td><td>4.6× faster</td></tr>
-  <tr><td>string_ops</td><td>0.285×</td><td>3.5× faster</td></tr>
-  <tr><td>decimal_scale</td><td>0.461×</td><td>2.2× faster</td></tr>
-  <tr><td>io_list</td><td>0.727×</td><td>1.4× faster</td></tr>
-  <tr><td>controlled_stack</td><td>0.714×</td><td>1.4× faster</td></tr>
+  <tr><td>string_search</td><td>0.06×</td><td>16.7× faster</td></tr>
+  <tr><td>picture_fold</td><td>0.10×</td><td>10× faster</td></tr>
+  <tr><td>string_ops</td><td>0.21×</td><td>4.8× faster</td></tr>
+  <tr><td>decimal_scale</td><td>0.45×</td><td>2.2× faster</td></tr>
+  <tr><td>by_name</td><td>0.47×</td><td>2.1× faster</td></tr>
+  <tr><td>select_chain</td><td>0.47×</td><td>2.1× faster</td></tr>
+  <tr><td>controlled_stack</td><td>0.73×</td><td>1.4× faster</td></tr>
+  <tr><td>io_list</td><td>0.89×</td><td>1.1× faster</td></tr>
 </table>
 
 Full results and the methodology live in `benchmarks/`.
@@ -73,8 +75,8 @@ Full results and the methodology live in `benchmarks/`.
 
 <table class="markdown-table">
   <tr><th>Benchmark</th><th>PL/I / Go ratio</th><th>Result</th></tr>
-  <tr><td>task_loop (spawn–join lifecycle)</td><td>0.800×</td><td>PL/I beats Go</td></tr>
-  <tr><td>task_spawn (20 000 live tasks)</td><td>21.7× (pending improvement)</td><td>Go&#39;s 2 KiB growable stack wins for fan-out</td></tr>
+  <tr><td>task_loop (spawn–join lifecycle)</td><td>0.76×</td><td>PL/I beats Go</td></tr>
+  <tr><td>task_spawn (20 000 live tasks)</td><td>23.6× (pending improvement)</td><td>Go's 2 KiB growable stack wins for fan-out</td></tr>
 </table>
 
 The fiber model reuses a pre-allocated stack per worker, making it faster than Go on the spawn–join lifecycle. Fan-out of many simultaneously-live tasks is PL/I's known cost — each fiber reserves an 8 MiB demand-paged stack region.
@@ -157,7 +159,7 @@ cmake --build build/cmake --target check     # formatting + static analysis + -W
 Configure with `PLI_CROSS_BITCODE=ON` to embed all four runtime bitcodes:
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DPLI_CROSS_BITCODE=ON   # plus platform flags
+cmake -G Ninja -S . -B build/cmake -DPLI_CROSS_BITCODE=ON   
 cmake --build build/cmake -j
 
 ./build/cmake/pli --triple x86_64-unknown-linux-gnu program.pli -o program
