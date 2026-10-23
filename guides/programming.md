@@ -773,9 +773,20 @@ iSUB builds a sliding view into one axis of an array without copying — like a 
 
 Affine forms like `x(m*1sub + c)` are served too.
 
+`kSUB` names the item's k-th subscript, so an overlay of any rank works. The
+axes may cross — a transposed view — and one dummy may drive several base axes:
+
+```pli
+ dcl g(3,4) fixed bin(31);
+ dcl t(4,3) fixed bin(31) defined g(2sub, 1sub);   /* t(i,j) = g(j,i) */
+
+ dcl sq(5,5) fixed bin(31);
+ dcl diag(5) fixed bin(31) defined sq(1sub, 1sub); /* sq(i,i) */
+```
+
 **Not yet**
 
-- `position` is an error; at most one iSUB per overlay; the base must be in the same or an enclosing scope.
+- `position` is an error; every item subscript must be mapped by a dummy; the base must be in the same or an enclosing scope.
 
 > **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `pli defined_isub.pli -o overlays && ./overlays`.
 

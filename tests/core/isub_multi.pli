@@ -1,0 +1,44 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (134): a kSUB dummy names the k-th subscript of the DEFINED
+    item, so an item of any rank can overlay the base — including a
+    transposed view (the axes cross) and a diagonal (one dummy drives
+    several base axes). */
+ isub_multi: procedure options(main);
+    declare g(3,4) fixed bin(31);
+    declare sq(5,5) fixed bin(31);
+    /* t(i,j) is a live view of g(j,i): the axes swap */
+    declare t(4,3) fixed bin(31) defined g(2sub, 1sub);
+    /* diag(i) is a live view of sq(i,i) */
+    declare diag(5) fixed bin(31) defined sq(1sub, 1sub);
+    /* step2(i) is a live view of sq(2i,2i): index arithmetic on both
+       axes */
+    declare step2(2) fixed bin(31) defined sq(2*1sub, 2*1sub);
+    declare bad fixed bin(31);
+    bad = 0;
+
+    /* writing through the transposed view lands in the base and back */
+    t(2,3) = 23;
+    if g(3,2) ^= 23 then bad = 1;
+    if t(2,3) ^= 23 then bad = 2;
+    g(1,4) = 14;
+    if t(4,1) ^= 14 then bad = 3;
+
+    /* the diagonal overlay touches only its base diagonal */
+    sq(3,2) = 12;                 /* an off-diagonal neighbour */
+    diag(3) = 99;
+    if sq(3,3) ^= 99 then bad = 4;
+    if sq(3,2) ^= 12 then bad = 5;
+
+    /* affine multi-axis: step2(2) is sq(4,4), step2(1) is sq(2,2) */
+    step2(2) = 44;
+    if sq(4,4) ^= 44 then bad = 6;
+    sq(2,2) = 22;
+    if step2(1) ^= 22 then bad = 7;
+
+    if bad ^= 0 then do;
+       put skip list('FAIL isub multi', bad);
+       stop;
+    end;
+    put skip list('PASS isub_multi');
+ end isub_multi;

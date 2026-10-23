@@ -1645,9 +1645,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             }
           } else {
             // Subscripted base DEFINED X(...) (rules 126,134): each base
-            // subscript is a constant index or a single iSUB dummy. With an
-            // iSUB, the item is a 1-D array overlaying that axis of X; with
-            // only constants, it is a scalar overlay of one element.
+            // subscript is a constant index or an iSUB dummy. A kSUB dummy
+            // names the item's k-th subscript; the same dummy may drive
+            // several base axes (X(1SUB,1SUB) overlays a diagonal). With only
+            // constants, the item is a scalar overlay of one element.
             if (!base->ty.isArray()) {
               d_.error(item.loc,
                        "DEFINED base '" + item.definedBase +
@@ -1660,21 +1661,31 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                            std::to_string(item.definedSubs.size()) + " subscript(s)",
                        "(126)");
             } else {
-              int isubAxis = -1;
-              std::vector<long long> cst(base->ty.dims.size(), 0);
-              long long iSubMult = 1, iSubAdd = 0;
+              const size_t nAx = base->ty.dims.size();
+              std::vector<long long> cst(nAx, 0);
+              std::vector<int> slotAxis(nAx, -1);
+              std::vector<long long> slotMult(nAx, 1), slotAdd(nAx, 0);
+              std::vector<bool> axisUsed(item.ty.dims.size(), false);
+              int nIsub = 0;
               bool ok = true;
               for (size_t k = 0; k < item.definedSubs.size(); ++k) {
                 const DefinedSub& ds = item.definedSubs[k];
                 if (ds.isub) {
-                  if (isubAxis >= 0) {
-                    d_.error(item.loc, "a DEFINED base may have only one iSUB", "(134)");
+                  // The dummy names one subscript of the item; out-of-range
+                  // numbers would leave the item's axes unmapped.
+                  if (ds.axis < 0 || (size_t)ds.axis >= item.ty.dims.size()) {
+                    d_.error(item.loc,
+                             "iSUB dummy " + std::to_string(ds.axis + 1) +
+                                 "SUB names a subscript the item does not have",
+                             "(134)");
                     ok = false;
-                  } else {
-                    isubAxis = (int)k;
-                    iSubMult = ds.mult;
-                    iSubAdd = ds.add;
+                    continue;
                   }
+                  slotAxis[k] = ds.axis;
+                  slotMult[k] = ds.mult;
+                  slotAdd[k] = ds.add;
+                  axisUsed[ds.axis] = true;
+                  ++nIsub;
                 } else if (ds.expr && ds.expr->kind == Expr::IntLit) {
                   cst[k] = ds.expr->ival;
                   const Dim& d = base->ty.dims[k];
@@ -1689,36 +1700,54 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   ok = false;
                 }
               }
-              if (ok && isubAxis >= 0) {
-                // iSUB overlay: Y is a 1-D array over X's iSUB axis. With
-                // index arithmetic Y(i) -> X(m*i + c), the affine image of the
-                // overlay's index range must stay within the base axis bounds.
-                const Dim& dd = base->ty.dims[isubAxis];
-                long long lo = iSubMult * item.ty.dims[0].lb + iSubAdd;
-                long long hi = iSubMult * item.ty.dims[0].ub + iSubAdd;
-                if (iSubMult < 0)
-                  std::swap(lo, hi);
-                bool match = item.ty.isArray() && item.ty.dims.size() == 1 &&
-                             item.ty.elementType() == base->ty.elementType() && lo >= dd.lb &&
-                             hi <= dd.ub;
-                if (match) {
-                  item.sym->definedBase = base;
-                  item.sym->definedIsubAxis = isubAxis;
-                  item.sym->definedConst = cst;
-                  item.sym->definedIsubMult = iSubMult;
-                  item.sym->definedIsubAdd = iSubAdd;
-                  isDefined = true;
-                } else {
+              if (ok && nIsub > 0) {
+                // iSUB overlay: Y overlays the base element selected by its
+                // subscripts. With index arithmetic Y(i) -> X(m*i + c), the
+                // affine image of each mapped item axis must stay within its
+                // base axis bounds, and every item axis must be mapped so the
+                // per-axis bounds check covers the whole item.
+                bool match = item.ty.isArray() &&
+                             item.ty.elementType() == base->ty.elementType();
+                for (size_t j = 0; match && j < axisUsed.size(); ++j)
+                  if (!axisUsed[j])
+                    match = false;
+                if (!match)
                   d_.error(item.loc,
-                           "DEFINED iSUB base requires the item to be a 1-D array of the iSUB "
-                           "axis's element type whose affine image fits the base axis",
+                           "DEFINED iSUB base requires an array of the base's element type "
+                           "whose every subscript appears as an iSUB dummy",
                            "(134)");
+                bool fits = true;
+                for (size_t k = 0; ok && match && k < nAx; ++k) {
+                  if (slotAxis[k] < 0)
+                    continue;
+                  const Dim& dd = base->ty.dims[k];
+                  const Dim& yd = item.ty.dims[slotAxis[k]];
+                  long long lo = slotMult[k] * yd.lb + slotAdd[k];
+                  long long hi = slotMult[k] * yd.ub + slotAdd[k];
+                  if (lo > hi)
+                    std::swap(lo, hi);
+                  if (lo < dd.lb || hi > dd.ub) {
+                    fits = false;
+                    d_.error(item.loc,
+                             "DEFINED iSUB axis " + std::to_string(slotAxis[k] + 1) +
+                                 " maps to base subscript " + std::to_string(k + 1) +
+                                 " outside its bounds " + std::to_string(dd.lb) + ":" +
+                                 std::to_string(dd.ub),
+                             "(134)");
+                  }
+                }
+                if (ok && match && fits) {
+                  item.sym->definedBase = base;
+                  item.sym->definedConst = cst;
+                  item.sym->definedSlotAxis = slotAxis;
+                  item.sym->definedSlotMult = slotMult;
+                  item.sym->definedSlotAdd = slotAdd;
+                  isDefined = true;
                 }
               } else if (ok) {
                 // All-constant element overlay: Y is a scalar of X's element type.
                 if (item.ty == base->ty.elementType()) {
                   item.sym->definedBase = base;
-                  item.sym->definedIsubAxis = -1;
                   item.sym->definedConst = cst;
                   isDefined = true;
                 } else {

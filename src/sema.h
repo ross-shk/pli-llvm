@@ -65,16 +65,16 @@ struct Symbol {
   // the offset is unassociated. Used to validate ALLOCATE/FREE ... IN(area).
   Symbol* offsetArea = nullptr;
   // For a DEFINED base that is a subscripted reference (rule 126):
-  //   definedIsubAxis = -1  -> a whole base, or a scalar overlay (no iSUB)
-  //   definedIsubAxis >= 0  -> this X axis holds the iSUB dummy (rule 134)
-  // definedConst holds one fixed constant per X axis (0 at the iSUB axis).
-  int definedIsubAxis = -1;
+  // definedConst holds one fixed index per base axis. An iSUB slot (rule 134)
+  // instead names the item subscript that drives it: the base index is
+  // `definedSlotMult * item_index + definedSlotAdd`. The same item axis may
+  // drive several base axes (a diagonal overlay). definedSlotAxis is empty
+  // when the base is not an iSUB overlay.
   std::vector<long long> definedConst;
-  // Affine iSUB base index (rule 134 index arithmetic): the iSUB axis base
-  // subscript is `definedIsubMult * overlay_index + definedIsubAdd`. Bare iSUB
-  // is mult=1, add=0.
-  long long definedIsubMult = 1;
-  long long definedIsubAdd = 0;
+  std::vector<int> definedSlotAxis; // per base axis: item axis, or -1 for a constant
+  std::vector<long long> definedSlotMult;
+  std::vector<long long> definedSlotAdd;
+  bool hasIsubOverlay() const { return !definedSlotAxis.empty(); }
   // Runtime upper-bound expression of a dynamic array's first axis (rule (13)),
   // lowered to HIR during AST->HIR lowering; null for a constant array. Used by
   // irgen to size and bounds-check the dynamic array.

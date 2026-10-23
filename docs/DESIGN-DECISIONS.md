@@ -10983,3 +10983,40 @@ element count.* Elements are then not independent, and a `FREE ... IN(ar(2))`
 could return a block that `ar(1)` owns. *Allow the whole array in `IN`.* It was
 accepted by the predicate and lowered to a load of the whole `[N x ptr]` value,
 producing an invalid module; the diagnostic is the honest fix.
+
+---
+
+## ADR-305 — multi-axis iSUB overlays
+
+**Context.** Rule (134) is `isub ::= integer SUB`. ADR-048 served one iSUB
+dummy in one base subscript and made the item a 1-D overlay of that axis, and
+the parser threw the dummy's number away. Y33-6003's own example is
+`DECLARE X(10,10), Y(5) DEFINED X(2*1SUB,2*1SUB)`, where the same dummy drives
+both base axes — so the number (and repeated dummies) must carry meaning, and
+the 1-D restriction was too narrow.
+
+**Decision.** `kSUB` names the k-th subscript of the item. Every base
+subscript slot keeps either a compile-time constant or an item axis with its
+own affine coefficients, so the base index for a slot is
+`mult * item_index[k] + add`. The same item axis may drive several slots (a
+diagonal overlay), and the axes may cross (`g(2SUB,1SUB)` is the transpose).
+The element address evaluates every item subscript exactly once — a repeated
+dummy must not run an expression twice — then maps one base index per base
+axis, bounds-checking each mapped slot and clamping on a resumed
+SUBSCRIPTRANGE exactly as the 1-D form did. A dummy past the item's rank, an
+item axis no dummy maps, and an affine image outside its base axis are
+diagnosed with rule (134).
+
+**Consequences.** `isub_multi.pli` writes through a transpose and reads it
+back through the base, proves a diagonal overlay leaves off-diagonal
+neighbours alone, and checks `2*1SUB` on both axes; `bad_isub_defined.pli`
+pins the three new diagnostics. `isub_defined.pli` and `isub_arith.pli` stay
+green unchanged, so the 1-D path is the same code with a one-slot map. The
+symbol now carries per-slot vectors instead of a single axis and coefficients;
+`hasIsubOverlay()` replaces the old `definedIsubAxis >= 0` test at every
+routing site.
+
+**Rejected.** *Keep the dummy number decorative.* It would make the standard
+Y33-6003 diagonal form unrepresentable. *Require every item axis to map to a
+distinct base axis.* That forbids the diagonal, which is exactly the case the
+cross-check in rule (134) prints.

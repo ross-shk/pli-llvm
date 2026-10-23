@@ -1,9 +1,16 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-   /* iSUB / DEFINED subscript restrictions (rules 134,24): the iSUB dummy may
-      appear only once, and an iSUB base requires a matching 1-D array item. */
+   /* iSUB / DEFINED subscript restrictions (rules 134,24): a kSUB dummy
+      must name a subscript the item has, every item subscript must be
+      mapped, and each mapped axis must fit the base axis. */
    bad_isub_defined: procedure options(main);
       declare a(3, 4) fixed bin(31);
-      declare bad1(4) fixed bin(31) defined a(1SUB, 2SUB);  /* two iSUBs */
-      declare bad2 fixed bin(31) defined a(2, 1SUB);        /* scalar item, iSUB base */
+      /* 2SUB names a second subscript a 1-D item does not have */
+      declare bad1(4) fixed bin(31) defined a(1SUB, 2SUB);
+      /* a scalar item has no subscript for the dummy to name */
+      declare bad2 fixed bin(31) defined a(2, 1SUB);
+      /* item axis 2 is not mapped by any base subscript */
+      declare bad3(2, 2) fixed bin(31) defined a(1SUB, 2);
+      /* 5 elements cannot fit base axes of 3 and 4 */
+      declare bad4(5) fixed bin(31) defined a(1SUB, 1SUB);
    end bad_isub_defined;

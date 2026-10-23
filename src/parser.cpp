@@ -1846,7 +1846,9 @@ void Parser::parseDeclTail(DeclItem& item) {
                 if (eat(Tok::Star)) {
                   // m * 1SUB
                   if (at(Tok::Isub)) {
+                    // m * kSUB: the dummy names the k-th subscript of the item.
                     ds.isub = true;
+                    ds.axis = (int)strtol(cur().text.c_str(), nullptr, 10) - 1;
                     ds.mult = c;
                     advance();
                   } else {
@@ -1860,8 +1862,9 @@ void Parser::parseDeclTail(DeclItem& item) {
                   ds.expr->ival = c;
                 }
               } else if (at(Tok::Isub)) {
-                // 1SUB (or 1SUB +/- c)
+                // 1SUB (or 1SUB +/- c): the dummy names the item's 1st subscript.
                 ds.isub = true;
+                ds.axis = (int)strtol(cur().text.c_str(), nullptr, 10) - 1;
                 ds.mult = 1;
                 advance();
               } else {

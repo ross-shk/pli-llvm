@@ -4034,7 +4034,7 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
   // iSUB overlay resolves to the base's address; a scalar element overlay
   // (all-constant subscripts, no iSUB) is a stable GEP into the base.
   if (sym->definedBase) {
-    if (!sym->definedConst.empty() && sym->definedIsubAxis < 0)
+    if (!sym->definedConst.empty() && !sym->hasIsubOverlay())
       return definedConstAddr(sym);
     return addressOf(sym->definedBase);
   }
@@ -6511,7 +6511,7 @@ void IRGen::emitAssign(HStmt* s) {
     }
     // An iSUB-DEFINED array target Y(k) (rule 134) has no storage of its own:
     // store into the live base element X(...k...).
-    if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
+    if (t->sym->definedBase && t->sym->hasIsubOverlay()) {
       llvm::Value* addr = definedSubElementAddr(t->sym, t->args, s->loc);
       storeScalarTo(addr, t->ty, convert(v, t->ty, s->loc));
       freeConcatTemp(s->value.get(), v.ptr);
@@ -8296,7 +8296,7 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
         storeScalarTo(addr, ty, cv, packedMemberPath(t->sym->ty, t->memberPath));
       return;
     }
-    if (t->sym->definedBase && t->sym->definedIsubAxis >= 0) {
+    if (t->sym->definedBase && t->sym->hasIsubOverlay()) {
       llvm::Value* addr = definedSubElementAddr(t->sym, t->args, loc);
       Val cv = convert(v, ty, loc);
       if (ty.isChar())
@@ -10672,42 +10672,57 @@ llvm::Value* IRGen::definedConstAddr(Symbol* sym) {
   return b_.CreateInBoundsGEP(arrTy, baseAddr, {i64(0), i64(flat)}, "defined");
 }
 
-// Address of a subscripted iSUB-DEFINED array element Y(k) (rules 134,126): Y
-// is a 1-D live overlay of one axis of the base array X, so Y(k) is the base
-// element X(fixed..., k, fixed...). The iSUB slot index is bounds-checked; the
-// fixed subscripts were compile-time checked.
+// Address of a subscripted iSUB-DEFINED array element Y(i0,i1,...) (rules
+// 134,126): Y is a live overlay of the base array X, so Y's element is the base
+// element selected by one index per base axis — the mapped item subscript for
+// an iSUB slot, the fixed constant otherwise. Each iSUB slot's base index is
+// bounds-checked; fixed subscripts were compile-time checked.
 llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& idxs, SourceLoc) {
   Symbol* base = y->definedBase;
   const Type& bty = base->ty;
   const size_t n = bty.dims.size();
-  llvm::Value* yidx = toI64(emitExpr(idxs[0].get()));
-  const Dim& dd = bty.dims[y->definedIsubAxis];
-  const int ilb = dd.lb, iub = dd.ub;
-  // Affine iSUB base index m*1SUB + c (rule 134 index arithmetic): Y(i) overlays
-  // X(m*i + c), so the base index is m*yidx + c and is bounds-checked against X.
-  llvm::Value* bidx =
-      b_.CreateAdd(b_.CreateMul(yidx, i64(y->definedIsubMult), "m"), i64(y->definedIsubAdd), "c");
-  llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(bidx, i64(ilb), "lo"),
-                                 b_.CreateICmpSGT(bidx, i64(iub), "hi"), "oob");
-  // A handled slip resumes with the base index clamped into range (rule 94);
-  // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
-  llvm::Value* cbidx = subChecks() ? clampIndex(bidx, i64(ilb), i64(iub)) : bidx;
-  if (subChecks()) {
-    std::string id = std::to_string(n_++);
-    llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
-    llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
-    b_.CreateCondBr(oob, failL, okL);
-    startBlock(failL);
-    emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
-    startBlock(okL);
+  // Evaluate the item's subscripts once, in order: one dummy may drive several
+  // base axes (X(1SUB,1SUB) overlays a diagonal), so no expression may run
+  // twice.
+  std::vector<llvm::Value*> yidx;
+  yidx.reserve(idxs.size());
+  for (const auto& ix : idxs)
+    yidx.push_back(toI64(emitExpr(ix.get())));
+  // One base index per base axis (rule 134 index arithmetic): an iSUB slot is
+  // m*item_index + c, checked against the base axis it addresses.
+  std::vector<llvm::Value*> bidx(n);
+  for (size_t k = 0; k < n; ++k) {
+    const int j = y->definedSlotAxis[k];
+    if (j < 0) {
+      bidx[k] = i64(y->definedConst[k]);
+      continue;
+    }
+    const Dim& dd = bty.dims[k];
+    const int ilb = dd.lb, iub = dd.ub;
+    llvm::Value* raw =
+        b_.CreateAdd(b_.CreateMul(yidx[(size_t)j], i64(y->definedSlotMult[k]), "m"),
+                     i64(y->definedSlotAdd[k]), "c");
+    llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(raw, i64(ilb), "lo"),
+                                   b_.CreateICmpSGT(raw, i64(iub), "hi"), "oob");
+    // A handled slip resumes with the base index clamped into range (rule 94);
+    // (NOSUBSCRIPTRANGE) trusts the raw index and emits no check.
+    bidx[k] = subChecks() ? clampIndex(raw, i64(ilb), i64(iub)) : raw;
+    if (subChecks()) {
+      std::string id = std::to_string(n_++);
+      llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "def.fail." + id, curFn_);
+      llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "def.ok." + id, curFn_);
+      b_.CreateCondBr(oob, failL, okL);
+      startBlock(failL);
+      emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", okL);
+      startBlock(okL);
+    }
   }
-
   llvm::Value* flat = i64(0);
   long long stride = 1;
   for (size_t k = n; k-- > 0;) {
-    llvm::Value* iv = (int)k == y->definedIsubAxis ? cbidx : i64(y->definedConst[k]);
     flat = b_.CreateAdd(
-        flat, b_.CreateMul(b_.CreateSub(iv, i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
+        flat,
+        b_.CreateMul(b_.CreateSub(bidx[k], i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
     stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);
   }
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
@@ -11424,7 +11439,7 @@ Val IRGen::emitExpr(HExpr* e) {
     }
     // An iSUB-DEFINED array Y (rule 134) has no storage of its own: Y(k) is a
     // live overlay of a base element, so route the address to the base X.
-    if (e->sym->definedBase && e->sym->definedIsubAxis >= 0) {
+    if (e->sym->definedBase && e->sym->hasIsubOverlay()) {
       llvm::Value* addr = definedSubElementAddr(e->sym, e->args, e->loc);
       const Type& el = e->ty;
       llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "defl");
@@ -12319,7 +12334,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         return true;
       }
       // An iSUB-DEFINED element overlays its base (rule 134).
-      if (a->sym->definedBase && a->sym->definedIsubAxis >= 0) {
+      if (a->sym->definedBase && a->sym->hasIsubOverlay()) {
         v.reg = definedSubElementAddr(a->sym, a->args, a->loc);
         result = v;
         return true;

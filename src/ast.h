@@ -80,14 +80,15 @@ struct InitItem {
 };
 
 // One DEFINED base subscript (rules 24,126): either an iSUB dummy variable
-// (rule 134, uses the DEFINED array's own index) or a fixed index expression.
-// An iSUB subscript may be affine `m * 1SUB + c` (rule 134 index arithmetic):
-// isub=true carries the coefficients mult (=m) and add (=c); a bare 1SUB is
-// mult=1, add=0.
+// (rule 134, uses one subscript of the DEFINED array) or a fixed index
+// expression. An iSUB subscript may be affine `m * kSUB + c` (rule 134 index
+// arithmetic): isub=true carries the item axis (kSUB = axis+1) and the
+// coefficients mult (=m) and add (=c); a bare 1SUB is axis=0, mult=1, add=0.
 struct DefinedSub {
   bool isub = false;  // true: this subscript contains the iSUB dummy
+  int axis = 0;       // item subscript the dummy names: 0 for 1SUB, 1 for 2SUB
   ExprP expr;         // fixed index expression (constant in this stage)
-  long long mult = 1; // affine iSUB multiplier (m in m*1SUB + c)
+  long long mult = 1; // affine iSUB multiplier (m in m*kSUB + c)
   long long add = 0;  // affine iSUB offset (c)
 };
 
