@@ -89,6 +89,21 @@ The fiber model is ~50× faster than raw OS threads on task_loop and ~5.5× on
 task_spawn — the stack and scheduler are shared across all tasks instead of
 allocated per thread.
 
+### Update: ADR-308, the POSIX fiber stack arena
+
+The table above is the measurement before ADR-308, when each POSIX fiber
+`mmap`ed its whole ceiling. Both binaries were then run alternately on the
+same host (21 rounds interleaved, median, 20 000 tasks):
+
+| task_spawn | ns/task | PL/I / Go |
+|---|---|---|
+| before (one `mmap` per fiber) | 13 364 | 24.8× |
+| after (arena + chunked commit) | **6 997** | **13.0×** |
+| Go | 539 | — |
+
+The lifecycle is unaffected: it recycles stacks from the fiber pool, so it
+never paid the reservation. The other columns above were not re-measured.
+
 ### Fiber context-switch floor
 
 `benchmarks/tasking/fiber_floor.c` measures the raw start + join with no
@@ -103,11 +118,14 @@ reused):
 ## Notes
 
 * **task_spawn is behind Go on both models.** 20 000 simultaneously-live
-  tasks require 20 000 live stacks. A fiber stack is a reserved region
-  (8 MiB ceiling, demand-paged) — the reservation itself costs a few
-  microseconds on macOS. Go gives a goroutine a 2 KiB stack from a cache
-  and copies on growth. The fiber floor (42 ns) proves the switch is not
-  the problem; the stack reservation is.
+  tasks require 20 000 live stacks. The fiber stacks come from an arena of
+  slots and grow in chunks (ADR-308), so the ceiling costs address space
+  and not a reservation of its own, and the remaining cost is the one page
+  a fiber touches when it starts — 16 KiB on Apple silicon, i.e. ~320 MiB
+  for 20 000 live tasks. Go gives a goroutine a 2 KiB stack from a cache
+  and copies it on growth, which is ~40 MiB for the same fan-out. Before
+  ADR-308 each fiber mmap'ed its whole ceiling, which cost another ~6 us
+  per task. The fiber floor (42 ns) proves the switch is not the problem.
 
 * **task_loop beats Go on this platform** (fiber: 0.75×–0.80×, os: 0.57×–0.77×
   when unloaded). The lifecycle workload recycles stacks from the pool, so the

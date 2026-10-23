@@ -1,0 +1,57 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79): a task's stack grows in chunks (ADR-308), so a procedure
+    whose frame is larger than a chunk moves the stack pointer past
+    several boundaries before it touches a page. The runtime must commit
+    the chunks the frame skipped over, and the task must see its storage
+    intact. */
+ task_grow: procedure options(main);
+    declare ev(4) event;
+    declare bad fixed binary(31);
+    declare i fixed binary(31);
+    bad = 0;
+    do i = 1 to 4;
+       call big event(ev(i));
+    end;
+    wait(ev);
+    if bad = 0 then
+       put skip list('PASS');
+    else
+       put skip list('FAIL a task lost its frame');
+    /* 200 000 bytes of automatics: more than three 64 KiB chunks, so
+       its first page is well below the committed one. */
+    big: procedure;
+       declare a(50000) fixed binary(31);
+       declare j fixed binary(31);
+       do j = 1 to 50000;
+          a(j) = j;
+       end;
+       if a(1) ^= 1 | a(25000) ^= 25000 | a(50000) ^= 50000 then
+          bad = 1;
+       call second;
+       /* Those frames are gone: the array must still be here. */
+       if a(1) ^= 1 | a(25000) ^= 25000 | a(50000) ^= 50000 then
+          bad = 1;
+    end big;
+    /* Two more frames under the first: the stack grows on through the
+       chunks the first frame skipped. */
+    second: procedure;
+       declare pad(25000) fixed binary(31);
+       declare k fixed binary(31);
+       do k = 1 to 25000;
+          pad(k) = k;
+       end;
+       if pad(1) ^= 1 | pad(25000) ^= 25000 then
+          bad = 1;
+       call third;
+    end second;
+    third: procedure;
+       declare q(15000) fixed binary(31);
+       declare m fixed binary(31);
+       do m = 1 to 15000;
+          q(m) = m;
+       end;
+       if q(1) ^= 1 | q(15000) ^= 15000 then
+          bad = 1;
+    end third;
+ end task_grow;

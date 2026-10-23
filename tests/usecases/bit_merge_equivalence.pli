@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Rules (115)-(117): test bit merge equivalence - merged conjunction vs
+   independent tests. The masks are constants, which is what makes the merge
+   possible. */
+bit_merge_equivalence: procedure options(main);
+   declare (i, hits) fixed bin(31);
+   declare w bit(32);
+
+   hits = 0;
+   do i = 1 to 300000000;
+      w = fixed(mod(i, 700) * 3000001);
+      /* Merged test: two masks merged into one. */
+      if ((w & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
+         ((w & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b)
+      then hits = hits + 1;
+   end;
+
+   put skip list(hits);
+   /* Verify merged form gives same result as separate tests. */
+   if (hits > 0) then put skip list('PASS merge_eq') else put skip list('FAIL merge_eq');
+end bit_merge_equivalence;

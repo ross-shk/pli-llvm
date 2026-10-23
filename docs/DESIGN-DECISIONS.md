@@ -11114,6 +11114,7 @@ references, which is the whole point of the form.
 
 ---
 
+<<<<<<< HEAD
 ## ADR-308 — `ABNORMAL`/`NORMAL`: a declared return point for an entry
 
 **Context.** Entry-name-attributes (rule (38)) include `ABNORMAL(label-name)`
@@ -11156,3 +11157,63 @@ a cited diagnostic instead of jumping into a possibly inactive block. *Making
 `ABNORMAL` a property of the called procedure rather than of the entry name.* It
 is an entry attribute: the same body reached through a different, `NORMAL`
 entry must still return normally.
+=======
+## ADR-308 — The POSIX fiber stack comes from an arena and grows in chunks (amends ADR-236, ADR-239)
+
+**Context.** ADR-236 gave Windows a stack arena and ADR-239 made a Windows
+fiber stack grow in chunks; POSIX was left with the older shape: every fiber
+stack was its own `mmap` of the *whole* ceiling, read-write, plus an
+`mprotect` guard and an entry in a 4096-slot guard table the signal handler
+scanned linearly. Fan-out of twenty thousand live tasks therefore made
+twenty thousand kernel reservations, twenty thousand guard entries (the
+table overflows at 4096, after which an overflow on a later stack was a bare
+crash) and twenty thousand read-write mappings, so the kernel had to build a
+page-table entry per fiber's ceiling rather than per touched page. The
+benchmark read 13.4 us/task, 24.8x Go.
+
+**Decision.** POSIX now uses the Windows design: an arena of stack slots
+(one `mmap`, `RT_ARENA_SLOTS` slots of `usable + page`), reserved
+`PROT_NONE` and committed as the stack grows. `pli_plat_stack_alloc` takes a
+slot from the arena's free list and commits only the top chunk (64 KiB);
+every page below it stays uncommitted until something touches it. A fault
+below the committed part of a slot makes the signal handler commit the
+chunks from the top down to the faulting chunk and return, so the faulting
+instruction is re-executed. The handler names the slot by arithmetic from
+the arena base, so it searches no table: the arenas are one lock-free list,
+and the 4096-entry guard table is gone. A fault below the slot's usable
+region, or in its bottom chunk, is the stack running out, and is reported as
+it was before (ADR-237). A released slot goes back to its arena with its
+pages still committed, so the next task that takes it pays no fault.
+
+**Measurements** (macOS 26 arm64, 20 000 tasks, 21 interleaved runs, median;
+`benchmarks/run_tasking_bench.py` binaries):
+
+| Workload | before (mmap per stack) | after (arena + chunks) | Go |
+|---|---|---|---|
+| fan-out / fan-in | 13 364 ns/task (24.8x Go) | **6 997 ns/task (13.0x Go)** | 539 ns/task |
+| the task lifecycle | 495.8 ns/task (0.70x Go) | 495.8 ns/task (0.70x Go) | 707 ns/task |
+
+The lifecycle is unchanged, as it should be: it recycles stacks from the
+fiber pool, so it never paid the reservation. Fan-out is 1.9x faster, and
+the ceiling no longer sets the price - an 8 MiB ceiling used to cost about
+7 us more per fiber than a 128 KiB one, and now costs nothing at all.
+
+**Consequences.** The remaining fan-out cost is memory, not scheduling: a
+live fiber still has to touch one page of its own stack (16 KiB on Apple
+silicon), so twenty thousand live tasks hold ~320 MiB of zero-filled stack,
+where Go's 2 KiB goroutine stacks hold ~40 MiB. Closing that gap needs
+stacks that start small and *move* when they grow, which needs the compiler
+to emit stack maps for the fibers' frames; it is not a runtime change, and it
+is not attempted here. `tests/driver/task_stack_overflow.sh` pins the
+overflow report on one and on four workers, and `task_grow.pli` pins a task
+whose frame skips past several chunks at once.
+
+**Rejected.** *Map the whole ceiling read-write, as before, but from an
+arena.* It was measured at 9 046 ns/task: the kernel builds page tables for
+a read-write region per fiber, and that per-fiber work was most of the cost.
+*Commit a page at a time instead of a chunk.* Measured at 7 268 ns/task, no
+better than the chunk, and it triples the number of growth faults a
+recursive task takes. *Copy the stack on growth, the way Go does.* See
+above: it needs compiler support, and a half-done version silently corrupts
+every pointer into a moved stack.
+>>>>>>> 19944e3 (Enhance fiber stack management and bit manipulation tests)

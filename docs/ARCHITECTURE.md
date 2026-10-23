@@ -288,6 +288,11 @@ The rules that make it work, each of them learned the hard way:
   the stack pointer that faulted must be committed. The fiber stack grows in
   chunks with a guard page at the bottom of each: the fault happens on the
   guard, and the room the kernel needs is in the chunk above it (ADR-239).
+  A frame larger than a chunk moves the stack pointer past several
+  boundaries before it touches one, so the handler commits every chunk
+  between the top and the fault, not only the next one; on POSIX the stacks
+  come from an arena of slots, so a live task's ceiling costs address space
+  and not a reservation of its own (ADR-308).
 * **A report about a full stack cannot run on that stack.** The overflow
   report runs on an emergency stack that the handler switches to through the
   exception context, so it needs no room on the task's stack (ADR-239). On

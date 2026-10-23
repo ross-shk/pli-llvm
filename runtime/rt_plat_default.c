@@ -599,69 +599,165 @@ void pli_sleep_ms(long long ms) {
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-/* The stack overflow diagnostic (ADR-237).
+/* The fiber stack: address space, not memory (ADR-308).
  *
- * A fiber stack has a guard page below it, so a stack that runs out of
- * room faults on an inaccessible page. Windows has a vectored handler for
- * this; POSIX has a signal handler, and it needs an alternate stack: the
- * faulting stack is full, so the handler cannot run on it.
+ * The ceiling of a stack is reserved, not committed: a task that never
+ * touches its stack costs one page, not the whole ceiling. The pages are
+ * committed as the stack grows into them, by the signal handler below: a
+ * fault below the committed part of the stack commits the chunks down to
+ * the fault, and the stack grows on. A stack that reaches its bottom chunk
+ * has run out of room, and it is reported as an overflow (ADR-237).
  *
- * The handler tells a stack overflow from any other fault by the address:
- * the guard pages are remembered here, and a fault inside one of them is
- * an overflow. Every other fault is left to the default handler, so a real
- * bug still crashes the program the way it should.
+ * The stacks come from an *arena*: one reservation carved into slots. A
+ * program with twenty thousand live tasks would otherwise make twenty
+ * thousand reservations, each with its own guard entry in a table that the
+ * handler has to scan, and the reservation itself is a kernel call. One
+ * arena costs one call, and the handler names a slot by arithmetic.
  *
- * The guard list is append-only and lock-free: the handler may run at any
- * moment, so it takes no lock. A released stack stays in the list (like the
- * Windows one), and a fault in a released guard page is reported as an
- * overflow, which is the right answer anyway. */
-#define RT_GUARD_MAX 4096
-static char *rt_guards[RT_GUARD_MAX];
-static size_t rt_guard_bytes[RT_GUARD_MAX];
-static volatile int rt_guard_count = 0;
-static volatile int rt_guard_ready = 0;
+ * A slot is laid out from its bottom up, because that is the direction a
+ * stack grows:
+ *
+ *     +----------------------+  slot_base + slot
+ *     |  the stack's top     |  the fiber starts here
+ *     |  (grows downward)    |
+ *     |  the usable region   |  the chunks, with a guard page
+ *     |                      |  at the bottom of each
+ *     +----------------------+  slot_base + page
+ *     |  the slot's guard    |  a write below the stack stops here
+ *     +----------------------+  slot_base
+ *
+ * The arena is one PROT_NONE reservation: a slot's pages are made readable
+ * and writable only as the stack grows into them, so a fiber's ceiling
+ * costs address space, never page-table entries.
+ *
+ * The arenas are listed in a lock-free list, because the handler may run at
+ * any moment and takes no lock; the free lists are locked, because a slot
+ * is handed out once per task that has no fiber to recycle. */
+#define RT_STACK_CHUNK (64u * 1024u) /* the commit granularity */
+#define RT_ARENA_SLOTS 64            /* slots per arena reservation */
 
-static void rt_guard_add(void *p, size_t bytes) {
-  /* A released stack leaves a hole in the list: reuse it. Without that, a
-   * program that allocates and frees stacks for its whole life would fill
-   * the list once and then stop registering guards - the overflow report
-   * would quietly stop working. The bytes go in before the address, so the
-   * handler never sees a matching address with a stale length. */
-  for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
-    if (!rt_guards[i]) {
-      rt_guard_bytes[i] = bytes;
-      __atomic_store_n(&rt_guards[i], (char *)p, __ATOMIC_RELEASE);
-      return;
-    }
-  }
-  int i = __atomic_fetch_add(&rt_guard_count, 1, __ATOMIC_RELAXED);
-  if (i < RT_GUARD_MAX) {
-    rt_guard_bytes[i] = bytes;
-    __atomic_store_n(&rt_guards[i], (char *)p, __ATOMIC_RELEASE);
-  }
+typedef struct RtArena {
+  struct RtArena *next;
+  char *base;      /* the reservation */
+  size_t bytes;    /* its size */
+  size_t slot;     /* one slot: the usable region plus its guard page */
+  size_t usable;   /* the usable size of a slot */
+  size_t page;     /* the page size */
+  int *free_slots; /* the free slot indices, LIFO */
+  int free_top;    /* how many are on the free list */
+} RtArena;
+
+static RtArena *rt_arenas = NULL; /* the list head */
+static pthread_mutex_t rt_stack_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* The commit granularity: whole pages, so the chunk's bottom page can be
+ * its guard. A page bigger than half a chunk widens the chunk. */
+static size_t rt_stack_chunk_bytes(size_t page) {
+  return RT_STACK_CHUNK < 2 * page ? 2 * page : RT_STACK_CHUNK;
 }
 
-static void rt_guard_remove(void *p) {
-  for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
-    if (__atomic_load_n(&rt_guards[i], __ATOMIC_ACQUIRE) == (char *)p) {
-      __atomic_store_n(&rt_guards[i], NULL, __ATOMIC_RELEASE);
-      rt_guard_bytes[i] = 0;
-      return;
-    }
-  }
+/* The arena that holds the address, or NULL. */
+static RtArena *rt_arena_of(char *addr) {
+  for (RtArena *a = __atomic_load_n(&rt_arenas, __ATOMIC_ACQUIRE); a;
+       a = a->next)
+    if (addr >= a->base && addr < a->base + a->bytes)
+      return a;
+  return NULL;
 }
 
-/* Is the address inside one of the guard pages? */
-static int rt_guard_holds(void *addr) {
-  for (int i = 0; i < rt_guard_count && i < RT_GUARD_MAX; ++i) {
-    char *p = __atomic_load_n(&rt_guards[i], __ATOMIC_ACQUIRE);
-    if (!p)
-      continue;
-    if ((char *)addr >= p && (char *)addr < p + rt_guard_bytes[i])
-      return 1;
+/* A new arena of this slot size. The caller holds rt_stack_mu. */
+static RtArena *rt_arena_new(size_t usable, size_t page) {
+  size_t slot = usable + page;
+  size_t bytes = slot * RT_ARENA_SLOTS;
+  /* PROT_NONE: the reservation costs address space only. */
+  char *base = (char *)mmap(NULL, bytes, PROT_NONE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (base == MAP_FAILED)
+    return NULL;
+  RtArena *a = (RtArena *)pli_plat_malloc(sizeof(RtArena));
+  int *free_slots = (int *)pli_plat_malloc(sizeof(int) * RT_ARENA_SLOTS);
+  if (!a || !free_slots) {
+    pli_plat_free(a);
+    pli_plat_free(free_slots);
+    munmap(base, bytes);
+    return NULL;
   }
-  return 0;
+  a->base = base;
+  a->bytes = bytes;
+  a->slot = slot;
+  a->usable = usable;
+  a->page = page;
+  a->free_slots = free_slots;
+  /* Every slot starts free. */
+  for (int i = 0; i < RT_ARENA_SLOTS; ++i)
+    a->free_slots[i] = i;
+  a->free_top = RT_ARENA_SLOTS;
+  /* Publish the arena only when it is whole: the handler reads the list. */
+  a->next = rt_arenas;
+  __atomic_store_n(&rt_arenas, a, __ATOMIC_RELEASE);
+  return a;
 }
+
+/* A free slot from an arena of this size, or NULL. */
+static RtArena *rt_arena_take(size_t usable, size_t page, size_t *out_off) {
+  pthread_mutex_lock(&rt_stack_mu);
+  RtArena *a = rt_arenas;
+  while (a && !(a->usable == usable && a->free_top > 0))
+    a = a->next;
+  if (!a)
+    a = rt_arena_new(usable, page);
+  if (a) {
+    int index = a->free_slots[--a->free_top];
+    *out_off = (size_t)index * a->slot;
+  }
+  pthread_mutex_unlock(&rt_stack_mu);
+  return a;
+}
+
+/* Give a slot back to its arena. */
+static void rt_arena_give(RtArena *a, size_t off) {
+  pthread_mutex_lock(&rt_stack_mu);
+  if (a->free_top < RT_ARENA_SLOTS)
+    a->free_slots[a->free_top++] = (int)(off / a->slot);
+  pthread_mutex_unlock(&rt_stack_mu);
+}
+
+/* Grow the stack that faulted, or say that it has run out.
+ *
+ * Returns 1 when the fault was a growth point and the chunk it landed in is
+ * now committed (the kernel re-executes the faulting instruction when the
+ * handler returns), 2 when the stack has run out, and 0 for any other fault
+ * - a real bug still crashes the program the way it should.
+ *
+ * A fault is not always on a guard page: a procedure with a large frame
+ * moves the stack pointer past several chunks before it touches one, so the
+ * chunk that faults may be well below the committed region. Every chunk
+ * between the fault and the top is committed, which covers both cases. */
+static int rt_stack_fault(char *fault) {
+  RtArena *a = rt_arena_of(fault);
+  if (!a)
+    return 0;
+  size_t index = (size_t)(fault - a->base) / a->slot;
+  char *usable = a->base + index * a->slot + a->page;
+  char *top = usable + a->usable;
+  if (fault >= top)
+    return 0; /* outside the stack */
+  if (fault < usable)
+    return 2; /* below the stack: it ran out of room */
+  size_t chunk = rt_stack_chunk_bytes(a->page);
+  /* The chunks are counted from the top, because the stack starts at the
+   * top and grows down; the fault names the chunk it landed in. */
+  size_t n = ((size_t)(top - fault) - 1) / chunk;
+  if ((n + 1) * chunk >= a->usable)
+    return 2; /* the bottom chunk: the stack ran out */
+  char *lo = top - (n + 1) * chunk;
+  if (mprotect(lo, (size_t)(top - lo), PROT_READ | PROT_WRITE) != 0)
+    return 0; /* nothing to be done for it: let the fault stand */
+  return 1;
+}
+
+/* Set once the signal handler is in place (it is one per process). */
+static volatile int rt_handler_ready = 0;
 
 /* The handler runs on an alternate stack: the fiber's stack is full. The
  * alternate stack is per thread, and a thread installs one the first time
@@ -689,7 +785,11 @@ static void rt_alt_stack_install(void) {
 
 static void rt_segv_handler(int sig, siginfo_t *info, void *ctx) {
   (void)ctx;
-  if (info && rt_guard_holds(info->si_addr)) {
+  int what = info ? rt_stack_fault((char *)info->si_addr) : 0;
+  /* The stack grew: the faulting instruction is re-executed on return. */
+  if (what == 1)
+    return;
+  if (what == 2) {
     static const char msg[] =
         "TASK: stack overflow (the task's stack ran out)\n";
     ssize_t n = write(2, msg, sizeof(msg) - 1);
@@ -708,7 +808,7 @@ static void rt_segv_handler(int sig, siginfo_t *info, void *ctx) {
  * worker started after the handler was installed would otherwise run the
  * handler on the full fiber stack and die instead of reporting. */
 static void rt_fault_handler_install(void) {
-  if (__atomic_exchange_n(&rt_guard_ready, 1, __ATOMIC_RELAXED))
+  if (__atomic_exchange_n(&rt_handler_ready, 1, __ATOMIC_RELAXED))
     return;
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
@@ -764,34 +864,44 @@ size_t pli_plat_page_size(void) {
   return p > 0 ? (size_t)p : 4096;
 }
 int pli_plat_stack_alloc(size_t *size_inout, void **out_base) {
-  size_t size = *size_inout;
   size_t page = pli_plat_page_size();
-  size = (size + page - 1) & ~(page - 1);
-  /* PROT_READ|PROT_WRITE over an anonymous mapping: the pages are
-   * demand-paged, so the reservation costs address space, not memory, and
-   * the fiber stack grows into it without ever moving. */
-  void *p = mmap(NULL, size + page, PROT_READ | PROT_WRITE,
-                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (p == MAP_FAILED)
+  /* The usable region is a whole number of chunks: the handler finds a
+   * chunk's guard page by arithmetic from the region's top, so a partial
+   * chunk would put the guard in the wrong place. A chunk holds its own
+   * guard page and the stack above it. */
+  size_t chunk = rt_stack_chunk_bytes(page);
+  size_t size = (*size_inout + chunk - 1) & ~(chunk - 1);
+  if (size < chunk)
+    size = chunk;
+  size_t off = 0;
+  RtArena *a = rt_arena_take(size, page, &off);
+  if (!a)
     return -1;
-  /* The guard page sits below the usable region: a fiber stack grows down
-   * into it, so an overflow lands on an inaccessible page. */
-  if (mprotect(p, page, PROT_NONE) != 0) {
-    munmap(p, size + page);
+  char *usable = a->base + off + page;
+  char *top = usable + size;
+  /* Commit the top chunk, where the fiber starts; the guard page below it
+   * faults in the next chunk as the stack grows down. */
+  if (mprotect(top - chunk + page, chunk - page, PROT_READ | PROT_WRITE) != 0) {
+    rt_arena_give(a, off); /* nothing was committed: the slot is still free */
     return -1;
   }
-  /* Remember the guard page, so the fault handler can tell a stack
-   * overflow from any other fault (ADR-237). */
-  rt_guard_add(p, page);
   *size_inout = size; /* the usable size the caller gets */
-  *out_base = (char *)p + page;
+  *out_base = usable;
   return 0;
 }
 void pli_plat_stack_free(void *base, size_t size) {
-  size_t page = pli_plat_page_size();
-  size = (size + page - 1) & ~(page - 1);
-  rt_guard_remove((char *)base - page);
-  munmap((char *)base - page, size + page);
+  (void)size;
+  if (!base)
+    return;
+  /* The slot goes back to its arena: the pages stay committed, so the next
+   * task that takes the slot does not pay for them again. */
+  char *bp = (char *)base;
+  for (RtArena *a = rt_arenas; a; a = a->next) {
+    if (bp >= a->base && bp < a->base + a->bytes) {
+      rt_arena_give(a, (size_t)(bp - a->base));
+      return;
+    }
+  }
 }
 /* Mutual exclusion around one shared EVENT/task table. */
 void pli_mutex_init(pli_mutex *m) { pthread_mutex_init(m, NULL); }

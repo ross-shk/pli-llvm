@@ -6244,16 +6244,18 @@ bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
   }
   // The comparison is the one the two separate tests would make: the masked
   // value against the merged expectation, as numbers (rule (117)).
+  // Pack BIT values into integer temporaries to preserve all bits (including
+  // high bits beyond 31), rather than truncating to fixedBin(31).
   Val mv;
   mv.ty = Type::bit(s1.nbits);
   mv.reg = masked;
   Val wv;
   wv.ty = Type::bit(s1.nbits);
   wv.reg = llvm::ConstantDataArray::get(ctx_, wantBytes);
-  Val mi = convert(mv, Type::fixedBin(31, 0), e->loc);
-  Val wi = convert(wv, Type::fixedBin(31, 0), e->loc);
+  llvm::Value* mp = packBitValue(masked, s1.nbits, e->loc);
+  llvm::Value* wp = packBitValue(wv.reg, s1.nbits, e->loc);
   out.ty = Type::bit(1);
-  out.reg = b_.CreateICmpEQ(mi.reg, wi.reg, "bt.cmp");
+  out.reg = b_.CreateICmpEQ(mp, wp, "bt.cmp");
   return true;
 }
 

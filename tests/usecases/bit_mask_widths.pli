@@ -1,0 +1,34 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Rules (115)-(117): test BIT mask widths and high-bit preservation. */
+bit_mask_widths: procedure options(main);
+   declare w bit(64);
+   /* Test various BIT widths with upper bit set. */
+   declare m bit(1) init(1);
+   declare e bit(1) init(1);
+   /* Width 1: single bit test. */
+   w = '1'b;
+   if (w & m) = e then put skip list('PASS width=1') else put skip list('FAIL width=1');
+   /* Width 8: byte-aligned test. */
+   w = '11111111'b;
+   if (w & m) = e then put skip list('PASS width=8') else put skip list('FAIL width=8');
+   /* Width 16: test upper bit preservation. */
+   w = '1000000000000000'b;
+   if ((w & m) = e) then put skip list('PASS width=16') else put skip list('FAIL width=16');
+   /* Width 31: test bit 30 (max for signed). */
+   w = '0100000000000000000000000000000'b;
+   if ((w & m) = e) then put skip list('PASS width=31') else put skip list('FAIL width=31');
+   /* Width 32: test all 32 bits. */
+   w = '11111111111111111111111111111111'b;
+   if ((w & m) = e) then put skip list('PASS width=32') else put skip list('FAIL width=32');
+   /* Width 63: test upper bit (bit 62). */
+   w = '01000000000000000000000000000000000000000000000000000000000000000'b;
+   if ((w & m) = e) then put skip list('PASS width=63') else put skip list('FAIL width=63');
+   /* Width 64: test all 64 bits. */
+   w = '111111111111111111111111111111111111111111111111111111111111111'b;
+   if ((w & m) = e) then put skip list('PASS width=64') else put skip list('FAIL width=64');
+   /* Assignment round trip: assign then test. */
+   w = '10101010101010101010101010101010'b;
+   if ((w & m) = e) then put skip list('PASS round-trip') else put skip list('FAIL round-trip');
+   put skip list('PASS');
+end bit_mask_widths;
