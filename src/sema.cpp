@@ -5030,16 +5030,90 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // Reclassify as a Subscript of the member's element type, carrying the
     // base structure symbol and the resolved field path.
     if (!e->path.empty()) {
-      // A locator-qualified member subscript P->S.A(i) (rules 124,126)
-      // would address through P, but the member paths below resolve
-      // the symbol's own base; diagnose it rather than silently
-      // using the wrong base.
+      // A locator-qualified member subscript P->S.A(i) (rules 124,126): the
+      // locator supplies the base address and the path resolves the member
+      // array inside the BASED structure. The declared BASED pointer is not
+      // used, so Q->S.A(i) can address a different block than P->S.A(i).
       if (e->locPtr) {
         typeExpr(e->locPtr.get(), sc, p);
-        d_.error(e->loc,
-                 "a locator-qualified member array subscript is not implemented in this stage",
-                 "(124)");
-        e->ty = Type::voidTy();
+        if (!e->locPtr->ty.isPointer()) {
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        Symbol* ls = lookup(sc, e->name);
+        if (ls && ls->kind == Symbol::Var && ls->ty.isArray() &&
+            ls->ty.elementType().isStruct()) {
+          d_.error(e->loc,
+                   "a locator-qualified array-of-structures member is not implemented in this "
+                   "stage",
+                   "(124)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!ls || ls->kind != Symbol::Var || !ls->ty.isStruct()) {
+          d_.error(e->loc,
+                   "'" + e->name + "' is not a structure, so it cannot be subscripted by member",
+                   "(124)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!ls->isBased()) {
+          d_.error(e->loc,
+                   "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
+                   "(124)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        const Type* leaf = resolveMemberPath(e, ls->ty);
+        if (!leaf) {
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (!leaf->isArray()) {
+          d_.error(e->loc, "structure member is not an array and cannot be subscripted", "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (leaf->isDynamic()) {
+          d_.error(e->loc,
+                   "a locator-qualified dynamic member array is not implemented in this stage",
+                   "(124)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        if (e->args.size() != leaf->dims.size()) {
+          d_.error(e->loc,
+                   "member array has " + std::to_string(leaf->dims.size()) +
+                       " dimension(s) and takes " + std::to_string(leaf->dims.size()) +
+                       " subscript(s), " + std::to_string(e->args.size()) + " given",
+                   "(126)");
+          e->ty = Type::voidTy();
+          break;
+        }
+        bool star = false;
+        for (const auto& a : e->args)
+          if (a->kind == Expr::Star) {
+            d_.error(e->loc,
+                     "a locator-qualified cross-section is not implemented in this stage", "(126)");
+            star = true;
+            break;
+          }
+        if (star) {
+          e->ty = Type::voidTy();
+          break;
+        }
+        e->kind = Expr::Subscript;
+        e->sym = ls;
+        checkSubscriptTypes(e);
+        e->ty = leaf->elementType();
+        std::string mname = e->name;
+        for (const std::string& q : e->path)
+          mname += "." + q;
+        checkSubscriptBoundsDims(e, leaf->dims, mname);
+        // rule (8)/(42): a structure of an enclosing procedure is reached
+        // through this procedure's static link.
+        noteStaticUse(p, ls);
         break;
       }
       Symbol* bs = lookup(sc, e->name);

@@ -10799,3 +10799,43 @@ existing "reaching an automatic variable" diagnostic; `DEFINE`,
 would diverge from IBM's establishment-time lifetime and need a second
 capture path for nested references. *Make unit locals static.* It would
 break recursion and re-entrant handlers.
+
+---
+
+## ADR-300 — Locator-qualified member arrays `P -> S.A(i)`
+
+**Context.** Rule (124) locator qualification addressed a based variable
+through a pointer, and ADR-164 already let a locator qualify a whole
+array subscript (`P -> X(i)`). The member-array form `P -> S.A(i)` stayed
+diagnosed because the member path resolved the structure symbol's own
+BASED pointer (`memberAddr`), so serving it naively would have silently
+addressed the wrong block whenever the locator was not that pointer.
+
+**Decision.** Sema types the locator, requires a POINTER and a BASED
+structure whose path resolves to a member array of static extent, and
+reclassifies the call as a subscript carrying the structure symbol and
+the resolved field path. IRGen already had `locatorMemberAddr`, so both
+the load and the store paths GEP the member array from the locator value
+and index it with the member's own type. The declared BASED pointer is
+not consulted; `Q -> S.A(i)` therefore addresses whichever block Q
+points at.
+
+**Consequences.** `locator_member_array.pli` allocates one block through
+the structure's base and a second through another structure, then checks
+that reads and stores through the second pointer leave the first block
+alone, including a nested minor-structure member, a runtime subscript,
+fixed and varying CHAR elements, a `GET STRING ... EDIT` target, and
+`PUT`/`GET STRING` on a scalar member. The same pass corrected the
+VARYING sink: it GEPs through the leaf type (length at field 0, data at
+field 1) instead of the enclosing structure, so a VARYING member at any
+position, or behind a locator, no longer overwrites its neighbours
+(`string_io_addr.pli`). `bad_locator_member_array.pli` pins the
+non-BASED diagnostic. Still diagnosed: a non-POINTER locator,
+a dynamic member array, a cross-section, and a locator-qualified
+array-of-structures member.
+
+**Rejected.** *Keep resolving the structure's declared base.* It would
+compile and then write through the wrong pointer, which is worse than a
+diagnostic. *Require the locator to be the declared BASED pointer.* It
+would remove the feature's reason for existing: reaching a block through
+a copy of the pointer.

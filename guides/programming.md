@@ -658,6 +658,8 @@ A `based(p)` structure has no storage of its own — it borrows it through point
 
 > **Go friends:** `based(p)` is like a struct accessed through a pointer, and `addr(x)` is `&x`.
 
+The locator can reach an array member too: `q -> view.items(i)` indexes `items` through `q`, even when `view` is declared `based(p)`. Store and load both follow the locator, so several pointers can address the same layout.
+
 ### CONTROLLED: a stack of generations
 
 `controlled` keeps a last-in-first-out stack of values. `allocate` pushes a fresh one, plain references see the newest, `free` pops. The declaration pushes a default generation on entry so first use just works.

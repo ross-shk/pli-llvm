@@ -1,0 +1,83 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (124),(126): a locator-qualified member array
+    q->s.a(i) addresses through the locator value, not
+    through the BASED pointer of the DECLARE. */
+ locmem: procedure options(main);
+    declare 1 s based(bp),
+              2 n fixed bin(31),
+              2 a(3) fixed bin(31),
+              2 c(2) char(3),
+              2 vv(2) char(5) varying,
+              2 sc char(3),
+              2 inner,
+                3 v(2) fixed bin(31);
+    declare 1 t based(bq),
+              2 n fixed bin(31),
+              2 a(3) fixed bin(31),
+              2 c(2) char(3),
+              2 vv(2) char(5) varying,
+              2 sc char(3),
+              2 inner,
+                3 v(2) fixed bin(31);
+    declare bp pointer;
+    declare bq pointer;
+    declare q pointer;
+    declare i fixed bin(31);
+    declare src char(4);
+    declare x fixed bin(31);
+    declare bad fixed bin(31);
+    bad = 0;
+
+    /* one block through BP (type S), the other through BQ (type T) */
+    allocate s set(bp);
+    s.a(1) = 10;
+    s.a(2) = 11;
+    s.c(1) = 'one';
+    s.inner.v(1) = 12;
+    allocate t set(bq);
+    t.a(1) = 20;
+    t.a(2) = 21;
+    t.c(2) = 'two';
+    t.inner.v(2) = 42;
+    q = bq;
+
+    /* Q->S... reads the BQ block, not the S base BP */
+    if q->s.a(1) ^= 20 then bad = 1;
+    i = 2;
+    if q->s.a(i) ^= 21 then bad = 2;
+    if s.a(1) ^= 10 then bad = 3;
+    if q->s.c(2) ^= 'two' then bad = 4;
+    if s.c(1) ^= 'one' then bad = 5;
+    if q->s.inner.v(2) ^= 42 then bad = 6;
+    if s.inner.v(1) ^= 12 then bad = 7;
+    q->s.vv(1) = 'abc';
+    if q->s.vv(1) ^= 'abc' then bad = 12;
+
+    /* a store through the locator leaves the S block alone */
+    q->s.a(1) = q->s.a(1) + 1;
+    if q->s.a(1) ^= 21 then bad = 8;
+    if s.a(1) ^= 10 then bad = 9;
+    if bp->s.a(1) ^= 10 then bad = 10;
+
+    /* GET STRING ... EDIT stores through the locator too */
+    src = '  42';
+    get string(src) edit(q->s.a(3)) (f(4));
+    if q->s.a(3) ^= 42 then bad = 11;
+
+    /* PUT/GET STRING address a scalar member through the locator */
+    s.sc = 'old';
+    t.sc = '123';
+    put string(q->s.sc) list('xyz');
+    if t.sc ^= 'xyz' then bad = 13;
+    if s.sc ^= 'old' then bad = 14;
+    t.sc = '123';
+    get string(q->s.sc) list(x);
+    if x ^= 123 then bad = 15;
+
+    if bad ^= 0 then do;
+       put skip list('FAIL locator member array', bad);
+       stop;
+    end;
+    put skip list('PASS locator_member_array');
+ end locmem;

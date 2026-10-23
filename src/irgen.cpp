@@ -6259,9 +6259,14 @@ void IRGen::emitAssign(HStmt* s) {
           const Type& arr = memberType(t->sym, t->memberPath);
           const Type& el = t->ty;
           llvm::Value *ub = nullptr, *lb = nullptr;
-          llvm::Value* base = arr.isDynamic()
-                                  ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
-                                  : memberAddr(t->sym, t->memberPath, s->loc);
+          // A locator-qualified member P->S.A(i) (rules 124,126) stores
+          // through the locator value, not the declared BASED pointer.
+          llvm::Value* base =
+              t->locPtr
+                  ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                  : (arr.isDynamic()
+                         ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                         : memberAddr(t->sym, t->memberPath, s->loc));
           llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
           bool packed = packedMemberPath(t->sym->ty, t->memberPath);
           if (el.isChar())
@@ -6481,8 +6486,13 @@ void IRGen::emitAssign(HStmt* s) {
       const Type& arr = memberType(t->sym, t->memberPath);
       const Type& el = t->ty;
       llvm::Value *ub = nullptr, *lb = nullptr;
-      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
-                                          : memberAddr(t->sym, t->memberPath, s->loc);
+      // A locator-qualified member P->S.A(i) (rules 124,126) stores through
+      // the locator value, not the declared BASED pointer.
+      llvm::Value* base =
+          t->locPtr
+              ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+              : (arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                                 : memberAddr(t->sym, t->memberPath, s->loc));
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc, ub, lb);
       bool packed = packedMemberPath(t->sym->ty, t->memberPath);
       if (el.isChar())
@@ -7882,17 +7892,26 @@ void IRGen::emitPut(HStmt* s) {
   llvm::Value* slenPrefix = nullptr; // for varying: pointer to length prefix
   if (s->stringTarget) {
     HExpr* st = s->stringTarget.get();
+    // A locator-qualified target P->S.STR (rule 105) sinks into the block the
+    // locator points at, not the structure's declared BASED pointer.
+    auto stringBase = [&]() -> llvm::Value* {
+      if (st->locPtr)
+        return st->memberPath.empty()
+                   ? emitExpr(st->locPtr.get()).reg
+                   : locatorMemberAddr(st->sym, st->memberPath, emitExpr(st->locPtr.get()).reg);
+      return st->memberPath.empty() ? addressOf(st->sym)
+                                    : memberAddr(st->sym, st->memberPath, st->loc);
+    };
     if (st->ty.isChar() && st->ty.varying) {
       // VARYING string: data is at struct index 1, length prefix at index 0
-      llvm::Value* base =
-          st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
-      sdata = b_.CreateStructGEP(llvmTy(st->sym->ty), base, 1, "vdata");
+      llvm::Value* base = stringBase();
+      // The leaf's own VARYING layout: data at field 1, length at field 0.
+      sdata = b_.CreateStructGEP(llvmTy(st->ty), base, 1, "vdata");
       slen = i64(st->ty.len); // capacity
-      slenPrefix = b_.CreateStructGEP(llvmTy(st->sym->ty), base, 0, "vlen");
+      slenPrefix = b_.CreateStructGEP(llvmTy(st->ty), base, 0, "vlen");
       isVarying = true;
     } else {
-      sdata =
-          st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+      sdata = stringBase();
       slen = i64(st->ty.len);
     }
     deferCall("pli_string_put_open", {sdata, slen});
@@ -8072,8 +8091,17 @@ void IRGen::emitGet(HStmt* s) {
   llvm::Value *sdata = nullptr, *slen = nullptr;
   if (s->stringTarget) {
     HExpr* st = s->stringTarget.get();
-    sdata =
-        st->memberPath.empty() ? addressOf(st->sym) : memberAddr(st->sym, st->memberPath, s->loc);
+    // A locator-qualified source P->S.STR (rule 105) reads the block the
+    // locator points at, not the structure's declared BASED pointer.
+    sdata = st->locPtr ? (st->memberPath.empty()
+                              ? emitExpr(st->locPtr.get()).reg
+                              : locatorMemberAddr(st->sym, st->memberPath,
+                                                  emitExpr(st->locPtr.get()).reg))
+                       : (st->memberPath.empty()
+                              ? addressOf(st->sym)
+                              : memberAddr(st->sym, st->memberPath, s->loc));
+    // GET STRING takes a NONVARYING source (rule (105)); sema diagnoses a
+    // VARYING one, so the whole capacity is the read length here.
     slen = i64(st->ty.len);
   }
   // FILE ( f ) (rule 105): route the list-directed input through the named
@@ -8246,8 +8274,13 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
     if (!t->memberPath.empty()) {
       const Type& arr = memberType(t->sym, t->memberPath);
       llvm::Value *ub = nullptr, *lb = nullptr;
-      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
-                                          : memberAddr(t->sym, t->memberPath, loc);
+      // A locator-qualified member P->S.A(i) (rules 124,126) stores through
+      // the locator value, not the declared BASED pointer.
+      llvm::Value* base =
+          t->locPtr
+              ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+              : (arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
+                                 : memberAddr(t->sym, t->memberPath, loc));
       llvm::Value* addr = arrayElementAddr(arr, base, t->args, loc, ub, lb);
       Val cv = convert(v, ty, loc);
       if (ty.isChar())
@@ -11352,8 +11385,13 @@ Val IRGen::emitExpr(HExpr* e) {
       const Type& arr = memberType(e->sym, e->memberPath);
       const Type& el = e->ty;
       llvm::Value *ub = nullptr, *lb = nullptr;
-      llvm::Value* base = arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
-                                          : memberAddr(e->sym, e->memberPath, e->loc);
+      // A locator-qualified member P->S.A(i) (rules 124,126) addresses the
+      // array through the locator value, not the declared BASED pointer.
+      llvm::Value* base =
+          e->locPtr
+              ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
+              : (arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
+                                 : memberAddr(e->sym, e->memberPath, e->loc));
       llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc, ub, lb);
       bool packed = packedMemberPath(e->sym->ty, e->memberPath);
       v.ty = el;

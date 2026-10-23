@@ -1,0 +1,41 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (105): PUT STRING addresses a VARYING target by its
+    own layout (length at field 0, data at field 1), wherever
+    the member sits in its structure, and follow a locator. */
+ stringio: procedure options(main);
+    declare 1 s based(bp),
+              2 v char(8) varying,
+              2 n fixed bin(31);
+    declare bp pointer;
+    declare q pointer;
+    declare c char(3);
+    declare bad fixed bin(31);
+    bad = 0;
+
+    allocate s set(bp);
+    s.n = 7;
+
+    /* V is the FIRST member: the sink must not GEP through the structure */
+    put string(s.v) list('abc');
+    if s.v ^= 'abc' then bad = 1;
+    if s.n ^= 7 then bad = 2;
+
+    c = 'xy';
+    put string(s.v) list(c);
+    if s.v ^= 'xy' then bad = 3;
+
+    /* the same member addressed through a locator */
+    q = bp;
+    put string(q->s.v) list('1234');
+    if s.v ^= '1234' then bad = 4;
+    if q->s.v ^= '1234' then bad = 5;
+
+    if s.n ^= 7 then bad = 6;
+
+    if bad ^= 0 then do;
+       put skip list('FAIL string io address', bad);
+       stop;
+    end;
+    put skip list('PASS string_io_addr');
+ end stringio;

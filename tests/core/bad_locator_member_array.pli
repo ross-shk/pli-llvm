@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (124): '->' requires a BASED reference, so a
+    locator-qualified member array of a plain structure
+    is diagnosed rather than addressed through the wrong
+    base. */
+ badlocmem: procedure options(main);
+    declare 1 t,
+              2 a(2) fixed bin(31);
+    declare p pointer;
+    p->t.a(1) = 1;
+ end badlocmem;
