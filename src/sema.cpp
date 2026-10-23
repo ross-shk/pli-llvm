@@ -4433,7 +4433,12 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
     }
     if (f.kind == FormatItem::P && it->ty.isNumeric()) {
-      /* P: picture-directed output; requires a numeric item. */
+      // A picture formatter works in decimal (val*10^-scale); a scaled FIXED
+      // BINARY has a 2^q point, which the formatter cannot express (ADR-282).
+      if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0)
+        d_.error(it->loc,
+                 "PICTURE output of a scaled FIXED BINARY is not implemented in this stage",
+                 "(53)");
     } else if (f.kind == FormatItem::P && !it->ty.isNumeric()) {
       d_.error(it->loc, "a P format requires a numeric item", "(53)");
     }

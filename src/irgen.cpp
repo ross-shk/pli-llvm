@@ -8193,13 +8193,6 @@ void IRGen::emitPutEditItems(HStmt* s) {
         break;
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
-      // A picture formatter works in decimal (val*10^-scale); a scaled
-      // FIXED BINARY needs a 2^q point and is still a B11 refinement.
-      if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
-        d_.error(item->loc, "PICTURE output of a scaled FIXED BINARY is not implemented in this stage",
-                 "(53)");
-        break;
-      }
       llvm::Value* val = nullptr;
       int scale = 0;
       if (v.ty.isFixed()) {
@@ -9528,10 +9521,8 @@ void IRGen::annotateAlias(llvm::Instruction* inst, Symbol* s) {
 void IRGen::stampFixedBinRange(llvm::LoadInst* load, const Type& ty) {
   if (!load || ty.k != TK::FixedBin || sizeChecks())
     return;
-  if (!load->getType()->isIntegerTy()) {
-    errs() << "DEBUG stampFixedBinRange: load not integer, ty.isArray=" << ty.isArray() << "\n";
-    return;
-  }
+  if (!load->getType()->isIntegerTy())
+    return; // a whole array is copied; there is no scalar range to stamp
   unsigned typeWidth = load->getType()->getIntegerBitWidth();
   unsigned prec = ty.prec;
   if (prec <= 0 || prec >= typeWidth)
@@ -10259,6 +10250,12 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   // targets (rules (15),(22),(20)): assignment copies the address, no numeric
   // conversion.
   if (v.ty.isLocator() && dst.isLocator())
+    return v;
+
+  // A whole-array value is an aggregate: sema required identical element
+  // types for an array assignment (ADR-250), so the bytes copy unchanged and
+  // there is no scalar slot to rescale.
+  if (v.ty.isArray() && dst.isArray())
     return v;
 
   // ENTRY values (IBM extension, ADR-171): a procedure pointer copies through.
