@@ -61,5 +61,14 @@ permits it. macOS `nice` exits 0 even when it is refused, so exit status alone
 is not treated as evidence. Rows whose PL/I median is under 50 ms are marked
 `◦` — their ratios are indicative, not stable.
 
+The C twin is built for the same target policy as the PL/I output: the driver
+targets LLVM's generic CPU and does not contract FP operations, so C gets
+`-march=x86-64` on x86_64, `-mcpu=generic` on arm64, and `-ffp-contract=off`.
+Without that the C baseline would get the host's native tuning (for example
+apple-m1) and fused multiply-adds, and the ratio would price the target policy
+rather than code generation. `--c-native` builds C for the host CPU instead (the
+FP-contraction policy stays matched); the effective flags are recorded in the
+manifest (`c_flags`).
+
 Tasking timings are whole-program wall times that include process startup;
 `ns/task` is that time divided by 20 000 and inherits the startup cost.

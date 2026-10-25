@@ -404,11 +404,15 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     return true;
   }
 
+  // ADR-310: the packed BIT lowering relies on the optimizer, so -O0 keeps
+  // the byte-array path; every optimized level uses the packed form.
+  const bool optimizing = optLevel != "-O0";
+
   // `--print-facts` lowers once and reports the decisions the compiler made
   // (ADR-260), then stops — no object, no link.
   if (print_facts) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides, "", noMemoryEffects);
+                false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
     irgen.setRemarkLibraryCalls(remarkLibraryCalls);
     irgen.run(hir);
@@ -426,7 +430,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   if (emitLLVM || emitMlir) {
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides, "", noMemoryEffects);
+                false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
     irgen.setRemarkLibraryCalls(remarkLibraryCalls);
     std::string ir = irgen.run(hir);
@@ -493,7 +497,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-              linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects);
+              linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects, optimizing);
     ipg.setPublishedEffects(published);
     ipg.setRemarkLibraryCalls(remarkLibraryCalls);
     auto om = ipg.takeModule(hir);

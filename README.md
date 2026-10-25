@@ -47,27 +47,61 @@ For a fuller tour — arrays, structures, storage, conditions, concurrency — s
 `benchmarks/run_benchmarks.py` compares PL/I against C across 33 micro-benchmarks (scalar, string, decimal, array, I/O); `benchmarks/run_tasking_bench.py` compares the tasking models against Go and C. Methodology and the validity rules are in [`benchmarks/README.md`](benchmarks/README.md).
 
 ```sh
-cmake --build build/cmake -j                   
-
+cmake --build build/cmake -j                   # rebuild before timing
 python3 benchmarks/run_benchmarks.py
 python3 benchmarks/run_tasking_bench.py --models fiber,os
 ```
 
 ### PL/I vs C (micro-benchmarks, -O2, median)
 
-21 of 33 benchmarks are at parity with or faster than Clang `-O2`. The wins concentrate where PL/I's native semantics avoid per-element C overhead:
+22 of 32 comparable benchmarks are at parity with or faster than the matched C baseline, and every row is within 1.06×. The IR corpus geomean is 0.75× (acceptance gate < 0.90×); the language corpus geomean is 0.57×. The wins concentrate where PL/I's native semantics avoid per-element C overhead.
 
-<table class="markdown-table">
-  <tr><th>Benchmark</th><th>PL/I / C ratio</th><th>PL/I Advantage</th></tr>
-  <tr><td>string_search</td><td>0.06×</td><td>16.7× faster</td></tr>
-  <tr><td>picture_fold</td><td>0.10×</td><td>10× faster</td></tr>
-  <tr><td>string_ops</td><td>0.21×</td><td>4.8× faster</td></tr>
-  <tr><td>decimal_scale</td><td>0.45×</td><td>2.2× faster</td></tr>
-  <tr><td>by_name</td><td>0.47×</td><td>2.1× faster</td></tr>
-  <tr><td>select_chain</td><td>0.47×</td><td>2.1× faster</td></tr>
-  <tr><td>controlled_stack</td><td>0.73×</td><td>1.4× faster</td></tr>
-  <tr><td>io_list</td><td>0.89×</td><td>1.1× faster</td></tr>
-</table>
+Measured on macOS 26 arm64, five samples per side, unpinned. The C twin uses the same target policy as the PL/I output (generic CPU, no FP contraction); `--c-native` builds it for the host CPU instead.
+
+**IR corpus** (C parity — the acceptance gate):
+
+| Benchmark | PL/I (ms) | C (ms) | Ratio |
+|---|---:|---:|---:|
+| `string_search` | 84.56 | 1272.62 | 0.07× |
+| `string_ops` | 4.10 | 18.90 | 0.22× |
+| `decimal_ops` † | 37.88 | 64.43 | 0.59× |
+| `controlled_stack` | 26.36 | 36.12 | 0.73× |
+| `bcd_decimal` | 103.12 | 131.70 | 0.78× |
+| `array_sort` | 59.94 | 75.15 | 0.80× |
+| `condition_ops` | 72.49 | 89.11 | 0.81× |
+| `fixed_bin63` | 67.48 | 82.29 | 0.82× |
+| `io_throughput` | 30.66 | 36.59 | 0.84× |
+| `scalar_arith` | 53.55 | 62.71 | 0.85× |
+| `file_io` | 58.76 | 61.54 | 0.95× |
+| `on_conditions` | 86.12 | 89.77 | 0.96× |
+| `collatz` | 57.23 | 58.16 | 0.98× |
+| `mandelbrot` | 59.18 | 59.01 | 1.00× |
+| `bit_ops` | 83.70 | 83.25 | 1.01× |
+| `division` | 55.40 | 54.79 | 1.01× |
+| `matrix_float` | 61.83 | 60.61 | 1.02× |
+| `math_functions` | 57.57 | 56.33 | 1.02× |
+| `proc_calls` | 29.28 | 28.34 | 1.03× |
+| `linked_list` | 80.31 | 77.07 | 1.04× |
+| `array_matmul` | 109.62 | 104.03 | 1.05× |
+
+**Language corpus** (PL/I semantics a C program cannot express; the C twin is a reference):
+
+| Benchmark | PL/I (ms) | C (ms) | Ratio |
+|---|---:|---:|---:|
+| `select_chain` | 31.74 | 352.37 | 0.09× |
+| `picture_fold` | 18.89 | 99.52 | 0.19× |
+| `decimal_scale` | 59.89 | 136.07 | 0.44× |
+| `by_name` | 3.73 | 7.88 | 0.47× |
+| `pure_call` | 63.97 | 99.06 | 0.65× |
+| `io_list` | 95.46 | 138.12 | 0.69× |
+| `concat_const` | 5.51 | 6.52 | 0.85× |
+| `checks_on` | 71.19 | 83.36 | 0.85× |
+| `bit_merge` | 74.26 | 75.58 | 0.98× |
+| `alias_scope` | 54.07 | 54.98 | 0.98× |
+| `on_dispatch` | 47.11 | 45.97 | 1.02× |
+| `bit_fields` | 69.91 | 66.47 | 1.05× |
+
+† `decimal_ops` is descriptive: its PL/I side is fixed decimal and its C side is `double`, so the row informs but does not gate. Every row matches its C twin exactly, except the float-sensitive rows (`scalar_arith`, `math_functions`, `matrix_float`), which are compared with a tolerance and also match.
 
 Full results and the methodology live in `benchmarks/`.
 
@@ -75,8 +109,8 @@ Full results and the methodology live in `benchmarks/`.
 
 <table class="markdown-table">
   <tr><th>Benchmark</th><th>PL/I / Go ratio</th><th>Result</th></tr>
-  <tr><td>task_loop (spawn–join lifecycle)</td><td>0.76×</td><td>PL/I beats Go</td></tr>
-  <tr><td>task_spawn (20 000 live tasks)</td><td>13.0× (pending improvement)</td><td>Go's 2 KiB growable stack still wins for fan-out</td></tr>
+  <tr><td>task_loop (spawn–join lifecycle)</td><td>0.69×</td><td>PL/I beats Go</td></tr>
+  <tr><td>task_spawn (20 000 live tasks)</td><td>10.8× (was 24.8×)</td><td>Go's 2 KiB growable stack still wins for fan-out</td></tr>
 </table>
 
 The fiber model recycles a stack per task, making it faster than Go on the spawn–join lifecycle. Fan-out of many simultaneously-live tasks is PL/I's known cost: a fiber stack comes from an arena and grows in chunks, so its 8 MiB ceiling costs address space only, but every live task still touches one 16 KiB stack page.

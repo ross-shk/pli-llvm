@@ -11114,7 +11114,6 @@ references, which is the whole point of the form.
 
 ---
 
-<<<<<<< HEAD
 ## ADR-308 — `ABNORMAL`/`NORMAL`: a declared return point for an entry
 
 **Context.** Entry-name-attributes (rule (38)) include `ABNORMAL(label-name)`
@@ -11157,8 +11156,10 @@ a cited diagnostic instead of jumping into a possibly inactive block. *Making
 `ABNORMAL` a property of the called procedure rather than of the entry name.* It
 is an entry attribute: the same body reached through a different, `NORMAL`
 entry must still return normally.
-=======
-## ADR-308 — The POSIX fiber stack comes from an arena and grows in chunks (amends ADR-236, ADR-239)
+
+---
+
+## ADR-309 — The POSIX fiber stack comes from an arena and grows in chunks (amends ADR-236, ADR-239)
 
 **Context.** ADR-236 gave Windows a stack arena and ADR-239 made a Windows
 fiber stack grow in chunks; POSIX was left with the older shape: every fiber
@@ -11216,4 +11217,69 @@ better than the chunk, and it triples the number of growth faults a
 recursive task takes. *Copy the stack on growth, the way Go does.* See
 above: it needs compiler support, and a half-done version silently corrupts
 every pointer into a moved stack.
->>>>>>> 19944e3 (Enhance fiber stack management and bit manipulation tests)
+
+---
+
+## ADR-310 — BIT logic and masked tests lower through packed integers (amends ADR-126, ADR-243)
+
+**Context.** A `BIT(n)` value is stored as a packed big-endian byte array,
+`[ceil(n/8) x i8]` (ADR-126). Logical `&`/`|` were lowered one storage byte at
+a time, and a comparison packed the whole string to i64 and compared that.
+LLVM then canonicalised the packed comparison back into per-byte compares, so
+the loop vectorizer emitted 8- and 16-bit lanes and widened each result to
+32 bits before accumulating. The C twin, using a `uint32_t`, compared in
+32-bit lanes. On `benchmarks/lang/bit_fields.pli` this cost 45% (1.45x C).
+
+**Decision.** For `BIT(n)` with `n <= 64`, logical `&`/`|` and the masked-test
+peepholes work on the packed integer, not on the bytes: `pack` is a bijection
+on n-bit strings, so `pack(a & b)` is `pack(a) & pack(b)`. Widths up to 32
+stay in i32, the lane width a C `uint32_t` uses; widths 33..64 use i64. The
+merged-conjunction peephole (ADR-243) and a new single-test peephole,
+`(X & M) = E`, use the same packing. Storage layout, bit order, padding, the
+`BIT(1)`-is-i1 convention and the external ABI are unchanged; strings wider
+than 64 bits keep the byte-array path. The single-test peephole has a
+`--experimental-lowering=bit_test:runtime` oracle that keeps the generic path.
+The packed form is used above `-O0`: at `-O0` the extra pack/unpack
+instructions are not folded away, so the byte-array path stays there.
+
+The conversion path also fixes a latent defect: widening a `BIT(1)` to a wider
+`BIT(n)` used to extract from the i1 scalar as if it were an aggregate,
+producing invalid IR (`w = '0'b` into `BIT(32)`). It now widens through the
+integer path.
+
+**Measurements** (`benchmarks/run_benchmarks.py --only bit_fields --runs 5`,
+macOS arm64): 1.45x C before, 0.87x-1.05x after. The full corpus run put
+`bit_fields` at 1.05x and `bit_merge` at 0.98x, with the IR geomean at 0.75x.
+
+**Consequences.** `BIT(n<=64)` logic is one register operation. A mask or
+expectation that is a compile-time literal gets the packed peephole directly;
+a mask held in a variable still reaches it after LLVM propagates the constant.
+The tests are `tests/usecases/bit_mask_widths.pli`,
+`tests/usecases/bit_merge_equivalence.pli` and `tests/ir/combine_tests`.
+
+## ADR-311 — the benchmark C twin follows the PL/I target policy
+
+**Context.** `pli` targets LLVM's generic CPU (`src/target.cpp`) and does not
+contract floating-point operations. The benchmark harness compiled the C twin
+with the host's native tuning (apple-m1 on macOS arm64) and Clang's default
+FP contraction. A ratio therefore mixed code generation with target policy:
+`alias_scope` lost 13% to C's wider native vectorisation and `mandelbrot` lost
+20% to fused multiply-adds the PL/I build never emits.
+
+**Decision.** The C twin is built for the same policy as the PL/I output:
+`-march=x86-64` on x86_64, `-mcpu=generic` on arm64, and
+`-ffp-contract=off`. The effective flags are recorded in the manifest
+(`c_flags`) and are part of manifest compatibility, so runs under different
+policies are never compared as a compiler improvement. `--c-native` builds C
+for the host CPU instead, for a native-policy comparison.
+
+**Measurements.** With the matched policy, `alias_scope` moved from 1.13x to
+0.98x and `mandelbrot` from 1.17x to 1.00x; the IR corpus geomean is 0.75x
+and no row is worse than 1.06x. The C twins for `on_conditions` (an ON-unit
+stack and indirect dispatch) and `linked_list` (an allocation-failure check)
+were also brought up to the same semantic work as their PL/I twins.
+
+**Consequences.** A ratio now prices code generation under one target policy.
+It is not a claim that PL/I is faster than a native-tuned C build; that
+comparison is still available with `--c-native`, and should be reported
+separately when used.

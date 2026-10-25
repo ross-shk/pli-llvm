@@ -1,0 +1,1 @@
+CHECK: bad_preprocessor.pli:4:{{[0-9]+}}: error: undefined label in %GOTO

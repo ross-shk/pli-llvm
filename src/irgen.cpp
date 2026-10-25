@@ -6151,6 +6151,19 @@ bool IRGen::emitConcatConstStore(HStmt* s) {
   return true;
 }
 
+// Pack a BIT literal into the integer its packed bytes denote (big-endian,
+// first character in the most significant bit). Widths above 64 are not
+// handled here; the caller keeps the generic byte-array path for those.
+static bool bitLitToU64(const std::string& bits, int nbits, uint64_t& out) {
+  if (nbits <= 0 || nbits > 64 || (int)bits.size() != nbits)
+    return false;
+  uint64_t v = 0;
+  for (int i = 0; i < nbits; ++i)
+    v = (v << 1) | (bits[i] == '1' ? 1u : 0u);
+  out = v;
+  return true;
+}
+
 // Merge two masked bit tests on the same value into one masked test
 // (ADR-243): `(X & M1) = E1 & (X & M2) = E2` is `(X & (M1|M2)) = (E1|E2)`,
 // when the masks are disjoint and each expectation lies inside its own
@@ -6228,47 +6241,55 @@ bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
     return false;
   }
   facts_.recordBuiltin("bit_merge", "llvm");
-  // One load of the value, masked with the merged constant mask.
+  // One load of the value, masked with the merged constant mask. The packed
+  // value is a bijection on n-bit strings, so pack(X & M) is pack(X) & M:
+  // one integer AND and one compare replace the per-byte chain and preserve
+  // every bit, including those above bit 31.
   Val x = emitExpr(s1.var);
   if (!x.ty.isBit() || x.ty.len != s1.nbits || !x.reg)
     return false;
-  const int B = bitBytes(s1.nbits);
-  std::vector<unsigned char> maskBytes = packBitLiteral(merge.mask, s1.nbits);
-  std::vector<unsigned char> wantBytes = packBitLiteral(merge.want, s1.nbits);
-  llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
-  llvm::Value* masked = llvm::UndefValue::get(arrTy);
-  for (int k = 0; k < B; ++k) {
-    llvm::Value* xb = b_.CreateExtractValue(x.reg, (unsigned)k, "bt.x");
-    llvm::Value* mb = llvm::ConstantInt::get(b_.getInt8Ty(), maskBytes[k]);
-    masked = b_.CreateInsertValue(masked, b_.CreateAnd(xb, mb, "bt.and"), (unsigned)k);
-  }
-  // The comparison is the one the two separate tests would make: the masked
-  // value against the merged expectation, as numbers (rule (117)).
-  // Pack BIT values into integer temporaries to preserve all bits (including
-  // high bits beyond 31), rather than truncating to fixedBin(31).
-  Val mv;
-  mv.ty = Type::bit(s1.nbits);
-  mv.reg = masked;
-  Val wv;
-  wv.ty = Type::bit(s1.nbits);
-  wv.reg = llvm::ConstantDataArray::get(ctx_, wantBytes);
-  llvm::Value* mp = packBitValue(masked, s1.nbits, e->loc);
-  llvm::Value* wp = packBitValue(wv.reg, s1.nbits, e->loc);
-  out.ty = Type::bit(1);
-  out.reg = b_.CreateICmpEQ(mp, wp, "bt.cmp");
-  return true;
-}
-
-// Pack a BIT literal into the integer its packed bytes denote (big-endian,
-// first character in the most significant bit). Widths above 64 are not
-// handled here; the caller keeps the generic byte-array path for those.
-static bool bitLitToU64(const std::string& bits, int nbits, uint64_t& out) {
-  if (nbits <= 0 || nbits > 64 || (int)bits.size() != nbits)
+  uint64_t maskVal = 0, wantVal = 0;
+  if (!bitLitToU64(merge.mask, s1.nbits, maskVal) ||
+      !bitLitToU64(merge.want, s1.nbits, wantVal))
     return false;
-  uint64_t v = 0;
-  for (int i = 0; i < nbits; ++i)
-    v = (v << 1) | (bits[i] == '1' ? 1u : 0u);
-  out = v;
+  // The packed form needs the optimizer to pay off; -O0 keeps the byte-array
+  // construction, which is fewer instructions unoptimized.
+  if (!optimize_) {
+    const int B = bitBytes(s1.nbits);
+    std::vector<unsigned char> maskBytes = packBitLiteral(merge.mask, s1.nbits);
+    std::vector<unsigned char> wantBytes = packBitLiteral(merge.want, s1.nbits);
+    llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+    llvm::Value* masked = llvm::UndefValue::get(arrTy);
+    for (int k = 0; k < B; ++k) {
+      llvm::Value* xb = b_.CreateExtractValue(x.reg, (unsigned)k, "bt.x");
+      llvm::Value* mb = llvm::ConstantInt::get(b_.getInt8Ty(), maskBytes[k]);
+      masked = b_.CreateInsertValue(masked, b_.CreateAnd(xb, mb, "bt.and"), (unsigned)k);
+    }
+    Val mv;
+    mv.ty = Type::bit(s1.nbits);
+    mv.reg = masked;
+    Val wv;
+    wv.ty = Type::bit(s1.nbits);
+    wv.reg = llvm::ConstantDataArray::get(ctx_, wantBytes);
+    llvm::Value* mp = packBitValue(masked, s1.nbits, e->loc);
+    llvm::Value* wp = packBitValue(wv.reg, s1.nbits, e->loc);
+    out.ty = Type::bit(1);
+    out.reg = b_.CreateICmpEQ(mp, wp, "bt.cmp");
+    return true;
+  }
+  llvm::Value* xp = packBitValue(x.reg, s1.nbits, e->loc);
+  llvm::Value* maskedInt;
+  llvm::Value* wantInt;
+  if (s1.nbits <= 32) {
+    xp = b_.CreateTrunc(xp, b_.getInt32Ty(), "bt.x32");
+    maskedInt = b_.CreateAnd(xp, b_.getInt32((int)maskVal), "bt.and32");
+    wantInt = b_.getInt32((int)wantVal);
+  } else {
+    maskedInt = b_.CreateAnd(xp, i64((long long)maskVal), "bt.and");
+    wantInt = i64((long long)wantVal);
+  }
+  out.ty = Type::bit(1);
+  out.reg = b_.CreateICmpEQ(maskedInt, wantInt, "bt.cmp");
   return true;
 }
 
@@ -6316,6 +6337,9 @@ bool IRGen::emitMaskedBitTest(HExpr* e, Val& out) {
     return false;
   // The lowering policy wins (ADR-260): the runtime path keeps the generic
   // byte-array lowering so the differential oracle can compare the two.
+  // -O0 also keeps it: packing is extra work without the optimizer.
+  if (!optimize_)
+    return false;
   if (runtimePath("bit_test")) {
     facts_.recordBuiltin("bit_test", "runtime");
     return false;
@@ -11987,7 +12011,7 @@ Val IRGen::emitExpr(HExpr* e) {
       // pack(a) & pack(b). This keeps the operation in a single register
       // instead of one AND/OR per storage byte. Wider strings keep the
       // byte-array path.
-      if (a.ty.len <= 64) {
+      if (a.ty.len <= 64 && optimize_) {
         llvm::Value* x = packBitValue(a.reg, a.ty.len, e->loc);
         llvm::Value* y = packBitValue(b.reg, b.ty.len, e->loc);
         // Keep the operation in the narrowest register that holds the string:

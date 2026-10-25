@@ -292,7 +292,7 @@ The rules that make it work, each of them learned the hard way:
   boundaries before it touches one, so the handler commits every chunk
   between the top and the fault, not only the next one; on POSIX the stacks
   come from an arena of slots, so a live task's ceiling costs address space
-  and not a reservation of its own (ADR-308).
+  and not a reservation of its own (ADR-309).
 * **A report about a full stack cannot run on that stack.** The overflow
   report runs on an emergency stack that the handler switches to through the
   exception context, so it needs no room on the task's stack (ADR-239). On

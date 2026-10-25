@@ -1,8 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (115)-(117): a merged conjunction of two masked BIT tests must
-    produce the same BIT(1) as the two tests written separately. The masks
-    are constants and disjoint, which is what permits the merge (ADR-243).
+    produce the same BIT(1) as the two tests written separately. The
+    masks are constants and disjoint, which is what permits the merge
+    (ADR-243).
     The masks use the top two bits of a BIT(32), so a lowering that
     truncates through FIXED BIN(31) disagrees on the sign bit. */
  bit_merge_equivalence: procedure options(main);

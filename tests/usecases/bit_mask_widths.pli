@@ -1,9 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Rules (115)-(117): masked BIT tests preserve every bit, including the
-    top bit of a BIT(32) (bit 31, the signed FIXED BIN(31) sign bit) and
-    bits above 31 in a BIT(64). A merged conjunction must agree with the
-    same two tests written separately. */
+ /* Rules (115)-(117): masked BIT tests preserve every bit, including
+    the top bit of a BIT(32) (bit 31, the signed FIXED BIN(31) sign
+    bit) and bits above 31 in a BIT(64). A merged conjunction must
+    agree with the same two tests written separately. */
  bit_mask_widths: procedure options(main);
    declare w bit(64);
    declare m bit(64);
@@ -24,7 +24,7 @@
       stop;
    end;
 
-   /* BIT(64): a value that differs in the top bit must fail the test. */
+   /* BIT(64): a value differing in the top bit must fail the test. */
    w = '01'b;
    if ((w & m) = m) & ((w & m) = m) then do;
       put skip list('FAIL bit64 differs');
