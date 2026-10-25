@@ -709,7 +709,7 @@ With `set`, `allocate` hands you a fresh heap block in a pointer:
  free rec;              /* release it */
 ```
 
-Any pointer-valued reference can be the locator: `free pool(i) -> rec;` and `free head -> node.next -> rec;` release the block that reference points at, and `free (a -> rec, b -> rec);` frees several in one statement.
+Any locator-valued reference (a pointer or an offset) can be the locator: `free pool(i) -> rec;` and `free head -> node.next -> rec;` release the block that reference points at, and `free (a -> rec, b -> rec);` frees several in one statement.
 
 **Not yet**
 
@@ -767,11 +767,23 @@ An offset can move by a byte count, and two offsets can be measured against each
 
 `offsetsubtract(q, n)` is `offsetadd(q, -n)`, and the count accepts a scaled decimal or a negative value. There is no bounds check.
 
+An array of offsets holds several blocks from one region. Each element is a full locator — set it with `allocate`, qualify a based reference with it, free through it, or move it with `offsetadd`:
+
+```pli
+ dcl slots(2) offset(region);
+
+ allocate slot in(region) set(slots(1));
+ allocate slot in(region) set(slots(2));
+ slots(1) -> slot.v = 11;
+ free slots(1) -> slot in(region);
+```
+
 **Not yet**
 
-- External areas and arrays of offsets are diagnosed, and the `OFFSET`/
-  `OFFSETVALUE` conversion built-ins are not served. An area declared as a
-  structure member has no region yet.
+- External areas are diagnosed, and the `OFFSET`/`OFFSETVALUE` conversion
+  built-ins are not served. An offset associated with one area can still be
+  set from a different `IN` area (the association is not checked yet). An area
+  declared as a structure member has no region yet.
 
 > **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.
 

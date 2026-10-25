@@ -11358,3 +11358,45 @@ into the same area, so the OFFSET type is kept and assignment to a POINTER
 stays an explicit locator conversion. *An inbounds GEP.* The moved address may
 point outside the allocated block (IBM does not require the result to stay
 inside), so `inbounds` would promise more than the language does.
+
+## ADR-312 — Arrays of `OFFSET`; an OFFSET is a full locator
+
+**Context.** ADR-170 made an OFFSET an opaque locator into an AREA, but sema
+diagnosed an array of OFFSET and treated OFFSET as a value only: the locator
+before `->` had to be a POINTER, and the SET target of ALLOCATE had to be a
+plain variable. Code that manages several blocks in one area therefore kept a
+scalar offset per block, and `slots(i)` could only be read and assigned. In
+IBM PL/I an OFFSET is an ordinary dimensioned attribute and a full locator: it
+can qualify a BASED reference, be a SET target, and be freed through.
+ALLOCATE also requires `IN ( area )` whenever the SET target is an OFFSET.
+
+**Decision.** Arrays of OFFSET are served with the ordinary array
+representation — the dimensions live on the type, and the elements are opaque
+addresses. Three paths were opened:
+
+- `SET` takes any assignable locator reference — a scalar, an array element
+  `slots(i)`, or a member — and ALLOCATE shares GET's reference store, so the
+  block address lands in that element or member. An OFFSET target additionally
+  requires `IN ( area )` (rule (88)).
+- The locator before `->` may be a POINTER or an OFFSET, so
+  `slots(1) -> rec.v` addresses the block held in the element. The same rule
+  guards FREE's locator (rule (90)).
+- A whole array remains rejected as a locator or SET target, and the offset
+  arithmetic built-ins require scalar operands.
+
+**Consequences.** `offset_array.pli` allocates two blocks into two elements,
+writes and reads through each element, moves one element with `OFFSETADD`,
+frees one block by its element and checks the other survives, and nulls and
+compares an element. `bad_offset_array.pli` pins the whole-array SET target
+(88), a bad AREA association on an array declaration (22), the missing IN for
+an OFFSET target (88), and a non-BASED `->` target (124). B5 loses arrays of
+OFFSET. Still open there: EXTERNAL areas, the `OFFSET`/`OFFSETVALUE`
+conversion built-ins, and the check that an OFFSET's associated AREA matches
+the `IN` area it is set from (rule (22)).
+
+**Rejected.** *Treating a whole array as a locator.* An array is not a value;
+each element is. *Allowing an AREA as a `->` locator.* An AREA names a region,
+not a block; the checks spell out POINTER or OFFSET rather than using
+`isLocator()`, which also accepts AREA. *Keeping the POINTER-only rule.* An
+OFFSET is a locator by rule (22); refusing it forced a scalar copy of every
+element.

@@ -1,9 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (124),(126): locator-qualified subscripts stay
-    diagnosed when the locator is not a POINTER, when the
-    target is not BASED, or when the arity is wrong. Each
-    bad statement below must fail with its rule cite. */
+    diagnosed when the locator is not a POINTER or OFFSET,
+    when the target is not BASED, or when the arity is
+    wrong. Each bad statement below must fail with its rule cite. */
  badbasedloc: procedure options(main);
    dcl p pointer;
    dcl n fixed bin(31);

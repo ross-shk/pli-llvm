@@ -2076,8 +2076,6 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // reference names the associated AREA; it is validated here and used to
         // check the ALLOCATE/FREE ... IN(area) option.
         if (item.offset) {
-          if (item.ty.isArray())
-            d_.error(item.loc, "an array of OFFSET is not implemented in this stage", "(22)");
           if (!item.offsetRef.empty()) {
             Symbol* ar = lookup(sc, item.offsetRef);
             if (ar && ar->ty.isArea())
@@ -4622,9 +4620,21 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                    "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
       } else {
         typeExpr(s->allocSet[i].get(), sc, p);
-        if (s->allocSet[i]->kind != Expr::VarRef || !s->allocSet[i]->ty.isLocator())
-          d_.error(s->allocSet[i]->loc,
-                   "the SET target of ALLOCATE must be a POINTER or OFFSET variable", "(88)");
+        // The SET target is any assignable locator reference: a scalar
+        // variable, an array element, or a member (rule (88)).
+        const Expr* tgt = s->allocSet[i].get();
+        const bool assignable = tgt->kind == Expr::VarRef || tgt->kind == Expr::Subscript;
+        const bool scalarLoc =
+            !tgt->ty.isArray() && (tgt->ty.isPointer() || tgt->ty.isOffset());
+        if (!assignable || !scalarLoc)
+          d_.error(tgt->loc,
+                   "the SET target of ALLOCATE must be a POINTER or OFFSET variable or element",
+                   "(88)");
+        // An OFFSET target has no heap meaning: the block must come from the
+        // AREA the offset locates (Y33-6003, rule (88)).
+        else if (tgt->ty.isOffset() && !areaE)
+          d_.error(tgt->loc,
+                   "ALLOCATE with a SET OFFSET target requires the IN ( area ) option", "(88)");
       }
     }
     break;
@@ -4662,7 +4672,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (!bsym || !bsym->isBased())
         d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
                  "(90)");
-      if (f->locPtr && !f->locPtr->ty.isLocator())
+      if (f->locPtr &&
+          ((!f->locPtr->ty.isPointer() && !f->locPtr->ty.isOffset()) ||
+           f->locPtr->ty.isArray()))
         d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER or OFFSET", "(90)");
       if (i < s->freeArea.size() && s->freeArea[i]) {
         typeExpr(s->freeArea[i].get(), sc, p);
@@ -5247,13 +5259,14 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       sym->owner = p;
     e->sym = sym;
     e->ty = sym->ty;
-    // A locator-qualified reference P -> X (rule 124): P is a POINTER, X a
-    // based variable whose storage is addressed through P. The member path
-    // below then resolves X.A against the based structure type.
+    // A locator-qualified reference P -> X (rule 124): P is a POINTER or an
+    // OFFSET, X a based variable whose storage is addressed through P. The
+    // member path below then resolves X.A against the based structure type.
     if (e->locPtr) {
       typeExpr(e->locPtr.get(), sc, p);
-      if (!e->locPtr->ty.isPointer())
-        d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+      if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
+          e->locPtr->ty.isArray())
+        d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
       if (!sym->isBased())
         d_.error(e->loc,
                  "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
@@ -5315,8 +5328,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // used, so Q->S.A(i) can address a different block than P->S.A(i).
       if (e->locPtr) {
         typeExpr(e->locPtr.get(), sc, p);
-        if (!e->locPtr->ty.isPointer()) {
-          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
+            e->locPtr->ty.isArray()) {
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
           e->ty = Type::voidTy();
           break;
         }
@@ -5483,13 +5497,14 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         arr && (arr->kind == Symbol::Var || arr->kind == Symbol::Param) && arr->ty.isArray()) {
       // A locator-qualified array subscript P->X(i) (rules 124,126): the
       // locator supplies the base address instead of the declared BASED
-      // pointer. The locator is typed first so a non-POINTER locator or
+      // pointer. The locator is typed first so a non-locator or
       // a non-BASED target is diagnosed with its rule cite, never
       // silently given the own base.
       if (e->locPtr) {
         typeExpr(e->locPtr.get(), sc, p);
-        if (!e->locPtr->ty.isPointer())
-          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
+            e->locPtr->ty.isArray())
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
         if (!arr->isBased()) {
           d_.error(e->loc,
                    "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
@@ -6189,14 +6204,14 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
-    if (!e->args[0]->ty.isOffset()) {
+    if (!e->args[0]->ty.isOffset() || e->args[0]->ty.isArray()) {
       d_.error(e->args[0]->loc, "the first argument to " + e->name + " must be an OFFSET",
                "(22)");
       e->ty = Type::voidTy();
       return true;
     }
     if (diff) {
-      if (!e->args[1]->ty.isOffset()) {
+      if (!e->args[1]->ty.isOffset() || e->args[1]->ty.isArray()) {
         d_.error(e->args[1]->loc, "the second argument to OFFSETDIFF must be an OFFSET",
                  "(22)");
         e->ty = Type::voidTy();
@@ -6205,8 +6220,9 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::fixedBin(31, 0);
       return true;
     }
-    if (!e->args[1]->ty.isNumeric()) {
-      d_.error(e->args[1]->loc, "the byte count of " + e->name + " must be numeric", "(123)");
+    if (!e->args[1]->ty.isNumeric() || e->args[1]->ty.isArray()) {
+      d_.error(e->args[1]->loc,
+               "the byte count of " + e->name + " must be a numeric scalar", "(123)");
       e->ty = Type::voidTy();
       return true;
     }

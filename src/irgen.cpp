@@ -7131,8 +7131,11 @@ void IRGen::emitAllocate(HStmt* s) {
         areaE ? b_.CreateCall(runtimeFn("pli_area_alloc"), {emitExpr(areaE).reg, sz}, "aheap")
               : b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
     HExpr* set = (i < s->allocSet.size()) ? s->allocSet[i].get() : nullptr;
+    // The SET target is any assignable locator reference — a scalar, an array
+    // element (rule (22) arrays of OFFSET), or a member — so share the
+    // reference store used by GET.
     if (set)
-      storeTo(set->sym, Val{set->ty, p}, set->loc);
+      storeGetTarget(set, Val{set->ty, p}, set->loc);
     // ALLOCATE of a BASED variable also sets the variable's own BASED locator
     // (rule (88)), so references through the based name address the new cell.
     if (bsym->basedBase && (!set || bsym->basedBase != set->sym))
