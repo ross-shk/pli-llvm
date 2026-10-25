@@ -130,7 +130,7 @@ are a deliberate ordering decision.
 
 | ID | Work | Status | Evidence | Done when | Size | Deps |
 |---|---|---|---|---|---|---|
-| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | open | `GC` Chapter 9 row: `%DO`/`%GO TO`/procedures still reject; `%REPLACE` exists (`src/preprocessor.cpp:361`) but rescanning is not modelled | the processor examples reproduce their expected program text; nested replacement across `%INCLUDE` is tested | M | — |
+| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | partial | `GC` Chapter 9 row: `%DO`/`%END` iteration loops implemented; `%GOTO`/`%GO TO` with flat-label resolution implemented; `%PROCEDURE`/`%PROC`/`%RETURN` and `%REPLACE` rescanning (Stage 3) still reject (`pp_do.pli`, `pp_goto.pli`, `bad_pp_do_unterminated.pli`, `bad_preprocessor.pli`, ADR-312) | `%PROCEDURE` macro expansion (Stage 2); `%REPLACE` textual rescanning moved from lexer to preprocessor (Stage 3, ADR-077→ADR-302) | M | — |
 
 ## Dropped, or deliberately out of scope
 

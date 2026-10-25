@@ -31,28 +31,28 @@ private:
   bool expandOneInclude(const std::filesystem::path& input, const std::string& rawName, int line,
                         int col, std::string& output, bool once);
   // Append text to output, recording one lineMap entry per \n so diagnostics
-  // stay attributed to the correct source file:line (ADR-219, ADR-305).
+  // stay attributed to the correct source file:line (ADR-219, ADR-312).
   void emit(const std::string& text, std::string& output, const std::filesystem::path& path,
             int& line, int& col);
   // Scan a source range char-by-char, emitting non-directive text via emit()
-  // and dispatching %-directives to processDirective (ADR-305). String, comment
+  // and dispatching %-directives to processDirective (ADR-312). String, comment
   // and // comment nesting is tracked so directives inside them are inert.
   bool scan(const std::string& source, size_t start, size_t end, std::string& output,
             int& line, int& col, const std::filesystem::path& path, bool active);
-  // Pre-scan source[start..end) for %label: definitions (ADR-305).
+  // Pre-scan source[start..end) for %label: definitions (ADR-312).
   void collectLabels(const std::string& source, size_t start, size_t end);
   // Find the ';' (or comment-embedded ';') that terminates a directive body
-  // starting just after `start`, skipping quoted strings (ADR-305).
+  // starting just after `start`, skipping quoted strings (ADR-312).
   size_t findDirectiveEnd(const std::string& source, size_t start);
   // Find the matching %END for a %DO starting at `start`, returning its position
-  // in `endPos` and the ';' position in `endSemi` (ADR-305).
+  // in `endPos` and the ';' position in `endSemi` (ADR-312).
   size_t findMatchingEnd(const std::filesystem::path& path, const std::string& source,
                          size_t start, size_t& endSemi, int line, int col);
   // Parse and run one %-directive at `i` (source[i] == '%'), returning the
   // index past it (npos after diagnosing). With active == false the directive
   // is skipped without effects; newlines stay caller-preserved. Sets semPos to
   // the last character position of the directive's own text so the caller can
-  // preserve its newlines (ADR-305).
+  // preserve its newlines (ADR-312).
   size_t processDirective(const std::filesystem::path& path, const std::string& source, size_t i,
                           std::string& output, int& line, int& col, bool active, size_t& semPos);
   // %IF expr %THEN directive [%ELSE directive] (ADR-083): arms are full
@@ -74,12 +74,12 @@ private:
   // variable to its decimal value.
   bool substituteRef(const std::filesystem::path& input, const std::string& name, int line,
                      int col, std::string& output);
-  // %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-305).
+  // %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-312).
   // Returns the position past %END (or npos on error).
   size_t handleDo(const std::filesystem::path& path, const std::string& source, size_t bodyStart,
                   size_t endPos, size_t endSemi, std::string& output, int& line, int& col,
                   bool active, const std::string& spec, int directiveLine, int directiveCol);
-  // %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-305).
+  // %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-312).
   bool handleGoto(const std::filesystem::path& path, const std::string& name,
                   const std::string& operand, int line, int col);
   // %PROCEDURE / %PROC / %RETURN — compile-time macros (Stage 2).
@@ -102,11 +102,11 @@ private:
   std::map<std::string, long long> ppVars_;
   // Activated variables (extension, ADR-113): only these expand as %NAME.
   std::set<std::string> ppActive_;
-  // %label: → flat position past the ':' + whitespace (ADR-305).
+  // %label: → flat position past the ':' + whitespace (ADR-312).
   std::unordered_map<std::string, size_t> labels_;
-  // Jump target set by %GOTO (ADR-305); scan() resumes there.
+  // Jump target set by %GOTO (ADR-312); scan() resumes there.
   size_t gotoTarget_ = 0;
-  // Recursion guard for scan()/handleDo() nesting (ADR-305).
+  // Recursion guard for scan()/handleDo() nesting (ADR-312).
   int scanDepth_ = 0;
   static constexpr int kMaxScanDepth = 256;
   // Flat-line source map (ADR-219): lineMap_[n-1] gives the canonical file path

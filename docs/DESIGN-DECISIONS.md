@@ -11283,3 +11283,45 @@ were also brought up to the same semantic work as their PL/I twins.
 It is not a claim that PL/I is faster than a native-tuned C build; that
 comparison is still available with `--c-native`, and should be reported
 separately when used.
+
+## ADR-312 — Textual rescanning preprocessor for Chapter 9 control flow
+
+**Context.** C28-6571-3 Chapter 9 defines `%DO`/`%END`, `%GOTO`/`%GO TO`,
+`%label:`, and `%PROCEDURE` macros as compile-time text control. The preprocessor
+already flattens `%INCLUDE`/`%XINCLUDE` recursively (ADR-071) and handles `%IF`/
+`%DECLARE`/`%ACTIVATE` with integer expressions (ADR-083). `%DO`/`%GOTO` were
+previously stubs (`handleDo`/`handleGoto` returned "not implemented"), so any
+program using them was rejected at the preprocessor stage.
+
+**Decision.** Implement `%DO`/`%END` and `%GOTO`/`%GO TO`/`%label:` as a flat-
+textual rescanning pass over the already-included source (ADR-305 for the scan
+architecture):
+
+- **`scan(source, start, end, …)`** walks the source char-by-char, tracking
+  strings, `/* */`, and `//` comment state so directives inside them are inert.
+  Non-directive text is emitted via `emit()`, which also updates the line map
+  (ADR-219) so diagnostics stay attributed to the real source file:line.
+- **`collectLabels(source, start, end)`** pre-scans the file for `%label:`
+  definitions, recording each label's flat position past `:` + whitespace in a
+  `labels_` map. Labels are file-scoped; a `%GOTO` to an undefined label is
+  diagnosed.
+- **`processDirective(...)`** dispatches all `%`-directives. For `%DO`, it finds
+  the matching `%END` via nest-counted `findMatchingEnd` (only `%END` counts, not
+  PL/I `end`); `%DO` without a matching `%END` is diagnosed as "unterminated %DO".
+- **`handleDo`** supports `%DO v=e1 TO e2 [BY e3]` iteration: for each value of
+  `v`, `scan()` is called on the body with `v` set in the preprocessor variable
+  table, so `%IF v = n` inside the body can emit or suppress code per iteration.
+  A bare `%DO;` (no iteration spec) scans the body once.
+- **`handleGoto`** looks up the label in `labels_` and sets `gotoTarget_`; `scan()`
+  checks `gotoTarget_` after each directive and jumps the cursor there. Forward
+  and backward jumps within the same file are supported; jumps outside the
+  current `scan()` range cause the scan to stop (used by `%DO` to exit loops).
+- **`%DO`/`%END`/`%GOTO`/`%label:`** are Stage 1 of the B6 work item; `%PROCEDURE`
+  (Stage 2) and `%REPLACE` textual rescanning moved out of the lexer (Stage 3,
+  superseding ADR-077's single-pass token model) remain deferred.
+
+**Consequences.** The preprocessor now produces text that contains zero `%DO`,
+`%END`, `%GOTO`, `%GO TO`, or `%label:` directives in its output; all control
+flow and iteration are resolved at the preprocessor stage. `%PROCEDURE` and
+`%REPLACE` rescanning remain in the lexer for now. The `kMaxScanDepth` guard
+(256) prevents infinite `%DO`/`%GOTO` nesting from exhausting the stack.

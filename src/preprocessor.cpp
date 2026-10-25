@@ -282,7 +282,7 @@ bool Preprocessor::evalCondExpr(const std::string& text, const fs::path& path, i
 // past it (npos after diagnosing). With active == false the directive is
 // skipped without effects; newlines stay caller-preserved. Sets semPos to the
 // last character position of the directive's own text so the caller can
-// preserve its newlines (ADR-305).
+// preserve its newlines (ADR-312).
 size_t Preprocessor::processDirective(const fs::path& path, const std::string& source, size_t i,
                                       std::string& output, int& line, int& col, bool active,
                                       size_t& semPos) {
@@ -380,8 +380,34 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
       return npos;
     }
     semPos = end;
+    // For %GO TO: skip the "TO" keyword, use the label after it.
+    std::string trimmedOp = trim(source.substr(wordEnd, end - wordEnd));
+    std::string up = upper(trimmedOp);
+    if (name == "GO") {
+      size_t toPos = std::string::npos;
+      for (size_t pos = 0; pos + 2 <= up.size(); ++pos) {
+        if (up.compare(pos, 2, "TO") != 0)
+          continue;
+        bool leftOk = pos == 0 || !isWordChar(up[pos - 1]);
+        bool rightOk = pos + 2 >= up.size() || !isWordChar(up[pos + 2]);
+        if (leftOk && rightOk) {
+          toPos = pos;
+          break;
+        }
+      }
+      if (toPos != std::string::npos) {
+        source.substr(wordEnd, end - wordEnd);
+        std::string label = trim(trimmedOp.substr(toPos + 2));
+        if (active) {
+          if (!handleGoto(path, name, label, directiveLine, directiveCol))
+            return npos;
+          return gotoTarget_;
+        }
+        return end + 1;
+      }
+    }
     if (active) {
-      if (!handleGoto(path, name, source.substr(wordEnd, end - wordEnd), directiveLine, directiveCol))
+      if (!handleGoto(path, name, trimmedOp, directiveLine, directiveCol))
         return npos;
       return gotoTarget_;
     }
@@ -719,7 +745,7 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
 
   int line = 1;
   int col = 1;
-  // %GOTO resolves labels in the current file's flat text (ADR-305).
+  // %GOTO resolves labels in the current file's flat text (ADR-312).
   // Save outer file's labels across recursive %INCLUDE expansion, then
   // repopulate for this file.
   auto savedLabels = labels_;
@@ -734,7 +760,7 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
 }
 
 // Append text to output, recording one lineMap entry per \n so diagnostics
-// stay attributed to the correct source file:line (ADR-219, ADR-305).
+// stay attributed to the correct source file:line (ADR-219, ADR-312).
 void Preprocessor::emit(const std::string& text, std::string& output, const fs::path& path,
                         int& line, int& col) {
   output += text;
@@ -750,7 +776,7 @@ void Preprocessor::emit(const std::string& text, std::string& output, const fs::
 }
 
 // Scan a source range char-by-char, emitting non-directive text via emit()
-// and dispatching %-directives to processDirective (ADR-305). String, comment
+// and dispatching %-directives to processDirective (ADR-312). String, comment
 // and // comment nesting is tracked so directives inside them are inert.
 // Depth-guarded to prevent runaway %DO/%GOTO nesting.
 bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std::string& output,
@@ -807,7 +833,7 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
       }
       // Preserve newlines from the directive's own text (i..semPos), not
       // from the jump target, so %DO body/%END and %GOTO target text is
-      // tracked by their own scan/processDirective calls (ADR-305).
+      // tracked by their own scan/processDirective calls (ADR-312).
       for (size_t j = i; j <= semPos; ++j) {
         if (source[j] == '\n') {
           output += '\n';
@@ -831,7 +857,7 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
   return true;
 }
 
-// Pre-scan source[start..end) for %label: definitions (ADR-305).
+// Pre-scan source[start..end) for %label: definitions (ADR-312).
 // Records each label's target position (right after ':' + whitespace).
 void Preprocessor::collectLabels(const std::string& source, size_t start, size_t end) {
   bool inString = false;
@@ -900,7 +926,7 @@ void Preprocessor::collectLabels(const std::string& source, size_t start, size_t
 }
 
 // Find the ';' (outside quoted strings) that terminates a directive body
-// starting just after `start` (ADR-305).
+// starting just after `start` (ADR-312).
 size_t Preprocessor::findDirectiveEnd(const std::string& source, size_t start) {
   bool quoted = false;
   for (size_t i = start; i < source.size(); ++i) {
@@ -916,7 +942,7 @@ size_t Preprocessor::findDirectiveEnd(const std::string& source, size_t start) {
   return std::string::npos;
 }
 
-// Find the matching %END for a %DO starting at `start` (ADR-305).
+// Find the matching %END for a %DO starting at `start` (ADR-312).
 // Returns the %END position in endPos, its ';' in endSemi.
 size_t Preprocessor::findMatchingEnd(const fs::path& path, const std::string& source,
                                      size_t start, size_t& endSemi, int line, int col) {
@@ -1261,7 +1287,7 @@ bool Preprocessor::substituteRef(const fs::path& input, const std::string& name,
   return true;
 }
 
-// %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-305).
+// %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-312).
 // The body is scan()'d once per iteration; the iteration variable is set
 // in ppVars_ before each scan. Returns endSemi+1 (past %END;) on success.
 size_t Preprocessor::handleDo(const fs::path& path, const std::string& source, size_t bodyStart,
@@ -1354,7 +1380,7 @@ size_t Preprocessor::handleDo(const fs::path& path, const std::string& source, s
   return endSemi + 1;
 }
 
-// %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-305).
+// %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-312).
 bool Preprocessor::handleGoto(const fs::path& path, const std::string& name,
                               const std::string& operand, int line, int col) {
   std::string label = upper(trim(operand));
@@ -1380,11 +1406,11 @@ size_t Preprocessor::handleProcedure(const fs::path& path, const std::string& so
 }
 
 // %REPLACE — Stage 3: textual rescanning in the preprocessor.
-bool Preprocessor::handleReplace(const fs::path& path, const std::string& source, size_t i,
-                                 size_t wordEnd, size_t end, std::string& output, int& line,
-                                 int& col, bool active) {
-  // Currently served downstream by the lexer's token substitution (ADR-077).
-  // Not called in Stage 1/2; reserved for Stage 3 migration.
+// Currently served downstream by the lexer's token substitution (ADR-077).
+// Reserved for Stage 3 migration.
+bool Preprocessor::handleReplace(const fs::path&, const std::string& source, size_t,
+                                 size_t wordEnd, size_t end, std::string&, int&, int&, bool) {
+  (void)source; (void)wordEnd; (void)end;
   return true;
 }
 
