@@ -1140,27 +1140,28 @@ std::string Parser::parseCondition(std::string* fileArg) {
     }
     return name;
   }
-  if (w == "ENDFILE") {
-    // ENDFILE(file) (rule 97): a file condition names its file. Sema keys
-    // the handler per file slot (Stmt::kEndfileBaseCondKey).
+  if (w == "ENDFILE" || w == "UNDEFINEDFILE") {
+    // ENDFILE(file) and UNDEFINEDFILE(file) (rule 97) are file conditions:
+    // each names its file, and sema keys the handler per file slot
+    // (Stmt::kEndfileBaseCondKey / kUndefinedfileBaseCondKey).
+    std::string cond = w;
     advance();
     if (!at(Tok::LParen)) {
-      d_.error(l, "ENDFILE requires a FILE ( f ) reference", "(97)");
+      d_.error(l, cond + " requires a FILE ( f ) reference", "(97)");
       return "";
     }
     advance(); // (
     if (!at(Tok::Word)) {
-      d_.error(cur().loc, "expected a FILE variable after ENDFILE(", "(97)");
+      d_.error(cur().loc, "expected a FILE variable after " + cond + "(", "(97)");
       return "";
     }
     if (fileArg)
       *fileArg = cur().text;
     advance();
-    if (!expect(Tok::RParen, "(97)"))
-      return "";
-    return "ENDFILE";
+    expect(Tok::RParen, "(97)");
+    return cond;
   }
-  if (w == "ENDPAGE" || w == "KEY" || w == "UNDEFINEDFILE" || w == "NAME" ||
+  if (w == "ENDPAGE" || w == "KEY" || w == "NAME" ||
       w == "RECORD" || w == "TRANSMIT") {
     advance();
     if (at(Tok::LParen))

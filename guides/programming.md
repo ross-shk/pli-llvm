@@ -1143,6 +1143,17 @@ the way through, with `on endfile` telling the loop to stop:
  end;
 ```
 
+An `open` that cannot open its file raises `undefinedfile(f)`. Without a
+handler the program stops with an error; a handler runs, and control resumes
+after the `open` with the file still closed:
+
+```pli
+ dcl in file;
+ on undefinedfile(in) put skip list('input file is missing');
+ open file(in) input title('missing.dat');
+ /* the open failed: reading from IN now raises error */
+```
+
 `display(x)` prints one value plus a newline (handy for quick debugging).
 `display(x) reply(v)` prints `x` and then reads the next input line into the
 character variable `v` — a prompt and its answer in one statement.

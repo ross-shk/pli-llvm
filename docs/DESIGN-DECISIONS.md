@@ -11217,3 +11217,50 @@ recursive task takes. *Copy the stack on growth, the way Go does.* See
 above: it needs compiler support, and a half-done version silently corrupts
 every pointer into a moved stack.
 >>>>>>> 19944e3 (Enhance fiber stack management and bit manipulation tests)
+
+---
+
+## ADR-309 — `UNDEFINEDFILE(f)`: a per-file condition for a failed `OPEN`
+
+**Context.** Rule (97)'s file conditions were served one at a time. `ENDFILE(f)`
+(ADR-285) established the pattern: the condition is keyed by the `FILE`
+variable's runtime slot, so every file carries its own handler, and the runtime
+raises it from the operation that detects the event. `UNDEFINEDFILE(f)` is the
+second such condition, and the one a batch program needs most: it is the only
+way to react to an input data set that is not there. The compiler diagnosed the
+name, and a failing `OPEN` called `pli_signal_error` unconditionally, so the
+condition could not be caught at all.
+
+**Decision.** `UNDEFINEDFILE` joins `ENDFILE` in one parser branch (both demand
+`( file )`), gets its own key base (`Stmt::kUndefinedfileBaseCondKey = -2000`,
+mirrored by `RT_UNDEFINEDFILE_KEY_BASE` in `runtime/rt_file.c` so the two ranges
+cannot overlap), and rides the existing `ON`/`REVERT`/`SIGNAL` statement paths.
+The runtime raises it from both `pli_file_open` and `pli_file_open_record`; a
+handler runs with its capture context and resumes after the `OPEN`, leaving the
+file closed, and with no handler the condition takes its implicit action, ERROR,
+which aborts exactly as the unconditional call did before. `SIGNAL
+UNDEFINEDFILE` is diagnosed with rule (93), like `SIGNAL ENDFILE`: the condition
+belongs to the runtime.
+
+A resumed handler leaves the file unopened, so a later transfer would have
+reached the *console*: `pli_put_select` fell back to SYSPRINT and
+`pli_get_select` to SYSIN whenever the slot held no stream. Both now raise ERROR
+(`PUT`/`GET` to a file that is not open) and, on output, discard what a resuming
+ERROR handler lets through. That also closes the same hole after `CLOSE`.
+
+**Consequences.** `undefinedfile.pli` pins per-file dispatch: a successful open
+raises nothing, each failing open runs only its own file's unit, and the unit
+stays established across opens. `driver/undefinedfile` covers the default
+action, `REVERT`, resume, `PUT`/`GET` on the closed file, and the RECORD open
+path. `bad_undefinedfile.pli` and `bad_undefinedfile_nofile.pli` pin the two
+diagnostics. B4 moves `UNDEFINEDFILE` from "unserved condition kinds" to served;
+the arithmetic and tasking kinds and the keyed-I/O file conditions stay open.
+
+**Rejected.** *Making the handler's resume retry the `OPEN`.* IBM continues with
+the statement after the `OPEN` and leaves the file undefined; a retry loop would
+change the program's control flow. *Raising `UNDEFINEDFILE` again on the later
+transfer.* The condition describes the `OPEN`, not the `PUT`/`GET`; ERROR is the
+condition for using a file that is not open, and it is what the RECORD path
+already raised. *Tracking the file for `FILENAME()`.* The builtin still reports
+blank inside a file-condition unit because the runtime does not carry the
+current file on the condition stack; that stays a recorded limitation.

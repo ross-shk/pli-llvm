@@ -690,7 +690,7 @@ Returns the key identifying the source of the current `SIGNAL` (0 when no condit
 
 ### `ONFILE()` → CHARACTER(32)
 
-Returns the name of the file for which the current I/O condition (`ENDFILE`, `KEY`, `UNDEFINEDFILE`, …) was raised — blank when no file condition is active. `ON ENDFILE(f)` now runs (ADR-285), but the runtime does not track the file of the condition, so every reachable call still returns blank (IBM's out-of-context null); `ON KEY`/`UNDEFINEDFILE` stay diagnosed, so those never reach a unit.
+Returns the name of the file for which the current I/O condition (`ENDFILE`, `KEY`, `UNDEFINEDFILE`, …) was raised — blank when no file condition is active. `ON ENDFILE(f)` (ADR-285) and `ON UNDEFINEDFILE(f)` (ADR-309) now run, but the runtime does not track the file of the condition, so every reachable call still returns blank (IBM's out-of-context null); `ON KEY` stays diagnosed, so it never reaches a unit.
 
 ```pli
 dcl f char(32);

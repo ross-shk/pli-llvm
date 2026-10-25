@@ -309,10 +309,12 @@ struct Stmt {
   static constexpr int kZerodivideCondKey = -3;
   static constexpr int kConversionCondKey = -4; // CONVERSION (rule 94, QR1.2)
   static constexpr int kStringrangeCondKey = -5; // STRINGRANGE (rules 60-63, 94)
-  // ENDFILE(f) (rule 97) is a file condition: its key is this base minus the
-  // FILE variable's runtime slot, so each file has its own handler. Mirrored
-  // in runtime/rt_file.c (RT_ENDFILE_KEY_BASE).
+  // ENDFILE(f) and UNDEFINEDFILE(f) (rule 97) are file conditions: each key is
+  // its base minus the FILE variable's runtime slot, so every file has its own
+  // handler. Mirrored in runtime/rt_file.c (RT_ENDFILE_KEY_BASE /
+  // RT_UNDEFINEDFILE_KEY_BASE).
   static constexpr int kEndfileBaseCondKey = -1000;
+  static constexpr int kUndefinedfileBaseCondKey = -2000;
   std::string condName; // e.g. "ERROR", "SIZE", "SUBSCRIPTRANGE", "ZERODIVIDE",
                         // or a rule (99) condition name
   int condKey = 0;      // 0 = ERROR, negative = fixed key above, else condNames index + 1

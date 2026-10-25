@@ -3056,12 +3056,17 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   return (unsigned int)((fnv1a(s->condName.data(), s->condName.size()) & 0x7FFFFFFFU) + 1);
 }
 
-// Rule (97): ENDFILE is a file condition, so its handler is keyed by the
-// file: kEndfileBaseCondKey - slot keeps each file's unit separate on the
+// Rule (97): the conditions the runtime raises against one named file.
+static bool isFileCondName(const std::string& n) {
+  return n == "ENDFILE" || n == "UNDEFINEDFILE";
+}
+
+// Rule (97): ENDFILE and UNDEFINEDFILE are file conditions, so their handlers
+// are keyed by the file: base - slot keeps each file's unit separate on the
 // shared ON stack.
 int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
   if (s->fileIdent.empty()) {
-    d_.error(s->loc, "ENDFILE requires a FILE ( f ) reference", "(97)");
+    d_.error(s->loc, s->condName + " requires a FILE ( f ) reference", "(97)");
     return 0;
   }
   Symbol* f = lookup(sc, s->fileIdent);
@@ -3070,7 +3075,9 @@ int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
     return 0;
   }
   s->fileSym = f;
-  return Stmt::kEndfileBaseCondKey - f->fileSlot;
+  int base = s->condName == "UNDEFINEDFILE" ? Stmt::kUndefinedfileBaseCondKey
+                                            : Stmt::kEndfileBaseCondKey;
+  return base - f->fileSlot;
 }
 
 // Whole-array expressions (rules 86, 127; QR2.1): storage a DO desugar can
@@ -4682,11 +4689,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     break;
   case Stmt::On:
-    // Rules (91),(94),(97),(99): ERROR, a fixed condition, ENDFILE(file), or
-    // a programmer-named condition; the unit body only needs typing plus the
-    // establishing-frame checks.
-    s->condKey = s->condName == "ENDFILE" ? resolveFileCondKey(s, sc)
-                                          : resolveCondKey(s, sc);
+    // Rules (91),(94),(97),(99): ERROR, a fixed condition, ENDFILE(file) or
+    // UNDEFINEDFILE(file), or a programmer-named condition; the unit body only
+    // needs typing plus the establishing-frame checks.
+    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc)
+                                             : resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
       ++inUnit_;
       checkStmt(s->unit.get(), sc, p);
@@ -4696,13 +4703,19 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   case Stmt::Revert:
     // A REVERT with no established handler is a no-op reverting to SYSTEM.
-    s->condKey = s->condName == "ENDFILE" ? resolveFileCondKey(s, sc)
-                                          : resolveCondKey(s, sc);
+    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc)
+                                             : resolveCondKey(s, sc);
     break;
   case Stmt::Signal:
-    // Rule (97): ENDFILE is raised by READ, never by SIGNAL.
+    // Rule (97): the file conditions are raised by the runtime, never by SIGNAL.
     if (s->condName == "ENDFILE") {
       d_.error(s->loc, "SIGNAL ENDFILE is not allowed; the condition is raised by READ",
+               "(93)");
+      break;
+    }
+    if (s->condName == "UNDEFINEDFILE") {
+      d_.error(s->loc,
+               "SIGNAL UNDEFINEDFILE is not allowed; the condition is raised by OPEN",
                "(93)");
       break;
     }
