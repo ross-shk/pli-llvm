@@ -1662,7 +1662,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           }
         }
         item.dynMembers = std::move(dynMs);
-        item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
+        // A STATIC AREA (rule (20)) is real static storage: its region lives for
+        // the whole program. AREA(*) inherits the argument's region, so the
+        // storage attribute cannot apply to it.
+        bool staticItem = isStatic || (item.area && item.sawStatic && !item.areaStar);
+        item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, staticItem);
         item.sym->owner = p; // which procedure's frame holds this variable
         if (item.external) {
           // EXTERNAL (rule (42)): shared across translation units via a
@@ -2022,9 +2026,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc, "an AREA array with a variable bound is not implemented in "
                                "this stage",
                      "(20)");
-          if (item.sym->isStatic || item.sawStatic)
-            d_.error(item.loc, "a STATIC or EXTERNAL AREA is not implemented in this stage",
-                     "(20)");
+          // A STATIC area is served by irgen (a module global slot created on
+          // first use); an EXTERNAL area needs cross-module region sharing.
+          if (item.sym->external)
+            d_.error(item.loc, "an EXTERNAL AREA is not implemented in this stage", "(20)");
           auto areaErr = [&](const char* what, const char* rule) {
             d_.error(item.loc, std::string("AREA+") + what + " is not implemented", rule);
           };
@@ -2040,17 +2045,17 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             areaErr("BASED", "(25)");
           if (item.controlled)
             areaErr("CONTROLLED", "(15)");
+          // AREA(*) (rule (20)) takes its size from the argument, so it is
+          // meaningful only on a procedure parameter; a parameter has no
+          // storage of its own, so STATIC cannot apply to either AREA form.
+          bool isParam =
+              std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+          if (!isParam)
+            for (auto& st : p->body)
+              if (st && st->kind == Stmt::Entry &&
+                  std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
+                isParam = true;
           if (item.areaStar) {
-            // AREA(*) (rule (20)): an adjustable size inherited from the
-            // argument, so it is meaningful only on a procedure parameter.
-            bool isParam =
-                std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
-            if (!isParam)
-              for (auto& st : p->body)
-                if (st && st->kind == Stmt::Entry &&
-                    std::find(st->params.begin(), st->params.end(), item.name) !=
-                        st->params.end())
-                  isParam = true;
             if (!isParam)
               d_.error(item.loc,
                        "AREA(*) requires a parameter: the size is inherited from the argument",
@@ -2063,6 +2068,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               d_.error(item.areaSize->loc, "an AREA size must be a positive constant in this stage",
                        "(20)");
           }
+          if (isParam && item.sawStatic)
+            d_.error(item.loc, "a parameter has no storage of its own, so STATIC cannot apply",
+                     "(20)");
         }
         // OFFSET (rule (22)): an opaque locator into an AREA. The optional
         // reference names the associated AREA; it is validated here and used to
@@ -2814,6 +2822,11 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
   bool nested = inUnit_ > 1;
   std::vector<Symbol*> caps;
   auto noteCap = [&](Symbol* sym, bool whole, SourceLoc loc) {
+    // A static symbol is a module global: it needs no capture and is visible
+    // from the frameless handler (rule 91). A DEFINED item keeps the old
+    // path: its base may still be an automatic of the establishing frame.
+    if (sym->kind == Symbol::Var && sym->isStatic && !sym->definedBase)
+      return;
     if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
         !sym->definedBase && !sym->fileAttr && sym->owner == p) {
       if (std::find(caps.begin(), caps.end(), sym) == caps.end())

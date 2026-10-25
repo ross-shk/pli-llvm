@@ -11264,3 +11264,56 @@ condition for using a file that is not open, and it is what the RECORD path
 already raised. *Tracking the file for `FILENAME()`.* The builtin still reports
 blank inside a file-condition unit because the runtime does not carry the
 current file on the condition stack; that stays a recorded limitation.
+
+## ADR-310 — `STATIC` AREA regions live for the whole program
+
+**Context.** `AREA` was created at procedure entry and destroyed on exit (rule
+(20)), so a block allocated in a callee died with the callee's activation. The
+`STATIC` storage attribute was a warned no-op for every variable, and `DCL a
+AREA(n) STATIC` was diagnosed with rule (20) since ADR-303, because treating it
+as automatic would let a program return a pointer into a freed region. Static
+areas are how PL/I code keeps a long-lived pool across calls — the caller
+allocates in the callee's region and frees the block a call later — so the
+diagnostic protected against a silent use-after-free but left the feature
+unserved.
+
+**Decision.** A static AREA is real static storage. Sema marks the symbol
+`isStatic` when the declaration carries STATIC (a parameter is diagnosed: it has
+no storage of its own), so `emitGlobals` gives it a module global slot — a
+pointer, or an array of pointers for an AREA array — and the symbol stays out of
+`localSyms`, which skips the per-activation create/destroy pass. The region is
+created on first use instead of at program load: `pli_area_lazy(slot, n)` creates
+the region when the slot is null and returns it. Every path that reads an area
+value goes through it — a scalar reference (in `addressOf`) and an element of a
+static AREA array (in `loadArrayElement`) — so the declaring procedure, an
+internal procedure, a package body and an `AREA(*)` argument all share the same
+region regardless of which runs first. A whole static AREA array passed to an
+array parameter materialises every element before the call, because the callee
+reads the slots directly. The region is never destroyed: it belongs to the
+program, and process exit reclaims it. The parser now defers the "STATIC has no
+effect" warning until the declaration's attributes are known, so an AREA
+suppresses it while a plain STATIC variable still gets it.
+
+**Consequences.** `area_static.pli` pins the lifetime (a block read after its
+allocating procedure returns), reuse across activations (a second activation
+FREEs a block made by the first in the same region), independent element
+regions, the whole-array parameter pre-create, the `AREA(*)` hand-off, a
+BEGIN-block static area and a package-level area shared by its member procedures
+(`area_static_package.pli`). `bad_area_static.pli` pins the two remaining
+diagnostics: an EXTERNAL area (cross-module region sharing, still open) and
+STATIC on a parameter. B5 moves static areas to served; EXTERNAL areas, arrays
+of OFFSET and offset arithmetic stay open. An AREA structure member is still
+accepted but never creates a region; that pre-existing hole is recorded for a
+follow-up rule-(20) diagnostic.
+
+**Rejected.** *Creating the regions in `llvm.global_ctors`.* A constructor runs
+before the runtime's `main` installs its state, and it would create regions for
+areas a program never touches; first use is simpler and adds no new codegen
+mechanism. *A per-entry guard in the declaring procedure.* An internal procedure
+or an `AREA(*)` callee can reach the area before the declaring procedure's first
+entry, so the guard would have to be duplicated in every procedure that can see
+the symbol. *Destroying the region at program exit.* Static storage has no
+per-module teardown path and the process reclaims it; a static area is
+program-lifetime by definition. *Extending static storage to every variable.*
+Plain STATIC variables are still automatic (warned); serving them needs
+INITIAL-once, static-link and capture semantics, which is separate work.

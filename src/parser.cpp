@@ -1521,6 +1521,7 @@ void Parser::parseDeclTail(DeclItem& item) {
 
   // Attribute bag (rules 14-32).
   AttrBag bag;
+  SourceLoc staticLoc; // where STATIC was written, for the deferred no-op warning
   ExprP init;
 
   for (;;) {
@@ -1650,12 +1651,17 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
-        d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
-                "(15)");
-        // Keep STATIC visible to sema: an automatic region would silently
-        // lose a STATIC AREA's lifetime, so that combination is diagnosed.
-        if (w == "STATIC")
+        // STATIC is the only storage attribute with an effect: a static AREA
+        // keeps its region for the whole program (rule (20)). It still has no
+        // effect on other variables, but the warning waits until the whole
+        // declaration is read so an AREA attribute can suppress it.
+        if (w == "STATIC") {
           bag.staticAttr = true;
+          staticLoc = cur().loc;
+        } else {
+          d_.warn(cur().loc, "attribute " + w + " is accepted but has no effect in this stage",
+                  "(15)");
+        }
         advance();
         continue;
       }
@@ -2228,6 +2234,10 @@ void Parser::parseDeclTail(DeclItem& item) {
   item.areaSize = std::move(bag.areaSize);
   item.areaStar = bag.areaStar;
   item.sawStatic = bag.staticAttr;
+  // A static AREA is real storage; every other STATIC is still automatic
+  // (rule (15)), so the no-op warning is emitted here.
+  if (bag.staticAttr && !item.area)
+    d_.warn(staticLoc, "attribute STATIC is accepted but has no effect in this stage", "(15)");
   item.offset = bag.offset;
   item.offsetRef = std::move(bag.offsetRef);
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {

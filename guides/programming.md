@@ -747,9 +747,20 @@ An array of areas gives every element its own region — handy for a fixed set o
  allocate slot in(pools(1)) set(pa);   /* pool 1 */
 ```
 
+A `static` area keeps one region for the whole program instead of one per call.
+A block allocated in a procedure is still valid after the procedure returns, and
+a later activation can free it:
+
+```pli
+ dcl a area(4096) static;
+
+ allocate slot in(a) set(pa);   /* the region outlives this activation */
+```
+
 **Not yet**
 
-- Static/external areas, arrays of offsets, and offset arithmetic are diagnosed.
+- External areas, arrays of offsets, and offset arithmetic are diagnosed.
+  An area declared as a structure member has no region yet.
 
 > **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.
 

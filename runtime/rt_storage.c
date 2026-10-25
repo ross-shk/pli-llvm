@@ -268,6 +268,16 @@ char *pli_area_create(long long n) {
   return (char *)a;
 }
 
+/* STATIC AREA (rule (20)): the region is created on first use and lives for the
+ * whole program, so blocks allocated by one activation outlive it and a later
+ * activation can FREE them. The slot is the declaring module's global. */
+char *pli_area_lazy(char *slotp, long long n) {
+  char **slot = (char **)slotp; /* the ABI passes the module global's address */
+  if (!*slot)
+    *slot = pli_area_create(n);
+  return *slot;
+}
+
 void pli_area_destroy(char *ap) {
   PliArea *a = (PliArea *)ap;
   if (!a)

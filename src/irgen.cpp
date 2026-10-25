@@ -4059,6 +4059,14 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
       return b_.CreateLoad(b_.getPtrTy(), ctlAnchorSlot(sym), "ctl.anchor.load");
     return b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctladdr");
   }
+  // A STATIC AREA (rule (20)) lives for the whole program: create its region on
+  // first use, so a block allocated by one activation stays valid for the next
+  // and a later activation can FREE it. The slot is the module global.
+  if (sym->ty.isArea() && sym->isStatic && !sym->ty.isArray()) {
+    auto slot = symAddr_.find(sym);
+    if (slot != symAddr_.end())
+      b_.CreateCall(runtimeFn("pli_area_lazy"), {slot->second, i64(sym->areaSize)});
+  }
   // rule (8): an enclosing variable is reached through this frame's static
   // link; otherwise it is this frame's own storage (globals / allocas /
   // parameters). Both are recorded in symAddr_.
@@ -8894,6 +8902,19 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
              "(18)");
     return llvm::Constant::getNullValue(b_.getPtrTy());
   }
+  // A whole STATIC AREA array (rule (20)) rides by reference: the callee reads
+  // the element slots directly, so materialise every region first.
+  if (direct && a->sym->isStatic && a->sym->ty.isArray() &&
+      a->sym->ty.elementType().isArea()) {
+    llvm::Value* base = addressOf(a->sym);
+    llvm::ArrayType* at =
+        llvm::ArrayType::get(b_.getPtrTy(), (unsigned)arrayExtent(a->sym->ty));
+    for (long long i = 0, n = arrayExtent(a->sym->ty); i < n; ++i) {
+      llvm::Value* slot = b_.CreateInBoundsGEP(at, base, {i64(0), i64(i)}, "ar.slot");
+      b_.CreateCall(runtimeFn("pli_area_lazy"), {slot, i64(a->sym->areaSize)});
+    }
+    return base;
+  }
   if (direct)
     return addressOf(a->sym);
   if (memberDirect)
@@ -10401,6 +10422,13 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   Val v;
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   v.ty = el;
+  if (el.isArea() && sym->isStatic) {
+    // A STATIC AREA array (rule (20)): every element owns a program-lifetime
+    // region, created when that element is first used.
+    llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc);
+    v.reg = b_.CreateCall(runtimeFn("pli_area_lazy"), {addr, i64(sym->areaSize)}, "arealz");
+    return v;
+  }
   if (el.isChar()) {
     // Fixed CHARACTER element (rules (12),(18)): the value is a view of the
     // element's bytes. A VARYING element is a struct { i32 len, [N x i8] data }.
