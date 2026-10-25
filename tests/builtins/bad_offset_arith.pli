@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Diagnostic test: the offset arithmetic built-ins take an OFFSET and
+    a numeric byte count (or two OFFSETs for OFFSETDIFF), rules
+    (22),(123); ADR-311. */
+ bad_offset_arith: procedure options(main);
+    declare region area(1024);
+    declare p offset(region);
+    declare q pointer;
+    declare n fixed bin(31);
+    declare s char(2);
+
+    s = 'ab';
+
+    p = offsetadd(p);             /* arity (123) */
+    p = offsetadd(p, n, 1);       /* arity (123) */
+    p = offsetadd(q, 1);          /* first argument must be OFFSET */
+    p = offsetadd(p, s);          /* byte count must be numeric */
+    p = offsetsubtract(p);        /* arity (123) */
+    n = offsetdiff(p);            /* arity (123) */
+    n = offsetdiff(p, q);         /* second must be OFFSET */
+ end bad_offset_arith;

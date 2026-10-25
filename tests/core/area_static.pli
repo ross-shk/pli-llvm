@@ -1,0 +1,123 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (20): a STATIC AREA keeps one region for the whole program, so
+    a block allocated in one activation stays valid for the next and
+    FREE works from a later activation; an element of a static AREA
+    array has its own region, created on first use. */
+ area_static: procedure options(main);
+    declare 1 s based(p),
+              2 v fixed bin(31);
+    declare (p, q, r, w) pointer;
+    declare a area(1000) static;
+    declare ar(2) area(256) static;
+    declare zero fixed bin(31) initial(0);
+    declare bad fixed bin(31);
+    bad = 0;
+
+    /* a block in the callee's static region survives the return */
+    call make(p, null());
+    p -> s.v = 41;
+    /* a second activation keeps the first block */
+    call make(q, null());
+    if p -> s.v ^= 41 then bad = 1;
+    /* and it can FREE a block made by an earlier activation */
+    call make(r, p);
+    if r = null() then bad = 2;
+
+    /* an element of a static AREA array passes to AREA(*) */
+    call fill(ar(1), w);
+    if w -> s.v ^= 5 then bad = 3;
+
+    /* the whole array rides by reference: the callee uses the fresh
+       ar(2) first, so its region must exist before the call */
+    call whole(ar, p);
+    if p -> s.v ^= 9 then bad = 4;
+
+    /* both element regions stay independent and keep their blocks */
+    allocate s in(ar(1)) set(p);
+    p -> s.v = 11;
+    q = p;
+    allocate s in(ar(2)) set(p);
+    p -> s.v = 22;
+    r = p;
+    if q -> s.v ^= 11 then bad = 5;
+    if r -> s.v ^= 22 then bad = 6;
+    free w -> s in(ar(1));
+    free q -> s in(ar(1));
+    free r -> s in(ar(2));
+
+    /* a static area in a BEGIN block also outlives the block */
+    call block_area(p);
+    if p -> s.v ^= 3 then bad = 7;
+
+    /* a handler needs no capture for a static area: the AREA(*) callee
+       allocates in it and fills the captured pointer */
+    on zerodivide begin;
+       p = getblk(a);
+    end;
+    bad = 1 / zero;
+    if p -> s.v ^= 77 then bad = 8;
+
+    if bad ^= 0 then do;
+       put skip list('FAIL area_static', bad);
+       stop;
+    end;
+    put skip list('PASS area_static');
+
+ make: procedure(out, old);
+    declare out pointer;
+    declare old pointer;
+    declare a area(1000) static;
+    declare 1 t based(x),
+              2 v fixed bin(31);
+    declare x pointer;
+    if old ^= null() then free old -> t in(a);
+    allocate t in(a) set(x);
+    t.v = 7;
+    out = x;
+ end make;
+
+ fill: procedure(a, out);
+    declare a area(*);
+    declare out pointer;
+    declare 1 t based(x),
+              2 v fixed bin(31);
+    declare x pointer;
+    allocate t in(a) set(x);
+    t.v = 5;
+    out = x;
+ end fill;
+
+ whole: procedure(a, out);
+    declare a(2) area(*);
+    declare out pointer;
+    declare 1 t based(x),
+              2 v fixed bin(31);
+    declare x pointer;
+    allocate t in(a(2)) set(x);
+    t.v = 9;
+    out = x;
+ end whole;
+
+ getblk: procedure(ar) returns(pointer);
+    declare ar area(*);
+    declare 1 t based(x),
+              2 v fixed bin(31);
+    declare x pointer;
+    allocate t in(ar) set(x);
+    t.v = 77;
+    return(x);
+ end getblk;
+
+ block_area: procedure(out);
+    declare out pointer;
+    declare 1 t based(x),
+              2 v fixed bin(31);
+    declare x pointer;
+    begin;
+       declare a area(1000) static;
+       allocate t in(a) set(out);
+       t.v = 3;
+    end;
+ end block_area;
+ end area_static;

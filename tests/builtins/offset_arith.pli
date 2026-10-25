@@ -1,0 +1,78 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Offset arithmetic (rules (22),(123); ADR-311): OFFSETADD and
+    OFFSETSUBTRACT move an offset by a byte count, OFFSETDIFF measures
+    the byte distance between two offsets. */
+ offset_arith: procedure options(main);
+    declare region area(4096);
+    declare 1 rec based(p),
+              2 x fixed bin(31),
+              2 y fixed bin(31),
+              2 z fixed bin(31);
+    declare 1 yv based(q),
+              2 yy fixed bin(31);
+    declare 1 zv based(r),
+              2 zz fixed bin(31);
+    declare p offset(region);
+    declare q offset(region);
+    declare r offset(region);
+    declare back offset(region);
+    declare dist fixed bin(31);
+
+    allocate rec in(region) set(p);
+    rec.x = 11;
+    rec.y = 22;
+    rec.z = 33;
+
+    /* four bytes past the block start is the second field */
+    q = offsetadd(p, 4);
+    if yv.yy ^= 22 then do;
+       put skip list('FAIL offsetadd: expected 22, got', yv.yy);
+       stop;
+    end;
+
+    /* another four bytes is the third field */
+    r = offsetadd(q, 4);
+    if zv.zz ^= 33 then do;
+       put skip list('FAIL offsetadd: expected 33, got', zv.zz);
+       stop;
+    end;
+
+    /* the distance between the second and third fields is four bytes */
+    dist = offsetdiff(r, q);
+    if dist ^= 4 then do;
+       put skip list('FAIL offsetdiff: expected 4, got', dist);
+       stop;
+    end;
+
+    /* eight bytes back reaches the start, like a negative count */
+    back = offsetsubtract(r, 8);
+    if offsetdiff(back, p) ^= 0 then do;
+       put skip list('FAIL offsetsubtract: wrong start');
+       stop;
+    end;
+    back = offsetadd(r, -8);
+    if offsetdiff(back, p) ^= 0 then do;
+       put skip list('FAIL offsetadd(-8): wrong start');
+       stop;
+    end;
+
+    /* the count converts from a scaled decimal (4.0 bytes) */
+    q = offsetadd(p, 4.0);
+    if yv.yy ^= 22 then do;
+       put skip list('FAIL offsetadd(4.0): expected 22, got', yv.yy);
+       stop;
+    end;
+
+    free rec in(region);
+
+    /* the null offset plus zero stays null */
+    p = null();
+    q = offsetadd(p, 0);
+    if q ^= null() then do;
+       put skip list('FAIL offsetadd(null, 0) is not null');
+       stop;
+    end;
+
+    put skip list('PASS offset_arith');
+ end offset_arith;

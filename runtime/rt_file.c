@@ -50,6 +50,31 @@ void pli_string_get_close(void) {
   rt_in_unlock();
 }
 
+/* Mirrors Stmt::kUndefinedfileBaseCondKey in src/ast.h: ON UNDEFINEDFILE(f) is
+ * keyed by the FILE variable's runtime slot, like ON ENDFILE(f). */
+#define RT_UNDEFINEDFILE_KEY_BASE (-2000LL)
+
+/* UNDEFINEDFILE (rules (97),(100)): an OPEN could not open its file. Run the
+ * ON-unit established for this file; with no unit the condition's implicit
+ * action is ERROR, as before it was served. A resume continues after the OPEN
+ * and leaves the file closed, so later I/O on it raises ERROR. */
+static void rt_undef_file(long long slot) {
+  char *ctx = NULL;
+  char *fn = pli_on_top_fn_pair(RT_UNDEFINEDFILE_KEY_BASE - slot, (char *)&ctx);
+  if (!fn) {
+    pli_signal_error("OPEN failed: the file could not be opened");
+    return;
+  }
+  /* IRGen's handler takes its capture context as the only argument; the
+   * pointer round-trip through a union avoids an object-to-function cast. */
+  union {
+    char *obj;
+    void (*fn)(void *);
+  } u;
+  u.obj = fn;
+  u.fn(ctx);
+}
+
 /* OPEN (rules 100-103): open the file in `slot` with the given name (namelen
  * bytes, not nul-terminated). mode 0 = INPUT, 1 = OUTPUT. The FILE variable's
  * slot is a compile-time constant, so rt_pli_files[slot] is stable across the
@@ -74,11 +99,11 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   } else {
     rt_pli_files[slot] = pli_plat_fopen(buf, mode ? "w" : "r");
     rt_pli_nonprint[slot] = 0;
-    /* A failed OPEN must not be silent: the slot stays NULL, and the output
-     * routing would fall back to SYSPRINT, sending the file's data to the
-     * console instead of the named file. */
+    /* A failed OPEN must not be silent: it raises UNDEFINEDFILE (rule 97)
+     * against this file, the slot stays NULL, and later I/O on the slot
+     * raises ERROR instead of falling back to the console. */
     if (!rt_pli_files[slot])
-      pli_signal_error("OPEN failed: the file could not be opened");
+      rt_undef_file(slot);
   }
 }
 
@@ -96,15 +121,30 @@ void pli_file_close(long long slot) {
 /* FILE ( f ) output routing (rule 105): rt_put_raw writes to the named file until
  * the matching unselect returns to SYSPRINT. */
 void pli_put_select(long long slot) {
+  int open;
   /* ADR-220: drain any buffered stdout before routing to a named file so
    * output ordering stays correct. */
   rt_flush_stdout();
   rt_out_lock();
-  if (slot >= 0 && slot < PLI_MAX_FILES && !rt_pli_nonprint[slot])
-    rt_out_f = rt_pli_files[slot];
-  else
+  open = slot >= 0 && slot < PLI_MAX_FILES &&
+         (rt_pli_files[slot] || rt_pli_nonprint[slot]);
+  if (!open) {
+    /* A CLOSE, or a failed OPEN whose UNDEFINEDFILE handler resumed: sending
+     * the file's data to the console instead would be a silent wrong answer.
+     * Discard what a resuming ERROR handler lets through. */
+    rt_out_f = NULL;
+    rt_out_discard = 1;
+    rt_out_unlock();
+    pli_signal_error("PUT to a file that is not open");
+    return;
+  }
+  if (rt_pli_nonprint[slot]) {
     rt_out_f = NULL;  /* NONPRINT: discard output (ADR-204) */
-  rt_out_discard = (slot >= 0 && slot < PLI_MAX_FILES && rt_pli_nonprint[slot]);
+    rt_out_discard = 1;
+  } else {
+    rt_out_f = rt_pli_files[slot];
+    rt_out_discard = 0;
+  }
   rt_col = 0;
   rt_items_on_line = 0;
   rt_out_unlock();
@@ -119,8 +159,19 @@ void pli_put_unselect(void) {
 
 /* FILE ( f ) input routing (rule 105): rt_next_char reads from the named file. */
 void pli_get_select(long long slot) {
+  int open;
   rt_in_lock();
-  rt_select_input((slot >= 0 && slot < PLI_MAX_FILES) ? rt_pli_files[slot] : NULL);
+  open = slot >= 0 && slot < PLI_MAX_FILES && rt_pli_files[slot] != NULL;
+  if (!open) {
+    /* Mirror the output path: reading SYSIN for a named file that is not open
+     * would be a silent wrong answer. */
+    rt_select_input(NULL);
+    rt_in_col = 0;
+    rt_in_unlock();
+    pli_signal_error("GET from a file that is not open");
+    return;
+  }
+  rt_select_input(rt_pli_files[slot]);
   rt_in_col = 0;
   rt_in_unlock();
 }
@@ -227,6 +278,8 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
   rt_pli_nonprint[slot] = 0;
   /* mode 0 = INPUT, 1 = OUTPUT, 2 = UPDATE (read and write in place). */
   rt_pli_files[slot] = pli_plat_fopen(buf, mode == 2 ? "r+b" : (mode ? "wb" : "rb"));
+  if (!rt_pli_files[slot])
+    rt_undef_file(slot);
 }
 
 static FILE *rec_file(long long slot, const char *what) {

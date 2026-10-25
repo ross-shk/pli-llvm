@@ -599,7 +599,7 @@ void pli_sleep_ms(long long ms) {
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-/* The fiber stack: address space, not memory (ADR-309).
+/* The fiber stack: address space, not memory (ADR-313).
  *
  * The ceiling of a stack is reserved, not committed: a task that never
  * touches its stack costs one page, not the whole ceiling. The pages are

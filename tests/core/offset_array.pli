@@ -1,0 +1,66 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (22),(88),(90),(124): an array of OFFSET holds several
+    locators into one AREA. Each element is set by ALLOCATE,
+    qualifies a BASED reference, frees its block, and moves by
+    offset arithmetic like any other offset. */
+ offset_array: procedure options(main);
+   dcl region area(4096);
+   dcl 1 rec based(prec),
+       2 v fixed bin(31),
+       2 w fixed bin(31);
+   dcl prec offset(region);
+   dcl slots(2) offset(region);
+   dcl after offset(region);
+   dcl 1 holder,
+       2 hp offset(region);
+
+   /* two blocks, each locator held in an array element */
+   allocate rec in(region) set(slots(1));
+   allocate rec in(region) set(slots(2));
+   slots(1) -> rec.v = 11;
+   slots(1) -> rec.w = 12;
+   slots(2) -> rec.v = 21;
+   slots(2) -> rec.w = 22;
+   if slots(1) -> rec.v ^= 11 then do;
+      put skip list('FAIL offset_array: expected 11');
+      stop;
+   end;
+   if slots(2) -> rec.w ^= 22 then do;
+      put skip list('FAIL offset_array: expected 22');
+      stop;
+   end;
+
+   /* an element moves like any offset into the same region */
+   after = offsetadd(slots(2), 4);
+   if after -> rec.v ^= 22 then do;
+      put skip list('FAIL offset_array: offsetadd lost the field');
+      stop;
+   end;
+
+   /* the first block frees by its element; the second survives */
+   free slots(1) -> rec in(region);
+   if slots(2) -> rec.v ^= 21 then do;
+      put skip list('FAIL offset_array: expected 21 after free');
+      stop;
+   end;
+
+   /* a null element assigns and compares like a scalar offset */
+   slots(1) = null();
+   if slots(1) ^= null() then do;
+      put skip list('FAIL offset_array: null element');
+      stop;
+   end;
+
+   /* a locator member is a SET target and a locator in its own right */
+   allocate rec in(region) set(holder.hp);
+   holder.hp -> rec.v = 31;
+   if holder.hp -> rec.v ^= 31 then do;
+      put skip list('FAIL offset_array: member locator');
+      stop;
+   end;
+   free holder.hp -> rec in(region);
+
+   free slots(2) -> rec in(region);
+   put skip list('PASS offset_array');
+ end offset_array;

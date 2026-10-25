@@ -1,0 +1,33 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* ADR-310: package-level data is static storage, so a package-level
+    AREA keeps one region for the whole program. */
+ pka: package exports(make);
+   dcl a area(1000);
+   dcl 1 s based(p), 2 v fixed bin(31);
+   dcl p pointer;
+   make: proc(val) returns(pointer);
+     dcl val fixed bin(31);
+     allocate s in(a) set(p);
+     s.v = val;
+     return(p);
+   end make;
+ end pka;
+
+ main: proc options(main);
+   dcl make entry(fixed bin(31)) returns(pointer) external;
+   dcl 1 t based(q), 2 v fixed bin(31);
+   dcl q pointer;
+   dcl (p1, p2) pointer;
+   dcl bad fixed bin(31);
+   bad = 0;
+   p1 = make(11);
+   p2 = make(22);         /* a later activation keeps the first block */
+   if p1 -> t.v ^= 11 then bad = 1;
+   if p2 -> t.v ^= 22 then bad = 2;
+   if bad ^= 0 then do;
+      put skip list('FAIL area_static_package', bad);
+      stop;
+   end;
+   put skip list('PASS area_static_package');
+ end main;

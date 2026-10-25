@@ -1318,11 +1318,11 @@ path.
 
 ---
 
-## 13. Benchmark parity pass (ADR-310, ADR-311)
+## 13. Benchmark parity pass (ADR-314, ADR-315)
 
 **The measurement.** `python3 benchmarks/run_benchmarks.py --runs 5`, macOS
 26 arm64, unpinned, LLVM 23.1.3. The C twin is built for the PL/I target
-policy (`-mcpu=generic -ffp-contract=off`, ADR-311); result file
+policy (`-mcpu=generic -ffp-contract=off`, ADR-315); result file
 `benchmarks/results/benchmark_results_1792952361_532466fe.json`.
 
 | Row | before | after |
@@ -1343,9 +1343,9 @@ is within 1.06x. `decimal_ops` stays descriptive at 0.59x.
 
 Tasking (`run_tasking_bench.py --models fiber --runs 5`): `task_loop` 0.69x Go
 (gate <= 0.90x holds), `task_spawn` 10.8x Go, down from 24.8x before the
-ADR-309 arena.
+ADR-313 arena.
 
 **What changed.** `BIT(n<=64)` logic and masked tests lower through packed
-integers (ADR-310); widening a `BIT(1)` no longer emits invalid IR; the C twin
+integers (ADR-314); widening a `BIT(1)` no longer emits invalid IR; the C twin
 follows the PL/I CPU/FP policy, and the `on_conditions` and `linked_list` C
-twins do the same semantic work as their PL/I twins (ADR-311).
+twins do the same semantic work as their PL/I twins (ADR-315).

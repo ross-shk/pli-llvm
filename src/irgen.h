@@ -187,7 +187,7 @@ private:
   // default effects. The escape hatch that lets a benchmark measure what the
   // inference is worth.
   bool noMemoryEffects_ = false;
-  // True above -O0: the packed-integer BIT lowering (ADR-310) relies on the
+  // True above -O0: the packed-integer BIT lowering (ADR-314) relies on the
   // optimizer, so the byte-array path stays for -O0 where packing is pure
   // extra work.
   bool optimize_ = true;

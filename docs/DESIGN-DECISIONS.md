@@ -11159,7 +11159,190 @@ entry must still return normally.
 
 ---
 
-## ADR-309 — The POSIX fiber stack comes from an arena and grows in chunks (amends ADR-236, ADR-239)
+## ADR-309 — `UNDEFINEDFILE(f)`: a per-file condition for a failed `OPEN`
+
+**Context.** Rule (97)'s file conditions were served one at a time. `ENDFILE(f)`
+(ADR-285) established the pattern: the condition is keyed by the `FILE`
+variable's runtime slot, so every file carries its own handler, and the runtime
+raises it from the operation that detects the event. `UNDEFINEDFILE(f)` is the
+second such condition, and the one a batch program needs most: it is the only
+way to react to an input data set that is not there. The compiler diagnosed the
+name, and a failing `OPEN` called `pli_signal_error` unconditionally, so the
+condition could not be caught at all.
+
+**Decision.** `UNDEFINEDFILE` joins `ENDFILE` in one parser branch (both demand
+`( file )`), gets its own key base (`Stmt::kUndefinedfileBaseCondKey = -2000`,
+mirrored by `RT_UNDEFINEDFILE_KEY_BASE` in `runtime/rt_file.c` so the two ranges
+cannot overlap), and rides the existing `ON`/`REVERT`/`SIGNAL` statement paths.
+The runtime raises it from both `pli_file_open` and `pli_file_open_record`; a
+handler runs with its capture context and resumes after the `OPEN`, leaving the
+file closed, and with no handler the condition takes its implicit action, ERROR,
+which aborts exactly as the unconditional call did before. `SIGNAL
+UNDEFINEDFILE` is diagnosed with rule (93), like `SIGNAL ENDFILE`: the condition
+belongs to the runtime.
+
+A resumed handler leaves the file unopened, so a later transfer would have
+reached the *console*: `pli_put_select` fell back to SYSPRINT and
+`pli_get_select` to SYSIN whenever the slot held no stream. Both now raise ERROR
+(`PUT`/`GET` to a file that is not open) and, on output, discard what a resuming
+ERROR handler lets through. That also closes the same hole after `CLOSE`.
+
+**Consequences.** `undefinedfile.pli` pins per-file dispatch: a successful open
+raises nothing, each failing open runs only its own file's unit, and the unit
+stays established across opens. `driver/undefinedfile` covers the default
+action, `REVERT`, resume, `PUT`/`GET` on the closed file, and the RECORD open
+path. `bad_undefinedfile.pli` and `bad_undefinedfile_nofile.pli` pin the two
+diagnostics. B4 moves `UNDEFINEDFILE` from "unserved condition kinds" to served;
+the arithmetic and tasking kinds and the keyed-I/O file conditions stay open.
+
+**Rejected.** *Making the handler's resume retry the `OPEN`.* IBM continues with
+the statement after the `OPEN` and leaves the file undefined; a retry loop would
+change the program's control flow. *Raising `UNDEFINEDFILE` again on the later
+transfer.* The condition describes the `OPEN`, not the `PUT`/`GET`; ERROR is the
+condition for using a file that is not open, and it is what the RECORD path
+already raised. *Tracking the file for `FILENAME()`.* The builtin still reports
+blank inside a file-condition unit because the runtime does not carry the
+current file on the condition stack; that stays a recorded limitation.
+
+## ADR-310 — `STATIC` AREA regions live for the whole program
+
+**Context.** `AREA` was created at procedure entry and destroyed on exit (rule
+(20)), so a block allocated in a callee died with the callee's activation. The
+`STATIC` storage attribute was a warned no-op for every variable, and `DCL a
+AREA(n) STATIC` was diagnosed with rule (20) since ADR-303, because treating it
+as automatic would let a program return a pointer into a freed region. Static
+areas are how PL/I code keeps a long-lived pool across calls — the caller
+allocates in the callee's region and frees the block a call later — so the
+diagnostic protected against a silent use-after-free but left the feature
+unserved.
+
+**Decision.** A static AREA is real static storage. Sema marks the symbol
+`isStatic` when the declaration carries STATIC (a parameter is diagnosed: it has
+no storage of its own), so `emitGlobals` gives it a module global slot — a
+pointer, or an array of pointers for an AREA array — and the symbol stays out of
+`localSyms`, which skips the per-activation create/destroy pass. The region is
+created on first use instead of at program load: `pli_area_lazy(slot, n)` creates
+the region when the slot is null and returns it. Every path that reads an area
+value goes through it — a scalar reference (in `addressOf`) and an element of a
+static AREA array (in `loadArrayElement`) — so the declaring procedure, an
+internal procedure, a package body and an `AREA(*)` argument all share the same
+region regardless of which runs first. A whole static AREA array passed to an
+array parameter materialises every element before the call, because the callee
+reads the slots directly. The region is never destroyed: it belongs to the
+program, and process exit reclaims it. The parser now defers the "STATIC has no
+effect" warning until the declaration's attributes are known, so an AREA
+suppresses it while a plain STATIC variable still gets it.
+
+**Consequences.** `area_static.pli` pins the lifetime (a block read after its
+allocating procedure returns), reuse across activations (a second activation
+FREEs a block made by the first in the same region), independent element
+regions, the whole-array parameter pre-create, the `AREA(*)` hand-off, a
+BEGIN-block static area and a package-level area shared by its member procedures
+(`area_static_package.pli`). `bad_area_static.pli` pins the two remaining
+diagnostics: an EXTERNAL area (cross-module region sharing, still open) and
+STATIC on a parameter. B5 moves static areas to served; EXTERNAL areas, arrays
+of OFFSET and offset arithmetic stay open. An AREA structure member is still
+accepted but never creates a region; that pre-existing hole is recorded for a
+follow-up rule-(20) diagnostic.
+
+**Rejected.** *Creating the regions in `llvm.global_ctors`.* A constructor runs
+before the runtime's `main` installs its state, and it would create regions for
+areas a program never touches; first use is simpler and adds no new codegen
+mechanism. *A per-entry guard in the declaring procedure.* An internal procedure
+or an `AREA(*)` callee can reach the area before the declaring procedure's first
+entry, so the guard would have to be duplicated in every procedure that can see
+the symbol. *Destroying the region at program exit.* Static storage has no
+per-module teardown path and the process reclaims it; a static area is
+program-lifetime by definition. *Extending static storage to every variable.*
+Plain STATIC variables are still automatic (warned); serving them needs
+INITIAL-once, static-link and capture semantics, which is separate work.
+
+## ADR-311 — Offset arithmetic: `OFFSETADD`, `OFFSETSUBTRACT`, `OFFSETDIFF`
+
+**Context.** ADR-170 lowered an OFFSET to the same opaque address as a POINTER
+and kept arithmetic mixing diagnosed: `p + 4` on an OFFSET is not PL/I.
+Enterprise PL/I gives locator movement its own built-ins — `OFFSETADD(x,y)`
+adds a byte count to an offset, `OFFSETSUBTRACT(x,y)` is `OFFSETADD(x,-y)`, and
+`OFFSETDIFF(x,y)` returns the FIXED BINARY(31,0) byte distance between two
+offsets — and none were served. Reaching a field inside a block therefore meant
+declaring a BASED structure over the whole block. B5 still listed "offset
+arithmetic" as open.
+
+**Decision.** Sema types the three built-ins and checks their signatures:
+ADD/SUBTRACT take an OFFSET and a numeric byte count, DIFF takes two OFFSETs.
+The count converts through the ordinary numeric conversion to FIXED
+BINARY(31,0), so a scaled decimal (`4.0`) arrives as 4 and a negative count
+walks backwards. An OFFSET is an absolute address (ADR-170), so IRGen emits one
+non-inbounds `i8` GEP for ADD (the count negated for SUBTRACT) and a `ptrtoint`
+subtraction truncated to `i32` for DIFF. No runtime support is needed, and
+there is no bounds check, exactly as IBM specifies.
+
+**Consequences.** `offset_arith.pli` allocates one three-field block and
+reaches the second and third fields through `OFFSETADD`, walks back with
+`OFFSETSUBTRACT` and with a negative `OFFSETADD`, checks byte distances with
+`OFFSETDIFF`, converts a scaled decimal count and confirms that the null offset
+plus zero is still null. `bad_offset_arith.pli` pins arity (rule (123)), the
+OFFSET operand requirement (rule (22)) and the numeric count (rule (123)). B5
+moves offset arithmetic to served; EXTERNAL areas and arrays of OFFSET stay
+open. A CHARACTER or BIT count is diagnosed in this stage because the general
+string-to-number conversion is not served; numeric counts are. The conversion
+built-ins `OFFSET` (a pointer relative to an area) and `OFFSETVALUE` (an
+integer to an offset) also stay open: our offsets carry no area base, so
+address arithmetic cannot serve them faithfully.
+
+**Rejected.** *Defining `+`/`-` on OFFSET operands.* IBM spells locator
+arithmetic with the built-ins, and ADR-170's rule that arithmetic mixing stays
+diagnosed is unchanged. *Returning a POINTER.* The result is still a locator
+into the same area, so the OFFSET type is kept and assignment to a POINTER
+stays an explicit locator conversion. *An inbounds GEP.* The moved address may
+point outside the allocated block (IBM does not require the result to stay
+inside), so `inbounds` would promise more than the language does.
+
+## ADR-312 — Arrays of `OFFSET`; an OFFSET is a full locator
+
+**Context.** ADR-170 made an OFFSET an opaque locator into an AREA, but sema
+diagnosed an array of OFFSET and treated OFFSET as a value only: the locator
+before `->` had to be a POINTER, and the SET target of ALLOCATE had to be a
+plain variable. Code that manages several blocks in one area therefore kept a
+scalar offset per block, and `slots(i)` could only be read and assigned. In
+IBM PL/I an OFFSET is an ordinary dimensioned attribute and a full locator: it
+can qualify a BASED reference, be a SET target, and be freed through.
+ALLOCATE also requires `IN ( area )` whenever the SET target is an OFFSET.
+
+**Decision.** Arrays of OFFSET are served with the ordinary array
+representation — the dimensions live on the type, and the elements are opaque
+addresses. Three paths were opened:
+
+- `SET` takes any assignable locator reference — a scalar, an array element
+  `slots(i)`, or a member — and ALLOCATE shares GET's reference store, so the
+  block address lands in that element or member. An OFFSET target additionally
+  requires `IN ( area )` (rule (88)).
+- The locator before `->` may be a POINTER or an OFFSET, so
+  `slots(1) -> rec.v` addresses the block held in the element. The same rule
+  guards FREE's locator (rule (90)).
+- A whole array remains rejected as a locator or SET target, and the offset
+  arithmetic built-ins require scalar operands.
+
+**Consequences.** `offset_array.pli` allocates two blocks into two elements,
+writes and reads through each element, moves one element with `OFFSETADD`,
+frees one block by its element and checks the other survives, and nulls and
+compares an element. `bad_offset_array.pli` pins the whole-array SET target
+(88), a bad AREA association on an array declaration (22), the missing IN for
+an OFFSET target (88), and a non-BASED `->` target (124). B5 loses arrays of
+OFFSET. Still open there: EXTERNAL areas, the `OFFSET`/`OFFSETVALUE`
+conversion built-ins, and the check that an OFFSET's associated AREA matches
+the `IN` area it is set from (rule (22)).
+
+**Rejected.** *Treating a whole array as a locator.* An array is not a value;
+each element is. *Allowing an AREA as a `->` locator.* An AREA names a region,
+not a block; the checks spell out POINTER or OFFSET rather than using
+`isLocator()`, which also accepts AREA. *Keeping the POINTER-only rule.* An
+OFFSET is a locator by rule (22); refusing it forced a scalar copy of every
+element.
+
+---
+
+## ADR-313 — The POSIX fiber stack comes from an arena and grows in chunks (amends ADR-236, ADR-239)
 
 **Context.** ADR-236 gave Windows a stack arena and ADR-239 made a Windows
 fiber stack grow in chunks; POSIX was left with the older shape: every fiber
@@ -11220,7 +11403,7 @@ every pointer into a moved stack.
 
 ---
 
-## ADR-310 — BIT logic and masked tests lower through packed integers (amends ADR-126, ADR-243)
+## ADR-314 — BIT logic and masked tests lower through packed integers (amends ADR-126, ADR-243)
 
 **Context.** A `BIT(n)` value is stored as a packed big-endian byte array,
 `[ceil(n/8) x i8]` (ADR-126). Logical `&`/`|` were lowered one storage byte at
@@ -11257,7 +11440,7 @@ a mask held in a variable still reaches it after LLVM propagates the constant.
 The tests are `tests/usecases/bit_mask_widths.pli`,
 `tests/usecases/bit_merge_equivalence.pli` and `tests/ir/combine_tests`.
 
-## ADR-311 — the benchmark C twin follows the PL/I target policy
+## ADR-315 — the benchmark C twin follows the PL/I target policy
 
 **Context.** `pli` targets LLVM's generic CPU (`src/target.cpp`) and does not
 contract floating-point operations. The benchmark harness compiled the C twin
@@ -11284,7 +11467,7 @@ It is not a claim that PL/I is faster than a native-tuned C build; that
 comparison is still available with `--c-native`, and should be reported
 separately when used.
 
-## ADR-312 — Textual rescanning preprocessor for Chapter 9 control flow
+## ADR-316 — Textual rescanning preprocessor for Chapter 9 control flow
 
 **Context.** C28-6571-3 Chapter 9 defines `%DO`/`%END`, `%GOTO`/`%GO TO`,
 `%label:`, and `%PROCEDURE` macros as compile-time text control. The preprocessor

@@ -282,7 +282,7 @@ bool Preprocessor::evalCondExpr(const std::string& text, const fs::path& path, i
 // past it (npos after diagnosing). With active == false the directive is
 // skipped without effects; newlines stay caller-preserved. Sets semPos to the
 // last character position of the directive's own text so the caller can
-// preserve its newlines (ADR-312).
+// preserve its newlines (ADR-316).
 size_t Preprocessor::processDirective(const fs::path& path, const std::string& source, size_t i,
                                       std::string& output, int& line, int& col, bool active,
                                       size_t& semPos) {
@@ -745,7 +745,7 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
 
   int line = 1;
   int col = 1;
-  // %GOTO resolves labels in the current file's flat text (ADR-312).
+  // %GOTO resolves labels in the current file's flat text (ADR-316).
   // Save outer file's labels across recursive %INCLUDE expansion, then
   // repopulate for this file.
   auto savedLabels = labels_;
@@ -760,7 +760,7 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
 }
 
 // Append text to output, recording one lineMap entry per \n so diagnostics
-// stay attributed to the correct source file:line (ADR-219, ADR-312).
+// stay attributed to the correct source file:line (ADR-219, ADR-316).
 void Preprocessor::emit(const std::string& text, std::string& output, const fs::path& path,
                         int& line, int& col) {
   output += text;
@@ -776,7 +776,7 @@ void Preprocessor::emit(const std::string& text, std::string& output, const fs::
 }
 
 // Scan a source range char-by-char, emitting non-directive text via emit()
-// and dispatching %-directives to processDirective (ADR-312). String, comment
+// and dispatching %-directives to processDirective (ADR-316). String, comment
 // and // comment nesting is tracked so directives inside them are inert.
 // Depth-guarded to prevent runaway %DO/%GOTO nesting.
 bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std::string& output,
@@ -833,7 +833,7 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
       }
       // Preserve newlines from the directive's own text (i..semPos), not
       // from the jump target, so %DO body/%END and %GOTO target text is
-      // tracked by their own scan/processDirective calls (ADR-312).
+      // tracked by their own scan/processDirective calls (ADR-316).
       for (size_t j = i; j <= semPos; ++j) {
         if (source[j] == '\n') {
           output += '\n';
@@ -857,7 +857,7 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
   return true;
 }
 
-// Pre-scan source[start..end) for %label: definitions (ADR-312).
+// Pre-scan source[start..end) for %label: definitions (ADR-316).
 // Records each label's target position (right after ':' + whitespace).
 void Preprocessor::collectLabels(const std::string& source, size_t start, size_t end) {
   bool inString = false;
@@ -926,7 +926,7 @@ void Preprocessor::collectLabels(const std::string& source, size_t start, size_t
 }
 
 // Find the ';' (outside quoted strings) that terminates a directive body
-// starting just after `start` (ADR-312).
+// starting just after `start` (ADR-316).
 size_t Preprocessor::findDirectiveEnd(const std::string& source, size_t start) {
   bool quoted = false;
   for (size_t i = start; i < source.size(); ++i) {
@@ -942,7 +942,7 @@ size_t Preprocessor::findDirectiveEnd(const std::string& source, size_t start) {
   return std::string::npos;
 }
 
-// Find the matching %END for a %DO starting at `start` (ADR-312).
+// Find the matching %END for a %DO starting at `start` (ADR-316).
 // Returns the %END position in endPos, its ';' in endSemi.
 size_t Preprocessor::findMatchingEnd(const fs::path& path, const std::string& source,
                                      size_t start, size_t& endSemi, int line, int col) {
@@ -1287,7 +1287,7 @@ bool Preprocessor::substituteRef(const fs::path& input, const std::string& name,
   return true;
 }
 
-// %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-312).
+// %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-316).
 // The body is scan()'d once per iteration; the iteration variable is set
 // in ppVars_ before each scan. Returns endSemi+1 (past %END;) on success.
 size_t Preprocessor::handleDo(const fs::path& path, const std::string& source, size_t bodyStart,
@@ -1380,7 +1380,7 @@ size_t Preprocessor::handleDo(const fs::path& path, const std::string& source, s
   return endSemi + 1;
 }
 
-// %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-312).
+// %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-316).
 bool Preprocessor::handleGoto(const fs::path& path, const std::string& name,
                               const std::string& operand, int line, int col) {
   std::string label = upper(trim(operand));

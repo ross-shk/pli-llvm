@@ -57,7 +57,7 @@ model, so they are measured once per workload and shared by the `fiber` and
 references fail loudly when a thread cannot be created, so resource
 exhaustion cannot be reported as a win.
 
-## Baseline measurement (before ADR-309)
+## Baseline measurement (before ADR-313)
 
 macOS 26.6.2 (arm64, 8 cores), pli v1.0.0-99-gaa83aa8 / LLVM 23.1.2,
 Go 1.27.3, Apple clang 17.0.0, 20 000 tasks, 9 runs, median. The current
@@ -90,9 +90,9 @@ The fiber model is ~50× faster than raw OS threads on task_loop and ~5.5× on
 task_spawn — the stack and scheduler are shared across all tasks instead of
 allocated per thread.
 
-### Update: ADR-309, the POSIX fiber stack arena
+### Update: ADR-313, the POSIX fiber stack arena
 
-The table above is the measurement before ADR-309, when each POSIX fiber
+The table above is the measurement before ADR-313, when each POSIX fiber
 `mmap`ed its whole ceiling. Both binaries were then run alternately on the
 same host (21 rounds interleaved, median, 20 000 tasks):
 
@@ -105,7 +105,7 @@ same host (21 rounds interleaved, median, 20 000 tasks):
 The lifecycle is unaffected: it recycles stacks from the fiber pool, so it
 never paid the reservation. The other columns above were not re-measured.
 
-### Current run (5 samples, after ADR-309)
+### Current run (5 samples, after ADR-313)
 
 `python3 benchmarks/run_tasking_bench.py --models fiber --runs 5` on the same
 host: **task_loop** 8.64 ms against Go's 12.58 ms (**0.69×**, gate holds) and
@@ -127,12 +127,12 @@ reused):
 
 * **task_spawn is behind Go on both models.** 20 000 simultaneously-live
   tasks require 20 000 live stacks. The fiber stacks come from an arena of
-  slots and grow in chunks (ADR-309), so the ceiling costs address space
+  slots and grow in chunks (ADR-313), so the ceiling costs address space
   and not a reservation of its own, and the remaining cost is the one page
   a fiber touches when it starts — 16 KiB on Apple silicon, i.e. ~320 MiB
   for 20 000 live tasks. Go gives a goroutine a 2 KiB stack from a cache
   and copies it on growth, which is ~40 MiB for the same fan-out. Before
-  ADR-309 each fiber mmap'ed its whole ceiling, which cost another ~6 us
+  ADR-313 each fiber mmap'ed its whole ceiling, which cost another ~6 us
   per task. The fiber floor (42 ns) proves the switch is not the problem.
 
 * **task_loop beats Go on this platform** (fiber: 0.75×–0.80×, os: 0.57×–0.77×

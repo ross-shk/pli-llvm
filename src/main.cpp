@@ -404,7 +404,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     return true;
   }
 
-  // ADR-310: the packed BIT lowering relies on the optimizer, so -O0 keeps
+  // ADR-314: the packed BIT lowering relies on the optimizer, so -O0 keeps
   // the byte-array path; every optimized level uses the packed form.
   const bool optimizing = optLevel != "-O0";
 

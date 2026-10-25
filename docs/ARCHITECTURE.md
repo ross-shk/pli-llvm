@@ -292,7 +292,7 @@ The rules that make it work, each of them learned the hard way:
   boundaries before it touches one, so the handler commits every chunk
   between the top and the fault, not only the next one; on POSIX the stacks
   come from an arena of slots, so a live task's ceiling costs address space
-  and not a reservation of its own (ADR-309).
+  and not a reservation of its own (ADR-313).
 * **A report about a full stack cannot run on that stack.** The overflow
   report runs on an emergency stack that the handler switches to through the
   exception context, so it needs no room on the task's stack (ADR-239). On
@@ -331,7 +331,7 @@ and to build, but not to switch.
 | `BIT(n)` | Packed bytes; `BIT(1)` uses a scalar representation in expressions | Supported operations vary by context. |
 | `COMPLEX` | Pair of floating-point values | The pair stores the real and imaginary components. |
 | `POINTER` | LLVM pointer | |
-| `OFFSET` | LLVM pointer | An opaque locator into an `AREA`; shares the POINTER representation, so a `BASED` variable may be addressed through it (ADR-170). |
+| `OFFSET` | LLVM pointer | An opaque locator into an `AREA`; shares the POINTER representation, so a `BASED` variable may be addressed through it (ADR-170); an array of OFFSET is an array of pointers, one locator per element (ADR-312). |
 | `AREA` | LLVM pointer to a runtime region | A region created at procedure entry and destroyed on exit; `ALLOCATE ... IN(area)` takes blocks from it and `FREE ... IN(area)` returns any block in any order (ADR-170). |
 | structure | LLVM struct | Members in declaration order; `ALIGNED` (the default) uses natural padding, `UNALIGNED` emits a packed struct for C interop and its member loads/stores use `align 1` (ADR-169). |
 | array | Contiguous, row-major storage | Dynamic bounds and parameter extents use runtime values. |
@@ -339,8 +339,9 @@ and to build, but not to switch.
 This table describes representation choices for supported forms, not a claim
 that every listed PL/I type or attribute is complete. `PICTURE`, label
 variables, and full entry descriptors remain limited or unimplemented; `AREA`
-and `OFFSET` serve automatic regions and their locators, while static areas,
-`AREA(*)`, and offset arithmetic remain out of scope. See the coverage ledger.
+and `OFFSET` serve automatic and static regions and their locators, including
+`AREA(*)` parameters, arrays of offsets, and byte offset arithmetic, while
+EXTERNAL areas remain out of scope. See the coverage ledger.
 
 **Parameter passing.** PL/I arguments are generally passed by reference: the
 callee receives addresses. If an argument needs conversion, is an expression,

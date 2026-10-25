@@ -12,6 +12,9 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------- |
 | Pointer  | `NULL`                                                                                                                                    | `( )`                    | `POINTER`                         |
 | Pointer  | `ADDR`                                                                                                                                    | `( var | var(i) | S.A )` | `POINTER`                         |
+| Area     | `OFFSETADD`                                                                                                                               | `( offset, n )`          | `OFFSET`                          |
+| Area     | `OFFSETSUBTRACT`                                                                                                                          | `( offset, n )`          | `OFFSET`                          |
+| Area     | `OFFSETDIFF`                                                                                                                              | `( offset, offset )`     | `FIXED BIN(31,0)`                 |
 | Storage  | `BYADDR`                                                                                                                                  | `( struct )`             | the struct (marker)               |
 | String   | `SUBSTR`                                                                                                                                  | `( s, start, length )`   | `CHAR(length)`                    |
 | String   | `INDEX`                                                                                                                                   | `( s, sub )`             | `FIXED BIN`                       |
@@ -690,7 +693,7 @@ Returns the key identifying the source of the current `SIGNAL` (0 when no condit
 
 ### `ONFILE()` → CHARACTER(32)
 
-Returns the name of the file for which the current I/O condition (`ENDFILE`, `KEY`, `UNDEFINEDFILE`, …) was raised — blank when no file condition is active. `ON ENDFILE(f)` now runs (ADR-285), but the runtime does not track the file of the condition, so every reachable call still returns blank (IBM's out-of-context null); `ON KEY`/`UNDEFINEDFILE` stay diagnosed, so those never reach a unit.
+Returns the name of the file for which the current I/O condition (`ENDFILE`, `KEY`, `UNDEFINEDFILE`, …) was raised — blank when no file condition is active. `ON ENDFILE(f)` (ADR-285) and `ON UNDEFINEDFILE(f)` (ADR-309) now run, but the runtime does not track the file of the condition, so every reachable call still returns blank (IBM's out-of-context null); `ON KEY` stays diagnosed, so it never reaches a unit.
 
 ```pli
 dcl f char(32);
@@ -705,6 +708,29 @@ Returns a null AREA handle (the area equivalent of `NULL()` for pointers).
 ```pli
 dcl area area;
 allocate area in area;   /* AREA is implicitly initialised to EMPTY() */
+```
+
+### `OFFSETADD(x, n)` / `OFFSETSUBTRACT(x, n)` → OFFSET *(IBM built-in, ADR-311)*
+
+Move an offset by a byte count. The count converts to `FIXED BINARY(31,0)`, so a scaled decimal works and a negative count walks backwards; `OFFSETSUBTRACT(x, n)` is `OFFSETADD(x, -n)`. The result is still an offset into the same area, and there is no bounds check — IBM leaves that to the program.
+
+### `OFFSETDIFF(x, y)` → FIXED BINARY(31,0) *(IBM built-in, ADR-311)*
+
+The byte distance between two offsets. Use it to measure a block or check that a walk returned where it started.
+
+```pli
+dcl region area(4096);
+dcl p offset(region);
+dcl q offset(region);
+dcl 1 rec based(p), 2 x fixed bin(31), 2 y fixed bin(31);
+dcl 1 atq based(q), 2 y fixed bin(31);
+
+allocate rec in(region) set(p);
+rec.x = 11;
+rec.y = 22;
+q = offsetadd(p, 4);              /* four bytes on: rec.y */
+if atq.y ^= 22 then put skip list('wrong field');
+if offsetdiff(q, p) ^= 4 then put skip list('wrong distance');
 ```
 
 ### `CURRENTSIZE(x)` → FIXED BINARY(31)

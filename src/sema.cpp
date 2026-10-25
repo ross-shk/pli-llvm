@@ -1662,7 +1662,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           }
         }
         item.dynMembers = std::move(dynMs);
-        item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, isStatic);
+        // A STATIC AREA (rule (20)) is real static storage: its region lives for
+        // the whole program. AREA(*) inherits the argument's region, so the
+        // storage attribute cannot apply to it.
+        bool staticItem = isStatic || (item.area && item.sawStatic && !item.areaStar);
+        item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, staticItem);
         item.sym->owner = p; // which procedure's frame holds this variable
         if (item.external) {
           // EXTERNAL (rule (42)): shared across translation units via a
@@ -2022,9 +2026,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc, "an AREA array with a variable bound is not implemented in "
                                "this stage",
                      "(20)");
-          if (item.sym->isStatic || item.sawStatic)
-            d_.error(item.loc, "a STATIC or EXTERNAL AREA is not implemented in this stage",
-                     "(20)");
+          // A STATIC area is served by irgen (a module global slot created on
+          // first use); an EXTERNAL area needs cross-module region sharing.
+          if (item.sym->external)
+            d_.error(item.loc, "an EXTERNAL AREA is not implemented in this stage", "(20)");
           auto areaErr = [&](const char* what, const char* rule) {
             d_.error(item.loc, std::string("AREA+") + what + " is not implemented", rule);
           };
@@ -2040,17 +2045,17 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             areaErr("BASED", "(25)");
           if (item.controlled)
             areaErr("CONTROLLED", "(15)");
+          // AREA(*) (rule (20)) takes its size from the argument, so it is
+          // meaningful only on a procedure parameter; a parameter has no
+          // storage of its own, so STATIC cannot apply to either AREA form.
+          bool isParam =
+              std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+          if (!isParam)
+            for (auto& st : p->body)
+              if (st && st->kind == Stmt::Entry &&
+                  std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
+                isParam = true;
           if (item.areaStar) {
-            // AREA(*) (rule (20)): an adjustable size inherited from the
-            // argument, so it is meaningful only on a procedure parameter.
-            bool isParam =
-                std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
-            if (!isParam)
-              for (auto& st : p->body)
-                if (st && st->kind == Stmt::Entry &&
-                    std::find(st->params.begin(), st->params.end(), item.name) !=
-                        st->params.end())
-                  isParam = true;
             if (!isParam)
               d_.error(item.loc,
                        "AREA(*) requires a parameter: the size is inherited from the argument",
@@ -2063,13 +2068,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               d_.error(item.areaSize->loc, "an AREA size must be a positive constant in this stage",
                        "(20)");
           }
+          if (isParam && item.sawStatic)
+            d_.error(item.loc, "a parameter has no storage of its own, so STATIC cannot apply",
+                     "(20)");
         }
         // OFFSET (rule (22)): an opaque locator into an AREA. The optional
         // reference names the associated AREA; it is validated here and used to
         // check the ALLOCATE/FREE ... IN(area) option.
         if (item.offset) {
-          if (item.ty.isArray())
-            d_.error(item.loc, "an array of OFFSET is not implemented in this stage", "(22)");
           if (!item.offsetRef.empty()) {
             Symbol* ar = lookup(sc, item.offsetRef);
             if (ar && ar->ty.isArea())
@@ -2814,6 +2820,11 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
   bool nested = inUnit_ > 1;
   std::vector<Symbol*> caps;
   auto noteCap = [&](Symbol* sym, bool whole, SourceLoc loc) {
+    // A static symbol is a module global: it needs no capture and is visible
+    // from the frameless handler (rule 91). A DEFINED item keeps the old
+    // path: its base may still be an automatic of the establishing frame.
+    if (sym->kind == Symbol::Var && sym->isStatic && !sym->definedBase)
+      return;
     if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
         !sym->definedBase && !sym->fileAttr && sym->owner == p) {
       if (std::find(caps.begin(), caps.end(), sym) == caps.end())
@@ -3056,12 +3067,17 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
   return (unsigned int)((fnv1a(s->condName.data(), s->condName.size()) & 0x7FFFFFFFU) + 1);
 }
 
-// Rule (97): ENDFILE is a file condition, so its handler is keyed by the
-// file: kEndfileBaseCondKey - slot keeps each file's unit separate on the
+// Rule (97): the conditions the runtime raises against one named file.
+static bool isFileCondName(const std::string& n) {
+  return n == "ENDFILE" || n == "UNDEFINEDFILE";
+}
+
+// Rule (97): ENDFILE and UNDEFINEDFILE are file conditions, so their handlers
+// are keyed by the file: base - slot keeps each file's unit separate on the
 // shared ON stack.
 int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
   if (s->fileIdent.empty()) {
-    d_.error(s->loc, "ENDFILE requires a FILE ( f ) reference", "(97)");
+    d_.error(s->loc, s->condName + " requires a FILE ( f ) reference", "(97)");
     return 0;
   }
   Symbol* f = lookup(sc, s->fileIdent);
@@ -3070,7 +3086,9 @@ int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
     return 0;
   }
   s->fileSym = f;
-  return Stmt::kEndfileBaseCondKey - f->fileSlot;
+  int base = s->condName == "UNDEFINEDFILE" ? Stmt::kUndefinedfileBaseCondKey
+                                            : Stmt::kEndfileBaseCondKey;
+  return base - f->fileSlot;
 }
 
 // Whole-array expressions (rules 86, 127; QR2.1): storage a DO desugar can
@@ -4602,9 +4620,21 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                    "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
       } else {
         typeExpr(s->allocSet[i].get(), sc, p);
-        if (s->allocSet[i]->kind != Expr::VarRef || !s->allocSet[i]->ty.isLocator())
-          d_.error(s->allocSet[i]->loc,
-                   "the SET target of ALLOCATE must be a POINTER or OFFSET variable", "(88)");
+        // The SET target is any assignable locator reference: a scalar
+        // variable, an array element, or a member (rule (88)).
+        const Expr* tgt = s->allocSet[i].get();
+        const bool assignable = tgt->kind == Expr::VarRef || tgt->kind == Expr::Subscript;
+        const bool scalarLoc =
+            !tgt->ty.isArray() && (tgt->ty.isPointer() || tgt->ty.isOffset());
+        if (!assignable || !scalarLoc)
+          d_.error(tgt->loc,
+                   "the SET target of ALLOCATE must be a POINTER or OFFSET variable or element",
+                   "(88)");
+        // An OFFSET target has no heap meaning: the block must come from the
+        // AREA the offset locates (Y33-6003, rule (88)).
+        else if (tgt->ty.isOffset() && !areaE)
+          d_.error(tgt->loc,
+                   "ALLOCATE with a SET OFFSET target requires the IN ( area ) option", "(88)");
       }
     }
     break;
@@ -4642,7 +4672,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (!bsym || !bsym->isBased())
         d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
                  "(90)");
-      if (f->locPtr && !f->locPtr->ty.isLocator())
+      if (f->locPtr &&
+          ((!f->locPtr->ty.isPointer() && !f->locPtr->ty.isOffset()) ||
+           f->locPtr->ty.isArray()))
         d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER or OFFSET", "(90)");
       if (i < s->freeArea.size() && s->freeArea[i]) {
         typeExpr(s->freeArea[i].get(), sc, p);
@@ -4682,11 +4714,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     break;
   case Stmt::On:
-    // Rules (91),(94),(97),(99): ERROR, a fixed condition, ENDFILE(file), or
-    // a programmer-named condition; the unit body only needs typing plus the
-    // establishing-frame checks.
-    s->condKey = s->condName == "ENDFILE" ? resolveFileCondKey(s, sc)
-                                          : resolveCondKey(s, sc);
+    // Rules (91),(94),(97),(99): ERROR, a fixed condition, ENDFILE(file) or
+    // UNDEFINEDFILE(file), or a programmer-named condition; the unit body only
+    // needs typing plus the establishing-frame checks.
+    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc)
+                                             : resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
       ++inUnit_;
       checkStmt(s->unit.get(), sc, p);
@@ -4696,13 +4728,19 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   case Stmt::Revert:
     // A REVERT with no established handler is a no-op reverting to SYSTEM.
-    s->condKey = s->condName == "ENDFILE" ? resolveFileCondKey(s, sc)
-                                          : resolveCondKey(s, sc);
+    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc)
+                                             : resolveCondKey(s, sc);
     break;
   case Stmt::Signal:
-    // Rule (97): ENDFILE is raised by READ, never by SIGNAL.
+    // Rule (97): the file conditions are raised by the runtime, never by SIGNAL.
     if (s->condName == "ENDFILE") {
       d_.error(s->loc, "SIGNAL ENDFILE is not allowed; the condition is raised by READ",
+               "(93)");
+      break;
+    }
+    if (s->condName == "UNDEFINEDFILE") {
+      d_.error(s->loc,
+               "SIGNAL UNDEFINEDFILE is not allowed; the condition is raised by OPEN",
                "(93)");
       break;
     }
@@ -5221,13 +5259,14 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       sym->owner = p;
     e->sym = sym;
     e->ty = sym->ty;
-    // A locator-qualified reference P -> X (rule 124): P is a POINTER, X a
-    // based variable whose storage is addressed through P. The member path
-    // below then resolves X.A against the based structure type.
+    // A locator-qualified reference P -> X (rule 124): P is a POINTER or an
+    // OFFSET, X a based variable whose storage is addressed through P. The
+    // member path below then resolves X.A against the based structure type.
     if (e->locPtr) {
       typeExpr(e->locPtr.get(), sc, p);
-      if (!e->locPtr->ty.isPointer())
-        d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+      if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
+          e->locPtr->ty.isArray())
+        d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
       if (!sym->isBased())
         d_.error(e->loc,
                  "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
@@ -5289,8 +5328,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // used, so Q->S.A(i) can address a different block than P->S.A(i).
       if (e->locPtr) {
         typeExpr(e->locPtr.get(), sc, p);
-        if (!e->locPtr->ty.isPointer()) {
-          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
+            e->locPtr->ty.isArray()) {
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
           e->ty = Type::voidTy();
           break;
         }
@@ -5457,13 +5497,14 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         arr && (arr->kind == Symbol::Var || arr->kind == Symbol::Param) && arr->ty.isArray()) {
       // A locator-qualified array subscript P->X(i) (rules 124,126): the
       // locator supplies the base address instead of the declared BASED
-      // pointer. The locator is typed first so a non-POINTER locator or
+      // pointer. The locator is typed first so a non-locator or
       // a non-BASED target is diagnosed with its rule cite, never
       // silently given the own base.
       if (e->locPtr) {
         typeExpr(e->locPtr.get(), sc, p);
-        if (!e->locPtr->ty.isPointer())
-          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER", "(124)");
+        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
+            e->locPtr->ty.isArray())
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
         if (!arr->isBased()) {
           d_.error(e->loc,
                    "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
@@ -6145,6 +6186,47 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::flt(6);
+    return true;
+  }
+  // OFFSETADD/OFFSETSUBTRACT/OFFSETDIFF (Y33-6003 builtins, rule (22)
+  // locators; ADR-311): byte arithmetic on an OFFSET. ADD/SUBTRACT move an
+  // offset by a numeric count (converted to FIXED BIN(31,0)) and yield an
+  // OFFSET; DIFF yields the FIXED BIN(31,0) byte distance between two
+  // offsets.
+  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" ||
+      e->name == "OFFSETDIFF") {
+    const bool diff = e->name == "OFFSETDIFF";
+    if (e->args.size() != 2) {
+      d_.error(e->loc,
+               e->name + (diff ? " expects 2 arguments (offset, offset)"
+                               : " expects 2 arguments (offset, bytes)"),
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isOffset() || e->args[0]->ty.isArray()) {
+      d_.error(e->args[0]->loc, "the first argument to " + e->name + " must be an OFFSET",
+               "(22)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (diff) {
+      if (!e->args[1]->ty.isOffset() || e->args[1]->ty.isArray()) {
+        d_.error(e->args[1]->loc, "the second argument to OFFSETDIFF must be an OFFSET",
+                 "(22)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      e->ty = Type::fixedBin(31, 0);
+      return true;
+    }
+    if (!e->args[1]->ty.isNumeric() || e->args[1]->ty.isArray()) {
+      d_.error(e->args[1]->loc,
+               "the byte count of " + e->name + " must be a numeric scalar", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::offsetTy();
     return true;
   }
   // ADDR built-in (rule 123, Appendix 1; Y33-6003 BASED storage builtin;

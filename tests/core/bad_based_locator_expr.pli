@@ -10,7 +10,7 @@
    dcl slots(4) pointer;
    dcl nums(4) fixed bin(31);
    nums(1) = 5;
-   /* a non-pointer locator is rejected */
+   /* a non-locator is rejected */
    n = nums(1) -> view.fd;
    /* a non-based target is rejected */
    n = slots(1) -> tmpl.fd;

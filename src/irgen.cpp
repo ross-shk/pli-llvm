@@ -4059,6 +4059,14 @@ llvm::Value* IRGen::addressOf(Symbol* sym) {
       return b_.CreateLoad(b_.getPtrTy(), ctlAnchorSlot(sym), "ctl.anchor.load");
     return b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctladdr");
   }
+  // A STATIC AREA (rule (20)) lives for the whole program: create its region on
+  // first use, so a block allocated by one activation stays valid for the next
+  // and a later activation can FREE it. The slot is the module global.
+  if (sym->ty.isArea() && sym->isStatic && !sym->ty.isArray()) {
+    auto slot = symAddr_.find(sym);
+    if (slot != symAddr_.end())
+      b_.CreateCall(runtimeFn("pli_area_lazy"), {slot->second, i64(sym->areaSize)});
+  }
   // rule (8): an enclosing variable is reached through this frame's static
   // link; otherwise it is this frame's own storage (globals / allocas /
   // parameters). Both are recorded in symAddr_.
@@ -7231,8 +7239,11 @@ void IRGen::emitAllocate(HStmt* s) {
         areaE ? b_.CreateCall(runtimeFn("pli_area_alloc"), {emitExpr(areaE).reg, sz}, "aheap")
               : b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
     HExpr* set = (i < s->allocSet.size()) ? s->allocSet[i].get() : nullptr;
+    // The SET target is any assignable locator reference — a scalar, an array
+    // element (rule (22) arrays of OFFSET), or a member — so share the
+    // reference store used by GET.
     if (set)
-      storeTo(set->sym, Val{set->ty, p}, set->loc);
+      storeGetTarget(set, Val{set->ty, p}, set->loc);
     // ALLOCATE of a BASED variable also sets the variable's own BASED locator
     // (rule (88)), so references through the based name address the new cell.
     if (bsym->basedBase && (!set || bsym->basedBase != set->sym))
@@ -9002,6 +9013,19 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
              "(18)");
     return llvm::Constant::getNullValue(b_.getPtrTy());
   }
+  // A whole STATIC AREA array (rule (20)) rides by reference: the callee reads
+  // the element slots directly, so materialise every region first.
+  if (direct && a->sym->isStatic && a->sym->ty.isArray() &&
+      a->sym->ty.elementType().isArea()) {
+    llvm::Value* base = addressOf(a->sym);
+    llvm::ArrayType* at =
+        llvm::ArrayType::get(b_.getPtrTy(), (unsigned)arrayExtent(a->sym->ty));
+    for (long long i = 0, n = arrayExtent(a->sym->ty); i < n; ++i) {
+      llvm::Value* slot = b_.CreateInBoundsGEP(at, base, {i64(0), i64(i)}, "ar.slot");
+      b_.CreateCall(runtimeFn("pli_area_lazy"), {slot, i64(a->sym->areaSize)});
+    }
+    return base;
+  }
   if (direct)
     return addressOf(a->sym);
   if (memberDirect)
@@ -10509,6 +10533,13 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   Val v;
   const Type& el = sym->ty.isArray() ? sym->ty.elementType() : sym->ty;
   v.ty = el;
+  if (el.isArea() && sym->isStatic) {
+    // A STATIC AREA array (rule (20)): every element owns a program-lifetime
+    // region, created when that element is first used.
+    llvm::Value* addr = arrayElementAddr(sym->ty, addressOf(sym), idxs, loc);
+    v.reg = b_.CreateCall(runtimeFn("pli_area_lazy"), {addr, i64(sym->areaSize)}, "arealz");
+    return v;
+  }
   if (el.isChar()) {
     // Fixed CHARACTER element (rules (12),(18)): the value is a view of the
     // element's bytes. A VARYING element is a struct { i32 len, [N x i8] data }.
@@ -12444,6 +12475,32 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     v.reg = flt(e->name == "EPSILON" ? DBL_EPSILON
                 : e->name == "MAXVAL" ? DBL_MAX
                                       : DBL_MIN);
+    result = v;
+    return true;
+  }
+  // OFFSETADD/OFFSETSUBTRACT/OFFSETDIFF (Y33-6003, rule (22); ADR-311): an
+  // OFFSET is an absolute address (ADR-170), so moving it is a non-inbounds
+  // i8 GEP and the distance is a pointer-to-integer subtraction. The count
+  // converts through the ordinary numeric path to FIXED BIN(31,0), so a
+  // scaled decimal reconciles its scale before it is used as a byte count.
+  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" ||
+      e->name == "OFFSETDIFF") {
+    llvm::Value* x = emitExpr(e->args[0].get()).reg;
+    if (e->name == "OFFSETDIFF") {
+      llvm::Value* y = emitExpr(e->args[1].get()).reg;
+      llvm::Value* xa = b_.CreatePtrToInt(x, b_.getInt64Ty(), "offx");
+      llvm::Value* ya = b_.CreatePtrToInt(y, b_.getInt64Ty(), "offy");
+      v.ty = e->ty;
+      v.reg = b_.CreateTrunc(b_.CreateSub(xa, ya, "offdiff"), b_.getInt32Ty(), "offd");
+      result = v;
+      return true;
+    }
+    Val count = convert(emitExpr(e->args[1].get()), Type::fixedBin(31, 0), e->loc);
+    llvm::Value* n = toI64(count, e->loc);
+    if (e->name == "OFFSETSUBTRACT")
+      n = b_.CreateNeg(n, "offneg");
+    v.ty = e->ty;
+    v.reg = b_.CreateGEP(b_.getInt8Ty(), x, {n}, "off");
     result = v;
     return true;
   }

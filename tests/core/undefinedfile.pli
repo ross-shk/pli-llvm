@@ -1,0 +1,51 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (97): UNDEFINEDFILE(f) is raised by a failing OPEN, keyed by
+    the FILE variable, and a resume continues after the OPEN with the
+    file closed. A successful OPEN raises nothing. */
+ undefinedfile: procedure options(main);
+    declare missing file;
+    declare other file;
+    declare good file;
+    declare hm fixed bin(31) initial(0);
+    declare ho fixed bin(31) initial(0);
+    declare hg fixed bin(31) initial(0);
+
+    on undefinedfile(missing) hm = hm + 1;
+    on undefinedfile(other) ho = ho + 1;
+    on undefinedfile(good) hg = hg + 1;
+
+    /* a successful OPEN raises nothing, for output or for input */
+    open file(good) output title('tests/core/out/undefinedfile.dat');
+    put file(good) list('x');
+    close file(good);
+    open file(good) input title('tests/core/out/undefinedfile.dat');
+    if hg ^= 0 then do;
+       put skip list('FAIL undefinedfile: good open raised', hg);
+       stop;
+    end;
+
+    /* a missing input file raises only its own file's unit */
+    open file(missing) input
+       title('tests/core/out/undefinedfile_absent_a.dat');
+    if hm ^= 1 | ho ^= 0 then do;
+       put skip list('FAIL undefinedfile: first open', hm, ho);
+       stop;
+    end;
+
+    /* the unit is per file and stays established */
+    open file(other) input
+       title('tests/core/out/undefinedfile_absent_b.dat');
+    if hm ^= 1 | ho ^= 1 then do;
+       put skip list('FAIL undefinedfile: second open', hm, ho);
+       stop;
+    end;
+    open file(missing) input
+       title('tests/core/out/undefinedfile_absent_c.dat');
+    if hm ^= 2 | ho ^= 1 then do;
+       put skip list('FAIL undefinedfile: third open', hm, ho);
+       stop;
+    end;
+
+    put skip list('PASS undefinedfile');
+ end undefinedfile;
