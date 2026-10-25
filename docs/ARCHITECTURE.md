@@ -339,8 +339,9 @@ and to build, but not to switch.
 This table describes representation choices for supported forms, not a claim
 that every listed PL/I type or attribute is complete. `PICTURE`, label
 variables, and full entry descriptors remain limited or unimplemented; `AREA`
-and `OFFSET` serve automatic regions and their locators, while static areas,
-`AREA(*)`, and offset arithmetic remain out of scope. See the coverage ledger.
+and `OFFSET` serve automatic and static regions and their locators, including
+`AREA(*)` parameters and byte offset arithmetic, while EXTERNAL areas and
+arrays of offsets remain out of scope. See the coverage ledger.
 
 **Parameter passing.** PL/I arguments are generally passed by reference: the
 callee receives addresses. If an argument needs conversion, is an expression,

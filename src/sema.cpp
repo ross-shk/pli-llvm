@@ -6173,6 +6173,46 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     e->ty = Type::flt(6);
     return true;
   }
+  // OFFSETADD/OFFSETSUBTRACT/OFFSETDIFF (Y33-6003 builtins, rule (22)
+  // locators; ADR-311): byte arithmetic on an OFFSET. ADD/SUBTRACT move an
+  // offset by a numeric count (converted to FIXED BIN(31,0)) and yield an
+  // OFFSET; DIFF yields the FIXED BIN(31,0) byte distance between two
+  // offsets.
+  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" ||
+      e->name == "OFFSETDIFF") {
+    const bool diff = e->name == "OFFSETDIFF";
+    if (e->args.size() != 2) {
+      d_.error(e->loc,
+               e->name + (diff ? " expects 2 arguments (offset, offset)"
+                               : " expects 2 arguments (offset, bytes)"),
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isOffset()) {
+      d_.error(e->args[0]->loc, "the first argument to " + e->name + " must be an OFFSET",
+               "(22)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (diff) {
+      if (!e->args[1]->ty.isOffset()) {
+        d_.error(e->args[1]->loc, "the second argument to OFFSETDIFF must be an OFFSET",
+                 "(22)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      e->ty = Type::fixedBin(31, 0);
+      return true;
+    }
+    if (!e->args[1]->ty.isNumeric()) {
+      d_.error(e->args[1]->loc, "the byte count of " + e->name + " must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::offsetTy();
+    return true;
+  }
   // ADDR built-in (rule 123, Appendix 1; Y33-6003 BASED storage builtin;
   // IBM ADDR storage-control): yields the address of a variable as a
   // POINTER value. An array element (rules 123,126, wishlist #4) is a

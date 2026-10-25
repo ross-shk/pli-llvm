@@ -757,10 +757,21 @@ a later activation can free it:
  allocate slot in(a) set(pa);   /* the region outlives this activation */
 ```
 
+An offset can move by a byte count, and two offsets can be measured against each other — the way to walk a variable-length block when a structure does not describe every byte:
+
+```pli
+ dcl q offset(region);
+ q = offsetadd(pa, 4);          /* four bytes past the block */
+ if offsetdiff(q, pa) ^= 4 then put skip list('bad walk');
+```
+
+`offsetsubtract(q, n)` is `offsetadd(q, -n)`, and the count accepts a scaled decimal or a negative value. There is no bounds check.
+
 **Not yet**
 
-- External areas, arrays of offsets, and offset arithmetic are diagnosed.
-  An area declared as a structure member has no region yet.
+- External areas and arrays of offsets are diagnosed, and the `OFFSET`/
+  `OFFSETVALUE` conversion built-ins are not served. An area declared as a
+  structure member has no region yet.
 
 > **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.
 

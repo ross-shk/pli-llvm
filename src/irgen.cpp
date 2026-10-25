@@ -12336,6 +12336,32 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // OFFSETADD/OFFSETSUBTRACT/OFFSETDIFF (Y33-6003, rule (22); ADR-311): an
+  // OFFSET is an absolute address (ADR-170), so moving it is a non-inbounds
+  // i8 GEP and the distance is a pointer-to-integer subtraction. The count
+  // converts through the ordinary numeric path to FIXED BIN(31,0), so a
+  // scaled decimal reconciles its scale before it is used as a byte count.
+  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" ||
+      e->name == "OFFSETDIFF") {
+    llvm::Value* x = emitExpr(e->args[0].get()).reg;
+    if (e->name == "OFFSETDIFF") {
+      llvm::Value* y = emitExpr(e->args[1].get()).reg;
+      llvm::Value* xa = b_.CreatePtrToInt(x, b_.getInt64Ty(), "offx");
+      llvm::Value* ya = b_.CreatePtrToInt(y, b_.getInt64Ty(), "offy");
+      v.ty = e->ty;
+      v.reg = b_.CreateTrunc(b_.CreateSub(xa, ya, "offdiff"), b_.getInt32Ty(), "offd");
+      result = v;
+      return true;
+    }
+    Val count = convert(emitExpr(e->args[1].get()), Type::fixedBin(31, 0), e->loc);
+    llvm::Value* n = toI64(count, e->loc);
+    if (e->name == "OFFSETSUBTRACT")
+      n = b_.CreateNeg(n, "offneg");
+    v.ty = e->ty;
+    v.reg = b_.CreateGEP(b_.getInt8Ty(), x, {n}, "off");
+    result = v;
+    return true;
+  }
    if (e->name == "ADDR") {
      HExpr* a = e->args[0].get();
       if (a->kind == HExpr::VarRef && a->isLabel) {

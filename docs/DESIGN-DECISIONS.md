@@ -11317,3 +11317,44 @@ per-module teardown path and the process reclaims it; a static area is
 program-lifetime by definition. *Extending static storage to every variable.*
 Plain STATIC variables are still automatic (warned); serving them needs
 INITIAL-once, static-link and capture semantics, which is separate work.
+
+## ADR-311 — Offset arithmetic: `OFFSETADD`, `OFFSETSUBTRACT`, `OFFSETDIFF`
+
+**Context.** ADR-170 lowered an OFFSET to the same opaque address as a POINTER
+and kept arithmetic mixing diagnosed: `p + 4` on an OFFSET is not PL/I.
+Enterprise PL/I gives locator movement its own built-ins — `OFFSETADD(x,y)`
+adds a byte count to an offset, `OFFSETSUBTRACT(x,y)` is `OFFSETADD(x,-y)`, and
+`OFFSETDIFF(x,y)` returns the FIXED BINARY(31,0) byte distance between two
+offsets — and none were served. Reaching a field inside a block therefore meant
+declaring a BASED structure over the whole block. B5 still listed "offset
+arithmetic" as open.
+
+**Decision.** Sema types the three built-ins and checks their signatures:
+ADD/SUBTRACT take an OFFSET and a numeric byte count, DIFF takes two OFFSETs.
+The count converts through the ordinary numeric conversion to FIXED
+BINARY(31,0), so a scaled decimal (`4.0`) arrives as 4 and a negative count
+walks backwards. An OFFSET is an absolute address (ADR-170), so IRGen emits one
+non-inbounds `i8` GEP for ADD (the count negated for SUBTRACT) and a `ptrtoint`
+subtraction truncated to `i32` for DIFF. No runtime support is needed, and
+there is no bounds check, exactly as IBM specifies.
+
+**Consequences.** `offset_arith.pli` allocates one three-field block and
+reaches the second and third fields through `OFFSETADD`, walks back with
+`OFFSETSUBTRACT` and with a negative `OFFSETADD`, checks byte distances with
+`OFFSETDIFF`, converts a scaled decimal count and confirms that the null offset
+plus zero is still null. `bad_offset_arith.pli` pins arity (rule (123)), the
+OFFSET operand requirement (rule (22)) and the numeric count (rule (123)). B5
+moves offset arithmetic to served; EXTERNAL areas and arrays of OFFSET stay
+open. A CHARACTER or BIT count is diagnosed in this stage because the general
+string-to-number conversion is not served; numeric counts are. The conversion
+built-ins `OFFSET` (a pointer relative to an area) and `OFFSETVALUE` (an
+integer to an offset) also stay open: our offsets carry no area base, so
+address arithmetic cannot serve them faithfully.
+
+**Rejected.** *Defining `+`/`-` on OFFSET operands.* IBM spells locator
+arithmetic with the built-ins, and ADR-170's rule that arithmetic mixing stays
+diagnosed is unchanged. *Returning a POINTER.* The result is still a locator
+into the same area, so the OFFSET type is kept and assignment to a POINTER
+stays an explicit locator conversion. *An inbounds GEP.* The moved address may
+point outside the allocated block (IBM does not require the result to stay
+inside), so `inbounds` would promise more than the language does.
