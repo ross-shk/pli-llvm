@@ -31,6 +31,25 @@ static bool isAreaRef(const Expr* e) {
          !e->ty.isArray();
 }
 
+// Synthesize a VarRef to an AREA symbol for an implicit IN option (ADR-313).
+static ExprP makeAreaRef(Symbol* area, SourceLoc loc) {
+  auto e = std::make_unique<Expr>();
+  e->kind = Expr::VarRef;
+  e->loc = loc;
+  e->name = area->name;
+  e->sym = area;
+  e->ty = area->ty;
+  return e;
+}
+
+// Record an implicit IN ( area ) expression on an ALLOCATE or FREE item.
+static Expr* setImplicitArea(std::vector<ExprP>& areas, size_t i, Symbol* area, SourceLoc loc) {
+  if (i >= areas.size())
+    areas.resize(i + 1);
+  areas[i] = makeAreaRef(area, loc);
+  return areas[i].get();
+}
+
 // FNV-1a 32-bit hash — deterministic per-name so all compilation units agree
 // on the integer key for a given name (cross-object SIGNAL and CONTROLLED slot
 // assignment). Defined below; forward-declared for the earlier DECLARE pass.
@@ -1616,6 +1635,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         for (int c : children[idx]) {
           std::vector<unsigned> cp = path;
           cp.push_back(fi);
+          // An AREA member has no region of its own in this stage; accepting it
+          // would allocate from a null region (rule (20)).
+          if (items[c]->area)
+            d_.error(items[c]->loc,
+                     "an AREA structure member is not implemented in this stage",
+                     "(20)");
           Type ct = buildType(c, cp, dynMs, unaligned);
           if (ct.isArray() && ct.isDynamic()) {
             // A dynamic array member (rule 13): resolve its bound expressions so
@@ -2078,8 +2103,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (item.offset) {
           if (!item.offsetRef.empty()) {
             Symbol* ar = lookup(sc, item.offsetRef);
-            if (ar && ar->ty.isArea())
+            if (ar && ar->ty.isArea() && !ar->ty.isArray())
               item.sym->offsetArea = ar;
+            else if (ar && ar->ty.isArea())
+              d_.error(item.loc,
+                       "OFFSET(" + item.offsetRef +
+                           ") requires a scalar AREA variable, not a whole array",
+                       "(22)");
             else
               d_.error(item.loc, "OFFSET(" + item.offsetRef + ") requires an AREA variable",
                        "(22)");
@@ -4606,18 +4636,27 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                        ? "an AREA array names one region only through a subscript, e.g. ar(1)"
                        : "the IN target of ALLOCATE must be an AREA variable",
                    "(88)");
-        else if (bsym->basedBase && bsym->basedBase->ty.isOffset() && bsym->basedBase->offsetArea &&
-                 bsym->basedBase->offsetArea != areaE->sym)
-          d_.error(areaE->loc, "the IN area does not match the OFFSET association", "(22)");
       }
-      // BASED without SET is served only with the IN ( area ) option (rule (88)):
-      // the block address lands in the based variable's own locator. A plain
-      // heap ALLOCATE of BASED storage still requires SET, and an unconnected
-      // bare-BASED variable has no own locator, so it always requires SET.
+      // BASED without SET is served with IN ( area ), or with an OFFSET locator
+      // whose declaration names the default area (ADR-313): the block address
+      // lands in the based variable's own locator. A plain heap ALLOCATE of
+      // BASED storage still requires SET.
       if (i >= s->allocSet.size() || !s->allocSet[i]) {
-        if (!areaE || bsym->basedNoPtr)
-          d_.error(s->allocBase[i]->loc,
-                   "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
+        if (!areaE && bsym->basedBase && bsym->basedBase->ty.isOffset() &&
+            !bsym->basedBase->ty.isArray() && bsym->basedBase->offsetArea)
+          areaE = setImplicitArea(s->allocArea, i, bsym->basedBase->offsetArea,
+                                  s->allocBase[i]->loc);
+        if (!areaE || bsym->basedNoPtr) {
+          if (!bsym->basedNoPtr && bsym->basedBase &&
+              bsym->basedBase->ty.isOffset() && !bsym->basedBase->ty.isArray())
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE of an OFFSET-based variable without IN requires the offset to be "
+                     "declared with an AREA",
+                     "(88)");
+          else
+            d_.error(s->allocBase[i]->loc,
+                     "ALLOCATE of BASED storage requires the SET ( reference ) option", "(88)");
+        }
       } else {
         typeExpr(s->allocSet[i].get(), sc, p);
         // The SET target is any assignable locator reference: a scalar
@@ -4630,11 +4669,21 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           d_.error(tgt->loc,
                    "the SET target of ALLOCATE must be a POINTER or OFFSET variable or element",
                    "(88)");
-        // An OFFSET target has no heap meaning: the block must come from the
-        // AREA the offset locates (Y33-6003, rule (88)).
-        else if (tgt->ty.isOffset() && !areaE)
-          d_.error(tgt->loc,
-                   "ALLOCATE with a SET OFFSET target requires the IN ( area ) option", "(88)");
+        // An OFFSET target has no heap meaning: without IN the block comes
+        // from the AREA the offset was declared with (ADR-313).
+        else if (tgt->ty.isOffset() && !areaE) {
+          if (tgt->sym && tgt->sym->offsetArea)
+            areaE = setImplicitArea(s->allocArea, i, tgt->sym->offsetArea, tgt->loc);
+          else if (!tgt->path.empty())
+            d_.error(tgt->loc,
+                     "an OFFSET member SET target without IN is not implemented in this stage",
+                     "(88)");
+          else
+            d_.error(tgt->loc,
+                     "an OFFSET SET target without IN requires the offset to be declared with an "
+                     "AREA",
+                     "(88)");
+        }
       }
     }
     break;
@@ -4676,14 +4725,45 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           ((!f->locPtr->ty.isPointer() && !f->locPtr->ty.isOffset()) ||
            f->locPtr->ty.isArray()))
         d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER or OFFSET", "(90)");
-      if (i < s->freeArea.size() && s->freeArea[i]) {
-        typeExpr(s->freeArea[i].get(), sc, p);
-        if (!isAreaRef(s->freeArea[i].get()))
-          d_.error(s->freeArea[i]->loc,
-                   s->freeArea[i]->ty.isArea()
+      // IN ( area ) (rule (90)): return the block to the named AREA region.
+      // Without IN, an OFFSET locator or the based variable's own OFFSET base
+      // supplies its declared AREA as the default; a POINTER keeps the heap
+      // FREE (ADR-313).
+      Expr* areaE = (i < s->freeArea.size()) ? s->freeArea[i].get() : nullptr;
+      if (areaE) {
+        typeExpr(areaE, sc, p);
+        if (!isAreaRef(areaE))
+          d_.error(areaE->loc,
+                   areaE->ty.isArea()
                        ? "an AREA array names one region only through a subscript, e.g. ar(1)"
                        : "the IN target of FREE must be an AREA variable",
                    "(90)");
+      } else {
+        const Type* offTy = nullptr;
+        Symbol* offSym = nullptr;
+        const Expr* offExpr = nullptr;
+        if (f->locPtr) {
+          offTy = &f->locPtr->ty;
+          offSym = f->locPtr->sym;
+          offExpr = f->locPtr.get();
+        } else if (bsym && bsym->basedBase) {
+          offTy = &bsym->basedBase->ty;
+          offSym = bsym->basedBase;
+        }
+        if (offTy && offTy->isOffset() && !offTy->isArray()) {
+          if (offSym && offSym->offsetArea)
+            setImplicitArea(s->freeArea, i, offSym->offsetArea,
+                            offExpr ? offExpr->loc : f->loc);
+          else if (offExpr && !offExpr->path.empty())
+            d_.error(offExpr->loc,
+                     "FREE of an OFFSET member without IN is not implemented in this stage",
+                     "(90)");
+          else
+            d_.error(offExpr ? offExpr->loc : f->loc,
+                     "FREE of an OFFSET without IN requires the offset to be declared with an "
+                     "AREA",
+                     "(90)");
+        }
       }
     }
     break;

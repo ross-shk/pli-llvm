@@ -1,9 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Rules (22),(88),(124): declaring an array of OFFSET does not make
-    the whole array a SET target or a `->` locator, a heap SET of an
+    the whole array a SET target or a `->` locator, an unassociated
     OFFSET needs an IN area, an OFFSET element cannot qualify a
-    non-BASED name, and the area association is still checked. Each
+    non-BASED name, and a non-AREA association is diagnosed. Each
     statement must fail with its rule cite. */
  bad_offset_array: procedure options(main);
    dcl region area(4096);
@@ -16,7 +16,7 @@
    dcl 1 rec based(prec),
        2 v fixed bin(31);
    allocate rec in(region) set(slots);  /* whole array (88) */
-   allocate rec set(heap);              /* OFFSET needs IN (88) */
+   allocate rec set(heap);              /* unassociated needs IN (88) */
    n = slots -> rec.v;                  /* whole array (124) */
    after = offsetadd(slots, 4);         /* whole array (22) */
    n = slots(1) -> n;                   /* n is not BASED (124) */

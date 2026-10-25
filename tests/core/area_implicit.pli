@@ -1,0 +1,65 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (22),(88),(90): an OFFSET's AREA is the default region for
+    ALLOCATE and FREE. An explicit IN overrides it, and a FREE without
+    IN uses the locator's or the based variable's area. */
+ area_implicit: procedure options(main);
+   dcl region area(4096);
+   dcl other  area(4096);
+   dcl pa offset(region);
+   dcl p0 offset(region);
+   dcl slots(2) offset(region);
+   dcl 1 rec based(pa),
+       2 v fixed bin(31);
+   dcl 1 r0 based(p0),
+       2 v fixed bin(31);
+   dcl 1 r1 based(pa),
+       2 v fixed bin(31);
+
+   /* no SET, no IN: the based variable's own OFFSET names the region */
+   allocate rec;
+   rec.v = 11;
+   if rec.v ^= 11 then do;
+      put skip list('FAIL area_implicit: implicit allocate', rec.v);
+      stop;
+   end;
+   free rec;
+
+   /* SET without IN: the SET offset's declared region */
+   allocate r0 set(p0);
+   r0.v = 22;
+   if p0 -> r0.v ^= 22 then do;
+      put skip list('FAIL area_implicit: implicit SET', p0 -> r0.v);
+      stop;
+   end;
+   free p0 -> r0;
+
+   /* an element of an OFFSET array carries the same association */
+   allocate r1 set(slots(1));
+   slots(1) -> r1.v = 33;
+   if slots(1) -> r1.v ^= 33 then do;
+      put skip list('FAIL area_implicit: element', slots(1) -> r1.v);
+      stop;
+   end;
+   free slots(1) -> r1;
+
+   /* an explicit IN wins over the association (it is not permanent) */
+   allocate rec in(other);
+   rec.v = 44;
+   if rec.v ^= 44 then do;
+      put skip list('FAIL area_implicit: explicit IN', rec.v);
+      stop;
+   end;
+   free rec in(other);
+
+   /* explicit IN on SET and FREE, even when the associations differ */
+   allocate r1 in(other) set(slots(2));
+   slots(2) -> r1.v = 55;
+   if slots(2) -> r1.v ^= 55 then do;
+      put skip list('FAIL area_implicit: override', slots(2) -> r1.v);
+      stop;
+   end;
+   free slots(2) -> r1 in(other);
+
+   put skip list('PASS area_implicit');
+ end area_implicit;

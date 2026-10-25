@@ -11400,3 +11400,72 @@ not a block; the checks spell out POINTER or OFFSET rather than using
 `isLocator()`, which also accepts AREA. *Keeping the POINTER-only rule.* An
 OFFSET is a locator by rule (22); refusing it forced a scalar copy of every
 element.
+
+## ADR-313 — An `OFFSET`'s declared `AREA` is a default, not a constraint
+
+**Context.** ADR-312 read the optional AREA in `OFFSET(area)` as a constraint
+and required `IN ( area )` on every ALLOCATE whose SET target is an OFFSET; it
+also recorded a matching check as still open. IBM's semantics are the other
+way around: the declaration supplies the *default* region. The language
+reference says storage is allocated in an area "when the IN option is
+specified or when the SET option specifies an offset variable", and "if you
+use an offset variable without the IN option, you must specify an area
+reference in the declaration of the offset variable." Its own example makes
+`dcl X based(O), A area, O offset(A); allocate X;` equivalent to
+`allocate X in(A) set(O);`. The association is "not permanent": an offset can
+be associated with another area through the `POINTER` built-in, and an
+explicit `IN` may name a different area (the programmer ensures the locator is
+valid). FREE follows the same rule: `IN` may be omitted when the based
+variable is qualified by an offset with an associated area.
+
+Two concrete failures prompted this correction. `free s;` on a block
+allocated `in(region)` aborted (exit 133) because FREE had no area expression
+and fell back to `pli_free` on a region address. And an AREA declared as a
+structure member was accepted, but no region was ever created for it, so
+`IN (s.a)` handed the runtime a null region.
+
+**Decision.** Sema treats the declared association as a default, not a
+constraint:
+
+- ALLOCATE with no `IN` and an OFFSET SET target, or an OFFSET-based variable
+  with no SET, synthesizes the area expression from the offset's declared
+  AREA. An OFFSET without an association in either position is diagnosed with
+  rule (88).
+- FREE with no `IN` synthesizes the AREA from an associated OFFSET locator, or
+  from an associated OFFSET based base. An unassociated OFFSET in either
+  position is diagnosed with rule (90); a POINTER still frees to the heap, so
+  the user names `IN` when that pointer addresses an area block.
+- An explicit `IN` is used as written. The old based-base check ("the IN area
+  does not match the OFFSET association") is removed; no match check is added
+  for the SET target or the FREE locator. The association can change at run
+  time through `POINTER(offset, area)`, so a compile-time mismatch is not an
+  error.
+- `OFFSET(area)` rejects a whole AREA array: the association names one region,
+  and an array is a buffer of regions.
+- An AREA structure member is diagnosed with rule (20) instead of allocating
+  from a null region.
+- A member OFFSET's declared association is not recorded (members carry types,
+  not Symbols), so a member SET or FREE without `IN` is diagnosed as
+  unimplemented (88)/(90) rather than guessed. The explicit `IN` form works.
+
+**Consequences.** `area_implicit.pli` covers bare `allocate rec`, `set(p0)`
+without `IN`, an OFFSET array element, an explicit `IN` that overrides the
+association, and SET/FREE with an explicit area different from the offset's.
+`bad_area_offset.pli` pins the AREA member (20), a whole AREA array
+association (22), unassociated SET/FREE (88)/(90), member SET/FREE (88)/(90),
+and non-AREA `IN` targets (88)/(90). `area_offset.pli`, `offset_array.pli`,
+the static-area tests and `area_offset_edge.pli` keep their matching explicit
+`IN` forms and are unchanged. ADR-312's blanket requirement is superseded;
+`bad_offset_array.pli` still fails because its `heap` OFFSET has no
+association. B5 now has only EXTERNAL areas and the `OFFSET`/`OFFSETVALUE`
+conversions open.
+
+**Rejected.** *Keeping the blanket `IN` requirement.* It rejects valid IBM
+code such as `allocate X;` with `X based(O)`, `O offset(A)`. *Diagnosing an
+`IN` that differs from the declared association.* The association is a
+default and can be changed with `POINTER`; IBM leaves validity to the
+programmer. *Falling back to heap FREE for an unassociated OFFSET.* It crashed
+on an area block and contradicts the OFFSET rule that a bare offset is used
+only through `POINTER()`. *Recording member associations now.* That needs a
+Symbol per member, or a new metadata field on `Member`, and is a larger
+change; the diagnosed limitation is honest and the explicit `IN` form works.

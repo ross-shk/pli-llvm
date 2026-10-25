@@ -737,6 +737,8 @@ An `area` is a memory pool for `based` allocation; an `offset` is an opaque loca
  pa = null();
 ```
 
+When an offset names its area (`offset(region)`), `allocate ... set(...)` without `in(...)` takes the block from that area, and `free` without `in(...)` returns it there. An explicit `in(...)` wins; an offset declared without an area needs `in(...)`.
+
 An `area` parameter can take any size: `dcl a area(*)` inherits the size from the argument, so the callee allocates in the caller's region.
 
 An array of areas gives every element its own region — handy for a fixed set of pools:
@@ -781,9 +783,9 @@ An array of offsets holds several blocks from one region. Each element is a full
 **Not yet**
 
 - External areas are diagnosed, and the `OFFSET`/`OFFSETVALUE` conversion
-  built-ins are not served. An offset associated with one area can still be
-  set from a different `IN` area (the association is not checked yet). An area
-  declared as a structure member has no region yet.
+  built-ins are not served. An area declared as a structure member is
+  diagnosed with rule (20). A member OFFSET's declared area is not recorded,
+  so a member `set(...)` or `free` needs an explicit `in(...)`.
 
 > **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.
 

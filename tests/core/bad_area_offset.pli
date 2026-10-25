@@ -1,13 +1,27 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* AREA/OFFSET errors (rules (20),(22),(88)): OFFSET must name an
-    AREA, the IN target of ALLOCATE must be an AREA, and a STATIC
-    AREA is not served. All are sema diagnostics, so they coexist. */
+ /* AREA/OFFSET errors (rules (20),(22),(88),(90)): OFFSET must name a
+    scalar AREA, an OFFSET SET or FREE without IN needs a declared AREA,
+    member associations are not recorded, an AREA structure member is
+    not served, and IN must name an AREA. All are sema diagnostics, so
+    they coexist. */
  bad_area_offset: procedure options(main);
    dcl x fixed bin(31);
-   dcl p offset(x);            /* x is not an AREA (22) */
-   dcl 1 rec based(p),
+   dcl a area(100);
+   dcl pools(2) area(100);
+   dcl p offset(x);               /* x is not an AREA (22) */
+   dcl parr offset(pools);        /* whole AREA array (22) */
+   dcl heap offset;               /* no area association */
+   dcl ptr pointer;
+   dcl 1 rec based(ptr),
        2 v fixed bin(31);
-   allocate rec in(x);         /* x is not an AREA (88) */
-   dcl s static area;          /* a STATIC AREA is not served (20) */
+   dcl 1 holder,
+       2 reg area(100),           /* an AREA member (20) */
+       2 hp offset(a);            /* member association not recorded */
+   allocate rec set(heap);        /* unassociated needs IN (88) */
+   free heap -> rec;              /* ... and an area to free to (90) */
+   allocate rec set(holder.hp);   /* member unknown (88) */
+   free holder.hp -> rec;         /* ... same on FREE (90) */
+   allocate rec in(x);            /* x is not an AREA (88) */
+   free rec in(x);                /* x is not an AREA (90) */
  end bad_area_offset;

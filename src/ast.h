@@ -330,11 +330,11 @@ struct Stmt {
   // before the unit runs; null when absent.
   ExprP oncodeExpr;
   // ALLOCATE (rule 87): per based-allocate-item, the based variable reference
-  // (a VarRef to a based structure) and its SET(...) pointer target (rule 88;
-  // allocSet[i] is a VarRef to a POINTER). A CONTROLLED item (rule 89) may
-  // carry a dimension-attribute bound list (allocBounds[i], one entry per
-  // axis: an extent expression `ub`, an explicit `*` reuse, or an `lb:ub`
-  // pair) and/or a CHAR length (allocCharLen[i]); allocVarying[i]/
+  // (a VarRef to a based structure) and its SET(...) locator target (rule 88;
+  // a POINTER or OFFSET variable, element, or member). A CONTROLLED item
+  // (rule 89) may carry a dimension-attribute bound list (allocBounds[i], one
+  // entry per axis: an extent expression `ub`, an explicit `*` reuse, or an
+  // `lb:ub` pair) and/or a CHAR length (allocCharLen[i]); allocVarying[i]/
   // allocHasChar[i] record the trailing CHARACTER/VARYING keywords. An empty
   // bound list = bare ALLOCATE with no dimension.
   struct AllocBound {
@@ -349,13 +349,16 @@ struct Stmt {
   std::vector<char> allocVarying;
   std::vector<char> allocHasChar;
   // ALLOCATE ... IN ( area ) (rule (88)): the AREA variable the block is
-  // allocated from; null = the default heap (pli_alloc).
+  // allocated from; null = the default heap (pli_alloc). Sema fills it from
+  // the declared AREA of an OFFSET base or SET target when IN is omitted
+  // (ADR-313).
   std::vector<ExprP> allocArea;
   // FREE (rule 90): per item, the based variable reference. An explicit locator
   // is carried on freeBase[i]->locPtr; null means the BASED base pointer.
   std::vector<ExprP> freeBase;
   // FREE ... IN ( area ) (rule (90)): the AREA the block is returned to;
-  // null = the default heap (pli_free).
+  // null = the default heap (pli_free). Sema fills it from the declared AREA
+  // of an OFFSET locator or based base when IN is omitted (ADR-313).
   std::vector<ExprP> freeArea;
 };
 
