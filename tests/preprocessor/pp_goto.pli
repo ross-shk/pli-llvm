@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Chapter 9 (ADR-316): %GOTO skips code; %LABEL targets %GOTO jumps.
+   %GO TO (two-word form) is equivalent to %GOTO. */
+%declare flag;
+%flag = 0;
+pp_goto: procedure options(main);
+  %if flag = 0 %then %goto skip;
+  put skip list('should not print');
+  %skip:;
+  put skip list('PASS pp_goto');
+end pp_goto;

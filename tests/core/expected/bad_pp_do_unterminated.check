@@ -1,0 +1,1 @@
+CHECK: bad_pp_do_unterminated.pli:6:{{[0-9]+}}: error: unterminated %DO

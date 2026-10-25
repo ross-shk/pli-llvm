@@ -31,7 +31,7 @@ static bool isAreaRef(const Expr* e) {
          !e->ty.isArray();
 }
 
-// Synthesize a VarRef to an AREA symbol for an implicit IN option (ADR-313).
+// Synthesize a VarRef to an AREA symbol for an implicit IN option (ADR-317).
 static ExprP makeAreaRef(Symbol* area, SourceLoc loc) {
   auto e = std::make_unique<Expr>();
   e->kind = Expr::VarRef;
@@ -4638,7 +4638,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                    "(88)");
       }
       // BASED without SET is served with IN ( area ), or with an OFFSET locator
-      // whose declaration names the default area (ADR-313): the block address
+      // whose declaration names the default area (ADR-317): the block address
       // lands in the based variable's own locator. A plain heap ALLOCATE of
       // BASED storage still requires SET.
       if (i >= s->allocSet.size() || !s->allocSet[i]) {
@@ -4670,7 +4670,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                    "the SET target of ALLOCATE must be a POINTER or OFFSET variable or element",
                    "(88)");
         // An OFFSET target has no heap meaning: without IN the block comes
-        // from the AREA the offset was declared with (ADR-313).
+        // from the AREA the offset was declared with (ADR-317).
         else if (tgt->ty.isOffset() && !areaE) {
           if (tgt->sym && tgt->sym->offsetArea)
             areaE = setImplicitArea(s->allocArea, i, tgt->sym->offsetArea, tgt->loc);
@@ -4728,7 +4728,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // IN ( area ) (rule (90)): return the block to the named AREA region.
       // Without IN, an OFFSET locator or the based variable's own OFFSET base
       // supplies its declared AREA as the default; a POINTER keeps the heap
-      // FREE (ADR-313).
+      // FREE (ADR-317).
       Expr* areaE = (i < s->freeArea.size()) ? s->freeArea[i].get() : nullptr;
       if (areaE) {
         typeExpr(areaE, sc, p);

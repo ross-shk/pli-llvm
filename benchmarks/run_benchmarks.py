@@ -206,6 +206,9 @@ def _find_pli() -> Path:
 
 PLI = Path(os.environ.get("PLI", str(_find_pli())))
 CC = os.environ.get("CC", _default_cc())
+# The C twin follows the PL/I target policy by default; --c-native
+# builds it for the host CPU instead (see _c_policy_flags).
+C_NATIVE = False
 RESULTS_DIR = BENCHMARK_DIR / "results"
 BIN_DIR = RESULTS_DIR / "bin"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -386,12 +389,26 @@ def _stack_flags() -> List[str]:
     return []
 
 
-def _arch_flags() -> List[str]:
-    # -march=x86-64 is only valid on x86_64 hosts; ARM (e.g. macOS arm64
-    # runners) and other arches must not receive it.
-    if platform.machine() in ("x86_64", "AMD64", "x64"):
-        return ["-march=x86-64"]
-    return []
+def _c_policy_flags() -> List[str]:
+    """Flags that make the C twin match the PL/I build's target policy.
+
+    The C twin must be built for the same CPU and floating-point policy as
+    the PL/I output. The driver targets LLVM's generic CPU (src/target.cpp)
+    and does not contract FP operations, so C gets the generic CPU and
+    -ffp-contract=off. Without this the C baseline would get the host's
+    native tuning (e.g. apple-m1) and fused multiply-adds, and the ratio
+    would price the target policy rather than code generation.
+    """
+    machine = platform.machine().lower()
+    flags: List[str] = []
+    if not C_NATIVE:
+        if machine in ("x86_64", "amd64", "x64"):
+            flags.append("-march=x86-64")
+        elif machine in ("arm64", "aarch64"):
+            flags.append("-mcpu=generic")
+    # PL/I does not contract FP operations, so neither does its C twin.
+    flags.append("-ffp-contract=off")
+    return flags
 
 
 def publish_effects(bench_name: str) -> Optional[Path]:
@@ -441,7 +458,7 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
     if compiler is None:
         compiler = CC
     src = BENCHMARK_DIR / c_file
-    cmd = [compiler, opt] + _arch_flags() + [str(src), "-o", str(output)]
+    cmd = [compiler, opt] + _c_policy_flags() + [str(src), "-o", str(output)]
     cmd.extend(_stack_flags())
     if bench_name in BENCHMARKS_REQUIRING_MATH and not IS_WINDOWS:
         # -lm is POSIX-only; on Windows the math routines live in the CRT,
@@ -694,7 +711,7 @@ def manifest_mismatch(current: Dict, previous: Dict) -> Optional[str]:
         return "previous run has no manifest (pre-v2 results)"
     for key in ("benchmarks", "opt_levels", "runs", "warmup",
                 "checks_forced", "extra_pli_flags", "pli_flags",
-                "platform"):
+                "c_flags", "platform"):
         if prev.get(key) != current.get(key):
             return f"manifest differs on {key}"
     return None
@@ -756,6 +773,7 @@ def build_manifest(pli: Path, cc_cmd: str, benches: List[Tuple],
         "pli_binary": str(pli),
         "pli_sha256": sha256_file(pli),
         "cc": cc_cmd,
+        "c_flags": _c_policy_flags(),
         "pinning": PINNING,
         "platform": platform.platform(aliased=True),
         "sources": sources,
@@ -824,6 +842,9 @@ def main():
                              "identical stdout to the default run (P1.7)")
     parser.add_argument("--runs", type=int, default=RUNS_PER_BENCH,
                         help="timed runs per benchmark (default: %(default)s)")
+    parser.add_argument("--c-native", action="store_true",
+                        help="build the C twin for the host CPU instead of the "
+                             "PL/I target policy (default: matched generic CPU)")
     parser.add_argument("--cc", type=str, default=None,
                         help="C compiler to use (overrides CC env var, "
                              "default: clang on Unix/macOS, clang.exe on Windows)")
@@ -842,6 +863,8 @@ def main():
                              f"({len(IR_BENCHMARKS)} in ir/, "
                              f"{len(LANG_BENCHMARKS)} in lang/)")
     args = parser.parse_args()
+    global C_NATIVE
+    C_NATIVE = args.c_native
 
     # Reject nonsensical sample counts before touching the filesystem: a run
     # with zero timed samples has no median to report.

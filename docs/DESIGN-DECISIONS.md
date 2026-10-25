@@ -11114,7 +11114,6 @@ references, which is the whole point of the form.
 
 ---
 
-<<<<<<< HEAD
 ## ADR-308 — `ABNORMAL`/`NORMAL`: a declared return point for an entry
 
 **Context.** Entry-name-attributes (rule (38)) include `ABNORMAL(label-name)`
@@ -11157,66 +11156,6 @@ a cited diagnostic instead of jumping into a possibly inactive block. *Making
 `ABNORMAL` a property of the called procedure rather than of the entry name.* It
 is an entry attribute: the same body reached through a different, `NORMAL`
 entry must still return normally.
-=======
-## ADR-308 — The POSIX fiber stack comes from an arena and grows in chunks (amends ADR-236, ADR-239)
-
-**Context.** ADR-236 gave Windows a stack arena and ADR-239 made a Windows
-fiber stack grow in chunks; POSIX was left with the older shape: every fiber
-stack was its own `mmap` of the *whole* ceiling, read-write, plus an
-`mprotect` guard and an entry in a 4096-slot guard table the signal handler
-scanned linearly. Fan-out of twenty thousand live tasks therefore made
-twenty thousand kernel reservations, twenty thousand guard entries (the
-table overflows at 4096, after which an overflow on a later stack was a bare
-crash) and twenty thousand read-write mappings, so the kernel had to build a
-page-table entry per fiber's ceiling rather than per touched page. The
-benchmark read 13.4 us/task, 24.8x Go.
-
-**Decision.** POSIX now uses the Windows design: an arena of stack slots
-(one `mmap`, `RT_ARENA_SLOTS` slots of `usable + page`), reserved
-`PROT_NONE` and committed as the stack grows. `pli_plat_stack_alloc` takes a
-slot from the arena's free list and commits only the top chunk (64 KiB);
-every page below it stays uncommitted until something touches it. A fault
-below the committed part of a slot makes the signal handler commit the
-chunks from the top down to the faulting chunk and return, so the faulting
-instruction is re-executed. The handler names the slot by arithmetic from
-the arena base, so it searches no table: the arenas are one lock-free list,
-and the 4096-entry guard table is gone. A fault below the slot's usable
-region, or in its bottom chunk, is the stack running out, and is reported as
-it was before (ADR-237). A released slot goes back to its arena with its
-pages still committed, so the next task that takes it pays no fault.
-
-**Measurements** (macOS 26 arm64, 20 000 tasks, 21 interleaved runs, median;
-`benchmarks/run_tasking_bench.py` binaries):
-
-| Workload | before (mmap per stack) | after (arena + chunks) | Go |
-|---|---|---|---|
-| fan-out / fan-in | 13 364 ns/task (24.8x Go) | **6 997 ns/task (13.0x Go)** | 539 ns/task |
-| the task lifecycle | 495.8 ns/task (0.70x Go) | 495.8 ns/task (0.70x Go) | 707 ns/task |
-
-The lifecycle is unchanged, as it should be: it recycles stacks from the
-fiber pool, so it never paid the reservation. Fan-out is 1.9x faster, and
-the ceiling no longer sets the price - an 8 MiB ceiling used to cost about
-7 us more per fiber than a 128 KiB one, and now costs nothing at all.
-
-**Consequences.** The remaining fan-out cost is memory, not scheduling: a
-live fiber still has to touch one page of its own stack (16 KiB on Apple
-silicon), so twenty thousand live tasks hold ~320 MiB of zero-filled stack,
-where Go's 2 KiB goroutine stacks hold ~40 MiB. Closing that gap needs
-stacks that start small and *move* when they grow, which needs the compiler
-to emit stack maps for the fibers' frames; it is not a runtime change, and it
-is not attempted here. `tests/driver/task_stack_overflow.sh` pins the
-overflow report on one and on four workers, and `task_grow.pli` pins a task
-whose frame skips past several chunks at once.
-
-**Rejected.** *Map the whole ceiling read-write, as before, but from an
-arena.* It was measured at 9 046 ns/task: the kernel builds page tables for
-a read-write region per fiber, and that per-fiber work was most of the cost.
-*Commit a page at a time instead of a chunk.* Measured at 7 268 ns/task, no
-better than the chunk, and it triples the number of growth faults a
-recursive task takes. *Copy the stack on growth, the way Go does.* See
-above: it needs compiler support, and a half-done version silently corrupts
-every pointer into a moved stack.
->>>>>>> 19944e3 (Enhance fiber stack management and bit manipulation tests)
 
 ---
 
@@ -11401,7 +11340,180 @@ not a block; the checks spell out POINTER or OFFSET rather than using
 OFFSET is a locator by rule (22); refusing it forced a scalar copy of every
 element.
 
-## ADR-313 — An `OFFSET`'s declared `AREA` is a default, not a constraint
+---
+
+---
+
+## ADR-313 — The POSIX fiber stack comes from an arena and grows in chunks (amends ADR-236, ADR-239)
+
+**Context.** ADR-236 gave Windows a stack arena and ADR-239 made a Windows
+fiber stack grow in chunks; POSIX was left with the older shape: every fiber
+stack was its own `mmap` of the *whole* ceiling, read-write, plus an
+`mprotect` guard and an entry in a 4096-slot guard table the signal handler
+scanned linearly. Fan-out of twenty thousand live tasks therefore made
+twenty thousand kernel reservations, twenty thousand guard entries (the
+table overflows at 4096, after which an overflow on a later stack was a bare
+crash) and twenty thousand read-write mappings, so the kernel had to build a
+page-table entry per fiber's ceiling rather than per touched page. The
+benchmark read 13.4 us/task, 24.8x Go.
+
+**Decision.** POSIX now uses the Windows design: an arena of stack slots
+(one `mmap`, `RT_ARENA_SLOTS` slots of `usable + page`), reserved
+`PROT_NONE` and committed as the stack grows. `pli_plat_stack_alloc` takes a
+slot from the arena's free list and commits only the top chunk (64 KiB);
+every page below it stays uncommitted until something touches it. A fault
+below the committed part of a slot makes the signal handler commit the
+chunks from the top down to the faulting chunk and return, so the faulting
+instruction is re-executed. The handler names the slot by arithmetic from
+the arena base, so it searches no table: the arenas are one lock-free list,
+and the 4096-entry guard table is gone. A fault below the slot's usable
+region, or in its bottom chunk, is the stack running out, and is reported as
+it was before (ADR-237). A released slot goes back to its arena with its
+pages still committed, so the next task that takes it pays no fault.
+
+**Measurements** (macOS 26 arm64, 20 000 tasks, 21 interleaved runs, median;
+`benchmarks/run_tasking_bench.py` binaries):
+
+| Workload | before (mmap per stack) | after (arena + chunks) | Go |
+|---|---|---|---|
+| fan-out / fan-in | 13 364 ns/task (24.8x Go) | **6 997 ns/task (13.0x Go)** | 539 ns/task |
+| the task lifecycle | 495.8 ns/task (0.70x Go) | 495.8 ns/task (0.70x Go) | 707 ns/task |
+
+The lifecycle is unchanged, as it should be: it recycles stacks from the
+fiber pool, so it never paid the reservation. Fan-out is 1.9x faster, and
+the ceiling no longer sets the price - an 8 MiB ceiling used to cost about
+7 us more per fiber than a 128 KiB one, and now costs nothing at all.
+
+**Consequences.** The remaining fan-out cost is memory, not scheduling: a
+live fiber still has to touch one page of its own stack (16 KiB on Apple
+silicon), so twenty thousand live tasks hold ~320 MiB of zero-filled stack,
+where Go's 2 KiB goroutine stacks hold ~40 MiB. Closing that gap needs
+stacks that start small and *move* when they grow, which needs the compiler
+to emit stack maps for the fibers' frames; it is not a runtime change, and it
+is not attempted here. `tests/driver/task_stack_overflow.sh` pins the
+overflow report on one and on four workers, and `task_grow.pli` pins a task
+whose frame skips past several chunks at once.
+
+**Rejected.** *Map the whole ceiling read-write, as before, but from an
+arena.* It was measured at 9 046 ns/task: the kernel builds page tables for
+a read-write region per fiber, and that per-fiber work was most of the cost.
+*Commit a page at a time instead of a chunk.* Measured at 7 268 ns/task, no
+better than the chunk, and it triples the number of growth faults a
+recursive task takes. *Copy the stack on growth, the way Go does.* See
+above: it needs compiler support, and a half-done version silently corrupts
+every pointer into a moved stack.
+
+---
+
+## ADR-314 — BIT logic and masked tests lower through packed integers (amends ADR-126, ADR-243)
+
+**Context.** A `BIT(n)` value is stored as a packed big-endian byte array,
+`[ceil(n/8) x i8]` (ADR-126). Logical `&`/`|` were lowered one storage byte at
+a time, and a comparison packed the whole string to i64 and compared that.
+LLVM then canonicalised the packed comparison back into per-byte compares, so
+the loop vectorizer emitted 8- and 16-bit lanes and widened each result to
+32 bits before accumulating. The C twin, using a `uint32_t`, compared in
+32-bit lanes. On `benchmarks/lang/bit_fields.pli` this cost 45% (1.45x C).
+
+**Decision.** For `BIT(n)` with `n <= 64`, logical `&`/`|` and the masked-test
+peepholes work on the packed integer, not on the bytes: `pack` is a bijection
+on n-bit strings, so `pack(a & b)` is `pack(a) & pack(b)`. Widths up to 32
+stay in i32, the lane width a C `uint32_t` uses; widths 33..64 use i64. The
+merged-conjunction peephole (ADR-243) and a new single-test peephole,
+`(X & M) = E`, use the same packing. Storage layout, bit order, padding, the
+`BIT(1)`-is-i1 convention and the external ABI are unchanged; strings wider
+than 64 bits keep the byte-array path. The single-test peephole has a
+`--experimental-lowering=bit_test:runtime` oracle that keeps the generic path.
+The packed form is used above `-O0`: at `-O0` the extra pack/unpack
+instructions are not folded away, so the byte-array path stays there.
+
+The conversion path also fixes a latent defect: widening a `BIT(1)` to a wider
+`BIT(n)` used to extract from the i1 scalar as if it were an aggregate,
+producing invalid IR (`w = '0'b` into `BIT(32)`). It now widens through the
+integer path.
+
+**Measurements** (`benchmarks/run_benchmarks.py --only bit_fields --runs 5`,
+macOS arm64): 1.45x C before, 0.87x-1.05x after. The full corpus run put
+`bit_fields` at 1.05x and `bit_merge` at 0.98x, with the IR geomean at 0.75x.
+
+**Consequences.** `BIT(n<=64)` logic is one register operation. A mask or
+expectation that is a compile-time literal gets the packed peephole directly;
+a mask held in a variable still reaches it after LLVM propagates the constant.
+The tests are `tests/usecases/bit_mask_widths.pli`,
+`tests/usecases/bit_merge_equivalence.pli` and `tests/ir/combine_tests`.
+
+## ADR-315 — the benchmark C twin follows the PL/I target policy
+
+**Context.** `pli` targets LLVM's generic CPU (`src/target.cpp`) and does not
+contract floating-point operations. The benchmark harness compiled the C twin
+with the host's native tuning (apple-m1 on macOS arm64) and Clang's default
+FP contraction. A ratio therefore mixed code generation with target policy:
+`alias_scope` lost 13% to C's wider native vectorisation and `mandelbrot` lost
+20% to fused multiply-adds the PL/I build never emits.
+
+**Decision.** The C twin is built for the same policy as the PL/I output:
+`-march=x86-64` on x86_64, `-mcpu=generic` on arm64, and
+`-ffp-contract=off`. The effective flags are recorded in the manifest
+(`c_flags`) and are part of manifest compatibility, so runs under different
+policies are never compared as a compiler improvement. `--c-native` builds C
+for the host CPU instead, for a native-policy comparison.
+
+**Measurements.** With the matched policy, `alias_scope` moved from 1.13x to
+0.98x and `mandelbrot` from 1.17x to 1.00x; the IR corpus geomean is 0.75x
+and no row is worse than 1.06x. The C twins for `on_conditions` (an ON-unit
+stack and indirect dispatch) and `linked_list` (an allocation-failure check)
+were also brought up to the same semantic work as their PL/I twins.
+
+**Consequences.** A ratio now prices code generation under one target policy.
+It is not a claim that PL/I is faster than a native-tuned C build; that
+comparison is still available with `--c-native`, and should be reported
+separately when used.
+
+## ADR-316 — Textual rescanning preprocessor for Chapter 9 control flow
+
+**Context.** C28-6571-3 Chapter 9 defines `%DO`/`%END`, `%GOTO`/`%GO TO`,
+`%label:`, and `%PROCEDURE` macros as compile-time text control. The preprocessor
+already flattens `%INCLUDE`/`%XINCLUDE` recursively (ADR-071) and handles `%IF`/
+`%DECLARE`/`%ACTIVATE` with integer expressions (ADR-083). `%DO`/`%GOTO` were
+previously stubs (`handleDo`/`handleGoto` returned "not implemented"), so any
+program using them was rejected at the preprocessor stage.
+
+**Decision.** Implement `%DO`/`%END` and `%GOTO`/`%GO TO`/`%label:` as a flat-
+textual rescanning pass over the already-included source (ADR-305 for the scan
+architecture):
+
+- **`scan(source, start, end, …)`** walks the source char-by-char, tracking
+  strings, `/* */`, and `//` comment state so directives inside them are inert.
+  Non-directive text is emitted via `emit()`, which also updates the line map
+  (ADR-219) so diagnostics stay attributed to the real source file:line.
+- **`collectLabels(source, start, end)`** pre-scans the file for `%label:`
+  definitions, recording each label's flat position past `:` + whitespace in a
+  `labels_` map. Labels are file-scoped; a `%GOTO` to an undefined label is
+  diagnosed.
+- **`processDirective(...)`** dispatches all `%`-directives. For `%DO`, it finds
+  the matching `%END` via nest-counted `findMatchingEnd` (only `%END` counts, not
+  PL/I `end`); `%DO` without a matching `%END` is diagnosed as "unterminated %DO".
+- **`handleDo`** supports `%DO v=e1 TO e2 [BY e3]` iteration: for each value of
+  `v`, `scan()` is called on the body with `v` set in the preprocessor variable
+  table, so `%IF v = n` inside the body can emit or suppress code per iteration.
+  A bare `%DO;` (no iteration spec) scans the body once.
+- **`handleGoto`** looks up the label in `labels_` and sets `gotoTarget_`; `scan()`
+  checks `gotoTarget_` after each directive and jumps the cursor there. Forward
+  and backward jumps within the same file are supported; jumps outside the
+  current `scan()` range cause the scan to stop (used by `%DO` to exit loops).
+- **`%DO`/`%END`/`%GOTO`/`%label:`** are Stage 1 of the B6 work item; `%PROCEDURE`
+  (Stage 2) and `%REPLACE` textual rescanning moved out of the lexer (Stage 3,
+  superseding ADR-077's single-pass token model) remain deferred.
+
+**Consequences.** The preprocessor now produces text that contains zero `%DO`,
+`%END`, `%GOTO`, `%GO TO`, or `%label:` directives in its output; all control
+flow and iteration are resolved at the preprocessor stage. `%PROCEDURE` and
+`%REPLACE` rescanning remain in the lexer for now. The `kMaxScanDepth` guard
+(256) prevents infinite `%DO`/`%GOTO` nesting from exhausting the stack.
+
+---
+
+## ADR-317 — An `OFFSET`'s declared `AREA` is a default, not a constraint
 
 **Context.** ADR-312 read the optional AREA in `OFFSET(area)` as a constraint
 and required `IN ( area )` on every ALLOCATE whose SET target is an OFFSET; it

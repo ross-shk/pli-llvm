@@ -47,27 +47,61 @@ For a fuller tour — arrays, structures, storage, conditions, concurrency — s
 `benchmarks/run_benchmarks.py` compares PL/I against C across 33 micro-benchmarks (scalar, string, decimal, array, I/O); `benchmarks/run_tasking_bench.py` compares the tasking models against Go and C. Methodology and the validity rules are in [`benchmarks/README.md`](benchmarks/README.md).
 
 ```sh
-cmake --build build/cmake -j                   
-
+cmake --build build/cmake -j                   # rebuild before timing
 python3 benchmarks/run_benchmarks.py
 python3 benchmarks/run_tasking_bench.py --models fiber,os
 ```
 
 ### PL/I vs C (micro-benchmarks, -O2, median)
 
-21 of 33 benchmarks are at parity with or faster than Clang `-O2`. The wins concentrate where PL/I's native semantics avoid per-element C overhead:
+22 of 32 comparable benchmarks are at parity with or faster than the matched C baseline, and every row is within 1.06×. The IR corpus geomean is 0.75× (acceptance gate < 0.90×); the language corpus geomean is 0.57×.
 
-<table class="markdown-table">
-  <tr><th>Benchmark</th><th>PL/I / C ratio</th><th>PL/I Advantage</th></tr>
-  <tr><td>string_search</td><td>0.06×</td><td>16.7× faster</td></tr>
-  <tr><td>picture_fold</td><td>0.10×</td><td>10× faster</td></tr>
-  <tr><td>string_ops</td><td>0.21×</td><td>4.8× faster</td></tr>
-  <tr><td>decimal_scale</td><td>0.45×</td><td>2.2× faster</td></tr>
-  <tr><td>by_name</td><td>0.47×</td><td>2.1× faster</td></tr>
-  <tr><td>select_chain</td><td>0.47×</td><td>2.1× faster</td></tr>
-  <tr><td>controlled_stack</td><td>0.73×</td><td>1.4× faster</td></tr>
-  <tr><td>io_list</td><td>0.89×</td><td>1.1× faster</td></tr>
-</table>
+Measured on macOS 26 arm64, five samples per side, unpinned. The C twin uses the same target policy as the PL/I output (generic CPU, no FP contraction); `--c-native` builds it for the host CPU instead. Rows whose PL/I median is under 50 ms are indicative.
+
+**IR corpus** (C parity — the acceptance gate):
+
+| Benchmark | Ratio | What it measures |
+|---|---:|---|
+| `string_search` | 0.07× | INDEX scan over a 76 KB character buffer |
+| `string_ops` | 0.22× | VARYING concatenation and substring extraction |
+| `decimal_ops` † | 0.59× | FIXED DECIMAL(18,2) pricing arithmetic |
+| `controlled_stack` | 0.73× | CONTROLLED array push, fill, sum and pop cycles |
+| `bcd_decimal` | 0.78× | Wide FIXED DECIMAL(25,4) pricing arithmetic |
+| `array_sort` | 0.80× | Bubble sort of 18,000 integers |
+| `condition_ops` | 0.81× | Array access under an ON SUBSCRIPTRANGE handler |
+| `fixed_bin63` | 0.82× | 63-bit FIXED arithmetic with 31×63 widening |
+| `io_throughput` | 0.84× | 200,000 list-directed output lines |
+| `scalar_arith` | 0.85× | Scalar 63-bit integer and float arithmetic |
+| `file_io` | 0.95× | 500,000-record sequential WRITE/READ cycle |
+| `on_conditions` | 0.96× | ON ZERODIVIDE dispatch, one fault per 100 divisions |
+| `collatz` | 0.98× | Collatz sequences for 2…400,000 |
+| `mandelbrot` | 1.00× | 1200×800 Mandelbrot escape-iteration loop |
+| `bit_ops` | 1.01× | AND, OR and NOT over BIT(32) strings |
+| `division` | 1.01× | FIXED BINARY division with a MOD-derived divisor |
+| `matrix_float` | 1.02× | 400×400 double matrix multiply with SIN/COS/SQRT seeding |
+| `math_functions` | 1.02× | Transcendental built-ins in a nested loop |
+| `proc_calls` | 1.03× | Recursive, iterative and array-summing procedure calls |
+| `linked_list` | 1.04× | Build, traverse and free a 3M-node BASED list |
+| `array_matmul` | 1.05× | 512×512 integer matrix multiplication |
+
+**Language corpus** (PL/I semantics a C program cannot express; the C twin is a reference):
+
+| Benchmark | Ratio | What it measures |
+|---|---:|---|
+| `select_chain` | 0.09× | SELECT over twenty constant CHAR arms |
+| `picture_fold` | 0.19× | Constant PICTURE conversion, folded vs runtime |
+| `decimal_scale` | 0.44× | Decimal scale reconciliation and rounding |
+| `by_name` | 0.47× | BY NAME structure assignment of ten members |
+| `pure_call` | 0.65× | Loop-invariant helper call priced by effect inference |
+| `io_list` | 0.69× | List-directed output of mixed item types |
+| `concat_const` | 0.85× | Constant-offset concatenation into a fixed result |
+| `checks_on` | 0.85× | Array arithmetic whose bounds and overflow checks cannot be proven away |
+| `bit_merge` | 0.98× | Two masked tests on one word merged into one |
+| `alias_scope` | 0.98× | Three-array copy that vectorizes only when proven disjoint |
+| `on_dispatch` | 1.02× | ON ZERODIVIDE with a multi-statement handler |
+| `bit_fields` | 1.05× | Four independent masked BIT(32) field tests |
+
+† `decimal_ops` is descriptive: its PL/I side is fixed decimal and its C side is `double`, so the row informs but does not gate. Every row matches its C twin exactly, except the float-sensitive rows (`scalar_arith`, `math_functions`, `matrix_float`), which are compared with a tolerance and also match.
 
 Full results and the methodology live in `benchmarks/`.
 
@@ -75,8 +109,8 @@ Full results and the methodology live in `benchmarks/`.
 
 <table class="markdown-table">
   <tr><th>Benchmark</th><th>PL/I / Go ratio</th><th>Result</th></tr>
-  <tr><td>task_loop (spawn–join lifecycle)</td><td>0.76×</td><td>PL/I beats Go</td></tr>
-  <tr><td>task_spawn (20 000 live tasks)</td><td>13.0× (pending improvement)</td><td>Go's 2 KiB growable stack still wins for fan-out</td></tr>
+  <tr><td>task_loop (spawn–join lifecycle)</td><td>0.69×</td><td>PL/I beats Go</td></tr>
+  <tr><td>task_spawn (20 000 live tasks)</td><td>10.8× (pending improvement)</td><td>Go&#39;s 2 KiB growable stack still wins for fan-out</td></tr>
 </table>
 
 The fiber model recycles a stack per task, making it faster than Go on the spawn–join lifecycle. Fan-out of many simultaneously-live tasks is PL/I's known cost: a fiber stack comes from an arena and grows in chunks, so its 8 MiB ceiling costs address space only, but every live task still touches one 16 KiB stack page.

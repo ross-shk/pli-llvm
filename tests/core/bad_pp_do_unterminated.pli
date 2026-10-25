@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* C28-6571-3 Chapter 9: %DO without %END is diagnosed. */
+%declare i;
+main: procedure options(main);
+  %do i = 1 to 3;
+  put skip list('PASS pp_do_unterminated');
+end main;

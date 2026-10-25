@@ -787,6 +787,7 @@ const std::map<std::string, bool>& runtimeDefaultTable() {
       // WS-C: the shape peepholes (the generic lowering is the fallback)
       {"concat_const", true},
       {"bit_merge", true},
+      {"bit_test", true},
   };
   return table;
 }
@@ -857,6 +858,7 @@ const std::set<std::string>& llvmLoweringOps() {
       // bit tests — so the differential oracle can compare the two shapes.
       "concat_const",
       "bit_merge",
+      "bit_test",
   };
   return table;
 }

@@ -1,5 +1,5 @@
 CHECK-LABEL: define {{.*}}@PLI_MAIN
 CHECK: load \[4 x i8\], ptr %W.addr
-CHECK: and i8 %{{.*}}, -1
+CHECK: and i32 %{{.*}}, 255
 CHECK: icmp eq i32 %{{.*}}, 51
 CHECK-NOT: icmp

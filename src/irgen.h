@@ -49,8 +49,9 @@ public:
         bool noConvChecks = false, bool noSubChecks = false,
         bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
         std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
-        bool noMemoryEffects = false)
-      : noMemoryEffects_(noMemoryEffects), d_(d), sema_(s), triple_(std::move(triple)),
+        bool noMemoryEffects = false, bool optimize = true)
+      : noMemoryEffects_(noMemoryEffects), optimize_(optimize), d_(d), sema_(s),
+        triple_(std::move(triple)),
         mod_("pli", ctx_), b_(ctx_), noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks),
         noZdivChecks_(noZdivChecks), noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
         platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
@@ -186,6 +187,10 @@ private:
   // default effects. The escape hatch that lets a benchmark measure what the
   // inference is worth.
   bool noMemoryEffects_ = false;
+  // True above -O0: the packed-integer BIT lowering (ADR-314) relies on the
+  // optimizer, so the byte-array path stays for -O0 where packing is pure
+  // extra work.
+  bool optimize_ = true;
   // The library-call remark (ADR-254): --remark-library-calls makes every
   // library-path built-in report the conversion it hands to the routine.
   bool remarkLibraryCalls_ = false;
@@ -248,6 +253,10 @@ private:
   // (ADR-243): (X & M1) = E1 & (X & M2) = E2 is one test on X. False for
   // any other shape, and when the two tests may not be merged.
   bool emitCombinedBitTest(HExpr* e, Val& out);
+  // Lower one masked bit test, (X & M) = E, on a BIT(n<=64) value as a
+  // packed-integer compare: pack(X) & M against E, instead of materialising
+  // the byte-array AND and comparing byte by byte. False for any other shape.
+  bool emitMaskedBitTest(HExpr* e, Val& out);
   // True when `s` is a parameter of the current procedure or of one of its
   // enclosing procedures: such a symbol's storage may be the caller's.
   bool isParamOfScope(Symbol* s) const;

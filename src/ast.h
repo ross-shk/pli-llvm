@@ -351,14 +351,14 @@ struct Stmt {
   // ALLOCATE ... IN ( area ) (rule (88)): the AREA variable the block is
   // allocated from; null = the default heap (pli_alloc). Sema fills it from
   // the declared AREA of an OFFSET base or SET target when IN is omitted
-  // (ADR-313).
+  // (ADR-317).
   std::vector<ExprP> allocArea;
   // FREE (rule 90): per item, the based variable reference. An explicit locator
   // is carried on freeBase[i]->locPtr; null means the BASED base pointer.
   std::vector<ExprP> freeBase;
   // FREE ... IN ( area ) (rule (90)): the AREA the block is returned to;
   // null = the default heap (pli_free). Sema fills it from the declared AREA
-  // of an OFFSET locator or based base when IN is omitted (ADR-313).
+  // of an OFFSET locator or based base when IN is omitted (ADR-317).
   std::vector<ExprP> freeArea;
 };
 

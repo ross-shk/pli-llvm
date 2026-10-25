@@ -26,6 +26,10 @@ std::string trim(const std::string& value) {
   return value.substr(first, last - first + 1);
 }
 
+bool isWordChar(char c) {
+  return std::isalnum((unsigned char)c) || c == '_' || c == '$' || c == '#' || c == '@';
+}
+
 fs::path normalized(const fs::path& path) {
   std::error_code ec;
   fs::path result = fs::weakly_canonical(path, ec);
@@ -39,6 +43,9 @@ bool Preprocessor::run(const fs::path& input, std::string& output) {
   included_.clear();
   ppVars_.clear();
   ppActive_.clear();
+  labels_.clear();
+  gotoTarget_ = 0;
+  scanDepth_ = 0;
   output.clear();
   lineMap_.clear();
   fileSrc_.clear();
@@ -272,11 +279,15 @@ bool Preprocessor::evalCondExpr(const std::string& text, const fs::path& path, i
 }
 
 // Parse and run one %-directive at `i` (source[i] == '%'). Returns the index
-// past it, or npos after diagnosing. With active == false the directive is
-// skipped without effects; newlines stay caller-preserved.
+// past it (npos after diagnosing). With active == false the directive is
+// skipped without effects; newlines stay caller-preserved. Sets semPos to the
+// last character position of the directive's own text so the caller can
+// preserve its newlines (ADR-316).
 size_t Preprocessor::processDirective(const fs::path& path, const std::string& source, size_t i,
-                                      std::string& output, int& line, int& col, bool active) {
+                                      std::string& output, int& line, int& col, bool active,
+                                      size_t& semPos) {
   static const size_t npos = std::string::npos;
+  semPos = i;
   int directiveLine = line;
   int directiveCol = col;
   size_t wordStart = i + 1;
@@ -294,31 +305,138 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
   }
 
   std::string name = upper(source.substr(wordStart, wordEnd - wordStart));
-  if (name == "IF")
-    return processIf(path, source, i, wordEnd, output, line, col, active);
+  if (name == "IF") {
+    size_t next = processIf(path, source, i, wordEnd, output, line, col, active, semPos);
+    return next;
+  }
   if (name == "THEN" || name == "ELSE") {
     error(path, directiveLine, directiveCol, "%" + name + " without %IF");
+    semPos = wordEnd;
     return npos;
   }
 
-  bool quoted = false;
-  size_t end = wordEnd;
-  for (; end < source.size(); ++end) {
-    if (source[end] == '\'') {
-      if (quoted && end + 1 < source.size() && source[end + 1] == '\'') {
-        ++end;
-        continue;
-      }
-      quoted = !quoted;
-    } else if (source[end] == ';' && !quoted) {
-      break;
+  // %label: — label marker (target for %GOTO). collectLabels() already
+  // recorded the target position; here we just skip the label prefix so
+  // scanning resumes at the labeled directive (or past ';' if standalone).
+  if (wordEnd < source.size() && source[wordEnd] == ':') {
+    size_t target = wordEnd + 1;
+    while (target < source.size() &&
+           (source[target] == ' ' || source[target] == '\t' || source[target] == '\f' ||
+            source[target] == '\n' || source[target] == '\r'))
+      ++target;
+    semPos = target - 1;
+    if (target < source.size() && source[target] == '%')
+      return target;
+    size_t semi = findDirectiveEnd(source, target);
+    if (semi != npos)
+      return semi + 1;
+    return target;
+  }
+
+  // %DO [v=e1 TO e2 [BY e3]] ; — find matching %END and dispatch the loop.
+  if (name == "DO") {
+    size_t doEnd = findDirectiveEnd(source, wordEnd);
+    if (doEnd == npos) {
+      error(path, directiveLine, directiveCol, "unterminated %DO (C28-6571-3 Ch.9)");
+      semPos = wordEnd;
+      return npos;
     }
+    semPos = doEnd;
+    size_t endSemi;
+    size_t matchingEnd = findMatchingEnd(path, source, doEnd + 1, endSemi, line, col);
+    if (matchingEnd == npos)
+      return npos;
+    if (active) {
+      return handleDo(path, source, doEnd + 1, matchingEnd, endSemi, output, line, col, active,
+                      source.substr(wordEnd, doEnd - wordEnd), directiveLine, directiveCol);
+    }
+    // Inactive %DO: skip past matching %END; preserving its newlines.
+    for (size_t j = matchingEnd; j <= endSemi; ++j) {
+      if (source[j] == '\n') {
+        output += '\n';
+        lineMap_.push_back({path.string(), line});
+        ++line;
+        col = 1;
+      } else {
+        ++col;
+      }
+    }
+    return endSemi + 1;
   }
-  if (end == source.size()) {
-    error(path, directiveLine, directiveCol, "unterminated preprocessor directive");
+
+  // %END without %DO — only reached if findMatchingEnd didn't consume it.
+  if (name == "END") {
+    error(path, directiveLine, directiveCol, "%END without %DO (C28-6571-3 Ch.9)");
+    semPos = wordEnd;
     return npos;
   }
 
+  // %GOTO label ; / %GO TO label ; — resolve target and jump.
+  if (name == "GO" || name == "GOTO") {
+    size_t end = findDirectiveEnd(source, wordEnd);
+    if (end == npos) {
+      error(path, directiveLine, directiveCol, "unterminated %GOTO (C28-6571-3 Ch.9)");
+      semPos = wordEnd;
+      return npos;
+    }
+    semPos = end;
+    // For %GO TO: skip the "TO" keyword, use the label after it.
+    std::string trimmedOp = trim(source.substr(wordEnd, end - wordEnd));
+    std::string up = upper(trimmedOp);
+    if (name == "GO") {
+      size_t toPos = std::string::npos;
+      for (size_t pos = 0; pos + 2 <= up.size(); ++pos) {
+        if (up.compare(pos, 2, "TO") != 0)
+          continue;
+        bool leftOk = pos == 0 || !isWordChar(up[pos - 1]);
+        bool rightOk = pos + 2 >= up.size() || !isWordChar(up[pos + 2]);
+        if (leftOk && rightOk) {
+          toPos = pos;
+          break;
+        }
+      }
+      if (toPos != std::string::npos) {
+        source.substr(wordEnd, end - wordEnd);
+        std::string label = trim(trimmedOp.substr(toPos + 2));
+        if (active) {
+          if (!handleGoto(path, name, label, directiveLine, directiveCol))
+            return npos;
+          return gotoTarget_;
+        }
+        return end + 1;
+      }
+    }
+    if (active) {
+      if (!handleGoto(path, name, trimmedOp, directiveLine, directiveCol))
+        return npos;
+      return gotoTarget_;
+    }
+    return end + 1;
+  }
+
+  // %PROCEDURE / %PROC / %RETURN — compile-time macros (Stage 2).
+  if (name == "PROCEDURE" || name == "PROC" || name == "RETURN") {
+    size_t end = findDirectiveEnd(source, wordEnd);
+    if (end == npos) {
+      error(path, directiveLine, directiveCol, "unterminated preprocessor directive");
+      semPos = wordEnd;
+      return npos;
+    }
+    semPos = end;
+    if (active) {
+      return handleProcedure(path, source, i, wordEnd, end, output, line, col, active);
+    }
+    return end + 1;
+  }
+
+  // Find ';' for standard directives.
+  size_t end = findDirectiveEnd(source, wordEnd);
+  if (end == npos) {
+    error(path, directiveLine, directiveCol, "unterminated preprocessor directive");
+    semPos = wordEnd;
+    return npos;
+  }
+  semPos = end;
   bool ok = false;
   if (name == "INCLUDE") {
     if (active)
@@ -341,21 +459,6 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     if (active)
       ok = handleActivation(path, name, source.substr(wordEnd, end - wordEnd), directiveLine,
                             directiveCol);
-    else
-      ok = true;
-  } else if (name == "DO" || name == "END") {
-    if (active)
-      ok = handleDo(path, name, directiveLine, directiveCol);
-    else
-      ok = true;
-  } else if (name == "GO" || name == "GOTO") {
-    if (active)
-      ok = handleGoto(path, name, directiveLine, directiveCol);
-    else
-      ok = true;
-  } else if (name == "PROCEDURE" || name == "PROC" || name == "RETURN") {
-    if (active)
-      ok = handleProcedure(path, name, directiveLine, directiveCol);
     else
       ok = true;
   } else if (name == "REPLACE") {
@@ -398,10 +501,12 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
 
 // %IF expr %THEN directive [%ELSE directive] (ADR-083). Arms are full
 // directives run (or structurally skipped) recursively, so nesting works;
-// each arm is exactly one directive.
+// each arm is exactly one directive. Sets semPos to the last character of
+// the %IF...%THEN header (before the arm) so the caller preserves its
+// newlines; arm text is emitted directly via emit()/processDirective.
 size_t Preprocessor::processIf(const fs::path& path, const std::string& source, size_t,
                                size_t wordEnd, std::string& output, int& line, int& col,
-                               bool active) {
+                               bool active, size_t& semPos) {
   static const size_t npos = std::string::npos;
   int directiveLine = line;
   int directiveCol = col;
@@ -446,7 +551,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
         ++ws;
       size_t we = ws;
       while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
-                                    source[we] == '$' || source[we] == '#' || source[we] == '@'))
+                                     source[we] == '$' || source[we] == '#' || source[we] == '@'))
         ++we;
       if (upper(source.substr(ws, we - ws)) == "THEN") {
         thenAt = t;
@@ -485,10 +590,14 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
     error(path, directiveLine, directiveCol, "expected a directive or statement after %THEN");
     return npos;
   }
+  // semPos covers %IF expr and %THEN keyword + trailing whitespace; the
+  // arm itself is emitted by the recursive processDirective/emit below.
+      semPos = arm > 0 ? arm - 1 : 0;
   size_t next;
   if (source[arm] == '%') {
     // Directive arm
-    next = processDirective(path, source, arm, output, line, col, active && cond != 0);
+    size_t armSemPos;
+    next = processDirective(path, source, arm, output, line, col, active && cond != 0, armSemPos);
   } else {
     // Statement arm: find the terminating semicolon (not in string/comment)
     size_t stmtEnd = arm;
@@ -532,7 +641,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
       ++stmtEnd;
     }
     if (active && cond != 0) {
-      output.append(source, arm, stmtEnd - arm);
+      emit(source.substr(arm, stmtEnd - arm), output, path, line, col);
     }
     next = stmtEnd;
   }
@@ -541,7 +650,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
   // An optional %ELSE arm takes the inverted condition.
   size_t e = next;
   while (e < source.size() && (source[e] == ' ' || source[e] == '\t' || source[e] == '\r' ||
-                               source[e] == '\n' || source[e] == '\f'))
+                                source[e] == '\n' || source[e] == '\f'))
     ++e;
   if (e < source.size() && source[e] == '%') {
     size_t ws = e + 1;
@@ -549,7 +658,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
       ++ws;
     size_t we = ws;
     while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
-                                  source[we] == '$' || source[we] == '#' || source[we] == '@'))
+                                 source[we] == '$' || source[we] == '#' || source[we] == '@'))
       ++we;
     if (upper(source.substr(ws, we - ws)) == "ELSE") {
       size_t arm2 = we;
@@ -562,7 +671,9 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
         return npos;
       }
       if (source[arm2] == '%') {
-        next = processDirective(path, source, arm2, output, line, col, active && cond == 0);
+        size_t arm2SemPos;
+        next = processDirective(path, source, arm2, output, line, col, active && cond == 0,
+                                arm2SemPos);
       } else {
         // Statement arm for %ELSE
         size_t stmtEnd = arm2;
@@ -606,7 +717,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
           ++stmtEnd;
         }
         if (active && cond == 0) {
-          output.append(source, arm2, stmtEnd - arm2);
+          emit(source.substr(arm2, stmtEnd - arm2), output, path, line, col);
         }
         next = stmtEnd;
       }
@@ -634,64 +745,96 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
 
   int line = 1;
   int col = 1;
+  // %GOTO resolves labels in the current file's flat text (ADR-316).
+  // Save outer file's labels across recursive %INCLUDE expansion, then
+  // repopulate for this file.
+  auto savedLabels = labels_;
+  labels_.clear();
+  collectLabels(source, 0, source.size());
+  gotoTarget_ = 0;
+  bool result = scan(source, 0, source.size(), output, line, col, path, true);
+  labels_ = savedLabels;
+
+  active_.pop_back();
+  return result;
+}
+
+// Append text to output, recording one lineMap entry per \n so diagnostics
+// stay attributed to the correct source file:line (ADR-219, ADR-316).
+void Preprocessor::emit(const std::string& text, std::string& output, const fs::path& path,
+                        int& line, int& col) {
+  output += text;
+  for (char c : text) {
+    if (c == '\n') {
+      lineMap_.push_back({path.string(), line});
+      ++line;
+      col = 1;
+    } else {
+      ++col;
+    }
+  }
+}
+
+// Scan a source range char-by-char, emitting non-directive text via emit()
+// and dispatching %-directives to processDirective (ADR-316). String, comment
+// and // comment nesting is tracked so directives inside them are inert.
+// Depth-guarded to prevent runaway %DO/%GOTO nesting.
+bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std::string& output,
+                        int& line, int& col, const fs::path& path, bool active) {
+  if (++scanDepth_ > kMaxScanDepth) {
+    --scanDepth_;
+    return error(path, line, col, "preprocessor control-flow nesting is too deep (C28-6571-3 Ch.9)");
+  }
   bool inString = false;
   bool inComment = false;
   bool inLineComment = false;
-  for (size_t i = 0; i < source.size();) {
+  for (size_t i = start; i < end;) {
     char c = source[i];
     if (inLineComment) {
-      // Line comment (ADR-156): copy verbatim to EOL so the lexer
-      // strips it; directives inside stay inert, newlines preserved.
-      output += c;
+      emit(std::string(1, c), output, path, line, col);
+      ++i;
       if (c == '\n')
         inLineComment = false;
     } else if (inComment) {
-      output += c;
-      if (c == '*' && i + 1 < source.size() && source[i + 1] == '/') {
-        output += '/';
-        i += 2;
-        col += 2;
+      emit(std::string(1, c), output, path, line, col);
+      ++i;
+      if (c == '*' && i < end && source[i] == '/') {
+        emit(std::string(1, '/'), output, path, line, col);
+        ++i;
         inComment = false;
-        continue;
       }
     } else if (inString) {
-      output += c;
-      if (c == '\'' && i + 1 < source.size() && source[i + 1] == '\'') {
-        output += '\'';
-        i += 2;
-        col += 2;
-        continue;
-      }
-      if (c == '\'')
+      emit(std::string(1, c), output, path, line, col);
+      ++i;
+      if (c == '\'' && i < end && source[i] == '\'') {
+        emit(std::string(1, '\''), output, path, line, col);
+        ++i;
+      } else if (c == '\'') {
         inString = false;
-    } else if (c == '/' && i + 1 < source.size() && source[i + 1] == '*') {
-      output += "/*";
+      }
+    } else if (c == '/' && i + 1 < end && source[i + 1] == '*') {
+      emit("/*", output, path, line, col);
       i += 2;
-      col += 2;
       inComment = true;
-      continue;
-    } else if (c == '/' && i + 1 < source.size() && source[i + 1] == '/') {
-      // Line comment start (ADR-156): adjacent slashes only, so
-      // `a / / b` stays two divisions while `a // b` comments.
-      output += "//";
+    } else if (c == '/' && i + 1 < end && source[i + 1] == '/') {
+      emit("//", output, path, line, col);
       i += 2;
-      col += 2;
       inLineComment = true;
-      continue;
     } else if (c == '\'') {
-      output += c;
+      emit(std::string(1, c), output, path, line, col);
+      ++i;
       inString = true;
     } else if (c == '%') {
-      size_t start = i;
-      size_t next = processDirective(path, source, i, output, line, col, true);
+      size_t semPos = i;
+      size_t next = processDirective(path, source, i, output, line, col, active, semPos);
       if (next == std::string::npos) {
-        active_.pop_back();
+        --scanDepth_;
         return false;
       }
-      // Preserve directive newlines so following root-source diagnostics remain
-      // useful; advance line/col in lockstep with recording so each directive
-      // line maps to its real source line, including multi-line directives (ADR-219).
-      for (size_t j = start; j < next; ++j) {
+      // Preserve newlines from the directive's own text (i..semPos), not
+      // from the jump target, so %DO body/%END and %GOTO target text is
+      // tracked by their own scan/processDirective calls (ADR-316).
+      for (size_t j = i; j <= semPos; ++j) {
         if (source[j] == '\n') {
           output += '\n';
           lineMap_.push_back({path.string(), line});
@@ -702,24 +845,192 @@ bool Preprocessor::expand(const fs::path& input, std::string& output) {
         }
       }
       i = next;
-      continue;
+      // Boundary guard: %GOTO may land outside [start, end).
+      if (i < start || i > end)
+        break;
     } else {
-      output += c;
+      emit(std::string(1, c), output, path, line, col);
+      ++i;
     }
-
-     ++i;
-     if (c == '\n') {
-       // Record the source line that just closed (ADR-219).
-       lineMap_.push_back({path.string(), line});
-       ++line;
-       col = 1;
-     } else {
-       ++col;
-     }
   }
-
-  active_.pop_back();
+  --scanDepth_;
   return true;
+}
+
+// Pre-scan source[start..end) for %label: definitions (ADR-316).
+// Records each label's target position (right after ':' + whitespace).
+void Preprocessor::collectLabels(const std::string& source, size_t start, size_t end) {
+  bool inString = false;
+  bool inComment = false;
+  bool inLineComment = false;
+  for (size_t i = start; i < end;) {
+    if (inLineComment) {
+      if (source[i] == '\n')
+        inLineComment = false;
+      ++i;
+    } else if (inComment) {
+      if (source[i] == '*' && i + 1 < end && source[i + 1] == '/') {
+        i += 2;
+        inComment = false;
+      } else {
+        ++i;
+      }
+    } else if (inString) {
+      if (source[i] == '\'' && i + 1 < end && source[i + 1] == '\'') {
+        i += 2;
+      } else if (source[i] == '\'') {
+        inString = false;
+        ++i;
+      } else {
+        ++i;
+      }
+    } else if (source[i] == '/' && i + 1 < end && source[i + 1] == '*') {
+      i += 2;
+      inComment = true;
+    } else if (source[i] == '/' && i + 1 < end && source[i + 1] == '/') {
+      while (i < end && source[i] != '\n')
+        ++i;
+    } else if (source[i] == '\'') {
+      ++i;
+      inString = true;
+    } else if (source[i] == '%') {
+      // Skip the directive name.
+      size_t ws = i + 1;
+      while (ws < end && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
+        ++ws;
+      size_t we = ws;
+      while (we < end && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
+                          source[we] == '$' || source[we] == '#' || source[we] == '@'))
+        ++we;
+      // If followed by ':', it's a %label: definition.
+      size_t chk = we;
+      while (chk < end && (source[chk] == ' ' || source[chk] == '\t' || source[chk] == '\f'))
+        ++chk;
+      if (chk < end && source[chk] == ':') {
+        std::string labelName = upper(source.substr(ws, we - ws));
+        size_t target = chk + 1;
+        while (target < end && (source[target] == ' ' || source[target] == '\t' ||
+                                source[target] == '\f' || source[target] == '\n' ||
+                                source[target] == '\r'))
+          ++target;
+        labels_[labelName] = target;
+        i = target;
+      } else {
+        // Not a label: skip to end of directive (semicolon or newline).
+        i = (we < end) ? we : end;
+      }
+    } else {
+      ++i;
+    }
+  }
+}
+
+// Find the ';' (outside quoted strings) that terminates a directive body
+// starting just after `start` (ADR-316).
+size_t Preprocessor::findDirectiveEnd(const std::string& source, size_t start) {
+  bool quoted = false;
+  for (size_t i = start; i < source.size(); ++i) {
+    if (source[i] == '\'' && quoted && i + 1 < source.size() && source[i + 1] == '\'') {
+      ++i; // skip escaped quote
+      continue;
+    }
+    if (source[i] == '\'')
+      quoted = !quoted;
+    else if (source[i] == ';' && !quoted)
+      return i;
+  }
+  return std::string::npos;
+}
+
+// Find the matching %END for a %DO starting at `start` (ADR-316).
+// Returns the %END position in endPos, its ';' in endSemi.
+size_t Preprocessor::findMatchingEnd(const fs::path& path, const std::string& source,
+                                     size_t start, size_t& endSemi, int line, int col) {
+  static const size_t npos = std::string::npos;
+  endSemi = npos;
+  int depth = 1;
+  bool inString = false;
+  bool inComment = false;
+  bool inLineComment = false;
+  for (size_t i = start; i < source.size();) {
+    if (inLineComment) {
+      if (source[i] == '\n')
+        inLineComment = false;
+      ++i;
+    } else if (inComment) {
+      if (source[i] == '*' && i + 1 < source.size() && source[i + 1] == '/') {
+        i += 2;
+        inComment = false;
+      } else {
+        ++i;
+      }
+    } else if (inString) {
+      if (source[i] == '\'' && i + 1 < source.size() && source[i + 1] == '\'') {
+        i += 2;
+      } else if (source[i] == '\'') {
+        inString = false;
+        ++i;
+      } else {
+        ++i;
+      }
+    } else if (source[i] == '/' && i + 1 < source.size() && source[i + 1] == '*') {
+      i += 2;
+      inComment = true;
+    } else if (source[i] == '/' && i + 1 < source.size() && source[i + 1] == '/') {
+      while (i < source.size() && source[i] != '\n')
+        ++i;
+    } else if (source[i] == '\'') {
+      ++i;
+      inString = true;
+    } else if (source[i] == '%') {
+      // Parse the directive name.
+      size_t ws = i + 1;
+      while (ws < source.size() && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
+        ++ws;
+      size_t we = ws;
+      while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
+                                     source[we] == '$' || source[we] == '#' || source[we] == '@'))
+        ++we;
+      std::string directiveName = upper(source.substr(ws, we - ws));
+      if (directiveName == "DO") {
+        ++depth;
+        // Skip to next ';' or end.
+        size_t semi = findDirectiveEnd(source, we);
+        if (semi == npos) {
+          error(path, line, col, "unterminated %DO (C28-6571-3 Ch.9)");
+          return npos;
+        }
+        i = semi + 1;
+      } else if (directiveName == "END") {
+        if (--depth == 0) {
+          endSemi = findDirectiveEnd(source, we);
+          if (endSemi == npos) {
+            error(path, line, col, "unterminated %END (C28-6571-3 Ch.9)");
+            return npos;
+          }
+          return i;
+        }
+        size_t semi = findDirectiveEnd(source, we);
+        if (semi == npos) {
+          error(path, line, col, "unterminated %END (C28-6571-3 Ch.9)");
+          return npos;
+        }
+        i = semi + 1;
+      } else {
+        // Other directive: skip to next ';'.
+        size_t semi = findDirectiveEnd(source, we);
+        if (semi == npos) {
+          error(path, line, col, "unterminated preprocessor directive");
+          return npos;
+        }
+        i = semi + 1;
+      }
+    } else {
+      ++i;
+    }
+  }
+  error(path, line, col, "unterminated %DO (C28-6571-3 Ch.9)");
+  return npos;
 }
 
 bool Preprocessor::handleInclude(const fs::path& input, const std::string& operand, int line,
@@ -976,22 +1287,131 @@ bool Preprocessor::substituteRef(const fs::path& input, const std::string& name,
   return true;
 }
 
-bool Preprocessor::handleConditional(const fs::path& input, const std::string& name, int line,
-                                     int col) {
-  return unsupported(input, name, line, col);
+// %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-316).
+// The body is scan()'d once per iteration; the iteration variable is set
+// in ppVars_ before each scan. Returns endSemi+1 (past %END;) on success.
+size_t Preprocessor::handleDo(const fs::path& path, const std::string& source, size_t bodyStart,
+                              size_t endPos, size_t endSemi, std::string& output, int& line,
+                              int& col, bool active, const std::string& spec, int directiveLine,
+                              int directiveCol) {
+  static const size_t npos = std::string::npos;
+  std::string trimmed = trim(spec);
+  long long e1 = 0, e2 = 0, e3 = 1;
+  std::string varName;
+  bool iterate = false;
+
+  if (!trimmed.empty()) {
+    // Parse: var = start TO end [BY step]
+    std::string up = upper(trimmed);
+    size_t eq = up.find('=');
+    if (eq == std::string::npos) {
+      error(path, directiveLine, directiveCol,
+            "expected 'var=start TO end [BY step]' in %DO, or bare %DO with no iteration");
+      return npos;
+    }
+    varName = upper(trim(up.substr(0, eq)));
+    std::string rest = trim(up.substr(eq + 1));
+    // Find TO as a whole word (not part of another identifier).
+    size_t toPos = std::string::npos;
+    for (size_t pos = 0; pos + 2 <= rest.size(); ++pos) {
+      if (rest.compare(pos, 2, "TO") != 0)
+        continue;
+      bool leftOk = pos == 0 || !isWordChar(rest[pos - 1]);
+      bool rightOk = pos + 2 >= rest.size() || !isWordChar(rest[pos + 2]);
+      if (leftOk && rightOk) {
+        toPos = pos;
+        break;
+      }
+    }
+    if (toPos == std::string::npos) {
+      error(path, directiveLine, directiveCol, "expected TO in %DO iteration spec");
+      return npos;
+    }
+    std::string startExpr = rest.substr(0, toPos);
+    std::string afterTo = trim(rest.substr(toPos + 2));
+    // Optional BY (also a whole word).
+    std::string endExpr = afterTo;
+    std::string stepExpr = "1";
+    size_t byPos = std::string::npos;
+    for (size_t pos = 0; pos + 2 <= afterTo.size(); ++pos) {
+      if (afterTo.compare(pos, 2, "BY") != 0)
+        continue;
+      bool leftOk = pos == 0 || !isWordChar(afterTo[pos - 1]);
+      bool rightOk = pos + 2 >= afterTo.size() || !isWordChar(afterTo[pos + 2]);
+      if (leftOk && rightOk) {
+        byPos = pos;
+        break;
+      }
+    }
+    if (byPos != std::string::npos) {
+      endExpr = trim(afterTo.substr(0, byPos));
+      stepExpr = trim(afterTo.substr(byPos + 2));
+    }
+    if (!evalCondExpr(startExpr, path, directiveLine, directiveCol, e1) ||
+        !evalCondExpr(endExpr, path, directiveLine, directiveCol, e2) ||
+        !evalCondExpr(stepExpr, path, directiveLine, directiveCol, e3))
+      return npos;
+    if (e3 == 0) {
+      error(path, directiveLine, directiveCol, "BY step is zero in %DO loop");
+      return npos;
+    }
+    iterate = true;
+  }
+
+  if (!iterate) {
+    // No iteration: scan body once.
+    if (!scan(source, bodyStart, endPos, output, line, col, path, active))
+      return npos;
+  } else {
+    // Iterative: scan body once per iteration.
+    for (long long iter = e1; (e3 > 0) ? (iter <= e2) : (iter >= e2); iter += e3) {
+      ppVars_[varName] = iter;
+      std::string iterOutput;
+      int iterLine = line;
+      int iterCol = col;
+      if (!scan(source, bodyStart, endPos, iterOutput, iterLine, iterCol, path, active))
+        return npos;
+      emit(iterOutput, output, path, line, col);
+      line = iterLine;
+      col = iterCol;
+    }
+  }
+
+  return endSemi + 1;
 }
 
-bool Preprocessor::handleDo(const fs::path& input, const std::string& name, int line, int col) {
-  return unsupported(input, name, line, col);
+// %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-316).
+bool Preprocessor::handleGoto(const fs::path& path, const std::string& name,
+                              const std::string& operand, int line, int col) {
+  std::string label = upper(trim(operand));
+  if (label.empty()) {
+    return error(path, line, col, "%" + name + " requires a label name");
+  }
+  auto it = labels_.find(label);
+  if (it == labels_.end()) {
+    return error(path, line, col, "undefined label in %" + name + ": '" + trim(operand) + "'");
+  }
+  gotoTarget_ = it->second;
+  return true;
 }
 
-bool Preprocessor::handleGoto(const fs::path& input, const std::string& name, int line, int col) {
-  return unsupported(input, name, line, col);
+// %PROCEDURE / %PROC / %RETURN — compile-time macros (Stage 2).
+// Placeholder: not yet implemented, returns the position past the directive.
+size_t Preprocessor::handleProcedure(const fs::path& path, const std::string& source, size_t,
+                                     size_t wordEnd, size_t end, std::string&, int& line,
+                                     int& col, bool) {
+  std::string name = upper(source.substr(wordEnd, end - wordEnd));
+  error(path, line, col, "%" + name + " is not implemented");
+  return std::string::npos;
 }
 
-bool Preprocessor::handleProcedure(const fs::path& input, const std::string& name, int line,
-                                   int col) {
-  return unsupported(input, name, line, col);
+// %REPLACE — Stage 3: textual rescanning in the preprocessor.
+// Currently served downstream by the lexer's token substitution (ADR-077).
+// Reserved for Stage 3 migration.
+bool Preprocessor::handleReplace(const fs::path&, const std::string& source, size_t,
+                                 size_t wordEnd, size_t end, std::string&, int&, int&, bool) {
+  (void)source; (void)wordEnd; (void)end;
+  return true;
 }
 
 bool Preprocessor::unsupported(const fs::path& input, const std::string& name, int line, int col) {

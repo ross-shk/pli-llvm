@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Chapter 9 (ADR-316): %DO/%END loops with iteration variables;
+   the loop counter is tested with %IF inside the body. */
+%declare i;
+pp_do: procedure options(main);
+  %do i = 1 to 3;
+  %if i = 2 %then put skip list('PASS pp_do');
+  %end;
+end pp_do;
