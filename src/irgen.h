@@ -248,6 +248,10 @@ private:
   // (ADR-243): (X & M1) = E1 & (X & M2) = E2 is one test on X. False for
   // any other shape, and when the two tests may not be merged.
   bool emitCombinedBitTest(HExpr* e, Val& out);
+  // Lower one masked bit test, (X & M) = E, on a BIT(n<=64) value as a
+  // packed-integer compare: pack(X) & M against E, instead of materialising
+  // the byte-array AND and comparing byte by byte. False for any other shape.
+  bool emitMaskedBitTest(HExpr* e, Val& out);
   // True when `s` is a parameter of the current procedure or of one of its
   // enclosing procedures: such a symbol's storage may be the caller's.
   bool isParamOfScope(Symbol* s) const;

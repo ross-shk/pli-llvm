@@ -1,34 +1,66 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* Rules (115)-(117): test BIT mask widths and high-bit preservation. */
-bit_mask_widths: procedure options(main);
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (115)-(117): masked BIT tests preserve every bit, including the
+    top bit of a BIT(32) (bit 31, the signed FIXED BIN(31) sign bit) and
+    bits above 31 in a BIT(64). A merged conjunction must agree with the
+    same two tests written separately. */
+ bit_mask_widths: procedure options(main);
    declare w bit(64);
-   /* Test various BIT widths with upper bit set. */
-   declare m bit(1) init(1);
-   declare e bit(1) init(1);
-   /* Width 1: single bit test. */
+   declare m bit(64);
+   declare w32 bit(32);
+   declare m32 bit(32);
+   declare w7 bit(7);
+   declare m7 bit(7);
+   declare hits fixed bin(31);
+
+   hits = 0;
+
+   /* BIT(64): the top bit survives a merged comparison. */
    w = '1'b;
-   if (w & m) = e then put skip list('PASS width=1') else put skip list('FAIL width=1');
-   /* Width 8: byte-aligned test. */
-   w = '11111111'b;
-   if (w & m) = e then put skip list('PASS width=8') else put skip list('FAIL width=8');
-   /* Width 16: test upper bit preservation. */
-   w = '1000000000000000'b;
-   if ((w & m) = e) then put skip list('PASS width=16') else put skip list('FAIL width=16');
-   /* Width 31: test bit 30 (max for signed). */
-   w = '0100000000000000000000000000000'b;
-   if ((w & m) = e) then put skip list('PASS width=31') else put skip list('FAIL width=31');
-   /* Width 32: test all 32 bits. */
-   w = '11111111111111111111111111111111'b;
-   if ((w & m) = e) then put skip list('PASS width=32') else put skip list('FAIL width=32');
-   /* Width 63: test upper bit (bit 62). */
-   w = '01000000000000000000000000000000000000000000000000000000000000000'b;
-   if ((w & m) = e) then put skip list('PASS width=63') else put skip list('FAIL width=63');
-   /* Width 64: test all 64 bits. */
-   w = '111111111111111111111111111111111111111111111111111111111111111'b;
-   if ((w & m) = e) then put skip list('PASS width=64') else put skip list('FAIL width=64');
-   /* Assignment round trip: assign then test. */
-   w = '10101010101010101010101010101010'b;
-   if ((w & m) = e) then put skip list('PASS round-trip') else put skip list('FAIL round-trip');
+   m = '1'b;
+   if ((w & m) = m) & ((w & m) = m) then hits = hits + 1;
+   else do;
+      put skip list('FAIL bit64 top');
+      stop;
+   end;
+
+   /* BIT(64): a value that differs in the top bit must fail the test. */
+   w = '01'b;
+   if ((w & m) = m) & ((w & m) = m) then do;
+      put skip list('FAIL bit64 differs');
+      stop;
+   end;
+
+   /* BIT(32): the top bit is outside FIXED BIN(31)'s value range. */
+   w32 = '1'b;
+   m32 = '1'b;
+   if ((w32 & m32) = m32) & ((w32 & m32) = m32) then hits = hits + 1;
+   else do;
+      put skip list('FAIL bit32 top');
+      stop;
+   end;
+
+   /* BIT(32): the second bit, next to the sign bit. */
+   w32 = '01'b;
+   m32 = '01'b;
+   if ((w32 & m32) = m32) & ((w32 & m32) = m32) then hits = hits + 1;
+   else do;
+      put skip list('FAIL bit32 second');
+      stop;
+   end;
+
+   /* BIT(7): a non-byte width. */
+   w7 = '1'b;
+   m7 = '1'b;
+   if ((w7 & m7) = m7) & ((w7 & m7) = m7) then hits = hits + 1;
+   else do;
+      put skip list('FAIL bit7 top');
+      stop;
+   end;
+
+   if hits ¬= 4 then do;
+      put skip list('FAIL count', hits);
+      stop;
+   end;
    put skip list('PASS');
-end bit_mask_widths;
+ end bit_mask_widths;

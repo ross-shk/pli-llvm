@@ -6259,6 +6259,90 @@ bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
   return true;
 }
 
+// Pack a BIT literal into the integer its packed bytes denote (big-endian,
+// first character in the most significant bit). Widths above 64 are not
+// handled here; the caller keeps the generic byte-array path for those.
+static bool bitLitToU64(const std::string& bits, int nbits, uint64_t& out) {
+  if (nbits <= 0 || nbits > 64 || (int)bits.size() != nbits)
+    return false;
+  uint64_t v = 0;
+  for (int i = 0; i < nbits; ++i)
+    v = (v << 1) | (bits[i] == '1' ? 1u : 0u);
+  out = v;
+  return true;
+}
+
+// Lower one masked bit test, (X & M) = E, on BIT(n<=64) as a packed-integer
+// compare. The packed value is a bijection on n-bit strings, so
+// pack(X & M) = pack(X) & pack(M): one integer AND and one compare replace
+// the byte-array AND and the per-byte equality chain. The generic byte-array
+// lowering stays the fallback (and the differential-oracle path).
+bool IRGen::emitMaskedBitTest(HExpr* e, Val& out) {
+  const Tok op = e->op;
+  if (op != Tok::Eq && op != Tok::Ne)
+    return false;
+  // One side is the masked value, the other a BIT literal expectation.
+  HExpr* masked = nullptr;
+  HExpr* want = nullptr;
+  if (e->a && e->a->kind == HExpr::Binary && e->a->op == Tok::Amp &&
+      e->b && e->b->kind == HExpr::BitLit) {
+    masked = e->a.get();
+    want = e->b.get();
+  } else if (e->b && e->b->kind == HExpr::Binary && e->b->op == Tok::Amp &&
+             e->a && e->a->kind == HExpr::BitLit) {
+    masked = e->b.get();
+    want = e->a.get();
+  } else {
+    return false;
+  }
+  // The mask is the literal operand of the AND; the other is the tested value.
+  HExpr* value = masked->a.get();
+  HExpr* mask = masked->b.get();
+  if (!mask || mask->kind != HExpr::BitLit) {
+    value = masked->b.get();
+    mask = masked->a.get();
+  }
+  if (!value || !mask || mask->kind != HExpr::BitLit)
+    return false;
+  if (!value->ty.isBit() || value->ty.len < 2 || value->ty.len > 64)
+    return false;
+  const int nbits = value->ty.len;
+  // The mask, the expectation and the value must all be the same bit string.
+  if (mask->ty.len != nbits || want->ty.len != nbits)
+    return false;
+  uint64_t maskVal = 0, wantVal = 0;
+  if (!bitLitToU64(mask->sval, nbits, maskVal) ||
+      !bitLitToU64(want->sval, nbits, wantVal))
+    return false;
+  // The lowering policy wins (ADR-260): the runtime path keeps the generic
+  // byte-array lowering so the differential oracle can compare the two.
+  if (runtimePath("bit_test")) {
+    facts_.recordBuiltin("bit_test", "runtime");
+    return false;
+  }
+  facts_.recordBuiltin("bit_test", "llvm");
+  // Evaluate the tested value once, pack it, then one AND and one compare.
+  Val x = emitExpr(value);
+  if (!x.ty.isBit() || x.ty.len != nbits || !x.reg)
+    return false;
+  llvm::Value* xp = packBitValue(x.reg, nbits, e->loc);
+  llvm::Value* maskedInt;
+  llvm::Value* wantInt;
+  if (nbits <= 32) {
+    // A 32-bit string stays in i32: the same lane width a C uint32_t uses.
+    xp = b_.CreateTrunc(xp, b_.getInt32Ty(), "bt.x32");
+    maskedInt = b_.CreateAnd(xp, b_.getInt32((int)maskVal), "bt.and32");
+    wantInt = b_.getInt32((int)wantVal);
+  } else {
+    maskedInt = b_.CreateAnd(xp, i64((long long)maskVal), "bt.and");
+    wantInt = i64((long long)wantVal);
+  }
+  llvm::Value* eq = b_.CreateICmpEQ(maskedInt, wantInt, "bt.eq");
+  out.ty = Type::bit(1);
+  out.reg = op == Tok::Ne ? b_.CreateNot(eq, "bt.ne") : eq;
+  return true;
+}
+
 void IRGen::emitAssign(HStmt* s) {
   if (!s->target)
     return;
@@ -10865,6 +10949,12 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         out = v;
         return out;
       }
+      // A BIT(1) rides as i1, not as a byte array: widen it through the
+      // integer path so the byte copy below never extracts from a scalar.
+      if (v.ty.len == 1) {
+        out.reg = unpackBitValue(b_.CreateZExt(v.reg, b_.getInt64Ty(), "b1w"), dst.len, loc);
+        return out;
+      }
       // Bit-to-bit copies bytes directly (pad/truncate on the right); an
       // integer round-trip would destroy string positions.
       int SB = bitBytes(v.ty.len), DB = bitBytes(dst.len);
@@ -11892,6 +11982,26 @@ Val IRGen::emitExpr(HExpr* e) {
         v.reg = llvm::UndefValue::get(llvm::ArrayType::get(b_.getInt8Ty(), 1));
         return v;
       }
+      // Up to 64 bits, pack the operands into one integer and do the logic
+      // there: pack is a bijection on n-bit strings, so pack(a & b) is
+      // pack(a) & pack(b). This keeps the operation in a single register
+      // instead of one AND/OR per storage byte. Wider strings keep the
+      // byte-array path.
+      if (a.ty.len <= 64) {
+        llvm::Value* x = packBitValue(a.reg, a.ty.len, e->loc);
+        llvm::Value* y = packBitValue(b.reg, b.ty.len, e->loc);
+        // Keep the operation in the narrowest register that holds the string:
+        // a 32-bit string in i32 lets the loop vectorizer use 32-bit lanes,
+        // the same width a C uint32_t uses.
+        if (a.ty.len <= 32) {
+          x = b_.CreateTrunc(x, b_.getInt32Ty(), "and32x");
+          y = b_.CreateTrunc(y, b_.getInt32Ty(), "and32y");
+        }
+        llvm::Value* r = op == Tok::Amp ? b_.CreateAnd(x, y, "and") : b_.CreateOr(x, y, "or");
+        v.ty = a.ty;
+        v.reg = unpackBitValue(r, a.ty.len, e->loc);
+        return v;
+      }
       int B = bitBytes(a.ty.len);
       llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
       llvm::Value* out = llvm::UndefValue::get(arrTy);
@@ -11915,6 +12025,11 @@ Val IRGen::emitExpr(HExpr* e) {
 
   const bool isCmp = op == Tok::Eq || op == Tok::Ne || op == Tok::Lt || op == Tok::Le ||
                      op == Tok::Gt || op == Tok::Ge || op == Tok::Ngt || op == Tok::Nlt;
+
+  // A single masked bit test, (X & M) = E, compares packed integers rather
+  // than materialising the byte-array AND (rules (115)-(117)).
+  if ((op == Tok::Eq || op == Tok::Ne) && emitMaskedBitTest(e, v))
+    return v;
 
   Val a = emitExpr(e->a.get());
   Val b = emitExpr(e->b.get());

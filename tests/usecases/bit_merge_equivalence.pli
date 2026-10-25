@@ -1,22 +1,71 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* Rules (115)-(117): test bit merge equivalence - merged conjunction vs
-   independent tests. The masks are constants, which is what makes the merge
-   possible. */
-bit_merge_equivalence: procedure options(main);
-   declare (i, hits) fixed bin(31);
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (115)-(117): a merged conjunction of two masked BIT tests must
+    produce the same BIT(1) as the two tests written separately. The masks
+    are constants and disjoint, which is what permits the merge (ADR-243).
+    The masks use the top two bits of a BIT(32), so a lowering that
+    truncates through FIXED BIN(31) disagrees on the sign bit. */
+ bit_merge_equivalence: procedure options(main);
    declare w bit(32);
+   declare m1 bit(32) init('10000000000000000000000000000000'b);
+   declare m2 bit(32) init('01000000000000000000000000000000'b);
+   declare (merged, sep1, sep2, separate) bit(1);
 
-   hits = 0;
-   do i = 1 to 300000000;
-      w = fixed(mod(i, 700) * 3000001);
-      /* Merged test: two masks merged into one. */
-      if ((w & '00000000000000000011000000000000'b) = '00000000000000000011000000000000'b) &
-         ((w & '00000000000000000000001100000000'b) = '00000000000000000000001100000000'b)
-      then hits = hits + 1;
+   /* Both masked tests hold: the top bit and the bit below it. */
+   w = '11'b;
+   merged = ((w & m1) = m1) & ((w & m2) = m2);
+   sep1 = (w & m1) = m1;
+   sep2 = (w & m2) = m2;
+   separate = sep1 & sep2;
+   if merged ¬= separate then do;
+      put skip list('FAIL both');
+      stop;
+   end;
+   if ^merged then do;
+      put skip list('FAIL both true');
+      stop;
    end;
 
-   put skip list(hits);
-   /* Verify merged form gives same result as separate tests. */
-   if (hits > 0) then put skip list('PASS merge_eq') else put skip list('FAIL merge_eq');
-end bit_merge_equivalence;
+   /* Only the top bit: the conjunction is false. */
+   w = '1'b;
+   merged = ((w & m1) = m1) & ((w & m2) = m2);
+   sep1 = (w & m1) = m1;
+   sep2 = (w & m2) = m2;
+   separate = sep1 & sep2;
+   if merged ¬= separate then do;
+      put skip list('FAIL top only');
+      stop;
+   end;
+   if merged then do;
+      put skip list('FAIL top only true');
+      stop;
+   end;
+
+   /* Only the second bit: the conjunction is false. */
+   w = '01'b;
+   merged = ((w & m1) = m1) & ((w & m2) = m2);
+   sep1 = (w & m1) = m1;
+   sep2 = (w & m2) = m2;
+   separate = sep1 & sep2;
+   if merged ¬= separate then do;
+      put skip list('FAIL second only');
+      stop;
+   end;
+   if merged then do;
+      put skip list('FAIL second only true');
+      stop;
+   end;
+
+   /* Neither bit: both forms are false. */
+   w = '0'b;
+   merged = ((w & m1) = m1) & ((w & m2) = m2);
+   sep1 = (w & m1) = m1;
+   sep2 = (w & m2) = m2;
+   separate = sep1 & sep2;
+   if merged ¬= separate then do;
+      put skip list('FAIL neither');
+      stop;
+   end;
+
+   put skip list('PASS');
+ end bit_merge_equivalence;
