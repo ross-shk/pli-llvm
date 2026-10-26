@@ -12252,3 +12252,51 @@ and a lost stack is not observable as an error. *Pack the head in a 128-bit
 CAS.* Not portable without libatomic. *Keep the Windows `Interlocked*` event
 load.* It is a full-barrier RMW on the waiter's path; the compiler atomics
 lower correctly on every supported target.
+
+---
+
+## ADR-332 — A worker must not park once MAIN has finished
+
+**Context.** A 200-task fan-out repeated 20 times intermittently left the
+process alive with every worker parked, after MAIN had returned. The
+diagnostic build (counters plus a watchdog; removed before this ADR) showed
+`rt_main_done = 1`, the main fiber `PLI_FIB_DEAD`, the waited event complete,
+every run queue empty, and every worker asleep, including worker 0.
+
+MAIN is not pinned to worker 0. When it is unparked, it goes to its home
+worker's `ready` list; the worker moves that list into its local run queue,
+and a thief may take MAIN before the owner runs it. MAIN can therefore finish
+on a peer. That peer sets `rt_main_done` and wakes every worker. But
+`rt_worker_park` checked only `runnext`, `local`, `ready` and the global queue
+in its re-check: a wake that arrived while worker 0 was between its check and
+`parked = 1` saw `parked = 0`, skipped the signal, and worker 0 then slept
+with `rt_main_done` set. Nothing else ever signals worker 0, so the process
+never exits. This affected the pre-ADR-331 runtime too; it is not a pool or
+event bug.
+
+**Decision.** `rt_worker_park` re-reads `rt_main_done` (acquire) for worker 0
+in the spin loop and again under the worker's own lock, and does not park when
+it is set. The check is inside the same `w->mu` region that sets `parked` and
+enters the wait, so the standard argument applies: a waker either sees
+`parked = 1` and signals, or worker 0 sees the flag in its re-check and does
+not sleep. No new lock and no new signal path.
+
+**Evidence.** Reproducer: `do r = 1 to 20; do i = 1 to 200; call w
+event(ev(i)); end; wait(ev); end;` with a no-argument `w`. Before: 8/20
+timeouts on the pre-change runtime and 11/20 on ADR-331. After: 0/40 at the
+default eight workers and 0/10 each at 2, 4, 6 and 8. `tests/core/
+task_pool_stress.pli` is the regression test (20 rounds x 200; it also checks
+every event) and is in the TSan loop.
+
+**Consequences.** `DEFERRED-WORK C5` is closed. Only worker 0's loop returns
+when MAIN ends; the peer workers are detached OS threads and die with the
+process, so they do not need to be woken to exit. The rule is recorded in
+`ARCHITECTURE.md` §3.7. No ABI, IRGen, or language change.
+
+**Rejected.** *Wake worker 0 again from the finishing worker.* The race is a
+missed signal, not a missing one; a second wake can be missed the same way.
+*Re-check `rt_main_done` only at the top of the loop.* That is where the loop
+already checks it; the gap is between that check and the park. *Disable
+stealing.* It hides the migration that exposes the race and costs the fan-out
+its load balance. *Let every worker exit on `rt_main_done`.* Only worker 0
+holds the process lifetime; peers are detached and never joined.

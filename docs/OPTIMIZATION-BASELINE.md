@@ -1467,6 +1467,8 @@ harness runs (227-268 ms against 250 ms); there is no repeatable direction.
 A spin lock (about 500 ms) and a platform mutex (about 339 ms) were both
 rejected during the pass - the production design is the tagged stack.
 
-The machine also exposed a pre-existing multi-worker fan-out task-loss hang
-that reproduces on the pre-change runtime; it is not part of this measurement
-and is tracked as `DEFERRED-WORK C5`.
+The machine also exposed a pre-existing multi-worker fan-out hang that
+reproduces on the pre-change runtime; it is not part of this measurement.
+It was a lost shutdown wakeup, not a task loss, and is fixed in ADR-332
+(`DEFERRED-WORK C5`, now done). The fan-out medians above stay noise
+dominated: the samples spread from 0.2 s to 0.5 s on the same host.

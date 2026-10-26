@@ -517,12 +517,19 @@ static void rt_worker_park(rt_worker *w) {
     if (timeout < 0)
       timeout = 0;
   }
+  /* Worker 0 is also the one that ends the program: once MAIN is done it
+   * must not sleep, or the wake from the worker that ran MAIN can arrive
+   * while it is on its way to sleep (the waker sees parked = 0, skips the
+   * signal, and nothing else will ever signal again). */
+  int main_done = w->id == 0 &&
+                  atomic_load_explicit(&rt_main_done, memory_order_acquire);
   /* Spin: look for work before sleeping. The ready list and the global
    * queue are the ones a waker pushes to, and they are published with a
    * release store, so a load here sees the task. */
   if (w->ran_recently) {
     for (int spin = 0; spin < RT_PARK_SPIN; ++spin) {
-      if (atomic_load_explicit(&w->ready, memory_order_acquire) ||
+      if (main_done ||
+          atomic_load_explicit(&w->ready, memory_order_acquire) ||
           atomic_load_explicit(&w->local, memory_order_acquire) ||
           atomic_load_explicit(&rt_global_head, memory_order_acquire))
         return;
@@ -535,8 +542,11 @@ static void rt_worker_park(rt_worker *w) {
   /* Re-check under the lock: a task may have arrived while we looked for
    * one. The ready list counts: a task unparked to this worker while it
    * was on its way to sleep would otherwise wait for a wakeup that never
-   * comes. */
-  if (!w->runnext && !atomic_load_explicit(&w->local, memory_order_acquire) &&
+   * comes. MAIN's end is re-read under the lock for the same reason. */
+  main_done = w->id == 0 &&
+              atomic_load_explicit(&rt_main_done, memory_order_acquire);
+  if (!main_done && !w->runnext &&
+      !atomic_load_explicit(&w->local, memory_order_acquire) &&
       !atomic_load_explicit(&w->ready, memory_order_acquire) &&
       !atomic_load_explicit(&rt_global_head, memory_order_acquire)) {
     atomic_store_explicit(&w->parked, 1, memory_order_release);

@@ -289,6 +289,12 @@ The rules that make it work, each of them learned the hard way:
   instead of one stack per task (ADR-325). The queue's head is atomic and so
   is each link: a thief reads a link while the owner is between its load and
   its compare-and-swap, and a plain field would be a data race there.
+* **A worker does not sleep once MAIN has finished.** MAIN can be taken by a
+  thief while it is moved from its home worker's ready list into the run
+  queue, so it may finish on a peer. That peer sets `rt_main_done` and wakes
+  every worker; worker 0 re-reads the flag inside its own park decision, or
+  the wake can arrive just before it marks itself parked and is lost, leaving
+  the program alive with no worker to end it (ADR-332).
 * **A condition variable is keyed.** The event table has one condition for
   all the events, so a plain broadcast would wake every waiter for every
   task that ends. A waiter says what it waits for, and a signal wakes only
