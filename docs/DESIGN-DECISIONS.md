@@ -11581,3 +11581,314 @@ on an area block and contradicts the OFFSET rule that a bare offset is used
 only through `POINTER()`. *Recording member associations now.* That needs a
 Symbol per member, or a new metadata field on `Member`, and is a larger
 change; the diagnosed limitation is honest and the explicit `IN` form works.
+
+---
+
+## ADR-318 — `EXTERNAL AREA` is one region, reached through a common global slot
+
+**Context.** Rule (42) already gives an `EXTERNAL` variable one definition shared
+by every translation unit, through a common-linkage LLVM global whose name is
+the external name. Rule (20) rejected `EXTERNAL AREA` with "an EXTERNAL AREA is
+not implemented in this stage", because the region also has to be *created*, and
+when the rejection was written an AREA had no lazy slot: only automatic regions
+created at procedure entry existed. ADR-310 then made a STATIC area a module
+global slot initialised on first use by `pli_area_lazy`, which is exactly the
+shape an EXTERNAL area needs — the common global is one slot, so the first module
+to touch it creates the region and every other module finds it non-null.
+
+**Decision.** Drop the rejection. An `EXTERNAL AREA` is an ordinary external
+variable whose type is an AREA, so it keeps rule (42)'s common-linkage slot and
+rides ADR-310's lazy creation path unchanged:
+
+- The slot is a common global named from the external name, so modules that
+  declare the same AREA reach the same 8-byte slot after linking.
+- `pli_area_lazy` creates the region on first use with the declaring item's size;
+  the declaration that runs first sets the capacity, the way C's tentative
+  definitions settle on one object. IBM requires the declarations to agree, so a
+  mismatch is the programmer's error, not a compiler check.
+- `STATIC` is implied, as rule (42) already does for every external variable, so
+  the region lives for the whole program and needs no destroy.
+- `AREA(*)`, an AREA array, and the remaining attribute combinations keep the
+  diagnostics they already had; only the EXTERNAL rejection changed.
+
+**Consequences.** `tests/multimodule/area_external.pli` and its `_lib` companion
+declare one external region in both modules: the library allocates a block and
+the main module reads and frees it, then the main module allocates a block the
+library frees. A FREE of a block the region does not own raises the AREA
+condition, so the test fails if the two modules end up with different slots.
+`bad_area_static.pli` keeps only the parameter-`STATIC` diagnostic. B5 is left
+with the `OFFSET`/`OFFSETVALUE` conversions.
+
+**Rejected.** *Give an EXTERNAL area its own external pointer and a per-module
+create.* Two modules would create two regions and a FREE across the boundary
+would raise AREA, which is the defect the test pins. *Require one module to
+declare it `STATIC` and the rest `EXTERNAL`.* IBM does not ask for that, and the
+common-slot form needs no owner.
+
+---
+
+## ADR-319 — `OFFSET(pointer, area)` is served; `OFFSETVALUE` stays diagnosed
+
+**Context.** B5 carried the `OFFSET`/`OFFSETVALUE` conversion built-ins as open
+because "our offsets carry no area base, so address arithmetic cannot serve them
+faithfully" (ADR-311). An offset in this compiler is an absolute address, the
+same representation as a POINTER (ADR-170); IBM's offset is a displacement from
+the start of its area. The two directions are not equally affected:
+
+- `OFFSET(x, y)` takes a pointer and the area it addresses and yields an offset.
+  Its result only has to *locate the same generation*, which an absolute address
+  already does. IBM's precondition — x must identify a generation in y — is a
+  check the region itself can answer, not a representation question.
+- `OFFSETVALUE(n)` takes a computational value and yields an offset whose
+  displacement from its area is n. With absolute addresses there is nowhere to
+  put a displacement: storing `n` as an address points at byte n of the process,
+  and the area that would turn it into an address is not an argument of the
+  built-in.
+
+**Decision.** Serve the pointer-to-offset direction and keep the other diagnosed:
+
+- `OFFSET(x, y)` is typed as an OFFSET when `x` is a scalar POINTER and `y` is a
+  scalar AREA reference (`isAreaRef`, so an AREA array element qualifies and a
+  whole array does not). Arity and argument type errors cite (123); a non-AREA
+  second argument cites (22).
+- It lowers to `pli_area_offset(area, pointer)`: a null pointer returns the null
+  offset, a null area raises the AREA condition, and a pointer that is not one of
+  the region's live generations raises AREA, mirroring what `FREE ... IN(area)`
+  already refuses. The returned value is the pointer itself, which is what the
+  representation means by "the same location".
+- `OFFSETVALUE` is diagnosed with rule (22) and a message that names the reason.
+  It is the recorded limitation of this representation, not an unimplemented
+  gap to be filled silently later.
+
+**Consequences.** `tests/builtins/offset_convert.pli` converts a heap pointer
+into an offset, dereferences the same generation through it, writes through the
+converted offset and reads the write through the pointer, and converts the null
+pointer. `tests/builtins/bad_offset_convert.pli` pins the arity, a non-POINTER
+first argument, a non-AREA second argument and the `OFFSETVALUE` rejection.
+`guides/builtins.md` and `guides/programming.md` list the served form and the
+limitation. B5 is closed.
+
+**Rejected.** *Store offsets as displacements and add the area base at every
+use.* That is the faithful model, but every SET, `->`, FREE, `OFFSETADD` and
+`OFFSETDIFF` site would need the base of the locator: an offset would have to
+carry which area it belongs to, and a POINTER-based reference would still be
+absolute. It is a representation change across sema, irgen and the ABI, not a
+conversion built-in.
+*Serve `OFFSETVALUE` by storing the value as an address.* The first dereference
+would read process memory at byte n — a silent wrong answer, the worst class in
+the priority model.
+
+---
+
+## ADR-320 — `CHECK`/`NOCHECK` are prefix elements that override the inherited check state
+
+**Context.** Rule (61) puts `check-condition` and `no-check-condition` in the
+prefix-element production, and rules (95)/(96) define them as a parenthesised
+list of unsubscripted references (`CHECK ( SIZE, STRINGRANGE )`, `NOCHECK`
+with or without a list). The compiler diagnosed both with rule (95) and kept
+the plain `NO...` prefixes, which every scope OR-inherits. Two gaps followed:
+
+- Nothing could re-enable a check, so `(NOSIZE): ... (CHECK(SIZE)): ...` was
+  impossible even though it is exactly what CHECK is for.
+- A prefix list on a `PROCEDURE` statement only carried STRINGRANGE. The
+  `(NOSIZE)` path dropped the flag, so `(NOSIZE): p: PROCEDURE;` compiled and
+  aborted on the first overflow — silently accepted, not diagnosed.
+
+**Decision.** Serve `CHECK`/`NOCHECK` as prefix elements over the checks this
+compiler implements (SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION,
+STRINGRANGE):
+
+- `CHECK(list)` force-enables every named check for the statement's scope;
+  `CHECK(ALL)` enables all five. `NOCHECK(list)` disables the named ones, and
+  `NOCHECK` alone disables all five (rule (96)'s optional list).
+- A `NO...` form inside a `CHECK`/`NOCHECK` list still disables, so
+  `(CHECK(SIZE), NOSIZE)` means what it reads: the last word wins.
+- Each implemented check carries two flags on the statement: the existing
+  `noX` disable and a new `chkX` enable. IRGen gives `chkX` precedence over
+  the OR-inherited disable (`top.noSize = chkSize ? false : (top.noSize ||
+  noSize)`), and sema copies both pairs when it splits an assignment into
+  synthesized statements. STRINGRANGE rides its existing tri-state.
+- A `PROCEDURE` statement's prefix list now scopes its body through a
+  four-entry parser state, restored when the body ends; statements start from
+  it and a nested prefix overrides it. This fixes the `(NOSIZE)` drop above
+  and makes `(CHECK(SIZE)): p: PROCEDURE` meaningful.
+- The whole-program switches still win: `--no-size-checks`, and `-O2`/`-O3`
+  which imply it, mean "this program never overflows", so `CHECK(SIZE)` does
+  not bring the traps back. `--size-checks` overrides the optimization-level
+  default and then CHECK behaves as above.
+- Conditions outside the implemented set keep the rule (60) unenforced
+  warning in a prefix list and the rule (94) diagnosis in ON/SIGNAL/REVERT.
+
+**Consequences.** `tests/core/check_prefix.pli` pins each behaviour: `(NOSIZE)`
+suppresses a SIZE trap, `(CHECK(SIZE))` nested inside it re-raises, both
+`NOCHECK` spellings suppress, `CHECK(CONVERSION)` re-enables after
+`NOCHECK(CONVERSION)`, `CHECK(ALL)` turns on the opt-in STRINGRANGE check while
+a plain `SUBSTR` stays clamped, and a `(NOSIZE)` prefix on a nested `PROCEDURE`
+statement leaves its body untrapped until a nested `(CHECK(SIZE))`. B4 loses
+the CHECK item; the arithmetic, FINISH, keyed-I/O and control-flow items stay
+open.
+
+**Rejected.** *Lower `CHECK` to an `ON condition SYSTEM` handler push.* The
+checks here are compile-time code, not runtime-dispatch decisions, and the
+handler is the program's real one in the same scope; pushing a second entry
+would only make `REVERT` pop more often for no behavioural gain.
+*Treat `CHECK` as a no-op.* It is a no-op where nothing is disabled, but the
+nested case above is observable and the test pins it.
+
+---
+
+## ADR-321 — An ON unit reaches fixed-size automatics by subscript and by member
+
+**Context.** Rule (91) runs a handler as a frameless function, so an ON unit
+that touches an automatic of the establishing procedure goes through the
+capture context: establishment stores the address of each collected automatic
+and the handler binds it back. ADR-299 let a `BEGIN` unit declare its own
+locals and ride that same path. The collector, however, only accepted a *whole*
+plain-scalar reference (`e->kind == VarRef && path.empty() && !locPtr`), so
+`a(1)` and `rec.inner.n` were diagnosed with "an ON-unit reaching an automatic
+variable is not implemented in this stage" even though both resolve to the same
+captured base plus constant offsets.
+
+**Decision.** Capture a fixed-size automatic of the establishing frame by its
+base address, whatever the reference shape:
+
+- The accepted symbols are `Var`s owned by the establishing procedure that are
+  not `STATIC`, `BASED`, `DEFINED`, `CONTROLLED`, `AREA` or `FILE`, whose extent
+  is not dynamic. Scalars, arrays and structures all qualify. A whole scalar
+  reference keeps its older path unchanged, so it still captures a
+  `CONTROLLED` scalar's live generation at establishment.
+- A subscripted or qualified reference uses that captured base exactly like a
+  whole reference does, so `a(i) = a(i) + 1` and `rec.inner.n = ...` inside the
+  unit read and write the raiser's storage. A dynamic subscript variable is
+  itself captured by the same traversal, which already walks the reference's
+  subscript expressions.
+- Everything whose address is not the symbol's own or moves after
+  establishment stays diagnosed for a subscripted or member reference:
+  `BASED` storage reached through a locator, a `CONTROLLED` generation (which
+  `ALLOCATE` can replace), a `DEFINED` overlay, an `AREA` slot's region, a
+  `FILE` variable's slot, a parameter (the frame does not own it), a variable
+  extent, and any reference from a nested unit (which runs with no establishing
+  frame at all).
+- The ORDER rule is unchanged: the unit reads the storage at trap time, so a
+  write by the procedure before the trap is visible (ADR-253).
+
+**Consequences.** `tests/core/on_unit_aggregate.pli` takes an array element and
+a nested structure member inside a `BEGIN` unit, writes both, and checks the
+writes from the procedure after the SIGNAL resumes. `bad_on_local.pli` now
+pins the remaining diagnostics (BASED, CONTROLLED, variable extent, nested
+unit). `GC` (91)–(99) and the programming guide say which references work. B4
+loses the unit-aggregate item.
+
+**Rejected.** *Capture the array or structure by value into the context.* The
+unit must write through to the establishing frame; a copy would swallow the
+writes, and the existing whole-scalar path already does the right thing with an
+address. *Collect only the elements the unit mentions.* A subscript is usually
+dynamic, so the set is not statically known, and `a(i)` with a captured `i`
+needs the base anyway.
+
+---
+
+## ADR-322 — `FINISH` is raised when the task's own procedure exits
+
+**Context.** Rule (94) lists `FINISH` among the conditions, and IBM raises it
+in a task when the task's procedure — the one named on the `CALL ... TASK` /
+`EVENT` — is about to complete, so a task can do its cleanup before the event
+completes. The parser diagnosed it with rule (94). Three facts shape the
+implementation:
+
+- The ON stack is per task (ADR-234), so a unit established in the task is
+  visible while that task runs.
+- A task is started through the per-site LLVM wrapper `pli_task_wrap_N`
+  (`emitAsyncSpawn`), which unpacks the context, calls the procedure, frees the
+  context and completes the event.
+- A procedure's epilogue pops the handlers it established *before* control
+  returns to that wrapper, so the wrapper can no longer see the task's unit.
+
+**Decision.** Raise `FINISH` from the task procedure's own exit, with the
+runtime naming that procedure:
+
+- `FINISH` gets the fixed key `Stmt::kFinishCondKey` (-6); `ON`/`SIGNAL`/
+  `REVERT FINISH` type-check through the normal condition path and
+  `CONDITION(FINISH)` is rejected like every other fixed condition.
+- The spawn wrapper calls `pli_task_finish_target(callee)` before it calls the
+  procedure, storing the callee in the per-task state.
+- Every procedure exit that establishes an ON unit calls
+  `pli_signal_finish(this_procedure)` *before* it pops the handler depth. The
+  runtime fires only when `this_procedure` is the recorded one and a `FINISH`
+  unit is still established; with no unit the task simply ends, which is the
+  condition's implicit action.
+- The hook is emitted on both exits: a falling-off-the-end epilogue and an
+  explicit `RETURN`, including the segment epilogues of a multi-entry body.
+- The raise happens before the wrapper frees the context and completes the
+  event, so a `WAIT` on the event observes the unit's writes.
+- The recorded procedure lives in `pli_task_local` and is cleared with the rest
+  of the state when a fiber is recycled for a new task.
+
+**Consequences.** `tests/core/on_finish.pli` runs a task whose procedure
+establishes `ON FINISH`, checks that the unit ran (and that its flag was visible
+through `WAIT`), then calls the same procedure normally and checks that nothing
+fires, then drives an early `RETURN` and a nested procedure with its own
+`FINISH` unit, which must stay silent. `bad_on_cond_finish.pli` pins the
+`CONDITION(FINISH)` rejection. `GC` (91)–(99) and the programming guide list the
+condition. B4 loses the `FINISH` item.
+
+**Rejected.** *Raise it from the wrapper after the callee returns.* The
+procedure has already popped the unit, so the handler lookup finds nothing and
+nothing runs. *Raise it at every procedure exit in a task, without naming the
+callee.* A nested procedure's own `FINISH` unit would fire early and a task
+procedure that calls a helper would see the helper's unit instead; the test
+pins that case. *Detect "am I a task?" and fire at procedure exit.* That is
+closer than the wrapper, but it still cannot tell the task's procedure from a
+nested one, and it would fire in the main task if the main procedure happened
+to establish the unit.
+
+---
+
+## ADR-323 — The `AREA` condition is catchable, and a resumed operation has no effect
+
+**Context.** Rule (94) lists `AREA` among the conditions; the parser diagnosed
+it with rule (94). The region runtime had three failure paths — an ALLOCATE that
+does not fit, a FREE through a region that does not own the block, and an
+OFFSET against the wrong region — and each one called `pli_signal_error`, which
+prints and exits, so a program could not recover and the region was left with no
+reported state. With `ON AREA` accepted, the runtime has to answer a harder
+question than "did it fail": what does the operation leave behind when a unit
+resumes?
+
+**Decision.** Raise the condition and leave the operation *undone*:
+
+- `AREA` gets the fixed key `Stmt::kAreaCondKey` (-7); `ON`/`SIGNAL`/`REVERT
+  AREA` type-check through the normal condition path, and `CONDITION(AREA)` is
+  rejected like any other fixed condition.
+- The three region failures call one helper that runs the topmost `AREA` unit
+  when one is established. With no unit it calls `pli_signal_error` as before —
+  a message and ERROR, exit 8 — so the unhandled behaviour is unchanged.
+- A unit that resumes leaves the operation with no effect: `pli_area_alloc`
+  returns null and the ALLOCATE stores nothing (neither the `SET(...)` locator
+  nor the based variable's own locator), `pli_area_free` returns without
+  unlinking the block, and `pli_area_offset` returns the pointer it was given.
+  A program that resumes therefore keeps the locator and the region it had
+  before the failed statement, which the test pins.
+- `pli_area_free` through a null region now raises AREA instead of freeing the
+  block through an unrelated header; the null-area ALLOCATE and OFFSET paths
+  raise it too.
+- IRGen branches on the null result only for `ALLOCATE ... IN(area)`; the heap
+  path (`pli_alloc`) cannot return null, so its code is unchanged.
+
+**Consequences.** `tests/core/on_area.pli` overflows a region with a unit
+established (allocator undone, earlier block intact), frees through the wrong
+region, converts through the wrong region with `OFFSET`, and drives the unit
+directly with `SIGNAL AREA`. `tests/driver/area_condition.sh` pins the
+unhandled path (message, exit 8) and repeats the resume case end to end.
+`bad_on_cond_area.pli` pins the `CONDITION(AREA)` rejection. `GC` (20) and
+(91)–(99) and the programming guide list the condition. B4 loses the AREA
+condition.
+
+**Rejected.** *Keep aborting when no unit is established but return a failure
+code to the unit.* An unhandled AREA is ERROR by definition, so the abort stays;
+the helper only changes what happens *with* a unit. *Let a resumed ALLOCATE
+still set the locator.* The block does not exist; pointing the locator at null
+(or at the previous block) is the only state the program can safely continue
+from, and overwriting a live locator would lose the only handle to the region's
+existing block. *Free the block when the region is null.* That is what the old
+code did by accident; the block would be returned to the wrong allocator.

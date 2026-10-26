@@ -41,7 +41,7 @@ pli name.pli -o name && ./name
 | Types      | FIXED BIN/DEC, FLOAT, COMPLEX, BIT, CHAR/VARYING, POINTER        | STERLING constants, PICTURE type |
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
-| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), named | OVERFLOW, CHECK                  |
+| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, named; `CHECK`/`NOCHECK` prefixes | OVERFLOW |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
@@ -759,6 +759,14 @@ a later activation can free it:
  allocate slot in(a) set(pa);   /* the region outlives this activation */
 ```
 
+An `external` area is one region shared by every module that declares it. The
+first module to use it creates it, and a block one module allocates another can
+free:
+
+```pli
+ dcl region area(4096) external;   /* same region in every module */
+```
+
 An offset can move by a byte count, and two offsets can be measured against each other — the way to walk a variable-length block when a structure does not describe every byte:
 
 ```pli
@@ -782,9 +790,9 @@ An array of offsets holds several blocks from one region. Each element is a full
 
 **Not yet**
 
-- External areas are diagnosed, and the `OFFSET`/`OFFSETVALUE` conversion
-  built-ins are not served. An area declared as a structure member is
-  diagnosed with rule (20). A member OFFSET's declared area is not recorded,
+- `OFFSETVALUE` (an integer displacement to an offset) is not served: an
+  offset here holds an absolute address. An area declared as a structure member
+  is diagnosed with rule (20). A member OFFSET's declared area is not recorded,
   so a member `set(...)` or `free` needs an explicit `in(...)`.
 
 > **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.
@@ -885,7 +893,30 @@ PL/I has resumable conditions with dynamic scope — think `try/except` in Pytho
  revert error;          /* pop the handler */
 ```
 
-Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), plus your own named conditions.
+Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, `area` for regions, plus your own named conditions.
+
+`on area` catches a region that cannot satisfy an `allocate`, and a pointer
+that does not belong to the region in `free`/`offset`. A unit that resumes
+leaves the operation undone — the locator is not changed and the block stays
+live:
+
+```pli
+ on area put skip list('region full');
+
+ allocate rec in(region) set(p);   /* refused: p keeps its old value */
+```
+
+`on finish` runs inside a task when the procedure the task was created for
+returns — before its event completes, so a `wait` sees the cleanup:
+
+```pli
+ call worker event(done);
+ wait(done);
+
+ worker: procedure;
+    on finish put skip list('task done');
+ end worker;
+```
 
 A `begin` ON-unit is a block, so it can declare its own work variables. They shadow outer names and keep their value for as long as the handler stays established:
 
@@ -896,6 +927,11 @@ A `begin` ON-unit is a block, so it can declare its own work variables. They sha
    put skip list('caught', tries);
  end;
 ```
+
+A unit can also read and write the establishing procedure's fixed-size arrays
+and structures by subscript or by qualified member name — it captures their
+storage, not a copy. `BASED`, `CONTROLLED` and variable-extent storage still
+cannot be reached from a unit.
 
 Bounds-checking example — the handler runs, then execution resumes with the index clamped:
 
@@ -934,11 +970,35 @@ Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconvers
  (nosubscriptrange): a(i) = 0;  /* trust me, i is fine */
 ```
 
+`check` puts a check back on for one statement, and `nocheck` turns checks off. Both take a list of conditions, or `all`; `nocheck` on its own turns every check off:
+
+```pli
+ (nosize):
+    do;
+       total = total + bump;
+       (check(size)): total = total + bump;   /* this one traps */
+    end;
+
+ (check(all)): y = substr(s, 5, 10);   /* raises stringrange */
+ (nocheck): x = fixed(text);           /* no conversion trap */
+```
+
+`check` also works on a `procedure` statement, where it scopes the whole body (nested procedures included):
+
+```pli
+ (nosize): fast_path: procedure;
+   /* every statement here runs without overflow traps */
+ end fast_path;
+```
+
+The command-line `--no-size-checks` (and `-O2`/`-O3`, which imply it) wins over `check`: that switch means "this program never overflows", so the traps stay out.
+
 > **Python friends:** `on ... / signal ...` is `try: ... except: ...` that resumes instead of jumping to the except's end. `revert` is leaving the `with` block.
 
 **Not yet**
 
-- `check` conditions, `on return`, `go to` inside a unit, and `return(value)` inside a handler are diagnosed.
+- `overflow` conditions, keyed-I/O conditions, `go to` inside a unit, and
+  `return(value)` inside a handler are diagnosed.
 
 > **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `pli conditions.pli -o conds && ./conds`.
 

@@ -1,10 +1,29 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rule (91): an ON-unit reaching an automatic variable by subscript
-    is not implemented in this stage (whole scalars are captured). */
+ /* rule (91); ADR-321: an ON-unit captures a fixed-size automatic of
+    the establishing frame by its base address, so a subscript or a
+    qualified member works. Storage the frame does not own or whose
+    address moves (BASED, CONTROLLED, a variable extent), and any
+    reference from a nested unit, still stay diagnosed. */
  badonlocal: procedure options(main);
-    declare a(10) fixed bin(31);
-    a(1) = 0;
-    on error a(1) = 1;
-    signal error;
+    declare p pointer;
+    declare 1 rec based(p),
+            2 v fixed bin(31);
+    declare c(3) fixed bin(31) controlled;
+    declare n fixed bin(31) init(2);
+    declare d(n) fixed bin(31);
+    declare a(3) fixed bin(31);
+
+    allocate c;
+    allocate rec set(p);
+
+    on error rec.v = 1;
+    on error c(1) = 2;
+    on error d(1) = 3;
+
+    on zerodivide begin;
+       on error a(1) = 4;
+    end;
+
+    put skip list('unreachable');
  end badonlocal;

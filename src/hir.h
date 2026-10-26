@@ -174,6 +174,10 @@ struct HStmt {
   bool noSub = false;               // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
   bool noZdiv = false;              // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
   bool noConv = false;              // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
+  bool chkSize = false;             // CHECK(...) prefix (rules (61),(95), ADR-320)
+  bool chkSub = false;
+  bool chkZdiv = false;
+  bool chkConv = false;
   int strRange = 0;                 // (STRINGRANGE)/(NOSTRINGRANGE) prefix (ADR-297)
   HStmtP thenS, elseS;
   std::vector<HStmtP> body;

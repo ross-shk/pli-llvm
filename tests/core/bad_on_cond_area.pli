@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (99): AREA is not a valid programmer-named
+    condition. */
+ badoncondarea: procedure options(main);
+    signal condition(area);
+ end badoncondarea;

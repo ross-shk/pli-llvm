@@ -47,6 +47,9 @@ typedef struct {
   long long ctl_cache_key;           /* the CONTROLLED freelist shape */
   void *ctl_cache_bytes;             /* the CONTROLLED freelist buffer */
   long long ctl_cache_len;           /* its length */
+  void *finish_fn;                   /* FINISH (rule 94, ADR-322): the task's
+                                      * procedure, named by the spawn wrapper;
+                                      * NULL outside a task */
 } pli_task_local;
 
 struct pli_fiber {

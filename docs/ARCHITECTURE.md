@@ -332,7 +332,7 @@ and to build, but not to switch.
 | `COMPLEX` | Pair of floating-point values | The pair stores the real and imaginary components. |
 | `POINTER` | LLVM pointer | |
 | `OFFSET` | LLVM pointer | An opaque locator into an `AREA`; shares the POINTER representation, so a `BASED` variable may be addressed through it (ADR-170); an array of OFFSET is an array of pointers, one locator per element (ADR-312), and the AREA in `OFFSET(area)` is the default region for `ALLOCATE`/`FREE` when `IN` is omitted (ADR-317). |
-| `AREA` | LLVM pointer to a runtime region | A region created at procedure entry and destroyed on exit; `ALLOCATE ... IN(area)` takes blocks from it and `FREE ... IN(area)` returns any block in any order (ADR-170). |
+| `AREA` | LLVM pointer to a runtime region | A region created at procedure entry and destroyed on exit; `ALLOCATE ... IN(area)` takes blocks from it and `FREE ... IN(area)` returns any block in any order (ADR-170); a `STATIC` region lives for the whole program (ADR-310) and an `EXTERNAL` one is a common global slot, so every module shares it (ADR-318). |
 | structure | LLVM struct | Members in declaration order; `ALIGNED` (the default) uses natural padding, `UNALIGNED` emits a packed struct for C interop and its member loads/stores use `align 1` (ADR-169). |
 | array | Contiguous, row-major storage | Dynamic bounds and parameter extents use runtime values. |
 
@@ -369,7 +369,8 @@ many condition kinds are still diagnosed.
   Check the coverage ledger for each condition's behavior and unsupported cases.
 - Condition prefixes are resolved during compilation. Supported prefixes such
   as `(NOSIZE)` and `(NOCONVERSION)` omit the matching runtime check; they are
-  not runtime switches.
+  not runtime switches. `(CHECK(...))` puts a check back on for its scope and
+  `(NOCHECK(...))` turns the named checks off (ADR-320).
 - On-unit control flow and recovery are implemented only for the supported
   condition subset. Do not assume general non-local `GO TO` or all standard
   condition actions are available.

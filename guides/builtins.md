@@ -12,6 +12,7 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------- |
 | Pointer  | `NULL`                                                                                                                                    | `( )`                    | `POINTER`                         |
 | Pointer  | `ADDR`                                                                                                                                    | `( var | var(i) | S.A )` | `POINTER`                         |
+| Area     | `OFFSET`                                                                                                                                  | `( pointer, area )`      | `OFFSET`                          |
 | Area     | `OFFSETADD`                                                                                                                               | `( offset, n )`          | `OFFSET`                          |
 | Area     | `OFFSETSUBTRACT`                                                                                                                          | `( offset, n )`          | `OFFSET`                          |
 | Area     | `OFFSETDIFF`                                                                                                                              | `( offset, offset )`     | `FIXED BIN(31,0)`                 |
@@ -709,6 +710,23 @@ Returns a null AREA handle (the area equivalent of `NULL()` for pointers).
 dcl area area;
 allocate area in area;   /* AREA is implicitly initialised to EMPTY() */
 ```
+
+### `OFFSET(p, area)` → OFFSET *(IBM built-in, ADR-319)*
+
+Convert a `POINTER` that addresses a block in `area` into an `OFFSET`. The pointer must belong to that region — a foreign pointer raises the `AREA` condition — and a null pointer gives the null offset. It is the inverse direction of `ADDR`: `ADDR` gives an address, `OFFSET` binds that address to a region.
+
+```pli
+dcl region area(4096);
+dcl p pointer;
+dcl o offset(region);
+dcl 1 rec based(p), 2 v fixed bin(31);
+
+allocate rec in(region) set(p);
+rec.v = 77;
+o = offset(p, region);   /* the same block, now an offset */
+```
+
+`OFFSETVALUE(n)`, the inverse that turns an integer displacement into an offset, is not served: an offset here holds an absolute address, so there is no displacement to convert.
 
 ### `OFFSETADD(x, n)` / `OFFSETSUBTRACT(x, n)` → OFFSET *(IBM built-in, ADR-311)*
 

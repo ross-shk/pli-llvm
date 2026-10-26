@@ -2052,9 +2052,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                                "this stage",
                      "(20)");
           // A STATIC area is served by irgen (a module global slot created on
-          // first use); an EXTERNAL area needs cross-module region sharing.
-          if (item.sym->external)
-            d_.error(item.loc, "an EXTERNAL AREA is not implemented in this stage", "(20)");
+          // first use); an EXTERNAL area (ADR-318) reuses that path, because
+          // the slot is a common global, so every module reaches one region.
           auto areaErr = [&](const char* what, const char* rule) {
             d_.error(item.loc, std::string("AREA+") + what + " is not implemented", rule);
           };
@@ -2855,8 +2854,21 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
     // path: its base may still be an automatic of the establishing frame.
     if (sym->kind == Symbol::Var && sym->isStatic && !sym->definedBase)
       return;
-    if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
-        !sym->definedBase && !sym->fileAttr && sym->owner == p) {
+    // A whole reference to an automatic of the establishing frame: the
+    // capture stores the address the reference would use (ADR-253/299).
+    const bool plainOwn =
+        sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
+        !sym->definedBase && !sym->fileAttr && sym->owner == p;
+    // A subscript or a member reference needs a base address the frame owns
+    // and that cannot move: fixed-size own storage only (ADR-321).
+    const bool ownFixed =
+        plainOwn && !sym->controlled && !sym->ty.isArea() && !sym->ty.isDynamic();
+    if (!nested && plainOwn && whole) {
+      if (std::find(caps.begin(), caps.end(), sym) == caps.end())
+        caps.push_back(sym);
+      return;
+    }
+    if (!nested && ownFixed && (sym->ty.isArray() || sym->ty.isStruct())) {
       if (std::find(caps.begin(), caps.end(), sym) == caps.end())
         caps.push_back(sym);
       return;
@@ -3081,6 +3093,10 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kConversionCondKey;
   if (s->condName == "STRINGRANGE")
     return Stmt::kStringrangeCondKey;
+  if (s->condName == "FINISH")
+    return Stmt::kFinishCondKey;
+  if (s->condName == "AREA")
+    return Stmt::kAreaCondKey;
   // Programmer-named conditions: deterministic hash ensures every
   // compilation unit assigns the same key to the same name, enabling
   // cross-object signal dispatch.
@@ -3360,6 +3376,10 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->chkSize = s->chkSize;
+  inner->chkSub = s->chkSub;
+  inner->chkZdiv = s->chkZdiv;
+  inner->chkConv = s->chkConv;
   inner->strRange = s->strRange;
   {
     auto tgt = std::make_unique<Expr>();
@@ -3714,6 +3734,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       fill->noSub = s->noSub;
       fill->noZdiv = s->noZdiv;
       fill->noConv = s->noConv;
+      fill->chkSize = s->chkSize;
+      fill->chkSub = s->chkSub;
+      fill->chkZdiv = s->chkZdiv;
+      fill->chkConv = s->chkConv;
       fill->strRange = s->strRange;
       auto fillTgt = std::make_unique<Expr>();
       fillTgt->kind = Expr::VarRef;
@@ -3737,6 +3761,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         copy->noSub = s->noSub;
         copy->noZdiv = s->noZdiv;
         copy->noConv = s->noConv;
+        copy->chkSize = s->chkSize;
+        copy->chkSub = s->chkSub;
+        copy->chkZdiv = s->chkZdiv;
+        copy->chkConv = s->chkConv;
         copy->strRange = s->strRange;
         auto ctgt = std::make_unique<Expr>();
         ctgt->kind = Expr::VarRef;
@@ -6058,6 +6086,10 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->chkSize = s->chkSize;
+  inner->chkSub = s->chkSub;
+  inner->chkZdiv = s->chkZdiv;
+  inner->chkConv = s->chkConv;
   inner->strRange = s->strRange;
   s->kind = Stmt::Group;
   s->byName = false;
@@ -6307,6 +6339,37 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::offsetTy();
+    return true;
+  }
+  // OFFSET(x, y) (Y33-6003, rule (22); ADR-319): convert a POINTER that
+  // addresses a generation in the AREA y into an OFFSET. OFFSETVALUE (a
+  // computational value to an offset) stays diagnosed: an OFFSET holds an
+  // absolute address here, so an integer cannot name storage.
+  if (e->name == "OFFSET") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "OFFSET expects 2 arguments (pointer, area)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isPointer() || e->args[0]->ty.isArray()) {
+      d_.error(e->args[0]->loc, "the first argument to OFFSET must be a POINTER", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!isAreaRef(e->args[1].get())) {
+      d_.error(e->args[1]->loc, "the second argument to OFFSET must be an AREA", "(22)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::offsetTy();
+    return true;
+  }
+  if (e->name == "OFFSETVALUE") {
+    d_.error(e->loc,
+             "OFFSETVALUE is not implemented: an OFFSET holds an absolute address in "
+             "this implementation, so an integer displacement cannot name storage",
+             "(22)");
+    e->ty = Type::voidTy();
     return true;
   }
   // ADDR built-in (rule 123, Appendix 1; Y33-6003 BASED storage builtin;

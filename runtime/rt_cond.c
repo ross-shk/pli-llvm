@@ -121,6 +121,35 @@ char *pli_on_top_fn_pair(long long key, char *ctx_out) {
   *(void **)ctx_out = NULL;
   return NULL;
 }
+
+/* FINISH (rule 94; ADR-322): raised in a task when the procedure the task
+ * was created for returns. The spawn wrapper records that procedure in the
+ * per-task state, and every procedure exit that has an ON unit in scope asks
+ * here whether it is the one — a nested call, a normal call, and the main
+ * task are all no-ops. The unit runs before the event completes, so a
+ * waiter sees the writes it made. */
+#define RT_FINISH_KEY (-6LL) /* mirrors Stmt::kFinishCondKey */
+void pli_task_finish_target(char *fn) {
+  on_state()->finish_fn = (void *)fn;
+}
+void pli_signal_finish(char *fn) {
+  pli_task_local *st = on_state();
+  if (!fn || st->finish_fn != (void *)fn)
+    return;
+  char *ctx = NULL;
+  char *h = pli_on_top_fn_pair(RT_FINISH_KEY, (char *)&ctx);
+  if (!h)
+    return; /* no unit: the implicit action is simply to end the task */
+  /* IRGen's handler takes its capture context as the only argument; the
+   * pointer round-trip through a union avoids an object-to-function cast. */
+  union {
+    char *obj;
+    void (*fn)(void *);
+  } u;
+  u.obj = h;
+  u.fn(ctx);
+}
+
 void pli_on_push_error(long long id, char *fn, char *ctx) {
   pli_on_push(0, id, (void*)fn, (void*)ctx);
 }
