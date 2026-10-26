@@ -3,3 +3,14 @@
 # option, and every driver test then reports a bogus failure. Keep them LF
 # in the working tree on every platform.
 *.sh text eol=lf
+
+# Sourced shell fragments (*.inc) are not matched by *.sh; dash rejects their
+# CRLF line endings when a Windows checkout is built/tested under WSL.
+*.inc text eol=lf
+
+# Empty sysroot archives are ASCII-only ("!<arch>\n"): Git's autocrlf would
+# otherwise turn them into an invalid archive and break Linux links.
+platform/**/*.a binary
+
+# SDK stub tables are linker text; keep them LF like the driver scripts.
+*.tbd text eol=lf
