@@ -179,6 +179,15 @@ struct DeclItem {
    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
 };
 
+// Rule (65) initial-label: an element of a label array named by a statement
+// prefix (AR(1): ...). The subscripts are optionally signed integer constants;
+// `sym` is the label array, bound by sema.
+struct LabelElem {
+  std::string name;
+  std::vector<long long> subs;
+  Symbol* sym = nullptr;
+};
+
 struct Stmt {
   enum Kind {
     Null,        // rule (67)
@@ -222,6 +231,11 @@ struct Stmt {
 
   SourceLoc loc{};
   std::vector<std::string> labels; // rule (64) label prefixes
+  // Rule (65) initial-label: an element of a label array as a statement prefix
+  // (AR(1): ...). The subscripts are signed integer constants; sema binds the
+  // array symbol, and codegen stores the statement's block address into that
+  // element at procedure entry.
+  std::vector<LabelElem> labelElems;
 
   std::vector<DeclItem> decls;
 

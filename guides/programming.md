@@ -126,7 +126,8 @@ Overflow of `+ - *` on fixed types can raise the `size` condition (see [Conditio
 - `/` truncates toward zero on integer-valued fixed operands; `**`, and any
   division with a fractional or float operand, still go through floating point.
 - `picture` data and picture variables are not implemented. `label` variables are
-  (ADR-192): `declare l label;` plus an indirect `goto (l)` through `addr`.
+  (ADR-192): `declare l label;` plus an indirect `goto (l)` through `addr`, a
+  label constant, or a label-array element (ADR-336).
 
 > **Run the full example:** [`examples/data_types.pli`](../examples/data_types.pli) — `pli data_types.pli -o data_types && ./data_types`.
 
@@ -479,6 +480,28 @@ Local `go to` jumps to a label. You'll rarely need it now that `leave`/`iterate`
 ```
 
 Jumping *into* an inactive block is an error. Jumping to an enclosing procedure is future work.
+
+A label is a value: it can be kept in a `label` variable or an array of labels, and `go to` through it is the computed jump. An array element can also label a statement as a prefix, which stores that statement's address in the element:
+
+```pli
+ dcl l label;
+ dcl steps(3) label;
+
+ l = second;
+ go to l;                 /* indirect through the variable */
+ second:
+ steps(1) = third;
+ go to (steps(1));        /* and through an array element */
+
+ third:
+ steps(1): put skip list('one');    /* an element labels a statement */
+ steps(2): put skip list('two');
+ steps(3): put skip list('three');
+
+ go to (steps(2));        /* computed: prints 'two', then 'three' */
+```
+
+An element prefix takes constant subscripts only, and the array must have a fixed extent (not `controlled`, `based` or a runtime-size array). `initial` values for label arrays are not implemented yet.
 
 > **Run the full example:** [`examples/control_flow.pli`](../examples/control_flow.pli) — `pli control_flow.pli -o flow && ./flow`.
 

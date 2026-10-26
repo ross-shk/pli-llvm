@@ -2907,6 +2907,11 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
   std::function<void(Stmt*)> check = [&](Stmt* s) {
     if (!s)
       return;
+    // Rule (65) prefixes name storage in the establishing frame; the frameless
+    // handler has no capture for that array in this stage.
+    if (!s->labelElems.empty())
+      d_.error(s->loc, "a label-array prefix inside an ON-unit is not implemented in this stage",
+               "(91)");
     switch (s->kind) {
     case Stmt::On:
       // A nested ON establishes a new handler when the outer unit runs
@@ -3623,6 +3628,44 @@ bool Sema::expandAggregateItems(Stmt* s, Scope* sc, Proc* p, bool isGet) {
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   if (!s)
     return;
+  // Rule (65): a statement prefix naming an element of a label array binds the
+  // array here; codegen initializes the element with this statement's address.
+  for (LabelElem& e : s->labelElems) {
+    if (e.sym)
+      continue;
+    Symbol* sym = lookup(sc, e.name);
+    if (!sym || (sym->kind != Symbol::Var && sym->kind != Symbol::Param) || !sym->ty.isArray() ||
+        !sym->ty.elementType().isLabel()) {
+      d_.error(s->loc, "'" + e.name + "' is not a label array", "(65)");
+      continue;
+    }
+    if (e.subs.size() != sym->ty.dims.size()) {
+      d_.error(s->loc, "label array '" + e.name + "' has " +
+                           std::to_string(sym->ty.dims.size()) + " dimension(s) and takes " +
+                           std::to_string(e.subs.size()) + " subscript(s)",
+               "(65)");
+      continue;
+    }
+    if (sym->ty.isDynamic() || sym->controlled || sym->isBased()) {
+      // The element's address must be fixed when the procedure is entered.
+      d_.error(s->loc,
+               "a label-array prefix needs a fixed-extent automatic array in this stage", "(65)");
+      continue;
+    }
+    bool inRange = true;
+    for (size_t k = 0; k < e.subs.size(); ++k) {
+      const Dim& d = sym->ty.dims[k];
+      if (e.subs[k] < d.lb || e.subs[k] > d.ub) {
+        d_.error(s->loc, "label-array subscript " + std::to_string(e.subs[k]) +
+                             " is outside the declared bounds",
+                 "(65)");
+        inRange = false;
+      }
+    }
+    if (!inRange)
+      continue;
+    e.sym = sym;
+  }
   switch (s->kind) {
   case Stmt::Null:
     break;
@@ -4836,14 +4879,28 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   case Stmt::Goto:
     // Direct GO TO label: target must be a label in this procedure (rules (64),(77)).
-    // Indirect GO TO (expr): operand is a LABEL variable, skip the label check.
+    // Indirect GO TO (expr): operand is a LABEL value, skip the label check.
     if (s->gotoTarget) {
       typeExpr(s->gotoTarget.get(), sc, p);
-    } else {
-      if (procLabels_.find(s->name) == procLabels_.end()) {
-        d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
+      if (!s->gotoTarget->ty.isVoid() && !s->gotoTarget->ty.isLabel())
+        d_.error(s->gotoTarget->loc, "the GO TO operand must be a LABEL value", "(77)");
+    } else if (procLabels_.find(s->name) == procLabels_.end()) {
+      // GO TO label-variable (rule (77)): a LABEL variable used without the
+      // parenthesized form is IBM's documented spelling of the indirect jump.
+      Symbol* sym = lookup(sc, s->name);
+      if (sym && (sym->kind == Symbol::Var || sym->kind == Symbol::Param) && sym->ty.isLabel()) {
+        auto target = std::make_unique<Expr>();
+        target->kind = Expr::VarRef;
+        target->name = s->name;
+        target->loc = s->loc;
+        s->gotoTarget = std::move(target);
+        typeExpr(s->gotoTarget.get(), sc, p);
+        s->name.clear();
         break;
       }
+      d_.error(s->loc, "'" + s->name + "' is not a label in this procedure", "(77)");
+      break;
+    } else {
       {
         auto lc = labelBeginChains_.find(s->name);
         if (lc != labelBeginChains_.end()) {

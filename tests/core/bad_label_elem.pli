@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (65): a statement prefix may name an element of a label
+    array, not an element of any other array. */
+ badlabelelem: procedure options(main);
+    declare a(3) fixed bin(31);
+    a(1): put skip list('x');
+ end badlabelelem;

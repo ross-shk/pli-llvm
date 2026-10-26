@@ -4730,13 +4730,19 @@ void IRGen::emitInitials(HProc* p) {
 void IRGen::collectGotoBlocks(HStmt* s, std::vector<int>& chain) {
   if (!s)
     return;
-  if (!s->labels.empty() && s->kind != HStmt::Entry) {
+  if ((!s->labels.empty() || !s->labelElems.empty()) && s->kind != HStmt::Entry) {
     std::string blk = "L" + std::to_string(n_++);
     llvm::BasicBlock* bb = llvm::BasicBlock::Create(ctx_, blk, curFn_);
+    stmtBlocks_[s] = bb;
     for (const std::string& l : s->labels) {
       labelBlocks_[l] = bb;
       labelBeginChain_[l] = chain; // enclosing BEGIN scopes (rule 91)
     }
+    // Rule (65): the label-array element is initialized with this statement's
+    // address when the procedure is entered.
+    for (const LabelElem& e : s->labelElems)
+      if (e.sym)
+        labelElemInits_.push_back({e.sym, e.subs, bb});
   }
   bool isBegin = s->kind == HStmt::Begin;
   if (isBegin) {
@@ -4751,6 +4757,24 @@ void IRGen::collectGotoBlocks(HStmt* s, std::vector<int>& chain) {
     collectGotoBlocks(b.get(), chain);
   if (isBegin)
     chain.pop_back();
+}
+
+// Rule (65) initial-label: give each label-array element used as a statement
+// prefix the address of that statement. The array is a fixed-extent automatic
+// (sema checked it), so the element sits at a constant offset from its base and
+// the store belongs in the entry block, where every activation performs it.
+void IRGen::emitLabelElemInits() {
+  for (const LabelElemInit& e : labelElemInits_) {
+    const Type& arr = e.sym->ty;
+    long long flat = 0, stride = 1;
+    for (size_t k = arr.dims.size(); k-- > 0;) {
+      flat += (e.subs[k] - arr.dims[k].lb) * stride;
+      stride *= (long long)(arr.dims[k].ub - arr.dims[k].lb + 1);
+    }
+    llvm::Value* addr = b_.CreateInBoundsGEP(llvmTy(arr.elementType()), addressOf(e.sym),
+                                             {i64(flat)}, "lelem");
+    b_.CreateStore(llvm::BlockAddress::get(curFn_, e.bb), addr);
+  }
 }
 
 // Handler depth to restore when a GO TO leaves enclosing BEGIN blocks (rule
@@ -5372,6 +5396,8 @@ void IRGen::emitProc(HProc* p) {
   }
   labelBlocks_.clear();
   labelBeginChain_.clear();
+  labelElemInits_.clear();
+  stmtBlocks_.clear();
   onScopes_.clear();
   symAddr_.clear();
   structRetPtr_ = nullptr;
@@ -5470,6 +5496,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 
   allocaLocals(p);
   emitInitials(p); // INITIAL attribute on AUTOMATIC variables (rule 26)
+  emitLabelElemInits(); // rule (65) label-array prefixes
   recordDynParamUbs(p->paramSyms);
 
   // Implicit ALLOCATE for every CONTROLLED variable declared in this proc:
@@ -5573,6 +5600,7 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
 
   allocaLocals(p);
   emitInitials(p);
+  emitLabelElemInits(); // rule (65) label-array prefixes
   recordDynParamUbs(uni);
 
   // Implicit ALLOCATE for every CONTROLLED variable declared in this proc,
@@ -5751,6 +5779,8 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       curOnDepth_ = nullptr;
       labelBlocks_.clear();
       labelBeginChain_.clear();
+      labelElemInits_.clear();
+      stmtBlocks_.clear();
       onScopes_.clear();
       symAddr_.clear();
       ctlImplicitAlloc_.clear(); // a handler allocates/frees nothing implicitly
@@ -5909,8 +5939,9 @@ void IRGen::emitStmt(HStmt* s) {
   // The current source location, for a remark raised inside a built-in
   // lowering (ADR-254).
   curLoc_ = s->loc;
-  if (!s->labels.empty()) {
-    startBlock(labelBlocks_[s->labels.front()]);
+  if (auto it = stmtBlocks_.find(s); it != stmtBlocks_.end()) {
+    // A labelled statement starts the block collected for it (rules (64),(65)).
+    startBlock(it->second);
   } else if (blockTerminated(b_.GetInsertBlock())) {
     newBlock(); // unreachable code (e.g. after STOP): start a fresh block
   }
@@ -6180,10 +6211,20 @@ void IRGen::emitStmt(HStmt* s) {
          addr = llvm::ConstantPointerNull::get(b_.getPtrTy());
        if (!addr->getType()->isPointerTy())
          addr = b_.CreateIntToPtr(addr, b_.getPtrTy(), "gotoptr");
-       // Collect all label blocks in this function as possible destinations (rule 77).
-       llvm::IndirectBrInst* ib = b_.CreateIndirectBr(addr, (unsigned)labelBlocks_.size());
+       // Collect every block an indirect transfer can reach: the named labels,
+       // the alternate entry segments, and the label-array prefixes (rule (65)).
+       std::vector<llvm::BasicBlock*> dests;
+       auto addDest = [&](llvm::BasicBlock* bb) {
+         if (bb && std::find(dests.begin(), dests.end(), bb) == dests.end())
+           dests.push_back(bb);
+       };
        for (auto& kv : labelBlocks_)
-         ib->addDestination(kv.second);
+         addDest(kv.second);
+       for (auto& kv : stmtBlocks_)
+         addDest(kv.second);
+       llvm::IndirectBrInst* ib = b_.CreateIndirectBr(addr, (unsigned)dests.size());
+       for (llvm::BasicBlock* d : dests)
+         ib->addDestination(d);
     } else {
       // Direct GO TO label: jump to the named block.
       if (llvm::Value* depth = onExitDepth(s->name))
@@ -11978,6 +12019,16 @@ Val IRGen::emitExpr(HExpr* e) {
     }
     return loadArrayElement(e->sym, e->args, e->loc, e->locPtr.get());
   case HExpr::VarRef:
+    if (e->isLabel) {
+      // A label constant in value position (rule (21)): its LABEL value is the
+      // address of the statement, the block address `ADDR(label)` yields, so
+      // `L = LBL;` and an element of a label array can hold it.
+      v.ty = e->ty;
+      llvm::BasicBlock* bb = lookupLabelBlock(e->name);
+      v.reg = (bb && curFn_) ? (llvm::Value*)llvm::BlockAddress::get(curFn_, bb)
+                             : llvm::ConstantPointerNull::get(b_.getPtrTy());
+      return v;
+    }
     if (!e->sym) {
       v.ty = e->ty;
       v.reg = i64(0);

@@ -12458,3 +12458,75 @@ is the reading that never refuses a legal declaration. *Treat the words as
 storage-class attributes somewhere else.* Rule (34) puts them on entry names
 only; the lexer still never classifies keywords, so `REDUCIBLE` remains usable
 as a variable or procedure name.
+
+---
+
+## ADR-336 — Computed `GO TO`: label constants, label arrays and initial labels
+
+**Context.** Rule (21) declares a `LABEL` variable, rule (64) a label prefix,
+rule (65) an *initial label* (an element of a label array used as a statement
+prefix), and rule (77) `GO TO`. IBM's *Label data and LABEL attribute* page
+shows the canonical computed jump: `Lbl_x = Lbl_a; GO TO Lbl_x;` — the bare
+form, no parentheses — and adds that "a label variable can have another label
+variable or a label constant assigned to it". The scan's rule (65) is damaged,
+but its own ⚠ note quotes Y33-6003's `INITIAL` attribute: "an element of a label
+array can appear as a statement prefix, provided that all subscripts are
+optionally signed decimal integer constants", and attests the shape in practice
+(`do(12):`, `do_hl(8):`). Three defects stood in the way: `L = Lbl;` compiled to
+a store of literal `0` (the indirect jump then trapped), `GO TO LblVar;` was
+rejected with "not a label in this procedure", and `DCL A(3) LABEL;` declared a
+*scalar* because the dimension lookahead did not know `LABEL`, so rule (65) was
+unreachable.
+
+**Decision.** Serve the computed jump end to end:
+
+- A **label constant in value position** lowers to the block address of its
+  statement — the same value `ADDR(label)` already produced — so an assignment
+  to a label variable or to an array element stores a real address.
+- `GO TO name` is indirect when `name` is not a label constant but a `LABEL`
+  variable (rule (77), IBM's bare spelling). The parenthesized form
+  `GO TO (expr)` now requires a `LABEL` value: an arithmetic operand is
+  diagnosed with rule (77) instead of being turned into an address.
+- `LABEL` joins the attribute words that make `A(n)` a dimension, so arrays of
+  labels exist and can be subscripted, assigned and jumped through.
+- **Rule (65) initial labels**: a statement prefix may name an element of a
+  label array with optionally signed integer constants. Sema binds the array and
+  checks the rank and the declared bounds; a non-label array, a wrong rank, an
+  out-of-range subscript, or a `CONTROLLED`/`BASED`/runtime-extent array (no
+  fixed element address at procedure entry) is diagnosed with rule (65).
+  Codegen stores the statement's block address into the element in the
+  procedure's entry block, so every activation initializes it the way a label
+  constant exists for the whole activation.
+- An indirect jump's destination list now includes the blocks created for
+  label-array prefixes, not only the named labels; LLVM's `indirectbr` must name
+  every block the jump can reach, so the prefix's block is a legal destination
+  (before this, `goto (ar(2))` jumped into a block with no predecessors and the
+  module failed verification or trapped).
+
+**Consequences.** `tests/core/label_computed.pli` covers a label constant
+assigned to a variable and the bare jump, an element assigned a constant and
+jumped through, a one- and a two-dimensional element prefix (with a name and an
+element prefix on one statement), and the computed paths in one control-flow
+chain. `bad_label_elem.pli`, `bad_label_elem_bounds.pli` and
+`bad_goto_operand.pli` pin the three diagnostics. `GC` (21), (64), (65) and (77),
+the programming guide and `DEFERRED-WORK` B4 (initial labels settled to rule
+(65)'s core form) carry the change.
+
+**Limitations recorded.** An indirect jump cannot be checked against block
+activation: a label value pointing into a block that is not active is IBM's
+run-time error, and this compiler's `indirectbr` will enter it. An uninitialized
+label variable or array element is likewise the program's error (IBM requires a
+label constant of an active block), and the jump through it is undefined.
+`INITIAL(...)` on a label array (IBM's *static* label array with initial values,
+then nonassignable) is still diagnosed; only the prefix form initializes
+elements. A `GO TO` out of an ON-unit, and a label-array prefix inside one, stay
+diagnosed (ADR-172 and rule (91)).
+
+**Rejected.** *Initialize the element lazily when the prefix statement runs.* A
+backward jump must find the element already holding the address, so the store
+belongs in the entry block. *Treat the prefix as a synthetic assignment.* The
+statement's address is known only to codegen, and an assignment would need a
+label-constant value that does not exist as a source expression. *Keep the
+indirect destination list to named labels.* The label-array element's block has
+no name, and an `indirectbr` that omits it is undefined behaviour; the fix also
+gave the pre-existing parenthesized form a correct destination list.

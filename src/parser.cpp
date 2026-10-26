@@ -881,11 +881,55 @@ StmtP Parser::parseStatement(Proc* owner) {
   if (st->strRange != 0)
     procStrRange_ = st->strRange;
 
-  // label prefixes                                                 rule (64)
-  while (at(Tok::Word) && peek().kind == Tok::Colon) {
-    st->labels.push_back(cur().text);
+  // label prefixes                                    rules (64),(65)
+  // A plain identifier labels the statement with a label constant; an element
+  // of a label array (initial-label, AR(1):) labels it through that element.
+  while (at(Tok::Word)) {
+    if (peek().kind == Tok::Colon) {
+      st->labels.push_back(cur().text);
+      advance();
+      advance();
+      continue;
+    }
+    if (peek().kind != Tok::LParen)
+      break;
+    // Try `ident ( signed-integer {, signed-integer} ) :`; anything else is the
+    // statement itself (a call or an assignment), so put the tokens back.
+    size_t save = i_;
+    std::string name = cur().text;
     advance();
-    advance();
+    advance(); // (
+    std::vector<long long> subs;
+    bool ok = true;
+    while (ok) {
+      long long sign = 1;
+      if (at(Tok::Plus)) {
+        advance();
+      } else if (at(Tok::Minus)) {
+        sign = -1;
+        advance();
+      }
+      if (!at(Tok::Number) || cur().isFloat || cur().sterling || cur().imaginary) {
+        ok = false;
+        break;
+      }
+      subs.push_back(sign * std::strtoll(cur().text.c_str(), nullptr, 10));
+      advance();
+      if (eat(Tok::Comma))
+        continue;
+      break;
+    }
+    if (ok && at(Tok::RParen) && peek().kind == Tok::Colon) {
+      advance(); // )
+      advance(); // :
+      LabelElem e;
+      e.name = name;
+      e.subs = std::move(subs);
+      st->labelElems.push_back(std::move(e));
+      continue;
+    }
+    i_ = save;
+    break;
   }
 
   // nested package (extension, ADR-109): packages nest nothing; a labelled
@@ -979,6 +1023,7 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->chkOver = st->chkOver;
       s->chkFOver = st->chkFOver;
       s->strRange = st->strRange;
+      s->labelElems = st->labelElems;
       return s;
     }
   }
@@ -986,6 +1031,7 @@ StmtP Parser::parseStatement(Proc* owner) {
   StmtP k = keywordStatement(owner, st->labels, /*probe=*/false);
   if (k) {
     k->labels = st->labels;
+    k->labelElems = st->labelElems;
     k->noSize = st->noSize;
     k->noSub = st->noSub;
     k->noZdiv = st->noZdiv;
@@ -1007,6 +1053,7 @@ StmtP Parser::parseStatement(Proc* owner) {
   auto s = parseAssignment();
   if (s) {
     s->labels = st->labels;
+    s->labelElems = st->labelElems;
     s->noSize = st->noSize;
     s->noSub = st->noSub;
     s->noZdiv = st->noZdiv;
@@ -2546,7 +2593,7 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
-           w == "EVENT" || w == "PICTURE" || w == "PIC";
+           w == "EVENT" || w == "PICTURE" || w == "PIC" || w == "LABEL";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);

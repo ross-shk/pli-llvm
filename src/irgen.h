@@ -966,6 +966,19 @@ private:
   llvm::Value* structRetPtr_ = nullptr;
   llvm::BasicBlock* lookupLabelBlock(const std::string& name) { return labelBlocks_.count(name) ? labelBlocks_[name] : nullptr; }
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
+  // Rule (65) initial-label: each statement prefix that names an element of a
+  // label array contributes an entry here; the element is initialized with the
+  // statement's block address in the procedure's entry block.
+  struct LabelElemInit {
+    Symbol* sym;
+    std::vector<long long> subs;
+    llvm::BasicBlock* bb;
+  };
+  std::vector<LabelElemInit> labelElemInits_;
+  // The block that a labelled statement starts (rule (64) or (65)), so emission
+  // can begin it without looking names up.
+  std::map<const HStmt*, llvm::BasicBlock*> stmtBlocks_;
+  void emitLabelElemInits();
   // ON-unit scope on block termination (rule (91); Y33 "Activation and
   // Termination of Blocks"): a GO TO that leaves one or more BEGIN blocks
   // reverts the handlers those blocks established. Each BEGIN carries a unique

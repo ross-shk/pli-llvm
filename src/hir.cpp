@@ -252,6 +252,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->kind = static_cast<HStmt::Kind>(s->kind);
   h->loc = s->loc;
   h->labels = s->labels;
+  h->labelElems = s->labelElems;
   h->name = s->name;
   h->sym = s->sym;
   h->params = s->params;

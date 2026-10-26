@@ -1,0 +1,47 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (21),(65),(77); ADR-336: a LABEL variable holds a label
+    constant, `GO TO variable` without parentheses is IBM's indirect
+    jump, and an element of a label array can be the target: it takes
+    a label constant by assignment or labels a statement as a prefix
+    (initial-label), in which case codegen stores that statement's
+    address in the element at procedure entry. */
+ label_computed: procedure options(main);
+    declare l label;
+    declare ar(3) label;
+    declare grid(2, 2) label;
+    declare hits fixed bin(31) init(0);
+
+    /* a label constant assigned to a variable, bare GO TO spelling */
+    l = second;
+    goto l;
+    put skip list('FAIL label_computed: no variable jump');
+    stop;
+
+ second:
+    /* a label-array element assigned a label constant */
+    ar(1) = top;
+    goto (ar(1));
+    put skip list('FAIL label_computed: no element jump');
+    stop;
+
+ top:
+    hits = hits + 1;
+    /* a computed jump to a statement labelled by an element */
+    goto (ar(2));
+    put skip list('FAIL label_computed: no prefix jump');
+    stop;
+
+ ar(2): hits = hits + 10;
+    goto (grid(2, 1));
+    put skip list('FAIL label_computed: no 2-D jump');
+    stop;
+
+    /* a name and a 2-D element prefix on one statement */
+ named: grid(2, 1): hits = hits + 100;
+    if hits ^= 111 then do;
+       put skip list('FAIL label_computed: hits', hits);
+       stop;
+    end;
+    put skip list('PASS label_computed');
+ end label_computed;

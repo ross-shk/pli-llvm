@@ -161,6 +161,7 @@ struct HStmt {
 
   SourceLoc loc{};
   std::vector<std::string> labels; // rule (64) label prefixes
+  std::vector<LabelElem> labelElems; // rule (65) label-array element prefixes
 
   std::vector<HDeclItem> decls;
 
