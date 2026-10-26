@@ -193,6 +193,7 @@ PLI_FN(pli_area_lazy, PTR, (PTR, I64))                /* STATIC AREA first-use c
 PLI_FN(pli_area_destroy, VOID, (PTR))                 /* AREA region destroy (20) */
 PLI_FN(pli_area_alloc, PTR, (PTR, I64))               /* ALLOCATE ... IN(area) (88) */
 PLI_FN(pli_area_free, VOID, (PTR, PTR))               /* FREE ... IN(area) (90) */
+PLI_FN(pli_area_offset, PTR, (PTR, PTR))              /* OFFSET(pointer, area) (22) */
 
 PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))

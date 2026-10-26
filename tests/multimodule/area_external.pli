@@ -1,0 +1,37 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (20),(42),(88),(90); ADR-318: an EXTERNAL AREA is one region
+    shared by every module that declares it. The library allocates in
+    the region; this module reads and frees that block, then allocates a
+    block the library frees -- if the slots differed, FREE would raise
+    AREA. Companion of area_external_lib.pli. */
+ area_external: procedure options(main);
+   declare region area(4096) external;
+   declare fill_region entry returns(offset) external;
+   declare release entry(offset) external;
+   declare 1 rec based(off),
+           2 v fixed bin(31);
+   declare 1 rec2 based(other),
+           2 w fixed bin(31);
+   declare off offset(region);
+   declare other offset(region);
+
+   off = fill_region();
+   if off = null() then do;
+      put skip list('FAIL area_external: no block in the region');
+      stop;
+   end;
+   if rec.v ^= 4321 then do;
+      put skip list('FAIL area_external: expected 4321, got', rec.v);
+      stop;
+   end;
+   free rec in(region);
+
+   allocate rec2 in(region) set(other);
+   rec2.w = 99;
+   call release(other);
+   off = null();
+   other = null();
+
+   put skip list('PASS area_external');
+ end area_external;

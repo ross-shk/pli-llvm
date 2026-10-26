@@ -310,6 +310,26 @@ char *pli_area_alloc(char *ap, long long n) {
   return (char *)(b + 1);
 }
 
+/* OFFSET(x, y) (rule (22); ADR-319): convert the POINTER x into an OFFSET
+ * relative to the AREA y. An offset holds an absolute address in this
+ * implementation (ADR-170), so the conversion is an identity once the
+ * pointer is known to address a generation in y; IBM requires exactly that,
+ * and the region is the only object that can answer it. A null pointer
+ * yields the null offset. */
+char *pli_area_offset(char *ap, char *p) {
+  if (!p)
+    return NULL;
+  PliArea *a = (PliArea *)ap;
+  if (!a)
+    pli_signal_error("AREA: OFFSET of a pointer with a null area");
+  PliBlock *b = (PliBlock *)p - 1;
+  for (PliBlock *live = a->blocks; live; live = live->next)
+    if (live == b)
+      return p;
+  pli_signal_error("AREA: OFFSET of a pointer not allocated in this area");
+  return p;
+}
+
 void pli_area_free(char *ap, char *p) {
   if (!p)
     return;

@@ -11581,3 +11581,99 @@ on an area block and contradicts the OFFSET rule that a bare offset is used
 only through `POINTER()`. *Recording member associations now.* That needs a
 Symbol per member, or a new metadata field on `Member`, and is a larger
 change; the diagnosed limitation is honest and the explicit `IN` form works.
+
+---
+
+## ADR-318 — `EXTERNAL AREA` is one region, reached through a common global slot
+
+**Context.** Rule (42) already gives an `EXTERNAL` variable one definition shared
+by every translation unit, through a common-linkage LLVM global whose name is
+the external name. Rule (20) rejected `EXTERNAL AREA` with "an EXTERNAL AREA is
+not implemented in this stage", because the region also has to be *created*, and
+when the rejection was written an AREA had no lazy slot: only automatic regions
+created at procedure entry existed. ADR-310 then made a STATIC area a module
+global slot initialised on first use by `pli_area_lazy`, which is exactly the
+shape an EXTERNAL area needs — the common global is one slot, so the first module
+to touch it creates the region and every other module finds it non-null.
+
+**Decision.** Drop the rejection. An `EXTERNAL AREA` is an ordinary external
+variable whose type is an AREA, so it keeps rule (42)'s common-linkage slot and
+rides ADR-310's lazy creation path unchanged:
+
+- The slot is a common global named from the external name, so modules that
+  declare the same AREA reach the same 8-byte slot after linking.
+- `pli_area_lazy` creates the region on first use with the declaring item's size;
+  the declaration that runs first sets the capacity, the way C's tentative
+  definitions settle on one object. IBM requires the declarations to agree, so a
+  mismatch is the programmer's error, not a compiler check.
+- `STATIC` is implied, as rule (42) already does for every external variable, so
+  the region lives for the whole program and needs no destroy.
+- `AREA(*)`, an AREA array, and the remaining attribute combinations keep the
+  diagnostics they already had; only the EXTERNAL rejection changed.
+
+**Consequences.** `tests/multimodule/area_external.pli` and its `_lib` companion
+declare one external region in both modules: the library allocates a block and
+the main module reads and frees it, then the main module allocates a block the
+library frees. A FREE of a block the region does not own raises the AREA
+condition, so the test fails if the two modules end up with different slots.
+`bad_area_static.pli` keeps only the parameter-`STATIC` diagnostic. B5 is left
+with the `OFFSET`/`OFFSETVALUE` conversions.
+
+**Rejected.** *Give an EXTERNAL area its own external pointer and a per-module
+create.* Two modules would create two regions and a FREE across the boundary
+would raise AREA, which is the defect the test pins. *Require one module to
+declare it `STATIC` and the rest `EXTERNAL`.* IBM does not ask for that, and the
+common-slot form needs no owner.
+
+---
+
+## ADR-319 — `OFFSET(pointer, area)` is served; `OFFSETVALUE` stays diagnosed
+
+**Context.** B5 carried the `OFFSET`/`OFFSETVALUE` conversion built-ins as open
+because "our offsets carry no area base, so address arithmetic cannot serve them
+faithfully" (ADR-311). An offset in this compiler is an absolute address, the
+same representation as a POINTER (ADR-170); IBM's offset is a displacement from
+the start of its area. The two directions are not equally affected:
+
+- `OFFSET(x, y)` takes a pointer and the area it addresses and yields an offset.
+  Its result only has to *locate the same generation*, which an absolute address
+  already does. IBM's precondition — x must identify a generation in y — is a
+  check the region itself can answer, not a representation question.
+- `OFFSETVALUE(n)` takes a computational value and yields an offset whose
+  displacement from its area is n. With absolute addresses there is nowhere to
+  put a displacement: storing `n` as an address points at byte n of the process,
+  and the area that would turn it into an address is not an argument of the
+  built-in.
+
+**Decision.** Serve the pointer-to-offset direction and keep the other diagnosed:
+
+- `OFFSET(x, y)` is typed as an OFFSET when `x` is a scalar POINTER and `y` is a
+  scalar AREA reference (`isAreaRef`, so an AREA array element qualifies and a
+  whole array does not). Arity and argument type errors cite (123); a non-AREA
+  second argument cites (22).
+- It lowers to `pli_area_offset(area, pointer)`: a null pointer returns the null
+  offset, a null area raises the AREA condition, and a pointer that is not one of
+  the region's live generations raises AREA, mirroring what `FREE ... IN(area)`
+  already refuses. The returned value is the pointer itself, which is what the
+  representation means by "the same location".
+- `OFFSETVALUE` is diagnosed with rule (22) and a message that names the reason.
+  It is the recorded limitation of this representation, not an unimplemented
+  gap to be filled silently later.
+
+**Consequences.** `tests/builtins/offset_convert.pli` converts a heap pointer
+into an offset, dereferences the same generation through it, writes through the
+converted offset and reads the write through the pointer, and converts the null
+pointer. `tests/builtins/bad_offset_convert.pli` pins the arity, a non-POINTER
+first argument, a non-AREA second argument and the `OFFSETVALUE` rejection.
+`guides/builtins.md` and `guides/programming.md` list the served form and the
+limitation. B5 is closed.
+
+**Rejected.** *Store offsets as displacements and add the area base at every
+use.* That is the faithful model, but every SET, `->`, FREE, `OFFSETADD` and
+`OFFSETDIFF` site would need the base of the locator: an offset would have to
+carry which area it belongs to, and a POINTER-based reference would still be
+absolute. It is a representation change across sema, irgen and the ABI, not a
+conversion built-in.
+*Serve `OFFSETVALUE` by storing the value as an address.* The first dereference
+would read process memory at byte n — a silent wrong answer, the worst class in
+the priority model.

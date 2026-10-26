@@ -2052,9 +2052,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                                "this stage",
                      "(20)");
           // A STATIC area is served by irgen (a module global slot created on
-          // first use); an EXTERNAL area needs cross-module region sharing.
-          if (item.sym->external)
-            d_.error(item.loc, "an EXTERNAL AREA is not implemented in this stage", "(20)");
+          // first use); an EXTERNAL area (ADR-318) reuses that path, because
+          // the slot is a common global, so every module reaches one region.
           auto areaErr = [&](const char* what, const char* rule) {
             d_.error(item.loc, std::string("AREA+") + what + " is not implemented", rule);
           };
@@ -6307,6 +6306,37 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     e->ty = Type::offsetTy();
+    return true;
+  }
+  // OFFSET(x, y) (Y33-6003, rule (22); ADR-319): convert a POINTER that
+  // addresses a generation in the AREA y into an OFFSET. OFFSETVALUE (a
+  // computational value to an offset) stays diagnosed: an OFFSET holds an
+  // absolute address here, so an integer cannot name storage.
+  if (e->name == "OFFSET") {
+    if (e->args.size() != 2) {
+      d_.error(e->loc, "OFFSET expects 2 arguments (pointer, area)", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isPointer() || e->args[0]->ty.isArray()) {
+      d_.error(e->args[0]->loc, "the first argument to OFFSET must be a POINTER", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!isAreaRef(e->args[1].get())) {
+      d_.error(e->args[1]->loc, "the second argument to OFFSET must be an AREA", "(22)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::offsetTy();
+    return true;
+  }
+  if (e->name == "OFFSETVALUE") {
+    d_.error(e->loc,
+             "OFFSETVALUE is not implemented: an OFFSET holds an absolute address in "
+             "this implementation, so an integer displacement cannot name storage",
+             "(22)");
+    e->ty = Type::voidTy();
     return true;
   }
   // ADDR built-in (rule 123, Appendix 1; Y33-6003 BASED storage builtin;

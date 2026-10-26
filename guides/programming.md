@@ -759,6 +759,14 @@ a later activation can free it:
  allocate slot in(a) set(pa);   /* the region outlives this activation */
 ```
 
+An `external` area is one region shared by every module that declares it. The
+first module to use it creates it, and a block one module allocates another can
+free:
+
+```pli
+ dcl region area(4096) external;   /* same region in every module */
+```
+
 An offset can move by a byte count, and two offsets can be measured against each other — the way to walk a variable-length block when a structure does not describe every byte:
 
 ```pli
@@ -782,9 +790,9 @@ An array of offsets holds several blocks from one region. Each element is a full
 
 **Not yet**
 
-- External areas are diagnosed, and the `OFFSET`/`OFFSETVALUE` conversion
-  built-ins are not served. An area declared as a structure member is
-  diagnosed with rule (20). A member OFFSET's declared area is not recorded,
+- `OFFSETVALUE` (an integer displacement to an offset) is not served: an
+  offset here holds an absolute address. An area declared as a structure member
+  is diagnosed with rule (20). A member OFFSET's declared area is not recorded,
   so a member `set(...)` or `free` needs an explicit `in(...)`.
 
 > **Run the full example:** [`examples/area_offset.pli`](../examples/area_offset.pli) — `pli area_offset.pli -o arena && ./arena`.

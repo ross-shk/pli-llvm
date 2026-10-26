@@ -12504,6 +12504,17 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
+  // OFFSET(x, y) (rule (22); ADR-319): an OFFSET holds an absolute address
+  // (ADR-170), so the conversion validates that x addresses a generation in
+  // the region y and returns the same address.
+  if (e->name == "OFFSET") {
+    llvm::Value* p = emitExpr(e->args[0].get()).reg;
+    llvm::Value* a = emitExpr(e->args[1].get()).reg;
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_area_offset"), {a, p}, "off");
+    result = v;
+    return true;
+  }
    if (e->name == "ADDR") {
      HExpr* a = e->args[0].get();
       if (a->kind == HExpr::VarRef && a->isLabel) {

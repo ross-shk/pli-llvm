@@ -1,10 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rule (20): STATIC areas are served, but an EXTERNAL area needs
-    cross-module region sharing and a parameter has no storage of its
-    own, so both stay diagnosed. */
+ /* rule (20): STATIC areas are served (ADR-310) and an EXTERNAL area is
+    one shared region (ADR-318), but a parameter has no storage of its
+    own, so STATIC stays diagnosed there. */
  bad_area_static: procedure options(main);
-    declare a area(1000) external;
     declare b area(1000) static;
     call inner(b);
 

@@ -332,7 +332,7 @@ and to build, but not to switch.
 | `COMPLEX` | Pair of floating-point values | The pair stores the real and imaginary components. |
 | `POINTER` | LLVM pointer | |
 | `OFFSET` | LLVM pointer | An opaque locator into an `AREA`; shares the POINTER representation, so a `BASED` variable may be addressed through it (ADR-170); an array of OFFSET is an array of pointers, one locator per element (ADR-312), and the AREA in `OFFSET(area)` is the default region for `ALLOCATE`/`FREE` when `IN` is omitted (ADR-317). |
-| `AREA` | LLVM pointer to a runtime region | A region created at procedure entry and destroyed on exit; `ALLOCATE ... IN(area)` takes blocks from it and `FREE ... IN(area)` returns any block in any order (ADR-170). |
+| `AREA` | LLVM pointer to a runtime region | A region created at procedure entry and destroyed on exit; `ALLOCATE ... IN(area)` takes blocks from it and `FREE ... IN(area)` returns any block in any order (ADR-170); a `STATIC` region lives for the whole program (ADR-310) and an `EXTERNAL` one is a common global slot, so every module shares it (ADR-318). |
 | structure | LLVM struct | Members in declaration order; `ALIGNED` (the default) uses natural padding, `UNALIGNED` emits a packed struct for C interop and its member loads/stores use `align 1` (ADR-169). |
 | array | Contiguous, row-major storage | Dynamic bounds and parameter extents use runtime values. |
 
