@@ -65,44 +65,44 @@ On x86-64, with alternating PL/I/C samples, the IR geomean is **0.84× on Window
 
 | Benchmark | Ratio | What it measures |
 |---|---:|---|
-| `string_search` | 0.07× | INDEX scan over a 76 KB character buffer |
-| `string_ops` | 0.22× | VARYING concatenation and substring extraction |
-| `decimal_ops` † | 0.59× | FIXED DECIMAL(18,2) pricing arithmetic |
-| `controlled_stack` | 0.73× | CONTROLLED array push, fill, sum and pop cycles |
-| `bcd_decimal` | 0.78× | Wide FIXED DECIMAL(25,4) pricing arithmetic |
-| `array_sort` | 0.80× | Bubble sort of 18,000 integers |
-| `condition_ops` | 0.81× | Array access under an ON SUBSCRIPTRANGE handler |
-| `fixed_bin63` | 0.82× | 63-bit FIXED arithmetic with 31×63 widening |
-| `io_throughput` | 0.84× | 200,000 list-directed output lines |
-| `scalar_arith` | 0.85× | Scalar 63-bit integer and float arithmetic |
-| `file_io` | 0.95× | 500,000-record sequential WRITE/READ cycle |
-| `on_conditions` | 0.96× | ON ZERODIVIDE dispatch, one fault per 100 divisions |
-| `collatz` | 0.98× | Collatz sequences for 2…400,000 |
-| `mandelbrot` | 1.00× | 1200×800 Mandelbrot escape-iteration loop |
-| `bit_ops` | 1.01× | AND, OR and NOT over BIT(32) strings |
-| `division` | 1.01× | FIXED BINARY division with a MOD-derived divisor |
-| `matrix_float` | 1.02× | 400×400 double matrix multiply with SIN/COS/SQRT seeding |
-| `math_functions` | 1.02× | Transcendental built-ins in a nested loop |
-| `proc_calls` | 1.03× | Recursive, iterative and array-summing procedure calls |
-| `linked_list` | 1.04× | Build, traverse and free a 3M-node BASED list |
-| `array_matmul` | 1.05× | 512×512 integer matrix multiplication |
+| `string_search` | 0.07× | Searches for matches in a 76 KB text buffer |
+| `string_ops` | 0.22× | Joins text and extracts substrings |
+| `decimal_ops` † | 0.59× | Decimal-number arithmetic (fixed-point style) |
+| `controlled_stack` | 0.73× | Repeated push/fill/sum/pop on a stack-like array |
+| `bcd_decimal` | 0.78× | Decimal arithmetic using a BCD-style representation |
+| `array_sort` | 0.80× | Bubble-sorts 18,000 integers |
+| `condition_ops` | 0.81× | Array access with built-in error handling for bad indexes |
+| `fixed_bin63` | 0.82× | 63-bit integer math |
+| `io_throughput` | 0.84× | Prints 200,000 output lines |
+| `scalar_arith` | 0.85× | Integer and floating-point math on single values |
+| `file_io` | 0.95× | Writes then reads 500,000 records in order |
+| `on_conditions` | 0.96× | Repeatedly handles divide-by-zero during division |
+| `collatz` | 0.98× | Runs the Collatz sequence for 2 to 400,000 |
+| `mandelbrot` | 1.00× | Computes Mandelbrot iterations for a 1200×800 image |
+| `bit_ops` | 1.01× | AND/OR/NOT on 32-bit values |
+| `division` | 1.01× | Fixed-point division using a divisor derived from modulo |
+| `matrix_float` | 1.02× | Multiplies a 400×400 matrix (with trig/math seeding) |
+| `math_functions` | 1.02× | Runs math library functions inside nested loops |
+| `proc_calls` | 1.03× | Repeated function calls (including recursive and iterative) |
+| `linked_list` | 1.04× | Builds, walks, and frees a list with 3 million nodes |
+| `array_matmul` | 1.05× | Multiplies two 512×512 integer matrices |
 
 **Language corpus** (PL/I semantics a C program cannot express; the C twin is a reference):
 
 | Benchmark | Ratio | What it measures |
 |---|---:|---|
-| `select_chain` | 0.09× | SELECT over twenty constant CHAR arms |
-| `picture_fold` | 0.19× | Constant PICTURE conversion, folded vs runtime |
-| `decimal_scale` | 0.44× | Decimal scale reconciliation and rounding |
-| `by_name` | 0.47× | BY NAME structure assignment of ten members |
-| `pure_call` | 0.65× | Loop-invariant helper call priced by effect inference |
-| `io_list` | 0.69× | List-directed output of mixed item types |
-| `concat_const` | 0.85× | Constant-offset concatenation into a fixed result |
-| `checks_on` | 0.85× | Array arithmetic whose bounds and overflow checks cannot be proven away |
-| `bit_merge` | 0.98× | Two masked tests on one word merged into one |
-| `alias_scope` | 0.98× | Three-array copy that vectorizes only when proven disjoint |
-| `on_dispatch` | 1.02× | ON ZERODIVIDE with a multi-statement handler |
-| `bit_fields` | 1.05× | Four independent masked BIT(32) field tests |
+| `select_chain` | 0.09× | Picks from many constant choices |
+| `picture_fold` | 0.19× | Converts a formatted constant value |
+| `decimal_scale` | 0.44× | Adjusts decimal scale and rounds correctly |
+| `by_name` | 0.47× | Copies a group of fields using name-based mapping |
+| `pure_call` | 0.65× | Lets the compiler reuse a helper call safely inside a loop |
+| `io_list` | 0.69× | Writes a list of mixed value types |
+| `concat_const` | 0.85× | Builds a final string using fixed offsets |
+| `checks_on` | 0.85× | Does array and overflow checks that can’t be skipped |
+| `bit_merge` | 0.98× | Combines two masked bit tests into one |
+| `alias_scope` | 0.98× | Copies arrays efficiently when it’s safe they don’t overlap |
+| `on_dispatch` | 1.02× | Handles divide-by-zero with a multi-step handler |
+| `bit_fields` | 1.05× | Tests multiple masked 32-bit fields |
 
 † `decimal_ops` is descriptive: its PL/I side is fixed decimal and its C side is `double`, so the row informs but does not gate. Every row matches its C twin exactly, except the float-sensitive rows (`scalar_arith`, `math_functions`, `matrix_float`), which are compared with a tolerance and also match.
 
