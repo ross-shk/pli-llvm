@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <limits>
 #include <set>
 
 #ifndef PLI_LLVM_VERSION
@@ -3065,6 +3066,51 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* 
   b_.CreateBr(okBB);
 }
 
+// UNDERFLOW (rule 94; ADR-326): a floating-point result whose magnitude is
+// below the smallest normal double is set to zero and the condition is raised,
+// taking IBM's notify-and-continue implicit action when no unit is established.
+// An exact zero from addition or subtraction is not an underflow (IBM's
+// significance-error rule), so `a`/`b` — the operands of a multiply, divide or
+// power — are null for those and the flushed-to-zero test is skipped.
+Val IRGen::applyUnderflow(Val r, llvm::Value* a, llvm::Value* b) {
+  if (!underflowChecks())
+    return r;
+  std::string id = std::to_string(n_++);
+  llvm::Value* zero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
+  llvm::Value* min = llvm::ConstantFP::get(b_.getDoubleTy(), std::numeric_limits<double>::min());
+  llvm::Function* fabsFn = intrinsicFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()});
+  llvm::Value* mag = b_.CreateCall(fabsFn, {r.reg}, "uf.mag." + id);
+  llvm::Value* tiny = b_.CreateFCmpOLT(mag, min, "uf.tiny." + id);
+  llvm::Value* nz = b_.CreateFCmpONE(mag, zero, "uf.nz." + id);
+  llvm::Value* bad = b_.CreateAnd(tiny, nz, "uf.bad." + id);
+  if (a && b) {
+    // A product, quotient or power of two non-zero values that lands on exact
+    // zero lost the whole exponent range.
+    llvm::Value* rz = b_.CreateFCmpOEQ(r.reg, zero, "uf.rz." + id);
+    llvm::Value* ab = b_.CreateAnd(b_.CreateFCmpONE(a, zero, "uf.az." + id),
+                                   b_.CreateFCmpONE(b, zero, "uf.bz." + id), "uf.ab." + id);
+    bad = b_.CreateOr(bad, b_.CreateAnd(rz, ab, "uf.flush." + id), "uf.any." + id);
+  }
+  llvm::BasicBlock* computeBB = b_.GetInsertBlock();
+  llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "uf.trap." + id, curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "uf.ok." + id, curFn_);
+  // intent: underflow is rare, so weight the clean edge and keep the hot block
+  // contiguous, the same shape the zero-divide trap uses.
+  llvm::MDBuilder mdb(ctx_);
+  if (auto* br = b_.CreateCondBr(bad, trapBB, okBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
+  b_.SetInsertPoint(trapBB);
+  emitCondTrap(Stmt::kUnderflowCondKey, "pli_underflow", okBB, /*notifyOnly=*/true);
+  b_.SetInsertPoint(okBB);
+  llvm::PHINode* phi = b_.CreatePHI(r.reg->getType(), 2, "uf.r." + id);
+  phi->addIncoming(r.reg, computeBB);
+  for (llvm::BasicBlock* pred : llvm::predecessors(okBB))
+    if (pred != computeBB)
+      phi->addIncoming(zero, pred);
+  r.reg = phi;
+  return r;
+}
+
 // STRINGRANGE check (rules (60)-(63),(94)): raise before the extraction when
 // the argument triple is invalid. IBM's normal return then gives the clamped
 // substring the lowerings already compute. y = LENGTH(x)+1 with z = 0 is
@@ -5640,6 +5686,7 @@ void IRGen::emitStmt(HStmt* s) {
   top.noSub = s->chkSub ? false : (top.noSub || s->noSub);
   top.noZdiv = s->chkZdiv ? false : (top.noZdiv || s->noZdiv);
   top.noConv = s->chkConv ? false : (top.noConv || s->noConv);
+  top.noUnder = s->chkUnder ? false : (top.noUnder || s->noUnder);
   // An explicit (STRINGRANGE)/(NOSTRINGRANGE) prefix wins for its subtree.
   if (s->strRange != 0)
     top.strRange = s->strRange;
@@ -12449,6 +12496,15 @@ Val IRGen::emitExpr(HExpr* e) {
     r = b_.CreateAdd(i64(0), i64(0));
     break;
   }
+  // UNDERFLOW (rule 94; ADR-326): a floating-point operator result is checked
+  // here; `*`, `/` and `**` pass their operands so a flush to exact zero counts
+  // as underflow too.
+  if (flt && !isCmp) {
+    const bool mulDiv = op == Tok::Star || op == Tok::Slash || op == Tok::Power;
+    r = applyUnderflow(Val{common, r}, mulDiv ? av.reg : nullptr,
+                       mulDiv ? bv.reg : nullptr)
+            .reg;
+  }
   v.ty = common;
   v.reg = r;
   return v;
@@ -13082,6 +13138,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                                            : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;
     v.reg = r;
+    if (common.k == TK::Float)
+      v.reg = applyUnderflow(v, av.reg, bv.reg).reg;
     result = v;
     return true;
   }
@@ -13096,7 +13154,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, flt(0.0), "zdiv");
     ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey);
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
-    v.reg = endZerodivide(zd, div);
+    v.reg = applyUnderflow(Val{common, endZerodivide(zd, div)}, av.reg, bv.reg).reg;
     result = v;
     return true;
   }

@@ -9,6 +9,7 @@ prints the wrong thing is never admitted as a measurement, and a gate is
 never reported over a partial or mismatched corpus.
 """
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -113,6 +114,25 @@ class ParityTests(unittest.TestCase):
         finally:
             rb.PAIRS.pop()
         self.assertTrue(any("no_such_source" in p for p in problems), problems)
+
+
+class BuiltinsLibTests(unittest.TestCase):
+    """The Windows builtins probe follows the compiler actually in use."""
+
+    def test_uses_the_effective_compiler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp) / "clang_rt.builtins-x86_64.lib"
+            lib.write_bytes(b"")
+            calls = []
+            orig_windows, orig_run = rb.IS_WINDOWS, rb.run_command
+            rb.IS_WINDOWS = True
+            rb.run_command = lambda cmd: (calls.append(cmd), (0, tmp, ""))[1]
+            try:
+                found = rb._find_builtins_lib("/custom/bin/clang")
+            finally:
+                rb.IS_WINDOWS, rb.run_command = orig_windows, orig_run
+        self.assertEqual(calls, [["/custom/bin/clang", "-print-runtime-dir"]])
+        self.assertEqual(found, str(lib))
 
 
 class TaskingRatioTests(unittest.TestCase):

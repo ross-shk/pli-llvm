@@ -276,6 +276,14 @@ void pli_stringrange(void) {
   pli_plat_fprintf(stderr, "STRINGRANGE: substring arguments out of range\n");
 }
 
+/* UNDERFLOW (rule 94; ADR-326): IBM's implicit action is a message and
+ * execution continues; the trap lowering has already set the result to 0. */
+void pli_underflow(void) {
+  rt_flush_stdout();
+  pli_plat_fflush(stdout);
+  pli_plat_fprintf(stderr, "UNDERFLOW: floating-point result too small\n");
+}
+
 /* ALLOCATE (rule 87): heap-allocate n bytes for a based structure. A null
  * return would be an ALLOCATION condition (M4); the interim raises a hard
  * error. */

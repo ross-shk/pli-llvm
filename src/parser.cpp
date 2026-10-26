@@ -487,9 +487,9 @@ Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
 // it. Restores the enclosing state when the body ends.
 struct ProcCondGuard {
   int* state;
-  int saved[4];
+  int saved[5];
   ProcCondGuard(int* s, const Stmt& pre) : state(s) {
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 5; ++i)
       saved[i] = s[i];
     if (pre.noSize)
       s[0] = 1;
@@ -507,9 +507,13 @@ struct ProcCondGuard {
       s[3] = 1;
     else if (pre.chkConv)
       s[3] = 2;
+    if (pre.noUnder)
+      s[4] = 1;
+    else if (pre.chkUnder)
+      s[4] = 2;
   }
   ~ProcCondGuard() {
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 5; ++i)
       state[i] = saved[i];
   }
 };
@@ -742,23 +746,24 @@ bool Parser::parseCondPrefixes(Stmt* st) {
     }
     advance();
     // Prefix elements (rules (60)-(63)): the plain forms are no-ops because
-    // SIZE, SUBSCRIPTRANGE, ZERODIVIDE and CONVERSION are on by default, the
-    // NO... forms disable them for the statement's scope, and STRINGRANGE is
-    // IBM's opt-in condition (ADR-297). CHECK(...)/NOCHECK(...) (rules
-    // (95),(96), ADR-320) name conditions — or ALL — and turn them on or off
-    // regardless of what an enclosing prefix disabled. Any other condition
-    // keeps the unenforced warning.
+    // SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION and UNDERFLOW are on by
+    // default, the NO... forms disable them for the statement's scope, and
+    // STRINGRANGE is IBM's opt-in condition (ADR-297). CHECK(...)/NOCHECK(...)
+    // (rules (95),(96), ADR-320) name conditions — or ALL — and turn them on
+    // or off regardless of what an enclosing prefix disabled. Any other
+    // condition keeps the unenforced warning.
     bool anyWord = false, allHandled = true;
     bool checkMode = false, noCheckMode = false, named = false;
     // Apply one state to one implemented check: 1 enables (and clears a
     // disable), -1 disables (and clears an enable); `which` -1 means ALL.
     auto setCond = [&](int which, int state) {
-      for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 4 : which); ++c) {
+      for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 5 : which); ++c) {
         switch (c) {
         case 0: st->noSize = state < 0; st->chkSize = state > 0; break;
         case 1: st->noSub = state < 0; st->chkSub = state > 0; break;
         case 2: st->noZdiv = state < 0; st->chkZdiv = state > 0; break;
         case 3: st->noConv = state < 0; st->chkConv = state > 0; break;
+        case 4: st->noUnder = state < 0; st->chkUnder = state > 0; break;
         default: st->strRange = state; break;
         }
       }
@@ -783,7 +788,7 @@ bool Parser::parseCondPrefixes(Stmt* st) {
       // Classify the word: a condition name, its NO... form, or ALL.
       int state = 0;
       if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOZERODIVIDE" ||
-          w == "NOCONVERSION" || w == "NOSTRINGRANGE") {
+          w == "NOCONVERSION" || w == "NOSTRINGRANGE" || w == "NOUNDERFLOW") {
         w = w.substr(2);
         state = -1;
       }
@@ -796,8 +801,10 @@ bool Parser::parseCondPrefixes(Stmt* st) {
         which = 2;
       else if (w == "CONVERSION")
         which = 3;
-      else if (w == "STRINGRANGE")
+      else if (w == "UNDERFLOW")
         which = 4;
+      else if (w == "STRINGRANGE")
+        which = 5;
       else if (w == "ALL")
         which = -1;
       else {
@@ -815,7 +822,7 @@ bool Parser::parseCondPrefixes(Stmt* st) {
           allHandled = false;
           continue;
         } else
-          state = which == 4 ? 1 : 0;
+          state = which == 5 ? 1 : 0;
       }
       if (checkMode || noCheckMode)
         named = true;
@@ -840,6 +847,7 @@ StmtP Parser::parseStatement(Proc* owner) {
   st->noSub = procCond_[1] == 1;
   st->noZdiv = procCond_[2] == 1;
   st->noConv = procCond_[3] == 1;
+  st->noUnder = procCond_[4] == 1;
 
   // condition prefix list                                          rule (60)
   if (!parseCondPrefixes(st.get()))
@@ -942,10 +950,12 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->noSub = st->noSub;
       s->noZdiv = st->noZdiv;
       s->noConv = st->noConv;
+      s->noUnder = st->noUnder;
       s->chkSize = st->chkSize;
       s->chkSub = st->chkSub;
       s->chkZdiv = st->chkZdiv;
       s->chkConv = st->chkConv;
+      s->chkUnder = st->chkUnder;
       s->strRange = st->strRange;
       return s;
     }
@@ -958,10 +968,12 @@ StmtP Parser::parseStatement(Proc* owner) {
     k->noSub = st->noSub;
     k->noZdiv = st->noZdiv;
     k->noConv = st->noConv;
+    k->noUnder = st->noUnder;
     k->chkSize = st->chkSize;
     k->chkSub = st->chkSub;
     k->chkZdiv = st->chkZdiv;
     k->chkConv = st->chkConv;
+    k->chkUnder = st->chkUnder;
     k->strRange = st->strRange;
     return k;
   }
@@ -973,10 +985,12 @@ StmtP Parser::parseStatement(Proc* owner) {
     s->noSub = st->noSub;
     s->noZdiv = st->noZdiv;
     s->noConv = st->noConv;
+    s->noUnder = st->noUnder;
     s->chkSize = st->chkSize;
     s->chkSub = st->chkSub;
     s->chkZdiv = st->chkZdiv;
     s->chkConv = st->chkConv;
+    s->chkUnder = st->chkUnder;
     s->strRange = st->strRange;
   }
   return s;
@@ -1214,8 +1228,13 @@ std::string Parser::parseCondition(std::string* fileArg) {
     advance();
     return w;
   }
-  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" ||
-      w == "UNDERFLOW") {
+  if (w == "UNDERFLOW") {
+    // UNDERFLOW (rule 94): a floating-point result below the smallest normal
+    // is set to zero and the condition is raised (ADR-326).
+    advance();
+    return w;
+  }
+  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
@@ -1244,7 +1263,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
         name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH" ||
-        name == "AREA") {
+        name == "AREA" || name == "UNDERFLOW") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

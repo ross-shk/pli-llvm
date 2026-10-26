@@ -1001,7 +1001,7 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
       }
       // Preserve newlines from the directive's own text (i..semPos), not
       // from the jump target, so %DO body/%END and %GOTO target text is
-      // tracked by their own scan/processDirective calls (ADR-312).
+      // tracked by their own scan/processDirective calls (ADR-316).
       for (size_t j = i; j <= semPos; ++j) {
         if (source[j] == '\n') {
           output += '\n';

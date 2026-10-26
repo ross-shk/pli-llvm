@@ -10916,31 +10916,6 @@ is malformed and should cite rule (38).
 
 ---
 
-## ADR-305 — `%REPLACE` textual rescanning in the preprocessor (Stage 3)
-
-**Context.** `%REPLACE name BY <tokens> ;` (ADR-077) is currently expanded in
-the lexer after token boundaries are recognized, which limits it to token-level
-substitution. The B6 preprocessor plan (ADR-316) calls for a fully textual
-rescanning preprocessor where `%REPLACE` operates on raw source text before
-lexing, consistent with `%DO`/`%GOTO`/`%PROCEDURE` control flow.
-
-**Decision.** Move `%REPLACE` from the lexer to the preprocessor's `scan()`
-loop. The preprocessor maintains a replace map (`replacements_`) of name →
-token-text. At each non-directive position, `scan()` checks whether a
-identifier-like token at the current position matches a `%REPLACE` name; if so,
-it emits the replacement text in place and rescans it. Quoted `"..."` operands
-keep their ADR-082 rescanning behavior.
-
-**Consequences.** The lexer's `applyReplace`, `lexDqString`, `lexSnippet`, and
-the `DqString` token production are removed; the parser no longer sees
-`DqString` tokens. All five `%REPLACE` golden tests
-(`replace.pli`, `replace_quoted.pli`, `bad_replace.pli`, `bad_replace_mixed.pli`,
-`bad_dqstring.pli`) must remain byte-identical. Stage 1+2 (`%DO`/`%GOTO`/
-`%PROCEDURE`/`%RETURN`) are unaffected and already pass. This is Stage 3 of
-the B6 work item and is targeted independently.
-
----
-
 ## ADR-303 — `AREA(*)` as an adjustable area size
 
 **Context.** Rule (20) is `area-attribute ::= AREA [ ( expression | * ) ]`.
@@ -11504,8 +11479,7 @@ previously stubs (`handleDo`/`handleGoto` returned "not implemented"), so any
 program using them was rejected at the preprocessor stage.
 
 **Decision.** Implement `%DO`/`%END` and `%GOTO`/`%GO TO`/`%label:` as a flat-
-textual rescanning pass over the already-included source (ADR-305 for the scan
-architecture):
+textual rescanning pass over the already-included source:
 
 - **`scan(source, start, end, …)`** walks the source char-by-char, tracking
   strings, `/* */`, and `//` comment state so directives inside them are inert.
@@ -12009,3 +11983,113 @@ the next spawn, so nearly every spawn pays a cross-core signal. *No wake.*
 117.2 ms and one stack per task. *500 µs.* 19.0 ms, worse. *A timer thread.*
 It would bound the delay when spawning stops, at the cost of another thread
 and its own wakeups; not needed for the measured workloads.
+
+## ADR-326 — `UNDERFLOW` is raised on a floating-point operator result
+
+**Context.** Rule (94) lists `UNDERFLOW` as a condition, and rule (63) gives it
+a `NOUNDERFLOW` prefix. IBM raises it when the magnitude of a floating-point
+result is smaller than the minimum allowed; the result becomes 0, and the
+implicit action is a message followed by *continuing* from the same point
+(except for IEEE on z/OS, which raises ERROR). Two details shape a faithful
+implementation: an exact zero produced by subtracting equal values is a
+significance error, not an underflow, and a product that loses the whole
+exponent range lands on exact zero rather than on a subnormal.
+
+**Decision.** Raise it at the floating-point operator results, and nowhere else:
+
+- The check compares the result with the smallest *normal* double and with
+  zero: a non-zero subnormal raises. For `*`, `/` and `**` the operands are
+  passed too, so a zero result with two non-zero operands also raises (the
+  whole exponent range was lost). Addition and subtraction get the subnormal
+  test only, so `a - a` stays silent.
+- The lowering resumes with 0 — IBM's result — through a phi that picks the
+  computed value on the clean path and zero on every trap path, the same shape
+  the ZERODIVIDE trap uses. With no unit established it calls
+  `pli_underflow`, which prints the message and returns: notify and continue,
+  as IBM defines it.
+- Instrumented sites: the four floating-point binary operators in the
+  expression emitter, the `MULTIPLY` and `DIVIDE` built-ins, and `**` (whose
+  constant-exponent-square fast path is an ordinary multiply). Not
+  instrumented: the complex arithmetic lowering (its results are pairs, not a
+  single float), the internal scaled-conversion math, and the math library
+  built-ins (`SQRT`, `EXP`, ...), whose results are values rather than operator
+  results. That scope is recorded in `GC` and the programming guide.
+- `UNDERFLOW` gets the fixed key `Stmt::kUnderflowCondKey` (-8);
+  `CONDITION(UNDERFLOW)` is rejected; `(UNDERFLOW)`/`(NOUNDERFLOW)` join the
+  prefix elements and `CHECK(...)`/`NOCHECK(...)` list it, so `CHECK(ALL)`
+  covers it. Ignoring `NOUNDERFLOW` before this change was a silent acceptance
+  too.
+- The traps ride the existing arithmetic switch: `--no-size-checks`, and
+  `-O2`/`-O3` which imply it, turn them off with the SIZE trap, so a benchmark
+  build carries no extra branch. Tests run with `--size-checks`, which turns
+  them on.
+
+**Consequences.** `tests/core/on_underflow.pli` pins the flush-to-zero case,
+the subnormal case, the significance-error exemption, `(nounderflow)`,
+`(nounderflow): (check(underflow))`, and the unhandled notify-and-continue path.
+`bad_on_cond_underflow.pli` pins the `CONDITION(UNDERFLOW)` rejection. `GC`
+(60)–(63) and (91)–(99), the programming guide and `DEFERRED-WORK` carry the
+change. B4 keeps `FIXEDOVERFLOW` and `OVERFLOW` open.
+
+**Rejected.** *Treat every zero result of non-zero operands as underflow.* That
+is exactly the significance error IBM excludes for subtraction, and it would
+fire on ordinary `a - b` where `a = b`. *Detect only subnormals.* A product
+such as `1e-300 * 1e-300` is below the subnormal range and lands on exact zero;
+without the operand test it would pass silently. *Raise on library built-ins
+too.* That is a later change with its own ADR: the built-ins return values
+through their own ABIs, and widening the scope means deciding, per built-in,
+whether a tiny result is an operator underflow or a legitimate value.
+
+---
+
+## ADR-327 — `%REPLACE` textual rescanning in the preprocessor (Stage 3)
+
+**Context.** `%REPLACE name BY <tokens> ;` (ADR-077) is currently expanded in
+the lexer after token boundaries are recognized, which limits it to token-level
+substitution. The B6 preprocessor plan (ADR-316) calls for a fully textual
+rescanning preprocessor where `%REPLACE` operates on raw source text before
+lexing, consistent with `%DO`/`%GOTO`/`%PROCEDURE` control flow.
+
+**Decision.** Move `%REPLACE` from the lexer to the preprocessor's `scan()`
+loop. The preprocessor maintains a replace map (`replacements_`) of name →
+token-text. At each non-directive position, `scan()` checks whether a
+identifier-like token at the current position matches a `%REPLACE` name; if so,
+it emits the replacement text in place and rescans it. Quoted `"..."` operands
+keep their ADR-082 rescanning behavior.
+
+**Consequences.** The lexer's `applyReplace`, `lexDqString`, `lexSnippet`, and
+the `DqString` token production are removed; the parser no longer sees
+`DqString` tokens. All five `%REPLACE` golden tests
+(`replace.pli`, `replace_quoted.pli`, `bad_replace.pli`, `bad_replace_mixed.pli`,
+`bad_dqstring.pli`) must remain byte-identical. Stage 1+2 (`%DO`/`%GOTO`/
+`%PROCEDURE`/`%RETURN`) are unaffected and already pass. This is Stage 3 of
+the B6 work item and is targeted independently.
+
+---
+
+## ADR-328 — `%PROCEDURE`/`%RETURN` compile-time macros (Stage 2)
+
+**Context.** ADR-316 implemented the Stage 1 control flow (`%DO`, `%GOTO`,
+`%label:`) of the Chapter 9 rescanning preprocessor and left `%PROCEDURE`
+macros deferred. C28-6571-3 Chapter 9 defines a compile-time procedure as text
+that is expanded where it is invoked, so its arguments and its result are
+resolved before the parser ever sees the source.
+
+**Decision.** A definition `%name: procedure (p1, p2) returns (fixed); … %end;`
+is captured verbatim — the body is stored, not scanned — in the preprocessor's
+macro table. A call `%name(a, b)` in directive position evaluates each argument
+as a compile-time integer expression, binds the parameters in the preprocessor
+variable table as activated `%DECLARE`-style names, scans the body at the call
+site, and emits the result text back into the output for another rescan.
+`%RETURN (expr) ;` evaluates the expression in the body's scope, stores the
+value and stops that scan, which is how recursion (`%fib(n-1) + %fib(n-2)`)
+terminates. Bindings and return state are saved and restored around every call,
+so nested and recursive invocations cannot leak parameters; an arity mismatch
+and a body that reaches `%END` without `%RETURN` are both diagnosed.
+
+**Consequences.** `pp_proc.pli` — a Fibonacci macro recursing inside the
+preprocessor — is the gate. Results are carried as integers: `returns (fixed)`
+emits the numeral, and `returns (character)` emits it as a quoted literal,
+which is the useful subset for include-parameter substitution. `%REPLACE`
+stays in the lexer until Stage 3 (ADR-327), and the `kMaxScanDepth` guard
+(256) still bounds the nesting a runaway macro can create.
