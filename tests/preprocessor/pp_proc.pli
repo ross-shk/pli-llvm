@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Chapter 9 (ADR-312): %PROCEDURE macros with parameters and %RETURN.
+   fib(n) = fib(n-1) + fib(n-2), fib(0)=0, fib(1)=1.
+   Expects PASS pp_proc on stdout. */
+%declare n;
+%fib: procedure(n) returns(fixed);
+  %if n <= 1 %then %return n;
+  %return %fib(n-1) + %fib(n-2);
+%end;
+pp_proc: procedure options(main);
+  %if %fib(10) = 55 %then put skip list('PASS pp_proc');
+%end;
+end pp_proc;

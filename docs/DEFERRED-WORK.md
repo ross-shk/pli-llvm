@@ -130,7 +130,7 @@ are a deliberate ordering decision.
 
 | ID | Work | Status | Evidence | Done when | Size | Deps |
 |---|---|---|---|---|---|---|
-| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | partial | `GC` Chapter 9 row: `%DO`/`%END` iteration loops implemented; `%GOTO`/`%GO TO` with flat-label resolution implemented; `%PROCEDURE`/`%PROC`/`%RETURN` and `%REPLACE` rescanning (Stage 3) still reject (`pp_do.pli`, `pp_goto.pli`, `bad_pp_do_unterminated.pli`, `bad_preprocessor.pli`, ADR-316) | `%PROCEDURE` macro expansion (Stage 2); `%REPLACE` textual rescanning moved from lexer to preprocessor (Stage 3, ADR-077→ADR-302) | M | — |
+| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | partial | `GC` Chapter 9 row: `%DO`/`%END` iteration loops implemented; `%GOTO`/`%GO TO` with flat-label resolution implemented; `%PROCEDURE`/`%PROC`/`%RETURN` compile-time macros implemented (Stage 1+2, `pp_proc.pli`, ADR-312); `%REPLACE` remains in the lexer (ADR-077), moving to preprocessor textual rescanning in Stage 3 (ADR-305) (`pp_do.pli`, `pp_goto.pli`, `bad_pp_do_unterminated.pli`, ADR-316) | `%REPLACE` textual rescanning moved from lexer to preprocessor (Stage 3, ADR-077→ADR-305) | M | — |
 
 ## Dropped, or deliberately out of scope
 

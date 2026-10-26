@@ -10916,6 +10916,31 @@ is malformed and should cite rule (38).
 
 ---
 
+## ADR-305 — `%REPLACE` textual rescanning in the preprocessor (Stage 3)
+
+**Context.** `%REPLACE name BY <tokens> ;` (ADR-077) is currently expanded in
+the lexer after token boundaries are recognized, which limits it to token-level
+substitution. The B6 preprocessor plan (ADR-316) calls for a fully textual
+rescanning preprocessor where `%REPLACE` operates on raw source text before
+lexing, consistent with `%DO`/`%GOTO`/`%PROCEDURE` control flow.
+
+**Decision.** Move `%REPLACE` from the lexer to the preprocessor's `scan()`
+loop. The preprocessor maintains a replace map (`replacements_`) of name →
+token-text. At each non-directive position, `scan()` checks whether a
+identifier-like token at the current position matches a `%REPLACE` name; if so,
+it emits the replacement text in place and rescans it. Quoted `"..."` operands
+keep their ADR-082 rescanning behavior.
+
+**Consequences.** The lexer's `applyReplace`, `lexDqString`, `lexSnippet`, and
+the `DqString` token production are removed; the parser no longer sees
+`DqString` tokens. All five `%REPLACE` golden tests
+(`replace.pli`, `replace_quoted.pli`, `bad_replace.pli`, `bad_replace_mixed.pli`,
+`bad_dqstring.pli`) must remain byte-identical. Stage 1+2 (`%DO`/`%GOTO`/
+`%PROCEDURE`/`%RETURN`) are unaffected and already pass. This is Stage 3 of
+the B6 work item and is targeted independently.
+
+---
+
 ## ADR-303 — `AREA(*)` as an adjustable area size
 
 **Context.** Rule (20) is `area-attribute ::= AREA [ ( expression | * ) ]`.
