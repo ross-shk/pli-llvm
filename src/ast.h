@@ -168,6 +168,8 @@ struct DeclItem {
                                   // scalar/pointer params marshal by value (C ABI)
    std::vector<std::string> uses; // USES( ... ) entry-name-attribute (rules (34),(38))
    std::vector<std::string> sets; // SETS( ... ) entry-name-attribute (rules (34),(38))
+   int reducible = 0;             // REDUCIBLE (1) / IRREDUCIBLE (-1) entry-name attribute
+                                  // (rule (34)): an optimization hint, metadata only
    std::string abnormalLabel;     // ABNORMAL(label) entry-name-attribute (rule (38))
    bool normal = false;           // NORMAL entry-name-attribute (rule (38)): no ABNORMAL
    std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))

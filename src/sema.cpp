@@ -1387,6 +1387,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           item.uses.clear();
           item.sets.clear();
         }
+        if (item.reducible != 0 && !item.isEntry && !item.entryVariable) {
+          // REDUCIBLE/IRREDUCIBLE is an entry-name-attribute (rule (34)): it
+          // says how calls through the entry may be repeated, so a storage
+          // item cannot carry it.
+          d_.error(item.loc, "REDUCIBLE/IRREDUCIBLE is only valid on an ENTRY declaration",
+                   "(34)");
+          item.reducible = 0;
+        }
         if ((!item.abnormalLabel.empty() || item.normal) && !item.isEntry) {
           // ABNORMAL/NORMAL is an entry-name-attribute (rule (38)): it decides
           // where a CALL through the entry returns to.
@@ -1456,6 +1464,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             sym->entryByValue = item.entryByValue;
             sym->entryUses = item.uses;
             sym->entrySets = item.sets;
+            sym->reducible = item.reducible;
             if (!isStatic)
               p->localSyms.push_back(sym);
             item.sym = sym;
@@ -1481,6 +1490,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           sym->entryByValue = item.entryByValue;
           sym->entryUses = item.uses;
           sym->entrySets = item.sets;
+          sym->reducible = item.reducible;
           sym->irName = "@" + (item.extName.empty() ? item.name : item.extName);
           item.sym = sym;
           entries_.push_back(sym);

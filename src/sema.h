@@ -35,6 +35,10 @@ struct Symbol {
   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
   std::vector<std::string> entryUses; // USES(...) interface metadata (rules (34),(38))
   std::vector<std::string> entrySets; // SETS(...) interface metadata (rules (34),(38))
+  // REDUCIBLE (1) / IRREDUCIBLE (-1) entry-name attribute (rule (34)): an
+  // optimization hint. Recorded as interface metadata; the decision layer
+  // performs no interprocedural value numbering, so it changes no code.
+  int reducible = 0;
   // ABNORMAL(label) (rule (38)): a CALL through this entry returns to that label
   // instead of the statement after the CALL. Empty = the normal return point.
   // The label lives in the declaring procedure's block, so only calls from that

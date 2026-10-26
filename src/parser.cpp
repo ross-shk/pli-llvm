@@ -1979,6 +1979,16 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
+      if (w == "REDUCIBLE" || w == "IRREDUCIBLE") {
+        // entry-name-attribute { REDUCIBLE | IRREDUCIBLE } (rule (34)): an
+        // optimization hint about repeating a call with the same arguments.
+        // The declaration is a hint, not a constraint, so a later attribute
+        // overrides an earlier one; validity (an ENTRY declaration) is
+        // checked in sema.
+        item.reducible = (w == "REDUCIBLE") ? 1 : -1;
+        advance();
+        continue;
+      }
       if (w == "LIKE") {
         // like-attribute ::= LIKE unsubscripted-reference (rule 43): the
         // declared item takes the structure shape of the referenced structure.

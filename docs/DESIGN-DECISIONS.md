@@ -12409,3 +12409,52 @@ They are different conditions with different resume rules and different
 handlers, and a program that handles one should not swallow the other.
 *Raise on a narrowing assignment.* That is exactly `SIZE`; IBM raises this one
 from the arithmetic, before the store.
+
+---
+
+## ADR-335 — `REDUCIBLE`/`IRREDUCIBLE` are recorded entry hints
+
+**Context.** Rule (34) lists `REDUCIBLE` and `IRREDUCIBLE` beside `ENTRY`,
+`RETURNS` and `USES`/`SETS` among the entry-name attributes, and the keyword
+table gives them the abbreviations `RED`/`IRRED`. IBM defines them as
+*reducibility* hints: a reducible procedure may be treated as returning the same
+value for the same arguments (so a repeated call may be folded or moved), while
+`IRREDUCIBLE` says the opposite. Before this record the parser stopped at the
+word with `expected ';'` under rule (9) — a wrong rule for a legal declaration,
+and the kind of rejection that makes a real program need source edits.
+
+**Decision.** Accept both attributes on an `ENTRY` declaration, in any attribute
+order, and record the hint on the symbol:
+
+- `DeclItem::reducible` is `1` for `REDUCIBLE` and `-1` for `IRREDUCIBLE`; the
+  later attribute of a pair wins, because the declaration is a hint rather than
+  a constraint, and rejecting a contradictory pair would refuse a program whose
+  meaning is still clear.
+- `Sema` copies it onto the entry symbol next to `entryUses`/`entrySets`, and on
+  anything that is not an `ENTRY` declaration it raises rule (34) — "only valid
+  on an ENTRY declaration" — clearing the flag, so a storage item never carries
+  interface metadata silently.
+- Nothing lowers or reads the field yet: this compiler performs no
+  interprocedural value numbering, and the decision layer's call model
+  (`irgen_decisions.cpp`) has no reducibility input. Ignoring a *hint* changes
+  performance, never results, so the attribute is metadata in the same sense as
+  ADR-302's `USES`/`SETS`. When the C3 inline-vs-library layer gains a
+  predicate, this field is where it reads the declaration.
+- A `PROCEDURE` statement's option list is rule (5)'s `function-attribute |
+  RECURSIVE | OPTIONS(...)`, which does not include these words; that spelling
+  keeps the existing "ignoring unsupported procedure option" warning rather
+  than a new acceptance the scan does not describe.
+
+**Consequences.** `tests/core/entry_reducible.pli` pins both attributes on
+external entries in both positions (before and after `ENTRY`/`RETURNS`);
+`tests/core/bad_reducible.pli` pins the rule (34) diagnostic on a storage item.
+`GC` (34)–(38) and `DEFERRED-WORK` B9 carry the change. No ABI or IR change.
+
+**Rejected.** *Mark the entry `readnone`/`readonly` so a repeated call folds.*
+`REDUCIBLE` says the *value* repeats; it says nothing about memory, and claiming
+`readnone` would let LLVM delete stores a reducible procedure still makes.
+*Diagnose the contradictory pair.* IBM's hints are advisory; the last one wins
+is the reading that never refuses a legal declaration. *Treat the words as
+storage-class attributes somewhere else.* Rule (34) puts them on entry names
+only; the lexer still never classifies keywords, so `REDUCIBLE` remains usable
+as a variable or procedure name.
