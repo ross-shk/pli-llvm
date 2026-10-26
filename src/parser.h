@@ -222,4 +222,9 @@ private:
   // 0 = inherit, 1 = enabled, -1 = disabled. Every statement parsed inside
   // that procedure starts from this state.
   int procStrRange_ = 0;
+  // Scope of the CHECK/NO... prefix elements on a PROCEDURE statement
+  // (rules (61),(95),(96); ADR-320): 0 = default, 1 = disabled by the
+  // procedure's prefix, 2 = re-enabled by CHECK. Every statement parsed
+  // inside that procedure starts from this state.
+  int procCond_[4] = {0, 0, 0, 0};
 };

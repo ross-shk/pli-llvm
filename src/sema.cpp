@@ -3359,6 +3359,10 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->chkSize = s->chkSize;
+  inner->chkSub = s->chkSub;
+  inner->chkZdiv = s->chkZdiv;
+  inner->chkConv = s->chkConv;
   inner->strRange = s->strRange;
   {
     auto tgt = std::make_unique<Expr>();
@@ -3713,6 +3717,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       fill->noSub = s->noSub;
       fill->noZdiv = s->noZdiv;
       fill->noConv = s->noConv;
+      fill->chkSize = s->chkSize;
+      fill->chkSub = s->chkSub;
+      fill->chkZdiv = s->chkZdiv;
+      fill->chkConv = s->chkConv;
       fill->strRange = s->strRange;
       auto fillTgt = std::make_unique<Expr>();
       fillTgt->kind = Expr::VarRef;
@@ -3736,6 +3744,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         copy->noSub = s->noSub;
         copy->noZdiv = s->noZdiv;
         copy->noConv = s->noConv;
+        copy->chkSize = s->chkSize;
+        copy->chkSub = s->chkSub;
+        copy->chkZdiv = s->chkZdiv;
+        copy->chkConv = s->chkConv;
         copy->strRange = s->strRange;
         auto ctgt = std::make_unique<Expr>();
         ctgt->kind = Expr::VarRef;
@@ -6057,6 +6069,10 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   inner->noSub = s->noSub;
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
+  inner->chkSize = s->chkSize;
+  inner->chkSub = s->chkSub;
+  inner->chkZdiv = s->chkZdiv;
+  inner->chkConv = s->chkConv;
   inner->strRange = s->strRange;
   s->kind = Stmt::Group;
   s->byName = false;

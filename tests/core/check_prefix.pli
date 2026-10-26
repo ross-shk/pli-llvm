@@ -1,0 +1,116 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* CHECK/NOCHECK prefix elements (rules (61),(95),(96); ADR-320): CHECK
+    re-enables a check an enclosing NO... prefix disabled, NOCHECK turns
+    the named checks (or all of them) off, CHECK(ALL) enables the opt-in
+    STRINGRANGE check, and a PROCEDURE statement's prefix scopes its
+    body. */
+ check_prefix: procedure options(main);
+    declare small fixed bin(15);
+    declare digits char(4) init('abcd');
+    declare num fixed bin(31) init(0);
+    declare text char(8) init('abcdefgh');
+    declare view char(8) init('');
+    declare szh fixed bin(31) init(0);
+    declare cvh fixed bin(31) init(0);
+    declare srh fixed bin(31) init(0);
+
+    on size begin;
+       szh = szh + 1;
+    end;
+    on conversion begin;
+       cvh = cvh + 1;
+    end;
+    on stringrange begin;
+       srh = srh + 1;
+    end;
+
+    /* (NOSIZE) elides the trap, so the assignment wraps silently */
+    (nosize): small = 40000;
+    if szh ^= 0 then do;
+       put skip list('FAIL check_prefix: NOSIZE raised', szh);
+       stop;
+    end;
+    if small ^= 40000 then do;
+       put skip list('FAIL check_prefix: NOSIZE wrapped', small);
+       stop;
+    end;
+
+    /* CHECK(SIZE) inside the NOSIZE scope re-enables the trap */
+    (nosize): (check(size)): small = 40000;
+    if szh ^= 1 then do;
+       put skip list('FAIL check_prefix: CHECK(SIZE)', szh);
+       stop;
+    end;
+
+    /* a CHECK statement in a NOSIZE group re-enables for itself */
+    (nosize):
+       do;
+          (check(size)): small = 40000;
+          small = 40000;
+       end;
+    if szh ^= 2 then do;
+       put skip list('FAIL check_prefix: nested CHECK', szh);
+       stop;
+    end;
+
+    /* NOCHECK names one check; NOCHECK alone disables every check */
+    (nocheck(size)): small = 40000;
+    if szh ^= 2 then do;
+       put skip list('FAIL check_prefix: NOCHECK(SIZE)', szh);
+       stop;
+    end;
+    (nocheck): small = 40000;
+    if szh ^= 2 then do;
+       put skip list('FAIL check_prefix: NOCHECK', szh);
+       stop;
+    end;
+
+    /* CONVERSION is on by default, off under NOCHECK, on under CHECK */
+    (nocheck(conversion)): num = fixed(digits);
+    if cvh ^= 0 then do;
+       put skip list('FAIL check_prefix: NOCHECK(CONVERSION)', cvh);
+       stop;
+    end;
+    (check(conversion)): num = fixed(digits);
+    if cvh ^= 1 then do;
+       put skip list('FAIL check_prefix: CHECK(CONVERSION)', cvh);
+       stop;
+    end;
+
+    /* STRINGRANGE is opt-in: plain SUBSTR clamps, CHECK(ALL) raises */
+    view = substr(text, 5, 10);
+    if srh ^= 0 then do;
+       put skip list('FAIL check_prefix: default STRINGRANGE', srh);
+       stop;
+    end;
+    (check(all)): view = substr(text, 5, 10);
+    if srh ^= 1 then do;
+       put skip list('FAIL check_prefix: CHECK(ALL)', srh);
+       stop;
+    end;
+
+    call nested();
+    put skip list('PASS check_prefix');
+ end check_prefix;
+
+ /* (NOSIZE) on the PROCEDURE statement scopes this body and its nested
+    declarations; CHECK re-enables the trap for one statement here. */
+ (nosize): nested: procedure;
+    declare y fixed bin(15);
+    declare hits fixed bin(31) init(0);
+    on size begin;
+       hits = hits + 1;
+    end;
+
+    y = 40000;
+    if hits ^= 0 then do;
+       put skip list('FAIL check_prefix: procedure NOSIZE', hits);
+       stop;
+    end;
+    (check(size)): y = 40000;
+    if hits ^= 1 then do;
+       put skip list('FAIL check_prefix: procedure CHECK', hits);
+       stop;
+    end;
+ end nested;

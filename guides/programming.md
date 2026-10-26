@@ -41,7 +41,7 @@ pli name.pli -o name && ./name
 | Types      | FIXED BIN/DEC, FLOAT, COMPLEX, BIT, CHAR/VARYING, POINTER        | STERLING constants, PICTURE type |
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
-| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), named | OVERFLOW, CHECK                  |
+| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), named; `CHECK`/`NOCHECK` prefixes | OVERFLOW, FINISH, AREA |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
@@ -942,11 +942,35 @@ Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconvers
  (nosubscriptrange): a(i) = 0;  /* trust me, i is fine */
 ```
 
+`check` puts a check back on for one statement, and `nocheck` turns checks off. Both take a list of conditions, or `all`; `nocheck` on its own turns every check off:
+
+```pli
+ (nosize):
+    do;
+       total = total + bump;
+       (check(size)): total = total + bump;   /* this one traps */
+    end;
+
+ (check(all)): y = substr(s, 5, 10);   /* raises stringrange */
+ (nocheck): x = fixed(text);           /* no conversion trap */
+```
+
+`check` also works on a `procedure` statement, where it scopes the whole body (nested procedures included):
+
+```pli
+ (nosize): fast_path: procedure;
+   /* every statement here runs without overflow traps */
+ end fast_path;
+```
+
+The command-line `--no-size-checks` (and `-O2`/`-O3`, which imply it) wins over `check`: that switch means "this program never overflows", so the traps stay out.
+
 > **Python friends:** `on ... / signal ...` is `try: ... except: ...` that resumes instead of jumping to the except's end. `revert` is leaving the `with` block.
 
 **Not yet**
 
-- `check` conditions, `on return`, `go to` inside a unit, and `return(value)` inside a handler are diagnosed.
+- `overflow`, `finish`, and `area` conditions, keyed-I/O conditions, `go to`
+  inside a unit, and `return(value)` inside a handler are diagnosed.
 
 > **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `pli conditions.pli -o conds && ./conds`.
 

@@ -481,6 +481,39 @@ Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
   return raw;
 }
 
+// Applies a PROCEDURE statement's condition prefix to the body it scopes
+// (rules (60)-(63),(95); ADR-320): the four entries of procCond_ are 0 for the
+// default, 1 when the prefix disables the check, and 2 when CHECK re-enables
+// it. Restores the enclosing state when the body ends.
+struct ProcCondGuard {
+  int* state;
+  int saved[4];
+  ProcCondGuard(int* s, const Stmt& pre) : state(s) {
+    for (int i = 0; i < 4; ++i)
+      saved[i] = s[i];
+    if (pre.noSize)
+      s[0] = 1;
+    else if (pre.chkSize)
+      s[0] = 2;
+    if (pre.noSub)
+      s[1] = 1;
+    else if (pre.chkSub)
+      s[1] = 2;
+    if (pre.noZdiv)
+      s[2] = 1;
+    else if (pre.chkZdiv)
+      s[2] = 2;
+    if (pre.noConv)
+      s[3] = 1;
+    else if (pre.chkConv)
+      s[3] = 2;
+  }
+  ~ProcCondGuard() {
+    for (int i = 0; i < 4; ++i)
+      state[i] = saved[i];
+  }
+};
+
 // procedure ::= [prefixlist] entry-namelist PROCEDURE [(parameterlist)]
 //               [procedure-optionslist] sentencelist                rule (2)
 void Parser::parseExternalProcedure() {
@@ -538,6 +571,7 @@ void Parser::parseExternalProcedure() {
   int outerStr = procStrRange_;
   if (pre->strRange != 0)
     procStrRange_ = pre->strRange;
+  ProcCondGuard condGuard(procCond_, *pre);
   parseProcBody(p);
   procStrRange_ = outerStr;
 }
@@ -707,45 +741,90 @@ bool Parser::parseCondPrefixes(Stmt* st) {
       return false;
     }
     advance();
-    // Extensions (ADR-110/112): SIZE/NOSIZE and SUBSCRIPTRANGE/
-    // NOSUBSCRIPTRANGE and ZERODIVIDE/NOZERODIVIDE prefixes are
-    // enforced; any other condition keeps the unenforced warning.
-    // STRINGRANGE/NOSTRINGRANGE is IBM's opt-in condition (ADR-297):
-    // disabled by default, enabled only inside the prefix's scope.
+    // Prefix elements (rules (60)-(63)): the plain forms are no-ops because
+    // SIZE, SUBSCRIPTRANGE, ZERODIVIDE and CONVERSION are on by default, the
+    // NO... forms disable them for the statement's scope, and STRINGRANGE is
+    // IBM's opt-in condition (ADR-297). CHECK(...)/NOCHECK(...) (rules
+    // (95),(96), ADR-320) name conditions — or ALL — and turn them on or off
+    // regardless of what an enclosing prefix disabled. Any other condition
+    // keeps the unenforced warning.
     bool anyWord = false, allHandled = true;
+    bool checkMode = false, noCheckMode = false, named = false;
+    // Apply one state to one implemented check: 1 enables (and clears a
+    // disable), -1 disables (and clears an enable); `which` -1 means ALL.
+    auto setCond = [&](int which, int state) {
+      for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 4 : which); ++c) {
+        switch (c) {
+        case 0: st->noSize = state < 0; st->chkSize = state > 0; break;
+        case 1: st->noSub = state < 0; st->chkSub = state > 0; break;
+        case 2: st->noZdiv = state < 0; st->chkZdiv = state > 0; break;
+        case 3: st->noConv = state < 0; st->chkConv = state > 0; break;
+        default: st->strRange = state; break;
+        }
+      }
+    };
     for (size_t k = save; k < i_; ++k) {
       if (t_[k].kind != Tok::Word)
         continue;
       anyWord = true;
-      const std::string& w = t_[k].text;
-      if (w == "SIZE" || w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE" || w == "CONVERSION")
-        continue; // already enabled: no-op
-      if (w == "NOSIZE") {
-        st->noSize = true;
+      std::string w = t_[k].text;
+      if (w == "CHECK") {
+        checkMode = true;
+        noCheckMode = false;
+        named = false;
         continue;
       }
-      if (w == "NOSUBSCRIPTRANGE") {
-        st->noSub = true;
+      if (w == "NOCHECK") {
+        noCheckMode = true;
+        checkMode = false;
+        named = false;
         continue;
       }
-      if (w == "NOZERODIVIDE") {
-        st->noZdiv = true;
+      // Classify the word: a condition name, its NO... form, or ALL.
+      int state = 0;
+      if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOZERODIVIDE" ||
+          w == "NOCONVERSION" || w == "NOSTRINGRANGE") {
+        w = w.substr(2);
+        state = -1;
+      }
+      int which;
+      if (w == "SIZE")
+        which = 0;
+      else if (w == "SUBSCRIPTRANGE")
+        which = 1;
+      else if (w == "ZERODIVIDE")
+        which = 2;
+      else if (w == "CONVERSION")
+        which = 3;
+      else if (w == "STRINGRANGE")
+        which = 4;
+      else if (w == "ALL")
+        which = -1;
+      else {
+        allHandled = false;
         continue;
       }
-      if (w == "NOCONVERSION") {
-        st->noConv = true;
-        continue;
+      // CHECK/NOCHECK turn a condition on/off; a plain prefix only disables
+      // (the checks are on by default), except STRINGRANGE, which it enables.
+      if (state == 0) {
+        if (checkMode)
+          state = 1;
+        else if (noCheckMode)
+          state = -1;
+        else if (which < 0) { // (ALL) is not a prefix element
+          allHandled = false;
+          continue;
+        } else
+          state = which == 4 ? 1 : 0;
       }
-      if (w == "STRINGRANGE") {
-        st->strRange = 1;
-        continue;
-      }
-      if (w == "NOSTRINGRANGE") {
-        st->strRange = -1;
-        continue;
-      }
-      allHandled = false;
+      if (checkMode || noCheckMode)
+        named = true;
+      if (state != 0)
+        setCond(which, state);
     }
+    // NOCHECK with no list disables every implemented check (rule (96)).
+    if (noCheckMode && !named)
+      setCond(-1, -1);
     if (!anyWord || !allHandled)
       d_.warn(l, "condition prefixes are parsed but not yet enforced", "(60)");
   }
@@ -757,6 +836,10 @@ StmtP Parser::parseStatement(Proc* owner) {
   st->loc = cur().loc;
   // A PROCEDURE-level prefix covers every statement in its body.
   st->strRange = procStrRange_;
+  st->noSize = procCond_[0] == 1;
+  st->noSub = procCond_[1] == 1;
+  st->noZdiv = procCond_[2] == 1;
+  st->noConv = procCond_[3] == 1;
 
   // condition prefix list                                          rule (60)
   if (!parseCondPrefixes(st.get()))
@@ -792,7 +875,14 @@ StmtP Parser::parseStatement(Proc* owner) {
     advance();
     Proc* p = startProc(st->labels.front(), st->loc, owner);
     parseProcOptions(p);
-    parseProcBody(p); // the statement guard already scoped the prefix
+    // The prefixlist scopes the nested body the same way it scopes an
+    // external procedure's body (rules (2),(60)).
+    int outerStr = procStrRange_;
+    if (st->strRange != 0)
+      procStrRange_ = st->strRange;
+    ProcCondGuard condGuard(procCond_, *st);
+    parseProcBody(p);
+    procStrRange_ = outerStr;
     return nullptr;   // procedures are hoisted into Program::procs
   }
 
@@ -852,6 +942,10 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->noSub = st->noSub;
       s->noZdiv = st->noZdiv;
       s->noConv = st->noConv;
+      s->chkSize = st->chkSize;
+      s->chkSub = st->chkSub;
+      s->chkZdiv = st->chkZdiv;
+      s->chkConv = st->chkConv;
       s->strRange = st->strRange;
       return s;
     }
@@ -864,6 +958,10 @@ StmtP Parser::parseStatement(Proc* owner) {
     k->noSub = st->noSub;
     k->noZdiv = st->noZdiv;
     k->noConv = st->noConv;
+    k->chkSize = st->chkSize;
+    k->chkSub = st->chkSub;
+    k->chkZdiv = st->chkZdiv;
+    k->chkConv = st->chkConv;
     k->strRange = st->strRange;
     return k;
   }
@@ -875,6 +973,10 @@ StmtP Parser::parseStatement(Proc* owner) {
     s->noSub = st->noSub;
     s->noZdiv = st->noZdiv;
     s->noConv = st->noConv;
+    s->chkSize = st->chkSize;
+    s->chkSub = st->chkSub;
+    s->chkZdiv = st->chkZdiv;
+    s->chkConv = st->chkConv;
     s->strRange = st->strRange;
   }
   return s;

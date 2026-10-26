@@ -11677,3 +11677,60 @@ conversion built-in.
 *Serve `OFFSETVALUE` by storing the value as an address.* The first dereference
 would read process memory at byte n — a silent wrong answer, the worst class in
 the priority model.
+
+---
+
+## ADR-320 — `CHECK`/`NOCHECK` are prefix elements that override the inherited check state
+
+**Context.** Rule (61) puts `check-condition` and `no-check-condition` in the
+prefix-element production, and rules (95)/(96) define them as a parenthesised
+list of unsubscripted references (`CHECK ( SIZE, STRINGRANGE )`, `NOCHECK`
+with or without a list). The compiler diagnosed both with rule (95) and kept
+the plain `NO...` prefixes, which every scope OR-inherits. Two gaps followed:
+
+- Nothing could re-enable a check, so `(NOSIZE): ... (CHECK(SIZE)): ...` was
+  impossible even though it is exactly what CHECK is for.
+- A prefix list on a `PROCEDURE` statement only carried STRINGRANGE. The
+  `(NOSIZE)` path dropped the flag, so `(NOSIZE): p: PROCEDURE;` compiled and
+  aborted on the first overflow — silently accepted, not diagnosed.
+
+**Decision.** Serve `CHECK`/`NOCHECK` as prefix elements over the checks this
+compiler implements (SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION,
+STRINGRANGE):
+
+- `CHECK(list)` force-enables every named check for the statement's scope;
+  `CHECK(ALL)` enables all five. `NOCHECK(list)` disables the named ones, and
+  `NOCHECK` alone disables all five (rule (96)'s optional list).
+- A `NO...` form inside a `CHECK`/`NOCHECK` list still disables, so
+  `(CHECK(SIZE), NOSIZE)` means what it reads: the last word wins.
+- Each implemented check carries two flags on the statement: the existing
+  `noX` disable and a new `chkX` enable. IRGen gives `chkX` precedence over
+  the OR-inherited disable (`top.noSize = chkSize ? false : (top.noSize ||
+  noSize)`), and sema copies both pairs when it splits an assignment into
+  synthesized statements. STRINGRANGE rides its existing tri-state.
+- A `PROCEDURE` statement's prefix list now scopes its body through a
+  four-entry parser state, restored when the body ends; statements start from
+  it and a nested prefix overrides it. This fixes the `(NOSIZE)` drop above
+  and makes `(CHECK(SIZE)): p: PROCEDURE` meaningful.
+- The whole-program switches still win: `--no-size-checks`, and `-O2`/`-O3`
+  which imply it, mean "this program never overflows", so `CHECK(SIZE)` does
+  not bring the traps back. `--size-checks` overrides the optimization-level
+  default and then CHECK behaves as above.
+- Conditions outside the implemented set keep the rule (60) unenforced
+  warning in a prefix list and the rule (94) diagnosis in ON/SIGNAL/REVERT.
+
+**Consequences.** `tests/core/check_prefix.pli` pins each behaviour: `(NOSIZE)`
+suppresses a SIZE trap, `(CHECK(SIZE))` nested inside it re-raises, both
+`NOCHECK` spellings suppress, `CHECK(CONVERSION)` re-enables after
+`NOCHECK(CONVERSION)`, `CHECK(ALL)` turns on the opt-in STRINGRANGE check while
+a plain `SUBSTR` stays clamped, and a `(NOSIZE)` prefix on a nested `PROCEDURE`
+statement leaves its body untrapped until a nested `(CHECK(SIZE))`. B4 loses
+the CHECK item; the arithmetic, FINISH, keyed-I/O and control-flow items stay
+open.
+
+**Rejected.** *Lower `CHECK` to an `ON condition SYSTEM` handler push.* The
+checks here are compile-time code, not runtime-dispatch decisions, and the
+handler is the program's real one in the same scope; pushing a second entry
+would only make `REVERT` pop more often for no behavioural gain.
+*Treat `CHECK` as a no-op.* It is a no-op where nothing is disabled, but the
+nested case above is observable and the test pins it.

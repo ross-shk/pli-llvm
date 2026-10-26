@@ -5615,14 +5615,16 @@ void IRGen::emitStmt(HStmt* s) {
   }
   // Condition enable-state (rules (60)-(63), ADR-110/112): each statement
   // sees its own disables OR-inherited through enclosing statements, so a
-  // prefixed group covers its body. Balanced by construction (single exit).
+  // prefixed group covers its body. A CHECK(...) prefix (rule (95), ADR-320)
+  // clears the inherited disable for the named check instead. Balanced by
+  // construction (single exit).
   CheckState top;
   if (!checkStack_.empty())
     top = checkStack_.back();
-  top.noSize = top.noSize || s->noSize;
-  top.noSub = top.noSub || s->noSub;
-  top.noZdiv = top.noZdiv || s->noZdiv;
-  top.noConv = top.noConv || s->noConv;
+  top.noSize = s->chkSize ? false : (top.noSize || s->noSize);
+  top.noSub = s->chkSub ? false : (top.noSub || s->noSub);
+  top.noZdiv = s->chkZdiv ? false : (top.noZdiv || s->noZdiv);
+  top.noConv = s->chkConv ? false : (top.noConv || s->noConv);
   // An explicit (STRINGRANGE)/(NOSTRINGRANGE) prefix wins for its subtree.
   if (s->strRange != 0)
     top.strRange = s->strRange;

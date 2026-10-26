@@ -369,7 +369,8 @@ many condition kinds are still diagnosed.
   Check the coverage ledger for each condition's behavior and unsupported cases.
 - Condition prefixes are resolved during compilation. Supported prefixes such
   as `(NOSIZE)` and `(NOCONVERSION)` omit the matching runtime check; they are
-  not runtime switches.
+  not runtime switches. `(CHECK(...))` puts a check back on for its scope and
+  `(NOCHECK(...))` turns the named checks off (ADR-320).
 - On-unit control flow and recovery are implemented only for the supported
   condition subset. Do not assume general non-local `GO TO` or all standard
   condition actions are available.
