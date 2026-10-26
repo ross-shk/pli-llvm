@@ -57,10 +57,16 @@ struct pli_fiber {
   void *pc;            /* the resume address (informational)                */
   void *stack_base;    /* the usable low address of the reserved stack      */
   size_t stack_size;   /* the usable size of the reserved stack             */
-  int state;           /* PLI_FIB_RUNNABLE / RUNNING / WAITING / DEAD        */
+  /* Atomic: a parked fiber is marked WAITING by its own worker and RUNNABLE
+   * by whichever thread unparks it (ADR-325 wake-on-spawn), so the status
+   * flag is written from two threads. It is informational only — the run
+   * queue carries the hand-off — hence relaxed stores. */
+  _Atomic int state;   /* PLI_FIB_RUNNABLE / RUNNING / WAITING / DEAD        */
   _Atomic int priority; /* the task's absolute priority (ADR-298)             */
   _Atomic long long handle; /* the TASK handle this fiber runs (ADR-298)     */
-  pli_fiber *next;     /* the run-queue link                                */
+  _Atomic(pli_fiber *) next; /* the run-queue link: atomic because a thief
+                              * reads it while the owner pops (both sides of
+                              * the CAS), and only the CAS publishes it */
   pli_fiber *wait_next;/* the wait-queue link (a lock or a condition)       */
   const void *wait_key;/* what the task waits for (a condition's key)      */
   long long deadline;  /* the DELAY deadline (ms since an arbitrary origin) */

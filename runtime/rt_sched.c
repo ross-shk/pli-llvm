@@ -625,6 +625,7 @@ static pli_fiber *rt_fiber_get(void) {
   /* Atomic members need explicit initialization before their first store. */
   atomic_init(&f->priority, 0);
   atomic_init(&f->handle, 0);
+  atomic_init(&f->state, PLI_FIB_RUNNABLE);
   f->stack_base = NULL;
   f->stack_size = 0;
   f->local = NULL;
@@ -657,7 +658,11 @@ void rt_sched_park(void) {
   if (!self || !w || !w->sched_ctx)
     return;
   self->state = PLI_FIB_WAITING;
-  self->home = w;
+  /* Every wait path records the owner *before* publishing the fiber on its
+   * wait queue (rt_sync.c, rt_input.c, rt_fbroker.c); re-storing it here,
+   * after that publication, would race with the unparker's read for no gain. */
+  if (self->home != w)
+    self->home = w;
   pli_fiber_switch(self, w->sched_ctx);
   /* Resumed: the scheduler made us runnable again. The fiber may have
    * moved to another worker, so nothing cached before the switch may be
