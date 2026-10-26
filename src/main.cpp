@@ -152,6 +152,7 @@ static void usage() {
          "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
          "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
          "  -shared -static  produce a shared / static binary\n"
+         "  --subsystem <s>  Windows PE subsystem: console (default) or windows\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
          "  --version        print pli + LLVM versions and the host triple, then exit\n"
@@ -593,6 +594,10 @@ int main(int argc, char** argv) {
   std::string sysparm;
   bool sysparmExplicit = false;
   std::string optLevel = "-O2";
+  // Windows PE subsystem: console keeps stdout/stderr for exec tests; windows
+  // builds a GUI application. Ignored by non-COFF linkers.
+  std::string subsystem = "console";
+  bool subsystemExplicit = false;
   std::vector<std::string> linkArgs;    // extra args appended to the link step
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
@@ -689,7 +694,13 @@ int main(int argc, char** argv) {
     }
     else if (a == "-shared" || a == "-static")
       linkArgs.push_back(a);
-    else if (a == "--extra") {
+    else if (a == "--subsystem") {
+      subsystem = next("--subsystem");
+      subsystemExplicit = true;
+    } else if (a.rfind("--subsystem=", 0) == 0) {
+      subsystem = a.substr(12);
+      subsystemExplicit = true;
+    } else if (a == "--extra") {
       // Comma-separated extra backend args, e.g. --extra -mllvm,-print-after-all.
       std::stringstream ss(next("--extra"));
       std::string tok;
@@ -789,6 +800,12 @@ int main(int argc, char** argv) {
       inputs.push_back(a);
   }
 
+  // --subsystem names a PE subsystem; anything else is a typo, not a fallback.
+  if (subsystem != "console" && subsystem != "windows") {
+    std::cerr << "pli: --subsystem expects console or windows\n";
+    return 2;
+  }
+
   // `--explain` needs no input file: print the production and exit.
   if (explain) {
     if (!explainRule(explain)) {
@@ -807,6 +824,16 @@ int main(int argc, char** argv) {
   if (inputs.empty()) {
     usage();
     return 2;
+  }
+
+  // The option only has a meaning for PE images: reject it on other targets
+  // rather than silently dropping it.
+  if (subsystemExplicit) {
+    llvm::Triple t(triple.empty() ? llvm::sys::getDefaultTargetTriple() : triple);
+    if (t.getObjectFormat() != llvm::Triple::COFF) {
+      std::cerr << "pli: --subsystem is only supported for Windows (COFF) targets\n";
+      return 2;
+    }
   }
 
   // Foreign object/archive inputs (C-interop): passed straight to the link
@@ -1308,12 +1335,21 @@ int main(int argc, char** argv) {
           argStore.push_back("--no-as-needed");
         }
         if (!useMingw) {
-          for (const std::string& f : desc.linkerFlags)
+          for (const std::string& f : desc.linkerFlags) {
+            // The subsystem is user-selectable; replace the target default.
+            if (llt.getObjectFormat() == llvm::Triple::COFF &&
+                f.rfind("/subsystem:", 0) == 0)
+              continue;
             argStore.push_back(f);
+          }
+          if (llt.getObjectFormat() == llvm::Triple::COFF)
+            argStore.push_back("/subsystem:" + subsystem);
         } else {
           // MinGW driver: GNU-style close (crtend.o); the COFF
-          // /entry:/subsystem: flags are not valid here (crt2.o defaults).
+          // /entry:/subsystem: flags are not valid here (crt2.o defaults),
+          // so select the subsystem with the GNU spelling instead.
           argStore.push_back(vsys.mingwDir + "/crtend.o");
+          argStore.push_back("--subsystem=" + subsystem);
         }
         for (const std::string& la : linkArgs) {
           // Vendored musl dictates a static EXEC: -pie conflicts with the
