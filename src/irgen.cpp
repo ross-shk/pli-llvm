@@ -5229,6 +5229,8 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 
   if (!blockTerminated(b_.GetInsertBlock())) {
     emitCtlEpilogue();
+    // FINISH (rule 94; ADR-322) is raised before the handler state goes.
+    emitFinishSignal();
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
@@ -5356,6 +5358,8 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   for (size_t i = 0; i < retPads.size(); ++i) {
     b_.SetInsertPoint(retPads[i]);
     emitCtlEpilogue();
+    // FINISH (rule 94; ADR-322): segment exit is procedure exit.
+    emitFinishSignal();
     // Rule (91): segment exit is procedure exit for handler scoping.
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
@@ -5507,6 +5511,17 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       curProc_ = nullptr;
     }
   }
+}
+
+// FINISH (rule 94; ADR-322): raise the condition at a task procedure's exit.
+// Every procedure exit that establishes an ON unit calls this; the runtime
+// compares the procedure against the one the spawn wrapper recorded, so a
+// nested or normal call, and the main task, do nothing.
+void IRGen::emitFinishSignal() {
+  if (!curOnDepth_ || !curFn_)
+    return;
+  b_.CreateCall(runtimeFn("pli_signal_finish"),
+                {b_.CreateBitCast(curFn_, b_.getPtrTy(), "finproc")});
 }
 
 // Establish a handler: push its id (0 for the system action) plus the handler
@@ -5774,6 +5789,9 @@ void IRGen::emitStmt(HStmt* s) {
     emitRecordDelete(s);
     break;
   case HStmt::Return: {
+    // FINISH (rule 94; ADR-322): an early return is the task procedure's
+    // exit too, so the condition is raised here before the handler state goes.
+    emitFinishSignal();
     // Rule (91): procedure exit restores the entry ERROR depth, popping any
     // handlers this procedure established.
     if (curOnDepth_)
@@ -9651,6 +9669,10 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   llvm::BasicBlock* savedBB = b_.GetInsertBlock();
   llvm::BasicBlock* wbb = llvm::BasicBlock::Create(ctx_, "entry", wrap);
   b_.SetInsertPoint(wbb);
+  // FINISH (rule 94; ADR-322): record the procedure this task was created
+  // for. Its exit raises the condition; no other procedure's does.
+  b_.CreateCall(runtimeFn("pli_task_finish_target"),
+                {b_.CreateBitCast(calleeF, b_.getPtrTy(), "finprog")});
   llvm::Value* ctx = wrap->arg_begin();
   std::vector<llvm::Value*> wargs;
   for (size_t k = 0; k < callArgs.size(); ++k) {

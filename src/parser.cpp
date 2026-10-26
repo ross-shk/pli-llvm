@@ -1202,7 +1202,13 @@ std::string Parser::parseCondition(std::string* fileArg) {
     advance();
     return w;
   }
-  if (w == "FINISH" || w == "AREA") {
+  if (w == "FINISH") {
+    // FINISH (rule 94): raised in a task when the task's procedure returns
+    // (ADR-322); ON/SIGNAL/REVERT are accepted and the runtime raises it.
+    advance();
+    return w;
+  }
+  if (w == "AREA") {
     advance();
     d_.error(l, w + " conditions are not implemented in this stage", "(94)");
     return "";
@@ -1236,7 +1242,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
     if (!expect(Tok::RParen, "(99)"))
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
-        name == "CONVERSION" || name == "STRINGRANGE") {
+        name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

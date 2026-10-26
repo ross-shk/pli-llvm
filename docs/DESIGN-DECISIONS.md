@@ -11785,3 +11785,59 @@ writes, and the existing whole-scalar path already does the right thing with an
 address. *Collect only the elements the unit mentions.* A subscript is usually
 dynamic, so the set is not statically known, and `a(i)` with a captured `i`
 needs the base anyway.
+
+---
+
+## ADR-322 — `FINISH` is raised when the task's own procedure exits
+
+**Context.** Rule (94) lists `FINISH` among the conditions, and IBM raises it
+in a task when the task's procedure — the one named on the `CALL ... TASK` /
+`EVENT` — is about to complete, so a task can do its cleanup before the event
+completes. The parser diagnosed it with rule (94). Three facts shape the
+implementation:
+
+- The ON stack is per task (ADR-234), so a unit established in the task is
+  visible while that task runs.
+- A task is started through the per-site LLVM wrapper `pli_task_wrap_N`
+  (`emitAsyncSpawn`), which unpacks the context, calls the procedure, frees the
+  context and completes the event.
+- A procedure's epilogue pops the handlers it established *before* control
+  returns to that wrapper, so the wrapper can no longer see the task's unit.
+
+**Decision.** Raise `FINISH` from the task procedure's own exit, with the
+runtime naming that procedure:
+
+- `FINISH` gets the fixed key `Stmt::kFinishCondKey` (-6); `ON`/`SIGNAL`/
+  `REVERT FINISH` type-check through the normal condition path and
+  `CONDITION(FINISH)` is rejected like every other fixed condition.
+- The spawn wrapper calls `pli_task_finish_target(callee)` before it calls the
+  procedure, storing the callee in the per-task state.
+- Every procedure exit that establishes an ON unit calls
+  `pli_signal_finish(this_procedure)` *before* it pops the handler depth. The
+  runtime fires only when `this_procedure` is the recorded one and a `FINISH`
+  unit is still established; with no unit the task simply ends, which is the
+  condition's implicit action.
+- The hook is emitted on both exits: a falling-off-the-end epilogue and an
+  explicit `RETURN`, including the segment epilogues of a multi-entry body.
+- The raise happens before the wrapper frees the context and completes the
+  event, so a `WAIT` on the event observes the unit's writes.
+- The recorded procedure lives in `pli_task_local` and is cleared with the rest
+  of the state when a fiber is recycled for a new task.
+
+**Consequences.** `tests/core/on_finish.pli` runs a task whose procedure
+establishes `ON FINISH`, checks that the unit ran (and that its flag was visible
+through `WAIT`), then calls the same procedure normally and checks that nothing
+fires, then drives an early `RETURN` and a nested procedure with its own
+`FINISH` unit, which must stay silent. `bad_on_cond_finish.pli` pins the
+`CONDITION(FINISH)` rejection. `GC` (91)–(99) and the programming guide list the
+condition. B4 loses the `FINISH` item.
+
+**Rejected.** *Raise it from the wrapper after the callee returns.* The
+procedure has already popped the unit, so the handler lookup finds nothing and
+nothing runs. *Raise it at every procedure exit in a task, without naming the
+callee.* A nested procedure's own `FINISH` unit would fire early and a task
+procedure that calls a helper would see the helper's unit instead; the test
+pins that case. *Detect "am I a task?" and fire at procedure exit.* That is
+closer than the wrapper, but it still cannot tell the task's procedure from a
+nested one, and it would fire in the main task if the main procedure happened
+to establish the unit.

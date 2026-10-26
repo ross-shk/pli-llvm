@@ -41,7 +41,7 @@ pli name.pli -o name && ./name
 | Types      | FIXED BIN/DEC, FLOAT, COMPLEX, BIT, CHAR/VARYING, POINTER        | STERLING constants, PICTURE type |
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
-| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), named; `CHECK`/`NOCHECK` prefixes | OVERFLOW, FINISH, AREA |
+| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), named; `CHECK`/`NOCHECK` prefixes | OVERFLOW, AREA |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
@@ -893,7 +893,19 @@ PL/I has resumable conditions with dynamic scope — think `try/except` in Pytho
  revert error;          /* pop the handler */
 ```
 
-Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), plus your own named conditions.
+Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, plus your own named conditions.
+
+`on finish` runs inside a task when the procedure the task was created for
+returns — before its event completes, so a `wait` sees the cleanup:
+
+```pli
+ call worker event(done);
+ wait(done);
+
+ worker: procedure;
+    on finish put skip list('task done');
+ end worker;
+```
 
 A `begin` ON-unit is a block, so it can declare its own work variables. They shadow outer names and keep their value for as long as the handler stays established:
 
@@ -974,8 +986,8 @@ The command-line `--no-size-checks` (and `-O2`/`-O3`, which imply it) wins over 
 
 **Not yet**
 
-- `overflow`, `finish`, and `area` conditions, keyed-I/O conditions, `go to`
-  inside a unit, and `return(value)` inside a handler are diagnosed.
+- `overflow` and `area` conditions, keyed-I/O conditions, `go to` inside a
+  unit, and `return(value)` inside a handler are diagnosed.
 
 > **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `pli conditions.pli -o conds && ./conds`.
 

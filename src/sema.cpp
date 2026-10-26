@@ -3093,6 +3093,8 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kConversionCondKey;
   if (s->condName == "STRINGRANGE")
     return Stmt::kStringrangeCondKey;
+  if (s->condName == "FINISH")
+    return Stmt::kFinishCondKey;
   // Programmer-named conditions: deterministic hash ensures every
   // compilation unit assigns the same key to the same name, enabling
   // cross-object signal dispatch.

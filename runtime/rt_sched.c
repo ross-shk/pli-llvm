@@ -584,6 +584,7 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
     f->local->oncode = 0;
     f->local->on_source = 0;
     f->local->ctl_count = 0;
+    f->local->finish_fn = NULL;
   }
   if (!f->stack_base) {
     void *base = NULL;

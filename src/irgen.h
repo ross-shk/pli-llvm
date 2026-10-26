@@ -229,6 +229,7 @@ private:
   void emitOnHandlers(HProgram& prog);
   void emitOn(HStmt* s);     // establish a handler (or SYSTEM)
   void emitSignal(HStmt* s); // raise ERROR: dispatch or take the system action
+  void emitFinishSignal();   // FINISH at a task procedure's exit (ADR-322)
 
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
