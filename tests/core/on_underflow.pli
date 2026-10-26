@@ -1,0 +1,77 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (94); ADR-324: UNDERFLOW is raised when a floating-point
+    arithmetic result falls below the smallest normal double,
+    including a product or quotient flushed to exact zero, and the
+    result becomes zero. Equal-number cancellation is not an
+    underflow, (nounderflow) suppresses the check, CHECK puts it
+    back, and with no unit the implicit action prints and continues. */
+ on_underflow: procedure options(main);
+    declare tiny float bin(53);
+    declare small float bin(53);
+    declare x float bin(53);
+    declare hits fixed bin(31) init(0);
+
+    on underflow begin;
+       hits = hits + 1;
+    end;
+
+    /* 1e-600 is below the smallest subnormal: flushed to zero */
+    tiny = 1e-300;
+    x = tiny * tiny;
+    if hits ^= 1 then do;
+       put skip list('FAIL on_underflow: flush count', hits);
+       stop;
+    end;
+    if x ^= 0 then do;
+       put skip list('FAIL on_underflow: flush result', x);
+       stop;
+    end;
+
+    /* 1e-400 is subnormal: nonzero, below the normal minimum */
+    small = 1e-200;
+    x = small * small;
+    if hits ^= 2 then do;
+       put skip list('FAIL on_underflow: subnormal count', hits);
+       stop;
+    end;
+    if x ^= 0 then do;
+       put skip list('FAIL on_underflow: subnormal result', x);
+       stop;
+    end;
+
+    /* significance error: equal values subtracted give zero, no trap */
+    x = tiny - tiny;
+    if hits ^= 2 then do;
+       put skip list('FAIL on_underflow: cancellation raised', hits);
+       stop;
+    end;
+
+    /* (nounderflow) turns the check off for its scope */
+    (nounderflow): x = small * small;
+    if hits ^= 2 then do;
+       put skip list('FAIL on_underflow: NOUNDERFLOW', hits);
+       stop;
+    end;
+
+    /* and CHECK(UNDERFLOW) puts it back inside that scope */
+    (nounderflow): (check(underflow)): x = small * small;
+    if hits ^= 3 then do;
+       put skip list('FAIL on_underflow: CHECK(UNDERFLOW)', hits);
+       stop;
+    end;
+
+    /* no unit: message and continue, still yielding zero */
+    revert underflow;
+    x = small * small;
+    if hits ^= 3 then do;
+       put skip list('FAIL on_underflow: unhandled count', hits);
+       stop;
+    end;
+    if x ^= 0 then do;
+       put skip list('FAIL on_underflow: unhandled result', x);
+       stop;
+    end;
+
+    put skip list('PASS on_underflow');
+ end on_underflow;

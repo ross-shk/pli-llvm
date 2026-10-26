@@ -11892,3 +11892,61 @@ still set the locator.* The block does not exist; pointing the locator at null
 from, and overwriting a live locator would lose the only handle to the region's
 existing block. *Free the block when the region is null.* That is what the old
 code did by accident; the block would be returned to the wrong allocator.
+
+---
+
+## ADR-324 — `UNDERFLOW` is raised on a floating-point operator result
+
+**Context.** Rule (94) lists `UNDERFLOW` as a condition, and rule (63) gives it
+a `NOUNDERFLOW` prefix. IBM raises it when the magnitude of a floating-point
+result is smaller than the minimum allowed; the result becomes 0, and the
+implicit action is a message followed by *continuing* from the same point
+(except for IEEE on z/OS, which raises ERROR). Two details shape a faithful
+implementation: an exact zero produced by subtracting equal values is a
+significance error, not an underflow, and a product that loses the whole
+exponent range lands on exact zero rather than on a subnormal.
+
+**Decision.** Raise it at the floating-point operator results, and nowhere else:
+
+- The check compares the result with the smallest *normal* double and with
+  zero: a non-zero subnormal raises. For `*`, `/` and `**` the operands are
+  passed too, so a zero result with two non-zero operands also raises (the
+  whole exponent range was lost). Addition and subtraction get the subnormal
+  test only, so `a - a` stays silent.
+- The lowering resumes with 0 — IBM's result — through a phi that picks the
+  computed value on the clean path and zero on every trap path, the same shape
+  the ZERODIVIDE trap uses. With no unit established it calls
+  `pli_underflow`, which prints the message and returns: notify and continue,
+  as IBM defines it.
+- Instrumented sites: the four floating-point binary operators in the
+  expression emitter, the `MULTIPLY` and `DIVIDE` built-ins, and `**` (whose
+  constant-exponent-square fast path is an ordinary multiply). Not
+  instrumented: the complex arithmetic lowering (its results are pairs, not a
+  single float), the internal scaled-conversion math, and the math library
+  built-ins (`SQRT`, `EXP`, ...), whose results are values rather than operator
+  results. That scope is recorded in `GC` and the programming guide.
+- `UNDERFLOW` gets the fixed key `Stmt::kUnderflowCondKey` (-8);
+  `CONDITION(UNDERFLOW)` is rejected; `(UNDERFLOW)`/`(NOUNDERFLOW)` join the
+  prefix elements and `CHECK(...)`/`NOCHECK(...)` list it, so `CHECK(ALL)`
+  covers it. Ignoring `NOUNDERFLOW` before this change was a silent acceptance
+  too.
+- The traps ride the existing arithmetic switch: `--no-size-checks`, and
+  `-O2`/`-O3` which imply it, turn them off with the SIZE trap, so a benchmark
+  build carries no extra branch. Tests run with `--size-checks`, which turns
+  them on.
+
+**Consequences.** `tests/core/on_underflow.pli` pins the flush-to-zero case,
+the subnormal case, the significance-error exemption, `(nounderflow)`,
+`(nounderflow): (check(underflow))`, and the unhandled notify-and-continue path.
+`bad_on_cond_underflow.pli` pins the `CONDITION(UNDERFLOW)` rejection. `GC`
+(60)–(63) and (91)–(99), the programming guide and `DEFERRED-WORK` carry the
+change. B4 keeps `FIXEDOVERFLOW` and `OVERFLOW` open.
+
+**Rejected.** *Treat every zero result of non-zero operands as underflow.* That
+is exactly the significance error IBM excludes for subtraction, and it would
+fire on ordinary `a - b` where `a = b`. *Detect only subnormals.* A product
+such as `1e-300 * 1e-300` is below the subnormal range and lands on exact zero;
+without the operand test it would pass silently. *Raise on library built-ins
+too.* That is a later change with its own ADR: the built-ins return values
+through their own ABIs, and widening the scope means deciding, per built-in,
+whether a tiny result is an operator underflow or a legitimate value.

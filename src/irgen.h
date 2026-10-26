@@ -230,6 +230,7 @@ private:
   void emitOn(HStmt* s);     // establish a handler (or SYSTEM)
   void emitSignal(HStmt* s); // raise ERROR: dispatch or take the system action
   void emitFinishSignal();   // FINISH at a task procedure's exit (ADR-322)
+  Val applyUnderflow(Val r, llvm::Value* a, llvm::Value* b); // UNDERFLOW (ADR-324)
 
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
@@ -990,6 +991,7 @@ private:
     bool noSub = false;
     bool noZdiv = false;
     bool noConv = false;
+    bool noUnder = false;
     // STRINGRANGE is opt-in (ADR-297): 0 disabled/inherited, 1 enabled,
     // -1 explicitly disabled in this scope.
     int strRange = 0;
@@ -1012,6 +1014,11 @@ private:
   }
   bool convChecks() const {
     return !noConvChecks_ && (checkStack_.empty() || !checkStack_.back().noConv);
+  }
+  // UNDERFLOW (rule 94; ADR-324) rides the arithmetic-trap switch: -O2 and
+  // --no-size-checks mean "this program never overflows or underflows".
+  bool underflowChecks() const {
+    return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noUnder);
   }
   bool strRangeChecks() const {
     return !checkStack_.empty() && checkStack_.back().strRange == 1;
