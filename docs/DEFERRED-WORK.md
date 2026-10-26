@@ -130,7 +130,7 @@ are a deliberate ordering decision.
 
 | ID | Work | Status | Evidence | Done when | Size | Deps |
 |---|---|---|---|---|---|---|
-| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | partial | `GC` Chapter 9 row: `%DO`/`%END` iteration loops implemented; `%GOTO`/`%GO TO` with flat-label resolution implemented; `%PROCEDURE`/`%PROC`/`%RETURN` and `%REPLACE` rescanning (Stage 3) still reject (`pp_do.pli`, `pp_goto.pli`, `bad_pp_do_unterminated.pli`, `bad_preprocessor.pli`, ADR-316) | `%PROCEDURE` macro expansion (Stage 2); `%REPLACE` textual rescanning moved from lexer to preprocessor (Stage 3, ADR-077→ADR-302) | M | — |
+| B6 | **Preprocessor `QR2.9`**: `%DO`, `%GO TO`, compile-time procedures, replacement and include rescanning | partial | `GC` Chapter 9 row: `%DO`/`%END` iteration loops implemented; `%GOTO`/`%GO TO` with flat-label resolution implemented; `%PROCEDURE`/`%PROC`/`%RETURN` compile-time macros implemented (Stage 1+2, `pp_proc.pli`, ADR-316); `%REPLACE` remains in the lexer (ADR-077), moving to preprocessor textual rescanning in Stage 3 (ADR-327) (`pp_do.pli`, `pp_goto.pli`, `bad_pp_do_unterminated.pli`, ADR-316) | `%REPLACE` textual rescanning moved from lexer to preprocessor (Stage 3, ADR-077→ADR-327) | M | — |
 
 ## Dropped, or deliberately out of scope
 
@@ -168,7 +168,7 @@ Do not re-open these without a new record.
 - Run the smoke group plus the new test per change; the full suite only at band
   boundaries, because it is expensive.
 - ADRs are append-only. Claim a number **before** writing: 259 is reserved for
-  `RESEXP` and 327 is the next free number; 244 was released when ADR-284 served
+  `RESEXP` and 328 is the next free number; 244 was released when ADR-284 served
   `C5`. Collisions happen: 192/194 and 239 were renumbered (ADR-232, ADR-279),
   and the fiber-stack entry that repeated the ABNORMAL/NORMAL ADR-308 was
   renumbered to ADR-313.

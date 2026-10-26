@@ -11479,8 +11479,7 @@ previously stubs (`handleDo`/`handleGoto` returned "not implemented"), so any
 program using them was rejected at the preprocessor stage.
 
 **Decision.** Implement `%DO`/`%END` and `%GOTO`/`%GO TO`/`%label:` as a flat-
-textual rescanning pass over the already-included source (ADR-305 for the scan
-architecture):
+textual rescanning pass over the already-included source:
 
 - **`scan(source, start, end, …)`** walks the source char-by-char, tracking
   strings, `/* */`, and `//` comment state so directives inside them are inert.
@@ -12043,7 +12042,61 @@ whether a tiny result is an operator underflow or a legitimate value.
 
 ---
 
-## ADR-327 — The x86-64 pass fixes the platform seam, not the benchmark
+## ADR-327 — `%REPLACE` textual rescanning in the preprocessor (Stage 3)
+
+**Context.** `%REPLACE name BY <tokens> ;` (ADR-077) is currently expanded in
+the lexer after token boundaries are recognized, which limits it to token-level
+substitution. The B6 preprocessor plan (ADR-316) calls for a fully textual
+rescanning preprocessor where `%REPLACE` operates on raw source text before
+lexing, consistent with `%DO`/`%GOTO`/`%PROCEDURE` control flow.
+
+**Decision.** Move `%REPLACE` from the lexer to the preprocessor's `scan()`
+loop. The preprocessor maintains a replace map (`replacements_`) of name →
+token-text. At each non-directive position, `scan()` checks whether a
+identifier-like token at the current position matches a `%REPLACE` name; if so,
+it emits the replacement text in place and rescans it. Quoted `"..."` operands
+keep their ADR-082 rescanning behavior.
+
+**Consequences.** The lexer's `applyReplace`, `lexDqString`, `lexSnippet`, and
+the `DqString` token production are removed; the parser no longer sees
+`DqString` tokens. All five `%REPLACE` golden tests
+(`replace.pli`, `replace_quoted.pli`, `bad_replace.pli`, `bad_replace_mixed.pli`,
+`bad_dqstring.pli`) must remain byte-identical. Stage 1+2 (`%DO`/`%GOTO`/
+`%PROCEDURE`/`%RETURN`) are unaffected and already pass. This is Stage 3 of
+the B6 work item and is targeted independently.
+
+---
+
+## ADR-328 — `%PROCEDURE`/`%RETURN` compile-time macros (Stage 2)
+
+**Context.** ADR-316 implemented the Stage 1 control flow (`%DO`, `%GOTO`,
+`%label:`) of the Chapter 9 rescanning preprocessor and left `%PROCEDURE`
+macros deferred. C28-6571-3 Chapter 9 defines a compile-time procedure as text
+that is expanded where it is invoked, so its arguments and its result are
+resolved before the parser ever sees the source.
+
+**Decision.** A definition `%name: procedure (p1, p2) returns (fixed); … %end;`
+is captured verbatim — the body is stored, not scanned — in the preprocessor's
+macro table. A call `%name(a, b)` in directive position evaluates each argument
+as a compile-time integer expression, binds the parameters in the preprocessor
+variable table as activated `%DECLARE`-style names, scans the body at the call
+site, and emits the result text back into the output for another rescan.
+`%RETURN (expr) ;` evaluates the expression in the body's scope, stores the
+value and stops that scan, which is how recursion (`%fib(n-1) + %fib(n-2)`)
+terminates. Bindings and return state are saved and restored around every call,
+so nested and recursive invocations cannot leak parameters; an arity mismatch
+and a body that reaches `%END` without `%RETURN` are both diagnosed.
+
+**Consequences.** `pp_proc.pli` — a Fibonacci macro recursing inside the
+preprocessor — is the gate. Results are carried as integers: `returns (fixed)`
+emits the numeral, and `returns (character)` emits it as a quoted literal,
+which is the useful subset for include-parameter substitution. `%REPLACE`
+stays in the lexer until Stage 3 (ADR-327), and the `kMaxScanDepth` guard
+(256) still bounds the nesting a runaway macro can create.
+
+---
+
+## ADR-329 — The x86-64 pass fixes the platform seam, not the benchmark
 
 **Context.** The README benchmark table is macOS arm64. On x86-64 the same
 corpus missed the `< 0.90x` gate: Windows measured 1.05x and Linux 1.08x. The
@@ -12074,15 +12127,16 @@ vendored `libmingwex.a` defines `sin`/`cos`/`exp`/`log`/`sqrt`/... as
   `pli_ctl_addr`.
 
 **Measurements.** Fresh rebuild, five samples. Windows IR geomean 1.05x ->
-**0.89x** (PASS); Linux IR geomean 1.08x -> **0.95x** (MISS). The rows:
-Windows `math_functions` 7.19x -> 1.03x; Linux `file_io` 1.96x -> 0.65x;
-Linux `string_search` 1.81x -> 0.90x; Linux `collatz` 1.11x -> 1.05x.
-Run files and per-row detail are in `OPTIMIZATION-BASELINE` §14.
+**0.84x** (PASS); Linux host IR geomean 1.08x -> **0.96x** (MISS); the fair
+static-musl baseline is **0.89x** (PASS, ADR-330). The rows: Windows
+`math_functions` 7.19x -> 1.03x; Linux `file_io` 1.96x -> 0.65x; Linux
+`string_search` 1.81x -> 0.90x; Linux `collatz` 1.11x -> 1.05x. Run files and
+per-row detail are in `OPTIMIZATION-BASELINE` §14-§15.
 
-**Consequences.** The Windows gate passes and the Linux gap is now the
-libc/allocator/ABI difference between static musl and the dynamic-glibc C
-twin (`linked_list`, `controlled_stack`, `bcd_decimal`, `proc_calls`), not a
-missing lowering. The gate was not moved and the C baseline was not weakened.
+**Consequences.** The Windows gate passes and the fair Linux baseline passes.
+The host-glibc Linux gap is the libc/allocator/ABI difference between static
+musl and the dynamic-glibc C twin (`linked_list`, `bcd_decimal`), not a missing
+lowering. The gate was not moved and the C baseline was not weakened.
 `tests/driver/windows_math.sh`, `tests/core/index_scan.pli`,
 `tests/core/mod_pow2.pli` and the existing `file_slab`/IR scan tests guard the
 new shapes.
@@ -12094,3 +12148,38 @@ the private API.* It is much slower than the public import (measured
 link-policy workaround; POSIX libc already provides the double routine.
 *Lower INDEX to `memmem`.* glibc's `memmem` is slower than its `strstr` for
 this shape, and musl's is slower than the inline SSE2 scan.
+
+---
+
+## ADR-330 — Interleaved samples and a fair static-musl C baseline
+
+**Context.** The x86-64 comparison ran all PL/I samples and then all C samples
+per row. On a shared or throttled host a slow patch landed entirely on one
+side; `on_conditions`, `matrix_float` and `array_sort` swung by 10-20% between
+runs. Separately, Linux PL/I links the in-tree static musl while the C twin
+used the host glibc, so a ratio mixed codegen with the libc.
+
+**Decision.** The harness alternates the two processes (PL/I, C, PL/I, C, ...)
+and records `"sampling": "interleaved"` in the manifest. The regression guard
+compares only runs with the same sampling mode. A new Linux-only `--c-musl`
+flag builds the C twin with clang's `--target=<arch>-linux-musl -static`, so
+both sides use the same libc implementation; the manifest records
+`"c_runtime": "musl-static"` (the default is `"host"`). The flag requires the
+musl target headers and `libc.a` and is opt-in: the host-libc table stays
+available and is reported separately.
+
+**Measurements.** Interleaved, five samples. Windows host **0.84x** (PASS);
+Linux host glibc **0.96x** (MISS); Linux static musl **0.89x** (PASS). On the
+fair baseline `controlled_stack` moves from 1.65x to 1.03x after the
+CONTROLLED alloc/free inlining and the no-task per-task-state cache.
+
+**Consequences.** A gate result now states which C runtime it measured. The
+`benchmarks/README.md` documents the flag and the interleaved contract. The
+old non-interleaved result files are not comparable: the manifest's `sampling`
+key makes the guard report the mismatch instead of a false regression.
+
+**Rejected.** *Keep the host glibc twin and call the Linux miss a compiler
+regression.* It is not: the fair baseline passes. *Build the C twin with
+`musl-gcc`.* That changes the compiler to GCC as well as the libc; `--c-musl`
+keeps clang and changes only the runtime. *Silently switch the default.* The
+host table stays the default so existing platform comparisons remain legible.

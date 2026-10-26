@@ -318,13 +318,51 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
   // %label: — label marker (target for %GOTO). collectLabels() already
   // recorded the target position; here we just skip the label prefix so
   // scanning resumes at the labeled directive (or past ';' if standalone).
+  // If the label is followed by 'procedure', register a Stage 2 macro.
   if (wordEnd < source.size() && source[wordEnd] == ':') {
     size_t target = wordEnd + 1;
     while (target < source.size() &&
            (source[target] == ' ' || source[target] == '\t' || source[target] == '\f' ||
             source[target] == '\n' || source[target] == '\r'))
       ++target;
-    semPos = target - 1;
+     semPos = target - 1;
+     // Check for %label: procedure (params) RETURNS (type); … %END;
+     std::string labelName = name;
+     std::string decl = source.substr(target);
+     {
+      size_t chk = target;
+      while (chk < source.size() &&
+             (source[chk] == ' ' || source[chk] == '\t' || source[chk] == '\f' ||
+              source[chk] == '\n' || source[chk] == '\r'))
+        ++chk;
+      size_t we = chk;
+      while (we < source.size() && isWordChar(source[we]))
+        ++we;
+       if (upper(source.substr(chk, we - chk)) == "PROCEDURE" ||
+           upper(source.substr(chk, we - chk)) == "PROC") {
+         size_t procEnd = findDirectiveEnd(source, we);
+        if (procEnd == npos) {
+          error(path, directiveLine, directiveCol, "unterminated preprocessor directive");
+          semPos = wordEnd;
+          return npos;
+        }
+        size_t endSemi;
+        size_t matchingEnd = findMatchingEnd(path, source, procEnd + 1, endSemi, line, col);
+        if (matchingEnd == npos)
+          return npos;
+        // The body is between procEnd+1 and matchingEnd.
+        std::string body = source.substr(procEnd + 1, matchingEnd - (procEnd + 1));
+        if (active) {
+          if (!handleDefinition(path, labelName, source.substr(target, procEnd - target),
+                                body, directiveLine, directiveCol))
+            return npos;
+        }
+        // Skip the label prefix and the entire body (past %END;).
+        semPos = endSemi;
+        return endSemi + 1;
+      }
+    }
+    // Not a procedure: regular %label: — skip the label prefix.
     if (target < source.size() && source[target] == '%')
       return target;
     size_t semi = findDirectiveEnd(source, target);
@@ -364,11 +402,18 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     return endSemi + 1;
   }
 
-  // %END without %DO — only reached if findMatchingEnd didn't consume it.
+  // %END without %DO — a PL/I compile-time directive (e.g. closing a
+  // non-%PROCEDURE PL/I block). Consume it; the PL/I END statement that
+  // accompanies it handles the actual block termination.
   if (name == "END") {
-    error(path, directiveLine, directiveCol, "%END without %DO (C28-6571-3 Ch.9)");
-    semPos = wordEnd;
-    return npos;
+    size_t end = findDirectiveEnd(source, wordEnd);
+    if (end == npos) {
+      error(path, directiveLine, directiveCol, "unterminated %END directive");
+      semPos = wordEnd;
+      return npos;
+    }
+    semPos = end;
+    return end + 1;
   }
 
   // %GOTO label ; / %GO TO label ; — resolve target and jump.
@@ -414,19 +459,97 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     return end + 1;
   }
 
-  // %PROCEDURE / %PROC / %RETURN — compile-time macros (Stage 2).
-  if (name == "PROCEDURE" || name == "PROC" || name == "RETURN") {
+  // %RETURN (expr) ; — inside a macro body, stop scanning and capture result.
+  if (name == "RETURN") {
     size_t end = findDirectiveEnd(source, wordEnd);
     if (end == npos) {
-      error(path, directiveLine, directiveCol, "unterminated preprocessor directive");
+      error(path, directiveLine, directiveCol, "unterminated %RETURN (C28-6571-3 Ch.9)");
       semPos = wordEnd;
       return npos;
     }
     semPos = end;
-    if (active) {
-      return handleProcedure(path, source, i, wordEnd, end, output, line, col, active);
+    if (active && !procReturning_) {
+      size_t ret = handleReturn(path, source, wordEnd, end, output, line, col);
+      if (ret == npos)
+        return npos;
+      return ret;
     }
+    // %RETURN outside a macro body is a no-op (just skip it).
     return end + 1;
+  }
+
+  // %name(arg,…) — Stage 2 macro invocation (no keyword match).
+  // Check before the generic ';' search since invocations may appear
+  // without a trailing ';' (e.g. in %IF expressions, %RETURN operands).
+  // Skip the invocation check for known directives that may use a
+  // parenthesized operand (e.g. %XINCLUDE (name), ADR-157).
+  if (name != "INCLUDE" && name != "XINCLUDE" && name != "DECLARE" && name != "DCL" &&
+      name != "ACTIVATE" && name != "DEACTIVATE" && name != "REPLACE") {
+    size_t rs = wordEnd;
+    while (rs < source.size() && (source[rs] == ' ' || source[rs] == '\t' ||
+                                   source[rs] == '\f' || source[rs] == '\r' ||
+                                   source[rs] == '\n'))
+      ++rs;
+    if (rs < source.size() && source[rs] == '(') {
+      int parenDepth = 1;
+      size_t argEnd = rs + 1;
+      bool inStr = false, inCmt = false, inLineCmt = false;
+      while (argEnd < source.size() && parenDepth > 0) {
+        char c = source[argEnd];
+        if (inLineCmt) {
+          if (c == '\n') inLineCmt = false;
+        } else if (inCmt) {
+          if (c == '*' && argEnd + 1 < source.size() && source[argEnd + 1] == '/') {
+            argEnd += 2;
+            inCmt = false;
+            continue;
+          }
+        } else if (inStr) {
+          if (c == '\'' && argEnd + 1 < source.size() && source[argEnd + 1] == '\'') {
+            argEnd += 2;
+            continue;
+          }
+          if (c == '\'') inStr = false;
+        } else {
+          if (c == '/' && argEnd + 1 < source.size() && source[argEnd + 1] == '*') {
+            argEnd += 2;
+            inCmt = true;
+            continue;
+          }
+          if (c == '/' && argEnd + 1 < source.size() && source[argEnd + 1] == '/') {
+            argEnd += 2;
+            inLineCmt = true;
+            continue;
+          }
+          if (c == '\'') inStr = true;
+          else if (c == '(') ++parenDepth;
+          else if (c == ')') --parenDepth;
+        }
+        ++argEnd;
+      }
+      if (parenDepth != 0) {
+        error(path, directiveLine, directiveCol, "unterminated argument list in %" + name);
+        semPos = wordEnd;
+        return npos;
+      }
+      size_t semi = findDirectiveEnd(source, argEnd);
+      if (semi != npos) {
+        semPos = semi;
+        if (active) {
+          if (!handleInvocation(path, name, source.substr(rs + 1, argEnd - rs - 2), directiveLine,
+                                directiveCol, output))
+            return npos;
+        }
+        return semi + 1;
+      }
+      semPos = argEnd - 1;
+      if (active) {
+        if (!handleInvocation(path, name, source.substr(rs + 1, argEnd - rs - 2), directiveLine,
+                              directiveCol, output))
+          return npos;
+      }
+      return argEnd;
+    }
   }
 
   // Find ';' for standard directives.
@@ -479,6 +602,10 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     size_t rs = wordEnd;
     while (rs < source.size() && (source[rs] == ' ' || source[rs] == '\t' || source[rs] == '\f'))
       ++rs;
+    if (rs < source.size() && source[rs] == '(') {
+      // Invocation already handled above; shouldn't reach here.
+      return npos;
+    }
     if (rs >= source.size() || source[rs] != '=') {
       if (active)
         ok = substituteRef(path, name, directiveLine, directiveCol, output);
@@ -545,21 +672,54 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
       ++t;
       continue;
     }
-    if (source[t] == '%') {
-      size_t ws = t + 1;
-      while (ws < source.size() && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
-        ++ws;
-      size_t we = ws;
-      while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
+     if (source[t] == '%') {
+       size_t ws = t + 1;
+       while (ws < source.size() && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
+         ++ws;
+       size_t we = ws;
+       while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
                                      source[we] == '$' || source[we] == '#' || source[we] == '@'))
-        ++we;
-      if (upper(source.substr(ws, we - ws)) == "THEN") {
-        thenAt = t;
-        break;
-      }
-      error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
-      return npos;
-    }
+         ++we;
+       std::string word = upper(source.substr(ws, we - ws));
+       if (word == "THEN") {
+         thenAt = t;
+         break;
+       }
+       // Skip macro invocations: %name(args)
+       size_t afterWs = we;
+       while (afterWs < source.size() && (source[afterWs] == ' ' || source[afterWs] == '\t' ||
+                                          source[afterWs] == '\f'))
+         ++afterWs;
+       if (afterWs < source.size() && source[afterWs] == '(') {
+         int parenDepth = 1;
+         size_t pe = afterWs + 1;
+         while (pe < source.size() && parenDepth > 0) {
+           if (source[pe] == '\'') {
+             if (pe + 1 < source.size() && source[pe + 1] == '\'') {
+               pe += 2;
+               continue;
+             }
+             ++pe;
+             while (pe < source.size()) {
+               if (source[pe] == '\'' && pe + 1 < source.size() && source[pe + 1] == '\'') {
+                 pe += 2;
+                 continue;
+               }
+               if (source[pe] == '\'') break;
+               ++pe;
+             }
+             continue;
+           }
+           if (source[pe] == '(') ++parenDepth;
+           else if (source[pe] == ')') --parenDepth;
+           ++pe;
+         }
+         t = pe;
+         continue;
+       }
+       error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
+       return npos;
+     }
     if (source[t] == ';') {
       error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
       return npos;
@@ -570,10 +730,18 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
     error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
     return npos;
   }
-  long long cond = 0;
-  if (active && !evalCondExpr(source.substr(wordEnd, thenAt - wordEnd), path, directiveLine,
-                              directiveCol, cond))
-    return npos;
+   long long cond = 0;
+   if (active) {
+     std::string rawExpr = source.substr(wordEnd, thenAt - wordEnd);
+     // Rescan the expression for macro invocations (%fib(N)) before eval.
+     std::string rescanned;
+     int eline = directiveLine;
+     int ecol = directiveCol;
+     if (!scan(rawExpr, 0, rawExpr.size(), rescanned, eline, ecol, path, true))
+       return npos;
+     if (!evalCondExpr(rescanned, path, directiveLine, directiveCol, cond))
+       return npos;
+   }
   // One directive or statement per arm, at the caller's activity gated by the condition.
   // thenAt points at '%': re-scan to the end of the THEN word itself, since
   // spaces may sit between them.
@@ -845,6 +1013,11 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
         }
       }
       i = next;
+      // Check for early return from %RETURN inside a macro body (Stage 2).
+      if (procReturning_) {
+        --scanDepth_;
+        return true;
+      }
       // Boundary guard: %GOTO may land outside [start, end).
       if (i < start || i > end)
         break;
@@ -1395,23 +1568,228 @@ bool Preprocessor::handleGoto(const fs::path& path, const std::string& name,
   return true;
 }
 
-// %PROCEDURE / %PROC / %RETURN — compile-time macros (Stage 2).
-// Placeholder: not yet implemented, returns the position past the directive.
-size_t Preprocessor::handleProcedure(const fs::path& path, const std::string& source, size_t,
-                                     size_t wordEnd, size_t end, std::string&, int& line,
-                                     int& col, bool) {
-  std::string name = upper(source.substr(wordEnd, end - wordEnd));
-  error(path, line, col, "%" + name + " is not implemented");
-  return std::string::npos;
+// %label: procedure (p1,p2) RETURNS (fixed|character); … %END; — register
+// a compile-time macro (Stage 2). The body text is captured, not scanned.
+bool Preprocessor::handleDefinition(const fs::path& path, const std::string& labelName,
+                                    const std::string& decl, const std::string& body,
+                                    int directiveLine, int directiveCol) {
+  std::string up = upper(trim(decl));
+  // Parse: PROCEDURE (p1, p2, ...) RETURNS (type)
+  // Expected format: "PROCEDURE" or "PROC" followed by params and RETURNS.
+  std::string paramsStr;
+  std::string returnsStr;
+  size_t pos = 0;
+  // Skip PROCEDURE/PROC keyword.
+  while (pos < up.size() && isWordChar(up[pos])) ++pos;
+  while (pos < up.size() && (up[pos] == ' ' || up[pos] == '\t' || up[pos] == '\r' ||
+                             up[pos] == '\n' || up[pos] == '\f'))
+    ++pos;
+  // Optional parameter list.
+  if (pos < up.size() && up[pos] == '(') {
+    int depth = 1;
+    size_t pStart = pos + 1;
+    ++pos;
+    while (pos < up.size() && depth > 0) {
+      if (up[pos] == '(') ++depth;
+      else if (up[pos] == ')') --depth;
+      if (depth == 0) break;
+      ++pos;
+    }
+    paramsStr = up.substr(pStart, pos - pStart);
+    ++pos; // skip ')'
+  }
+  // Parse RETURNS.
+  while (pos < up.size() && (up[pos] == ' ' || up[pos] == '\t' || up[pos] == '\r' ||
+                             up[pos] == '\n' || up[pos] == '\f'))
+    ++pos;
+  size_t rettPos = up.find("RETURNS", pos);
+  if (rettPos != std::string::npos) {
+    pos = rettPos + 7;
+    while (pos < up.size() && (up[pos] == ' ' || up[pos] == '\t' || up[pos] == '\r' ||
+                               up[pos] == '\n' || up[pos] == '\f'))
+      ++pos;
+    if (pos < up.size() && up[pos] == '(') {
+      int depth = 1;
+      size_t rettStart = pos + 1;
+      ++pos;
+      while (pos < up.size() && depth > 0) {
+        if (up[pos] == '(') ++depth;
+        else if (up[pos] == ')') --depth;
+        if (depth == 0) break;
+        ++pos;
+      }
+      returnsStr = up.substr(rettStart, pos - rettStart);
+      ++pos; // skip ')'
+    }
+  }
+
+  PPProc proc;
+  proc.name = upper(labelName);
+  proc.body = body;
+  proc.returns = upper(trim(returnsStr));
+  // Parse parameters (comma-separated, uppercase).
+  std::string paramsTrimmed = trim(paramsStr);
+  if (!paramsTrimmed.empty()) {
+    size_t start = 0;
+    while (start < paramsTrimmed.size()) {
+      size_t comma = paramsTrimmed.find(',', start);
+      if (comma == std::string::npos) comma = paramsTrimmed.size();
+      std::string param = upper(trim(paramsTrimmed.substr(start, comma - start)));
+      if (!param.empty())
+        proc.params.push_back(param);
+      start = comma + 1;
+    }
+  }
+
+  std::string procName = upper(labelName);
+  if (ppVars_.count(procName)) {
+    error(path, directiveLine, directiveCol, "%" + procName + " conflicts with a preprocessor variable");
+    return false;
+  }
+  procTable_[procName] = proc;
+  return true;
 }
 
-// %REPLACE — Stage 3: textual rescanning in the preprocessor.
-// Currently served downstream by the lexer's token substitution (ADR-077).
-// Reserved for Stage 3 migration.
-bool Preprocessor::handleReplace(const fs::path&, const std::string& source, size_t,
-                                 size_t wordEnd, size_t end, std::string&, int&, int&, bool) {
-  (void)source; (void)wordEnd; (void)end;
+// %name(arg,…): invoke a registered macro (Stage 2). Parses args, binds
+// params in ppVars_/ppActive_ (saved/restored), scans the body, emits the
+// return value. Arguments are integer expressions evaluated in the caller's
+// context.
+bool Preprocessor::handleInvocation(const fs::path& path, const std::string& name,
+                                    const std::string& args, int line, int col,
+                                     std::string& output) {
+  std::string upperName = upper(name);
+  auto it = procTable_.find(upperName);
+  if (it == procTable_.end()) {
+    return error(path, line, col, "%" + upperName + " is not a defined preprocessor procedure");
+  }
+  const PPProc& proc = it->second;
+
+  // Parse arguments (comma-separated at depth 0).
+  std::vector<std::string> argList;
+  if (!trim(args).empty()) {
+    size_t start = 0;
+    int parenDepth = 0;
+    bool inStr = false;
+    for (size_t pos = 0; pos < args.size();) {
+      char c = args[pos];
+      if (inStr) {
+        if (c == '\'' && pos + 1 < args.size() && args[pos + 1] == '\'') {
+          pos += 2;
+          continue;
+        }
+        if (c == '\'') inStr = false;
+      } else if (c == '\'') {
+        inStr = true;
+      } else if (c == '(') {
+        ++parenDepth;
+      } else if (c == ')') {
+        --parenDepth;
+      } else if (c == ',' && parenDepth == 0) {
+        argList.push_back(args.substr(start, pos - start));
+        start = pos + 1;
+      }
+      ++pos;
+    }
+    argList.push_back(args.substr(start));
+  }
+
+  if (argList.size() != proc.params.size()) {
+    return error(path, line, col,
+                 "%" + upperName + " expects " + std::to_string(proc.params.size()) +
+                 " argument(s), got " + std::to_string(argList.size()));
+  }
+
+  // Evaluate arguments as integer expressions in the caller's context.
+  std::vector<long long> argValues;
+  for (const auto& arg : argList) {
+    long long val = 0;
+    if (!evalCondExpr(arg, path, line, col, val))
+      return false;
+    argValues.push_back(val);
+  }
+
+  // Bind parameters as integer variables + activate them.
+  std::set<std::string> savedActive;
+  std::map<std::string, long long> savedVars;
+  for (const auto& param : proc.params) {
+    if (ppVars_.count(param))
+      savedVars[param] = ppVars_[param];
+    else
+      savedVars[param] = 0;
+    savedActive.insert(param);
+  }
+  for (size_t idx = 0; idx < proc.params.size(); ++idx)
+    ppVars_[proc.params[idx]] = argValues[idx];
+  for (const auto& param : proc.params)
+    ppActive_.insert(param);
+
+  // Save and clear return state.
+  bool savedReturning = procReturning_;
+  long long savedResult = procResult_;
+  procReturning_ = false;
+  procResult_ = 0;
+
+  // Scan the body with params bound.
+  int bodyLine = line;
+  int bodyCol = col;
+  std::string bodyOutput;
+  if (!scan(proc.body, 0, proc.body.size(), bodyOutput, bodyLine, bodyCol, path, true)) {
+    // Restore bindings on error.
+    ppActive_.swap(savedActive);
+    ppVars_ = savedVars;
+    procReturning_ = savedReturning;
+    procResult_ = savedResult;
+    return false;
+  }
+  (void)bodyOutput;
+
+  // Restore activations and params.
+  ppActive_.swap(savedActive);
+  ppVars_ = savedVars;
+
+  if (!procReturning_) {
+    procReturning_ = savedReturning;
+    procResult_ = savedResult;
+    return error(path, line, col, "%" + upperName + " did not return a value");
+  }
+  procReturning_ = savedReturning;
+  long long result = procResult_;
+
+  // Emit the result and rescan it for further macro invocations.
+  std::string emittedText = (proc.returns == "CHARACTER")
+                                ? "'" + std::to_string(result) + "'"
+                                : std::to_string(result);
+  std::string rescanned;
+  int rline = line;
+  int rcol = col;
+  if (!scan(emittedText, 0, emittedText.size(), rescanned, rline, rcol, path, true))
+    return false;
+  output += rescanned;
   return true;
+}
+
+// %RETURN (expr) ; — evaluate expr, set procResult_, signal scan() to stop.
+size_t Preprocessor::handleReturn(const fs::path& path, const std::string& source, size_t wordEnd,
+                                  size_t end, std::string&, int& line, int& col) {
+  std::string expr = trim(source.substr(wordEnd, end - wordEnd));
+  // Strip optional surrounding parentheses.
+  if (!expr.empty() && expr.front() == '(') {
+    expr = trim(expr.substr(1));
+    if (!expr.empty() && expr.back() == ')')
+      expr.pop_back();
+  }
+  // Rescan expr for macro invocations before evaluation.
+  std::string rescanned;
+  int eline = line;
+  int ecol = col;
+  if (!scan(expr, 0, expr.size(), rescanned, eline, ecol, path, true))
+    return std::string::npos;
+  long long value = 0;
+  if (!evalCondExpr(rescanned, path, line, col, value))
+    return std::string::npos;
+  procResult_ = value;
+  procReturning_ = true;
+  return end + 1;
 }
 
 bool Preprocessor::unsupported(const fs::path& input, const std::string& name, int line, int col) {
