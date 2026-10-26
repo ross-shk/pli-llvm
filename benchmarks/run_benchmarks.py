@@ -209,6 +209,9 @@ CC = os.environ.get("CC", _default_cc())
 # The C twin follows the PL/I target policy by default; --c-native
 # builds it for the host CPU instead (see _c_policy_flags).
 C_NATIVE = False
+# --c-musl builds the C twin against the same static musl libc as the Linux
+# PL/I output, so a ratio measures codegen rather than glibc-vs-musl.
+C_STATIC_MUSL = False
 RESULTS_DIR = BENCHMARK_DIR / "results"
 BIN_DIR = RESULTS_DIR / "bin"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -411,6 +414,20 @@ def _c_policy_flags() -> List[str]:
     return flags
 
 
+def _musl_target() -> str:
+    """The static-musl target triple matching the host architecture."""
+    machine = platform.machine().lower()
+    arch = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
+    return f"{arch}-linux-musl"
+
+
+def _c_runtime_flags() -> List[str]:
+    """Flags that make the C twin use the PL/I output's static musl libc."""
+    if not C_STATIC_MUSL:
+        return []
+    return [f"--target={_musl_target()}", "-static"]
+
+
 def publish_effects(bench_name: str) -> Optional[Path]:
     """WS-A2 (ADR-267): publish the effects a benchmark's library unit promises.
 
@@ -458,7 +475,8 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
     if compiler is None:
         compiler = CC
     src = BENCHMARK_DIR / c_file
-    cmd = [compiler, opt] + _c_policy_flags() + [str(src), "-o", str(output)]
+    cmd = ([compiler, opt] + _c_policy_flags() + _c_runtime_flags()
+           + [str(src), "-o", str(output)])
     cmd.extend(_stack_flags())
     if bench_name in BENCHMARKS_REQUIRING_MATH and not IS_WINDOWS:
         # -lm is POSIX-only; on Windows the math routines live in the CRT,
@@ -500,6 +518,50 @@ def run_benchmark(exe: Path, runs: int = RUNS_PER_BENCH, warmup: int = WARMUP,
             return exc.status, [], ""
         times.append(secs)
     return "ok", times, expected or ""
+
+
+def run_pair_benchmark(pli_exe: Path, c_exe: Path, runs: int = RUNS_PER_BENCH,
+                       warmup: int = WARMUP, cwd: Optional[Path] = None
+                       ) -> Tuple[str, List[float], str, str, List[float], str]:
+    """Run PL/I and C alternately and return both sides' samples.
+
+    Alternating the two processes keeps a drifting CPU clock from pricing one
+    side systematically higher: a slow patch is shared by both instead of
+    landing entirely on whichever side happened to run second.
+    """
+    expected_pli = expected_c = None
+    try:
+        for _ in range(warmup):
+            _, out_pli = run_measured([str(pli_exe)], cwd=cwd,
+                                      prefix=PINNING["prefix"])
+            _, out_c = run_measured([str(c_exe)], cwd=cwd,
+                                    prefix=PINNING["prefix"])
+            expected_pli = out_pli.strip()
+            expected_c = out_c.strip()
+    except MeasureError as exc:
+        print(f"  Warmup failed: {exc}")
+        return "warmup_failed", [], "", "warmup_failed", [], ""
+
+    pli_times: List[float] = []
+    c_times: List[float] = []
+    for _ in range(runs):
+        try:
+            secs, _ = run_measured([str(pli_exe)], cwd=cwd,
+                                   expected_stdout=expected_pli,
+                                   prefix=PINNING["prefix"])
+        except MeasureError as exc:
+            print(f"  PL/I run failed: {exc}")
+            return exc.status, [], "", "skipped", [], ""
+        pli_times.append(secs)
+        try:
+            secs, _ = run_measured([str(c_exe)], cwd=cwd,
+                                   expected_stdout=expected_c,
+                                   prefix=PINNING["prefix"])
+        except MeasureError as exc:
+            print(f"  C run failed: {exc}")
+            return "ok", pli_times, expected_pli or "", exc.status, [], ""
+        c_times.append(secs)
+    return "ok", pli_times, expected_pli or "", "ok", c_times, expected_c or ""
 
 
 def median_result(times: List[float]) -> Optional[float]:
@@ -711,7 +773,7 @@ def manifest_mismatch(current: Dict, previous: Dict) -> Optional[str]:
         return "previous run has no manifest (pre-v2 results)"
     for key in ("benchmarks", "opt_levels", "runs", "warmup",
                 "checks_forced", "extra_pli_flags", "pli_flags",
-                "c_flags", "platform"):
+                "c_runtime", "c_flags", "sampling", "platform"):
         if prev.get(key) != current.get(key):
             return f"manifest differs on {key}"
     return None
@@ -767,13 +829,15 @@ def build_manifest(pli: Path, cc_cmd: str, benches: List[Tuple],
         "opt_levels": opt_levels,
         "runs": runs,
         "warmup": warmup,
+        "sampling": "interleaved",
         "checks_forced": checks_forced,
         "extra_pli_flags": [" ".join(EXTRA_PLIFLAGS.get(b[0], []))
                             for b in benches],
         "pli_binary": str(pli),
         "pli_sha256": sha256_file(pli),
         "cc": cc_cmd,
-        "c_flags": _c_policy_flags(),
+        "c_runtime": "musl-static" if C_STATIC_MUSL else "host",
+        "c_flags": _c_policy_flags() + _c_runtime_flags(),
         "pinning": PINNING,
         "platform": platform.platform(aliased=True),
         "sources": sources,
@@ -845,6 +909,10 @@ def main():
     parser.add_argument("--c-native", action="store_true",
                         help="build the C twin for the host CPU instead of the "
                              "PL/I target policy (default: matched generic CPU)")
+    parser.add_argument("--c-musl", action="store_true",
+                        help="Linux only: build the C twin with the same static "
+                             "musl libc as the PL/I output (requires clang and "
+                             "the musl target libraries)")
     parser.add_argument("--cc", type=str, default=None,
                         help="C compiler to use (overrides CC env var, "
                              "default: clang on Unix/macOS, clang.exe on Windows)")
@@ -863,22 +931,34 @@ def main():
                              f"({len(IR_BENCHMARKS)} in ir/, "
                              f"{len(LANG_BENCHMARKS)} in lang/)")
     args = parser.parse_args()
-    global C_NATIVE
+    global C_NATIVE, C_STATIC_MUSL
     C_NATIVE = args.c_native
+    C_STATIC_MUSL = args.c_musl
 
     # Reject nonsensical sample counts before touching the filesystem: a run
     # with zero timed samples has no median to report.
     if args.runs < 1:
         parser.error("--runs must be at least 1")
+    if C_STATIC_MUSL:
+        if platform.system() != "Linux":
+            parser.error("--c-musl is Linux-only")
+        libc = Path(f"/usr/lib/{_musl_target()}/libc.a")
+        if not libc.is_file():
+            parser.error(f"--c-musl needs {libc} (install the musl target "
+                         f"libraries, e.g. musl-tools)")
 
     # Use --cc argument if provided, otherwise fall back to env var, then default
     cc_cmd = args.cc or os.environ.get("CC", _default_cc())
+    if C_STATIC_MUSL and "clang" not in Path(cc_cmd).name.lower():
+        parser.error("--c-musl requires clang (pass --cc clang)")
     pli_cmd = args.pli or os.environ.get("PLI", str(_find_pli()))
     global PLI
     PLI = Path(pli_cmd)
 
     print("PL/I Compiler Benchmark Harness")
     print("=" * 70)
+    if C_STATIC_MUSL:
+        print(f"C twin runtime: static {_musl_target()} (matches the PL/I libc)")
     if args.force:
         print("Note: --force is redundant; every measured binary is rebuilt.")
 
@@ -1008,15 +1088,13 @@ def main():
                 results[bench_name][opt] = {"status": "c_compile_failed"}
                 continue
 
-            # Run both: PL/I first, C second, each with a verified warmup.
-            status, pli_times, pli_out = run_benchmark(
-                pli_exe, runs=args.runs, cwd=BIN_DIR)
+            # Run both, each with a verified warmup, alternating the samples.
+            status, pli_times, pli_out, c_status, c_times, c_out = (
+                run_pair_benchmark(pli_exe, c_exe, runs=args.runs, cwd=BIN_DIR))
             if status != "ok":
                 print(f"{bench_name:<20} {opt:<6} PL/I {status.upper()}")
                 results[bench_name][opt] = {"status": status, "flags": flags_str}
                 continue
-            c_status, c_times, c_out = run_benchmark(
-                c_exe, runs=args.runs, cwd=BIN_DIR)
             if c_status != "ok":
                 print(f"{bench_name:<20} {opt:<6} C {c_status.upper()}")
                 results[bench_name][opt] = {"status": c_status, "flags": flags_str}

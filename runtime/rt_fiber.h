@@ -43,6 +43,7 @@ typedef struct {
   int oncode;                        /* ONCODE */
   int on_source;                     /* the pending ONSOURCE key */
   void *ctl_vars;                    /* the CONTROLLED table (rt_storage.c) */
+  void *ctl_last;                    /* one-entry lookup cache for ctl_vars */
   long long ctl_count;               /* its entry count */
   long long ctl_cache_key;           /* the CONTROLLED freelist shape */
   void *ctl_cache_bytes;             /* the CONTROLLED freelist buffer */

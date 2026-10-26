@@ -16,11 +16,24 @@ program and a C program that does the same work; a few also have a Go twin.
 cmake --build build/cmake -j          # always rebuild before timing anything
 python3 benchmarks/run_benchmarks.py  # all benches, -O0..-O3 + paired -O2
 python3 benchmarks/run_benchmarks.py --only checks_on --runs 7
+python3 benchmarks/run_benchmarks.py --c-musl  # Linux: C on the PL/I static musl
 python3 benchmarks/run_tasking_bench.py --models fiber,os
 ```
 
 Every measured binary is rebuilt on every run, so a compiler rebuild can never
 be timed against a stale executable. `--force` is accepted and redundant.
+
+The PL/I and C samples are interleaved (one PL/I run, one C run, repeated), so
+a drifting CPU clock is shared by both sides instead of pricing whichever side
+runs second. The result manifest records `"sampling": "interleaved"` and
+`"c_runtime": "host"` (or `"musl-static"`); the regression guard only compares
+runs whose sampling and C runtime match.
+
+On Linux the PL/I driver links static musl while the host C compiler defaults
+to glibc. `--c-musl` (Linux only) builds the C twin with clang's
+`--target=<arch>-linux-musl -static`, so the ratio prices code generation
+rather than the libc. It requires the musl target headers and `libc.a` (e.g.
+Ubuntu's `musl-tools`) and is opt-in: the default host-libc table is unchanged.
 
 ## What makes a number valid
 

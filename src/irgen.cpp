@@ -552,11 +552,11 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       // `memory(none)` and lets LLVM CSE an addr across an alloc. Loop
       // hoisting is done explicitly in IRGen (emitDoIter), so LLVM needs no
       // facts beyond "these calls all touch the same state".
-      {"pli_ctl_alloc", {.willReturn = false, .mem = RtMemOtherMod}},
+      {"pli_ctl_alloc", {.willReturn = false, .alwaysInline = true, .mem = RtMemOtherMod}},
       {"pli_ctl_alloc_dims", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_ensure", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_free", {.willReturn = false, .mem = RtMemOtherMod}},
-      {"pli_ctl_free_addr", {.willReturn = true, .mem = RtMemOtherMod}},
+      {"pli_ctl_free_addr", {.willReturn = true, .alwaysInline = true, .mem = RtMemOtherMod}},
       {"pli_ctl_set_dim", {.willReturn = false, .mem = RtMemOtherMod}},
       // Runtime init/fini: touch global state, always return.
       {"pli_rt_init", {.willReturn = true, .mem = RtMemOtherMod}},

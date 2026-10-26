@@ -9,6 +9,15 @@
  * (the platform seam), except pli_free itself, whose body names
  * pli_plat_free (the seam free: a pli_free call here would recurse). */
 
+/* Static helpers on the CONTROLLED hot path inline into the alloc/free body;
+ * the external pli_ctl_alloc/pli_ctl_free_addr bodies stay out of line and are
+ * inlined by applyRuntimeAttrs (AlwaysInline) after the bitcode is merged. */
+#if defined(_MSC_VER)
+#define PLI_ALWAYS_INLINE __forceinline
+#else
+#define PLI_ALWAYS_INLINE __attribute__((always_inline))
+#endif
+
 char *pli_alloc(long long n) {
   char *p = (char *)pli_plat_malloc((size_t)(n < 0 ? 0 : n));
   if (!p)
@@ -39,23 +48,46 @@ typedef struct {
 static CtlVar *ctlVars(pli_task_local *st) { return (CtlVar *)st->ctl_vars; }
 static long long ctlCount(pli_task_local *st) { return st->ctl_count; }
 
+/* A program with no tasks has one context: cache its per-task state, so the
+ * CONTROLLED hot path is a global load instead of a fiber/TLS lookup. Once a
+ * task exists the cache is bypassed, because the state follows the task. */
+static pli_task_local *ctlLocal(void) {
+  if (!rt_tasks_active) {
+    static _Thread_local pli_task_local *main_local = NULL;
+    if (!main_local)
+      main_local = rt_task_local();
+    return main_local;
+  }
+  return rt_task_local();
+}
+
 /* Find (or, when create is set, append) the generation stack for a variable.
  * Keys are the sema-assigned FNV-1a name hashes, so unrelated CONTROLLED
  * variables in different object files never share a slot. The variable count
  * is tiny, so a linear scan beats a hash table. */
-static CtlVar *ctlFind(long long key, int create) {
-  pli_task_local *st = rt_task_local();
+static PLI_ALWAYS_INLINE CtlVar *ctlFind(long long key, int create) {
+  pli_task_local *st = ctlLocal();
+  /* intent: a hot push/pop loop keeps naming the same variable; skip the
+   * table walk when the last lookup already found it. */
+  if (st->ctl_last) {
+    CtlVar *last = (CtlVar *)st->ctl_last;
+    if (last->key == key)
+      return last;
+  }
   CtlVar *vars = ctlVars(st);
   long long count = ctlCount(st);
   for (long long i = 0; i < count; ++i)
-    if (vars[i].key == key)
+    if (vars[i].key == key) {
+      st->ctl_last = &vars[i];
       return &vars[i];
+    }
   if (!create)
     return NULL;
   CtlVar *nv = (CtlVar *)pli_plat_realloc(vars, (size_t)(count + 1) * sizeof(CtlVar));
   if (!nv)
     pli_signal_error("CONTROLLED table out of memory");
   st->ctl_vars = nv;
+  st->ctl_last = NULL; /* the old entries may have moved */
   st->ctl_count = count + 1;
   CtlVar *v = &nv[count];
   v->key = key;
@@ -65,11 +97,12 @@ static CtlVar *ctlFind(long long key, int create) {
   v->dimss = NULL;
   v->depth = 0;
   v->cap = 0;
+  st->ctl_last = v;
   return v;
 }
 
 /* Grow a generation stack's parallel arrays to hold one more generation. */
-static void ctlGrow(CtlVar *v) {
+static PLI_ALWAYS_INLINE void ctlGrow(CtlVar *v) {
   if (v->depth < v->cap)
     return;
   long long ncap = v->cap ? v->cap * 2 : 4;
@@ -107,7 +140,7 @@ static void ctlGrow(CtlVar *v) {
 // The allocation returns the new generation's address, so the compiler can
 // keep it in a slot (WS-K8, ADR-257) instead of fetching it per reference.
 char *pli_ctl_alloc(long long key, long long n) {
-  pli_task_local *st = rt_task_local();
+  pli_task_local *st = ctlLocal();
   CtlVar *v = ctlFind(key, 1);
   ctlGrow(v);
   // intent: same-key/same-size LIFO churn reuses the cached buffer.
@@ -193,7 +226,7 @@ long long pli_ctl_depth(long long key) {
  * empty). The compiler uses the return value to refresh its cached address,
  * so a FREE costs one runtime call instead of FREE + pli_ctl_addr. */
 char *pli_ctl_free_addr(long long key) {
-  pli_task_local *st = rt_task_local();
+  pli_task_local *st = ctlLocal();
   CtlVar *v = ctlFind(key, 0);
   if (!v || v->depth <= 0) {
     pli_signal_error("FREE of empty CONTROLLED stack");

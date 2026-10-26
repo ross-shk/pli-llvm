@@ -135,6 +135,68 @@ class BuiltinsLibTests(unittest.TestCase):
         self.assertEqual(found, str(lib))
 
 
+class InterleavedPairTests(unittest.TestCase):
+    """PL/I and C samples alternate, so a drifting clock hits both sides."""
+
+    def test_pair_benchmark_alternates_pli_and_c(self):
+        calls = []
+        original = rb.run_measured
+
+        def fake(cmd, **kwargs):
+            calls.append(cmd[0])
+            return 0.1, "same"
+
+        rb.run_measured = fake
+        try:
+            result = rb.run_pair_benchmark(Path("pli"), Path("c"),
+                                           runs=2, warmup=1)
+        finally:
+            rb.run_measured = original
+        self.assertEqual(result[0], "ok")
+        self.assertEqual(result[3], "ok")
+        self.assertEqual(calls, ["pli", "c", "pli", "c", "pli", "c"])
+
+    def test_c_failure_leaves_no_ratio(self):
+        original = rb.run_measured
+
+        def fake(cmd, **kwargs):
+            if cmd[0] == "c" and kwargs.get("expected_stdout") is not None:
+                raise bench_common.MeasureError("output_mismatch")
+            return 0.1, "same"
+
+        rb.run_measured = fake
+        try:
+            result = rb.run_pair_benchmark(Path("pli"), Path("c"),
+                                           runs=2, warmup=1)
+        finally:
+            rb.run_measured = original
+        self.assertEqual(result[0], "ok")
+        self.assertEqual(result[3], "output_mismatch")
+
+
+class MuslBaselineTests(unittest.TestCase):
+    """The fair Linux baseline links the C twin against the same static musl."""
+
+    def test_runtime_flags_are_off_by_default(self):
+        old = rb.C_STATIC_MUSL
+        rb.C_STATIC_MUSL = False
+        try:
+            self.assertEqual(rb._c_runtime_flags(), [])
+        finally:
+            rb.C_STATIC_MUSL = old
+
+    def test_runtime_flags_select_static_musl(self):
+        old = rb.C_STATIC_MUSL
+        rb.C_STATIC_MUSL = True
+        try:
+            flags = rb._c_runtime_flags()
+        finally:
+            rb.C_STATIC_MUSL = old
+        self.assertIn("-static", flags)
+        self.assertTrue(any(f.startswith("--target=") and f.endswith("-linux-musl")
+                            for f in flags), flags)
+
+
 class TaskingRatioTests(unittest.TestCase):
     """A side that failed yields no ratio, whatever its wall time was."""
 

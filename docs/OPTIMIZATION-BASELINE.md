@@ -1352,7 +1352,7 @@ twins do the same semantic work as their PL/I twins (ADR-315).
 
 ---
 
-## 14. x86-64 performance pass (ADR-327)
+## 14. x86-64 performance pass (ADR-329)
 
 **The measurement.** Fresh rebuild, `--runs 5`, LLVM 23.1.3 on Windows and
 LLVM 23.1.2 on Linux (WSL2). The C twin keeps ADR-315's target policy. Windows
@@ -1396,3 +1396,44 @@ is dynamic glibc. `linked_list` (1.13x), `controlled_stack` (1.65x),
 allocator, the CONTROLLED runtime lookup, and the by-reference call ABI. No
 benchmark or baseline was weakened to move the number. Closing the last
 0.05x is a libc-policy or allocator decision, not another row fix.
+
+---
+
+## 15. Interleaved samples and the fair static-musl baseline (ADR-330)
+
+**The measurement change.** §14 ran all PL/I samples and then all C samples
+per row. On a shared or throttled host, a slow patch lands entirely on one
+side. The harness now interleaves the samples (PL/I, C, PL/I, C, ...) and
+records `"sampling": "interleaved"` in the manifest. The regression guard
+requires the same sampling mode, so the old and new runs are not mixed.
+
+**The C-runtime change.** Linux PL/I links the in-tree static musl; the C
+twin used the host glibc. `--c-musl` builds the C twin with the same clang
+and `--target=<arch>-linux-musl -static`, so both sides use the same libc
+implementation. The mode is opt-in; the default host-libc table is unchanged.
+
+**Final numbers.** Fresh rebuild, five interleaved samples.
+
+| Host | C runtime | IR geomean | Gate |
+|---|---|---:|---|
+| Windows 11 x86-64 | host (UCRT) | **0.84x** | PASS |
+| Linux x86-64 | host glibc | **0.96x** | MISS |
+| Linux x86-64 | static musl (`--c-musl`) | **0.89x** | PASS |
+
+Run files: `benchmark_results_1793017127_68c4b3d3.json` (Windows),
+`benchmark_results_1793013381_35882b49.json` (Linux host), and
+`benchmark_results_1793016820_2675adb7.json` (Linux static musl). The
+Windows language corpus is 0.66x; the Linux fair-baseline language corpus is
+0.64x.
+
+**What closed the last gap.** `pli_ctl_alloc` and `pli_ctl_free_addr` are
+AlwaysInline runtime entries; their static helpers inline into the body, and
+a no-task program caches its per-task state, so the CONTROLLED hot path is a
+thread-local load rather than a fiber/TLS call. `controlled_stack` moves from
+1.65x to 1.03x on the fair baseline. Interleaved sampling removes the drift
+that made `on_conditions`, `matrix_float` and `array_sort` look 10-20% worse
+than their interleaved ratios.
+
+**Remaining.** On the fair baseline the only rows above 1.1x are
+`linked_list` (1.16x) and `bcd_decimal` (1.10x). Both are real codegen
+targets, not libc artifacts, and neither is needed for the 0.89x gate.

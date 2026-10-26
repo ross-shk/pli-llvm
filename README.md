@@ -49,6 +49,7 @@ For a fuller tour — arrays, structures, storage, conditions, concurrency — s
 ```sh
 cmake --build build/cmake -j                   # rebuild before timing
 python3 benchmarks/run_benchmarks.py
+python3 benchmarks/run_benchmarks.py --c-musl  # Linux: C twin on the same static musl
 python3 benchmarks/run_tasking_bench.py --models fiber,os
 ```
 
@@ -58,7 +59,7 @@ python3 benchmarks/run_tasking_bench.py --models fiber,os
 
 Measured on macOS 26 arm64, five samples per side, unpinned. The C twin uses the same target policy as the PL/I output (generic CPU, no FP contraction); `--c-native` builds it for the host CPU instead. Rows whose PL/I median is under 50 ms are indicative.
 
-On x86-64 the IR geomean is **0.89× on Windows** (gate passes) and **0.95× on Linux** (gate misses); the Linux PL/I binary links static musl while the C twin uses dynamic glibc. The per-row x86 numbers and run IDs are in [`docs/OPTIMIZATION-BASELINE.md`](docs/OPTIMIZATION-BASELINE.md) §14.
+On x86-64, with alternating PL/I/C samples, the IR geomean is **0.84× on Windows** (gate passes) and **0.96× on Linux** against the host-glibc C twin. `--c-musl` builds the C twin with the same static musl libc as the Linux PL/I output; that fair baseline is **0.89×** (gate passes). Per-row numbers and run IDs are in [`docs/OPTIMIZATION-BASELINE.md`](docs/OPTIMIZATION-BASELINE.md) §15.
 
 **IR corpus** (C parity — the acceptance gate):
 
