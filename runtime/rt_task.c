@@ -105,12 +105,18 @@ static void pli_rt_init_sync(void) {
   rt_lock_init(&pli_task_mu);
 }
 
+/* Already complete: no table lock. The completion's release store and this
+ * acquire load give a waiter the same visibility the lock used to. */
+static int rt_ev_done(const char *ev) {
+  return pli_plat_load_i32_acquire(ev) != 0;
+}
+
 void pli_event_reset(char *ev) {
   if (!ev)
     return;
   pli_call_once(&pli_rt_once, pli_rt_init_sync);
   rt_lock_acquire(&pli_ev_mu);
-  *(int *)ev = 0;
+  pli_plat_store_i32_release(ev, 0);
   rt_lock_release(&pli_ev_mu);
 }
 
@@ -120,7 +126,7 @@ void pli_event_complete(char *ev) {
     return;
   pli_call_once(&pli_rt_once, pli_rt_init_sync);
   rt_lock_acquire(&pli_ev_mu);
-  *(int *)ev = 1;
+  pli_plat_store_i32_release(ev, 1);
   /* Signal this event, not the whole table: a program with many events
    * would otherwise wake every waiter for every task that ends. */
   rt_cond_signal_key(&pli_ev_cv, ev);
@@ -131,9 +137,12 @@ void pli_event_complete(char *ev) {
 void pli_event_wait(char *ev) {
   if (!ev)
     return;
+  /* The fan-in common case: the task has already completed. */
+  if (rt_ev_done(ev))
+    return;
   pli_call_once(&pli_rt_once, pli_rt_init_sync);
   rt_lock_acquire(&pli_ev_mu);
-  while (*(int *)ev == 0)
+  while (!rt_ev_done(ev))
     rt_cond_wait_keyed(&pli_ev_cv, &pli_ev_mu, ev);
   rt_lock_release(&pli_ev_mu);
 }
@@ -145,13 +154,18 @@ void pli_wait_n(char *evs, long long n, long long need) {
     return;
   if (need > n)
     need = n;
+  char **addrs = (char **)evs;
+  /* Already satisfied: no table lock (the usual case in a fan-in). */
+  long long done = 0;
+  for (long long i = 0; i < n; ++i)
+    if (addrs[i] && rt_ev_done(addrs[i]) && ++done >= need)
+      return;
   pli_call_once(&pli_rt_once, pli_rt_init_sync);
   rt_lock_acquire(&pli_ev_mu);
   for (;;) {
-    long long done = 0;
-    char **addrs = (char **)evs;
+    done = 0;
     for (long long i = 0; i < n; ++i)
-      if (addrs[i] && *(int *)addrs[i] != 0 && ++done >= need)
+      if (addrs[i] && rt_ev_done(addrs[i]) && ++done >= need)
         break;
     if (done >= need)
       break;
@@ -164,11 +178,8 @@ void pli_wait_n(char *evs, long long n, long long need) {
 unsigned char pli_event_status(char *ev) {
   if (!ev)
     return 1;
-  pli_call_once(&pli_rt_once, pli_rt_init_sync);
-  rt_lock_acquire(&pli_ev_mu);
-  int done = *(int *)ev != 0;
-  rt_lock_release(&pli_ev_mu);
-  return (unsigned char)(done ? 1 : 0);
+  /* A poll needs one atomic load, not the table lock. */
+  return (unsigned char)(rt_ev_done(ev) ? 1 : 0);
 }
 
 /* DELAY(n): suspend for n milliseconds. Under the fiber model this parks

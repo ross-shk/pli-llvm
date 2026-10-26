@@ -33,9 +33,9 @@ if ! san_build_runtime "$CC" "$SAN" "$OUT/rt"; then
   exit 1
 fi
 
-# One program with a single wait, one fan-out of a hundred concurrent tasks:
-# the second drives work stealing and the park/unpark paths.
-for t in task task_many; do
+# A single wait, a fan-out of a hundred concurrent tasks, and fiber reuse:
+# together they drive work stealing, the park/unpark paths and the pool.
+for t in task task_many task_reuse; do
   if ! $PLI --no-bitcode-runtime "tests/core/$t.pli" -c -o "$OUT/$t.o" \
        >"$OUT/$t.compile" 2>&1; then
     echo "FAIL tasking_tsan: $t did not compile"

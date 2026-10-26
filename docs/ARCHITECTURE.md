@@ -262,7 +262,7 @@ ADR-234 introduced and ADR-235 and ADR-236 refined.
 | Piece | Where | What it does |
 |---|---|---|
 | The context switch | `runtime/rt_fiber_asm.c` | Saves the callee-saved registers, the stack pointer and the resume address of the suspended fiber, restores the target's, and jumps. Hand-written assembly, because the compiler cannot express it. x86-64 (SysV and Win64) and AArch64 (AAPCS64). |
-| The scheduler | `runtime/rt_sched.c` | The worker pool, the run queues, the work stealing, the DELAY timer heap, the park and unpark, and the fiber pool. |
+| The scheduler | `runtime/rt_sched.c` | The worker pool, the run queues, the work stealing, the DELAY timer heap, the park and unpark, and the fiber pool (one private spare per worker plus a tagged stack, ADR-331). |
 | The lock layer | `runtime/rt_sync.c` | Locks and conditions that work on tasks rather than on OS threads. The fiber mode parks a task that cannot proceed; the legacy mode blocks the thread. |
 | The stack arena | `runtime/rt_plat_default.c` | The fiber stacks come from one reservation carved into slots, so a program with many tasks does not make many system calls. The stack grows in chunks, each with a guard page at its bottom. |
 | The input broker | `runtime/rt_input.c` | A reader thread that does the blocking read on standard input, so a task that waits for input parks instead of holding its worker. |
@@ -292,7 +292,14 @@ The rules that make it work, each of them learned the hard way:
 * **A condition variable is keyed.** The event table has one condition for
   all the events, so a plain broadcast would wake every waiter for every
   task that ends. A waiter says what it waits for, and a signal wakes only
-  those that said so.
+  those that said so. A waiter whose event is already complete returns on one
+  acquire load, without the lock (ADR-331); the completing task's release
+  store publishes its writes.
+* **The fiber pool hands back a fiber once, and usually locally.** A worker
+  keeps one finished fiber as its private spare, so a spawn/join cycle on one
+  worker touches no shared cache line. The shared remainder is a stack whose
+  head carries a generation tag: a stale pop cannot hand the same fiber to two
+  tasks (ABA), because every push and pop changes the tag (ADR-331).
 * **A stack that grows has to fault where the handler can run.** The kernel
   builds the exception record on the task's own stack, so the memory below
   the stack pointer that faulted must be committed. The fiber stack grows in

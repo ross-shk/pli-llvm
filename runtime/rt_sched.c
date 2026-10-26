@@ -18,6 +18,7 @@
 #include "pli_rt.h"
 #include "rt_fiber.h"
 #include "rt_sched.h"
+#include <stdint.h>
 #include <stdatomic.h>
 
 /* The model: 1 = the fiber model, 0 = the legacy OS-thread model. The
@@ -78,6 +79,7 @@ typedef struct rt_worker {
   _Atomic(pli_fiber *) local; /* the worker's LIFO run queue */
   _Atomic(pli_fiber *) ready; /* the fibers unparked while they slept here */
   pli_fiber *runnext;         /* the next task to run: never stolen */
+  pli_fiber *spare;           /* one finished fiber; only this worker touches it */
   pli_fiber *cur;             /* the fiber running on this worker */
   pli_fiber *sched_ctx;       /* the worker's own context (its OS stack) */
   pli_mutex mu;               /* the worker's own lock */
@@ -166,7 +168,9 @@ void rt_sched_init(void) {
      * platform's per-thread tasking setup now, before the first task. */
     pli_plat_thread_init();
     pli_mutex_init(&rt_sched_mu);
-    for (int i = 0; i < RT_WORKERS_MAX; ++i) {
+    /* Only the workers this run can use; every loop over the pool is
+     * bounded by rt_worker_count. */
+    for (int i = 0; i < rt_worker_count; ++i) {
       pli_mutex_init(&rt_workers[i].mu);
       pli_cond_init(&rt_workers[i].cv);
       rt_workers[i].id = i;
@@ -602,24 +606,70 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
   return 0;
 }
 
-/* The fiber pool: a global, lock-free stack. A fiber carries its stack, so
- * recycling a fiber recycles its stack too — that is the point of the pool:
- * a program that starts a million tasks allocates a handful of stacks. It
- * is global, not per worker, because a task may finish on a different
- * worker than the one that started it, and the stack must go back to the
- * pool that the next spawn looks in. */
-static _Atomic(pli_fiber *) rt_free_fibers = NULL;
+/* The fiber pool. A worker keeps one finished fiber as its private spare, so
+ * the common spawn/join cycle never touches a shared cache line; the rest go
+ * to a pool shared by every worker (a task may finish on a different worker
+ * than the one that starts the next one).
+ *
+ * The pool is a Treiber stack whose head packs the pointer and a generation
+ * tag in one word. The tag is what makes the pop safe: the former untagged
+ * pop could hand out a fiber that a peer had already taken and returned
+ * (ABA), and two tasks would then share one stack. Fibers are never freed,
+ * so tagged pointers and a lock-free stack are all that is needed; a mutex
+ * here serialised every fan-out and cost more than the CAS did.
+ *
+ * The fiber backend is 64-bit (x86-64, AArch64), where a user address fits
+ * in 48 bits; the tag takes the rest. A fiber whose address does not fit is
+ * simply not recycled. */
+#if RT_HAVE_FIBER && UINTPTR_MAX > 0xFFFFFFFFu
+#define RT_TAGGED_POOL 1
+#define RT_POOL_PTR_BITS 48
+#define RT_POOL_PTR_MASK ((((uintptr_t)1) << RT_POOL_PTR_BITS) - 1)
+#define RT_POOL_TAG_ONE (((uintptr_t)1) << RT_POOL_PTR_BITS)
+#define RT_POOL_TAG_MASK (~RT_POOL_PTR_MASK)
+static _Atomic uintptr_t rt_pool_head = 0;
 
-static pli_fiber *rt_fiber_get(void) {
-  pli_fiber *f = atomic_load_explicit(&rt_free_fibers, memory_order_acquire);
-  while (f) {
-    pli_fiber *next = f->next;
-    if (atomic_compare_exchange_weak_explicit(&rt_free_fibers, &f, next,
+/* Pop the newest fiber, or NULL when the pool is empty. */
+static pli_fiber *rt_pool_pop(void) {
+  uintptr_t h = atomic_load_explicit(&rt_pool_head, memory_order_acquire);
+  for (;;) {
+    pli_fiber *f = (pli_fiber *)(h & RT_POOL_PTR_MASK);
+    if (!f)
+      return NULL;
+    uintptr_t next = (uintptr_t)atomic_load_explicit(&f->next, memory_order_relaxed);
+    uintptr_t nh =
+        (next & RT_POOL_PTR_MASK) | ((h + RT_POOL_TAG_ONE) & RT_POOL_TAG_MASK);
+    if (atomic_compare_exchange_weak_explicit(&rt_pool_head, &h, nh,
                                               memory_order_acq_rel,
-                                              memory_order_acquire))
+                                              memory_order_relaxed))
       return f;
   }
-  f = (pli_fiber *)pli_plat_malloc(sizeof(pli_fiber));
+}
+
+/* Push a finished fiber. */
+static void rt_pool_push(pli_fiber *f) {
+  uintptr_t fp = (uintptr_t)f;
+  if (fp & RT_POOL_TAG_MASK)
+    return; /* a wider address: abandon the fiber rather than corrupt the pool */
+  uintptr_t h = atomic_load_explicit(&rt_pool_head, memory_order_relaxed);
+  for (;;) {
+    atomic_store_explicit(&f->next, (pli_fiber *)(h & RT_POOL_PTR_MASK),
+                          memory_order_relaxed);
+    uintptr_t nh =
+        (fp & RT_POOL_PTR_MASK) | ((h + RT_POOL_TAG_ONE) & RT_POOL_TAG_MASK);
+    if (atomic_compare_exchange_weak_explicit(&rt_pool_head, &h, nh,
+                                              memory_order_release,
+                                              memory_order_relaxed))
+      return;
+  }
+}
+#else
+#define RT_TAGGED_POOL 0
+#endif
+
+/* A fiber on a fresh stack, with no task-local state yet. */
+static pli_fiber *rt_fiber_new(void) {
+  pli_fiber *f = (pli_fiber *)pli_plat_malloc(sizeof(pli_fiber));
   if (!f)
     return NULL;
   /* Atomic members need explicit initialization before their first store. */
@@ -633,14 +683,33 @@ static pli_fiber *rt_fiber_get(void) {
   return f;
 }
 
-static void rt_fiber_put(pli_fiber *f) {
-  pli_fiber *h;
-  do {
-    h = atomic_load_explicit(&rt_free_fibers, memory_order_relaxed);
-    f->next = h;
-  } while (!atomic_compare_exchange_weak_explicit(&rt_free_fibers, &h, f,
-                                                  memory_order_release,
-                                                  memory_order_relaxed));
+/* Take a fiber: the worker's spare, then the shared pool, then a new one. */
+static pli_fiber *rt_fiber_get(rt_worker *w) {
+  if (w && w->spare) {
+    pli_fiber *f = w->spare;
+    w->spare = NULL;
+    return f;
+  }
+#if RT_TAGGED_POOL
+  pli_fiber *f = rt_pool_pop();
+  if (f)
+    return f;
+#endif
+  return rt_fiber_new();
+}
+
+/* Return a finished fiber: keep one as this worker's spare, pool the rest. */
+static void rt_fiber_put(rt_worker *w, pli_fiber *f) {
+  if (w && !w->spare) {
+    w->spare = f;
+    return;
+  }
+#if RT_TAGGED_POOL
+  rt_pool_push(f);
+#else
+  (void)w;
+  (void)f;
+#endif
 }
 
 /* Park and unpark.
@@ -741,7 +810,7 @@ static void rt_worker_loop(rt_worker *w) {
           rt_wake_one(&rt_workers[i]);
         return;
       }
-      rt_fiber_put(f);
+      rt_fiber_put(w, f);
     }
   }
 }
@@ -762,6 +831,10 @@ static void *rt_worker_entry(void *arg) {
  * so the others are the only ones created here; they are created when the
  * first task appears, so a program without tasks never pays for them. */
 static void rt_workers_start(void) {
+  /* After start-up a plain load: an exchange on every spawn would dirty a
+   * shared line for no work. */
+  if (atomic_load_explicit(&rt_workers_started, memory_order_acquire))
+    return;
   /* Two tasks on two workers may spawn at the same moment: only one of them
    * may create the pool, or two threads would end up owning one worker. */
   if (atomic_exchange_explicit(&rt_workers_started, 1, memory_order_acq_rel))
@@ -826,12 +899,14 @@ static pli_fiber *rt_sched_spawn_ex(void *(*fn)(void *), void *arg, int priority
   rt_worker *w = rt_self_get();
   if (!w)
     return NULL;
-  rt_workers_start();
-  pli_fiber *f = rt_fiber_get();
+  /* A one-worker run has no peers to start. */
+  if (rt_worker_count > 1)
+    rt_workers_start();
+  pli_fiber *f = rt_fiber_get(w);
   if (!f)
     return NULL;
   if (rt_fiber_prepare(f, fn, arg) != 0) {
-    rt_fiber_put(f);
+    rt_fiber_put(w, f);
     return NULL;
   }
   f->priority = priority;

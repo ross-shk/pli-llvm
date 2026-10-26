@@ -1437,3 +1437,36 @@ than their interleaved ratios.
 **Remaining.** On the fair baseline the only rows above 1.1x are
 `linked_list` (1.16x) and `bcd_decimal` (1.10x). Both are real codegen
 targets, not libc artifacts, and neither is needed for the 0.89x gate.
+
+---
+
+## 16. Tasking hot path (ADR-331)
+
+**The measurement.** Windows 11 x86-64, 20 cores, `python
+benchmarks/run_tasking_bench.py --models fiber --runs 9`, fresh rebuilds, the
+harness's affinity/high-priority pinning, 20 000 tasks. The Go and C
+toolchains were absent, so the `task_loop <= 0.90x` Go gate was not evaluated
+here; the table compares the same-host PL/I medians before and after.
+
+| Run | `task_loop` | `task_spawn` |
+|---|---:|---:|
+| pre-change (`tasking_1793030646_aa715495`) | 10.687 ms | 250.073 ms |
+| ADR-331, run 1 (`tasking_1793030976_2516af39`) | 10.521 ms | 268.450 ms |
+| ADR-331, run 2 (`tasking_1793030987_7dc000b1`) | 11.201 ms | 226.967 ms |
+| ADR-331, run 3 (`tasking_1793030999_96d112e3`) | 10.413 ms | 234.228 ms |
+
+**What changed.** One private finished fiber per worker covers the reused
+lifecycle; the shared remainder is a generation-tagged Treiber stack (also the
+fix for the ABA bug); `WAIT`/`EVENT` return on one acquire load when the event
+is already complete; worker init and the pool-start flag stopped doing
+per-spawn work.
+
+**Reading it.** The reused lifecycle is flat (10.4-11.2 ms against 10.7 ms).
+The fan-out is dominated by stack allocation and is visibly noisy across
+harness runs (227-268 ms against 250 ms); there is no repeatable direction.
+A spin lock (about 500 ms) and a platform mutex (about 339 ms) were both
+rejected during the pass - the production design is the tagged stack.
+
+The machine also exposed a pre-existing multi-worker fan-out task-loss hang
+that reproduces on the pre-change runtime; it is not part of this measurement
+and is tracked as `DEFERRED-WORK C5`.

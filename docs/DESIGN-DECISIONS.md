@@ -12183,3 +12183,72 @@ regression.* It is not: the fair baseline passes. *Build the C twin with
 `musl-gcc`.* That changes the compiler to GCC as well as the libc; `--c-musl`
 keeps clang and changes only the runtime. *Silently switch the default.* The
 host table stays the default so existing platform comparisons remain legible.
+
+---
+
+## ADR-331 — Tasking hot path: a worker-local spare, a tagged pool, and completed-event fast paths
+
+**Context.** QR2.8 tasking is correct but still pays for machinery the common
+shapes do not need. `rt_sched_init` built mutexes and conditions for all 64
+worker slots even when the run uses one. Every spawn performed an
+`atomic_exchange` on the pool-start flag. Every finished fiber and every spawn
+went through one global lock-free stack. Every `WAIT` took the event table's
+lock, even when the task had already completed (the fan-in case). And that
+global stack had an ABA bug: a popped fiber that a peer returned could make a
+stale compare-and-swap succeed, handing one stack to two tasks. Fibers are
+never freed, so the failure is shared stacks and corruption, not a
+use-after-free, and ThreadSanitizer does not see it.
+
+**Decision.** Four changes in `runtime/rt_sched.c`, `runtime/rt_task.c`,
+`runtime/pli_rt_plat.h`, and the platform TU:
+
+1. Initialise only `rt_worker_count` worker slots, and check the start flag
+   with a plain acquire load before the exchange (and skip the call entirely
+   with one worker).
+2. Give each worker one private finished fiber (`rt_worker.spare`). A
+   spawn/join cycle on one worker reuses that fiber with no shared atomics.
+3. Replace the shared freelist with a Treiber stack whose head packs the
+   pointer and a 16-bit generation tag in one `uintptr_t`; every push and pop
+   advances the tag, so a stale CAS cannot succeed. A fiber whose address does
+   not fit in 48 bits is not recycled. The fiber backend is 64-bit
+   (x86-64/AArch64), and the pool is compiled only for it.
+4. Add `pli_plat_load_i32_acquire` / `pli_plat_store_i32_release` to the
+   platform seam and use them for every EVENT word access. `WAIT`, `EVENT`,
+   and `pli_wait_n` return on one acquire load when the event is already
+   complete; the completing task's release store is what publishes the task's
+   writes. Reset remains under the table lock, and concurrent reset/wait is
+   still a program error (WAIT before event reuse).
+
+The portable TUs stay C11 plus seam calls: no OS header, no `#ifdef _WIN32`.
+The default platform TU implements the pair with `__atomic_*` on every target.
+That TU is built by clang for Windows, Linux, and macOS, so it lowers to a
+plain acquire load / release store (a Windows `Interlocked*` RMW was measured
+slower and is not used). The tagged pool needs no OS call and no 128-bit CAS.
+
+**Measurements.** Windows x86-64, fresh rebuilds, fiber model, 9 runs,
+medians. Pre-change: `task_loop` 10.687 ms, `task_spawn` 250.073 ms. After:
+`task_loop` 10.521 / 11.201 / 10.413 ms and `task_spawn` 268.450 / 226.967 /
+234.228 ms across three harness runs. The reused lifecycle is flat; the
+fan-out stays in the baseline's range (the workload is dominated by stack
+allocation and is visibly noisy). The Go toolchain was absent, so the
+`task_loop <= 0.90x` gate was not checked in this run; the absolute medians are
+recorded in `OPTIMIZATION-BASELINE.md`. A spin lock and a platform mutex for
+the pool were tried first and are rejected below.
+
+**Consequences.** `tests/core/task_reuse.pli` covers sequential and fan-out
+fiber reuse and is stable (0/30 timeouts). `tests/driver/tasking_tsan.sh` runs
+it under TSan on Unix. The `ARCHITECTURE.md` §3.7 pool description and the
+`rt_sched.c` header comment are updated. The 48-bit packing is an invariant of
+the supported 64-bit targets; the fallback abandons a fiber rather than
+corrupting the pool. A pre-existing multi-worker fan-out task-loss hang was
+confirmed during this work (it reproduces on the pre-change runtime); it is
+tracked as `DEFERRED-WORK C5`, not fixed here.
+
+**Rejected.** *Guard the pool with a spin lock.* A fan-out puts every worker
+on the pool; a spin lock convoyed, and `task_spawn` doubled to ~500 ms. *Use
+the platform mutex instead.* Better, but still serialised the fan-out
+(339 ms). *Leave the untagged lock-free pool.* The ABA case is rare but real,
+and a lost stack is not observable as an error. *Pack the head in a 128-bit
+CAS.* Not portable without libatomic. *Keep the Windows `Interlocked*` event
+load.* It is a full-barrier RMW on the waiter's path; the compiler atomics
+lower correctly on every supported target.

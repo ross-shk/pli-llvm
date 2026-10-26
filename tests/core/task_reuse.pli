@@ -1,0 +1,91 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82): a finished task's fiber is reused. One sequential
+    pass walks the same fiber over and over; a fan-out then makes many
+    fibers live at once and recycles them across workers. Each task is
+    given its own variable, so a fiber handed out twice (a scheduler or
+    pool bug) shows up as a missing update here (ADR-234).
+
+    The arguments are plain variables: an async call with a computed
+    argument (an array element, say) is a separate, pre-existing IRGen
+    limitation: the marshalling dummy is per call site, not per call. */
+ task_reuse: procedure options(main);
+    declare ev(8) event;
+    declare a1 fixed binary(31);
+    declare a2 fixed binary(31);
+    declare a3 fixed binary(31);
+    declare a4 fixed binary(31);
+    declare a5 fixed binary(31);
+    declare a6 fixed binary(31);
+    declare a7 fixed binary(31);
+    declare a8 fixed binary(31);
+    declare bad fixed binary(31);
+    bad = 0;
+    /* Sequential spawn/join: the pool hands the same fiber back. */
+    a1 = 1;
+    a2 = 2;
+    a3 = 3;
+    a4 = 4;
+    a5 = 5;
+    a6 = 6;
+    a7 = 7;
+    a8 = 8;
+    call bump(a1) event(ev(1));
+    wait(ev(1));
+    call bump(a2) event(ev(2));
+    wait(ev(2));
+    call bump(a3) event(ev(3));
+    wait(ev(3));
+    call bump(a4) event(ev(4));
+    wait(ev(4));
+    call bump(a5) event(ev(5));
+    wait(ev(5));
+    call bump(a6) event(ev(6));
+    wait(ev(6));
+    call bump(a7) event(ev(7));
+    wait(ev(7));
+    call bump(a8) event(ev(8));
+    wait(ev(8));
+    if a1 ^= 101 then bad = bad + 1;
+    if a2 ^= 102 then bad = bad + 1;
+    if a3 ^= 103 then bad = bad + 1;
+    if a4 ^= 104 then bad = bad + 1;
+    if a5 ^= 105 then bad = bad + 1;
+    if a6 ^= 106 then bad = bad + 1;
+    if a7 ^= 107 then bad = bad + 1;
+    if a8 ^= 108 then bad = bad + 1;
+    /* Fan-out: many live fibers, recycled as each one ends. */
+    a1 = 1;
+    a2 = 2;
+    a3 = 3;
+    a4 = 4;
+    a5 = 5;
+    a6 = 6;
+    a7 = 7;
+    a8 = 8;
+    call bump(a1) event(ev(1));
+    call bump(a2) event(ev(2));
+    call bump(a3) event(ev(3));
+    call bump(a4) event(ev(4));
+    call bump(a5) event(ev(5));
+    call bump(a6) event(ev(6));
+    call bump(a7) event(ev(7));
+    call bump(a8) event(ev(8));
+    wait(ev);
+    if a1 ^= 101 then bad = bad + 1;
+    if a2 ^= 102 then bad = bad + 1;
+    if a3 ^= 103 then bad = bad + 1;
+    if a4 ^= 104 then bad = bad + 1;
+    if a5 ^= 105 then bad = bad + 1;
+    if a6 ^= 106 then bad = bad + 1;
+    if a7 ^= 107 then bad = bad + 1;
+    if a8 ^= 108 then bad = bad + 1;
+    if bad = 0 then
+       put skip list('PASS task_reuse');
+    else
+       put skip list('FAIL task_reuse', bad);
+    bump: procedure(n);
+       declare n fixed binary(31);
+       n = n + 100;
+    end bump;
+ end task_reuse;

@@ -186,6 +186,13 @@ void pli_cond_signal(pli_cond *c);
 void pli_cond_broadcast(pli_cond *c);
 /* One-time initialisation for mutexes/conds with no static initializer. */
 void pli_call_once(pli_once *o, void (*fn)(void));
+/* Atomic 32-bit EVENTS (QR2.8). An EVENT is a PL/I variable (an i32 word),
+ * so it cannot be declared _Atomic; the portable runtime reaches it only
+ * through these. The completing task stores with release and a waiter loads
+ * with acquire, so a waiter that sees the flag also sees the task's writes.
+ * A custom platform must provide both. */
+int pli_plat_load_i32_acquire(const void *p);
+void pli_plat_store_i32_release(void *p, int v);
 /* Spawn a thread running fn(arg); returns 0 on success. */
 int pli_spawn(pli_thread *th, void *(*fn)(void *), void *arg);
 void pli_thread_detach(pli_thread th);

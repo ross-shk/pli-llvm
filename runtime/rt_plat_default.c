@@ -968,3 +968,19 @@ int pli_spawn_detached(void *(*fn)(void *), void *arg) {
   pli_thread_detach(th);
   return 0;
 }
+
+/* Atomic access to a PL/I EVENT word (QR2.8). The word is a plain i32 in a
+ * PL/I variable, so it cannot carry C11's _Atomic type; these calls are the
+ * only way the runtime touches it.
+ *
+ * The runtime bitcode — this platform TU included — is built by clang for
+ * every supported target, so the compiler atomics are available here. A
+ * plain acquire load matters: the Windows Interlocked* alternative is a
+ * full-barrier read-modify-write, and the event fast path is exactly the
+ * place where the waiter wants a load, not an RMW. */
+int pli_plat_load_i32_acquire(const void *p) {
+  return __atomic_load_n((const int *)p, __ATOMIC_ACQUIRE);
+}
+void pli_plat_store_i32_release(void *p, int v) {
+  __atomic_store_n((int *)p, v, __ATOMIC_RELEASE);
+}
