@@ -3099,6 +3099,10 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
     return Stmt::kAreaCondKey;
   if (s->condName == "UNDERFLOW")
     return Stmt::kUnderflowCondKey;
+  if (s->condName == "OVERFLOW")
+    return Stmt::kOverflowCondKey;
+  if (s->condName == "FIXEDOVERFLOW")
+    return Stmt::kFixedoverflowCondKey;
   // Programmer-named conditions: deterministic hash ensures every
   // compilation unit assigns the same key to the same name, enabling
   // cross-object signal dispatch.
@@ -3379,11 +3383,15 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
   inner->noUnder = s->noUnder;
+  inner->noOver = s->noOver;
+  inner->noFOver = s->noFOver;
   inner->chkSize = s->chkSize;
   inner->chkSub = s->chkSub;
   inner->chkZdiv = s->chkZdiv;
   inner->chkConv = s->chkConv;
   inner->chkUnder = s->chkUnder;
+  inner->chkOver = s->chkOver;
+  inner->chkFOver = s->chkFOver;
   inner->strRange = s->strRange;
   {
     auto tgt = std::make_unique<Expr>();
@@ -3739,11 +3747,15 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       fill->noZdiv = s->noZdiv;
       fill->noConv = s->noConv;
       fill->noUnder = s->noUnder;
+      fill->noOver = s->noOver;
+      fill->noFOver = s->noFOver;
       fill->chkSize = s->chkSize;
       fill->chkSub = s->chkSub;
       fill->chkZdiv = s->chkZdiv;
       fill->chkConv = s->chkConv;
       fill->chkUnder = s->chkUnder;
+      fill->chkOver = s->chkOver;
+      fill->chkFOver = s->chkFOver;
       fill->strRange = s->strRange;
       auto fillTgt = std::make_unique<Expr>();
       fillTgt->kind = Expr::VarRef;
@@ -3768,11 +3780,15 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         copy->noZdiv = s->noZdiv;
         copy->noConv = s->noConv;
         copy->noUnder = s->noUnder;
+        copy->noOver = s->noOver;
+        copy->noFOver = s->noFOver;
         copy->chkSize = s->chkSize;
         copy->chkSub = s->chkSub;
         copy->chkZdiv = s->chkZdiv;
         copy->chkConv = s->chkConv;
         copy->chkUnder = s->chkUnder;
+        copy->chkOver = s->chkOver;
+        copy->chkFOver = s->chkFOver;
         copy->strRange = s->strRange;
         auto ctgt = std::make_unique<Expr>();
         ctgt->kind = Expr::VarRef;
@@ -6095,11 +6111,15 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   inner->noZdiv = s->noZdiv;
   inner->noConv = s->noConv;
   inner->noUnder = s->noUnder;
+  inner->noOver = s->noOver;
+  inner->noFOver = s->noFOver;
   inner->chkSize = s->chkSize;
   inner->chkSub = s->chkSub;
   inner->chkZdiv = s->chkZdiv;
   inner->chkConv = s->chkConv;
   inner->chkUnder = s->chkUnder;
+  inner->chkOver = s->chkOver;
+  inner->chkFOver = s->chkFOver;
   inner->strRange = s->strRange;
   s->kind = Stmt::Group;
   s->byName = false;

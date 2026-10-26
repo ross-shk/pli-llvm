@@ -539,6 +539,9 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_subscript_oob", {.noReturn = true}},
       {"pli_zerodivide", {.noReturn = true}},
       {"pli_fixed_overflow", {.noReturn = true}},
+      {"pli_overflow", {.noReturn = true}},
+      {"pli_fixedoverflow", {.noReturn = true}},
+      {"pli_overflow_error", {.noReturn = true}},
       {"pli_conversion", {.noReturn = true}},
       {"pli_stop", {.noReturn = true}},
       // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
@@ -3243,6 +3246,73 @@ Val IRGen::applyUnderflow(Val r, llvm::Value* a, llvm::Value* b) {
   return r;
 }
 
+// OVERFLOW (rule 94; ADR-333): a floating-point operator result whose
+// magnitude exceeds the largest double raises the condition. IBM leaves the
+// result undefined and its implicit action is a message followed by ERROR; a
+// unit that returns normally re-raises ERROR. The value stays whatever IEEE
+// produced (±inf), which is IBM's "undefined" result made concrete.
+Val IRGen::applyOverflow(Val r) {
+  if (!overflowChecks())
+    return r;
+  std::string id = std::to_string(n_++);
+  llvm::Value* max = llvm::ConstantFP::get(b_.getDoubleTy(), std::numeric_limits<double>::max());
+  llvm::Function* fabsFn = intrinsicFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()});
+  llvm::Value* mag = b_.CreateCall(fabsFn, {r.reg}, "of.mag." + id);
+  // An infinite result is the only way |x| exceeds the largest finite double;
+  // NaN compares false, so an invalid operand does not raise OVERFLOW.
+  llvm::Value* bad = b_.CreateFCmpOGT(mag, max, "of.bad." + id);
+  llvm::BasicBlock* computeBB = b_.GetInsertBlock();
+  llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "of.trap." + id, curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "of.ok." + id, curFn_);
+  llvm::MDBuilder mdb(ctx_);
+  if (auto* br = b_.CreateCondBr(bad, trapBB, okBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
+  b_.SetInsertPoint(trapBB);
+  llvm::Function* dispatch = onTrapDispatch(Stmt::kOverflowCondKey, "pli_overflow");
+  if (!dispatch) {
+    // No unit in this module: message plus ERROR, which never returns.
+    b_.CreateCall(runtimeFn("pli_overflow"), {});
+    b_.CreateUnreachable();
+  } else {
+    b_.CreateCall(dispatch, {});
+    // IBM's normal-return rule: the returned OVERFLOW unit raises ERROR.
+    emitErrorRaise();
+    b_.CreateBr(okBB);
+  }
+  b_.SetInsertPoint(okBB);
+  llvm::PHINode* phi = b_.CreatePHI(r.reg->getType(), 2, "of.r." + id);
+  phi->addIncoming(r.reg, computeBB);
+  for (llvm::BasicBlock* pred : llvm::predecessors(okBB))
+    if (pred != computeBB)
+      phi->addIncoming(r.reg, pred);
+  r.reg = phi;
+  return r;
+}
+
+// The ERROR condition through the runtime ON stack (rule 94), used by IBM's
+// normal-return rule for OVERFLOW: an ERROR unit established anywhere runs and
+// execution resumes after it; without one the system action aborts. Mirrors
+// emitSignal's ERROR branch, with ONCODE 1 inside the unit (ADR-076).
+void IRGen::emitErrorRaise() {
+  // The slot lives in the entry block: a trap inside a loop must not grow the
+  // caller's stack each time the unit returns (ADR-263).
+  llvm::Value* fnSlot = entryAlloca(b_.getPtrTy(), "on.ctxslot");
+  llvm::Value* fn = b_.CreateCall(runtimeFn("pli_on_top_fn_pair"), {i64(0), fnSlot}, "ontopfn");
+  llvm::Value* ctx = b_.CreateLoad(b_.getPtrTy(), fnSlot, "ontopctx");
+  llvm::Value* none = b_.CreateICmpEQ(fn, llvm::Constant::getNullValue(b_.getPtrTy()), "onnosystem");
+  llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
+  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", curFn_);
+  b_.CreateCondBr(none, defBB, dspBB);
+  b_.SetInsertPoint(defBB);
+  b_.CreateCall(runtimeFn("pli_overflow_error"), {});
+  b_.CreateUnreachable();
+  b_.SetInsertPoint(dspBB);
+  b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
+  llvm::FunctionType* hft = llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
+  b_.CreateCall(hft, fn, {ctx});
+  b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+}
+
 // STRINGRANGE check (rules (60)-(63),(94)): raise before the extraction when
 // the argument triple is invalid. IBM's normal return then gives the clamped
 // substring the lowerings already compute. y = LENGTH(x)+1 with z = 0 is
@@ -3346,8 +3416,14 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
 // FIXED BINARY checked +,-,* (QR1.2): the overflow intrinsic yields the
 // value plus a flag; a set flag traps through the SIZE path (hard ERROR
 // when no SIZE handler is established, QR1.4).
-llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
-  if (!sizeChecks()) {
+llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b, bool dec) {
+  // A FIXED DECIMAL result is subject to FIXEDOVERFLOW (rule 94; ADR-334) when
+  // it needs more than the PL/I maximum of 31 digits. Only the i128 storage
+  // can hold such a value; the i64 intermediates top out at 18 digits, so a
+  // wrap there stays on the SIZE path (recorded in GC).
+  const bool wrapOn = sizeChecks();
+  const bool foverOn = dec && fixedOverflowChecks() && a->getType()->isIntegerTy(128);
+  if (!wrapOn && !foverOn) {
     // (NOSIZE): plain arithmetic — the wrapped value stands (rules (60)-(63),
     // ADR-110). Skip the overflow intrinsic entirely; its struct return and
     // extractvalue block the optimizer's overflow-narrowing passes.
@@ -3364,21 +3440,25 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   // so compute the result and overflow flag at emit time and drop the
   // with.overflow intrinsic + trap block. Only matters at -O0/-O1 (-O2/-O3
   // default to NOSIZE per Task 7). Sound because both operands are constants.
-  if (auto* ca = llvm::dyn_cast<llvm::ConstantInt>(a)) {
-    if (auto* cb = llvm::dyn_cast<llvm::ConstantInt>(b)) {
-      const llvm::APInt& av = ca->getValue();
-      const llvm::APInt& bv = cb->getValue();
-      bool of = false;
-      llvm::APInt rv;
-      if (op == Tok::Plus)
-        rv = av.sadd_ov(bv, of);
-      else if (op == Tok::Minus)
-        rv = av.ssub_ov(bv, of);
-      else // Tok::Star
-        rv = av.smul_ov(bv, of);
-      if (!of)
-        return llvm::ConstantInt::get(ty, rv);
-      // Overflow possible: fall through to the intrinsic + trap path below.
+  // A FIXEDOVERFLOW site keeps the intrinsic path: the digit-length test needs
+  // the value in an IR compare, not only the wrap flag.
+  if (wrapOn && !foverOn) {
+    if (auto* ca = llvm::dyn_cast<llvm::ConstantInt>(a)) {
+      if (auto* cb = llvm::dyn_cast<llvm::ConstantInt>(b)) {
+        const llvm::APInt& av = ca->getValue();
+        const llvm::APInt& bv = cb->getValue();
+        bool of = false;
+        llvm::APInt rv;
+        if (op == Tok::Plus)
+          rv = av.sadd_ov(bv, of);
+        else if (op == Tok::Minus)
+          rv = av.ssub_ov(bv, of);
+        else // Tok::Star
+          rv = av.smul_ov(bv, of);
+        if (!of)
+          return llvm::ConstantInt::get(ty, rv);
+        // Overflow possible: fall through to the intrinsic + trap path below.
+      }
     }
   }
   std::string base = op == Tok::Plus ? "sadd" : op == Tok::Minus ? "ssub" : "smul";
@@ -3387,13 +3467,27 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   llvm::Value* ov = b_.CreateCall(intrinsicFn(iname, st, {ty, ty}), {a, b}, "ov");
   llvm::Value* r = b_.CreateExtractValue(ov, 0, "bin");
   llvm::Value* of = b_.CreateExtractValue(ov, 1, "ovf");
+  llvm::Value* bad = of;
+  if (foverOn) {
+    // The raw scaled integer's digit count is the result's precision, so
+    // |result| >= 10^31 is exactly "more than 31 digits". A wrap of the i128
+    // product is far past that too, so both edges share the one condition.
+    llvm::Value* lim = i128(pliPow10_128(31));
+    llvm::Value* negLim = i128(pli_neg_s(pliPow10_128(31)));
+    llvm::Value* hi = b_.CreateICmpSGE(r, lim, "dfl.hi");
+    llvm::Value* lo = b_.CreateICmpSLE(r, negLim, "dfl.lo");
+    bad = b_.CreateOr(b_.CreateOr(hi, lo, "dfl.len"), of, "dfl.bad");
+  }
   int seq = ovSeq_++;
   llvm::BasicBlock* trapBB =
       llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
   llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
-  b_.CreateCondBr(of, trapBB, okBB);
+  b_.CreateCondBr(bad, trapBB, okBB);
   b_.SetInsertPoint(trapBB);
-  emitSizeTrap(okBB);
+  if (foverOn)
+    emitCondTrap(Stmt::kFixedoverflowCondKey, "pli_fixedoverflow", okBB);
+  else
+    emitSizeTrap(okBB);
   b_.SetInsertPoint(okBB);
   return r;
 }
@@ -3788,6 +3882,8 @@ std::string IRGen::run(HProgram& prog) {
     eopts.subscriptChecks = subChecks();
     eopts.zerodivideChecks = zdivChecks();
     eopts.conversionChecks = convChecks();
+    eopts.overflowChecks = overflowChecks();
+    eopts.fixedOverflowChecks = fixedOverflowChecks();
     if (!noMemoryEffects_)
       effects_ = pli::analyzeEffects(prog, byValue, eopts);
   }
@@ -5764,6 +5860,14 @@ void IRGen::emitSignal(HStmt* s) {
   if (s->condKey == Stmt::kStringrangeCondKey) {
     b_.CreateCall(runtimeFn("pli_stringrange"), {});
     b_.CreateBr(resBB);
+  } else if (s->condKey == Stmt::kOverflowCondKey) {
+    // OVERFLOW's implicit action is a message followed by ERROR (ADR-333).
+    b_.CreateCall(runtimeFn("pli_overflow"), {});
+    b_.CreateUnreachable();
+  } else if (s->condKey == Stmt::kFixedoverflowCondKey) {
+    // FIXEDOVERFLOW's implicit action is a message followed by ERROR (ADR-334).
+    b_.CreateCall(runtimeFn("pli_fixedoverflow"), {});
+    b_.CreateUnreachable();
   } else {
     std::string msg;
     if (s->condKey == 0)
@@ -5788,6 +5892,10 @@ void IRGen::emitSignal(HStmt* s) {
   b_.CreateCall(hft, fn, {ctx});
   if (s->condKey == 0)
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+  // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
+  // (ADR-333), which either runs an ERROR unit or takes the system action.
+  if (s->condKey == Stmt::kOverflowCondKey)
+    emitErrorRaise();
   b_.CreateBr(resBB);
   b_.SetInsertPoint(resBB);
 }
@@ -5819,6 +5927,8 @@ void IRGen::emitStmt(HStmt* s) {
   top.noZdiv = s->chkZdiv ? false : (top.noZdiv || s->noZdiv);
   top.noConv = s->chkConv ? false : (top.noConv || s->noConv);
   top.noUnder = s->chkUnder ? false : (top.noUnder || s->noUnder);
+  top.noOver = s->chkOver ? false : (top.noOver || s->noOver);
+  top.noFOver = s->chkFOver ? false : (top.noFOver || s->noFOver);
   // An explicit (STRINGRANGE)/(NOSTRINGRANGE) prefix wins for its subtree.
   if (s->strRange != 0)
     top.strRange = s->strRange;
@@ -12544,21 +12654,22 @@ Val IRGen::emitExpr(HExpr* e) {
     // FIXED overflow (QR1.2): a checked op traps on a wrapped intermediate
     // (BIT arithmetic is diagnosed in sema, so only FIXED reaches here);
     // DECIMAL precision against the declared digits is checked at narrowing
-    // conversions instead (full widening stays D1/QR2).
+    // conversions instead (full widening stays D1/QR2). A FIXED DECIMAL result
+    // longer than 31 digits raises FIXEDOVERFLOW (ADR-334).
     if (!flt && !isCmp && common.isFixed())
-      r = checkedArith(op, av.reg, bv.reg);
+      r = checkedArith(op, av.reg, bv.reg, common.k == TK::FixedDec);
     else
       r = flt ? b_.CreateFAdd(av.reg, bv.reg, "bin") : b_.CreateAdd(av.reg, bv.reg, "bin");
     break;
   case Tok::Minus:
     if (!flt && !isCmp && common.isFixed())
-      r = checkedArith(op, av.reg, bv.reg);
+      r = checkedArith(op, av.reg, bv.reg, common.k == TK::FixedDec);
     else
       r = flt ? b_.CreateFSub(av.reg, bv.reg, "bin") : b_.CreateSub(av.reg, bv.reg, "bin");
     break;
   case Tok::Star:
     if (!flt && !isCmp && common.isFixed())
-      r = checkedArith(op, av.reg, bv.reg);
+      r = checkedArith(op, av.reg, bv.reg, common.k == TK::FixedDec);
     else
       r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin");
     break;
@@ -12629,14 +12740,15 @@ Val IRGen::emitExpr(HExpr* e) {
     r = b_.CreateAdd(i64(0), i64(0));
     break;
   }
-  // UNDERFLOW (rule 94; ADR-326): a floating-point operator result is checked
-  // here; `*`, `/` and `**` pass their operands so a flush to exact zero counts
-  // as underflow too.
+  // UNDERFLOW and OVERFLOW (rules 94; ADR-326/333): a floating-point operator
+  // result is checked here; `*`, `/` and `**` pass their operands so a flush
+  // to exact zero counts as underflow too.
   if (flt && !isCmp) {
     const bool mulDiv = op == Tok::Star || op == Tok::Slash || op == Tok::Power;
     r = applyUnderflow(Val{common, r}, mulDiv ? av.reg : nullptr,
                        mulDiv ? bv.reg : nullptr)
             .reg;
+    r = applyOverflow(Val{common, r}).reg;
   }
   v.ty = common;
   v.reg = r;
@@ -13265,14 +13377,18 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       av = convert(a, common, e->loc);
       bv = convert(b, common, e->loc);
     }
-    // FIXED overflow (QR1.2): like Binary `*`, a wrapped product traps.
+    // FIXED overflow (QR1.2): like Binary `*`, a wrapped product traps; a
+    // FIXED DECIMAL product longer than 31 digits raises FIXEDOVERFLOW.
     llvm::Value* r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
-                     : common.isFixed()    ? checkedArith(Tok::Star, av.reg, bv.reg)
+                     : common.isFixed()    ? checkedArith(Tok::Star, av.reg, bv.reg,
+                                                          common.k == TK::FixedDec)
                                            : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;
     v.reg = r;
-    if (common.k == TK::Float)
+    if (common.k == TK::Float) {
       v.reg = applyUnderflow(v, av.reg, bv.reg).reg;
+      v.reg = applyOverflow(v).reg;
+    }
     result = v;
     return true;
   }
@@ -13288,6 +13404,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey);
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
     v.reg = applyUnderflow(Val{common, endZerodivide(zd, div)}, av.reg, bv.reg).reg;
+    v.reg = applyOverflow(Val{common, v.reg}).reg;
     result = v;
     return true;
   }

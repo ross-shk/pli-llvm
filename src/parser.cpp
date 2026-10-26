@@ -482,14 +482,14 @@ Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
 }
 
 // Applies a PROCEDURE statement's condition prefix to the body it scopes
-// (rules (60)-(63),(95); ADR-320): the four entries of procCond_ are 0 for the
+// (rules (60)-(63),(95); ADR-320): the entries of procCond_ are 0 for the
 // default, 1 when the prefix disables the check, and 2 when CHECK re-enables
 // it. Restores the enclosing state when the body ends.
 struct ProcCondGuard {
   int* state;
-  int saved[5];
+  int saved[7];
   ProcCondGuard(int* s, const Stmt& pre) : state(s) {
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 7; ++i)
       saved[i] = s[i];
     if (pre.noSize)
       s[0] = 1;
@@ -511,9 +511,17 @@ struct ProcCondGuard {
       s[4] = 1;
     else if (pre.chkUnder)
       s[4] = 2;
+    if (pre.noOver)
+      s[5] = 1;
+    else if (pre.chkOver)
+      s[5] = 2;
+    if (pre.noFOver)
+      s[6] = 1;
+    else if (pre.chkFOver)
+      s[6] = 2;
   }
   ~ProcCondGuard() {
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 7; ++i)
       state[i] = saved[i];
   }
 };
@@ -746,9 +754,10 @@ bool Parser::parseCondPrefixes(Stmt* st) {
     }
     advance();
     // Prefix elements (rules (60)-(63)): the plain forms are no-ops because
-    // SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION and UNDERFLOW are on by
-    // default, the NO... forms disable them for the statement's scope, and
-    // STRINGRANGE is IBM's opt-in condition (ADR-297). CHECK(...)/NOCHECK(...)
+    // SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, UNDERFLOW, OVERFLOW and
+    // FIXEDOVERFLOW are on by default, the NO... forms disable them for the
+    // statement's scope, and STRINGRANGE is IBM's opt-in condition (ADR-297).
+    // CHECK(...)/NOCHECK(...)
     // (rules (95),(96), ADR-320) name conditions — or ALL — and turn them on
     // or off regardless of what an enclosing prefix disabled. Any other
     // condition keeps the unenforced warning.
@@ -757,14 +766,16 @@ bool Parser::parseCondPrefixes(Stmt* st) {
     // Apply one state to one implemented check: 1 enables (and clears a
     // disable), -1 disables (and clears an enable); `which` -1 means ALL.
     auto setCond = [&](int which, int state) {
-      for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 5 : which); ++c) {
+      for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 7 : which); ++c) {
         switch (c) {
         case 0: st->noSize = state < 0; st->chkSize = state > 0; break;
         case 1: st->noSub = state < 0; st->chkSub = state > 0; break;
         case 2: st->noZdiv = state < 0; st->chkZdiv = state > 0; break;
         case 3: st->noConv = state < 0; st->chkConv = state > 0; break;
         case 4: st->noUnder = state < 0; st->chkUnder = state > 0; break;
-        default: st->strRange = state; break;
+        case 5: st->strRange = state; break;
+        case 6: st->noOver = state < 0; st->chkOver = state > 0; break;
+        default: st->noFOver = state < 0; st->chkFOver = state > 0; break;
         }
       }
     };
@@ -788,7 +799,8 @@ bool Parser::parseCondPrefixes(Stmt* st) {
       // Classify the word: a condition name, its NO... form, or ALL.
       int state = 0;
       if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOZERODIVIDE" ||
-          w == "NOCONVERSION" || w == "NOSTRINGRANGE" || w == "NOUNDERFLOW") {
+          w == "NOCONVERSION" || w == "NOSTRINGRANGE" || w == "NOUNDERFLOW" ||
+          w == "NOOVERFLOW" || w == "NOFIXEDOVERFLOW") {
         w = w.substr(2);
         state = -1;
       }
@@ -805,6 +817,10 @@ bool Parser::parseCondPrefixes(Stmt* st) {
         which = 4;
       else if (w == "STRINGRANGE")
         which = 5;
+      else if (w == "OVERFLOW")
+        which = 6;
+      else if (w == "FIXEDOVERFLOW")
+        which = 7;
       else if (w == "ALL")
         which = -1;
       else {
@@ -848,6 +864,8 @@ StmtP Parser::parseStatement(Proc* owner) {
   st->noZdiv = procCond_[2] == 1;
   st->noConv = procCond_[3] == 1;
   st->noUnder = procCond_[4] == 1;
+  st->noOver = procCond_[5] == 1;
+  st->noFOver = procCond_[6] == 1;
 
   // condition prefix list                                          rule (60)
   if (!parseCondPrefixes(st.get()))
@@ -951,11 +969,15 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->noZdiv = st->noZdiv;
       s->noConv = st->noConv;
       s->noUnder = st->noUnder;
+      s->noOver = st->noOver;
+      s->noFOver = st->noFOver;
       s->chkSize = st->chkSize;
       s->chkSub = st->chkSub;
       s->chkZdiv = st->chkZdiv;
       s->chkConv = st->chkConv;
       s->chkUnder = st->chkUnder;
+      s->chkOver = st->chkOver;
+      s->chkFOver = st->chkFOver;
       s->strRange = st->strRange;
       return s;
     }
@@ -969,11 +991,15 @@ StmtP Parser::parseStatement(Proc* owner) {
     k->noZdiv = st->noZdiv;
     k->noConv = st->noConv;
     k->noUnder = st->noUnder;
+    k->noOver = st->noOver;
+    k->noFOver = st->noFOver;
     k->chkSize = st->chkSize;
     k->chkSub = st->chkSub;
     k->chkZdiv = st->chkZdiv;
     k->chkConv = st->chkConv;
     k->chkUnder = st->chkUnder;
+    k->chkOver = st->chkOver;
+    k->chkFOver = st->chkFOver;
     k->strRange = st->strRange;
     return k;
   }
@@ -986,11 +1012,15 @@ StmtP Parser::parseStatement(Proc* owner) {
     s->noZdiv = st->noZdiv;
     s->noConv = st->noConv;
     s->noUnder = st->noUnder;
+    s->noOver = st->noOver;
+    s->noFOver = st->noFOver;
     s->chkSize = st->chkSize;
     s->chkSub = st->chkSub;
     s->chkZdiv = st->chkZdiv;
     s->chkConv = st->chkConv;
     s->chkUnder = st->chkUnder;
+    s->chkOver = st->chkOver;
+    s->chkFOver = st->chkFOver;
     s->strRange = st->strRange;
   }
   return s;
@@ -1184,9 +1214,10 @@ void Parser::skipParen(const char* rule) {
   }
 }
 
-// One condition (rule 94). ERROR, SIZE, SUBSCRIPTRANGE, and ZERODIVIDE are
-// served; every other condition is diagnosed with its rule number, never
-// silently accepted.
+// One condition (rule 94). ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE,
+// CONVERSION, STRINGRANGE, FINISH, AREA, UNDERFLOW, OVERFLOW and
+// FIXEDOVERFLOW are served; every other condition is diagnosed with its rule
+// number, never silently accepted.
 std::string Parser::parseCondition(std::string* fileArg) {
   if (!at(Tok::Word)) {
     d_.error(cur().loc, "expected a condition", "(94)");
@@ -1234,10 +1265,18 @@ std::string Parser::parseCondition(std::string* fileArg) {
     advance();
     return w;
   }
-  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW") {
+  if (w == "OVERFLOW") {
+    // OVERFLOW (rule 94): a floating-point result larger in magnitude than the
+    // double range; the implicit action is a message plus ERROR (ADR-333).
     advance();
-    d_.error(l, w + " conditions are not implemented in this stage", "(94)");
-    return "";
+    return w;
+  }
+  if (w == "FIXEDOVERFLOW") {
+    // FIXEDOVERFLOW (rule 94): a FIXED DECIMAL arithmetic result longer than
+    // the 31-digit maximum; the implicit action is a message plus ERROR
+    // (ADR-334).
+    advance();
+    return w;
   }
   if (w == "CHECK") {
     advance();
@@ -1263,7 +1302,8 @@ std::string Parser::parseCondition(std::string* fileArg) {
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
         name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH" ||
-        name == "AREA" || name == "UNDERFLOW") {
+        name == "AREA" || name == "UNDERFLOW" || name == "OVERFLOW" ||
+        name == "FIXEDOVERFLOW") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

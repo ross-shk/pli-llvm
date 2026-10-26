@@ -136,6 +136,8 @@ struct EffectOptions {
   bool subscriptChecks = true;
   bool zerodivideChecks = true;
   bool conversionChecks = true;
+  bool overflowChecks = true;        // FLOAT arithmetic can raise OVERFLOW
+  bool fixedOverflowChecks = true;   // DECIMAL arithmetic can raise FIXEDOVERFLOW
 };
 
 // Analyze every procedure in the program. `byValue` names the parameters that

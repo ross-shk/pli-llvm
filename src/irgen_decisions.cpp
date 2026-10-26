@@ -324,6 +324,17 @@ private:
     if (opts_->sizeChecks)
       b_.raiseKeys.insert(Stmt::kSizeCondKey);
   }
+  // A FLOAT arithmetic result can exceed the double range and abort through
+  // OVERFLOW's implicit action (ADR-333); a DECIMAL one can exceed the 31-digit
+  // maximum and abort through FIXEDOVERFLOW's (ADR-334).
+  void raiseOverflow() {
+    if (opts_->overflowChecks)
+      b_.raiseKeys.insert(Stmt::kOverflowCondKey);
+  }
+  void raiseFixedOverflow() {
+    if (opts_->fixedOverflowChecks)
+      b_.raiseKeys.insert(Stmt::kFixedoverflowCondKey);
+  }
 
   const HProc* p_;
   const std::unordered_set<const Symbol*>* byValue_;
@@ -454,8 +465,13 @@ void EffectWalker::walkCallExpr(HExpr* e, bool writeCtx) {
     // established anywhere may then run and write.
     if (e->name == "SUBSTR")
       b_.raiseKeys.insert(Stmt::kStringrangeCondKey);
-    if (e->name == "ADD" || e->name == "SUBTRACT" || e->name == "MULTIPLY")
+    if (e->name == "ADD" || e->name == "SUBTRACT" || e->name == "MULTIPLY") {
       raiseSize();
+      if (e->ty.k == TK::Float)
+        raiseOverflow();
+      else if (e->ty.k == TK::FixedDec)
+        raiseFixedOverflow();
+    }
     break;
   }
   case BuiltinEffect::Allocates:
@@ -557,6 +573,15 @@ void EffectWalker::walkExpr(HExpr* e, bool writeCtx) {
     // value, so it cannot overflow — the code generator emits no trap for it.
     if (e->a && e->a->ty.isFixed() && isArithOp(e->op))
       raiseSize();
+    // A FLOAT result can exceed the double range; a DECIMAL result can exceed
+    // the 31-digit maximum. Both conditions abort when no unit is established,
+    // so a procedure that computes one does not necessarily return.
+    if (isArithOp(e->op)) {
+      if (e->ty.k == TK::Float)
+        raiseOverflow();
+      else if (e->ty.k == TK::FixedDec)
+        raiseFixedOverflow();
+    }
     if (e->op == Tok::Slash && opts_->zerodivideChecks)
       b_.raiseKeys.insert(Stmt::kZerodivideCondKey);
     return;

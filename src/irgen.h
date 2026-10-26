@@ -231,6 +231,10 @@ private:
   void emitSignal(HStmt* s); // raise ERROR: dispatch or take the system action
   void emitFinishSignal();   // FINISH at a task procedure's exit (ADR-322)
   Val applyUnderflow(Val r, llvm::Value* a, llvm::Value* b); // UNDERFLOW (ADR-326)
+  Val applyOverflow(Val r);                                 // OVERFLOW (ADR-333)
+  // IBM's normal-return rule for OVERFLOW: raise ERROR through the runtime ON
+  // stack, or take ERROR's system action when no unit is established.
+  void emitErrorRaise();
 
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
@@ -659,7 +663,7 @@ private:
   llvm::Value* sretAlloc(const Type& rty, const char* name = "sret");
   // FIXED BINARY checked +,-,* (QR1.2): overflow traps to the SIZE path
   // (hard ERROR when no SIZE handler is established, QR1.4).
-  llvm::Value* checkedArith(Tok op, llvm::Value* a, llvm::Value* b);
+  llvm::Value* checkedArith(Tok op, llvm::Value* a, llvm::Value* b, bool dec = false);
   // FIXED DECIMAL precision trap (QR1.2): an i64 magnitude at or beyond
   // `limit` (10^prec digits, or a binary width) traps to the SIZE path.
   void magTrap(llvm::Value* v, long long limit);
@@ -995,6 +999,8 @@ private:
     bool noZdiv = false;
     bool noConv = false;
     bool noUnder = false;
+    bool noOver = false;
+    bool noFOver = false;
     // STRINGRANGE is opt-in (ADR-297): 0 disabled/inherited, 1 enabled,
     // -1 explicitly disabled in this scope.
     int strRange = 0;
@@ -1022,6 +1028,15 @@ private:
   // --no-size-checks mean "this program never overflows or underflows".
   bool underflowChecks() const {
     return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noUnder);
+  }
+  // OVERFLOW and FIXEDOVERFLOW (rules (60)-(63); ADR-333/334) ride the same
+  // arithmetic-trap switch: -O2 and --no-size-checks mean "this program never
+  // overflows".
+  bool overflowChecks() const {
+    return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noOver);
+  }
+  bool fixedOverflowChecks() const {
+    return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noFOver);
   }
   bool strRangeChecks() const {
     return !checkStack_.empty() && checkStack_.back().strRange == 1;

@@ -12300,3 +12300,112 @@ already checks it; the gap is between that check and the park. *Disable
 stealing.* It hides the migration that exposes the race and costs the fan-out
 its load balance. *Let every worker exit on `rt_main_done`.* Only worker 0
 holds the process lifetime; peers are detached and never joined.
+
+---
+
+## ADR-333 — `OVERFLOW` is raised on a floating-point result past the double range
+
+**Context.** Rule (94) lists `OVERFLOW` as a condition and rule (63) gives it a
+`NOOVERFLOW` prefix. IBM raises it when the magnitude of a floating-point
+result exceeds the largest representable value; the result is *undefined*, the
+implicit action is a message followed by `ERROR`, and — the part that shapes
+the design — a unit that **returns normally also raises `ERROR`**. The condition
+code is 300.
+
+**Decision.** Raise it at the same operator sites `UNDERFLOW` uses, and nowhere
+else:
+
+- The four floating-point binary operators, the `MULTIPLY` and `DIVIDE`
+  built-ins, and `**` (including its constant-exponent square fast path). The
+  test is `|result| > DBL_MAX`, which only an infinite result satisfies on an
+  IEEE host; `NaN` compares false, so an invalid operand does not raise.
+- Not instrumented, for the same reasons `UNDERFLOW` skips them: the complex
+  arithmetic lowering (its results are pairs, not one float) and the math
+  library built-ins (`SQRT`, `EXP`, ...), whose results are values rather than
+  operator results.
+- The result is left as the IEEE operation produced it — `±inf` — which is IBM's
+  "undefined" result made concrete and observable through an ordinary compare.
+- No unit: `pli_overflow` prints `OVERFLOW: floating-point result too large`
+  and calls the ERROR system action, so the program aborts with code 8.
+- Unit returns: the lowering raises `ERROR` through the **runtime ON stack**
+  (the same path `SIGNAL ERROR` uses) instead of the compile-time trap table,
+  because the rule is about the condition, not about which function trapped;
+  a unit established in another module therefore still runs. With no `ERROR`
+  unit, `pli_overflow_error` aborts. `SIGNAL OVERFLOW` follows the same rule.
+- `OVERFLOW` gets the fixed key `Stmt::kOverflowCondKey` (-9);
+  `CONDITION(OVERFLOW)` is rejected; `(OVERFLOW)`/`(NOOVERFLOW)` join the prefix
+  elements and `CHECK(...)`/`NOCHECK(...)` list it, so `CHECK(ALL)` covers it.
+  It rides the arithmetic-trap switch, so `--no-size-checks` and `-O2`/`-O3`
+  turn it off and a benchmark build carries no extra branch.
+
+**Consequences.** `tests/core/on_overflow.pli` pins the raise at every operator
+site, the undefined value, the normal-return `ERROR`, `(nooverflow)`,
+`(nooverflow): (check(overflow))`, `SIGNAL OVERFLOW` and a finite result that
+does not raise. `tests/driver/overflow_conditions.sh` covers the three implicit
+actions (no unit, unit without an `ERROR` unit, unit with one) and the prefix.
+`bad_on_cond_overflow.pli` pins the `CONDITION(OVERFLOW)` rejection, and
+`bad_on_cond.pli` now uses `ENDPAGE` as its unserved condition because
+`OVERFLOW` is served. `GC` (60)–(63), (91)–(99) and the guide carry the change.
+`ONCODE()` is not extended: it keeps ADR-076's ERROR/SIGNAL code instead of
+IBM's 300 for the computational conditions.
+
+**Rejected.** *Resume with the largest finite value instead of infinity.* IBM
+leaves the result undefined; infinity is what the hardware already produced, and
+substituting a value would hide the overflow from the program's own arithmetic.
+*Print the message from the unit path too.* The message is part of the implicit
+action, which is defined only when no unit is established; the normal-return
+`ERROR` brings its own action. *Route the normal-return `ERROR` through the
+compile-time trap table.* That table knows only this function's units, while the
+runtime stack is what makes `SIGNAL ERROR` work across modules.
+
+---
+
+## ADR-334 — `FIXEDOVERFLOW` marks a decimal result longer than 31 digits
+
+**Context.** Rule (94) lists `FIXEDOVERFLOW` and rule (63) gives it a
+`NOFIXEDOVERFLOW` prefix. IBM raises it when "the length of the result of a
+FIXED DECIMAL arithmetic operation exceeds the maximum length allowed by the
+implementation", which is 31 digits. It is **never** raised for FIXED BINARY,
+the result is undefined, the implicit action is a message followed by `ERROR`,
+and unlike `OVERFLOW` a unit that returns normally simply resumes. The condition
+code is 310. IBM separates it from `SIZE`: `SIZE` is a value that does not fit
+the *declared* size of a variable, `FIXEDOVERFLOW` is a value the *implementation*
+cannot represent at all.
+
+**Decision.** Raise it inside the checked decimal arithmetic, at the point where
+the wrap flag is already computed:
+
+- Sites: `+`, `-` and `*` on a `FIXED DECIMAL` common type (the binary operator
+  path and the `MULTIPLY` built-in). A `FIXED BINARY` operand keeps the SIZE
+  path and never raises this condition.
+- Test: `|raw scaled result| >= 10^31`, two-sided. The stored integer carries
+  the scale, so its digit count *is* the result's precision; 31 digits is the
+  PL/I maximum and `10^31` itself already needs 32. A wrap of the i128 product
+  is far past that, so it shares the trap instead of taking SIZE.
+- Only the i128 storages can reach the limit. A decimal result held in i64 has
+  at most 18 digits, so it can never need 31; its wrap stays on the SIZE path
+  (recorded as a limitation in `GC` and the guide, and part of B11's exact
+  decimal work).
+- A unit that returns resumes after the operation with the raw value (IBM's
+  undefined result); with no unit `pli_fixedoverflow` prints
+  `FIXEDOVERFLOW: decimal result longer than 31 digits` and aborts through ERROR.
+- `FIXEDOVERFLOW` gets the fixed key `Stmt::kFixedoverflowCondKey` (-10);
+  `CONDITION(FIXEDOVERFLOW)` is rejected; the prefix and `CHECK(...)` forms work
+  like the other checks, and the traps ride `--no-size-checks`/`-O2`.
+
+**Consequences.** `tests/core/on_fixedoverflow.pli` pins 32 digits raising and
+31 not raising, the `FIXED BINARY` exemption, addition, the normal-return
+resume, `(nofixedoverflow)`, `(nofixedoverflow): (check(fixedoverflow))` and
+`SIGNAL FIXEDOVERFLOW`. `tests/driver/overflow_conditions.sh` covers the two
+implicit actions. `bad_on_cond_fixedoverflow.pli` pins the `CONDITION(...)`
+rejection. `GC` (16)/(17) and (60)–(63), (91)–(99) and the guide carry the
+change.
+
+**Rejected.** *Raise from the static intermediate precision (`p1+p2 > 31`).*
+`mulResultType` caps the product precision at 31 (ADR-056, ADR-191), so that
+information is gone by lowering time; the value test never refuses a result that
+fits and is the conservative reading. *Fold FIXEDOVERFLOW into the SIZE trap.*
+They are different conditions with different resume rules and different
+handlers, and a program that handles one should not swallow the other.
+*Raise on a narrowing assignment.* That is exactly `SIZE`; IBM raises this one
+from the arithmetic, before the store.

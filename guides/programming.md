@@ -41,7 +41,7 @@ pli name.pli -o name && ./name
 | Types      | FIXED BIN/DEC, FLOAT, COMPLEX, BIT, CHAR/VARYING, POINTER        | STERLING constants, PICTURE type |
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
-| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, UNDERFLOW, named; `CHECK`/`NOCHECK` prefixes | OVERFLOW |
+| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, UNDERFLOW, OVERFLOW, FIXEDOVERFLOW, named; `CHECK`/`NOCHECK` prefixes | KEYED/DIRECT file conditions |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
@@ -893,7 +893,7 @@ PL/I has resumable conditions with dynamic scope — think `try/except` in Pytho
  revert error;          /* pop the handler */
 ```
 
-Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, `area` for regions, `underflow` for floating-point results, plus your own named conditions.
+Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, `area` for regions, `underflow` and `overflow` for floating-point results, `fixedoverflow` for decimal arithmetic, plus your own named conditions.
 
 `on underflow` catches a floating-point result below the smallest normal value
 (including a `*`, `/` or `**` that loses the whole exponent range). The result
@@ -903,6 +903,34 @@ becomes zero, and with no unit the runtime prints a message and continues:
  on underflow put skip list('tiny result');
 
  x = small * small;   /* x is 0 */
+```
+
+`on overflow` catches a floating-point result too large for the double range.
+IBM's implicit action is a message followed by `error`, and a unit that
+*returns* raises `error` too — so a handler that wants to continue needs an
+`on error` unit, otherwise the program aborts:
+
+```pli
+ on overflow begin;
+   put skip list('result out of range');
+ end;
+ on error begin;
+   put skip list('continuing after the overflow');
+ end;
+
+ x = huge * 10.0;    /* the overflow unit runs, then the error unit */
+```
+
+`on fixedoverflow` catches a `FIXED DECIMAL` `+`, `-` or `*` whose result
+needs more than the 31 digits PL/I allows. It is never raised for
+`FIXED BINARY`, and a unit that returns just resumes (the value is
+undefined):
+
+```pli
+ on fixedoverflow put skip list('decimal result too long');
+
+ big = 1000000000000000;
+ c = big * 10000000000000000;   /* 1e31: 32 digits */
 ```
 
 `on area` catches a region that cannot satisfy an `allocate`, and a pointer
@@ -974,7 +1002,7 @@ Bounds-checking example — the handler runs, then execution resumes with the in
 
 ### One-statement opt-outs
 
-Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconversion)` / `(nounderflow)` skip the check for one statement when you've already validated it:
+Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconversion)` / `(nounderflow)` / `(nooverflow)` / `(nofixedoverflow)` skip the check for one statement when you've already validated it:
 
 ```pli
  (nosubscriptrange): a(i) = 0;  /* trust me, i is fine */
@@ -1007,10 +1035,12 @@ The command-line `--no-size-checks` (and `-O2`/`-O3`, which imply it) wins over 
 
 **Not yet**
 
-- `overflow` conditions, keyed-I/O conditions, `go to` inside a unit, and
-  `return(value)` inside a handler are diagnosed. The underflow check covers
-  the arithmetic operators; complex arithmetic and the math built-ins are not
-  instrumented.
+- Keyed-I/O conditions, `go to` inside a unit, and `return(value)` inside a
+  handler are diagnosed. The underflow and overflow checks cover the
+  arithmetic operators; complex arithmetic and the math built-ins are not
+  instrumented. `fixedoverflow` is raised from `FIXED DECIMAL` `+ - *`; a
+  decimal intermediate that wraps the 64-bit storage still takes the `size`
+  path (exact 19-31 digit arithmetic is still open).
 
 > **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `pli conditions.pli -o conds && ./conds`.
 

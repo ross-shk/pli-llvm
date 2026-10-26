@@ -390,8 +390,9 @@ compiler implements a subset of the condition rules; non-local `GO TO` and
 many condition kinds are still diagnosed.
 
 - The implemented `ON`/`SIGNAL`/`REVERT` paths include `ERROR`, `SIZE`,
-  `SUBSCRIPTRANGE`, `ZERODIVIDE`, `CONVERSION`, and programmer-named conditions.
-  Check the coverage ledger for each condition's behavior and unsupported cases.
+  `SUBSCRIPTRANGE`, `ZERODIVIDE`, `CONVERSION`, `UNDERFLOW`, `OVERFLOW`,
+  `FIXEDOVERFLOW`, and programmer-named conditions. Check the coverage ledger
+  for each condition's behavior and unsupported cases.
 - Condition prefixes are resolved during compilation. Supported prefixes such
   as `(NOSIZE)` and `(NOCONVERSION)` omit the matching runtime check; they are
   not runtime switches. `(CHECK(...))` puts a check back on for its scope and

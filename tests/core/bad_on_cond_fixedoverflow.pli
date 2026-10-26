@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (99): FIXEDOVERFLOW is not a valid programmer-named
+    condition. */
+ badoncondfixedoverflow: procedure options(main);
+    signal condition(fixedoverflow);
+ end badoncondfixedoverflow;

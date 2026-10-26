@@ -5,7 +5,10 @@
     exactly d fraction digits (10^d does not fit an i64 past d = 18),
     and an infinite FLOAT must print rather than spin in the exponent
     loop (inf / 10 is still inf). The expected output is pinned in
-    expected/fmt_edge.out. */
+    expected/fmt_edge.out. The overflow that produces the infinity is
+    wrapped in (nooverflow) (ADR-333): the test is about the formatter,
+    and IBM raises OVERFLOW on an unchecked product past the double
+    range. */
  fmt_edge: proc options(main);
     declare d decimal(25, 2);
     declare x float bin(53);
@@ -16,7 +19,8 @@
     put skip edit(d) (f(30, 20));
     /* F(w,d) rounding to fewer digits than the scale holds */
     put skip edit(d) (f(12, 1));
-    /* an infinite FLOAT prints instead of hanging */
-    x = 1.0E308 * 10.0;
+    /* an infinite FLOAT must print instead of hanging; (nooverflow)
+       keeps the IEEE result this formatter test needs to see */
+    (nooverflow): x = 1.0E308 * 10.0;
     put skip list('INF', x);
  end fmt_edge;

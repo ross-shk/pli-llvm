@@ -1,0 +1,83 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (94); ADR-333: OVERFLOW is raised when a floating-point
+    arithmetic result exceeds the largest double. The result is
+    undefined (IEEE infinity here), a unit that returns normally
+    raises ERROR, (nooverflow) suppresses the check for its scope,
+    and CHECK(OVERFLOW) puts it back. SIGNAL OVERFLOW follows the
+    same normal-return rule. */
+ on_overflow: procedure options(main);
+    declare big float bin(53);
+    declare x float bin(53);
+    declare ofl fixed bin(31) init(0);
+    declare errs fixed bin(31) init(0);
+
+    on overflow begin;
+       ofl = ofl + 1;
+    end;
+    on error begin;
+       errs = errs + 1;
+    end;
+    big = 1e308;
+
+    /* a product past the double range raises, and the normal return
+       raises ERROR (IBM's normal-return rule) */
+    x = big * 10.0;
+    if ofl ^= 1 then do;
+       put skip list('FAIL on_overflow: multiply count', ofl);
+       stop;
+    end;
+    if errs ^= 1 then do;
+       put skip list('FAIL on_overflow: multiply ERROR', errs);
+       stop;
+    end;
+    if ^(x > 1e308) then do;
+       put skip list('FAIL on_overflow: undefined result', x);
+       stop;
+    end;
+
+    /* addition, division and a power raise at the same sites */
+    x = big + big;
+    x = big / 1e-300;
+    x = big ** 2;
+    if ofl ^= 4 then do;
+       put skip list('FAIL on_overflow: operator count', ofl);
+       stop;
+    end;
+
+    /* (nooverflow) turns the check off for its scope */
+    (nooverflow): x = big * 10.0;
+    if ofl ^= 4 then do;
+       put skip list('FAIL on_overflow: NOOVERFLOW', ofl);
+       stop;
+    end;
+
+    /* and CHECK(OVERFLOW) puts it back inside that scope */
+    (nooverflow): (check(overflow)):
+       x = big * 10.0;
+    if ofl ^= 5 then do;
+       put skip list('FAIL on_overflow: CHECK(OVERFLOW)', ofl);
+       stop;
+    end;
+
+    /* a finite result just past an earlier one is not an overflow */
+    x = 1e300 * 10.0;
+    if ofl ^= 5 then do;
+       put skip list('FAIL on_overflow: finite result', ofl);
+       stop;
+    end;
+
+    /* SIGNAL OVERFLOW runs the unit and, on its normal return,
+       raises ERROR like a trapped one */
+    signal overflow;
+    if ofl ^= 6 then do;
+       put skip list('FAIL on_overflow: SIGNAL count', ofl);
+       stop;
+    end;
+    if errs ^= 6 then do;
+       put skip list('FAIL on_overflow: SIGNAL ERROR', errs);
+       stop;
+    end;
+
+    put skip list('PASS on_overflow');
+ end on_overflow;
