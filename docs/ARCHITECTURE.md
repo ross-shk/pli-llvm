@@ -278,7 +278,10 @@ The rules that make it work, each of them learned the hard way:
   the task.
 * **A worker's run queue is a LIFO, and the task it spawned last is not
   stealable.** A program that spawns a task and waits for it keeps both on
-  one worker; without that, every task costs an OS thread wakeup.
+  one worker; without that, every task costs an OS thread wakeup. In a
+  fan-out, the worker that keeps spawning wakes a peer at most every 200 µs,
+  so tasks run while the loop is still going and their stacks are recycled
+  instead of one stack per task (ADR-319).
 * **A condition variable is keyed.** The event table has one condition for
   all the events, so a plain broadcast would wake every waiter for every
   task that ends. A waiter says what it waits for, and a signal wakes only
@@ -292,7 +295,9 @@ The rules that make it work, each of them learned the hard way:
   boundaries before it touches one, so the handler commits every chunk
   between the top and the fault, not only the next one; on POSIX the stacks
   come from an arena of slots, so a live task's ceiling costs address space
-  and not a reservation of its own (ADR-313).
+  and not a reservation of its own (ADR-313). A new stack commits one page,
+  not the whole top chunk, so an idle task maps only the page it starts on
+  (ADR-318).
 * **A report about a full stack cannot run on that stack.** The overflow
   report runs on an emergency stack that the handler switches to through the
   exception context, so it needs no room on the task's stack (ADR-239). On

@@ -105,12 +105,28 @@ same host (21 rounds interleaved, median, 20 000 tasks):
 The lifecycle is unaffected: it recycles stacks from the fiber pool, so it
 never paid the reservation. The other columns above were not re-measured.
 
-### Current run (5 samples, after ADR-313)
+### Update: ADR-318 and ADR-319, the fan-out path
 
-`python3 benchmarks/run_tasking_bench.py --models fiber --runs 5` on the same
-host: **task_loop** 8.64 ms against Go's 12.58 ms (**0.69×**, gate holds) and
-**task_spawn** 128.6 ms against Go's 11.89 ms (**10.8×**, down from 24.8×
-before the arena).
+ADR-318 commits one page at allocation instead of the top 64 KiB chunk, and
+ADR-319 wakes an idle peer while a fan-out is still spawning, so finished
+tasks recycle their stacks instead of every task keeping one. Same host,
+20 000 tasks, median of 9 or 15 runs:
+
+| task_spawn | ns/task | PL/I / Go |
+|---|---|---|
+| after ADR-313 (top chunk, no wake) | 6 715 | 11.85× |
+| ADR-318 (top page) | 5 859 | 9.30× |
+| ADR-319, wake on every spawn | 3 075 | 5.57× |
+| ADR-319, wake at most every 200 µs | **744–821** | **1.1–1.5×** |
+
+Go read 10.7–13.8 ms across those runs, so the ratio moves with the Go side;
+the PL/I absolute time (14.9–16.4 ms) is the stable figure. Peak RSS on a
+200 000-task fan-out fell from 1.4 GiB to 20.9 MiB. The lifecycle is
+unchanged (0.66–0.72× Go), and the gate still holds.
+
+`benchmarks/tasking/stack_cost.c` is the microbenchmark behind the one-page
+figure: it prices a PROT_NONE arena, the `mprotect`, and the first touch with
+no scheduler in the way.
 
 ### Fiber context-switch floor
 
@@ -125,15 +141,15 @@ reused):
 
 ## Notes
 
-* **task_spawn is behind Go on both models.** 20 000 simultaneously-live
-  tasks require 20 000 live stacks. The fiber stacks come from an arena of
-  slots and grow in chunks (ADR-313), so the ceiling costs address space
-  and not a reservation of its own, and the remaining cost is the one page
-  a fiber touches when it starts — 16 KiB on Apple silicon, i.e. ~320 MiB
-  for 20 000 live tasks. Go gives a goroutine a 2 KiB stack from a cache
-  and copies it on growth, which is ~40 MiB for the same fan-out. Before
-  ADR-313 each fiber mmap'ed its whole ceiling, which cost another ~6 us
-  per task. The fiber floor (42 ns) proves the switch is not the problem.
+* **task_spawn is now close to Go.** The fiber stacks come from an arena of
+  slots, start with one page committed and grow in 64 KiB chunks
+  (ADR-313/318), so a ceiling costs address space and not a reservation.
+  ADR-319 wakes a peer during the spawn loop, so a fan-out recycles the
+  stacks of tasks that finish instead of keeping one for every task: a
+  200 000-task fan-out peaks at ~21 MiB, not 1.4 GiB. A task still costs
+  the one page it first touches — 16 KiB on Apple silicon — and Go's 2 KiB
+  copied stack stays smaller, which is the remaining difference. The fiber
+  floor (42 ns) proves the switch is not the problem.
 
 * **task_loop beats Go on this platform** (fiber: 0.75×–0.80×, os: 0.57×–0.77×
   when unloaded). The lifecycle workload recycles stacks from the pool, so the

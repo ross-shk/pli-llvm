@@ -84,6 +84,7 @@ typedef struct rt_worker {
   pli_cond cv;                /* the worker's own condvar */
   _Atomic int parked;         /* 1 while the worker waits on the condvar */
   int ran_recently;           /* 1 while the worker still expects work */
+  long long last_wake_us;     /* when this worker last woke a peer */
   int id;
 } rt_worker;
 
@@ -838,8 +839,19 @@ static pli_fiber *rt_sched_spawn_ex(void *(*fn)(void *), void *arg, int priority
    * (after the current one yields), so there is no wakeup to send. */
   pli_fiber *old = w->runnext;
   w->runnext = f;
-  if (old)
+  if (old) {
     rt_queue_push(&w->local, old);
+    /* Wake an idle worker for the queued tasks. Without this a fan-out
+     * leaves the pool asleep until the spawner blocks in WAIT, so every
+     * task holds a fresh stack instead of recycling the finished ones.
+     * A wake at most every 200 us lets a fan-out hand over a batch: each
+     * cross-core wake then serves several tasks, not one empty one. */
+    long long now = pli_plat_now_us();
+    if (now - w->last_wake_us >= 200) {
+      w->last_wake_us = now;
+      rt_wake_any();
+    }
+  }
   return f;
 }
 
