@@ -1,6 +1,6 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rule (94); ADR-324: UNDERFLOW is raised when a floating-point
+ /* rule (94); ADR-326: UNDERFLOW is raised when a floating-point
     arithmetic result falls below the smallest normal double,
     including a product or quotient flushed to exact zero, and the
     result becomes zero. Equal-number cancellation is not an

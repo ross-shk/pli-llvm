@@ -110,10 +110,10 @@ Full results and the methodology live in `benchmarks/`.
 <table class="markdown-table">
   <tr><th>Benchmark</th><th>PL/I / Go ratio</th><th>Result</th></tr>
   <tr><td>task_loop (spawn–join lifecycle)</td><td>0.69×</td><td>PL/I beats Go</td></tr>
-  <tr><td>task_spawn (20 000 live tasks)</td><td>10.8× (pending improvement)</td><td>Go&#39;s 2 KiB growable stack still wins for fan-out</td></tr>
+  <tr><td>task_spawn (20 000 live tasks)</td><td>1.1×–1.5×</td><td>Near parity: peers wake during the spawn loop and recycle stacks (ADR-324/325)</td></tr>
 </table>
 
-The fiber model recycles a stack per task, making it faster than Go on the spawn–join lifecycle. Fan-out of many simultaneously-live tasks is PL/I's known cost: a fiber stack comes from an arena and grows in chunks, so its 8 MiB ceiling costs address space only, but every live task still touches one 16 KiB stack page.
+The fiber model recycles a stack per task, making it faster than Go on the spawn–join lifecycle. A fan-out now wakes idle peers while it is still spawning, so finished tasks hand their stacks back instead of every task keeping one: 20 000 tasks peak at ~10 MiB, and the remaining gap to Go is its smaller copied stack.
 
 ## Build from source
 

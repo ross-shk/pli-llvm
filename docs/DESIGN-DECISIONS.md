@@ -11895,7 +11895,97 @@ code did by accident; the block would be returned to the wrong allocator.
 
 ---
 
-## ADR-324 — `UNDERFLOW` is raised on a floating-point operator result
+## ADR-324 — A fiber's stack starts with one committed page (amends ADR-313)
+
+**Context.** ADR-313 commits the top 64 KiB chunk of a new POSIX fiber stack.
+That chunk keeps its bottom page as the guard, so 48 KiB — three 16 KiB pages
+on Apple silicon — is writable at once, although a task that has not started
+touches only the 176-byte context at the top of the stack. The kernel does
+page-table work for the whole writable range: a microbenchmark that mirrors
+the arena (`benchmarks/tasking/stack_cost.c`) measured 3 803 ns/stack to
+`mprotect` three pages and touch the top, 2 100 ns for one page, and 466 ns
+for the `mprotect` alone.
+
+**Decision.** `pli_plat_stack_alloc` commits only the top page. The chunk
+stays 64 KiB: growth still commits a whole chunk at a time, so a recursive
+task takes one fault per chunk, not one per page. The handler's overflow test
+moves from "the fault is in the bottom chunk" to a floor at `usable + page`:
+a fault at or below the floor is the overflow guard, and a fault above it —
+even in the bottom chunk — commits from the faulting chunk down to the floor,
+never the guard page.
+
+**Measurements** (macOS 26 arm64, 20 000 tasks, 9 runs, median, before the
+wake change of ADR-325):
+
+| initial commit | task_spawn | PL/I / Go |
+|---|---|---|
+| the top chunk (48 KiB) | 6 715 ns/task (134.3 ms) | 11.85× |
+| the top page (16 KiB) | **5 859 ns/task (117.2 ms)** | **9.30×** |
+
+Go read 11.3 ms and 12.6 ms on the two runs; the PL/I absolute time is the
+stable part.
+
+**Consequences.** A task that uses more than 16 KiB of stack now takes one
+growth fault where the old code had the page mapped already; the chunk is
+still the growth unit, so one fault buys 48 KiB. `tests/core/task_grow.pli`
+(frames that skip several chunks) and `tests/driver/task_stack_overflow.sh`
+(a 128 KiB ceiling on one and four workers) pin both paths. Memory per live
+task is unchanged: one touched page.
+
+**Rejected.** *Page-sized chunks with a page commit.* ADR-313 measured that at
+7 268 ns/task because every growth then costs a fault; committing one page at
+allocation keeps the coarse growth. *Pre-committing 48 KiB because it looks
+free.* It is not: the kernel maps the whole writable range for every fiber.
+
+---
+
+## ADR-325 — A fan-out wakes a peer while it is still spawning (amends ADR-235)
+
+**Context.** `rt_sched_spawn_ex` keeps the new task in the worker's runnext
+slot, which no stealer may touch, and pushes the previous task to the worker's
+local queue. Nothing wakes another worker. All workers therefore sleep until
+the spawner blocks in WAIT: a fan-out of 20 000 tasks allocates 20 000 stacks
+and runs the whole queue on worker 0 afterwards. On macOS the 20 000-task
+fan-out held 332 MiB; 200 000 tasks held 1.4 GiB in the same shape.
+
+**Decision.** When a spawn pushes the previous runnext task to the local
+queue, it wakes an idle peer, at most once per 200 µs per spawning worker.
+`rt_wake_any` takes the peer's own lock and re-checks its parked flag, so the
+wake cannot be lost (ADR-235). The first queued task wakes at once
+(`last_wake_us` starts at 0), which keeps a two-task fan-out prompt; a
+spawn-then-WAIT still uses runnext and never reaches the wake.
+
+**Measurements** (macOS 26 arm64, 20 000 tasks, median of 9 or 15 runs;
+PL/I absolute time):
+
+| wake policy | task_spawn | ns/task |
+|---|---|---|
+| none (ADR-313/324) | 117.2 ms | 5 859 |
+| on every spawn | 61.5 ms | 3 075 |
+| at most every 50 µs | 38.2 ms | 1 909 |
+| at most every 200 µs | **14.9–16.4 ms** | **744–821** |
+| at most every 500 µs | 19.0 ms | 952 |
+
+Go read 10.7–13.8 ms (537–691 ns/task) across those runs, so the PL/I/Go
+ratio is now about 1.1–1.5×, against 11.85× before. A 200 000-task fan-out
+peaked at 20.9 MiB instead of 1.4 GiB. 500 µs is worse because fewer peers
+join and the tail drains on fewer workers.
+
+**Consequences.** Tasks now start while the caller is still spawning. TASK is
+asynchronous, so this is allowed; a program that relied on "nothing runs until
+WAIT" was relying on the old scheduler. If the spawner never blocks and stops
+spawning, a task in the local queue waits for the next spawn or the WAIT —
+there is no timer that wakes the pool, the pre-existing runnext contract.
+4 000 stress runs at two, four and eight workers completed; a single timeout
+in an earlier 1 000-run batch did not reproduce.
+
+**Rejected.** *Wake on every spawn.* 61.5 ms: an empty task finishes before
+the next spawn, so nearly every spawn pays a cross-core signal. *No wake.*
+117.2 ms and one stack per task. *500 µs.* 19.0 ms, worse. *A timer thread.*
+It would bound the delay when spawning stops, at the cost of another thread
+and its own wakeups; not needed for the measured workloads.
+
+## ADR-326 — `UNDERFLOW` is raised on a floating-point operator result
 
 **Context.** Rule (94) lists `UNDERFLOW` as a condition, and rule (63) gives it
 a `NOUNDERFLOW` prefix. IBM raises it when the magnitude of a floating-point

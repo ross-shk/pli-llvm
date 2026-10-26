@@ -742,15 +742,19 @@ static int rt_stack_fault(char *fault) {
   char *top = usable + a->usable;
   if (fault >= top)
     return 0; /* outside the stack */
-  if (fault < usable)
-    return 2; /* below the stack: it ran out of room */
   size_t chunk = rt_stack_chunk_bytes(a->page);
+  /* The bottom page of the usable region is the overflow guard: it stays
+   * inaccessible even when the chunk above it is committed. A fault below
+   * the usable region, or in that page, is the stack running out. */
+  char *floor = usable + a->page;
+  if (fault < floor)
+    return 2; /* the guard page: the stack ran out */
   /* The chunks are counted from the top, because the stack starts at the
    * top and grows down; the fault names the chunk it landed in. */
   size_t n = ((size_t)(top - fault) - 1) / chunk;
-  if ((n + 1) * chunk >= a->usable)
-    return 2; /* the bottom chunk: the stack ran out */
   char *lo = top - (n + 1) * chunk;
+  if (lo < floor)
+    lo = floor; /* the bottom chunk: never commit its guard page */
   if (mprotect(lo, (size_t)(top - lo), PROT_READ | PROT_WRITE) != 0)
     return 0; /* nothing to be done for it: let the fault stand */
   return 1;
@@ -879,9 +883,10 @@ int pli_plat_stack_alloc(size_t *size_inout, void **out_base) {
     return -1;
   char *usable = a->base + off + page;
   char *top = usable + size;
-  /* Commit the top chunk, where the fiber starts; the guard page below it
-   * faults in the next chunk as the stack grows down. */
-  if (mprotect(top - chunk + page, chunk - page, PROT_READ | PROT_WRITE) != 0) {
+  /* Commit only the page the fiber starts on; the rest of the top chunk
+   * faults in through the handler when the task actually grows into it.
+   * An idle task therefore commits one page, not a whole chunk. */
+  if (mprotect(top - page, page, PROT_READ | PROT_WRITE) != 0) {
     rt_arena_give(a, off); /* nothing was committed: the slot is still free */
     return -1;
   }

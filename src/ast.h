@@ -231,7 +231,7 @@ struct Stmt {
   bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
   bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
   bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
-  bool noUnder = false;            // (NOUNDERFLOW) prefix (rules (60)-(63), ADR-324)
+  bool noUnder = false;            // (NOUNDERFLOW) prefix (rules (60)-(63), ADR-326)
   // CHECK(...) prefix (rules (61),(95); ADR-320): re-enable the named check
   // for this scope, overriding a NO... prefix inherited from an enclosing one.
   bool chkSize = false;
@@ -319,7 +319,7 @@ struct Stmt {
   static constexpr int kStringrangeCondKey = -5; // STRINGRANGE (rules 60-63, 94)
   static constexpr int kFinishCondKey = -6;      // FINISH (rule 94, ADR-322)
   static constexpr int kAreaCondKey = -7;        // AREA (rule 94, ADR-323)
-  static constexpr int kUnderflowCondKey = -8;   // UNDERFLOW (rule 94, ADR-324)
+  static constexpr int kUnderflowCondKey = -8;   // UNDERFLOW (rule 94, ADR-326)
   // ENDFILE(f) and UNDEFINEDFILE(f) (rule 97) are file conditions: each key is
   // its base minus the FILE variable's runtime slot, so every file has its own
   // handler. Mirrored in runtime/rt_file.c (RT_ENDFILE_KEY_BASE /

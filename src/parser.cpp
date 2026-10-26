@@ -1230,7 +1230,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
   }
   if (w == "UNDERFLOW") {
     // UNDERFLOW (rule 94): a floating-point result below the smallest normal
-    // is set to zero and the condition is raised (ADR-324).
+    // is set to zero and the condition is raised (ADR-326).
     advance();
     return w;
   }

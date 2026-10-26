@@ -230,7 +230,7 @@ private:
   void emitOn(HStmt* s);     // establish a handler (or SYSTEM)
   void emitSignal(HStmt* s); // raise ERROR: dispatch or take the system action
   void emitFinishSignal();   // FINISH at a task procedure's exit (ADR-322)
-  Val applyUnderflow(Val r, llvm::Value* a, llvm::Value* b); // UNDERFLOW (ADR-324)
+  Val applyUnderflow(Val r, llvm::Value* a, llvm::Value* b); // UNDERFLOW (ADR-326)
 
   // --- statements & expressions --------------------------------------
   void emitStmt(HStmt* s);
@@ -1015,7 +1015,7 @@ private:
   bool convChecks() const {
     return !noConvChecks_ && (checkStack_.empty() || !checkStack_.back().noConv);
   }
-  // UNDERFLOW (rule 94; ADR-324) rides the arithmetic-trap switch: -O2 and
+  // UNDERFLOW (rule 94; ADR-326) rides the arithmetic-trap switch: -O2 and
   // --no-size-checks mean "this program never overflows or underflows".
   bool underflowChecks() const {
     return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noUnder);

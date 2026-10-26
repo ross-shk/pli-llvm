@@ -275,10 +275,20 @@ The rules that make it work, each of them learned the hard way:
   the task to its owner and only its owner runs it again.
 * **A task's owner is recorded before it is published.** A wakeup can arrive
   before the task reaches its park, and the unpark has to know where to put
-  the task.
+  the task. `rt_sched_park` therefore does not re-store the owner: the wait
+  path (`rt_sync.c`, `rt_input.c`, `rt_fbroker.c`) records it while it holds
+  the lock that publishes the waiter, and a second store after publication
+  would only race with the unparker's read. The fiber's status flag is atomic
+  for the same reason: a parked fiber is marked waiting by its own worker and
+  runnable by whatever thread unparks it.
 * **A worker's run queue is a LIFO, and the task it spawned last is not
   stealable.** A program that spawns a task and waits for it keeps both on
-  one worker; without that, every task costs an OS thread wakeup.
+  one worker; without that, every task costs an OS thread wakeup. In a
+  fan-out, the worker that keeps spawning wakes a peer at most every 200 µs,
+  so tasks run while the loop is still going and their stacks are recycled
+  instead of one stack per task (ADR-325). The queue's head is atomic and so
+  is each link: a thief reads a link while the owner is between its load and
+  its compare-and-swap, and a plain field would be a data race there.
 * **A condition variable is keyed.** The event table has one condition for
   all the events, so a plain broadcast would wake every waiter for every
   task that ends. A waiter says what it waits for, and a signal wakes only
@@ -292,7 +302,9 @@ The rules that make it work, each of them learned the hard way:
   boundaries before it touches one, so the handler commits every chunk
   between the top and the fault, not only the next one; on POSIX the stacks
   come from an arena of slots, so a live task's ceiling costs address space
-  and not a reservation of its own (ADR-313).
+  and not a reservation of its own (ADR-313). A new stack commits one page,
+  not the whole top chunk, so an idle task maps only the page it starts on
+  (ADR-324).
 * **A report about a full stack cannot run on that stack.** The overflow
   report runs on an emergency stack that the handler switches to through the
   exception context, so it needs no room on the task's stack (ADR-239). On

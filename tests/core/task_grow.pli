@@ -1,6 +1,6 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rules (79): a task's stack grows in chunks (ADR-308), so a procedure
+ /* rules (79): a task's stack grows in chunks (ADR-313), so a procedure
     whose frame is larger than a chunk moves the stack pointer past
     several boundaries before it touches a page. The runtime must commit
     the chunks the frame skipped over, and the task must see its storage

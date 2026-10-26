@@ -276,7 +276,7 @@ void pli_stringrange(void) {
   pli_plat_fprintf(stderr, "STRINGRANGE: substring arguments out of range\n");
 }
 
-/* UNDERFLOW (rule 94; ADR-324): IBM's implicit action is a message and
+/* UNDERFLOW (rule 94; ADR-326): IBM's implicit action is a message and
  * execution continues; the trap lowering has already set the result to 0. */
 void pli_underflow(void) {
   rt_flush_stdout();

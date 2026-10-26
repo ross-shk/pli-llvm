@@ -3066,7 +3066,7 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* 
   b_.CreateBr(okBB);
 }
 
-// UNDERFLOW (rule 94; ADR-324): a floating-point result whose magnitude is
+// UNDERFLOW (rule 94; ADR-326): a floating-point result whose magnitude is
 // below the smallest normal double is set to zero and the condition is raised,
 // taking IBM's notify-and-continue implicit action when no unit is established.
 // An exact zero from addition or subtraction is not an underflow (IBM's
@@ -12496,7 +12496,7 @@ Val IRGen::emitExpr(HExpr* e) {
     r = b_.CreateAdd(i64(0), i64(0));
     break;
   }
-  // UNDERFLOW (rule 94; ADR-324): a floating-point operator result is checked
+  // UNDERFLOW (rule 94; ADR-326): a floating-point operator result is checked
   // here; `*`, `/` and `**` pass their operands so a flush to exact zero counts
   // as underflow too.
   if (flt && !isCmp) {
