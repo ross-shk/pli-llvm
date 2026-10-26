@@ -11734,3 +11734,54 @@ handler is the program's real one in the same scope; pushing a second entry
 would only make `REVERT` pop more often for no behavioural gain.
 *Treat `CHECK` as a no-op.* It is a no-op where nothing is disabled, but the
 nested case above is observable and the test pins it.
+
+---
+
+## ADR-321 — An ON unit reaches fixed-size automatics by subscript and by member
+
+**Context.** Rule (91) runs a handler as a frameless function, so an ON unit
+that touches an automatic of the establishing procedure goes through the
+capture context: establishment stores the address of each collected automatic
+and the handler binds it back. ADR-299 let a `BEGIN` unit declare its own
+locals and ride that same path. The collector, however, only accepted a *whole*
+plain-scalar reference (`e->kind == VarRef && path.empty() && !locPtr`), so
+`a(1)` and `rec.inner.n` were diagnosed with "an ON-unit reaching an automatic
+variable is not implemented in this stage" even though both resolve to the same
+captured base plus constant offsets.
+
+**Decision.** Capture a fixed-size automatic of the establishing frame by its
+base address, whatever the reference shape:
+
+- The accepted symbols are `Var`s owned by the establishing procedure that are
+  not `STATIC`, `BASED`, `DEFINED`, `CONTROLLED`, `AREA` or `FILE`, whose extent
+  is not dynamic. Scalars, arrays and structures all qualify. A whole scalar
+  reference keeps its older path unchanged, so it still captures a
+  `CONTROLLED` scalar's live generation at establishment.
+- A subscripted or qualified reference uses that captured base exactly like a
+  whole reference does, so `a(i) = a(i) + 1` and `rec.inner.n = ...` inside the
+  unit read and write the raiser's storage. A dynamic subscript variable is
+  itself captured by the same traversal, which already walks the reference's
+  subscript expressions.
+- Everything whose address is not the symbol's own or moves after
+  establishment stays diagnosed for a subscripted or member reference:
+  `BASED` storage reached through a locator, a `CONTROLLED` generation (which
+  `ALLOCATE` can replace), a `DEFINED` overlay, an `AREA` slot's region, a
+  `FILE` variable's slot, a parameter (the frame does not own it), a variable
+  extent, and any reference from a nested unit (which runs with no establishing
+  frame at all).
+- The ORDER rule is unchanged: the unit reads the storage at trap time, so a
+  write by the procedure before the trap is visible (ADR-253).
+
+**Consequences.** `tests/core/on_unit_aggregate.pli` takes an array element and
+a nested structure member inside a `BEGIN` unit, writes both, and checks the
+writes from the procedure after the SIGNAL resumes. `bad_on_local.pli` now
+pins the remaining diagnostics (BASED, CONTROLLED, variable extent, nested
+unit). `GC` (91)–(99) and the programming guide say which references work. B4
+loses the unit-aggregate item.
+
+**Rejected.** *Capture the array or structure by value into the context.* The
+unit must write through to the establishing frame; a copy would swallow the
+writes, and the existing whole-scalar path already does the right thing with an
+address. *Collect only the elements the unit mentions.* A subscript is usually
+dynamic, so the set is not statically known, and `a(i)` with a captured `i`
+needs the base anyway.

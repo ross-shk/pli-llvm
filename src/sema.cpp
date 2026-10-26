@@ -2854,8 +2854,21 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
     // path: its base may still be an automatic of the establishing frame.
     if (sym->kind == Symbol::Var && sym->isStatic && !sym->definedBase)
       return;
-    if (!nested && whole && sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
-        !sym->definedBase && !sym->fileAttr && sym->owner == p) {
+    // A whole reference to an automatic of the establishing frame: the
+    // capture stores the address the reference would use (ADR-253/299).
+    const bool plainOwn =
+        sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
+        !sym->definedBase && !sym->fileAttr && sym->owner == p;
+    // A subscript or a member reference needs a base address the frame owns
+    // and that cannot move: fixed-size own storage only (ADR-321).
+    const bool ownFixed =
+        plainOwn && !sym->controlled && !sym->ty.isArea() && !sym->ty.isDynamic();
+    if (!nested && plainOwn && whole) {
+      if (std::find(caps.begin(), caps.end(), sym) == caps.end())
+        caps.push_back(sym);
+      return;
+    }
+    if (!nested && ownFixed && (sym->ty.isArray() || sym->ty.isStruct())) {
       if (std::find(caps.begin(), caps.end(), sym) == caps.end())
         caps.push_back(sym);
       return;

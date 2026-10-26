@@ -905,6 +905,11 @@ A `begin` ON-unit is a block, so it can declare its own work variables. They sha
  end;
 ```
 
+A unit can also read and write the establishing procedure's fixed-size arrays
+and structures by subscript or by qualified member name — it captures their
+storage, not a copy. `BASED`, `CONTROLLED` and variable-extent storage still
+cannot be reached from a unit.
+
 Bounds-checking example — the handler runs, then execution resumes with the index clamped:
 
 ```pli
