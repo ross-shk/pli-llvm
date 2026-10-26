@@ -5229,6 +5229,8 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 
   if (!blockTerminated(b_.GetInsertBlock())) {
     emitCtlEpilogue();
+    // FINISH (rule 94; ADR-322) is raised before the handler state goes.
+    emitFinishSignal();
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
@@ -5356,6 +5358,8 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   for (size_t i = 0; i < retPads.size(); ++i) {
     b_.SetInsertPoint(retPads[i]);
     emitCtlEpilogue();
+    // FINISH (rule 94; ADR-322): segment exit is procedure exit.
+    emitFinishSignal();
     // Rule (91): segment exit is procedure exit for handler scoping.
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
@@ -5509,6 +5513,17 @@ void IRGen::emitOnHandlers(HProgram& prog) {
   }
 }
 
+// FINISH (rule 94; ADR-322): raise the condition at a task procedure's exit.
+// Every procedure exit that establishes an ON unit calls this; the runtime
+// compares the procedure against the one the spawn wrapper recorded, so a
+// nested or normal call, and the main task, do nothing.
+void IRGen::emitFinishSignal() {
+  if (!curOnDepth_ || !curFn_)
+    return;
+  b_.CreateCall(runtimeFn("pli_signal_finish"),
+                {b_.CreateBitCast(curFn_, b_.getPtrTy(), "finproc")});
+}
+
 // Establish a handler: push its id (0 for the system action) plus the handler
 // address and the capture context for automatics the unit touches (rule 91).
 // The address/context pair is what lets a SIGNAL raised anywhere — including
@@ -5615,14 +5630,16 @@ void IRGen::emitStmt(HStmt* s) {
   }
   // Condition enable-state (rules (60)-(63), ADR-110/112): each statement
   // sees its own disables OR-inherited through enclosing statements, so a
-  // prefixed group covers its body. Balanced by construction (single exit).
+  // prefixed group covers its body. A CHECK(...) prefix (rule (95), ADR-320)
+  // clears the inherited disable for the named check instead. Balanced by
+  // construction (single exit).
   CheckState top;
   if (!checkStack_.empty())
     top = checkStack_.back();
-  top.noSize = top.noSize || s->noSize;
-  top.noSub = top.noSub || s->noSub;
-  top.noZdiv = top.noZdiv || s->noZdiv;
-  top.noConv = top.noConv || s->noConv;
+  top.noSize = s->chkSize ? false : (top.noSize || s->noSize);
+  top.noSub = s->chkSub ? false : (top.noSub || s->noSub);
+  top.noZdiv = s->chkZdiv ? false : (top.noZdiv || s->noZdiv);
+  top.noConv = s->chkConv ? false : (top.noConv || s->noConv);
   // An explicit (STRINGRANGE)/(NOSTRINGRANGE) prefix wins for its subtree.
   if (s->strRange != 0)
     top.strRange = s->strRange;
@@ -5772,6 +5789,9 @@ void IRGen::emitStmt(HStmt* s) {
     emitRecordDelete(s);
     break;
   case HStmt::Return: {
+    // FINISH (rule 94; ADR-322): an early return is the task procedure's
+    // exit too, so the condition is raised here before the handler state goes.
+    emitFinishSignal();
     // Rule (91): procedure exit restores the entry ERROR depth, popping any
     // handlers this procedure established.
     if (curOnDepth_)
@@ -7239,6 +7259,18 @@ void IRGen::emitAllocate(HStmt* s) {
         areaE ? b_.CreateCall(runtimeFn("pli_area_alloc"), {emitExpr(areaE).reg, sz}, "aheap")
               : b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
     HExpr* set = (i < s->allocSet.size()) ? s->allocSet[i].get() : nullptr;
+    // A resumed AREA condition leaves the allocation undone (ADR-323): the
+    // region returns null, and neither the SET locator nor the based
+    // variable's own locator is overwritten.
+    llvm::BasicBlock* storesDone = nullptr;
+    if (areaE) {
+      llvm::Value* refused =
+          b_.CreateICmpEQ(p, llvm::ConstantPointerNull::get(b_.getPtrTy()), "arefused");
+      llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "aalloc", curFn_);
+      storesDone = llvm::BasicBlock::Create(ctx_, "aalloc.done", curFn_);
+      b_.CreateCondBr(refused, storesDone, okBB);
+      b_.SetInsertPoint(okBB);
+    }
     // The SET target is any assignable locator reference — a scalar, an array
     // element (rule (22) arrays of OFFSET), or a member — so share the
     // reference store used by GET.
@@ -7248,6 +7280,10 @@ void IRGen::emitAllocate(HStmt* s) {
     // (rule (88)), so references through the based name address the new cell.
     if (bsym->basedBase && (!set || bsym->basedBase != set->sym))
       b_.CreateStore(p, addressOf(bsym->basedBase));
+    if (storesDone) {
+      b_.CreateBr(storesDone);
+      b_.SetInsertPoint(storesDone);
+    }
   }
 }
 
@@ -9649,6 +9685,10 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   llvm::BasicBlock* savedBB = b_.GetInsertBlock();
   llvm::BasicBlock* wbb = llvm::BasicBlock::Create(ctx_, "entry", wrap);
   b_.SetInsertPoint(wbb);
+  // FINISH (rule 94; ADR-322): record the procedure this task was created
+  // for. Its exit raises the condition; no other procedure's does.
+  b_.CreateCall(runtimeFn("pli_task_finish_target"),
+                {b_.CreateBitCast(calleeF, b_.getPtrTy(), "finprog")});
   llvm::Value* ctx = wrap->arg_begin();
   std::vector<llvm::Value*> wargs;
   for (size_t k = 0; k < callArgs.size(); ++k) {
@@ -12501,6 +12541,17 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       n = b_.CreateNeg(n, "offneg");
     v.ty = e->ty;
     v.reg = b_.CreateGEP(b_.getInt8Ty(), x, {n}, "off");
+    result = v;
+    return true;
+  }
+  // OFFSET(x, y) (rule (22); ADR-319): an OFFSET holds an absolute address
+  // (ADR-170), so the conversion validates that x addresses a generation in
+  // the region y and returns the same address.
+  if (e->name == "OFFSET") {
+    llvm::Value* p = emitExpr(e->args[0].get()).reg;
+    llvm::Value* a = emitExpr(e->args[1].get()).reg;
+    v.ty = e->ty;
+    v.reg = b_.CreateCall(runtimeFn("pli_area_offset"), {a, p}, "off");
     result = v;
     return true;
   }

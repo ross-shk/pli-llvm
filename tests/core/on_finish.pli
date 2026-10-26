@@ -1,0 +1,80 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (94); ADR-322: FINISH is raised in a task when the procedure
+    the task was created for returns. It runs before the event
+    completes, an early RETURN counts as the exit, a nested call's own
+    FINISH unit stays silent, and a normal call raises nothing. */
+ on_finish: procedure options(main);
+    declare e event;
+    declare hits fixed bin(31) external;
+    declare done fixed bin(31) external;
+    declare calls fixed bin(31) external;
+
+    hits = 0;
+    done = 0;
+    calls = 0;
+
+    call worker event(e);
+    wait(e);
+    if hits ^= 1 then do;
+       put skip list('FAIL on_finish: task hits', hits);
+       stop;
+    end;
+    if done ^= 1 then do;
+       put skip list('FAIL on_finish: unit before complete', done);
+       stop;
+    end;
+
+    /* the same procedure called normally is not a task: no FINISH */
+    call worker;
+    if hits ^= 1 then do;
+       put skip list('FAIL on_finish: normal call raised', hits);
+       stop;
+    end;
+    if calls ^= 2 then do;
+       put skip list('FAIL on_finish: calls', calls);
+       stop;
+    end;
+
+    call outer event(e);
+    wait(e);
+    if hits ^= 2 then do;
+       put skip list('FAIL on_finish: early RETURN', hits);
+       stop;
+    end;
+
+    put skip list('PASS on_finish');
+ end on_finish;
+
+ worker: procedure;
+    declare hits fixed bin(31) external;
+    declare done fixed bin(31) external;
+    declare calls fixed bin(31) external;
+
+    on finish begin;
+       hits = hits + 1;
+       done = 1;
+    end;
+    calls = calls + 1;
+ end worker;
+
+ /* early RETURN is the task procedure's exit, and the nested call's
+    own FINISH unit is not the task's, so it stays silent (it would
+    add 100) */
+ outer: procedure;
+    declare hits fixed bin(31) external;
+
+    on finish begin;
+       hits = hits + 1;
+    end;
+    call inner();
+    return;
+ end outer;
+
+ inner: procedure;
+    declare hits fixed bin(31) external;
+
+    on finish begin;
+       hits = hits + 100;
+    end;
+ end inner;

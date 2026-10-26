@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (22),(123); ADR-319: OFFSET takes a POINTER and an AREA, and
+    OFFSETVALUE (a computational value to an offset) stays diagnosed
+    because an OFFSET holds an absolute address here. */
+ bad_offset_convert: procedure options(main);
+    declare region area(1000);
+    declare p pointer;
+    declare i fixed bin(31);
+    declare o offset(region);
+    o = offset(p);
+    o = offset(i, region);
+    o = offset(p, i);
+    o = offsetvalue(16);
+    put skip list('unreachable', o);
+ end bad_offset_convert;

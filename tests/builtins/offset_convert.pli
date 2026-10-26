@@ -1,0 +1,46 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* OFFSET conversion (rules (22),(123); ADR-319): OFFSET(pointer, area)
+    turns a POINTER that addresses a generation in the area into an
+    OFFSET, and a null pointer gives the null offset. */
+ offset_convert: procedure options(main);
+    declare region area(4096);
+    declare 1 rec based(p),
+              2 v fixed bin(31);
+    declare 1 view based(o),
+              2 oo fixed bin(31);
+    declare p pointer;
+    declare o offset(region);
+    declare n offset(region);
+
+    allocate rec in(region) set(p);
+    rec.v = 77;
+
+    o = offset(p, region);
+    if o = null() then do;
+       put skip list('FAIL offset_convert: null offset result');
+       stop;
+    end;
+    if view.oo ^= 77 then do;
+       put skip list('FAIL offset_convert: want 77, got', view.oo);
+       stop;
+    end;
+
+    /* the conversion is not a copy of the block: a write through the
+       offset reaches the same generation */
+    view.oo = 88;
+    if rec.v ^= 88 then do;
+       put skip list('FAIL offset_convert: want 88, got', rec.v);
+       stop;
+    end;
+
+    /* a null pointer has no generation, so the null offset results */
+    n = offset(null(), region);
+    if n ^= null() then do;
+       put skip list('FAIL offset_convert: null pointer not null');
+       stop;
+    end;
+
+    free rec in(region);
+    put skip list('PASS offset_convert');
+ end offset_convert;

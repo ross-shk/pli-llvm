@@ -2,7 +2,7 @@
 /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* stack_cost.c — the per-stack cost of the fiber stack's commit policy.
  *
- * ADR-313 commits the top 64 KiB chunk of a new fiber stack; ADR-318
+ * ADR-313 commits the top 64 KiB chunk of a new fiber stack; ADR-324
  * commits only its top page. This measures what that difference buys: a
  * PROT_NONE arena of slots, an mprotect of the top chunk or the top page,
  * and the first touch a fiber makes when it starts. It is a microbenchmark

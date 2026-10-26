@@ -1,0 +1,42 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (91); ADR-321: a BEGIN ON-unit reaches the establishing frame's
+    fixed-size automatics by subscript and by qualified member name, and
+    its writes land in the same storage the procedure sees. */
+ on_unit_aggregate: procedure options(main);
+    declare a(3) fixed bin(31);
+    declare 1 rec,
+            2 name char(4),
+            2 inner,
+              3 n fixed bin(31);
+    declare i fixed bin(31) init(0);
+    declare text char(4) init('abcd');
+
+    a(1) = 10;
+    a(2) = 20;
+    a(3) = 30;
+    rec.name = text;
+    rec.inner.n = 7;
+
+    on error begin;
+       i = 2;
+       a(i) = a(i) + 1;
+       rec.inner.n = rec.inner.n + 1;
+       put skip list('unit', a(2), rec.name, rec.inner.n);
+    end;
+
+    signal error;
+    if a(2) ^= 21 then do;
+       put skip list('FAIL on_unit_aggregate: array', a(2));
+       stop;
+    end;
+    if rec.inner.n ^= 8 then do;
+       put skip list('FAIL on_unit_aggregate: member', rec.inner.n);
+       stop;
+    end;
+    if rec.name ^= 'abcd' then do;
+       put skip list('FAIL on_unit_aggregate: name', rec.name);
+       stop;
+    end;
+    put skip list('PASS on_unit_aggregate');
+ end on_unit_aggregate;

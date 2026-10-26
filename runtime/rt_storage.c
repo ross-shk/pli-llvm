@@ -290,16 +290,44 @@ void pli_area_destroy(char *ap) {
   pli_free((char *)a);
 }
 
+/* AREA (rule 94; ADR-323): a region operation raises the condition instead of
+ * aborting outright. A unit the program established for AREA runs; with none
+ * the implicit action is ERROR (message + exit), as before. A unit that
+ * resumes leaves the operation with no effect, which the callers report: NULL
+ * from ALLOCATE, and the block still live after a refused FREE. */
+#define RT_AREA_KEY (-7LL) /* mirrors Stmt::kAreaCondKey */
+static int rt_area_raise(const char *msg) {
+  char *ctx = NULL;
+  char *h = pli_on_top_fn_pair(RT_AREA_KEY, (char *)&ctx);
+  if (!h) {
+    pli_signal_error(msg);
+    return 0;
+  }
+  /* IRGen's handler takes its capture context as the only argument; the
+   * pointer round-trip through a union avoids an object-to-function cast. */
+  union {
+    char *obj;
+    void (*fn)(void *);
+  } u;
+  u.obj = h;
+  u.fn(ctx);
+  return 1;
+}
+
 char *pli_area_alloc(char *ap, long long n) {
   PliArea *a = (PliArea *)ap;
-  if (!a)
-    pli_signal_error("AREA: allocation from a null area");
+  if (!a) {
+    rt_area_raise("AREA: allocation from a null area");
+    return NULL;
+  }
   long long need = n < 0 ? 0 : n;
   /* The block header is charged against the region too, and the check is
    * written so it cannot overflow: a->used <= a->size always holds. */
   long long hdr = (long long)sizeof(PliBlock);
-  if (need > a->size - a->used - hdr)
-    pli_signal_error("AREA: area overflow");
+  if (need > a->size - a->used - hdr) {
+    rt_area_raise("AREA: area overflow");
+    return NULL;
+  }
   PliBlock *b = (PliBlock *)pli_plat_malloc((size_t)need + sizeof(PliBlock));
   if (!b)
     pli_abort("AREA: out of memory");
@@ -310,24 +338,48 @@ char *pli_area_alloc(char *ap, long long n) {
   return (char *)(b + 1);
 }
 
+/* OFFSET(x, y) (rule (22); ADR-319): convert the POINTER x into an OFFSET
+ * relative to the AREA y. An offset holds an absolute address in this
+ * implementation (ADR-170), so the conversion is an identity once the
+ * pointer is known to address a generation in y; IBM requires exactly that,
+ * and the region is the only object that can answer it. A null pointer
+ * yields the null offset. */
+char *pli_area_offset(char *ap, char *p) {
+  if (!p)
+    return NULL;
+  PliArea *a = (PliArea *)ap;
+  if (!a) {
+    rt_area_raise("AREA: OFFSET of a pointer with a null area");
+    return p;
+  }
+  PliBlock *b = (PliBlock *)p - 1;
+  for (PliBlock *live = a->blocks; live; live = live->next)
+    if (live == b)
+      return p;
+  rt_area_raise("AREA: OFFSET of a pointer not allocated in this area");
+  return p;
+}
+
 void pli_area_free(char *ap, char *p) {
   if (!p)
     return;
   PliArea *a = (PliArea *)ap;
   PliBlock *b = (PliBlock *)p - 1;
-  if (a) {
-    /* Unlink the block from the region's live list. A pointer that this
-     * region does not own is refused: freeing it would read a header from
-     * unrelated memory and leave another region's block dangling. */
-    PliBlock **link = &a->blocks;
-    while (*link && *link != b)
-      link = &(*link)->next;
-    if (!*link) {
-      pli_signal_error("AREA: FREE of a pointer not allocated in this area");
-      return;
-    }
-    *link = b->next;
-    a->used -= b->size + (long long)sizeof(PliBlock);
+  if (!a) {
+    rt_area_raise("AREA: FREE through a null area");
+    return;
   }
+  /* Unlink the block from the region's live list. A pointer that this
+   * region does not own is refused: freeing it would read a header from
+   * unrelated memory and leave another region's block dangling. */
+  PliBlock **link = &a->blocks;
+  while (*link && *link != b)
+    link = &(*link)->next;
+  if (!*link) {
+    rt_area_raise("AREA: FREE of a pointer not allocated in this area");
+    return;
+  }
+  *link = b->next;
+  a->used -= b->size + (long long)sizeof(PliBlock);
   pli_free((char *)b);
 }

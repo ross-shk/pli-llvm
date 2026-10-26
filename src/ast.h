@@ -231,6 +231,12 @@ struct Stmt {
   bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
   bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
   bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
+  // CHECK(...) prefix (rules (61),(95); ADR-320): re-enable the named check
+  // for this scope, overriding a NO... prefix inherited from an enclosing one.
+  bool chkSize = false;
+  bool chkSub = false;
+  bool chkZdiv = false;
+  bool chkConv = false;
   // (STRINGRANGE)/(NOSTRINGRANGE) prefix (rules (60)-(63)): 0 = inherit
   // (disabled unless an enclosing scope enables it), 1 = enable, -1 = disable.
   int strRange = 0;
@@ -309,6 +315,8 @@ struct Stmt {
   static constexpr int kZerodivideCondKey = -3;
   static constexpr int kConversionCondKey = -4; // CONVERSION (rule 94, QR1.2)
   static constexpr int kStringrangeCondKey = -5; // STRINGRANGE (rules 60-63, 94)
+  static constexpr int kFinishCondKey = -6;      // FINISH (rule 94, ADR-322)
+  static constexpr int kAreaCondKey = -7;        // AREA (rule 94, ADR-323)
   // ENDFILE(f) and UNDEFINEDFILE(f) (rule 97) are file conditions: each key is
   // its base minus the FILE variable's runtime slot, so every file has its own
   // handler. Mirrored in runtime/rt_file.c (RT_ENDFILE_KEY_BASE /

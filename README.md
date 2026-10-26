@@ -110,7 +110,7 @@ Full results and the methodology live in `benchmarks/`.
 <table class="markdown-table">
   <tr><th>Benchmark</th><th>PL/I / Go ratio</th><th>Result</th></tr>
   <tr><td>task_loop (spawn–join lifecycle)</td><td>0.69×</td><td>PL/I beats Go</td></tr>
-  <tr><td>task_spawn (20 000 live tasks)</td><td>1.1×–1.5×</td><td>Near parity: peers wake during the spawn loop and recycle stacks (ADR-318/319)</td></tr>
+  <tr><td>task_spawn (20 000 live tasks)</td><td>1.1×–1.5×</td><td>Near parity: peers wake during the spawn loop and recycle stacks (ADR-324/325)</td></tr>
 </table>
 
 The fiber model recycles a stack per task, making it faster than Go on the spawn–join lifecycle. A fan-out now wakes idle peers while it is still spawning, so finished tasks hand their stacks back instead of every task keeping one: 20 000 tasks peak at ~10 MiB, and the remaining gap to Go is its smaller copied stack.

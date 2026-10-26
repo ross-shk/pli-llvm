@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (20),(42),(88),(90); ADR-318: library side of area_external.
+    It reaches the caller's EXTERNAL AREA through its own declaration,
+    so allocation and FREE cross the module boundary. */
+ area_ext_lib: package exports(fill_region, release);
+ fill_region: procedure returns(offset);
+   declare region area(4096) external;
+   declare 1 rec based(off),
+           2 v fixed bin(31);
+   declare off offset;
+   allocate rec in(region) set(off);
+   rec.v = 4321;
+   return(off);
+ end fill_region;
+ release: procedure(off);
+   declare region area(4096) external;
+   declare off offset;
+   declare 1 rec based(off),
+           2 v fixed bin(31);
+   free rec in(region);
+ end release;
+ end area_ext_lib;
