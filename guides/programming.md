@@ -41,7 +41,7 @@ pli name.pli -o name && ./name
 | Types      | FIXED BIN/DEC, FLOAT, COMPLEX, BIT, CHAR/VARYING, POINTER        | STERLING constants, PICTURE type |
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
-| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), named; `CHECK`/`NOCHECK` prefixes | OVERFLOW, AREA |
+| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, named; `CHECK`/`NOCHECK` prefixes | OVERFLOW |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
@@ -893,7 +893,18 @@ PL/I has resumable conditions with dynamic scope — think `try/except` in Pytho
  revert error;          /* pop the handler */
 ```
 
-Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, plus your own named conditions.
+Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, `area` for regions, plus your own named conditions.
+
+`on area` catches a region that cannot satisfy an `allocate`, and a pointer
+that does not belong to the region in `free`/`offset`. A unit that resumes
+leaves the operation undone — the locator is not changed and the block stays
+live:
+
+```pli
+ on area put skip list('region full');
+
+ allocate rec in(region) set(p);   /* refused: p keeps its old value */
+```
 
 `on finish` runs inside a task when the procedure the task was created for
 returns — before its event completes, so a `wait` sees the cleanup:
@@ -986,8 +997,8 @@ The command-line `--no-size-checks` (and `-O2`/`-O3`, which imply it) wins over 
 
 **Not yet**
 
-- `overflow` and `area` conditions, keyed-I/O conditions, `go to` inside a
-  unit, and `return(value)` inside a handler are diagnosed.
+- `overflow` conditions, keyed-I/O conditions, `go to` inside a unit, and
+  `return(value)` inside a handler are diagnosed.
 
 > **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `pli conditions.pli -o conds && ./conds`.
 

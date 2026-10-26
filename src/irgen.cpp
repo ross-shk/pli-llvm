@@ -7259,6 +7259,18 @@ void IRGen::emitAllocate(HStmt* s) {
         areaE ? b_.CreateCall(runtimeFn("pli_area_alloc"), {emitExpr(areaE).reg, sz}, "aheap")
               : b_.CreateCall(runtimeFn("pli_alloc"), {sz}, "heap");
     HExpr* set = (i < s->allocSet.size()) ? s->allocSet[i].get() : nullptr;
+    // A resumed AREA condition leaves the allocation undone (ADR-323): the
+    // region returns null, and neither the SET locator nor the based
+    // variable's own locator is overwritten.
+    llvm::BasicBlock* storesDone = nullptr;
+    if (areaE) {
+      llvm::Value* refused =
+          b_.CreateICmpEQ(p, llvm::ConstantPointerNull::get(b_.getPtrTy()), "arefused");
+      llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "aalloc", curFn_);
+      storesDone = llvm::BasicBlock::Create(ctx_, "aalloc.done", curFn_);
+      b_.CreateCondBr(refused, storesDone, okBB);
+      b_.SetInsertPoint(okBB);
+    }
     // The SET target is any assignable locator reference — a scalar, an array
     // element (rule (22) arrays of OFFSET), or a member — so share the
     // reference store used by GET.
@@ -7268,6 +7280,10 @@ void IRGen::emitAllocate(HStmt* s) {
     // (rule (88)), so references through the based name address the new cell.
     if (bsym->basedBase && (!set || bsym->basedBase != set->sym))
       b_.CreateStore(p, addressOf(bsym->basedBase));
+    if (storesDone) {
+      b_.CreateBr(storesDone);
+      b_.SetInsertPoint(storesDone);
+    }
   }
 }
 

@@ -11841,3 +11841,54 @@ pins that case. *Detect "am I a task?" and fire at procedure exit.* That is
 closer than the wrapper, but it still cannot tell the task's procedure from a
 nested one, and it would fire in the main task if the main procedure happened
 to establish the unit.
+
+---
+
+## ADR-323 — The `AREA` condition is catchable, and a resumed operation has no effect
+
+**Context.** Rule (94) lists `AREA` among the conditions; the parser diagnosed
+it with rule (94). The region runtime had three failure paths — an ALLOCATE that
+does not fit, a FREE through a region that does not own the block, and an
+OFFSET against the wrong region — and each one called `pli_signal_error`, which
+prints and exits, so a program could not recover and the region was left with no
+reported state. With `ON AREA` accepted, the runtime has to answer a harder
+question than "did it fail": what does the operation leave behind when a unit
+resumes?
+
+**Decision.** Raise the condition and leave the operation *undone*:
+
+- `AREA` gets the fixed key `Stmt::kAreaCondKey` (-7); `ON`/`SIGNAL`/`REVERT
+  AREA` type-check through the normal condition path, and `CONDITION(AREA)` is
+  rejected like any other fixed condition.
+- The three region failures call one helper that runs the topmost `AREA` unit
+  when one is established. With no unit it calls `pli_signal_error` as before —
+  a message and ERROR, exit 8 — so the unhandled behaviour is unchanged.
+- A unit that resumes leaves the operation with no effect: `pli_area_alloc`
+  returns null and the ALLOCATE stores nothing (neither the `SET(...)` locator
+  nor the based variable's own locator), `pli_area_free` returns without
+  unlinking the block, and `pli_area_offset` returns the pointer it was given.
+  A program that resumes therefore keeps the locator and the region it had
+  before the failed statement, which the test pins.
+- `pli_area_free` through a null region now raises AREA instead of freeing the
+  block through an unrelated header; the null-area ALLOCATE and OFFSET paths
+  raise it too.
+- IRGen branches on the null result only for `ALLOCATE ... IN(area)`; the heap
+  path (`pli_alloc`) cannot return null, so its code is unchanged.
+
+**Consequences.** `tests/core/on_area.pli` overflows a region with a unit
+established (allocator undone, earlier block intact), frees through the wrong
+region, converts through the wrong region with `OFFSET`, and drives the unit
+directly with `SIGNAL AREA`. `tests/driver/area_condition.sh` pins the
+unhandled path (message, exit 8) and repeats the resume case end to end.
+`bad_on_cond_area.pli` pins the `CONDITION(AREA)` rejection. `GC` (20) and
+(91)–(99) and the programming guide list the condition. B4 loses the AREA
+condition.
+
+**Rejected.** *Keep aborting when no unit is established but return a failure
+code to the unit.* An unhandled AREA is ERROR by definition, so the abort stays;
+the helper only changes what happens *with* a unit. *Let a resumed ALLOCATE
+still set the locator.* The block does not exist; pointing the locator at null
+(or at the previous block) is the only state the program can safely continue
+from, and overwriting a live locator would lose the only handle to the region's
+existing block. *Free the block when the region is null.* That is what the old
+code did by accident; the block would be returned to the wrong allocator.

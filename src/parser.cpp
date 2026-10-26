@@ -1209,9 +1209,10 @@ std::string Parser::parseCondition(std::string* fileArg) {
     return w;
   }
   if (w == "AREA") {
+    // AREA (rule 94): raised by the region runtime when an ALLOCATE cannot be
+    // satisfied or a pointer does not belong to the region (ADR-323).
     advance();
-    d_.error(l, w + " conditions are not implemented in this stage", "(94)");
-    return "";
+    return w;
   }
   if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW" ||
       w == "UNDERFLOW") {
@@ -1242,7 +1243,8 @@ std::string Parser::parseCondition(std::string* fileArg) {
     if (!expect(Tok::RParen, "(99)"))
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
-        name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH") {
+        name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH" ||
+        name == "AREA") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }

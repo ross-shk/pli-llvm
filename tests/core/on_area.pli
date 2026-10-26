@@ -1,0 +1,76 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (94); ADR-323: the AREA condition is raised when a region
+    cannot satisfy an ALLOCATE, when a pointer is FREE'd or converted
+    against a region that does not own it, and by SIGNAL AREA. A unit
+    that resumes leaves the operation undone. */
+ on_area: procedure options(main);
+    declare region area(64);
+    declare other area(64);
+    declare 1 rec based(p),
+            2 v fixed bin(31);
+    declare 1 big based(q),
+            2 words(100) fixed bin(31);
+    declare p pointer;
+    declare q pointer;
+    declare o offset(region);
+    declare hits fixed bin(31) init(0);
+
+    on area begin;
+       hits = hits + 1;
+    end;
+
+    allocate rec in(region) set(p);
+    rec.v = 7;
+
+    /* 400 bytes do not fit: the unit runs and the allocation is undone,
+       so the locator is left untouched (still null here) */
+    allocate big in(region) set(q);
+    if hits ^= 1 then do;
+       put skip list('FAIL on_area: overflow count', hits);
+       stop;
+    end;
+    if q ^= null() then do;
+       put skip list('FAIL on_area: refused ALLOCATE set a locator');
+       stop;
+    end;
+
+    /* FREE through a region that does not own the block: refused */
+    free rec in(other);
+    if hits ^= 2 then do;
+       put skip list('FAIL on_area: refused FREE count', hits);
+       stop;
+    end;
+    if rec.v ^= 7 then do;
+       put skip list('FAIL on_area: refused FREE lost the block');
+       stop;
+    end;
+
+    /* OFFSET against a region that does not own the block: refused,
+       and the offset keeps the address it was given */
+    o = offset(p, other);
+    if hits ^= 3 then do;
+       put skip list('FAIL on_area: refused OFFSET count', hits);
+       stop;
+    end;
+    if o = null() then do;
+       put skip list('FAIL on_area: refused OFFSET dropped the value');
+       stop;
+    end;
+
+    /* SIGNAL AREA runs the unit directly */
+    signal area;
+    if hits ^= 4 then do;
+       put skip list('FAIL on_area: SIGNAL count', hits);
+       stop;
+    end;
+
+    /* the block is still the region's: this free succeeds silently */
+    free rec in(region);
+    if hits ^= 4 then do;
+       put skip list('FAIL on_area: own FREE raised', hits);
+       stop;
+    end;
+
+    put skip list('PASS on_area');
+ end on_area;
