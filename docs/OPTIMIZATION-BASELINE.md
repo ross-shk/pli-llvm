@@ -1349,3 +1349,50 @@ ADR-313 arena.
 integers (ADR-314); widening a `BIT(1)` no longer emits invalid IR; the C twin
 follows the PL/I CPU/FP policy, and the `on_conditions` and `linked_list` C
 twins do the same semantic work as their PL/I twins (ADR-315).
+
+---
+
+## 14. x86-64 performance pass (ADR-327)
+
+**The measurement.** Fresh rebuild, `--runs 5`, LLVM 23.1.3 on Windows and
+LLVM 23.1.2 on Linux (WSL2). The C twin keeps ADR-315's target policy. Windows
+uses the vendored MinGW sysroot; Linux links the in-tree static musl.
+
+| Host | IR geomean (before -> after) | Gate |
+|---|---:|---|
+| Windows 11 x86-64 | 1.05x -> **0.89x** | PASS |
+| Linux x86-64, static musl | 1.08x -> **0.95x** | MISS |
+
+Run files: `benchmark_results_1793008944_a3141a6a.json` (Windows) and
+`benchmark_results_1793008471_11f23f2b.json` (Linux). Language corpus: Windows
+0.68x, Linux 0.71x.
+
+**Windows `math_functions`: 7.19x -> 1.03x.** The intrinsic-lowered calls
+resolved to `libmingwex.a`'s `sin`/`cos`/`exp`/`log`/`sqrt`/... entries, which
+convert to `long double` and call `__sinl_internal`. `libucrt.a` has the
+`__imp_*` slots but no plain entry. The runtime now defines the missing
+double routines as windows-only shims through `__imp_*`; the linked
+disassembly calls the UCRT import and carries no `__sinl_internal`.
+
+**Linux `file_io`: 1.96x -> 0.65x.** The read side already had a slab; the
+write side still did one locked `fwrite` per list item. A per-file output
+slab now drains when full (single-threaded) or at the end of the PUT (when
+tasks are active, preserving ADR-233 record atomicity). `CLOSE`, a slot
+re-open, and `pli_rt_fini` drain it.
+
+**Linux `string_search`: 1.81x -> 0.90x.** The INDEX fast path called
+`memchr`; the static musl implementation is scalar on this build, while the
+C twin gets glibc's vector `strstr`. A constant needle on x86-64 now lowers
+to an inline 16-byte SSE2 scan with a bounded tail and a `memcmp` verify.
+The old `memchr` shape remains on AArch64.
+
+**Smaller changes.** `MOD(x, 2^k)` is a mask for every dividend sign (it was
+only used for a provably non-negative dividend); `pli_ctl_free_addr` returns
+the new generation so a FREE is one call rather than FREE + `pli_ctl_addr`.
+
+**Why Linux still misses.** The PL/I executable is static musl and the C twin
+is dynamic glibc. `linked_list` (1.13x), `controlled_stack` (1.65x),
+`bcd_decimal` (1.10x) and `proc_calls` (1.09x) price that difference: the
+allocator, the CONTROLLED runtime lookup, and the by-reference call ABI. No
+benchmark or baseline was weakened to move the number. Closing the last
+0.05x is a libc-policy or allocator decision, not another row fix.

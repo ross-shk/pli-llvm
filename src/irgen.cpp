@@ -373,12 +373,11 @@ void IRGen::ctlNoteAlloc(Symbol* sym, llvm::Value* addr) {
   b_.CreateStore(addr, ctlAnchorSlot(sym));
 }
 
-// ... and a free refreshes it: the generation below the popped one is the
-// current one now.
-void IRGen::ctlNoteFree(Symbol* sym) {
-  if (!sym || !sym->ctlDirect)
+// ... and a free refreshes it from the address the free returns: the
+// generation below the popped one is the current one now.
+void IRGen::ctlNoteFree(Symbol* sym, llvm::Value* addr) {
+  if (!sym || !sym->ctlDirect || !addr)
     return;
-  llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_addr"), {ctlKeyOf(sym)}, "ctlafterfree");
   b_.CreateStore(addr, ctlAnchorSlot(sym));
 }
 
@@ -557,6 +556,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_ctl_alloc_dims", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_ensure", {.willReturn = false, .mem = RtMemOtherMod}},
       {"pli_ctl_free", {.willReturn = false, .mem = RtMemOtherMod}},
+      {"pli_ctl_free_addr", {.willReturn = true, .mem = RtMemOtherMod}},
       {"pli_ctl_set_dim", {.willReturn = false, .mem = RtMemOtherMod}},
       // Runtime init/fini: touch global state, always return.
       {"pli_rt_init", {.willReturn = true, .mem = RtMemOtherMod}},
@@ -1412,13 +1412,22 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
                                   llvm::Value* bLen) {
   // P7.2: dispatch to SIMD fast-path for constant needles of length 2..16
   if (auto [gv, str] = extractConstantNeedle(b); gv && !str.empty()) {
+    llvm::Triple tgtTriple(triple_);
+    // The needle length is the runtime string length, not str.size() (the
+    // ConstantDataArray may carry a trailing NUL). A constant length lets the
+    // x86 path compare a fixed-width vector.
+    if (auto* blenC = llvm::dyn_cast<llvm::ConstantInt>(bLen)) {
+      uint64_t realLen = blenC->getZExtValue();
+      if (realLen >= 1 && realLen <= 16 &&
+          tgtTriple.getArch() == llvm::Triple::x86_64)
+        return emitIndexConstantSSE2(a, aLen, b, bLen, (unsigned char)str[0], realLen);
+    }
     uint64_t nlen = str.size();
     // ConstantDataArray::getString stores a NUL terminator; the needle
     // length is the value bLen (not str.size, which includes '\0').
     // We use nlen as upper bound on the needle length we can handle
     // with a single SIMD register (16 bytes).
     if (nlen >= 2 && nlen <= 17) {
-      llvm::Triple tgtTriple(triple_);
       if (tgtTriple.getArch() == llvm::Triple::aarch64)
         return emitIndexConstantNEON(a, aLen, b, bLen, str);
     }
@@ -1530,6 +1539,129 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   resultPhi->addIncoming(slowResult, slowPathBB);
 
    return resultPhi;
+}
+
+// SSE2-accelerated INDEX for a constant needle on x86-64. glibc's memchr is
+// SIMD, but the static musl runtime the compiler links is not, so the INDEX
+// fast path pays a scalar scan on Linux. Scan 16 bytes at a time with the
+// baseline SSE2 compare, then verify the candidate with memcmp. The vector
+// load is bounded by rem >= 16, so it never reads past the haystack.
+llvm::Value* IRGen::emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                                          llvm::Value* bLen, unsigned char first,
+                                          uint64_t needleLen) {
+  llvm::Function* F = b_.GetInsertBlock()->getParent();
+  llvm::Type* i64 = b_.getInt64Ty();
+  llvm::Value* zero = llvm::ConstantInt::get(i64, 0);
+  llvm::Value* one = llvm::ConstantInt::get(i64, 1);
+  llvm::Value* aLen64 = b_.CreateZExtOrTrunc(aLen, i64, "idx.alen");
+  llvm::Value* bLen64 = b_.CreateZExtOrTrunc(bLen, i64, "idx.blen");
+  llvm::VectorType* vecTy = llvm::VectorType::get(b_.getInt8Ty(), 16, false);
+  llvm::Value* firstVec = llvm::ConstantVector::getSplat(
+      llvm::ElementCount::get(16, false), llvm::ConstantInt::get(b_.getInt8Ty(), first));
+  llvm::Value* firstScalar = llvm::ConstantInt::get(b_.getInt8Ty(), first);
+  llvm::Function* memcmpFn =
+      scanFn("memcmp", b_.getInt32Ty(), {b_.getPtrTy(), b_.getPtrTy(), i64});
+
+  // The CFG: guards, a 16-byte scan loop, a scalar tail, and one verify block.
+  llvm::BasicBlock* ret1BB = llvm::BasicBlock::Create(ctx_, "idx.ret1", F);
+  llvm::BasicBlock* ret0BB = llvm::BasicBlock::Create(ctx_, "idx.ret0", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "idx.check", F);
+  llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "idx.sse.loop", F);
+  llvm::BasicBlock* vecBB = llvm::BasicBlock::Create(ctx_, "idx.sse.vec", F);
+  llvm::BasicBlock* vecNextBB = llvm::BasicBlock::Create(ctx_, "idx.sse.vec_next", F);
+  llvm::BasicBlock* vecFoundBB = llvm::BasicBlock::Create(ctx_, "idx.sse.found", F);
+  llvm::BasicBlock* tailBB = llvm::BasicBlock::Create(ctx_, "idx.sse.tail", F);
+  llvm::BasicBlock* tailCheckBB = llvm::BasicBlock::Create(ctx_, "idx.sse.tail_check", F);
+  llvm::BasicBlock* tailNextBB = llvm::BasicBlock::Create(ctx_, "idx.sse.tail_next", F);
+  llvm::BasicBlock* verifyBB = llvm::BasicBlock::Create(ctx_, "idx.sse.verify", F);
+  llvm::BasicBlock* verifyMemBB = llvm::BasicBlock::Create(ctx_, "idx.sse.verify_mem", F);
+  llvm::BasicBlock* verifyNextBB = llvm::BasicBlock::Create(ctx_, "idx.sse.verify_next", F);
+  llvm::BasicBlock* matchBB = llvm::BasicBlock::Create(ctx_, "idx.sse.match", F);
+  llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx_, "idx.sse.exit", F);
+
+  // An empty needle matches at 1; a needle longer than the haystack cannot.
+  b_.CreateCondBr(b_.CreateICmpULE(bLen64, zero, "idx.blenle0"), ret1BB, checkBB);
+  startBlock(checkBB);
+  b_.CreateCondBr(b_.CreateICmpUGT(bLen64, aLen64, "idx.blen_gt_alen"), ret0BB, loopBB);
+
+  // The scan position: entry, after a full vector, after a scalar byte, or
+  // after a candidate that did not verify.
+  startBlock(loopBB);
+  llvm::PHINode* pos = b_.CreatePHI(i64, 4, "idx.pos");
+  pos->addIncoming(zero, checkBB);
+  llvm::Value* rem = b_.CreateSub(aLen64, pos, "idx.rem");
+  b_.CreateCondBr(b_.CreateICmpUGE(rem, llvm::ConstantInt::get(i64, 16), "idx.can_vec"),
+                  vecBB, tailBB);
+
+  startBlock(vecBB);
+  llvm::Value* vecPtr = b_.CreateGEP(b_.getInt8Ty(), a, {pos}, "idx.vec_ptr");
+  llvm::Value* hayVec = b_.CreateAlignedLoad(vecTy, vecPtr, llvm::Align(1), "idx.hay_vec");
+  llvm::Value* cmpVec = b_.CreateICmpEQ(hayVec, firstVec, "idx.cmp_vec");
+  llvm::Value* bits = b_.CreateBitCast(cmpVec, b_.getInt16Ty(), "idx.bits");
+  b_.CreateCondBr(b_.CreateICmpNE(bits, llvm::ConstantInt::get(b_.getInt16Ty(), 0),
+                                  "idx.any"),
+                  vecFoundBB, vecNextBB);
+
+  startBlock(vecNextBB);
+  llvm::Value* afterVec = b_.CreateAdd(pos, llvm::ConstantInt::get(i64, 16), "idx.next_vec");
+  b_.CreateBr(loopBB);
+  pos->addIncoming(afterVec, vecNextBB);
+
+  startBlock(vecFoundBB);
+  llvm::Function* cttz = llvm::Intrinsic::getOrInsertDeclaration(
+      b_.GetInsertBlock()->getModule(), llvm::Intrinsic::cttz, {b_.getInt16Ty()});
+  llvm::Value* off16 =
+      b_.CreateCall(cttz, {bits, b_.getFalse()}, "idx.off16");
+  llvm::Value* off = b_.CreateZExt(off16, i64, "idx.off");
+  llvm::Value* vecCand = b_.CreateAdd(pos, off, "idx.vec_cand");
+  b_.CreateBr(verifyBB);
+
+  startBlock(tailBB);
+  b_.CreateCondBr(b_.CreateICmpEQ(rem, zero, "idx.tail_done"), ret0BB, tailCheckBB);
+  startBlock(tailCheckBB);
+  llvm::Value* tailPtr = b_.CreateGEP(b_.getInt8Ty(), a, {pos}, "idx.tail_ptr");
+  llvm::Value* tailCh = b_.CreateLoad(b_.getInt8Ty(), tailPtr, "idx.tail_ch");
+  b_.CreateCondBr(b_.CreateICmpEQ(tailCh, firstScalar, "idx.tail_first"),
+                  verifyBB, tailNextBB);
+  startBlock(tailNextBB);
+  llvm::Value* afterByte = b_.CreateAdd(pos, one, "idx.next_byte");
+  b_.CreateBr(loopBB);
+  pos->addIncoming(afterByte, tailNextBB);
+
+  // Verify: the candidate must fit, then memcmp decides.
+  startBlock(verifyBB);
+  llvm::PHINode* cand = b_.CreatePHI(i64, 2, "idx.cand");
+  cand->addIncoming(vecCand, vecFoundBB);
+  cand->addIncoming(pos, tailCheckBB);
+  llvm::Value* end = b_.CreateAdd(cand, llvm::ConstantInt::get(i64, needleLen), "idx.cand_end");
+  b_.CreateCondBr(b_.CreateICmpULE(end, aLen64, "idx.cand_fits"), verifyMemBB, ret0BB);
+
+  startBlock(verifyMemBB);
+  llvm::Value* candPtr = b_.CreateGEP(b_.getInt8Ty(), a, {cand}, "idx.cand_ptr");
+  llvm::Value* cmp = b_.CreateCall(
+      memcmpFn, {candPtr, b, llvm::ConstantInt::get(i64, needleLen)}, "idx.memcmp");
+  b_.CreateCondBr(b_.CreateICmpEQ(cmp, llvm::ConstantInt::get(b_.getInt32Ty(), 0),
+                                  "idx.cmp_eq"),
+                  matchBB, verifyNextBB);
+  startBlock(verifyNextBB);
+  llvm::Value* afterCand = b_.CreateAdd(cand, one, "idx.next_cand");
+  b_.CreateBr(loopBB);
+  pos->addIncoming(afterCand, verifyNextBB);
+
+  startBlock(matchBB);
+  llvm::Value* matchResult = b_.CreateAdd(cand, one, "idx.result");
+  b_.CreateBr(exitBB);
+  startBlock(ret0BB);
+  b_.CreateBr(exitBB);
+  startBlock(ret1BB);
+  b_.CreateBr(exitBB);
+
+  startBlock(exitBB);
+  llvm::PHINode* result = b_.CreatePHI(i64, 3, "idx.out");
+  result->addIncoming(one, ret1BB);
+  result->addIncoming(zero, ret0BB);
+  result->addIncoming(matchResult, matchBB);
+  return result;
 }
 
 // P7.2: SIMD-accelerated INDEX for constant needles on ARM64 NEON.
@@ -7341,8 +7473,9 @@ void IRGen::emitFree(HStmt* s) {
   for (size_t i = 0; i < s->freeBase.size(); ++i) {
     Symbol* bsym = s->freeBase[i]->sym;
     if (bsym && bsym->controlled) {
-      b_.CreateCall(runtimeFn("pli_ctl_free"), {ctlKeyOf(bsym)});
-      ctlNoteFree(bsym);
+      llvm::Value* top = b_.CreateCall(runtimeFn("pli_ctl_free_addr"), {ctlKeyOf(bsym)},
+                                      "ctlafterfree");
+      ctlNoteFree(bsym, top);
       continue;
     }
     llvm::Value* addr =
@@ -13063,27 +13196,27 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
           // srem already yields the correct non-negative result — skip the
           // adjust/select chain entirely (P1.3).
           llvm::SimplifyQuery SQ(mod_.getDataLayout());
-           // intent: isKnownNonNegative with no DominatorTree/AssumptionCache
-           // cannot see through load(sext) at IRGen time. Check if the dividend
-           // is a constant, or derived from a DO index whose FROM is known
-           // non-negative (P6.3). Otherwise fall back to isKnownNonNegative.
-           bool avNonNeg = false;
-           if (auto* avConst = llvm::dyn_cast<llvm::ConstantInt>(avi))
-             avNonNeg = !avConst->getValue().isNegative();
-            else if (isDerivedFromNonNegDoIndex(avi))
-              avNonNeg = true;
-            else
-              avNonNeg = llvm::isKnownNonNegative(avi, SQ);
-          if (avNonNeg && cv.isStrictlyPositive()) {
+          // intent: isKnownNonNegative with no DominatorTree/AssumptionCache
+          // cannot see through load(sext) at IRGen time. Check if the dividend
+          // is a constant, or derived from a DO index whose FROM is known
+          // non-negative (P6.3). Otherwise fall back to isKnownNonNegative.
+          bool avNonNeg = false;
+          if (auto* avConst = llvm::dyn_cast<llvm::ConstantInt>(avi))
+            avNonNeg = !avConst->getValue().isNegative();
+          else if (isDerivedFromNonNegDoIndex(avi))
+            avNonNeg = true;
+          else
+            avNonNeg = llvm::isKnownNonNegative(avi, SQ);
+          if (cv.isPowerOf2()) {
+            // intent: MOD(x, 2^k) for a positive power-of-two divisor is
+            // x & (2^k - 1) for every sign: the mask already gives PL/I's
+            // non-negative remainder, so no adjust/select chain is needed.
+            uint64_t mask = cv.getZExtValue() - 1;
+            m = b_.CreateAnd(avi, i64(mask), "modand");
+          } else if (avNonNeg && cv.isStrictlyPositive()) {
             // intent: for a non-negative dividend and positive divisor, the
-            // remainder is already correct. If the divisor is a power of two,
-            // MOD(x, 2^k) = x & (2^k - 1) — replace srem with a bitwise-and.
-            if (cv.isPowerOf2()) {
-              uint64_t mask = cv.getZExtValue() - 1;
-              m = b_.CreateAnd(avi, i64(mask), "modand");
-            } else {
-              m = b_.CreateSRem(avi, divisor, "mod");
-            }
+            // remainder is already correct.
+            m = b_.CreateSRem(avi, divisor, "mod");
           } else {
             // General case: adjust when sign(r) != sign(divisor).
             llvm::Value* r = b_.CreateSRem(avi, divisor, "mod");

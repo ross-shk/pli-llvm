@@ -189,11 +189,16 @@ long long pli_ctl_depth(long long key) {
   return v->depth;
 }
 
-void pli_ctl_free(long long key) {
+/* Free the top generation and return the new top (NULL when the stack is
+ * empty). The compiler uses the return value to refresh its cached address,
+ * so a FREE costs one runtime call instead of FREE + pli_ctl_addr. */
+char *pli_ctl_free_addr(long long key) {
   pli_task_local *st = rt_task_local();
   CtlVar *v = ctlFind(key, 0);
-  if (!v || v->depth <= 0)
+  if (!v || v->depth <= 0) {
     pli_signal_error("FREE of empty CONTROLLED stack");
+    return NULL;
+  }
   --v->depth;
   pli_free((char *)v->dimss[v->depth]);
   v->dimss[v->depth] = NULL;
@@ -207,7 +212,7 @@ void pli_ctl_free(long long key) {
     if (st->ctl_cache_bytes) {
       if (st->ctl_cache_key == key && st->ctl_cache_len == n) {
         pli_free(buf); // slot already serves this shape: drop the duplicate
-        return;
+        return v->depth > 0 ? v->gens[v->depth - 1] : NULL;
       }
       pli_free((char *)st->ctl_cache_bytes); // evict stale entry before stashing
     }
@@ -217,7 +222,10 @@ void pli_ctl_free(long long key) {
   } else {
     pli_free(buf);
   }
+  return v->depth > 0 ? v->gens[v->depth - 1] : NULL;
 }
+
+void pli_ctl_free(long long key) { (void)pli_ctl_free_addr(key); }
 
 char *pli_ctl_addr(long long key) {
   CtlVar *v = ctlFind(key, 0);

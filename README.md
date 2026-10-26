@@ -58,6 +58,8 @@ python3 benchmarks/run_tasking_bench.py --models fiber,os
 
 Measured on macOS 26 arm64, five samples per side, unpinned. The C twin uses the same target policy as the PL/I output (generic CPU, no FP contraction); `--c-native` builds it for the host CPU instead. Rows whose PL/I median is under 50 ms are indicative.
 
+On x86-64 the IR geomean is **0.89× on Windows** (gate passes) and **0.95× on Linux** (gate misses); the Linux PL/I binary links static musl while the C twin uses dynamic glibc. The per-row x86 numbers and run IDs are in [`docs/OPTIMIZATION-BASELINE.md`](docs/OPTIMIZATION-BASELINE.md) §14.
+
 **IR corpus** (C parity — the acceptance gate):
 
 | Benchmark | Ratio | What it measures |

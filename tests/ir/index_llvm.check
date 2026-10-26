@@ -1,8 +1,8 @@
 CHECK-NOT: pli_index
-CHECK: memchr
+CHECK: (memchr|idx\.sse\.vec)
 CHECK: getelementptr i8, ptr
 CHECK: (xor <16 x i8>|idx\.memcmp)
-CHECK: (idx\.simd_verify|idx\.verify)
+CHECK: (idx\.simd_verify|idx\.verify|idx\.sse\.verify)
 CHECK-NOT: idx.vnext
-CHECK: (idx\.simd_match|idx\.match)
+CHECK: (idx\.simd_match|idx\.match|idx\.sse\.match)
 CHECK: phi i64

@@ -128,3 +128,33 @@ double pli_sind(double x)   { return pli_math_sin(x * PLI_DEG_TO_RAD); }
 double pli_cosd(double x)   { return pli_math_cos(x * PLI_DEG_TO_RAD); }
 double pli_tand(double x)   { return pli_math_tan(x * PLI_DEG_TO_RAD); }
 double pli_atand(double x)  { return pli_math_atan(x) * PLI_RAD_TO_DEG; }
+
+#if defined(_WIN32)
+/* MinGW supplies sin/cos/exp/log/sqrt/pow/floor/ceil/fmod/fabs/atan2 as
+ * long-double wrappers, while the UCRT import library has only the __imp_
+ * slot. These definitions win over libmingwex.a, so an intrinsic-lowered
+ * math call stays on UCRT's double routine. */
+extern double (*__imp_sin)(double);
+extern double (*__imp_cos)(double);
+extern double (*__imp_exp)(double);
+extern double (*__imp_log)(double);
+extern double (*__imp_sqrt)(double);
+extern double (*__imp_pow)(double, double);
+extern double (*__imp_floor)(double);
+extern double (*__imp_ceil)(double);
+extern double (*__imp_fmod)(double, double);
+extern double (*__imp_fabs)(double);
+extern double (*__imp_atan2)(double, double);
+
+double sin(double x) { return __imp_sin(x); }
+double cos(double x) { return __imp_cos(x); }
+double exp(double x) { return __imp_exp(x); }
+double log(double x) { return __imp_log(x); }
+double sqrt(double x) { return __imp_sqrt(x); }
+double pow(double x, double y) { return __imp_pow(x, y); }
+double floor(double x) { return __imp_floor(x); }
+double ceil(double x) { return __imp_ceil(x); }
+double fmod(double x, double y) { return __imp_fmod(x, y); }
+double fabs(double x) { return __imp_fabs(x); }
+double atan2(double y, double x) { return __imp_atan2(y, x); }
+#endif

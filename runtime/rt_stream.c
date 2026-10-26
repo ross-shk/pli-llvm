@@ -81,6 +81,41 @@ static size_t rt_in_f_len = 0;
 static size_t rt_in_f_pos = 0;
 static FILE *rt_in_f_owner = NULL; /* the file the slab was filled from */
 
+/* File output slab (WS-H5): a list-directed PUT to a FILE emits many small
+ * pieces (separator, digits, newline), and one locked fwrite per piece costs
+ * more than the C twin's single fprintf. Accumulate the pieces and drain when
+ * the slab fills; with tasks active, also drain at the end of each PUT while
+ * the statement lock is held, which keeps the record atomic (ADR-233). */
+#define RT_FILE_OUT_BUF 8192
+static char rt_file_out_buf[RT_FILE_OUT_BUF];
+static size_t rt_file_out_pos = 0;
+static FILE *rt_file_out_owner = NULL;
+
+/* Drain the file slab. The caller holds the output lock. */
+static void rt_file_out_drain(void) {
+  if (rt_file_out_owner && rt_file_out_pos > 0) {
+    pli_plat_fwrite(rt_file_out_buf, 1, rt_file_out_pos, rt_file_out_owner);
+    rt_file_out_pos = 0;
+  }
+}
+
+/* Flush the file slab before routing or closing the file it belongs to. */
+void rt_flush_file_out(void) {
+  rt_out_lock();
+  rt_file_out_drain();
+  rt_out_unlock();
+}
+
+/* Forget a file that is about to be closed: drain its slab first. */
+void rt_file_out_detach(FILE *f) {
+  rt_out_lock();
+  if (rt_file_out_owner == f) {
+    rt_file_out_drain();
+    rt_file_out_owner = NULL;
+  }
+  rt_out_unlock();
+}
+
 /* ---------------------------------------------------------------------------
  * Stream serialisation (ADR-233).
  *
@@ -115,7 +150,14 @@ void rt_stream_enable_threads(void) { pli_call_once(&rt_out_once, rt_out_init); 
  * or DISPLAY statement with these, so the whole record reaches the stream
  * before another task's record does. No-ops until the program has a task. */
 void pli_out_begin(void) { rt_out_lock(); }
-void pli_out_end(void) { rt_out_unlock(); }
+void pli_out_end(void) {
+  /* With tasks, the record boundary is the atomic unit: drain it while the
+   * lock is held. A single-threaded program keeps the slab across records and
+   * lets it fill, so a tiny PUT does not cost one locked fwrite. */
+  if (rt_tasks_active)
+    rt_flush_file_out();
+  rt_out_unlock();
+}
 
 /* One input statement under the lock (ADR-233): the compiler brackets a GET
  * statement with these, so a task reads whole records. The input lock is
@@ -138,7 +180,21 @@ void rt_flush_stdout(void) {
  * the item count stay consistent when a task writes concurrently. */
 void rt_put_raw(const char *p, size_t n) {
   if (rt_out_f) {
-    pli_plat_fwrite(p, 1, n, rt_out_f);
+    /* A different file starts a fresh slab; a piece larger than the slab
+     * drains first and goes straight to the stream. */
+    if (rt_file_out_owner != rt_out_f) {
+      rt_file_out_drain();
+      rt_file_out_owner = rt_out_f;
+    }
+    if (n >= RT_FILE_OUT_BUF) {
+      rt_file_out_drain();
+      pli_plat_fwrite(p, 1, n, rt_out_f);
+    } else {
+      if (rt_file_out_pos + n > RT_FILE_OUT_BUF)
+        rt_file_out_drain();
+      pli_memcpy(rt_file_out_buf + rt_file_out_pos, p, n);
+      rt_file_out_pos += n;
+    }
     rt_col += (int)n;
     return;
   }

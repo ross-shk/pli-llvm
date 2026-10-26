@@ -12040,3 +12040,57 @@ without the operand test it would pass silently. *Raise on library built-ins
 too.* That is a later change with its own ADR: the built-ins return values
 through their own ABIs, and widening the scope means deciding, per built-in,
 whether a tiny result is an operator underflow or a legitimate value.
+
+---
+
+## ADR-327 — The x86-64 pass fixes the platform seam, not the benchmark
+
+**Context.** The README benchmark table is macOS arm64. On x86-64 the same
+corpus missed the `< 0.90x` gate: Windows measured 1.05x and Linux 1.08x. The
+largest Windows row was `math_functions` at 7.19x. The cause was not the
+generated IR: `llvm.sin.f64` and friends lowered to plain calls, and the
+vendored `libmingwex.a` defines `sin`/`cos`/`exp`/`log`/`sqrt`/... as
+`long double` wrappers (`__sinl_internal`), while `libucrt.a` exposes only the
+`__imp_*` slots. Linux was the mirror image: PL/I links static musl, whose
+`memchr` is scalar, against a C twin on glibc's vector `strstr`.
+
+**Decision.**
+
+- **Windows math.** The runtime defines the double names MinGW shadows as
+  windows-only shims that call the UCRT `__imp_*` import. The definitions win
+  over `libmingwex.a`, so an intrinsic-lowered math call stays on the UCRT
+  double implementation. This is a link-policy fix, not a new ABI for PL/I.
+- **File output.** A per-file output slab accumulates list-directed pieces.
+  Single-threaded programs drain it only when it fills; with tasks active it
+  drains at the end of each PUT, while ADR-233's statement lock is held, so
+  record atomicity is unchanged. `CLOSE`, a slot re-open and `pli_rt_fini`
+  drain it.
+- **INDEX scan.** A constant needle on x86-64 lowers to an inline 16-byte
+  SSE2 scan with a bounded tail and a `memcmp` verify. AArch64 keeps the
+  existing NEON/`memchr` path.
+- **Smaller codegen.** `MOD(x, 2^k)` is a mask for every dividend sign, not
+  only a provably non-negative one. `pli_ctl_free_addr` returns the new
+  generation so a FREE is one runtime call instead of FREE +
+  `pli_ctl_addr`.
+
+**Measurements.** Fresh rebuild, five samples. Windows IR geomean 1.05x ->
+**0.89x** (PASS); Linux IR geomean 1.08x -> **0.95x** (MISS). The rows:
+Windows `math_functions` 7.19x -> 1.03x; Linux `file_io` 1.96x -> 0.65x;
+Linux `string_search` 1.81x -> 0.90x; Linux `collatz` 1.11x -> 1.05x.
+Run files and per-row detail are in `OPTIMIZATION-BASELINE` §14.
+
+**Consequences.** The Windows gate passes and the Linux gap is now the
+libc/allocator/ABI difference between static musl and the dynamic-glibc C
+twin (`linked_list`, `controlled_stack`, `bcd_decimal`, `proc_calls`), not a
+missing lowering. The gate was not moved and the C baseline was not weakened.
+`tests/driver/windows_math.sh`, `tests/core/index_scan.pli`,
+`tests/core/mod_pow2.pli` and the existing `file_slab`/IR scan tests guard the
+new shapes.
+
+**Rejected.** *Reorder the MinGW libraries so UCRT wins.* `libucrt.a` has no
+plain `sin`, so the linker still takes the MinGW wrapper. *Use `_o_sin` from
+the private API.* It is much slower than the public import (measured
+~3x). *Define `sin` globally on every platform.* The MinGW shim is a Windows
+link-policy workaround; POSIX libc already provides the double routine.
+*Lower INDEX to `memmem`.* glibc's `memmem` is slower than its `strstr` for
+this shape, and musl's is slower than the inline SSE2 scan.

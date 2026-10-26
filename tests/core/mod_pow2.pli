@@ -1,0 +1,29 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* MOD by a positive power of two is a mask for every dividend sign. */
+mod_pow2: procedure options(main);
+   declare r fixed binary(31);
+
+   if mod(-3, 2) ^= 1 then do;
+      put skip list('FAIL mod_pow2: -3 mod 2 =', mod(-3, 2));
+      stop;
+   end;
+   if mod(-4, 2) ^= 0 then do;
+      put skip list('FAIL mod_pow2: -4 mod 2 =', mod(-4, 2));
+      stop;
+   end;
+   if mod(-5, 4) ^= 3 then do;
+      put skip list('FAIL mod_pow2: -5 mod 4 =', mod(-5, 4));
+      stop;
+   end;
+   if mod(-7, 8) ^= 1 then do;
+      put skip list('FAIL mod_pow2: -7 mod 8 =', mod(-7, 8));
+      stop;
+   end;
+   if mod(7, 8) ^= 7 then do;
+      put skip list('FAIL mod_pow2: 7 mod 8 =', mod(7, 8));
+      stop;
+   end;
+
+   put skip list('PASS mod_pow2');
+end mod_pow2;

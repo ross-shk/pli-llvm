@@ -242,7 +242,7 @@ private:
   // WS-K8 (ADR-257): keep the anchor in step with the runtime's generation
   // stack.
   void ctlNoteAlloc(Symbol* sym, llvm::Value* addr);
-  void ctlNoteFree(Symbol* sym);
+  void ctlNoteFree(Symbol* sym, llvm::Value* addr);
   void emitAssign(HStmt* s);
   // Self-append peephole (rule (119), P4): X = X || lit... appends in place
   // for AUTOMATIC scalar VARYING targets; false for any other shape.
@@ -815,6 +815,9 @@ private:
   // P7.2: SIMD-accelerated INDEX for constant needles on ARM64 NEON.
   llvm::Value* emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
                                      llvm::Value* bLen, llvm::StringRef needleStr);
+  // SSE2-accelerated INDEX for constant needles on x86-64.
+  llvm::Value* emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                                     llvm::Value* bLen, unsigned char first, uint64_t needleLen);
   // Direct LLVM lowering for assign_varying (P3): memmove + blank-pad + return n.
   llvm::Value* emitAssignVaryingLLVM(llvm::Value* dst, llvm::Value* cap, llvm::Value* src,
                                      llvm::Value* srcLen);

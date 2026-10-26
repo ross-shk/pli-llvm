@@ -91,8 +91,10 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
   pli_memcpy(buf, name, n);
   buf[n] = '\0';
-  if (rt_pli_files[slot])
+  if (rt_pli_files[slot]) {
+    rt_file_out_detach(rt_pli_files[slot]);
     pli_plat_fclose(rt_pli_files[slot]);
+  }
   if (nonprint) {
     rt_pli_files[slot] = NULL;
     rt_pli_nonprint[slot] = 1;
@@ -113,6 +115,7 @@ void pli_file_close(long long slot) {
     return;
   rt_rec_reset(slot);
   if (rt_pli_files[slot]) {
+    rt_file_out_detach(rt_pli_files[slot]);
     pli_plat_fclose(rt_pli_files[slot]);
     rt_pli_files[slot] = NULL;
   }
@@ -268,8 +271,10 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
   pli_memcpy(buf, name, n);
   buf[n] = '\0';
   rt_rec_reset(slot);
-  if (rt_pli_files[slot])
+  if (rt_pli_files[slot]) {
+    rt_file_out_detach(rt_pli_files[slot]);
     pli_plat_fclose(rt_pli_files[slot]);
+  }
   if (nonprint) {
     rt_pli_files[slot] = NULL;
     rt_pli_nonprint[slot] = 1;

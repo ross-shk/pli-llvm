@@ -1,0 +1,53 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* INDEX over long constant needles: the x86-64 SSE2 scan must find a match
+   that crosses a 16-byte block, retry past a decoy first byte, and handle a
+   match ending exactly at the haystack end. */
+index_scan: procedure options(main);
+   declare (i, r) fixed binary(31);
+   declare s character(64);
+   declare t character(64);
+
+   s = '';
+   do i = 1 to 4;
+      s = s || '0123456789abcdef';
+   end;
+
+   /* A match crossing the first 16-byte boundary. */
+   substr(s, 15, 8) = 'SENTINEL';
+   r = index(s, 'SENTINEL');
+   if r ^= 15 then do;
+      put skip list('FAIL index_scan: boundary', r);
+      stop;
+   end;
+
+   /* A decoy first byte before the real match forces a retry. */
+   substr(s, 1, 1) = 'S';
+   r = index(s, 'SENTINEL');
+   if r ^= 15 then do;
+      put skip list('FAIL index_scan: retry', r);
+      stop;
+   end;
+
+   /* Match ending exactly at the end of the haystack. */
+   t = '';
+   do i = 1 to 4;
+      t = t || '0123456789abcdef';
+   end;
+   substr(t, 57, 8) = 'SENTINEL';
+   r = index(t, 'SENTINEL');
+   if r ^= 57 then do;
+      put skip list('FAIL index_scan: tail', r);
+      stop;
+   end;
+
+   /* A full 16-byte needle in one vector. */
+   substr(s, 17, 16) = '0123456789ABCDEF';
+   r = index(s, '0123456789ABCDEF');
+   if r ^= 17 then do;
+      put skip list('FAIL index_scan: wide', r);
+      stop;
+   end;
+
+   put skip list('PASS index_scan');
+end index_scan;

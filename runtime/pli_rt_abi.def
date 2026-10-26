@@ -187,6 +187,7 @@ PLI_FN(pli_ctl_extent, I64, (I64, I64))              /* latest generation axis e
 PLI_FN(pli_ctl_depth, I64, (I64))                    /* live generation count (89) */
 PLI_FN(pli_ctl_ensure, VOID, (I64, I64))              /* CONTROLLED implicit first generation (87) */
 PLI_FN(pli_ctl_free, VOID, (I64))                     /* CONTROLLED FREE (90) */
+PLI_FN(pli_ctl_free_addr, PTR, (I64))                 /* FREE and return the new top */
 PLI_FN(pli_ctl_addr, PTR, (I64))                      /* CONTROLLED latest generation */
 PLI_FN(pli_ctl_len, I64, (I64))                       /* CONTROLLED latest generation byte size (18) */
 PLI_FN(pli_area_create, PTR, (I64))                   /* AREA region create (20) */

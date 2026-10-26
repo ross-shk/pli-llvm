@@ -176,6 +176,10 @@ void rt_wait_tasks(void);
 void rt_select_input(FILE *f);
 /* ADR-220: flush the stdout write slab before program exit or FILE routing. */
 void rt_flush_stdout(void);
+/* WS-H5: flush the file write slab at the end of a PUT, before routing or
+ * closing the file it belongs to. */
+void rt_flush_file_out(void);
+void rt_file_out_detach(FILE *f);
 
 /* ---------------------------------------------------------------------------
  * Stream serialisation (ADR-233).

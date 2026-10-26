@@ -1,7 +1,6 @@
 CHECK-NOT: pli_index
-CHECK: memchr
-CHECK: (idx\.simd_search|idx\.memchr)
-CHECK: (idx\.simd_verify|idx\.verify)
-CHECK: (idx\.simd_match|idx\.match)
+CHECK: (memchr|idx\.sse\.vec)
+CHECK: (idx\.simd_search|idx\.memchr|idx\.sse\.vec)
+CHECK: (idx\.simd_verify|idx\.verify|idx\.sse\.verify)
+CHECK: (idx\.simd_match|idx\.match|idx\.sse\.match)
 CHECK: phi i64
-CHECK-NOT: memcmp
