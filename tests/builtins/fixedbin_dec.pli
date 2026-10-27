@@ -1,0 +1,105 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* FIXEDBIN/FIXEDDEC built-ins: convert x to FIXED BIN or FIXED DEC,
+    deriving p/q from the source when omitted (rule (123), App. 1). */
+ fixedbin_dec_test: procedure options(main);
+    declare b fixed bin(31);
+    declare d fixed dec(9,2);
+
+    /* explicit precision and scale */
+    b = fixedbin(3.75, 8, 2);
+    if b ^= 3 then do;
+       put skip list('FAIL fixedbin(3.75,8,2)', b);
+       stop;
+    end;
+    d = fixedbin(3.75, 8, 2);
+    if d ^= 3.75 then do;
+       put skip list('FAIL fixedbin dec target', d);
+       stop;
+    end;
+    d = fixeddec(3.75, 4, 2);
+    if d ^= 3.75 then do;
+       put skip list('FAIL fixeddec(3.75,4,2)', d);
+       stop;
+    end;
+
+    /* p only: q defaults to zero */
+    b = fixedbin(3.75, 8);
+    if b ^= 3 then do;
+       put skip list('FAIL fixedbin(3.75,8)', b);
+       stop;
+    end;
+    d = fixeddec(3.25, 4);
+    if d ^= 3.00 then do;
+       put skip list('FAIL fixeddec(3.25,4)', d);
+       stop;
+    end;
+
+    /* omitted p/q derives from the source type */
+    b = fixedbin(3.75);
+    if b ^= 3 then do;
+       put skip list('FAIL fixedbin(3.75)', b);
+       stop;
+    end;
+    d = fixeddec(3.75);
+    if d ^= 3.75 then do;
+       put skip list('FAIL fixeddec(3.75)', d);
+       stop;
+    end;
+    b = fixedbin(fixeddec(7, 2, 1));
+    if b ^= 7 then do;
+       put skip list('FAIL fixedbin(dec)', b);
+       stop;
+    end;
+    d = fixeddec(fixedbin(1.5, 8, 1));
+    if d ^= 1.50 then do;
+       put skip list('FAIL fixeddec(bin)', d);
+       stop;
+    end;
+    b = fixedbin(3.5e0);
+    if b ^= 3 then do;
+       put skip list('FAIL fixedbin(float)', b);
+       stop;
+    end;
+    d = fixeddec(3.5e0);
+    if d ^= 3.00 then do;
+       put skip list('FAIL fixeddec(float)', d);
+       stop;
+    end;
+
+    /* the maximum declared precisions use the 64/128-bit slots */
+    b = fixedbin(7, 63);
+    if b ^= 7 then do;
+       put skip list('FAIL fixedbin(7,63)', b);
+       stop;
+    end;
+    d = fixeddec(7, 31);
+    if d ^= 7.00 then do;
+       put skip list('FAIL fixeddec(7,31)', d);
+       stop;
+    end;
+
+    /* character and bit sources */
+    b = fixedbin('123');
+    if b ^= 123 then do;
+       put skip list('FAIL fixedbin(char)', b);
+       stop;
+    end;
+    d = fixeddec('12', 5, 2);
+    if d ^= 12.00 then do;
+       put skip list('FAIL fixeddec(char)', d);
+       stop;
+    end;
+    b = fixedbin('101'b);
+    if b ^= 5 then do;
+       put skip list('FAIL fixedbin(bit)', b);
+       stop;
+    end;
+    d = fixeddec('101'b);
+    if d ^= 5.00 then do;
+       put skip list('FAIL fixeddec(bit)', d);
+       stop;
+    end;
+
+    put skip list('PASS fixedbin_dec');
+ end fixedbin_dec_test;

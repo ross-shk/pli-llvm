@@ -39,6 +39,8 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | String   | `DATETIME`                                                                                                                                | `( )`                    | `CHAR(14)`                        |
 | Type     | `CHAR`                                                                                                                                    | `( x )`                  | `CHAR(24)`                        |
 | Type     | `FIXED`                                                                                                                                   | `( char | num )`         | `FIXED BIN(31)`                   |
+| Type     | `FIXEDBIN`                                                                                                                                | `( x [,p[,q]] )`         | `FIXED BIN(p,q)`                  |
+| Type     | `FIXEDDEC`                                                                                                                                | `( x [,p[,q]] )`         | `FIXED DEC(p,q)`                  |
 | Numeric  | `ABS`                                                                                                                                     | `( x )`                  | same type as `x`                  |
 | Numeric  | `SIGN`                                                                                                                                    | `( x )`                  | `FIXED BIN(31)`                  |
 | Numeric  | `TRUNC`                                                                                                                                   | `( x )`                  | same type as `x`                  |
@@ -403,6 +405,33 @@ distinction is not represented separately; the precision tail remains
 deferred.
 
 **Limitations** — `FIXED` of a `BIT` argument is an error.
+
+### `FIXEDBIN(x[,p[,q]])` / `FIXEDDEC(x[,p[,q]])`
+
+Base-explicit fixed-point conversions. `FIXEDBIN` returns `FIXED BIN(p,q)`;
+`FIXEDDEC` returns `FIXED DEC(p,q)`. `p` and `q` are integer constants, with
+`p` up to 63 (binary) or 31 (decimal); `q` is nonnegative and must fit the
+storage slot (at most 62 binary, 18 decimal, or 38 for a wide decimal). If
+`p` is present and `q` is omitted, `q` is zero.
+
+If both are omitted, the precision and scale come from the source type:
+FIXED sources keep their base and scale (or convert through IBM's 3.32
+factor), `BIT` sources take the maximum precision, and character sources
+derive from their length. `FLOAT` sources are read as FLOAT DECIMAL because
+the compiler's type does not keep the binary/decimal base.
+
+```pli
+dcl b fixed bin(31);
+dcl d fixed dec(9,2);
+
+b = fixedbin(3.75, 8, 2);   /* b is 3 */
+d = fixeddec(3.5, 6, 1);    /* d is 3.50 */
+b = fixedbin('123');        /* b is 123 */
+```
+
+Character input currently reuses `FIXED(char)`'s integer-only text scan, so
+a decimal point in the text is not yet parsed; use a numeric source for
+fractional values.
 
 ---
 

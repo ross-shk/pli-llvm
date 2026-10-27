@@ -11442,6 +11442,10 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       out.reg = b_.CreateSIToFP(iv, b_.getDoubleTy(), "cvt");
     } else if (llvmTy(dst)->getIntegerBitWidth() == 64) {
       out.reg = iv;
+    } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
+      // A genuinely wide DECIMAL target (ADR-191) holds 20+ digits in i128;
+      // a bit-string source is an unsigned magnitude that fits i64.
+      out.reg = b_.CreateSExt(iv, llvmTy(dst), "cvt");
     } else {
       out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
     }
@@ -13818,12 +13822,13 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
-  // BINARY/DECIMAL/FLOAT (rule (123), Appendix 1): numeric conversion with
-  // optional precision/scale override. char input reuses the FIXED(char)
-  // decimal-text parse path (CONVERSION trap, ADR-170); numeric input goes
-  // through convert(), which already handles float->fixed scaling (ADR-006)
-  // and fixed->float back-scaling.
-  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
+  // BINARY/DECIMAL/FLOAT/FIXEDBIN/FIXEDDEC (rule (123), Appendix 1):
+  // numeric conversion with optional precision/scale override. char input
+  // reuses the FIXED(char) decimal-text parse path (CONVERSION trap,
+  // ADR-170); numeric input goes through convert(), which already handles
+  // float->fixed scaling (ADR-006) and fixed->float back-scaling.
+  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT" ||
+      e->name == "FIXEDBIN" || e->name == "FIXEDDEC") {
     Val a = emitExpr(e->args[0].get());
     if (a.ty.isChar()) {
       // char -> numeric: parse decimal text via the FIXED(char) path, then

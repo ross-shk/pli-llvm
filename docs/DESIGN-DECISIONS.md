@@ -12864,3 +12864,43 @@ serialise record reads against stream GETs for no semantic reason and still
 leave the `ftell`/position update unprotected between two record reads. *Give
 the broker a request queue.* One slot plus a lock covers the two callers; a
 queue is machinery the runtime does not need yet.
+
+---
+
+## ADR-343 — `FIXEDBIN` and `FIXEDDEC` derive precision from the source
+
+**Context.** Rule (123) and Appendix 1 define `FIXEDBIN(x[,p[,q]])` and
+`FIXEDDEC(x[,p[,q]])`; the compiler had only `FIXED`, which always returns
+`FIXED BINARY(31)` and takes one argument. B11's precision tail needs the
+base-explicit converters, because a program can ask for `FIXED DEC(p,q)`
+without a declaration target.
+
+**Decision.** Serve both built-ins through the existing conversion path:
+1. An explicit `p`/`q` must be an integer constant; `p` is 1..63 for BINARY
+   and 1..31 for DECIMAL, `q` is nonnegative and fits the converter's storage
+   slot (62 for BINARY; 18 for a DECIMAL slot up to 18 digits, 38 for a wider
+   one). With `p` alone, `q` is zero.
+2. With both omitted, use IBM's source-type table. The 3.32 factor is exact
+   rational 83/25 (`CEIL(n*3.32)` = `(n*83+24)/25`), and the compiler limits
+   are M=63 for FIXED BINARY and N=31 for FIXED DECIMAL. The DECIMAL -> BINARY
+   and BINARY -> DECIMAL rows add the one integer digit the table specifies.
+3. `FLOAT` sources are read as FLOAT DECIMAL: `Type` stores only the
+   precision, not the base. `BIT` sources map to the table's maximum-precision
+   row. `CHAR` sources reuse `FIXED(char)`'s integer-text scan; a decimal
+   point in the text is still B11's tail.
+4. A `BIT` source converted to a genuinely wide DECIMAL result now
+   sign-extends into i128 instead of truncating an i64 to i128.
+
+**Consequences.** `tests/builtins/fixedbin_dec.pli` exercises explicit p/q,
+the source table for FIXED/CHAR/BIT/FLOAT, and the 63/31 wide results;
+`bad_fixedbin_dec.pli` pins arity and precision diagnostics. `FIXED` keeps its
+existing one-argument/default-31 behavior so current programs do not change.
+B11 stays open for the exact-decimal division tail, FLOAT-base tracking, and
+fractional character text.
+
+**Rejected.** *Change `FIXED` to the IBM default (15,0)/(5,0) in the same
+slice.* It would silently change an existing built-in's result type and its
+call sites. *Evaluate 3.32 in floating point.* The table's ceilings are exact
+integer arithmetic at the boundary values; the rational form keeps them exact.
+*Track the FLOAT base by guessing from the precision.* Binary and decimal
+precisions overlap; B11 needs a real `Type` field.
