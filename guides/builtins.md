@@ -364,18 +364,26 @@ put skip list(datetime());                      /* e.g. 20261002094210 */
 
 ## Type-conversion built-ins
 
-### `CHAR(x)` → CHARACTER(24)
+### `CHAR(x)` → CHARACTER(24) (29 for a complex value)
 
-Renders a scalar (`FIXED`, `FLOAT`, `BIT`) as text. A character argument passes through (truncated/padded by assignment).
+Renders a scalar (`FIXED`, `FLOAT`, `BIT`, `COMPLEX`) as text. A character
+argument passes through (truncated/padded by assignment).
 
 ```pli
 dcl s char(24);
 
 s = char(42);                     /* '42' */
 s = char(3.5);                    /* '3.5' */
+s = char(complex(1.5, 2.5));      /* '1.5+2.5I' */
 ```
 
-**Limitations** — `CHAR` of a structure, array, pointer, or complex is an error.
+A `COMPLEX` argument returns `CHARACTER(29)` (the compiler's complex mode
+is `FLOAT DECIMAL(6)`). The real part comes first, the imaginary part is
+always signed, and an `I` follows; there are no blanks between the parts.
+The parts use the same readable `%.6g` image as `PUT LIST`, so an exact IBM
+`E`-format image remains in the decimal/precision tail.
+
+**Limitations** — `CHAR` of a structure, array, or pointer is an error.
 
 ### `FIXED(x)` → FIXED BINARY(31)
 
@@ -388,7 +396,13 @@ n = fixed('1234');                /* integer parse */
 n = fixed(3.9);                   /* 3 */
 ```
 
-**Limitations** — `FIXED` of a `BIT` or `COMPLEX` argument is an error.
+A `COMPLEX` argument keeps the complex mode and truncates both parts toward
+zero; assigning the result to a real target takes the real part. Complex
+values are carried as a `{double,double}` pair, so the fixed/float
+distinction is not represented separately; the precision tail remains
+deferred.
+
+**Limitations** — `FIXED` of a `BIT` argument is an error.
 
 ---
 
@@ -535,7 +549,11 @@ Negate the imaginary part (the complex conjugate).
 put skip list(conjg(z));    /* (1.5, -2.5) */
 ```
 
-**Limitations** — ordered comparison (`<`, `>`, etc.) and `CHAR`/`FIXED` of a complex value are errors; only part-wise `=`/`^=` is supported.
+`CHAR` and `FIXED` of a complex value are served; `FIXED` keeps both
+truncated parts, and assigning it to a real target takes the real part.
+
+**Limitations** — ordered comparison (`<`, `>`, etc.) is an error; only
+part-wise `=`/`^=` is supported.
 
 ---
 

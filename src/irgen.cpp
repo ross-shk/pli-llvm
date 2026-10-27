@@ -633,6 +633,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_low", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_char_of_float", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_char_of_complex", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_isochar", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_file_open_slot", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_lineno", {.willReturn = true, .mem = RtMemReadonly}},
@@ -13733,6 +13734,27 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
   if (e->name == "FIXED") {
     Val a = emitExpr(e->args[0].get());
+    if (a.ty.isComplex()) {
+      // FIXED(complex) keeps the pair and truncates each part toward zero.
+      bool rt = useRuntimeCall("fixed_of_float");
+      auto truncPart = [&](llvm::Value* x, const char* nm) -> llvm::Value* {
+        if (rt)
+          return b_.CreateCall(runtimeFn("pli_fixed_of_float"), {x}, nm);
+        return emitFixedOfFloatLLVM(x);
+      };
+      llvm::Value* cpx = a.cpxVal();
+      llvm::Value* re = b_.CreateExtractValue(cpx, 0, "fxc.re");
+      llvm::Value* im = b_.CreateExtractValue(cpx, 1, "fxc.im");
+      llvm::Value* reD = b_.CreateSIToFP(truncPart(re, "fxc.reI"), b_.getDoubleTy(), "fxc.reD");
+      llvm::Value* imD = b_.CreateSIToFP(truncPart(im, "fxc.imI"), b_.getDoubleTy(), "fxc.imD");
+      llvm::Value* s = llvm::UndefValue::get(llvmTy(Type::complexTy()));
+      s = b_.CreateInsertValue(s, reD, 0, "fxc.cpx.re");
+      s = b_.CreateInsertValue(s, imD, 1, "fxc.cpx.im");
+      v.ty = e->ty;
+      v.cpx = s;
+      result = v;
+      return true;
+    }
     if (a.ty.isChar()) {
       // CONVERSION (rule 94): when the text holds no digits, FIXED(char)
       // traps through the CONVERSION dispatch (abort or ON unit); the resume
@@ -13825,6 +13847,18 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val a = emitExpr(e->args[0].get());
     if (a.ty.isChar()) {
       result = a;
+      return true;
+    }
+    if (a.ty.isComplex()) {
+      // CHAR(complex): real image, signed imaginary image, I; the runtime
+      // helper matches the list-directed complex rendering.
+      Val dst = charTemp(e->ty.len);
+      llvm::Value* cpx = a.cpxVal();
+      llvm::Value* re = b_.CreateExtractValue(cpx, 0, "cpx.re");
+      llvm::Value* im = b_.CreateExtractValue(cpx, 1, "cpx.im");
+      b_.CreateCall(runtimeFn("pli_char_of_complex"), {dst.ptr, dst.len, re, im});
+      dst.len = i64(e->ty.len);
+      result = dst;
       return true;
     }
     Val dst = charTemp(e->ty.len);

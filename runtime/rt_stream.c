@@ -413,6 +413,20 @@ void pli_char_of_float(char *dst, long long dstcap, double x) {
     dst[i] = ' ';
 }
 
+/* CHAR(complex): real image, signed imaginary image, I; blank-padded to
+ * dstcap. Same readable %.6g rendering as PUT LIST of a complex value. */
+void pli_char_of_complex(char *dst, long long dstcap, double re, double im) {
+  char tmp[64];
+  int n = pli_snprintf(tmp, sizeof tmp, "%.6g%+.6gI", re, im);
+  long long i = 0;
+  while (i < n && i < dstcap) {
+    dst[i] = tmp[i];
+    ++i;
+  }
+  for (; i < dstcap; ++i)
+    dst[i] = ' ';
+}
+
 /* FIXED(char): parse decimal text, truncating any fraction toward zero.
  * Leading blanks, one optional sign, then digits; stops at the first
  * non-digit. Sets *ok = 1 when at least one digit was consumed, 0 when the

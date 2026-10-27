@@ -7226,6 +7226,12 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     const Type& a = e->args[0]->ty;
+    if (a.isComplex() && !a.isArray()) {
+      // FIXED(complex) keeps the complex mode (the result has the base and
+      // mode of x); both parts are truncated toward zero.
+      e->ty = Type::complexTy();
+      return true;
+    }
     if (a.isChar() || a.isNumeric()) {
       e->ty = Type::fixedBin(31, 0);
       return true;
@@ -7295,6 +7301,13 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     }
     if (a.isNumeric() || a.isBit()) {
       e->ty = Type::chr(24); // decimal or %.6g image, blank-padded
+      return true;
+    }
+    if (a.isComplex() && !a.isArray()) {
+      // CHAR(complex) is the real image followed by a signed imaginary
+      // image and I. The compiler's complex mode is FLOAT DECIMAL(6), so
+      // IBM's intermediate length is 2*p+17 = 29.
+      e->ty = Type::chr(2 * Type::complexTy().prec + 17);
       return true;
     }
     d_.error(e->args[0]->loc, "CHAR argument must be a scalar value in this stage", "(123)");
