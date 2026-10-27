@@ -20,7 +20,6 @@ enum class Tok {
   CharLit,  // '...'   (character-string constant)
   BitLit,   // '...'B  (bit-string constant)
   HexLit,   // '...'X  (hex character constant, rule (143))
-  DqString, // "..."  (extension: quoted %REPLACE replacement, ADR-082)
   // Punctuation
   Semi,
   Colon,
@@ -47,7 +46,7 @@ enum class Tok {
   Ngt,
   Nlt,     // < <= > >= ¬= ¬> ¬<
   Arrow,   // ->  locator qualification
-  Percent, // %  (extension: preprocessor directives, ADR-077)
+  Percent, // %  (extension: preprocessor directives; see ADR-316)
 };
 
 struct Token {

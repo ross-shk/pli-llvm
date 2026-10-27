@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* extension (ADR-327): a replacement defined
+     in an include is visible after it, and
+     include text sees the parent's map. */
+  replace_include: procedure options(main);
+     declare a fixed bin(31);
+     declare b fixed bin(31);
+     %replace fromparent by 11;
+     %include 'replace_inc.inc';
+     b = frominclude;
+     put skip list('parent', a);
+     put skip list('include', b);
+  end replace_include;

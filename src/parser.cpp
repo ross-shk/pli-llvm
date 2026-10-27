@@ -4823,11 +4823,6 @@ ExprP Parser::parsePrimary() {
     return lhs;
   }
 
-  // Double quotes are only a %REPLACE replacement operand (ADR-082).
-  if (at(Tok::DqString)) {
-    d_.error(cur().loc, "double-quoted strings are only valid as a %REPLACE operand (ADR-082)", "");
-    return nullptr;
-  }
   d_.error(cur().loc, std::string("expected an expression, found ") + tokName(cur().kind), "(123)");
   return nullptr;
 }

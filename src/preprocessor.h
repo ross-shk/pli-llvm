@@ -104,9 +104,9 @@ private:
   // return value (ADR-316, Stage 2).
   size_t handleReturn(const fs::path& path, const std::string& source, size_t wordEnd,
                       size_t end, std::string& output, int& line, int& col);
-  // %REPLACE — Stage 3: textual rescanning in the preprocessor.
+  // %REPLACE — Stage 3: textual rescanning in the preprocessor (ADR-327).
   bool handleReplace(const fs::path& path, const std::string& source, size_t i, size_t wordEnd,
-                     size_t end, std::string& output, int& line, int& col, bool active);
+                     size_t end, int directiveLine, int directiveCol);
   bool unsupported(const fs::path& input, const std::string& name, int line, int col);
   bool error(const fs::path& input, int line, int col, const std::string& message);
 
@@ -119,6 +119,10 @@ private:
   std::map<std::string, long long> ppVars_;
   // Activated variables (extension, ADR-113): only these expand as %NAME.
   std::set<std::string> ppActive_;
+  // %REPLACE name → source text, keyed uppercase (Stage 3, ADR-327).
+  std::map<std::string, std::string> replacements_;
+  // Names being expanded right now, so self/mutual replacement terminates.
+  std::set<std::string> replacing_;
   // %label: → flat position past the ':' + whitespace (ADR-316).
   std::unordered_map<std::string, size_t> labels_;
   // Jump target set by %GOTO (ADR-316); scan() resumes there.

@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* extension (ADR-077): the replacement text
+     cannot be empty. */
+  badreplaceempty: procedure options(main);
+     %replace x by ;
+     put skip list('x');
+  end badreplaceempty;
