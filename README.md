@@ -33,10 +33,10 @@ Each archive contains just the compiler binary (`pli` or `pli.exe`); the runtime
 hello: procedure options(main);
   declare name char(40);
   
-  put skip list('Enter your name:');
+  put skip list('Enter your name: ');
   get list(name);
   put skip list('Hello, ' || name || '!');
-end hello;
+end;
 ```
 
 ```sh
@@ -141,7 +141,7 @@ Use distro LLVM for development, or the pinned static toolchain for release buil
 ### Linux / macOS
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/path/to/llvm-23
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=</path/to/llvm-23>
 cmake --build build/cmake -j
 ```
 

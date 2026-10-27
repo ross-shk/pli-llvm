@@ -172,6 +172,11 @@ void rt_flush_stdout(void) {
     pli_plat_fwrite(rt_stdout_buf, 1, rt_stdout_pos, stdout);
     rt_stdout_pos = 0;
   }
+  /* Push the bytes past libc's stdio buffer too: when stdout is redirected
+   * to a file or pipe it is block-buffered, so fwrite alone would leave the
+   * output stuck until the buffer fills or the program exits. A blocking
+   * GET below must not wait on that. */
+  pli_plat_fflush(stdout);
   rt_out_unlock();
 }
 
@@ -1244,6 +1249,10 @@ void pli_copy(void) {
 void pli_get_reply(char *dst, long long cap) {
   if (cap <= 0)
     return;
+  /* Flush a preceding DISPLAY prompt before the input lock is taken: REPLY
+   * blocks on stdin, so the prompt must reach the terminal first. No lock is
+   * held here, keeping the input/output lock order. */
+  rt_flush_stdout();
   long long i = 0;
   rt_in_lock();
   for (;;) {
