@@ -83,7 +83,9 @@ jobs:
       - name: Size gate (stripped < 150 MB)
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            llvm-objcopy --strip-all -o /tmp/pli.strip build/cmake/pli.exe
+            # llvm-objcopy takes the output as a positional argument; -o is a
+            # GNU objcopy spelling it rejects.
+            llvm-objcopy --strip-all build/cmake/pli.exe /tmp/pli.strip
             bytes=$(stat -c%s /tmp/pli.strip 2>/dev/null || stat -f%z /tmp/pli.strip)
             echo "Stripped size: $bytes bytes"
             test "$bytes" -lt 157286400
