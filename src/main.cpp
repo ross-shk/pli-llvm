@@ -34,6 +34,7 @@
 #include "embedded_sysroot.h"
 #include "hostcrt.h"
 #include "pgo.h"
+#include "sanitize.h"
 #include "target.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
@@ -142,6 +143,8 @@ static void usage() {
   "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
   "  --fprofile-generate  instrument for PGO (run the binary, it writes a profile)\n"
   "  --fprofile-use=<f>   rebuild using that profile (.profraw or .profdata)\n"
+  "  -fsanitize=address  instrument the emitted code with AddressSanitizer and\n"
+  "                   link its runtime (ADR-340; not with --flto or Windows)\n"
   "  --triple <t>     target triple (default: host triple, in-process)\n"
           "  --march=native   opt-in: use host CPU features (default: generic;\n"
           "                   CI/baselines always use generic; local hot runs only)\n"
@@ -346,7 +349,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool noMemoryEffects = false, bool warnUnset = false,
                        const std::string& effectsFile = "",
                        const std::string& emitEffectsFile = "",
-                       bool remarkLibraryCalls = false) {
+                       bool remarkLibraryCalls = false, bool sanitizeAddress = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -430,6 +433,13 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM || emitMlir) {
+    // ADR-340: the ASan pass runs on the module at object emission; this
+    // terminal mode stops earlier, so say so instead of dropping the option.
+    if (sanitizeAddress) {
+      std::cerr << "pli: -fsanitize=address applies to object/link output; "
+                   "-emit-llvm/-emit-mlir stop before it\n";
+      return false;
+    }
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
                 false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
@@ -496,6 +506,12 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     std::cerr << "pli: --flto cannot be combined with --fprofile-generate/--fprofile-use\n";
     return false;
   }
+  // ADR-340: LTO defers the pipeline to the link step, where the ASan pass
+  // is not wired; keep the combination diagnosed instead of half-applied.
+  if (!ltoKind.empty() && sanitizeAddress) {
+    std::cerr << "pli: --flto cannot be combined with -fsanitize=address yet\n";
+    return false;
+  }
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
               linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects, optimizing);
@@ -535,6 +551,17 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // Also set module target triple to ensure consistent
     // feature handling during codegen (module triple affects some defaults).
     om->mod->setTargetTriple(llvm::Triple(triple));
+    // ADR-340: instrument the code this compilation emits. Functions from
+    // the precompiled runtime blob are marked off: they are already measured
+    // from source (B0), and its fiber stacks do not follow the C stack model
+    // ASan assumes.
+    if (sanitizeAddress) {
+      const std::set<std::string> rt = pli::runtimeFuncNames(llvm::Triple(triple));
+      for (llvm::Function& f : *om->mod)
+        if (rt.count(f.getName().str()))
+          f.addFnAttr(llvm::Attribute::DisableSanitizerInstrumentation);
+      pli::instrumentAddressSanitizer(*om->mod);
+    }
     std::error_code ec;
     llvm::raw_fd_ostream os(objPath.string(), ec, llvm::sys::fs::OF_None);
     if (ec) {
@@ -611,7 +638,7 @@ int main(int argc, char** argv) {
   bool remarkLibraryCalls = false;
   // WS-A2 (ADR-267): the published-effects file, in both directions.
   std::string effectsFile, emitEffectsFile;
-  bool useBitcode = true, pgoGenerate = false;
+  bool useBitcode = true, pgoGenerate = false, sanitizeAddress = false;
   std::string ltoKind, pgoUse;
   int explain = 0;
   // Experimental lowering mode (design-docs/mlir-runtime-migration-plan.md §5.2).
@@ -664,6 +691,14 @@ int main(int argc, char** argv) {
       pgoUse = a.substr(15);
     else if (a == "--fprofile-use")
       pgoUse = next("--fprofile-use");
+    else if (a == "-fsanitize=address")
+      sanitizeAddress = true;
+    else if (a.rfind("-fsanitize=", 0) == 0) {
+      // B13 serves the emitted-code ASan pass; UBSan/TSan need frontend
+      // checks or a race model this stage does not have.
+      std::cerr << "pli: " << a << " is not supported (only -fsanitize=address)\n";
+      return 2;
+    }
     else if (a == "--clang")
       clangPath = next("--clang");
     else if (a == "--triple")
@@ -1044,7 +1079,7 @@ int main(int argc, char** argv) {
                     singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
                     noMemoryEffects, warnUnset, effectsFile, emitEffectsFile,
-                    remarkLibraryCalls))
+                    remarkLibraryCalls, sanitizeAddress))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -1387,6 +1422,38 @@ int main(int argc, char** argv) {
             return 1;
           }
           argStore.push_back(profRt);
+        }
+        // ADR-340: the instrumented object references __asan_*; the runtime
+        // comes from compiler-rt (next to pli or in the toolchain resources).
+        if (sanitizeAddress) {
+          if (useMusl) {
+            std::cerr << "pli: -fsanitize=address needs a dynamic C runtime "
+                         "(the vendored musl sysroot is static)\n";
+            pli::cleanupMaterializedSysroot(emb.dir);
+            return 1;
+          }
+          std::string asanRt = pli::addressSanitizerRuntime(llt, exeDir.string());
+          if (asanRt.empty()) {
+            std::cerr << "pli: -fsanitize=address needs the compiler-rt ASan runtime\n";
+            pli::cleanupMaterializedSysroot(emb.dir);
+            return 1;
+          }
+          if (llt.getObjectFormat() == llvm::Triple::MachO) {
+            argStore.push_back(asanRt);
+            // Apple clang's runtime install name is @rpath-relative.
+            argStore.push_back("-rpath");
+            argStore.push_back(fs::path(asanRt).parent_path().string());
+          } else if (llt.getObjectFormat() == llvm::Triple::ELF) {
+            // The static runtime is built for whole-archive linking (its
+            // preinit object has no other reference), and older glibc needs
+            // the thread/dl/rt entry points spelled out.
+            argStore.push_back("--whole-archive");
+            argStore.push_back(asanRt);
+            argStore.push_back("--no-whole-archive");
+            argStore.push_back("-lpthread");
+            argStore.push_back("-ldl");
+            argStore.push_back("-lrt");
+          }
         }
         if (useMingw) {
           // fltused marker + import libs + GCC helpers (MinGW driver takes
