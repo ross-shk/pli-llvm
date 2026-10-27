@@ -204,7 +204,7 @@ PLI_FN(pli_signal_finish, VOID, (PTR))               /* FINISH at task procedure
 
 PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))
-PLI_FN(pli_get_list_char, VOID, (PTR, I64))
+PLI_FN(pli_get_list_char, I64, (PTR, I64))             /* returns assigned chars */
 PLI_FN(pli_get_list_complex, VOID, (PTR, PTR)) /* CM5 (ADR-086) */
 PLI_FN(pli_get_list_bit, I8, (VOID))
 PLI_FN(pli_get_data_next, I64, (PTR, I64))           /* DATA-directed input (106) */
@@ -218,7 +218,7 @@ PLI_FN(pli_get_edit_num, DOUBLE, (I64))
 PLI_FN(pli_get_edit_pic, I64, (I64, I64)) /* P input (ADR-291) */
 PLI_FN(pli_get_edit_pic_sterling, I64, (I64, CPTR, I64)) /* sterling P input (B1): (width, picture, len) */
 PLI_FN(pli_get_edit_pic_wide, VOID, (I64, I64, PTR)) /* wide P input (B1): (width, scale, out) */
-PLI_FN(pli_get_edit_char, VOID, (PTR, I64, I64))
+PLI_FN(pli_get_edit_char, I64, (PTR, I64, I64))       /* returns field chars */
 PLI_FN(pli_get_edit_bit, VOID, (PTR, I64, I64))
 PLI_FN(pli_get_edit_column, VOID, (I64))
 PLI_FN(pli_get_edit_x, VOID, (I64))

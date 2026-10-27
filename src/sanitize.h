@@ -10,7 +10,7 @@ class Triple;
 } // namespace llvm
 
 namespace pli {
-// ADR-340: instrument `M`'s memory accesses with ASan checks. Runs on the
+// ADR-341: instrument `M`'s memory accesses with ASan checks. Runs on the
 // user module before the precompiled runtime blob is merged, so the runtime
 // stays uninstrumented (B0 measures the runtime separately).
 void instrumentAddressSanitizer(llvm::Module& M);

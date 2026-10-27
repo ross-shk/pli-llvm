@@ -437,7 +437,7 @@ if(PLI_SHARED_LLVM_LINK AND TARGET LLVM)
 else()
   # Core/IR (superset of the old `core irreader support linker` set).
   # ProfileData: InstrProfReader for in-process --fprofile-use (ADR-225).
-  # Instrumentation: the ASan module pass for -fsanitize=address (ADR-340).
+  # Instrumentation: the ASan module pass for -fsanitize=address (ADR-341).
   llvm_map_components_to_libnames(llvm_libs_core
     Core IRReader Support BitReader BitWriter Linker ProfileData Instrumentation)
   # MC/Target: the distro prefix builds all targets (initializeAllTargets()

@@ -31,18 +31,19 @@ Each archive contains just the compiler binary (`pli` or `pli.exe`); the runtime
 
 ```pli
 hello: procedure options(main);
-  declare name char(40);
+  declare name char(40) varying;
   
-  put skip list('Enter your name:');
+  put skip list('Enter your name: ');
   get list(name);
-  put skip list('Hello, ' || name '!');
-end hello;
+  put skip list('Hello, ' || name || '!');
+end;
 ```
 
 ```sh
 pli hello.pli -o hello
 ./hello
 # When running, enter your name at the prompt, e.g. "Alice"
+# Output: Hello, Alice!
 ```
 
 For a fuller tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are in the [Built-ins reference](guides/builtins.md).
@@ -141,7 +142,7 @@ Use distro LLVM for development, or the pinned static toolchain for release buil
 ### Linux / macOS
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/path/to/llvm-23
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=</path/to/llvm-23>
 cmake --build build/cmake -j
 ```
 

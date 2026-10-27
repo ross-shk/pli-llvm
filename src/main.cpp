@@ -144,7 +144,7 @@ static void usage() {
   "  --fprofile-generate  instrument for PGO (run the binary, it writes a profile)\n"
   "  --fprofile-use=<f>   rebuild using that profile (.profraw or .profdata)\n"
   "  -fsanitize=address  instrument the emitted code with AddressSanitizer and\n"
-  "                   link its runtime (ADR-340; not with --flto or Windows)\n"
+  "                   link its runtime (ADR-341; not with --flto or Windows)\n"
   "  --triple <t>     target triple (default: host triple, in-process)\n"
           "  --march=native   opt-in: use host CPU features (default: generic;\n"
           "                   CI/baselines always use generic; local hot runs only)\n"
@@ -433,7 +433,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM || emitMlir) {
-    // ADR-340: the ASan pass runs on the module at object emission; this
+    // ADR-341: the ASan pass runs on the module at object emission; this
     // terminal mode stops earlier, so say so instead of dropping the option.
     if (sanitizeAddress) {
       std::cerr << "pli: -fsanitize=address applies to object/link output; "
@@ -506,7 +506,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     std::cerr << "pli: --flto cannot be combined with --fprofile-generate/--fprofile-use\n";
     return false;
   }
-  // ADR-340: LTO defers the pipeline to the link step, where the ASan pass
+  // ADR-341: LTO defers the pipeline to the link step, where the ASan pass
   // is not wired; keep the combination diagnosed instead of half-applied.
   if (!ltoKind.empty() && sanitizeAddress) {
     std::cerr << "pli: --flto cannot be combined with -fsanitize=address yet\n";
@@ -551,7 +551,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // Also set module target triple to ensure consistent
     // feature handling during codegen (module triple affects some defaults).
     om->mod->setTargetTriple(llvm::Triple(triple));
-    // ADR-340: instrument the code this compilation emits. Functions from
+    // ADR-341: instrument the code this compilation emits. Functions from
     // the precompiled runtime blob are marked off: they are already measured
     // from source (B0), and its fiber stacks do not follow the C stack model
     // ASan assumes.
@@ -1423,7 +1423,7 @@ int main(int argc, char** argv) {
           }
           argStore.push_back(profRt);
         }
-        // ADR-340: the instrumented object references __asan_*; the runtime
+        // ADR-341: the instrumented object references __asan_*; the runtime
         // comes from compiler-rt (next to pli or in the toolchain resources).
         if (sanitizeAddress) {
           if (useMusl) {

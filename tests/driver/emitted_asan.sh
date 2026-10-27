@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/emitted_asan.sh — -fsanitize=address instruments the code the
-# compiler emits (B13, ADR-340). The B0 runs build the runtime from source
+# compiler emits (B13, ADR-341). The B0 runs build the runtime from source
 # under a sanitizer; this test is the other half: irgen's own memory accesses
 # (stack arrays, globals) and the runtime allocator's heap blocks.
 set -u

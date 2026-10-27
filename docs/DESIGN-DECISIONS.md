@@ -12712,7 +12712,61 @@ extent stays diagnosed (rule (24)): the fit check needs the extents at entry and
 the overlay would need a descriptor. Structure/aggregate bases (a view over part
 of a structure) and `POSITION` on an array item remain diagnosed as before.
 
-## ADR-340 — `-fsanitize=address` instruments the code the compiler emits
+---
+
+## ADR-340 — `GET` into `CHARACTER VARYING` keeps the input length
+
+**Context.** Character input into a `CHARACTER(n) VARYING` target stored `n` as
+the live length on all three input paths. `GET LIST` and `GET DATA` copied the
+token and `GET EDIT A(w)` copied the field, but the runtime helpers returned
+`void`, so IRGen always set the varying length to the declared maximum. The
+value was therefore blank-padded to `n`, and concatenation exposed the padding:
+`'Hello, ' || NAME || '!'` became `Hello, Alice`, 35 blanks, and `!`. Fixed
+`CHARACTER(n)` targets are different: IBM defines them as blank-padded to their
+declared length, so their length and content were already correct.
+
+IBM's language reference sets a varying target's length to the number of
+characters transferred, while a nonvarying target is padded to its declared
+length (SC26-3114-01 §§2.4.2.2, 3.3.4, 4.2; Y33-6003 assignment semantics). `GET EDIT A(w)` transfers the field width, truncated to the target's
+maximum (SC26-3113-01, GET EDIT; SC26-3114-01 §12.1).
+
+**Decision.** `pli_get_list_char` and `pli_get_edit_char` return the number of
+characters assigned: the token length for list/data input, and at most
+`MIN(w, n)` for `A(w)`. IRGen stores that value as the live length only when the target is
+`VARYING`; a fixed target keeps its declared length and remains blank-padded.
+`GET DATA` uses the same list helper, so all three paths share one rule. The
+runtime reports the count because only it knows whether the token or field was
+shorter than the target, hit EOF, or was truncated; the front end cannot infer
+it from the declared type.
+
+**Consequences.** `tests/driver/get.sh` checks a varying list target (5
+characters), the concatenation `'Hello, ' || V || '!'`, a fixed target's
+8-character padding, and a 4-character varying target's truncation;
+`tests/core/get_data.pli` checks `V=Alice;` into `CHAR(8) VARYING`;
+`tests/core/edit.pli` checks `A(4)` into `CHAR(8) VARYING` (length 4) and an
+`A(10)` field truncated to the 8-character maximum. The README hello-world now
+declares `NAME CHAR(40) VARYING`, so its documented output is `Hello, Alice!`
+rather than a padded line. Fixed targets are unchanged.
+
+**Rejected.** *Trim fixed targets after input.* IBM defines nonvarying character
+assignment as blank-padding to the declared length; trimming would change
+existing semantics and break the fixed-target checks. *Have IRGen derive the
+length from the input token.* The runtime consumes the stream and knows the
+actual transfer count; duplicating that logic in IRGen would mishandle EOF,
+truncation, and `A(w)` fields wider than the target. *Return `void` and store
+the declared length for both kinds.* That is the bug this ADR fixes.
+
+**Limitations recorded.** Quoted IBM character constants in list/data input
+remain out of scope. EOF and null fields still leave the target blank (the
+helpers report zero), and list/data tokens are still limited to the existing
+255-character buffer. `GET EDIT A(w)` truncates a wider field to the target's
+maximum, as before.
+
+---
+
+## ADR-341 — `-fsanitize=address` instruments the code the compiler emits
+
+*(ADR number: this decision was ADR-340 on the branch that grew it; the GET branch had already taken ADR-340 for a different decision, so it is renumbered here to ADR-341. ADR-232 did the same for a duplicated pair.)*
 
 **Context.** B0 put the storage, overlay and tasking paths under ASan/UBSan/TSan
 by rebuilding the runtime from source and linking the self-checking programs
