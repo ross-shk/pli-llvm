@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (12); ADR-337: IBM supplies VARIABLE when an ENTRY declaration
+    carries array bounds, so the name would be an array of entry values.
+    A call through a subscripted designator is not implemented, so the
+    declaration is diagnosed instead of becoming one entry constant. */
+ bad_entry_array: procedure options(main);
+    declare e(3) entry;
+ end bad_entry_array;

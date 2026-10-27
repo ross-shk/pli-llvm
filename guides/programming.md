@@ -1274,6 +1274,10 @@ keeping a transcript while reading a field.
 
 ### Files & records
 
+A file is a scalar name, not data: `dcl f file;` declares one file, and a
+dimension (`dcl f(3) file;`) would be an array of file variables, which this
+compiler diagnoses. Declare one name per file.
+
 ```pli
  dcl f file;
 

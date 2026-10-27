@@ -41,6 +41,10 @@ struct Val {
   llvm::Value* ptr = nullptr;
   llvm::Value* len = nullptr;
   llvm::Value* cpx = nullptr;
+  // A complex value is the {double,double} struct itself. A scalar variable
+  // load publishes it as `cpx`; a subscript or member load has it in `reg`
+  // (the loaded struct), so every consumer reads it through here.
+  llvm::Value* cpxVal() const { return cpx ? cpx : reg; }
 };
 
 class IRGen {

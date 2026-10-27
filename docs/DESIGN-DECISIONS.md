@@ -12530,3 +12530,81 @@ label-constant value that does not exist as a source expression. *Keep the
 indirect destination list to named labels.* The label-array element's block has
 no name, and an `indirectbr` that omits it is undefined behaviour; the fix also
 gave the pre-existing parenthesized form a correct destination list.
+
+---
+
+## ADR-337 — Dimension or precision: the attribute-word lookahead, COMPLEX arrays, and the diagnosed FILE/ENTRY/LIKE arrays
+
+**Context.** Rule (12) writes a dimension bare after the declared name
+(`DECLARE A(10) FIXED BINARY(31)`), while a numeric type writes its precision in
+the same position (`DECLARE X FIXED BINARY(31)`). The parser decides which one a
+parenthesized constant is by looking at the word that follows, through a
+hand-maintained list in `tryParseDimension`. That list has drifted from the
+attribute set the declaration parser accepts, and ADR-336 had just fixed one
+entry of it (`LABEL`). Six more were missing — `FILE`, `ENTRY`, `LIKE`,
+`COMPLEX`, `CPLX`, `REAL` — so a bare dimension before any of them was read as a
+precision the item cannot use, and the value was silently dropped:
+
+- `DCL F(3) FILE;` declared **one** file with one runtime slot, and nothing in
+  the declaration said so. The `lb:ub` spelling (`DCL F(1:3) FILE;`) took the
+  other branch of the decision, kept the extents (`DIM(F,1)` reported 3) and
+  still gave every file statement that one slot — an array in the type system,
+  one file at run time, which is the worst shape of silent wrong answer.
+- `DCL E(3) ENTRY;` declared one entry constant. IBM's rule is the opposite:
+  array bounds supply `VARIABLE` implicitly, so the name is an array of entry
+  values.
+- `DCL X(3) LIKE T;` declared a scalar copy of `T`. Rule (43)'s existing
+  "LIKE with a dimension" diagnostic never fired, because there was no dimension.
+- `DCL C(3) COMPLEX;` declared one complex value.
+
+Checking whether COMPLEX arrays would work once the dimension parsed exposed a
+second defect: a complex value is the `{double,double}` struct itself, a scalar
+variable load publishes it in `Val::cpx`, but a **subscript or member load**
+published the loaded struct in `Val::reg` and left `cpx` null. Every complex
+consumer dereferenced `.cpx`, so `z = c(2) + c(3)`, `c(1) = c(2)`,
+`real(c(2))` and `real(s.z)` all **segfaulted the compiler** (rc 139), on valid
+PL/I. Scalar `real(z)` worked, which is why the suite never saw it.
+
+**Decision.**
+
+- The lookahead list gains `FILE`, `ENTRY`, `LIKE`, `COMPLEX`, `CPLX` and `REAL`,
+  so the dimension parses wherever an attribute that can follow it appears.
+- Arrays of complex values are served end to end: element load, arithmetic,
+  `REAL`/`IMAG`, `CONJG`, assignment from and to an element, and a complex
+  member of a structure.
+- **FILE and ENTRY arrays are diagnosed** with rule (12), in both spellings:
+  a file array needs one runtime slot per element and a subscripted file
+  designator (`OPEN FILE(F(i))`, `PUT FILE(F(i))`) which the file statements do
+  not parse today; an entry array needs a call through a subscripted designator
+  (`CALL E(1)(...)`), while ADR-171's entry variables are scalar only. The
+  `lb:ub` spelling (`DCL F(1:3) FILE;`) used to slip past the lookahead and
+  declare an array whose operations all used one slot; it is now diagnosed the
+  same way.
+- `LIKE` keeps its rule (43) diagnostic, now reachable from the bare spelling.
+- Complex consumers read the payload through `Val::cpxVal()` (`cpx ?: reg`), so a
+  value is published by whichever load path produced it instead of every future
+  path having to remember to set a second field. The `.cpx` writes are unchanged.
+
+**Consequences.** `tests/core/complex_array.pli` covers a bare-dimension complex
+array (element arithmetic, `REAL`/`IMAG`, `CONJG` on a member and on an element,
+the copy through assignment). `bad_file_array.pli`, `bad_entry_array.pli` and
+`bad_like_array.pli` pin the three diagnostics. `GC` (12),(13), (16),(17) and
+(43) carry the change, and `DEFERRED-WORK` A6 moves to done.
+
+**Rejected.** *Support FILE arrays now.* One slot per element plus a subscripted
+file designator in `OPEN`/`CLOSE`/`PUT`/`GET`/`READ`/`WRITE`/`REWRITE`/`DELETE`
+is its own slice, not a footnote on the lookahead. *Support ENTRY arrays now.*
+The storage is a pointer (ADR-171), but the call grammar has no
+`CALL E(1)(...)` and function references through an element are unattested here.
+*Let FILE/ENTRY arrays be declared and fail later at `OPEN`/`CALL`.* That is what
+the `lb:ub` spelling did, and every one of those statements would keep using the
+single slot. *Set `.cpx` in each load site instead of an accessor.* The defect
+already recurred (scalar loads had it, subscript and member loads did not), and
+there are more load paths than consumers.
+
+**Limitations recorded.** `REAL` without `FLOAT` is still accepted and ignored
+(`REAL` is only meaningful with `FLOAT`); the attribute is not validated.
+`DEFINED` with a bare dimension (`DCL X(3) DEFINED B(1)`) still reads the `(3)` as
+a precision when no explicit type precedes the attribute; in the spelling that is
+used in practice (`DCL X(3) FIXED BIN(31) DEFINED B(1)`) the dimension already
+parses.

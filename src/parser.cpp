@@ -2593,7 +2593,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
-           w == "EVENT" || w == "PICTURE" || w == "PIC" || w == "LABEL";
+           w == "EVENT" || w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "COMPLEX" ||
+           w == "CPLX" || w == "REAL" || w == "LIKE" || w == "FILE" || w == "ENTRY";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);

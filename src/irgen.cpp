@@ -6049,8 +6049,8 @@ void IRGen::emitStmt(HStmt* s) {
       d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
       break;
     case TK::Complex:
-      deferCall("pli_display_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                                        b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+      deferCall("pli_display_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re"),
+                                        b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im")});
       break;
     default:
       break; // array/struct operands are diagnosed by sema
@@ -8472,8 +8472,8 @@ void IRGen::emitPut(HStmt* s) {
         break;
       case TK::Complex:
         // Complex output (CM5): real, sign, imaginary magnitude, I.
-        deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                                           b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+        deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re"),
+                                           b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im")});
         break;
       case TK::Task:
       case TK::Event:
@@ -8909,8 +8909,8 @@ void IRGen::emitPutEditItems(HStmt* s) {
         break;
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
-      llvm::Value* re = b_.CreateExtractValue(v.cpx, 0, "cpx.re");
-      llvm::Value* im = b_.CreateExtractValue(v.cpx, 1, "cpx.im");
+      llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
+      llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
       if (f.subs.empty()) {
         d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
         break;
@@ -10592,7 +10592,7 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool 
                           Symbol* aliasSym) {
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is stored as the {double,double} struct.
-    llvm::StoreInst* si = b_.CreateStore(v.cpx, addr);
+    llvm::StoreInst* si = b_.CreateStore(v.cpxVal(), addr);
     if (packed)
       si->setAlignment(llvm::Align(1));
     annotateAlias(si, aliasSym);
@@ -11346,7 +11346,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (v.ty.isComplex() && !dst.isComplex()) {
     Val re;
     re.ty = Type::flt(6);
-    re.reg = b_.CreateExtractValue(v.cpx, 0, "cpx.re");
+    re.reg = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
     return convert(re, dst, loc);
   }
   if (!v.ty.isComplex() && dst.isComplex()) {
@@ -12520,11 +12520,11 @@ Val IRGen::emitExpr(HExpr* e) {
     Val ac = convert(a, Type::complexTy(), e->loc);
     Val bc = convert(b, Type::complexTy(), e->loc);
     llvm::Value* er =
-        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpx, 0, "cpx.er"),
-                      b_.CreateExtractValue(bc.cpx, 0, "cpx.er"), "cpx.er");
+        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpxVal(), 0, "cpx.er"),
+                      b_.CreateExtractValue(bc.cpxVal(), 0, "cpx.er"), "cpx.er");
     llvm::Value* ei =
-        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpx, 1, "cpx.ei"),
-                      b_.CreateExtractValue(bc.cpx, 1, "cpx.ei"), "cpx.ei");
+        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpxVal(), 1, "cpx.ei"),
+                      b_.CreateExtractValue(bc.cpxVal(), 1, "cpx.ei"), "cpx.ei");
     llvm::Value* r = b_.CreateAnd(er, ei, "cpx.eq");
     if (op == Tok::Ne)
       r = b_.CreateNot(r, "cpx.ne");
@@ -12634,10 +12634,10 @@ Val IRGen::emitExpr(HExpr* e) {
   if (!isCmp && common.isComplex()) {
     // Complex arithmetic (CM5) over {double,double} pairs; mixed reals
     // arrive with a zero imaginary part via convert above.
-    llvm::Value* ar = b_.CreateExtractValue(av.cpx, 0, "cpx.ar");
-    llvm::Value* ai = b_.CreateExtractValue(av.cpx, 1, "cpx.ai");
-    llvm::Value* br = b_.CreateExtractValue(bv.cpx, 0, "cpx.br");
-    llvm::Value* bi = b_.CreateExtractValue(bv.cpx, 1, "cpx.bi");
+    llvm::Value* ar = b_.CreateExtractValue(av.cpxVal(), 0, "cpx.ar");
+    llvm::Value* ai = b_.CreateExtractValue(av.cpxVal(), 1, "cpx.ai");
+    llvm::Value* br = b_.CreateExtractValue(bv.cpxVal(), 0, "cpx.br");
+    llvm::Value* bi = b_.CreateExtractValue(bv.cpxVal(), 1, "cpx.bi");
     llvm::Value* rr = nullptr;
     llvm::Value* ri = nullptr;
     switch (op) {
@@ -13066,8 +13066,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* r;
     if (at.isComplex()) {
       // |x + iy| = sqrt(x*x + y*y) over the FLOAT pair (rule (123)).
-      llvm::Value* re = b_.CreateExtractValue(a.cpx, 0, "abre");
-      llvm::Value* im = b_.CreateExtractValue(a.cpx, 1, "abim");
+      llvm::Value* re = b_.CreateExtractValue(a.cpxVal(), 0, "abre");
+      llvm::Value* im = b_.CreateExtractValue(a.cpxVal(), 1, "abim");
       llvm::Value* m =
           b_.CreateFAdd(b_.CreateFMul(re, re, "abq1"), b_.CreateFMul(im, im, "abq2"), "abq");
       // Gate on the lowering policy like the math builtins (W4b).
@@ -13198,14 +13198,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "REAL" || e->name == "IMAG") {
     Val z = emitExpr(e->args[0].get());
     v.ty = e->ty;
-    v.reg = b_.CreateExtractValue(z.cpx, e->name == "REAL" ? 0 : 1, "part");
+    v.reg = b_.CreateExtractValue(z.cpxVal(), e->name == "REAL" ? 0 : 1, "part");
     result = v;
     return true;
   }
   if (e->name == "CONJG") {
     Val z = emitExpr(e->args[0].get());
-    llvm::Value* re = b_.CreateExtractValue(z.cpx, 0, "cgr");
-    llvm::Value* im = b_.CreateExtractValue(z.cpx, 1, "cgi");
+    llvm::Value* re = b_.CreateExtractValue(z.cpxVal(), 0, "cgr");
+    llvm::Value* im = b_.CreateExtractValue(z.cpxVal(), 1, "cgi");
     llvm::Value* nim = b_.CreateFNeg(im, "cgn");
     llvm::Value* s =
         llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
@@ -14492,11 +14492,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       Val ac = convert(a, Type::complexTy(), e->loc);
       Val bc = convert(b, Type::complexTy(), e->loc);
       llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                      b_.CreateExtractValue(ac.cpx, 0, "ideq.cr"),
-                                      b_.CreateExtractValue(bc.cpx, 0, "ideq.cr"), "ideq.er");
+                                      b_.CreateExtractValue(ac.cpxVal(), 0, "ideq.cr"),
+                                      b_.CreateExtractValue(bc.cpxVal(), 0, "ideq.cr"), "ideq.er");
       llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                      b_.CreateExtractValue(ac.cpx, 1, "ideq.ci"),
-                                      b_.CreateExtractValue(bc.cpx, 1, "ideq.ci"), "ideq.ei");
+                                      b_.CreateExtractValue(ac.cpxVal(), 1, "ideq.ci"),
+                                      b_.CreateExtractValue(bc.cpxVal(), 1, "ideq.ci"), "ideq.ei");
       v.reg = b_.CreateAnd(er, ei, "ideq.cx");
     } else if (a.ty.isBit() && b.ty.isBit() && a.ty.len > 1) {
       // Wide BIT scalars compare byte by byte (packed big-endian).

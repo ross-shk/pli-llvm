@@ -1472,6 +1472,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           continue;
         }
         if (item.isEntry) {
+          if (!item.ty.dims.empty())
+            d_.error(item.loc, "an array of ENTRY values is not implemented in this stage",
+                     "(12)");
           if (item.valueInit)
             d_.error(item.loc,
                      "VALUE on an ENTRY declaration is not implemented in this stage (ADR-108)",
@@ -1713,6 +1716,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (item.fileAttr) {
           // A FILE variable carries no runtime storage of its own: its identity
           // is the compile-time slot that OPEN/CLOSE/FILE( f ) pass to pli_runtime.
+          // A dimension makes it an array of file variables, which needs one slot
+          // per element and a subscripted designator in every file statement
+          // (OPEN FILE(F(i)) is not parsed yet), so it is diagnosed (rule (12)).
+          if (!item.ty.dims.empty())
+            d_.error(item.loc, "an array of FILE variables is not implemented in this stage",
+                     "(12)");
           item.sym->fileAttr = true;
           item.sym->fileNonprint = item.nonprint;
           item.sym->fileSlot = nextFileSlot_++;
