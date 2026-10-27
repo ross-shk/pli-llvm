@@ -843,16 +843,26 @@ An array of offsets holds several blocks from one region. Each element is a full
  put skip list(y);               /* 7 */
 ```
 
-Overlay with a different layout to reinterpret bytes — two halves over one word:
+A defined array starts at its base's first element and only has to fit, so a
+shorter or differently shaped view of the same storage works:
+
+```pli
+ dcl table(100) fixed bin(31);
+ dcl header(4) fixed bin(31) defined table;   /* table(1:4) */
+ dcl grid(2,2) fixed bin(31) defined table;   /* the same four */
+```
+
+The element type and size must match the base element's.
+
+Overlay a different type of the same size to reinterpret bytes — a memory view,
+like a C union member:
 
 ```pli
  dcl word fixed bin(31);
- dcl 1 halves defined word,
-       2 hi fixed bin(31),
-       2 lo fixed bin(31);
+ dcl cents fixed dec(9) defined word;   /* the same four bytes */
 
- word = 16#00420001#;
- put skip list(halves.hi, halves.lo);
+ word = 7;
+ put skip list(cents);                  /* 7, viewed as FIXED DECIMAL(9) */
 ```
 
 iSUB builds a sliding view into one axis of an array without copying — like a slice that stays linked to the original:
@@ -905,6 +915,7 @@ the alias follows the index — like a pointer you can retarget by changing a va
 **Not yet**
 
 - every item subscript must be mapped by a dummy; a runtime base subscript keeps the item a scalar of the base's element type; `position` needs a scalar character item over a character base (a bit-string position is an error); the base must be in the same or an enclosing scope.
+- a defined *structure* (a record layout over another variable's storage) is diagnosed; overlay same-size scalar views instead.
 
 > **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `pli defined_isub.pli -o overlays && ./overlays`.
 

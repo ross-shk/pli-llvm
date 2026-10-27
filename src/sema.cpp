@@ -107,6 +107,19 @@ static long long definedCharUnits(const Type& t) {
   return n * t.len;
 }
 
+// Element count of a fixed-extent array (rule (12)); -1 for an empty or
+// runtime (dynamic/adjustable) axis, which a DEFINED overlay cannot check at
+// compile time.
+static long long fixedElemCount(const Type& t) {
+  long long n = 1;
+  for (const Dim& d : t.dims) {
+    if (d.dyn || d.lbDyn || d.adj || d.ub < d.lb)
+      return -1;
+    n *= d.ub - d.lb + 1;
+  }
+  return n;
+}
+
 // True when an array axis has a runtime extent (rule (13)): a dynamic DECLARE
 // bound or an adjustable `*` axis. A DEFINED element overlay needs the base's
 // compile-time shape to compute its flat offset, so such a base is diagnosed.
@@ -1795,6 +1808,42 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             bool sameView = item.ty == base->ty || (itemBytes > 0 && itemBytes == baseBytes);
             if (item.ty.isStruct() || base->ty.isStruct()) {
               d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
+            } else if (item.ty.isArray() || base->ty.isArray()) {
+              // Array overlay (rule 24; IBM simple defining): the item starts at
+              // the base's first element. The bounds need not match — the item
+              // only has to fit — but the element types must (same type, or the
+              // same element storage size, which is the scalar overlay rule).
+              long long itemN = fixedElemCount(item.ty);
+              long long baseN = fixedElemCount(base->ty);
+              long long itemElem =
+                  item.ty.isArray() ? definedScalarBytes(item.ty.elementType()) : itemBytes;
+              long long baseElem =
+                  base->ty.isArray() ? definedScalarBytes(base->ty.elementType()) : baseBytes;
+              if (!item.ty.isArray() || !base->ty.isArray()) {
+                d_.error(item.loc,
+                         "DEFINED requires the item and its base to be both arrays or both "
+                         "scalars",
+                         "(24)");
+              } else if (itemN < 0 || baseN < 0) {
+                d_.error(item.loc,
+                         "DEFINED over an array with a runtime extent is not implemented in this "
+                         "stage",
+                         "(24)");
+              } else if (itemElem <= 0 || baseElem <= 0 || itemElem != baseElem) {
+                d_.error(item.loc,
+                         "a DEFINED array needs its base's element type and size (" +
+                             item.ty.elementType().desc() + " vs " +
+                             base->ty.elementType().desc() + ")",
+                         "(24)");
+              } else if (itemN > baseN) {
+                d_.error(item.loc,
+                         "a DEFINED array must fit into its base (" + std::to_string(itemN) +
+                             " element(s), base has " + std::to_string(baseN) + ")",
+                         "(24)");
+              } else {
+                item.sym->definedBase = base;
+                isDefined = true;
+              }
             } else if (!sameView) {
               d_.error(item.loc,
                        "DEFINED requires the item and base to have the same storage size (" +
@@ -1967,9 +2016,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   isDefined = true;
                 } else {
                   d_.error(item.loc,
-                           "DEFINED element base requires a scalar item of the base's element "
-                           "type (" +
-                               item.ty.desc() + " vs " + base->ty.elementType().desc() + ")",
+                           item.ty.isArray()
+                               ? "DEFINED element base requires a scalar item, not an array"
+                               : "DEFINED element base requires a scalar item of the base's "
+                                 "element type (" +
+                                     item.ty.desc() + " vs " + base->ty.elementType().desc() + ")",
                            "(24)");
                 }
               }

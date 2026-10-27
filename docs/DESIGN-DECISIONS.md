@@ -12655,3 +12655,59 @@ compiles two extents' worth of intent into one and only survives when they match
 **Limitations recorded.** LIKE of a structure with a dynamic member is still
 diagnosed (rule (13)), as before. A LIKE template that is itself a TYPE-defined
 structure is outside this stage (TYPE is not implemented).
+
+
+---
+
+## ADR-339 — Array overlay defining: a `DEFINED` array only has to fit its base
+
+**Context.** Rule (24) and IBM's `DEFINED`/`POSITION` page allow the defined
+variable to "have the dimension attribute", and the bounds "do not always have
+to match those of the base variable. However, the defined variable must be able
+to fit into the corresponding base array". The scalar overlay and `iSUB` forms
+were served (ADR-018, ADR-305/307), but an array item only compiled when its
+declared type was *identical* to the base's: the whole-base branch compared
+scalars by storage size, while an array returned "no fixed scalar size" and fell
+through to the same-size diagnostic. So the common prefix view
+`DCL HEADER(4) FIXED BIN(31) DEFINED TABLE;` (TABLE(100)) was rejected, and a
+different rank over the same prefix was rejected with it.
+
+The same branch also hid a silent wrong shape. `DEFINED` and its abbreviation
+`DEF` were missing from the dimension lookahead, so a bare
+`DCL X(3) DEFINED B;` — no type attributes before the attribute — read `(3)` as
+a precision and declared X a scalar. ADR-337 recorded that limitation; the
+shape the program wrote was dropped without a diagnostic.
+
+**Decision.** A DEFINED array with a whole-array base starts at the base's first
+element. Its bounds need not match: the item may be shorter or have another
+rank, and its element count must not exceed the base's. The element type must
+match, or have the scalar overlay's equal storage size (the existing
+different-type memory-view rule); a different element size is diagnosed. An
+array item over an *element* base stays diagnosed — IBM routes that to its
+string-overlay or iSUB forms, which are served separately. A runtime extent on
+either side is diagnosed, because the fit cannot be checked when the block is
+entered. `DEFINED`/`DEF` now ride the dimension lookahead, so the bare spelling
+parses its dimension instead of reading a precision.
+
+**Consequences.** `tests/core/defined_array.pli` pins a three-element view of a
+ten-element base, a `(2,2)` view over the same prefix (row-major addressing
+through the item's own shape), write-through in both directions, and the `DEF`
+abbreviation. `tests/core/bad_defined_array.pli` pins the five diagnostics: an
+array that does not fit, an element size mismatch, a scalar item over an array
+base, an array item over an element base, and a runtime-extent array base.
+`GC` (24), the programming guide's overlay section and the B8 row carry the
+change. ADR-337's bare-dimension limitation is fixed here (ADR-337 itself is
+left untouched).
+
+**Rejected.** *Require identical dimensions.* IBM says the bounds need not
+match; the fit rule is the whole point of the common prefix view. *Allow an
+array item over an element base.* An element actual argument does not match an
+array parameter, so IBM classifies it as string-overlay or iSUB defining, not
+simple defining; both forms already have their own paths. *Check only the total
+bytes and not the element size.* A view whose elements straddle its base's
+elements is not a shape the program can index consistently.
+
+**Limitations recorded.** A `DEFINED` array whose item or base has a runtime
+extent stays diagnosed (rule (24)): the fit check needs the extents at entry and
+the overlay would need a descriptor. Structure/aggregate bases (a view over part
+of a structure) and `POSITION` on an array item remain diagnosed as before.

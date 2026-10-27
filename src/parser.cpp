@@ -2585,6 +2585,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   // `DCL X(4) BASED(P)` and `DCL Y(4) CONTROLLED` form arrays rather
   // than precision-4 scalars (rules (12),(15),(25)). TASK and EVENT ride
   // here as well, so `DCL EV(2) EVENT` is an array of flags (rule (15)).
+  // DEFINED rides here so `DCL X(3) FIXED BIN(31) DEFINED B;` declares a
+  // 3-element overlay instead of reading `(3)` as a precision (ADR-339).
   auto isAttrWord = [&](const std::string& w) {
     return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
@@ -2594,7 +2596,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
            w == "EVENT" || w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "COMPLEX" ||
-           w == "CPLX" || w == "REAL" || w == "LIKE" || w == "FILE" || w == "ENTRY";
+           w == "CPLX" || w == "REAL" || w == "LIKE" || w == "FILE" || w == "ENTRY" ||
+           w == "DEFINED" || w == "DEF";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
