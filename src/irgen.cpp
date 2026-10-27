@@ -13753,8 +13753,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   }
   // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
   // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
+  // The p/q form converts the source directly so a scaled float is not
+  // truncated before the target scale is applied.
   if (e->name == "FIXED") {
     Val a = emitExpr(e->args[0].get());
+    const bool hasPrec = e->args.size() >= 2;
     if (a.ty.isComplex()) {
       // FIXED(complex) keeps the pair and truncates each part toward zero.
       bool rt = useRuntimeCall("fixed_of_float");
@@ -13799,12 +13802,28 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
         b_.SetInsertPoint(okBB);
       }
-      v.ty = e->ty;
-      v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
+      if (hasPrec) {
+        // The p/q form rescales the parsed integer into the declared target
+        // (character fractions are rejected in sema for a nonzero scale).
+        Val fixed;
+        fixed.ty = Type::fixedBin(63, 0);
+        fixed.reg = b_.CreateTrunc(r, b_.getInt64Ty(), "fxc");
+        v = convert(fixed, e->ty, e->loc);
+      } else {
+        v.ty = e->ty;
+        v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
+      }
       result = v;
       return true;
     }
     if (a.ty.k == TK::Float) {
+      // With an explicit scale, convert the float at full precision; the
+      // one-argument form keeps the historical truncating helper.
+      if (hasPrec) {
+        v = convert(a, e->ty, e->loc);
+        result = v;
+        return true;
+      }
       llvm::Value* r;
       if (useRuntimeCall("fixed_of_float")) {
         r = b_.CreateCall(runtimeFn("pli_fixed_of_float"), {a.reg}, "fxf_rt");

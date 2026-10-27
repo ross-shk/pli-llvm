@@ -7244,28 +7244,94 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // FIXED built-in (rule (123)): FIXED(char) parses decimal text with
   // truncation, FIXED(numeric) truncates toward zero (the PL/I
   // FIXED(x) conversion entry point used by libnet's `port =
-  // fixed(substr(url, pos+1))`).
+  // fixed(substr(url, pos+1))`). The optional p/q form takes the result
+  // base from a fixed source; FLOAT is read as FLOAT DECIMAL (ADR-343).
   if (e->name == "FIXED") {
-    if (e->args.size() != 1) {
-      d_.error(e->loc, "FIXED expects 1 argument", "(123)");
+    if (e->args.empty() || e->args.size() > 3) {
+      d_.error(e->loc, "FIXED expects 1-3 arguments", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
     const Type& a = e->args[0]->ty;
-    if (a.isComplex() && !a.isArray()) {
-      // FIXED(complex) keeps the complex mode (the result has the base and
-      // mode of x); both parts are truncated toward zero.
-      e->ty = Type::complexTy();
+    if (e->args.size() == 1) {
+      if (a.isComplex() && !a.isArray()) {
+        // FIXED(complex) keeps the complex mode (the result has the base and
+        // mode of x); both parts are truncated toward zero.
+        e->ty = Type::complexTy();
+        return true;
+      }
+      if (a.isChar() || a.isNumeric()) {
+        // The one-argument form keeps the historical BIN(31,0) result so
+        // existing FIXED(x) programs do not change (B11 compatibility tail).
+        e->ty = Type::fixedBin(31, 0);
+        return true;
+      }
+      d_.error(e->args[0]->loc, "FIXED argument must be character or numeric",
+               "(123)");
+      e->ty = Type::voidTy();
       return true;
     }
-    if (a.isChar() || a.isNumeric()) {
-      e->ty = Type::fixedBin(31, 0);
+    // Precision/scale form: p and q are integer constants, q defaults to 0.
+    if (a.isArray() || a.isComplex() || (!a.isNumeric() && !a.isChar())) {
+      d_.error(a.isArray() ? e->args[0]->loc : e->loc,
+               "FIXED precision requires a scalar numeric or character value",
+               "(123)");
+      e->ty = Type::voidTy();
       return true;
     }
-    d_.error(e->args[0]->loc, "FIXED argument must be character or numeric", "(123)");
-     e->ty = Type::voidTy();
-     return true;
-   }
+    int p = 0, q = 0;
+    auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+      ConstNum c;
+      if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
+          c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
+        d_.error(e->args[idx]->loc,
+                 std::string("FIXED ") + what + " must be an integer constant",
+                 "(123)");
+        return false;
+      }
+      out = (int)c.value;
+      return true;
+    };
+    if (!readInteger(1, "precision", p)) {
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (e->args.size() == 3 && !readInteger(2, "scale", q)) {
+      e->ty = Type::voidTy();
+      return true;
+    }
+    // FLOAT is read as FLOAT DECIMAL, matching the ADR-343 source table;
+    // Type does not retain the FLOAT base, so FLOAT BINARY stays a B11 tail.
+    const bool dec = a.k == TK::FixedDec || a.k == TK::Float;
+    const int maxP = dec ? 31 : 63;
+    if (p < 1 || p > maxP) {
+      d_.error(e->args[1]->loc,
+               "FIXED precision must be between 1 and " + std::to_string(maxP),
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    const int maxQ = dec ? (p > 18 ? 38 : 18) : 62;
+    if (q < 0 || q > maxQ) {
+      d_.error(e->args.size() == 3 ? e->args[2]->loc : e->args[1]->loc,
+               "FIXED scale must be between 0 and " + std::to_string(maxQ),
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    // Fractional character text still uses the integer-only FIXED(char)
+    // scan; reject a nonzero scale rather than return a silently wrong value.
+    if (a.isChar() && q > 0) {
+      d_.error(e->args[2]->loc,
+               "FIXED of character text with a nonzero scale is not "
+               "implemented",
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = dec ? Type::fixedDec(p, q) : Type::fixedBin(p, q);
+    return true;
+  }
    // FIXEDBIN/FIXEDDEC built-ins (rule (123), Appendix 1): convert x to a
    // fixed binary/decimal value. Explicit p/q must be constants; when both
    // are omitted IBM's source-type table derives them.

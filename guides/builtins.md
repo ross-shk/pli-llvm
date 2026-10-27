@@ -387,24 +387,40 @@ The parts use the same readable `%.6g` image as `PUT LIST`, so an exact IBM
 
 **Limitations** — `CHAR` of a structure, array, or pointer is an error.
 
-### `FIXED(x)` → FIXED BINARY(31)
+### `FIXED(x[,p[,q]])` → fixed point
 
-Parses decimal text, or truncates a float toward zero. For a float, out-of-range values clamp; `NaN` reads as 0.
+Parses decimal text, or converts a numeric value to fixed point. The
+one-argument form keeps the historical `FIXED BINARY(31,0)` result and
+truncates toward zero; for a float, out-of-range values clamp and `NaN`
+reads as 0.
 
 ```pli
 dcl n fixed bin(31);
+dcl b fixed bin(8,2);
+dcl d fixed dec(9,2);
 
 n = fixed('1234');                /* integer parse */
 n = fixed(3.9);                   /* 3 */
+b = fixed(3.75E0, 8, 2);          /* FIXED DEC(8,2), 3.75 */
+d = fixed(fixeddec(3.75, 4, 2), 6); /* FIXED DEC(6,0), 4.00 */
 ```
 
-A `COMPLEX` argument keeps the complex mode and truncates both parts toward
-zero; assigning the result to a real target takes the real part. Complex
-values are carried as a `{double,double}` pair, so the fixed/float
-distinction is not represented separately; the precision tail remains
-deferred.
+`p` and `q` are integer constants; `q` defaults to zero and must be
+nonnegative. The result keeps the base of a fixed source (`FIXED DEC` stays
+decimal, `FIXED BIN` stays binary). A `FLOAT` source is read as `FLOAT
+DECIMAL` because the compiler's type does not retain its base, so the result
+is decimal; a character source produces a binary result. Limits are the same
+as `FIXEDBIN`/`FIXEDDEC`: `p` up to 63 binary or 31 decimal, and `q` up to 62
+binary or 18/38 decimal depending on the width.
 
-**Limitations** — `FIXED` of a `BIT` argument is an error.
+A `COMPLEX` argument keeps the complex mode and truncates both parts toward
+zero in the one-argument form; a complex value with `p`/`q` is rejected.
+Complex values are carried as a `{double,double}` pair, so the fixed/float
+distinction is not represented separately.
+
+**Limitations** — `FIXED` of a `BIT` argument is an error. Character text
+with `q > 0` is rejected until the fractional character scan lands; use a
+numeric source for fractional values.
 
 ### `FIXEDBIN(x[,p[,q]])` / `FIXEDDEC(x[,p[,q]])`
 

@@ -12931,3 +12931,45 @@ pins the offset-0 overlap and `tests/core/bad_secondary.pli` pins the negative.
 
 **Rejected.** *Implement `SECONDARY` as an alias for something.* IBM gives it no
 data-attribute meaning, so any mapping would invent semantics.
+
+---
+
+## ADR-345 — `FIXED` accepts optional precision and scale
+
+**Context.** Rule (123) and IBM Appendix 1 define `FIXED(x[,p[,q]])`. The
+compiler only accepted one argument and always returned `FIXED BINARY(31,0)`.
+IBM derives the result's base and mode from `x`, with `p` the total digits and
+`q` the scale (`q` defaults to zero and must be nonnegative). The compiler's
+`Type` records a fixed base but not a `FLOAT` base.
+
+**Decision.** Accept one to three arguments:
+1. The one-argument form is unchanged: a character or numeric value returns
+   `FIXED BINARY(31,0)`, and a complex value keeps its complex mode with both
+   parts truncated. This preserves existing programs while B11 tracks IBM's
+   `(15,0)`/`(5,0)` default.
+2. With `p`, both `p` and `q` must be integer constants. `p` is 1..63 for a
+   binary result and 1..31 for a decimal result; `q` is 0..62 for binary and
+   0..18 or 0..38 for decimal, using the same storage limits as ADR-343.
+3. The result keeps the base of a fixed source: `FIXED BIN` gives
+   `FIXED BIN(p,q)` and `FIXED DEC` gives `FIXED DEC(p,q)`. A `FLOAT` source
+   is read as `FLOAT DECIMAL`, matching ADR-343, so it gives a decimal result;
+   a character source has no base and gives binary. Numeric sources lower
+   through `convert()` so a float is scaled before it is truncated; a
+   character source with `q = 0` reuses the integer-text scan and then
+   rescales.
+4. A character source with `q > 0`, a complex value with `p`/`q`, and any
+   `BIT` source are diagnosed with rule (123) instead of returning a silently
+   wrong value.
+
+**Consequences.** `tests/builtins/fixed_precision.pli` covers float, decimal,
+binary, and character sources plus decimal round-half-away rescaling;
+`tests/builtins/bad_fixed_precision.pli` pins arity, precision/scale, source,
+and character-fraction diagnostics. `FIXED`'s one-argument default and the
+fractional character scan remain B11 tails, as does tracking `FLOAT`'s base.
+
+**Rejected.** *Change the one-argument result to IBM's default now.* It would
+silently change an existing built-in's type and its call sites. *Pick a float
+base from its precision.* Binary and decimal precisions overlap; B11 needs a
+real `Type` field. *Let character `q > 0` reuse the integer scan.* It would
+turn `FIXED('1.5', 5, 2)` into `1.00` rather than the correct fractional
+value.
