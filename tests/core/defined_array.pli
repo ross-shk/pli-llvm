@@ -1,0 +1,34 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (12),(24); ADR-339: a DEFINED array overlays the base array's
+    first element and only has to fit into it, so a shorter view or
+    another rank over the same prefix is legal. */
+ defined_array: procedure options(main);
+    declare base(10) fixed bin(31);
+    declare view(3) fixed bin(31) defined base;
+    declare matrix(2,2) fixed bin(31) defined base;
+    declare abbrev(2) fixed bin(31) def base;
+    declare i fixed bin(31);
+
+    do i = 1 to 10;
+       base(i) = i * 10;
+    end;
+
+    /* The view and the matrix alias the base's first elements. */
+    if view(1) ^= 10 then go to bad;
+    if view(3) ^= 30 then go to bad;
+    if matrix(2,2) ^= 40 then go to bad;
+    if abbrev(2) ^= 20 then go to bad;
+
+    /* Writes go through to the base and back. */
+    view(2) = 999;
+    if base(2) ^= 999 then go to bad;
+    base(3) = 333;
+    if view(3) ^= 333 then go to bad;
+
+    put skip list('PASS defined_array');
+    stop;
+
+ bad:
+    put skip list('FAIL defined_array');
+ end defined_array;
