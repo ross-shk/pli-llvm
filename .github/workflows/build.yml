@@ -60,10 +60,13 @@ jobs:
           fi
       - name: Test
         run: |
+          # --output-on-failure: ctest captures the runner's stdout, so without
+          # it a red suite reports only "pli-tests (Failed)" and the failing
+          # test names never reach the log.
           if [ "${{ runner.os }}" = "Windows" ]; then
-            ctest --test-dir build/cmake -j$NUMBER_OF_PROCESSORS
+            ctest --test-dir build/cmake -j$NUMBER_OF_PROCESSORS --output-on-failure
           else
-            ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+            ctest --test-dir build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) --output-on-failure
           fi
       - name: Size gate (stripped < 150 MB)
         run: |
