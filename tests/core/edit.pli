@@ -17,6 +17,7 @@
       declare p fixed dec(5,2);
       declare q fixed dec(5,2);
       declare chunk char(7);
+      declare v char(8) varying;
 
       /* F(w): right-justified integer in a width-w field. */
       a = 123;
@@ -38,6 +39,31 @@
       get string(buf) edit(y) (a(4));
       if y ^= 'abcd' then do;
          put skip list('FAIL A roundtrip', y);
+         stop;
+      end;
+
+      /* VARYING A(w) takes the field width, not the maximum. */
+      x = 'hi';
+      put string(buf) edit(x) (a(4));
+      get string(buf) edit(v) (a(4));
+      if length(v) ^= 4 then do;
+         put skip list('FAIL A varying len', length(v));
+         stop;
+      end;
+      if v ^= 'hi  ' then do;
+         put skip list('FAIL A varying value', v);
+         stop;
+      end;
+
+      /* A field wider than the target truncates to the maximum. */
+      buf = 'abcdefghij';
+      get string(buf) edit(v) (a(10));
+      if length(v) ^= 8 then do;
+         put skip list('FAIL A varying trunc', length(v));
+         stop;
+      end;
+      if v ^= 'abcdefgh' then do;
+         put skip list('FAIL A trunc value', v);
          stop;
       end;
 

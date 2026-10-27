@@ -8557,9 +8557,11 @@ void IRGen::emitGetDataItems(HStmt* s) {
     }
     case TK::Char: {
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gdch");
-      b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
+      llvm::Value* n = b_.CreateCall(runtimeFn("pli_get_list_char"),
+                                     {buf, i64(ty.len)}, "gdch.n");
       v.ptr = buf;
-      v.len = i64(ty.len);
+      // VARYING stores the assigned length; a fixed target stays padded to len.
+      v.len = ty.varying ? n : i64(ty.len);
       v.ty = ty;
       break;
     }
@@ -8730,10 +8732,11 @@ void IRGen::emitGet(HStmt* s) {
         // Read into a reusable entry buffer, then assign into the target.
         llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
         deferCall("pli_get_list_char", {buf, i64(ty.len)}, false,
-                  [this, t, buf, loc](const std::vector<llvm::Value*>&, size_t) {
+                  [this, t, buf, loc](const std::vector<llvm::Value*>& r, size_t i) {
                     Val v;
                     v.ptr = buf;
-                    v.len = i64(t->ty.len);
+                    // VARYING takes the input length; fixed stays padded to len.
+                    v.len = t->ty.varying ? r[i] : i64(t->ty.len);
                     v.ty = t->ty;
                     storeGetTarget(t, v, loc);
                   });
@@ -9114,10 +9117,11 @@ void IRGen::emitGetEditItems(HStmt* s) {
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gech");
       deferCall("pli_get_edit_char", {buf, i64(ty.len), w}, false,
-                [this, t, buf, loc](const std::vector<llvm::Value*>&, size_t) {
+                [this, t, buf, loc](const std::vector<llvm::Value*>& r, size_t i) {
                   Val v;
                   v.ptr = buf;
-                  v.len = i64(t->ty.len);
+                  // VARYING takes the field width; fixed stays padded to len.
+                  v.len = t->ty.varying ? r[i] : i64(t->ty.len);
                   v.ty = t->ty;
                   storeGetTarget(t, v, loc);
                 });

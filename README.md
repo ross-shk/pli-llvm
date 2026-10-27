@@ -31,7 +31,7 @@ Each archive contains just the compiler binary (`pli` or `pli.exe`); the runtime
 
 ```pli
 hello: procedure options(main);
-  declare name char(40);
+  declare name char(40) varying;
   
   put skip list('Enter your name: ');
   get list(name);
@@ -43,6 +43,7 @@ end;
 pli hello.pli -o hello
 ./hello
 # When running, enter your name at the prompt, e.g. "Alice"
+# Output: Hello, Alice!
 ```
 
 For a fuller tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are in the [Built-ins reference](guides/builtins.md).

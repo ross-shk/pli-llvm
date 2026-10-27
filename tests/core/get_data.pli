@@ -9,6 +9,7 @@
       declare a fixed bin(31);
       declare x float;
       declare s char(4);
+      declare v char(8) varying;
       declare b bit(1);
       declare c fixed bin(31);
       declare y float;
@@ -49,6 +50,17 @@
       end;
       if y ^= 7.0 then do;
          put skip list('FAIL reorder y');
+         stop;
+      end;
+      /* VARYING takes the value length, not the maximum. */
+      buf = 'V=Alice;';
+      get string(buf) data(v);
+      if length(v) ^= 5 then do;
+         put skip list('FAIL varying len', length(v));
+         stop;
+      end;
+      if v ^= 'Alice' then do;
+         put skip list('FAIL varying value', v);
          stop;
       end;
    put skip list('PASS get-data');
