@@ -4161,7 +4161,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (s->data) {
       // Data-directed output (rule (106)): each item prints as NAME=value,
       // so it must be a plain scalar variable reference. Subscripted,
-      // qualified, structure, pointer, and complex items stay diagnosed.
+      // qualified, structure, pointer, and array items stay diagnosed; a
+      // scalar COMPLEX prints through the list-directed re+imI image.
       for (auto& it : s->items) {
         typeExpr(it.get(), sc, p);
         if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName) {
@@ -4169,7 +4170,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           continue;
         }
         // Allow structures: they will be expanded to their members in codegen
-        if (it->ty.isVoid() || it->ty.isPointer() || it->ty.isComplex() || it->ty.isArray()) {
+        if (it->ty.isVoid() || it->ty.isPointer() || it->ty.isArray()) {
           d_.error(it->loc, "PUT DATA of this type is not implemented in this stage", "(110)");
         }
       }
@@ -4210,7 +4211,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // Data-directed input (rule (106)): each NAME=value pair stores into
       // the named variable, so items must be plain scalar variable
       // references, mirroring PUT DATA (subscripted, qualified, structure,
-      // pointer, complex, and array items stay diagnosed).
+      // pointer, picture, and array items stay diagnosed). A scalar COMPLEX
+      // reads the list-directed re+imI (or bare-number) image.
       for (auto& it : s->items) {
         typeExpr(it.get(), sc, p);
         if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName ||
@@ -4218,7 +4220,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           d_.error(it->loc, "a GET DATA item must be a scalar variable", "(110)");
           continue;
         }
-        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() || it->ty.isComplex() ||
+        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() ||
             it->ty.isArray() || (it->ty.isChar() && !it->ty.picture.empty())) {
           d_.error(it->loc, "GET DATA of this type is not implemented in this stage", "(110)");
         }

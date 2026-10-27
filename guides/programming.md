@@ -1280,7 +1280,7 @@ keeping a transcript while reading a field.
 
 ### DATA-directed: self-describing dumps
 
-`put data(x, y)` prints `name=value` pairs; `get data` reads them in any order and skips unknown names. Great for configs and debugging — like `repr()` of your variables.
+`put data(x, y)` prints `name=value` pairs; `get data` reads them in any order and skips unknown names. Great for configs and debugging — like `repr()` of your variables. A scalar `complex` value uses the list-directed `re+imI` image, so `put data(z)` writes `Z=7-3I` and `get data(z)` reads it back.
 
 ```pli
  dcl 1 config,

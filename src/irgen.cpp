@@ -8279,6 +8279,12 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
     deferCall("pli_put_list_bit", {bit});
     break;
   }
+  case TK::Complex:
+    // Complex DATA output (CM5): the same real+imaginary list image, printed
+    // directly after the NAME= prefix.
+    deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "dcpx.re"),
+                                       b_.CreateExtractValue(v.cpxVal(), 1, "dcpx.im")});
+    break;
   case TK::FixedBin:
   case TK::FixedDec:
     if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
@@ -8563,6 +8569,17 @@ void IRGen::emitGetDataItems(HStmt* s) {
       v.ptr = buf;
       // VARYING stores the assigned length; a fixed target stays padded to len.
       v.len = ty.varying ? n : i64(ty.len);
+      v.ty = ty;
+      break;
+    }
+    case TK::Complex: {
+      // Complex DATA input (CM5): read both parts through element pointers,
+      // then load the pair into the target.
+      llvm::Value* pair = entryAlloca(llvmTy(ty), "gdcx");
+      b_.CreateCall(runtimeFn("pli_get_list_complex"),
+                    {b_.CreateStructGEP(llvmTy(ty), pair, 0, "gdcxr"),
+                     b_.CreateStructGEP(llvmTy(ty), pair, 1, "gdcxi")});
+      v.cpx = b_.CreateLoad(llvmTy(ty), pair, "gdcx");
       v.ty = ty;
       break;
     }
