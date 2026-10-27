@@ -12608,3 +12608,50 @@ there are more load paths than consumers.
 a precision when no explicit type precedes the attribute; in the spelling that is
 used in practice (`DCL X(3) FIXED BIN(31) DEFINED B(1)`) the dimension already
 parses.
+
+---
+
+## ADR-338 — `LIKE` with a dimension is an array of the template
+
+**Context.** Rule (43) declares an item with the shape of an already-declared
+structure. ADR-337 taught the dimension lookahead the word `LIKE`, so
+`DECLARE 1 TEAM(8) LIKE TEMPLATE;` finally parsed its dimension — and the LIKE
+branch, which had a "LIKE with a dimension is not implemented" guard, diagnosed
+it. That turned `tests/corner_cases/struct_edge.pli` red:
+`declare 1 emp_copy(3) like employees;` followed by `emp_copy = employees;` and
+`emp_copy(2).salary` is exactly the construct IBM documents
+(`DECLARE 1 EMPLOYEE_INFO(1000) LIKE TEMPLATE;` is "equivalent to
+`DECLARE 1 EMPLOYEE_INFO(1000), 2 NAME ..., ...`").
+
+The failure also explained how that test had been passing: the LIKE branch
+returned a copy of the *whole template type*, including the template's own
+dimension. `employees` was an array of three structures, so `emp_copy` inherited
+three elements from it, and the `(3)` the source wrote was dropped as a precision.
+The extents happened to agree, so the test could not see it. The same inheritance
+is wrong on its own terms: `DECLARE 1 X LIKE ARRAY_OF_3;` silently produced three
+elements, and IBM says the reference's own dimensions are *not* carried over
+(only its substructures' and elements' alignment and dimensions are).
+
+**Decision.** A LIKE item's own dimension sets the array shape; the template's own
+dimension is not copied. The template's members are copied deeply, so their
+dimensions and alignment still come along. The extend form (LIKE combined with the
+item's own members) stays diagnosed with rule (43).
+
+**Consequences.** `tests/core/like_array.pli` pins three cases: an array of a
+scalar template, an item extent over an array template (three elements, not two
+times three), and a scalar item of an array template (`w.b` is valid — with the
+old inheritance it would have been an array and the reference would have needed a
+subscript). `struct_edge.pli` is green again. `GC` (43) and the programming
+guide's LIKE section carry the change, and the A6 row's evidence is corrected
+(ADR-337 listed LIKE with a dimension as diagnosed; ADR-338 serves it).
+
+**Rejected.** *Keep the diagnostic.* The test is the source of truth and IBM
+documents the construct, including its own example. *Keep inheriting the
+template's dimension.* That is a silent wrong extent — the worst class — and it
+made the written extent a decoration. *Read the written dimension as a precision
+and let the template supply the shape.* That was the pre-ADR-337 accident: it
+compiles two extents' worth of intent into one and only survives when they match.
+
+**Limitations recorded.** LIKE of a structure with a dynamic member is still
+diagnosed (rule (13)), as before. A LIKE template that is itself a TYPE-defined
+structure is outside this stage (TYPE is not implemented).

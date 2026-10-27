@@ -173,9 +173,18 @@ Nesting goes as deep as you like:
 
 You can also narrow to a sub-structure with `like s.a.b` (a deep copy of that branch).
 
+A dimension on the `like` item makes an array of that shape:
+
+```pli
+ dcl 1 team(8) like template;   /* eight copies of template's members */
+ team(3).id = 42;
+```
+
+The template's *own* dimension is not copied with the shape — write the extent you want on the item. The dimensions of the template's members are kept.
+
 **Not yet**
 
-- `like` of a non-structure, or `like` plus a dimension, is an error the compiler reports.
+- `like` of a non-structure, or `like` combined with its own members, is an error the compiler reports.
 
 > **Run the full example:** [`examples/declarations_structures.pli`](../examples/declarations_structures.pli) — `pli declarations_structures.pli -o decls && ./decls`.
 

@@ -1567,11 +1567,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         bool unaligned = it.unaligned || (inheritUnaligned && !it.aligned);
         // LIKE template (rule 43): the item takes the structure shape of an
         // already-declared structure variable (a deep copy of its type). A LIKE
-        // item combined with its own members (the extend form) or a dimension
-        // (an array of the template) is diagnosed, never silently dropped.
+        // item combined with its own members (the extend form) is diagnosed,
+        // never silently dropped.
         if (!it.like.empty()) {
-          if (!it.ty.dims.empty())
-            d_.error(it.loc, "LIKE with a dimension is not implemented in this stage", "(43)");
           if (!children[idx].empty())
             d_.error(
                 it.loc,
@@ -1635,9 +1633,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (hasDynamicMember(*tplTy))
             d_.error(it.loc, "LIKE of a structure with a dynamic member is not implemented",
                      "(13)");
-          // A LIKE copy keeps the template's layout; an explicit ALIGNED or
-          // UNALIGNED on the item wins, and an enclosing UNALIGNED packs it.
+          // A LIKE copy keeps the template's members — with their own
+          // alignment and dimensions — but not the template's storage class,
+          // alignment or own dimension: `DECLARE 1 E(1000) LIKE T;` is an array
+          // of 1000 copies of T's members. IBM's LIKE attribute is explicit:
+          // the reference's own dimensions are not carried over, while its
+          // substructures' and elements' dimensions are.
           Type t = *tplTy; // deep copy via Type's copy constructor
+          t.dims = it.ty.dims;
+          // An explicit ALIGNED or UNALIGNED on the item wins, and an enclosing
+          // UNALIGNED packs it.
           t.unaligned = it.unaligned || (!it.aligned && (inheritUnaligned || t.unaligned));
           return t;
         }

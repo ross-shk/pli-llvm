@@ -1,9 +1,0 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rule (43); ADR-337: an array of the LIKE template is diagnosed, so a
-    bare dimension is read as one instead of being taken for a precision
-    and leaving a silent scalar copy. */
- bad_like_array: procedure options(main);
-    declare 1 t, 2 a fixed bin(31);
-    declare x(3) like t;
- end bad_like_array;
