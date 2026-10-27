@@ -35,7 +35,7 @@ hello: procedure options(main);
   
   put skip list('Enter your name:');
   get list(name);
-  put skip list('Hello, ' || name '!');
+  put skip list('Hello, ' || name || '!');
 end hello;
 ```
 
