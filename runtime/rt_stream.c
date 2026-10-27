@@ -132,6 +132,7 @@ void rt_file_out_detach(FILE *f) {
  * ------------------------------------------------------------------------- */
 rt_lock rt_out_mu;
 rt_lock rt_in_mu;
+rt_lock rt_rec_read_mu;
 static pli_once rt_out_once = PLI_ONCE_INIT;
 volatile int rt_tasks_active = 0;
 
@@ -140,6 +141,7 @@ volatile int rt_tasks_active = 0;
 static void rt_out_init(void) {
   rt_lock_init_recursive(&rt_out_mu);
   rt_lock_init_recursive(&rt_in_mu);
+  rt_lock_init(&rt_rec_read_mu);
   rt_tasks_active = 1;
 }
 

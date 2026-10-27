@@ -12817,3 +12817,50 @@ just TSan entry/exit hooks. Both stay diagnosed.
 no per-module pipeline to hang the pass on. Windows and the static musl sysroot
 are unsupported. `-emit-llvm`/`-emit-mlir` do not run the pass. The ELF link is
 best-effort: only the Darwin path is exercised by the suite.
+
+---
+
+## ADR-342 — Record `READ` parks through the file broker
+
+**Context.** C2/ADR-298 item 7 moved stream `GET` from a named file onto the
+file-read broker but left record `READ` doing a direct blocking `fread`
+(`runtime/rt_file.c`). Under the fiber model that read holds the worker, so
+every task on that worker stalls until the record arrives - the case C4
+tracks. A record read is more than the `fread`: it records `ftell` before and
+the record position after, and the broker has one work slot that used to be
+safe only because a `GET` holds the input lock (ADR-233) around it. A record
+`READ` is not bracketed by that lock, so it could overwrite a stream request
+already in the slot.
+
+**Decision.** Record reads use the same broker and add two locks around it.
+
+1. `pli_record_read_{fixed,float,char,bit}` call `rt_fbroker_fread` instead of
+   `pli_plat_fread`; under the fiber model the task parks while the broker
+   thread blocks in the read. Counts are bytes (the broker's contract):
+   fixed/float check `sizeof v`, char checks `len`.
+2. A fiber-aware `rt_rec_read_mu` makes the `ftell` -> read -> `rt_rec_set`
+   sequence one unit, so two readers cannot both read the same record and
+   leave a stale position. It is initialised in `rt_out_init` and stays off
+   until the first task spawn, like the stream locks. The read releases it
+   before `rt_rec_endfile`, because an ENDFILE unit may do record I/O again.
+3. The broker serialises its one work slot with a fiber-aware `rt_lock`: a
+   record `READ` and a stream `GET` can now arrive together, and the input
+   lock alone no longer guarantees one caller. A second caller parks.
+
+**Consequences.** A record `READ` parks the task; `tests/driver/task_record.sh`
+puts a reader on a FIFO and a sleeping ticker on a single worker - the ticker
+only writes its mark when the read parks - then sends the record and checks
+the value. The test needs a POSIX FIFO and is skipped on Windows. ADR-298 item
+7 stays as the historical contract it was; this ADR supersedes its "record
+READ still blocks" clause. `C4` moves to done.
+
+**Limitations.** Record `WRITE`/`REWRITE`/`DELETE` still call the platform
+`fwrite`/`fseek` directly and can hold a worker on a slow file; only `READ` was
+in C4's scope. The record lock serialises readers with each other, not a reader
+against a writer on the same file.
+
+**Rejected.** *Bracket record READ with the input lock instead.* It would
+serialise record reads against stream GETs for no semantic reason and still
+leave the `ftell`/position update unprotected between two record reads. *Give
+the broker a request queue.* One slot plus a lock covers the two callers; a
+queue is machinery the runtime does not need yet.

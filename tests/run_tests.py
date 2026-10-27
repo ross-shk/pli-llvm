@@ -409,9 +409,11 @@ def main():
     # Tests that cannot run on Windows for platform reasons (not code bugs):
     # - builtins/system shells out to the Unix `true`/`false` commands.
     # - core/socket_pair needs <sys/socket.h>, absent on Windows.
+    # - driver/task_record needs a POSIX FIFO a native program can open.
     WINDOWS_SKIP = {
         ("tests/builtins", "system"): "needs Unix true/false commands",
         ("tests/core", "socket_pair"): "needs <sys/socket.h>",
+        ("tests/driver", "task_record"): "needs a POSIX FIFO",
     }
 
     def work(job):

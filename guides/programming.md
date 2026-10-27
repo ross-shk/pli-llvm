@@ -1169,11 +1169,10 @@ fiber backend yet.
 - The fiber backend exists for x86-64 and AArch64 and runs in CI on Linux, macOS
   and Windows; the Windows backend (ADR-239) is the least-proven of the three.
   The tasking matrix per backend is tracked in `docs/DEFERRED-WORK.md` (C1).
-- Under the fiber model, a stream `get` from a file parks the task (and frees
-  its worker) until the read completes, using the same helper-thread mechanism
-  as standard input (ADR-238, ADR-298). Record `read` still blocks the worker
-  (DEFERRED-WORK C4). Reading *standard input* likewise parks rather than
-  blocking.
+- Under the fiber model, a stream `get` from a file and a record `read` both
+  park the task (and free its worker) until the read completes, using the same
+  helper-thread mechanism as standard input (ADR-238, ADR-298, ADR-342).
+  Reading *standard input* likewise parks rather than blocking.
 
 A task that runs out of stack is reported, not left to die quietly:
 `TASK: stack overflow (the task's stack ran out)`, and the program stops

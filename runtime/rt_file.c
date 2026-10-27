@@ -346,12 +346,15 @@ long long pli_record_read_fixed(long long slot) {
   long long off;
   if (!f)
     return 0;
+  rt_rec_read_lock();
   off = pli_plat_ftell(f);
-  if (pli_plat_fread(&v, sizeof v, 1, f) != 1) {
+  if (rt_fbroker_fread(&v, sizeof v, f) != sizeof v) {
+    rt_rec_read_unlock();
     rt_rec_endfile(slot);
     return 0;
   }
   rt_rec_set(slot, off, (long long)sizeof v);
+  rt_rec_read_unlock();
   return v;
 }
 
@@ -361,12 +364,15 @@ double pli_record_read_float(long long slot) {
   long long off;
   if (!f)
     return 0;
+  rt_rec_read_lock();
   off = pli_plat_ftell(f);
-  if (pli_plat_fread(&v, sizeof v, 1, f) != 1) {
+  if (rt_fbroker_fread(&v, sizeof v, f) != sizeof v) {
+    rt_rec_read_unlock();
     rt_rec_endfile(slot);
     return 0;
   }
   rt_rec_set(slot, off, (long long)sizeof v);
+  rt_rec_read_unlock();
   return v;
 }
 
@@ -375,12 +381,15 @@ void pli_record_read_char(long long slot, char *p, long long len) {
   long long off;
   if (!f || len <= 0)
     return;
+  rt_rec_read_lock();
   off = pli_plat_ftell(f);
-  if (pli_plat_fread(p, 1, (size_t)len, f) != (size_t)len) {
+  if (rt_fbroker_fread(p, (size_t)len, f) != (size_t)len) {
+    rt_rec_read_unlock();
     rt_rec_endfile(slot);
     return;
   }
   rt_rec_set(slot, off, len);
+  rt_rec_read_unlock();
 }
 
 unsigned char pli_record_read_bit(long long slot) {
@@ -389,12 +398,15 @@ unsigned char pli_record_read_bit(long long slot) {
   long long off;
   if (!f)
     return 0;
+  rt_rec_read_lock();
   off = pli_plat_ftell(f);
-  if (pli_plat_fread(&v, sizeof v, 1, f) != 1) {
+  if (rt_fbroker_fread(&v, sizeof v, f) != sizeof v) {
+    rt_rec_read_unlock();
     rt_rec_endfile(slot);
     return 0;
   }
   rt_rec_set(slot, off, (long long)sizeof v);
+  rt_rec_read_unlock();
   return v;
 }
 
