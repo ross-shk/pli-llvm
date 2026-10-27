@@ -12904,3 +12904,30 @@ call sites. *Evaluate 3.32 in floating point.* The table's ceilings are exact
 integer arithmetic at the boundary values; the rational form keeps them exact.
 *Track the FLOAT base by guessing from the precision.* Binary and decimal
 precisions overlap; B11 needs a real `Type` field.
+
+---
+
+## ADR-344 — `CELL` is a synonym for `UNION`; `SECONDARY` stays diagnosed
+
+**Context.** TR 25.084 rule (15) lists `CELL` and `SECONDARY` among the data
+attributes. IBM Enterprise PL/I accepts `CELL` as a synonym for `UNION` in its
+structure and union section, while it defines no `SECONDARY` data attribute;
+that word appears only in secondary-entry-point terminology. The compiler
+already implements `UNION` overlays (ADR-202), but the parser rejected `CELL`
+with a generic rule (15) diagnostic and let `SECONDARY` fall through to a
+rule (9) syntax error.
+
+**Decision.** Treat `CELL` exactly like `UNION` in a declaration: both set the
+existing `unionAttr` flag and use the ADR-202 overlay layout. Add `CELL`,
+`UNION` and `SECONDARY` to the dimension lookahead, so
+`DCL 1 v(n) CELL, 2 a ..., 2 b ...` is an array of unions rather than a scalar
+with a precision. Diagnose `SECONDARY` during
+declaration parsing with rule (15) and record it as an accepted limitation
+rather than inventing storage semantics for it.
+
+**Consequences.** `CELL` needs no new layout or codegen; `tests/core/cell_union.pli`
+pins the offset-0 overlap and `tests/core/bad_secondary.pli` pins the negative.
+`SECONDARY` stays unsupported and `GRAMMAR-COVERAGE.md` records that limitation.
+
+**Rejected.** *Implement `SECONDARY` as an alias for something.* IBM gives it no
+data-attribute meaning, so any mapping would invent semantics.

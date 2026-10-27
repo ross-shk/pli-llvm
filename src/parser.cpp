@@ -2277,9 +2277,14 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.labelAttr = true;
         continue;
       }
-      if (w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
-        // CELL, GENERIC, BUILTIN are not Subset-G attributes; diagnosed.
-        d_.error(cur().loc, "attribute " + w + " is not a Subset-G attribute", "(15)");
+      if (w == "GENERIC" || w == "BUILTIN" || w == "SECONDARY") {
+        // GENERIC/BUILTIN are not Subset-G attributes; SECONDARY is listed in
+        // TR 25.084 rule (15), but IBM Enterprise PL/I defines no such data
+        // attribute. Both cases are diagnosed with the attribute rule number.
+        std::string why = w == "SECONDARY"
+                              ? "attribute SECONDARY is not supported"
+                              : "attribute " + w + " is not a Subset-G attribute";
+        d_.error(cur().loc, why, "(15)");
         advance();
         if (at(Tok::LParen)) {
           int d = 0;
@@ -2300,8 +2305,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.reserved = true;
         continue;
       }
-      if (w == "UNION") {
+      if (w == "UNION" || w == "CELL") {
         // UNION (ADR-202): overlapping minor structures (Subset-G extension).
+        // CELL is IBM Enterprise's synonym for UNION (TR 25.084 rule (15)).
         // The first occurrence starts the overlay; subsequent members share
         // offset 0. Implemented via the DEFINED overlay path.
         advance();
@@ -2595,7 +2601,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
-           w == "EVENT" || w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "COMPLEX" ||
+           w == "EVENT" || w == "CELL" || w == "UNION" || w == "SECONDARY" ||
+           w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "COMPLEX" ||
            w == "CPLX" || w == "REAL" || w == "LIKE" || w == "FILE" || w == "ENTRY" ||
            w == "DEFINED" || w == "DEF";
   };
