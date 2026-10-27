@@ -141,7 +141,7 @@ Use distro LLVM for development, or the pinned static toolchain for release buil
 ### Linux / macOS
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/path/to/llvm-23
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=</path/to/llvm-23>
 cmake --build build/cmake -j
 ```
 

@@ -13,6 +13,11 @@
  * The input lock (ADR-233) is taken here: the token and the column state it
  * advances are read as a unit, so two tasks do not split one token. */
 int rt_get_token(char *buf, size_t cap) {
+  /* Flush any buffered prompt to stdout before the input lock is taken: the
+   * read below may block on stdin, so a preceding PUT must reach the terminal
+   * first. Done here with no lock held, so acquiring the output lock cannot
+   * invert the input/output lock order. */
+  rt_flush_stdout();
   rt_in_lock();
   int c;
   do {
