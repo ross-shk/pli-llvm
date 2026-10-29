@@ -9,6 +9,8 @@
  onconv: procedure options(main);
     declare x fixed bin(31);
     declare y fixed bin(31);
+    declare z float;
+    declare caught fixed bin(31);
 
     on conversion put skip list('caught signal', oncode());
     signal conversion;
@@ -19,6 +21,32 @@
     x = fixed('abc');
     if x ^= 0 then do;
        put skip list('FAIL fixed(abc) =', x);
+       stop;
+    end;
+    revert conversion;
+
+    /* exponent character text is not parsed yet: it must raise,
+       not return the integer prefix as a silently wrong value */
+    caught = 0;
+    on conversion begin;
+       caught = 1;
+    end;
+    x = fixed('1e3');
+    if caught ^= 1 then do;
+       put skip list('FAIL exponent conversion');
+       stop;
+    end;
+    revert conversion;
+
+    /* FLOAT(char) shares the parser: exponent text must raise, not
+       return the integer prefix as a silently wrong value */
+    caught = 0;
+    on conversion begin;
+       caught = 1;
+    end;
+    z = float('1e3');
+    if caught ^= 1 then do;
+       put skip list('FAIL float exponent conversion');
        stop;
     end;
     revert conversion;

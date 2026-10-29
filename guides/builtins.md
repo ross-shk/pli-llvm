@@ -39,6 +39,8 @@ Built-in names are case-insensitive. Some built-ins require a constant argument 
 | String   | `DATETIME`                                                                                                                                | `( )`                    | `CHAR(14)`                        |
 | Type     | `CHAR`                                                                                                                                    | `( x )`                  | `CHAR(24)`                        |
 | Type     | `FIXED`                                                                                                                                   | `( char | num )`         | `FIXED BIN(31)`                   |
+| Type     | `FIXEDBIN`                                                                                                                                | `( x [,p[,q]] )`         | `FIXED BIN(p,q)`                  |
+| Type     | `FIXEDDEC`                                                                                                                                | `( x [,p[,q]] )`         | `FIXED DEC(p,q)`                  |
 | Numeric  | `ABS`                                                                                                                                     | `( x )`                  | same type as `x`                  |
 | Numeric  | `SIGN`                                                                                                                                    | `( x )`                  | `FIXED BIN(31)`                  |
 | Numeric  | `TRUNC`                                                                                                                                   | `( x )`                  | same type as `x`                  |
@@ -364,31 +366,111 @@ put skip list(datetime());                      /* e.g. 20261002094210 */
 
 ## Type-conversion built-ins
 
-### `CHAR(x)` → CHARACTER(24)
+### `CHAR(x)` → CHARACTER(24) (29 for a complex value)
 
-Renders a scalar (`FIXED`, `FLOAT`, `BIT`) as text. A character argument passes through (truncated/padded by assignment).
+Renders a scalar (`FIXED`, `FLOAT`, `BIT`, `COMPLEX`) as text. A character
+argument passes through (truncated/padded by assignment).
 
 ```pli
 dcl s char(24);
 
 s = char(42);                     /* '42' */
 s = char(3.5);                    /* '3.5' */
+s = char(complex(1.5, 2.5));      /* '1.5+2.5I' */
 ```
 
-**Limitations** — `CHAR` of a structure, array, pointer, or complex is an error.
+A `COMPLEX` argument returns `CHARACTER(29)` (the compiler's complex mode
+is `FLOAT DECIMAL(6)`). The real part comes first, the imaginary part is
+always signed, and an `I` follows; there are no blanks between the parts.
+The parts use the same readable `%.6g` image as `PUT LIST`, so an exact IBM
+`E`-format image remains in the decimal/precision tail.
 
-### `FIXED(x)` → FIXED BINARY(31)
+**Limitations** — `CHAR` of a structure, array, or pointer is an error.
 
-Parses decimal text, or truncates a float toward zero. For a float, out-of-range values clamp; `NaN` reads as 0.
+### `FIXED(x[,p[,q]])` → fixed point
+
+Parses decimal text (including a decimal point), or converts a numeric value
+to fixed point. The one-argument form keeps the historical
+`FIXED BINARY(31,0)` result and truncates toward zero; for a float,
+out-of-range values clamp and `NaN` reads as 0.
 
 ```pli
 dcl n fixed bin(31);
+dcl b fixed bin(8,2);
+dcl d fixed dec(9,2);
 
 n = fixed('1234');                /* integer parse */
+n = fixed('12.9');                /* 12, fractional text */
 n = fixed(3.9);                   /* 3 */
+b = fixed(3.75E0, 8, 2);          /* FIXED DEC(8,2), 3.75 */
+d = fixed(fixeddec(3.75, 4, 2), 6); /* FIXED DEC(6,0), 4.00 */
 ```
 
-**Limitations** — `FIXED` of a `BIT` or `COMPLEX` argument is an error.
+`p` and `q` are integer constants; `q` defaults to zero and must be
+nonnegative. The result keeps the base of a fixed source (`FIXED DEC` stays
+decimal, `FIXED BIN` stays binary). A `FLOAT` source is read as `FLOAT
+DECIMAL` because the compiler's type does not retain its base, so the result
+is decimal; a character source produces a binary result. Limits are the same
+as `FIXEDBIN`/`FIXEDDEC`: `p` up to 63 binary or 31 decimal, and `q` up to 62
+binary or 18/38 decimal depending on the width.
+
+A `COMPLEX` argument keeps the complex mode and truncates both parts toward
+zero in the one-argument form; a complex value with `p`/`q` is rejected.
+Complex values are carried as a `{double,double}` pair, so the fixed/float
+distinction is not represented separately.
+
+A character source now parses a fractional value: a binary target truncates
+toward zero and a decimal target rounds half away from zero. For example,
+`fixed('3.75', 8, 2)` gives binary `3.75`, while `fixeddec('1.5', 5, 0)`
+gives `2.00`.
+
+**Limitations** — `FIXED` of a `BIT` argument is an error. Exponent text
+such as `'1e3'` raises `CONVERSION` instead of being parsed; `FLOAT(char)`
+uses the same fractional parser.
+
+### `FIXEDBIN(x[,p[,q]])` / `FIXEDDEC(x[,p[,q]])`
+
+Base-explicit fixed-point conversions. `FIXEDBIN` returns `FIXED BIN(p,q)`;
+`FIXEDDEC` returns `FIXED DEC(p,q)`. `p` and `q` are integer constants, with
+`p` up to 63 (binary) or 31 (decimal); `q` is nonnegative and must fit the
+storage slot (at most 62 binary, 18 decimal, or 38 for a wide decimal). If
+`p` is present and `q` is omitted, `q` is zero.
+
+If both are omitted, the precision and scale come from the source type:
+FIXED sources keep their base and scale (or convert through IBM's 3.32
+factor), `BIT` sources take the maximum precision, and character sources
+derive from their length. `FLOAT` sources are read as FLOAT DECIMAL because
+the compiler's type does not keep the binary/decimal base.
+
+```pli
+dcl b fixed bin(31);
+dcl d fixed dec(9,2);
+
+b = fixedbin(3.75, 8, 2);   /* b is 3 */
+d = fixeddec(3.5, 6, 1);    /* d is 3.50 */
+b = fixedbin('123');        /* b is 123 */
+```
+
+Character input parses a decimal point. The conversion uses the target base:
+binary targets truncate toward zero, decimal targets round half away from
+zero. Exponent text raises `CONVERSION`.
+
+### `FLOAT(x[,p])` → `FLOAT(p)`
+
+Converts a numeric value, or parses character text, to `FLOAT`. `p` is the
+result precision; every `FLOAT` is carried as a double.
+
+```pli
+dcl f float dec(6);
+
+f = float('1.5');                 /* 1.5 */
+f = float('  -2.25');             /* -2.25 */
+f = float(3, 6);                  /* FLOAT(6) */
+```
+
+Character text follows the same parser as the fixed conversions: leading
+blanks, one optional sign, digits, and at most one decimal point. Exponent
+text raises `CONVERSION`.
 
 ---
 
@@ -535,7 +617,11 @@ Negate the imaginary part (the complex conjugate).
 put skip list(conjg(z));    /* (1.5, -2.5) */
 ```
 
-**Limitations** — ordered comparison (`<`, `>`, etc.) and `CHAR`/`FIXED` of a complex value are errors; only part-wise `=`/`^=` is supported.
+`CHAR` and `FIXED` of a complex value are served; `FIXED` keeps both
+truncated parts, and assigning it to a real target takes the real part.
+
+**Limitations** — ordered comparison (`<`, `>`, etc.) is an error; only
+part-wise `=`/`^=` is supported.
 
 ---
 

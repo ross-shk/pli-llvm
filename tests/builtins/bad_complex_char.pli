@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* B11: CHAR and FIXED take a scalar complex value, not an
+    array of complex values. */
+ bad_complex_char: procedure options(main);
+    declare za(2) complex;
+    declare s char(29);
+    declare c complex;
+    s = char(za);
+    c = fixed(za);
+ end bad_complex_char;

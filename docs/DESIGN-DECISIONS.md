@@ -12818,7 +12818,245 @@ no per-module pipeline to hang the pass on. Windows and the static musl sysroot
 are unsupported. `-emit-llvm`/`-emit-mlir` do not run the pass. The ELF link is
 best-effort: only the Darwin path is exercised by the suite.
 
-## ADR-342 — Calendar time routes through the `rt_plat` seam
+---
+
+## ADR-342 — Record `READ` parks through the file broker
+
+**Context.** C2/ADR-298 item 7 moved stream `GET` from a named file onto the
+file-read broker but left record `READ` doing a direct blocking `fread`
+(`runtime/rt_file.c`). Under the fiber model that read holds the worker, so
+every task on that worker stalls until the record arrives - the case C4
+tracks. A record read is more than the `fread`: it records `ftell` before and
+the record position after, and the broker has one work slot that used to be
+safe only because a `GET` holds the input lock (ADR-233) around it. A record
+`READ` is not bracketed by that lock, so it could overwrite a stream request
+already in the slot.
+
+**Decision.** Record reads use the same broker and add two locks around it.
+
+1. `pli_record_read_{fixed,float,char,bit}` call `rt_fbroker_fread` instead of
+   `pli_plat_fread`; under the fiber model the task parks while the broker
+   thread blocks in the read. Counts are bytes (the broker's contract):
+   fixed/float check `sizeof v`, char checks `len`.
+2. A fiber-aware `rt_rec_read_mu` makes the `ftell` -> read -> `rt_rec_set`
+   sequence one unit, so two readers cannot both read the same record and
+   leave a stale position. It is initialised in `rt_out_init` and stays off
+   until the first task spawn, like the stream locks. The read releases it
+   before `rt_rec_endfile`, because an ENDFILE unit may do record I/O again.
+3. The broker serialises its one work slot with a fiber-aware `rt_lock`: a
+   record `READ` and a stream `GET` can now arrive together, and the input
+   lock alone no longer guarantees one caller. A second caller parks.
+
+**Consequences.** A record `READ` parks the task; `tests/driver/task_record.sh`
+puts a reader on a FIFO and a sleeping ticker on a single worker - the ticker
+only writes its mark when the read parks - then sends the record and checks
+the value. The test needs a POSIX FIFO and is skipped on Windows. ADR-298 item
+7 stays as the historical contract it was; this ADR supersedes its "record
+READ still blocks" clause. `C4` moves to done.
+
+**Limitations.** Record `WRITE`/`REWRITE`/`DELETE` still call the platform
+`fwrite`/`fseek` directly and can hold a worker on a slow file; only `READ` was
+in C4's scope. The record lock serialises readers with each other, not a reader
+against a writer on the same file.
+
+**Rejected.** *Bracket record READ with the input lock instead.* It would
+serialise record reads against stream GETs for no semantic reason and still
+leave the `ftell`/position update unprotected between two record reads. *Give
+the broker a request queue.* One slot plus a lock covers the two callers; a
+queue is machinery the runtime does not need yet.
+
+---
+
+## ADR-343 — `FIXEDBIN` and `FIXEDDEC` derive precision from the source
+
+**Context.** Rule (123) and Appendix 1 define `FIXEDBIN(x[,p[,q]])` and
+`FIXEDDEC(x[,p[,q]])`; the compiler had only `FIXED`, which always returns
+`FIXED BINARY(31)` and takes one argument. B11's precision tail needs the
+base-explicit converters, because a program can ask for `FIXED DEC(p,q)`
+without a declaration target.
+
+**Decision.** Serve both built-ins through the existing conversion path:
+1. An explicit `p`/`q` must be an integer constant; `p` is 1..63 for BINARY
+   and 1..31 for DECIMAL, `q` is nonnegative and fits the converter's storage
+   slot (62 for BINARY; 18 for a DECIMAL slot up to 18 digits, 38 for a wider
+   one). With `p` alone, `q` is zero.
+2. With both omitted, use IBM's source-type table. The 3.32 factor is exact
+   rational 83/25 (`CEIL(n*3.32)` = `(n*83+24)/25`), and the compiler limits
+   are M=63 for FIXED BINARY and N=31 for FIXED DECIMAL. The DECIMAL -> BINARY
+   and BINARY -> DECIMAL rows add the one integer digit the table specifies.
+3. `FLOAT` sources are read as FLOAT DECIMAL: `Type` stores only the
+   precision, not the base. `BIT` sources map to the table's maximum-precision
+   row. `CHAR` sources reuse `FIXED(char)`'s integer-text scan; a decimal
+   point in the text is still B11's tail.
+4. A `BIT` source converted to a genuinely wide DECIMAL result now
+   sign-extends into i128 instead of truncating an i64 to i128.
+
+**Consequences.** `tests/builtins/fixedbin_dec.pli` exercises explicit p/q,
+the source table for FIXED/CHAR/BIT/FLOAT, and the 63/31 wide results;
+`bad_fixedbin_dec.pli` pins arity and precision diagnostics. `FIXED` keeps its
+existing one-argument/default-31 behavior so current programs do not change.
+B11 stays open for the exact-decimal division tail, FLOAT-base tracking, and
+fractional character text.
+
+**Rejected.** *Change `FIXED` to the IBM default (15,0)/(5,0) in the same
+slice.* It would silently change an existing built-in's result type and its
+call sites. *Evaluate 3.32 in floating point.* The table's ceilings are exact
+integer arithmetic at the boundary values; the rational form keeps them exact.
+*Track the FLOAT base by guessing from the precision.* Binary and decimal
+precisions overlap; B11 needs a real `Type` field.
+
+---
+
+## ADR-344 — `CELL` is a synonym for `UNION`; `SECONDARY` stays diagnosed
+
+**Context.** TR 25.084 rule (15) lists `CELL` and `SECONDARY` among the data
+attributes. IBM Enterprise PL/I accepts `CELL` as a synonym for `UNION` in its
+structure and union section, while it defines no `SECONDARY` data attribute;
+that word appears only in secondary-entry-point terminology. The compiler
+already implements `UNION` overlays (ADR-202), but the parser rejected `CELL`
+with a generic rule (15) diagnostic and let `SECONDARY` fall through to a
+rule (9) syntax error.
+
+**Decision.** Treat `CELL` exactly like `UNION` in a declaration: both set the
+existing `unionAttr` flag and use the ADR-202 overlay layout. Add `CELL`,
+`UNION` and `SECONDARY` to the dimension lookahead, so
+`DCL 1 v(n) CELL, 2 a ..., 2 b ...` is an array of unions rather than a scalar
+with a precision. Diagnose `SECONDARY` during
+declaration parsing with rule (15) and record it as an accepted limitation
+rather than inventing storage semantics for it.
+
+**Consequences.** `CELL` needs no new layout or codegen; `tests/core/cell_union.pli`
+pins the offset-0 overlap and `tests/core/bad_secondary.pli` pins the negative.
+`SECONDARY` stays unsupported and `GRAMMAR-COVERAGE.md` records that limitation.
+
+**Rejected.** *Implement `SECONDARY` as an alias for something.* IBM gives it no
+data-attribute meaning, so any mapping would invent semantics.
+
+---
+
+## ADR-345 — `FIXED` accepts optional precision and scale
+
+**Context.** Rule (123) and IBM Appendix 1 define `FIXED(x[,p[,q]])`. The
+compiler only accepted one argument and always returned `FIXED BINARY(31,0)`.
+IBM derives the result's base and mode from `x`, with `p` the total digits and
+`q` the scale (`q` defaults to zero and must be nonnegative). The compiler's
+`Type` records a fixed base but not a `FLOAT` base.
+
+**Decision.** Accept one to three arguments:
+1. The one-argument form is unchanged: a character or numeric value returns
+   `FIXED BINARY(31,0)`, and a complex value keeps its complex mode with both
+   parts truncated. This preserves existing programs while B11 tracks IBM's
+   `(15,0)`/`(5,0)` default.
+2. With `p`, both `p` and `q` must be integer constants. `p` is 1..63 for a
+   binary result and 1..31 for a decimal result; `q` is 0..62 for binary and
+   0..18 or 0..38 for decimal, using the same storage limits as ADR-343.
+3. The result keeps the base of a fixed source: `FIXED BIN` gives
+   `FIXED BIN(p,q)` and `FIXED DEC` gives `FIXED DEC(p,q)`. A `FLOAT` source
+   is read as `FLOAT DECIMAL`, matching ADR-343, so it gives a decimal result;
+   a character source has no base and gives binary. Numeric sources lower
+   through `convert()` so a float is scaled before it is truncated; a
+   character source with `q = 0` reuses the integer-text scan and then
+   rescales.
+4. A character source with `q > 0`, a complex value with `p`/`q`, and any
+   `BIT` source are diagnosed with rule (123) instead of returning a silently
+   wrong value.
+
+**Consequences.** `tests/builtins/fixed_precision.pli` covers float, decimal,
+binary, and character sources plus decimal round-half-away rescaling;
+`tests/builtins/bad_fixed_precision.pli` pins arity, precision/scale, source,
+and character-fraction diagnostics. `FIXED`'s one-argument default and the
+fractional character scan remain B11 tails, as does tracking `FLOAT`'s base.
+
+**Rejected.** *Change the one-argument result to IBM's default now.* It would
+silently change an existing built-in's type and its call sites. *Pick a float
+base from its precision.* Binary and decimal precisions overlap; B11 needs a
+real `Type` field. *Let character `q > 0` reuse the integer scan.* It would
+turn `FIXED('1.5', 5, 2)` into `1.00` rather than the correct fractional
+value.
+
+## ADR-346 — Fractional character text for fixed-point targets
+
+**Context.** ADR-345 added `FIXED(x[,p[,q]])` but rejected a character source
+with `q > 0` because `FIXED(char)` only scanned an integer. The same
+integer-only scan also made `FIXED('1.5')` return `1` and
+`FIXEDDEC('1.5',5,0)` lose the fraction before the target scale could be
+applied. A character source is decimal text, so the conversion needs its
+decimal point and fractional digits, not a pre-truncated integer.
+
+**Decision.** Parse character text into significant digits plus a fraction
+count, then rescale once into the target type:
+1. Both lowerings accept leading blanks/tabs, one optional sign, digits, and
+   at most one decimal point. They keep up to 38 significant digits and up
+   to 76 fractional digits in a 256-bit intermediate. `*ok` is zero when the
+   text has no digits, exceeds those limits, or contains exponent text.
+2. A decimal target computes `round-half-away(all * 10^q / 10^f)`; a binary
+   target computes `trunc(all * 2^q / 10^f)`. The result then takes the
+   normal declared-precision SIZE trap and is truncated to the storage slot.
+3. The path serves `FIXED`, `FIXEDBIN`, `FIXEDDEC`, `BINARY`, and `DECIMAL`
+   with a character source, including the one-argument `FIXED` form and
+   `q = 0`. `FLOAT(char)` keeps the old integer-only scan.
+4. The runtime parser returns the signed digits as two i64 halves because the
+   ABI does not pass i128 by value; the inline lowering returns i256 directly
+   and makes no `pli_*` call.
+5. Exponent text such as `'1e3'` raises CONVERSION rather than returning the
+   integer prefix as a silently wrong value.
+
+**Consequences.** `tests/builtins/fixed_precision.pli` covers fractional
+character text for both bases, signed decimal rounding, binary truncation,
+the wide i128 path, and `BINARY`/`DECIMAL`; `tests/core/on_conversion.pli`
+pins the exponent rejection; `tests/ir/w4_scalar_rt.check` pins the new
+runtime symbol. Exponent parsing and `FLOAT(char)` fractional text remain
+B11 tails.
+
+**Rejected.** *Keep the integer scan and only accept `q = 0`.* It still turns
+`FIXEDDEC('12.9',5,0)` into `12` instead of rounding to `13`. *Parse directly
+into an i64.* A wide decimal target needs more than 64 bits. *Parse exponent
+text now.* It makes a larger parser and scale-normalisation change; rejecting
+it is honest until that slice lands.
+
+## ADR-347 — Fractional character text for FLOAT
+
+**Context.** ADR-346 gave FIXED, FIXEDBIN, FIXEDDEC, BINARY and DECIMAL a
+fractional character parser but left `FLOAT(char)` on the older integer-only
+scan. That scan was a silent wrong answer: `FLOAT('1.5')` returned `1` and
+`FLOAT('1e3')` returned `1`, both without a condition, so a program ran with a
+value the language forbids. The fixed conversions had already proved the
+parser; FLOAT only needed a different final scale.
+
+**Decision.** `FLOAT(char)` reuses the ADR-346 parse (signed significant
+digits and a fraction count, CONVERSION on no digits, overflow, or exponent
+text), then computes `digits / 10^frac` in double. The signed digits are
+converted from the 256-bit intermediate directly, so a long significand is not
+truncated through an i64 first.
+1. Both lowerings share the parse through `emitCharParts`: the runtime path
+   calls `pli_fixed_char_parts`, the inline path uses
+   `emitFixedCharPartsLLVM`.
+2. The one-argument form and the precision override (`FLOAT(x,p)`) both take
+   this path; only the result type differs.
+3. The old integer-only `emitFixedOfCharLLVM` and the `pli_fixed_of_char`
+   runtime entry are removed, so no future caller can fall back to the
+   truncating scan.
+4. Exponent text still raises CONVERSION, now for both fixed and FLOAT
+   character sources; exponent parsing remains a B11 tail.
+5. Each double conversion rounds once, so the result is within a few ulps of
+   a correctly rounded decimal parse. FLOAT is a double, so that is inside its
+   precision.
+
+**Consequences.** `tests/builtins/float_char.pli` covers signs, leading
+blanks, `.5`, `5.`, and short fractions; `tests/core/on_conversion.pli` pins
+exponent rejection; `tests/ir/w4_scalar_llvm.pli` and
+`tests/ir/w4_scalar_rt.pli` exercise FLOAT(char) in both lowerings.
+
+**Rejected.** *Call `strtod` in the runtime and keep the inline parser.* The
+two lowerings could round differently, and `strtod` starts parsing exponent
+text that the shared parser rejects. *Count the fraction by scaling the double
+in a loop.* It adds error without changing the result class; the exact i256
+power divided once is easier to reason about. *Keep the legacy scan for
+compatibility.* It is the silent wrong answer this ADR removes.
+
+---
+
+## ADR-348 — Calendar time routes through the `rt_plat` seam
 
 **Context.** ADR-222 split the runtime into a portable blob (`pli_runtime.bc`)
 plus a swappable platform TU (`pli_rtplat.bc`, selected with `--rt-platform`),

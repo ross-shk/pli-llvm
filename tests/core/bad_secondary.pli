@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* SECONDARY is in TR 25.084 rule (15), but IBM Enterprise PL/I does
+    not define it as a data attribute; the declaration is rejected. */
+ bad_secondary: procedure options(main);
+    dcl x fixed bin(31) secondary;
+    x = 1;
+ end bad_secondary;

@@ -225,6 +225,26 @@ static inline void rt_in_unlock(void) {
  * stream operation runs under the matching lock. */
 void rt_stream_enable_threads(void);
 
+/* ---------------------------------------------------------------------------
+ * Record READ serialisation (DEFERRED-WORK C4, ADR-342).
+ *
+ * A record READ does ftell, then hands the blocking fread to the file broker,
+ * then stores the record position. Two tasks interleaving those steps would
+ * both read the same record and leave the position wrong, and the broker has
+ * one work slot. One fiber-aware lock makes the whole read a unit; a second
+ * record read parks instead of blocking its worker. Off until the first task
+ * spawn, like the stream locks above.
+ * ------------------------------------------------------------------------- */
+extern rt_lock rt_rec_read_mu;
+static inline void rt_rec_read_lock(void) {
+  if (rt_tasks_active)
+    rt_lock_acquire(&rt_rec_read_mu);
+}
+static inline void rt_rec_read_unlock(void) {
+  if (rt_tasks_active)
+    rt_lock_release(&rt_rec_read_mu);
+}
+
 /* Compatibility aliases so split sources keep their original identifiers. */
 #define col rt_col
 #define items_on_line rt_items_on_line

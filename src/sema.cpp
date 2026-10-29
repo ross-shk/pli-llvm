@@ -5,6 +5,7 @@
 #include "irgen_decisions.h" // pli::classifyPicture: the picture digit layout (ADR-288)
 #include <algorithm>
 #include <climits>
+#include <cstdlib>
 #include <functional>
 #include <set>
 #include <unordered_map>
@@ -18,6 +19,29 @@ static const std::vector<Stmt::AllocBound> emptyAllocBounds;
 // cap it so a short source line cannot ask for gigabytes of memory. The
 // declared element count bounds it further where it is known.
 static const long long kMaxInitElems = 1LL << 20;
+
+// IBM's base-conversion factor is 3.32 = 83/25. These helpers keep the
+// FIXEDBIN/FIXEDDEC source-derived precision tables exact (rule (123)).
+static int ceilMulDiv(int n, int mul, int div) {
+  return (n * mul + div - 1) / div;
+}
+// FIXED DEC(p,q) -> FIXED BIN(r,s), adding one integer digit for the base
+// change (IBM Appendix 1).
+static int decToBinDigits(int p) { return std::min(63, 1 + ceilMulDiv(p, 83, 25)); }
+static int decToBinScale(int q) {
+  if (q == 0)
+    return 0;
+  int s = ceilMulDiv(std::abs(q), 83, 25);
+  return q > 0 ? s : -s;
+}
+// FIXED BIN(p,q) -> FIXED DEC(r,s), again adding one integer digit.
+static int binToDecDigits(int p) { return std::min(31, 1 + ceilMulDiv(p, 25, 83)); }
+static int binToDecScale(int q) {
+  if (q == 0)
+    return 0;
+  int s = ceilMulDiv(std::abs(q), 25, 83);
+  return q > 0 ? s : -s;
+}
 
 // True when a structure type contains a dynamic (runtime-extent) array member
 // (rule 13); forward-declared here because resolveStructReturn (rule 127) and
@@ -4161,7 +4185,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (s->data) {
       // Data-directed output (rule (106)): each item prints as NAME=value,
       // so it must be a plain scalar variable reference. Subscripted,
-      // qualified, structure, pointer, and complex items stay diagnosed.
+      // qualified, structure, pointer, and array items stay diagnosed; a
+      // scalar COMPLEX prints through the list-directed re+imI image.
       for (auto& it : s->items) {
         typeExpr(it.get(), sc, p);
         if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName) {
@@ -4169,7 +4194,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           continue;
         }
         // Allow structures: they will be expanded to their members in codegen
-        if (it->ty.isVoid() || it->ty.isPointer() || it->ty.isComplex() || it->ty.isArray()) {
+        if (it->ty.isVoid() || it->ty.isPointer() || it->ty.isArray()) {
           d_.error(it->loc, "PUT DATA of this type is not implemented in this stage", "(110)");
         }
       }
@@ -4210,7 +4235,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // Data-directed input (rule (106)): each NAME=value pair stores into
       // the named variable, so items must be plain scalar variable
       // references, mirroring PUT DATA (subscripted, qualified, structure,
-      // pointer, complex, and array items stay diagnosed).
+      // pointer, picture, and array items stay diagnosed). A scalar COMPLEX
+      // reads the list-directed re+imI (or bare-number) image.
       for (auto& it : s->items) {
         typeExpr(it.get(), sc, p);
         if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName ||
@@ -4218,7 +4244,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           d_.error(it->loc, "a GET DATA item must be a scalar variable", "(110)");
           continue;
         }
-        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() || it->ty.isComplex() ||
+        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() ||
             it->ty.isArray() || (it->ty.isChar() && !it->ty.picture.empty())) {
           d_.error(it->loc, "GET DATA of this type is not implemented in this stage", "(110)");
         }
@@ -7218,20 +7244,207 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // FIXED built-in (rule (123)): FIXED(char) parses decimal text with
   // truncation, FIXED(numeric) truncates toward zero (the PL/I
   // FIXED(x) conversion entry point used by libnet's `port =
-  // fixed(substr(url, pos+1))`).
+  // fixed(substr(url, pos+1))`). The optional p/q form takes the result
+  // base from a fixed source; FLOAT is read as FLOAT DECIMAL (ADR-343).
   if (e->name == "FIXED") {
-    if (e->args.size() != 1) {
-      d_.error(e->loc, "FIXED expects 1 argument", "(123)");
+    if (e->args.empty() || e->args.size() > 3) {
+      d_.error(e->loc, "FIXED expects 1-3 arguments", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
     const Type& a = e->args[0]->ty;
-    if (a.isChar() || a.isNumeric()) {
-      e->ty = Type::fixedBin(31, 0);
+    if (e->args.size() == 1) {
+      if (a.isComplex() && !a.isArray()) {
+        // FIXED(complex) keeps the complex mode (the result has the base and
+        // mode of x); both parts are truncated toward zero.
+        e->ty = Type::complexTy();
+        return true;
+      }
+      if (a.isChar() || a.isNumeric()) {
+        // The one-argument form keeps the historical BIN(31,0) result so
+        // existing FIXED(x) programs do not change (B11 compatibility tail).
+        e->ty = Type::fixedBin(31, 0);
+        return true;
+      }
+      d_.error(e->args[0]->loc, "FIXED argument must be character or numeric",
+               "(123)");
+      e->ty = Type::voidTy();
       return true;
     }
-    d_.error(e->args[0]->loc, "FIXED argument must be character or numeric", "(123)");
-     e->ty = Type::voidTy();
+    // Precision/scale form: p and q are integer constants, q defaults to 0.
+    if (a.isArray() || a.isComplex() || (!a.isNumeric() && !a.isChar())) {
+      d_.error(a.isArray() ? e->args[0]->loc : e->loc,
+               "FIXED precision requires a scalar numeric or character value",
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    int p = 0, q = 0;
+    auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+      ConstNum c;
+      if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
+          c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
+        d_.error(e->args[idx]->loc,
+                 std::string("FIXED ") + what + " must be an integer constant",
+                 "(123)");
+        return false;
+      }
+      out = (int)c.value;
+      return true;
+    };
+    if (!readInteger(1, "precision", p)) {
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (e->args.size() == 3 && !readInteger(2, "scale", q)) {
+      e->ty = Type::voidTy();
+      return true;
+    }
+    // FLOAT is read as FLOAT DECIMAL, matching the ADR-343 source table;
+    // Type does not retain the FLOAT base, so FLOAT BINARY stays a B11 tail.
+    const bool dec = a.k == TK::FixedDec || a.k == TK::Float;
+    const int maxP = dec ? 31 : 63;
+    if (p < 1 || p > maxP) {
+      d_.error(e->args[1]->loc,
+               "FIXED precision must be between 1 and " + std::to_string(maxP),
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    const int maxQ = dec ? (p > 18 ? 38 : 18) : 62;
+    if (q < 0 || q > maxQ) {
+      d_.error(e->args.size() == 3 ? e->args[2]->loc : e->args[1]->loc,
+               "FIXED scale must be between 0 and " + std::to_string(maxQ),
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = dec ? Type::fixedDec(p, q) : Type::fixedBin(p, q);
+    return true;
+  }
+   // FIXEDBIN/FIXEDDEC built-ins (rule (123), Appendix 1): convert x to a
+   // fixed binary/decimal value. Explicit p/q must be constants; when both
+   // are omitted IBM's source-type table derives them.
+   if (e->name == "FIXEDBIN" || e->name == "FIXEDDEC") {
+     const bool bin = e->name == "FIXEDBIN";
+     const char* nm = e->name.c_str();
+     if (e->args.empty() || e->args.size() > 3) {
+       d_.error(e->loc, std::string(nm) + " expects 1-3 arguments", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     const Type& a = e->args[0]->ty;
+     if (a.isArray() || (!a.isNumeric() && !a.isChar() && !a.isBit())) {
+       d_.error(e->args[0]->loc,
+                std::string(nm) + " argument must be a scalar numeric, bit, "
+                                  "or character value",
+                "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     int p = 0, q = 0;
+     const bool haveP = e->args.size() >= 2;
+     const bool haveQ = e->args.size() >= 3;
+     auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+       ConstNum c;
+       if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
+           c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
+         d_.error(e->args[idx]->loc,
+                  std::string(nm) + " " + what + " must be an integer constant",
+                  "(123)");
+         return false;
+       }
+       out = (int)c.value;
+       return true;
+     };
+     if (haveP && !readInteger(1, "precision", p)) {
+       e->ty = Type::voidTy();
+       return true;
+     }
+     if (haveQ && !readInteger(2, "scale", q)) {
+       e->ty = Type::voidTy();
+       return true;
+     }
+     if (haveP) {
+       const int maxP = bin ? 63 : 31;
+       if (p < 1 || p > maxP) {
+         d_.error(e->args[1]->loc,
+                  std::string(nm) + " precision must be between 1 and " +
+                      std::to_string(maxP),
+                  "(123)");
+         e->ty = Type::voidTy();
+         return true;
+       }
+       // The conversion paths use a 64-bit power of two for BINARY and an
+       // i64/i128 power of ten for DECIMAL; keep q inside those slots.
+       const int maxQ = bin ? 62 : (p > 18 ? 38 : 18);
+       if (haveQ && q > maxQ) {
+         d_.error(e->args[2]->loc,
+                  std::string(nm) + " scale must not exceed " +
+                      std::to_string(maxQ),
+                  "(123)");
+         e->ty = Type::voidTy();
+         return true;
+       }
+     }
+     if (haveQ && q < 0) {
+       d_.error(e->args[2]->loc,
+                std::string(nm) + " scale must be nonnegative", "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     if (haveP) {
+       e->ty = bin ? Type::fixedBin(p, q) : Type::fixedDec(p, q);
+       return true;
+     }
+     // The source-type table (IBM Appendix 1). The compiler's FLOAT type
+     // does not retain its base, so it is read as FLOAT DECIMAL here; the
+     // FLOAT base is part of B11's precision tail.
+     int dp = 0, dq = 0;
+     switch (a.k) {
+     case TK::FixedBin:
+       if (bin) {
+         dp = a.prec;
+         dq = a.scale;
+       } else {
+         dp = binToDecDigits(a.prec);
+         dq = binToDecScale(a.scale);
+       }
+       break;
+     case TK::FixedDec:
+       if (bin) {
+         dp = decToBinDigits(a.prec);
+         dq = decToBinScale(a.scale);
+       } else {
+         dp = a.prec;
+         dq = a.scale;
+       }
+       break;
+     case TK::Float:
+       if (bin)
+         dp = std::min(63, ceilMulDiv(a.prec, 83, 25));
+       else
+         dp = std::min(31, a.prec);
+       break;
+     case TK::Bit:
+       dp = bin ? 63 : binToDecDigits(63);
+       break;
+     case TK::Char:
+       dp = bin ? decToBinDigits(std::max(1, a.len)) : 31;
+       break;
+     default:
+       break;
+     }
+     const int maxQ = bin ? 62 : (dp > 18 ? 38 : 18);
+     if (dq > maxQ) {
+       d_.error(e->args[0]->loc,
+                std::string(nm) + " source-derived scale must not exceed " +
+                    std::to_string(maxQ),
+                "(123)");
+       e->ty = Type::voidTy();
+       return true;
+     }
+     e->ty = bin ? Type::fixedBin(dp, dq) : Type::fixedDec(dp, dq);
      return true;
    }
    // BINARY/DECIMAL/FLOAT built-in (rule (123), Appendix 1): convert x to
@@ -7295,6 +7508,13 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
     }
     if (a.isNumeric() || a.isBit()) {
       e->ty = Type::chr(24); // decimal or %.6g image, blank-padded
+      return true;
+    }
+    if (a.isComplex() && !a.isArray()) {
+      // CHAR(complex) is the real image followed by a signed imaginary
+      // image and I. The compiler's complex mode is FLOAT DECIMAL(6), so
+      // IBM's intermediate length is 2*p+17 = 29.
+      e->ty = Type::chr(2 * Type::complexTy().prec + 17);
       return true;
     }
     d_.error(e->args[0]->loc, "CHAR argument must be a scalar value in this stage", "(123)");
