@@ -427,45 +427,11 @@ void pli_char_of_complex(char *dst, long long dstcap, double re, double im) {
     dst[i] = ' ';
 }
 
-/* Legacy integer-only character scan used by FLOAT(char): parse decimal text,
- * truncating any fraction toward zero. Leading blanks, one optional sign, then
- * digits; stops at the first non-digit. Sets *ok = 1 when at least one digit
- * was consumed, 0 when the text has no numeric value (CONVERSION condition,
- * rule 94, ADR-170). */
-long long pli_fixed_of_char(const char *s, long long slen, int *ok) {
-  long long i = 0;
-  while (i < slen && (s[i] == ' ' || s[i] == '\t'))
-    ++i;
-  int neg = 0;
-  if (i < slen && (s[i] == '+' || s[i] == '-')) {
-    neg = s[i] == '-';
-    ++i;
-  }
-  long long v = 0;
-  int sawDigit = 0;
-  int overflow = 0;
-  while (i < slen && s[i] >= '0' && s[i] <= '9') {
-    unsigned d = (unsigned)(s[i] - '0');
-    /* The accumulator overflows past 19 digits: stop and report it, rather
-     * than wrapping silently (signed overflow is undefined). */
-    if (!overflow && (v > (0x7FFFFFFFFFFFFFFFLL - (long long)d) / 10)) {
-      overflow = 1;
-      v = 0x7FFFFFFFFFFFFFFFLL;
-    } else if (!overflow) {
-      v = v * 10 + (long long)d;
-    }
-    ++i;
-    sawDigit = 1;
-  }
-  *ok = sawDigit && !overflow;
-  return neg ? -v : v;
-}
-
-/* FIXED(char) fractional text: parse leading blanks, one optional sign, and a
- * decimal point, returning the significant digits (signed, at most 38) and the
- * number of fractional digits. The caller rescales into the target FIXED
- * type. *ok is 0 when the text holds no digits or exceeds the digit limit
- * (CONVERSION, rule 94). */
+/* FIXED/FLOAT(char) fractional text: parse leading blanks, one optional sign,
+ * and a decimal point, returning the significant digits (signed, at most 38)
+ * and the number of fractional digits. The caller rescales into the target
+ * FIXED type, or divides by 10^frac for FLOAT. *ok is 0 when the text holds no
+ * digits or exceeds the digit limit (CONVERSION, rule 94). */
 void pli_fixed_char_parts(const char *s, long long slen, int *ok, int *frac,
                           char *outv) {
   long long *out = (long long *)outv;

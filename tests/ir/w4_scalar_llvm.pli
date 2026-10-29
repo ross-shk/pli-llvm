@@ -12,6 +12,8 @@ w4_ir: procedure options(main);
     x = fixed(s);
     x = fixed('123');
     x = fixed('1.5');
+    f = float(s);
+    f = float('1.5');
     y = 'val=' || 42;
     y = 'flt=' || f;
     y = 'neg=' || -7;

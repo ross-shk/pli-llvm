@@ -612,7 +612,6 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_search", {.willReturn = true, .mem = RtMemArgRead}},
       {"pli_verify_from", {.willReturn = true, .mem = RtMemArgRead}},
       {"pli_rank", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_fixed_char_parts", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_data_name_is", {.willReturn = true, .mem = RtMemArgRead}},
       // String writers: arg-pointed memory only, no error paths.
@@ -2804,112 +2803,6 @@ llvm::Value* IRGen::emitFixedOfFloatLLVM(llvm::Value* x) {
   return b_.CreateCall(sat, {x}, "fxof_f");
 }
 
-// Legacy integer-only character scan used by FLOAT(char) (W4): mirrors
-// rt_stream.c pli_fixed_of_char. Skip leading blanks/tabs, consume an optional
-// sign, scan digit chars, and store sawDigit into *okSlot (0 when no digits →
-// CONVERSION trap by caller).
-llvm::Value* IRGen::emitFixedOfCharLLVM(llvm::Value* s, llvm::Value* slen, llvm::Value* okSlot) {
-  llvm::Function* F = b_.GetInsertBlock()->getParent();
-  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
-  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
-  llvm::Value* ten = llvm::ConstantInt::get(b_.getInt64Ty(), 10);
-  llvm::Value* space = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
-  llvm::Value* tab = llvm::ConstantInt::get(b_.getInt8Ty(), '\t');
-  llvm::Value* plus = llvm::ConstantInt::get(b_.getInt8Ty(), '+');
-  llvm::Value* minus = llvm::ConstantInt::get(b_.getInt8Ty(), '-');
-  llvm::Value* zeroCh = llvm::ConstantInt::get(b_.getInt8Ty(), '0');
-  llvm::Value* nineCh = llvm::ConstantInt::get(b_.getInt8Ty(), '9');
-  llvm::Value* slen64 = b_.CreateZExtOrTrunc(slen, b_.getInt64Ty(), "fxc.slen");
-
-  llvm::Value* idxSlot = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "fxc.idx");
-  llvm::Value* valSlot = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "fxc.val");
-  llvm::Value* negSlot = b_.CreateAlloca(b_.getInt1Ty(), nullptr, "fxc.neg");
-  llvm::Value* sawSlot = b_.CreateAlloca(b_.getInt1Ty(), nullptr, "fxc.saw");
-  b_.CreateStore(zero, idxSlot, false);
-  b_.CreateStore(zero, valSlot, false);
-  b_.CreateStore(b_.getFalse(), negSlot, false);
-  b_.CreateStore(b_.getFalse(), sawSlot, false);
-
-  // skip spaces/tabs
-  llvm::BasicBlock* skipBB = llvm::BasicBlock::Create(ctx_, "fxc.skip", F);
-  llvm::BasicBlock* skipBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.skip_body", F);
-  llvm::BasicBlock* signBB = llvm::BasicBlock::Create(ctx_, "fxc.sign", F);
-  llvm::BasicBlock* digitBB = llvm::BasicBlock::Create(ctx_, "fxc.digit", F);
-  llvm::BasicBlock* digitBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.digit_body", F);
-  llvm::BasicBlock* digitExitBB = llvm::BasicBlock::Create(ctx_, "fxc.digit_ex", F);
-  b_.CreateBr(skipBB);
-  startBlock(skipBB);
-  {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.i");
-    llvm::Value* cond = b_.CreateICmpULT(i, slen64, "fxc.skip_cond");
-    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
-                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.skip_ptr"), "fxc.c");
-    llvm::Value* isBlank = b_.CreateOr(b_.CreateICmpEQ(c, space, "fxc.isspace"),
-                                       b_.CreateICmpEQ(c, tab, "fxc.istab"), "fxc.isblank");
-    b_.CreateCondBr(b_.CreateAnd(cond, isBlank, "fxc.skip_cont"), skipBodyBB, signBB);
-  }
-  startBlock(skipBodyBB);
-  {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.i_inc");
-    b_.CreateStore(b_.CreateAdd(i, one, "fxc.i_next"), idxSlot, false);
-    b_.CreateBr(skipBB);
-  }
-
-  // optional sign
-  startBlock(signBB);
-  {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.sign_i");
-    llvm::Value* idxLtLen = b_.CreateICmpULT(i, slen64, "fxc.idx_lt_len");
-    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
-                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.sign_ptr"), "fxc.sc");
-    llvm::Value* isPlus = b_.CreateICmpEQ(c, plus, "fxc.is_plus");
-    llvm::Value* isMinus = b_.CreateICmpEQ(c, minus, "fxc.is_minus");
-    llvm::Value* hasSign =
-        b_.CreateAnd(idxLtLen, b_.CreateOr(isPlus, isMinus, "fxc.is_sign"), "fxc.has_sign");
-    llvm::Value* iNext = b_.CreateAdd(i, one, "fxc.sign_next");
-    b_.CreateStore(b_.CreateSelect(hasSign, iNext, i, "fxc.idx_after_sign"), idxSlot, false);
-    b_.CreateStore(isMinus, negSlot, false);
-  }
-  b_.CreateBr(digitBB);
-
-  // digit scan (blocks declared above)
-  startBlock(digitBB);
-  {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.d_i");
-    llvm::Value* cond = b_.CreateICmpULT(i, slen64, "fxc.d_cond");
-    llvm::Value* c =
-        b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.d_ptr"), "fxc.d_c");
-    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.d_ge0"),
-                                        b_.CreateICmpULE(c, nineCh, "fxc.d_le9"), "fxc.is_digit");
-    b_.CreateCondBr(b_.CreateAnd(cond, isDigit, "fxc.d_cont"), digitBodyBB, digitExitBB);
-  }
-  startBlock(digitBodyBB);
-  {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.d_i_inc");
-    llvm::Value* v = b_.CreateLoad(b_.getInt64Ty(), valSlot, "fxc.d_val");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.d_digit_ptr"), "fxc.d_digit");
-    llvm::Value* dig =
-        b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.d_sub"), b_.getInt64Ty(), "fxc.digit_val");
-    llvm::Value* nv = b_.CreateAdd(b_.CreateMul(v, ten, "fxc.d_mul"), dig, "fxc.d_add");
-    b_.CreateStore(nv, valSlot, false);
-    b_.CreateStore(b_.getTrue(), sawSlot, false);
-    b_.CreateStore(b_.CreateAdd(i, one, "fxc.d_next"), idxSlot, false);
-    b_.CreateBr(digitBB);
-  }
-
-  startBlock(digitExitBB);
-  {
-    llvm::Value* saw = b_.CreateLoad(b_.getInt1Ty(), sawSlot, "fxc.saw");
-    llvm::Value* okVal = b_.CreateZExt(saw, b_.getInt32Ty(), "fxc.ok_val");
-    b_.CreateStore(okVal, okSlot, false);
-    llvm::Value* val = b_.CreateLoad(b_.getInt64Ty(), valSlot, "fxc.val_load");
-    llvm::Value* isNeg = b_.CreateLoad(b_.getInt1Ty(), negSlot, "fxc.neg_load");
-    llvm::Value* negVal = b_.CreateSub(zero, val, "fxc.neg_val");
-    return b_.CreateSelect(isNeg, negVal, val, "fxc.result");
-  }
-}
-
 // Direct LLVM lowering for FIXED(char) fractional text (W4): mirrors
 // rt_stream.c pli_fixed_char_parts. Accumulates up to 38 significant digits
 // in i256 and up to 76 fractional digits; a second decimal point or trailing
@@ -3134,25 +3027,18 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   }
 }
 
-// Character text → fixed target (rule (123)): parse the signed significant
-// digits and fraction count, then rescale in i256. DECIMAL targets round half
-// away from zero; BINARY targets truncate toward zero. The parsed magnitude is
-// limited to 38 significant digits.
-Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst) {
-  llvm::Type* i128Ty = b_.getInt128Ty();
-  llvm::Type* i256Ty = b_.getIntNTy(256);
-  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
-  llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
-  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
-  llvm::Value* zero64 = i64(0);
-  llvm::Value* one64 = i64(1);
-
+// Shared character parse (rule (123)): parse the signed significant digits and
+// fraction count, raising CONVERSION (rule 94) on unparseable text. The resume
+// value is the parsed prefix.
+llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
+                                  llvm::Value* fracSlot) {
   llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "fxc.ok");
-  llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
   llvm::Value* all;
   if (useRuntimeCall("fixed_of_char")) {
     // The runtime returns the signed digits as (lo, hi) i64 halves because the
     // ABI does not pass i128 by value.
+    llvm::Type* i128Ty = b_.getInt128Ty();
+    llvm::Type* i256Ty = b_.getIntNTy(256);
     llvm::Type* pairTy = llvm::StructType::get(ctx_, {b_.getInt64Ty(), b_.getInt64Ty()});
     llvm::Value* outSlot = entryAlloca(pairTy, "fxc.parts");
     b_.CreateCall(runtimeFn("pli_fixed_char_parts"), {s, slen, okSlot, fracSlot, outSlot});
@@ -3169,8 +3055,7 @@ Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
     all = emitFixedCharPartsLLVM(s, slen, okSlot, fracSlot);
   }
 
-  // CONVERSION (rule 94): no digits (or digit overflow) traps; the resume
-  // value is the parsed prefix.
+  // CONVERSION (rule 94): no digits (or digit overflow) traps.
   if (convChecks()) {
     llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
     llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
@@ -3183,6 +3068,23 @@ Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
     emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
     b_.SetInsertPoint(okBB);
   }
+  return all;
+}
+
+// Character text → fixed target (rule (123)): parse the signed significant
+// digits and fraction count, then rescale in i256. DECIMAL targets round half
+// away from zero; BINARY targets truncate toward zero. The parsed magnitude is
+// limited to 38 significant digits.
+Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst) {
+  llvm::Type* i256Ty = b_.getIntNTy(256);
+  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
+  llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
+  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
+  llvm::Value* zero64 = i64(0);
+  llvm::Value* one64 = i64(1);
+
+  llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
+  llvm::Value* all = emitCharParts(s, slen, fracSlot);
 
   // Signed digits → magnitude plus sign.
   llvm::Value* isNeg = b_.CreateICmpSLT(all, zero256, "fxc.neg");
@@ -3237,6 +3139,54 @@ Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   Val v;
   v.ty = dst;
   v.reg = b_.CreateTrunc(raw, llvmTy(dst), "fxc.trunc");
+  return v;
+}
+
+// Character text → FLOAT (rule (123)): parse the signed significant digits and
+// fraction count, then divide the digits by 10^frac in double. Each conversion
+// rounds once, so the result is within a few ulps of a correctly rounded parse.
+Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst) {
+  llvm::Type* i256Ty = b_.getIntNTy(256);
+  llvm::Value* zero64 = i64(0);
+  llvm::Value* one64 = i64(1);
+  llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
+  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
+
+  llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
+  llvm::Value* all = emitCharParts(s, slen, fracSlot);
+
+  // 10^frac, built by a short loop (frac <= 76, so it stays inside i256).
+  llvm::Value* powSlot = entryAlloca(i256Ty, "fxc.fpow");
+  llvm::Value* kSlot = entryAlloca(b_.getInt64Ty(), "fxc.fk");
+  b_.CreateStore(one256, powSlot, false);
+  b_.CreateStore(zero64, kSlot, false);
+  llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.ffrac.load");
+  llvm::Value* frac64 = b_.CreateZExt(frac32, b_.getInt64Ty(), "fxc.ffrac64");
+  llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow", curFn_);
+  llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_body", curFn_);
+  llvm::BasicBlock* powDoneBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_done", curFn_);
+  b_.CreateBr(powBB);
+  startBlock(powBB);
+  {
+    llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.fk.load");
+    b_.CreateCondBr(b_.CreateICmpSLT(k, frac64, "fxc.fk_lt"), powBodyBB, powDoneBB);
+  }
+  startBlock(powBodyBB);
+  {
+    llvm::Value* p = b_.CreateLoad(i256Ty, powSlot, "fxc.fpow.load");
+    llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.fk.inc");
+    b_.CreateStore(b_.CreateMul(p, ten256, "fxc.fpow.next"), powSlot, false);
+    b_.CreateStore(b_.CreateAdd(k, one64, "fxc.fk.next"), kSlot, false);
+    b_.CreateBr(powBB);
+  }
+  startBlock(powDoneBB);
+  llvm::Value* pow10 = b_.CreateLoad(i256Ty, powSlot, "fxc.fpow10");
+
+  llvm::Value* digits = b_.CreateSIToFP(all, b_.getDoubleTy(), "fxc.fdigits");
+  llvm::Value* scale = b_.CreateSIToFP(pow10, b_.getDoubleTy(), "fxc.fscale");
+  Val v;
+  v.ty = dst;
+  v.reg = b_.CreateFDiv(digits, scale, "fxc.fvalue");
   return v;
 }
 
@@ -14158,30 +14108,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         result = v;
         return true;
       }
-      // FLOAT(char) keeps the historical integer-only scan, then converts.
-      llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
-      llvm::Value* r;
-      if (useRuntimeCall("fixed_of_char")) {
-        r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len, okSlot}, "fxc_rt");
-      } else {
-        r = emitFixedOfCharLLVM(a.ptr, a.len, okSlot);
-      }
-      if (convChecks()) {
-        llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
-        llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
-        llvm::BasicBlock* trapBB =
-            llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
-        llvm::BasicBlock* okBB =
-            llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
-        b_.CreateCondBr(fail, trapBB, okBB);
-        b_.SetInsertPoint(trapBB);
-        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
-        b_.SetInsertPoint(okBB);
-      }
-      Val fixed;
-      fixed.ty = Type::fixedBin(63, 0);
-      fixed.reg = b_.CreateTrunc(r, b_.getInt64Ty(), "fxc");
-      v = convert(fixed, e->ty, e->loc);
+      // FLOAT(char) parses the same fractional text as the fixed targets.
+      v = emitFloatFromChar(a.ptr, a.len, e->ty);
       result = v;
       return true;
     }

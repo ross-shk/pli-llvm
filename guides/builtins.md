@@ -425,8 +425,8 @@ toward zero and a decimal target rounds half away from zero. For example,
 gives `2.00`.
 
 **Limitations** — `FIXED` of a `BIT` argument is an error. Exponent text
-such as `'1e3'` raises `CONVERSION` instead of being parsed. `FLOAT(char)`
-still uses the integer-only scan.
+such as `'1e3'` raises `CONVERSION` instead of being parsed; `FLOAT(char)`
+uses the same fractional parser.
 
 ### `FIXEDBIN(x[,p[,q]])` / `FIXEDDEC(x[,p[,q]])`
 
@@ -454,6 +454,23 @@ b = fixedbin('123');        /* b is 123 */
 Character input parses a decimal point. The conversion uses the target base:
 binary targets truncate toward zero, decimal targets round half away from
 zero. Exponent text raises `CONVERSION`.
+
+### `FLOAT(x[,p])` → `FLOAT(p)`
+
+Converts a numeric value, or parses character text, to `FLOAT`. `p` is the
+result precision; every `FLOAT` is carried as a double.
+
+```pli
+dcl f float dec(6);
+
+f = float('1.5');                 /* 1.5 */
+f = float('  -2.25');             /* -2.25 */
+f = float(3, 6);                  /* FLOAT(6) */
+```
+
+Character text follows the same parser as the fixed conversions: leading
+blanks, one optional sign, digits, and at most one decimal point. Exponent
+text raises `CONVERSION`.
 
 ---
 

@@ -897,15 +897,17 @@ private:
   // Direct LLVM lowering for FIXED(float) (W4): fptosi.sat.i64 matches the
   // runtime pli_fixed_of_float clamping + truncation-toward-zero semantics.
   llvm::Value* emitFixedOfFloatLLVM(llvm::Value* x);
-  // Legacy integer-only scan for FLOAT(char) (W4): skip blanks, optional sign,
-  // scan digits, set *ok=0 when no digits found.
-  llvm::Value* emitFixedOfCharLLVM(llvm::Value* s, llvm::Value* slen, llvm::Value* okSlot);
-  // Direct LLVM lowering for FIXED/FIXEDBIN/FIXEDDEC/BINARY/DECIMAL(char):
-  // parse a decimal point, returning signed significant digits and *frac.
+  // Direct LLVM lowering for character text: parse a decimal point, returning
+  // signed significant digits and *frac.
   llvm::Value* emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen, llvm::Value* okSlot,
                                       llvm::Value* fracSlot);
+  // Shared character parse: digits and fraction count, with the CONVERSION
+  // trap on unparseable text (rule 94). Returns signed i256 digits.
+  llvm::Value* emitCharParts(llvm::Value* s, llvm::Value* slen, llvm::Value* fracSlot);
   // Character text → a fixed target, including decimal scale conversion.
   Val emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst);
+  // Character text → FLOAT: signed digits divided by 10^frac in double.
+  Val emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst);
   // Direct LLVM lowering for CHAR(fixed) (W4): integer → decimal string,
   // blank-padded to dstcap. Mirrors rt_stream.c pli_char_of_fixed.
   void emitCharOfFixedLLVM(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* v);

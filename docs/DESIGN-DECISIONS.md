@@ -13013,3 +13013,43 @@ B11 tails.
 into an i64.* A wide decimal target needs more than 64 bits. *Parse exponent
 text now.* It makes a larger parser and scale-normalisation change; rejecting
 it is honest until that slice lands.
+
+## ADR-347 — Fractional character text for FLOAT
+
+**Context.** ADR-346 gave FIXED, FIXEDBIN, FIXEDDEC, BINARY and DECIMAL a
+fractional character parser but left `FLOAT(char)` on the older integer-only
+scan. That scan was a silent wrong answer: `FLOAT('1.5')` returned `1` and
+`FLOAT('1e3')` returned `1`, both without a condition, so a program ran with a
+value the language forbids. The fixed conversions had already proved the
+parser; FLOAT only needed a different final scale.
+
+**Decision.** `FLOAT(char)` reuses the ADR-346 parse (signed significant
+digits and a fraction count, CONVERSION on no digits, overflow, or exponent
+text), then computes `digits / 10^frac` in double. The signed digits are
+converted from the 256-bit intermediate directly, so a long significand is not
+truncated through an i64 first.
+1. Both lowerings share the parse through `emitCharParts`: the runtime path
+   calls `pli_fixed_char_parts`, the inline path uses
+   `emitFixedCharPartsLLVM`.
+2. The one-argument form and the precision override (`FLOAT(x,p)`) both take
+   this path; only the result type differs.
+3. The old integer-only `emitFixedOfCharLLVM` and the `pli_fixed_of_char`
+   runtime entry are removed, so no future caller can fall back to the
+   truncating scan.
+4. Exponent text still raises CONVERSION, now for both fixed and FLOAT
+   character sources; exponent parsing remains a B11 tail.
+5. Each double conversion rounds once, so the result is within a few ulps of
+   a correctly rounded decimal parse. FLOAT is a double, so that is inside its
+   precision.
+
+**Consequences.** `tests/builtins/float_char.pli` covers signs, leading
+blanks, `.5`, `5.`, and short fractions; `tests/core/on_conversion.pli` pins
+exponent rejection; `tests/ir/w4_scalar_llvm.pli` and
+`tests/ir/w4_scalar_rt.pli` exercise FLOAT(char) in both lowerings.
+
+**Rejected.** *Call `strtod` in the runtime and keep the inline parser.* The
+two lowerings could round differently, and `strtod` starts parsing exponent
+text that the shared parser rejects. *Count the fraction by scaling the double
+in a loop.* It adds error without changing the result class; the exact i256
+power divided once is easier to reason about. *Keep the legacy scan for
+compatibility.* It is the silent wrong answer this ADR removes.
