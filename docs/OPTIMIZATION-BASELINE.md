@@ -1472,3 +1472,47 @@ reproduces on the pre-change runtime; it is not part of this measurement.
 It was a lost shutdown wakeup, not a task loss, and is fixed in ADR-332
 (`DEFERRED-WORK C5`, now done). The fan-out medians above stay noise
 dominated: the samples spread from 0.2 s to 0.5 s on the same host.
+
+## 17. LLM orchestration workloads
+
+**The measurement.** Fresh rebuild, `python3 benchmarks/run_benchmarks.py`,
+macOS 26 arm64, unpinned, LLVM 23.1.3; result file
+`benchmarks/results/benchmark_results_1793260761_2fb4fa5e.json`. Six rows
+price the CPU side of an LLM serving loop — the work that neither the GPU
+kernels nor the model math covers: BPE tokenization, sampling, a paged KV
+block manager, a grammar mask, Strata's adaptive expert tier and its
+prompt-lookup drafter (`benchmarks/LLM-ORCHESTRATION-PLAN.md`). Each is
+integer-only with an exact C twin, prints the same bytes at every `-O`
+level, sits above the 50 ms floor and is unchanged under `--checks-forced`.
+
+| Row | PL/I `-O2` | C `-O2` | ratio |
+|---|---:|---:|---:|
+| `llm_tokenize` | 183.2 ms | 239.3 ms | 0.77x |
+| `llm_sample` | 172.8 ms | 131.9 ms | 1.31x |
+| `llm_kvcache` | 241.1 ms | 217.1 ms | 1.11x |
+| `llm_grammar` | 219.9 ms | 182.9 ms | 1.20x |
+| `llm_expert_tier` | 275.2 ms | 217.8 ms | 1.26x |
+| `llm_lookup` | 147.1 ms | 148.6 ms | 0.99x |
+
+IR corpus geomean **0.80x** over 26 rows (gate < 0.90x, 26/26 valid). The 20
+rows of §13 alone give 0.73x on this host; the six new rows give 1.09x. The
+language corpus holds at 0.62x (12/12).
+
+**Reading it.** Tokenization is ahead of C: the C twin is built for the PL/I
+target policy (`-mcpu=generic`, ADR-315) and gives up host-specific tuning.
+`llm_lookup` is at parity. The four rows above 1.0x are tracked in
+`DEFERRED-WORK D7`:
+
+- `llm_sample` (1.31x) and `llm_expert_tier` (1.26x) scan `bit(1)` flags.
+  The array is one byte per element on both sides (`[N x i8]`, like C's
+  `unsigned char`), but each PL/I test is a load plus `trunc i8 -> i1`, an
+  extra mask per element in the top-k scan and the expert swap scan; this
+  is the shared cause the row was gated on.
+- `llm_grammar` (1.20x) has no flag array; its gap sits in the DFA walk's
+  index arithmetic (1-based 2-D `trans` lookup).
+- `llm_kvcache` (1.11x) is the paged block manager: free stack, block
+  tables, copy-on-write and preemption.
+
+**What changed.** Six benchmarks, their C twins and their registration under
+`IR_BENCHMARKS`; no compiler or runtime change. These rows measure, they do
+not promote — the gate still holds at 0.80x.
