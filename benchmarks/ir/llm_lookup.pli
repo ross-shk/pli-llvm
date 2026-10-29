@@ -1,0 +1,120 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Prompt-lookup drafting benchmark: index the context's trigrams,
+    match the last three tokens against earlier text, draft up to five
+    tokens from the match and keep the prefix the target verifies - the
+    host work behind Strata's prompt-lookup drafter (--lookup-chain-min
+    default 3), benchmarks/LLM-ORCHESTRATION-PLAN.md 4.6. */
+ /*
+  * Bounds:
+  *   - text ids < 32000; trigram hash = id * 961 + id * 31 + id
+  *     < 3.1e7, then mod 65536 (fits 31 bits)
+  *   - 400000 tokens per request, 12 requests
+  *   - chk = mod(chk * 31 + best * 8 + acc, 1000000007): the term is
+  *     < 3.2e5, so chk stays below 3.2e10 per step
+  *
+  * Scaling rule: 12 requests of 400000 tokens put the slowest -O2
+  * configuration at ~160 ms.
+  */
+ test_llm_lookup: proc options(main);
+    dcl tgt(400100) fixed bin(31);
+    dcl head(65536) fixed bin(31);
+    dcl prev(400100) fixed bin(31);
+    dcl (n, i, j, p, len, src, pos, best, best_len, cand, walk, m,
+       nd, acc, h, done, req, nreq) fixed bin(31);
+    dcl (seed, steps, drafted, accepted, chk) fixed bin(63);
+
+    n = 400000;
+    nreq = 12;
+    steps = 0;
+    drafted = 0;
+    accepted = 0;
+    chk = 0;
+    do req = 1 to nreq;
+       /* the text to be decoded: runs of fresh tokens mixed with
+          copies of earlier spans, as in a code edit */
+       seed = 31337 + req * 7919;
+       i = 0;
+       do while (i < n);
+          seed = mod(seed * 1103515245 + 12345, 2147483648);
+          len = 8 + mod(seed / 65536, 33);
+          seed = mod(seed * 1103515245 + 12345, 2147483648);
+          if i > 1000 & mod(seed / 65536, 10) < 6 then do;
+             seed = mod(seed * 1103515245 + 12345, 2147483648);
+             src = 1 + mod(seed / 65536, i - 50);
+             do j = 0 to len - 1;
+                if i < n then do;
+                   i = i + 1;
+                   tgt(i) = tgt(src + j);
+                end;
+             end;
+          end;
+          else do j = 1 to len;
+             if i < n then do;
+                i = i + 1;
+                seed = mod(seed * 1103515245 + 12345, 2147483648);
+                tgt(i) = 1 + mod(seed / 65536, 32000);
+             end;
+          end;
+       end;
+       /* a fresh trigram index for this request */
+       do i = 1 to 65536;
+          head(i) = 0;
+       end;
+
+       /* decode: the first three tokens are the prompt */
+       pos = 3;
+       done = 2;
+       do while (pos < n - 6);
+          /* index every trigram that now ends before the last one */
+          do while (done < pos - 1);
+             done = done + 1;
+             h = mod(tgt(done - 2) * 961 + tgt(done - 1) * 31
+                + tgt(done), 65536) + 1;
+             prev(done) = head(h);
+             head(h) = done;
+          end;
+          /* walk up to 8 candidates; keep the longest backward match */
+          h = mod(tgt(pos - 2) * 961 + tgt(pos - 1) * 31 + tgt(pos),
+             65536) + 1;
+          cand = head(h);
+          best = 0;
+          best_len = 0;
+          walk = 0;
+          do while (cand > 0 & walk < 8);
+             walk = walk + 1;
+             m = 0;
+             do j = 0 to 15 while (m = j);
+                if cand - j >= 1 then
+                   if tgt(cand - j) = tgt(pos - j) then m = m + 1;
+             end;
+             if m >= 3 then
+                if m > best_len then do;
+                   best_len = m;
+                   best = cand;
+                end;
+             cand = prev(cand);
+          end;
+          /* draft up to five tokens after the match; accept the prefix
+             the target agrees with, plus the model's own next token */
+          nd = 0;
+          acc = 0;
+          if best > 0 then do;
+             nd = 5;
+             if best + nd > pos then nd = pos - best;
+             do j = 1 to nd while (acc = j - 1);
+                if tgt(best + j) = tgt(pos + j) then acc = acc + 1;
+             end;
+          end;
+          drafted = drafted + nd;
+          accepted = accepted + acc;
+          pos = pos + acc + 1;
+          steps = steps + 1;
+          chk = mod(chk * 31 + best * 8 + acc, 1000000007);
+       end;
+    end;
+    put skip list(steps);
+    put skip list(drafted);
+    put skip list(accepted);
+    put skip list(chk);
+ end test_llm_lookup;

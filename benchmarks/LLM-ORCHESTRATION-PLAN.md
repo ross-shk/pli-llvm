@@ -145,8 +145,9 @@ Hot loop (verified):
 ```
 
 Output: total merges, then a position-weighted checksum of every word's
-final ids. Prototype: 400 000 words → `1744998` / `130699528` on both
-sides, PL/I ≈ 0.24 s, C ≈ 0.32 s (single run, indicative).
+final ids. Final: 300 000 words → `1308536` / `215674087` on both sides,
+PL/I ≈ 183 ms, C ≈ 239 ms at -O2 (0.77x; the harness builds the C twin
+for the PL/I target policy, so it gives up some host-specific tuning).
 
 ### 4.2 `llm_sample` — repetition penalty, top-k, seeded pick
 
@@ -194,15 +195,15 @@ Hot loop (verified):
           cumulative weight past the target wins */
 ```
 
-Integer division truncates toward zero on both sides; the prototype
-confirms identical results. Output: one checksum of the chosen tokens.
-Prototype: 300 steps → `132811396` on both sides, PL/I ≈ 0.87 s,
-C ≈ 0.72 s wall (with `top_k = 40` it was 1.00 s vs 0.76 s user) —
-**about 1.2–1.3x**. Use ~100 steps for the 100–300 ms target, and
-in P2 read the `-emit-llvm` output of the top-k scan: the likely suspect
-is the `bit(1)` `live` array (C uses `unsigned char`). `llm_expert_tier`
-(§4.5) shows the same gap with a `bit(1)` array, which supports that
-suspicion (`docs/DEFERRED-WORK.md` D7).
+Integer division truncates toward zero on both sides; the runs
+confirm identical results. Output: one checksum of the chosen tokens.
+Final: 100 steps → `571571061` on both sides, PL/I ≈ 173 ms, C ≈ 132 ms
+at -O2 (1.31x). The `-emit-llvm` read shows the flag array is one byte
+per element on both sides (`[32000 x i8]`, like C's `unsigned char`), but
+every PL/I test is a load plus `trunc i8 -> i1`, an extra mask per
+element that the C twin does not pay. The same shape appears in
+`llm_expert_tier`'s swap scan (§4.5), which supports one shared cause
+(`docs/DEFERRED-WORK.md` D7).
 
 ### 4.3 `llm_kvcache` — paged KV block manager
 
@@ -217,13 +218,15 @@ next token in the same block missed again), started at block 0 of a
 1-based array, never freed anything (the free list ran dry), used an
 undefined `slot`, and named LRU eviction without implementing it.
 
-Data: 32 sequences, 512 physical blocks of 16 tokens, `btab(32, 64)`.
+Data: 32 sequences, 320 physical blocks of 16 tokens, `btab(32, 64)`.
 Each sequence grows to a LCG-drawn goal; when it gets there it is
 released and re-forked from its neighbour, sharing up to 120 tokens (7½
 blocks, so the last shared block is partial and the first append
 triggers copy-on-write). When the free stack is empty, the sequence with
 the most blocks (other than the current one) is preempted: all its blocks
-are released and it restarts from length 0.
+are released and it restarts from length 0. Every 5000 ticks one other
+sequence is preempted anyway (admission pressure), so the eviction path
+is exercised even while the pool has room.
 
 Hot loop (verified):
 
@@ -263,11 +266,11 @@ Allocation is inline in the main loop because a separate `alloc_blk`
 procedure calling the sibling `release` hits the rule (8) limitation.
 
 Output: allocations, copy-on-writes, preemptions, slot checksum.
-Prototype: 400 000 ticks × 32 sequences → `822161 / 476 / 26230 /
-784993904` on both sides, PL/I ≈ 0.08 s, C ≈ 0.10 s. Use ~1 000 000
-ticks. In P3, tune so every counter is clearly non-zero (copy-on-write is
-currently ~0.06 % of allocations; 1024 physical blocks would cut the
-preemption churn that keeps resetting the fork source).
+Final: 1 200 000 ticks → `2659298 / 267452 / 242 / 772805723` on both
+sides, PL/I ≈ 241 ms, C ≈ 217 ms at -O2 (1.11x). The 320-block pool keeps
+copy-on-write at about a tenth of the allocations while the periodic
+preemption keeps the eviction path priced; with 512 blocks the pool never
+empties and with 256 the churn suppresses forks (measured while tuning).
 
 Strata itself is not a paged-block server: it keeps the KV cache's
 most-read part in VRAM and streams the rest from RAM (`--kv-streaming`),
@@ -316,8 +319,8 @@ Hot loop (verified; `to ... while` is rule (71), served):
 
 When no token is allowed the grammar restarts at state 1. Output: total
 allowed tokens across all steps, then a checksum of (chosen token, new
-state). Prototype: 3000 steps → `10023026` / `148437306` on both sides,
-PL/I ≈ 0.33 s, C ≈ 0.26 s (≈1.27x). Use ~2000 steps.
+state). Final: 2000 steps → `6682345` / `850759558` on both sides,
+PL/I ≈ 220 ms, C ≈ 183 ms at -O2 (1.20x).
 
 ### 4.5 `llm_expert_tier` — Strata's adaptive expert tier
 
@@ -371,10 +374,10 @@ and the swap pass, once per layer per adapt window:
 ```
 
 Output: hits, CPU misses, PCIe misses, swaps, resident count (must stay
-3072) and a checksum of the final resident set. Prototype: 40 000 tokens
-→ `6528830 / 8869819 / 3801351 / 74404 / 3072 / 748913249` on both sides
-(a 34 % hit rate), PL/I ≈ 1.35 s, C ≈ 1.07 s (≈1.26x — the second
-`bit(1)`-array row above 1.2x). Use ~8000 tokens.
+3072) and a checksum of the final resident set. Final: 8000 tokens →
+`1313661 / 1768437 / 757902 / 14791 / 3072 / 780146310` on both sides
+(a 34 % hit rate), PL/I ≈ 275 ms, C ≈ 218 ms at -O2 (1.26x — the second
+`bit(1)`-array row above 1.2x).
 
 ### 4.6 `llm_lookup` — Strata's prompt-lookup drafter
 
@@ -420,11 +423,12 @@ Hot loop (verified; both inner loops use `to ... while`):
 ```
 
 Output: decode steps, drafted tokens, accepted tokens, checksum.
-Prototype: one 400 000-token text → `231515 / 247503 / 168476 /
-594160705` on both sides (68 % of drafts accepted — in the 0.5–0.8 band
-Strata's docs report for its drafts), PL/I ≈ C ≈ 0.02 s. One text is too fast:
-P6 wraps it in an outer loop of ~8 "requests", each with its own seed
-and a fresh index, for the 100–300 ms target.
+Final: 12 requests of 400 000 tokens → `2755547 / 3014734 / 2044357 /
+425474171` on both sides (68 % of drafts accepted — in the 0.5–0.8 band
+Strata's docs report for its drafts), PL/I ≈ 147 ms, C ≈ 149 ms at -O2
+(0.99x). One 400 000-token text alone is ~0.02 s; the outer loop of
+"requests", each with its own seed and a fresh index, brings the row into
+the timing window.
 
 ## 5. File plan
 
@@ -543,15 +547,15 @@ baseline numbers from P7.
 
 ## 8. Review checklist
 
-- [ ] No `src/`, `runtime/` or `tests/` change; platform separation
+- [x] No `src/`, `runtime/` or `tests/` change; platform separation
   untouched.
-- [ ] Served syntax only: `DO WHILE` and `DO ... TO ... WHILE` (rule
+- [x] Served syntax only: `DO WHILE` and `DO ... TO ... WHILE` (rule
   (71)), `MOD`, fixed-bin arithmetic, 1-D/2-D arrays, `bit(1)` flags.
   No `||`, `SELECT`, `LEAVE`/`ITERATE`/`EXIT` or `DO UNTIL`.
-- [ ] Margins 2–72 and SPDX headers on all twelve files.
-- [ ] `validate_inventory()` clean; `bench_harness.sh` passes.
-- [ ] Every `--only` run `✓`, every `--checks-forced` run identical.
-- [ ] Full run: 26/26 rows valid, gate result recorded in
+- [x] Margins 2–72 and SPDX headers on all twelve files.
+- [x] `validate_inventory()` clean; `bench_harness.sh` passes.
+- [x] Every `--only` run `✓`, every `--checks-forced` run identical.
+- [x] Full run: 26/26 rows valid, gate result recorded in
   `docs/OPTIMIZATION-BASELINE.md` with the run id; D7 carries the
   measured ratios.
 

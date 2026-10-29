@@ -67,6 +67,15 @@ IR_BENCHMARKS = [
     ("bcd_decimal",       "ir/bcd_decimal.pli",       "ir/baseline/bcd_decimal_c.c"),
     ("string_search",     "ir/string_search.pli",     "ir/baseline/string_search_c.c"),
     ("file_io",           "ir/file_io.pli",           "ir/baseline/file_io_c.c"),
+    # LLM orchestration (benchmarks/LLM-ORCHESTRATION-PLAN.md): the host-side
+    # CPU work around an inference engine. Each has an exact C twin, so the
+    # ratio prices the orchestration loop itself, not the model math.
+    ("llm_tokenize",      "ir/llm_tokenize.pli",      "ir/baseline/llm_tokenize_c.c"),
+    ("llm_sample",        "ir/llm_sample.pli",        "ir/baseline/llm_sample_c.c"),
+    ("llm_kvcache",       "ir/llm_kvcache.pli",       "ir/baseline/llm_kvcache_c.c"),
+    ("llm_grammar",       "ir/llm_grammar.pli",       "ir/baseline/llm_grammar_c.c"),
+    ("llm_expert_tier",   "ir/llm_expert_tier.pli",   "ir/baseline/llm_expert_tier_c.c"),
+    ("llm_lookup",        "ir/llm_lookup.pli",        "ir/baseline/llm_lookup_c.c"),
 ]
 
 LANG_BENCHMARKS = [
@@ -268,6 +277,13 @@ CHECKS = {
     "bcd_decimal":      {"min_ms_O2": 50, "float_tol": False},  # expected ~: BCD decimal vs double
     "string_search":    {"min_ms_O2": 50, "float_tol": False},
     "file_io":          {"min_ms_O2": 50, "float_tol": False},
+    # LLM orchestration: integer-only, exact parity with the C twin.
+    "llm_tokenize":     {"min_ms_O2": 50, "float_tol": False},
+    "llm_sample":       {"min_ms_O2": 50, "float_tol": False},
+    "llm_kvcache":      {"min_ms_O2": 50, "float_tol": False},
+    "llm_grammar":      {"min_ms_O2": 50, "float_tol": False},
+    "llm_expert_tier":  {"min_ms_O2": 50, "float_tol": False},
+    "llm_lookup":       {"min_ms_O2": 50, "float_tol": False},
     # The PL/I-language corpus: exact parity with the C twin (both are
     # exact integer or fixed-point arithmetic, never floating point).
     "checks_on":        {"min_ms_O2": 50, "float_tol": False},

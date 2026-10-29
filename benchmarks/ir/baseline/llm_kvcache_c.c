@@ -88,6 +88,7 @@ int main(void) {
             slen[s]++;
             chk = (chk * 31 + (int64_t)(b - 1) * 16 + off) % 1000000007;
         }
+    }
     printf("%lld\n%lld\n%lld\n%lld\n", (long long)nalloc, (long long)ncow,
            (long long)npreempt, (long long)chk);
     return 0;
