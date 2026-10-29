@@ -123,6 +123,7 @@ measurement recorded, as `OB` already does for `I1`, `K5` and `K10`.
 | D4 | `I2` loop fusion: add the workload first | gated | a measured multi-pass array pattern exists; LLVM's loop-fusion pass is not in the default pipeline (`OB §11.2`) | M | measurement |
 | D5 | Extension track: `RESEXP` and `INLIST`/`INARRAY` | gated | own ADR each plus an `Extensions (not in TR 25.084)` row; rejected as optimizations because they change which conditions a program raises (`OB §12.6`, §12.8); ADR-259 is reserved for `RESEXP` | M | ADR accepted |
 | D6 | P2 architectural items 11 and 12: SSA promotion in `IRGen`, `llvm.assume` overflow-narrowing hints | gated | close unless a benchmark regresses; parity targets are already met (`benchmarks/OPTIMIZATION-PLAN.md:7-10`) | S | measurement |
+| D7 | LLM orchestration rows above 1.0x: `llm_sample` (~1.2–1.3x), `llm_expert_tier` (~1.26x), `llm_grammar` (~1.27x); the first two scan a `bit(1)` flag array where C reads `unsigned char`, the likely shared cause | gated | the rows land and P7 of `benchmarks/LLM-ORCHESTRATION-PLAN.md` measures them in a full run (current figures are single-run prototypes); the `-emit-llvm` read names the cause per row; a row that measures ≤ 1.0x leaves this row with its number recorded in `OB` §17 | S–M | measurement |
 
 ## Parked — deliberately last
 

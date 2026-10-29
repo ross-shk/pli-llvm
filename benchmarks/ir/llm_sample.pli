@@ -1,0 +1,81 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Sampling benchmark: repetition penalty, top-k selection by repeated
+    max scans and a seeded weighted pick among the survivors, the CPU
+    step between forward passes that Strata (top-k <= 64, default 20)
+    and llama.cpp run per verified token
+    (benchmarks/LLM-ORCHESTRATION-PLAN.md 4.2). */
+ /*
+  * Bounds:
+  *   - logits in -10000..10000, penalty 2 keeps them < 20001
+  *   - weight = logit - k-th logit + 1 is 1..40001
+  *   - total < 20 * 40001 = 800020; target < total (fits 31 bits)
+  *   - chk = mod(chk * 31 + chosen, 1000000007): < 3.2e10 per step
+  *
+  * Scaling rule: 100 steps of 32000 integer logits puts the slowest
+  * -O2 configuration at ~290 ms.
+  */
+ test_llm_sample: proc options(main);
+    dcl logits(32000) fixed bin(31);
+    dcl seen(32000) fixed bin(31);
+    dcl live(32000) bit(1);
+    dcl order(64) fixed bin(31);
+    dcl (i, k, best, step, chosen, vocab_n, top_k, pen, lo, nsteps)
+       fixed bin(31);
+    dcl (seed, total, acc, target, chk) fixed bin(63);
+
+    vocab_n = 32000;
+    top_k = 20;
+    pen = 2;
+    nsteps = 100;
+    seed = 777;
+    chk = 0;
+    do i = 1 to vocab_n;
+       seen(i) = 0;
+    end;
+    do step = 1 to nsteps;
+       /* fresh integer logits for this step, centred on zero */
+       do i = 1 to vocab_n;
+          seed = mod(seed * 1103515245 + 12345, 2147483648);
+          logits(i) = mod(seed / 65536, 20001) - 10000;
+          live(i) = '1'b;
+       end;
+       /* repetition penalty: push every seen token toward zero */
+       do i = 1 to vocab_n;
+          if seen(i) > 0 then
+             if logits(i) > 0 then logits(i) = logits(i) / pen;
+             else logits(i) = logits(i) * pen;
+       end;
+       /* top-k: take the largest live logit k times (lowest index
+          wins a tie) */
+       do k = 1 to top_k;
+          best = 0;
+          do i = 1 to vocab_n;
+             if live(i) then
+                if best = 0 then best = i;
+                else if logits(i) > logits(best) then best = i;
+          end;
+          live(best) = '0'b;
+          order(k) = best;
+       end;
+       /* seeded pick: weight = logit - k-th logit + 1; the first
+          cumulative weight past the target wins */
+       lo = logits(order(top_k));
+       total = 0;
+       do k = 1 to top_k;
+          total = total + logits(order(k)) - lo + 1;
+       end;
+       seed = mod(seed * 1103515245 + 12345, 2147483648);
+       target = mod(seed, total);
+       acc = 0;
+       chosen = 0;
+       do k = 1 to top_k;
+          acc = acc + logits(order(k)) - lo + 1;
+          if chosen = 0 then
+             if acc > target then chosen = order(k);
+       end;
+       seen(chosen) = seen(chosen) + 1;
+       chk = mod(chk * 31 + chosen, 1000000007);
+    end;
+    put skip list(chk);
+ end test_llm_sample;
