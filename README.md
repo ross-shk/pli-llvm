@@ -17,13 +17,26 @@ curl -L "https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-$os-$
 
 Windows (x86_64):
 
+The release publishes both `pli-windows-x86_64.zip` and `pli-windows-x86_64.tar.gz`. The archive contains a top-level `windows-x86_64/` dir holding `pli.exe`.
+
+cmd.exe:
+
 ```bat
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -o pli.zip
-if not exist "%USERPROFILE%\pli" mkdir "%USERPROFILE%\pli"
+if not exist "%USERPROFILE%\pli\windows-x86_64" mkdir "%USERPROFILE%\pli\windows-x86_64"
 tar -xf pli.zip -C "%USERPROFILE%\pli"
+setx PATH "%PATH%;%USERPROFILE%\pli\windows-x86_64"
 ```
 
-Then add `%USERPROFILE%\pli` to `PATH`.
+PowerShell:
+
+```pwsh
+Invoke-WebRequest -Uri https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -OutFile pli.zip
+Expand-Archive -Force pli.zip -DestinationPath $env:USERPROFILE\pli
+[Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";$env:USERPROFILE\pli\windows-x86_64", [EnvironmentVariableTarget]::User)
+```
+
+Then open a new shell so `%USERPROFILE%\pli\windows-x86_64` is on `PATH` and `pli.exe` resolves.
 
 Each archive contains just the compiler binary (`pli` or `pli.exe`); the runtime and platform link sysroot are embedded.
 
@@ -36,7 +49,7 @@ hello: procedure options(main);
   put skip list('Enter your name:');
   get list(name);
   put skip list('Hello, ' || name '!');
-end hello;
+end;
 ```
 
 ```sh
@@ -149,28 +162,67 @@ On macOS, use `-DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"`. On Linux, the distr
 
 ### Windows
 
-Run from `cmd.exe`, not PowerShell or a MinGW/MSYS shell:
+Build with `clang-cl` + `lld-link` (not `cl.exe`, MinGW, MSYS2, Cygwin, or WSL). First set up a Visual Studio developer environment (the Windows SDK is required). `vcvarsall.bat` location varies by VS edition/year — locate it with `vswhere` or use the common fallback paths:
+
+cmd.exe:
 
 ```bat
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+REM Locate vcvarsall.bat (examples; adjust to your install)
+for %i in (
+  "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat"
+  "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat"
+  "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+) do if exist "%~fi" call "%~fi" x64
 
-cmake -G Ninja -S C:/path/to/pli-llvm -B C:/path/to/pli-llvm/build/cmake ^
+cmake -G Ninja -S . -B build/cmake ^
   -DCMAKE_PREFIX_PATH=C:/path/to/llvm-23 ^
   -DCMAKE_C_COMPILER=clang-cl ^
   -DCMAKE_CXX_COMPILER=clang-cl ^
   -DCMAKE_BUILD_TYPE=Release
-cmake --build C:/path/to/pli-llvm/build/cmake -j
+cmake --build build/cmake -j
 ```
 
-Use clang-cl + lld-link (not `cl.exe`, MinGW, MSYS2, Cygwin, or WSL), forward slashes in CMake paths, and make sure Ninja is on `PATH`.
+PowerShell:
+
+```pwsh
+# Locate vcvarsall.bat (examples; adjust to your install)
+$vcvars = @(
+  "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat",
+  "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat",
+  "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $vcvars) { throw "vcvarsall.bat not found; install the Visual Studio C++ Build Tools" }
+cmd /c """$vcvars"" x64 & set" | ForEach-Object {
+  if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], [EnvironmentVariableTarget]::Process) }
+}
+
+cmake -G Ninja -S . -B build/cmake `
+  -DCMAKE_PREFIX_PATH=C:/path/to/llvm-23 `
+  -DCMAKE_C_COMPILER=clang-cl `
+  -DCMAKE_CXX_COMPILER=clang-cl `
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/cmake -j
+```
+
+Use clang-cl + lld-link, forward slashes in CMake paths, and make sure Ninja is on `PATH`.
 
 ### Hermetic static (release builds)
 
 Use the pinned static LLVM instead of a distro install:
 
+cmd.exe (Git Bash/MSYS):
+
 ```sh
 sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps
 cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=~/pli-deps
+cmake --build build/cmake -j
+```
+
+PowerShell (native, no Git Bash required):
+
+```pwsh
+.\scripts\fetch_llvm_static.ps1 --prefix $env:USERPROFILE\pli-deps
+cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli-deps
 cmake --build build/cmake -j
 ```
 
