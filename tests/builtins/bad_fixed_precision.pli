@@ -1,7 +1,7 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Diagnostic test: FIXED(x[,p[,q]]) rejects bad arity, precision,
-    source, scale, and unsupported character fractions. */
+    source, and scale. */
  bad_fixed_precision: procedure options(main);
     declare x fixed bin(31);
     declare z complex;
@@ -22,6 +22,5 @@
     x = fixed(1, 8, 1.5);
     x = fixed(z, 8, 2);
     x = fixed(a, 8, 2);
-    x = fixed('1.5', 8, 2);
     x = fixed('1'B, 8, 2);
  end bad_fixed_precision;

@@ -12973,3 +12973,43 @@ base from its precision.* Binary and decimal precisions overlap; B11 needs a
 real `Type` field. *Let character `q > 0` reuse the integer scan.* It would
 turn `FIXED('1.5', 5, 2)` into `1.00` rather than the correct fractional
 value.
+
+## ADR-346 — Fractional character text for fixed-point targets
+
+**Context.** ADR-345 added `FIXED(x[,p[,q]])` but rejected a character source
+with `q > 0` because `FIXED(char)` only scanned an integer. The same
+integer-only scan also made `FIXED('1.5')` return `1` and
+`FIXEDDEC('1.5',5,0)` lose the fraction before the target scale could be
+applied. A character source is decimal text, so the conversion needs its
+decimal point and fractional digits, not a pre-truncated integer.
+
+**Decision.** Parse character text into significant digits plus a fraction
+count, then rescale once into the target type:
+1. Both lowerings accept leading blanks/tabs, one optional sign, digits, and
+   at most one decimal point. They keep up to 38 significant digits and up
+   to 76 fractional digits in a 256-bit intermediate. `*ok` is zero when the
+   text has no digits, exceeds those limits, or contains exponent text.
+2. A decimal target computes `round-half-away(all * 10^q / 10^f)`; a binary
+   target computes `trunc(all * 2^q / 10^f)`. The result then takes the
+   normal declared-precision SIZE trap and is truncated to the storage slot.
+3. The path serves `FIXED`, `FIXEDBIN`, `FIXEDDEC`, `BINARY`, and `DECIMAL`
+   with a character source, including the one-argument `FIXED` form and
+   `q = 0`. `FLOAT(char)` keeps the old integer-only scan.
+4. The runtime parser returns the signed digits as two i64 halves because the
+   ABI does not pass i128 by value; the inline lowering returns i256 directly
+   and makes no `pli_*` call.
+5. Exponent text such as `'1e3'` raises CONVERSION rather than returning the
+   integer prefix as a silently wrong value.
+
+**Consequences.** `tests/builtins/fixed_precision.pli` covers fractional
+character text for both bases, signed decimal rounding, binary truncation,
+the wide i128 path, and `BINARY`/`DECIMAL`; `tests/core/on_conversion.pli`
+pins the exponent rejection; `tests/ir/w4_scalar_rt.check` pins the new
+runtime symbol. Exponent parsing and `FLOAT(char)` fractional text remain
+B11 tails.
+
+**Rejected.** *Keep the integer scan and only accept `q = 0`.* It still turns
+`FIXEDDEC('12.9',5,0)` into `12` instead of rounding to `13`. *Parse directly
+into an i64.* A wide decimal target needs more than 64 bits. *Parse exponent
+text now.* It makes a larger parser and scale-normalisation change; rejecting
+it is honest until that slice lands.

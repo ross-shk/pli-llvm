@@ -7319,16 +7319,6 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
-    // Fractional character text still uses the integer-only FIXED(char)
-    // scan; reject a nonzero scale rather than return a silently wrong value.
-    if (a.isChar() && q > 0) {
-      d_.error(e->args[2]->loc,
-               "FIXED of character text with a nonzero scale is not "
-               "implemented",
-               "(123)");
-      e->ty = Type::voidTy();
-      return true;
-    }
     e->ty = dec ? Type::fixedDec(p, q) : Type::fixedBin(p, q);
     return true;
   }

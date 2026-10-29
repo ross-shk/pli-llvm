@@ -134,6 +134,7 @@ PLI_FN(pli_char_of_fixed, VOID, (PTR, I64, I64))      /* CHAR(fixed) */
 PLI_FN(pli_char_of_float, VOID, (PTR, I64, DOUBLE))   /* CHAR(float) */
 PLI_FN(pli_char_of_complex, VOID, (PTR, I64, DOUBLE, DOUBLE)) /* CHAR(complex) */
 PLI_FN(pli_fixed_of_char, I64, (CPTR, I64, IPTR))     /* FIXED(char): *ok=0 on no digits */
+PLI_FN(pli_fixed_char_parts, VOID, (CPTR, I64, IPTR, IPTR, PTR)) /* FIXED(char) digits + fraction count */
 PLI_FN(pli_fixed_of_float, I64, (DOUBLE))             /* FIXED(float) */
 PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 

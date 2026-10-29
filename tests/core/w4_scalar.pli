@@ -80,7 +80,7 @@
     end;
 
     /* FIXED(char) with no digits raises CONVERSION; with NOCONVERSION,
-       the resume value is 0 (runtime: pli_fixed_of_char sets ok=0). */
+       the resume value is 0 (runtime: the fixed-text parser sets ok=0). */
     (noconversion):
        x = fixed('xyz');
     if x ^= 0 then do;

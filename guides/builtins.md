@@ -389,10 +389,10 @@ The parts use the same readable `%.6g` image as `PUT LIST`, so an exact IBM
 
 ### `FIXED(x[,p[,q]])` → fixed point
 
-Parses decimal text, or converts a numeric value to fixed point. The
-one-argument form keeps the historical `FIXED BINARY(31,0)` result and
-truncates toward zero; for a float, out-of-range values clamp and `NaN`
-reads as 0.
+Parses decimal text (including a decimal point), or converts a numeric value
+to fixed point. The one-argument form keeps the historical
+`FIXED BINARY(31,0)` result and truncates toward zero; for a float,
+out-of-range values clamp and `NaN` reads as 0.
 
 ```pli
 dcl n fixed bin(31);
@@ -400,6 +400,7 @@ dcl b fixed bin(8,2);
 dcl d fixed dec(9,2);
 
 n = fixed('1234');                /* integer parse */
+n = fixed('12.9');                /* 12, fractional text */
 n = fixed(3.9);                   /* 3 */
 b = fixed(3.75E0, 8, 2);          /* FIXED DEC(8,2), 3.75 */
 d = fixed(fixeddec(3.75, 4, 2), 6); /* FIXED DEC(6,0), 4.00 */
@@ -418,9 +419,14 @@ zero in the one-argument form; a complex value with `p`/`q` is rejected.
 Complex values are carried as a `{double,double}` pair, so the fixed/float
 distinction is not represented separately.
 
-**Limitations** — `FIXED` of a `BIT` argument is an error. Character text
-with `q > 0` is rejected until the fractional character scan lands; use a
-numeric source for fractional values.
+A character source now parses a fractional value: a binary target truncates
+toward zero and a decimal target rounds half away from zero. For example,
+`fixed('3.75', 8, 2)` gives binary `3.75`, while `fixeddec('1.5', 5, 0)`
+gives `2.00`.
+
+**Limitations** — `FIXED` of a `BIT` argument is an error. Exponent text
+such as `'1e3'` raises `CONVERSION` instead of being parsed. `FLOAT(char)`
+still uses the integer-only scan.
 
 ### `FIXEDBIN(x[,p[,q]])` / `FIXEDDEC(x[,p[,q]])`
 
@@ -445,9 +451,9 @@ d = fixeddec(3.5, 6, 1);    /* d is 3.50 */
 b = fixedbin('123');        /* b is 123 */
 ```
 
-Character input currently reuses `FIXED(char)`'s integer-only text scan, so
-a decimal point in the text is not yet parsed; use a numeric source for
-fractional values.
+Character input parses a decimal point. The conversion uses the target base:
+binary targets truncate toward zero, decimal targets round half away from
+zero. Exponent text raises `CONVERSION`.
 
 ---
 

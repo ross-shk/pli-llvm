@@ -427,10 +427,11 @@ void pli_char_of_complex(char *dst, long long dstcap, double re, double im) {
     dst[i] = ' ';
 }
 
-/* FIXED(char): parse decimal text, truncating any fraction toward zero.
- * Leading blanks, one optional sign, then digits; stops at the first
- * non-digit. Sets *ok = 1 when at least one digit was consumed, 0 when the
- * text has no numeric value (CONVERSION condition, rule 94, ADR-170). */
+/* Legacy integer-only character scan used by FLOAT(char): parse decimal text,
+ * truncating any fraction toward zero. Leading blanks, one optional sign, then
+ * digits; stops at the first non-digit. Sets *ok = 1 when at least one digit
+ * was consumed, 0 when the text has no numeric value (CONVERSION condition,
+ * rule 94, ADR-170). */
 long long pli_fixed_of_char(const char *s, long long slen, int *ok) {
   long long i = 0;
   while (i < slen && (s[i] == ' ' || s[i] == '\t'))
@@ -458,6 +459,68 @@ long long pli_fixed_of_char(const char *s, long long slen, int *ok) {
   }
   *ok = sawDigit && !overflow;
   return neg ? -v : v;
+}
+
+/* FIXED(char) fractional text: parse leading blanks, one optional sign, and a
+ * decimal point, returning the significant digits (signed, at most 38) and the
+ * number of fractional digits. The caller rescales into the target FIXED
+ * type. *ok is 0 when the text holds no digits or exceeds the digit limit
+ * (CONVERSION, rule 94). */
+void pli_fixed_char_parts(const char *s, long long slen, int *ok, int *frac,
+                          char *outv) {
+  long long *out = (long long *)outv;
+  long long i = 0;
+  while (i < slen && (s[i] == ' ' || s[i] == '\t'))
+    ++i;
+  int neg = 0;
+  if (i < slen && (s[i] == '+' || s[i] == '-')) {
+    neg = s[i] == '-';
+    ++i;
+  }
+  PliU128 all = pli_u128(0u, 0u);
+  PliU128 ten = pli_u128(10u, 0u);
+  int digits = 0;
+  int f = 0;
+  int saw = 0;
+  int seenNonzero = 0;
+  int dot = 0;
+  int overflow = 0;
+  while (i < slen) {
+    char c = s[i];
+    if (c >= '0' && c <= '9') {
+      unsigned d = (unsigned)(c - '0');
+      int sig = seenNonzero || d != 0;
+      int cap = (sig && digits >= 38) || (dot && f >= 76);
+      if (cap)
+        overflow = 1;
+      if (!overflow && sig) {
+        all = pli_add_u(pli_mul_u(all, ten), pli_u128((uint64_t)d, 0u));
+        ++digits;
+      }
+      if (dot && !overflow && f < 76)
+        ++f;
+      if (d != 0)
+        seenNonzero = 1;
+      saw = 1;
+      ++i;
+    } else if (c == '.' && !dot) {
+      dot = 1;
+      ++i;
+    } else {
+      break;
+    }
+  }
+  /* Exponent text is not parsed yet; reject it rather than return the
+   * integer prefix as a silently wrong value. */
+  if (i < slen && (s[i] == 'e' || s[i] == 'E'))
+    overflow = 1;
+  PliI128 v = pli_to_s(all);
+  if (neg)
+    v = pli_neg_s(v);
+  out[0] = (long long)pli_slo64(v);
+  out[1] = (long long)pli_shi64(v);
+  *frac = f;
+  *ok = saw && !overflow;
 }
 
 /* FIXED(float): truncate toward zero (NaN reads as 0, out-of-range clamps;
