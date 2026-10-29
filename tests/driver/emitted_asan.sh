@@ -22,7 +22,7 @@ compile_asan() {
   if $PLI -fsanitize=address -O2 "$1" -o "$2" >"$OUT/$3.compile" 2>&1; then
     return 0
   fi
-  if grep -q 'needs the compiler-rt ASan runtime' "$OUT/$3.compile"; then
+  if grep -Eq 'needs the (compiler-rt ASan runtime|dynamic C runtime)' "$OUT/$3.compile"; then
     echo "SKIP: no AddressSanitizer runtime in this toolchain"
     exit 0
   fi
