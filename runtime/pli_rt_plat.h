@@ -42,7 +42,8 @@ void pli_plat_abort(void);
 FILE *pli_plat_popen(const char *cmd, const char *mode);
 int pli_plat_pclose(FILE *fp);
 
-/* --- calendar time (custom platforms: fill *out from any clock; NULL-safe) */
+/* --- calendar time (custom platforms: any clock; NULL-safe) */
+time_t pli_plat_time(time_t *t);
 void pli_plat_localtime(const time_t *t, struct tm *out);
 
 /* --- FILE I/O (custom platforms: any FILE-compatible layer, or stubs that

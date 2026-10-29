@@ -50,6 +50,7 @@ int pli_plat_pclose(FILE *fp) {
 }
 
 /* --- calendar time: re-entrant POSIX, locked _s on Windows */
+time_t pli_plat_time(time_t *t) { return time(t); }
 void pli_plat_localtime(const time_t *t, struct tm *out) {
 #if defined(_WIN32)
   localtime_s(out, t);

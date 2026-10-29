@@ -12817,3 +12817,37 @@ just TSan entry/exit hooks. Both stay diagnosed.
 no per-module pipeline to hang the pass on. Windows and the static musl sysroot
 are unsupported. `-emit-llvm`/`-emit-mlir` do not run the pass. The ELF link is
 best-effort: only the Darwin path is exercised by the suite.
+
+## ADR-342 — Calendar time routes through the `rt_plat` seam
+
+**Context.** ADR-222 split the runtime into a portable blob (`pli_runtime.bc`)
+plus a swappable platform TU (`pli_rtplat.bc`, selected with `--rt-platform`),
+and declared `time()` a direct call ("branch-free standard C, no seam needed").
+That left one host call outside the seam: `rt_string.c` calls `time(NULL)` for
+the `DATE`/`TIME`/`DATETIME` builtins. A custom platform (freestanding target,
+alternate libc, wasm without `time()`, ...) that implements the documented
+`pli_plat_*` surface still has to provide a raw `time()` symbol that is not in
+the contract, which widens the porting surface beyond the seam.
+
+**Decision.** Add a calendar-time seam entry `time_t pli_plat_time(time_t *t)`
+to `runtime/pli_rt_plat.h`, implement it against host `time()` in
+`runtime/rt_plat_default.c` (POSIX and Win32 both expose `time()` in
+`<time.h>`, so the default body is branch-free), and route `DATE`/`TIME`/
+`DATETIME` in `runtime/rt_string.c` through it. The custom platform must now
+provide `pli_plat_time`; `time()` itself no longer appears in portable code.
+`pli_plat_localtime` (local conversion) stays the companion seam entry it was
+already.
+
+**Consequences.** A custom `--rt-platform` TU implements 33 documented symbols
+instead of 32, and `checkPlatformSeamComplete` diagnoses `pli_plat_time` by
+name when it is missing. Default behavior is unchanged: the full suite,
+including `tests/builtins/datetime.pli` and `tests/driver/rt_platform.sh`,
+stays green. `time()` remains directly callable by a custom platform's own
+code; it is only removed from the portable blob.
+
+**Rejected.** Keep `time()` direct (ADR-222's original position): saves one
+seam entry but leaves a non-contract host call in portable code, contradicting
+the split-runtime goal of a single, named substitution point. Move calendar
+time into `pli_plat_localtime` (make it return `time_t` too): mixes acquisition
+and conversion, and callers that only need local `struct tm` would pay for a
+clock read they do not use; keep them separate.
