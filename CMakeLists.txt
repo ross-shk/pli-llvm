@@ -141,6 +141,7 @@ set(PLI_SOURCES
   src/embedded_runtime.cpp
   src/hostcrt.cpp
   src/pgo.cpp
+  src/sanitize.cpp
 )
 
 # P2: MLIR canary dialect sources (compiled only with PLI_ENABLE_MLIR=ON).
@@ -282,12 +283,38 @@ message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 # driver does the same at link time, and no build step shells out to xcrun.
 set(PLI_HOST_SYSROOT_FLAG "")
 if(APPLE)
-  find_path(PLI_HOST_SDK
-    NAMES usr/lib/libSystem.B.tbd
-    PATHS
-      /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+  # Keep the first candidate the toolchain can actually link against, not
+  # merely the first directory that exists: the Command Line Tools package
+  # can be newer than the selected Xcode (a 27.0 CLT beside Xcode 26.x), and
+  # its stubs name architectures (arm64e.x1) the Xcode linker rejects, which
+  # breaks every C-interop link. Xcode first (xcode-select points there by
+  # default), CLT as the dev-machine fallback.
+  set(PLI_HOST_SDK "")
+  set(_pli_sdk_fallback "")
+  foreach(_sdk
       /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-    NO_DEFAULT_PATH)
+      /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk)
+    if(NOT EXISTS "${_sdk}/usr/lib/libSystem.B.tbd")
+      continue()
+    endif()
+    if(NOT _pli_sdk_fallback)
+      set(_pli_sdk_fallback "${_sdk}")
+    endif()
+    # A trivial link is the property the tests need from the SDK.
+    file(WRITE "${CMAKE_BINARY_DIR}/_pli_sdk_probe.c" "int main(void) { return 0; }\n")
+    execute_process(
+      COMMAND "${LLVM_TOOLS_BINARY_DIR}/clang" -isysroot "${_sdk}"
+              "${CMAKE_BINARY_DIR}/_pli_sdk_probe.c"
+              -o "${CMAKE_BINARY_DIR}/_pli_sdk_probe"
+      RESULT_VARIABLE _pli_sdk_rc OUTPUT_QUIET ERROR_QUIET)
+    if(_pli_sdk_rc EQUAL 0)
+      set(PLI_HOST_SDK "${_sdk}")
+      break()
+    endif()
+  endforeach()
+  if(NOT PLI_HOST_SDK)
+    set(PLI_HOST_SDK "${_pli_sdk_fallback}")
+  endif()
   if(PLI_HOST_SDK)
     set(PLI_HOST_SYSROOT_FLAG -isysroot ${PLI_HOST_SDK})
     message(STATUS "Host bitcode sysroot: ${PLI_HOST_SDK}")
@@ -410,8 +437,9 @@ if(PLI_SHARED_LLVM_LINK AND TARGET LLVM)
 else()
   # Core/IR (superset of the old `core irreader support linker` set).
   # ProfileData: InstrProfReader for in-process --fprofile-use (ADR-225).
+  # Instrumentation: the ASan module pass for -fsanitize=address (ADR-341).
   llvm_map_components_to_libnames(llvm_libs_core
-    Core IRReader Support BitReader BitWriter Linker ProfileData)
+    Core IRReader Support BitReader BitWriter Linker ProfileData Instrumentation)
   # MC/Target: the distro prefix builds all targets (initializeAllTargets()
   # needs them all); the hermetic static prefix only builds X86+AArch64, so
   # map just those — other --triple values already diagnose "no target" at
@@ -856,6 +884,12 @@ enable_testing()
 add_test(NAME pli-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/run_tests.py)
 set(PLI_TEST_ENV "PLI=$<TARGET_FILE:pli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
+# The C-interop tests link with clang, which looks for compiler-rt builtins
+# in its resource dir; the hermetic stash keeps them under lib/windows, so
+# hand the file CMake resolved to the tests.
+if(CLANG_RT_BUILTINS)
+  list(APPEND PLI_TEST_ENV "CLANG_RT_BUILTINS=${CLANG_RT_BUILTINS}")
+endif()
 if(PLI_TEST_SDK_ENV)
   list(APPEND PLI_TEST_ENV "${PLI_TEST_SDK_ENV}")
 endif()

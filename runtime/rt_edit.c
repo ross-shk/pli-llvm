@@ -336,8 +336,10 @@ void pli_get_edit_pic_wide(long long w, long long scale, char *out) {
 }
 
 /* A(w): read w characters left-justified into dst, blank-padded to cap; a field
- * wider than the target is truncated (the excess input is still consumed). */
-void pli_get_edit_char(char *dst, long long cap, long long w) {
+ * wider than the target is truncated (the excess input is still consumed).
+ * Returns the assigned length: a VARYING target stores it, a fixed target
+ * ignores it and stays blank-padded. */
+long long pli_get_edit_char(char *dst, long long cap, long long w) {
   long long i = 0;
   rt_in_lock();
   for (; i < w; ++i) {
@@ -347,9 +349,12 @@ void pli_get_edit_char(char *dst, long long cap, long long w) {
     if (i < cap)
       dst[i] = (char)c;
   }
+  /* Save the read count before the padding loop drives i up to cap. */
+  long long n = i < cap ? i : cap;
   for (; i < cap; ++i)
     dst[i] = ' ';
   rt_in_unlock();
+  return n;
 }
 
 /* X(w): skip w input characters. */

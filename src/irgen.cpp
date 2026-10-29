@@ -539,6 +539,9 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_subscript_oob", {.noReturn = true}},
       {"pli_zerodivide", {.noReturn = true}},
       {"pli_fixed_overflow", {.noReturn = true}},
+      {"pli_overflow", {.noReturn = true}},
+      {"pli_fixedoverflow", {.noReturn = true}},
+      {"pli_overflow_error", {.noReturn = true}},
       {"pli_conversion", {.noReturn = true}},
       {"pli_stop", {.noReturn = true}},
       // Allocation: malloc/free wrappers (aborts on OOM, so no willreturn).
@@ -609,7 +612,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_search", {.willReturn = true, .mem = RtMemArgRead}},
       {"pli_verify_from", {.willReturn = true, .mem = RtMemArgRead}},
       {"pli_rank", {.willReturn = true, .mem = RtMemArgRead}},
-      {"pli_fixed_of_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_fixed_char_parts", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_data_name_is", {.willReturn = true, .mem = RtMemArgRead}},
       // String writers: arg-pointed memory only, no error paths.
       {"pli_assign_char", {.willReturn = true, .mem = RtMemArgReadWrite}},
@@ -630,6 +633,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_low", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_char_of_fixed", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_char_of_float", {.willReturn = true, .mem = RtMemArgReadWrite}},
+      {"pli_char_of_complex", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_isochar", {.willReturn = true, .mem = RtMemArgReadWrite}},
       {"pli_file_open_slot", {.willReturn = true, .mem = RtMemReadonly}},
       {"pli_lineno", {.willReturn = true, .mem = RtMemReadonly}},
@@ -2799,53 +2803,78 @@ llvm::Value* IRGen::emitFixedOfFloatLLVM(llvm::Value* x) {
   return b_.CreateCall(sat, {x}, "fxof_f");
 }
 
-// Direct LLVM lowering for FIXED(char) (W4): mirrors rt_stream.c pli_fixed_of_char.
-// Skip leading blanks/tabs, consume an optional sign, scan digit chars, and
-// store sawDigit into *okSlot (0 when no digits → CONVERSION trap by caller).
-llvm::Value* IRGen::emitFixedOfCharLLVM(llvm::Value* s, llvm::Value* slen, llvm::Value* okSlot) {
+// Direct LLVM lowering for FIXED(char) fractional text (W4): mirrors
+// rt_stream.c pli_fixed_char_parts. Accumulates up to 38 significant digits
+// in i256 and up to 76 fractional digits; a second decimal point or trailing
+// text ends the scan. *ok=0 on no digits or digit overflow.
+llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
+                                           llvm::Value* okSlot, llvm::Value* fracSlot) {
   llvm::Function* F = b_.GetInsertBlock()->getParent();
-  llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
-  llvm::Value* one = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
-  llvm::Value* ten = llvm::ConstantInt::get(b_.getInt64Ty(), 10);
+  llvm::Type* i256Ty = b_.getIntNTy(256);
+  llvm::Value* zero64 = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
+  llvm::Value* one64 = llvm::ConstantInt::get(b_.getInt64Ty(), 1);
+  llvm::Value* zero32 = llvm::ConstantInt::get(b_.getInt32Ty(), 0);
+  llvm::Value* one32 = llvm::ConstantInt::get(b_.getInt32Ty(), 1);
+  llvm::Value* maxDigits = i32(38);
+  llvm::Value* maxFrac = i32(76);
+  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
+  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
   llvm::Value* space = llvm::ConstantInt::get(b_.getInt8Ty(), ' ');
   llvm::Value* tab = llvm::ConstantInt::get(b_.getInt8Ty(), '\t');
   llvm::Value* plus = llvm::ConstantInt::get(b_.getInt8Ty(), '+');
   llvm::Value* minus = llvm::ConstantInt::get(b_.getInt8Ty(), '-');
+  llvm::Value* dotCh = llvm::ConstantInt::get(b_.getInt8Ty(), '.');
   llvm::Value* zeroCh = llvm::ConstantInt::get(b_.getInt8Ty(), '0');
   llvm::Value* nineCh = llvm::ConstantInt::get(b_.getInt8Ty(), '9');
   llvm::Value* slen64 = b_.CreateZExtOrTrunc(slen, b_.getInt64Ty(), "fxc.slen");
 
-  llvm::Value* idxSlot = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "fxc.idx");
-  llvm::Value* valSlot = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "fxc.val");
-  llvm::Value* negSlot = b_.CreateAlloca(b_.getInt1Ty(), nullptr, "fxc.neg");
-  llvm::Value* sawSlot = b_.CreateAlloca(b_.getInt1Ty(), nullptr, "fxc.saw");
-  b_.CreateStore(zero, idxSlot, false);
-  b_.CreateStore(zero, valSlot, false);
+  llvm::Value* idxSlot = entryAlloca(b_.getInt64Ty(), "fxc.idx");
+  llvm::Value* allSlot = entryAlloca(i256Ty, "fxc.all");
+  llvm::Value* digitsSlot = entryAlloca(b_.getInt32Ty(), "fxc.digits");
+  llvm::Value* negSlot = entryAlloca(b_.getInt1Ty(), "fxc.neg");
+  llvm::Value* sawSlot = entryAlloca(b_.getInt1Ty(), "fxc.saw");
+  llvm::Value* seenSlot = entryAlloca(b_.getInt1Ty(), "fxc.seen");
+  llvm::Value* dotSlot = entryAlloca(b_.getInt1Ty(), "fxc.dot");
+  llvm::Value* overflowSlot = entryAlloca(b_.getInt1Ty(), "fxc.overflow");
+  b_.CreateStore(zero64, idxSlot, false);
+  b_.CreateStore(zero256, allSlot, false);
+  b_.CreateStore(zero32, digitsSlot, false);
+  b_.CreateStore(zero32, fracSlot, false);
   b_.CreateStore(b_.getFalse(), negSlot, false);
   b_.CreateStore(b_.getFalse(), sawSlot, false);
+  b_.CreateStore(b_.getFalse(), seenSlot, false);
+  b_.CreateStore(b_.getFalse(), dotSlot, false);
+  b_.CreateStore(b_.getFalse(), overflowSlot, false);
 
-  // skip spaces/tabs
   llvm::BasicBlock* skipBB = llvm::BasicBlock::Create(ctx_, "fxc.skip", F);
   llvm::BasicBlock* skipBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.skip_body", F);
   llvm::BasicBlock* signBB = llvm::BasicBlock::Create(ctx_, "fxc.sign", F);
-  llvm::BasicBlock* digitBB = llvm::BasicBlock::Create(ctx_, "fxc.digit", F);
-  llvm::BasicBlock* digitBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.digit_body", F);
-  llvm::BasicBlock* digitExitBB = llvm::BasicBlock::Create(ctx_, "fxc.digit_ex", F);
+  llvm::BasicBlock* intBB = llvm::BasicBlock::Create(ctx_, "fxc.int", F);
+  llvm::BasicBlock* intBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.int_body", F);
+  llvm::BasicBlock* dotBB = llvm::BasicBlock::Create(ctx_, "fxc.dot", F);
+  llvm::BasicBlock* dotBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.dot_body", F);
+  llvm::BasicBlock* fracBB = llvm::BasicBlock::Create(ctx_, "fxc.frac", F);
+  llvm::BasicBlock* fracBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.frac_body", F);
+  llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "fxc.check_exp", F);
+  llvm::BasicBlock* expBB = llvm::BasicBlock::Create(ctx_, "fxc.exp", F);
+  llvm::BasicBlock* finishBB = llvm::BasicBlock::Create(ctx_, "fxc.finish", F);
   b_.CreateBr(skipBB);
+
+  // leading blanks/tabs
   startBlock(skipBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.i");
-    llvm::Value* cond = b_.CreateICmpULT(i, slen64, "fxc.skip_cond");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.skip_cond");
     llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
                                    b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.skip_ptr"), "fxc.c");
-    llvm::Value* isBlank = b_.CreateOr(b_.CreateICmpEQ(c, space, "fxc.isspace"),
-                                       b_.CreateICmpEQ(c, tab, "fxc.istab"), "fxc.isblank");
-    b_.CreateCondBr(b_.CreateAnd(cond, isBlank, "fxc.skip_cont"), skipBodyBB, signBB);
+    llvm::Value* blank = b_.CreateOr(b_.CreateICmpEQ(c, space, "fxc.isspace"),
+                                     b_.CreateICmpEQ(c, tab, "fxc.istab"), "fxc.isblank");
+    b_.CreateCondBr(b_.CreateAnd(inRange, blank, "fxc.skip_cont"), skipBodyBB, signBB);
   }
   startBlock(skipBodyBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.i_inc");
-    b_.CreateStore(b_.CreateAdd(i, one, "fxc.i_next"), idxSlot, false);
+    b_.CreateStore(b_.CreateAdd(i, one64, "fxc.i_next"), idxSlot, false);
     b_.CreateBr(skipBB);
   }
 
@@ -2853,55 +2882,312 @@ llvm::Value* IRGen::emitFixedOfCharLLVM(llvm::Value* s, llvm::Value* slen, llvm:
   startBlock(signBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.sign_i");
-    llvm::Value* idxLtLen = b_.CreateICmpULT(i, slen64, "fxc.idx_lt_len");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.idx_lt_len");
     llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
                                    b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.sign_ptr"), "fxc.sc");
     llvm::Value* isPlus = b_.CreateICmpEQ(c, plus, "fxc.is_plus");
     llvm::Value* isMinus = b_.CreateICmpEQ(c, minus, "fxc.is_minus");
     llvm::Value* hasSign =
-        b_.CreateAnd(idxLtLen, b_.CreateOr(isPlus, isMinus, "fxc.is_sign"), "fxc.has_sign");
-    llvm::Value* iNext = b_.CreateAdd(i, one, "fxc.sign_next");
+        b_.CreateAnd(inRange, b_.CreateOr(isPlus, isMinus, "fxc.is_sign"), "fxc.has_sign");
+    llvm::Value* iNext = b_.CreateAdd(i, one64, "fxc.sign_next");
     b_.CreateStore(b_.CreateSelect(hasSign, iNext, i, "fxc.idx_after_sign"), idxSlot, false);
     b_.CreateStore(isMinus, negSlot, false);
   }
-  b_.CreateBr(digitBB);
+  b_.CreateBr(intBB);
 
-  // digit scan (blocks declared above)
-  startBlock(digitBB);
-  {
+  // Shared digit body: leading zeros do not count as significant digits;
+  // fractional digits increment *frac even when they are leading zeros.
+  auto emitDigitBody = [&](bool fractional) {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.d_i");
-    llvm::Value* cond = b_.CreateICmpULT(i, slen64, "fxc.d_cond");
-    llvm::Value* c =
-        b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.d_ptr"), "fxc.d_c");
-    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.d_ge0"),
-                                        b_.CreateICmpULE(c, nineCh, "fxc.d_le9"), "fxc.is_digit");
-    b_.CreateCondBr(b_.CreateAnd(cond, isDigit, "fxc.d_cont"), digitBodyBB, digitExitBB);
-  }
-  startBlock(digitBodyBB);
-  {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.d_i_inc");
-    llvm::Value* v = b_.CreateLoad(b_.getInt64Ty(), valSlot, "fxc.d_val");
     llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.d_digit_ptr"), "fxc.d_digit");
-    llvm::Value* dig =
-        b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.d_sub"), b_.getInt64Ty(), "fxc.digit_val");
-    llvm::Value* nv = b_.CreateAdd(b_.CreateMul(v, ten, "fxc.d_mul"), dig, "fxc.d_add");
-    b_.CreateStore(nv, valSlot, false);
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.d_ptr"), "fxc.d_c");
+    llvm::Value* dig8 = b_.CreateSub(c, zeroCh, "fxc.d_sub");
+    llvm::Value* dig32 = b_.CreateZExt(dig8, b_.getInt32Ty(), "fxc.dig32");
+    llvm::Value* dig256 = b_.CreateZExt(dig8, i256Ty, "fxc.dig256");
+    llvm::Value* seen = b_.CreateLoad(b_.getInt1Ty(), seenSlot, "fxc.seen");
+    llvm::Value* sig = b_.CreateOr(seen, b_.CreateICmpNE(dig32, zero32, "fxc.nonzero"),
+                                   "fxc.sig");
+    llvm::Value* digits = b_.CreateLoad(b_.getInt32Ty(), digitsSlot, "fxc.digits");
+    llvm::Value* frac = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.frac");
+    llvm::Value* overflow = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.ov");
+    llvm::Value* capDigits = b_.CreateAnd(sig, b_.CreateICmpUGE(digits, maxDigits, "fxc.capd"),
+                                          "fxc.cap_digits");
+    llvm::Value* capFrac =
+        fractional ? b_.CreateICmpUGE(frac, maxFrac, "fxc.capf") : b_.getFalse();
+    llvm::Value* cap = b_.CreateOr(capDigits, capFrac, "fxc.cap");
+    llvm::Value* canAcc = b_.CreateAnd(b_.CreateNot(overflow), b_.CreateNot(cap), "fxc.canacc");
+    llvm::Value* all = b_.CreateLoad(i256Ty, allSlot, "fxc.all");
+    llvm::Value* nv = b_.CreateAdd(b_.CreateMul(all, ten256, "fxc.mul10"), dig256,
+                                   "fxc.adddig");
+    b_.CreateStore(b_.CreateSelect(canAcc, nv, all, "fxc.all_next"), allSlot, false);
+    llvm::Value* newDigits = b_.CreateAdd(digits, one32, "fxc.digits_next");
+    b_.CreateStore(b_.CreateSelect(b_.CreateAnd(canAcc, sig), newDigits, digits,
+                                   "fxc.digits_sel"),
+                   digitsSlot, false);
+    llvm::Value* newOverflow = b_.CreateOr(overflow, cap, "fxc.ov_next");
+    if (fractional) {
+      llvm::Value* newFrac = b_.CreateAdd(frac, one32, "fxc.frac_next");
+      llvm::Value* fInc = b_.CreateNot(newOverflow, "fxc.frac_inc");
+      b_.CreateStore(b_.CreateSelect(fInc, newFrac, frac, "fxc.frac_sel"), fracSlot, false);
+    }
+    b_.CreateStore(b_.CreateOr(seen, sig, "fxc.seen_next"), seenSlot, false);
+    b_.CreateStore(newOverflow, overflowSlot, false);
     b_.CreateStore(b_.getTrue(), sawSlot, false);
-    b_.CreateStore(b_.CreateAdd(i, one, "fxc.d_next"), idxSlot, false);
-    b_.CreateBr(digitBB);
+    b_.CreateStore(b_.CreateAdd(i, one64, "fxc.d_next"), idxSlot, false);
+  };
+
+  // integer digits
+  startBlock(intBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ib_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ib_cond");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ib_ptr"), "fxc.ib_c");
+    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.ib_ge0"),
+                                        b_.CreateICmpULE(c, nineCh, "fxc.ib_le9"), "fxc.is_digit");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.ib_cont"), intBodyBB, dotBB);
+  }
+  startBlock(intBodyBB);
+  {
+    emitDigitBody(false);
+    b_.CreateBr(intBB);
   }
 
-  startBlock(digitExitBB);
+  // one optional decimal point
+  startBlock(dotBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.dot_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.dot_cond");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.dot_ptr"), "fxc.dot_c");
+    llvm::Value* isDot = b_.CreateICmpEQ(c, dotCh, "fxc.is_dot");
+    llvm::Value* hadDot = b_.CreateLoad(b_.getInt1Ty(), dotSlot, "fxc.had_dot");
+    llvm::Value* take = b_.CreateAnd(
+        inRange, b_.CreateAnd(isDot, b_.CreateNot(hadDot), "fxc.dot_new"), "fxc.take_dot");
+    b_.CreateCondBr(take, dotBodyBB, checkBB);
+  }
+  startBlock(dotBodyBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.dot_body_i");
+    b_.CreateStore(b_.getTrue(), dotSlot, false);
+    b_.CreateStore(b_.CreateAdd(i, one64, "fxc.dot_next"), idxSlot, false);
+    b_.CreateBr(fracBB);
+  }
+
+  // fractional digits
+  startBlock(fracBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.fb_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.fb_cond");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.fb_ptr"), "fxc.fb_c");
+    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.fb_ge0"),
+                                        b_.CreateICmpULE(c, nineCh, "fxc.fb_le9"), "fxc.fb_digit");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.fb_cont"), fracBodyBB, checkBB);
+  }
+  startBlock(fracBodyBB);
+  {
+    emitDigitBody(true);
+    b_.CreateBr(fracBB);
+  }
+
+  // Reject exponent text (1e3) rather than returning the integer prefix.
+  startBlock(checkBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ck_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ck_range");
+    b_.CreateCondBr(inRange, expBB, finishBB);
+  }
+  startBlock(expBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.exp_i");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.exp_ptr"), "fxc.exp_c");
+    llvm::Value* isExp = b_.CreateOr(b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'e'),
+                                                     "fxc.is_e"),
+                                     b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'E'),
+                                                     "fxc.is_E"),
+                                     "fxc.is_exp");
+    llvm::Value* ov = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.exp_ov");
+    b_.CreateStore(b_.CreateOr(ov, isExp, "fxc.exp_bad"), overflowSlot, false);
+    b_.CreateBr(finishBB);
+  }
+
+  startBlock(finishBB);
   {
     llvm::Value* saw = b_.CreateLoad(b_.getInt1Ty(), sawSlot, "fxc.saw");
-    llvm::Value* okVal = b_.CreateZExt(saw, b_.getInt32Ty(), "fxc.ok_val");
+    llvm::Value* overflow = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.ov_final");
+    llvm::Value* okVal = b_.CreateZExt(
+        b_.CreateAnd(saw, b_.CreateNot(overflow), "fxc.ok"), b_.getInt32Ty(), "fxc.ok_val");
     b_.CreateStore(okVal, okSlot, false);
-    llvm::Value* val = b_.CreateLoad(b_.getInt64Ty(), valSlot, "fxc.val_load");
+    llvm::Value* all = b_.CreateLoad(i256Ty, allSlot, "fxc.all_load");
     llvm::Value* isNeg = b_.CreateLoad(b_.getInt1Ty(), negSlot, "fxc.neg_load");
-    llvm::Value* negVal = b_.CreateSub(zero, val, "fxc.neg_val");
-    return b_.CreateSelect(isNeg, negVal, val, "fxc.result");
+    llvm::Value* negVal = b_.CreateSub(zero256, all, "fxc.neg_val");
+    return b_.CreateSelect(isNeg, negVal, all, "fxc.result");
   }
+}
+
+// Shared character parse (rule (123)): parse the signed significant digits and
+// fraction count, raising CONVERSION (rule 94) on unparseable text. The resume
+// value is the parsed prefix.
+llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
+                                  llvm::Value* fracSlot) {
+  llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "fxc.ok");
+  llvm::Value* all;
+  if (useRuntimeCall("fixed_of_char")) {
+    // The runtime returns the signed digits as (lo, hi) i64 halves because the
+    // ABI does not pass i128 by value.
+    llvm::Type* i128Ty = b_.getInt128Ty();
+    llvm::Type* i256Ty = b_.getIntNTy(256);
+    llvm::Type* pairTy = llvm::StructType::get(ctx_, {b_.getInt64Ty(), b_.getInt64Ty()});
+    llvm::Value* outSlot = entryAlloca(pairTy, "fxc.parts");
+    b_.CreateCall(runtimeFn("pli_fixed_char_parts"), {s, slen, okSlot, fracSlot, outSlot});
+    llvm::Value* lo = b_.CreateLoad(
+        b_.getInt64Ty(), b_.CreateStructGEP(pairTy, outSlot, 0, "fxc.lo.ptr"), "fxc.lo");
+    llvm::Value* hi = b_.CreateLoad(
+        b_.getInt64Ty(), b_.CreateStructGEP(pairTy, outSlot, 1, "fxc.hi.ptr"), "fxc.hi");
+    llvm::Value* shift = llvm::ConstantInt::get(i128Ty, 64);
+    llvm::Value* all128 = b_.CreateOr(
+        b_.CreateZExt(lo, i128Ty, "fxc.lo.z"),
+        b_.CreateShl(b_.CreateZExt(hi, i128Ty, "fxc.hi.z"), shift, "fxc.hi.shift"), "fxc.all128");
+    all = b_.CreateSExt(all128, i256Ty, "fxc.all");
+  } else {
+    all = emitFixedCharPartsLLVM(s, slen, okSlot, fracSlot);
+  }
+
+  // CONVERSION (rule 94): no digits (or digit overflow) traps.
+  if (convChecks()) {
+    llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
+    llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
+    llvm::BasicBlock* trapBB =
+        llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
+    llvm::BasicBlock* okBB =
+        llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
+    b_.CreateCondBr(fail, trapBB, okBB);
+    b_.SetInsertPoint(trapBB);
+    emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
+    b_.SetInsertPoint(okBB);
+  }
+  return all;
+}
+
+// Character text → fixed target (rule (123)): parse the signed significant
+// digits and fraction count, then rescale in i256. DECIMAL targets round half
+// away from zero; BINARY targets truncate toward zero. The parsed magnitude is
+// limited to 38 significant digits.
+Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst) {
+  llvm::Type* i256Ty = b_.getIntNTy(256);
+  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
+  llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
+  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
+  llvm::Value* zero64 = i64(0);
+  llvm::Value* one64 = i64(1);
+
+  llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
+  llvm::Value* all = emitCharParts(s, slen, fracSlot);
+
+  // Signed digits → magnitude plus sign.
+  llvm::Value* isNeg = b_.CreateICmpSLT(all, zero256, "fxc.neg");
+  llvm::Value* mag =
+      b_.CreateSelect(isNeg, b_.CreateSub(zero256, all, "fxc.negmag"), all, "fxc.mag");
+
+  // 10^frac, built by a short loop (frac <= 76, so it stays inside i256).
+  llvm::Value* powSlot = entryAlloca(i256Ty, "fxc.pow");
+  llvm::Value* kSlot = entryAlloca(b_.getInt64Ty(), "fxc.k");
+  b_.CreateStore(one256, powSlot, false);
+  b_.CreateStore(zero64, kSlot, false);
+  llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.frac.load");
+  llvm::Value* frac64 = b_.CreateZExt(frac32, b_.getInt64Ty(), "fxc.frac64");
+  llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.pow", curFn_);
+  llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.pow_body", curFn_);
+  llvm::BasicBlock* powDoneBB = llvm::BasicBlock::Create(ctx_, "fxc.pow_done", curFn_);
+  b_.CreateBr(powBB);
+  startBlock(powBB);
+  {
+    llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.k.load");
+    b_.CreateCondBr(b_.CreateICmpSLT(k, frac64, "fxc.k_lt"), powBodyBB, powDoneBB);
+  }
+  startBlock(powBodyBB);
+  {
+    llvm::Value* p = b_.CreateLoad(i256Ty, powSlot, "fxc.pow.load");
+    llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.k.inc");
+    b_.CreateStore(b_.CreateMul(p, ten256, "fxc.pow.next"), powSlot, false);
+    b_.CreateStore(b_.CreateAdd(k, one64, "fxc.k.next"), kSlot, false);
+    b_.CreateBr(powBB);
+  }
+  startBlock(powDoneBB);
+  llvm::Value* pow10 = b_.CreateLoad(i256Ty, powSlot, "fxc.pow10");
+
+  llvm::Value* raw;
+  if (dst.k == TK::FixedDec) {
+    // Decimal target: all * 10^q / 10^f, rounded half away from zero.
+    llvm::Value* scaled = b_.CreateMul(mag, intPowConst(i256Ty, 10, dst.scale), "fxc.dec.mul");
+    llvm::Value* q = b_.CreateSDiv(scaled, pow10, "fxc.dec.q");
+    llvm::Value* r = b_.CreateSRem(scaled, pow10, "fxc.dec.r");
+    llvm::Value* twice = b_.CreateMul(r, llvm::ConstantInt::get(i256Ty, 2), "fxc.dec.2r");
+    llvm::Value* roundUp = b_.CreateICmpUGE(twice, pow10, "fxc.dec.round");
+    q = b_.CreateAdd(q, b_.CreateZExt(roundUp, i256Ty, "fxc.dec.inc"), "fxc.dec.rounded");
+    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero256, q, "fxc.dec.neg"), q, "fxc.dec.raw");
+    wideMagTrap(raw, dst.prec);
+  } else {
+    // Binary target: all * 2^q / 10^f, truncated toward zero.
+    llvm::Value* scaled = b_.CreateMul(mag, intPowConst(i256Ty, 2, dst.scale), "fxc.bin.mul");
+    llvm::Value* q = b_.CreateSDiv(scaled, pow10, "fxc.bin.q");
+    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero256, q, "fxc.bin.neg"), q, "fxc.bin.raw");
+    raw = fixedBinPrecTrap(raw, dst.prec);
+  }
+  Val v;
+  v.ty = dst;
+  v.reg = b_.CreateTrunc(raw, llvmTy(dst), "fxc.trunc");
+  return v;
+}
+
+// Character text → FLOAT (rule (123)): parse the signed significant digits and
+// fraction count, then divide the digits by 10^frac in double. Each conversion
+// rounds once, so the result is within a few ulps of a correctly rounded parse.
+Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst) {
+  llvm::Type* i256Ty = b_.getIntNTy(256);
+  llvm::Value* zero64 = i64(0);
+  llvm::Value* one64 = i64(1);
+  llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
+  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
+
+  llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
+  llvm::Value* all = emitCharParts(s, slen, fracSlot);
+
+  // 10^frac, built by a short loop (frac <= 76, so it stays inside i256).
+  llvm::Value* powSlot = entryAlloca(i256Ty, "fxc.fpow");
+  llvm::Value* kSlot = entryAlloca(b_.getInt64Ty(), "fxc.fk");
+  b_.CreateStore(one256, powSlot, false);
+  b_.CreateStore(zero64, kSlot, false);
+  llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.ffrac.load");
+  llvm::Value* frac64 = b_.CreateZExt(frac32, b_.getInt64Ty(), "fxc.ffrac64");
+  llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow", curFn_);
+  llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_body", curFn_);
+  llvm::BasicBlock* powDoneBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_done", curFn_);
+  b_.CreateBr(powBB);
+  startBlock(powBB);
+  {
+    llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.fk.load");
+    b_.CreateCondBr(b_.CreateICmpSLT(k, frac64, "fxc.fk_lt"), powBodyBB, powDoneBB);
+  }
+  startBlock(powBodyBB);
+  {
+    llvm::Value* p = b_.CreateLoad(i256Ty, powSlot, "fxc.fpow.load");
+    llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.fk.inc");
+    b_.CreateStore(b_.CreateMul(p, ten256, "fxc.fpow.next"), powSlot, false);
+    b_.CreateStore(b_.CreateAdd(k, one64, "fxc.fk.next"), kSlot, false);
+    b_.CreateBr(powBB);
+  }
+  startBlock(powDoneBB);
+  llvm::Value* pow10 = b_.CreateLoad(i256Ty, powSlot, "fxc.fpow10");
+
+  llvm::Value* digits = b_.CreateSIToFP(all, b_.getDoubleTy(), "fxc.fdigits");
+  llvm::Value* scale = b_.CreateSIToFP(pow10, b_.getDoubleTy(), "fxc.fscale");
+  Val v;
+  v.ty = dst;
+  v.reg = b_.CreateFDiv(digits, scale, "fxc.fvalue");
+  return v;
 }
 
 // Direct LLVM lowering for CHAR(fixed) (W4): format an i64 as a decimal
@@ -3243,6 +3529,73 @@ Val IRGen::applyUnderflow(Val r, llvm::Value* a, llvm::Value* b) {
   return r;
 }
 
+// OVERFLOW (rule 94; ADR-333): a floating-point operator result whose
+// magnitude exceeds the largest double raises the condition. IBM leaves the
+// result undefined and its implicit action is a message followed by ERROR; a
+// unit that returns normally re-raises ERROR. The value stays whatever IEEE
+// produced (±inf), which is IBM's "undefined" result made concrete.
+Val IRGen::applyOverflow(Val r) {
+  if (!overflowChecks())
+    return r;
+  std::string id = std::to_string(n_++);
+  llvm::Value* max = llvm::ConstantFP::get(b_.getDoubleTy(), std::numeric_limits<double>::max());
+  llvm::Function* fabsFn = intrinsicFn("llvm.fabs.f64", b_.getDoubleTy(), {b_.getDoubleTy()});
+  llvm::Value* mag = b_.CreateCall(fabsFn, {r.reg}, "of.mag." + id);
+  // An infinite result is the only way |x| exceeds the largest finite double;
+  // NaN compares false, so an invalid operand does not raise OVERFLOW.
+  llvm::Value* bad = b_.CreateFCmpOGT(mag, max, "of.bad." + id);
+  llvm::BasicBlock* computeBB = b_.GetInsertBlock();
+  llvm::BasicBlock* trapBB = llvm::BasicBlock::Create(ctx_, "of.trap." + id, curFn_);
+  llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "of.ok." + id, curFn_);
+  llvm::MDBuilder mdb(ctx_);
+  if (auto* br = b_.CreateCondBr(bad, trapBB, okBB))
+    br->setMetadata(llvm::LLVMContext::MD_prof, mdb.createBranchWeights({1, 99}));
+  b_.SetInsertPoint(trapBB);
+  llvm::Function* dispatch = onTrapDispatch(Stmt::kOverflowCondKey, "pli_overflow");
+  if (!dispatch) {
+    // No unit in this module: message plus ERROR, which never returns.
+    b_.CreateCall(runtimeFn("pli_overflow"), {});
+    b_.CreateUnreachable();
+  } else {
+    b_.CreateCall(dispatch, {});
+    // IBM's normal-return rule: the returned OVERFLOW unit raises ERROR.
+    emitErrorRaise();
+    b_.CreateBr(okBB);
+  }
+  b_.SetInsertPoint(okBB);
+  llvm::PHINode* phi = b_.CreatePHI(r.reg->getType(), 2, "of.r." + id);
+  phi->addIncoming(r.reg, computeBB);
+  for (llvm::BasicBlock* pred : llvm::predecessors(okBB))
+    if (pred != computeBB)
+      phi->addIncoming(r.reg, pred);
+  r.reg = phi;
+  return r;
+}
+
+// The ERROR condition through the runtime ON stack (rule 94), used by IBM's
+// normal-return rule for OVERFLOW: an ERROR unit established anywhere runs and
+// execution resumes after it; without one the system action aborts. Mirrors
+// emitSignal's ERROR branch, with ONCODE 1 inside the unit (ADR-076).
+void IRGen::emitErrorRaise() {
+  // The slot lives in the entry block: a trap inside a loop must not grow the
+  // caller's stack each time the unit returns (ADR-263).
+  llvm::Value* fnSlot = entryAlloca(b_.getPtrTy(), "on.ctxslot");
+  llvm::Value* fn = b_.CreateCall(runtimeFn("pli_on_top_fn_pair"), {i64(0), fnSlot}, "ontopfn");
+  llvm::Value* ctx = b_.CreateLoad(b_.getPtrTy(), fnSlot, "ontopctx");
+  llvm::Value* none = b_.CreateICmpEQ(fn, llvm::Constant::getNullValue(b_.getPtrTy()), "onnosystem");
+  llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
+  llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", curFn_);
+  b_.CreateCondBr(none, defBB, dspBB);
+  b_.SetInsertPoint(defBB);
+  b_.CreateCall(runtimeFn("pli_overflow_error"), {});
+  b_.CreateUnreachable();
+  b_.SetInsertPoint(dspBB);
+  b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
+  llvm::FunctionType* hft = llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
+  b_.CreateCall(hft, fn, {ctx});
+  b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+}
+
 // STRINGRANGE check (rules (60)-(63),(94)): raise before the extraction when
 // the argument triple is invalid. IBM's normal return then gives the clamped
 // substring the lowerings already compute. y = LENGTH(x)+1 with z = 0 is
@@ -3346,8 +3699,14 @@ llvm::Value* IRGen::zerodivideResume(llvm::Value* isZero, llvm::Value* computed,
 // FIXED BINARY checked +,-,* (QR1.2): the overflow intrinsic yields the
 // value plus a flag; a set flag traps through the SIZE path (hard ERROR
 // when no SIZE handler is established, QR1.4).
-llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
-  if (!sizeChecks()) {
+llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b, bool dec) {
+  // A FIXED DECIMAL result is subject to FIXEDOVERFLOW (rule 94; ADR-334) when
+  // it needs more than the PL/I maximum of 31 digits. Only the i128 storage
+  // can hold such a value; the i64 intermediates top out at 18 digits, so a
+  // wrap there stays on the SIZE path (recorded in GC).
+  const bool wrapOn = sizeChecks();
+  const bool foverOn = dec && fixedOverflowChecks() && a->getType()->isIntegerTy(128);
+  if (!wrapOn && !foverOn) {
     // (NOSIZE): plain arithmetic — the wrapped value stands (rules (60)-(63),
     // ADR-110). Skip the overflow intrinsic entirely; its struct return and
     // extractvalue block the optimizer's overflow-narrowing passes.
@@ -3364,21 +3723,25 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   // so compute the result and overflow flag at emit time and drop the
   // with.overflow intrinsic + trap block. Only matters at -O0/-O1 (-O2/-O3
   // default to NOSIZE per Task 7). Sound because both operands are constants.
-  if (auto* ca = llvm::dyn_cast<llvm::ConstantInt>(a)) {
-    if (auto* cb = llvm::dyn_cast<llvm::ConstantInt>(b)) {
-      const llvm::APInt& av = ca->getValue();
-      const llvm::APInt& bv = cb->getValue();
-      bool of = false;
-      llvm::APInt rv;
-      if (op == Tok::Plus)
-        rv = av.sadd_ov(bv, of);
-      else if (op == Tok::Minus)
-        rv = av.ssub_ov(bv, of);
-      else // Tok::Star
-        rv = av.smul_ov(bv, of);
-      if (!of)
-        return llvm::ConstantInt::get(ty, rv);
-      // Overflow possible: fall through to the intrinsic + trap path below.
+  // A FIXEDOVERFLOW site keeps the intrinsic path: the digit-length test needs
+  // the value in an IR compare, not only the wrap flag.
+  if (wrapOn && !foverOn) {
+    if (auto* ca = llvm::dyn_cast<llvm::ConstantInt>(a)) {
+      if (auto* cb = llvm::dyn_cast<llvm::ConstantInt>(b)) {
+        const llvm::APInt& av = ca->getValue();
+        const llvm::APInt& bv = cb->getValue();
+        bool of = false;
+        llvm::APInt rv;
+        if (op == Tok::Plus)
+          rv = av.sadd_ov(bv, of);
+        else if (op == Tok::Minus)
+          rv = av.ssub_ov(bv, of);
+        else // Tok::Star
+          rv = av.smul_ov(bv, of);
+        if (!of)
+          return llvm::ConstantInt::get(ty, rv);
+        // Overflow possible: fall through to the intrinsic + trap path below.
+      }
     }
   }
   std::string base = op == Tok::Plus ? "sadd" : op == Tok::Minus ? "ssub" : "smul";
@@ -3387,13 +3750,27 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b) {
   llvm::Value* ov = b_.CreateCall(intrinsicFn(iname, st, {ty, ty}), {a, b}, "ov");
   llvm::Value* r = b_.CreateExtractValue(ov, 0, "bin");
   llvm::Value* of = b_.CreateExtractValue(ov, 1, "ovf");
+  llvm::Value* bad = of;
+  if (foverOn) {
+    // The raw scaled integer's digit count is the result's precision, so
+    // |result| >= 10^31 is exactly "more than 31 digits". A wrap of the i128
+    // product is far past that too, so both edges share the one condition.
+    llvm::Value* lim = i128(pliPow10_128(31));
+    llvm::Value* negLim = i128(pli_neg_s(pliPow10_128(31)));
+    llvm::Value* hi = b_.CreateICmpSGE(r, lim, "dfl.hi");
+    llvm::Value* lo = b_.CreateICmpSLE(r, negLim, "dfl.lo");
+    bad = b_.CreateOr(b_.CreateOr(hi, lo, "dfl.len"), of, "dfl.bad");
+  }
   int seq = ovSeq_++;
   llvm::BasicBlock* trapBB =
       llvm::BasicBlock::Create(ctx_, "ov.trap." + std::to_string(seq), curFn_);
   llvm::BasicBlock* okBB = llvm::BasicBlock::Create(ctx_, "ov.ok." + std::to_string(seq), curFn_);
-  b_.CreateCondBr(of, trapBB, okBB);
+  b_.CreateCondBr(bad, trapBB, okBB);
   b_.SetInsertPoint(trapBB);
-  emitSizeTrap(okBB);
+  if (foverOn)
+    emitCondTrap(Stmt::kFixedoverflowCondKey, "pli_fixedoverflow", okBB);
+  else
+    emitSizeTrap(okBB);
   b_.SetInsertPoint(okBB);
   return r;
 }
@@ -3788,6 +4165,8 @@ std::string IRGen::run(HProgram& prog) {
     eopts.subscriptChecks = subChecks();
     eopts.zerodivideChecks = zdivChecks();
     eopts.conversionChecks = convChecks();
+    eopts.overflowChecks = overflowChecks();
+    eopts.fixedOverflowChecks = fixedOverflowChecks();
     if (!noMemoryEffects_)
       effects_ = pli::analyzeEffects(prog, byValue, eopts);
   }
@@ -4634,13 +5013,19 @@ void IRGen::emitInitials(HProc* p) {
 void IRGen::collectGotoBlocks(HStmt* s, std::vector<int>& chain) {
   if (!s)
     return;
-  if (!s->labels.empty() && s->kind != HStmt::Entry) {
+  if ((!s->labels.empty() || !s->labelElems.empty()) && s->kind != HStmt::Entry) {
     std::string blk = "L" + std::to_string(n_++);
     llvm::BasicBlock* bb = llvm::BasicBlock::Create(ctx_, blk, curFn_);
+    stmtBlocks_[s] = bb;
     for (const std::string& l : s->labels) {
       labelBlocks_[l] = bb;
       labelBeginChain_[l] = chain; // enclosing BEGIN scopes (rule 91)
     }
+    // Rule (65): the label-array element is initialized with this statement's
+    // address when the procedure is entered.
+    for (const LabelElem& e : s->labelElems)
+      if (e.sym)
+        labelElemInits_.push_back({e.sym, e.subs, bb});
   }
   bool isBegin = s->kind == HStmt::Begin;
   if (isBegin) {
@@ -4655,6 +5040,24 @@ void IRGen::collectGotoBlocks(HStmt* s, std::vector<int>& chain) {
     collectGotoBlocks(b.get(), chain);
   if (isBegin)
     chain.pop_back();
+}
+
+// Rule (65) initial-label: give each label-array element used as a statement
+// prefix the address of that statement. The array is a fixed-extent automatic
+// (sema checked it), so the element sits at a constant offset from its base and
+// the store belongs in the entry block, where every activation performs it.
+void IRGen::emitLabelElemInits() {
+  for (const LabelElemInit& e : labelElemInits_) {
+    const Type& arr = e.sym->ty;
+    long long flat = 0, stride = 1;
+    for (size_t k = arr.dims.size(); k-- > 0;) {
+      flat += (e.subs[k] - arr.dims[k].lb) * stride;
+      stride *= (long long)(arr.dims[k].ub - arr.dims[k].lb + 1);
+    }
+    llvm::Value* addr = b_.CreateInBoundsGEP(llvmTy(arr.elementType()), addressOf(e.sym),
+                                             {i64(flat)}, "lelem");
+    b_.CreateStore(llvm::BlockAddress::get(curFn_, e.bb), addr);
+  }
 }
 
 // Handler depth to restore when a GO TO leaves enclosing BEGIN blocks (rule
@@ -5276,6 +5679,8 @@ void IRGen::emitProc(HProc* p) {
   }
   labelBlocks_.clear();
   labelBeginChain_.clear();
+  labelElemInits_.clear();
+  stmtBlocks_.clear();
   onScopes_.clear();
   symAddr_.clear();
   structRetPtr_ = nullptr;
@@ -5374,6 +5779,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 
   allocaLocals(p);
   emitInitials(p); // INITIAL attribute on AUTOMATIC variables (rule 26)
+  emitLabelElemInits(); // rule (65) label-array prefixes
   recordDynParamUbs(p->paramSyms);
 
   // Implicit ALLOCATE for every CONTROLLED variable declared in this proc:
@@ -5477,6 +5883,7 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
 
   allocaLocals(p);
   emitInitials(p);
+  emitLabelElemInits(); // rule (65) label-array prefixes
   recordDynParamUbs(uni);
 
   // Implicit ALLOCATE for every CONTROLLED variable declared in this proc,
@@ -5655,6 +6062,8 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       curOnDepth_ = nullptr;
       labelBlocks_.clear();
       labelBeginChain_.clear();
+      labelElemInits_.clear();
+      stmtBlocks_.clear();
       onScopes_.clear();
       symAddr_.clear();
       ctlImplicitAlloc_.clear(); // a handler allocates/frees nothing implicitly
@@ -5764,6 +6173,14 @@ void IRGen::emitSignal(HStmt* s) {
   if (s->condKey == Stmt::kStringrangeCondKey) {
     b_.CreateCall(runtimeFn("pli_stringrange"), {});
     b_.CreateBr(resBB);
+  } else if (s->condKey == Stmt::kOverflowCondKey) {
+    // OVERFLOW's implicit action is a message followed by ERROR (ADR-333).
+    b_.CreateCall(runtimeFn("pli_overflow"), {});
+    b_.CreateUnreachable();
+  } else if (s->condKey == Stmt::kFixedoverflowCondKey) {
+    // FIXEDOVERFLOW's implicit action is a message followed by ERROR (ADR-334).
+    b_.CreateCall(runtimeFn("pli_fixedoverflow"), {});
+    b_.CreateUnreachable();
   } else {
     std::string msg;
     if (s->condKey == 0)
@@ -5788,6 +6205,10 @@ void IRGen::emitSignal(HStmt* s) {
   b_.CreateCall(hft, fn, {ctx});
   if (s->condKey == 0)
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+  // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
+  // (ADR-333), which either runs an ERROR unit or takes the system action.
+  if (s->condKey == Stmt::kOverflowCondKey)
+    emitErrorRaise();
   b_.CreateBr(resBB);
   b_.SetInsertPoint(resBB);
 }
@@ -5801,8 +6222,9 @@ void IRGen::emitStmt(HStmt* s) {
   // The current source location, for a remark raised inside a built-in
   // lowering (ADR-254).
   curLoc_ = s->loc;
-  if (!s->labels.empty()) {
-    startBlock(labelBlocks_[s->labels.front()]);
+  if (auto it = stmtBlocks_.find(s); it != stmtBlocks_.end()) {
+    // A labelled statement starts the block collected for it (rules (64),(65)).
+    startBlock(it->second);
   } else if (blockTerminated(b_.GetInsertBlock())) {
     newBlock(); // unreachable code (e.g. after STOP): start a fresh block
   }
@@ -5819,6 +6241,8 @@ void IRGen::emitStmt(HStmt* s) {
   top.noZdiv = s->chkZdiv ? false : (top.noZdiv || s->noZdiv);
   top.noConv = s->chkConv ? false : (top.noConv || s->noConv);
   top.noUnder = s->chkUnder ? false : (top.noUnder || s->noUnder);
+  top.noOver = s->chkOver ? false : (top.noOver || s->noOver);
+  top.noFOver = s->chkFOver ? false : (top.noFOver || s->noFOver);
   // An explicit (STRINGRANGE)/(NOSTRINGRANGE) prefix wins for its subtree.
   if (s->strRange != 0)
     top.strRange = s->strRange;
@@ -5908,8 +6332,8 @@ void IRGen::emitStmt(HStmt* s) {
       d_.error(s->loc, "a POINTER value cannot be written with DISPLAY in this stage", "(114)");
       break;
     case TK::Complex:
-      deferCall("pli_display_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                                        b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+      deferCall("pli_display_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re"),
+                                        b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im")});
       break;
     default:
       break; // array/struct operands are diagnosed by sema
@@ -6070,10 +6494,20 @@ void IRGen::emitStmt(HStmt* s) {
          addr = llvm::ConstantPointerNull::get(b_.getPtrTy());
        if (!addr->getType()->isPointerTy())
          addr = b_.CreateIntToPtr(addr, b_.getPtrTy(), "gotoptr");
-       // Collect all label blocks in this function as possible destinations (rule 77).
-       llvm::IndirectBrInst* ib = b_.CreateIndirectBr(addr, (unsigned)labelBlocks_.size());
+       // Collect every block an indirect transfer can reach: the named labels,
+       // the alternate entry segments, and the label-array prefixes (rule (65)).
+       std::vector<llvm::BasicBlock*> dests;
+       auto addDest = [&](llvm::BasicBlock* bb) {
+         if (bb && std::find(dests.begin(), dests.end(), bb) == dests.end())
+           dests.push_back(bb);
+       };
        for (auto& kv : labelBlocks_)
-         ib->addDestination(kv.second);
+         addDest(kv.second);
+       for (auto& kv : stmtBlocks_)
+         addDest(kv.second);
+       llvm::IndirectBrInst* ib = b_.CreateIndirectBr(addr, (unsigned)dests.size());
+       for (llvm::BasicBlock* d : dests)
+         ib->addDestination(d);
     } else {
       // Direct GO TO label: jump to the named block.
       if (llvm::Value* depth = onExitDepth(s->name))
@@ -8127,6 +8561,12 @@ void IRGen::emitPutDataScalar(HExpr* t, const std::string& name) {
     deferCall("pli_put_list_bit", {bit});
     break;
   }
+  case TK::Complex:
+    // Complex DATA output (CM5): the same real+imaginary list image, printed
+    // directly after the NAME= prefix.
+    deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "dcpx.re"),
+                                       b_.CreateExtractValue(v.cpxVal(), 1, "dcpx.im")});
+    break;
   case TK::FixedBin:
   case TK::FixedDec:
     if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
@@ -8321,8 +8761,8 @@ void IRGen::emitPut(HStmt* s) {
         break;
       case TK::Complex:
         // Complex output (CM5): real, sign, imaginary magnitude, I.
-        deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpx, 0, "cpx.re"),
-                                           b_.CreateExtractValue(v.cpx, 1, "cpx.im")});
+        deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re"),
+                                           b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im")});
         break;
       case TK::Task:
       case TK::Event:
@@ -8406,9 +8846,22 @@ void IRGen::emitGetDataItems(HStmt* s) {
     }
     case TK::Char: {
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gdch");
-      b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)});
+      llvm::Value* n = b_.CreateCall(runtimeFn("pli_get_list_char"),
+                                     {buf, i64(ty.len)}, "gdch.n");
       v.ptr = buf;
-      v.len = i64(ty.len);
+      // VARYING stores the assigned length; a fixed target stays padded to len.
+      v.len = ty.varying ? n : i64(ty.len);
+      v.ty = ty;
+      break;
+    }
+    case TK::Complex: {
+      // Complex DATA input (CM5): read both parts through element pointers,
+      // then load the pair into the target.
+      llvm::Value* pair = entryAlloca(llvmTy(ty), "gdcx");
+      b_.CreateCall(runtimeFn("pli_get_list_complex"),
+                    {b_.CreateStructGEP(llvmTy(ty), pair, 0, "gdcxr"),
+                     b_.CreateStructGEP(llvmTy(ty), pair, 1, "gdcxi")});
+      v.cpx = b_.CreateLoad(llvmTy(ty), pair, "gdcx");
       v.ty = ty;
       break;
     }
@@ -8579,10 +9032,11 @@ void IRGen::emitGet(HStmt* s) {
         // Read into a reusable entry buffer, then assign into the target.
         llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gch");
         deferCall("pli_get_list_char", {buf, i64(ty.len)}, false,
-                  [this, t, buf, loc](const std::vector<llvm::Value*>&, size_t) {
+                  [this, t, buf, loc](const std::vector<llvm::Value*>& r, size_t i) {
                     Val v;
                     v.ptr = buf;
-                    v.len = i64(t->ty.len);
+                    // VARYING takes the input length; fixed stays padded to len.
+                    v.len = t->ty.varying ? r[i] : i64(t->ty.len);
                     v.ty = t->ty;
                     storeGetTarget(t, v, loc);
                   });
@@ -8758,8 +9212,8 @@ void IRGen::emitPutEditItems(HStmt* s) {
         break;
       HExpr* item = s->items[di++].get();
       Val v = emitExpr(item);
-      llvm::Value* re = b_.CreateExtractValue(v.cpx, 0, "cpx.re");
-      llvm::Value* im = b_.CreateExtractValue(v.cpx, 1, "cpx.im");
+      llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
+      llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
       if (f.subs.empty()) {
         d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
         break;
@@ -8963,10 +9417,11 @@ void IRGen::emitGetEditItems(HStmt* s) {
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gech");
       deferCall("pli_get_edit_char", {buf, i64(ty.len), w}, false,
-                [this, t, buf, loc](const std::vector<llvm::Value*>&, size_t) {
+                [this, t, buf, loc](const std::vector<llvm::Value*>& r, size_t i) {
                   Val v;
                   v.ptr = buf;
-                  v.len = i64(t->ty.len);
+                  // VARYING takes the field width; fixed stays padded to len.
+                  v.len = t->ty.varying ? r[i] : i64(t->ty.len);
                   v.ty = t->ty;
                   storeGetTarget(t, v, loc);
                 });
@@ -10441,7 +10896,7 @@ void IRGen::storeScalarTo(llvm::Value* addr, const Type& ty, const Val& v, bool 
                           Symbol* aliasSym) {
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is stored as the {double,double} struct.
-    llvm::StoreInst* si = b_.CreateStore(v.cpx, addr);
+    llvm::StoreInst* si = b_.CreateStore(v.cpxVal(), addr);
     if (packed)
       si->setAlignment(llvm::Align(1));
     annotateAlias(si, aliasSym);
@@ -11195,7 +11650,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (v.ty.isComplex() && !dst.isComplex()) {
     Val re;
     re.ty = Type::flt(6);
-    re.reg = b_.CreateExtractValue(v.cpx, 0, "cpx.re");
+    re.reg = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
     return convert(re, dst, loc);
   }
   if (!v.ty.isComplex() && dst.isComplex()) {
@@ -11269,6 +11724,10 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       out.reg = b_.CreateSIToFP(iv, b_.getDoubleTy(), "cvt");
     } else if (llvmTy(dst)->getIntegerBitWidth() == 64) {
       out.reg = iv;
+    } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
+      // A genuinely wide DECIMAL target (ADR-191) holds 20+ digits in i128;
+      // a bit-string source is an unsigned magnitude that fits i64.
+      out.reg = b_.CreateSExt(iv, llvmTy(dst), "cvt");
     } else {
       out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
     }
@@ -11868,6 +12327,16 @@ Val IRGen::emitExpr(HExpr* e) {
     }
     return loadArrayElement(e->sym, e->args, e->loc, e->locPtr.get());
   case HExpr::VarRef:
+    if (e->isLabel) {
+      // A label constant in value position (rule (21)): its LABEL value is the
+      // address of the statement, the block address `ADDR(label)` yields, so
+      // `L = LBL;` and an element of a label array can hold it.
+      v.ty = e->ty;
+      llvm::BasicBlock* bb = lookupLabelBlock(e->name);
+      v.reg = (bb && curFn_) ? (llvm::Value*)llvm::BlockAddress::get(curFn_, bb)
+                             : llvm::ConstantPointerNull::get(b_.getPtrTy());
+      return v;
+    }
     if (!e->sym) {
       v.ty = e->ty;
       v.reg = i64(0);
@@ -12359,11 +12828,11 @@ Val IRGen::emitExpr(HExpr* e) {
     Val ac = convert(a, Type::complexTy(), e->loc);
     Val bc = convert(b, Type::complexTy(), e->loc);
     llvm::Value* er =
-        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpx, 0, "cpx.er"),
-                      b_.CreateExtractValue(bc.cpx, 0, "cpx.er"), "cpx.er");
+        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpxVal(), 0, "cpx.er"),
+                      b_.CreateExtractValue(bc.cpxVal(), 0, "cpx.er"), "cpx.er");
     llvm::Value* ei =
-        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpx, 1, "cpx.ei"),
-                      b_.CreateExtractValue(bc.cpx, 1, "cpx.ei"), "cpx.ei");
+        b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpxVal(), 1, "cpx.ei"),
+                      b_.CreateExtractValue(bc.cpxVal(), 1, "cpx.ei"), "cpx.ei");
     llvm::Value* r = b_.CreateAnd(er, ei, "cpx.eq");
     if (op == Tok::Ne)
       r = b_.CreateNot(r, "cpx.ne");
@@ -12473,10 +12942,10 @@ Val IRGen::emitExpr(HExpr* e) {
   if (!isCmp && common.isComplex()) {
     // Complex arithmetic (CM5) over {double,double} pairs; mixed reals
     // arrive with a zero imaginary part via convert above.
-    llvm::Value* ar = b_.CreateExtractValue(av.cpx, 0, "cpx.ar");
-    llvm::Value* ai = b_.CreateExtractValue(av.cpx, 1, "cpx.ai");
-    llvm::Value* br = b_.CreateExtractValue(bv.cpx, 0, "cpx.br");
-    llvm::Value* bi = b_.CreateExtractValue(bv.cpx, 1, "cpx.bi");
+    llvm::Value* ar = b_.CreateExtractValue(av.cpxVal(), 0, "cpx.ar");
+    llvm::Value* ai = b_.CreateExtractValue(av.cpxVal(), 1, "cpx.ai");
+    llvm::Value* br = b_.CreateExtractValue(bv.cpxVal(), 0, "cpx.br");
+    llvm::Value* bi = b_.CreateExtractValue(bv.cpxVal(), 1, "cpx.bi");
     llvm::Value* rr = nullptr;
     llvm::Value* ri = nullptr;
     switch (op) {
@@ -12544,21 +13013,22 @@ Val IRGen::emitExpr(HExpr* e) {
     // FIXED overflow (QR1.2): a checked op traps on a wrapped intermediate
     // (BIT arithmetic is diagnosed in sema, so only FIXED reaches here);
     // DECIMAL precision against the declared digits is checked at narrowing
-    // conversions instead (full widening stays D1/QR2).
+    // conversions instead (full widening stays D1/QR2). A FIXED DECIMAL result
+    // longer than 31 digits raises FIXEDOVERFLOW (ADR-334).
     if (!flt && !isCmp && common.isFixed())
-      r = checkedArith(op, av.reg, bv.reg);
+      r = checkedArith(op, av.reg, bv.reg, common.k == TK::FixedDec);
     else
       r = flt ? b_.CreateFAdd(av.reg, bv.reg, "bin") : b_.CreateAdd(av.reg, bv.reg, "bin");
     break;
   case Tok::Minus:
     if (!flt && !isCmp && common.isFixed())
-      r = checkedArith(op, av.reg, bv.reg);
+      r = checkedArith(op, av.reg, bv.reg, common.k == TK::FixedDec);
     else
       r = flt ? b_.CreateFSub(av.reg, bv.reg, "bin") : b_.CreateSub(av.reg, bv.reg, "bin");
     break;
   case Tok::Star:
     if (!flt && !isCmp && common.isFixed())
-      r = checkedArith(op, av.reg, bv.reg);
+      r = checkedArith(op, av.reg, bv.reg, common.k == TK::FixedDec);
     else
       r = flt ? b_.CreateFMul(av.reg, bv.reg, "bin") : b_.CreateMul(av.reg, bv.reg, "bin");
     break;
@@ -12629,14 +13099,15 @@ Val IRGen::emitExpr(HExpr* e) {
     r = b_.CreateAdd(i64(0), i64(0));
     break;
   }
-  // UNDERFLOW (rule 94; ADR-326): a floating-point operator result is checked
-  // here; `*`, `/` and `**` pass their operands so a flush to exact zero counts
-  // as underflow too.
+  // UNDERFLOW and OVERFLOW (rules 94; ADR-326/333): a floating-point operator
+  // result is checked here; `*`, `/` and `**` pass their operands so a flush
+  // to exact zero counts as underflow too.
   if (flt && !isCmp) {
     const bool mulDiv = op == Tok::Star || op == Tok::Slash || op == Tok::Power;
     r = applyUnderflow(Val{common, r}, mulDiv ? av.reg : nullptr,
                        mulDiv ? bv.reg : nullptr)
             .reg;
+    r = applyOverflow(Val{common, r}).reg;
   }
   v.ty = common;
   v.reg = r;
@@ -12903,8 +13374,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     llvm::Value* r;
     if (at.isComplex()) {
       // |x + iy| = sqrt(x*x + y*y) over the FLOAT pair (rule (123)).
-      llvm::Value* re = b_.CreateExtractValue(a.cpx, 0, "abre");
-      llvm::Value* im = b_.CreateExtractValue(a.cpx, 1, "abim");
+      llvm::Value* re = b_.CreateExtractValue(a.cpxVal(), 0, "abre");
+      llvm::Value* im = b_.CreateExtractValue(a.cpxVal(), 1, "abim");
       llvm::Value* m =
           b_.CreateFAdd(b_.CreateFMul(re, re, "abq1"), b_.CreateFMul(im, im, "abq2"), "abq");
       // Gate on the lowering policy like the math builtins (W4b).
@@ -13035,14 +13506,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "REAL" || e->name == "IMAG") {
     Val z = emitExpr(e->args[0].get());
     v.ty = e->ty;
-    v.reg = b_.CreateExtractValue(z.cpx, e->name == "REAL" ? 0 : 1, "part");
+    v.reg = b_.CreateExtractValue(z.cpxVal(), e->name == "REAL" ? 0 : 1, "part");
     result = v;
     return true;
   }
   if (e->name == "CONJG") {
     Val z = emitExpr(e->args[0].get());
-    llvm::Value* re = b_.CreateExtractValue(z.cpx, 0, "cgr");
-    llvm::Value* im = b_.CreateExtractValue(z.cpx, 1, "cgi");
+    llvm::Value* re = b_.CreateExtractValue(z.cpxVal(), 0, "cgr");
+    llvm::Value* im = b_.CreateExtractValue(z.cpxVal(), 1, "cgi");
     llvm::Value* nim = b_.CreateFNeg(im, "cgn");
     llvm::Value* s =
         llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
@@ -13265,14 +13736,18 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       av = convert(a, common, e->loc);
       bv = convert(b, common, e->loc);
     }
-    // FIXED overflow (QR1.2): like Binary `*`, a wrapped product traps.
+    // FIXED overflow (QR1.2): like Binary `*`, a wrapped product traps; a
+    // FIXED DECIMAL product longer than 31 digits raises FIXEDOVERFLOW.
     llvm::Value* r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
-                     : common.isFixed()    ? checkedArith(Tok::Star, av.reg, bv.reg)
+                     : common.isFixed()    ? checkedArith(Tok::Star, av.reg, bv.reg,
+                                                          common.k == TK::FixedDec)
                                            : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;
     v.reg = r;
-    if (common.k == TK::Float)
+    if (common.k == TK::Float) {
       v.reg = applyUnderflow(v, av.reg, bv.reg).reg;
+      v.reg = applyOverflow(v).reg;
+    }
     result = v;
     return true;
   }
@@ -13288,6 +13763,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     ZdivCheck zd = beginZerodivide(dz, flt(0.0), Stmt::kZerodivideCondKey);
     llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "div");
     v.reg = applyUnderflow(Val{common, endZerodivide(zd, div)}, av.reg, bv.reg).reg;
+    v.reg = applyOverflow(Val{common, v.reg}).reg;
     result = v;
     return true;
   }
@@ -13559,37 +14035,47 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   }
   // FIXED (rule (123)): FIXED(char) parses decimal text, FIXED(numeric)
   // truncates toward zero (floats clamp out-of-range, NaN reads as 0).
+  // The p/q form converts the source directly so a scaled float is not
+  // truncated before the target scale is applied.
   if (e->name == "FIXED") {
     Val a = emitExpr(e->args[0].get());
-    if (a.ty.isChar()) {
-      // CONVERSION (rule 94): when the text holds no digits, FIXED(char)
-      // traps through the CONVERSION dispatch (abort or ON unit); the resume
-      // value is 0, the value the LLVM or runtime path leaves in `ok=0`.
-      llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
-      llvm::Value* r;
-      if (useRuntimeCall("fixed_of_char")) {
-        r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len, okSlot}, "fxc_rt");
-      } else {
-        r = emitFixedOfCharLLVM(a.ptr, a.len, okSlot);
-      }
-      if (convChecks()) {
-        llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
-        llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
-        llvm::BasicBlock* trapBB =
-            llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
-        llvm::BasicBlock* okBB =
-            llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
-        b_.CreateCondBr(fail, trapBB, okBB);
-        b_.SetInsertPoint(trapBB);
-        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
-        b_.SetInsertPoint(okBB);
-      }
+    const bool hasPrec = e->args.size() >= 2;
+    if (a.ty.isComplex()) {
+      // FIXED(complex) keeps the pair and truncates each part toward zero.
+      bool rt = useRuntimeCall("fixed_of_float");
+      auto truncPart = [&](llvm::Value* x, const char* nm) -> llvm::Value* {
+        if (rt)
+          return b_.CreateCall(runtimeFn("pli_fixed_of_float"), {x}, nm);
+        return emitFixedOfFloatLLVM(x);
+      };
+      llvm::Value* cpx = a.cpxVal();
+      llvm::Value* re = b_.CreateExtractValue(cpx, 0, "fxc.re");
+      llvm::Value* im = b_.CreateExtractValue(cpx, 1, "fxc.im");
+      llvm::Value* reD = b_.CreateSIToFP(truncPart(re, "fxc.reI"), b_.getDoubleTy(), "fxc.reD");
+      llvm::Value* imD = b_.CreateSIToFP(truncPart(im, "fxc.imI"), b_.getDoubleTy(), "fxc.imD");
+      llvm::Value* s = llvm::UndefValue::get(llvmTy(Type::complexTy()));
+      s = b_.CreateInsertValue(s, reD, 0, "fxc.cpx.re");
+      s = b_.CreateInsertValue(s, imD, 1, "fxc.cpx.im");
       v.ty = e->ty;
-      v.reg = b_.CreateTrunc(r, llvmTy(e->ty), "fxc");
+      v.cpx = s;
+      result = v;
+      return true;
+    }
+    if (a.ty.isChar()) {
+      // FIXED(char) parses a decimal point; the p/q form rescales directly into
+      // the declared target (CONVERSION trap on no digits, rule 94).
+      v = emitFixedFromChar(a.ptr, a.len, e->ty);
       result = v;
       return true;
     }
     if (a.ty.k == TK::Float) {
+      // With an explicit scale, convert the float at full precision; the
+      // one-argument form keeps the historical truncating helper.
+      if (hasPrec) {
+        v = convert(a, e->ty, e->loc);
+        result = v;
+        return true;
+      }
       llvm::Value* r;
       if (useRuntimeCall("fixed_of_float")) {
         r = b_.CreateCall(runtimeFn("pli_fixed_of_float"), {a.reg}, "fxf_rt");
@@ -13607,39 +14093,23 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
-  // BINARY/DECIMAL/FLOAT (rule (123), Appendix 1): numeric conversion with
-  // optional precision/scale override. char input reuses the FIXED(char)
-  // decimal-text parse path (CONVERSION trap, ADR-170); numeric input goes
-  // through convert(), which already handles float->fixed scaling (ADR-006)
-  // and fixed->float back-scaling.
-  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
+  // BINARY/DECIMAL/FLOAT/FIXEDBIN/FIXEDDEC (rule (123), Appendix 1):
+  // numeric conversion with optional precision/scale override. Fixed targets
+  // parse fractional character text directly (CONVERSION trap, ADR-170);
+  // numeric input goes through convert(), which already handles float->fixed
+  // scaling (ADR-006) and fixed->float back-scaling.
+  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT" ||
+      e->name == "FIXEDBIN" || e->name == "FIXEDDEC") {
     Val a = emitExpr(e->args[0].get());
     if (a.ty.isChar()) {
-      // char -> numeric: parse decimal text via the FIXED(char) path, then
-      // convert the parsed FIXED BIN(63) to the requested target type.
-      llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "conv_ok");
-      llvm::Value* r;
-      if (useRuntimeCall("fixed_of_char")) {
-        r = b_.CreateCall(runtimeFn("pli_fixed_of_char"), {a.ptr, a.len, okSlot}, "fxc_rt");
-      } else {
-        r = emitFixedOfCharLLVM(a.ptr, a.len, okSlot);
+      // Fixed targets parse a decimal point and rescale directly.
+      if (e->ty.isFixed()) {
+        v = emitFixedFromChar(a.ptr, a.len, e->ty);
+        result = v;
+        return true;
       }
-      if (convChecks()) {
-        llvm::Value* ok = b_.CreateLoad(b_.getInt32Ty(), okSlot, "conv_ok");
-        llvm::Value* fail = b_.CreateICmpEQ(ok, i32(0), "conv_fail");
-        llvm::BasicBlock* trapBB =
-            llvm::BasicBlock::Create(ctx_, "conv.trap." + std::to_string(n_++), curFn_);
-        llvm::BasicBlock* okBB =
-            llvm::BasicBlock::Create(ctx_, "conv.ok." + std::to_string(n_++), curFn_);
-        b_.CreateCondBr(fail, trapBB, okBB);
-        b_.SetInsertPoint(trapBB);
-        emitCondTrap(Stmt::kConversionCondKey, "pli_conversion", okBB);
-        b_.SetInsertPoint(okBB);
-      }
-      Val fixed;
-      fixed.ty = Type::fixedBin(63, 0);
-      fixed.reg = b_.CreateTrunc(r, b_.getInt64Ty(), "fxc");
-      v = convert(fixed, e->ty, e->loc);
+      // FLOAT(char) parses the same fractional text as the fixed targets.
+      v = emitFloatFromChar(a.ptr, a.len, e->ty);
       result = v;
       return true;
     }
@@ -13653,6 +14123,18 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     Val a = emitExpr(e->args[0].get());
     if (a.ty.isChar()) {
       result = a;
+      return true;
+    }
+    if (a.ty.isComplex()) {
+      // CHAR(complex): real image, signed imaginary image, I; the runtime
+      // helper matches the list-directed complex rendering.
+      Val dst = charTemp(e->ty.len);
+      llvm::Value* cpx = a.cpxVal();
+      llvm::Value* re = b_.CreateExtractValue(cpx, 0, "cpx.re");
+      llvm::Value* im = b_.CreateExtractValue(cpx, 1, "cpx.im");
+      b_.CreateCall(runtimeFn("pli_char_of_complex"), {dst.ptr, dst.len, re, im});
+      dst.len = i64(e->ty.len);
+      result = dst;
       return true;
     }
     Val dst = charTemp(e->ty.len);
@@ -14324,11 +14806,11 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       Val ac = convert(a, Type::complexTy(), e->loc);
       Val bc = convert(b, Type::complexTy(), e->loc);
       llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                      b_.CreateExtractValue(ac.cpx, 0, "ideq.cr"),
-                                      b_.CreateExtractValue(bc.cpx, 0, "ideq.cr"), "ideq.er");
+                                      b_.CreateExtractValue(ac.cpxVal(), 0, "ideq.cr"),
+                                      b_.CreateExtractValue(bc.cpxVal(), 0, "ideq.cr"), "ideq.er");
       llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                      b_.CreateExtractValue(ac.cpx, 1, "ideq.ci"),
-                                      b_.CreateExtractValue(bc.cpx, 1, "ideq.ci"), "ideq.ei");
+                                      b_.CreateExtractValue(ac.cpxVal(), 1, "ideq.ci"),
+                                      b_.CreateExtractValue(bc.cpxVal(), 1, "ideq.ci"), "ideq.ei");
       v.reg = b_.CreateAnd(er, ei, "ideq.cx");
     } else if (a.ty.isBit() && b.ty.isBit() && a.ty.len > 1) {
       // Wide BIT scalars compare byte by byte (packed big-endian).

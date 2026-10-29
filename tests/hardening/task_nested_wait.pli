@@ -1,0 +1,62 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82),(83): tasks that spawn tasks and WAIT for them.
+    Two parents each start two children; each child starts and waits
+    for a grandchild. A WAIT inside a task must park that task only,
+    so every level finishes under fiber/1 as well as os/4. Actuals
+    are whole scalars, one per task. */
+ task_nested_wait: procedure options(main);
+    declare e1 event;
+    declare e2 event;
+    declare p1 fixed bin(31);
+    declare p2 fixed bin(31);
+    declare r1 fixed bin(31);
+    declare r2 fixed bin(31);
+    p1 = 1;
+    p2 = 2;
+    r1 = 0;
+    r2 = 0;
+    call parent(p1, r1) event(e1);
+    call parent(p2, r2) event(e2);
+    wait(e1, e2);
+    /* parent p: (10p+1+100p) + (10p+2+100p) + p */
+    if r1 ^= 224 | r2 ^= 445 then do;
+       put skip list('FAIL task_nested_wait:', r1, r2);
+       stop;
+    end;
+    put skip list('PASS task_nested_wait');
+    parent: procedure(p, res);
+       declare p fixed bin(31);
+       declare res fixed bin(31);
+       declare c1 event;
+       declare c2 event;
+       declare j1 fixed bin(31);
+       declare j2 fixed bin(31);
+       declare v1 fixed bin(31);
+       declare v2 fixed bin(31);
+       j1 = 1;
+       j2 = 2;
+       v1 = 0;
+       v2 = 0;
+       call child(p, j1, v1) event(c1);
+       call child(p, j2, v2) event(c2);
+       wait(c1, c2);
+       res = v1 + v2 + p;
+    end parent;
+    child: procedure(p, j, slot);
+       declare p fixed bin(31);
+       declare j fixed bin(31);
+       declare slot fixed bin(31);
+       declare g event;
+       declare gv fixed bin(31);
+       gv = 0;
+       call grandchild(p, gv) event(g);
+       wait(g);
+       slot = p * 10 + j + gv;
+    end child;
+    grandchild: procedure(p, slot);
+       declare p fixed bin(31);
+       declare slot fixed bin(31);
+       slot = p * 100;
+    end grandchild;
+ end task_nested_wait;

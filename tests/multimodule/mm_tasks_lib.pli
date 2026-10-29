@@ -1,0 +1,17 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Library side of mm_tasks.pli: the task body. */
+ mm_tasks_lib: package exports(work);
+ declare cells(4) fixed bin(31) external;
+ work: procedure(k);
+    declare k fixed bin(31);
+    declare hit fixed bin(31);
+    declare z fixed bin(31);
+    declare d fixed bin(31);
+    hit = 0;
+    d = 0;
+    on zerodivide hit = 1;
+    z = 10 / d;
+    cells(k) = k * 100 + hit + z;
+ end work;
+ end mm_tasks_lib;

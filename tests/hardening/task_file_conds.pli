@@ -1,0 +1,111 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(97),(105),(112): ENDFILE and UNDEFINEDFILE are keyed
+    per file and per task. Two readers run at once on different
+    record files (a record READ parks, ADR-342); each counts its own
+    end of file and its own failed OPEN. MAIN's units for the same
+    files must not run while the tasks do, and must run once when
+    MAIN does the same thing afterwards. Only reads run in the tasks:
+    WRITE still blocks a worker. */
+ task_file_conds: procedure options(main);
+    declare f1 file;
+    declare f2 file;
+    declare miss1 file;
+    declare miss2 file;
+    declare e1 event;
+    declare e2 event;
+    declare t1e fixed bin(31);
+    declare t1u fixed bin(31);
+    declare t2e fixed bin(31);
+    declare t2u fixed bin(31);
+    declare me fixed bin(31);
+    declare mu fixed bin(31);
+    declare i fixed bin(31);
+    declare rec fixed bin(31);
+    me = 0;
+    mu = 0;
+    /* three records in each file */
+    open file(f1) record sequential output
+       title('tests/hardening/out/task_file_conds_1.dat');
+    open file(f2) record sequential output
+       title('tests/hardening/out/task_file_conds_2.dat');
+    do i = 1 to 3;
+       rec = i;
+       write file(f1) from(rec);
+       write file(f2) from(rec);
+    end;
+    close file(f1);
+    close file(f2);
+    on endfile(f1) me = me + 1;
+    on undefinedfile(miss1) mu = mu + 1;
+    call reader1(t1e, t1u) event(e1);
+    call reader2(t2e, t2u) event(e2);
+    wait(e1, e2);
+    if t1e ^= 1 | t1u ^= 1 | t2e ^= 1 | t2u ^= 1 then do;
+       put skip list('FAIL task_file_conds: tasks', t1e, t1u, t2e,
+          t2u);
+       stop;
+    end;
+    if me ^= 0 | mu ^= 0 then do;
+       put skip list('FAIL task_file_conds: main early', me, mu);
+       stop;
+    end;
+    /* MAIN's own units fire for MAIN's own reads */
+    open file(f1) record sequential input
+       title('tests/hardening/out/task_file_conds_1.dat');
+    do i = 1 to 4;
+       read file(f1) into(rec);
+    end;
+    close file(f1);
+    open file(miss1) input
+       title('tests/hardening/out/task_file_conds_absent.dat');
+    if me ^= 1 | mu ^= 1 then do;
+       put skip list('FAIL task_file_conds: main', me, mu);
+       stop;
+    end;
+    put skip list('PASS task_file_conds');
+    reader1: procedure(eo, un);
+       declare eo fixed bin(31);
+       declare un fixed bin(31);
+       declare eofs fixed bin(31);
+       declare undefs fixed bin(31);
+       declare j fixed bin(31);
+       declare r fixed bin(31);
+       eofs = 0;
+       undefs = 0;
+       on endfile(f1) eofs = eofs + 1;
+       on undefinedfile(miss1) undefs = undefs + 1;
+       open file(f1) record sequential input
+          title('tests/hardening/out/task_file_conds_1.dat');
+       do j = 1 to 4;
+          read file(f1) into(r);
+       end;
+       close file(f1);
+       open file(miss1) input
+          title('tests/hardening/out/task_file_conds_absent.dat');
+       eo = eofs;
+       un = undefs;
+    end reader1;
+    reader2: procedure(eo, un);
+       declare eo fixed bin(31);
+       declare un fixed bin(31);
+       declare eofs fixed bin(31);
+       declare undefs fixed bin(31);
+       declare j fixed bin(31);
+       declare r fixed bin(31);
+       eofs = 0;
+       undefs = 0;
+       on endfile(f2) eofs = eofs + 1;
+       on undefinedfile(miss2) undefs = undefs + 1;
+       open file(f2) record sequential input
+          title('tests/hardening/out/task_file_conds_2.dat');
+       do j = 1 to 4;
+          read file(f2) into(r);
+       end;
+       close file(f2);
+       open file(miss2) input
+          title('tests/hardening/out/task_file_conds_absent.dat');
+       eo = eofs;
+       un = undefs;
+    end reader2;
+ end task_file_conds;

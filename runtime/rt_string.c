@@ -3,7 +3,7 @@
 /* rt_string.c — PL/I runtime library (pli_runtime): string semantics + helpers. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
-/* Calendar time routes through pli_plat_localtime (the platform seam). */
+/* Calendar time routes through pli_plat_time + pli_plat_localtime (the platform seam). */
 
 void pli_assign_char(char *dst, long long dstlen, const char *src, long long srclen) {
   /* A negative length is a caller bug; clamp it, or the size_t cast below
@@ -207,7 +207,7 @@ void pli_low(char *dst, long long n) { pli_memset(dst, 0x00, (size_t)n); }
 
 /* DATE(): write the current local date as 'YYYYMMDD'. */
 void pli_date(char *buf, long long cap) {
-  time_t now = time(NULL);
+  time_t now = pli_plat_time(NULL);
   struct tm tmv;
   pli_plat_localtime(&now, &tmv);
   char tmp[16];
@@ -220,7 +220,7 @@ void pli_date(char *buf, long long cap) {
 
 /* TIME(): write the current local time as 'HHMMSS'. */
 void pli_time(char *buf, long long cap) {
-  time_t now = time(NULL);
+  time_t now = pli_plat_time(NULL);
   struct tm tmv;
   pli_plat_localtime(&now, &tmv);
   char tmp[16];
@@ -232,7 +232,7 @@ void pli_time(char *buf, long long cap) {
 
 /* DATETIME(): write the current local date and time as 'YYYYMMDDHHMMSS' (14 chars). */
 void pli_datetime(char *buf, long long cap) {
-  time_t now = time(NULL);
+  time_t now = pli_plat_time(NULL);
   struct tm tmv;
   pli_plat_localtime(&now, &tmv);
   char tmp[32];

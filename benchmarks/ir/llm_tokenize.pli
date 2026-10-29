@@ -1,0 +1,117 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* BPE tokenization benchmark: for each pre-tokenized word, repeatedly
+    merge the adjacent pair with the lowest rank, looked up in an
+    open-addressing table. This is the CPU half of tokenization that
+    llama.cpp (and Strata, through ggml) runs before the GPU encodes
+    tokens (benchmarks/LLM-ORCHESTRATION-PLAN.md 4.1). */
+ /*
+  * Bounds:
+  *   - word ids < 100000, key = id * 4096 + id < 4.1e8 (fits 31 bits)
+  *   - key * 2654435761 < 1.1e18 (fits fixed bin(63))
+  *   - chk = mod(chk * 31 + id * pos, 1000000007): < 3.2e10 per step
+  *
+  * Scaling rule: 300000 words of 4..15 letters, each merged down to
+  * one token, puts the slowest -O2 configuration at ~180 ms.
+  */
+ test_llm_tokenize: proc options(main);
+    dcl hkey(4096) fixed bin(31);
+    dcl hrank(4096) fixed bin(31);
+    dcl hnew(4096) fixed bin(31);
+    dcl w(16) fixed bin(31);
+    dcl (i, j, n, len, best_i, best_r, r, nid, nwords, nmerge)
+       fixed bin(31);
+    dcl (seed, key, h, chk) fixed bin(63);
+    dcl found bit(1);
+
+    /* empty the merge table (key 0 marks a free slot) */
+    do i = 1 to 4096;
+       hkey(i) = 0;
+    end;
+    nid = 8;
+    nmerge = 0;
+    /* level 1: every letter pair merges; rank is a fixed permutation */
+    do i = 1 to 8;
+       do j = 1 to 8;
+          nid = nid + 1;
+          r = mod(i * 37 + j * 11, 64) + 1;
+          call put_merge(i, j, r, nid);
+       end;
+    end;
+    /* level 2: a pair token followed by a letter, a third of them */
+    do i = 9 to 72;
+       do j = 1 to 8;
+          if mod(i + j, 3) = 0 then do;
+             nid = nid + 1;
+             r = 100 + mod(i * 13 + j * 7, 512);
+             call put_merge(i, j, r, nid);
+          end;
+       end;
+    end;
+
+    seed = 12345;
+    chk = 0;
+    nwords = 300000;
+    do n = 1 to nwords;
+       /* one word of 4..15 letters from the seeded generator */
+       seed = mod(seed * 1103515245 + 12345, 2147483648);
+       len = 4 + mod(seed / 65536, 12);
+       do i = 1 to len;
+          seed = mod(seed * 1103515245 + 12345, 2147483648);
+          w(i) = 1 + mod(seed / 65536, 8);
+       end;
+       /* merge the lowest-rank adjacent pair until none is left */
+       found = '1'b;
+       do while (found);
+          best_i = 0;
+          best_r = 2147483647;
+          do i = 1 to len - 1;
+             key = w(i) * 4096 + w(i + 1);
+             h = mod(key * 2654435761, 4096) + 1;
+             do while (hkey(h) ^= 0 & hkey(h) ^= key);
+                h = mod(h, 4096) + 1;
+             end;
+             if hkey(h) = key then
+                if hrank(h) < best_r then do;
+                   best_r = hrank(h);
+                   best_i = i;
+                end;
+          end;
+          if best_i = 0 then found = '0'b;
+          else do;
+             /* replace the winning pair with its merged token */
+             key = w(best_i) * 4096 + w(best_i + 1);
+             h = mod(key * 2654435761, 4096) + 1;
+             do while (hkey(h) ^= key);
+                h = mod(h, 4096) + 1;
+             end;
+             w(best_i) = hnew(h);
+             do i = best_i + 1 to len - 1;
+                w(i) = w(i + 1);
+             end;
+             len = len - 1;
+             nmerge = nmerge + 1;
+          end;
+       end;
+       /* fold the token ids into a position-weighted checksum */
+       do i = 1 to len;
+          chk = mod(chk * 31 + w(i) * i, 1000000007);
+       end;
+    end;
+    put skip list(nmerge);
+    put skip list(chk);
+
+ /* insert one merge rule: probe to the first free slot */
+ put_merge: proc(l, rt, rank, id);
+    dcl (l, rt, rank, id) fixed bin(31);
+    dcl (k, hh) fixed bin(63);
+    k = l * 4096 + rt;
+    hh = mod(k * 2654435761, 4096) + 1;
+    do while (hkey(hh) ^= 0);
+       hh = mod(hh, 4096) + 1;
+    end;
+    hkey(hh) = k;
+    hrank(hh) = rank;
+    hnew(hh) = id;
+ end put_merge;
+ end test_llm_tokenize;

@@ -1,0 +1,80 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (94); ADR-334: FIXEDOVERFLOW is raised when the result of a
+    FIXED DECIMAL arithmetic operation needs more than the 31 digits
+    PL/I allows. A unit that returns normally resumes, the condition
+    is never raised for FIXED BINARY, (nofixedoverflow) suppresses
+    it and CHECK puts it back. */
+ on_fixedoverflow: procedure options(main);
+    declare a fixed dec(20,0);
+    declare c fixed dec(31,0);
+    declare f float bin(53);
+    declare n fixed bin(31) init(0);
+    declare b31 fixed bin(31);
+    declare y fixed bin(31);
+
+    on fixedoverflow begin;
+       n = n + 1;
+    end;
+
+    /* 1e15 * 1e16 = 1e31 needs 32 digits: raises, and the unit's
+       normal return resumes after the statement */
+    a = 1000000000000000;
+    c = a * 10000000000000000;
+    if n ^= 1 then do;
+       put skip list('FAIL on_fixedoverflow: 32 digits', n);
+       stop;
+    end;
+
+    /* 1e15 * 1e15 = 1e30 needs 31 digits: the maximum, no raise */
+    c = a * 1000000000000000;
+    if n ^= 1 then do;
+       put skip list('FAIL on_fixedoverflow: 31 digits', n);
+       stop;
+    end;
+
+    /* a FIXED BINARY product never raises FIXEDOVERFLOW */
+    (nosize): b31 = 2000000000;
+    (nosize): y = b31 * b31;
+    if n ^= 1 then do;
+       put skip list('FAIL on_fixedoverflow: binary', n);
+       stop;
+    end;
+
+    /* addition past 31 digits raises too; the sum goes to FLOAT so
+       the assignment itself cannot take the SIZE path */
+    c = 9999999999999999999999999999999;
+    f = c + c;
+    if n ^= 2 then do;
+       put skip list('FAIL on_fixedoverflow: addition', n);
+       stop;
+    end;
+    if ^(f > 1e31) then do;
+       put skip list('FAIL on_fixedoverflow: addition value', f);
+       stop;
+    end;
+
+    /* (nofixedoverflow) turns the check off for its scope */
+    (nofixedoverflow): c = a * 10000000000000000;
+    if n ^= 2 then do;
+       put skip list('FAIL on_fixedoverflow: NOFIXEDOVERFLOW', n);
+       stop;
+    end;
+
+    /* and CHECK(FIXEDOVERFLOW) puts it back inside that scope */
+    (nofixedoverflow): (check(fixedoverflow)):
+       c = a * 10000000000000000;
+    if n ^= 3 then do;
+       put skip list('FAIL on_fixedoverflow: CHECK', n);
+       stop;
+    end;
+
+    /* SIGNAL FIXEDOVERFLOW runs the unit and resumes */
+    signal fixedoverflow;
+    if n ^= 4 then do;
+       put skip list('FAIL on_fixedoverflow: SIGNAL', n);
+       stop;
+    end;
+
+    put skip list('PASS on_fixedoverflow');
+ end on_fixedoverflow;

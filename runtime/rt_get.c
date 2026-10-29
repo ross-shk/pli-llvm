@@ -13,6 +13,11 @@
  * The input lock (ADR-233) is taken here: the token and the column state it
  * advances are read as a unit, so two tasks do not split one token. */
 int rt_get_token(char *buf, size_t cap) {
+  /* Flush any buffered prompt to stdout before the input lock is taken: the
+   * read below may block on stdin, so a preceding PUT must reach the terminal
+   * first. Done here with no lock held, so acquiring the output lock cannot
+   * invert the input/output lock order. */
+  rt_flush_stdout();
   rt_in_lock();
   int c;
   do {
@@ -55,20 +60,24 @@ double pli_get_list_float(void) {
   return pli_strtod(tok, NULL);
 }
 
-void pli_get_list_char(char *dst, long long cap) {
+long long pli_get_list_char(char *dst, long long cap) {
   char tok[256];
   /* get_token leaves the buffer untouched at EOF: check its result, or the
    * copy below reads uninitialised stack. */
   if (!get_token(tok, sizeof tok)) {
     for (long long i = 0; i < cap; ++i)
       dst[i] = ' ';
-    return;
+    return 0;
   }
-  long long i = 0;
-  for (; i < cap && tok[i]; ++i)
+  /* The return value is the assigned length: a VARYING target stores it as
+   * its live length, while a fixed target ignores it and stays blank-padded. */
+  long long n = (long long)pli_strlen(tok);
+  long long copy = n < cap ? n : cap;
+  for (long long i = 0; i < copy; ++i)
     dst[i] = tok[i];
-  for (; i < cap; ++i)
+  for (long long i = copy; i < cap; ++i)
     dst[i] = ' ';
+  return copy;
 }
 
 /* FIXED DECIMAL input (QR1.2): scale the token by 10^q, truncating extra

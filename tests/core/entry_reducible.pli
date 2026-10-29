@@ -1,0 +1,15 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (34): REDUCIBLE and IRREDUCIBLE are entry-name attributes.
+    They are optimization hints — a reducible entry may be replaced
+    by its value when a call repeats with the same arguments — so
+    the compiler records them as interface metadata and changes no
+    generated code. The attribute order is free. */
+ enred: procedure options(main);
+    declare extf entry(fixed bin(31)) returns(fixed bin(31))
+            reducible;
+    declare extg irreducible entry;
+    declare h entry returns(fixed bin(31)) irreducible;
+
+    put skip list('PASS entry_reducible');
+ end enred;

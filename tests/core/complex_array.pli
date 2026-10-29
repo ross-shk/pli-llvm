@@ -1,0 +1,24 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (12),(16); ADR-337: a bare dimension before COMPLEX declares
+    an array of complex values, and a subscript or member load carries
+    the real/imaginary pair through arithmetic, REAL/IMAG and CONJG. */
+ complex_array: procedure options(main);
+    declare c(3) complex;
+    declare z complex;
+    declare 1 s, 2 m complex;
+
+    c(2) = 1.0 + 2.0i;
+    c(3) = c(2) * 2.0;
+    z = c(3) - c(2);
+    if real(z) ^= 1.0 then go to bad;
+    if imag(z) ^= 2.0 then go to bad;
+    s.m = conjg(c(2));
+    if real(s.m) ^= 1.0 then go to bad;
+    if imag(s.m) ^= -2.0 then go to bad;
+    put skip list('PASS complex_array');
+    stop;
+
+ bad:
+    put skip list('FAIL complex_array');
+ end complex_array;

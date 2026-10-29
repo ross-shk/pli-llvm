@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* extension (ADR-327): %REPLACE text is
+     rescanned, so a replacement may name
+     another one; quoted operands rescan too. */
+  %replace first by second;
+  %replace second by 7;
+  %replace quoted by "second";
+  %replace self by self;
+  %replace MixedCase by 9;
+  replace_rescan: procedure options(main);
+     declare n fixed bin(31);
+     declare self fixed bin(31);
+     n = first;
+     put skip list('chain', n);
+     n = quoted;
+     put skip list('quoted', n);
+     self = 3;
+     put skip list('self', self);
+     n = mixedcase;
+     put skip list('case', n);
+  end replace_rescan;

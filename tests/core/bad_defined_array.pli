@@ -1,0 +1,17 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (12),(24); ADR-339: a DEFINED array must fit into its base,
+    its element type must match the base element's, an array item needs
+    an array base (not an element), and a bare dimension before DEFINED
+    parses as a dimension, not as a precision. */
+ bad_defined_array: procedure options(main);
+    declare base(10) fixed bin(31);
+    declare bigger(20) fixed bin(31) defined base;
+    declare wider(5) fixed bin(63) defined base;
+    declare scalar_view fixed bin(31) defined base;
+    declare elem_view(3) fixed bin(31) defined base(1);
+    declare n fixed bin(31) initial(5);
+    declare dyn(n) fixed bin(31);
+    declare dyn_view(3) fixed bin(31) defined dyn;
+    put skip list('unreachable');
+ end bad_defined_array;

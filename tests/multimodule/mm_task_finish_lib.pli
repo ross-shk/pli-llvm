@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Library side of mm_task_finish.pli. */
+ mm_task_finish_lib: package exports(worker);
+ declare finished fixed bin(31) external;
+ declare runs fixed bin(31) external;
+ declare inner_hits fixed bin(31) external;
+ worker: procedure;
+    on finish finished = finished + 1;
+    runs = runs + 1;
+    call inner;
+ end worker;
+ inner: procedure;
+    on finish inner_hits = inner_hits + 100;
+ end inner;
+ end mm_task_finish_lib;

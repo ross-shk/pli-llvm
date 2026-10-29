@@ -168,6 +168,8 @@ struct DeclItem {
                                   // scalar/pointer params marshal by value (C ABI)
    std::vector<std::string> uses; // USES( ... ) entry-name-attribute (rules (34),(38))
    std::vector<std::string> sets; // SETS( ... ) entry-name-attribute (rules (34),(38))
+   int reducible = 0;             // REDUCIBLE (1) / IRREDUCIBLE (-1) entry-name attribute
+                                  // (rule (34)): an optimization hint, metadata only
    std::string abnormalLabel;     // ABNORMAL(label) entry-name-attribute (rule (38))
    bool normal = false;           // NORMAL entry-name-attribute (rule (38)): no ABNORMAL
    std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
@@ -175,6 +177,15 @@ struct DeclItem {
    bool unionAttr = false;        // UNION (ADR-202): overlay with next member
    bool labelAttr = false;        // LABEL (rule (21)): label variable
    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
+};
+
+// Rule (65) initial-label: an element of a label array named by a statement
+// prefix (AR(1): ...). The subscripts are optionally signed integer constants;
+// `sym` is the label array, bound by sema.
+struct LabelElem {
+  std::string name;
+  std::vector<long long> subs;
+  Symbol* sym = nullptr;
 };
 
 struct Stmt {
@@ -220,6 +231,11 @@ struct Stmt {
 
   SourceLoc loc{};
   std::vector<std::string> labels; // rule (64) label prefixes
+  // Rule (65) initial-label: an element of a label array as a statement prefix
+  // (AR(1): ...). The subscripts are signed integer constants; sema binds the
+  // array symbol, and codegen stores the statement's block address into that
+  // element at procedure entry.
+  std::vector<LabelElem> labelElems;
 
   std::vector<DeclItem> decls;
 
@@ -232,6 +248,8 @@ struct Stmt {
   bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
   bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
   bool noUnder = false;            // (NOUNDERFLOW) prefix (rules (60)-(63), ADR-326)
+  bool noOver = false;             // (NOOVERFLOW) prefix (rules (60)-(63), ADR-333)
+  bool noFOver = false;            // (NOFIXEDOVERFLOW) prefix (rules (60)-(63), ADR-334)
   // CHECK(...) prefix (rules (61),(95); ADR-320): re-enable the named check
   // for this scope, overriding a NO... prefix inherited from an enclosing one.
   bool chkSize = false;
@@ -239,6 +257,8 @@ struct Stmt {
   bool chkZdiv = false;
   bool chkConv = false;
   bool chkUnder = false;
+  bool chkOver = false;
+  bool chkFOver = false;
   // (STRINGRANGE)/(NOSTRINGRANGE) prefix (rules (60)-(63)): 0 = inherit
   // (disabled unless an enclosing scope enables it), 1 = enable, -1 = disable.
   int strRange = 0;
@@ -320,6 +340,8 @@ struct Stmt {
   static constexpr int kFinishCondKey = -6;      // FINISH (rule 94, ADR-322)
   static constexpr int kAreaCondKey = -7;        // AREA (rule 94, ADR-323)
   static constexpr int kUnderflowCondKey = -8;   // UNDERFLOW (rule 94, ADR-326)
+  static constexpr int kOverflowCondKey = -9;    // OVERFLOW (rule 94, ADR-333)
+  static constexpr int kFixedoverflowCondKey = -10; // FIXEDOVERFLOW (rule 94, ADR-334)
   // ENDFILE(f) and UNDEFINEDFILE(f) (rule 97) are file conditions: each key is
   // its base minus the FILE variable's runtime slot, so every file has its own
   // handler. Mirrored in runtime/rt_file.c (RT_ENDFILE_KEY_BASE /

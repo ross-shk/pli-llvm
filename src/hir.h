@@ -161,6 +161,7 @@ struct HStmt {
 
   SourceLoc loc{};
   std::vector<std::string> labels; // rule (64) label prefixes
+  std::vector<LabelElem> labelElems; // rule (65) label-array element prefixes
 
   std::vector<HDeclItem> decls;
 
@@ -175,11 +176,15 @@ struct HStmt {
   bool noZdiv = false;              // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
   bool noConv = false;              // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
   bool noUnder = false;             // (NOUNDERFLOW) prefix (ADR-326)
+  bool noOver = false;              // (NOOVERFLOW) prefix (ADR-333)
+  bool noFOver = false;             // (NOFIXEDOVERFLOW) prefix (ADR-334)
   bool chkSize = false;             // CHECK(...) prefix (rules (61),(95), ADR-320)
   bool chkSub = false;
   bool chkZdiv = false;
   bool chkConv = false;
   bool chkUnder = false;
+  bool chkOver = false;
+  bool chkFOver = false;
   int strRange = 0;                 // (STRINGRANGE)/(NOSTRINGRANGE) prefix (ADR-297)
   HStmtP thenS, elseS;
   std::vector<HStmtP> body;

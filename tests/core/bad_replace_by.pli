@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* extension (ADR-077): a %REPLACE needs BY
+     before the replacement text. */
+  badreplaceby: procedure options(main);
+     %replace x 6;
+     put skip list('x');
+  end badreplaceby;

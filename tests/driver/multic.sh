@@ -10,7 +10,10 @@ set -u
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
 # EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=--rtlib=compiler-rt ;;
+  # The hermetic stash keeps compiler-rt builtins under lib/windows, outside
+  # clang's resource dir, so --rtlib=compiler-rt cannot find them: pass the
+  # file ctest resolved, and keep the flag only when CMake did not resolve one.
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=${CLANG_RT_BUILTINS:---rtlib=compiler-rt} ;;
   *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
 esac
 PLI=${PLI:-$PWD/build/cmake/pli}

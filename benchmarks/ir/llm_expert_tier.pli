@@ -1,0 +1,109 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Adaptive expert-tier benchmark: count routed experts, send a miss
+    either to the CPU pool or over PCIe, decay the counts and swap a few
+    hot outsiders in for cold residents - the bookkeeping behind
+    Strata's VRAM expert cache (--adapt-every/-swaps/-decay,
+    --pcie-frac), benchmarks/LLM-ORCHESTRATION-PLAN.md 4.5. */
+ /*
+  * Unusual for this corpus: no C twin check on the arithmetic below,
+  * the two programs are line-for-line the same loops.
+  *
+  * Bounds:
+  *   - 48 layers x 512 experts = 24576 counters; index <= 24576
+  *   - counts are fixed point, 16 per hit, decayed by 1/8 per window;
+  *     a count stays below 2^31 (16 hits per window at most)
+  *   - hits + misses = 40000 tokens * 48 layers * 10 experts = 1.92e7
+  *   - chk = mod(chk * 31 + i, 1000000007) for 24576 residents
+  *
+  * Scaling rule: 8000 tokens of 48 layers puts the slowest -O2
+  * configuration at ~270 ms.
+  */
+ test_llm_expert_tier: proc options(main);
+    dcl cnt(24576) fixed bin(31);
+    dcl res(24576) bit(1);
+    dcl (l, k, e, base, i, tok, topic, sw, hot, cold, nres)
+       fixed bin(31);
+    dcl (seed, u, hits, cpu_miss, pcie_miss, swaps, chk)
+       fixed bin(63);
+
+    /* experts 1..64 of each of the 48 layers start resident */
+    do l = 0 to 47;
+       do e = 1 to 512;
+          cnt(l * 512 + e) = 0;
+          res(l * 512 + e) = e <= 64;
+       end;
+    end;
+    seed = 2026;
+    hits = 0;
+    cpu_miss = 0;
+    pcie_miss = 0;
+    swaps = 0;
+    topic = 0;
+    do tok = 1 to 8000;
+       /* the conversation drifts: a new topic every 2000 tokens */
+       if mod(tok, 2000) = 0 then topic = topic + 1;
+       do l = 0 to 47;
+          base = l * 512;
+          /* route 10 experts, skewed toward the topic's favourites */
+          do k = 1 to 10;
+             seed = mod(seed * 1103515245 + 12345, 2147483648);
+             u = mod(seed / 65536, 512);
+             e = mod(u * u / 512 + topic * 37 + l, 512) + 1;
+             cnt(base + e) = cnt(base + e) + 16;
+             if res(base + e) then hits = hits + 1;
+             /* a miss goes over PCIe 3 times in 10, else to the CPU */
+             else if mod(cpu_miss + pcie_miss, 10) < 3 then
+                pcie_miss = pcie_miss + 1;
+             else cpu_miss = cpu_miss + 1;
+          end;
+       end;
+       /* every 8 windows: decay the counts, then up to 4 swaps per
+          layer, hottest outsider for coldest resident */
+       if mod(tok, 8) = 0 then do;
+          do l = 0 to 47;
+             base = l * 512;
+             do e = 1 to 512;
+                cnt(base + e) = cnt(base + e) - cnt(base + e) / 8;
+             end;
+             do sw = 1 to 4;
+                hot = 0;
+                cold = 0;
+                do e = 1 to 512;
+                   if res(base + e) then do;
+                      if cold = 0 then cold = e;
+                      else if cnt(base + e) < cnt(base + cold) then
+                         cold = e;
+                   end;
+                   else do;
+                      if hot = 0 then hot = e;
+                      else if cnt(base + e) > cnt(base + hot) then
+                         hot = e;
+                   end;
+                end;
+                if cnt(base + hot) >= 32 then
+                   if cnt(base + cold) < 8 then do;
+                      res(base + hot) = '1'b;
+                      res(base + cold) = '0'b;
+                      swaps = swaps + 1;
+                   end;
+             end;
+          end;
+       end;
+    end;
+    /* fold the final resident set into the checksum */
+    chk = 0;
+    nres = 0;
+    do i = 1 to 24576;
+       if res(i) then do;
+          nres = nres + 1;
+          chk = mod(chk * 31 + i, 1000000007);
+       end;
+    end;
+    put skip list(hits);
+    put skip list(cpu_miss);
+    put skip list(pcie_miss);
+    put skip list(swaps);
+    put skip list(nres);
+    put skip list(chk);
+ end test_llm_expert_tier;

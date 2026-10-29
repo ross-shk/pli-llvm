@@ -12300,3 +12300,792 @@ already checks it; the gap is between that check and the park. *Disable
 stealing.* It hides the migration that exposes the race and costs the fan-out
 its load balance. *Let every worker exit on `rt_main_done`.* Only worker 0
 holds the process lifetime; peers are detached and never joined.
+
+---
+
+## ADR-333 — `OVERFLOW` is raised on a floating-point result past the double range
+
+**Context.** Rule (94) lists `OVERFLOW` as a condition and rule (63) gives it a
+`NOOVERFLOW` prefix. IBM raises it when the magnitude of a floating-point
+result exceeds the largest representable value; the result is *undefined*, the
+implicit action is a message followed by `ERROR`, and — the part that shapes
+the design — a unit that **returns normally also raises `ERROR`**. The condition
+code is 300.
+
+**Decision.** Raise it at the same operator sites `UNDERFLOW` uses, and nowhere
+else:
+
+- The four floating-point binary operators, the `MULTIPLY` and `DIVIDE`
+  built-ins, and `**` (including its constant-exponent square fast path). The
+  test is `|result| > DBL_MAX`, which only an infinite result satisfies on an
+  IEEE host; `NaN` compares false, so an invalid operand does not raise.
+- Not instrumented, for the same reasons `UNDERFLOW` skips them: the complex
+  arithmetic lowering (its results are pairs, not one float) and the math
+  library built-ins (`SQRT`, `EXP`, ...), whose results are values rather than
+  operator results.
+- The result is left as the IEEE operation produced it — `±inf` — which is IBM's
+  "undefined" result made concrete and observable through an ordinary compare.
+- No unit: `pli_overflow` prints `OVERFLOW: floating-point result too large`
+  and calls the ERROR system action, so the program aborts with code 8.
+- Unit returns: the lowering raises `ERROR` through the **runtime ON stack**
+  (the same path `SIGNAL ERROR` uses) instead of the compile-time trap table,
+  because the rule is about the condition, not about which function trapped;
+  a unit established in another module therefore still runs. With no `ERROR`
+  unit, `pli_overflow_error` aborts. `SIGNAL OVERFLOW` follows the same rule.
+- `OVERFLOW` gets the fixed key `Stmt::kOverflowCondKey` (-9);
+  `CONDITION(OVERFLOW)` is rejected; `(OVERFLOW)`/`(NOOVERFLOW)` join the prefix
+  elements and `CHECK(...)`/`NOCHECK(...)` list it, so `CHECK(ALL)` covers it.
+  It rides the arithmetic-trap switch, so `--no-size-checks` and `-O2`/`-O3`
+  turn it off and a benchmark build carries no extra branch.
+
+**Consequences.** `tests/core/on_overflow.pli` pins the raise at every operator
+site, the undefined value, the normal-return `ERROR`, `(nooverflow)`,
+`(nooverflow): (check(overflow))`, `SIGNAL OVERFLOW` and a finite result that
+does not raise. `tests/driver/overflow_conditions.sh` covers the three implicit
+actions (no unit, unit without an `ERROR` unit, unit with one) and the prefix.
+`bad_on_cond_overflow.pli` pins the `CONDITION(OVERFLOW)` rejection, and
+`bad_on_cond.pli` now uses `ENDPAGE` as its unserved condition because
+`OVERFLOW` is served. `GC` (60)–(63), (91)–(99) and the guide carry the change.
+`ONCODE()` is not extended: it keeps ADR-076's ERROR/SIGNAL code instead of
+IBM's 300 for the computational conditions.
+
+**Rejected.** *Resume with the largest finite value instead of infinity.* IBM
+leaves the result undefined; infinity is what the hardware already produced, and
+substituting a value would hide the overflow from the program's own arithmetic.
+*Print the message from the unit path too.* The message is part of the implicit
+action, which is defined only when no unit is established; the normal-return
+`ERROR` brings its own action. *Route the normal-return `ERROR` through the
+compile-time trap table.* That table knows only this function's units, while the
+runtime stack is what makes `SIGNAL ERROR` work across modules.
+
+---
+
+## ADR-334 — `FIXEDOVERFLOW` marks a decimal result longer than 31 digits
+
+**Context.** Rule (94) lists `FIXEDOVERFLOW` and rule (63) gives it a
+`NOFIXEDOVERFLOW` prefix. IBM raises it when "the length of the result of a
+FIXED DECIMAL arithmetic operation exceeds the maximum length allowed by the
+implementation", which is 31 digits. It is **never** raised for FIXED BINARY,
+the result is undefined, the implicit action is a message followed by `ERROR`,
+and unlike `OVERFLOW` a unit that returns normally simply resumes. The condition
+code is 310. IBM separates it from `SIZE`: `SIZE` is a value that does not fit
+the *declared* size of a variable, `FIXEDOVERFLOW` is a value the *implementation*
+cannot represent at all.
+
+**Decision.** Raise it inside the checked decimal arithmetic, at the point where
+the wrap flag is already computed:
+
+- Sites: `+`, `-` and `*` on a `FIXED DECIMAL` common type (the binary operator
+  path and the `MULTIPLY` built-in). A `FIXED BINARY` operand keeps the SIZE
+  path and never raises this condition.
+- Test: `|raw scaled result| >= 10^31`, two-sided. The stored integer carries
+  the scale, so its digit count *is* the result's precision; 31 digits is the
+  PL/I maximum and `10^31` itself already needs 32. A wrap of the i128 product
+  is far past that, so it shares the trap instead of taking SIZE.
+- Only the i128 storages can reach the limit. A decimal result held in i64 has
+  at most 18 digits, so it can never need 31; its wrap stays on the SIZE path
+  (recorded as a limitation in `GC` and the guide, and part of B11's exact
+  decimal work).
+- A unit that returns resumes after the operation with the raw value (IBM's
+  undefined result); with no unit `pli_fixedoverflow` prints
+  `FIXEDOVERFLOW: decimal result longer than 31 digits` and aborts through ERROR.
+- `FIXEDOVERFLOW` gets the fixed key `Stmt::kFixedoverflowCondKey` (-10);
+  `CONDITION(FIXEDOVERFLOW)` is rejected; the prefix and `CHECK(...)` forms work
+  like the other checks, and the traps ride `--no-size-checks`/`-O2`.
+
+**Consequences.** `tests/core/on_fixedoverflow.pli` pins 32 digits raising and
+31 not raising, the `FIXED BINARY` exemption, addition, the normal-return
+resume, `(nofixedoverflow)`, `(nofixedoverflow): (check(fixedoverflow))` and
+`SIGNAL FIXEDOVERFLOW`. `tests/driver/overflow_conditions.sh` covers the two
+implicit actions. `bad_on_cond_fixedoverflow.pli` pins the `CONDITION(...)`
+rejection. `GC` (16)/(17) and (60)–(63), (91)–(99) and the guide carry the
+change.
+
+**Rejected.** *Raise from the static intermediate precision (`p1+p2 > 31`).*
+`mulResultType` caps the product precision at 31 (ADR-056, ADR-191), so that
+information is gone by lowering time; the value test never refuses a result that
+fits and is the conservative reading. *Fold FIXEDOVERFLOW into the SIZE trap.*
+They are different conditions with different resume rules and different
+handlers, and a program that handles one should not swallow the other.
+*Raise on a narrowing assignment.* That is exactly `SIZE`; IBM raises this one
+from the arithmetic, before the store.
+
+---
+
+## ADR-335 — `REDUCIBLE`/`IRREDUCIBLE` are recorded entry hints
+
+**Context.** Rule (34) lists `REDUCIBLE` and `IRREDUCIBLE` beside `ENTRY`,
+`RETURNS` and `USES`/`SETS` among the entry-name attributes, and the keyword
+table gives them the abbreviations `RED`/`IRRED`. IBM defines them as
+*reducibility* hints: a reducible procedure may be treated as returning the same
+value for the same arguments (so a repeated call may be folded or moved), while
+`IRREDUCIBLE` says the opposite. Before this record the parser stopped at the
+word with `expected ';'` under rule (9) — a wrong rule for a legal declaration,
+and the kind of rejection that makes a real program need source edits.
+
+**Decision.** Accept both attributes on an `ENTRY` declaration, in any attribute
+order, and record the hint on the symbol:
+
+- `DeclItem::reducible` is `1` for `REDUCIBLE` and `-1` for `IRREDUCIBLE`; the
+  later attribute of a pair wins, because the declaration is a hint rather than
+  a constraint, and rejecting a contradictory pair would refuse a program whose
+  meaning is still clear.
+- `Sema` copies it onto the entry symbol next to `entryUses`/`entrySets`, and on
+  anything that is not an `ENTRY` declaration it raises rule (34) — "only valid
+  on an ENTRY declaration" — clearing the flag, so a storage item never carries
+  interface metadata silently.
+- Nothing lowers or reads the field yet: this compiler performs no
+  interprocedural value numbering, and the decision layer's call model
+  (`irgen_decisions.cpp`) has no reducibility input. Ignoring a *hint* changes
+  performance, never results, so the attribute is metadata in the same sense as
+  ADR-302's `USES`/`SETS`. When the C3 inline-vs-library layer gains a
+  predicate, this field is where it reads the declaration.
+- A `PROCEDURE` statement's option list is rule (5)'s `function-attribute |
+  RECURSIVE | OPTIONS(...)`, which does not include these words; that spelling
+  keeps the existing "ignoring unsupported procedure option" warning rather
+  than a new acceptance the scan does not describe.
+
+**Consequences.** `tests/core/entry_reducible.pli` pins both attributes on
+external entries in both positions (before and after `ENTRY`/`RETURNS`);
+`tests/core/bad_reducible.pli` pins the rule (34) diagnostic on a storage item.
+`GC` (34)–(38) and `DEFERRED-WORK` B9 carry the change. No ABI or IR change.
+
+**Rejected.** *Mark the entry `readnone`/`readonly` so a repeated call folds.*
+`REDUCIBLE` says the *value* repeats; it says nothing about memory, and claiming
+`readnone` would let LLVM delete stores a reducible procedure still makes.
+*Diagnose the contradictory pair.* IBM's hints are advisory; the last one wins
+is the reading that never refuses a legal declaration. *Treat the words as
+storage-class attributes somewhere else.* Rule (34) puts them on entry names
+only; the lexer still never classifies keywords, so `REDUCIBLE` remains usable
+as a variable or procedure name.
+
+---
+
+## ADR-336 — Computed `GO TO`: label constants, label arrays and initial labels
+
+**Context.** Rule (21) declares a `LABEL` variable, rule (64) a label prefix,
+rule (65) an *initial label* (an element of a label array used as a statement
+prefix), and rule (77) `GO TO`. IBM's *Label data and LABEL attribute* page
+shows the canonical computed jump: `Lbl_x = Lbl_a; GO TO Lbl_x;` — the bare
+form, no parentheses — and adds that "a label variable can have another label
+variable or a label constant assigned to it". The scan's rule (65) is damaged,
+but its own ⚠ note quotes Y33-6003's `INITIAL` attribute: "an element of a label
+array can appear as a statement prefix, provided that all subscripts are
+optionally signed decimal integer constants", and attests the shape in practice
+(`do(12):`, `do_hl(8):`). Three defects stood in the way: `L = Lbl;` compiled to
+a store of literal `0` (the indirect jump then trapped), `GO TO LblVar;` was
+rejected with "not a label in this procedure", and `DCL A(3) LABEL;` declared a
+*scalar* because the dimension lookahead did not know `LABEL`, so rule (65) was
+unreachable.
+
+**Decision.** Serve the computed jump end to end:
+
+- A **label constant in value position** lowers to the block address of its
+  statement — the same value `ADDR(label)` already produced — so an assignment
+  to a label variable or to an array element stores a real address.
+- `GO TO name` is indirect when `name` is not a label constant but a `LABEL`
+  variable (rule (77), IBM's bare spelling). The parenthesized form
+  `GO TO (expr)` now requires a `LABEL` value: an arithmetic operand is
+  diagnosed with rule (77) instead of being turned into an address.
+- `LABEL` joins the attribute words that make `A(n)` a dimension, so arrays of
+  labels exist and can be subscripted, assigned and jumped through.
+- **Rule (65) initial labels**: a statement prefix may name an element of a
+  label array with optionally signed integer constants. Sema binds the array and
+  checks the rank and the declared bounds; a non-label array, a wrong rank, an
+  out-of-range subscript, or a `CONTROLLED`/`BASED`/runtime-extent array (no
+  fixed element address at procedure entry) is diagnosed with rule (65).
+  Codegen stores the statement's block address into the element in the
+  procedure's entry block, so every activation initializes it the way a label
+  constant exists for the whole activation.
+- An indirect jump's destination list now includes the blocks created for
+  label-array prefixes, not only the named labels; LLVM's `indirectbr` must name
+  every block the jump can reach, so the prefix's block is a legal destination
+  (before this, `goto (ar(2))` jumped into a block with no predecessors and the
+  module failed verification or trapped).
+
+**Consequences.** `tests/core/label_computed.pli` covers a label constant
+assigned to a variable and the bare jump, an element assigned a constant and
+jumped through, a one- and a two-dimensional element prefix (with a name and an
+element prefix on one statement), and the computed paths in one control-flow
+chain. `bad_label_elem.pli`, `bad_label_elem_bounds.pli` and
+`bad_goto_operand.pli` pin the three diagnostics. `GC` (21), (64), (65) and (77),
+the programming guide and `DEFERRED-WORK` B4 (initial labels settled to rule
+(65)'s core form) carry the change.
+
+**Limitations recorded.** An indirect jump cannot be checked against block
+activation: a label value pointing into a block that is not active is IBM's
+run-time error, and this compiler's `indirectbr` will enter it. An uninitialized
+label variable or array element is likewise the program's error (IBM requires a
+label constant of an active block), and the jump through it is undefined.
+`INITIAL(...)` on a label array (IBM's *static* label array with initial values,
+then nonassignable) is still diagnosed; only the prefix form initializes
+elements. A `GO TO` out of an ON-unit, and a label-array prefix inside one, stay
+diagnosed (ADR-172 and rule (91)).
+
+**Rejected.** *Initialize the element lazily when the prefix statement runs.* A
+backward jump must find the element already holding the address, so the store
+belongs in the entry block. *Treat the prefix as a synthetic assignment.* The
+statement's address is known only to codegen, and an assignment would need a
+label-constant value that does not exist as a source expression. *Keep the
+indirect destination list to named labels.* The label-array element's block has
+no name, and an `indirectbr` that omits it is undefined behaviour; the fix also
+gave the pre-existing parenthesized form a correct destination list.
+
+---
+
+## ADR-337 — Dimension or precision: the attribute-word lookahead, COMPLEX arrays, and the diagnosed FILE/ENTRY/LIKE arrays
+
+**Context.** Rule (12) writes a dimension bare after the declared name
+(`DECLARE A(10) FIXED BINARY(31)`), while a numeric type writes its precision in
+the same position (`DECLARE X FIXED BINARY(31)`). The parser decides which one a
+parenthesized constant is by looking at the word that follows, through a
+hand-maintained list in `tryParseDimension`. That list has drifted from the
+attribute set the declaration parser accepts, and ADR-336 had just fixed one
+entry of it (`LABEL`). Six more were missing — `FILE`, `ENTRY`, `LIKE`,
+`COMPLEX`, `CPLX`, `REAL` — so a bare dimension before any of them was read as a
+precision the item cannot use, and the value was silently dropped:
+
+- `DCL F(3) FILE;` declared **one** file with one runtime slot, and nothing in
+  the declaration said so. The `lb:ub` spelling (`DCL F(1:3) FILE;`) took the
+  other branch of the decision, kept the extents (`DIM(F,1)` reported 3) and
+  still gave every file statement that one slot — an array in the type system,
+  one file at run time, which is the worst shape of silent wrong answer.
+- `DCL E(3) ENTRY;` declared one entry constant. IBM's rule is the opposite:
+  array bounds supply `VARIABLE` implicitly, so the name is an array of entry
+  values.
+- `DCL X(3) LIKE T;` declared a scalar copy of `T`. Rule (43)'s existing
+  "LIKE with a dimension" diagnostic never fired, because there was no dimension.
+- `DCL C(3) COMPLEX;` declared one complex value.
+
+Checking whether COMPLEX arrays would work once the dimension parsed exposed a
+second defect: a complex value is the `{double,double}` struct itself, a scalar
+variable load publishes it in `Val::cpx`, but a **subscript or member load**
+published the loaded struct in `Val::reg` and left `cpx` null. Every complex
+consumer dereferenced `.cpx`, so `z = c(2) + c(3)`, `c(1) = c(2)`,
+`real(c(2))` and `real(s.z)` all **segfaulted the compiler** (rc 139), on valid
+PL/I. Scalar `real(z)` worked, which is why the suite never saw it.
+
+**Decision.**
+
+- The lookahead list gains `FILE`, `ENTRY`, `LIKE`, `COMPLEX`, `CPLX` and `REAL`,
+  so the dimension parses wherever an attribute that can follow it appears.
+- Arrays of complex values are served end to end: element load, arithmetic,
+  `REAL`/`IMAG`, `CONJG`, assignment from and to an element, and a complex
+  member of a structure.
+- **FILE and ENTRY arrays are diagnosed** with rule (12), in both spellings:
+  a file array needs one runtime slot per element and a subscripted file
+  designator (`OPEN FILE(F(i))`, `PUT FILE(F(i))`) which the file statements do
+  not parse today; an entry array needs a call through a subscripted designator
+  (`CALL E(1)(...)`), while ADR-171's entry variables are scalar only. The
+  `lb:ub` spelling (`DCL F(1:3) FILE;`) used to slip past the lookahead and
+  declare an array whose operations all used one slot; it is now diagnosed the
+  same way.
+- `LIKE` keeps its rule (43) diagnostic, now reachable from the bare spelling.
+- Complex consumers read the payload through `Val::cpxVal()` (`cpx ?: reg`), so a
+  value is published by whichever load path produced it instead of every future
+  path having to remember to set a second field. The `.cpx` writes are unchanged.
+
+**Consequences.** `tests/core/complex_array.pli` covers a bare-dimension complex
+array (element arithmetic, `REAL`/`IMAG`, `CONJG` on a member and on an element,
+the copy through assignment). `bad_file_array.pli`, `bad_entry_array.pli` and
+`bad_like_array.pli` pin the three diagnostics. `GC` (12),(13), (16),(17) and
+(43) carry the change, and `DEFERRED-WORK` A6 moves to done.
+
+**Rejected.** *Support FILE arrays now.* One slot per element plus a subscripted
+file designator in `OPEN`/`CLOSE`/`PUT`/`GET`/`READ`/`WRITE`/`REWRITE`/`DELETE`
+is its own slice, not a footnote on the lookahead. *Support ENTRY arrays now.*
+The storage is a pointer (ADR-171), but the call grammar has no
+`CALL E(1)(...)` and function references through an element are unattested here.
+*Let FILE/ENTRY arrays be declared and fail later at `OPEN`/`CALL`.* That is what
+the `lb:ub` spelling did, and every one of those statements would keep using the
+single slot. *Set `.cpx` in each load site instead of an accessor.* The defect
+already recurred (scalar loads had it, subscript and member loads did not), and
+there are more load paths than consumers.
+
+**Limitations recorded.** `REAL` without `FLOAT` is still accepted and ignored
+(`REAL` is only meaningful with `FLOAT`); the attribute is not validated.
+`DEFINED` with a bare dimension (`DCL X(3) DEFINED B(1)`) still reads the `(3)` as
+a precision when no explicit type precedes the attribute; in the spelling that is
+used in practice (`DCL X(3) FIXED BIN(31) DEFINED B(1)`) the dimension already
+parses.
+
+---
+
+## ADR-338 — `LIKE` with a dimension is an array of the template
+
+**Context.** Rule (43) declares an item with the shape of an already-declared
+structure. ADR-337 taught the dimension lookahead the word `LIKE`, so
+`DECLARE 1 TEAM(8) LIKE TEMPLATE;` finally parsed its dimension — and the LIKE
+branch, which had a "LIKE with a dimension is not implemented" guard, diagnosed
+it. That turned `tests/corner_cases/struct_edge.pli` red:
+`declare 1 emp_copy(3) like employees;` followed by `emp_copy = employees;` and
+`emp_copy(2).salary` is exactly the construct IBM documents
+(`DECLARE 1 EMPLOYEE_INFO(1000) LIKE TEMPLATE;` is "equivalent to
+`DECLARE 1 EMPLOYEE_INFO(1000), 2 NAME ..., ...`").
+
+The failure also explained how that test had been passing: the LIKE branch
+returned a copy of the *whole template type*, including the template's own
+dimension. `employees` was an array of three structures, so `emp_copy` inherited
+three elements from it, and the `(3)` the source wrote was dropped as a precision.
+The extents happened to agree, so the test could not see it. The same inheritance
+is wrong on its own terms: `DECLARE 1 X LIKE ARRAY_OF_3;` silently produced three
+elements, and IBM says the reference's own dimensions are *not* carried over
+(only its substructures' and elements' alignment and dimensions are).
+
+**Decision.** A LIKE item's own dimension sets the array shape; the template's own
+dimension is not copied. The template's members are copied deeply, so their
+dimensions and alignment still come along. The extend form (LIKE combined with the
+item's own members) stays diagnosed with rule (43).
+
+**Consequences.** `tests/core/like_array.pli` pins three cases: an array of a
+scalar template, an item extent over an array template (three elements, not two
+times three), and a scalar item of an array template (`w.b` is valid — with the
+old inheritance it would have been an array and the reference would have needed a
+subscript). `struct_edge.pli` is green again. `GC` (43) and the programming
+guide's LIKE section carry the change, and the A6 row's evidence is corrected
+(ADR-337 listed LIKE with a dimension as diagnosed; ADR-338 serves it).
+
+**Rejected.** *Keep the diagnostic.* The test is the source of truth and IBM
+documents the construct, including its own example. *Keep inheriting the
+template's dimension.* That is a silent wrong extent — the worst class — and it
+made the written extent a decoration. *Read the written dimension as a precision
+and let the template supply the shape.* That was the pre-ADR-337 accident: it
+compiles two extents' worth of intent into one and only survives when they match.
+
+**Limitations recorded.** LIKE of a structure with a dynamic member is still
+diagnosed (rule (13)), as before. A LIKE template that is itself a TYPE-defined
+structure is outside this stage (TYPE is not implemented).
+
+
+---
+
+## ADR-339 — Array overlay defining: a `DEFINED` array only has to fit its base
+
+**Context.** Rule (24) and IBM's `DEFINED`/`POSITION` page allow the defined
+variable to "have the dimension attribute", and the bounds "do not always have
+to match those of the base variable. However, the defined variable must be able
+to fit into the corresponding base array". The scalar overlay and `iSUB` forms
+were served (ADR-018, ADR-305/307), but an array item only compiled when its
+declared type was *identical* to the base's: the whole-base branch compared
+scalars by storage size, while an array returned "no fixed scalar size" and fell
+through to the same-size diagnostic. So the common prefix view
+`DCL HEADER(4) FIXED BIN(31) DEFINED TABLE;` (TABLE(100)) was rejected, and a
+different rank over the same prefix was rejected with it.
+
+The same branch also hid a silent wrong shape. `DEFINED` and its abbreviation
+`DEF` were missing from the dimension lookahead, so a bare
+`DCL X(3) DEFINED B;` — no type attributes before the attribute — read `(3)` as
+a precision and declared X a scalar. ADR-337 recorded that limitation; the
+shape the program wrote was dropped without a diagnostic.
+
+**Decision.** A DEFINED array with a whole-array base starts at the base's first
+element. Its bounds need not match: the item may be shorter or have another
+rank, and its element count must not exceed the base's. The element type must
+match, or have the scalar overlay's equal storage size (the existing
+different-type memory-view rule); a different element size is diagnosed. An
+array item over an *element* base stays diagnosed — IBM routes that to its
+string-overlay or iSUB forms, which are served separately. A runtime extent on
+either side is diagnosed, because the fit cannot be checked when the block is
+entered. `DEFINED`/`DEF` now ride the dimension lookahead, so the bare spelling
+parses its dimension instead of reading a precision.
+
+**Consequences.** `tests/core/defined_array.pli` pins a three-element view of a
+ten-element base, a `(2,2)` view over the same prefix (row-major addressing
+through the item's own shape), write-through in both directions, and the `DEF`
+abbreviation. `tests/core/bad_defined_array.pli` pins the five diagnostics: an
+array that does not fit, an element size mismatch, a scalar item over an array
+base, an array item over an element base, and a runtime-extent array base.
+`GC` (24), the programming guide's overlay section and the B8 row carry the
+change. ADR-337's bare-dimension limitation is fixed here (ADR-337 itself is
+left untouched).
+
+**Rejected.** *Require identical dimensions.* IBM says the bounds need not
+match; the fit rule is the whole point of the common prefix view. *Allow an
+array item over an element base.* An element actual argument does not match an
+array parameter, so IBM classifies it as string-overlay or iSUB defining, not
+simple defining; both forms already have their own paths. *Check only the total
+bytes and not the element size.* A view whose elements straddle its base's
+elements is not a shape the program can index consistently.
+
+**Limitations recorded.** A `DEFINED` array whose item or base has a runtime
+extent stays diagnosed (rule (24)): the fit check needs the extents at entry and
+the overlay would need a descriptor. Structure/aggregate bases (a view over part
+of a structure) and `POSITION` on an array item remain diagnosed as before.
+
+---
+
+## ADR-340 — `GET` into `CHARACTER VARYING` keeps the input length
+
+**Context.** Character input into a `CHARACTER(n) VARYING` target stored `n` as
+the live length on all three input paths. `GET LIST` and `GET DATA` copied the
+token and `GET EDIT A(w)` copied the field, but the runtime helpers returned
+`void`, so IRGen always set the varying length to the declared maximum. The
+value was therefore blank-padded to `n`, and concatenation exposed the padding:
+`'Hello, ' || NAME || '!'` became `Hello, Alice`, 35 blanks, and `!`. Fixed
+`CHARACTER(n)` targets are different: IBM defines them as blank-padded to their
+declared length, so their length and content were already correct.
+
+IBM's language reference sets a varying target's length to the number of
+characters transferred, while a nonvarying target is padded to its declared
+length (SC26-3114-01 §§2.4.2.2, 3.3.4, 4.2; Y33-6003 assignment semantics). `GET EDIT A(w)` transfers the field width, truncated to the target's
+maximum (SC26-3113-01, GET EDIT; SC26-3114-01 §12.1).
+
+**Decision.** `pli_get_list_char` and `pli_get_edit_char` return the number of
+characters assigned: the token length for list/data input, and at most
+`MIN(w, n)` for `A(w)`. IRGen stores that value as the live length only when the target is
+`VARYING`; a fixed target keeps its declared length and remains blank-padded.
+`GET DATA` uses the same list helper, so all three paths share one rule. The
+runtime reports the count because only it knows whether the token or field was
+shorter than the target, hit EOF, or was truncated; the front end cannot infer
+it from the declared type.
+
+**Consequences.** `tests/driver/get.sh` checks a varying list target (5
+characters), the concatenation `'Hello, ' || V || '!'`, a fixed target's
+8-character padding, and a 4-character varying target's truncation;
+`tests/core/get_data.pli` checks `V=Alice;` into `CHAR(8) VARYING`;
+`tests/core/edit.pli` checks `A(4)` into `CHAR(8) VARYING` (length 4) and an
+`A(10)` field truncated to the 8-character maximum. The README hello-world now
+declares `NAME CHAR(40) VARYING`, so its documented output is `Hello, Alice!`
+rather than a padded line. Fixed targets are unchanged.
+
+**Rejected.** *Trim fixed targets after input.* IBM defines nonvarying character
+assignment as blank-padding to the declared length; trimming would change
+existing semantics and break the fixed-target checks. *Have IRGen derive the
+length from the input token.* The runtime consumes the stream and knows the
+actual transfer count; duplicating that logic in IRGen would mishandle EOF,
+truncation, and `A(w)` fields wider than the target. *Return `void` and store
+the declared length for both kinds.* That is the bug this ADR fixes.
+
+**Limitations recorded.** Quoted IBM character constants in list/data input
+remain out of scope. EOF and null fields still leave the target blank (the
+helpers report zero), and list/data tokens are still limited to the existing
+255-character buffer. `GET EDIT A(w)` truncates a wider field to the target's
+maximum, as before.
+
+---
+
+## ADR-341 — `-fsanitize=address` instruments the code the compiler emits
+
+*(ADR number: this decision was ADR-340 on the branch that grew it; the GET branch had already taken ADR-340 for a different decision, so it is renumbered here to ADR-341. ADR-232 did the same for a duplicated pair.)*
+
+**Context.** B0 put the storage, overlay and tasking paths under ASan/UBSan/TSan
+by rebuilding the runtime from source and linking the self-checking programs
+against the instrumented objects (`tests/driver/storage_asan.sh`). The code
+`irgen` emits stayed uninstrumented: a PL/I subscript that runs past its array
+reached the store unchecked at `-O2` (SUBSCRIPTRANGE is off there), and ASan
+never saw it. Clang does not add sanitizer checks to IR input, and the driver
+had no option to ask for them. LLVM 23's ASan pass also instruments only
+functions marked `sanitize_address`, so running the pass alone is not enough.
+
+**Decision.** `-fsanitize=address` marks every function this compilation emits
+with `sanitize_address`, opts the precompiled runtime and platform blobs out
+(`disable_sanitizer_instrumentation`, matched by name through
+`runtimeFuncNames`), runs LLVM's `AddressSanitizerPass` on the finished module,
+and links compiler-rt's runtime through the in-process lld (ADR-225). On Darwin
+the dynamic runtime is linked by path plus `-rpath` (Apple clang's install name
+is `@rpath`-relative); on ELF the static archive is linked with `-lpthread
+-ldl -lrt`. The runtime is discovered like the profile runtime: next to `pli`
+first, then `$PLI_TOOLCHAIN_PREFIX` or the baked prefix, under
+`lib/clang/<major>/lib/<os>`. Recovery is off, so a finding stops the program.
+
+The runtime's own functions stay out because B0 already measures them from
+source and its fiber stacks switch away from the C stack model ASan assumes;
+marking them is what keeps ASan's stack redzones out of the fiber path. A
+missing runtime, `--flto`, the vendored static musl sysroot, Windows and the
+other sanitizer names (`undefined`, `thread`, ...) are diagnosed rather than
+half-applied; `-emit-llvm`/`-emit-mlir` stop before the pass and say so.
+
+**Consequences.** `tests/driver/emitted_asan.sh` pins the option: a one-past
+stack array and a one-past BASED allocation are reported
+(`stack-buffer-overflow`, `heap-buffer-overflow`, non-zero exit), an in-bounds
+run stays clean, the same overflow without the option is silent, `-c` emits an
+instrumented object, and `-fsanitize=thread` / `-fsanitize=address --flto` are
+refused. The test skips when the toolchain has no compiler-rt ASan runtime and
+prints `SANITIZER: address`. `B13` moves to done; `B0`'s row points here for the
+emitted half.
+
+**Rejected.** *Pass `-fsanitize=address` through to a clang link.* ADR-225 made
+in-process lld the only linker; the option has to work without a clang
+subprocess. *Instrument the runtime blob too.* B0 covers the runtime from
+source, and the fiber tests would get ASan stack reports for stacks ASan did
+not create. *Serve UBSan and TSan in the same slice.* Most UBSan checks are
+generated by a frontend's CodeGen (division, shifts, conversions), so they need
+`irgen` work per check; a PL/I-level data race needs the tasking model, not
+just TSan entry/exit hooks. Both stay diagnosed.
+
+**Limitations recorded.** `--flto` with the option is refused: the LTO path has
+no per-module pipeline to hang the pass on. Windows and the static musl sysroot
+are unsupported. `-emit-llvm`/`-emit-mlir` do not run the pass. The ELF link is
+best-effort: only the Darwin path is exercised by the suite.
+
+---
+
+## ADR-342 — Record `READ` parks through the file broker
+
+**Context.** C2/ADR-298 item 7 moved stream `GET` from a named file onto the
+file-read broker but left record `READ` doing a direct blocking `fread`
+(`runtime/rt_file.c`). Under the fiber model that read holds the worker, so
+every task on that worker stalls until the record arrives - the case C4
+tracks. A record read is more than the `fread`: it records `ftell` before and
+the record position after, and the broker has one work slot that used to be
+safe only because a `GET` holds the input lock (ADR-233) around it. A record
+`READ` is not bracketed by that lock, so it could overwrite a stream request
+already in the slot.
+
+**Decision.** Record reads use the same broker and add two locks around it.
+
+1. `pli_record_read_{fixed,float,char,bit}` call `rt_fbroker_fread` instead of
+   `pli_plat_fread`; under the fiber model the task parks while the broker
+   thread blocks in the read. Counts are bytes (the broker's contract):
+   fixed/float check `sizeof v`, char checks `len`.
+2. A fiber-aware `rt_rec_read_mu` makes the `ftell` -> read -> `rt_rec_set`
+   sequence one unit, so two readers cannot both read the same record and
+   leave a stale position. It is initialised in `rt_out_init` and stays off
+   until the first task spawn, like the stream locks. The read releases it
+   before `rt_rec_endfile`, because an ENDFILE unit may do record I/O again.
+3. The broker serialises its one work slot with a fiber-aware `rt_lock`: a
+   record `READ` and a stream `GET` can now arrive together, and the input
+   lock alone no longer guarantees one caller. A second caller parks.
+
+**Consequences.** A record `READ` parks the task; `tests/driver/task_record.sh`
+puts a reader on a FIFO and a sleeping ticker on a single worker - the ticker
+only writes its mark when the read parks - then sends the record and checks
+the value. The test needs a POSIX FIFO and is skipped on Windows. ADR-298 item
+7 stays as the historical contract it was; this ADR supersedes its "record
+READ still blocks" clause. `C4` moves to done.
+
+**Limitations.** Record `WRITE`/`REWRITE`/`DELETE` still call the platform
+`fwrite`/`fseek` directly and can hold a worker on a slow file; only `READ` was
+in C4's scope. The record lock serialises readers with each other, not a reader
+against a writer on the same file.
+
+**Rejected.** *Bracket record READ with the input lock instead.* It would
+serialise record reads against stream GETs for no semantic reason and still
+leave the `ftell`/position update unprotected between two record reads. *Give
+the broker a request queue.* One slot plus a lock covers the two callers; a
+queue is machinery the runtime does not need yet.
+
+---
+
+## ADR-343 — `FIXEDBIN` and `FIXEDDEC` derive precision from the source
+
+**Context.** Rule (123) and Appendix 1 define `FIXEDBIN(x[,p[,q]])` and
+`FIXEDDEC(x[,p[,q]])`; the compiler had only `FIXED`, which always returns
+`FIXED BINARY(31)` and takes one argument. B11's precision tail needs the
+base-explicit converters, because a program can ask for `FIXED DEC(p,q)`
+without a declaration target.
+
+**Decision.** Serve both built-ins through the existing conversion path:
+1. An explicit `p`/`q` must be an integer constant; `p` is 1..63 for BINARY
+   and 1..31 for DECIMAL, `q` is nonnegative and fits the converter's storage
+   slot (62 for BINARY; 18 for a DECIMAL slot up to 18 digits, 38 for a wider
+   one). With `p` alone, `q` is zero.
+2. With both omitted, use IBM's source-type table. The 3.32 factor is exact
+   rational 83/25 (`CEIL(n*3.32)` = `(n*83+24)/25`), and the compiler limits
+   are M=63 for FIXED BINARY and N=31 for FIXED DECIMAL. The DECIMAL -> BINARY
+   and BINARY -> DECIMAL rows add the one integer digit the table specifies.
+3. `FLOAT` sources are read as FLOAT DECIMAL: `Type` stores only the
+   precision, not the base. `BIT` sources map to the table's maximum-precision
+   row. `CHAR` sources reuse `FIXED(char)`'s integer-text scan; a decimal
+   point in the text is still B11's tail.
+4. A `BIT` source converted to a genuinely wide DECIMAL result now
+   sign-extends into i128 instead of truncating an i64 to i128.
+
+**Consequences.** `tests/builtins/fixedbin_dec.pli` exercises explicit p/q,
+the source table for FIXED/CHAR/BIT/FLOAT, and the 63/31 wide results;
+`bad_fixedbin_dec.pli` pins arity and precision diagnostics. `FIXED` keeps its
+existing one-argument/default-31 behavior so current programs do not change.
+B11 stays open for the exact-decimal division tail, FLOAT-base tracking, and
+fractional character text.
+
+**Rejected.** *Change `FIXED` to the IBM default (15,0)/(5,0) in the same
+slice.* It would silently change an existing built-in's result type and its
+call sites. *Evaluate 3.32 in floating point.* The table's ceilings are exact
+integer arithmetic at the boundary values; the rational form keeps them exact.
+*Track the FLOAT base by guessing from the precision.* Binary and decimal
+precisions overlap; B11 needs a real `Type` field.
+
+---
+
+## ADR-344 — `CELL` is a synonym for `UNION`; `SECONDARY` stays diagnosed
+
+**Context.** TR 25.084 rule (15) lists `CELL` and `SECONDARY` among the data
+attributes. IBM Enterprise PL/I accepts `CELL` as a synonym for `UNION` in its
+structure and union section, while it defines no `SECONDARY` data attribute;
+that word appears only in secondary-entry-point terminology. The compiler
+already implements `UNION` overlays (ADR-202), but the parser rejected `CELL`
+with a generic rule (15) diagnostic and let `SECONDARY` fall through to a
+rule (9) syntax error.
+
+**Decision.** Treat `CELL` exactly like `UNION` in a declaration: both set the
+existing `unionAttr` flag and use the ADR-202 overlay layout. Add `CELL`,
+`UNION` and `SECONDARY` to the dimension lookahead, so
+`DCL 1 v(n) CELL, 2 a ..., 2 b ...` is an array of unions rather than a scalar
+with a precision. Diagnose `SECONDARY` during
+declaration parsing with rule (15) and record it as an accepted limitation
+rather than inventing storage semantics for it.
+
+**Consequences.** `CELL` needs no new layout or codegen; `tests/core/cell_union.pli`
+pins the offset-0 overlap and `tests/core/bad_secondary.pli` pins the negative.
+`SECONDARY` stays unsupported and `GRAMMAR-COVERAGE.md` records that limitation.
+
+**Rejected.** *Implement `SECONDARY` as an alias for something.* IBM gives it no
+data-attribute meaning, so any mapping would invent semantics.
+
+---
+
+## ADR-345 — `FIXED` accepts optional precision and scale
+
+**Context.** Rule (123) and IBM Appendix 1 define `FIXED(x[,p[,q]])`. The
+compiler only accepted one argument and always returned `FIXED BINARY(31,0)`.
+IBM derives the result's base and mode from `x`, with `p` the total digits and
+`q` the scale (`q` defaults to zero and must be nonnegative). The compiler's
+`Type` records a fixed base but not a `FLOAT` base.
+
+**Decision.** Accept one to three arguments:
+1. The one-argument form is unchanged: a character or numeric value returns
+   `FIXED BINARY(31,0)`, and a complex value keeps its complex mode with both
+   parts truncated. This preserves existing programs while B11 tracks IBM's
+   `(15,0)`/`(5,0)` default.
+2. With `p`, both `p` and `q` must be integer constants. `p` is 1..63 for a
+   binary result and 1..31 for a decimal result; `q` is 0..62 for binary and
+   0..18 or 0..38 for decimal, using the same storage limits as ADR-343.
+3. The result keeps the base of a fixed source: `FIXED BIN` gives
+   `FIXED BIN(p,q)` and `FIXED DEC` gives `FIXED DEC(p,q)`. A `FLOAT` source
+   is read as `FLOAT DECIMAL`, matching ADR-343, so it gives a decimal result;
+   a character source has no base and gives binary. Numeric sources lower
+   through `convert()` so a float is scaled before it is truncated; a
+   character source with `q = 0` reuses the integer-text scan and then
+   rescales.
+4. A character source with `q > 0`, a complex value with `p`/`q`, and any
+   `BIT` source are diagnosed with rule (123) instead of returning a silently
+   wrong value.
+
+**Consequences.** `tests/builtins/fixed_precision.pli` covers float, decimal,
+binary, and character sources plus decimal round-half-away rescaling;
+`tests/builtins/bad_fixed_precision.pli` pins arity, precision/scale, source,
+and character-fraction diagnostics. `FIXED`'s one-argument default and the
+fractional character scan remain B11 tails, as does tracking `FLOAT`'s base.
+
+**Rejected.** *Change the one-argument result to IBM's default now.* It would
+silently change an existing built-in's type and its call sites. *Pick a float
+base from its precision.* Binary and decimal precisions overlap; B11 needs a
+real `Type` field. *Let character `q > 0` reuse the integer scan.* It would
+turn `FIXED('1.5', 5, 2)` into `1.00` rather than the correct fractional
+value.
+
+## ADR-346 — Fractional character text for fixed-point targets
+
+**Context.** ADR-345 added `FIXED(x[,p[,q]])` but rejected a character source
+with `q > 0` because `FIXED(char)` only scanned an integer. The same
+integer-only scan also made `FIXED('1.5')` return `1` and
+`FIXEDDEC('1.5',5,0)` lose the fraction before the target scale could be
+applied. A character source is decimal text, so the conversion needs its
+decimal point and fractional digits, not a pre-truncated integer.
+
+**Decision.** Parse character text into significant digits plus a fraction
+count, then rescale once into the target type:
+1. Both lowerings accept leading blanks/tabs, one optional sign, digits, and
+   at most one decimal point. They keep up to 38 significant digits and up
+   to 76 fractional digits in a 256-bit intermediate. `*ok` is zero when the
+   text has no digits, exceeds those limits, or contains exponent text.
+2. A decimal target computes `round-half-away(all * 10^q / 10^f)`; a binary
+   target computes `trunc(all * 2^q / 10^f)`. The result then takes the
+   normal declared-precision SIZE trap and is truncated to the storage slot.
+3. The path serves `FIXED`, `FIXEDBIN`, `FIXEDDEC`, `BINARY`, and `DECIMAL`
+   with a character source, including the one-argument `FIXED` form and
+   `q = 0`. `FLOAT(char)` keeps the old integer-only scan.
+4. The runtime parser returns the signed digits as two i64 halves because the
+   ABI does not pass i128 by value; the inline lowering returns i256 directly
+   and makes no `pli_*` call.
+5. Exponent text such as `'1e3'` raises CONVERSION rather than returning the
+   integer prefix as a silently wrong value.
+
+**Consequences.** `tests/builtins/fixed_precision.pli` covers fractional
+character text for both bases, signed decimal rounding, binary truncation,
+the wide i128 path, and `BINARY`/`DECIMAL`; `tests/core/on_conversion.pli`
+pins the exponent rejection; `tests/ir/w4_scalar_rt.check` pins the new
+runtime symbol. Exponent parsing and `FLOAT(char)` fractional text remain
+B11 tails.
+
+**Rejected.** *Keep the integer scan and only accept `q = 0`.* It still turns
+`FIXEDDEC('12.9',5,0)` into `12` instead of rounding to `13`. *Parse directly
+into an i64.* A wide decimal target needs more than 64 bits. *Parse exponent
+text now.* It makes a larger parser and scale-normalisation change; rejecting
+it is honest until that slice lands.
+
+## ADR-347 — Fractional character text for FLOAT
+
+**Context.** ADR-346 gave FIXED, FIXEDBIN, FIXEDDEC, BINARY and DECIMAL a
+fractional character parser but left `FLOAT(char)` on the older integer-only
+scan. That scan was a silent wrong answer: `FLOAT('1.5')` returned `1` and
+`FLOAT('1e3')` returned `1`, both without a condition, so a program ran with a
+value the language forbids. The fixed conversions had already proved the
+parser; FLOAT only needed a different final scale.
+
+**Decision.** `FLOAT(char)` reuses the ADR-346 parse (signed significant
+digits and a fraction count, CONVERSION on no digits, overflow, or exponent
+text), then computes `digits / 10^frac` in double. The signed digits are
+converted from the 256-bit intermediate directly, so a long significand is not
+truncated through an i64 first.
+1. Both lowerings share the parse through `emitCharParts`: the runtime path
+   calls `pli_fixed_char_parts`, the inline path uses
+   `emitFixedCharPartsLLVM`.
+2. The one-argument form and the precision override (`FLOAT(x,p)`) both take
+   this path; only the result type differs.
+3. The old integer-only `emitFixedOfCharLLVM` and the `pli_fixed_of_char`
+   runtime entry are removed, so no future caller can fall back to the
+   truncating scan.
+4. Exponent text still raises CONVERSION, now for both fixed and FLOAT
+   character sources; exponent parsing remains a B11 tail.
+5. Each double conversion rounds once, so the result is within a few ulps of
+   a correctly rounded decimal parse. FLOAT is a double, so that is inside its
+   precision.
+
+**Consequences.** `tests/builtins/float_char.pli` covers signs, leading
+blanks, `.5`, `5.`, and short fractions; `tests/core/on_conversion.pli` pins
+exponent rejection; `tests/ir/w4_scalar_llvm.pli` and
+`tests/ir/w4_scalar_rt.pli` exercise FLOAT(char) in both lowerings.
+
+**Rejected.** *Call `strtod` in the runtime and keep the inline parser.* The
+two lowerings could round differently, and `strtod` starts parsing exponent
+text that the shared parser rejects. *Count the fraction by scaling the double
+in a loop.* It adds error without changing the result class; the exact i256
+power divided once is easier to reason about. *Keep the legacy scan for
+compatibility.* It is the silent wrong answer this ADR removes.
+
+---
+
+## ADR-348 — Calendar time routes through the `rt_plat` seam
+
+**Context.** ADR-222 split the runtime into a portable blob (`pli_runtime.bc`)
+plus a swappable platform TU (`pli_rtplat.bc`, selected with `--rt-platform`),
+and declared `time()` a direct call ("branch-free standard C, no seam needed").
+That left one host call outside the seam: `rt_string.c` calls `time(NULL)` for
+the `DATE`/`TIME`/`DATETIME` builtins. A custom platform (freestanding target,
+alternate libc, wasm without `time()`, ...) that implements the documented
+`pli_plat_*` surface still has to provide a raw `time()` symbol that is not in
+the contract, which widens the porting surface beyond the seam.
+
+**Decision.** Add a calendar-time seam entry `time_t pli_plat_time(time_t *t)`
+to `runtime/pli_rt_plat.h`, implement it against host `time()` in
+`runtime/rt_plat_default.c` (POSIX and Win32 both expose `time()` in
+`<time.h>`, so the default body is branch-free), and route `DATE`/`TIME`/
+`DATETIME` in `runtime/rt_string.c` through it. The custom platform must now
+provide `pli_plat_time`; `time()` itself no longer appears in portable code.
+`pli_plat_localtime` (local conversion) stays the companion seam entry it was
+already.
+
+**Consequences.** A custom `--rt-platform` TU implements 33 documented symbols
+instead of 32, and `checkPlatformSeamComplete` diagnoses `pli_plat_time` by
+name when it is missing. Default behavior is unchanged: the full suite,
+including `tests/builtins/datetime.pli` and `tests/driver/rt_platform.sh`,
+stays green. `time()` remains directly callable by a custom platform's own
+code; it is only removed from the portable blob.
+
+**Rejected.** Keep `time()` direct (ADR-222's original position): saves one
+seam entry but leaves a non-contract host call in portable code, contradicting
+the split-runtime goal of a single, named substitution point. Move calendar
+time into `pli_plat_localtime` (make it return `time_t` too): mixes acquisition
+and conversion, and callers that only need local `struct tm` would pay for a
+clock read they do not use; keep them separate.

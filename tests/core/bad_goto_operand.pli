@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (77): the operand of an indirect GO TO must be a LABEL
+    value; an arithmetic value is diagnosed, never turned into an
+    address. */
+ badgotooperand: procedure options(main);
+    goto (5);
+ end badgotooperand;

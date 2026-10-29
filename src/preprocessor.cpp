@@ -30,6 +30,10 @@ bool isWordChar(char c) {
   return std::isalnum((unsigned char)c) || c == '_' || c == '$' || c == '#' || c == '@';
 }
 
+bool isWordStart(char c) {
+  return std::isalpha((unsigned char)c) || c == '$' || c == '#' || c == '@';
+}
+
 fs::path normalized(const fs::path& path) {
   std::error_code ec;
   fs::path result = fs::weakly_canonical(path, ec);
@@ -43,6 +47,8 @@ bool Preprocessor::run(const fs::path& input, std::string& output) {
   included_.clear();
   ppVars_.clear();
   ppActive_.clear();
+  replacements_.clear();
+  replacing_.clear();
   labels_.clear();
   gotoTarget_ = 0;
   scanDepth_ = 0;
@@ -585,15 +591,12 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
     else
       ok = true;
   } else if (name == "REPLACE") {
-    if (active) {
-      // Served downstream by the lexer's token substitution (ADR-077):
-      // preserve the directive text verbatim, minus newlines (the caller
-      // re-adds those, keeping output line numbers aligned).
-      for (size_t j = i; j <= end; ++j)
-        if (source[j] != '\n')
-          output += source[j];
-    }
-    ok = true;
+    // Stage 3 (ADR-327): record the replacement for scan() to expand at
+    // use sites; an inactive arm is skipped without defining it.
+    if (active)
+      ok = handleReplace(path, source, i, wordEnd, end, directiveLine, directiveCol);
+    else
+      ok = true;
   } else {
     // Bare %NAME (extension, ADR-113): a reference expanding an activated
     // variable. Anything else stays an assignment attempt. The reference
@@ -1021,6 +1024,36 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
       // Boundary guard: %GOTO may land outside [start, end).
       if (i < start || i > end)
         break;
+    } else if (isWordStart(c)) {
+      // %REPLACE names expand as whole identifier words (Stage 3, ADR-327).
+      size_t j = i + 1;
+      while (j < end && isWordChar(source[j]))
+        ++j;
+      std::string word = source.substr(i, j - i);
+      std::string key = upper(word);
+      auto rep = replacements_.find(key);
+      if (rep != replacements_.end() && replacing_.insert(key).second) {
+        // Emit the replacement text in place and rescan it so a replacement
+        // may name another one; the guard keeps %REPLACE A BY A; (and mutual
+        // cycles) terminating.
+        bool expanded = scan(rep->second, 0, rep->second.size(), output, line, col, path, active);
+        replacing_.erase(key);
+        if (!expanded) {
+          --scanDepth_;
+          return false;
+        }
+        i = j;
+      } else {
+        emit(word, output, path, line, col);
+        i = j;
+      }
+    } else if (c == '"') {
+      // Double quotes are only a %REPLACE operand (ADR-082); the lexer no
+      // longer produces a DqString token (Stage 3, ADR-327).
+      error(path, line, col,
+            "double-quoted strings are only valid as a %REPLACE operand (ADR-082)");
+      --scanDepth_;
+      return false;
     } else {
       emit(std::string(1, c), output, path, line, col);
       ++i;
@@ -1446,6 +1479,94 @@ bool Preprocessor::handleActivation(const fs::path& input, const std::string& na
     error(input, line, col, "expected a name in %" + name);
     return false;
   }
+  return true;
+}
+
+// %REPLACE name BY <text> ; — record name → source text for scan() to expand
+// at later use sites (Stage 3, ADR-327). A quoted "..." operand stores the
+// text without its quotes (ADR-082); quotes mixed with other text are
+// diagnosed.
+bool Preprocessor::handleReplace(const fs::path& path, const std::string& source, size_t i,
+                                 size_t wordEnd, size_t end, int directiveLine,
+                                 int directiveCol) {
+  auto skipWs = [&](size_t& p) {
+    while (p < end && (source[p] == ' ' || source[p] == '\t' || source[p] == '\f' ||
+                       source[p] == '\r' || source[p] == '\n'))
+      ++p;
+  };
+  // The name follows the directive word; its position anchors diagnostics.
+  size_t p = wordEnd;
+  skipWs(p);
+  size_t nameStart = p;
+  if (p >= end || !isWordStart(source[p]))
+    return error(path, directiveLine, directiveCol,
+                 "expected an identifier after %REPLACE (ADR-077)");
+  while (p < end && isWordChar(source[p]))
+    ++p;
+  std::string name = upper(source.substr(nameStart, p - nameStart));
+  int nameLine = directiveLine;
+  int nameCol = directiveCol;
+  for (size_t k = i; k < nameStart; ++k) {
+    if (source[k] == '\n') {
+      ++nameLine;
+      nameCol = 1;
+    } else {
+      ++nameCol;
+    }
+  }
+  // BY separates the name from the replacement text.
+  skipWs(p);
+  size_t byStart = p;
+  while (p < end && isWordChar(source[p]))
+    ++p;
+  if (upper(source.substr(byStart, p - byStart)) != "BY")
+    return error(path, nameLine, nameCol,
+                 "expected BY after the %REPLACE identifier (ADR-077)");
+  // Capture the replacement text between BY and the terminating ';'.
+  skipWs(p);
+  size_t textEnd = end;
+  while (textEnd > p && std::isspace((unsigned char)source[textEnd - 1]))
+    --textEnd;
+  std::string text = source.substr(p, textEnd - p);
+  if (text.empty())
+    return error(path, nameLine, nameCol, "empty replacement text in %REPLACE (ADR-077)");
+  // A quoted operand is the ADR-082 form: strip the quotes ("" is one quote)
+  // and rescan the body at each use.
+  if (text.front() == '"') {
+    std::string body;
+    size_t q = 1;
+    bool closed = false;
+    while (q < text.size()) {
+      if (text[q] == '"') {
+        if (q + 1 < text.size() && text[q + 1] == '"') {
+          body.push_back('"');
+          q += 2;
+          continue;
+        }
+        ++q;
+        closed = true;
+        break;
+      }
+      body.push_back(text[q]);
+      ++q;
+    }
+    if (!closed)
+      return error(path, nameLine, nameCol, "unterminated double-quoted string");
+    while (q < text.size() && std::isspace((unsigned char)text[q]))
+      ++q;
+    if (q != text.size())
+      return error(path, nameLine, nameCol,
+                   "a quoted %REPLACE operand must be the whole replacement text (ADR-082)");
+    body = trim(body);
+    if (body.empty())
+      return error(path, nameLine, nameCol, "empty replacement text in %REPLACE (ADR-077)");
+    replacements_[name] = body;
+    return true;
+  }
+  if (text.find('"') != std::string::npos)
+    return error(path, nameLine, nameCol,
+                 "a quoted %REPLACE operand must be the whole replacement text (ADR-082)");
+  replacements_[name] = text;
   return true;
 }
 

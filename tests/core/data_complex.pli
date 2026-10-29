@@ -1,0 +1,25 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (104)-(106),(135)-(139): data-directed I/O handles a COMPLEX
+    scalar, reusing the list-directed re+imI image and reader. */
+ data_complex: procedure options(main);
+    declare z complex;
+    declare buf char(20);
+    z = complex(7, -3);
+    put string(buf) data(z);
+    if substr(buf, 1, 6) ^= 'Z=7-3I' then do;
+       put skip list('FAIL put data', substr(buf, 1, 6));
+       stop;
+    end;
+    z = complex(0, 0);
+    get string(buf) data(z);
+    if real(z) ^= 7 then do;
+       put skip list('FAIL complex real', real(z));
+       stop;
+    end;
+    if imag(z) ^= -3 then do;
+       put skip list('FAIL complex imag', imag(z));
+       stop;
+    end;
+    put skip list('PASS data-complex');
+ end data_complex;

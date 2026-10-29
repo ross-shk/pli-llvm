@@ -482,14 +482,14 @@ Proc* Parser::startProc(const std::string& name, SourceLoc loc, Proc* parent) {
 }
 
 // Applies a PROCEDURE statement's condition prefix to the body it scopes
-// (rules (60)-(63),(95); ADR-320): the four entries of procCond_ are 0 for the
+// (rules (60)-(63),(95); ADR-320): the entries of procCond_ are 0 for the
 // default, 1 when the prefix disables the check, and 2 when CHECK re-enables
 // it. Restores the enclosing state when the body ends.
 struct ProcCondGuard {
   int* state;
-  int saved[5];
+  int saved[7];
   ProcCondGuard(int* s, const Stmt& pre) : state(s) {
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 7; ++i)
       saved[i] = s[i];
     if (pre.noSize)
       s[0] = 1;
@@ -511,9 +511,17 @@ struct ProcCondGuard {
       s[4] = 1;
     else if (pre.chkUnder)
       s[4] = 2;
+    if (pre.noOver)
+      s[5] = 1;
+    else if (pre.chkOver)
+      s[5] = 2;
+    if (pre.noFOver)
+      s[6] = 1;
+    else if (pre.chkFOver)
+      s[6] = 2;
   }
   ~ProcCondGuard() {
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 7; ++i)
       state[i] = saved[i];
   }
 };
@@ -746,9 +754,10 @@ bool Parser::parseCondPrefixes(Stmt* st) {
     }
     advance();
     // Prefix elements (rules (60)-(63)): the plain forms are no-ops because
-    // SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION and UNDERFLOW are on by
-    // default, the NO... forms disable them for the statement's scope, and
-    // STRINGRANGE is IBM's opt-in condition (ADR-297). CHECK(...)/NOCHECK(...)
+    // SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, UNDERFLOW, OVERFLOW and
+    // FIXEDOVERFLOW are on by default, the NO... forms disable them for the
+    // statement's scope, and STRINGRANGE is IBM's opt-in condition (ADR-297).
+    // CHECK(...)/NOCHECK(...)
     // (rules (95),(96), ADR-320) name conditions — or ALL — and turn them on
     // or off regardless of what an enclosing prefix disabled. Any other
     // condition keeps the unenforced warning.
@@ -757,14 +766,16 @@ bool Parser::parseCondPrefixes(Stmt* st) {
     // Apply one state to one implemented check: 1 enables (and clears a
     // disable), -1 disables (and clears an enable); `which` -1 means ALL.
     auto setCond = [&](int which, int state) {
-      for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 5 : which); ++c) {
+      for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 7 : which); ++c) {
         switch (c) {
         case 0: st->noSize = state < 0; st->chkSize = state > 0; break;
         case 1: st->noSub = state < 0; st->chkSub = state > 0; break;
         case 2: st->noZdiv = state < 0; st->chkZdiv = state > 0; break;
         case 3: st->noConv = state < 0; st->chkConv = state > 0; break;
         case 4: st->noUnder = state < 0; st->chkUnder = state > 0; break;
-        default: st->strRange = state; break;
+        case 5: st->strRange = state; break;
+        case 6: st->noOver = state < 0; st->chkOver = state > 0; break;
+        default: st->noFOver = state < 0; st->chkFOver = state > 0; break;
         }
       }
     };
@@ -788,7 +799,8 @@ bool Parser::parseCondPrefixes(Stmt* st) {
       // Classify the word: a condition name, its NO... form, or ALL.
       int state = 0;
       if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOZERODIVIDE" ||
-          w == "NOCONVERSION" || w == "NOSTRINGRANGE" || w == "NOUNDERFLOW") {
+          w == "NOCONVERSION" || w == "NOSTRINGRANGE" || w == "NOUNDERFLOW" ||
+          w == "NOOVERFLOW" || w == "NOFIXEDOVERFLOW") {
         w = w.substr(2);
         state = -1;
       }
@@ -805,6 +817,10 @@ bool Parser::parseCondPrefixes(Stmt* st) {
         which = 4;
       else if (w == "STRINGRANGE")
         which = 5;
+      else if (w == "OVERFLOW")
+        which = 6;
+      else if (w == "FIXEDOVERFLOW")
+        which = 7;
       else if (w == "ALL")
         which = -1;
       else {
@@ -848,6 +864,8 @@ StmtP Parser::parseStatement(Proc* owner) {
   st->noZdiv = procCond_[2] == 1;
   st->noConv = procCond_[3] == 1;
   st->noUnder = procCond_[4] == 1;
+  st->noOver = procCond_[5] == 1;
+  st->noFOver = procCond_[6] == 1;
 
   // condition prefix list                                          rule (60)
   if (!parseCondPrefixes(st.get()))
@@ -863,11 +881,55 @@ StmtP Parser::parseStatement(Proc* owner) {
   if (st->strRange != 0)
     procStrRange_ = st->strRange;
 
-  // label prefixes                                                 rule (64)
-  while (at(Tok::Word) && peek().kind == Tok::Colon) {
-    st->labels.push_back(cur().text);
+  // label prefixes                                    rules (64),(65)
+  // A plain identifier labels the statement with a label constant; an element
+  // of a label array (initial-label, AR(1):) labels it through that element.
+  while (at(Tok::Word)) {
+    if (peek().kind == Tok::Colon) {
+      st->labels.push_back(cur().text);
+      advance();
+      advance();
+      continue;
+    }
+    if (peek().kind != Tok::LParen)
+      break;
+    // Try `ident ( signed-integer {, signed-integer} ) :`; anything else is the
+    // statement itself (a call or an assignment), so put the tokens back.
+    size_t save = i_;
+    std::string name = cur().text;
     advance();
-    advance();
+    advance(); // (
+    std::vector<long long> subs;
+    bool ok = true;
+    while (ok) {
+      long long sign = 1;
+      if (at(Tok::Plus)) {
+        advance();
+      } else if (at(Tok::Minus)) {
+        sign = -1;
+        advance();
+      }
+      if (!at(Tok::Number) || cur().isFloat || cur().sterling || cur().imaginary) {
+        ok = false;
+        break;
+      }
+      subs.push_back(sign * std::strtoll(cur().text.c_str(), nullptr, 10));
+      advance();
+      if (eat(Tok::Comma))
+        continue;
+      break;
+    }
+    if (ok && at(Tok::RParen) && peek().kind == Tok::Colon) {
+      advance(); // )
+      advance(); // :
+      LabelElem e;
+      e.name = name;
+      e.subs = std::move(subs);
+      st->labelElems.push_back(std::move(e));
+      continue;
+    }
+    i_ = save;
+    break;
   }
 
   // nested package (extension, ADR-109): packages nest nothing; a labelled
@@ -951,12 +1013,17 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->noZdiv = st->noZdiv;
       s->noConv = st->noConv;
       s->noUnder = st->noUnder;
+      s->noOver = st->noOver;
+      s->noFOver = st->noFOver;
       s->chkSize = st->chkSize;
       s->chkSub = st->chkSub;
       s->chkZdiv = st->chkZdiv;
       s->chkConv = st->chkConv;
       s->chkUnder = st->chkUnder;
+      s->chkOver = st->chkOver;
+      s->chkFOver = st->chkFOver;
       s->strRange = st->strRange;
+      s->labelElems = st->labelElems;
       return s;
     }
   }
@@ -964,16 +1031,21 @@ StmtP Parser::parseStatement(Proc* owner) {
   StmtP k = keywordStatement(owner, st->labels, /*probe=*/false);
   if (k) {
     k->labels = st->labels;
+    k->labelElems = st->labelElems;
     k->noSize = st->noSize;
     k->noSub = st->noSub;
     k->noZdiv = st->noZdiv;
     k->noConv = st->noConv;
     k->noUnder = st->noUnder;
+    k->noOver = st->noOver;
+    k->noFOver = st->noFOver;
     k->chkSize = st->chkSize;
     k->chkSub = st->chkSub;
     k->chkZdiv = st->chkZdiv;
     k->chkConv = st->chkConv;
     k->chkUnder = st->chkUnder;
+    k->chkOver = st->chkOver;
+    k->chkFOver = st->chkFOver;
     k->strRange = st->strRange;
     return k;
   }
@@ -981,16 +1053,21 @@ StmtP Parser::parseStatement(Proc* owner) {
   auto s = parseAssignment();
   if (s) {
     s->labels = st->labels;
+    s->labelElems = st->labelElems;
     s->noSize = st->noSize;
     s->noSub = st->noSub;
     s->noZdiv = st->noZdiv;
     s->noConv = st->noConv;
     s->noUnder = st->noUnder;
+    s->noOver = st->noOver;
+    s->noFOver = st->noFOver;
     s->chkSize = st->chkSize;
     s->chkSub = st->chkSub;
     s->chkZdiv = st->chkZdiv;
     s->chkConv = st->chkConv;
     s->chkUnder = st->chkUnder;
+    s->chkOver = st->chkOver;
+    s->chkFOver = st->chkFOver;
     s->strRange = st->strRange;
   }
   return s;
@@ -1184,9 +1261,10 @@ void Parser::skipParen(const char* rule) {
   }
 }
 
-// One condition (rule 94). ERROR, SIZE, SUBSCRIPTRANGE, and ZERODIVIDE are
-// served; every other condition is diagnosed with its rule number, never
-// silently accepted.
+// One condition (rule 94). ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE,
+// CONVERSION, STRINGRANGE, FINISH, AREA, UNDERFLOW, OVERFLOW and
+// FIXEDOVERFLOW are served; every other condition is diagnosed with its rule
+// number, never silently accepted.
 std::string Parser::parseCondition(std::string* fileArg) {
   if (!at(Tok::Word)) {
     d_.error(cur().loc, "expected a condition", "(94)");
@@ -1234,10 +1312,18 @@ std::string Parser::parseCondition(std::string* fileArg) {
     advance();
     return w;
   }
-  if (w == "CONVERSION" || w == "FIXEDOVERFLOW" || w == "OVERFLOW") {
+  if (w == "OVERFLOW") {
+    // OVERFLOW (rule 94): a floating-point result larger in magnitude than the
+    // double range; the implicit action is a message plus ERROR (ADR-333).
     advance();
-    d_.error(l, w + " conditions are not implemented in this stage", "(94)");
-    return "";
+    return w;
+  }
+  if (w == "FIXEDOVERFLOW") {
+    // FIXEDOVERFLOW (rule 94): a FIXED DECIMAL arithmetic result longer than
+    // the 31-digit maximum; the implicit action is a message plus ERROR
+    // (ADR-334).
+    advance();
+    return w;
   }
   if (w == "CHECK") {
     advance();
@@ -1263,7 +1349,8 @@ std::string Parser::parseCondition(std::string* fileArg) {
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
         name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH" ||
-        name == "AREA" || name == "UNDERFLOW") {
+        name == "AREA" || name == "UNDERFLOW" || name == "OVERFLOW" ||
+        name == "FIXEDOVERFLOW") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }
@@ -1939,6 +2026,16 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
+      if (w == "REDUCIBLE" || w == "IRREDUCIBLE") {
+        // entry-name-attribute { REDUCIBLE | IRREDUCIBLE } (rule (34)): an
+        // optimization hint about repeating a call with the same arguments.
+        // The declaration is a hint, not a constraint, so a later attribute
+        // overrides an earlier one; validity (an ENTRY declaration) is
+        // checked in sema.
+        item.reducible = (w == "REDUCIBLE") ? 1 : -1;
+        advance();
+        continue;
+      }
       if (w == "LIKE") {
         // like-attribute ::= LIKE unsubscripted-reference (rule 43): the
         // declared item takes the structure shape of the referenced structure.
@@ -2180,9 +2277,14 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.labelAttr = true;
         continue;
       }
-      if (w == "CELL" || w == "GENERIC" || w == "BUILTIN") {
-        // CELL, GENERIC, BUILTIN are not Subset-G attributes; diagnosed.
-        d_.error(cur().loc, "attribute " + w + " is not a Subset-G attribute", "(15)");
+      if (w == "GENERIC" || w == "BUILTIN" || w == "SECONDARY") {
+        // GENERIC/BUILTIN are not Subset-G attributes; SECONDARY is listed in
+        // TR 25.084 rule (15), but IBM Enterprise PL/I defines no such data
+        // attribute. Both cases are diagnosed with the attribute rule number.
+        std::string why = w == "SECONDARY"
+                              ? "attribute SECONDARY is not supported"
+                              : "attribute " + w + " is not a Subset-G attribute";
+        d_.error(cur().loc, why, "(15)");
         advance();
         if (at(Tok::LParen)) {
           int d = 0;
@@ -2203,8 +2305,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.reserved = true;
         continue;
       }
-      if (w == "UNION") {
+      if (w == "UNION" || w == "CELL") {
         // UNION (ADR-202): overlapping minor structures (Subset-G extension).
+        // CELL is IBM Enterprise's synonym for UNION (TR 25.084 rule (15)).
         // The first occurrence starts the overlay; subsequent members share
         // offset 0. Implemented via the DEFINED overlay path.
         advance();
@@ -2488,6 +2591,8 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   // `DCL X(4) BASED(P)` and `DCL Y(4) CONTROLLED` form arrays rather
   // than precision-4 scalars (rules (12),(15),(25)). TASK and EVENT ride
   // here as well, so `DCL EV(2) EVENT` is an array of flags (rule (15)).
+  // DEFINED rides here so `DCL X(3) FIXED BIN(31) DEFINED B;` declares a
+  // 3-element overlay instead of reading `(3)` as a precision (ADR-339).
   auto isAttrWord = [&](const std::string& w) {
     return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
            w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
@@ -2496,7 +2601,10 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
-           w == "EVENT" || w == "PICTURE" || w == "PIC";
+           w == "EVENT" || w == "CELL" || w == "UNION" || w == "SECONDARY" ||
+           w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "COMPLEX" ||
+           w == "CPLX" || w == "REAL" || w == "LIKE" || w == "FILE" || w == "ENTRY" ||
+           w == "DEFINED" || w == "DEF";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -4722,11 +4830,6 @@ ExprP Parser::parsePrimary() {
     return lhs;
   }
 
-  // Double quotes are only a %REPLACE replacement operand (ADR-082).
-  if (at(Tok::DqString)) {
-    d_.error(cur().loc, "double-quoted strings are only valid as a %REPLACE operand (ADR-082)", "");
-    return nullptr;
-  }
   d_.error(cur().loc, std::string("expected an expression, found ") + tokName(cur().kind), "(123)");
   return nullptr;
 }

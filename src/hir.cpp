@@ -252,6 +252,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->kind = static_cast<HStmt::Kind>(s->kind);
   h->loc = s->loc;
   h->labels = s->labels;
+  h->labelElems = s->labelElems;
   h->name = s->name;
   h->sym = s->sym;
   h->params = s->params;
@@ -356,11 +357,15 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->noZdiv = s->noZdiv;
   h->noConv = s->noConv;
   h->noUnder = s->noUnder;
+  h->noOver = s->noOver;
+  h->noFOver = s->noFOver;
   h->chkSize = s->chkSize;
   h->chkSub = s->chkSub;
   h->chkZdiv = s->chkZdiv;
   h->chkConv = s->chkConv;
   h->chkUnder = s->chkUnder;
+  h->chkOver = s->chkOver;
+  h->chkFOver = s->chkFOver;
   h->strRange = s->strRange;
   h->until = s->until;
   h->cond = lowerExpr(s->cond.get());

@@ -1,0 +1,24 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (43); ADR-338: a dimension on a LIKE item makes an array of the
+    template's members, and the template's own dimension is not carried
+    over with the shape. */
+ like_array: procedure options(main);
+    declare 1 t, 2 a fixed bin(31);
+    declare 1 e(3) like t;
+    declare 1 u(2), 2 b fixed bin(31);
+    declare 1 v(3) like u;
+    declare 1 w like u;
+
+    e(2).a = 5;
+    v(3).b = 7;
+    w.b = 9;
+    if e(2).a ^= 5 then go to bad;
+    if v(3).b ^= 7 then go to bad;
+    if w.b ^= 9 then go to bad;
+    put skip list('PASS like_array');
+    stop;
+
+ bad:
+    put skip list('FAIL like_array');
+ end like_array;

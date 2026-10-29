@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* extension (ADR-077): a %REPLACE needs an
+     identifier after the directive name. */
+  badreplacename: procedure options(main);
+     %replace 5 by 6;
+     put skip list('x');
+  end badreplacename;

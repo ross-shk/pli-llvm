@@ -13,8 +13,8 @@
  * a record is read as a unit and two tasks never split one. Only the raw
  * bytes cross the thread boundary.
  *
- * This broker serves standard input; stream file reads use the file broker
- * (rt_fbroker.c, ADR-298), and record READ still blocks.
+ * This broker serves standard input; stream and record file reads use the
+ * file broker (rt_fbroker.c, ADR-298, ADR-342).
  */
 #include "pli_rt.h"
 #include "rt_fiber.h"

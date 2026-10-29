@@ -132,7 +132,8 @@ PLI_FN(pli_time, VOID, (PTR, I64))                    /* TIME() */
 PLI_FN(pli_datetime, VOID, (PTR, I64))                /* DATETIME(): YYYYMMDDHHMMSS */
 PLI_FN(pli_char_of_fixed, VOID, (PTR, I64, I64))      /* CHAR(fixed) */
 PLI_FN(pli_char_of_float, VOID, (PTR, I64, DOUBLE))   /* CHAR(float) */
-PLI_FN(pli_fixed_of_char, I64, (CPTR, I64, IPTR))     /* FIXED(char): *ok=0 on no digits */
+PLI_FN(pli_char_of_complex, VOID, (PTR, I64, DOUBLE, DOUBLE)) /* CHAR(complex) */
+PLI_FN(pli_fixed_char_parts, VOID, (CPTR, I64, IPTR, IPTR, PTR)) /* FIXED/FLOAT(char) digits + fraction count */
 PLI_FN(pli_fixed_of_float, I64, (DOUBLE))             /* FIXED(float) */
 PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 
@@ -154,6 +155,9 @@ PLI_FN(pli_empty_area, PTR, (VOID))                   /* EMPTY(): null AREA hand
 PLI_FN(pli_signal_error, VOID, (CPTR))                /* conditions (M5) */
 PLI_FN(pli_subscript_oob, VOID, (VOID))               /* SUBSCRIPTRANGE abort (no handler) */
 PLI_FN(pli_underflow, VOID, (VOID))                  /* UNDERFLOW implicit action (ADR-326) */
+PLI_FN(pli_overflow, VOID, (VOID))                   /* OVERFLOW implicit action (ADR-333) */
+PLI_FN(pli_fixedoverflow, VOID, (VOID))              /* FIXEDOVERFLOW implicit action (ADR-334) */
+PLI_FN(pli_overflow_error, VOID, (VOID))             /* OVERFLOW normal return -> ERROR (ADR-333) */
 PLI_FN(pli_zerodivide, VOID, (VOID))                  /* ZERODIVIDE abort (no handler) */
 PLI_FN(pli_fixed_overflow, VOID, (VOID))            /* FIXED overflow interim (QR1.2) */
 PLI_FN(pli_conversion, VOID, (VOID))                  /* CONVERSION abort (no handler, ADR-170) */
@@ -201,7 +205,7 @@ PLI_FN(pli_signal_finish, VOID, (PTR))               /* FINISH at task procedure
 
 PLI_FN(pli_get_list_fixed, I64, (VOID))               /* list-directed input (109) */
 PLI_FN(pli_get_list_float, DOUBLE, (VOID))
-PLI_FN(pli_get_list_char, VOID, (PTR, I64))
+PLI_FN(pli_get_list_char, I64, (PTR, I64))             /* returns assigned chars */
 PLI_FN(pli_get_list_complex, VOID, (PTR, PTR)) /* CM5 (ADR-086) */
 PLI_FN(pli_get_list_bit, I8, (VOID))
 PLI_FN(pli_get_data_next, I64, (PTR, I64))           /* DATA-directed input (106) */
@@ -215,7 +219,7 @@ PLI_FN(pli_get_edit_num, DOUBLE, (I64))
 PLI_FN(pli_get_edit_pic, I64, (I64, I64)) /* P input (ADR-291) */
 PLI_FN(pli_get_edit_pic_sterling, I64, (I64, CPTR, I64)) /* sterling P input (B1): (width, picture, len) */
 PLI_FN(pli_get_edit_pic_wide, VOID, (I64, I64, PTR)) /* wide P input (B1): (width, scale, out) */
-PLI_FN(pli_get_edit_char, VOID, (PTR, I64, I64))
+PLI_FN(pli_get_edit_char, I64, (PTR, I64, I64))       /* returns field chars */
 PLI_FN(pli_get_edit_bit, VOID, (PTR, I64, I64))
 PLI_FN(pli_get_edit_column, VOID, (I64))
 PLI_FN(pli_get_edit_x, VOID, (I64))

@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (65): the subscripts of a label-array prefix must lie inside
+    the declared bounds. */
+ badlabelelembounds: procedure options(main);
+    declare ar(3) label;
+    ar(9): put skip list('x');
+ end badlabelelembounds;

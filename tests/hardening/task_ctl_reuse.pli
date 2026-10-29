@@ -1,0 +1,66 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(87)-(90): CONTROLLED generations belong to the task.
+    Twenty rounds of four tasks recycle the same fibers; every task
+    must start from its own entry generation (INITIAL 7), push two
+    more, see each fresh one take INITIAL, and pop back in LIFO order
+    to the values it stored. One CONTROLLED variable per task: two or
+    more on a recycled fiber is deferred work (C6). */
+ task_ctl_reuse: procedure options(main);
+    declare ev(4) event;
+    declare bad(4) fixed bin(31) external;
+    declare k1 fixed bin(31);
+    declare k2 fixed bin(31);
+    declare k3 fixed bin(31);
+    declare k4 fixed bin(31);
+    declare r fixed bin(31);
+    declare i fixed bin(31);
+    k1 = 1;
+    k2 = 2;
+    k3 = 3;
+    k4 = 4;
+    do i = 1 to 4;
+       bad(i) = 0;
+    end;
+    do r = 1 to 20;
+       call work(k1) event(ev(1));
+       call work(k2) event(ev(2));
+       call work(k3) event(ev(3));
+       call work(k4) event(ev(4));
+       wait(ev);
+    end;
+    do i = 1 to 4;
+       if bad(i) ^= 0 then do;
+          put skip list('FAIL task_ctl_reuse:', i, bad(i));
+          stop;
+       end;
+    end;
+    put skip list('PASS task_ctl_reuse');
+ end task_ctl_reuse;
+ work: procedure(k);
+    declare k fixed bin(31);
+    declare bad(4) fixed bin(31) external;
+    declare c fixed bin(31) controlled initial(7);
+    declare d event;
+    /* the entry generation */
+    if c ^= 7 then bad(k) = bad(k) + 1;
+    c = k;
+    allocate c;
+    if c ^= 7 then bad(k) = bad(k) + 1;
+    c = k * 10;
+    /* park so another task runs between the pushes */
+    call nop event(d);
+    wait(d);
+    allocate c;
+    if c ^= 7 then bad(k) = bad(k) + 1;
+    c = k * 100;
+    call nop event(d);
+    wait(d);
+    if c ^= k * 100 then bad(k) = bad(k) + 1;
+    free c;
+    if c ^= k * 10 then bad(k) = bad(k) + 1;
+    free c;
+    if c ^= k then bad(k) = bad(k) + 1;
+ end work;
+ nop: procedure;
+ end nop;

@@ -9,6 +9,7 @@ w4_rt: procedure options(main);
     x = fixed(f);
     x = fixed(s);
     x = fixed('123');
+    f = float(s);
     y = 'val=' || 42;
     y = 'flt=' || f;
     y = 'neg=' || -7;

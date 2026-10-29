@@ -1,0 +1,28 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* CELL is IBM's synonym for UNION (TR 25.084 rule (15)): the members
+    overlay at offset 0. */
+ cell_union: procedure options(main);
+    dcl 1 u cell,
+        2 a fixed bin(31),
+        2 b fixed bin(31);
+    u.a = 42;
+    if u.b ^= 42 then do;
+       put skip list('FAIL: cell u.b');
+       stop;
+    end;
+    u.b = 99;
+    if u.a ^= 99 then do;
+       put skip list('FAIL: cell u.a');
+       stop;
+    end;
+    dcl 1 v(2) cell,
+        2 x fixed bin(31),
+        2 y fixed bin(31);
+    v(1).x = 7;
+    if v(1).y ^= 7 then do;
+       put skip list('FAIL: cell array member');
+       stop;
+    end;
+    put skip list('PASS cell synonym for union');
+ end cell_union;

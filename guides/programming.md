@@ -41,7 +41,7 @@ pli name.pli -o name && ./name
 | Types      | FIXED BIN/DEC, FLOAT, COMPLEX, BIT, CHAR/VARYING, POINTER        | STERLING constants, PICTURE type |
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
-| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, UNDERFLOW, named; `CHECK`/`NOCHECK` prefixes | OVERFLOW |
+| Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, UNDERFLOW, OVERFLOW, FIXEDOVERFLOW, named; `CHECK`/`NOCHECK` prefixes | KEYED/DIRECT file conditions |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
@@ -126,7 +126,8 @@ Overflow of `+ - *` on fixed types can raise the `size` condition (see [Conditio
 - `/` truncates toward zero on integer-valued fixed operands; `**`, and any
   division with a fractional or float operand, still go through floating point.
 - `picture` data and picture variables are not implemented. `label` variables are
-  (ADR-192): `declare l label;` plus an indirect `goto (l)` through `addr`.
+  (ADR-192): `declare l label;` plus an indirect `goto (l)` through `addr`, a
+  label constant, or a label-array element (ADR-336).
 
 > **Run the full example:** [`examples/data_types.pli`](../examples/data_types.pli) — `pli data_types.pli -o data_types && ./data_types`.
 
@@ -172,9 +173,18 @@ Nesting goes as deep as you like:
 
 You can also narrow to a sub-structure with `like s.a.b` (a deep copy of that branch).
 
+A dimension on the `like` item makes an array of that shape:
+
+```pli
+ dcl 1 team(8) like template;   /* eight copies of template's members */
+ team(3).id = 42;
+```
+
+The template's *own* dimension is not copied with the shape — write the extent you want on the item. The dimensions of the template's members are kept.
+
 **Not yet**
 
-- `like` of a non-structure, or `like` plus a dimension, is an error the compiler reports.
+- `like` of a non-structure, or `like` combined with its own members, is an error the compiler reports.
 
 > **Run the full example:** [`examples/declarations_structures.pli`](../examples/declarations_structures.pli) — `pli declarations_structures.pli -o decls && ./decls`.
 
@@ -479,6 +489,28 @@ Local `go to` jumps to a label. You'll rarely need it now that `leave`/`iterate`
 ```
 
 Jumping *into* an inactive block is an error. Jumping to an enclosing procedure is future work.
+
+A label is a value: it can be kept in a `label` variable or an array of labels, and `go to` through it is the computed jump. An array element can also label a statement as a prefix, which stores that statement's address in the element:
+
+```pli
+ dcl l label;
+ dcl steps(3) label;
+
+ l = second;
+ go to l;                 /* indirect through the variable */
+ second:
+ steps(1) = third;
+ go to (steps(1));        /* and through an array element */
+
+ third:
+ steps(1): put skip list('one');    /* an element labels a statement */
+ steps(2): put skip list('two');
+ steps(3): put skip list('three');
+
+ go to (steps(2));        /* computed: prints 'two', then 'three' */
+```
+
+An element prefix takes constant subscripts only, and the array must have a fixed extent (not `controlled`, `based` or a runtime-size array). `initial` values for label arrays are not implemented yet.
 
 > **Run the full example:** [`examples/control_flow.pli`](../examples/control_flow.pli) — `pli control_flow.pli -o flow && ./flow`.
 
@@ -811,16 +843,26 @@ An array of offsets holds several blocks from one region. Each element is a full
  put skip list(y);               /* 7 */
 ```
 
-Overlay with a different layout to reinterpret bytes — two halves over one word:
+A defined array starts at its base's first element and only has to fit, so a
+shorter or differently shaped view of the same storage works:
+
+```pli
+ dcl table(100) fixed bin(31);
+ dcl header(4) fixed bin(31) defined table;   /* table(1:4) */
+ dcl grid(2,2) fixed bin(31) defined table;   /* the same four */
+```
+
+The element type and size must match the base element's.
+
+Overlay a different type of the same size to reinterpret bytes — a memory view,
+like a C union member:
 
 ```pli
  dcl word fixed bin(31);
- dcl 1 halves defined word,
-       2 hi fixed bin(31),
-       2 lo fixed bin(31);
+ dcl cents fixed dec(9) defined word;   /* the same four bytes */
 
- word = 16#00420001#;
- put skip list(halves.hi, halves.lo);
+ word = 7;
+ put skip list(cents);                  /* 7, viewed as FIXED DECIMAL(9) */
 ```
 
 iSUB builds a sliding view into one axis of an array without copying — like a slice that stays linked to the original:
@@ -873,6 +915,7 @@ the alias follows the index — like a pointer you can retarget by changing a va
 **Not yet**
 
 - every item subscript must be mapped by a dummy; a runtime base subscript keeps the item a scalar of the base's element type; `position` needs a scalar character item over a character base (a bit-string position is an error); the base must be in the same or an enclosing scope.
+- a defined *structure* (a record layout over another variable's storage) is diagnosed; overlay same-size scalar views instead.
 
 > **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `pli defined_isub.pli -o overlays && ./overlays`.
 
@@ -893,7 +936,7 @@ PL/I has resumable conditions with dynamic scope — think `try/except` in Pytho
  revert error;          /* pop the handler */
 ```
 
-Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, `area` for regions, `underflow` for floating-point results, plus your own named conditions.
+Supported: `error`, `size`, `subscriptrange`, `zerodivide`, `conversion`, `stringrange` (opt-in with a `(stringrange):` prefix, as IBM defines it), `finish` in a task, `area` for regions, `underflow` and `overflow` for floating-point results, `fixedoverflow` for decimal arithmetic, plus your own named conditions.
 
 `on underflow` catches a floating-point result below the smallest normal value
 (including a `*`, `/` or `**` that loses the whole exponent range). The result
@@ -903,6 +946,34 @@ becomes zero, and with no unit the runtime prints a message and continues:
  on underflow put skip list('tiny result');
 
  x = small * small;   /* x is 0 */
+```
+
+`on overflow` catches a floating-point result too large for the double range.
+IBM's implicit action is a message followed by `error`, and a unit that
+*returns* raises `error` too — so a handler that wants to continue needs an
+`on error` unit, otherwise the program aborts:
+
+```pli
+ on overflow begin;
+   put skip list('result out of range');
+ end;
+ on error begin;
+   put skip list('continuing after the overflow');
+ end;
+
+ x = huge * 10.0;    /* the overflow unit runs, then the error unit */
+```
+
+`on fixedoverflow` catches a `FIXED DECIMAL` `+`, `-` or `*` whose result
+needs more than the 31 digits PL/I allows. It is never raised for
+`FIXED BINARY`, and a unit that returns just resumes (the value is
+undefined):
+
+```pli
+ on fixedoverflow put skip list('decimal result too long');
+
+ big = 1000000000000000;
+ c = big * 10000000000000000;   /* 1e31: 32 digits */
 ```
 
 `on area` catches a region that cannot satisfy an `allocate`, and a pointer
@@ -974,7 +1045,7 @@ Bounds-checking example — the handler runs, then execution resumes with the in
 
 ### One-statement opt-outs
 
-Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconversion)` / `(nounderflow)` skip the check for one statement when you've already validated it:
+Prefixes like `(nosize)` / `(nosubscriptrange)` / `(nozerodivide)` / `(noconversion)` / `(nounderflow)` / `(nooverflow)` / `(nofixedoverflow)` skip the check for one statement when you've already validated it:
 
 ```pli
  (nosubscriptrange): a(i) = 0;  /* trust me, i is fine */
@@ -1007,10 +1078,12 @@ The command-line `--no-size-checks` (and `-O2`/`-O3`, which imply it) wins over 
 
 **Not yet**
 
-- `overflow` conditions, keyed-I/O conditions, `go to` inside a unit, and
-  `return(value)` inside a handler are diagnosed. The underflow check covers
-  the arithmetic operators; complex arithmetic and the math built-ins are not
-  instrumented.
+- Keyed-I/O conditions, `go to` inside a unit, and `return(value)` inside a
+  handler are diagnosed. The underflow and overflow checks cover the
+  arithmetic operators; complex arithmetic and the math built-ins are not
+  instrumented. `fixedoverflow` is raised from `FIXED DECIMAL` `+ - *`; a
+  decimal intermediate that wraps the 64-bit storage still takes the `size`
+  path (exact 19-31 digit arithmetic is still open).
 
 > **Run the full example:** [`examples/conditions.pli`](../examples/conditions.pli) — `pli conditions.pli -o conds && ./conds`.
 
@@ -1096,11 +1169,10 @@ fiber backend yet.
 - The fiber backend exists for x86-64 and AArch64 and runs in CI on Linux, macOS
   and Windows; the Windows backend (ADR-239) is the least-proven of the three.
   The tasking matrix per backend is tracked in `docs/DEFERRED-WORK.md` (C1).
-- Under the fiber model, a stream `get` from a file parks the task (and frees
-  its worker) until the read completes, using the same helper-thread mechanism
-  as standard input (ADR-238, ADR-298). Record `read` still blocks the worker
-  (DEFERRED-WORK C4). Reading *standard input* likewise parks rather than
-  blocking.
+- Under the fiber model, a stream `get` from a file and a record `read` both
+  park the task (and free its worker) until the read completes, using the same
+  helper-thread mechanism as standard input (ADR-238, ADR-298, ADR-342).
+  Reading *standard input* likewise parks rather than blocking.
 
 A task that runs out of stack is reported, not left to die quietly:
 `TASK: stack overflow (the task's stack ran out)`, and the program stops
@@ -1208,7 +1280,7 @@ keeping a transcript while reading a field.
 
 ### DATA-directed: self-describing dumps
 
-`put data(x, y)` prints `name=value` pairs; `get data` reads them in any order and skips unknown names. Great for configs and debugging — like `repr()` of your variables.
+`put data(x, y)` prints `name=value` pairs; `get data` reads them in any order and skips unknown names. Great for configs and debugging — like `repr()` of your variables. A scalar `complex` value uses the list-directed `re+imI` image, so `put data(z)` writes `Z=7-3I` and `get data(z)` reads it back.
 
 ```pli
  dcl 1 config,
@@ -1220,6 +1292,10 @@ keeping a transcript while reading a field.
 ```
 
 ### Files & records
+
+A file is a scalar name, not data: `dcl f file;` declares one file, and a
+dimension (`dcl f(3) file;`) would be an array of file variables, which this
+compiler diagnoses. Declare one name per file.
 
 ```pli
  dcl f file;

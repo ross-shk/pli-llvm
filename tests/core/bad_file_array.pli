@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (12); ADR-337: a dimension on FILE declares an array of file
+    variables, which needs one runtime slot per element and a
+    subscripted file designator in every I/O statement. It is
+    diagnosed, never collapsed silently into one file. */
+ bad_file_array: procedure options(main);
+    declare f(3) file;
+    put skip list('unreachable');
+ end bad_file_array;

@@ -1,0 +1,88 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Grammar-constrained decoding benchmark: at every step walk every
+    vocabulary token's symbols through a byte-level DFA from the current
+    state; a token is allowed when its walk never reaches the dead
+    state. Then take the best allowed token and advance on it - the
+    llama.cpp-style mask build without a precomputed index
+    (benchmarks/LLM-ORCHESTRATION-PLAN.md 4.4). */
+ /*
+  * Bounds:
+  *   - 32 states x 64 symbols; 8000 tokens of 1..8 symbols in one pool
+  *   - pool length <= 8000 * 8 = 64000; tstart <= 64001
+  *   - score = mod(tok * 7919 + step * 104729, 65536) < 65536
+  *   - chk = mod(chk * 31 + best * 64 + state, 1000000007): the term
+  *     is < 5.2e5, so chk stays below 3.2e10 per step
+  *
+  * Scaling rule: 2000 steps over 8000 tokens puts the slowest -O2
+  * configuration at ~220 ms.
+  */
+ test_llm_grammar: proc options(main);
+    dcl trans(32, 0:63) fixed bin(31);
+    dcl tstart(8000) fixed bin(31);
+    dcl tlen(8000) fixed bin(31);
+    dcl pool(48000) fixed bin(31);
+    dcl (s, c, i, j, st, tok, best, step, nallow, plen, vocab_n,
+       score, best_score) fixed bin(31);
+    dcl (seed, chk, nmask) fixed bin(63);
+
+    /* DFA: about one symbol in five leads to the dead state 0 */
+    do s = 1 to 32;
+       do c = 0 to 63;
+          if mod(s * 7 + c * 13, 5) = 0 then trans(s, c) = 0;
+          else trans(s, c) = 1 + mod(s * 11 + c * 3, 32);
+       end;
+    end;
+    /* vocabulary: 8000 tokens of 1..8 symbols in one flat pool */
+    vocab_n = 8000;
+    seed = 99;
+    plen = 0;
+    do tok = 1 to vocab_n;
+       seed = mod(seed * 1103515245 + 12345, 2147483648);
+       tlen(tok) = 1 + mod(seed / 65536, 8);
+       tstart(tok) = plen + 1;
+       do j = 1 to tlen(tok);
+          seed = mod(seed * 1103515245 + 12345, 2147483648);
+          plen = plen + 1;
+          pool(plen) = mod(seed / 65536, 64);
+       end;
+    end;
+
+    s = 1;
+    chk = 0;
+    nmask = 0;
+    do step = 1 to 2000;
+       /* mask: a token is allowed when its symbols avoid state 0;
+          the best-scoring allowed token wins (lowest index on a tie) */
+       nallow = 0;
+       best = 0;
+       best_score = -1;
+       do tok = 1 to vocab_n;
+          st = s;
+          do j = tstart(tok) to tstart(tok) + tlen(tok) - 1
+             while (st ^= 0);
+             st = trans(st, pool(j));
+          end;
+          if st ^= 0 then do;
+             nallow = nallow + 1;
+             score = mod(tok * 7919 + step * 104729, 65536);
+             if score > best_score then do;
+                best_score = score;
+                best = tok;
+             end;
+          end;
+       end;
+       nmask = nmask + nallow;
+       /* advance the grammar state on the chosen token; restart the
+          grammar when no token is allowed */
+       if best = 0 then s = 1;
+       else do;
+          do j = tstart(best) to tstart(best) + tlen(best) - 1;
+             s = trans(s, pool(j));
+          end;
+       end;
+       chk = mod(chk * 31 + best * 64 + s, 1000000007);
+    end;
+    put skip list(nmask);
+    put skip list(chk);
+ end test_llm_grammar;

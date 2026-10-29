@@ -7,17 +7,17 @@
  * the bytes arrive. This mirrors the stdin broker (ADR-238) but serves
  * arbitrary FILE streams.
  *
- * A GET statement holds the input lock (ADR-233) for its whole duration,
- * so only one task is inside the broker at a time and a single work slot
- * is enough.
+ * A GET statement holds the input lock (ADR-233) for its whole duration.
+ * A record READ does not, so the broker serialises its one work slot: a
+ * second caller parks on a fiber-aware lock until the first has taken its
+ * result (ADR-342). Only one blocking read is in flight at a time.
  */
 #include "pli_rt.h"
 #include "rt_fiber.h"
 #include "rt_sched.h"
 
-/* The work slot: the reader thread picks up a request from here. There is
- * one slot because the compiler brackets a GET statement with the input
- * lock (ADR-233), so only one task is inside the broker at a time. */
+/* The work slot: the reader thread picks up a request from here. One slot
+ * is enough because rt_fbroker_fread serialises its callers (ADR-342). */
 struct rt_fbroker_req {
   FILE *f;
   void *buf;
@@ -28,6 +28,7 @@ struct rt_fbroker_req {
 static struct {
   pli_mutex mu;
   pli_cond request_cv;  /* the reader waits here for a request */
+  rt_lock slot;         /* one caller in the broker at a time */
   struct rt_fbroker_req req;
   struct pli_fiber *waiter; /* the task parked for the read */
   pli_thread th;
@@ -64,6 +65,7 @@ static void *rt_fbroker_thread(void *arg) {
 static void rt_fbroker_start(void) {
   pli_mutex_init(&rt_fbroker.mu);
   pli_cond_init(&rt_fbroker.request_cv);
+  rt_lock_init(&rt_fbroker.slot);
   rt_fbroker.req.f = NULL;
   rt_fbroker.req.result = -1;
   rt_fbroker.waiter = NULL;
@@ -81,6 +83,8 @@ size_t rt_fbroker_fread(void *buf, size_t n, FILE *f) {
     return pli_plat_fread(buf, 1, n, f);
 
   pli_call_once(&rt_fbroker.once, rt_fbroker_start);
+  /* One work slot: wait for the previous caller to take its result. */
+  rt_lock_acquire(&rt_fbroker.slot);
   pli_mutex_lock(&rt_fbroker.mu);
   /* Record the owner before publishing the waiter: the reader may unpark
    * us before rt_sched_park runs, and an unpark hands the fiber to its
@@ -101,5 +105,6 @@ size_t rt_fbroker_fread(void *buf, size_t n, FILE *f) {
   pli_mutex_lock(&rt_fbroker.mu);
   long long got = rt_fbroker.req.result;
   pli_mutex_unlock(&rt_fbroker.mu);
+  rt_lock_release(&rt_fbroker.slot);
   return got < 0 ? 0 : (size_t)got;
 }

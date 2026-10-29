@@ -284,6 +284,34 @@ void pli_underflow(void) {
   pli_plat_fprintf(stderr, "UNDERFLOW: floating-point result too small\n");
 }
 
+/* OVERFLOW (rule 94; ADR-333): IBM's implicit action is a message followed by
+ * ERROR, which aborts when no ERROR unit is established. With an OVERFLOW unit
+ * the dispatcher runs it; a normal return then raises ERROR from IRGen. */
+void pli_overflow(void) {
+  rt_flush_stdout();
+  pli_plat_fflush(stdout);
+  pli_plat_fprintf(stderr, "OVERFLOW: floating-point result too large\n");
+  pli_signal_error("OVERFLOW");
+}
+
+/* FIXEDOVERFLOW (rule 94; ADR-334): same implicit action, message then ERROR.
+ * A unit that returns normally resumes; this entry is the no-unit path. */
+void pli_fixedoverflow(void) {
+  rt_flush_stdout();
+  pli_plat_fflush(stdout);
+  pli_plat_fprintf(stderr, "FIXEDOVERFLOW: decimal result longer than 31 digits\n");
+  pli_signal_error("FIXEDOVERFLOW");
+}
+
+/* OVERFLOW's normal-return rule (rule 94; ADR-333): a unit that returns
+ * normally raises ERROR, and with no ERROR unit the system action is this
+ * message followed by the abort. */
+void pli_overflow_error(void) {
+  rt_flush_stdout();
+  pli_plat_fflush(stdout);
+  pli_signal_error("normal return from an OVERFLOW unit");
+}
+
 /* ALLOCATE (rule 87): heap-allocate n bytes for a based structure. A null
  * return would be an ALLOCATION condition (M4); the interim raises a hard
  * error. */

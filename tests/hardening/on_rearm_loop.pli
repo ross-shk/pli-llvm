@@ -1,0 +1,63 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (91): an ON-unit lives until its block ends. Each pass
+    arms a unit in a fresh BEGIN block, a fresh procedure
+    activation, or a BEGIN block left by GO TO; thousands of passes
+    must leave the ON stack (64 entries) where it started, and the
+    outer unit must be on top again after every pass. */
+ on_rearm_loop: procedure options(main);
+    declare i fixed bin(31);
+    declare j fixed bin(31);
+    declare inner fixed bin(31);
+    declare outer fixed bin(31);
+    declare jumped fixed bin(31);
+    declare proc_hits fixed bin(31) external;
+    inner = 0;
+    outer = 0;
+    jumped = 0;
+    proc_hits = 0;
+    on error outer = outer + 1;
+    /* block exit pops the unit */
+    do i = 1 to 1000;
+       do j = 1 to 10;
+          begin;
+             on error inner = inner + 1;
+             signal error;
+          end;
+       end;
+       signal error;
+    end;
+    if inner ^= 10000 | outer ^= 1000 then do;
+       put skip list('FAIL on_rearm_loop: begin', inner, outer);
+       stop;
+    end;
+    /* procedure exit pops the unit */
+    do i = 1 to 1000;
+       call arm;
+    end;
+    signal error;
+    if proc_hits ^= 1000 | outer ^= 1001 then do;
+       put skip list('FAIL on_rearm_loop: proc', proc_hits, outer);
+       stop;
+    end;
+    /* GO TO out of the block pops the unit */
+    do i = 1 to 1000;
+       begin;
+          on error jumped = jumped + 1;
+          signal error;
+          go to resume;
+       end;
+ resume: ;
+    end;
+    signal error;
+    if jumped ^= 1000 | outer ^= 1002 then do;
+       put skip list('FAIL on_rearm_loop: goto', jumped, outer);
+       stop;
+    end;
+    put skip list('PASS on_rearm_loop');
+ end on_rearm_loop;
+ arm: procedure;
+    declare proc_hits fixed bin(31) external;
+    on error proc_hits = proc_hits + 1;
+    signal error;
+ end arm;

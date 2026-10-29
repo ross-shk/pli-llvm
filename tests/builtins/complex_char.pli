@@ -1,0 +1,45 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* B11: CHAR and FIXED of a complex value — the imaginary
+    part is signed and carries an I; FIXED truncates both
+    parts toward zero and keeps the complex mode. */
+ complex_char: procedure options(main);
+    declare z complex;
+    declare c complex;
+    declare s char(29);
+    declare r fixed bin(31);
+    z = complex(1.5, 2.5);
+    s = char(z);
+    if trim(s) ^= '1.5+2.5I' then do;
+       put skip list('FAIL char positive:', s);
+       stop;
+    end;
+    if length(s) ^= 29 then do;
+       put skip list('FAIL char length:', length(s));
+       stop;
+    end;
+    z = complex(-1.25, -3.5);
+    s = char(z);
+    if trim(s) ^= '-1.25-3.5I' then do;
+       put skip list('FAIL char negative:', s);
+       stop;
+    end;
+    z = complex(4.0, 0.0);
+    s = char(z);
+    if trim(s) ^= '4+0I' then do;
+       put skip list('FAIL char zero imaginary:', s);
+       stop;
+    end;
+    z = complex(1.9, -2.9);
+    c = fixed(z);
+    if real(c) ^= 1.0 | imag(c) ^= -2.0 then do;
+       put skip list('FAIL fixed complex:', real(c), imag(c));
+       stop;
+    end;
+    r = fixed(z);
+    if r ^= 1 then do;
+       put skip list('FAIL fixed real:', r);
+       stop;
+    end;
+    put skip list('PASS complex-char');
+ end complex_char;

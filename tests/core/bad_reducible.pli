@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (34): REDUCIBLE describes how an ENTRY's calls may be
+    repeated, so it is diagnosed on a storage item. */
+ badred: procedure options(main);
+    declare a fixed bin(31) reducible;
+ end badred;
