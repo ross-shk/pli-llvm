@@ -1,0 +1,69 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(94): FINISH is raised in a task when the procedure the
+    task was created for returns. Two parent tasks each start a child
+    task; each parent and each child counts its own FINISH in its own
+    counter, so nothing races. A synchronous helper with ON FINISH
+    never raises it, and a synchronous call of parent1 raises only its
+    child's. Counters are EXTERNAL because an ON-unit may only capture
+    its own procedure's automatics. */
+ task_nested_finish: procedure options(main);
+    declare pfin1 fixed bin(31) external;
+    declare pfin2 fixed bin(31) external;
+    declare cfin1 fixed bin(31) external;
+    declare cfin2 fixed bin(31) external;
+    declare syncfin fixed bin(31) external;
+    declare e1 event;
+    declare e2 event;
+    pfin1 = 0;
+    pfin2 = 0;
+    cfin1 = 0;
+    cfin2 = 0;
+    syncfin = 0;
+    call parent1 event(e1);
+    call parent2 event(e2);
+    wait(e1, e2);
+    if pfin1 ^= 1 | pfin2 ^= 1 | cfin1 ^= 1 | cfin2 ^= 1 |
+       syncfin ^= 0 then do;
+       put skip list('FAIL task_nested_finish: tasks', pfin1, pfin2,
+          cfin1, cfin2, syncfin);
+       stop;
+    end;
+    /* plain call: no FINISH of its own, child1 is a task */
+    call parent1;
+    if pfin1 ^= 1 | pfin2 ^= 1 | cfin1 ^= 2 | cfin2 ^= 1 |
+       syncfin ^= 0 then do;
+       put skip list('FAIL task_nested_finish: sync', pfin1, pfin2,
+          cfin1, cfin2, syncfin);
+       stop;
+    end;
+    put skip list('PASS task_nested_finish');
+ end task_nested_finish;
+ parent1: procedure;
+    declare pfin1 fixed bin(31) external;
+    declare ce event;
+    on finish pfin1 = pfin1 + 1;
+    call child1 event(ce);
+    wait(ce);
+    call helper;
+ end parent1;
+ parent2: procedure;
+    declare pfin2 fixed bin(31) external;
+    declare ce event;
+    on finish pfin2 = pfin2 + 1;
+    call child2 event(ce);
+    wait(ce);
+    call helper;
+ end parent2;
+ child1: procedure;
+    declare cfin1 fixed bin(31) external;
+    on finish cfin1 = cfin1 + 1;
+ end child1;
+ child2: procedure;
+    declare cfin2 fixed bin(31) external;
+    on finish cfin2 = cfin2 + 1;
+ end child2;
+ helper: procedure;
+    declare syncfin fixed bin(31) external;
+    on finish syncfin = syncfin + 1;
+ end helper;

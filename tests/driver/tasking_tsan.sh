@@ -35,9 +35,19 @@ fi
 
 # A single wait, a fan-out of a hundred concurrent tasks, fiber reuse, and a
 # fan-out with the shutdown race: together they drive work stealing, the
-# park/unpark paths, the pool and MAIN's exit.
-for t in task task_many task_reuse task_pool_stress; do
-  if ! $PLI --no-bitcode-runtime "tests/core/$t.pli" -c -o "$OUT/$t.o" \
+# park/unpark paths, the pool and MAIN's exit. The hardening cases add a WAIT
+# inside a task and CONTROLLED generations on a recycled fiber.
+for spec in \
+  task:tests/core/task.pli \
+  task_many:tests/core/task_many.pli \
+  task_reuse:tests/core/task_reuse.pli \
+  task_pool_stress:tests/core/task_pool_stress.pli \
+  task_nested_wait:tests/hardening/task_nested_wait.pli \
+  task_ctl_reuse:tests/hardening/task_ctl_reuse.pli
+do
+  t=${spec%%:*}
+  src=${spec#*:}
+  if ! $PLI --no-bitcode-runtime "$src" -c -o "$OUT/$t.o" \
        >"$OUT/$t.compile" 2>&1; then
     echo "FAIL tasking_tsan: $t did not compile"
     tail -5 "$OUT/$t.compile"

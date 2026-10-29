@@ -1,0 +1,35 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (42),(79),(82),(91): MAIN starts four tasks on a package
+    member compiled separately (mm_tasks_lib.pli). Each task arms its
+    own ZERODIVIDE unit, traps, resumes with 0, and writes its slot of
+    an EXTERNAL array shared across the link. */
+ mm_tasks: procedure options(main);
+    declare cells(4) fixed bin(31) external;
+    declare work entry(fixed bin(31)) external;
+    declare ev(4) event;
+    declare k1 fixed bin(31);
+    declare k2 fixed bin(31);
+    declare k3 fixed bin(31);
+    declare k4 fixed bin(31);
+    declare i fixed bin(31);
+    k1 = 1;
+    k2 = 2;
+    k3 = 3;
+    k4 = 4;
+    do i = 1 to 4;
+       cells(i) = 0;
+    end;
+    call work(k1) event(ev(1));
+    call work(k2) event(ev(2));
+    call work(k3) event(ev(3));
+    call work(k4) event(ev(4));
+    wait(ev);
+    do i = 1 to 4;
+       if cells(i) ^= i * 100 + 1 then do;
+          put skip list('FAIL mm_tasks:', i, cells(i));
+          stop;
+       end;
+    end;
+    put skip list('PASS mm_tasks');
+ end mm_tasks;

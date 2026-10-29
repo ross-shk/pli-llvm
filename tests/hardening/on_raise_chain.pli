@@ -1,0 +1,54 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (91)-(94): a unit raises the next condition. ca's unit
+    signals cb, cb's unit divides by zero, ZERODIVIDE's unit signals
+    ERROR. Each unit runs once, each resumes where it was raised, the
+    division resumes with 0, and control returns after the first
+    SIGNAL with ONCODE back to 0. ONCODE is read only in ca's unit
+    before it raises anything: nested ONCODE restore is not pinned. */
+ on_raise_chain: procedure options(main);
+    declare ca condition;
+    declare cb condition;
+    declare ha fixed bin(31);
+    declare hb fixed bin(31);
+    declare hz fixed bin(31);
+    declare he fixed bin(31);
+    declare ncode fixed bin(31);
+    declare after fixed bin(31);
+    declare zr fixed bin(31);
+    declare d fixed bin(31);
+    ha = 0;
+    hb = 0;
+    hz = 0;
+    he = 0;
+    ncode = 0;
+    after = 0;
+    zr = -1;
+    d = 0;
+    on error he = he + 1;
+    on zerodivide begin;
+       hz = hz + 1;
+       signal error;
+    end;
+    on condition(cb) begin;
+       hb = hb + 1;
+       zr = 5 / d;
+    end;
+    on condition(ca) begin;
+       ncode = oncode();
+       ha = ha + 1;
+       signal condition(cb);
+    end;
+    signal condition(ca) set oncode(42);
+    after = 1;
+    if ha ^= 1 | hb ^= 1 | hz ^= 1 | he ^= 1 then do;
+       put skip list('FAIL on_raise_chain: hits', ha, hb, hz, he);
+       stop;
+    end;
+    if ncode ^= 42 | after ^= 1 | zr ^= 0 | oncode() ^= 0 then do;
+       put skip list('FAIL on_raise_chain:', ncode, after, zr,
+          oncode());
+       stop;
+    end;
+    put skip list('PASS on_raise_chain');
+ end on_raise_chain;

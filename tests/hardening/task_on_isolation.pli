@@ -1,0 +1,73 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82),(91)-(94): each task's ON stack and ONCODE are its
+    own. Four workers arm ERROR and a named condition, park in a WAIT
+    so the others run, then fire both. Each must see only its own
+    unit and its own SET ONCODE value; MAIN's unit for the same
+    condition never runs and MAIN's ONCODE stays 0. Every worker arms
+    its own unit before it signals, so the test holds whether or not a
+    task inherits its attacher's units. */
+ task_on_isolation: procedure options(main);
+    declare evt condition;
+    declare ev(4) event;
+    declare k1 fixed bin(31);
+    declare k2 fixed bin(31);
+    declare k3 fixed bin(31);
+    declare k4 fixed bin(31);
+    declare h1 fixed bin(31);
+    declare h2 fixed bin(31);
+    declare h3 fixed bin(31);
+    declare h4 fixed bin(31);
+    declare mh fixed bin(31);
+    mh = 0;
+    /* outputs are zeroed, so a worker that never writes is visible */
+    h1 = 0;
+    h2 = 0;
+    h3 = 0;
+    h4 = 0;
+    k1 = 1;
+    k2 = 2;
+    k3 = 3;
+    k4 = 4;
+    on condition(evt) mh = mh + 1;
+    call worker(k1, h1) event(ev(1));
+    call worker(k2, h2) event(ev(2));
+    call worker(k3, h3) event(ev(3));
+    call worker(k4, h4) event(ev(4));
+    wait(ev);
+    /* hits*10000 + error hits*1000 + code */
+    if h1 ^= 11011 | h2 ^= 11022 | h3 ^= 11033 | h4 ^= 11044 then do;
+       put skip list('FAIL task_on_isolation:', h1, h2, h3, h4);
+       stop;
+    end;
+    if mh ^= 0 | oncode() ^= 0 then do;
+       put skip list('FAIL task_on_isolation: main', mh, oncode());
+       stop;
+    end;
+    put skip list('PASS task_on_isolation');
+    worker: procedure(k, res);
+       declare k fixed bin(31);
+       declare res fixed bin(31);
+       declare hit fixed bin(31);
+       declare ehit fixed bin(31);
+       declare code fixed bin(31);
+       declare ye event;
+       hit = 0;
+       ehit = 0;
+       code = 0;
+       on error ehit = ehit + 1;
+       on condition(evt) begin;
+          hit = hit + 1;
+          code = oncode();
+       end;
+       call yield event(ye);
+       wait(ye);
+       signal error;
+       signal condition(evt) set oncode(k * 11);
+       revert condition(evt);
+       revert error;
+       res = hit * 10000 + ehit * 1000 + code;
+    end worker;
+    yield: procedure;
+    end yield;
+ end task_on_isolation;

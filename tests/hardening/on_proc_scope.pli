@@ -1,0 +1,42 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (91): a unit armed in a procedure is dropped when the
+    procedure ends, by RETURN (mid) or by falling off its END (mid2).
+    deep arms nothing, so its signal reaches mid's unit; MAIN's unit
+    is on top again after each call. Counters are EXTERNAL because a
+    unit may only capture its own procedure's automatics. */
+ on_proc_scope: procedure options(main);
+    declare main_hits fixed bin(31) external;
+    declare mid_hits fixed bin(31) external;
+    declare mid2_hits fixed bin(31) external;
+    main_hits = 0;
+    mid_hits = 0;
+    mid2_hits = 0;
+    on error main_hits = main_hits + 1;
+    signal error;
+    call mid;
+    signal error;
+    call mid2;
+    signal error;
+    if main_hits ^= 3 | mid_hits ^= 20 | mid2_hits ^= 100 then do;
+       put skip list('FAIL on_proc_scope:', main_hits, mid_hits,
+          mid2_hits);
+       stop;
+    end;
+    put skip list('PASS on_proc_scope');
+ end on_proc_scope;
+ mid: procedure;
+    declare mid_hits fixed bin(31) external;
+    on error mid_hits = mid_hits + 10;
+    signal error;
+    call deep;
+    return;
+ end mid;
+ mid2: procedure;
+    declare mid2_hits fixed bin(31) external;
+    on error mid2_hits = mid2_hits + 100;
+    signal error;
+ end mid2;
+ deep: procedure;
+    signal error;
+ end deep;

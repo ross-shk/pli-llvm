@@ -1,0 +1,30 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (42),(79),(94): FINISH across the link. worker (in
+    mm_task_finish_lib.pli) arms ON FINISH and calls a private
+    procedure that arms its own. Run as a task, only worker's unit
+    fires; run as a plain call, neither does. */
+ mm_task_finish: procedure options(main);
+    declare finished fixed bin(31) external;
+    declare runs fixed bin(31) external;
+    declare inner_hits fixed bin(31) external;
+    declare worker entry external;
+    declare e1 event;
+    finished = 0;
+    runs = 0;
+    inner_hits = 0;
+    call worker event(e1);
+    wait(e1);
+    if finished ^= 1 | runs ^= 1 | inner_hits ^= 0 then do;
+       put skip list('FAIL mm_task_finish: task', finished, runs,
+          inner_hits);
+       stop;
+    end;
+    call worker;
+    if finished ^= 1 | runs ^= 2 | inner_hits ^= 0 then do;
+       put skip list('FAIL mm_task_finish: sync', finished, runs,
+          inner_hits);
+       stop;
+    end;
+    put skip list('PASS mm_task_finish');
+ end mm_task_finish;
