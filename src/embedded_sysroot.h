@@ -19,8 +19,8 @@ struct SysrootFile {
 };
 // Files embedded for this build's host OS (musl set on Linux, mingw set on
 // Windows, .tbd stubs on macOS). Empty (n=0, null return) when the build
-// embedded none — arch mismatch or missing sources — in which case the
-// driver falls back to the host toolchain.
+// embedded none — arch mismatch or missing sources — in which case user links
+// fail with a clear error (no host-toolchain fallback).
 const SysrootFile* embeddedSysrootFiles(size_t* n);
 // Which link path the set feeds: "musl", "mingw", or "sdk" ("" when none).
 const char* embeddedSysrootName();

@@ -4,12 +4,9 @@
 # tests/driver/bitcode_runtime.sh — OPTIMIZATION.md §10 (P3): the bitcode
 # runtime. IRGen merges the pli_* definitions from the embedded blob into the
 # MAIN unit (full merge, ADR-179 — library units reference symbols the MAIN
-# unit never calls, so a LinkOnlyNeeded pull would duplicate them); an
-# explicit --runtime archive stays on the link line, never pulled once the
-# symbols are defined; --no-bitcode-runtime keeps every unit's references
-# external, resolved at link from the embedded blob. The embedded bundle is
-# the only source: there is no external-runtime-file option (a custom
-# platform TU goes through --rt-platform, covered by rt_platform.sh).
+# unit never calls, so a LinkOnlyNeeded pull would duplicate them). The
+# embedded bundle is the only source: there is no external-runtime-file option
+# (a custom platform TU goes through --rt-platform, covered by rt_platform.sh).
 set -u
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
@@ -49,16 +46,6 @@ grep -q "define.*@pli_put_list_char" "$OUT.ll" \
 grep -q "declare.*@pli_put_list_char" "$OUT.ll" \
   && { echo "FAIL: runtime still a bare declaration"; ok=0; }
 check "default run" "$($OUT.bc$EXE)" "PASS bitcode_runtime"
-
-# --- --no-bitcode-runtime: references stay external, so the module
-#     carries only declarations -----------------------------------------
-$PLI "$OUT.pli" -o "$OUT.nobc$EXE" --no-bitcode-runtime --keep-ll \
-  || { echo "FAIL: --no-bitcode-runtime build"; ok=0; }
-grep -q "declare.*@pli_put_list_char" "$OUT.ll" \
-  || { echo "FAIL: archive mode lacks a pli_* declaration"; ok=0; }
-grep -q "define.*@pli_put_list_char" "$OUT.ll" \
-  && { echo "FAIL: archive mode unexpectedly embeds the runtime"; ok=0; }
-check "archive run" "$($OUT.nobc$EXE)" "PASS bitcode_runtime"
 
 # --- multi-unit: only the MAIN object embeds the runtime; the library unit's
 #     external pli_* references resolve against that one shared copy (runtime

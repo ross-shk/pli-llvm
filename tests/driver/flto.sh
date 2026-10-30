@@ -75,12 +75,6 @@ cmd=$($PLI "$OUT.pli" -c -o "$OUT.full.o" --flto=full -v 2>&1) \
 no_clang "full-lto -v" "$cmd"
 is_bitcode "$OUT.full.o" "full-lto object"
 
-# --- PGO+LTO combined is rejected (link-time PGO is out of scope) --------
-if $PLI "$OUT.pli" -o "$OUT.combo$EXE" --flto=thin --fprofile-generate >/dev/null 2>&1; then
-  echo "FAIL: --flto + --fprofile-generate should be rejected"
-  ok=0
-fi
-
 # --- full link+run ---------------------------------------------------------
 cmd=$($PLI "$OUT.pli" -o "$OUT.thin$EXE" --flto=thin -v 2>&1) \
   || { echo "FAIL: thin-lto compile+link"; ok=0; }

@@ -1108,9 +1108,7 @@ private:
   std::vector<llvm::Value*> areaSlots_;
   // Bitcode runtime (OPTIMIZATION.md §10, P3): the embedded blob's pli_*
   // definitions merge into the module when linkBitcode_ requests it. Only
-  // the MAIN unit embeds (runtime globals must stay shared across units);
-  // an explicit --runtime archive stays on the final link line where its
-  // members are simply never pulled once the symbols are defined.
+  // the MAIN unit embeds (runtime globals must stay shared across units).
   bool linkBitcode_ = false;
   // Split runtime: platformBc_ names a custom platform TU (--rt-platform;
   // empty selects the embedded pli_rtplat.bc), merged alongside the portable
@@ -1126,8 +1124,7 @@ private:
   // runtime into the module, and re-apply the P0 side-table facts to the real
   // bodies. The embedded definitions keep their external linkage so every
   // unit's pli_* references resolve to this one shared copy (runtime globals
-  // stay shared); an explicit --runtime archive stays on the link line but
-  // is never pulled.
+  // stay shared).
   // Returns false after diagnosing.
   bool linkRuntimeBitcode();
 };

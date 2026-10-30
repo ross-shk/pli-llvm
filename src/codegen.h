@@ -44,10 +44,6 @@ bool emitObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_strea
 // link time, no plugin, no clang.
 bool emitLTOObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,
                    bool thin, const std::string& optLevel, std::string& err);
-// Single-module fast path only: link the embedded runtime into `M` at BC
-// level (LinkOnlyNeeded). Never for `-c`, never per-module of multi-input.
-bool linkEmbeddedLibPLI(llvm::Module& M, const llvm::Triple& targetTriple, std::string& err,
-                        const std::string& platformBc = "");
 // Split runtime: load the platform TU — a custom --rt-platform file or the
 // embedded pli_rtplat.bc for the target — triple-checked and stripped. Null
 // on failure (err set); null with err untouched when no embedded platform
@@ -63,14 +59,6 @@ bool isPlatformSeamSymbol(const std::string& name);
 // platform); empty string when the seam is complete. The default platform
 // blob passes this by construction.
 std::string checkPlatformSeamComplete(const llvm::Module& M);
-// Multi-input path: parse the embedded bundle into its own module.
-std::unique_ptr<llvm::Module> parseEmbeddedRuntime(const llvm::Triple& targetTriple,
-                                                   llvm::LLVMContext& ctx, std::string& err);
-// Emit the embedded runtime as its own object (one lld input among others).
-// platformBc selects a custom platform TU merged in place of the default.
-bool emitRuntimeObject(llvm::TargetMachine& TM, const llvm::Triple& targetTriple,
-                       llvm::raw_pwrite_stream& out, std::string& err,
-                       const std::string& platformBc = "");
 // Link object files + system libs into an executable in-process (needs lld).
 // Optional outs/errs let the caller capture or suppress lld's diagnostic output
 // (e.g. a speculative first pass whose output should be hidden on retry);

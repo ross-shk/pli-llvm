@@ -7,12 +7,11 @@
 # the file is what got linked); an incomplete platform is rejected by name;
 # a missing platform file is an error.
 set -u
-# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
-# is no libm (the UCRT provides it), and program output uses CRLF. On Unix
-# EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
+# Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix and
+# program output uses CRLF. On Unix EXE is empty and stripping CR is a no-op.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB= ;;
-  *) EXE=; MATHLIB=-lm ;;
+  MINGW*|MSYS*|CYGWIN*) EXE=.exe ;;
+  *) EXE= ;;
 esac
 PLI=${PLI:-./build/cmake/pli}
 CLANG=${CLANG:-clang}
@@ -83,12 +82,6 @@ EOF
 $PLI "$OUT.marker.pli" -o "$OUT.marker$EXE" --rt-platform "$OUT.plat.bc" \
   || { echo "FAIL: marker build"; ok=0; }
 check "marker run" "$($OUT.marker$EXE)" "PASS rt_platform marker"
-
-# --- archive path: --no-bitcode-runtime also honors --rt-platform -----------
-$PLI "$OUT.pli" -o "$OUT.arch$EXE" --no-bitcode-runtime \
-  --rt-platform "$OUT.plat.bc" $MATHLIB \
-  || { echo "FAIL: archive-path --rt-platform build"; ok=0; }
-check "archive-path run" "$($OUT.arch$EXE)" "PASS rt_platform"
 
 # --- incomplete platform: rejected by name, not by a bare link error -------
 cat > "$OUT.empty.c" <<'EOF'

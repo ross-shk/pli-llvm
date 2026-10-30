@@ -13089,3 +13089,57 @@ the split-runtime goal of a single, named substitution point. Move calendar
 time into `pli_plat_localtime` (make it return `time_t` too): mixes acquisition
 and conversion, and callers that only need local `struct tm` would pay for a
 clock read they do not use; keep them separate.
+
+---
+
+## ADR-349 — The link path is embedded-only: one binary, one runtime source
+
+**Context.** ADR-227 embedded the link sysroot but kept two other sources
+(resolved first): an exe-relative `musl/`/`mingw/`/`sdk/` directory next to
+the binary, and a host recipe that probed `/usr/lib*`, the Xcode SDK
+(`findMacOSSdk`, ADR-280) or the MSVC `LIB` directories. Release archives
+still had to ship nothing, so the fallbacks only ever hid a broken build on
+the developer's own machine, and a user link could silently depend on a host
+CRT that a release host may not have. The driver also carried options that
+contradict the single-binary goal: `--runtime`/`--no-bitcode-runtime`
+(external full runtime archive), `--linker`/`-fuse-ld` (in-process lld is the
+only linker, ADR-225), `-shared`/`-static-pie` (need dynamic linking), PGO
+(`--fprofile-generate`/`--fprofile-use`, external `clang_rt.profile`) and
+`-fsanitize=address` (external `libclang_rt.asan` plus a dynamic C runtime,
+ADR-341), along with the `$PLI_SYSROOT` and `$PLI_TOOLCHAIN_PREFIX`
+redirects.
+
+**Decision.** The embedded sysroot is the only link input. The driver
+materializes it, links in-process, and fails with a clear diagnostic when the
+set embedded for the build arch is empty or incomplete — there is no
+exe-relative override, no host-recipe probe and no environment redirect.
+`--runtime`, `--no-bitcode-runtime`, `--linker`, `-shared`, `-static-pie`,
+`--fprofile-generate`, `--fprofile-use` and `-fsanitize=address` are removed
+from the driver and the help text; `-static` stays (the musl recipe already
+links statically). The embedded runtime bitcode is merged into the MAIN unit
+by IRGen, so `emitRuntimeObject`, `linkEmbeddedLibPLI` and the now-callerless
+`parseEmbeddedRuntime` are deleted; `--rt-platform` and its
+`loadPlatformModule` path remain. `$PLI_SYSROOT` and
+`$PLI_TOOLCHAIN_PREFIX` are no longer read.
+
+**Consequences.** A release is one self-contained binary per OS; compiling
+and linking user programs needs no Xcode, MSVC, build-essential, compiler-rt
+or installed LLVM. A build host whose arch-native sysroot directory is not
+populated now fails user links instead of borrowing the host CRT, so the
+release job must populate `platform/<os>-<abi>/<arch>/` first. Users of
+`-shared`, PGO or ASan lose those opt-ins; `tests/driver/storage_asan.sh`,
+`tasking_tsan.sh`, `emitted_asan.sh`, `pgo.sh`, `sanitizer_common.inc` and
+`macho_sdk_retry.sh` are deleted with the mechanisms they exercised
+(`lifetime_asan.sh` stays: it tests the ADR-246 lifetime markers, not the
+removed flag, and B0 in `DEFERRED-WORK.md` reopens for the lost runtime-source
+coverage). Default codegen is unchanged — the
+link line keeps the target recipe flags (`-dead_strip` on MachO,
+`--gc-sections` on ELF) — so benchmark baselines still apply.
+
+**Rejected.** *Keep the exe-relative override for development.* It is the
+exact path that lets a broken embedded set pass local testing; populate the
+platform directory instead. *Keep the host recipe as a last resort.* It
+reintroduces the external dependency this ADR removes and makes link success
+host-dependent. *Keep `--no-bitcode-runtime` for sanitizer builds.* It
+contradicts embedded-runtime-only and existed only to feed a second runtime
+copy, which the removed sanitizer options no longer need.

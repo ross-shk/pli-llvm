@@ -729,10 +729,9 @@ static void applyRuntimeAttrs(llvm::Function* f) {
   }
 }
 
-// Shared with codegen.cpp linkEmbeddedLibPLI: re-apply the audited P0
-// side-table facts to a linked runtime definition. Unknown names (user
-// functions) are left alone — unlike applyRuntimeAttrs, this never stamps
-// NoUnwind on names outside the table.
+// Re-apply the audited P0 side-table facts to a runtime definition merged
+// from the embedded bitcode. Unknown names (user functions) are left alone —
+// unlike applyRuntimeAttrs, this never stamps NoUnwind on names outside the table.
 void pli::applyRuntimeFnAttrs(llvm::Function& f) {
   if (kRuntimeAttrs().count(f.getName().str()) == 0)
     return;
@@ -4289,7 +4288,7 @@ bool IRGen::linkRuntimeBitcode() {
   if (stamp != PLI_LLVM_VERSION) {
     d_.error({}, "runtime bitcode '" + rtName + "' was built with LLVM " + stamp +
                      " but pli with LLVM " PLI_LLVM_VERSION +
-                     " — rebuild it or pass --no-bitcode-runtime",
+                     " — rebuild pli (the runtime is embedded)",
              "");
     return false;
   }
@@ -4309,15 +4308,14 @@ bool IRGen::linkRuntimeBitcode() {
       osKey(rtTriple.getOS()) != osKey(tgtTriple.getOS())) {
     d_.error({},
              "runtime bitcode target '" + rtTriple.str() + "' does not match '" + triple_ +
-                 "' — rebuild it or pass --no-bitcode-runtime",
+                 " — rebuild pli (the runtime is embedded)",
              "");
     return false;
   }
   // The whole runtime is merged (no LinkOnlyNeeded) because library units
   // reference pli_* symbols this module does not call itself: only a full
   // merge guarantees every unit's reference resolves to this one embedded
-  // copy and the archive is never pulled (its members would duplicate the
-  // symbols otherwise). Dead-stripping at the final link removes whatever the
+  // copy. Dead-stripping at the final link removes whatever the
   // program does not use. The definitions keep their external linkage so the
   // runtime's global state (CONTROLLED/ON stacks, I/O) stays shared across
   // units; the P0 side-table facts are re-applied so the optimizer keeps the
@@ -4330,14 +4328,12 @@ bool IRGen::linkRuntimeBitcode() {
   // differs between the build host and the link-time target and blocks inlining.
   // A probe-stack / target-cpu mismatch also breaks the backend on some targets.
   // The TargetMachine re-applies its own defaults at codegen, so stripping
-  // is sound on every target. Identical strip in linkEmbeddedLibPLI and
-  // emitRuntimeObject (codegen.cpp).
+  // is sound on every target.
   // Stamp NoInline on every runtime body so the non-always-inline wrappers
   // (e.g. pli_put_list_char) are not generically inlined at -O2 and survive
   // -dead_strip at link (tests/driver/link.sh dead-strip sub-check). The math
   // wrappers are re-attributed by applyRuntimeAttrs below, which clears NoInline
-  // and sets AlwaysInline for them. Mirrors linkEmbeddedLibPLI
-  // (codegen.cpp:80-95) / emitRuntimeObject (codegen.cpp:128-139).
+  // and sets AlwaysInline for them.
   for (auto& F : *rt) {
     if (F.hasFnAttribute("target-cpu"))
       F.removeFnAttr("target-cpu");

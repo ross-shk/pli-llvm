@@ -33,8 +33,6 @@
 #include "embedded_runtime.h"
 #include "embedded_sysroot.h"
 #include "hostcrt.h"
-#include "pgo.h"
-#include "sanitize.h"
 #include "target.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
@@ -48,14 +46,8 @@
 #include "llvm/Support/Host.h"
 #endif
 
-#ifndef PLI_RUNTIME_LIB
-#define PLI_RUNTIME_LIB ""
-#endif
-
 // Bitcode runtime source (OPTIMIZATION.md §10, P3): always the embedded
-// blob. IRGen merges the pli_* definitions from it into the MAIN unit so
-// clang sees real bodies; --no-bitcode-runtime keeps every unit's references
-// external for the link step instead.
+// blob. IRGen merges the pli_* definitions from it into the MAIN unit.
 
 // Version and LLVM identity baked in at build time (self-contained milestone:
 // `pli version` reports the toolchain without invoking sub-tools).
@@ -130,31 +122,20 @@ static void usage() {
   "  --release        maximum optimization + stripped binary (minimal size)\n"
   "  --debug          no optimization (-O0; no DWARF emitted yet)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
-         "  --runtime <lib>  path to an external runtime archive (default: none;\n"
-         "                   the embedded runtime is used instead)\n"
-         "  --no-bitcode-runtime\n"
-         "                   keep pli_* references external and resolve them at link\n"
-         "                   from the embedded runtime instead of merging the\n"
-         "                   definitions into the MAIN unit\n"
-  "  --rt-platform <f>\n"
-  "                   path to a custom platform bitcode file implementing\n"
-  "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
-  "                   pli_rtplat.bc is merged instead)\n"
-  "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
-  "  --fprofile-generate  instrument for PGO (run the binary, it writes a profile)\n"
-  "  --fprofile-use=<f>   rebuild using that profile (.profraw or .profdata)\n"
-  "  -fsanitize=address  instrument the emitted code with AddressSanitizer and\n"
-  "                   link its runtime (ADR-341; not with --flto or Windows)\n"
-  "  --triple <t>     target triple (default: host triple, in-process)\n"
+         "  --rt-platform <f>\n"
+         "                   path to a custom platform bitcode file implementing\n"
+         "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
+         "                   pli_rtplat.bc is merged instead)\n"
+         "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
+         "  --triple <t>     target triple (default: host triple, in-process)\n"
           "  --march=native   opt-in: use host CPU features (default: generic;\n"
-          "                   CI/baselines always use generic; local hot runs only)\n"
+         "                   CI/baselines always use generic; local hot runs only)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
          "  -I <dir>         add a %INCLUDE search directory (repeatable; -I<dir> too)\n"
          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
          "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
-         "  --linker <ld>    select the linker via -fuse-ld=<ld>\n"
-         "  -shared -static  produce a shared / static binary\n"
+         "  -static          produce a statically linked binary\n"
          "  --subsystem <s>  Windows PE subsystem: console (default) or windows\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
@@ -179,9 +160,9 @@ static void usage() {
          "  pli walks upward from the source root (cwd) and the pli executable\n"
          "  directory, adding lib/ and lib/pli/ to library search paths and\n"
          "  include/ and inc/ to %INCLUDE search paths at each ancestor. On\n"
-         "  Linux/macOS, /usr/lib, /usr/local/lib and the matching include paths\n"
-         "  are added as static fallbacks.\n"
-         "\n"
+         "  Linux/macOS, /usr/include, /usr/local/include and the matching lib\n"
+         "  dirs are added as static search fallbacks (linking never needs them:\n"
+         "  the link sysroot is embedded).\n"
          "  pli version     same as --version (Go/Zig style)\n";
 }
 
@@ -343,13 +324,12 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        const std::string& optLevel, const fs::path& keepLLDir, int fileIndex,
                        std::string* outObj, bool linkBitcode, LowerMode lowerMode = LowerMode::Auto,
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
-                       bool linkRuntimeIn = false, const std::string& ltoKind = "",
-                       pli::PgoMode pgoMode = pli::PgoMode::None, const std::string& pgoUse = "",
+                       const std::string& ltoKind = "",
                        bool marchNative = false, const std::string& platformBc = "",
                        bool noMemoryEffects = false, bool warnUnset = false,
                        const std::string& effectsFile = "",
                        const std::string& emitEffectsFile = "",
-                       bool remarkLibraryCalls = false, bool sanitizeAddress = false) {
+                       bool remarkLibraryCalls = false) {
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -433,13 +413,6 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM || emitMlir) {
-    // ADR-341: the ASan pass runs on the module at object emission; this
-    // terminal mode stops earlier, so say so instead of dropping the option.
-    if (sanitizeAddress) {
-      std::cerr << "pli: -fsanitize=address applies to object/link output; "
-                   "-emit-llvm/-emit-mlir stop before it\n";
-      return false;
-    }
     IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
                 false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
@@ -500,18 +473,6 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
   // In-process codegen only (no subprocess, ADR-225): owned module ->
   // TargetMachine -> relocatable object, or LTO bitcode with --flto (in-process
-  // lld optimizes at link). PGO rides the PassBuilder; LTO skips the
-  // per-module pipeline (PGO+LTO combined diagnoses, it needs link-time PGO).
-  if (!ltoKind.empty() && pgoMode != pli::PgoMode::None) {
-    std::cerr << "pli: --flto cannot be combined with --fprofile-generate/--fprofile-use\n";
-    return false;
-  }
-  // ADR-341: LTO defers the pipeline to the link step, where the ASan pass
-  // is not wired; keep the combination diagnosed instead of half-applied.
-  if (!ltoKind.empty() && sanitizeAddress) {
-    std::cerr << "pli: --flto cannot be combined with -fsanitize=address yet\n";
-    return false;
-  }
   {
     IRGen ipg(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
               linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects, optimizing);
@@ -529,17 +490,6 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
         !writePublishedEffects(emitEffectsFile, hir, ipg.procEffects(), ipg))
       return false;
     // Single-module fast path: runtime linked at BC level (never `-c`).
-    // Bitcode (linkBitcode) already merged the runtime via IRGen, so the
-    // embedded blob is only linked when it did not.
-    if (linkRuntimeIn && !linkBitcode && !compileOnly) {
-      std::string rtErr;
-      llvm::Triple targetTriple(triple);
-      if (!pli::linkEmbeddedLibPLI(*om->mod, targetTriple, rtErr, platformBc)) {
-        std::cerr << "pli: " << rtErr << "\n";
-        return false;
-      }
-    }
-    // Create TargetMachine using the provided target triple.
     std::string tmErr;
     auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative);
     if (!tm) {
@@ -551,17 +501,6 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // Also set module target triple to ensure consistent
     // feature handling during codegen (module triple affects some defaults).
     om->mod->setTargetTriple(llvm::Triple(triple));
-    // ADR-341: instrument the code this compilation emits. Functions from
-    // the precompiled runtime blob are marked off: they are already measured
-    // from source (B0), and its fiber stacks do not follow the C stack model
-    // ASan assumes.
-    if (sanitizeAddress) {
-      const std::set<std::string> rt = pli::runtimeFuncNames(llvm::Triple(triple));
-      for (llvm::Function& f : *om->mod)
-        if (rt.count(f.getName().str()))
-          f.addFnAttr(llvm::Attribute::DisableSanitizerInstrumentation);
-      pli::instrumentAddressSanitizer(*om->mod);
-    }
     std::error_code ec;
     llvm::raw_fd_ostream os(objPath.string(), ec, llvm::sys::fs::OF_None);
     if (ec) {
@@ -575,20 +514,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
       // runs the link-time optimizer.
       emitted = pli::emitLTOObject(*om->mod, *tm, os, ltoKind == "thin", optLevel, emErr);
     } else {
-      // Mirror the old clang backend: optimize the (runtime-linked) IR at the
-      // requested -O level before codegen, with in-process PGO when asked.
-      auto pgo = pli::makePgoOptions(pgoMode, pgoUse);
-      if (pgoMode == pli::PgoMode::Use) {
-        // Runtime overlap must not validate a stale profile (the blob is
-        // merged into every MAIN module); user functions must match.
-        std::set<std::string> rtNames =
-            pli::runtimeFuncNames(llvm::Triple(om->mod->getTargetTriple()));
-        if (!pli::validateUseProfile(pgoUse, *om->mod, rtNames, emErr)) {
-          std::cerr << "pli: " << emErr << "\n";
-          return false;
-        }
-      }
-      pli::optimizeModule(*om->mod, *tm, optLevel, pgo);
+      // Mirror the old clang backend: optimize the IR at the requested -O level.
+      pli::optimizeModule(*om->mod, *tm, optLevel, std::nullopt);
       emitted = pli::emitObject(*om->mod, *tm, os, emErr);
     }
     os.close();
@@ -613,7 +540,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 
 int main(int argc, char** argv) {
   std::vector<std::string> inputs;
-  std::string output, runtimeLib = PLI_RUNTIME_LIB, triple;
+  std::string output, triple;
   // Split runtime: custom platform TU (--rt-platform); empty selects the
   // embedded pli_rtplat.bc. Always explicit (no baked-in default path).
   std::string platformBc;
@@ -628,7 +555,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> linkArgs;    // extra args appended to the link step
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
   bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
-  bool runtimeExplicit = false, print_hir = false, print_facts = false, release = false, debug = false;
+  bool print_hir = false, print_facts = false, release = false, debug = false;
   bool marchNative = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
        noConvChecks = false, noSubChecks = false, noSubChecksExplicit = false, wantVersion = false;
@@ -638,8 +565,7 @@ int main(int argc, char** argv) {
   bool remarkLibraryCalls = false;
   // WS-A2 (ADR-267): the published-effects file, in both directions.
   std::string effectsFile, emitEffectsFile;
-  bool useBitcode = true, pgoGenerate = false, sanitizeAddress = false;
-  std::string ltoKind, pgoUse;
+  std::string ltoKind;
   int explain = 0;
   // Experimental lowering mode (design-docs/mlir-runtime-migration-plan.md §5.2).
   LowerMode lowerMode = LowerMode::Auto;
@@ -674,31 +600,12 @@ int main(int argc, char** argv) {
       syntaxOnly = true;
     else if (a == "--keep-ll")
       keepLL = true;
-    else if (a == "--runtime") {
-      runtimeLib = next("--runtime");
-      runtimeExplicit = true;
-    } else if (a == "--no-bitcode-runtime")
-      useBitcode = false;
     else if (a == "--rt-platform") {
       platformBc = next("--rt-platform");
     } else if (a.rfind("--rt-platform=", 0) == 0) {
       platformBc = a.substr(14);
     } else if (a == "--flto=thin" || a == "--flto=full")
       ltoKind = a.substr(7);
-    else if (a == "--fprofile-generate")
-      pgoGenerate = true;
-    else if (a.rfind("--fprofile-use=", 0) == 0)
-      pgoUse = a.substr(15);
-    else if (a == "--fprofile-use")
-      pgoUse = next("--fprofile-use");
-    else if (a == "-fsanitize=address")
-      sanitizeAddress = true;
-    else if (a.rfind("-fsanitize=", 0) == 0) {
-      // B13 serves the emitted-code ASan pass; UBSan/TSan need frontend
-      // checks or a race model this stage does not have.
-      std::cerr << "pli: " << a << " is not supported (only -fsanitize=address)\n";
-      return 2;
-    }
     else if (a == "--clang")
       clangPath = next("--clang");
     else if (a == "--triple")
@@ -721,13 +628,7 @@ int main(int argc, char** argv) {
       linkArgs.push_back(a);
     else if (a.rfind("-Wl,", 0) == 0)
       linkArgs.push_back(a);
-    else if (a == "--linker") {
-      // ADR-225: in-process lld is the only linker; --linker names nothing
-      // to select. Warn (don't error: old build scripts pass it) and drop it.
-      std::cerr << "pli: warning: --linker '" + next("--linker") +
-                       "' ignored (in-process lld is the only linker)\n";
-    }
-    else if (a == "-shared" || a == "-static")
+    else if (a == "-static")
       linkArgs.push_back(a);
     else if (a == "--subsystem") {
       subsystem = next("--subsystem");
@@ -936,21 +837,17 @@ int main(int argc, char** argv) {
       if (!dir.empty())
         linkArgs.push_back("-L" + dir);
   }
-  // Append discovered library dirs as -L entries so they feed both the
-  // in-process lld path and the clang fallback path.
+  // Append discovered library dirs as -L entries for the in-process lld link.
   for (const fs::path& d : discoveredLibDirs)
     linkArgs.push_back("-L" + d.string());
 
   // Single-binary distribution: the runtime ships embedded in the binary,
-  // so there is no installed-runtime lookup. runtimeLib is either the
-  // baked-in build-tree default (development) or an explicit --runtime path
-  // (external option). Bitcode runtime (OPTIMIZATION.md §10, P3): by default
-  // IRGen merges the pli_* definitions out of the embedded blob into the
-  // MAIN unit (lib units keep external references resolved by that one
-  // shared copy).
-  // --no-bitcode-runtime always selects the archive path.
+  // so there is no installed-runtime lookup. IRGen merges the pli_*
+  // definitions out of the embedded blob into the MAIN unit (lib units
+  // keep external references resolved by that one shared copy).
   // Split runtime: a custom platform file must exist; there is no baked-in
-  // a user error. The embedded pli_rtplat.bc covers the empty case.
+  // default, so a missing --rt-platform path is a user error. The embedded
+  // pli_rtplat.bc covers the empty case.
   if (!platformBc.empty() && !fs::exists(platformBc)) {
     std::cerr << "pli: no such platform runtime: " << platformBc << "\n";
     return 2;
@@ -1024,16 +921,6 @@ int main(int argc, char** argv) {
   // disable by default at -O2/-O3 for performance (ADR-111).
   if (!noSubChecksExplicit && (optLevel == "-O2" || optLevel == "-O3"))
     noSubChecks = true;
-  // Explicit opt-in PGO/LTO (OPTIMIZATION.md §10, P3), all in-process
-  // (ADR-225): --flto emits LTO bitcode objects that in-process lld optimizes
-  // at link; --fprofile-generate instruments via PassBuilder and links the
-  // profile runtime; --fprofile-use consumes a raw or indexed profile through
-  // InstrProfReader. No clang pipeline remains.
-  pli::PgoMode pgoMode = pli::PgoMode::None;
-  if (pgoGenerate)
-    pgoMode = pli::PgoMode::Generate;
-  else if (!pgoUse.empty())
-    pgoMode = pli::PgoMode::Use;
 
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
@@ -1054,21 +941,11 @@ int main(int argc, char** argv) {
   fs::path keepLLDir = output.empty() ? fs::path(".") : fs::path(output).parent_path();
   if (keepLLDir.empty())
     keepLLDir = ".";
-  // Runtime-once fast path: one PL/I input becoming the executable directly.
-  // Bitcode runtime: the MAIN unit embeds the pli_* definitions from the
-  // embedded blob; an explicit --runtime
-  // archive stays on the link line, where it is never pulled once the symbols
-  // are defined by that embedded copy (runtime globals must stay shared).
-  // The embedded blob is always selected, so the merge needs no
-  // runtime files on disk. An empty platformBc likewise selects the embedded
-  // pli_rtplat.bc; --rt-platform names a custom platform TU instead.
-  const bool linkBitcode = useBitcode && !emitLLVM;
-  // Runtime-once fast path: one PL/I input becoming the executable directly.
-  // Disabled for the archive path (!useBitcode: --no-bitcode-runtime keeps
-  // external references for the link step). PGO/LTO stay on the in-process
-  // path (ADR-225); only PGO+LTO combined is rejected (in compileOne).
-  const bool singleModuleFinalLink =
-      !compileOnly && !terminalMode && pliInputs.size() == 1 && foreignObjs.empty() && useBitcode;
+  // Bitcode runtime (OPTIMIZATION.md §10, P3): the MAIN unit embeds the
+  // pli_* definitions from the embedded blob; non-MAIN units keep external
+  // references resolved by that one shared copy. --rt-platform names a
+  // custom platform TU instead of the embedded pli_rtplat.bc.
+  const bool linkBitcode = !emitLLVM;
   std::vector<std::string> objs = foreignObjs;
   for (size_t i = 0; i < pliInputs.size(); ++i) {
     std::string outObj;
@@ -1076,10 +953,10 @@ int main(int argc, char** argv) {
                     compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, print_facts,
                     keepLL, verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
                     keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
-                    singleModuleFinalLink, ltoKind, pgoMode, pgoUse,
+                    ltoKind,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
                     noMemoryEffects, warnUnset, effectsFile, emitEffectsFile,
-                    remarkLibraryCalls, sanitizeAddress))
+                    remarkLibraryCalls))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -1092,13 +969,16 @@ int main(int argc, char** argv) {
   }
 
   // --- link step ----------------------------------------------------------
-  // In-process lld link only (no subprocess, ADR-225; PLI_HAVE_LLD is a hard
-  // configure requirement now). With the bitcode runtime the MAIN object
-  // already defines the pli_* symbols (an explicit --runtime archive's members
-  // are then simply never pulled: no duplicates); --no-bitcode-runtime
-  // compiles every unit with external references resolved at link from the
-  // embedded blob. Drop unreferenced runtime sections (function sections,
-  // ADR-079); multitasking (QR2.8) runs on pthreads.
+  // In-process lld link only (no subprocess, ADR-225). The link sysroot is
+  // EMBEDDED in pli — release archives hold only the binary. Materialize it,
+  // fail loudly if the embedded set is incomplete for this build arch.
+  // Drop the per-input temp objects this invocation created (never user ones).
+  auto removeTempObjects = [&]() {
+    for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
+      std::error_code ec;
+      fs::remove(objs[i], ec);
+    }
+  };
   if (output.empty())
     output = "a.out";
   if (triple.empty())
@@ -1109,492 +989,154 @@ int main(int argc, char** argv) {
     const pli::TargetDesc& desc = pli::getTargetDesc(llt);
     std::string tmErr;
     if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
-      // Link-mode scan (once): PIE unless -static/-shared/-no-pie, and whether
-      // this is a shared-library link (no startup objects, no interpreter).
-      bool wantPIE = true, wantShared = false;
+      // Materialize the embedded sysroot. All-or-nothing: if it is empty or
+      // incomplete for this arch, the link fails with a clear error.
+      pli::EmbeddedSysroot emb = pli::materializeEmbeddedSysroot();
+      if (emb.dir.empty()) {
+        std::cerr << "pli: no embedded link sysroot for this platform "
+                     "(" << emb.name << ") — cannot link without a sysroot\n";
+        removeTempObjects();
+        return 1;
+      }
+      const std::string& sysrootDir = emb.dir;
+      if (verbose)
+        std::cerr << "pli: using embedded link sysroot (" << emb.name << ": "
+                  << sysrootDir << ")\n";
+
+      // Link-mode scan: PIE unless -static/-no-pie.
+      bool wantPIE = true;
       for (const std::string& la : linkArgs) {
         std::string f = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
-        if (f == "-static" || f == "-static-pie" || f == "-shared" || f == "-no-pie" ||
-            f == "-nopie" || f == "-no-pic")
+        if (f == "-static" || f == "-no-pie" || f == "-nopie" || f == "-no-pic")
           wantPIE = false;
-        if (f == "-shared" || la == "-shared")
-          wantShared = true;
       }
-      if (wantShared)
-        wantPIE = false;
-      // With the bitcode runtime (linkBitcode) the
-      // MAIN object already defines every pli_* symbol, so no separate
-      // runtime object is emitted (it would duplicate them). Otherwise
-      // multi-input links carry the runtime as its own object (runtime-once);
-      // single-module links already carry it at BC level
-      // (singleModuleFinalLink above).
-      std::string rtObj;
-      bool haveRtObj = false;
-      if (!singleModuleFinalLink && !linkBitcode) {
-        // A unique temp name, created exclusively (see the per-input object
-        // above): a predictable "<tmp>/pli_runtime-<pid>.o" could be planted.
-        llvm::SmallString<128> rtPath;
-        std::error_code fec = llvm::sys::fs::createUniqueFile(
-            (fs::temp_directory_path() / "pli_runtime-%%%%%%.o").string(), rtPath);
-        rtObj = rtPath.str().str();
-        std::error_code ec;
-        llvm::raw_fd_ostream os(rtObj, ec, llvm::sys::fs::OF_None);
-        std::string rtErr;
-        haveRtObj = !ec && pli::emitRuntimeObject(*tm, llt, os, rtErr, platformBc);
-        if (!haveRtObj && verbose)
-          std::cerr << "pli: runtime object failed (" << rtErr << "), using clang\n";
-      }
-      if (singleModuleFinalLink || haveRtObj || linkBitcode) {
-        // Single-file self-containment (ADR-227): the link sysroot is
-        // EMBEDDED in pli — release archives hold only the binary. An
-        // exe-relative musl//mingw/ dir is a dev override (iterate on
-        // sysroot files without rebuilding) and wins when complete; the
-        // embedded set is next. $PLI_SYSROOT never redirects either
-        // (self-contained already).
-        // -shared/-static-pie stay on the host recipe (a static sysroot
-        // cannot link them).
-        pli::VendoredSysroot vsys = pli::resolveVendoredSysroot(exeDir.string());
-        const bool muslOverride = vsys.haveMusl;
-        const bool mingwOverride = vsys.haveMingw;
-        // Lazily materialized below (once): avoided entirely when the
-        // override already satisfies the link, or for -c/emit flows.
-        pli::EmbeddedSysroot emb;
-        bool embTried = false;
-        auto ensureEmbedded = [&]() {
-          if (!embTried) {
-            embTried = true;
-            emb = pli::materializeEmbeddedSysroot();
-          }
-        };
-        if (!vsys.haveMusl && !vsys.haveMingw) {
-          ensureEmbedded();
-          if (emb.name == "musl" && !emb.dir.empty()) {
-            vsys.haveMusl = true;
-            vsys.muslDir = emb.dir;
-          } else if (emb.name == "mingw" && !emb.dir.empty()) {
-            vsys.haveMingw = true;
-            vsys.mingwDir = emb.dir;
-          }
-        }
-        bool wantStaticPIE = false;
-        for (const std::string& la : linkArgs) {
-          const std::string f = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
-          if (f == "-static-pie") {
-            wantStaticPIE = true;
-            break;
-          }
-        }
-        const bool useMusl = llt.getObjectFormat() == llvm::Triple::ELF && vsys.haveMusl &&
-                             !wantShared && !wantStaticPIE;
-        const bool useMingw = llt.getObjectFormat() == llvm::Triple::COFF && vsys.haveMingw &&
-                              !wantShared;
-        if (useMusl && verbose)
-          std::cerr << "pli: using vendored musl sysroot ("
-                    << (muslOverride ? "exe-relative override" : "embedded") << ": " << vsys.muslDir
-                    << ")\n";
-        if (useMingw && verbose)
-          std::cerr << "pli: using vendored mingw sysroot ("
-                    << (mingwOverride ? "exe-relative override" : "embedded") << ": "
-                    << vsys.mingwDir << ")\n";
-        // Host C-runtime/sysroot recipe (hostcrt.cpp): stable filesystem
-        // locations, first-hit-wins, $PLI_SYSROOT redirect. No subprocess.
-        // Skipped entirely on vendored paths (host independence proof: even
-        // a bogus $PLI_SYSROOT cannot break the link).
-        std::string sysroot;
-        if (const char* env = std::getenv("PLI_SYSROOT"))
-          sysroot = env;
-        pli::HostCrt crt;
-        if (!useMusl && !useMingw) {
-          crt = pli::resolveHostCrt(llt, sysroot);
-          if (!crt.ok) {
-            std::cerr << "pli: " << crt.err << "\n";
-            // The sysroot was already materialized above: release it before
-            // the early return, or the temp dir is left behind.
-            pli::cleanupMaterializedSysroot(emb.dir);
-            return 1;
-          }
-        }
-        std::vector<std::string> argStore = {"ld.lld"};
-        if (useMingw) {
-          // MinGW driver (GNU-ld-compatible argv): crt2.o + crtbegin.o, the
-          // objects, fltused.o (MSVC _fltused marker clang emits), then the
-          // import libs + GCC helpers, then crtend.o. libgcc.a covers
-          // __udivti3/___chkstk_ms, so no compiler-rt builtins ride.
-          // -m i386pep is the x86_64 emulation (aarch64 ships its own
-          // sysroot + spelling when that target lands).
-          const std::string& md = vsys.mingwDir;
-          argStore.push_back("-m");
-          argStore.push_back("i386pep");
-          argStore.push_back(md + "/crt2.o");
-          argStore.push_back(md + "/crtbegin.o");
-        }
-        if (useMusl) {
-          // Static musl (matches musl-gcc -static): no interpreter, no host
-          // libdirs, no -lgcc — the binary needs only the kernel at runtime.
-          argStore.push_back("-static");
-          argStore.push_back(vsys.muslDir + "/crt1.o");
-          argStore.push_back(vsys.muslDir + "/crti.o");
-        }
-        if (llt.getObjectFormat() == llvm::Triple::MachO) {
-          // Vendored SDK stubs (ADR-226/227): exe-relative <exeDir>/sdk is
-          // a dev override; the embedded stubs are next (single-file release);
-          // otherwise fall back to the host Xcode CLT / Xcode SDK, probed
-          // directly via findMacOSSdk() — no subprocess (ADR-225).
-          std::string sdkPath;
-          bool sdkOverride = false;
-          {
-            std::error_code ec;
-            fs::path stub = exeDir / "sdk";
-            if (fs::is_directory(stub, ec)) {
-              sdkPath = stub.string();
-              sdkOverride = true;
-            }
-          }
-          if (sdkPath.empty()) {
-            ensureEmbedded();
-            if (emb.name == "sdk" && !emb.dir.empty())
-              sdkPath = emb.dir;
-          }
-          if (!sdkPath.empty()) {
-            if (verbose)
-              std::cerr << "pli: using vendored SDK stubs ("
-                        << (sdkOverride ? "exe-relative override" : "embedded") << ": " << sdkPath
-                        << ")\n";
-          } else {
-            sdkPath = pli::findMacOSSdk();
-            if (!sdkPath.empty()) {
-              if (verbose)
-                std::cerr << "pli: using host macOS SDK: " << sdkPath << "\n";
-            } else if (verbose)
-              std::cerr << "pli: no vendored or host macOS SDK found\n";
-          }
-          argStore.push_back("-arch");
-          argStore.push_back(std::string(llt.getArchName()));
-          if (!sdkPath.empty()) {
-            argStore.push_back("-syslibroot");
-            argStore.push_back(sdkPath);
-          }
-        } else if (llt.getObjectFormat() == llvm::Triple::ELF && !useMusl) {
-          // PIE startup (matches clang): Scrt1.o + crtbeginS.o/crtendS.o with
-          // -pie and an explicit interpreter, else a non-PIE EXEC segfaults.
-          if (wantPIE) {
-            argStore.push_back("-pie");
-            argStore.push_back("--eh-frame-hdr");
-            argStore.push_back("--hash-style=gnu");
-            argStore.push_back("--build-id");
-            if (!crt.interpreter.empty()) {
-              argStore.push_back("-dynamic-linker");
-              argStore.push_back(crt.interpreter);
-            } else if (verbose) {
-              std::cerr << "pli: no host interpreter found\n";
-            }
-          }
-          // Non-PIE links need the non-S CRT set; the recipe probed the PIE
-          // set, so fall back to bare names lld resolves via -L (same as the
-          // old clang -print-file-name fallback to the bare filename).
-          // Shared libraries take neither.
-          if (!wantShared) {
-            if (wantPIE) {
-              for (const std::string& s : crt.startupObjects)
-                argStore.push_back(s);
-            } else {
-              argStore.push_back("crt1.o");
-              argStore.push_back("crti.o");
-              argStore.push_back("crtbegin.o");
-            }
-          }
-          // Recipe lib dirs so lld finds -lm, -lc, -lgcc_s without clang.
-          for (const std::string& d : crt.libDirs)
-            argStore.push_back("-L" + d);
-          if (!sysroot.empty() && sysroot != "/") {
-            argStore.push_back("--sysroot");
-            argStore.push_back(sysroot);
-          }
-        }
+
+      std::vector<std::string> argStore = {"ld.lld"};
+      const llvm::Triple::ObjectFormatType objFmt = llt.getObjectFormat();
+      const bool isMachO = objFmt == llvm::Triple::MachO;
+      const bool isCOFF = objFmt == llvm::Triple::COFF;
+
+      if (isMachO) {
+        // macOS: SDK stubs (.tbd) from the embedded sysroot.
+        argStore.push_back("-arch");
+        argStore.push_back(std::string(llt.getArchName()));
+        argStore.push_back("-syslibroot");
+        argStore.push_back(sysrootDir);
         for (const std::string& o : objs)
           argStore.push_back(o);
-        if (haveRtObj)
-          argStore.push_back(rtObj);
-        // Explicit --runtime archive (external option): on the link line where
-        // its members are never pulled once MAIN defines pli_* (bitcode path),
-        // or as the symbol source on the archive path. The old clang fallback
-        // owned this; the in-process link is now the only link.
-        {
-          const bool runtimeLibUsable = !runtimeLib.empty() && fs::exists(runtimeLib);
-          if (runtimeLibUsable)
-            argStore.push_back(runtimeLib);
-          else if (runtimeExplicit) {
-            std::cerr << "pli: runtime archive not found: " << runtimeLib << "\n";
-            pli::cleanupMaterializedSysroot(emb.dir);
-            return 1;
-          } else if (verbose && linkBitcode)
-            std::cerr << "pli: runtime archive not found; MAIN already defines pli_* (embedded)\n";
+        // systemLibs: -lSystem, -lm
+        for (const std::string& s : desc.systemLibs)
+          argStore.push_back(s);
+      } else if (objFmt == llvm::Triple::ELF) {
+        // Linux/musl: static link, no interpreter, no host libdirs.
+        argStore.push_back("-static");
+        argStore.push_back(sysrootDir + "/crt1.o");
+        argStore.push_back(sysrootDir + "/crti.o");
+        for (const std::string& o : objs)
+          argStore.push_back(o);
+        argStore.push_back(sysrootDir + "/crtn.o");
+        argStore.push_back(sysrootDir + "/libc.a");
+        // 128-bit builtins (musl omits __udivti3 etc.)
+        std::string builtins = sysrootDir + "/libpli_builtins-" +
+            std::string(llt.getArchName()) + ".a";
+        argStore.push_back(builtins);
+        argStore.push_back("-L" + sysrootDir);
+        // systemLibs: -lm, -lc
+        for (const std::string& s : desc.systemLibs)
+          argStore.push_back(s);
+        if (wantPIE) {
+          argStore.push_back("-pie");
+          argStore.push_back("--eh-frame-hdr");
+          argStore.push_back("--hash-style=gnu");
+          argStore.push_back("--build-id");
         }
-        if (llt.getObjectFormat() == llvm::Triple::ELF && !useMusl) {
-          if (!wantShared) {
-            if (wantPIE) {
-              for (const std::string& s : crt.endObjects)
-                argStore.push_back(s);
-            } else {
-              argStore.push_back("crtend.o");
-              argStore.push_back("crtn.o");
-            }
-          }
-          // GCC unwinding helpers (matches clang: -lgcc --as-needed -lgcc_s).
-          argStore.push_back("-lgcc");
-          argStore.push_back("--as-needed");
-          argStore.push_back("-lgcc_s");
-          argStore.push_back("--no-as-needed");
-        }
-        if (useMusl) {
-          // musl close: our builtins (128-bit helpers musl omits) + the libc
-          // archive (provides -lc/-lm/pthread) + crtn.o. -L points at the
-          // sysroot so user -l flags (e.g. -lm) resolve to its empty stubs,
-          // never to host libraries. Host -lgcc/system libs stay off: the
-          // binary is fully static.
-          argStore.push_back(vsys.muslDir + "/libpli_builtins-" +
-                             std::string(llt.getArchName()) + ".a");
-          argStore.push_back(vsys.muslDir + "/libc.a");
-          argStore.push_back(vsys.muslDir + "/crtn.o");
-          argStore.push_back("-L" + vsys.muslDir);
-        }
-        if (!useMusl && !useMingw) {
-          for (const std::string& s : desc.systemLibs)
-            argStore.push_back(s);
-        }
-        if (llt.getObjectFormat() == llvm::Triple::ELF && !useMusl) {
-          // Trailing helpers (matches clang: -lc -lgcc --as-needed -lgcc_s).
-          argStore.push_back("-lgcc");
-          argStore.push_back("--as-needed");
-          argStore.push_back("-lgcc_s");
-          argStore.push_back("--no-as-needed");
-        }
-        if (!useMingw) {
-          for (const std::string& f : desc.linkerFlags) {
-            // The subsystem is user-selectable; replace the target default.
-            if (llt.getObjectFormat() == llvm::Triple::COFF &&
-                f.rfind("/subsystem:", 0) == 0)
-              continue;
-            argStore.push_back(f);
-          }
-          if (llt.getObjectFormat() == llvm::Triple::COFF)
-            argStore.push_back("/subsystem:" + subsystem);
-        } else {
-          // MinGW driver: GNU-style close (crtend.o); the COFF
-          // /entry:/subsystem: flags are not valid here (crt2.o defaults),
-          // so select the subsystem with the GNU spelling instead.
-          argStore.push_back(vsys.mingwDir + "/crtend.o");
-          argStore.push_back("--subsystem=" + subsystem);
-        }
-        for (const std::string& la : linkArgs) {
-          // Vendored musl dictates a static EXEC: -pie conflicts with the
-          // -static above, and the GNU-named -nopie/-no-pic are not lld
-          // flags, so drop them (-static-pie routed to host earlier). The
-          // non-PIE spelling -no-pie/-no_pie agrees with static and reaches
-          // lld like any other -Wl flag.
-          const std::string fwd = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
-          if (useMusl && (fwd == "-pie" || fwd == "-nopie" || fwd == "-no-pic"))
-            continue;
-          if (la.rfind("-Wl,", 0) == 0) {
-            // lld takes the flag directly, but ELF lld uses -no-pie (hyphen),
-            // not Mach-O's -no_pie (underscore).
-            std::string f = la.substr(4);
-            if (llt.getObjectFormat() == llvm::Triple::ELF && f == "-no_pie")
-              f = "-no-pie";
-            argStore.push_back(f);
-          } else if (la == "-shared" && llt.getObjectFormat() == llvm::Triple::MachO) {
-            // The clang driver maps -shared to -dylib; in-process lld needs
-            // the spelling itself.
-            argStore.push_back("-dylib");
-          } else if (la == "-shared" && llt.getObjectFormat() == llvm::Triple::COFF) {
-            argStore.push_back("/dll");
-          } else
-            argStore.push_back(la);
-        }
-        // PGO instrumented link: the counters need the compiler-rt profile
-        // runtime (shipped next to pli / in the toolchain resource dir).
-        if (pgoMode == pli::PgoMode::Generate) {
-          std::string profRt = pli::profileRuntimeLib(llt, exeDir.string());
-          if (profRt.empty()) {
-            std::cerr << "pli: --fprofile-generate needs the profile runtime (clang_rt.profile-"
-                      << llt.getArchName().str() << ".a next to pli)\n";
-            pli::cleanupMaterializedSysroot(emb.dir);
-            return 1;
-          }
-          argStore.push_back(profRt);
-        }
-        // ADR-341: the instrumented object references __asan_*; the runtime
-        // comes from compiler-rt (next to pli or in the toolchain resources).
-        if (sanitizeAddress) {
-          if (useMusl) {
-            std::cerr << "pli: -fsanitize=address needs a dynamic C runtime "
-                         "(the vendored musl sysroot is static)\n";
-            pli::cleanupMaterializedSysroot(emb.dir);
-            return 1;
-          }
-          std::string asanRt = pli::addressSanitizerRuntime(llt, exeDir.string());
-          if (asanRt.empty()) {
-            std::cerr << "pli: -fsanitize=address needs the compiler-rt ASan runtime\n";
-            pli::cleanupMaterializedSysroot(emb.dir);
-            return 1;
-          }
-          if (llt.getObjectFormat() == llvm::Triple::MachO) {
-            argStore.push_back(asanRt);
-            // Apple clang's runtime install name is @rpath-relative.
-            argStore.push_back("-rpath");
-            argStore.push_back(fs::path(asanRt).parent_path().string());
-          } else if (llt.getObjectFormat() == llvm::Triple::ELF) {
-            // The static runtime is built for whole-archive linking (its
-            // preinit object has no other reference), and older glibc needs
-            // the thread/dl/rt entry points spelled out.
-            argStore.push_back("--whole-archive");
-            argStore.push_back(asanRt);
-            argStore.push_back("--no-whole-archive");
-            argStore.push_back("-lpthread");
-            argStore.push_back("-ldl");
-            argStore.push_back("-lrt");
-          }
-        }
-        if (useMingw) {
-          // fltused marker + import libs + GCC helpers (MinGW driver takes
-          // GNU -l names; -L points at the vendored dir). Order mirrors the
-          // mingw-gcc recipe: startup, objects, libs, crtend.o (added above).
-          const std::string& md = vsys.mingwDir;
-          argStore.push_back(md + "/fltused.o");
-          argStore.push_back(md + "/chkstk.o");
-          argStore.push_back("-L" + md);
-          // libws2_32.a lets C-interop networking link without a manual
-          // /DEFAULTLIB:ws2_32 (ADR-281); unused imports pull no DLL.
-          // libkernel32.a repeats: one-pass GNU linking needs it again for
-          // symbols referenced by the later import libs.
-          for (const char* lib :
-               {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a", "libucrt.a",
-                "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a",
-                "libuser32.a", "libws2_32.a", "libkernel32.a"})
-            argStore.push_back(std::string("-l:") + lib);
-          argStore.push_back("-o");
-          argStore.push_back(output);
-        } else if (llt.getObjectFormat() == llvm::Triple::COFF) {
-          // compiler-rt builtins for 128-bit helpers (__udivti3, __divti3)
-          // used by the runtime. Shipped next to pli.exe in the release
-          // archive (copied from our own toolchain at pack time); the old
-          // backend-clang-relative probe is gone with the clang subprocess.
-          std::string rtArch;
-          if (llt.getArch() == llvm::Triple::x86_64)
-            rtArch = "x86_64";
-          else if (llt.getArch() == llvm::Triple::aarch64)
-            rtArch = "aarch64";
-          else if (llt.getArch() == llvm::Triple::arm)
-            rtArch = "arm";
-          if (!rtArch.empty()) {
-            fs::path builtins = exeDir / ("clang_rt.builtins-" + rtArch + ".lib");
-            std::error_code bsec;
-            if (fs::exists(builtins, bsec))
-              argStore.push_back(builtins.string());
-            else if (verbose)
-              std::cerr << "pli: compiler-rt builtins not found (" << builtins.string()
-                        << "), 128-bit division may fail to link\n";
-          }
-          argStore.push_back("/out:" + output);
-        } else {
-          argStore.push_back("-o");
-          argStore.push_back(output);
-        }
-        std::vector<const char*> argv;
-        for (const std::string& a : argStore)
-          argv.push_back(a.c_str());
-        std::string linkErr;
-        if (verbose) {
-          std::cerr << "+";
-          for (const std::string& a : argStore)
-            std::cerr << " " << a;
-          std::cerr << "\n";
-        }
-        // ADR-227: the vendored-mingw link runs the MinGW driver (GNU argv);
-        // every other link runs the object-format driver as before.
-        const bool isMachO = llt.getObjectFormat() == llvm::Triple::MachO;
-        bool linkOk = false;
-        // MachO first pass stays on the vendored stub, but its output is
-        // captured: ADR-280 may retry with the host SDK, and a successful
-        // retry must not print the first pass's undefined-symbol noise.
-        std::string firstOut, firstErr;
-        bool canRetry = true;
-        if (isMachO) {
-          llvm::raw_string_ostream out(firstOut), err(firstErr);
-          linkOk =
-              pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr, &out, &err, &canRetry);
-          out.flush();
-          err.flush();
-        } else {
-          linkOk = useMingw ? pli::linkMinGWExecutable(argv, linkErr)
-                            : pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr);
-        }
-        // ADR-280: the vendored stub is a curated subset, so a C-interop
-        // program can reference symbols it omits (sockets, __memcpy_chk).
-        // Retry once with the real host SDK's libSystem.B.tbd as an explicit
-        // input; the vendored -syslibroot still supplies the other stubs.
-        bool retried = false;
-        if (!linkOk && isMachO && canRetry) {
-          const std::string sdk = pli::findMacOSSdk();
-          const std::string tbd = sdk.empty() ? "" : sdk + "/usr/lib/libSystem.B.tbd";
-          std::error_code ec;
-          if (!tbd.empty() && fs::is_regular_file(tbd, ec)) {
-            retried = true;
-            if (verbose)
-              std::cerr << "pli: retrying MachO link with host SDK libSystem.B.tbd\n";
-            // A positional input appended after `-o <output>` is fine: lld
-            // takes it as another dylib, not as the output path.
-            std::vector<std::string> retryStore = argStore;
-            retryStore.push_back(tbd);
-            std::vector<const char*> retryArgv;
-            for (const std::string& a : retryStore)
-              retryArgv.push_back(a.c_str());
-            std::string retryOut, retryErr;
-            llvm::raw_string_ostream out(retryOut), err(retryErr);
-            linkOk =
-                pli::linkExecutable(retryArgv, (int)llt.getObjectFormat(), linkErr, &out, &err);
-            out.flush();
-            err.flush();
-            // The retry ran the same inputs, so its diagnostics supersede
-            // the first pass's; never print both.
-            if (!linkOk)
-              std::cerr << retryOut << retryErr;
-          }
-        }
-        // A first-pass success may still carry warnings: replay them. A
-        // failed pass is represented by the retry's own diagnostics, or by
-        // this replay when no retry was possible.
-        if (!retried)
-          std::cerr << firstOut << firstErr;
-        if (linkOk) {
-          for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
-            std::error_code ec;
-            fs::remove(objs[i], ec);
-          }
-          if (haveRtObj) {
-            std::error_code ec;
-            fs::remove(rtObj, ec);
-          }
-          pli::cleanupMaterializedSysroot(emb.dir);
-          return 0;
-        }
-        std::cerr << "pli: in-process link failed (" << linkErr << ")\n";
-        // Release every temp object, not just the runtime: the success path
-        // above removes them all, and a failed link left the per-input
-        // objects behind in the temp dir.
-        for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
-          std::error_code ec;
-          fs::remove(objs[i], ec);
-        }
-        if (haveRtObj) {
-          std::error_code ec;
-          fs::remove(rtObj, ec);
-        }
+      } else if (isCOFF) {
+        // Windows/mingw: MinGW driver (GNU-ld-compatible argv).
+        argStore.push_back("-m");
+        argStore.push_back("i386pep");
+        argStore.push_back(sysrootDir + "/crt2.o");
+        argStore.push_back(sysrootDir + "/crtbegin.o");
+        for (const std::string& o : objs)
+          argStore.push_back(o);
+        argStore.push_back(sysrootDir + "/fltused.o");
+        argStore.push_back(sysrootDir + "/chkstk.o");
+        argStore.push_back("-L" + sysrootDir);
+        // Import libs + GCC helpers (mirrors the mingw-gcc recipe).
+        for (const char* lib :
+             {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
+              "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
+              "libshell32.a", "libuser32.a", "libws2_32.a", "libkernel32.a"})
+          argStore.push_back(std::string("-l:") + lib);
+        argStore.push_back(sysrootDir + "/crtend.o");
+        argStore.push_back("--subsystem=" + subsystem);
+      } else {
+        std::cerr << "pli: unsupported object format for link\n";
+        removeTempObjects();
         pli::cleanupMaterializedSysroot(emb.dir);
         return 1;
       }
+
+      // Target link recipe: function-level dead-stripping (MachO
+      // -dead_strip, ELF --gc-sections) and the MachO -platform_version.
+      // The MinGW driver takes crt2.o's entry/subsystem instead.
+      if (!isCOFF)
+        for (const std::string& f : desc.linkerFlags)
+          argStore.push_back(f);
+
+      // User-supplied link flags (-Wl, and -l).
+      for (const std::string& la : linkArgs) {
+        if (la.rfind("-Wl,", 0) == 0) {
+          std::string f = la.substr(4);
+          if (objFmt == llvm::Triple::ELF && f == "-no_pie")
+            f = "-no-pie";
+          argStore.push_back(f);
+        } else {
+          argStore.push_back(la);
+        }
+      }
+      argStore.push_back("-o");
+      argStore.push_back(output);
+
+      std::vector<const char*> argv;
+      for (const std::string& a : argStore)
+        argv.push_back(a.c_str());
+      std::string linkErr;
+      if (verbose) {
+        std::cerr << "+";
+        for (const std::string& a : argStore)
+          std::cerr << " " << a;
+        std::cerr << "\n";
+      }
+      bool linkOk = false;
+      std::string firstOut, firstErr;
+      if (isMachO) {
+        llvm::raw_string_ostream out(firstOut), err(firstErr);
+        linkOk = pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr, &out, &err);
+        out.flush();
+        err.flush();
+      } else if (isCOFF) {
+        linkOk = pli::linkMinGWExecutable(argv, linkErr);
+      } else {
+        linkOk = pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr);
+      }
+      if (isMachO)
+        std::cerr << firstOut << firstErr;
+
+      if (linkOk) {
+        removeTempObjects();
+        pli::cleanupMaterializedSysroot(emb.dir);
+        return 0;
+      }
+      std::cerr << "pli: in-process link failed";
+      if (!linkErr.empty())
+        std::cerr << " (" << linkErr << ")";
+      std::cerr << "\n";
+      removeTempObjects();
+      pli::cleanupMaterializedSysroot(emb.dir);
+      return 1;
     } else {
       std::cerr << "pli: no target (" << tmErr << ")\n";
+      removeTempObjects();
       return 1;
     }
   }

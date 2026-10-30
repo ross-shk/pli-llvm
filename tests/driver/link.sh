@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/link.sh — the driver's link-step flags (-c, -L/-l, -Wl,
-# --linker, -shared, --extra) and a cross-unit link against a C unit.
+# --extra) and a cross-unit link against a C unit.
 # All links are in-process lld (ADR-225): the C unit still needs a C compiler
 # (CLANG, user-side tool for C sources), but the final link always goes
 # through pli itself, never a clang driver.
@@ -53,9 +53,9 @@ $CLANG -c "$OUT.c" -o "$OUT.c.o" || { echo "FAIL: clang -c failed"; ok=0; }
 $PLI "$OUT.pli.o" "$OUT.c.o" -o "$OUT$EXE" || { echo "FAIL: cross-unit link failed"; ok=0; }
 check "cross-unit run" "$($OUT$EXE)" "pli: 42"
 
-# -Wl/--linker/-shared/nm probe Unix link behavior; skip on Windows.
+# -Wl/nm probe Unix link behavior; skip on Windows.
 if [ -n "$EXE" ]; then
-  echo "SKIP: Unix-only link checks (-Wl, --linker, -shared, nm)"
+  echo "SKIP: Unix-only link checks (-Wl, nm)"
 else
 # --- -Wl reaches in-process lld (via -v), in platform spelling ------------
 # (ELF lld wants -no-pie with a hyphen; Mach-O wants -no_pie).
@@ -72,20 +72,6 @@ case "$(uname -s)" in
   *) want=-no-pie ;;
 esac
 printf '%s\n' "$cmd" | grep -q -- "$want" || { echo "FAIL: -Wl flag not passed through"; ok=0; }
-# --- --linker is accepted with a warning (in-process lld is the only link) --
-warn=$($PLI "$OUT.flag.pli" -o "$OUT.wl2" --linker ld64.lld 2>&1) \
-  || { echo "FAIL: --linker build failed"; ok=0; }
-printf '%s\n' "$warn" | grep -q 'in-process lld is the only linker' \
-  || { echo "FAIL: --linker warning missing"; ok=0; }
-
-# --- -shared produces a shared artifact (self-contained, no external C) -----
-cat > "$OUT.shared.pli" <<'EOF'
- libproc: procedure;
-    put skip list('shared lib');
- end libproc;
-EOF
-$PLI "$OUT.shared.pli" -o "$OUT.dylib" -shared 2>/dev/null || { echo "FAIL: -shared link failed"; ok=0; }
-[ -f "$OUT.dylib" ] || { echo "FAIL: -shared produced no output"; ok=0; }
 
 # --- dead code: hello-world must not carry unused runtime functions --------
 cat > "$OUT.hello.pli" <<'EOF'

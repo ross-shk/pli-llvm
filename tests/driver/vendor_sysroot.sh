@@ -4,12 +4,7 @@
 # tests/driver/vendor_sysroot.sh — vendored sysroots (ADR-227): user programs
 # link with nothing except the OS. The sysroot is EMBEDDED in pli(.exe) —
 # release archives hold only the binary — and materializes to a temp dir at
-# link time; an exe-relative dir next to the binary is a dev override.
-# Phase 1 stages the binary ALONE (the release layout) and proves the
-# embedded path; phase 2 stages it with the platform/ dirs and proves the
-# override path. Copies pli to a temp dir so the build tree stays clean.
-# The float program exercises libm linkage on every OS (musl stubs, mingw
-# import libs, .tbd stubs).
+# link time.
 #
 # The program is also the anti-drift gate for the vendored sysroot's symbol
 # set: it calls every math transcendental, the complex power (which reaches
@@ -57,8 +52,7 @@ EXPECT="PASS vendor_sysroot 21 42 1 5 6"
 
 ok=1
 fail() { echo "FAIL: $1"; ok=0; }
-# Stage the binary alone (phase 1: the release layout) or with the
-# platform/ dirs (phase 2: the dev override); DLLs ride along because dev
+# Stage the binary alone (the release layout); DLLs ride along because dev
 # builds link shared zlib/zstd (release-static needs none).
 stage() {
   rm -rf "$OUT.stage"
@@ -68,29 +62,23 @@ stage() {
     [ -f "$dll" ] || continue
     cp "$dll" "$OUT.stage/" 2>/dev/null || true
   done
-  if [ "$1" = "single" ]; then
-    if [ -e "$OUT.stage/musl" ] || [ -e "$OUT.stage/mingw" ] || [ -e "$OUT.stage/sdk" ]; then
-      fail "sysroot dir leaked into single-file stage"
-      return 1
-    fi
-  else
-    cp -r "$OVERRIDE_SRC" "$OUT.stage/$OVERRIDE_DST" \
-      || { fail "stage $OVERRIDE_DST copy"; return 1; }
+  if [ -e "$OUT.stage/musl" ] || [ -e "$OUT.stage/mingw" ] || [ -e "$OUT.stage/sdk" ]; then
+    fail "sysroot dir leaked into single-file stage"
+    return 1
   fi
 }
-# $1 = phase, $2 = extra env assignments for the link, $3 = expected -v marker
+# $1 = extra env assignments for the link, $2 = expected -v marker
 link_and_run() {
-  cmd=$(env $2 "$OUT.stage/$PLI_EXE" "$OUT.pli" -o "$OUT.bin$EXE" -v 2>&1) \
-    || { fail "$1 compile+link"; printf '%s\n' "$cmd"; return 1; }
-  printf '%s\n' "$cmd" | grep -Eqil "$3" \
-    || { fail "$1 sysroot not picked up ($3)"; return 1; }
-  printf '%s\n' "$cmd" | grep -Eqil "$HOST_LEAK" && { fail "$1 host input leaked ($HOST_LEAK)"; return 1; }
+  cmd=$(env $1 "$OUT.stage/$PLI_EXE" "$OUT.pli" -o "$OUT.bin$EXE" -v 2>&1) \
+    || { fail "compile+link"; printf '%s\n' "$cmd"; return 1; }
+  printf '%s\n' "$cmd" | grep -Eqil "$2" \
+    || { fail "sysroot not picked up ($2)"; return 1; }
   if [ -n "$STATIC_CHECK" ] && command -v file >/dev/null 2>&1; then
     file "$OUT.bin$EXE" | grep -qi 'statically linked' \
-      || { fail "$1 binary is not static ($(file "$OUT.bin$EXE"))"; return 1; }
+      || { fail "binary is not static ($(file "$OUT.bin$EXE"))"; return 1; }
   fi
   got=$("$OUT.bin$EXE" 2>/dev/null | tr -d '\r')
-  [ "$got" = "$EXPECT" ] || { fail "$1 run (got: $got)"; return 1; }
+  [ "$got" = "$EXPECT" ] || { fail "run (got: $got)"; return 1; }
 }
 
 case "$(uname -s)" in
@@ -99,41 +87,29 @@ case "$(uname -s)" in
     EXE=.exe
     PLI_EXE=pli.exe
     SYSROOT=platform/windows-mingw
-    OVERRIDE_SRC=$SYSROOT
-    OVERRIDE_DST=mingw
-    HOST_LEAK='Microsoft Visual Studio|/out:|kernel32\.lib|clang_rt\.builtins'
     STATIC_CHECK=
-    # Keep this list in step with detectMingw() (src/hostcrt.cpp): a file it
-    # requires but this directory lacks makes the override silently fall back.
+    # Keep this list in step with the embedded sysroot manifest.
     for f in crt2.o crtbegin.o crtend.o fltused.o chkstk.o libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a libws2_32.a; do
       [ -f "$SYSROOT/$f" ] || { echo "FAIL: sysroot source missing ($SYSROOT/$f)"; exit 1; }
     done
-    if stage single; then link_and_run single "LIB=" 'vendored.*mingw.*embedded'; fi
-    if stage override; then link_and_run override "LIB=" 'vendored.*mingw.*override'; fi
+    if stage; then link_and_run "" 'embedded link sysroot.*mingw'; fi
     ;;
   Darwin*)
     # --- macOS: SDK stubs, no Xcode CLT in the picture ---
     EXE=
     PLI_EXE=pli
     SYSROOT=platform/darwin-sdk
-    OVERRIDE_SRC=$SYSROOT
-    OVERRIDE_DST=sdk
-    HOST_LEAK='MacOSX\.sdk|Xcode'
     STATIC_CHECK=
     for f in usr/lib/libm.tbd usr/lib/libSystem.tbd; do
       [ -f "$SYSROOT/$f" ] || { echo "FAIL: sysroot source missing ($SYSROOT/$f)"; exit 1; }
     done
-    if stage single; then link_and_run single "" 'vendored SDK stubs.*embedded'; fi
-    if stage override; then link_and_run override "" 'vendored SDK stubs.*override'; fi
+    if stage; then link_and_run "" 'embedded link sysroot.*sdk'; fi
     ;;
   *)
     # --- Linux: musl static, no host CRT ---
     EXE=
     PLI_EXE=pli
     SYSROOT=platform/linux-musl/$(uname -m)
-    OVERRIDE_SRC=$SYSROOT
-    OVERRIDE_DST=musl
-    HOST_LEAK='/usr/lib.*Scrt1\.o|/usr/lib64'
     STATIC_CHECK=1
     for f in crt1.o crti.o crtn.o libc.a; do
       [ -f "$SYSROOT/$f" ] || { echo "FAIL: sysroot source missing ($SYSROOT/$f)"; exit 1; }
@@ -142,11 +118,7 @@ case "$(uname -s)" in
       echo "FAIL: sysroot source missing (libpli_builtins-<arch>.a)"
       exit 1
     fi
-    # Hide the host CRT: point PLI_SYSROOT at an empty dir so only the
-    # vendored sysroot can satisfy the link (proves OS-only independence).
-    mkdir -p "$OUT.emptyroot"
-    if stage single; then link_and_run single "PLI_SYSROOT=$OUT.emptyroot" 'vendored.*musl.*embedded'; fi
-    if stage override; then link_and_run override "PLI_SYSROOT=$OUT.emptyroot" 'vendored.*musl.*override'; fi
+    if stage; then link_and_run "" 'embedded link sysroot.*musl'; fi
     ;;
 esac
 

@@ -140,8 +140,6 @@ set(PLI_SOURCES
   src/codegen.cpp
   src/embedded_runtime.cpp
   src/hostcrt.cpp
-  src/pgo.cpp
-  src/sanitize.cpp
 )
 
 # P2: MLIR canary dialect sources (compiled only with PLI_ENABLE_MLIR=ON).
@@ -277,105 +275,54 @@ if(NOT PLI_TARGET_TRIPLE)
 endif()
 message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
-# Apple host bitcode: a from-source clang ships no baked-in macOS SDK, so the
-# host-triple runtime compile must be given a sysroot explicitly or it cannot
-# find <stdio.h>. Probe the stable SDK locations directly (ADR-280): the
-# driver does the same at link time, and no build step shells out to xcrun.
+# Build-time sysroot for macOS: the host-triple runtime compile needs
+# -isysroot to find system headers (clang has no baked-in SDK). Probe stable
+# locations; empty on other platforms.
 set(PLI_HOST_SYSROOT_FLAG "")
 if(APPLE)
-  # Keep the first candidate the toolchain can actually link against, not
-  # merely the first directory that exists: the Command Line Tools package
-  # can be newer than the selected Xcode (a 27.0 CLT beside Xcode 26.x), and
-  # its stubs name architectures (arm64e.x1) the Xcode linker rejects, which
-  # breaks every C-interop link. Xcode first (xcode-select points there by
-  # default), CLT as the dev-machine fallback.
-  set(PLI_HOST_SDK "")
+  # Keep the first candidate this toolchain can actually link against, not
+  # merely the first directory that exists: a Command Line Tools package newer
+  # than the selected Xcode ships stubs naming architectures (arm64e.x1) the
+  # linker rejects, which breaks every C-interop link the test suite runs.
+  # Xcode first (xcode-select points there by default), CLT as the fallback.
+  set(_pli_sdk "")
   set(_pli_sdk_fallback "")
+  file(WRITE "${CMAKE_BINARY_DIR}/_pli_sdk_probe.c" "int main(void) { return 0; }\n")
   foreach(_sdk
       /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
       /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk)
-    if(NOT EXISTS "${_sdk}/usr/lib/libSystem.B.tbd")
+    if(NOT EXISTS "${_sdk}/usr/lib/libSystem.tbd")
       continue()
     endif()
     if(NOT _pli_sdk_fallback)
       set(_pli_sdk_fallback "${_sdk}")
     endif()
     # A trivial link is the property the tests need from the SDK.
-    file(WRITE "${CMAKE_BINARY_DIR}/_pli_sdk_probe.c" "int main(void) { return 0; }\n")
     execute_process(
       COMMAND "${LLVM_TOOLS_BINARY_DIR}/clang" -isysroot "${_sdk}"
               "${CMAKE_BINARY_DIR}/_pli_sdk_probe.c"
               -o "${CMAKE_BINARY_DIR}/_pli_sdk_probe"
       RESULT_VARIABLE _pli_sdk_rc OUTPUT_QUIET ERROR_QUIET)
     if(_pli_sdk_rc EQUAL 0)
-      set(PLI_HOST_SDK "${_sdk}")
+      set(_pli_sdk "${_sdk}")
       break()
     endif()
   endforeach()
-  if(NOT PLI_HOST_SDK)
-    set(PLI_HOST_SDK "${_pli_sdk_fallback}")
+  if(NOT _pli_sdk)
+    set(_pli_sdk "${_pli_sdk_fallback}")
   endif()
-  if(PLI_HOST_SDK)
-    set(PLI_HOST_SYSROOT_FLAG -isysroot ${PLI_HOST_SDK})
-    message(STATUS "Host bitcode sysroot: ${PLI_HOST_SDK}")
+  if(_pli_sdk)
+    set(PLI_HOST_SYSROOT_FLAG -isysroot ${_pli_sdk})
+    # Tests shell out to the compiler's own clang for C helpers; on Darwin it
+    # needs the SDK too, and reads it from SDKROOT.
+    set(PLI_HOST_SDKROOT "${_pli_sdk}")
+    message(STATUS "Host bitcode sysroot: ${_pli_sdk}")
   else()
     message(WARNING "No macOS SDK found; the host runtime bitcode may fail to compile")
   endif()
 endif()
-# The test suite's clang comes from our LLVM build, which has no baked-in SDK
-# either: expose the probed root to tests that compile C (interop, ASan, C IR).
-set(PLI_TEST_SDK_ENV "")
-if(APPLE AND PLI_HOST_SDK)
-  set(PLI_TEST_SDK_ENV "SDKROOT=${PLI_HOST_SDK}")
-endif()
-if(WIN32 AND NOT APPLE)
-  # Test subprocesses invoke clang/lld-link for C interop — they need the
-  # MSVC Windows SDK include and lib paths (set by vcvarsall.bat). Probe them
-  # at configure time so ctest works without a pre-initialised dev shell.
-  find_program(VCVARSALL_BAT NAMES vcvarsall.bat
-    HINTS ENV VCINSTALLDIR
-    PATHS
-      "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build"
-      "C:/Program Files (x86)/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build"
-      "C:/Program Files (x86)/Microsoft Visual Studio/2022/Professional/VC/Auxiliary/Build"
-      "C:/Program Files (x86)/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build"
-    DOC "Path to vcvarsall.bat")
-  if(VCVARSALL_BAT)
-    # vcvarsall.bat sets up the MSVC env; use a temp batch wrapper so cmd.exe
-    # parses the quoted path (with spaces) correctly. `call` is required so
-    # execution returns after vcvarsall.bat finishes.
-    file(WRITE ${CMAKE_BINARY_DIR}/_msvc_env.bat
-      "call \"${VCVARSALL_BAT}\" x64 && set INCLUDE && set LIB\n")
-    execute_process(
-      COMMAND cmd /c "${CMAKE_BINARY_DIR}/_msvc_env.bat"
-      OUTPUT_VARIABLE _msvc_env
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-      ERROR_QUIET)
-    foreach(_var INCLUDE LIB)
-      string(REGEX MATCH "${_var}=([^\r\n]*)" _m "${_msvc_env}")
-      if(_m)
-        # Escape semicolons so CMake's ENVIRONMENT property doesn't split
-        # the ;-separated Windows path list into separate variables.
-        string(REPLACE ";" "\\;" _val "${CMAKE_MATCH_1}")
-        list(APPEND PLI_TEST_SDK_ENV "${_var}=${_val}")
-        message(STATUS "Test env MSVC ${_var}: ${CMAKE_MATCH_1}")
-      endif()
-    endforeach()
-  else()
-    message(WARNING "vcvarsall.bat not found — C interop tests may fail on Windows")
-  endif()
-endif()
 
-# Toolchain prefix baked in as a data-file fallback (ADR-225): the profile
-# runtime / builtins probes try exe-relative first (release layout), then
-# $PLI_TOOLCHAIN_PREFIX, then this build-time prefix (dev machines).
-if(PLI_LLVM_STATIC_PREFIX)
-  set(PLI_TOOLCHAIN_PREFIX "${PLI_LLVM_STATIC_PREFIX}")
-else()
-  get_filename_component(PLI_TOOLCHAIN_PREFIX "${LLVM_TOOLS_BINARY_DIR}" DIRECTORY)
-endif()
 target_compile_definitions(pli PRIVATE
-  PLI_TOOLCHAIN_PREFIX="${PLI_TOOLCHAIN_PREFIX}"
   PLI_VERSION="${PLI_VERSION}"
   PLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
   PLI_HAVE_LLD=${PLI_HAVE_LLD}
@@ -436,10 +383,9 @@ if(PLI_SHARED_LLVM_LINK AND TARGET LLVM)
   endif()
 else()
   # Core/IR (superset of the old `core irreader support linker` set).
-  # ProfileData: InstrProfReader for in-process --fprofile-use (ADR-225).
-  # Instrumentation: the ASan module pass for -fsanitize=address (ADR-341).
+  # ProfileData: profile reader used by the in-process LTO link pipeline.
   llvm_map_components_to_libnames(llvm_libs_core
-    Core IRReader Support BitReader BitWriter Linker ProfileData Instrumentation)
+    Core IRReader Support BitReader BitWriter Linker ProfileData)
   # MC/Target: the distro prefix builds all targets (initializeAllTargets()
   # needs them all); the hermetic static prefix only builds X86+AArch64, so
   # map just those — other --triple values already diagnose "no target" at
@@ -485,24 +431,6 @@ target_link_libraries(pli PRIVATE pli_rules
 # P2: link MLIR targets when MLIR is enabled.
 if(PLI_ENABLE_MLIR)
   target_link_libraries(pli PRIVATE pli_mlir)
-endif()
-
-# compiler-rt provides __divti3 (128-bit division) needed for i128 arithmetic
-# on Windows where the CRT doesn't include it.
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" _LLVM_MAJOR "${LLVM_PACKAGE_VERSION}")
-  # Prebuilt LLVM installs builtins under lib/clang/<ver>/lib/windows; the
-  # standalone compiler-rt build in the hermetic stash installs under lib/windows.
-  find_file(CLANG_RT_BUILTINS
-    NAMES clang_rt.builtins-x86_64.lib clang_rt.builtins-aarch64.lib
-    HINTS ${CMAKE_PREFIX_PATH}/lib/clang/${_LLVM_MAJOR}/lib/windows
-          ${CMAKE_PREFIX_PATH}/lib/windows)
-  if(CLANG_RT_BUILTINS)
-    target_link_libraries(pli PRIVATE ${CLANG_RT_BUILTINS})
-    message(STATUS "compiler-rt builtins: ${CLANG_RT_BUILTINS}")
-  else()
-    message(WARNING "compiler-rt builtins not found (clang_rt.builtins) — 128-bit division may fail to link")
-  endif()
 endif()
 
 # clang-cl + lld-link: CMake doesn't auto-detect MSVC C++ stdlib (IMPLICIT_LINK_LIBRARIES is empty).
@@ -587,9 +515,7 @@ option(PLI_ENABLE_MLIR "Build the experimental MLIR canary dialect (P2)" OFF)
 
 # pli runtime (C11). One source per section so the link drops unused pieces
 # (ADR-079); the sources feed only the embedded bitcode below — no archive or
-# runtime.bc file is built or installed (single-binary distribution). The
-# --runtime flag still accepts a user-supplied external archive,
-# and --no-bitcode-runtime materialises the link input from the embedded blob.
+# runtime.bc file is built or installed (single-binary distribution).
 
 # Warnings: -Wall -Wextra on the C++ driver (pli_runtime is C11 with its own style).
 # Use Clang compiler ID check FIRST: clang-cl defines the Clang ID but also
@@ -728,8 +654,8 @@ foreach(src ${RT_PORTABLE_SRCS})
             -I${CMAKE_SOURCE_DIR}/runtime
             -O2
             -ffunction-sections -fdata-sections
-            $<$<PLATFORM_ID:Linux>:-fPIC>
             ${PLI_HOST_SYSROOT_FLAG}
+            $<$<PLATFORM_ID:Linux>:-fPIC>
             -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS}
@@ -748,8 +674,8 @@ foreach(src ${RT_PLATFORM_SRCS})
             -I${CMAKE_SOURCE_DIR}/runtime
             -O2
             -ffunction-sections -fdata-sections
-            $<$<PLATFORM_ID:Linux>:-fPIC>
             ${PLI_HOST_SYSROOT_FLAG}
+            $<$<PLATFORM_ID:Linux>:-fPIC>
             -target ${PLI_TARGET_TRIPLE}
             -o ${DEFAULT_BC_DIR}/${base}.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS}
@@ -788,7 +714,7 @@ add_dependencies(pli embedded_runtime_inc_default)
 # time (src/hostcrt.cpp). Only the build host's OS set is embedded; the
 # per-arch dirs under platform/linux-musl/<arch>/ hold the matching files.
 # An unsupported arch (or missing sources) embeds an empty table with a
-# warning, and the driver falls back to the host toolchain.
+# warning, and every user link then fails with a clear diagnostic.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
   set(PLI_BUILD_ARCH x86_64)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|ARM64|arm64)$")
@@ -838,9 +764,9 @@ foreach(f ${PLI_SYSROOT_FILES})
 endforeach()
 if(PLI_SYSROOT_KNOWN_OS AND NOT "${PLI_SYSROOT_MISSING}" STREQUAL "")
   list(REMOVE_ITEM PLI_SYSROOT_FILES ${PLI_SYSROOT_MISSING})
-  message(WARNING "link sysroot incomplete under ${PLI_SYSROOT_SRC_DIR} (missing: ${PLI_SYSROOT_MISSING}) — embedding ${PLI_SYSROOT_FILES}; user links fall back to the host toolchain for the rest")
+  message(WARNING "link sysroot incomplete under ${PLI_SYSROOT_SRC_DIR} (missing: ${PLI_SYSROOT_MISSING}) — embedding ${PLI_SYSROOT_FILES}; user links will fail for the missing files")
 elseif(PLI_SYSROOT_KNOWN_OS AND PLI_SYSROOT_FILES STREQUAL "")
-  message(WARNING "no embeddable link sysroot for ${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH} — user links use the host toolchain (populate the arch-native sysroot dir)")
+  message(WARNING "no embeddable link sysroot for ${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH} — user links will fail (populate the arch-native sysroot dir)")
 endif()
 # Generated TU per file (sanitize mirrors gen_sysroot_embed.py: every
 # non-alphanumeric run becomes '_'). "none" sentinel: an empty set name
@@ -884,14 +810,8 @@ enable_testing()
 add_test(NAME pli-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/run_tests.py)
 set(PLI_TEST_ENV "PLI=$<TARGET_FILE:pli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
-# The C-interop tests link with clang, which looks for compiler-rt builtins
-# in its resource dir; the hermetic stash keeps them under lib/windows, so
-# hand the file CMake resolved to the tests.
-if(CLANG_RT_BUILTINS)
-  list(APPEND PLI_TEST_ENV "CLANG_RT_BUILTINS=${CLANG_RT_BUILTINS}")
-endif()
-if(PLI_TEST_SDK_ENV)
-  list(APPEND PLI_TEST_ENV "${PLI_TEST_SDK_ENV}")
+if(PLI_HOST_SDKROOT)
+  list(APPEND PLI_TEST_ENV "SDKROOT=${PLI_HOST_SDKROOT}")
 endif()
 set_tests_properties(pli-tests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -899,7 +819,7 @@ set_tests_properties(pli-tests PROPERTIES
 
 # Single-binary distribution: only the pli driver ships. The runtime travels
 # embedded (embedded_runtime.inc), so no libpli_runtime.a / runtime.bc is
-# installed; the driver falls back to the embedded blob when they are absent.
+# installed or looked up.
 install(TARGETS pli
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 

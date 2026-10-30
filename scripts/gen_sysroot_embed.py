@@ -18,8 +18,7 @@ Usage:
   kEmbeddedSysrootFiles table {(path, data, len)} plus kEmbeddedSysrootName
   (<set_name>: "musl", "mingw", or "sdk" — which link path the set feeds).
   With no <relpath>s the manifest holds an empty table (arch mismatch /
-  missing sources at build time: the driver falls back to the host
-  toolchain).
+  missing sources at build time: user links fail with a clear error).
   Sanitized: every non-alphanumeric run becomes '_' (so
   libpli_builtins-x86_64.a and usr/lib/libSystem.tbd are valid identifiers).
   Zero-length files emit the 1-dummy-byte form (MSVC rejects zero-size
