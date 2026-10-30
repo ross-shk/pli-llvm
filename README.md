@@ -17,15 +17,15 @@ curl -L "https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-$os-$
 
 Windows (x86_64):
 
-The release publishes both `pli-windows-x86_64.zip` and `pli-windows-x86_64.tar.gz`. The archive contains a top-level `windows-x86_64/` dir holding `pli.exe`.
+The release publishes both `pli-windows-x86_64.zip` and `pli-windows-x86_64.tar.gz`. The archive contains `pli.exe` at its top level; extract it to any dir on `PATH`.
 
 cmd.exe:
 
 ```bat
 curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -o pli.zip
-if not exist "%USERPROFILE%\pli\windows-x86_64" mkdir "%USERPROFILE%\pli\windows-x86_64"
+if not exist "%USERPROFILE%\pli" mkdir "%USERPROFILE%\pli"
 tar -xf pli.zip -C "%USERPROFILE%\pli"
-setx PATH "%PATH%;%USERPROFILE%\pli\windows-x86_64"
+setx PATH "%PATH%;%USERPROFILE%\pli"
 ```
 
 PowerShell:
@@ -33,10 +33,10 @@ PowerShell:
 ```pwsh
 Invoke-WebRequest -Uri https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -OutFile pli.zip
 Expand-Archive -Force pli.zip -DestinationPath $env:USERPROFILE\pli
-[Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";$env:USERPROFILE\pli\windows-x86_64", [EnvironmentVariableTarget]::User)
+[Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";$env:USERPROFILE\pli", [EnvironmentVariableTarget]::User)
 ```
 
-Then open a new shell so `%USERPROFILE%\pli\windows-x86_64` is on `PATH` and `pli.exe` resolves.
+Then open a new shell so `%USERPROFILE%\pli` is on `PATH` and `pli.exe` resolves.
 
 Each archive contains just the compiler binary (`pli` or `pli.exe`); the runtime and platform link sysroot are embedded.
 
