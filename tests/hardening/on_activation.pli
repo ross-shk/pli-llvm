@@ -1,0 +1,70 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (91): ON establishment is per block activation (ADR-350).
+    A re-armed ON replaces the earlier unit instead of stacking, a
+    REVERT ignores a unit an enclosing activation armed, and a unit
+    armed inside an ON-unit ends when that unit returns. */
+ on_activation: procedure options(main);
+    declare i fixed bin(31);
+    declare inner fixed bin(31) external;
+    declare outer fixed bin(31) external;
+    declare zd_hits fixed bin(31) external;
+    declare inner_zd fixed bin(31) external;
+    inner = 0;
+    outer = 0;
+    zd_hits = 0;
+    inner_zd = 0;
+    on error outer = outer + 1;
+    /* 200 re-arms in one activation must leave exactly one unit */
+    begin;
+       do i = 1 to 200;
+          on error inner = inner + 1;
+       end;
+       signal error;
+    end;
+    signal error;
+    if inner ^= 1 | outer ^= 1 then do;
+       put skip list('FAIL rearm', inner, outer);
+       stop;
+    end;
+    /* a procedure that armed nothing must not pop the caller's unit */
+    call foreign_revert;
+    signal error;
+    if outer ^= 2 then do;
+       put skip list('FAIL foreign', outer);
+       stop;
+    end;
+    /* a BEGIN block with only a REVERT owns no unit to drop */
+    begin;
+       revert error;
+    end;
+    signal error;
+    if outer ^= 3 then do;
+       put skip list('FAIL revert-block', outer);
+       stop;
+    end;
+    /* REVERT in the arming activation drops that unit, not the outer */
+    begin;
+       on error inner = inner + 10;
+       revert error;
+       signal error;
+    end;
+    if inner ^= 1 | outer ^= 4 then do;
+       put skip list('FAIL revert-own', inner, outer);
+       stop;
+    end;
+    /* a unit armed inside an ON-unit dies with it */
+    on zerodivide zd_hits = zd_hits + 1;
+    on error on zerodivide inner_zd = inner_zd + 1;
+    signal error;
+    signal zerodivide;
+    if inner_zd ^= 0 | zd_hits ^= 1 then do;
+       put skip list('FAIL unit-scope', inner_zd, zd_hits);
+       stop;
+    end;
+    put skip list('PASS on_activation');
+ end on_activation;
+
+ foreign_revert: procedure;
+    revert error;
+ end foreign_revert;

@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm */
+ end_label: procedure options(main);
+    declare i fixed binary(31);
+    do i = 1 to 10;
+       if i = 3 then go to nxt;
+    nxt: end;
+    if i = 3 then
+       put skip list('PASS end_label');
+    else
+       put skip list('FAIL end_label', i);
+ end end_label;

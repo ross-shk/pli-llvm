@@ -1,0 +1,64 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (79),(87)-(90): a recycled fiber must start with no CONTROLLED
+    generations, even with two CONTROLLED variables in one task.
+    Five rounds of four tasks reuse the same fibers; each task checks
+    entry generations (INITIAL 7 and 9), pushes one generation on each,
+    parks so another task runs, then pops back in LIFO order. */
+ task_ctl_reuse_multi: procedure options(main);
+    declare ev(4) event;
+    declare bad(4) fixed bin(31) external;
+    declare r fixed bin(31);
+    declare i fixed bin(31);
+    declare k1 fixed bin(31);
+    declare k2 fixed bin(31);
+    declare k3 fixed bin(31);
+    declare k4 fixed bin(31);
+    k1 = 1;
+    k2 = 2;
+    k3 = 3;
+    k4 = 4;
+    do i = 1 to 4;
+       bad(i) = 0;
+    end;
+    do r = 1 to 5;
+       call work(k1) event(ev(1));
+       call work(k2) event(ev(2));
+       call work(k3) event(ev(3));
+       call work(k4) event(ev(4));
+       wait(ev);
+    end;
+    do i = 1 to 4;
+       if bad(i) ^= 0 then do;
+          put skip list('FAIL task_ctl_reuse_multi:', i, bad(i));
+          stop;
+       end;
+    end;
+    put skip list('PASS task_ctl_reuse_multi');
+ end task_ctl_reuse_multi;
+ work: procedure(k);
+    declare k fixed bin(31);
+    declare bad(4) fixed bin(31) external;
+    declare c fixed bin(31) controlled initial(7);
+    declare d fixed bin(31) controlled initial(9);
+    declare e event;
+    /* Entry generations come from INITIAL, not from the old task. */
+    if c ^= 7 | d ^= 9 then bad(k) = bad(k) + 1;
+    c = k;
+    d = k * 10;
+    allocate c;
+    allocate d;
+    if c ^= 7 | d ^= 9 then bad(k) = bad(k) + 1;
+    c = k * 100;
+    d = k * 1000;
+    /* Park so another task runs between the pushes. */
+    call nop event(e);
+    wait(e);
+    if c ^= k * 100 | d ^= k * 1000 then bad(k) = bad(k) + 1;
+    free d;
+    if d ^= k * 10 then bad(k) = bad(k) + 1;
+    free c;
+    if c ^= k then bad(k) = bad(k) + 1;
+ end work;
+ nop: procedure;
+ end nop;

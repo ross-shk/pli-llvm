@@ -140,6 +140,8 @@ PLI_FN(pli_cmp_char, I32, (CPTR, I64, CPTR, I64))     /* string compare */
 PLI_FN(pli_isochar, VOID, (PTR, I64, I32, I32))       /* ISOCHAR(lo, hi): dst, dstLen, start, end */
 
 PLI_FN(pli_file_open_slot, I32, (I64))                /* FILEOPEN(f): slot -> 1 if open, 0 if closed */
+/* A10: map a FILE variable's marker address to one process-wide slot. */
+PLI_FN(pli_file_slot, I64, (CPTR))
 PLI_FN(pli_lineno, I64, (I64))                        /* LINENO(f): slot -> current line number */
 PLI_FN(pli_pageno, I64, (I64))                        /* PAGENO(f): slot -> current page number */
 PLI_FN(pli_set_pageno, VOID, (I64, I64))              /* PAGENO(f)=n: set page counter (ADR-201) */
@@ -164,6 +166,8 @@ PLI_FN(pli_conversion, VOID, (VOID))                  /* CONVERSION abort (no ha
 PLI_FN(pli_stringrange, VOID, (VOID))                 /* STRINGRANGE implicit action (ADR-297) */
 
 PLI_FN(pli_on_push_error, VOID, (I64, PTR, PTR))  /* ON ERROR: id (0 = SYSTEM), handler fn, capture ctx */
+PLI_FN(pli_on_establish, VOID, (I64, I64, PTR, PTR, I64)) /* ON: key, id, fn, ctx, activation base (ADR-350) */
+PLI_FN(pli_on_revert, VOID, (I64, I64)) /* REVERT: key, activation base (ADR-350) */
 PLI_FN(pli_on_pop_error, VOID, (VOID))  /* REVERT ERROR */
 PLI_FN(pli_on_top_error, I64, (VOID))   /* top id, 0 = none/SYSTEM */
 PLI_FN(pli_on_top_fn, PTR, (I64))       /* SIGNAL dispatch: top handler address, NULL = none/SYSTEM */

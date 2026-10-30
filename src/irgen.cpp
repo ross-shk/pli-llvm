@@ -5613,20 +5613,21 @@ void IRGen::declareProc(HProc* p) {
   }
 }
 
-// Does `s` establish any handler (rule 91) at the current block level? A
-// nested BEGIN scopes its own handler depth (it restores on exit), so it is
-// not descended; ON-unit bodies are, because a nested ON inside a handler runs
-// within this block's dynamic extent and must be undone here. The runtime's
-// handler depth spans every condition (one shared stack), so any `ON` — not
-// just `ON ERROR` — forces the save/restore. Procedure-precise skip: only
-// blocks that can push a handler pay the entry/exit depth save/restore
-// (OPTIMIZATION.md §8.1).
+// Does `s` establish or revert a handler (rules (91),(92)) at the current
+// block level? A nested BEGIN scopes its own handler depth (it restores on
+// exit), so it is not descended; ON-unit bodies are, because a nested ON
+// inside a handler runs within this block's dynamic extent and must be undone
+// here. The runtime's handler depth spans every condition (one shared stack),
+// so any `ON` or `REVERT` — not just `ON ERROR` — forces the save/restore:
+// REVERT needs the activation base to tell its own unit from an enclosing
+// one (ADR-350). Procedure-precise skip: only blocks that can touch a
+// handler pay the entry/exit depth save/restore (OPTIMIZATION.md §8.1).
 static bool hasOnAtLevel(HStmt* s) {
   if (!s)
     return false;
   if (s->kind == HStmt::Begin)
     return false; // a nested BEGIN restores its own entry depth
-  if (s->kind == HStmt::On && !s->isSystem)
+  if (s->kind == HStmt::On || s->kind == HStmt::Revert)
     return true;
   if (hasOnAtLevel(s->thenS.get()))
     return true;
@@ -5640,8 +5641,8 @@ static bool hasOnAtLevel(HStmt* s) {
   return false;
 }
 
-// True if any top-level statement of `p` establishes a handler, so the
-// procedure must save/restore the handler depth at entry/exit.
+// True if any top-level statement of `p` establishes or reverts a handler,
+// so the procedure must save/restore the handler depth at entry/exit.
 static bool procEstablishesOn(HProc* p) {
   for (auto& st : p->body)
     if (hasOnAtLevel(st.get()))
@@ -6072,6 +6073,11 @@ void IRGen::emitOnHandlers(HProgram& prog) {
           symAddr_[gs] = mod_.getGlobalVariable(gs->irName.substr(1), true);
       llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", fn);
       b_.SetInsertPoint(entry);
+      // An ON unit is a block activation of its own (rule 91; ADR-350): save
+      // its entry depth so a unit armed inside it ends when it returns.
+      curOnUnitDepth_ = entryAlloca(b_.getInt64Ty(), "onunitdepth");
+      b_.CreateStore(b_.CreateCall(runtimeFn("pli_on_depth_error"), {}),
+                     curOnUnitDepth_);
       // Bind the capture context: the i-th slot holds the address of the i-th
       // collected automatic, in the same order establishment stored them.
       if (!s->onCaps.empty()) {
@@ -6086,8 +6092,13 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       std::vector<int> beginChain;
       collectGotoBlocks(s->unit.get(), beginChain);
       emitStmt(s->unit.get());
-      if (!blockTerminated(b_.GetInsertBlock()))
+      if (!blockTerminated(b_.GetInsertBlock())) {
+        // Unit return terminates the activation: drop the units it armed.
+        b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                      {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitdepth")});
         b_.CreateRetVoid();
+      }
+      curOnUnitDepth_ = nullptr;
       curOnDepth_ = savedDepth;
       inHandler_ = false;
       curFn_ = nullptr;
@@ -6107,10 +6118,26 @@ void IRGen::emitFinishSignal() {
                 {b_.CreateBitCast(curFn_, b_.getPtrTy(), "finproc")});
 }
 
+// The activation base for ON and REVERT (rule (91); ADR-350): the innermost
+// block activation's entry depth — an ON-unit body, a BEGIN block, or the
+// procedure. Only units established at or above this depth belong to the
+// current activation. When no depth was saved (no ON/REVERT can occur here),
+// read the live depth so a REVERT stays a no-op and an ON simply pushes.
+llvm::Value* IRGen::onBaseDepth() {
+  if (curOnUnitDepth_)
+    return b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitbase");
+  if (!onScopes_.empty() && onScopes_.back().entryDepth)
+    return onScopes_.back().entryDepth;
+  if (curOnDepth_)
+    return b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "onprocbase");
+  return b_.CreateCall(runtimeFn("pli_on_depth_error"), {}, "onlivebase");
+}
+
 // Establish a handler: push its id (0 for the system action) plus the handler
 // address and the capture context for automatics the unit touches (rule 91).
 // The address/context pair is what lets a SIGNAL raised anywhere — including
-// another object file — run this module's handler against this frame.
+// another object file — run this module's handler against this frame. The
+// activation base makes a repeated ON replace the earlier unit (ADR-350).
 void IRGen::emitOn(HStmt* s) {
   long long id = s->isSystem ? 0 : s->onIndex;
   llvm::Value* fnv = llvm::Constant::getNullValue(b_.getPtrTy());
@@ -6133,10 +6160,8 @@ void IRGen::emitOn(HStmt* s) {
       ctx = cap;
     }
   }
-  if (s->condKey == 0)
-    b_.CreateCall(runtimeFn("pli_on_push_error"), {i64(id), fnv, ctx});
-  else
-    b_.CreateCall(runtimeFn("pli_on_push_cond"), {i64(s->condKey), i64(id), fnv, ctx});
+  b_.CreateCall(runtimeFn("pli_on_establish"),
+                {fileCondKeyValue(s), i64(id), fnv, ctx, onBaseDepth()});
 }
 
 // Raise a condition: without an established handler take the system action
@@ -6396,6 +6421,10 @@ void IRGen::emitStmt(HStmt* s) {
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
+    // A RETURN inside an ON unit ends the unit's activation (ADR-350).
+    if (curOnUnitDepth_)
+      b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                    {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitdepth")});
     if (!s->value) {
       // A bare RETURN ends an ON-unit and resumes after the SIGNAL (rule
       // 91); sema rejects it in procedure bodies, so a handler (whose
@@ -6470,11 +6499,9 @@ void IRGen::emitStmt(HStmt* s) {
     emitOn(s);
     break;
   case HStmt::Revert:
-    // REVERT pops one handler for the condition (a no-op when none).
-    if (s->condKey == 0)
-      b_.CreateCall(runtimeFn("pli_on_pop_error"), {});
-    else
-      b_.CreateCall(runtimeFn("pli_on_pop_cond"), {i64(s->condKey)});
+    // REVERT pops the unit this activation established for the condition and
+    // ignores an enclosing activation's unit (rule (92); ADR-350).
+    b_.CreateCall(runtimeFn("pli_on_revert"), {fileCondKeyValue(s), onBaseDepth()});
     break;
   case HStmt::Signal:
     emitSignal(s);
@@ -7919,6 +7946,47 @@ void IRGen::emitFree(HStmt* s) {
   }
 }
 
+// A10: FILE identity across separately compiled units. The marker global's
+// address is the identity; an EXTERNAL file's marker is a common symbol so
+// every unit links the same address, while a private file gets its own.
+llvm::GlobalVariable* IRGen::fileMarker(Symbol* f) {
+  auto it = fileMarkers_.find(f);
+  if (it != fileMarkers_.end())
+    return it->second;
+  bool ext = f->external;
+  std::string extName = f->irName.size() > 1 ? f->irName.substr(1) : f->name;
+  std::string name = ext ? "pli_file_marker_" + extName
+                         : "pli_file_marker_" + std::to_string(n_++);
+  auto* gv = new llvm::GlobalVariable(
+      mod_, b_.getInt8Ty(), false,
+      ext ? llvm::GlobalValue::CommonLinkage : llvm::GlobalValue::InternalLinkage,
+      llvm::Constant::getNullValue(b_.getInt8Ty()), name);
+  fileMarkers_[f] = gv;
+  return gv;
+}
+
+// A10: resolve the file's process-wide slot on first use. The runtime caches
+// marker address -> slot, so every statement naming this FILE variable and
+// both sides of its condition key agree, whatever unit emitted them.
+llvm::Value* IRGen::fileSlotValue(Symbol* f) {
+  llvm::Value* key = b_.CreateBitCast(fileMarker(f), b_.getPtrTy(), "fkey");
+  return b_.CreateCall(runtimeFn("pli_file_slot"), {key}, "fslot");
+}
+
+// A10: ON ENDFILE(f)/UNDEFINEDFILE(f) key = base - runtime slot.
+llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
+  long long base = 0;
+  if (s->condName == "UNDEFINEDFILE")
+    base = Stmt::kUndefinedfileBaseCondKey;
+  else if (s->condName == "ENDFILE")
+    base = Stmt::kEndfileBaseCondKey;
+  else
+    return i64(s->condKey);
+  if (!s->fileSym)
+    return i64(s->condKey);
+  return b_.CreateSub(i64(base), fileSlotValue(s->fileSym), "fcondkey");
+}
+
 // OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
 // The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 =
 // OUTPUT, 2 = UPDATE. A RECORD SEQUENTIAL open (rules (101),(112)) uses the
@@ -7929,14 +7997,14 @@ void IRGen::emitOpen(HStmt* s) {
   long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
    b_.CreateCall(
        runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
-       {i64(f->fileSlot), name, i64((long long)s->openTitle.size()), i64(mode),
+       {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
         i64(f->fileNonprint ? 1 : 0)});
 }
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
 void IRGen::emitRecordWrite(HStmt* s) {
-  llvm::Value* slot = i64(s->fileSym->fileSlot);
+  llvm::Value* slot = fileSlotValue(s->fileSym);
   Val v = emitExpr(s->value.get());
   switch (v.ty.k) {
   case TK::FixedBin:
@@ -7963,7 +8031,7 @@ void IRGen::emitRecordWrite(HStmt* s) {
 // The runtime checks that a current record exists and that the new image has
 // the same size, then writes it in place.
 void IRGen::emitRecordRewrite(HStmt* s) {
-  llvm::Value* slot = i64(s->fileSym->fileSlot);
+  llvm::Value* slot = fileSlotValue(s->fileSym);
   Val v = emitExpr(s->value.get());
   switch (v.ty.k) {
   case TK::FixedBin:
@@ -7989,14 +8057,14 @@ void IRGen::emitRecordRewrite(HStmt* s) {
 // DELETE (rule (112)): remove the record most recently read, shifting the
 // rest of the file down so the next READ sees the following record.
 void IRGen::emitRecordDelete(HStmt* s) {
-  b_.CreateCall(runtimeFn("pli_record_delete"), {i64(s->fileSym->fileSlot)});
+  b_.CreateCall(runtimeFn("pli_record_delete"), {fileSlotValue(s->fileSym)});
 }
 
 // READ (rules (112),(113)): consume one fixed-size binary record into a plain
 // scalar variable; a short read (EOF) raises ERROR in the runtime, since ON
 // ENDFILE stays diagnosed.
 void IRGen::emitRecordRead(HStmt* s) {
-  llvm::Value* slot = i64(s->fileSym->fileSlot);
+  llvm::Value* slot = fileSlotValue(s->fileSym);
   HExpr* t = s->target.get();
   const Type& ty = t->ty;
   Val v;
@@ -8036,7 +8104,7 @@ void IRGen::emitRecordRead(HStmt* s) {
 
 // CLOSE (rules 102,103): close the FILE variable's slot.
 void IRGen::emitClose(HStmt* s) {
-  b_.CreateCall(runtimeFn("pli_file_close"), {i64(s->fileSym->fileSlot)});
+  b_.CreateCall(runtimeFn("pli_file_close"), {fileSlotValue(s->fileSym)});
 }
 
 void IRGen::emitIf(HStmt* s) {
@@ -8654,7 +8722,7 @@ void IRGen::emitPut(HStmt* s) {
   // file's stream instead of SYSPRINT. Select before page/skip so all output
   // goes to the named file.
   if (s->fileSym)
-    deferCall("pli_put_select", {i64(s->fileSym->fileSlot)});
+    deferCall("pli_put_select", {fileSlotValue(s->fileSym)});
   if (s->page)
     deferCall("pli_put_page", {});
   if (s->skip) {
@@ -8913,7 +8981,7 @@ void IRGen::emitGet(HStmt* s) {
     if (s->stringTarget)
       b_.CreateCall(runtimeFn("pli_string_get_open"), {sdata, slen});
     if (s->fileSym)
-      b_.CreateCall(runtimeFn("pli_get_select"), {i64(s->fileSym->fileSlot)});
+      b_.CreateCall(runtimeFn("pli_get_select"), {fileSlotValue(s->fileSym)});
     // LINE ( n ) stream option (rule (105)): resume input at line n.
     if (s->line) {
       llvm::Value* n = s->lineCount ? toI64(emitExpr(s->lineCount.get())) : i64(1);
@@ -8931,7 +8999,7 @@ void IRGen::emitGet(HStmt* s) {
   if (s->stringTarget)
     deferCall("pli_string_get_open", {sdata, slen});
   if (s->fileSym)
-    deferCall("pli_get_select", {i64(s->fileSym->fileSlot)});
+    deferCall("pli_get_select", {fileSlotValue(s->fileSym)});
   // LINE ( n ) stream option (rule (105)): resume input at line n.
   if (s->line) {
     llvm::Value* n = s->lineCount ? toI64(emitExpr(s->lineCount.get())) : i64(1);
@@ -9587,7 +9655,9 @@ llvm::Value* IRGen::fitTo(llvm::Value* v, llvm::Type* dst, const char* name) {
 }
 
 // Address of one call argument for a by-reference parameter (rule 4).
-llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
+llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty, llvm::Type** dummyTy) {
+  if (dummyTy)
+    *dummyTy = nullptr;
   // A whole-structure argument is passed BY VALUE (rule 127): the source's
   // storage is copied into a fresh buffer, so the callee's writes do not reach
   // the caller's structure. Scalars and arrays remain by reference.
@@ -9601,10 +9671,12 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
                                        : memberAddr(inner->sym, inner->memberPath, a->loc);
   }
   if (pty.isStruct()) {
-    llvm::Value* dst = entryAlloca(llvmTy(pty), "sv");
+    llvm::AllocaInst* dst = entryAlloca(llvmTy(pty), "sv");
     Val av = materializeActual(a);
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(pty)));
     b_.CreateMemCpy(dst, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), sz);
+    if (dummyTy)
+      *dummyTy = dst->getAllocatedType();
     return dst;
   }
   bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
@@ -9618,6 +9690,16 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
       !pty.isStruct() && !(pty.isChar() && pty.starLen) && a->kind == HExpr::VarRef && a->sym &&
       a->sym->kind != Symbol::ProcName && !a->memberPath.empty() && !a->locPtr &&
       !a->sym->definedBase && a->ty == pty && !packedMemberPath(a->sym->ty, a->memberPath);
+  // P4.1 for a fixed array element (rule 4, A8): `CALL w(a(i))` passes the
+  // element itself when its storage is directly addressable and its layout
+  // matches the dummy exactly. Packed members, DEFINED overlays, CONTROLLED
+  // and runtime-extent arrays keep the copy path; an element of a fixed
+  // array of the same type needs no temporary.
+  bool elemDirect =
+      !pty.isStruct() && !(pty.isChar() && pty.starLen) && a->kind == HExpr::Subscript &&
+      a->sym && a->sym->kind != Symbol::ProcName && a->memberPath.empty() && !a->locPtr &&
+      !a->sym->definedBase && !a->sym->controlled && !a->sym->ty.isDynamic() &&
+      a->ty == pty;
   if (pty.isChar() && pty.starLen) {
     // An adjustable-length `CHAR(*)` parameter (rule (18)) takes the caller's
     // character variable directly by reference (no copy): the callee's length
@@ -9646,6 +9728,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
         llvm::Type* st = llvm::StructType::get(
             ctx_, {b_.getInt32Ty(), llvm::ArrayType::get(b_.getInt8Ty(), cap)});
         llvm::AllocaInst* tmp = entryAlloca(st, "vstar");
+        if (dummyTy)
+          *dummyTy = st;
         markTempLifetime(tmp);
         llvm::Value* lp = b_.CreateStructGEP(st, tmp, 0, "vlp");
         llvm::Value* srcLen = av0.len ? av0.len : i64(av0.ty.len);
@@ -9668,6 +9752,8 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
       // fixed 256-byte cap overflowed the stack for a longer actual.
       unsigned cap = av.ty.len > 0 ? (unsigned)av.ty.len : 1;
       llvm::AllocaInst* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), cap), "cbuf");
+      if (dummyTy)
+        *dummyTy = buf->getAllocatedType();
       markTempLifetime(buf);
       b_.CreateMemCpy(buf, llvm::MaybeAlign(), av.ptr, llvm::MaybeAlign(), av.len);
       // The concat's heap buffer has been copied: release it (the call
@@ -9697,7 +9783,20 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty) {
     return addressOf(a->sym);
   if (memberDirect)
     return memberAddr(a->sym, a->memberPath, a->loc);
-  llvm::Value* addr = entryAlloca(llvmTy(pty), "dummy");
+  if (elemDirect) {
+    llvm::Value* elem = arrayElementAddr(a->sym->ty, addressOf(a->sym), a->args, a->loc,
+                                         dynUb_.count(a->sym) ? dynUb_[a->sym] : nullptr,
+                                         dynLb_.count(a->sym) ? dynLb_[a->sym] : nullptr);
+    // An element of a STATIC AREA array carries its own lazily created region
+    // (rule (20)), like the whole-array path above: create it before the
+    // callee can allocate from it.
+    if (a->sym->isStatic && a->sym->ty.elementType().isArea())
+      b_.CreateCall(runtimeFn("pli_area_lazy"), {elem, i64(a->sym->areaSize)});
+    return elem;
+  }
+  llvm::AllocaInst* addr = entryAlloca(llvmTy(pty), "dummy");
+  if (dummyTy)
+    *dummyTy = addr->getAllocatedType();
   // ADR-246: the dummy is live only until the call returns.
   markTempLifetime(addr);
   Val av = emitExpr(a);
@@ -10207,15 +10306,20 @@ void IRGen::emitAsyncCall(HStmt* s) {
     llvm::Function* calleeF = calleeFn(calleeSym);
     std::vector<Type> paramTypes = calleeSym->entryParams;
     std::vector<llvm::Value*> callArgs;
+    std::vector<llvm::Type*> dummyTys; // A9: copied actual carries its bytes in the ctx
     ActualScope scope(*this);
     for (size_t i = 0; i < s->args.size() && i < paramTypes.size(); ++i) {
       HExpr* a = s->args[i].get();
       if (a->kind == HExpr::Star) {
         callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+        dummyTys.push_back(nullptr);
         continue;
       }
-      callArgs.push_back(calleeSym->entryByValue ? marshalArg(a, paramTypes[i], s->loc)
-                                                 : argAddr(a, paramTypes[i]));
+      llvm::Type* dty = nullptr;
+      llvm::Value* arg = calleeSym->entryByValue ? marshalArg(a, paramTypes[i], s->loc)
+                                                 : argAddr(a, paramTypes[i], &dty);
+      callArgs.push_back(arg);
+      dummyTys.push_back(dty);
     }
     // Hidden extent/length args for `*`-extent array and CHAR(*) parameters
     // (rules (13),(18)), exactly as the synchronous external path marshals
@@ -10234,9 +10338,12 @@ void IRGen::emitAsyncCall(HStmt* s) {
         ext = i64(0);
       }
       callArgs.push_back(ext);
+      dummyTys.push_back(nullptr);
     }
     appendStaticLinks(nullptr, callArgs);
-    emitAsyncSpawn(s, calleeF, callArgs);
+    while (dummyTys.size() < callArgs.size())
+      dummyTys.push_back(nullptr);
+    emitAsyncSpawn(s, calleeF, callArgs, dummyTys);
     return;
   }
   llvm::Function* calleeF = calleeFn(calleeSym);
@@ -10245,10 +10352,13 @@ void IRGen::emitAsyncCall(HStmt* s) {
 
   // Marshal the callee arguments exactly as a synchronous call would.
   std::vector<llvm::Value*> callArgs;
+  std::vector<llvm::Type*> dummyTys; // A9: copied actual carries its bytes in the ctx
   Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
                 : (callee ? callee->retTy : Type::voidTy());
-  if (rty.isStruct() || rty.isChar())
+  if (rty.isStruct() || rty.isChar()) {
     callArgs.push_back(rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret"));
+    dummyTys.push_back(nullptr);
+  }
   // Evaluate each actual once for this call (rule 78).
   ActualScope scope(*this);
   for (size_t i = 0; i < s->args.size(); ++i) {
@@ -10260,13 +10370,18 @@ void IRGen::emitAsyncCall(HStmt* s) {
       break;
     if (a->kind == HExpr::Star) {
       callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+      dummyTys.push_back(nullptr);
       continue;
     }
-    callArgs.push_back(argAddr(a, pty));
+    llvm::Type* dty = nullptr;
+    callArgs.push_back(argAddr(a, pty, &dty));
+    dummyTys.push_back(dty);
   }
   if (en || callee)
-    for (size_t i = s->args.size(); i < calleeParams.size(); ++i)
+    for (size_t i = s->args.size(); i < calleeParams.size(); ++i) {
       callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
+      dummyTys.push_back(nullptr);
+    }
   for (size_t i = 0; i < calleeParams.size(); ++i) {
     if (isAdjustable(calleeParams[i])) {
       HExpr* a =
@@ -10275,16 +10390,20 @@ void IRGen::emitAsyncCall(HStmt* s) {
       if (!ext)
         ext = i64(0); // diagnosed by sema through the sync path (13)
       callArgs.push_back(ext);
+      dummyTys.push_back(nullptr);
     }
   }
   appendStaticLinks(callee, callArgs);
-  emitAsyncSpawn(s, calleeF, callArgs);
+  while (dummyTys.size() < callArgs.size())
+    dummyTys.push_back(nullptr);
+  emitAsyncSpawn(s, calleeF, callArgs, dummyTys);
 }
 
 /* The common tail of emitAsyncCall: build the context layout, the per-site
  * wrapper, and spawn the task (with priority if PRIORITY was given). */
 void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
-                           std::vector<llvm::Value*> callArgs) {
+                           std::vector<llvm::Value*> callArgs,
+                           const std::vector<llvm::Type*>& dummyTys) {
   // PRIORITY (rule 79, ADR-298): evaluated and passed to the spawn
   // function so the task starts with that priority. A bare CALL (no
   // task option) reaches here only when PRIORITY is the sole option.
@@ -10299,11 +10418,14 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   if (s->taskRef)
     taskAddr = taskEventAddr(s->taskRef.get(), s->loc);
 
-  // Context layout: [event addr, ...callArgs in order]. All addresses are
-  // opaque pointers; extents are i64.
+  // Context layout: [event addr, ...callArgs in order]. A copied actual (A9)
+  // stores its bytes inline so every task spawned from one call site sees the
+  // value as it was at spawn time; a by-reference actual still stores its
+  // pointer into the caller's frame.
   std::vector<llvm::Type*> fields = {b_.getPtrTy()};
-  for (llvm::Value* v : callArgs)
-    fields.push_back(v->getType());
+  for (size_t k = 0; k < callArgs.size(); ++k)
+    fields.push_back(k < dummyTys.size() && dummyTys[k] ? dummyTys[k]
+                                                        : callArgs[k]->getType());
   llvm::StructType* ctxTy = llvm::StructType::get(ctx_, fields);
 
   // Per-site wrapper: unpack the context, call the procedure, free the
@@ -10324,7 +10446,18 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   std::vector<llvm::Value*> wargs;
   for (size_t k = 0; k < callArgs.size(); ++k) {
     llvm::Value* fp = b_.CreateStructGEP(ctxTy, ctx, (unsigned)(k + 1), "carg");
-    wargs.push_back(b_.CreateLoad(fields[k + 1], fp, "cval"));
+    llvm::Type* dty = k < dummyTys.size() ? dummyTys[k] : nullptr;
+    if (dty) {
+      // Rebuild the copied actual on this task's own stack: the task must not
+      // share the caller-frame dummy that the next spawn would overwrite.
+      llvm::IRBuilder<> ab(wbb, wbb->begin());
+      llvm::AllocaInst* dslot = ab.CreateAlloca(dty, nullptr, "task.dummy");
+      b_.CreateMemCpy(dslot, llvm::MaybeAlign(), fp, llvm::MaybeAlign(),
+                      i64((long long)mod_.getDataLayout().getTypeStoreSize(dty)));
+      wargs.push_back(b_.CreateBitCast(dslot, b_.getPtrTy(), "tdarg"));
+    } else {
+      wargs.push_back(b_.CreateLoad(fields[k + 1], fp, "cval"));
+    }
   }
   b_.CreateCall(calleeF, wargs);
   llvm::Value* evp = b_.CreateStructGEP(ctxTy, ctx, 0, "cev");
@@ -10342,7 +10475,12 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   b_.CreateStore(eventAddr, evField);
   for (size_t k = 0; k < callArgs.size(); ++k) {
     llvm::Value* fp = b_.CreateStructGEP(ctxTy, ctxRaw, (unsigned)(k + 1), "targ");
-    b_.CreateStore(callArgs[k], fp);
+    llvm::Type* dty = k < dummyTys.size() ? dummyTys[k] : nullptr;
+    if (dty)
+      b_.CreateMemCpy(fp, llvm::MaybeAlign(), callArgs[k], llvm::MaybeAlign(),
+                      i64((long long)mod_.getDataLayout().getTypeStoreSize(dty)));
+    else
+      b_.CreateStore(callArgs[k], fp);
   }
   if (s->eventRef)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
@@ -10361,10 +10499,10 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   // the spawning task's priority (absolute = self + 0) (ADR-298).
   b_.CreateCall(runtimeFn("pli_task_spawn_p"), {fnPtr, ctxRaw, taskId, prioVal});
   pendingVarWrites_.clear(); // no sync point to copy a varying arg back
-  // ADR-246: the argument buffers stay live — the task reads them from the
-  // caller's frame after the call returns, so their slots must not be
-  // reused. Drop the markers without ending them.
-  dropTempLifetimes();
+  // A9: copied actuals now live in the heap context, so their caller-frame
+  // buffers are dead once the context is filled. By-reference actuals are not
+  // lifetime-marked and stay live for the task (ADR-246).
+  endTempLifetimes();
 }
 
 // Expand one WAIT operand into its event addresses (rule (82)). A whole

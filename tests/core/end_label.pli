@@ -1,0 +1,26 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule (7): an END clause takes a labellist. A GO TO to `nxt: end;`
+    leaves the loop at once, and a label on a named END closes every
+    block up to that name (multiple closure, TR 25.084 2.3.2.2). */
+ end_label: procedure options(main);
+    declare i fixed binary(31);
+    do i = 1 to 10;
+       if i = 3 then go to nxt;
+       if i = 4 then put skip list('FAIL loop body');
+    nxt: end;
+    if i ^= 3 then
+       put skip list('FAIL end_label', i);
+    else do;
+       outer: begin;
+          do i = 1 to 10;
+             if i = 2 then go to out;
+          end;
+          put skip list('FAIL inner body');
+       out: end outer;
+       if i = 2 then
+          put skip list('PASS end_label');
+       else
+          put skip list('FAIL closure', i);
+    end;
+ end end_label;

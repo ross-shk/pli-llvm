@@ -13143,3 +13143,266 @@ reintroduces the external dependency this ADR removes and makes link success
 host-dependent. *Keep `--no-bitcode-runtime` for sanitizer builds.* It
 contradicts embedded-runtime-only and existed only to feed a second runtime
 copy, which the removed sanitizer options no longer need.
+
+---
+
+## ADR-350 — ON establishment is scoped to its block activation
+
+**Context.** Rules (91)–(94) establish an ON unit for the activation of the
+block that executed the ON statement. IBM SC26-3114 §14.2.1.2 says a repeated
+ON for the same condition in one activation logically nullifies the earlier
+unit; units stack only when a dynamic descendant establishes one, and a
+REVERT is ignored unless the same block activation armed the unit. An ON unit
+is itself an activation, so a unit armed inside it ends when it returns. The
+runtime instead kept one flat stack: every ON pushed, REVERT popped the
+topmost entry for the key wherever it came from, and a unit armed inside an
+ON-unit stayed established. Three defects followed: a loop re-arming one
+condition overflowed the 64-entry stack; a REVERT in a procedure that armed
+nothing popped the caller's unit; and `ON ERROR ON ZERODIVIDE ...` left the
+ZERODIVIDE unit alive after its ERROR unit returned.
+
+**Decision.** ON and REVERT carry the depth saved at the current activation's
+entry. `pli_on_establish(key, id, fn, ctx, base)` removes a same-key entry at
+or above `base` before pushing, so a repeat replaces rather than stacks;
+`pli_on_revert(key, base)` removes the topmost same-key entry only when it is
+at or above `base`, and is otherwise a no-op. IRGen saves that base at
+procedure entry when the body contains an ON or a REVERT, at each BEGIN whose
+body does likewise, and at ON-unit entry for the unit body. Procedure and
+BEGIN exits keep restoring by depth; an ON-unit exit restores its entry depth
+on every path (normal return and bare RETURN). `ON ... SYSTEM` is a real push
+and now gets the same block scope it always needed.
+
+**Consequences.** One activation holds at most one unit per condition, so 200
+re-arms in one block leave one entry; a foreign REVERT leaves the caller's
+unit; a direct nested ON unit dies with its unit. `tests/hardening/
+on_activation.pli` gates all three. Three tests pinned the flat-stack model
+and change as conformance changes under this ADR: `on_nested.pli` now re-
+exposes the procedure's ZERODIVIDE unit after the direct nested unit ends,
+`on_stringrange.pli` exposes its outer unit by leaving a BEGIN block instead of
+REVERT-ing a same-activation duplicate, and `condition_edge.pli` drops a
+SIGNAL that would take the system action. SIGNAL dispatch and the trap paths
+are untouched; blocks and procedures with no ON/REVERT still pay no depth
+save.
+
+**Rejected.** *Remove every entry for the key on REVERT.* It pops an enclosing
+activation's unit, the defect this ADR fixes. *Keep the flat stack and always
+push.* It overflows at 64 arms and contradicts "logically nullified". *Scope
+only at procedure and BEGIN exits.* A direct `ON ... ON ...` unit would still
+leak, because the inner statement is not a BEGIN block.
+
+---
+
+## ADR-351 — Array-element call actuals pass by reference
+
+**Context.** PL/I passes an argument by reference unless the entry is declared
+by value, so a reference to a parameter is a reference to the argument: after
+`CALL setv(a(1), 5)`, `a(1)` must hold 5. `argAddr` treated only a whole
+`VarRef` (and a same-layout member leaf) as directly addressable. A subscripted
+actual took the per-site dummy path: its value was copied into a temporary,
+the callee wrote the temporary, and the caller's element never changed. The
+defect was silent — the program compiled and produced the wrong array.
+
+**Decision.** A subscripted actual of a fixed array whose element type equals
+the dummy's exactly passes the element's own address, computed with the same
+`arrayElementAddr` path a normal subscript read uses, including constant and
+computed indexes and multiple axes. The direct path is refused when the
+element needs layout conversion (a different type, length, precision or
+VARYING mode), a packed member, a locator-qualified array, a `DEFINED` overlay,
+a CONTROLLED variable, or a runtime-extent array; those keep the per-site
+dummy and its conversion or copy. Whole variables and member leaves keep their
+existing direct paths, so the common call gains no work.
+
+**Consequences.** Synchronous and asynchronous calls share `argAddr`, so both
+now write through an element actual; an async call still requires the caller
+to WAIT before the frame dies, as before. `tests/core/arg_element_ref.pli`
+covers numeric constant and computed subscripts, a multi-axis element, CHAR and
+VARYING CHAR elements, and an asynchronous call; `tests/ir/arg_element_ref.pli`
+pins in `-emit-llvm` that the element and a whole variable reach the call as
+their own addresses, with no dummy copy. `DEFINED`, dynamic, CONTROLLED and
+packed elements are unchanged by construction.
+
+**Rejected.** *Pass every subscript by reference regardless of layout.* A
+converted or checked dummy needs storage the callee's writes must not write
+back through, and packed members cannot be addressed as their load type.
+*Copy the element back after the call.* It fixes the observed value but still
+gives the callee a different object, so two parameters that alias one element
+disagree inside the call — the property the language actually specifies.
+
+## ADR-352 — Async copied actuals live in the task context
+
+**Context.** An asynchronous `CALL` (rule 79) returns before the task runs, so
+the mapped arguments must outlive the caller's current statement. A whole
+variable is passed by reference and the caller must WAIT before its frame dies
+(C28), so sharing that storage is intended. An actual that needs a dummy — an
+expression, a literal, a converted scalar, an adjustable-character temporary, a
+`VARYING` wrapper — is copied into a per-site entry-block alloca. Every spawn
+from one call site reused that one alloca, so three tasks started from
+`CALL w(i + 0) EVENT(e(i))` in a loop all read the last value (`0 0 3`). The
+spawn also ended the dummy's lifetime while the task was still reading it.
+
+**Decision.** `argAddr` reports the type of every dummy it creates. `emitAsyncCall`
+threads those types into `emitAsyncSpawn`; for each copied actual the heap
+context stores the dummy's bytes inline instead of a pointer into the caller's
+frame, and the caller memcpys the live dummy into the context at spawn time.
+The per-site wrapper rebuilds a dummy on the task's own stack, copies the bytes
+from the context, and passes that address to the callee. Arguments already
+addressable in the caller's frame — whole variables, same-layout member leaves,
+the fixed-array elements of ADR-351, the sret buffer, static links and hidden
+extents — keep the pointer/value form. The caller-frame dummies are dead once
+the context is filled, so the spawn ends their lifetime rather than dropping the
+markers.
+
+**Consequences.** Each task sees the values it was called with, and callee
+writes to a copied dummy stay inside that task, exactly as on the synchronous
+copy path. Whole variables and elements still gain no copy or allocation, and
+the context remains a single heap allocation per spawn. Gates:
+`tests/core/task_arg_dummy.pli` (three tasks from one site copy a numeric
+expression, a `SUBSTR` character expression and a second numeric expression)
+and the `tests/driver/task_arg_dummy.sh` matrix under fiber/os with one and four
+workers.
+
+**Rejected.** *Allocate one heap dummy per argument and store its pointer.* It
+adds an allocation per copied actual and an indirection the wrapper does not
+need; the inline field keeps the context a single block. *Keep the shared alloca
+and require a WAIT before the next spawn.* That serialises the tasks and defeats
+the point of `CALL ... EVENT`. *Copy at callee entry.* The callee cannot tell a
+dummy from a genuine by-reference argument, so it cannot reconstruct the value.
+
+## ADR-353 — FILE slots are process-wide, keyed by the variable's symbol
+
+**Context.** A FILE variable owns no runtime storage: its compile-time slot is
+its identity in the process-global `rt_pli_files` table (rules (39),(100)-(105)).
+`Sema::nextFileSlot_` restarted at 0 for every translation unit, so separately
+compiled units reused slot 0. In the probe, MAIN opened and wrote its own file,
+the library opened, wrote and closed its own file, and MAIN's next `PUT` hit the
+library's now-closed slot and aborted with "PUT to a file that is not open".
+
+**Decision.** IRGen emits one marker global per FILE variable and uses its
+address as the file's identity. An `EXTERNAL` FILE emits a common marker, so
+the linker gives every unit the same address; a unit-private FILE emits an
+internal marker, so same-named private files stay distinct. The runtime
+`pli_file_slot` maps a marker address to one process-wide slot on first use
+(initialised once, guarded by the platform mutex) and caches the mapping. Every
+file statement resolves its slot through that call, and a file condition's key
+becomes `base - runtime slot` computed at run time, so `ON UNDEFINEDFILE(f)` /
+`ON ENDFILE(f)` match the key the runtime raises.
+
+**Consequences.** Units can no longer collide, while `EXTERNAL` FILEs still
+share. The 16-slot table is now one budget for the whole linked program instead
+of 16 per unit; exceeding it raises `ERROR` ("too many FILE constants") rather
+than silently misusing a slot. The lookup is a short linear scan per file
+statement over the distinct files in the program, negligible beside the I/O it
+guards. Gate: `tests/multimodule/mm_file_slots.pli` with its `_lib` companion
+(the library opens, writes and closes its own file while MAIN keeps its file
+open, and MAIN writes and reads back both records).
+
+**Rejected.** *Per-unit compile-time ranges.* Separate compilation cannot know
+which range another unit took, and a fixed linker script for slots would be a
+new build requirement. *Key the registry by file name.* Two private FILE
+variables with the same name in different scopes are different files, and an
+`EXTERNAL` name needs its own sharing rule; the marker address already carries
+exactly the right identity.
+
+## ADR-354 — A labelled END marks its group's exit
+
+**Context.** Rule (7) gives the end-clause a `[labellist]` before `END`. The
+parser collected a statement prefix and then tried to parse `END` as the start
+of a statement, so `nxt: end;` was rejected as an assignment. The label must
+name the point *after* the group: a branch to it leaves an iterative DO without
+running that iteration's step or test blocks, and leaves a BEGIN or SELECT at
+its end.
+
+**Decision.** The parser recognises a labellist before `END`, stores it in the
+`EndInfo` end clause, and the closing group's parser places a labelled null
+statement after the group in the enclosing body. A named `END` still closes
+every block up to that name; the labels survive the multiple-closure
+propagation and land only after the final group. SELECT carries the labels out
+of a WHEN/OTHERWISE body to the exit after its IF chain, and a labelled END at
+a procedure end appends the null to the procedure body (the branch then returns
+through the normal epilogue). Codegen is unchanged: the label is an ordinary
+statement label on a null, so `GO TO` branches past the group.
+
+**Consequences.** `nxt: end;` works for DO, BEGIN and SELECT groups. A label
+array on an END clause is diagnosed as unimplemented with rule (7), never
+silently dropped, and an unknown label still cites rule (77). Gate:
+`tests/core/end_label.pli` (loop exit and multiple closure through a named
+`END`).
+
+**Rejected.** *Map the label to the loop's exit block inside codegen.* Every
+group emitter would have to publish an exit block, and BEGIN/SELECT have none;
+the null placement works for all three. *Attach the labels to the last
+statement of the group body.* An iterative DO then runs its step and test after
+the branch and can re-enter the loop, which is not what the END label means.
+
+## ADR-355 — Factored FILE declarations and FILE value diagnostics
+
+**Context.** `DECLARE (a, b) FILE;` parses the attribute tail once and clones
+the per-name fields, but the clone omitted the parser-only `fileAttr` and
+`nonprint` flags. Both names became non-file variables, so `OPEN FILE(a)`
+rejected them with rule (105). Separately, a FILE name in a value position had
+a void type and compiled, so `f = 1` silently produced no meaningful code.
+
+**Decision.** The factored clone copies `fileAttr` and `nonprint`, exactly like
+the other per-name flags. A FILE variable reference in a value position is
+diagnosed with rule (39): a FILE variable is a designator for `OPEN`, `CLOSE`
+and `FILE(f)`, not a data value.
+
+**Consequences.** Every name in a factored declaration opens, writes and reads
+as its own file, and a scalar use is rejected instead of compiling. Gates:
+`tests/core/factor_file.pli` and the negative `tests/core/bad_factor_file.pli`.
+
+**Rejected.** *Give FILE a real data type.* It owns no runtime storage and has
+no value; a type would invite arithmetic and assignment the language does not
+provide. *Detect the factored case in sema.* The flags live only in the parse
+item and are gone before sema; copying them at the clone is the narrow fix.
+
+## ADR-356 — A recycled task fiber clears the CONTROLLED lookup cache
+
+**Context.** The CONTROLLED table is per task. `ctlFind` keeps `ctl_last`, a
+one-entry cache pointing at the last `CtlVar`. `rt_fiber_prepare` reset the
+table count to zero for a new task but left the cache pointer, and `ctlFind`
+trusted it before reading the count. A new task whose first lookup used the
+same deterministic key as the previous task's last lookup reused the old
+generation stack; a task with two CONTROLLED variables then failed on a
+recycled fiber with `FREE of empty CONTROLLED stack` or SIGSEGV.
+
+**Decision.** The fiber reset clears `ctl_last` together with `ctl_count`, and
+`ctlFind` trusts the cache only while the table is non-empty. The table buffer
+itself stays allocated for reuse.
+
+**Consequences.** Two or more CONTROLLED variables start from their entry
+generations on a recycled fiber. The reset adds one store and the hot lookup
+one count check. Gate: `tests/hardening/task_ctl_reuse_multi.pli` (five rounds,
+four tasks, two CONTROLLED variables, fiber/os with one and four workers).
+
+**Rejected.** *Make the key comparison sufficient.* The stale entry has the
+same key as the new task's variable; only the count tells the two activations
+apart. *Free the whole table on reset.* It would turn reuse into an allocation
+per task and still leave the pointer dangling until cleared.
+
+## ADR-357 — The ON-unit stack grows on the heap
+
+**Context.** A task's ON-unit stack was a fixed `pli_on_frame[64]` inside the
+per-task state block. Nesting has no language limit, so 200 recursive
+activations that each arm `ON ERROR` is a legal program; it aborted at 64
+entries with "ON ERROR stack overflow", and the message named ERROR whatever
+condition key actually overflowed.
+
+**Decision.** The stack is a heap array with an initial capacity of 16, doubled
+when a push fills it and halved when a pop drops the depth to a quarter of the
+capacity. Procedure, BEGIN and GO TO exits continue to reset the depth the way
+they did; the array itself stays with the recycled fiber for reuse. An
+allocation failure aborts with a message that includes the condition key.
+
+**Consequences.** Nesting is limited only by memory, and a deep unwind returns
+the capacity instead of pinning it. Shallow programs (capacity 16) pay no
+growth, and each push/pop adds at most one capacity check. Gate:
+`tests/hardening/on_deep_recursion.pli` (200 activations, capture context read
+by the innermost unit); `on_rearm_loop.pli` and the fixed-condition tests stay
+green.
+
+**Rejected.** *Raise the fixed array to, say, 1024.* It replaces one arbitrary
+limit with another and still spends the array in every task's state block.
+*Allocate on every push.* It turns a cheap push into an allocator call and
+loses the contiguous scan the whole stack relies on. *Never shrink.* A single
+deep recursion would pin the largest frame for the life of the fiber.

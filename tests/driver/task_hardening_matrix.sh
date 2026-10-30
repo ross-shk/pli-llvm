@@ -12,7 +12,7 @@ OUT=tests/driver/out/task_hardening_matrix
 mkdir -p "$OUT"
 
 rc=0
-for t in task_nested_wait task_nested_finish task_ctl_reuse \
+for t in task_nested_wait task_nested_finish task_ctl_reuse task_ctl_reuse_multi \
          task_on_isolation task_on_combo task_alloc_combo; do
   $PLI "tests/hardening/$t.pli" -o "$OUT/$t" || { echo "FAIL $t: compile"; rc=1; continue; }
   for model in fiber os; do

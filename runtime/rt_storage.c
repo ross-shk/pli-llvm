@@ -69,7 +69,7 @@ static PLI_ALWAYS_INLINE CtlVar *ctlFind(long long key, int create) {
   pli_task_local *st = ctlLocal();
   /* intent: a hot push/pop loop keeps naming the same variable; skip the
    * table walk when the last lookup already found it. */
-  if (st->ctl_last) {
+  if (st->ctl_last && ctlCount(st) > 0) {
     CtlVar *last = (CtlVar *)st->ctl_last;
     if (last->key == key)
       return last;

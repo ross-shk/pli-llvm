@@ -75,9 +75,48 @@ static void rt_undef_file(long long slot) {
   u.fn(ctx);
 }
 
+/* A10: FILE identity across separately compiled units. Each FILE variable has
+ * a marker symbol in its unit; an EXTERNAL file's marker is a common symbol
+ * the linker merges. The address is stable for the whole process, so the
+ * runtime maps it to one slot on first use instead of trusting a per-unit
+ * compile-time index (which made every unit start at slot 0). */
+static struct {
+  pli_mutex mu;
+  pli_once once;
+  const void *key[PLI_MAX_FILES];
+  long long count;
+} rt_file_reg;
+
+static void rt_file_reg_init(void) {
+  pli_mutex_init(&rt_file_reg.mu);
+  rt_file_reg.count = 0;
+}
+
+long long pli_file_slot(const char *key) {
+  pli_call_once(&rt_file_reg.once, rt_file_reg_init);
+  pli_mutex_lock(&rt_file_reg.mu);
+  for (long long i = 0; i < rt_file_reg.count; ++i) {
+    if (rt_file_reg.key[i] == (const void *)key) {
+      pli_mutex_unlock(&rt_file_reg.mu);
+      return i;
+    }
+  }
+  long long slot = rt_file_reg.count;
+  if (slot < PLI_MAX_FILES) {
+    rt_file_reg.key[slot] = (const void *)key;
+    rt_file_reg.count = slot + 1;
+  }
+  pli_mutex_unlock(&rt_file_reg.mu);
+  if (slot >= PLI_MAX_FILES) {
+    pli_signal_error("too many FILE constants in one program");
+    return -1;
+  }
+  return slot;
+}
+
 /* OPEN (rules 100-103): open the file in `slot` with the given name (namelen
  * bytes, not nul-terminated). mode 0 = INPUT, 1 = OUTPUT. The FILE variable's
- * slot is a compile-time constant, so rt_pli_files[slot] is stable across the
+ * slot comes from pli_file_slot, so rt_pli_files[slot] is stable across the
  * OPEN/GET/PUT/CLOSE statements that name it. nonprint=1 (ADR-204): output
  * to this file is silently discarded. */
 void pli_file_open(long long slot, const char *name, long long namelen, long long mode,

@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm */
+ factor_file: procedure options(main);
+    declare (fa, fb) file;
+    declare x char(20);
+    declare y char(20);
+    open file(fa) title('examples/out/fa.txt') output;
+    put file(fa) skip list('alpha');
+    close file(fa);
+    open file(fb) title('examples/out/fb.txt') output;
+    put file(fb) skip list('beta');
+    close file(fb);
+    open file(fa) title('examples/out/fa.txt') input;
+    get file(fa) skip list(x);
+    close file(fa);
+    open file(fb) title('examples/out/fb.txt') input;
+    get file(fb) skip list(y);
+    close file(fb);
+    if x = 'alpha' & y = 'beta' then
+       put skip list('PASS factor_file');
+    else
+       put skip list('FAIL factor_file', x, y);
+ end factor_file;

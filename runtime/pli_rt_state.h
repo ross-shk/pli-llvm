@@ -277,6 +277,9 @@ static inline long long rt_pli_on_top(long long key);
 static inline void *rt_pli_on_top_fn(long long key);
 static inline void *rt_pli_on_top_ctx(long long key);
 void rt_pli_on_pop(long long key);
+void pli_on_establish(long long key, long long id, char *fn, char *ctx,
+                      long long base);
+void pli_on_revert(long long key, long long base);
 
 /* Centralised abort/exit helpers (Phase 6): pli_abort flushes the runtime
  * output, prints msg to stderr and exits 8; pli_exit exits with a code. */

@@ -1,8 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-  /* rules (91)-(94): nested ON units; an
-     ON-unit may establish another handler
-     and SIGNAL it before resuming. */
+  /* rules (91)-(94): nested ON units; an ON-unit may establish
+     another handler and SIGNAL it before resuming. A unit armed
+     inside an ON-unit ends with that unit (ADR-350), so the direct
+     nested form re-exposes the procedure's own ZERODIVIDE unit. */
   on_nested: procedure options(main);
      on error begin;
         put skip list('outer');
@@ -15,8 +16,8 @@
      end;
      signal error;
      put skip list('mid');
-     on error on zerodivide
-        put skip list('direct');
+     on zerodivide put skip list('outer-zd');
+     on error on zerodivide put skip list('direct');
      signal error;
      signal zerodivide;
      put skip list('done');

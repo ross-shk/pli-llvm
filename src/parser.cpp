@@ -675,6 +675,15 @@ void Parser::parseProcOptions(Proc* p) {
 
 EndInfo Parser::parseProcBody(Proc* p) {
   EndInfo e = parseBody(p, p->body, p->name);
+  // A labelled END at the procedure's end (`nxt: end;`, rule (7)) is a target
+  // that returns from the procedure: place the labelled null at the body end.
+  if (e.present && e.label.empty() && !e.endLabels.empty()) {
+    auto n = std::make_unique<Stmt>();
+    n->kind = Stmt::Null;
+    n->loc = e.loc;
+    n->labels = std::move(e.endLabels);
+    p->body.push_back(std::move(n));
+  }
   if (e.present && !e.label.empty()) {
     // END names something that is not this procedure and not any enclosing
     // block we know about.
@@ -854,6 +863,25 @@ bool Parser::parseCondPrefixes(Stmt* st) {
   return true;
 }
 
+// Rule (7): a labelled END (`nxt: end;`) closes its group, and the labels
+// target the group's exit. Place a labelled null right after the group so a
+// GO TO branches past the loop's step/test blocks instead of into them.
+StmtP Parser::closeWithEndLabels(StmtP base) {
+  if (endClauseLabels_.empty() || !base)
+    return base;
+  auto g = std::make_unique<Stmt>();
+  g->kind = Stmt::Group;
+  g->loc = base->loc;
+  g->body.push_back(std::move(base));
+  auto n = std::make_unique<Stmt>();
+  n->kind = Stmt::Null;
+  n->loc = g->loc;
+  n->labels = std::move(endClauseLabels_);
+  endClauseLabels_.clear();
+  g->body.push_back(std::move(n));
+  return g;
+}
+
 StmtP Parser::parseStatement(Proc* owner) {
   auto st = std::make_unique<Stmt>();
   st->loc = cur().loc;
@@ -930,6 +958,30 @@ StmtP Parser::parseStatement(Proc* owner) {
     }
     i_ = save;
     break;
+  }
+
+  // end-clause labellist (rule (7)): `nxt: end;` labels the enclosing group's
+  // exit. The group parser turns the labels into a labelled null after the
+  // group, so a GO TO jumps out of a loop instead of re-entering its body.
+  if (!st->labels.empty() && atStmtKeyword("END")) {
+    if (!st->labelElems.empty())
+      d_.error(st->loc, "a label array on an END clause is not implemented in this stage",
+               "(7)");
+    EndInfo e;
+    e.present = true;
+    e.loc = cur().loc;
+    advance(); // END
+    if (at(Tok::Word)) {
+      e.label = cur().text;
+      advance();
+    }
+    expect(Tok::Semi, "(7)");
+    e.endLabels = std::move(st->labels);
+    pendingEnd_ = std::move(e);
+    auto n = std::make_unique<Stmt>();
+    n->kind = Stmt::Null;
+    n->loc = pendingEnd_.loc;
+    return n;
   }
 
   // nested package (extension, ADR-109): packages nest nothing; a labelled
@@ -1024,7 +1076,7 @@ StmtP Parser::parseStatement(Proc* owner) {
       s->chkFOver = st->chkFOver;
       s->strRange = st->strRange;
       s->labelElems = st->labelElems;
-      return s;
+      return closeWithEndLabels(std::move(s));
     }
   }
 
@@ -1047,7 +1099,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     k->chkOver = st->chkOver;
     k->chkFOver = st->chkFOver;
     k->strRange = st->strRange;
-    return k;
+    return closeWithEndLabels(std::move(k));
   }
 
   auto s = parseAssignment();
@@ -1142,7 +1194,9 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     st->kind = Stmt::Begin; // a block with its own scope (rule (68))
     EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
     if (e.present && !e.label.empty())
-      pendingEnd_ = e;
+      pendingEnd_ = std::move(e);
+    else if (e.present)
+      endClauseLabels_ = std::move(e.endLabels);
     return st;
   }
   if (kw("FORMAT")) {
@@ -1530,6 +1584,11 @@ StmtP Parser::parseDeclare() {
         item.controlled = base.controlled;
         item.like = base.like;
         item.picture = base.picture;
+        // FILE (rules (39),(40)) and its NONPRINT modifier (ADR-204) are
+        // per-name flags, not part of the type: copy them or every factored
+        // name stays a non-file and OPEN/FILE( f ) rejects it (B15).
+        item.fileAttr = base.fileAttr;
+        item.nonprint = base.nonprint;
         st->decls.push_back(std::move(item));
       }
     } else {
@@ -2992,13 +3051,24 @@ StmtP Parser::parseSelect(Proc* owner) {
   StmtP head;
   Stmt* tail = nullptr; // open IF node awaiting its elseS
   bool sawWhen = false, sawOtherwise = false;
+  // A labelled END from a WHEN/OTHERWISE body closes this SELECT; its labels
+  // target the exit after the whole IF chain (rule (7)).
+  auto closeFromBody = [&] {
+    EndInfo e = std::move(pendingEnd_);
+    pendingEnd_ = {};
+    if (e.label.empty())
+      endClauseLabels_ = std::move(e.endLabels);
+    else
+      pendingEnd_ = std::move(e);
+    return std::move(head);
+  };
   for (;;) {
     if (at(Tok::Eof)) {
       d_.error(cur().loc, "unexpected end of file: missing END for SELECT (ADR-104)", "");
       return head;
     }
     if (pendingEnd_.present)
-      return head; // multiple closure from a WHEN body
+      return closeFromBody(); // multiple closure from a WHEN body
     bool isWhen = cur().isWord("WHEN") && !looksLikeAssignment();
     bool isOtherwise = cur().isWord("OTHERWISE") && !looksLikeAssignment();
     if (atStmtKeyword("END")) {
@@ -3097,7 +3167,7 @@ StmtP Parser::parseSelect(Proc* owner) {
       }
       sawWhen = true;
       if (pendingEnd_.present)
-        return head; // multiple closure from the WHEN body
+        return closeFromBody(); // multiple closure from the WHEN body
       continue;
     }
     // OTHERWISE (exactly one; a second is diagnosed above via sawOtherwise).
@@ -3113,7 +3183,7 @@ StmtP Parser::parseSelect(Proc* owner) {
       tail->elseS = std::move(body);
     // Without a preceding WHEN the rejection surfaces at END (!sawWhen).
     if (pendingEnd_.present)
-      return head; // multiple closure from the OTHERWISE body
+      return closeFromBody(); // multiple closure from the OTHERWISE body
   }
 }
 
@@ -3269,7 +3339,9 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
 
   EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
   if (e.present && !e.label.empty())
-    pendingEnd_ = e; // multiple closure
+    pendingEnd_ = std::move(e); // multiple closure
+  else if (e.present)
+    endClauseLabels_ = std::move(e.endLabels);
   return st;
 }
 

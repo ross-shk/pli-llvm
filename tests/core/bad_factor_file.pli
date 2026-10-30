@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (11),(39): a name in a factored FILE declaration is still a
+    file designator, never a data value. */
+ bad_factor_file: procedure options(main);
+    declare (fa, fb) file;
+    fb = 1;
+ end bad_factor_file;

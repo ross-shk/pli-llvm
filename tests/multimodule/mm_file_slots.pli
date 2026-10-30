@@ -1,0 +1,27 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (42),(100)-(105), ADR-353: FILE variables of separately
+    compiled units get distinct runtime slots. The library opens,
+    writes and closes its own file while MAIN's stays open, so MAIN's
+    second PUT and its read-back must still reach MAIN's file. */
+ mm_file_slots: procedure options(main);
+    declare mine file;
+    declare libio entry;
+    declare w1 char(20);
+    declare w2 char(20);
+    open file(mine)
+       title('tests/multimodule/out/mm_file_slots_main.txt') output;
+    put file(mine) skip list('one');
+    call libio();
+    put file(mine) skip list('two');
+    close file(mine);
+    open file(mine)
+       title('tests/multimodule/out/mm_file_slots_main.txt') input;
+    get file(mine) skip list(w1);
+    get file(mine) skip list(w2);
+    close file(mine);
+    if w1 = 'one' & w2 = 'two' then
+       put skip list('PASS mm_file_slots');
+    else
+       put skip list('FAIL', w1, w2);
+ end mm_file_slots;

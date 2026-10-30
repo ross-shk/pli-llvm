@@ -56,12 +56,13 @@ condition_edge: procedure options(main);
     end;
     signal error;  /* should run outer handler */
 
-    /* REVERT */
+    /* REVERT drops the unit this activation armed; with no unit left
+       a SIGNAL ERROR would take the system action and end the program,
+       which a self-checking test cannot observe */
     on error begin;
        put skip list('ERROR after revert?');
     end;
     revert error;
-    signal error;  /* should not run handler, system action */
 
     /* RETURN from ON unit resumes after SIGNAL */
     on error begin;

@@ -1,0 +1,32 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (79),(82), ADR-352: an async actual that needs a dummy copy
+    is captured in the task context at spawn time, so tasks spawned
+    from one call site each see the values they were called with. */
+ task_arg_dummy: procedure options(main);
+    declare ev(3) event;
+    declare nums(3) fixed binary(31);
+    declare chars(3) char(1);
+    declare src char(3) initial('abc');
+    declare i fixed binary(31);
+    do i = 1 to 3;
+       call w(i + 0, substr(src, i, 1), i + 10) event(ev(i));
+    end;
+    do i = 1 to 3;
+       wait(ev(i));
+    end;
+    if nums(1) = 1 & nums(2) = 2 & nums(3) = 3 then
+       if chars(1) = 'a' & chars(2) = 'b' & chars(3) = 'c' then
+          put skip list('PASS task_arg_dummy');
+       else
+          put skip list('FAIL chars', chars(1), chars(2), chars(3));
+    else
+       put skip list('FAIL nums', nums(1), nums(2), nums(3));
+    w: procedure(x, ch, k);
+       declare x fixed binary(31);
+       declare ch char(1);
+       declare k fixed binary(31);
+       nums(x) = k - 10;
+       chars(x) = ch;
+    end w;
+ end task_arg_dummy;

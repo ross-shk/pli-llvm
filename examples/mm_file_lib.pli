@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm */
+ mm_file_lib: package exports(libio);
+ libio: procedure;
+    declare own file;
+    open file(own) title('examples/out/mm_lib.txt') output;
+    put file(own) skip list('lib one');
+    close file(own);
+ end libio;
+ end mm_file_lib;

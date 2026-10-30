@@ -599,6 +599,10 @@ static int rt_fiber_prepare(pli_fiber *f, void *(*fn)(void *), void *arg) {
     f->local->oncode = 0;
     f->local->on_source = 0;
     f->local->ctl_count = 0;
+    // The one-entry CONTROLLED lookup cache points into the old table. With
+    // the count zeroed, ctlFind must not trust it: a recycled fiber with two
+    // or more CONTROLLED variables would hand out a stale generation stack.
+    f->local->ctl_last = NULL;
     f->local->finish_fn = NULL;
   }
   if (!f->stack_base) {

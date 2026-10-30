@@ -1,0 +1,5 @@
+CHECK-LABEL: define internal void @PLI_ARG_ELEMENT_REF\(
+CHECK: %{{[a-z0-9]+}} = getelementptr inbounds \[3 x i32\], ptr %A.addr, i64 0, i64 1
+CHECK: call void @SETV\(ptr %{{aelem}}, ptr
+CHECK: call void @SETV\(ptr %B.addr, ptr
+CHECK: ret void

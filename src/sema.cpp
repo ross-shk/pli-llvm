@@ -5549,6 +5549,11 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       sym->owner = p;
     e->sym = sym;
     e->ty = sym->ty;
+    // A FILE variable is a designator for OPEN/CLOSE/FILE( f ), not a data
+    // value (rules (39),(40)); a scalar use is diagnosed instead of silently
+    // assigning through its void type.
+    if (sym->fileAttr)
+      d_.error(e->loc, "'" + e->name + "' is a FILE variable and has no value", "(39)");
     // A locator-qualified reference P -> X (rule 124): P is a POINTER or an
     // OFFSET, X a based variable whose storage is addressed through P. The
     // member path below then resolves X.A against the based structure type.

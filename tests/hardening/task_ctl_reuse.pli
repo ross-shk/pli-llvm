@@ -4,8 +4,8 @@
     Twenty rounds of four tasks recycle the same fibers; every task
     must start from its own entry generation (INITIAL 7), push two
     more, see each fresh one take INITIAL, and pop back in LIFO order
-    to the values it stored. One CONTROLLED variable per task: two or
-    more on a recycled fiber is deferred work (C6). */
+    to the values it stored. One CONTROLLED variable per task; the
+    multi-variable recycled-fiber case is task_ctl_reuse_multi (C6). */
  task_ctl_reuse: procedure options(main);
     declare ev(4) event;
     declare bad(4) fixed bin(31) external;

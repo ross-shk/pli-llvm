@@ -1,0 +1,18 @@
+ /* A8 probe: an array element actual is the argument, not a copy. */
+ on_argref: procedure options(main);
+    declare a(3) fixed bin(31) init(0, 0, 0);
+    declare i fixed bin(31);
+    i = 2;
+    call setv(a(1), 5);
+    call setv(a(i), 9);
+    call setv(a(3), 13);
+    put skip list('fixed', a(1), a(2), a(3));
+    call setv(a(1), 7);
+    put skip list('again', a(1));
+ end on_argref;
+
+ setv: procedure(n, v);
+    declare n fixed bin(31);
+    declare v fixed bin(31);
+    n = v;
+ end setv;

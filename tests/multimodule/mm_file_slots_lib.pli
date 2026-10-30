@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (42),(100)-(105), ADR-353: companion to mm_file_slots.pli.
+    This unit's FILE variable must not take MAIN's slot. */
+ mm_file_slots_lib: package exports(libio);
+ libio: procedure;
+    declare own file;
+    open file(own)
+       title('tests/multimodule/out/mm_file_slots_lib.txt') output;
+    put file(own) skip list('lib one');
+    close file(own);
+ end libio;
+ end mm_file_slots_lib;

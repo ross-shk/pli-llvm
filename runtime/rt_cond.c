@@ -41,18 +41,42 @@ void pli_abort(const char *msg) {
 /* The ON state of the running task. */
 static PLI_ALWAYS_INLINE pli_task_local *on_state(void) { return rt_task_local(); }
 
+/* Return capacity when the stack has been popped well below it (C7): nesting
+ * has no language limit, and a deep activation must not pin its frames after
+ * it unwinds. A failed realloc is harmless (the old block stays valid). */
+static PLI_ALWAYS_INLINE void on_shrink(pli_task_local *st) {
+  if (st->on_cap > PLI_ON_INIT && st->on_sp <= st->on_cap / 4) {
+    int cap = st->on_cap / 2;
+    pli_on_frame *ns =
+        (pli_on_frame *)pli_plat_realloc(st->on_stack, (size_t)cap * sizeof *ns);
+    if (ns) {
+      st->on_stack = ns;
+      st->on_cap = cap;
+    }
+  }
+}
+
 void rt_pli_on_push(long long key, long long id, void *fn, void *ctx) {
   pli_task_local *st = on_state();
-  if (st->on_sp < PLI_ON_MAX) {
-    st->on_stack[st->on_sp].key = key;
-    st->on_stack[st->on_sp].src = 0;
-    st->on_stack[st->on_sp].id = id;
-    st->on_stack[st->on_sp].fn = fn;
-    st->on_stack[st->on_sp].ctx = ctx;
-    ++st->on_sp;
-  } else {
-    pli_abort("ON ERROR stack overflow");
+  if (st->on_sp == st->on_cap) {
+    int cap = st->on_cap ? st->on_cap * 2 : PLI_ON_INIT;
+    pli_on_frame *ns =
+        (pli_on_frame *)pli_plat_realloc(st->on_stack, (size_t)cap * sizeof *ns);
+    if (!ns) {
+      char msg[96];
+      pli_snprintf(msg, sizeof msg,
+                   "ON stack out of memory for condition key %lld", key);
+      pli_abort(msg);
+    }
+    st->on_stack = ns;
+    st->on_cap = cap;
   }
+  st->on_stack[st->on_sp].key = key;
+  st->on_stack[st->on_sp].src = 0;
+  st->on_stack[st->on_sp].id = id;
+  st->on_stack[st->on_sp].fn = fn;
+  st->on_stack[st->on_sp].ctx = ctx;
+  ++st->on_sp;
 }
 
 /* Topmost id for a key, or 0 when none (or SYSTEM) is established for it.
@@ -83,6 +107,44 @@ void *rt_pli_on_top_ctx(long long key) {
       return st->on_stack[i].ctx;
   return NULL;
 }
+/* Establishment scoped to a block activation (rule 91; ADR-350): a repeated
+ * ON for the same condition in one activation replaces the earlier unit
+ * instead of stacking a second one. `base` is the depth saved at the
+ * activation's entry, so only units this activation established are
+ * candidates; an entry below `base` belongs to an enclosing activation and
+ * stays untouched under the new unit. */
+void pli_on_establish(long long key, long long id, char *fn, char *ctx,
+                      long long base) {
+  pli_task_local *st = on_state();
+  if (base < 0)
+    base = 0;
+  for (int i = st->on_sp - 1; i >= (int)base; --i)
+    if (st->on_stack[i].key == key) {
+      for (int j = i; j < st->on_sp - 1; ++j)
+        st->on_stack[j] = st->on_stack[j + 1];
+      --st->on_sp;
+      break;
+    }
+  pli_on_push(key, id, (void *)fn, (void *)ctx);
+}
+
+/* REVERT scoped to a block activation (rule 92; ADR-350): drop the topmost
+ * entry for `key` only when this activation established it. A REVERT in a
+ * block that armed nothing is ignored, never the caller's unit. */
+void pli_on_revert(long long key, long long base) {
+  pli_task_local *st = on_state();
+  if (base < 0 || base > st->on_sp)
+    return;
+  for (int i = st->on_sp - 1; i >= (int)base; --i)
+    if (st->on_stack[i].key == key) {
+      for (int j = i; j < st->on_sp - 1; ++j)
+        st->on_stack[j] = st->on_stack[j + 1];
+      --st->on_sp;
+      on_shrink(st);
+      return;
+    }
+}
+
 /* Drop the topmost entry for a key; a no-op when none is established. */
 void rt_pli_on_pop(long long key) {
   pli_task_local *st = on_state();
@@ -91,6 +153,7 @@ void rt_pli_on_pop(long long key) {
       for (int j = i; j < st->on_sp - 1; ++j)
         st->on_stack[j] = st->on_stack[j + 1];
       --st->on_sp;
+      on_shrink(st);
       return;
     }
 }
@@ -179,8 +242,10 @@ long long pli_on_depth_error(void) {
 }
 void pli_on_reset_error(long long d) {
   pli_task_local *st = on_state();
-  if (d >= 0 && d <= st->on_sp)
+  if (d >= 0 && d <= st->on_sp) {
     st->on_sp = (int)d;
+    on_shrink(st);
+  }
 }
 int pli_oncode(void) {
   return on_state()->oncode;

@@ -1,0 +1,17 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* A8: a fixed-array element and a whole variable pass their own
+    addresses to a by-reference dummy; no per-site dummy copy. */
+ arg_element_ref: procedure options(main);
+    declare a(3) fixed bin(31) init(0, 0, 0);
+    declare b fixed bin(31);
+    b = 0;
+    call setv(a(2), 1);
+    call setv(b, 2);
+ end arg_element_ref;
+
+ setv: procedure(n, v);
+    declare n fixed bin(31);
+    declare v fixed bin(31);
+    n = v;
+ end setv;

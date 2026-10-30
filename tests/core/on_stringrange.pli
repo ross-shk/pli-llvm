@@ -3,7 +3,7 @@
  /* rules (60)-(63),(91)-(94): (STRINGRANGE) enables the
     condition for its scope only; ON STRINGRANGE catches an
     out-of-range SUBSTR and resumes with IBM's clamped
-    substring; REVERT exposes the enclosing handler. */
+    substring; leaving the inner block exposes the outer handler. */
  onstrrange: procedure options(main);
     declare s char(5) init('abcde');
     declare r char(2);
@@ -19,16 +19,18 @@
        put skip list('FAIL disabled value', r);
        stop;
     end;
-    /* two handlers: the topmost runs, REVERT exposes the first */
+    /* two handlers: the topmost activation runs; leaving its block
+       exposes the first (rule (91); ADR-350) */
     on stringrange hits = hits + 10;
-    on stringrange hits = hits + 1;
-    (stringrange):
-       r = substr(s, 0, 2);
-    if hits ^= 1 then do;
-       put skip list('FAIL raise count', hits);
-       stop;
+    begin;
+       on stringrange hits = hits + 1;
+       (stringrange):
+          r = substr(s, 0, 2);
+       if hits ^= 1 then do;
+          put skip list('FAIL raise count', hits);
+          stop;
+       end;
     end;
-    revert stringrange;
     (stringrange):
        r = substr(s, 4, 10);
     if hits ^= 11 then do;

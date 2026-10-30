@@ -1,0 +1,19 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (91)-(94): nesting has no language limit. 200 recursive
+    activations each arm ON ERROR; the deepest SIGNAL runs the innermost
+    unit (which reads a captured automatic), then the stack unwinds. */
+ on_deep_recursion: procedure options(main);
+    call rec(200);
+    put skip list('PASS on_deep_recursion');
+ rec: procedure(n) recursive;
+    declare n fixed binary(31);
+    declare v fixed binary(31);
+    v = n;
+    on error put skip list('caught', v);
+    if n > 1 then
+       call rec(n - 1);
+    else
+       signal error;
+ end rec;
+ end on_deep_recursion;

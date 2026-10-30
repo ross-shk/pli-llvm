@@ -1,0 +1,21 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm */
+ mm_file_main: procedure options(main);
+    declare mine file;
+    declare libio entry;
+    declare w1 char(20);
+    declare w2 char(20);
+    open file(mine) title('examples/out/mm_main.txt') output;
+    put file(mine) skip list('one');
+    call libio();
+    put file(mine) skip list('two');
+    close file(mine);
+    open file(mine) title('examples/out/mm_main.txt') input;
+    get file(mine) skip list(w1);
+    get file(mine) skip list(w2);
+    close file(mine);
+    if w1 = 'one' & w2 = 'two' then
+       put skip list('PASS mm_file_slots');
+    else
+       put skip list('FAIL', w1, w2);
+ end mm_file_main;

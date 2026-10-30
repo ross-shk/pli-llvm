@@ -1,0 +1,35 @@
+ /* A7 probe: re-arm 200 times, foreign REVERT, unit-armed unit. */
+ on_a7: procedure options(main);
+    declare i fixed bin(31);
+    declare inner fixed bin(31) external;
+    declare outer fixed bin(31) external;
+    declare zd_hits fixed bin(31) external;
+    declare inner_zd fixed bin(31) external;
+    inner = 0;
+    outer = 0;
+    zd_hits = 0;
+    inner_zd = 0;
+    /* one block activation re-arms the same unit 200 times */
+    on error outer = outer + 1;
+    do i = 1 to 200;
+       on error inner = inner + 1;
+    end;
+    signal error;
+    put skip list('after-rearm', inner, outer);
+    /* a procedure that armed nothing must not pop the caller's unit */
+    call foreign_revert;
+    signal error;
+    put skip list('after-foreign', inner, outer);
+    /* a unit armed inside an ON-unit ends with that unit */
+    on zerodivide zd_hits = zd_hits + 1;
+    on error begin;
+       on zerodivide inner_zd = inner_zd + 1;
+    end;
+    signal error;
+    signal zerodivide;
+    put skip list('after-unit', inner_zd, zd_hits);
+ end on_a7;
+
+ foreign_revert: procedure;
+    revert error;
+ end foreign_revert;

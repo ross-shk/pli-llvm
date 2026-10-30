@@ -1,0 +1,64 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule 4: a reference to a parameter is a reference to the
+    argument, so an array element actual must reach the callee's
+    writes. Constant and computed subscripts, a multi-axis
+    element, CHAR and VARYING CHAR elements, and an asynchronous
+    call all pass the element itself (ADR-351). */
+ arg_element_ref: procedure options(main);
+    declare a(3) fixed bin(31) init(0, 0, 0);
+    declare m(2, 2) fixed bin(31);
+    declare c(2) char(4) init('aaaa', 'bbbb');
+    declare v(2) char(8) varying;
+    declare i fixed bin(31);
+    declare ev event;
+    i = 2;
+    call setv(a(1), 5);
+    call setv(a(i), 9);
+    call setv(m(2, 1), 8);
+    call setc(c(2), 'zzzz');
+    v(1) = 'one';
+    call setvc(v(1), 'two');
+    call setone(a(3)) event(ev);
+    wait(ev);
+    if a(1) ^= 5 | a(2) ^= 9 | a(3) ^= 42 then do;
+       put skip list('FAIL numeric', a(1), a(2), a(3));
+       stop;
+    end;
+    if m(2, 1) ^= 8 then do;
+       put skip list('FAIL multi-axis', m(2, 1));
+       stop;
+    end;
+    if c(2) ^= 'zzzz' then do;
+       put skip list('FAIL char', c(2));
+       stop;
+    end;
+    if v(1) ^= 'two' then do;
+       put skip list('FAIL varying', v(1));
+       stop;
+    end;
+    put skip list('PASS arg_element_ref');
+ end arg_element_ref;
+
+ setv: procedure(n, val);
+    declare n fixed bin(31);
+    declare val fixed bin(31);
+    n = val;
+ end setv;
+
+ setc: procedure(n, val);
+    declare n char(4);
+    declare val char(4);
+    n = val;
+ end setc;
+
+ setvc: procedure(n, val);
+    declare n char(8) varying;
+    declare val char(8) varying;
+    n = val;
+ end setvc;
+
+ setone: procedure(n);
+    declare n fixed bin(31);
+    n = 42;
+ end setone;

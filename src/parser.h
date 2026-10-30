@@ -14,6 +14,9 @@
 struct EndInfo {
   bool present = false;
   std::string label;
+  // Labels prefixed to the END (`nxt: end;`, rule (7)): they label the group's
+  // exit, so the parser places a labelled null statement after the group.
+  std::vector<std::string> endLabels;
   SourceLoc loc{};
 };
 
@@ -218,6 +221,10 @@ private:
   size_t i_ = 0;
   std::unique_ptr<Program> prog_ = std::make_unique<Program>();
   EndInfo pendingEnd_{}; // propagates multiple closure outward
+  // End-clause labels (rule (7)) collected by the closing group: a following
+  // labelled null statement marks the group's exit for a GO TO.
+  std::vector<std::string> endClauseLabels_;
+  StmtP closeWithEndLabels(StmtP base);
   // Scope of a condition prefix on a PROCEDURE statement (rules (60)-(63)):
   // 0 = inherit, 1 = enabled, -1 = disabled. Every statement parsed inside
   // that procedure starts from this state.

@@ -26,7 +26,9 @@ struct rt_worker;
  * Under the legacy model that state is thread-local, one copy per OS
  * thread; under the fiber model it must follow the *fiber*, because a
  * worker runs many tasks in turn. */
-#define PLI_ON_MAX 64
+/* Initial capacity of a task's ON-unit stack. The stack lives on the heap and
+ * doubles when it fills, so nesting has no language-level limit (C7). */
+#define PLI_ON_INIT 16
 
 /* One ON-unit stack entry (rules (91)-(94)). */
 typedef struct {
@@ -38,8 +40,9 @@ typedef struct {
 } pli_on_frame;
 
 typedef struct {
-  pli_on_frame on_stack[PLI_ON_MAX]; /* the ON-unit stack */
-  int on_sp;                         /* its depth */
+  pli_on_frame *on_stack; /* heap-grown ON-unit stack */
+  int on_sp;              /* its depth */
+  int on_cap;             /* its allocated capacity */
   int oncode;                        /* ONCODE */
   int on_source;                     /* the pending ONSOURCE key */
   void *ctl_vars;                    /* the CONTROLLED table (rt_storage.c) */

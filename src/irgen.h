@@ -112,6 +112,10 @@ private:
   // Every storage-owning symbol this frame can address directly (global,
   // local alloca, parameter, or a static link) to its address value.
   std::unordered_map<Symbol*, llvm::Value*> symAddr_;
+  // A10: one marker global per FILE variable. Its address is the file's
+  // identity across separately compiled units; EXTERNAL files use a common
+  // symbol so the linker merges the marker.
+  std::unordered_map<Symbol*, llvm::GlobalVariable*> fileMarkers_;
   // P6.1b (ADR-215): every internal-procedure parameter decided by-value
   // (read-only scalar, address never taken) maps to true; absent or false
   // keeps the by-reference address form. Filled by computeByValueParams.
@@ -337,7 +341,8 @@ private:
   // Shared spawn tail for emitAsyncCall: builds the context and spawns the
   // task, passing PRIORITY if present.
   void emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
-                      std::vector<llvm::Value*> callArgs);
+                      std::vector<llvm::Value*> callArgs,
+                      const std::vector<llvm::Type*>& dummyTys);
   void emitWait(HStmt* s); // WAIT (rule (82), QR2.8)
   // One WAIT operand -> its event addresses (an EVENT array expands).
   void appendWaitAddrs(HExpr* e, std::vector<llvm::Value*>& out, SourceLoc loc);
@@ -350,6 +355,13 @@ private:
   void emitFree(HStmt* s);        // FREE (rule 90)
   void emitOpen(HStmt* s);        // OPEN (rules 100,101)
   void emitClose(HStmt* s);       // CLOSE (rules 102,103)
+  // A10: the FILE variable's marker global and its process-wide runtime slot.
+  // The slot is looked up by the marker's address, so units cannot collide.
+  llvm::GlobalVariable* fileMarker(Symbol* f);
+  llvm::Value* fileSlotValue(Symbol* f);
+  // A10: a file condition's key is base minus the runtime slot, not a
+  // per-unit compile-time constant.
+  llvm::Value* fileCondKeyValue(HStmt* s);
   void emitRecordRead(HStmt* s);  // READ (rules (112),(113)): one binary record in
   void emitRecordWrite(HStmt* s); // WRITE (rules (112),(113)): one binary record out
   void emitRecordRewrite(HStmt* s); // REWRITE (rule (112)): replace the current record
@@ -358,8 +370,11 @@ private:
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is
   // copied into a fresh dummy argument. Shared by emitCall and emitExpr so the
-  // marshalling logic has a single home.
-  llvm::Value* argAddr(HExpr* a, const Type& pty);
+  // marshalling logic has a single home. `dummyTy`, when non-null, receives
+  // the dummy's allocated type for a copied actual, so an asynchronous call
+  // can carry the value in its heap context instead of the caller's frame
+  // (A9, ADR-352); it is left null for a direct address.
+  llvm::Value* argAddr(HExpr* a, const Type& pty, llvm::Type** dummyTy = nullptr);
   // Materialized call actuals, keyed by the expression node. argAddr evaluates
   // an actual once and records it; argLen (the hidden CHAR(*) length argument)
   // reads the record back, so an actual is evaluated exactly once per call
@@ -424,9 +439,6 @@ private:
   void markTempLifetime(llvm::Value* buf);
   // End the marked lifetimes (the buffers are dead after this point).
   void endTempLifetimes();
-  // Drop the marked lifetimes without ending them: the buffers outlive the
-  // call, so their slots must stay reserved.
-  void dropTempLifetimes() { pendingTempLifetimes_.clear(); }
   // Marshal one argument for a by-value C entry (rules (34),(38)): FIXED and
   // FLOAT scalars convert to the parameter type and ride as values, POINTERs
   // ride as the pointer itself; anything else keeps the argAddr form. A
@@ -1083,6 +1095,13 @@ private:
   // Procedure-entry ERROR depth slot for exit restore; null when the module
   // establishes no handlers (the common path stays free) or inside a handler.
   llvm::AllocaInst* curOnDepth_ = nullptr;
+  // ON-unit-entry depth slot (rule 91; ADR-350): an ON unit is a block
+  // activation of its own, so a unit it arms ends when the unit returns.
+  // Null outside a handler body.
+  llvm::AllocaInst* curOnUnitDepth_ = nullptr;
+  // The activation base for ON/REVERT at the current point: the innermost
+  // ON-unit, BEGIN block or procedure entry depth (ADR-350).
+  llvm::Value* onBaseDepth();
   // True while filling an ON-unit handler: calls needing static links are
   // diagnosed (the handler has no establishing frame).
   bool inHandler_ = false;

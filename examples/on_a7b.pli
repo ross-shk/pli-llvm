@@ -1,0 +1,24 @@
+ /* A7 probe 2: foreign REVERT and a unit armed inside a unit. */
+ on_a7b: procedure options(main);
+    declare zd_hits fixed bin(31) external;
+    declare inner_zd fixed bin(31) external;
+    declare outer fixed bin(31) external;
+    zd_hits = 0;
+    inner_zd = 0;
+    outer = 0;
+    on error outer = outer + 1;
+    call foreign_revert;
+    signal error;
+    put skip list('after-foreign', outer);
+    on zerodivide zd_hits = zd_hits + 1;
+    on error begin;
+       on zerodivide inner_zd = inner_zd + 1;
+    end;
+    signal error;
+    signal zerodivide;
+    put skip list('after-unit', inner_zd, zd_hits);
+ end on_a7b;
+
+ foreign_revert: procedure;
+    revert error;
+ end foreign_revert;

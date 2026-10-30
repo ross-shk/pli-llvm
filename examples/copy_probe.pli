@@ -1,0 +1,19 @@
+ /* A8 copy-path probe: DEFINED, dynamic and CONTROLLED elements. */
+ copy_probe: procedure options(main);
+    declare base(3) fixed bin(31) init(1, 2, 3);
+    declare view(3) fixed bin(31) defined base;
+    declare c(2) fixed bin(31) controlled;
+    declare n fixed bin(31);
+    declare dyn(n) fixed bin(31);
+    allocate c;
+    n = 2;
+    call setv(view(n), 5);
+    call setv(c(n), 6);
+    call setv(dyn(n), 7);
+ end copy_probe;
+
+ setv: procedure(n, val);
+    declare n fixed bin(31);
+    declare val fixed bin(31);
+    n = val;
+ end setv;
