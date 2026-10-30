@@ -433,6 +433,24 @@ if(PLI_ENABLE_MLIR)
   target_link_libraries(pli PRIVATE pli_mlir)
 endif()
 
+# compiler-rt provides __divti3 (128-bit division) needed for i128 arithmetic
+# on Windows where the CRT doesn't include it.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" _LLVM_MAJOR "${LLVM_PACKAGE_VERSION}")
+  # Prebuilt LLVM installs builtins under lib/clang/<ver>/lib/windows; the
+  # standalone compiler-rt build in the hermetic stash installs under lib/windows.
+  find_file(CLANG_RT_BUILTINS
+    NAMES clang_rt.builtins-x86_64.lib clang_rt.builtins-aarch64.lib
+    HINTS ${CMAKE_PREFIX_PATH}/lib/clang/${_LLVM_MAJOR}/lib/windows
+          ${CMAKE_PREFIX_PATH}/lib/windows)
+  if(CLANG_RT_BUILTINS)
+    target_link_libraries(pli PRIVATE ${CLANG_RT_BUILTINS})
+    message(STATUS "compiler-rt builtins: ${CLANG_RT_BUILTINS}")
+  else()
+    message(WARNING "compiler-rt builtins not found (clang_rt.builtins) — 128-bit division may fail to link")
+  endif()
+endif()
+
 # clang-cl + lld-link: CMake doesn't auto-detect MSVC C++ stdlib (IMPLICIT_LINK_LIBRARIES is empty).
 # The prebuilt LLVM 23 libraries use /MT (static CRT), so pli must use /MT too to avoid
 # RuntimeLibrary mismatch (MT_StaticRelease vs MD_DynamicRelease).
@@ -810,6 +828,12 @@ enable_testing()
 add_test(NAME pli-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/run_tests.py)
 set(PLI_TEST_ENV "PLI=$<TARGET_FILE:pli>;CLANG=${LLVM_TOOLS_BINARY_DIR}/clang")
+# The C-interop tests link with clang, which looks for compiler-rt builtins
+# in its resource dir; the hermetic stash keeps them under lib/windows, so
+# hand the file CMake resolved to the tests.
+if(CLANG_RT_BUILTINS)
+  list(APPEND PLI_TEST_ENV "CLANG_RT_BUILTINS=${CLANG_RT_BUILTINS}")
+endif()
 if(PLI_HOST_SDKROOT)
   list(APPEND PLI_TEST_ENV "SDKROOT=${PLI_HOST_SDKROOT}")
 endif()
