@@ -13406,3 +13406,45 @@ limit with another and still spends the array in every task's state block.
 *Allocate on every push.* It turns a cheap push into an allocator call and
 loses the contiguous scan the whole stack relies on. *Never shrink.* A single
 deep recursion would pin the largest frame for the life of the fiber.
+
+---
+
+## ADR-358 — Sanitizer coverage is a test-only harness
+
+**Context.** ADR-349 removed `--no-bitcode-runtime` and the external runtime
+path, and with them the drivers that rebuilt the runtime from source under
+ASan/UBSan/TSan (`storage_asan.sh`, `tasking_tsan.sh`,
+`sanitizer_common.inc`). The embedded runtime is uninstrumented, and
+`-fsanitize=address` at link time only adds the sanitizer runtime: clang does
+not add checks to IR input, and the ASan/TSan passes instrument only functions
+marked `sanitize_address` / `sanitize_thread` (ADR-341). B0 therefore
+reopened.
+
+**Decision.** Sanitizer coverage stays out of the driver and lives in test
+drivers. `-emit-llvm` stops before the embedded runtime merge, so the program
+IR is still a separate unit. `tests/driver/sanitizer_common.inc` builds the
+runtime TUs from source with the sanitizer, rewrites the program IR's attribute
+groups to add the matching sanitizer attribute, compiles that IR with the
+compiler's own clang, and links the program against the instrumented runtime.
+`storage_asan.sh` runs the storage and overlay programs under ASan+UBSan, and
+`tasking_tsan.sh` runs the tasking programs under TSan in both the fiber and
+OS models. Both skip when the toolchain has no sanitizer runtime, print
+`SANITIZER: ...`, and are counted by `run_tests.py`; the runner gives them a
+240s floor because they rebuild the runtime. `lifetime_asan.sh` stays as the
+ADR-246 lifetime-marker smoke test.
+
+**Consequences.** B0's matrix is measured again without a driver opt-in or a
+second runtime source in the shipped binary. The runtime TUs are listed in
+`SAN_RT_SRCS` and must stay in sync with `RT_PORTABLE_SRCS` /
+`RT_PLATFORM_SRCS` in `CMakeLists.txt`. UBSan covers the runtime source, where
+the storage and overlay code lives; the program IR is marked for ASan/TSan
+only, because UBSan checks are emitted by clang's front end and cannot be
+applied to existing IR. The tasking drivers run both models against a runtime
+built from source at `-O1`, not against the optimized merged blob.
+
+**Rejected.** *Restore `--no-bitcode-runtime`.* It contradicts ADR-349 and only
+serves a second runtime copy. *Link `-fsanitize=...` without marking the IR.*
+Clang only links the runtime; the program stays uninstrumented. *Instrument the
+merged `--keep-ll` module.* It mixes the optimized embedded runtime with the
+test build and instruments functions the compiler would not mark; a source
+build keeps the sanitizer view identical to the old harness.

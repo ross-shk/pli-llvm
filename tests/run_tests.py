@@ -31,6 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 TIMEOUT = 10  # seconds per exec run step
+# The ceiling a load-scaled exec budget may reach.
+EXEC_TIMEOUT_MAX = 60
 # Driver scripts compile and link several programs each, so one 10s budget
 # starves them under parallel load (the overflow drivers timed out cold);
 # they get their own budget while single-binary runs stay tight enough to
@@ -38,6 +40,29 @@ TIMEOUT = 10  # seconds per exec run step
 DRIVER_TIMEOUT = 60  # seconds per driver test
 # The ceiling the load-scaled driver budget may reach.
 DRIVER_TIMEOUT_MAX = 300
+# Sanitizer drivers rebuild and instrument the runtime, so they need a larger
+# floor than an ordinary driver even on an idle host.
+SANITIZER_TIMEOUT = 240
+# The fuzz driver compiles ten programs twice; it shares the machine with the
+# sanitizer builds and needs a larger floor under that load.
+FUZZ_TIMEOUT = 180
+
+
+def exec_timeout() -> int:
+    """The per-run budget for a compiled test, scaled by host load.
+
+    A test that finishes in milliseconds can wait behind the rest of the
+    suite on a busy host; the fixed 10s budget then fails a correct program.
+    The load average is sampled once per test, so an idle host keeps the
+    tight budget that catches a genuine hang.
+    """
+    try:
+        load = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        return TIMEOUT
+    cores = os.cpu_count() or 1
+    scaled = int(TIMEOUT * load / cores)
+    return min(EXEC_TIMEOUT_MAX, max(TIMEOUT, scaled))
 
 
 def driver_timeout() -> int:
@@ -230,6 +255,10 @@ class Runner:
         import os as _os
         env = dict(_os.environ, PLI=PLI, CLANG=CLANG)
         budget = driver_timeout()
+        if self.name in ("storage_asan", "tasking_tsan"):
+            budget = max(budget, SANITIZER_TIMEOUT)
+        elif self.name == "peephole_fuzz":
+            budget = max(budget, FUZZ_TIMEOUT)
         try:
             with open(self.out / f"{self.name}.out", "wb") as fh:
                 proc = subprocess.Popen([sh, str(self.dir / f"{self.name}.sh")],
@@ -289,9 +318,11 @@ class Runner:
         if failed:
             return self.fail(failed,
                              compilefile.read_text(errors="replace"))
-        rc, _ = run_cmd([str(self.out / (self.name + EXE_EXT))], self.out / f"{self.name}.out")
+        budget = exec_timeout()
+        rc, _ = run_cmd([str(self.out / (self.name + EXE_EXT))],
+                        self.out / f"{self.name}.out", timeout=budget)
         if rc == 124:
-            return self.fail(f"timed out after {TIMEOUT}s")
+            return self.fail(f"timed out after {budget}s")
         return self.check_out()
 
     def diag(self):
