@@ -3,7 +3,7 @@
 /* P6.3: MOD(DO_index, k) must produce the same result as MOD(literal, k)
    for all indices, including sign-of-divisor correctness. */
 mod_index: procedure options(main);
-   declare i, s fixed bin(31);
+   declare (i, s) fixed bin(31);
    s = 0;
    /* DO i = 1 TO n: the index is non-negative, so MOD(i, k) with positive k
       is just i rem k. Verify a few known values: MOD(3,3)=0, MOD(4,3)=1,

@@ -1,0 +1,12 @@
+ probe: procedure options(main);
+   dcl a fixed decimal(5,2) init(1.00);
+   dcl b fixed decimal(5,2) init(3.00);
+   dcl c fixed decimal(5,2);
+   dcl w fixed decimal(31,0);
+   c = a / b;
+   put skip list(c);
+   put skip list(a / b);
+   put skip list((a / b) * 3);
+   put skip list(1 / 3);
+   put skip list(1.00000000 / 3.00000000);
+ end probe;

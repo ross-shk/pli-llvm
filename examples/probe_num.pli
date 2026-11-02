@@ -1,0 +1,6 @@
+ probe: procedure options(main);
+   dcl z imaginary fixed(15,3);
+   dcl a fixed(15,3);
+   a = fixed('1.5e3');
+   put skip list(a);
+ end probe;

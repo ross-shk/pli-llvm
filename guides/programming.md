@@ -123,8 +123,10 @@ Overflow of `+ - *` on fixed types can raise the `size` condition (see [Conditio
 **Not yet**
 
 - `fixed bin` precision is 31 or 63 bits; mixed widths widen to the larger side.
-- `/` truncates toward zero on integer-valued fixed operands; `**`, and any
-  division with a fractional or float operand, still go through floating point.
+- Division of two `fixed` operands of the same base keeps PL/I's maximum
+  precision and scale, so `7/2` is `3.5` and truncates only when assigned to a
+  fixed integer (ADR-360); mixed-base `fixed` division and `**` still go through
+  the older fixed or floating path.
 - `picture` data and picture variables are not implemented. `label` variables are
   (ADR-192): `declare l label;` plus an indirect `goto (l)` through `addr`, a
   label constant, or a label-array element (ADR-336).

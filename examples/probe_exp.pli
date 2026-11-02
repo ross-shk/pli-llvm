@@ -1,0 +1,7 @@
+ probe: procedure options(main);
+   dcl a fixed(15,3);
+   dcl f float(16);
+   a = fixed('1.5e3');
+   f = float('1.5e3');
+   put skip list(a, f);
+ end probe;

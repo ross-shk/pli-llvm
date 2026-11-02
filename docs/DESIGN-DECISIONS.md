@@ -13491,3 +13491,50 @@ verdict, because the result buffer is now written.
 ABI would still need per-entry copies); keeping the common-type fast path when
 the types happen to agree (two ABIs for one mechanism, and the void-primary
 bare-`RETURN` gap would remain). C structure returns stay open in B9.
+
+## ADR-360 — FIXED division keeps the RULES(IBM) precision and scale
+
+**Context.** Rule (121) makes `/` a FIXED operation when both operands are
+FIXED, but the front end only kept that type when both scales were 0; every
+other FIXED/FIXED pair (and both scales were 0 in the common case) fell back to
+FLOAT, and the integer pair was then divided by `sdiv`. The result was a silent
+wrong answer: `1/3` printed `0`, `7/2` assigned to FLOAT was `3`, and
+`DECIMAL(10,2)/DECIMAL(10,2)` lost its fraction. IBM's RULES(IBM) division
+(Table 4 of the language reference) instead uses the implementation maximum
+precision N (31 decimal digits / 63 binary bits) and the scale
+`q = N - p1 + q1 - q2`. This was the remaining B11 exact-decimal tail.
+
+**Decision.** A same-base FIXED/FIXED `/` is typed by `divResultType`: the
+result is `FIXED DECIMAL(31,q)` or `FIXED BINARY(63,q)`, with a negative `q`
+clamped to 0 (the quotient's integer part is wider than the raw quotient). The
+lowering divides the raw integers exactly: `A_raw * base^(N - p1)` (multiplied
+in i128 for DECIMAL, i64 for BINARY, where it always fits) over `B_raw` with
+`sdiv`, which truncates toward zero as rule (121) requires. A negative `q`
+scales the raw quotient up into the scale-0 result; DECIMAL raises
+`FIXEDOVERFLOW` past 31 digits (ADR-334) and BINARY takes the SIZE path when it
+leaves BIN(63). ZERODIVIDE keeps its branch-before-`sdiv` guard and resume-with-0
+contract. Operands keep their own scales during lowering: rescaling them to the
+result scale first would round away the digits the division exists to produce.
+The existing Convert fast paths are extended, not replaced: a scale-0 FIXED
+target still uses integer `sdiv`, and a FLOAT target divides the operands in
+FLOAT when `q >= 0`, because converting the exact quotient back through a
+non-dyadic `10^q` loses an ulp (`7/2` would not compare equal to `3.5`). Mixed-
+base FIXED division stays on the old path and is recorded as the B11 tail.
+
+**Consequences.** `tests/core/fixed_division.pli` pins the 21- and 26-digit
+thirds, `7/2` in FLOAT and in a scale-0 target, negative truncation, an exact
+decimal quotient, BIN(63,32) division, the negative-scale DECIMAL and BINARY
+cases, `FIXEDOVERFLOW`, and ZERODIVIDE. `tests/core/expected/arith.out` now
+records `7/2 into FLOAT = 3.5` (was `3`). `mod_index.pli` used
+`declare i, s fixed bin(31);`, which gives `i` the default DECIMAL (the
+parenthesised `(i, s)` form is the factored declaration), so its MOD identity
+was silently relying on the truncated division; the declaration is now the
+factored form. `GC` (16)/(17) and (115)-(122) cite this ADR.
+
+**Rejected.** Keep converting `/` to FLOAT (rule (121) says FIXED, and the
+fraction is then approximate at six digits). Introduce a correctly-rounded
+DECIMAL-to-FLOAT conversion for the exact quotient (a dtoa-sized change; the
+FLOAT fast path already gives the right value at the direct assignment, and the
+general converter remains the D1 tail). Truncate every FIXED/FIXED division to
+an integer (the old behaviour, and the source of the wrong answers).
+

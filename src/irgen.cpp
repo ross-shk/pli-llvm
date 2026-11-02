@@ -12307,12 +12307,11 @@ Val IRGen::emitExpr(HExpr* e) {
   switch (e->kind) {
   case HExpr::Convert: {
     HExpr* src = e->a.get();
-    // Fast path (P1, Task 6): FIXED / FIXED → FIXED uses sdiv directly,
-    // skipping the FDiv float round-trip (FDiv + FPTosi). Only valid when the
-    // FLOAT result is immediately narrowed back to a scale-0 FIXED target —
-    // that conversion context is visible here in the Convert node, not in the
-    // Binary/Slash case (which always yields FLOAT per PL/I). For FLOAT
-    // results the fall-through below emits exact FDiv.
+    // Fast path (P1, Task 6): a scale-0 FIXED / FIXED quotient assigned to a
+    // scale-0 FIXED target uses sdiv directly, skipping the exact fixed
+    // quotient's rescale. The conversion context is visible here in the Convert
+    // node, not in the Binary/Slash case. For FLOAT targets the path below
+    // divides in FLOAT instead.
     if (e->convTo.isFixed() && e->convTo.scale == 0 && src && src->kind == HExpr::Binary &&
         src->op == Tok::Slash) {
       Val av = emitExpr(src->a.get());
@@ -12341,6 +12340,34 @@ Val IRGen::emitExpr(HExpr* e) {
           q = endZerodivide(zd, q);
         }
         v.reg = convert(Val{Type::fixedBin(63, 0), q}, e->convTo, e->loc).reg;
+        return v;
+      }
+    }
+    // A FIXED/FIXED quotient narrowed straight to FLOAT (ADR-360): divide in
+    // FLOAT. Converting the exact wide fixed quotient would scale its raw
+    // integer by an inexact 10^q, losing an ulp on values like 7/2. The
+    // quotient is still computed as FIXED first when a negative result scale
+    // can raise FIXEDOVERFLOW (see divResultType), so only q >= 0 takes this
+    // path.
+    if (e->convTo.k == TK::Float && src && src->kind == HExpr::Binary && src->op == Tok::Slash &&
+        src->a->ty.isFixed() && src->b->ty.isFixed() && src->a->ty.k == src->b->ty.k &&
+        !src->a->ty.isArray() && !src->b->ty.isArray()) {
+      const int maxP = src->a->ty.k == TK::FixedDec ? 31 : 63;
+      const int dq = maxP - src->a->ty.prec + src->a->ty.scale - src->b->ty.scale;
+      if (dq >= 0) {
+        Val av = convert(emitExpr(src->a.get()), e->convTo, e->loc);
+        Val bv = convert(emitExpr(src->b.get()), e->convTo, e->loc);
+        llvm::Value* fzero = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
+        llvm::Value* dz = b_.CreateFCmpOEQ(bv.reg, fzero, "zdiv");
+        ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey);
+        llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
+        Val v;
+        v.ty = e->convTo;
+        v.reg = endZerodivide(zd, div);
+        // Same UNDERFLOW/OVERFLOW checks as the general FLOAT division path
+        // (rules 94, ADR-326/333).
+        v = applyUnderflow(v, av.reg, bv.reg);
+        v = applyOverflow(v);
         return v;
       }
     }
@@ -13018,7 +13045,19 @@ Val IRGen::emitExpr(HExpr* e) {
   if (!isCmp && op == Tok::Power && !common.isComplex())
     common = Type::flt(e->ty.prec);
   Val av, bv;
-  if (op == Tok::Star && common.isFixed()) {
+  const bool fixedDiv = op == Tok::Slash && common.isFixed() && a.ty.isFixed() &&
+                        b.ty.isFixed() && a.ty.k == b.ty.k;
+  if (fixedDiv) {
+    // Exact FIXED division (ADR-360): keep each operand's own scale so the raw
+    // integers divide directly. Rescaling both to the result scale first would
+    // round away the quotient digits the division is meant to produce.
+    Type wa = common;
+    wa.scale = a.ty.scale;
+    Type wb = common;
+    wb.scale = b.ty.scale;
+    av = convert(a, wa, e->loc);
+    bv = convert(b, wb, e->loc);
+  } else if (op == Tok::Star && common.isFixed()) {
     // A product's scale is the sum of the operand scales (ADR-006); multiply
     // the raw scaled integers without first rescaling either operand.
     Type wa = common;
@@ -13205,11 +13244,56 @@ Val IRGen::emitExpr(HExpr* e) {
       ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey);
       llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
       r = endZerodivide(zd, div);
+    } else if (fixedDiv) {
+      // Exact FIXED division (rule 121, ADR-360): the raw operands divide at
+      // the RULES(IBM) result scale, sdiv truncating toward zero. The divisor
+      // is zero-guarded before the sdiv so the compute block always divides by
+      // a non-zero value (rule 94).
+      const bool dec = common.k == TK::FixedDec;
+      const int maxP = dec ? 31 : 63;
+      const int dq = maxP - a.ty.prec + a.ty.scale - b.ty.scale;
+      // A_raw * base^(maxp - p1) is the exact quotient numerator; it fits the
+      // result width because |A_raw| < base^p1.
+      llvm::Value* ai = av.reg;
+      int up = maxP - a.ty.prec;
+      if (up > 0)
+        ai = dec ? b_.CreateMul(ai, i128(pliPow10_128(up)), "dnum")
+                 : b_.CreateMul(ai, i64(1LL << up), "dnum");
+      llvm::Value* bi = bv.reg;
+      llvm::Value* z0 = dec ? i128(0) : i64(0);
+      llvm::Value* qv;
+      if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bi)) {
+        if (ci->isZero())
+          qv = zerodivideResume(b_.getTrue(), z0, z0);
+        else
+          qv = b_.CreateSDiv(ai, bi, "bin");
+      } else {
+        llvm::Value* dz = b_.CreateICmpEQ(bi, z0, "zdiv");
+        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey);
+        qv = b_.CreateSDiv(ai, bi, "bin");
+        qv = endZerodivide(zd, qv);
+      }
+      if (dq < 0) {
+        // A negative scale means the integer part is wider than the raw
+        // quotient: scale it up into the scale-0 result. DECIMAL past the
+        // 31-digit maximum raises FIXEDOVERFLOW (ADR-334); a BINARY value
+        // outside its 63-bit precision takes the SIZE path.
+        if (dec) {
+          qv = checkedArith(Tok::Star, qv, i128(pliPow10_128(-dq)), true);
+        } else {
+          llvm::Value* w = b_.CreateSExt(qv, b_.getInt128Ty(), "dnum");
+          w = b_.CreateMul(w, i128(pli_from_i64(1LL << -dq)), "dnum");
+          w = fixedBinPrecTrap(w, maxP);
+          qv = b_.CreateTrunc(w, b_.getInt64Ty(), "bin");
+        }
+      }
+      r = qv;
     } else {
-      // Integer division (P3, ADR-190): sdiv truncates toward zero, matching
-      // PL/I's FIXED division semantics (rule 121). Operands widened so
-      // CreateSDiv is well-defined (32-bit sdiv has narrower range); widened to
-      // i64 normally, i128 for a wide (>18 digit) DECIMAL common (ADR-191).
+      // Mixed-base integer division (the B11 tail): two scale-0 operands of
+      // different bases keep the old FIXED path. sdiv truncates toward zero,
+      // matching PL/I's FIXED division semantics (rule 121). Operands widened
+      // so CreateSDiv is well-defined (32-bit sdiv has narrower range); widened
+      // to i64 normally, i128 for a wide (>18 digit) DECIMAL common (ADR-191).
       // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0 — guarded
       // by branching before the sdiv so the divisor is provably non-zero in the
       // compute block (no safe-divisor select on the hot path, rule 94).

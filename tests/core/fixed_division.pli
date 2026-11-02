@@ -1,0 +1,149 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (121); ADR-360: FIXED division keeps the RULES(IBM) result
+    precision (31 decimal digits, 63 binary bits) and scale
+    q = maxp - p1 + q1 - q2 instead of falling back to FLOAT. */
+ fixed_division: procedure options(main);
+    declare d10a fixed dec(10,2);
+    declare d10b fixed dec(10,2);
+    declare d4 fixed dec(10,4);
+    declare w21 fixed dec(31,21);
+    declare w26 fixed dec(31,26);
+    declare big fixed dec(31,0);
+    declare tiny fixed dec(5,4);
+    declare b31 fixed bin(31);
+    declare b31b fixed bin(31);
+    declare b63 fixed bin(63,0);
+    declare bs fixed bin(63,62);
+    declare bq fixed bin(63,0);
+    declare bpow fixed bin(63,0);
+    declare i fixed bin(31);
+    declare f float;
+    declare nov fixed bin(31) init(0);
+    declare nzd fixed bin(31) init(0);
+    declare nsz fixed bin(31) init(0);
+
+    /* DEC(10,2)/DEC(10,2) keeps 31 - 10 + 2 - 2 = 21 digits. */
+    d10a = 1.00;
+    d10b = 3.00;
+    w21 = d10a / d10b;
+    if w21 ^= 0.333333333333333333333 then do;
+       put skip list('FAIL fixed_division: 21-digit third', w21);
+       stop;
+    end;
+
+    /* Scale-0 constants: 1/3 is DECIMAL(31,26), 26 threes. */
+    w26 = 1 / 3;
+    if w26 ^= 0.33333333333333333333333333 then do;
+       put skip list('FAIL fixed_division: 26-digit third', w26);
+       stop;
+    end;
+
+    /* 7/2 keeps the fraction for FLOAT, truncates into FIXED. */
+    f = 7 / 2;
+    if f ^= 3.5 then do;
+       put skip list('FAIL fixed_division: 7/2 float', f);
+       stop;
+    end;
+    i = 7 / 2;
+    if i ^= 3 then do;
+       put skip list('FAIL fixed_division: 7/2 fixed', i);
+       stop;
+    end;
+    f = -7 / 2;
+    if f ^= -3.5 then do;
+       put skip list('FAIL fixed_division: -7/2 float', f);
+       stop;
+    end;
+    i = -7 / 2;
+    if i ^= -3 then do;
+       put skip list('FAIL fixed_division: -7/2 fixed', i);
+       stop;
+    end;
+
+    /* Exact decimal quotient: 10.00/4.00 = 2.5. */
+    d10a = 10.00;
+    d10b = 4.00;
+    d4 = d10a / d10b;
+    if d4 ^= 2.5 then do;
+       put skip list('FAIL fixed_division: 10/4', d4);
+       stop;
+    end;
+
+    /* Same-base binary division: BIN(31,0)/BIN(31,0) is
+       BIN(63,32), so 7/2 is 3.5 rather than 3. */
+    b31 = 7;
+    b31b = 2;
+    f = b31 / b31b;
+    if f ^= 3.5 then do;
+       put skip list('FAIL fixed_division: bin 7/2', f);
+       stop;
+    end;
+    i = b31 / b31b;
+    if i ^= 3 then do;
+       put skip list('FAIL fixed_division: bin 7/2 fixed', i);
+       stop;
+    end;
+
+    /* Binary negative q: BIN(63,0)/BIN(63,62) has q = -62, so the
+       raw quotient 1 becomes 2^62 at scale 0. A value outside
+       BIN(63) takes the SIZE path. */
+    b63 = 1;
+    bs = 2.0 ** -62;
+    bq = b63 / bs;
+    bpow = 2 ** 62;
+    if bq ^= bpow then do;
+       put skip list('FAIL fixed_division: -q binary', bq);
+       stop;
+    end;
+    on size nsz = nsz + 1;
+    b63 = 2;
+    bq = b63 / bs;
+    if nsz ^= 1 then do;
+       put skip list('FAIL fixed_division: binary size', nsz);
+       stop;
+    end;
+    revert size;
+
+    /* Negative q: DEC(31,0)/DEC(5,4) has q = -4, so the raw
+       quotient is scaled up into the scale-0 result. */
+    big = 10000000000000000;
+    tiny = 0.0001;
+    big = big / tiny;
+    if big ^= 100000000000000000000 then do;
+       put skip list('FAIL fixed_division: -q quotient', big);
+       stop;
+    end;
+
+    /* A -q quotient past 31 digits raises FIXEDOVERFLOW (rule 94). */
+    on fixedoverflow nov = nov + 1;
+    big = 1000000000000000000000000000000;
+    big = big / tiny;
+    if nov ^= 1 then do;
+       put skip list('FAIL fixed_division: fixedoverflow', nov);
+       stop;
+    end;
+    revert fixedoverflow;
+
+    /* ZERODIVIDE still traps and resumes with 0 (rule 94). */
+    on zerodivide nzd = nzd + 1;
+    b31b = 0;
+    f = b31 / b31b;
+    if f ^= 0 then do;
+       put skip list('FAIL fixed_division: bin zero', f);
+       stop;
+    end;
+    d10b = 0.00;
+    f = d10a / d10b;
+    if f ^= 0 then do;
+       put skip list('FAIL fixed_division: dec zero', f);
+       stop;
+    end;
+    if nzd ^= 2 then do;
+       put skip list('FAIL fixed_division: zerodivide count', nzd);
+       stop;
+    end;
+    revert zerodivide;
+
+    put skip list('PASS fixed_division');
+ end fixed_division;

@@ -238,6 +238,19 @@ Type mulResultType(const Type& a, const Type& b) {
   return t;
 }
 
+// FIXED/FIXED division of the same base (rule 121, ADR-360): RULES(IBM) gives
+// the result the implementation maximum precision and the scale
+// maxP - p1 + q1 - q2, so a quotient keeps its fraction instead of widening to
+// FLOAT. A negative scale (the integer part is wider than the raw quotient) is
+// clamped to 0; the lowering then scales the raw quotient up and raises
+// FIXEDOVERFLOW past the maximum precision.
+Type divResultType(const Type& a, const Type& b) {
+  int maxP = a.k == TK::FixedDec ? 31 : 63;
+  int q = maxP - a.prec + a.scale - b.scale;
+  return a.k == TK::FixedDec ? Type::fixedDec(maxP, std::max(q, 0))
+                             : Type::fixedBin(maxP, std::max(q, 0));
+}
+
 // Cross-section (rule 126): a subscript list containing at least one '*'. The
 // result is an array whose rank and bounds are those of the '*' axes, in axis
 // order; each non-'*' axis is collapsed by its fixed index. Returns true and
@@ -5995,16 +6008,19 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       break;
     case Tok::Slash:
-      // Exact integer division (P3, ADR-190): when both operands are fixed-point
-      // and integer-valued (scale 0), `/` truncates toward zero — PL/I rule 121
-      // semantics — and the result type is FIXED (arithResultType), not FLOAT.
-      // Non-integer `/` (any FLOAT operand, or DECIMAL with scale > 0) stays
-      // FLOAT for correct fractional results (ADR-014 stand-down).
+      // FIXED/FIXED division keeps the rule's exact result type (ADR-360): the
+      // maximum precision and the scale maxP - p1 + q1 - q2, so 7/2 is a
+      // DECIMAL/BINARY 3.5 (truncating only on assignment to a FIXED target).
+      // Same-base operands use divResultType; a mixed-base integer division
+      // stays on the old FIXED path (B11 tail), and a non-FIXED operand
+      // (FLOAT) stays FLOAT for a correct fractional result.
       if (complexArith(A, B)) {
         e->ty = Type::complexTy();
       } else if (!A.isNumeric() || !B.isNumeric()) {
         d_.error(e->loc, "operator requires arithmetic operands", "(121)");
         e->ty = Type::flt(6);
+      } else if (A.isFixed() && B.isFixed() && A.k == B.k) {
+        e->ty = divResultType(A, B);
       } else if (A.isFixed() && B.isFixed() && A.scale == 0 && B.scale == 0) {
         e->ty = arithResultType(A, B);
       } else {

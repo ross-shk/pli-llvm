@@ -1,0 +1,12 @@
+ probe: procedure options(main);
+   dcl a fixed bin(63,62);
+   dcl b fixed bin(63,63);
+   dcl c fixed dec(31,31);
+   dcl d fixed dec(31,30);
+   a = 0.5;
+   b = 0.5;
+   c = 0.5;
+   d = 0.5;
+   put skip list(a, b, c, d);
+   put skip list(precision(a, 31, 30));
+ end probe;
