@@ -13492,6 +13492,57 @@ ABI would still need per-entry copies); keeping the common-type fast path when
 the types happen to agree (two ABIs for one mechanism, and the void-primary
 bare-`RETURN` gap would remain). C structure returns stay open in B9.
 
+---
+
+## ADR-360 — In-memory link: zero named temporary files
+
+**Context.** ADR-225 and ADR-227 made compile and link fully in-process with an
+embedded link sysroot, but the driver still wrote two kinds of named temp files
+to the OS temp dir before calling lld: each PL/I unit's relocatable object (or
+LTO bitcode) via `raw_fd_ostream` to `<tmp>/<base>-<n>-%%%%%%.o`, and the whole
+materialized embedded sysroot (CRT, libc, builtins, `.tbd` stubs) to
+`<tmp>/pli-sysroot-XXXXXX`. Both were removed after the link, but they briefly
+lived on disk as named, guessable paths.
+
+**Decision.** Feed lld's object and sysroot data through anonymous file
+descriptors so there are zero named files and zero bytes persisted to disk; the
+only real file produced is the final executable (`-o`).
+
+- New module `src/memfd.{h,cpp}` turns a byte blob into an openable path with no
+  named file: `memfd_create` + `/proc/self/fd/N` on Linux, `mkstemp` + immediate
+  `unlink` + `/dev/fd/N` on macOS. Windows/COFF has no `/dev/fd` equivalent, so
+  `createMemBlob` returns "" there and the caller falls back to disk
+  materialization (documented follow-up).
+- Objects compile into an in-memory `raw_svector_ostream` buffer (both
+  `emitObject` and `emitLTOObject` accept `raw_pwrite_stream`), then
+  `createMemBlob` hands lld the mem path; `-c` still writes a real `.o` file.
+- The embedded sysroot gains `materializeEmbeddedSysrootMem`, mapping each
+  embedded blob's logical path to a mem path. The link step resolves the sysroot
+  once (mem preferred, disk fallback) and passes every vendored artifact
+  (objects, archives, `.tbd` stubs) as an explicit mem-path argument, dropping
+  the vendored `-L`/`-syslibroot` directory flags. Only user/discovered `-L`
+  dirs stay. lld-internal `--flto` temps (`lld::openLTOOutputFile`) are not
+  controllable through the shipped public API and remain out of scope.
+- Cleanup closes the mem fds (`closeMemBlob` / `cleanupMaterializedSysrootMem`)
+  instead of `fs::remove`; all success and failure paths are symmetric.
+
+**Consequences.** No named temp object or sysroot file is ever created on disk
+for the link path; the `-v` transcript reports `using embedded link sysroot
+(<name>, in-memory)`. `tests/driver/vendor_sysroot.sh`'s regex
+`embedded link sysroot.*(sdk|mingw|musl)` still matches. `-c`, `-emit-llvm`,
+`--keep-ll`, `--print-hir` keep writing their real requested artifacts (they are
+not temps). Windows/MinGW keeps the disk sysroot behind the same seam.
+
+**Rejected.** Keeping `createUniqueFile` temp objects plus `fs::remove` (the
+status quo — named files on disk, the very thing this removes). A symlink-only
+`-syslibroot` dir fallback for MachO if `.tbd` stubs are rejected as direct
+inputs (zero data bytes, but still a named dir — documented fallback only).
+
+**Known limits.** lld-internal `--flto` temp outputs remain on disk (uncontrollable
+via the shipped `lld/Common` API); Windows/MinGW in-memory link is a follow-up;
+no TR 25.084 syntax rule is touched (driver/codegen plumbing only), so no
+GRAMMAR-COVERAGE row.
+
 ## ADR-361 — FIXED division keeps the RULES(IBM) precision and scale
 
 **Context.** Rule (121) makes `/` a FIXED operation when both operands are

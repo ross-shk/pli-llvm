@@ -33,7 +33,10 @@
 #include "embedded_runtime.h"
 #include "embedded_sysroot.h"
 #include "hostcrt.h"
+#include "memfd.h"
 #include "target.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -330,6 +333,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        const std::string& effectsFile = "",
                        const std::string& emitEffectsFile = "",
                        bool remarkLibraryCalls = false) {
+  (void)fileIndex;
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
   // Use macosx15.0 for bitcode compatibility; SME features disabled in IRGen.
@@ -447,29 +451,13 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
 
   // Object destination, mirroring cc: -c single with -o names the object, -c
-  // without -o writes <base>.o in the cwd; link mode uses a per-input temp
-  // object (the index keeps distinct stems apart across directories).
+  // without -o writes <base>.o in the cwd; link mode uses an in-memory object
+  // (anonymous fd, no named temp) created after codegen below.
   fs::path objPath;
   if (compileOnly && !output.empty())
     objPath = output;
   else if (compileOnly)
     objPath = fs::path(base) += ".o";
-  else {
-    // Link mode: a unique temp object. The name is random and the file is
-    // created exclusively (O_EXCL), so a name planted in the temp dir cannot
-    // be mistaken for ours and redirect the write. A predictable
-    // "<tmp>/<base>-<pid>-<n>.o" could.
-    llvm::SmallString<128> tmpObj;
-    std::error_code fec = llvm::sys::fs::createUniqueFile(
-        (fs::temp_directory_path() /
-         (base + "-" + std::to_string(fileIndex) + "-%%%%%%.o")).string(),
-        tmpObj);
-    if (fec) {
-      std::cerr << "pli: cannot create a temporary object\n";
-      return false;
-    }
-    objPath = fs::path(tmpObj.str().str());
-  }
 
   // In-process codegen only (no subprocess, ADR-225): owned module ->
   // TargetMachine -> relocatable object, or LTO bitcode with --flto (in-process
@@ -501,27 +489,54 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
     // Also set module target triple to ensure consistent
     // feature handling during codegen (module triple affects some defaults).
     om->mod->setTargetTriple(llvm::Triple(triple));
-    std::error_code ec;
-    llvm::raw_fd_ostream os(objPath.string(), ec, llvm::sys::fs::OF_None);
-    if (ec) {
-      std::cerr << "pli: cannot write " << objPath.string() << "\n";
-      return false;
-    }
+    // Link mode: emit into an in-memory buffer and hand lld an anonymous-fd
+    // path — no named temp object on disk. -c keeps a real .o file.
     std::string emErr;
     bool emitted = false;
-    if (!ltoKind.empty()) {
-      // LTO object: pre-link pipeline + summarised bitcode; in-process lld
-      // runs the link-time optimizer.
-      emitted = pli::emitLTOObject(*om->mod, *tm, os, ltoKind == "thin", optLevel, emErr);
+    std::error_code ec;
+    if (!compileOnly) {
+      llvm::SmallVector<char, 0> objBuf;
+      llvm::raw_svector_ostream objOS(objBuf);
+      if (!ltoKind.empty()) {
+        emitted = pli::emitLTOObject(*om->mod, *tm, objOS, ltoKind == "thin", optLevel, emErr);
+      } else {
+        pli::optimizeModule(*om->mod, *tm, optLevel, std::nullopt);
+        emitted = pli::emitObject(*om->mod, *tm, objOS, emErr);
+      }
+      if (!emitted) {
+        std::cerr << "pli: emit failed (" << emErr << ")\n";
+        return false;
+      }
+      std::string memErr;
+      std::string memPath = pli::createMemBlob(
+          llvm::StringRef(objBuf.data(), objBuf.size()), memErr);
+      if (memPath.empty()) {
+        std::cerr << "pli: cannot create in-memory object (" << memErr << ")\n";
+        return false;
+      }
+      *outObj = memPath;
+      if (verbose)
+        std::cerr << "pli: emitted object in-memory -> " << memPath << "\n";
     } else {
-      // Mirror the old clang backend: optimize the IR at the requested -O level.
-      pli::optimizeModule(*om->mod, *tm, optLevel, std::nullopt);
-      emitted = pli::emitObject(*om->mod, *tm, os, emErr);
-    }
-    os.close();
-    if (!emitted) {
-      std::cerr << "pli: emit failed (" << emErr << ")\n";
-      return false;
+      // -c: real object file next to the source (or named by -o).
+      llvm::raw_fd_ostream os(objPath.string(), ec, llvm::sys::fs::OF_None);
+      if (ec) {
+        std::cerr << "pli: cannot write " << objPath.string() << "\n";
+        return false;
+      }
+      if (!ltoKind.empty()) {
+        emitted = pli::emitLTOObject(*om->mod, *tm, os, ltoKind == "thin", optLevel, emErr);
+      } else {
+        pli::optimizeModule(*om->mod, *tm, optLevel, std::nullopt);
+        emitted = pli::emitObject(*om->mod, *tm, os, emErr);
+      }
+      os.close();
+      if (!emitted) {
+        std::cerr << "pli: emit failed (" << emErr << ")\n";
+        return false;
+      }
+      if (verbose)
+        std::cerr << "pli: emitted " << objPath.string() << " in-process\n";
     }
     if (keepLL) {
       llvm::raw_fd_ostream llOs((keepLLDir / (base + ".ll")).string(), ec, llvm::sys::fs::OF_None);
@@ -530,10 +545,6 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
         om->mod->print(llOs, nullptr);
       }
     }
-    if (verbose)
-      std::cerr << "pli: emitted " << objPath.string() << " in-process\n";
-    if (!compileOnly)
-      *outObj = objPath.string();
     return true;
   }
 }
@@ -972,12 +983,10 @@ int main(int argc, char** argv) {
   // In-process lld link only (no subprocess, ADR-225). The link sysroot is
   // EMBEDDED in pli — release archives hold only the binary. Materialize it,
   // fail loudly if the embedded set is incomplete for this build arch.
-  // Drop the per-input temp objects this invocation created (never user ones).
+  // Close the per-input mem fds this invocation created (never user ones).
   auto removeTempObjects = [&]() {
-    for (size_t i = foreignObjs.size(); i < objs.size(); ++i) {
-      std::error_code ec;
-      fs::remove(objs[i], ec);
-    }
+    for (size_t i = foreignObjs.size(); i < objs.size(); ++i)
+      pli::closeMemBlob(objs[i]);
   };
   if (output.empty())
     output = "a.out";
@@ -989,19 +998,43 @@ int main(int argc, char** argv) {
     const pli::TargetDesc& desc = pli::getTargetDesc(llt);
     std::string tmErr;
     if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
-      // Materialize the embedded sysroot. All-or-nothing: if it is empty or
-      // incomplete for this arch, the link fails with a clear error.
-      pli::EmbeddedSysroot emb = pli::materializeEmbeddedSysroot();
-      if (emb.dir.empty()) {
-        std::cerr << "pli: no embedded link sysroot for this platform "
-                     "(" << emb.name << ") — cannot link without a sysroot\n";
-        removeTempObjects();
-        return 1;
+      // Resolve the embedded sysroot once: in-memory (anonymous fds, no named
+      // file) when the platform supports it (Linux/macOS); disk materialization
+      // otherwise (Windows/COFF, out of scope for in-memory). The recipe below
+      // passes every vendored sysroot artifact as an explicit path argument and
+      // drops the vendored -L/-syslibroot directory flags.
+      pli::EmbeddedSysrootMem embMem = pli::materializeEmbeddedSysrootMem();
+      const bool useMemSysroot = !embMem.name.empty() && !embMem.files.empty();
+      pli::EmbeddedSysroot emb;
+      if (!useMemSysroot) {
+        emb = pli::materializeEmbeddedSysroot();
+        if (emb.dir.empty()) {
+          std::cerr << "pli: no embedded link sysroot for this platform "
+                       "(" << emb.name << ") — cannot link without a sysroot\n";
+          removeTempObjects();
+          return 1;
+        }
       }
-      const std::string& sysrootDir = emb.dir;
-      if (verbose)
-        std::cerr << "pli: using embedded link sysroot (" << emb.name << ": "
-                  << sysrootDir << ")\n";
+      if (verbose) {
+        if (useMemSysroot)
+          std::cerr << "pli: using embedded link sysroot (" << embMem.name
+                    << ", in-memory)\n";
+        else
+          std::cerr << "pli: using embedded link sysroot (" << emb.name << ": "
+                    << emb.dir << ")\n";
+      }
+
+      // Resolve a sysroot logical path to its link argument: the anonymous-fd
+      // mem path in-memory mode, the materialized dir path on disk. Every
+      // embedded file is present in the map; an empty result means the set is
+      // incomplete and the link is fatal.
+      auto sysrootPath = [&](const std::string& logical) -> std::string {
+        if (useMemSysroot) {
+          auto it = embMem.files.find(logical);
+          return it == embMem.files.end() ? std::string() : it->second;
+        }
+        return emb.dir + "/" + logical;
+      };
 
       // Link-mode scan: PIE unless -static/-no-pie.
       bool wantPIE = true;
@@ -1017,33 +1050,64 @@ int main(int argc, char** argv) {
       const bool isCOFF = objFmt == llvm::Triple::COFF;
 
       if (isMachO) {
-        // macOS: SDK stubs (.tbd) from the embedded sysroot.
+        // macOS: .tbd stubs passed as direct file args (no -syslibroot dir).
         argStore.push_back("-arch");
         argStore.push_back(std::string(llt.getArchName()));
-        argStore.push_back("-syslibroot");
-        argStore.push_back(sysrootDir);
         for (const std::string& o : objs)
           argStore.push_back(o);
-        // systemLibs: -lSystem, -lm
-        for (const std::string& s : desc.systemLibs)
-          argStore.push_back(s);
+        // systemLibs: -lSystem, -lm -> direct .tbd file args.
+        std::string libSystem = sysrootPath("usr/lib/libSystem.tbd");
+        std::string libm = sysrootPath("usr/lib/libm.tbd");
+        if (libSystem.empty() || libm.empty()) {
+          std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+          removeTempObjects();
+          if (!useMemSysroot)
+            pli::cleanupMaterializedSysroot(emb.dir);
+          return 1;
+        }
+        for (const std::string& s : desc.systemLibs) {
+          if (s == "-lSystem")
+            argStore.push_back(libSystem);
+          else if (s == "-lm")
+            argStore.push_back(libm);
+          else
+            argStore.push_back(s);
+        }
       } else if (objFmt == llvm::Triple::ELF) {
-        // Linux/musl: static link, no interpreter, no host libdirs.
+        // Linux/musl: static link, every sysroot artifact an explicit path arg;
+        // no -L<sysroot>, no -lc (libc.a already explicit).
+        const std::string arch = llt.getArchName().str();
+        std::string crt1 = sysrootPath("crt1.o");
+        std::string crti = sysrootPath("crti.o");
+        std::string crtn = sysrootPath("crtn.o");
+        std::string libc = sysrootPath("libc.a");
+        std::string builtins = sysrootPath("libpli_builtins-" + arch + ".a");
+        std::string libm = sysrootPath("libm.a");
+        if (crt1.empty() || crti.empty() || crtn.empty() || libc.empty() ||
+            builtins.empty() || libm.empty()) {
+          std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+          removeTempObjects();
+          if (!useMemSysroot)
+            pli::cleanupMaterializedSysroot(emb.dir);
+          return 1;
+        }
         argStore.push_back("-static");
-        argStore.push_back(sysrootDir + "/crt1.o");
-        argStore.push_back(sysrootDir + "/crti.o");
+        argStore.push_back(crt1);
+        argStore.push_back(crti);
         for (const std::string& o : objs)
           argStore.push_back(o);
-        argStore.push_back(sysrootDir + "/crtn.o");
-        argStore.push_back(sysrootDir + "/libc.a");
-        // 128-bit builtins (musl omits __udivti3 etc.)
-        std::string builtins = sysrootDir + "/libpli_builtins-" +
-            std::string(llt.getArchName()) + ".a";
+        argStore.push_back(crtn);
+        argStore.push_back(libc);
         argStore.push_back(builtins);
-        argStore.push_back("-L" + sysrootDir);
-        // systemLibs: -lm, -lc
-        for (const std::string& s : desc.systemLibs)
-          argStore.push_back(s);
+        // systemLibs: -lm -> libm.a; -lc covered by explicit libc.a.
+        for (const std::string& s : desc.systemLibs) {
+          if (s == "-lm")
+            argStore.push_back(libm);
+          else if (s == "-lc")
+            continue;
+          else
+            argStore.push_back(s);
+        }
         if (wantPIE) {
           argStore.push_back("-pie");
           argStore.push_back("--eh-frame-hdr");
@@ -1051,28 +1115,29 @@ int main(int argc, char** argv) {
           argStore.push_back("--build-id");
         }
       } else if (isCOFF) {
-        // Windows/mingw: MinGW driver (GNU-ld-compatible argv).
+        // Windows/mingw: MinGW driver (GNU-ld-compatible, disk sysroot).
         argStore.push_back("-m");
         argStore.push_back("i386pep");
-        argStore.push_back(sysrootDir + "/crt2.o");
-        argStore.push_back(sysrootDir + "/crtbegin.o");
+        argStore.push_back(emb.dir + "/crt2.o");
+        argStore.push_back(emb.dir + "/crtbegin.o");
         for (const std::string& o : objs)
           argStore.push_back(o);
-        argStore.push_back(sysrootDir + "/fltused.o");
-        argStore.push_back(sysrootDir + "/chkstk.o");
-        argStore.push_back("-L" + sysrootDir);
+        argStore.push_back(emb.dir + "/fltused.o");
+        argStore.push_back(emb.dir + "/chkstk.o");
+        argStore.push_back("-L" + emb.dir);
         // Import libs + GCC helpers (mirrors the mingw-gcc recipe).
         for (const char* lib :
              {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
               "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
               "libshell32.a", "libuser32.a", "libws2_32.a", "libkernel32.a"})
           argStore.push_back(std::string("-l:") + lib);
-        argStore.push_back(sysrootDir + "/crtend.o");
+        argStore.push_back(emb.dir + "/crtend.o");
         argStore.push_back("--subsystem=" + subsystem);
       } else {
         std::cerr << "pli: unsupported object format for link\n";
         removeTempObjects();
-        pli::cleanupMaterializedSysroot(emb.dir);
+        if (!useMemSysroot)
+          pli::cleanupMaterializedSysroot(emb.dir);
         return 1;
       }
 
@@ -1124,7 +1189,10 @@ int main(int argc, char** argv) {
 
       if (linkOk) {
         removeTempObjects();
-        pli::cleanupMaterializedSysroot(emb.dir);
+        if (useMemSysroot)
+          pli::cleanupMaterializedSysrootMem(embMem);
+        else
+          pli::cleanupMaterializedSysroot(emb.dir);
         return 0;
       }
       std::cerr << "pli: in-process link failed";
@@ -1132,7 +1200,10 @@ int main(int argc, char** argv) {
         std::cerr << " (" << linkErr << ")";
       std::cerr << "\n";
       removeTempObjects();
-      pli::cleanupMaterializedSysroot(emb.dir);
+      if (useMemSysroot)
+        pli::cleanupMaterializedSysrootMem(embMem);
+      else
+        pli::cleanupMaterializedSysroot(emb.dir);
       return 1;
     } else {
       std::cerr << "pli: no target (" << tmErr << ")\n";
