@@ -937,22 +937,10 @@ void Sema::processProc(Proc* p) {
   if (!declsCollected_)
     flushPendingBased();
 
-  // Every function-valued entry point (the procedure's own RETURNS and each
-  // ENTRY's RETURNS, rule (34)) must share one result type, which the shared
-  // implementation returns. A non-function primary entry may coexist with
-  // function ENTRYs (their segments carry a RETURN(value)).
-  Type common = p->isFunction ? p->retTy : Type::voidTy();
-  for (auto& st : p->body)
-    if (st && st->kind == Stmt::Entry && st->entryIsFunction) {
-      if (common.isVoid())
-        common = st->entryRetTy;
-      else if (st->entryRetTy != common)
-        d_.error(st->loc,
-                 "entries in one implementation must all return the same type; a mixed "
-                 "return type is not implemented in this stage",
-                 "(56)");
-    }
-  p->commonRetTy = common;
+  // Every function-valued entry point keeps its own result type (rule (56)):
+  // the shared implementation returns through a hidden result pointer, so a
+  // void primary may coexist with valued ENTRYs and the valued ENTRYs need not
+  // agree with each other (ADR-359).
 
   procLabels_.clear();
   labelBeginChains_.clear();
@@ -4435,20 +4423,16 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   }
   case Stmt::Return: {
     // rule (81): RETURN(value) supplies a function procedure's result; a plain
-    // RETURN ends a procedure. In a multi-entry procedure a segment belonging to
-    // a function ENTRY (rule 56) may also RETURN(value), even if the primary
-    // entry itself returns nothing. Every RETURN must also agree with the
-    // shared implementation's single result type: a plain RETURN is only valid
-    // when that type is void, and RETURN(value) only when it is not (rule 56).
+    // RETURN ends a procedure. In a multi-entry procedure each segment carries
+    // its own result type (rule 56): the primary segment uses `p->retTy`, an
+    // ENTRY segment uses its RETURNS type. A bare RETURN is valid in a void
+    // segment even when another segment returns a value, and RETURN(value) is
+    // valid in a valued segment even when another segment is void (ADR-359).
     const bool inFuncEntry = curEntry_ && curEntry_->entryIsFunction;
-    const bool isFunc = p->isFunction || inFuncEntry;
-    const Type& rty = inFuncEntry ? curEntry_->entryRetTy : p->retTy;
+    const bool isFunc = curEntry_ ? inFuncEntry : p->isFunction;
+    const Type& rty = curEntry_ ? curEntry_->entryRetTy : p->retTy;
     if (s->value) {
       if (!isFunc) {
-        d_.error(s->loc, "RETURN with a value is only valid in a function procedure", "(81)");
-        break;
-      }
-      if (p->commonRetTy.isVoid()) {
         d_.error(s->loc, "RETURN with a value is only valid in a function procedure", "(81)");
         break;
       }
@@ -4457,19 +4441,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         checkAssignable(rty, s->value->ty, s->loc, "RETURN value");
     } else {
       // A bare RETURN in an ON-unit ends the unit and resumes after the
-      // SIGNAL (rule 91): it answers neither the value nor the common-type
-      // checks below. Elsewhere a function must RETURN a value (81).
+      // SIGNAL (rule 91); elsewhere a valued segment must RETURN a value (81).
       if (inUnit_)
         break;
       if (isFunc) {
         d_.error(s->loc, "a function procedure must RETURN a value", "(81)");
-        break;
-      }
-      if (!p->commonRetTy.isVoid()) {
-        d_.error(s->loc,
-                 "a plain RETURN is not valid in a procedure whose ENTRYs return a value; "
-                 "RETURN a value of the common result type",
-                 "(56)");
       }
     }
     break;

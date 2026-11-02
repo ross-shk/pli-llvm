@@ -527,7 +527,6 @@ HProgram lower(const Program& prog) {
     hp->isRecursive = prog.procs[i]->isRecursive;
     hp->isFunction = prog.procs[i]->isFunction;
     hp->retTy = prog.procs[i]->retTy;
-    hp->commonRetTy = prog.procs[i]->commonRetTy;
     hp->params = prog.procs[i]->params;
     hp->entryNames = prog.procs[i]->entryNames;
     hp->paramSyms = prog.procs[i]->paramSyms;

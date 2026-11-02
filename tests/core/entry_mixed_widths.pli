@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* rule (56): entries in one implementation may return
+     different fixed widths; each segment writes its own
+     result buffer. */
+  entry_mixed_widths: procedure options(main);
+     declare w fixed bin(63);
+     declare n fixed bin(15);
+
+     w = wide();
+     n = narrow();
+     if w = 1 & n = 2
+        then put skip list('PASS mixed fixed widths');
+        else put skip list('FAIL mixed fixed widths:', w, n);
+
+     wide: procedure returns(fixed bin(63));
+        return(1);
+
+        narrow: entry returns(fixed bin(15));
+        return(2);
+     end wide;
+  end entry_mixed_widths;

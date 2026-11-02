@@ -213,7 +213,7 @@ private:
   void applyControlAttrs(llvm::Function* f, const HProc* p);
   void emitProc(HProc* p);
   void emitPlainProc(HProc* p, llvm::Type* retLLVM);
-  void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM);
+  void emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries);
   void allocaLocals(HProc* p);
   void emitInitials(HProc* p); // INITIAL stores on AUTOMATIC vars (rule 26)
   // Folded constant INITIAL/VALUE on a Fixed/Float scalar (rules (26), ADR-108):
@@ -982,8 +982,13 @@ private:
   std::vector<llvm::GlobalVariable*> strLits_;
   int n_ = 0;
   HProc* curProc_ = nullptr;
-  Type curRetTy_; // result type of the function currently being emitted (the impl's
-                  // common entry type for a multi-entry procedure, rule (56))
+  Type curRetTy_; // result type of the segment currently being emitted: the primary
+                  // entry's type for segment 0, an ENTRY's RETURNS type after it
+  // Multi-entry procedures (rule (56), ADR-359): the shared impl always
+  // returns void and writes the segment's result through this pointer. Each
+  // thunk passes a buffer of its own entry's result type.
+  bool multiEntry_ = false;
+  llvm::Value* multiResult_ = nullptr;
   // The hidden result pointer of a structure- or character-valued function
   // (rules 127 and (34),(37)): the caller-supplied buffer that a RETURN
   // copies into before returning void.

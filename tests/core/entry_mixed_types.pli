@@ -1,0 +1,77 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* rule (56): alternate entries may return different
+     types; each segment returns through its own
+     result buffer while the shared impl returns void. */
+  entry_mixed_types: procedure options(main);
+     declare 1 pair,
+             2 a fixed bin(31),
+             2 b fixed bin(31);
+     declare 1 got,
+             2 a fixed bin(31),
+             2 b fixed bin(31);
+     declare r fixed bin(31);
+     declare c char(4);
+     declare c2 char(4);
+     declare v fixed bin(31) init(0);
+
+     got = pair_of(3, 5);
+     if got.a = 3 then
+        if got.b = 5
+           then put skip list('PASS struct result');
+           else put skip list('FAIL struct b:', got.b);
+     else put skip list('FAIL struct a:', got.a);
+
+     c = chars();
+     if c = 'abcd'
+        then put skip list('PASS char result');
+        else put skip list('FAIL char result:', c);
+
+     c2 = cprime();
+     if c2 = 'wxyz'
+        then put skip list('PASS char primary');
+        else put skip list('FAIL char primary:', c2);
+
+     r = cnum();
+     if r = 9
+        then put skip list('PASS char-primary entry');
+        else put skip list('FAIL char-primary entry:', r);
+
+     r = nums();
+     if r = 42
+        then put skip list('PASS fixed result');
+        else put skip list('FAIL fixed result:', r);
+
+     call voids();
+     if v = 7
+        then put skip list('PASS void entry');
+        else put skip list('FAIL void entry:', v);
+
+     pair_of: procedure(x, y) returns(pair);
+        declare x fixed bin(31);
+        declare y fixed bin(31);
+        declare 1 res,
+                2 a fixed bin(31),
+                2 b fixed bin(31);
+        res.a = x;
+        res.b = y;
+        return(res);
+
+       chars: entry returns(char(4));
+        return('abcd');
+
+       nums: entry returns(fixed bin(31));
+        return(42);
+
+       voids: entry;
+        v = 7;
+        return;
+     end pair_of;
+
+     cprime: procedure returns(char(4));
+        return('wxyz');
+
+       cnum: entry returns(fixed bin(31));
+        return(9);
+     end cprime;
+  end entry_mixed_types;

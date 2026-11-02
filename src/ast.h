@@ -404,8 +404,6 @@ struct Proc {
   bool isRecursive = false; // RECURSIVE option (rule (5))
   bool isFunction = false;  // has a RETURNS attribute (rules (5),(34))
   Type retTy{};             // function return type (RETURNS)
-  Type commonRetTy{};       // rule (56): the single result type shared by all
-                            // function-valued entry points (void if none)
   // A structure-valued function's result type (rule 127): the name of an
   // enclosing structure variable whose shape the function returns. The parser
   // records the name; sema resolves it to a deep copy of that type into retTy.

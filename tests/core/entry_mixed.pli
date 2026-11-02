@@ -1,9 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
   /* rule (56): a void primary may coexist with
-     function ENTRYs sharing one result type.
-     Rule (34): an external ENTRY RETURNS is
-     callable as a function. */
+     function ENTRYs, each with its own result
+     type. Rule (34): an external ENTRY RETURNS
+     is callable as a function. */
   entry_mixed: procedure options(main);
      declare r fixed bin(31);
      declare em_add entry(fixed bin(31),
@@ -32,6 +32,7 @@
    once: procedure;
       declare n fixed bin(31);
       put skip list('PASS once body');
+      return;
 
      twice: entry(n) returns(fixed bin(31));
      return(n * 2);

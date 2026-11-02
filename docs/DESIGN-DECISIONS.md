@@ -13448,3 +13448,46 @@ Clang only links the runtime; the program stays uninstrumented. *Instrument the
 merged `--keep-ll` module.* It mixes the optimized embedded runtime with the
 test build and instruments functions the compiler would not mark; a source
 build keeps the sanitizer view identical to the old harness.
+
+---
+
+## ADR-359 — Mixed-return ENTRYs return through a per-entry buffer
+
+**Context.** ADR-026 and ADR-075 gave every multi-entry procedure one shared
+implementation with one result type. A void primary could coexist with valued
+ENTRYs only while the primary never issued a bare `RETURN`, and valued ENTRYs
+had to agree on the type, so a fixed-valued primary beside a character-valued
+ENTRY (or a structure-valued primary beside a scalar ENTRY) was diagnosed.
+The shared impl also could not carry a hidden result buffer for a character or
+structure result, so those signatures were rejected with rule (56).
+
+**Decision.** The shared `.impl` function now always returns `void` and takes
+a trailing `ptr` result buffer. Every thunk owns the ABI of its own entry: a
+scalar-valued thunk allocates a buffer of the entry's result type, passes it to
+the impl, loads the value and returns it; a character- or structure-valued
+thunk takes the usual hidden result pointer and passes that pointer straight
+through; a void thunk passes null. The impl tracks the active segment's result
+type (`curRetTy_`), and `RETURN(value)` stores the converted value into the
+buffer (scalar store, character copy, or structure memcpy). A valued segment
+that falls off its end zeroes the buffer before its return pad so a thunk never
+loads uninitialised storage. Sema checks each `RETURN` against its own segment:
+a bare `RETURN` is valid in a void segment even when another segment returns a
+value, and `RETURN(value)` is valid in a valued segment even when another is
+void. The old `commonRetTy` field is removed.
+
+**Consequences.** `entry.pli` and the void-primary case in `entry_mixed.pli`
+stay green; `entry_mixed.pli` now also issues a bare `RETURN` in its void
+primary. `entry_mixed_types.pli` covers a structure-valued primary with a
+character-valued and a fixed-valued ENTRY plus a void ENTRY, and a
+character-valued primary with a fixed-valued ENTRY. `entry_mixed_widths.pli`
+replaces the obsolete `bad_entry_type.pli`, covering a `FIXED BIN(63)` primary
+with a `FIXED BIN(15)` ENTRY. `bad_entry_ret.pli` now pins a bare `RETURN` in a
+valued primary, and `bad_entry_void_value.pli` pins `RETURN(value)` in a void
+ENTRY. The memory-effect metadata for the impl and thunks widens a
+`none`/`argmem-read` verdict to `argmem-readwrite`, and drops a global-read
+verdict, because the result buffer is now written.
+
+**Rejected.** A tagged union result (every thunk would decode a tag and the
+ABI would still need per-entry copies); keeping the common-type fast path when
+the types happen to agree (two ABIs for one mechanism, and the void-primary
+bare-`RETURN` gap would remain). C structure returns stay open in B9.

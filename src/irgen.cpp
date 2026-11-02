@@ -778,6 +778,22 @@ static void applyMemoryEffect(llvm::Function* f, pli::MemEffect e) {
   }
 }
 
+// Multi-entry thunks and the shared impl write the caller's result buffer
+// (ADR-359). A computed "none"/"argmem-read" verdict describes the PL/I
+// value semantics, not that extra write, so widen it to argmem-readwrite;
+// a global-reading verdict ("read") cannot promise no writes any more.
+static pli::MemEffect resultBufferEffect(pli::MemEffect e) {
+  switch (e) {
+  case pli::MemEffect::None:
+  case pli::MemEffect::ArgRead:
+    return pli::MemEffect::ArgReadWrite;
+  case pli::MemEffect::Read:
+    return pli::MemEffect::Unknown;
+  default:
+    return e;
+  }
+}
+
 // --- WS-A2 (ADR-267): the digest of a PL/I signature ----------------------
 //
 // A published promise names the signature it was published for. The digest is
@@ -4088,33 +4104,6 @@ static bool programHasAsync(HProgram& prog) {
 }
 
 std::string IRGen::run(HProgram& prog) {
-  // Reject unsupported signatures before constructing a partial module.
-  for (auto& p : prog.procs) {
-    bool hasEntries = false;
-    for (auto& st : p->body)
-      if (st && st->kind == HStmt::Entry) {
-        hasEntries = true;
-        break;
-      }
-    // A character-valued function (rules (34),(37)) returns through a hidden
-    // result buffer like a structure (rule 127); with ENTRY segments the
-    // shared impl cannot carry the buffer, so it stays diagnosed (rule 56).
-    if (hasEntries && p->commonRetTy.isChar())
-      for (auto& st : p->body)
-        if (st && st->kind == HStmt::Entry)
-          d_.error(st->loc,
-                   "a character-returning procedure with ENTRY statements is not implemented in "
-                   "this stage",
-                   "(56)");
-    if (p->isFunction && p->retTy.isStruct()) {
-      for (auto& st : p->body)
-        if (st && st->kind == HStmt::Entry)
-          d_.error(st->loc,
-                   "a structure-returning procedure with ENTRY statements is not implemented in "
-                   "this stage",
-                   "(56)");
-    }
-  }
   if (prog.mainProc && !prog.mainProc->params.empty())
     d_.error(prog.mainProc->loc,
              "parameters on the MAIN procedure are not implemented in this stage", "(2)");
@@ -5473,11 +5462,11 @@ void IRGen::declareProc(HProc* p) {
   // A structure-valued (rule 127) or character-valued (rules (34),(37))
   // function returns through a hidden result pointer and returns void: the
   // caller allocates the storage and passes its address as the first argument.
-  // The shared implementation returns the single result type shared by every
-  // function-valued entry point (rule 56): the procedure's own RETURNS type
-  // when it is a function, else the common RETURNS type of its function ENTRYs
-  // (a non-function primary entry may coexist with function segments).
-  llvm::Type* implRet = (sret || p->commonRetTy.isVoid()) ? b_.getVoidTy() : llvmTy(p->commonRetTy);
+  // A multi-entry procedure's shared implementation always returns void and
+  // writes the current segment's result through a hidden result pointer; each
+  // thunk owns a buffer of its entry's own result type (rule (56), ADR-359).
+  llvm::Type* implRet =
+      (sret || !p->isFunction) ? b_.getVoidTy() : llvmTy(p->retTy);
   std::vector<HStmt*> entries;
   for (auto& st : p->body)
     if (st && st->kind == HStmt::Entry)
@@ -5526,7 +5515,9 @@ void IRGen::declareProc(HProc* p) {
     for (Symbol* s : e->entryParamSyms)
       push(s);
 
-  // Shared implementation (body filled by emitMultiEntryProc).
+  // Shared implementation (body filled by emitMultiEntryProc). It returns
+  // void: the segment writes its own result through the trailing result
+  // pointer, and the entry thunk reads it back with its own type.
   std::vector<llvm::Type*> pt;
   for (size_t i = 0; i < uni.size(); ++i)
     pt.push_back(b_.getPtrTy());
@@ -5536,23 +5527,26 @@ void IRGen::declareProc(HProc* p) {
   for (size_t i = 0; i < p->env.size(); ++i)
     pt.push_back(b_.getPtrTy());
   pt.push_back(b_.getInt64Ty()); // the entry selector
-  llvm::FunctionType* ift = llvm::FunctionType::get(implRet, pt, false);
+  pt.push_back(b_.getPtrTy());   // the current entry's result buffer
+  llvm::FunctionType* ift = llvm::FunctionType::get(b_.getVoidTy(), pt, false);
   llvm::Function* impl = llvm::Function::Create(ift, llvm::Function::InternalLinkage,
                                                 p->irName.substr(1) + ".impl", &mod_);
-  applyMemoryEffect(impl, effectOf(p));
+  applyMemoryEffect(impl, resultBufferEffect(effectOf(p)));
   applyControlAttrs(impl, p);
 
-  // A thunk marshals one entry's arguments and tail-calls the shared impl.
-  // The impl carries one segment per entry point in body order; control must
-  // never fall from one segment into the next, so each segment ends with an
-  // explicit terminator when its source statements do not supply one: a
-  // function-valued segment returns the common result type (reached only by
-  // falling off its RETURNs), and a void segment returns void. The thunk
-  // returns its own entry point's result type (void for a non-function entry;
-  // a value produced by the impl is then discarded).
+  // A thunk marshals one entry's arguments and calls the shared impl. It keeps
+  // the entry's own ABI: a scalar-valued entry returns the loaded result, a
+  // structure- or character-valued entry takes the usual hidden result pointer
+  // and returns void, and a void entry discards the buffer. The impl receives
+  // a pointer to the thunk's result storage and writes the active segment's
+  // value there (ADR-359).
   int thunkN = 0;
-  auto thunk = [&](const std::vector<Symbol*>& mine, llvm::Value* selv, llvm::Type* trty) {
+  auto thunk = [&](const std::vector<Symbol*>& mine, llvm::Value* selv, const Type& rty) {
+    const bool valued = !rty.isVoid();
+    const bool sret = valued && (rty.isStruct() || rty.isChar());
     std::vector<llvm::Type*> sig;
+    if (sret)
+      sig.push_back(b_.getPtrTy()); // hidden result pointer
     for (size_t i = 0; i < mine.size(); ++i)
       sig.push_back(b_.getPtrTy());
     for (Symbol* s : mine)
@@ -5560,15 +5554,23 @@ void IRGen::declareProc(HProc* p) {
         sig.push_back(b_.getInt64Ty()); // hidden `*` extent / CHAR(*) length args
     for (size_t i = 0; i < p->env.size(); ++i)
       sig.push_back(b_.getPtrTy()); // links
+    llvm::Type* trty =
+        sret ? b_.getVoidTy() : (valued ? llvmTy(rty) : b_.getVoidTy());
     llvm::FunctionType* tft = llvm::FunctionType::get(trty, sig, false);
     llvm::Function* tf = llvm::Function::Create(tft, llvm::Function::InternalLinkage,
                                                 "entry.thunk." + std::to_string(thunkN++), &mod_);
-    applyMemoryEffect(tf, effectOf(p));
+    applyMemoryEffect(tf, resultBufferEffect(effectOf(p)));
     applyControlAttrs(tf, p);
+    curFn_ = tf;
     llvm::BasicBlock* tb = llvm::BasicBlock::Create(ctx_, "entry", tf);
     b_.SetInsertPoint(tb);
-    std::vector<llvm::Value*> args;
     size_t targ = 0;
+    llvm::Value* resultBuf = nullptr;
+    if (sret)
+      resultBuf = tf->getArg(targ++);
+    else if (valued)
+      resultBuf = entryAlloca(llvmTy(rty), "entry.ret");
+    std::vector<llvm::Value*> args;
     std::unordered_map<Symbol*, llvm::Value*> mineAddr;
     for (Symbol* s : mine)
       mineAddr[s] = tf->getArg(targ++);
@@ -5587,17 +5589,19 @@ void IRGen::declareProc(HProc* p) {
     for (auto* l : links)
       args.push_back(l);
     args.push_back(selv);
+    args.push_back(resultBuf ? resultBuf : llvm::Constant::getNullValue(b_.getPtrTy()));
     llvm::CallInst* call = b_.CreateCall(ift, impl, args);
-    call->setTailCall(true);
-    if (trty->isVoidTy())
+    if (!valued || sret) {
+      call->setTailCall(true);
       b_.CreateRetVoid();
-    else
-      b_.CreateRet(call);
+    } else {
+      b_.CreateRet(b_.CreateLoad(llvmTy(rty), resultBuf, "entry.ret"));
+    }
     return tf;
   };
 
-  llvm::Function* t0 =
-      thunk(p->paramSyms, i64(0), p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
+  llvm::Function* t0 = thunk(p->paramSyms, i64(0),
+                             p->isFunction ? p->retTy : Type::voidTy());
   t0->setName(p->irName.substr(1));
   // Rule (42): the primary entry thunk of an external procedure is the
   // link-visible symbol; the shared impl stays module-private.
@@ -5608,7 +5612,7 @@ void IRGen::declareProc(HProc* p) {
   for (size_t i = 0; i < entries.size(); ++i) {
     llvm::Function* tf =
         thunk(entries[i]->entryParamSyms, i64(i + 1),
-              entries[i]->entryIsFunction ? llvmTy(entries[i]->entryRetTy) : b_.getVoidTy());
+              entries[i]->entryIsFunction ? entries[i]->entryRetTy : Type::voidTy());
     tf->setName(entryIrName(p->name, p->parent ? p->parent->name : "", entries[i]->name).substr(1));
   }
 }
@@ -5694,6 +5698,9 @@ void IRGen::emitProc(HProc* p) {
                             ? b_.getVoidTy()
                             : (p->isFunction ? llvmTy(p->retTy) : b_.getVoidTy());
 
+  multiEntry_ = false;
+  multiResult_ = nullptr;
+
   // rule (56): ENTRY statements declare alternate entry points.
   std::vector<HStmt*> entries;
   for (auto& st : p->body)
@@ -5703,8 +5710,7 @@ void IRGen::emitProc(HProc* p) {
   if (entries.empty())
     emitPlainProc(p, retLLVM);
   else
-    emitMultiEntryProc(p, entries,
-                       p->commonRetTy.isVoid() ? b_.getVoidTy() : llvmTy(p->commonRetTy));
+    emitMultiEntryProc(p, entries);
   curProc_ = nullptr;
 }
 
@@ -5829,10 +5835,11 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 // rule (56): a procedure with ENTRY statements. The shared implementation
 // function (pre-created by declareProc) carries the whole body split into
 // segments; each entry point's thunk was built by declareProc.
-void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llvm::Type* retLLVM) {
+void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
   llvm::Function* impl = mod_.getFunction(p->irName.substr(1) + ".impl");
   curFn_ = impl;
-  curRetTy_ = p->commonRetTy;
+  multiEntry_ = true;
+  curRetTy_ = p->isFunction ? p->retTy : Type::voidTy();
   // The entry block must be the function's first block (so it is the real
   // entry and its allocas dominate every reachable segment block).
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx_, "entry", impl);
@@ -5870,6 +5877,8 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
   for (size_t i = 0; i < p->env.size(); ++i)
     symAddr_[p->env[i]] = impl->getArg(ai++);
   llvm::Value* sel = impl->getArg(ai++);
+  llvm::Value* result = impl->getArg(ai++);
+  multiResult_ = result;
 
   b_.SetInsertPoint(entry);
 
@@ -5914,11 +5923,15 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), i + 1), segs[i + 1]);
 
   // Segment 0 is the procedure's own start; each ENTRY begins the next segment.
-  // Segments never fall through: close each one by branching to a per-segment
-  // return pad that returns the impl's single result type (void segments return
-  // void). Sema already rejected a RETURN whose shape disagrees with its own
-  // segment, so every explicit RETURN in a segment matches the pad it reaches.
-  llvm::Type* implRet = retLLVM;
+  // Segments never fall through: each closes on its own return pad. The impl
+  // returns void, so a valued segment writes its result through `multiResult_`
+  // before the pad returns; a void segment leaves the buffer untouched.
+  auto segmentType = [&](size_t i) -> Type {
+    if (i == 0)
+      return p->isFunction ? p->retTy : Type::voidTy();
+    const HStmt* e = entries[i - 1];
+    return e->entryIsFunction ? e->entryRetTy : Type::voidTy();
+  };
   std::vector<llvm::BasicBlock*> retPads;
   for (size_t i = 0; i <= entries.size(); ++i) {
     retPads.push_back(llvm::BasicBlock::Create(ctx_, "e.ret." + std::to_string(i), impl));
@@ -5930,6 +5943,7 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
       if (!blockTerminated(b_.GetInsertBlock()))
         b_.CreateBr(retPads[seg]);
       ++seg;
+      curRetTy_ = segmentType(seg);
       startBlock(segs[seg]);
       continue;
     }
@@ -5946,13 +5960,24 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries, llv
     if (curOnDepth_)
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
-    if (implRet->isVoidTy())
-      b_.CreateRetVoid();
-    else
-      b_.CreateRet(llvm::Constant::getNullValue(implRet));
+    // A valued segment that falls off its end has no RETURN to write the
+    // buffer; zero it so the thunk never loads uninitialised storage.
+    Type rty = segmentType(i);
+    if (!rty.isVoid()) {
+      if (rty.isStruct() || rty.isChar())
+        b_.CreateMemSet(multiResult_, b_.getInt8(0),
+                        i64(mod_.getDataLayout().getTypeStoreSize(sretBufTy(rty))),
+                        llvm::MaybeAlign(), false);
+      else
+        b_.CreateStore(llvm::Constant::getNullValue(llvmTy(rty)), multiResult_);
+    }
+    b_.CreateRetVoid();
   }
   curOnDepth_ = nullptr;
   curFn_ = nullptr;
+  curRetTy_ = Type::voidTy();
+  multiEntry_ = false;
+  multiResult_ = nullptr;
 }
 
 std::string IRGen::entryIrName(const std::string& proc, const std::string& parent,
@@ -6426,41 +6451,42 @@ void IRGen::emitStmt(HStmt* s) {
       b_.CreateCall(runtimeFn("pli_on_reset_error"),
                     {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitdepth")});
     if (!s->value) {
-      // A bare RETURN ends an ON-unit and resumes after the SIGNAL (rule
-      // 91); sema rejects it in procedure bodies, so a handler (whose
-      // hidden result pointers are null) is the only path that gets here.
+      // A bare RETURN ends a void procedure/segment, or an ON-unit (rule 91).
       emitCtlEpilogue();
       b_.CreateRetVoid();
-    } else if (curProc_->isFunction && curProc_->retTy.isStruct()) {
+    } else if (curRetTy_.isStruct()) {
       // Structure-valued function (rule 127): copy the returned structure's
-      // storage into the caller's result buffer, then return void.
+      // storage into the caller's result buffer, then return void. In a
+      // multi-entry procedure that buffer is the thunk's own result storage.
       Val v = emitExpr(s->value.get());
-      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curProc_->retTy)));
-      b_.CreateMemCpy(structRetPtr_, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+      llvm::Value* dst = multiEntry_ ? multiResult_ : structRetPtr_;
+      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
+      b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
       emitCtlEpilogue();
       b_.CreateRetVoid();
-    } else if (curProc_->isFunction && curProc_->retTy.isChar()) {
+    } else if (curRetTy_.isChar()) {
       // Character-valued function (rules (34),(37)): copy the value into the
       // caller's hidden buffer, blank-padding or truncating (rule (86)). A
       // `CHAR(*) VARYING` result uses the caller-sized max, never the static
       // placeholder length.
       Val v = emitExpr(s->value.get());
-      const Type& rty = curProc_->retTy;
+      const Type& rty = curRetTy_;
+      llvm::Value* dst = multiEntry_ ? multiResult_ : structRetPtr_;
       if (rty.starLen && rty.varying) {
-        llvm::Value* dp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 1, "rdata");
+        llvm::Value* dp = b_.CreateStructGEP(sretBufTy(rty), dst, 1, "rdata");
         llvm::Value* ln = emitAssignVarying(dp, i64(kStarRetMax), v.ptr, v.len);
-        llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), structRetPtr_, 0, "rlenp");
+        llvm::Value* lp = b_.CreateStructGEP(sretBufTy(rty), dst, 0, "rlenp");
         b_.CreateStore(b_.CreateTrunc(ln, b_.getInt32Ty(), "rl32"), lp);
       } else if (rty.starLen) {
-        emitAssignChar(structRetPtr_, i64(kStarRetMax), v.ptr, v.len);
+        emitAssignChar(dst, i64(kStarRetMax), v.ptr, v.len);
       } else {
-        storeCharTo(structRetPtr_, rty, v, s->loc);
+        storeCharTo(dst, rty, v, s->loc);
       }
       emitCtlEpilogue();
       b_.CreateRetVoid();
     } else if (!curRetTy_.isVoid()) {
-      // Valued return: the impl's common entry type (rule (56)) may be valued
-      // even when the primary entry is not a function.
+      // Valued return: the segment's own result type may differ from the
+      // primary entry's type (rule (56), ADR-359).
       Val v = emitExpr(s->value.get());
       Val rv = convert(v, curRetTy_, s->loc);
       llvm::Value* reg = rv.reg;
@@ -6468,7 +6494,12 @@ void IRGen::emitStmt(HStmt* s) {
         reg = b_.CreateZExt(reg, b_.getInt8Ty(), "retz");
       }
       emitCtlEpilogue();
-      b_.CreateRet(reg);
+      if (multiEntry_) {
+        b_.CreateStore(reg, multiResult_);
+        b_.CreateRetVoid();
+      } else {
+        b_.CreateRet(reg);
+      }
     } else {
       emitCtlEpilogue();
       b_.CreateRetVoid();

@@ -1,15 +1,15 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-  /* rule (56): a plain RETURN is not valid in
-     a procedure whose ENTRYs return a value;
-     the segments share one valued impl. */
+  /* rule (81): a bare RETURN is not valid in a
+     valued primary segment. */
   badentryret: procedure options(main);
-     call once();
+     put skip list(once());
   end badentryret;
 
-  once: procedure;
+  once: procedure returns(fixed bin(31));
      put skip list('body');
      return;
-     twice: entry returns(fixed bin(31));
+
+    twice: entry returns(fixed bin(31));
      return(2);
   end once;

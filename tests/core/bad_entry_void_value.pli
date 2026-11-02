@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  /* rule (81): a void alternate entry cannot RETURN
+     a value, even when the primary entry returns one. */
+  badentryvoid: procedure options(main);
+     put skip list(once());
+  end badentryvoid;
+
+  once: procedure returns(fixed bin(31));
+     return(1);
+
+    twice: entry;
+     return(2);
+  end once;
