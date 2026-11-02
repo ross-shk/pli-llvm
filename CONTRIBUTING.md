@@ -7,11 +7,10 @@ Read first: `docs/ARCHITECTURE.md` (pipeline), `docs/GRAMMAR-COVERAGE.md `(what 
 ## Build and test
 
 ```bash
-# Canonical build (CMake + Ninja):
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
-# ... or hermetic static (releases, ADR-224): fetch first, then configure with
-# -DPLI_LLVM_STATIC_PREFIX=~/pli-deps instead of CMAKE_PREFIX_PATH:
-# sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps
+# Hermetic static build (Linux + macOS): fetch the pinned static LLVM once,
+# then configure with -DPLI_LLVM_STATIC_PREFIX instead of CMAKE_PREFIX_PATH:
+sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps
+cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=~/pli-deps
 cmake --build build/cmake -j$(nproc)        # build/cmake/pli (runtime embedded)
 ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.pli
 ```
@@ -25,8 +24,6 @@ cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli
 cmake --build build/cmake -j
 ctest --test-dir build/cmake
 ```
-
-With a prebuilt LLVM 23 install instead, pass `-DCMAKE_PREFIX_PATH=C:/clang+llvm-23.1.3-x86_64-pc-windows-msvc -DPLI_VCPKG_ROOT=""` (zlib/zstd come from vcpkg; `pli.exe` then needs `z.dll`/`zstd.dll` on `PATH`).
 
 Optional MLIR canary build (proves the `pli_mlir` bridge, lowers no PL/I operation — see ADR-230):
 

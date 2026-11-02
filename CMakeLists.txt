@@ -263,6 +263,79 @@ target_include_directories(pli PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DI
 target_include_directories(pli SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS}
                            ${LLD_INCLUDE_DIR})
 
+# On Windows, clang (for bitcode gen) and clang-cl (for the driver) both need
+# explicit -isystem/-imsvc flags for VC and Windows SDK include dirs, since
+# neither reads the INCLUDE environment variable like cl.exe does.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  # Probe VC include dir, preferring VCToolsInstallDir env var, then
+  # scanning installed MSVC versions for xutility.
+  set(_pli_vc_include "")
+  if(DEFINED ENV{VCToolsInstallDir})
+    set(_pli_vc_env_include "$ENV{VCToolsInstallDir}/include")
+    if(EXISTS "${_pli_vc_env_include}/xutility")
+      set(_pli_vc_include "${_pli_vc_env_include}")
+    endif()
+  endif()
+  if(NOT _pli_vc_include)
+    # Scan installed MSVC versions (directories like 14.39.33519) and pick
+    # the newest one that has xutility.
+    file(GLOB _pli_vc_dirs
+      "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/*/include"
+      "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/*/include")
+    set(_pli_vc_best "")
+    foreach(_dir ${_pli_vc_dirs})
+      if(EXISTS "${_dir}/xutility")
+        # Version string is the parent dir name; lexicographic compare works
+        # because MSVC versions are zero-padded (14.39.33519 > 14.36.32532).
+        get_filename_component(_dir_ver "${_dir}" DIRECTORY)
+        get_filename_component(_dir_ver "${_dir_ver}" DIRECTORY)
+        if(NOT _pli_vc_best OR _dir_ver VERSION_GREATER _pli_vc_best_ver)
+          set(_pli_vc_best "${_dir}")
+          set(_pli_vc_best_ver "${_dir_ver}")
+        endif()
+      endif()
+    endforeach()
+    if(_pli_vc_best)
+      set(_pli_vc_include "${_pli_vc_best}")
+    endif()
+  endif()
+  find_path(_pli_windows_sdk_um NAMES windows.h
+    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/um"
+    NO_DEFAULT_PATH)
+  find_path(_pli_windows_sdk_shared NAMES winapifamily.h
+    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/shared"
+    NO_DEFAULT_PATH)
+  find_path(_pli_windows_sdk_ucrt NAMES stdio.h
+    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/ucrt"
+    NO_DEFAULT_PATH)
+  set(_pli_include_dirs "")
+  set(_pli_isystem_flags "")
+  if(_pli_vc_include)
+    list(APPEND _pli_include_dirs "${_pli_vc_include}")
+    list(APPEND _pli_isystem_flags -isystem "${_pli_vc_include}")
+  endif()
+  if(_pli_windows_sdk_um)
+    list(APPEND _pli_include_dirs "${_pli_windows_sdk_um}")
+    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_um}")
+  endif()
+  if(_pli_windows_sdk_shared)
+    list(APPEND _pli_include_dirs "${_pli_windows_sdk_shared}")
+    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_shared}")
+  endif()
+  if(_pli_windows_sdk_ucrt)
+    list(APPEND _pli_include_dirs "${_pli_windows_sdk_ucrt}")
+    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_ucrt}")
+  endif()
+  if(_pli_include_dirs)
+    set(PLI_WINDOWS_INCLUDE_DIRS ${_pli_include_dirs})
+    set(PLI_HOST_SYSROOT_FLAG ${_pli_isystem_flags})
+    target_include_directories(pli SYSTEM PRIVATE ${_pli_include_dirs})
+    message(STATUS "Windows SDK include dirs: ${_pli_include_dirs}")
+  else()
+    message(WARNING "No Windows SDK include dirs found; compilation may fail")
+  endif()
+endif()
+
 # Get the default target triple from LLVM for consistent bitcode generation.
 # Use clang (not CMAKE_C_COMPILER) for triple detection and bitcode generation
 # since GCC doesn't support -print-effective-triple or -emit-llvm -target.
@@ -279,7 +352,6 @@ message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 # Build-time sysroot for macOS: the host-triple runtime compile needs
 # -isysroot to find system headers (clang has no baked-in SDK). Probe stable
 # locations; empty on other platforms.
-set(PLI_HOST_SYSROOT_FLAG "")
 if(APPLE)
   # Keep the first candidate this toolchain can actually link against, not
   # merely the first directory that exists: a Command Line Tools package newer
@@ -320,42 +392,17 @@ if(APPLE)
     message(STATUS "Host bitcode sysroot: ${_pli_sdk}")
   else()
     message(WARNING "No macOS SDK found; the host runtime bitcode may fail to compile")
+    set(PLI_HOST_SYSROOT_FLAG "")
   endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  # clang (not clang-cl) is used for bitcode generation; on Windows it needs
-  # explicit -isystem flags for the VC and Windows SDK include dirs, since it
-  # does not read the INCLUDE environment variable like cl.exe/clang-cl do.
-  find_path(_pli_vc_include NAMES vcruntime.h
-    HINTS "$ENV:VCToolsInstallDir/include" "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/*/include"
-    NO_DEFAULT_PATH)
-  find_path(_pli_windows_sdk_um NAMES windows.h
-    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/um"
-    NO_DEFAULT_PATH)
-  find_path(_pli_windows_sdk_shared NAMES winapifamily.h
-    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/shared"
-    NO_DEFAULT_PATH)
-  find_path(_pli_windows_sdk_ucrt NAMES stdio.h
-    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/ucrt"
-    NO_DEFAULT_PATH)
-  set(_pli_isystem_flags "")
-  if(_pli_vc_include)
-    list(APPEND _pli_isystem_flags -isystem "${_pli_vc_include}")
+  # clang (not clang-cl) is used for bitcode generation; reuse the same
+  # Windows SDK include dirs found above via PLI_HOST_SYSROOT_FLAG.
+  # PLI_HOST_SYSROOT_FLAG was already set by the Windows block above.
+  if(NOT PLI_HOST_SYSROOT_FLAG)
+    set(PLI_HOST_SYSROOT_FLAG "")
   endif()
-  if(_pli_windows_sdk_um)
-    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_um}")
-  endif()
-  if(_pli_windows_sdk_shared)
-    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_shared}")
-  endif()
-  if(_pli_windows_sdk_ucrt)
-    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_ucrt}")
-  endif()
-  if(_pli_isystem_flags)
-    set(PLI_HOST_SYSROOT_FLAG ${_pli_isystem_flags})
-    message(STATUS "Host bitcode Windows SDK include dirs: ${_pli_isystem_flags}")
-  else()
-    message(WARNING "No Windows SDK include dirs found; the host runtime bitcode may fail to compile")
-  endif()
+else()
+  set(PLI_HOST_SYSROOT_FLAG "")
 endif()
 
 target_compile_definitions(pli PRIVATE
@@ -480,8 +527,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     HINTS ${CMAKE_PREFIX_PATH}/lib/clang/${_LLVM_MAJOR}/lib/windows
           ${CMAKE_PREFIX_PATH}/lib/windows)
   if(CLANG_RT_BUILTINS)
-    target_link_libraries(pli PRIVATE ${CLANG_RT_BUILTINS})
     message(STATUS "compiler-rt builtins: ${CLANG_RT_BUILTINS}")
+    # Pass as a bare library name; resolved via /LIBPATH
+    # (pli-deps/lib/windows added to target_link_directories above).
+    get_filename_component(_pli_clang_rt_name "${CLANG_RT_BUILTINS}" NAME)
+    target_link_libraries(pli PRIVATE "${_pli_clang_rt_name}")
   else()
     message(WARNING "compiler-rt builtins not found (clang_rt.builtins) — 128-bit division may fail to link")
   endif()
@@ -496,23 +546,41 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
   # (see CMAKE_LINKER); passing -fuse-ld=lld here would forward a driver-only
   # flag to lld-link ("ignoring unknown argument"). User programs link
   # in-process through lld (ADR-225), never through a clang driver.
-  # /DEFAULTLIB:libcmt.lib pulls in the MT-variant CRT and C++ stdlib objects
-  # (provides __std_remove_8, __std_replace_8, ___chkstk_ms, etc.) without a
-  # RuntimeLibrary mismatch. MSVC libs must come after LLVM/lld libs on the link line.
+  # /DEFAULTLIB:libcmt.lib pulls in the MT-variant CRT (provides ___chkstk_ms, etc.)
+  # without a RuntimeLibrary mismatch. libcpmt.lib provides the C++ stdlib
+  # __std_* algorithm symbols expected by the prebuilt LLVM/lld libs. MSVC libs
+  # must come after LLVM/lld libs on the link line.
   target_link_options(pli PRIVATE /DEFAULTLIB:libcmt.lib)
+  # lld-link (COFF) doesn't read the LIB env var; pass the VC and Windows SDK
+  # lib dirs explicitly so libcpmt.lib and kernel32.lib etc. are found.
+  if(DEFINED ENV{VCToolsInstallDir})
+    target_link_directories(pli PRIVATE "$ENV{VCToolsInstallDir}/lib/x64")
+  endif()
+  # compiler-rt builtins (clang_rt.builtins-*.lib) are referenced as bare
+  # library names on Windows; make sure lld-link finds them via /LIBPATH.
+  if(PLI_LLVM_STATIC_PREFIX)
+    target_link_directories(pli PRIVATE "${PLI_LLVM_STATIC_PREFIX}/lib/windows")
+  endif()
+  foreach(_sdk_lib
+      "C:/Program Files (x86)/Windows Kits/10/Lib/10.0.22000.0/um/x64"
+      "C:/Program Files (x86)/Windows Kits/10/Lib/10.0.22000.0/ucrt/x64"
+      "C:/Program Files (x86)/Windows Kits/NETFXSDK/4.8/lib/um/x64")
+    if(EXISTS "${_sdk_lib}/kernel32.lib" OR EXISTS "${_sdk_lib}/ucrt.lib")
+      target_link_directories(pli PRIVATE "${_sdk_lib}")
+    endif()
+  endforeach()
   target_link_libraries(pli PRIVATE
     kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib
-    advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib)
+    advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib
+    libcpmt.lib)
   # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
   # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
   # Compiled from runtime/stl_stubs.c as part of the build. The hermetic stash
   # is compiled with the runner's own toolset, so its libcpmt already exports
   # these helpers; adding the stubs there produces duplicate symbols.
   target_sources(pli PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c)
-  if(NOT PLI_LLVM_STATIC_PREFIX)
-    target_sources(pli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c)
-  endif()
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c)
   # Silence expected clang warnings for the __std_*/xml* helper stubs
   # (reserved double-underscore names, pre-C99 declaration style).
   set_source_files_properties(
