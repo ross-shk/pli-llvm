@@ -36,7 +36,7 @@ find_package(LLVM REQUIRED CONFIG)
 # ZSTD_compress2, ...), so the empty INTERFACE fallbacks below only satisfy
 # configure — without real libs the link fails with undefined symbols.
 # LibXml2 is the exception: manifest merging is covered by in-tree stubs
-# (runtime/libxml2_stubs.c, added to pli sources below).
+# (src/win/libxml2_stubs.c, added to pli sources below).
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # Drop the old dev-machine hint var (replaced by the *_ROOT vars below).
   unset(PLI_LLVM_DEPS_DIR CACHE)
@@ -75,10 +75,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # ships no binaries, and the old import-lib stub only covered 8 of the 16
   # symbols LLVM 23 needs (besides requiring a nonexistent libxml2.dll at
   # startup). Use an empty target and provide static abort-stubs in-tree
-  # (runtime/libxml2_stubs.c, added to pli sources below) instead.
+  # (src/win/libxml2_stubs.c, added to pli sources below) instead.
   if(NOT TARGET LibXml2::LibXml2)
     add_library(LibXml2::LibXml2 INTERFACE IMPORTED)
-    message(STATUS "LibXml2: in-tree stubs (runtime/libxml2_stubs.c)")
+    message(STATUS "LibXml2: in-tree stubs (src/win/libxml2_stubs.c)")
   endif()
 endif()
 if(LLVM_PACKAGE_VERSION VERSION_LESS 23)
@@ -575,19 +575,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
     libcpmt.lib)
   # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
   # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
-  # Compiled from runtime/stl_stubs.c as part of the build. The hermetic stash
+  # Compiled from src/win/stl_stubs.c as part of the build. The hermetic stash
   # is compiled with the runner's own toolset, so its libcpmt already exports
   # these helpers; adding the stubs there produces duplicate symbols.
   target_sources(pli PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/libxml2_stubs.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c)
   # Silence expected clang warnings for the __std_*/xml* helper stubs
   # (reserved double-underscore names, pre-C99 declaration style).
   set_source_files_properties(
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/stl_stubs.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/libxml2_stubs.c PROPERTIES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/libxml2_stubs.c PROPERTIES
     COMPILE_OPTIONS "-Wno-reserved-identifier;-Wno-missing-prototypes;-Wno-unsafe-buffer-usage;-Wno-unreachable-code-return;-Wno-declaration-after-statement;-Wno-unused-parameter")
-  message(STATUS "MSVC STL helper stubs: runtime/stl_stubs.c")
+  message(STATUS "MSVC STL helper stubs: src/win/stl_stubs.c")
   message(STATUS "Using /MT (static CRT) to match prebuilt LLVM libraries")
 endif()
 
