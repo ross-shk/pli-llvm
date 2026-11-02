@@ -238,7 +238,7 @@ Type mulResultType(const Type& a, const Type& b) {
   return t;
 }
 
-// FIXED/FIXED division of the same base (rule 121, ADR-360): RULES(IBM) gives
+// FIXED/FIXED division of the same base (rule 121, ADR-361): RULES(IBM) gives
 // the result the implementation maximum precision and the scale
 // maxP - p1 + q1 - q2, so a quotient keeps its fraction instead of widening to
 // FLOAT. A negative scale (the integer part is wider than the raw quotient) is
@@ -6008,7 +6008,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       break;
     case Tok::Slash:
-      // FIXED/FIXED division keeps the rule's exact result type (ADR-360): the
+      // FIXED/FIXED division keeps the rule's exact result type (ADR-361): the
       // maximum precision and the scale maxP - p1 + q1 - q2, so 7/2 is a
       // DECIMAL/BINARY 3.5 (truncating only on assignment to a FIXED target).
       // Same-base operands use divResultType; a mixed-base integer division

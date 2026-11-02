@@ -13492,7 +13492,7 @@ ABI would still need per-entry copies); keeping the common-type fast path when
 the types happen to agree (two ABIs for one mechanism, and the void-primary
 bare-`RETURN` gap would remain). C structure returns stay open in B9.
 
-## ADR-360 — FIXED division keeps the RULES(IBM) precision and scale
+## ADR-361 — FIXED division keeps the RULES(IBM) precision and scale
 
 **Context.** Rule (121) makes `/` a FIXED operation when both operands are
 FIXED, but the front end only kept that type when both scales were 0; every

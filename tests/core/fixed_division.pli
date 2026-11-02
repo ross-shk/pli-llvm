@@ -1,6 +1,6 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rule (121); ADR-360: FIXED division keeps the RULES(IBM) result
+ /* rule (121); ADR-361: FIXED division keeps the RULES(IBM) result
     precision (31 decimal digits, 63 binary bits) and scale
     q = maxp - p1 + q1 - q2 instead of falling back to FLOAT. */
  fixed_division: procedure options(main);

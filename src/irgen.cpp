@@ -12343,7 +12343,7 @@ Val IRGen::emitExpr(HExpr* e) {
         return v;
       }
     }
-    // A FIXED/FIXED quotient narrowed straight to FLOAT (ADR-360): divide in
+    // A FIXED/FIXED quotient narrowed straight to FLOAT (ADR-361): divide in
     // FLOAT. Converting the exact wide fixed quotient would scale its raw
     // integer by an inexact 10^q, losing an ulp on values like 7/2. The
     // quotient is still computed as FIXED first when a negative result scale
@@ -13048,7 +13048,7 @@ Val IRGen::emitExpr(HExpr* e) {
   const bool fixedDiv = op == Tok::Slash && common.isFixed() && a.ty.isFixed() &&
                         b.ty.isFixed() && a.ty.k == b.ty.k;
   if (fixedDiv) {
-    // Exact FIXED division (ADR-360): keep each operand's own scale so the raw
+    // Exact FIXED division (ADR-361): keep each operand's own scale so the raw
     // integers divide directly. Rescaling both to the result scale first would
     // round away the quotient digits the division is meant to produce.
     Type wa = common;
@@ -13245,7 +13245,7 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
       r = endZerodivide(zd, div);
     } else if (fixedDiv) {
-      // Exact FIXED division (rule 121, ADR-360): the raw operands divide at
+      // Exact FIXED division (rule 121, ADR-361): the raw operands divide at
       // the RULES(IBM) result scale, sdiv truncating toward zero. The divisor
       // is zero-guarded before the sdiv so the compute block always divides by
       // a non-zero value (rule 94).
