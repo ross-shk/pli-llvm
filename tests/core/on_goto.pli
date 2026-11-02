@@ -1,0 +1,20 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LL */
+/* rule (91) / B4: a GO TO inside an ON-unit to a label in the same
+   procedure is a local transfer and is served. */
+on_goto: procedure options(main);
+   declare i fixed bin(31) init(0);
+   declare x fixed bin(31) init(10);
+   declare y fixed bin(31) init(0);
+   on zerodivide begin;
+      put skip list('handler fired');
+      i = 1;
+      goto done;
+   end;
+   declare z fixed bin(31);
+   z = x / y;
+   put skip list('should not print');
+done:
+   put skip list('i=', i);
+   put skip list('PASS on_goto');
+ end on_goto;

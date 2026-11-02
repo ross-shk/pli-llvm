@@ -3496,7 +3496,14 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* 
     return;
   }
   b_.CreateCall(dispatch, {});
-  b_.CreateBr(okBB);
+  // B4: if the handler did a non-local exit (RETURN(value)/GO TO), the escape
+  // code is non-zero; branch to the escape block instead of resuming at okBB.
+  // Only create escape blocks when the procedure can return a value or has a
+  // handler with GO TO; otherwise the extra CFG edges break SSA dominance.
+  if (curProc_->isFunction || hasHandlerGoto_)
+    emitEscapeCheck(okBB);
+  else
+    b_.CreateBr(okBB);
 }
 
 // UNDERFLOW (rule 94; ADR-326): a floating-point result whose magnitude is
@@ -5732,6 +5739,18 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
+  // B4: snapshot this procedure's label map for ON-unit GO TO escape blocks,
+  // which are created during statement emission (before emitOnHandlers runs).
+  procLabelBlocks_[p] = labelBlocks_;
+  // B4: check if any ON-unit in this procedure contains a GO TO statement; if
+  // not, skip creating goto escape blocks (their CFG edges to label blocks
+  // would break SSA dominance).
+  hasHandlerGoto_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerGotoStmt(st.get())) {
+      hasHandlerGoto_ = true;
+      break;
+    }
 
   // Parameter arguments become their symbols' addresses (PL/I by reference);
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
@@ -5846,6 +5865,15 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
+  // B4: snapshot this procedure's label map for ON-unit GO TO escape blocks.
+  procLabelBlocks_[p] = labelBlocks_;
+  // B4: check if any ON-unit in this procedure contains a GO TO statement.
+  hasHandlerGoto_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerGotoStmt(st.get())) {
+      hasHandlerGoto_ = true;
+      break;
+    }
 
   std::vector<Symbol*> uni;
   auto push = [&](Symbol* s) {
@@ -6023,6 +6051,336 @@ static void collectOnStmts(HStmt* s, std::map<std::pair<int, int>, HStmt*>& out)
     collectOnStmts(b.get(), out);
 }
 
+// B4: scan for any GO TO statement in a statement tree.
+static bool hasGotoStmt(HStmt* s);
+
+// B4: scan the statement tree for an ON-unit whose unit contains a GO TO
+// statement. Used to decide whether goto escape blocks are needed.
+bool IRGen::hasHandlerGotoStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::On && !s->isSystem && s->unit)
+    if (hasGotoStmt(s->unit.get()))
+      return true;
+  if (s->thenS && hasHandlerGotoStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasHandlerGotoStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasHandlerGotoStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasHandlerGotoStmt(b.get()))
+      return true;
+  return false;
+}
+
+// B4: scan for any GO TO statement in a statement tree.
+static bool hasGotoStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::Goto)
+    return true;
+  if (s->thenS && hasGotoStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasGotoStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasGotoStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasGotoStmt(b.get()))
+      return true;
+  return false;
+}
+
+// B4: module-level escape globals for ON-unit non-local exit. Created lazily
+// on first use; shared across all procedures in the module. The handler stores
+// escape info here and returns void; the trap/signal dispatch reads it and
+// branches to the return-with-value or goto-label target.
+llvm::GlobalVariable* IRGen::escapeCodeGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeCode"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeCode");
+}
+llvm::GlobalVariable* IRGen::escapeRetKindGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetKind"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeRetKind");
+}
+llvm::GlobalVariable* IRGen::escapeRetI64Global() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetI64"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetI64");
+}
+llvm::GlobalVariable* IRGen::escapeRetF64Global() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetF64"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getDoubleTy(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "onEscapeRetF64");
+}
+llvm::GlobalVariable* IRGen::escapeRetBufGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetBuf"))
+    return g;
+  return new llvm::GlobalVariable(mod_,
+      llvm::ArrayType::get(b_.getInt8Ty(), 4096), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::Constant::getNullValue(llvm::ArrayType::get(b_.getInt8Ty(), 4096)),
+      "onEscapeRetBuf");
+}
+llvm::GlobalVariable* IRGen::escapeRetSizeGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetSize"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetSize");
+}
+llvm::GlobalVariable* IRGen::escapeLabelIdxGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeLabelIdx"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeLabelIdx");
+}
+
+// B4: inside a handler unit, RETURN(value) stores the converted value in the
+// escape globals and returns void from the handler. The trap/signal dispatch
+// later performs the actual procedure return from emitEscapeReturnBlock().
+// curRetTy_ is void inside the handler; use curProc_->retTy (the establishing
+// procedure's return type).
+void IRGen::emitEscapeReturn(Val v) {
+  const Type& rty = curProc_->retTy;
+  // v is already converted to rty by the caller.
+  if (rty.isStruct() || rty.isChar()) {
+    b_.CreateStore(i32(rty.isStruct() ? 2 : 3), escapeRetKindGlobal());
+    llvm::Value* sz =
+        i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(rty)));
+    b_.CreateStore(sz, escapeRetSizeGlobal());
+    llvm::Value* dst = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(), "esc.buf");
+    b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+  } else if (rty.k == TK::Float) {
+    b_.CreateStore(i32(1), escapeRetKindGlobal());
+    // Extend float to double if needed (float -> double is fpext).
+    llvm::Value* storeVal = v.reg;
+    if (storeVal->getType() != b_.getDoubleTy())
+      storeVal = b_.CreateFPExt(storeVal, b_.getDoubleTy(), "esc.fpext");
+    b_.CreateStore(storeVal, escapeRetF64Global());
+  } else {
+    // fixed, bit, pointer, etc.: widen/truncate to i64 and store.
+    b_.CreateStore(i32(0), escapeRetKindGlobal());
+    llvm::Value* storeVal = v.reg;
+    unsigned srcBits = storeVal->getType()->getIntegerBitWidth();
+    if (srcBits < 64)
+      storeVal = b_.CreateZExt(storeVal, b_.getInt64Ty(), "esc.zext");
+    else if (srcBits > 64)
+      storeVal = b_.CreateTrunc(storeVal, b_.getInt64Ty(), "esc.trunc");
+    b_.CreateStore(storeVal, escapeRetI64Global());
+  }
+  b_.CreateStore(i32(1), escapeCodeGlobal());
+  b_.CreateRetVoid();
+}
+
+// B4: inside a handler unit, GO TO stores the label index in the escape
+// globals and returns void from the handler. The dispatch later performs the
+// indirect branch from emitEscapeGotoBlock().
+void IRGen::emitEscapeGoto(HStmt* s) {
+  // Dense label index: position of the label in the establishing procedure's
+  // labelBlocks_ (saved as procLabelBlocks_[curProc_] before handler emission).
+  int idx = 0;
+  auto& lbls = procLabelBlocks_[curProc_];
+  for (auto& kv : lbls) {
+    if (kv.first == s->name) {
+      b_.CreateStore(i32(idx), escapeLabelIdxGlobal());
+      b_.CreateStore(i32(2), escapeCodeGlobal());
+      b_.CreateRetVoid();
+      return;
+    }
+    ++idx;
+  }
+  // Should not happen: sema validated the label exists in this procedure.
+  d_.error(s->loc, "GO TO target label not found in this procedure", "(77)");
+  b_.CreateRetVoid();
+}
+
+// B4: after a handler returns at a trap or signal site, check the escape code.
+// Branch to resumeBB when zero; otherwise fall into the escape block which is
+// filled by the caller via emitEscapeReturnBlock / emitEscapeGotoBlock.
+// The goto escape block is only created when the procedure has an ON-unit
+// containing a GO TO statement; otherwise its CFG edges to label blocks would
+// break SSA dominance.
+void IRGen::emitEscapeCheck(llvm::BasicBlock* resumeBB) {
+  llvm::Value* esc = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc");
+  llvm::Value* none = b_.CreateICmpEQ(esc, i32(0), "esc.none");
+  llvm::BasicBlock* escBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
+  b_.CreateCondBr(none, resumeBB, escBB);
+  b_.SetInsertPoint(escBB);
+  // Switch on the escape code; default is unreachable (should not happen).
+  llvm::BasicBlock* badBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
+  unsigned numCases = hasHandlerGoto_ ? 2 : 1;
+  llvm::SwitchInst* sw = b_.CreateSwitch(esc, badBB, numCases);
+  llvm::BasicBlock* retBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
+  if (hasHandlerGoto_) {
+    llvm::BasicBlock* gotoBB =
+        llvm::BasicBlock::Create(ctx_, "on.escape.goto", curFn_);
+    sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
+    b_.SetInsertPoint(gotoBB);
+    emitEscapeGotoBlock();
+  }
+  b_.SetInsertPoint(badBB);
+  b_.CreateUnreachable();
+  // Fill the return-with-value block.
+  b_.SetInsertPoint(retBB);
+  emitEscapeReturnBlock();
+  // Continue insertion at the resume block (the fall-through target).
+  b_.SetInsertPoint(resumeBB);
+}
+
+// B4: return-with-value escape block. Mirrors the tail of emitReturn: finish
+// signal, handler-depth reset, ctl epilogue, then return the stored value.
+// A void procedure cannot RETURN a value (sema rejects it), so the escape
+// blocks here are dead code — generate unreachable to keep the module valid.
+void IRGen::emitEscapeReturnBlock() {
+  emitFinishSignal();
+  if (curOnDepth_)
+    b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
+  emitCtlEpilogue();
+  if (curRetTy_.isVoid()) {
+    b_.CreateUnreachable();
+    return;
+  }
+  llvm::Value* kind = b_.CreateLoad(b_.getInt32Ty(), escapeRetKindGlobal(),
+                                    "esc.kind");
+  llvm::BasicBlock* intBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.int", curFn_);
+  llvm::BasicBlock* fltBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.flt", curFn_);
+  llvm::BasicBlock* strBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.str", curFn_);
+  llvm::BasicBlock* chrBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.chr", curFn_);
+  llvm::BasicBlock* badBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.bad", curFn_);
+  llvm::SwitchInst* sw = b_.CreateSwitch(kind, badBB, 4);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(0)), intBB);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), fltBB);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), strBB);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(3)), chrBB);
+
+  b_.SetInsertPoint(intBB);
+  {
+    // kind 0 = integer/pointer return.
+    if (curRetTy_.isFixed() || curRetTy_.isBit() || curRetTy_.isPointer() ||
+        curRetTy_.isLocator()) {
+      llvm::Value* v64 = b_.CreateLoad(b_.getInt64Ty(), escapeRetI64Global(),
+                                       "esc.v.i64");
+      llvm::Type* retLLVM = llvmTy(curRetTy_);
+      llvm::Value* retVal = v64;
+      if (retLLVM->isIntegerTy()) {
+        unsigned retBits = retLLVM->getIntegerBitWidth();
+        if (retBits < 64)
+          retVal = b_.CreateTrunc(v64, retLLVM, "esc.trunc");
+        else if (retBits > 64)
+          retVal = b_.CreateZExt(v64, retLLVM, "esc.zext");
+      } else if (retLLVM->isPointerTy()) {
+        retVal = b_.CreateIntToPtr(v64, retLLVM, "esc.inttoptr");
+      }
+      b_.CreateRet(retVal);
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(fltBB);
+  {
+    // kind 1 = float return.
+    if (curRetTy_.k == TK::Float) {
+      llvm::Value* vd = b_.CreateLoad(b_.getDoubleTy(), escapeRetF64Global(),
+                                      "esc.v.f64");
+      llvm::Type* retLLVM = llvmTy(curRetTy_);
+      llvm::Value* retVal = vd;
+      if (retLLVM != b_.getDoubleTy())
+        retVal = b_.CreateFPTrunc(vd, retLLVM, "esc.fptrunc");
+      b_.CreateRet(retVal);
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(strBB);
+  {
+    // kind 2 = struct return.
+    if (curRetTy_.isStruct() && structRetPtr_) {
+      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(),
+                                      "esc.v.sz");
+      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(),
+                                          "esc.buf");
+      llvm::Value* dst = structRetPtr_;
+      b_.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), sz);
+      b_.CreateRetVoid();
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(chrBB);
+  {
+    // kind 3 = char return.
+    if (curRetTy_.isChar() && structRetPtr_) {
+      // Character result: copy into the hidden result buffer, pad/truncate.
+      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(),
+                                      "esc.v.sz");
+      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(),
+                                          "esc.buf");
+      storeCharTo(structRetPtr_, curRetTy_, Val{curRetTy_, nullptr, src, sz},
+                  SourceLoc{});
+      b_.CreateRetVoid();
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(badBB);
+  b_.CreateUnreachable();
+}
+
+// B4: goto-label escape block. Restore the ON depth to the target's scope,
+// then indirect-branch to the label block selected by the stored index.
+void IRGen::emitEscapeGotoBlock() {
+  // Restore the handler's own depth (the unit was a block activation).
+  if (curOnUnitDepth_)
+    b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_,
+                                 "onunitdepth")});
+  llvm::Value* idx = b_.CreateLoad(b_.getInt32Ty(), escapeLabelIdxGlobal(),
+                                   "esc.idx");
+  llvm::Value* idx64 = b_.CreateZExt(idx, b_.getInt64Ty(), "esc.idx64");
+  // Build an indirect branch whose targets are every label block in this
+  // procedure. A select maps the dense index to a blockaddress.
+  std::vector<llvm::BasicBlock*> dests;
+  auto& lbls = procLabelBlocks_[curProc_];
+  for (auto& kv : lbls)
+    dests.push_back(kv.second);
+  if (dests.empty()) {
+    b_.CreateUnreachable();
+    return;
+  }
+  llvm::Value* target = llvm::ConstantPointerNull::get(b_.getPtrTy());
+  for (size_t i = 0; i < dests.size(); ++i) {
+    llvm::Value* addr = llvm::BlockAddress::get(curFn_, dests[i]);
+    target = b_.CreateSelect(b_.CreateICmpEQ(idx64, i64((long long)i), "esc.sel"),
+                             addr, target, "esc.addr");
+  }
+  auto* ib = b_.CreateIndirectBr(target, (unsigned)dests.size());
+  for (llvm::BasicBlock* d : dests)
+    ib->addDestination(d);
+}
+
 void IRGen::declareOnHandlers(HProgram& prog) {
   std::map<std::pair<int, int>, HStmt*> byId;
   for (auto& p : prog.procs)
@@ -6082,6 +6440,10 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       inHandler_ = true;
       llvm::AllocaInst* savedDepth = curOnDepth_;
       curOnDepth_ = nullptr;
+      // B4: labelBlocks_ was already snapshotted into procLabelBlocks_[curProc_]
+      // by emitPlainProc/emitMultiEntryProc before statement emission; the
+      // handler emission below clears labelBlocks_ but must not overwrite the
+      // snapshot with an empty map.
       labelBlocks_.clear();
       labelBeginChain_.clear();
       labelElemInits_.clear();
@@ -6249,13 +6611,53 @@ void IRGen::emitSignal(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
   llvm::FunctionType* hft = llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
   b_.CreateCall(hft, fn, {ctx});
-  if (s->condKey == 0)
-    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
-  // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
-  // (ADR-333), which either runs an ERROR unit or takes the system action.
-  if (s->condKey == Stmt::kOverflowCondKey)
-    emitErrorRaise();
-  b_.CreateBr(resBB);
+  // B4: if the handler did a non-local exit (RETURN(value)/GO TO), the escape
+  // code is non-zero; branch to the escape block instead of the normal resume
+  // path. Only create escape blocks when needed to avoid extraneous CFG edges.
+  if (curProc_->isFunction || hasHandlerGoto_) {
+    llvm::Value* escCode = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc.code");
+    llvm::Value* escNone = b_.CreateICmpEQ(escCode, i32(0), "esc.none");
+    llvm::BasicBlock* normalBB =
+        llvm::BasicBlock::Create(ctx_, "on.normal", curFn_);
+    llvm::BasicBlock* escBB =
+        llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
+    b_.CreateCondBr(escNone, normalBB, escBB);
+    // Normal path: reset oncode, handle overflow, resume.
+    b_.SetInsertPoint(normalBB);
+    if (s->condKey == 0)
+      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+    // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
+    // (ADR-333), which either runs an ERROR unit or takes the system action.
+    if (s->condKey == Stmt::kOverflowCondKey)
+      emitErrorRaise();
+    b_.CreateBr(resBB);
+    // Escape block: switch on the code and fill the return/goto targets.
+    b_.SetInsertPoint(escBB);
+    llvm::BasicBlock* badBB = llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
+    unsigned numCases = hasHandlerGoto_ ? 2 : 1;
+    llvm::SwitchInst* sw = b_.CreateSwitch(escCode, badBB, numCases);
+    llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
+    sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
+    if (hasHandlerGoto_) {
+      llvm::BasicBlock* gotoBB = llvm::BasicBlock::Create(ctx_, "on.escape.goto", curFn_);
+      sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
+      b_.SetInsertPoint(gotoBB);
+      emitEscapeGotoBlock();
+    }
+    b_.SetInsertPoint(badBB);
+    b_.CreateUnreachable();
+    b_.SetInsertPoint(retBB);
+    emitEscapeReturnBlock();
+    b_.SetInsertPoint(resBB);
+  } else {
+    if (s->condKey == 0)
+      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+    // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
+    // (ADR-333), which either runs an ERROR unit or takes the system action.
+    if (s->condKey == Stmt::kOverflowCondKey)
+      emitErrorRaise();
+    b_.CreateBr(resBB);
+  }
   b_.SetInsertPoint(resBB);
 }
 
@@ -6438,6 +6840,26 @@ void IRGen::emitStmt(HStmt* s) {
     emitRecordDelete(s);
     break;
   case HStmt::Return: {
+    // B4: inside an ON-unit handler, RETURN does a non-local exit from the
+    // establishing procedure. A bare RETURN ends the unit and resumes after
+    // the SIGNAL; RETURN(value) returns the value from the procedure.
+    if (inHandler_) {
+      if (!s->value) {
+        // Bare RETURN ends the unit's activation (ADR-350); the dispatch
+        // resumes after the SIGNAL. Just return void from the handler — the
+        // trap/signal dispatch handles resume.
+        b_.CreateRetVoid();
+      } else {
+        // RETURN(value): convert to the establishing procedure's return type
+        // (curRetTy_ is void inside the handler; use curProc_->retTy), store
+        // in the escape globals, and return void from the handler.
+        const Type& rty = curProc_->retTy;
+        Val v = emitExpr(s->value.get());
+        Val rv = convert(v, rty, s->loc);
+        emitEscapeReturn(rv);
+      }
+      break;
+    }
     // FINISH (rule 94; ADR-322): an early return is the task procedure's
     // exit too, so the condition is raised here before the handler state goes.
     emitFinishSignal();
@@ -6538,6 +6960,20 @@ void IRGen::emitStmt(HStmt* s) {
     emitSignal(s);
     break;
   case HStmt::Goto:
+    // B4: inside an ON-unit handler, GO TO does a non-local exit to a label in
+    // the establishing procedure. Store the label index and return void from
+    // the handler; the dispatch performs the indirect branch.
+    if (inHandler_) {
+      if (s->gotoTarget) {
+        // Indirect GO TO (label variable) from a handler is not yet served.
+        d_.error(s->loc, "indirect GO TO inside an ON-unit is not implemented in this stage",
+                 "(91)");
+        b_.CreateRetVoid();
+      } else {
+        emitEscapeGoto(s);
+      }
+      break;
+    }
     // Rule (91) / Y33 block termination: a GO TO that leaves enclosing BEGIN
     // blocks reverts the handlers those blocks established, restoring the
     // depth saved at the outermost exited block's entry.

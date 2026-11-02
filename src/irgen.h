@@ -1024,6 +1024,11 @@ private:
   std::map<std::string, std::vector<int>> labelBeginChain_;
   int nextOnScope_ = 0;
   llvm::Value* onExitDepth(const std::string& label);
+  // B4: snapshot of each establishing procedure's label->block map, taken
+  // before emitOnHandlers clears labelBlocks_ for handler emission. Keyed by
+  // HProc so emitEscapeGotoBlock can look up the right procedure's labels
+  // (curProc_ is the establishing procedure during escape-block emission).
+  std::map<HProc*, std::map<std::string, llvm::BasicBlock*>> procLabelBlocks_;
   // Enclosing iterative groups for LEAVE/ITERATE (extension, ADR-105):
   // labels with the break (end) and continue (re-entry) blocks, innermost last.
   struct LoopTargets {
@@ -1110,6 +1115,39 @@ private:
   // True while filling an ON-unit handler: calls needing static links are
   // diagnosed (the handler has no establishing frame).
   bool inHandler_ = false;
+  // B4: true if any ON-unit in the current procedure contains a GO TO
+  // statement. Used to avoid creating goto escape blocks (and their CFG
+  // edges to label blocks) in procedures that don't need them, which would
+  // otherwise break SSA dominance.
+  bool hasHandlerGoto_ = false;
+  // Scan the procedure body for ON-units that contain a GO TO statement.
+  static bool hasHandlerGotoStmt(HStmt* s);
+  // B4: ON-unit RETURN(value)/GO TO non-local exit escape slots. The handler
+  // stores escape info in these module-level globals and returns void; the
+  // trap/signal dispatch reads the code after the handler returns and branches
+  // to the return-with-value or goto-label target in the establishing
+  // procedure.
+  llvm::GlobalVariable* escapeCodeGlobal();   // @onEscapeCode (i32): 0=none,1=return,2=goto
+  llvm::GlobalVariable* escapeRetKindGlobal(); // @onEscapeRetKind (i32): 0=i64,1=double,2=struct,3=char
+  llvm::GlobalVariable* escapeRetI64Global(); // @onEscapeRetI64 (i64)
+  llvm::GlobalVariable* escapeRetF64Global(); // @onEscapeRetF64 (double)
+  llvm::GlobalVariable* escapeRetBufGlobal(); // @onEscapeRetBuf ([4096 x i8])
+  llvm::GlobalVariable* escapeRetSizeGlobal(); // @onEscapeRetSize (i64)
+  llvm::GlobalVariable* escapeLabelIdxGlobal(); // @onEscapeLabelIdx (i32)
+  // Emit escape code inside a handler unit: RETURN(value) stores the converted
+  // value in the escape globals and returns void from the handler.
+  void emitEscapeReturn(Val v);
+  // GO TO stores the label index and returns void from the handler.
+  void emitEscapeGoto(HStmt* s);
+  // After a handler returns at a trap or signal site, check the escape code:
+  // branch to resumeBB when zero, otherwise to the return/goto escape block.
+  void emitEscapeCheck(llvm::BasicBlock* resumeBB);
+  // Fill the return-with-value escape block: finish, reset, ctl epilogue,
+  // then return the stored value.
+  void emitEscapeReturnBlock();
+  // Fill the goto-label escape block: reset depth, then indirect-br to the
+  // target label block.
+  void emitEscapeGotoBlock();
   // Per-procedure tracking for implicit ALLOCATE of CONTROLLED variables
   // (IBM Enterprise PL/I): one bit per symbol prevents duplicate pushes.
   std::unordered_set<Symbol*> ctlImplicitAlloc_;

@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LL */
+/* rule (81) / B4: RETURN(value) inside an ON-unit returns from the
+   establishing procedure; code after the trap does not run. */
+on_return_val: procedure options(main) returns(fixed bin(31));
+   declare x fixed bin(31) init(10);
+   declare y fixed bin(31) init(0);
+   on zerodivide begin;
+      put skip list('handler fired');
+      return (42);
+   end;
+   declare z fixed bin(31);
+   z = x / y;
+   put skip list('should not print');
+   return (z);
+ end on_return_val;

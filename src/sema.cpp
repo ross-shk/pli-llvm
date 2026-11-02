@@ -3009,11 +3009,9 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
       // by checkStmt, so skip it here to avoid duplicate diagnostics.
       return;
     case Stmt::Return:
-      // A bare RETURN ends the unit and resumes after the SIGNAL (rule 91);
-      // RETURN with a value has no function to return from here.
-      if (s->value)
-        d_.error(s->loc, "RETURN with a value inside an ON-unit is not implemented in this stage",
-                 "(91)");
+      // Rule (81) type-checking happens in checkStmt; an ON-unit may bare
+      // RETURN (ends the unit, resumes after SIGNAL) or RETURN(value)
+      // (returns from the establishing procedure). No extra restriction here.
       break;
     case Stmt::Leave:
       d_.error(s->loc, "LEAVE inside an ON-unit is not implemented in this stage", "(91)");
@@ -3040,10 +3038,9 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
       d_.error(s->loc, "ENTRY inside an ON-unit is not implemented in this stage", "(91)");
       break;
     case Stmt::Goto:
-      // The unit runs as a frameless handler, off the establishing frame's
-      // call chain, so a GO TO cannot reach a procedure label (rule 77); a
-      // non-local transfer is not implemented in this stage.
-      d_.error(s->loc, "GO TO inside an ON-unit is not implemented in this stage", "(91)");
+      // GO TO target validation happens in checkStmt; an ON-unit may GO TO a
+      // label in the same procedure (rule 77). Non-local GO TO to an enclosing
+      // procedure remains M4/M5 and is rejected by the label-resolution above.
       break;
     case Stmt::DoIter:
       // The control variable lives in the establishing frame.
