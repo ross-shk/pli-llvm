@@ -8,6 +8,7 @@
 #include "hostcrt.h"
 
 #include "embedded_sysroot.h"
+#include "memfd.h"
 #include "llvm/Support/FileSystem.h"
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,32 @@
 namespace fs = std::filesystem;
 
 namespace pli {
+
+EmbeddedSysrootMem materializeEmbeddedSysrootMem() {
+  EmbeddedSysrootMem out;
+  size_t n = 0;
+  const SysrootFile* files = embeddedSysrootFiles(&n);
+  const char* setName = embeddedSysrootName();
+  if (!files || n == 0 || !setName || !*setName)
+    return out;
+  for (size_t i = 0; i < n; ++i) {
+    std::string err;
+    std::string memPath = pli::createMemBlob(
+        llvm::StringRef(reinterpret_cast<const char*>(files[i].data), files[i].len), err);
+    if (memPath.empty())
+      return EmbeddedSysrootMem();
+    out.files[files[i].path] = memPath;
+  }
+  out.name = setName;
+  return out;
+}
+
+void cleanupMaterializedSysrootMem(EmbeddedSysrootMem& m) {
+  for (auto& kv : m.files)
+    pli::closeMemBlob(kv.second);
+  m.files.clear();
+  m.name.clear();
+}
 
 EmbeddedSysroot materializeEmbeddedSysroot() {
   EmbeddedSysroot out;
