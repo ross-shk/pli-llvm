@@ -26,7 +26,7 @@ cmake --build build/cmake -j
 ctest --test-dir build/cmake
 ```
 
-With a prebuilt LLVM 23 install instead, pass `-DCMAKE_PREFIX_PATH=C:/clang+llvm-23.1.3-x86_64-pc-windows-msvc -DPLI_VCPKG_ROOT=C:/vcpkg/installed/x64-windows` (zlib/zstd come from vcpkg; `pli.exe` then needs `z.dll`/`zstd.dll` on `PATH`).
+With a prebuilt LLVM 23 install instead, pass `-DCMAKE_PREFIX_PATH=C:/clang+llvm-23.1.3-x86_64-pc-windows-msvc -DPLI_VCPKG_ROOT=""` (zlib/zstd come from vcpkg; `pli.exe` then needs `z.dll`/`zstd.dll` on `PATH`).
 
 Optional MLIR canary build (proves the `pli_mlir` bridge, lowers no PL/I operation — see ADR-230):
 

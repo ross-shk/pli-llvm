@@ -166,10 +166,17 @@ A distro LLVM 23 is usually found without `CMAKE_PREFIX_PATH`; Homebrew's `llvm`
 
 Build with `clang-cl` + `lld-link` (not `cl.exe`, MinGW, MSYS2, Cygwin, or WSL) from a
 **Developer PowerShell for VS 2022** — that shell supplies the Windows SDK, MSVC headers,
-CMake, and Ninja.
+and CMake. Ninja ships with VS 2022 but is not on `PATH` by default; add it:
+
+```pwsh
+$env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;$env:PATH"
+```
+
+(Adjust the path if VS 2022 is installed elsewhere — `vswhere` can locate it.)
 
 Recommended: the pinned static LLVM — the same toolchain the release builds use — which needs
-no vcpkg and produces a self-contained `pli.exe`:
+no vcpkg and produces a self-contained `pli.exe`. Fetch once, then put its `bin` on `PATH`
+*before* running cmake so `clang-cl` and `lld-link` resolve:
 
 ```pwsh
 .\scripts\fetch_llvm_static.ps1 -Prefix $env:USERPROFILE\pli-deps   # once per machine
@@ -194,7 +201,7 @@ running it:
 ```pwsh
 cmake -G Ninja -S . -B build/cmake `
   -DCMAKE_PREFIX_PATH=C:/clang+llvm-23.1.3-x86_64-pc-windows-msvc `
-  -DPLI_VCPKG_ROOT=C:/vcpkg/installed/x64-windows `
+  -DPLI_VCPKG_ROOT="" `
   -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake -j

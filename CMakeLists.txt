@@ -42,7 +42,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   unset(PLI_LLVM_DEPS_DIR CACHE)
   set(PLI_ZLIB_ROOT "" CACHE PATH "Optional zlib install prefix (contains lib/)")
   set(PLI_ZSTD_ROOT "" CACHE PATH "Optional zstd install prefix (contains lib/)")
-  set(PLI_VCPKG_ROOT "C:/vcpkg/installed/x64-windows" CACHE PATH "Optional vcpkg triplet root")
+  set(PLI_VCPKG_ROOT "" CACHE PATH "Optional vcpkg triplet root")
   # ZLIB (prefer static: the import lib would add a zlib.dll startup dependency)
   if(NOT TARGET ZLIB::ZLIB)
     find_file(ZLIB_LIB NAMES zlibstatic.lib zlib.lib
@@ -320,6 +320,41 @@ if(APPLE)
     message(STATUS "Host bitcode sysroot: ${_pli_sdk}")
   else()
     message(WARNING "No macOS SDK found; the host runtime bitcode may fail to compile")
+  endif()
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  # clang (not clang-cl) is used for bitcode generation; on Windows it needs
+  # explicit -isystem flags for the VC and Windows SDK include dirs, since it
+  # does not read the INCLUDE environment variable like cl.exe/clang-cl do.
+  find_path(_pli_vc_include NAMES vcruntime.h
+    HINTS "$ENV:VCToolsInstallDir/include" "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/*/include"
+    NO_DEFAULT_PATH)
+  find_path(_pli_windows_sdk_um NAMES windows.h
+    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/um"
+    NO_DEFAULT_PATH)
+  find_path(_pli_windows_sdk_shared NAMES winapifamily.h
+    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/shared"
+    NO_DEFAULT_PATH)
+  find_path(_pli_windows_sdk_ucrt NAMES stdio.h
+    HINTS "C:/Program Files (x86)/Windows Kits/10/include/*/ucrt"
+    NO_DEFAULT_PATH)
+  set(_pli_isystem_flags "")
+  if(_pli_vc_include)
+    list(APPEND _pli_isystem_flags -isystem "${_pli_vc_include}")
+  endif()
+  if(_pli_windows_sdk_um)
+    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_um}")
+  endif()
+  if(_pli_windows_sdk_shared)
+    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_shared}")
+  endif()
+  if(_pli_windows_sdk_ucrt)
+    list(APPEND _pli_isystem_flags -isystem "${_pli_windows_sdk_ucrt}")
+  endif()
+  if(_pli_isystem_flags)
+    set(PLI_HOST_SYSROOT_FLAG ${_pli_isystem_flags})
+    message(STATUS "Host bitcode Windows SDK include dirs: ${_pli_isystem_flags}")
+  else()
+    message(WARNING "No Windows SDK include dirs found; the host runtime bitcode may fail to compile")
   endif()
 endif()
 
