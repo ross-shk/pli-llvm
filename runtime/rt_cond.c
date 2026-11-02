@@ -190,8 +190,8 @@ char *pli_on_top_fn_pair(long long key, char *ctx_out) {
  * per-task state, and every procedure exit that has an ON unit in scope asks
  * here whether it is the one — a nested call, a normal call, and the main
  * task are all no-ops. The unit runs before the event completes, so a
- * waiter sees the writes it made. */
-#define RT_FINISH_KEY (-6LL) /* mirrors Stmt::kFinishCondKey */
+ * waiter sees the writes it made. RT_FINISH_KEY is defined in rt_fiber.h.
+ */
 void pli_task_finish_target(char *fn) {
   on_state()->finish_fn = (void *)fn;
 }
@@ -245,6 +245,40 @@ void pli_on_reset_error(long long d) {
   if (d >= 0 && d <= st->on_sp) {
     st->on_sp = (int)d;
     on_shrink(st);
+  }
+}
+
+/* A11: copy the attacher's ON units into `dst` (the new task's per-task
+ * state), skipping FINISH so an inherited FINISH unit can never fire in the
+ * wrong task. The fn/ctx pointers are shallow-copied: compiled code and
+ * capture contexts are shared with the attacher, matching capture-context
+ * lifetime (ADR-253). Called at spawn with rt_cur == the attacher, so
+ * rt_task_local() is the source. Mirrors the OOM abort of rt_pli_on_push. */
+void pli_on_inherit(pli_task_local *dst) {
+  pli_task_local *src = rt_task_local(); /* the attacher */
+  if (dst->on_stack) {
+    pli_plat_free(dst->on_stack);
+    dst->on_stack = NULL;
+  }
+  /* Leave dst in a consistent state: a recycled fiber may carry a stale
+   * on_cap with a now-freed on_stack. */
+  dst->on_sp = 0;
+  dst->on_cap = 0;
+  int n = 0;
+  for (int i = 0; i < src->on_sp; ++i)
+    if (src->on_stack[i].key != RT_FINISH_KEY)
+      ++n;
+  if (n) {
+    dst->on_stack =
+        (pli_on_frame *)pli_plat_malloc((size_t)n * sizeof(pli_on_frame));
+    if (!dst->on_stack)
+      pli_abort("ON stack out of memory for inheritance");
+    int k = 0;
+    for (int i = 0; i < src->on_sp; ++i)
+      if (src->on_stack[i].key != RT_FINISH_KEY)
+        dst->on_stack[k++] = src->on_stack[i]; /* shallow copy of fn/ctx */
+    dst->on_sp = n;
+    dst->on_cap = n;
   }
 }
 int pli_oncode(void) {

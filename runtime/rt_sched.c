@@ -923,6 +923,18 @@ static pli_fiber *rt_sched_spawn_ex(void *(*fn)(void *), void *arg, int priority
     rt_fiber_put(w, f);
     return NULL;
   }
+  /* A11: the subtask inherits the attacher's ON units (minus FINISH).
+   * rt_fiber_prepare zeroed on_sp but may have left a stale on_stack on a
+   * recycled fiber; pli_on_inherit frees it before copying. MAIN never goes
+   * through rt_sched_spawn_ex, so it starts empty. */
+  if (!f->local) {
+    f->local = (pli_task_local *)pli_plat_calloc(1, sizeof(pli_task_local));
+    if (!f->local) {
+      rt_fiber_put(w, f);
+      return NULL;
+    }
+  }
+  pli_on_inherit(f->local);
   f->priority = priority;
   f->handle = handle;
   if (priority != 0)

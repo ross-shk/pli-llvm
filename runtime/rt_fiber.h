@@ -30,6 +30,12 @@ struct rt_worker;
  * doubles when it fills, so nesting has no language-level limit (C7). */
 #define PLI_ON_INIT 16
 
+/* FINISH (rule 94; ADR-322): the per-task key raised when the procedure the
+ * task was created for returns. It is never inherited by a subtask
+ * (deferred-work A11), so an inherited FINISH unit can never fire in the
+ * wrong task. Mirrors Stmt::kFinishCondKey. */
+#define RT_FINISH_KEY (-6LL)
+
 /* One ON-unit stack entry (rules (91)-(94)). */
 typedef struct {
   long long key; /* 0 = ERROR, else the sema-assigned condition key */
