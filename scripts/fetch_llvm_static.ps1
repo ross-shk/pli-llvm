@@ -7,7 +7,7 @@
 # PowerShell port of scripts/fetch_llvm_static.sh. Same pins, same URLs, same
 # sha256 trust anchor — single source of truth stays in llvm_static.pins.
 #
-# Usage: .\scripts\fetch_llvm_static.ps1 --prefix <dir>
+# Usage: .\scripts\fetch_llvm_static.ps1 -Prefix <dir>
 # Env:   PLI_DEPS_TAG=<tag> override the release tag (testing/forks)
 #        PLI_DEPS_URL=<base> override the release base URL
 
@@ -18,6 +18,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Progress rendering makes large downloads several times slower.
+$ProgressPreference = "SilentlyContinue"
+
+# Download with retries. Windows PowerShell 5.1 has no -MaximumRetryCount.
+function Get-Url([string]$Url, [string]$Out) {
+  for ($i = 1; $i -le 3; $i++) {
+    try { Invoke-WebRequest -Uri $Url -OutFile $Out; return }
+    catch {
+      if ($i -eq 3) { throw }
+      Start-Sleep -Seconds 2
+    }
+  }
+}
 
 # Resolve this script's dir regardless of cwd.
 $SELF_DIR = (Get-Item (Split-Path -Parent $MyInvocation.MyCommand.Path)).FullName
@@ -61,8 +74,11 @@ if (-not $BASE) { $BASE = "https://github.com/$REPO/releases/download/$DEPS_TAG"
 $TARBALL = "llvm-static-$LLVM_VER-$PLAT.tar.zst"
 $URL = "$BASE/$TARBALL"
 
-# Local cache: one download shared across worktrees.
-$cacheRoot = if ($env:XDG_CACHE_HOME) { $env:XDG_CACHE_HOME } else { Join-Path $env:HOME ".cache" }
+# Local cache: one download shared across worktrees. Windows PowerShell does
+# not set HOME, so fall back to USERPROFILE.
+$cacheRoot = if ($env:XDG_CACHE_HOME) { $env:XDG_CACHE_HOME }
+             elseif ($env:HOME) { $env:HOME }
+             else { $env:USERPROFILE }
 $CACHE_DIR = Join-Path $cacheRoot "pli-deps"
 $CACHE = Join-Path $CACHE_DIR $TARBALL
 New-Item -ItemType Directory -Force -Path $CACHE_DIR | Out-Null
@@ -84,7 +100,7 @@ if (Test-Path $CACHE) {
 
 if ($needDownload) {
   Write-Host "fetch_llvm_static.ps1: downloading $URL"
-  Invoke-WebRequest -Uri $URL -OutFile $CACHE -MaximumRetryCount 3
+  Get-Url $URL $CACHE
   $got = Get-Sha256 $CACHE
   if ($got -ne $SHA) {
     Write-Error "fetch_llvm_static.ps1: sha256 mismatch for $TARBALL (got $got, want $SHA)"
@@ -95,9 +111,27 @@ if ($needDownload) {
 }
 
 # Extract into the prefix (tarball contains the install-tree contents).
-if (-not (Get-Command zstd -ErrorAction SilentlyContinue)) {
-  throw "fetch_llvm_static.ps1: zstd needed to unpack (install zstd and add it to PATH)"
+# zstd is not part of Windows, so fetch the pinned win64 build once.
+$zstdExe = $null
+$zstdCmd = Get-Command zstd -ErrorAction SilentlyContinue
+if ($zstdCmd) { $zstdExe = $zstdCmd.Source }
+if (-not $zstdExe) {
+  $ZSTD_VER = Get-Pin "ZSTD_VER"
+  if (-not $ZSTD_VER) { throw "fetch_llvm_static.ps1: pins missing ZSTD_VER" }
+  $ZDIR = Join-Path $CACHE_DIR "zstd-$ZSTD_VER"
+  $found = Get-ChildItem -Path $ZDIR -Recurse -Filter zstd.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $found) {
+    $ZIP = Join-Path $CACHE_DIR "zstd-$ZSTD_VER-win64.zip"
+    Write-Host "fetch_llvm_static.ps1: fetching zstd $ZSTD_VER"
+    Get-Url "https://github.com/facebook/zstd/releases/download/v$ZSTD_VER/zstd-v$ZSTD_VER-win64.zip" $ZIP
+    Expand-Archive -Force $ZIP -DestinationPath $ZDIR
+    $found = Get-ChildItem -Path $ZDIR -Recurse -Filter zstd.exe | Select-Object -First 1
+  }
+  if (-not $found) { throw "fetch_llvm_static.ps1: zstd.exe not found under $ZDIR" }
+  $zstdExe = $found.FullName
 }
-& zstd -dc $CACHE | tar -C $Prefix -xf -
+# cmd owns the pipe: a PowerShell 5.1 pipeline decodes the stream as text.
+cmd /c "`"$zstdExe`" -dc `"$CACHE`" | tar -C `"$Prefix`" -xf -"
+if ($LASTEXITCODE -ne 0) { throw "fetch_llvm_static.ps1: extraction failed (exit $LASTEXITCODE)" }
 
 Write-Host "fetch_llvm_static.ps1: extracted $LLVM_VER into $Prefix"

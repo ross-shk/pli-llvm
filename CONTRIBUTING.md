@@ -16,13 +16,17 @@ cmake --build build/cmake -j$(nproc)        # build/cmake/pli (runtime embedded)
 ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.pli
 ```
 
-```bat
-:: Windows (clang-cl + lld-link):
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=C:/path/to/llvm-23 -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+```pwsh
+# Windows (clang-cl + lld-link), from a Developer PowerShell for VS 2022.
+# Fetch the pinned static LLVM once, then put its bin (clang-cl, lld) on PATH:
+.\scripts\fetch_llvm_static.ps1 -Prefix $env:USERPROFILE\pli-deps
+$env:PATH = "$env:USERPROFILE\pli-deps\bin;$env:PATH"
+cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli-deps -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake -j
 ctest --test-dir build/cmake
 ```
+
+With a prebuilt LLVM 23 install instead, pass `-DCMAKE_PREFIX_PATH=C:/clang+llvm-23.1.3-x86_64-pc-windows-msvc -DPLI_VCPKG_ROOT=C:/vcpkg/installed/x64-windows` (zlib/zstd come from vcpkg; `pli.exe` then needs `z.dll`/`zstd.dll` on `PATH`).
 
 Optional MLIR canary build (proves the `pli_mlir` bridge, lowers no PL/I operation — see ADR-230):
 

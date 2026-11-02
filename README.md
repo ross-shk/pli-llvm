@@ -143,87 +143,70 @@ Builds on Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), and Windows (x86_
 
 | Requirement | Minimum | Notes |
 | --- | --- | --- |
-| C++20 compiler | gcc 12 / clang 15 / clang-cl 18+ | Windows also needs the Windows 10/11 SDK |
+| C++20 compiler | gcc 12 / clang 15 / clang-cl 18+ | Windows: VS 2022 Build Tools (MSVC headers + Windows SDK) |
 | CMake | 3.20 | All platforms |
-| Ninja | recent | Canonical generator on all platforms |
+| Ninja | recent | Ships with VS 2022; present in the Developer PowerShell |
 | LLVM + clang + lld | 23 | Development libraries and lld headers/libs |
 | Python | 3 | Build scripts and test runner |
 | Git | recent | Optional; without it `pli version` reports `unknown` |
 
-Use distro LLVM for development, or the pinned static toolchain for release builds.
+Use a distro LLVM for development, or the pinned static toolchain for releases (and, on Windows, for development too).
 
 ### Linux / macOS
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=</path/to/llvm-23>
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23           # Linux
+cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"   # macOS
 cmake --build build/cmake -j
 ```
 
-On macOS, use `-DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"`. On Linux, the distro package is usually found automatically; otherwise point at `/usr/lib/llvm-23`.
+A distro LLVM 23 is usually found without `CMAKE_PREFIX_PATH`; Homebrew's `llvm` is keg-only, so there the line is required.
 
 ### Windows
 
-Build with `clang-cl` + `lld-link` (not `cl.exe`, MinGW, MSYS2, Cygwin, or WSL). First set up a Visual Studio developer environment (the Windows SDK is required). `vcvarsall.bat` location varies by VS edition/year — locate it with `vswhere` or use the common fallback paths:
+Build with `clang-cl` + `lld-link` (not `cl.exe`, MinGW, MSYS2, Cygwin, or WSL) from a
+**Developer PowerShell for VS 2022** — that shell supplies the Windows SDK, MSVC headers,
+CMake, and Ninja.
 
-cmd.exe:
-
-```bat
-REM Locate vcvarsall.bat (examples; adjust to your install)
-for %i in (
-  "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat"
-  "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat"
-  "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
-) do if exist "%~fi" call "%~fi" x64
-
-cmake -G Ninja -S . -B build/cmake ^
-  -DCMAKE_PREFIX_PATH=C:/path/to/llvm-23 ^
-  -DCMAKE_C_COMPILER=clang-cl ^
-  -DCMAKE_CXX_COMPILER=clang-cl ^
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build/cmake -j
-```
-
-PowerShell:
+Recommended: the pinned static LLVM — the same toolchain the release builds use — which needs
+no vcpkg and produces a self-contained `pli.exe`:
 
 ```pwsh
-# Locate vcvarsall.bat (examples; adjust to your install)
-$vcvars = @(
-  "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat",
-  "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat",
-  "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
-) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $vcvars) { throw "vcvarsall.bat not found; install the Visual Studio C++ Build Tools" }
-cmd /c """$vcvars"" x64 & set" | ForEach-Object {
-  if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], [EnvironmentVariableTarget]::Process) }
-}
+.\scripts\fetch_llvm_static.ps1 -Prefix $env:USERPROFILE\pli-deps   # once per machine
+$env:PATH = "$env:USERPROFILE\pli-deps\bin;$env:PATH"               # clang-cl + lld
 
 cmake -G Ninja -S . -B build/cmake `
-  -DCMAKE_PREFIX_PATH=C:/path/to/llvm-23 `
-  -DCMAKE_C_COMPILER=clang-cl `
-  -DCMAKE_CXX_COMPILER=clang-cl `
+  -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli-deps `
+  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake -j
 ```
 
-Use clang-cl + lld-link, forward slashes in CMake paths, and make sure Ninja is on `PATH`.
+Configure may report `ZLIB not found`; the pinned LLVM is built without zlib, so that warning
+is informational.
 
-### Hermetic static (release builds)
+Alternatively, point at a prebuilt LLVM 23 Windows release: the extracted folder that holds
+`bin`, `lib`, and `include` (put its `bin` on `PATH` first so `clang-cl` resolves). That build
+has zlib/zstd enabled but ships neither library, so pass a vcpkg triplet that has them. The
+resulting `pli.exe` imports `z.dll`/`zstd.dll`, so keep the triplet's `bin` on `PATH` when
+running it:
 
-Use the pinned static LLVM instead of a distro install:
+```pwsh
+cmake -G Ninja -S . -B build/cmake `
+  -DCMAKE_PREFIX_PATH=C:/clang+llvm-23.1.3-x86_64-pc-windows-msvc `
+  -DPLI_VCPKG_ROOT=C:/vcpkg/installed/x64-windows `
+  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/cmake -j
+```
 
-cmd.exe (Git Bash/MSYS):
+### Hermetic static toolchain
+
+Use the pinned static LLVM instead of a distro install (Windows: see above):
 
 ```sh
 sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps
 cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=~/pli-deps
-cmake --build build/cmake -j
-```
-
-PowerShell (native, no Git Bash required):
-
-```pwsh
-.\scripts\fetch_llvm_static.ps1 --prefix $env:USERPROFILE\pli-deps
-cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli-deps
 cmake --build build/cmake -j
 ```
 
