@@ -4107,11 +4107,11 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
       if (t.isChar() && t.starLen)
         pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
     }
-    // An external character-valued function (rules (34),(37)) returns through
-    // a hidden result buffer like structures do: the caller allocates it and
-    // passes its address as the first argument, so the declaration is
-    // `void @NAME(ptr sret, ...)`.
-    if (sym->entryIsFunction && sym->entryRetTy.isChar()) {
+    // An external character- or structure-valued function (rules (34),(37))
+    // returns through a hidden result buffer like structures do: the caller
+    // allocates it and passes its address as the first argument, so the
+    // declaration is `void @NAME(ptr sret, ...)`.
+    if (sym->entryIsFunction && (sym->entryRetTy.isChar() || sym->entryRetTy.isStruct())) {
       std::vector<llvm::Type*> pt2 = pt;
       pt2.insert(pt2.begin(), b_.getPtrTy());
       llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
@@ -4132,11 +4132,12 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     if (t.isChar() && t.starLen)
       pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
   }
-  // An external character-valued function (rules (34),(37)) returns through a
-  // hidden result buffer like structures do; for PL/I callers outside this
-  // TU we cannot generate the buffer allocation site here, but the external
-  // declaration must match the callee's inter-procedure signature (ptr-first).
-  bool extChar = sym->entryIsFunction && sym->entryRetTy.isChar();
+  // An external character- or structure-valued function (rules (34),(37))
+  // returns through a hidden result buffer like structures do; for PL/I
+  // callers outside this TU we cannot generate the buffer allocation site
+  // here, but the external declaration must match the callee's inter-procedure
+  // signature (ptr-first).
+  bool extChar = sym->entryIsFunction && (sym->entryRetTy.isChar() || sym->entryRetTy.isStruct());
   std::vector<llvm::Type*> pt2 = pt;
   if (extChar) {
     // Emit the declaration with hidden-result-pointer semantics: the external
@@ -13240,7 +13241,7 @@ Val IRGen::emitExpr(HExpr* e) {
       // argument, and return its address/length to the caller.
       std::vector<llvm::Value*> args;
       llvm::Value* sretPtr = nullptr;
-      if (rty.isChar()) {
+      if (rty.isChar() || rty.isStruct()) {
         sretPtr = sretAlloc(rty);
         args.push_back(sretPtr);
       }
@@ -13298,6 +13299,15 @@ Val IRGen::emitExpr(HExpr* e) {
           v.ptr = sretPtr;
           v.len = i64(rty.len);
         }
+        return v;
+      }
+      if (rty.isStruct()) {
+        // The structure result lives in the caller's buffer (the sret); the
+        // callee returns void, so the call carries no result value name.
+        b_.CreateCall(extFn, args);
+        flushVarWrites();
+        v.ty = rty;
+        v.ptr = sretPtr; // the result lives in the caller's buffer
         return v;
       }
       llvm::CallInst* call = b_.CreateCall(extFn, args, "fres");

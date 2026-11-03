@@ -1513,6 +1513,25 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // upper-cased PL/I identifier (rules (34),(38); z/OS ILC naming).
           // Not storage. A RETURNS(...) entry-name-attribute (rule (34))
           // makes it a function entry whose result type types a call.
+          // Resolve a structure-valued RETURNS name (rule 127): the parser
+          // recorded a bare structure name; resolve it to a deep copy of that
+          // structure's type, mirroring resolveStructReturn for ENTRY
+          // statements. A missing or non-structure reference, or a structure
+          // with a dynamic member, is diagnosed.
+          if (!item.returnsStructName.empty()) {
+            Symbol* tpl = lookup(sc, item.returnsStructName);
+            if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
+              d_.error(item.loc,
+                       "RETURNS reference '" + item.returnsStructName + "' is not a structure in this scope",
+                       "(127)");
+              item.entryRetTy = Type::voidTy();
+            } else if (hasDynamicMember(tpl->ty)) {
+              d_.error(item.loc, "RETURNS of a structure with a dynamic member is not implemented", "(13)");
+              item.entryRetTy = Type::voidTy();
+            } else {
+              item.entryRetTy = tpl->ty; // deep copy via Type's copy constructor
+            }
+          }
           Type symTy = item.entryIsFunction ? item.entryRetTy : Type::voidTy();
           Symbol* sym = declare(sc, item.name, symTy, item.loc, Symbol::ProcName, false);
           sym->isEntry = true;

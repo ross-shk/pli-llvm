@@ -2005,10 +2005,19 @@ void Parser::parseDeclTail(DeclItem& item) {
         advance();
         if (expect(Tok::LParen, "(34)")) {
           item.entryIsFunction = true;
-          parseDescriptorType(item.entryRetTy);
-          if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
-            d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
-            item.entryRetTy = Type::chr(1);
+          // A lone non-scalar-type word names a structure template whose shape
+          // the entry returns (rule 127), resolved in sema; otherwise parse a
+          // descriptor type.
+          if (cur().kind == Tok::Word && peek().kind == Tok::RParen &&
+              !isScalarTypeWord(cur().text)) {
+            item.returnsStructName = cur().text;
+            advance();
+          } else {
+            parseDescriptorType(item.entryRetTy);
+            if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
+              d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
+              item.entryRetTy = Type::chr(1);
+            }
           }
           expect(Tok::RParen, "(34)");
         }
