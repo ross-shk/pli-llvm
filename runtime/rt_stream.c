@@ -428,10 +428,12 @@ void pli_char_of_complex(char *dst, long long dstcap, double re, double im) {
 }
 
 /* FIXED/FLOAT(char) fractional text: parse leading blanks, one optional sign,
- * and a decimal point, returning the significant digits (signed, at most 38)
- * and the number of fractional digits. The caller rescales into the target
- * FIXED type, or divides by 10^frac for FLOAT. *ok is 0 when the text holds no
- * digits or exceeds the digit limit (CONVERSION, rule 94). */
+ * a decimal point, and an optional exponent, returning the significant digits
+ * (signed, at most 38) and the effective fraction count. The exponent folds
+ * into the count, so a positive exponent makes it negative. The caller
+ * rescales into the target FIXED type, or scales by 10^frac for FLOAT. *ok is 0
+ * when the text holds no digits, a malformed exponent, or exceeds the digit or
+ * scale limit (CONVERSION, rule 94). */
 void pli_fixed_char_parts(const char *s, long long slen, int *ok, int *frac,
                           char *outv) {
   long long *out = (long long *)outv;
@@ -476,10 +478,39 @@ void pli_fixed_char_parts(const char *s, long long slen, int *ok, int *frac,
       break;
     }
   }
-  /* Exponent text is not parsed yet; reject it rather than return the
-   * integer prefix as a silently wrong value. */
-  if (i < slen && (s[i] == 'e' || s[i] == 'E'))
-    overflow = 1;
+  /* Optional exponent: fold it into the fraction count (eff = frac - exp), so
+   * a positive exponent makes *frac negative. The effective range matches the
+   * LLVM parser; outside it the text is malformed for this conversion. */
+  if (i < slen && (s[i] == 'e' || s[i] == 'E')) {
+    ++i;
+    int eneg = 0;
+    if (i < slen && (s[i] == '+' || s[i] == '-')) {
+      eneg = s[i] == '-';
+      ++i;
+    }
+    int e = 0;
+    int edigits = 0;
+    while (i < slen && s[i] >= '0' && s[i] <= '9') {
+      if (e <= 1000)
+        e = e * 10 + (s[i] - '0');
+      if (e > 1000)
+        e = 1000;
+      ++edigits;
+      ++i;
+    }
+    if (edigits == 0) {
+      overflow = 1;
+    } else {
+      int eff = eneg ? f + e : f - e;
+      int isZero = pli_cmp_u(all, pli_u128(0u, 0u)) == 0;
+      if (isZero)
+        f = 0;
+      else if (eff > 76 || eff < -76)
+        overflow = 1;
+      else
+        f = eff;
+    }
+  }
   PliI128 v = pli_to_s(all);
   if (neg)
     v = pli_neg_s(v);

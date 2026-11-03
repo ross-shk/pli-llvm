@@ -7,10 +7,32 @@
 // ENTRY/FILE/LABEL variables are M2-M4 (see IMPLEMENTATION-PLAN). AREA/OFFSET
 // (rules (20),(22)) serve automatic regions and their locators (ADR-170).
 #pragma once
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+// IBM's base-conversion factor is 3.32 = 83/25. These keep the FIXEDBIN/
+// FIXEDDEC precision tables (rule (123)) and mixed-base arithmetic exact.
+inline int ceilMulDiv(int n, int mul, int div) { return (n * mul + div - 1) / div; }
+// FIXED DEC(p,q) -> FIXED BIN(r,s), adding one integer digit for the base
+// change (IBM Appendix 1).
+inline int decToBinDigits(int p) { return std::min(63, 1 + ceilMulDiv(p, 83, 25)); }
+inline int decToBinScale(int q) {
+  if (q == 0)
+    return 0;
+  int s = ceilMulDiv(q < 0 ? -q : q, 83, 25);
+  return q > 0 ? s : -s;
+}
+// FIXED BIN(p,q) -> FIXED DEC(r,s), again adding one integer digit.
+inline int binToDecDigits(int p) { return std::min(31, 1 + ceilMulDiv(p, 25, 83)); }
+inline int binToDecScale(int q) {
+  if (q == 0)
+    return 0;
+  int s = ceilMulDiv(q < 0 ? -q : q, 25, 83);
+  return q > 0 ? s : -s;
+}
 
 enum class TK {
   FixedBin, // FIXED BINARY(p,q)

@@ -13589,3 +13589,75 @@ FLOAT fast path already gives the right value at the direct assignment, and the
 general converter remains the D1 tail). Truncate every FIXED/FIXED division to
 an integer (the old behaviour, and the source of the wrong answers).
 
+---
+
+## ADR-362 — Mixed-base FIXED division converts DECIMAL to BINARY
+
+**Context.** ADR-361 gave same-base FIXED division its RULES(IBM) precision and
+scale. A mixed pair (`BIN(31,0) / DEC(5,0)`) stayed on the old path: two scale-0
+operands were divided with `sdiv` (`f = 7 / b` printed `3` instead of `3.5`),
+and any scaled pair widened to FLOAT. IBM's rule is explicit: "If the bases of
+the two operands differ, the decimal operand is converted to its binary
+equivalent," so mixed FIXED division is a binary operation and its scale formula
+uses the converted operand's precision and scale. This was the last B11 division
+tail.
+
+**Decision.** `divResultType` treats every FIXED/FIXED division as fixed:
+same-base DECIMAL keeps `DECIMAL(31,q)`; every other pair is `BINARY(63,q)`. For
+a mixed pair each DECIMAL operand is viewed as `BIN(decToBinDigits(p),
+min(62, decToBinScale(q)))` (IBM Appendix 1: 3.32 = 83/25 bits per digit, plus
+one integer bit), and the dividend view supplies `p1`/`q1` in the scale formula
+`q = 63 - p1 + q1 - q2`. The lowering converts the DECIMAL operand through the
+existing cross-base `convert` (exact wide rescaling, ADR-289), then divides the
+converted raw integers exactly as ADR-361 does. A value outside the converted
+binary precision raises SIZE (a DECIMAL(31) magnitude can exceed 63 bits); the
+binary scale is capped at `M-1 = 62` because that is the widest representable
+scale. ZERODIVIDE and the FIXEDOVERFLOW/SIZE resume rules are unchanged. The
+FLOAT-target fast path stays same-base only: a binary fixed quotient converts to
+FLOAT through an exact power-of-two scale, so it needs no double-division path.
+
+**Consequences.** `fixed_division.pli` adds mixed `7/2`, `7.0/7`, negative, and
+scaled `14.00/7`, `10.00/7`, `/10.00` cases. `mod_index.pli` now writes
+`trunc(i / 3)` in its MOD identity: with fractional FIXED division the
+untruncated identity is false for a non-zero remainder, and `trunc` keeps the
+test's MOD intent. `GC` (16)/(17) and (115)-(122) cite this ADR.
+
+**Rejected.** Keep mixed scale-0 division as integer `sdiv` (the silent wrong
+answer). Widen mixed division to FLOAT (IBM says fixed, and the result then has
+only six significant digits). Use the DECIMAL operand's own p/q in the binary
+formula without converting first (the units do not match: digits vs bits).
+
+---
+
+## ADR-363 — Character exponent text in FIXED and FLOAT conversions
+
+**Context.** ADR-346/347 served fractional character text for `FIXED`/
+`FIXEDBIN`/`FIXEDDEC`/`FLOAT`, but the shared parser stopped at the mantissa and
+rejected an `e`/`E` suffix with CONVERSION (and the runtime
+`pli_fixed_char_parts` did the same). That was the last numeric-text tail in
+B11: `fixed('1e3')` and `float('1.5e-2')` are ordinary PL/I numeric text.
+
+**Decision.** The LLVM parser (`emitFixedCharPartsLLVM`) and the runtime parser
+(`pli_fixed_char_parts`) accept an optional exponent after the mantissa: `e` or
+`E`, an optional sign, and at least one digit. The exponent folds into the
+fraction count as `eff = frac - exp`, so a positive exponent makes `eff`
+negative; the callers then move the point the other way. The effective count is
+limited to `+/-76`, the same bound as the fractional-digit and literal caps; a
+zero mantissa is exempt (`0e999` is 0). Malformed text (no exponent digits, or
+an out-of-range effective count) keeps the CONVERSION path.
+`emitFixedFromChar` now rescales in i512 instead of i256: a 38-digit mantissa, a
+76-place shift, and a 38-digit target scale can reach 152 decimal digits. Values
+outside the target still take the existing SIZE paths. `emitFloatFromChar`
+scales the mantissa by `10^|eff|` in double; its i256-to-double conversion is
+built from four native 64-bit limbs because the runtime link has no compiler-rt
+`__floattidf`, which also makes `FLOAT(char)` link in the runtime lowering mode.
+
+**Consequences.** `tests/core/w4_scalar.pli` pins exponent text for binary and
+decimal fixed targets, including a wide mantissa and `0e999`;
+`tests/builtins/float_char.pli` pins `FLOAT`; `tests/core/on_conversion.pli`
+pins malformed text; the `experimental_lowering` witness checks fixed and float
+parity in auto/runtime/llvm. `GC` (123) cites this ADR.
+
+**Rejected.** Keep rejecting exponent text (the old limitation). Parse with
+`strtod` (platform libc, breaking the self-contained runtime). Keep i256 for the
+fixed rescale (it overflows at the largest legal mantissa and shift).

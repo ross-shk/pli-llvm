@@ -20,29 +20,6 @@ static const std::vector<Stmt::AllocBound> emptyAllocBounds;
 // declared element count bounds it further where it is known.
 static const long long kMaxInitElems = 1LL << 20;
 
-// IBM's base-conversion factor is 3.32 = 83/25. These helpers keep the
-// FIXEDBIN/FIXEDDEC source-derived precision tables exact (rule (123)).
-static int ceilMulDiv(int n, int mul, int div) {
-  return (n * mul + div - 1) / div;
-}
-// FIXED DEC(p,q) -> FIXED BIN(r,s), adding one integer digit for the base
-// change (IBM Appendix 1).
-static int decToBinDigits(int p) { return std::min(63, 1 + ceilMulDiv(p, 83, 25)); }
-static int decToBinScale(int q) {
-  if (q == 0)
-    return 0;
-  int s = ceilMulDiv(std::abs(q), 83, 25);
-  return q > 0 ? s : -s;
-}
-// FIXED BIN(p,q) -> FIXED DEC(r,s), again adding one integer digit.
-static int binToDecDigits(int p) { return std::min(31, 1 + ceilMulDiv(p, 25, 83)); }
-static int binToDecScale(int q) {
-  if (q == 0)
-    return 0;
-  int s = ceilMulDiv(std::abs(q), 25, 83);
-  return q > 0 ? s : -s;
-}
-
 // True when a structure type contains a dynamic (runtime-extent) array member
 // (rule 13); forward-declared here because resolveStructReturn (rule 127) and
 // LIKE/assignment (rules 43,127) both use it.
@@ -238,17 +215,31 @@ Type mulResultType(const Type& a, const Type& b) {
   return t;
 }
 
-// FIXED/FIXED division of the same base (rule 121, ADR-361): RULES(IBM) gives
-// the result the implementation maximum precision and the scale
-// maxP - p1 + q1 - q2, so a quotient keeps its fraction instead of widening to
-// FLOAT. A negative scale (the integer part is wider than the raw quotient) is
-// clamped to 0; the lowering then scales the raw quotient up and raises
-// FIXEDOVERFLOW past the maximum precision.
+// FIXED/FIXED division (rule 121, ADR-361/362): RULES(IBM) gives the result the
+// implementation maximum precision and the scale maxP - p1 + q1 - q2, so a
+// quotient keeps its fraction instead of widening to FLOAT. Same-base DECIMAL
+// stays decimal; every other FIXED pair is binary, after converting a DECIMAL
+// operand to its binary view (IBM Appendix 1, ADR-362). A negative scale (the
+// integer part is wider than the raw quotient) is clamped to 0; the lowering
+// then scales the raw quotient up and raises FIXEDOVERFLOW past the maximum.
 Type divResultType(const Type& a, const Type& b) {
-  int maxP = a.k == TK::FixedDec ? 31 : 63;
-  int q = maxP - a.prec + a.scale - b.scale;
-  return a.k == TK::FixedDec ? Type::fixedDec(maxP, std::max(q, 0))
-                             : Type::fixedBin(maxP, std::max(q, 0));
+  const bool bothDec = a.k == TK::FixedDec && b.k == TK::FixedDec;
+  const int maxP = bothDec ? 31 : 63;
+  int p1 = a.prec, q1 = a.scale, q2 = b.scale;
+  if (!bothDec && a.k != b.k) {
+    // Mixed bases: IBM converts the DECIMAL operand to binary before the
+    // operation, and the formula uses the converted precision and scale. The
+    // binary scale maximum is M-1; a wider decimal scale is capped there.
+    if (a.k == TK::FixedDec) {
+      p1 = decToBinDigits(a.prec);
+      q1 = std::min(62, decToBinScale(a.scale));
+    }
+    if (b.k == TK::FixedDec)
+      q2 = std::min(62, decToBinScale(b.scale));
+  }
+  int q = maxP - p1 + q1 - q2;
+  return bothDec ? Type::fixedDec(31, std::max(q, 0))
+                 : Type::fixedBin(63, std::max(q, 0));
 }
 
 // Cross-section (rule 126): a subscript list containing at least one '*'. The
@@ -6005,21 +5996,19 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       }
       break;
     case Tok::Slash:
-      // FIXED/FIXED division keeps the rule's exact result type (ADR-361): the
-      // maximum precision and the scale maxP - p1 + q1 - q2, so 7/2 is a
+      // FIXED/FIXED division keeps the rule's exact result type (ADR-361/362):
+      // the maximum precision and the scale maxP - p1 + q1 - q2, so 7/2 is a
       // DECIMAL/BINARY 3.5 (truncating only on assignment to a FIXED target).
-      // Same-base operands use divResultType; a mixed-base integer division
-      // stays on the old FIXED path (B11 tail), and a non-FIXED operand
-      // (FLOAT) stays FLOAT for a correct fractional result.
+      // Same-base operands keep their base; a mixed pair is binary, with the
+      // DECIMAL operand converted first. A non-FIXED operand (FLOAT) stays
+      // FLOAT for a correct fractional result.
       if (complexArith(A, B)) {
         e->ty = Type::complexTy();
       } else if (!A.isNumeric() || !B.isNumeric()) {
         d_.error(e->loc, "operator requires arithmetic operands", "(121)");
         e->ty = Type::flt(6);
-      } else if (A.isFixed() && B.isFixed() && A.k == B.k) {
+      } else if (A.isFixed() && B.isFixed()) {
         e->ty = divResultType(A, B);
-      } else if (A.isFixed() && B.isFixed() && A.scale == 0 && B.scale == 0) {
-        e->ty = arithResultType(A, B);
       } else {
         e->ty = Type::flt(std::max(6, std::max(A.prec, B.prec)));
       }

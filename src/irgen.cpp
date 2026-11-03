@@ -2851,6 +2851,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   llvm::Value* seenSlot = entryAlloca(b_.getInt1Ty(), "fxc.seen");
   llvm::Value* dotSlot = entryAlloca(b_.getInt1Ty(), "fxc.dot");
   llvm::Value* overflowSlot = entryAlloca(b_.getInt1Ty(), "fxc.overflow");
+  llvm::Value* expSlot = entryAlloca(b_.getInt32Ty(), "fxc.exp");
+  llvm::Value* expNegSlot = entryAlloca(b_.getInt1Ty(), "fxc.exp_neg");
   b_.CreateStore(zero64, idxSlot, false);
   b_.CreateStore(zero256, allSlot, false);
   b_.CreateStore(zero32, digitsSlot, false);
@@ -2860,6 +2862,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   b_.CreateStore(b_.getFalse(), seenSlot, false);
   b_.CreateStore(b_.getFalse(), dotSlot, false);
   b_.CreateStore(b_.getFalse(), overflowSlot, false);
+  b_.CreateStore(zero32, expSlot, false);
+  b_.CreateStore(b_.getFalse(), expNegSlot, false);
 
   llvm::BasicBlock* skipBB = llvm::BasicBlock::Create(ctx_, "fxc.skip", F);
   llvm::BasicBlock* skipBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.skip_body", F);
@@ -2871,7 +2875,14 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   llvm::BasicBlock* fracBB = llvm::BasicBlock::Create(ctx_, "fxc.frac", F);
   llvm::BasicBlock* fracBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.frac_body", F);
   llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "fxc.check_exp", F);
-  llvm::BasicBlock* expBB = llvm::BasicBlock::Create(ctx_, "fxc.exp", F);
+  llvm::BasicBlock* expMarkBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_mark", F);
+  llvm::BasicBlock* expSignBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_sign", F);
+  llvm::BasicBlock* expFirstBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_first", F);
+  llvm::BasicBlock* expFirstBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_first_body", F);
+  llvm::BasicBlock* expBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_body", F);
+  llvm::BasicBlock* expBodyBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_body_body", F);
+  llvm::BasicBlock* expApplyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_apply", F);
+  llvm::BasicBlock* expFailBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_fail", F);
   llvm::BasicBlock* finishBB = llvm::BasicBlock::Create(ctx_, "fxc.finish", F);
   b_.CreateBr(skipBB);
 
@@ -3006,25 +3017,126 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
     b_.CreateBr(fracBB);
   }
 
-  // Reject exponent text (1e3) rather than returning the integer prefix.
+  // Exponent text (rule (123)): e/E, an optional sign, and at least one digit.
+  // The exponent folds into the fraction count (eff = frac - exp); malformed
+  // text or an effective count outside +/-maxFrac keeps the CONVERSION path.
   startBlock(checkBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ck_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ck_range");
-    b_.CreateCondBr(inRange, expBB, finishBB);
+    b_.CreateCondBr(inRange, expMarkBB, finishBB);
   }
-  startBlock(expBB);
+  startBlock(expMarkBB);
   {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.exp_i");
-    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
-                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.exp_ptr"), "fxc.exp_c");
-    llvm::Value* isExp = b_.CreateOr(b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'e'),
-                                                     "fxc.is_e"),
-                                     b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'E'),
-                                                     "fxc.is_E"),
-                                     "fxc.is_exp");
-    llvm::Value* ov = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.exp_ov");
-    b_.CreateStore(b_.CreateOr(ov, isExp, "fxc.exp_bad"), overflowSlot, false);
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.em_i");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.em_ptr"), "fxc.em_c");
+    llvm::Value* isExp =
+        b_.CreateOr(b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'e'),
+                                    "fxc.em_e"),
+                    b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'E'),
+                                    "fxc.em_E"),
+                    "fxc.em_is");
+    llvm::Value* next = b_.CreateAdd(i, one64, "fxc.em_next");
+    b_.CreateStore(b_.CreateSelect(isExp, next, i, "fxc.em_idx"), idxSlot, false);
+    b_.CreateCondBr(isExp, expSignBB, finishBB);
+  }
+  startBlock(expSignBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.es_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.es_range");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.es_ptr"), "fxc.es_c");
+    llvm::Value* isPlus = b_.CreateICmpEQ(c, plus, "fxc.es_plus");
+    llvm::Value* isMinus = b_.CreateICmpEQ(c, minus, "fxc.es_minus");
+    llvm::Value* hasSign =
+        b_.CreateAnd(inRange, b_.CreateOr(isPlus, isMinus, "fxc.es_sign"), "fxc.es_has");
+    llvm::Value* iNext = b_.CreateAdd(i, one64, "fxc.es_next");
+    b_.CreateStore(b_.CreateSelect(hasSign, iNext, i, "fxc.es_idx"), idxSlot, false);
+    b_.CreateStore(b_.CreateAnd(hasSign, isMinus, "fxc.es_neg"), expNegSlot, false);
+    b_.CreateBr(expFirstBB);
+  }
+  startBlock(expFirstBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ef_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ef_range");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ef_ptr"), "fxc.ef_c");
+    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.ef_ge0"),
+                                        b_.CreateICmpULE(c, nineCh, "fxc.ef_le9"),
+                                        "fxc.ef_dig");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.ef_cont"), expFirstBodyBB,
+                    expFailBB);
+  }
+  startBlock(expFirstBodyBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.efb_i");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.efb_ptr"), "fxc.efb_c");
+    llvm::Value* d = b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.efb_sub"),
+                                   b_.getInt32Ty(), "fxc.efb_d");
+    b_.CreateStore(d, expSlot, false);
+    b_.CreateStore(b_.CreateAdd(i, one64, "fxc.efb_next"), idxSlot, false);
+    b_.CreateBr(expBodyBB);
+  }
+  startBlock(expBodyBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.eb_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.eb_range");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.eb_ptr"), "fxc.eb_c");
+    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.eb_ge0"),
+                                        b_.CreateICmpULE(c, nineCh, "fxc.eb_le9"),
+                                        "fxc.eb_dig");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.eb_cont"), expBodyBodyBB,
+                    expApplyBB);
+  }
+  startBlock(expBodyBodyBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ebb_i");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ebb_ptr"), "fxc.ebb_c");
+    llvm::Value* d = b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.ebb_sub"),
+                                   b_.getInt32Ty(), "fxc.ebb_d");
+    llvm::Value* e = b_.CreateLoad(b_.getInt32Ty(), expSlot, "fxc.ebb_e");
+    llvm::Value* next = b_.CreateAdd(b_.CreateMul(e, i32(10), "fxc.ebb_mul"), d,
+                                     "fxc.ebb_add");
+    // Saturate past the parser's scale range; expApply rejects it as malformed.
+    llvm::Value* capped = b_.CreateSelect(
+        b_.CreateICmpUGT(next, i32(1000), "fxc.ebb_over"), i32(1000), next, "fxc.ebb_cap");
+    b_.CreateStore(capped, expSlot, false);
+    b_.CreateStore(b_.CreateAdd(i, one64, "fxc.ebb_next"), idxSlot, false);
+    b_.CreateBr(expBodyBB);
+  }
+  startBlock(expApplyBB);
+  {
+    llvm::Value* e = b_.CreateLoad(b_.getInt32Ty(), expSlot, "fxc.ea_e");
+    llvm::Value* neg = b_.CreateLoad(b_.getInt1Ty(), expNegSlot, "fxc.ea_neg");
+    llvm::Value* frac = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.ea_frac");
+    // eff = frac - exp, so a negative exponent adds to the fraction count.
+    llvm::Value* signedExp =
+        b_.CreateSelect(neg, e, b_.CreateSub(i32(0), e, "fxc.ea_neg_e"), "fxc.ea_signed");
+    llvm::Value* eff = b_.CreateAdd(frac, signedExp, "fxc.ea_eff");
+    llvm::Value* negMaxFrac = b_.CreateSub(i32(0), maxFrac, "fxc.ea_negmax");
+    llvm::Value* inRange =
+        b_.CreateAnd(b_.CreateICmpSGE(eff, negMaxFrac, "fxc.ea_lo"),
+                     b_.CreateICmpSLE(eff, maxFrac, "fxc.ea_hi"), "fxc.ea_in");
+    // A zero mantissa is representable at any exponent (0e999 is 0).
+    llvm::Value* allNow = b_.CreateLoad(i256Ty, allSlot, "fxc.ea_all");
+    llvm::Value* zeroMag = b_.CreateICmpEQ(allNow, zero256, "fxc.ea_zero");
+    inRange = b_.CreateOr(inRange, zeroMag, "fxc.ea_ok");
+    llvm::Value* ov = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.ea_ov");
+    b_.CreateStore(b_.CreateOr(ov, b_.CreateNot(inRange, "fxc.ea_bad"), "fxc.ea_bad2"),
+                   overflowSlot, false);
+    // A zero mantissa stores a zero scale, so the callers never build 10^1000.
+    llvm::Value* kept = b_.CreateSelect(inRange, eff, frac, "fxc.ea_eff");
+    llvm::Value* stored = b_.CreateSelect(zeroMag, i32(0), kept, "fxc.ea_eff_zero");
+    b_.CreateStore(stored, fracSlot, false);
+    b_.CreateBr(finishBB);
+  }
+  startBlock(expFailBB);
+  {
+    b_.CreateStore(b_.getTrue(), overflowSlot, false);
     b_.CreateBr(finishBB);
   }
 
@@ -3043,8 +3155,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
 }
 
 // Shared character parse (rule (123)): parse the signed significant digits and
-// fraction count, raising CONVERSION (rule 94) on unparseable text. The resume
-// value is the parsed prefix.
+// the fraction count (adjusted by an exponent), raising CONVERSION (rule 94)
+// on unparseable text. The resume value is the parsed prefix.
 llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
                                   llvm::Value* fracSlot) {
   llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "fxc.ok");
@@ -3087,32 +3199,39 @@ llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
 }
 
 // Character text → fixed target (rule (123)): parse the signed significant
-// digits and fraction count, then rescale in i256. DECIMAL targets round half
+// digits and fraction count, then rescale in i512. DECIMAL targets round half
 // away from zero; BINARY targets truncate toward zero. The parsed magnitude is
-// limited to 38 significant digits.
+// limited to 38 significant digits, but an exponent can move the point by up
+// to 76 places, so the intermediate scale needs more than i256.
 Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst) {
-  llvm::Type* i256Ty = b_.getIntNTy(256);
-  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
-  llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
-  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
+  llvm::Type* i512Ty = b_.getIntNTy(512);
+  llvm::Value* zero512 = llvm::ConstantInt::get(i512Ty, 0);
+  llvm::Value* one512 = llvm::ConstantInt::get(i512Ty, 1);
+  llvm::Value* ten512 = llvm::ConstantInt::get(i512Ty, 10);
   llvm::Value* zero64 = i64(0);
   llvm::Value* one64 = i64(1);
 
   llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
-  llvm::Value* all = emitCharParts(s, slen, fracSlot);
+  llvm::Value* all256 = emitCharParts(s, slen, fracSlot);
+  llvm::Value* all = b_.CreateSExt(all256, i512Ty, "fxc.all");
 
   // Signed digits → magnitude plus sign.
-  llvm::Value* isNeg = b_.CreateICmpSLT(all, zero256, "fxc.neg");
+  llvm::Value* isNeg = b_.CreateICmpSLT(all, zero512, "fxc.neg");
   llvm::Value* mag =
-      b_.CreateSelect(isNeg, b_.CreateSub(zero256, all, "fxc.negmag"), all, "fxc.mag");
+      b_.CreateSelect(isNeg, b_.CreateSub(zero512, all, "fxc.negmag"), all, "fxc.mag");
 
-  // 10^frac, built by a short loop (frac <= 76, so it stays inside i256).
-  llvm::Value* powSlot = entryAlloca(i256Ty, "fxc.pow");
+  // 10^|frac|, built by a short loop (|frac| <= 76).
+  llvm::Value* powSlot = entryAlloca(i512Ty, "fxc.pow");
   llvm::Value* kSlot = entryAlloca(b_.getInt64Ty(), "fxc.k");
-  b_.CreateStore(one256, powSlot, false);
+  b_.CreateStore(one512, powSlot, false);
   b_.CreateStore(zero64, kSlot, false);
   llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.frac.load");
-  llvm::Value* frac64 = b_.CreateZExt(frac32, b_.getInt64Ty(), "fxc.frac64");
+  // A negative fraction count means the exponent moved the point right:
+  // multiply the digits now and leave a 1 divisor for the rescale below.
+  llvm::Value* negFrac = b_.CreateICmpSLT(frac32, i32(0), "fxc.frac.neg");
+  llvm::Value* fracAbs = b_.CreateSelect(
+      negFrac, b_.CreateSub(i32(0), frac32, "fxc.frac.abs"), frac32, "fxc.frac.mag");
+  llvm::Value* frac64 = b_.CreateZExt(fracAbs, b_.getInt64Ty(), "fxc.frac64");
   llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.pow", curFn_);
   llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.pow_body", curFn_);
   llvm::BasicBlock* powDoneBB = llvm::BasicBlock::Create(ctx_, "fxc.pow_done", curFn_);
@@ -3124,31 +3243,36 @@ Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   }
   startBlock(powBodyBB);
   {
-    llvm::Value* p = b_.CreateLoad(i256Ty, powSlot, "fxc.pow.load");
+    llvm::Value* p = b_.CreateLoad(i512Ty, powSlot, "fxc.pow.load");
     llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.k.inc");
-    b_.CreateStore(b_.CreateMul(p, ten256, "fxc.pow.next"), powSlot, false);
+    b_.CreateStore(b_.CreateMul(p, ten512, "fxc.pow.next"), powSlot, false);
     b_.CreateStore(b_.CreateAdd(k, one64, "fxc.k.next"), kSlot, false);
     b_.CreateBr(powBB);
   }
   startBlock(powDoneBB);
-  llvm::Value* pow10 = b_.CreateLoad(i256Ty, powSlot, "fxc.pow10");
+  llvm::Value* pow10 = b_.CreateLoad(i512Ty, powSlot, "fxc.pow10");
+  llvm::Value* magScaled =
+      b_.CreateSelect(negFrac, b_.CreateMul(mag, pow10, "fxc.exp.mag"), mag, "fxc.mag2");
+  llvm::Value* div10 = b_.CreateSelect(negFrac, one512, pow10, "fxc.div10");
 
   llvm::Value* raw;
   if (dst.k == TK::FixedDec) {
     // Decimal target: all * 10^q / 10^f, rounded half away from zero.
-    llvm::Value* scaled = b_.CreateMul(mag, intPowConst(i256Ty, 10, dst.scale), "fxc.dec.mul");
-    llvm::Value* q = b_.CreateSDiv(scaled, pow10, "fxc.dec.q");
-    llvm::Value* r = b_.CreateSRem(scaled, pow10, "fxc.dec.r");
-    llvm::Value* twice = b_.CreateMul(r, llvm::ConstantInt::get(i256Ty, 2), "fxc.dec.2r");
-    llvm::Value* roundUp = b_.CreateICmpUGE(twice, pow10, "fxc.dec.round");
-    q = b_.CreateAdd(q, b_.CreateZExt(roundUp, i256Ty, "fxc.dec.inc"), "fxc.dec.rounded");
-    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero256, q, "fxc.dec.neg"), q, "fxc.dec.raw");
+    llvm::Value* scaled =
+        b_.CreateMul(magScaled, intPowConst(i512Ty, 10, dst.scale), "fxc.dec.mul");
+    llvm::Value* q = b_.CreateSDiv(scaled, div10, "fxc.dec.q");
+    llvm::Value* r = b_.CreateSRem(scaled, div10, "fxc.dec.r");
+    llvm::Value* twice = b_.CreateMul(r, llvm::ConstantInt::get(i512Ty, 2), "fxc.dec.2r");
+    llvm::Value* roundUp = b_.CreateICmpUGE(twice, div10, "fxc.dec.round");
+    q = b_.CreateAdd(q, b_.CreateZExt(roundUp, i512Ty, "fxc.dec.inc"), "fxc.dec.rounded");
+    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero512, q, "fxc.dec.neg"), q, "fxc.dec.raw");
     wideMagTrap(raw, dst.prec);
   } else {
     // Binary target: all * 2^q / 10^f, truncated toward zero.
-    llvm::Value* scaled = b_.CreateMul(mag, intPowConst(i256Ty, 2, dst.scale), "fxc.bin.mul");
-    llvm::Value* q = b_.CreateSDiv(scaled, pow10, "fxc.bin.q");
-    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero256, q, "fxc.bin.neg"), q, "fxc.bin.raw");
+    llvm::Value* scaled =
+        b_.CreateMul(magScaled, intPowConst(i512Ty, 2, dst.scale), "fxc.bin.mul");
+    llvm::Value* q = b_.CreateSDiv(scaled, div10, "fxc.bin.q");
+    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero512, q, "fxc.bin.neg"), q, "fxc.bin.raw");
     raw = fixedBinPrecTrap(raw, dst.prec);
   }
   Val v;
@@ -3165,6 +3289,7 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   llvm::Value* zero64 = i64(0);
   llvm::Value* one64 = i64(1);
   llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
+  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
   llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
 
   llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
@@ -3176,7 +3301,11 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   b_.CreateStore(one256, powSlot, false);
   b_.CreateStore(zero64, kSlot, false);
   llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.ffrac.load");
-  llvm::Value* frac64 = b_.CreateZExt(frac32, b_.getInt64Ty(), "fxc.ffrac64");
+  // A negative fraction count means the exponent moved the point right.
+  llvm::Value* negFrac = b_.CreateICmpSLT(frac32, i32(0), "fxc.ffrac.neg");
+  llvm::Value* fracAbs = b_.CreateSelect(
+      negFrac, b_.CreateSub(i32(0), frac32, "fxc.ffrac.abs"), frac32, "fxc.ffrac.mag");
+  llvm::Value* frac64 = b_.CreateZExt(fracAbs, b_.getInt64Ty(), "fxc.ffrac64");
   llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow", curFn_);
   llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_body", curFn_);
   llvm::BasicBlock* powDoneBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_done", curFn_);
@@ -3197,11 +3326,33 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   startBlock(powDoneBB);
   llvm::Value* pow10 = b_.CreateLoad(i256Ty, powSlot, "fxc.fpow10");
 
-  llvm::Value* digits = b_.CreateSIToFP(all, b_.getDoubleTy(), "fxc.fdigits");
-  llvm::Value* scale = b_.CreateSIToFP(pow10, b_.getDoubleTy(), "fxc.fscale");
+  // Convert an i256 magnitude to double with four native 64-bit limbs: the
+  // runtime link has no compiler-rt 256-bit FP helper.
+  llvm::Value* two64 = llvm::ConstantFP::get(b_.getDoubleTy(), 18446744073709551616.0);
+  auto magToDouble = [&](llvm::Value* v, const char* nm) {
+    llvm::Value* d = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
+    for (int limb = 3; limb >= 0; --limb) {
+      llvm::Value* sh = b_.CreateLShr(
+          v, llvm::ConstantInt::get(i256Ty, 64 * limb), std::string(nm) + ".sh");
+      llvm::Value* l = b_.CreateTrunc(sh, b_.getInt64Ty(), std::string(nm) + ".lo");
+      llvm::Value* ld = b_.CreateUIToFP(l, b_.getDoubleTy(), std::string(nm) + ".d");
+      d = b_.CreateFAdd(b_.CreateFMul(d, two64, std::string(nm) + ".mul"), ld,
+                        std::string(nm) + ".add");
+    }
+    return d;
+  };
+  llvm::Value* allNeg = b_.CreateICmpSLT(all, zero256, "fxc.fneg");
+  llvm::Value* allMag = b_.CreateSelect(
+      allNeg, b_.CreateSub(zero256, all, "fxc.fmag.neg"), all, "fxc.fmag");
+  llvm::Value* digits = magToDouble(allMag, "fxc.fdigits");
+  digits = b_.CreateSelect(allNeg, b_.CreateFNeg(digits, "fxc.fneg.d"), digits,
+                           "fxc.fsigned");
+  llvm::Value* scale = magToDouble(pow10, "fxc.fscale");
   Val v;
   v.ty = dst;
-  v.reg = b_.CreateFDiv(digits, scale, "fxc.fvalue");
+  llvm::Value* div = b_.CreateFDiv(digits, scale, "fxc.fvalue");
+  llvm::Value* mul = b_.CreateFMul(digits, scale, "fxc.fvalue.mul");
+  v.reg = b_.CreateSelect(negFrac, mul, div, "fxc.fvalue");
   return v;
 }
 
@@ -13476,23 +13627,42 @@ Val IRGen::emitExpr(HExpr* e) {
                                         b.ty.isBit() ? Type::fixedBin(63, 0) : b.ty)
                       : e->ty;
   // Power always promotes to FLOAT (rule 121, CM5). Division stays in the
-  // type sema chose: FIXED for integer-valued operands (P3, ADR-190 — sdiv),
-  // FLOAT for non-integer operands (fdiv).
+  // type sema chose: FIXED for two FIXED operands (ADR-361/362), FLOAT when
+  // either operand is FLOAT.
   if (!isCmp && op == Tok::Power && !common.isComplex())
     common = Type::flt(e->ty.prec);
   Val av, bv;
-  const bool fixedDiv = op == Tok::Slash && common.isFixed() && a.ty.isFixed() &&
-                        b.ty.isFixed() && a.ty.k == b.ty.k;
+  const bool fixedDiv =
+      op == Tok::Slash && common.isFixed() && a.ty.isFixed() && b.ty.isFixed();
   if (fixedDiv) {
-    // Exact FIXED division (ADR-361): keep each operand's own scale so the raw
-    // integers divide directly. Rescaling both to the result scale first would
-    // round away the quotient digits the division is meant to produce.
-    Type wa = common;
-    wa.scale = a.ty.scale;
-    Type wb = common;
-    wb.scale = b.ty.scale;
+    // Exact FIXED division (ADR-361/362): keep each operand's own scale so the
+    // raw integers divide directly. Rescaling both to the result scale first
+    // would round away the quotient digits the division is meant to produce.
+    // A mixed pair converts the DECIMAL side to its binary view first (IBM
+    // Appendix 1), so the quotient is computed from the converted values.
+    Type wa = common, wb = common;
+    const bool mixed = a.ty.k != b.ty.k;
+    wa.scale = a.ty.k == TK::FixedDec && mixed
+                   ? std::min(62, decToBinScale(a.ty.scale))
+                   : a.ty.scale;
+    wb.scale = b.ty.k == TK::FixedDec && mixed
+                   ? std::min(62, decToBinScale(b.ty.scale))
+                   : b.ty.scale;
+    if (mixed) {
+      // The converted DECIMAL side is a BIN(p',q'); the binary side keeps its
+      // own declared precision, so the formula can use p1 below.
+      if (a.ty.k == TK::FixedDec)
+        wa.prec = decToBinDigits(a.ty.prec);
+      if (b.ty.k == TK::FixedDec)
+        wb.prec = decToBinDigits(b.ty.prec);
+    }
     av = convert(a, wa, e->loc);
     bv = convert(b, wb, e->loc);
+    // A converted operand narrower than its slot joins the i64 formula width.
+    if (av.reg->getType()->isIntegerTy(32))
+      av.reg = b_.CreateSExt(av.reg, b_.getInt64Ty(), "ai");
+    if (bv.reg->getType()->isIntegerTy(32))
+      bv.reg = b_.CreateSExt(bv.reg, b_.getInt64Ty(), "bi");
   } else if (op == Tok::Star && common.isFixed()) {
     // A product's scale is the sum of the operand scales (ADR-006); multiply
     // the raw scaled integers without first rescaling either operand.
@@ -13680,18 +13850,28 @@ Val IRGen::emitExpr(HExpr* e) {
       ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey);
       llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
       r = endZerodivide(zd, div);
-    } else if (fixedDiv) {
-      // Exact FIXED division (rule 121, ADR-361): the raw operands divide at
-      // the RULES(IBM) result scale, sdiv truncating toward zero. The divisor
-      // is zero-guarded before the sdiv so the compute block always divides by
-      // a non-zero value (rule 94).
+    } else {
+      // Exact FIXED division (rule 121, ADR-361/362): the raw operands divide
+      // at the RULES(IBM) result scale, sdiv truncating toward zero. A mixed
+      // pair already arrived as its binary view, so the formula uses the
+      // converted dividend precision p1. The divisor is zero-guarded before
+      // the sdiv so the compute block always divides by a non-zero value.
       const bool dec = common.k == TK::FixedDec;
       const int maxP = dec ? 31 : 63;
-      const int dq = maxP - a.ty.prec + a.ty.scale - b.ty.scale;
+      int p1 = a.ty.prec, q1 = a.ty.scale, q2 = b.ty.scale;
+      if (!dec) {
+        if (a.ty.k == TK::FixedDec) {
+          p1 = decToBinDigits(a.ty.prec);
+          q1 = std::min(62, decToBinScale(a.ty.scale));
+        }
+        if (b.ty.k == TK::FixedDec)
+          q2 = std::min(62, decToBinScale(b.ty.scale));
+      }
+      const int dq = maxP - p1 + q1 - q2;
       // A_raw * base^(maxp - p1) is the exact quotient numerator; it fits the
       // result width because |A_raw| < base^p1.
       llvm::Value* ai = av.reg;
-      int up = maxP - a.ty.prec;
+      int up = maxP - p1;
       if (up > 0)
         ai = dec ? b_.CreateMul(ai, i128(pliPow10_128(up)), "dnum")
                  : b_.CreateMul(ai, i64(1LL << up), "dnum");
@@ -13724,48 +13904,6 @@ Val IRGen::emitExpr(HExpr* e) {
         }
       }
       r = qv;
-    } else {
-      // Mixed-base integer division (the B11 tail): two scale-0 operands of
-      // different bases keep the old FIXED path. sdiv truncates toward zero,
-      // matching PL/I's FIXED division semantics (rule 121). Operands widened
-      // so CreateSDiv is well-defined (32-bit sdiv has narrower range); widened
-      // to i64 normally, i128 for a wide (>18 digit) DECIMAL common (ADR-191).
-      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0 — guarded
-      // by branching before the sdiv so the divisor is provably non-zero in the
-      // compute block (no safe-divisor select on the hot path, rule 94).
-      bool wide = common.intBits() == 128; // ADR-191
-      // Operands widened to the division width (i64, or i128 for a wide
-      // >18-digit DECIMAL common) so CreateSDiv is well-defined and so the ICmp
-      // zero-divide guard compares same-width values. av/bv are already
-      // converted to `common`, so widen only when their storage is narrower.
-      llvm::Type* wty = wide ? b_.getInt128Ty() : b_.getInt64Ty();
-      unsigned wbits = wide ? 128 : 64;
-      llvm::Value* ai = (av.reg->getType()->getIntegerBitWidth() == wbits)
-                            ? av.reg
-                            : b_.CreateSExt(av.reg, wty, "ai");
-      llvm::Value* bi = (bv.reg->getType()->getIntegerBitWidth() == wbits)
-                            ? bv.reg
-                            : b_.CreateSExt(bv.reg, wty, "bi");
-      llvm::Value* z0 = wide ? i128(0) : i64(0);
-      llvm::Value* q;
-      if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bi)) {
-        if (ci->isZero()) {
-          q = zerodivideResume(b_.getTrue(), z0, z0);
-        } else {
-          q = b_.CreateSDiv(ai, bi, "bin");
-        }
-      } else {
-        // Branch-then-compute: sdiv only runs when the divisor is non-zero,
-        // eliminating the safe-divisor select from the hot path (T1a).
-        llvm::Value* dz = b_.CreateICmpEQ(bi, z0, "zdiv");
-        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey);
-        q = b_.CreateSDiv(ai, bi, "bin");
-        q = endZerodivide(zd, q);
-      }
-      if (wide)
-        r = q; // already at common's i128 width and scale
-      else
-        r = convert(Val{Type::fixedBin(63, 0), q}, common, e->loc).reg;
     }
     break;
   }

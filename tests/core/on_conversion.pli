@@ -25,28 +25,26 @@
     end;
     revert conversion;
 
-    /* exponent character text is not parsed yet: it must raise,
-       not return the integer prefix as a silently wrong value */
+    /* malformed exponent text still raises CONVERSION */
     caught = 0;
     on conversion begin;
        caught = 1;
     end;
-    x = fixed('1e3');
+    x = fixed('1e');
     if caught ^= 1 then do;
-       put skip list('FAIL exponent conversion');
+       put skip list('FAIL malformed fixed exponent');
        stop;
     end;
     revert conversion;
 
-    /* FLOAT(char) shares the parser: exponent text must raise, not
-       return the integer prefix as a silently wrong value */
+    /* FLOAT(char) shares the parser */
     caught = 0;
     on conversion begin;
        caught = 1;
     end;
-    z = float('1e3');
+    z = float('1e+');
     if caught ^= 1 then do;
-       put skip list('FAIL float exponent conversion');
+       put skip list('FAIL malformed float exponent');
        stop;
     end;
     revert conversion;
