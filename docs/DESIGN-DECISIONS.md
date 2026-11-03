@@ -13661,3 +13661,37 @@ parity in auto/runtime/llvm. `GC` (123) cites this ADR.
 **Rejected.** Keep rejecting exponent text (the old limitation). Parse with
 `strtod` (platform libc, breaking the self-contained runtime). Keep i256 for the
 fixed rescale (it overflows at the largest legal mantissa and shift).
+
+
+## ADR-364 — IMAGINARY data attribute (IBM Enterprise PL/I extension)
+
+**Context.** B11 (Numeric data remainder) leaves the `IMAGINARY` data attribute
+unimplemented. `IMAGINARY` is an IBM Enterprise PL/I attribute: it declares an
+arithmetic variable stored as COMPLEX whose real part is always zero. Assigning
+a real value to an IMAGINARY variable stores `(0, value)`; `REAL`/`IMAG` extract
+the parts and arithmetic rides the existing COMPLEX lowering. It is not part of
+TR 25.084, so it is tracked as an extension in `GRAMMAR-COVERAGE.md`, never as
+spec scope.
+
+**Decision.** The parser recognises `IMAGINARY` (and `IMAG` is not a synonym) as
+a data attribute in the same attribute loop as `COMPLEX`. It combines with the
+FIXED/FLOAT and BINARY/DECIMAL base attributes but not with string, POINTER or
+FILE, and conflicts with `COMPLEX`; each conflict cites rule (15). The type is
+`TK::Complex` carrying a non-equivalence `imaginary` flag (like `varyingz`),
+flowing through `Type::operator=`. sema permits real -> IMAGINARY conversion
+through the existing complex-conversion path; irgen lowers real -> IMAGINARY as
+`{0.0, value}` instead of `{value, 0.0}`. IMAGINARY -> real takes the real part
+(0 for a pure imaginary value), and IMAGINARY <-> COMPLEX pass through the
+{double,double} layout. `CONJG`, `REAL`, `IMAG`, `CHAR` and `FIXED` of an
+IMAGINARY value use the ordinary COMPLEX paths.
+
+**Consequences.** `tests/builtins/imaginary.pli` pins real->IMAGINARY assignment
+(`imag(x)` returns the value, `real(x)` returns 0), IMAGINARY -> COMPLEX, and
+COMPLEX -> IMAGINARY. `GRAMMAR-COVERAGE.md` gains an "Extensions (not in TR
+25.084)" row for IMAGINARY and notes it under rules (14),(15).
+
+**Rejected.** Make IMAGINARY a distinct `TK::Imaginary` kind (it would duplicate
+the COMPLEX layout and every arithmetic/built-in path). Treat IMAGINARY as an
+error everywhere (the feature is IBM Enterprise and B11 lists it as remaining
+work). Infer the imaginary part from usage without the attribute (there is no
+surface syntax for that in PL/I).

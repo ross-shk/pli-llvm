@@ -102,6 +102,10 @@ struct Type {
   // unless they carry an explicit ALIGNED. Part of type equivalence because a
   // packed and an aligned structure with the same members have different layout.
   bool unaligned = false;
+  // IMAGINARY (IBM Enterprise PL/I extension, ADR-364): a COMPLEX-typed variable
+  // whose real part is always zero; a real value assigned to it is stored as
+  // (0, value). Deliberately not part of type equivalence.
+  bool imaginary = false;
   // Union overlay (ADR-202, Subset-G extension): all members start at offset 0,
   // sharing storage. Part of layout but not type equivalence — a union and a
   // non-union struct with the same members have different layout.
@@ -253,6 +257,7 @@ struct Type {
   bool isLocator() const { return k == TK::Pointer || k == TK::Offset || k == TK::Area; }
   bool isVoid() const { return k == TK::Void; }
   bool isComplex() const { return k == TK::Complex; }
+  bool isImaginary() const { return k == TK::Complex && imaginary; }
   bool isTask() const { return k == TK::Task; }
   bool isEvent() const { return k == TK::Event; }
   bool isLabel() const { return k == TK::Label; }
@@ -339,6 +344,7 @@ inline Type& Type::operator=(const Type& o) {
   starLen = o.starLen;
   controlled = o.controlled;
   unaligned = o.unaligned;
+  imaginary = o.imaginary; // IMAGINARY flag (ADR-364)
   isUnion = o.isUnion; // Union overlay layout (ADR-202)
   picture = o.picture;
   dims = o.dims;

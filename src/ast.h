@@ -180,6 +180,7 @@ struct DeclItem {
    bool unionAttr = false;        // UNION (ADR-202): overlay with next member
    bool labelAttr = false;        // LABEL (rule (21)): label variable
    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
+   bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
 };
 
 // Rule (65) initial-label: an element of a label array named by a statement

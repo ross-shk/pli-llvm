@@ -12406,6 +12406,16 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     re.reg = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
     return convert(re, dst, loc);
   }
+  // real -> imaginary: (0, value), real part zeroed (ADR-364).
+  if (!v.ty.isComplex() && dst.isImaginary()) {
+    Val re = convert(v, Type::flt(6), loc);
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, flt(0.0), 0, "cpx.re");
+    s = b_.CreateInsertValue(s, re.reg, 1, "cpx.im");
+    out.cpx = s;
+    return out;
+  }
   if (!v.ty.isComplex() && dst.isComplex()) {
     Val re = convert(v, Type::flt(6), loc);
     llvm::Value* s =

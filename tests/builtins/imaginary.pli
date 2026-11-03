@@ -1,0 +1,35 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* B11: IMAGINARY data (IBM Enterprise extension ADR-364).
+    An IMAGINARY variable is COMPLEX storage whose real part is
+    always zero; assigning a real value stores (0, value).
+    REAL/IMAG extract the parts. */
+ imaginary_test: procedure options(main);
+    declare x imaginary float dec(6);
+    declare y float dec(6);
+    declare z complex;
+    x = 2.5;
+    y = imag(x);
+    if abs(y - 2.5) > 1e-6 then do;
+       put skip list('FAIL imag(x):', y);
+       stop;
+    end;
+    y = real(x);
+    if abs(y - 0.0) > 1e-6 then do;
+       put skip list('FAIL real(x):', y);
+       stop;
+    end;
+    z = x;
+    y = imag(z);
+    if abs(y - 2.5) > 1e-6 then do;
+       put skip list('FAIL imag(z):', y);
+       stop;
+    end;
+    x = complex(1.0, 2.0);
+    y = imag(x);
+    if abs(y - 2.0) > 1e-6 then do;
+       put skip list('FAIL imag(x2):', y);
+       stop;
+    end;
+    put skip list('PASS imaginary');
+ end imaginary_test;
